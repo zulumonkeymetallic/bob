@@ -51,11 +51,29 @@ try {
 } catch (e) {
   console.warn('[init] dailyDigestGenerator not loaded', e?.message || e);
 }
+
+try {
+  const financeEnhancements = require('./finance/enhancements');
+  if (financeEnhancements) {
+    exports.importExternalFinanceTransactions = financeEnhancements.importExternalFinanceTransactions;
+    exports.importMonzoTransactionsCsv = financeEnhancements.importMonzoTransactionsCsv;
+    exports.matchExternalToMonzoTransactions = financeEnhancements.matchExternalToMonzoTransactions;
+    exports.recomputeDebtServiceBreakdown = financeEnhancements.recomputeDebtServiceBreakdown;
+    exports.generateFinanceActionInsights = financeEnhancements.generateFinanceActionInsights;
+    exports.convertFinanceActionToStory = financeEnhancements.convertFinanceActionToStory;
+    exports.upsertManualFinanceAccount = financeEnhancements.upsertManualFinanceAccount;
+    exports.deleteManualFinanceAccount = financeEnhancements.deleteManualFinanceAccount;
+    exports.fetchFinanceEnhancementData = financeEnhancements.fetchFinanceEnhancementData;
+  }
+} catch (e) {
+  console.warn('[init] financeEnhancements not loaded', e?.message || e);
+}
 const { sendEmail } = require('./lib/email');
 const { coerceZone, toDateTime, computeDayWindow } = require('./lib/time');
 const crypto = require('crypto');
 const { KeyManagementServiceClient } = require('@google-cloud/kms');
 const MS_IN_DAY = 24 * 60 * 60 * 1000;
+const MS_IN_WEEK = 7 * MS_IN_DAY;
 const TASK_TTL_DAYS = Number(process.env.TASK_TTL_DAYS || 7);
 const SPRINT_NONE = '__none__';
 
@@ -90,6 +108,7 @@ try {
     // Capacity Planning
     const capacityPlanning = require('./capacityPlanning');
     exports.calculateSprintCapacity = capacityPlanning.calculateSprintCapacity;
+    exports.calculateNextWeekCapacity = capacityPlanning.calculateNextWeekCapacity;
     exports.updateStoryPriorities = capacityPlanning.updateStoryPriorities; // New Scheduled Function
   }
 } catch (e) {
@@ -134,7 +153,9 @@ const updateGoalTargetYears = async () => {
   return { updated: updates };
 };
 
-exports.updateGoalTargetYears = schedulerV2.onSchedule('0 3 * * *', async () => {
+exports.updateGoalTargetYears = schedulerV2.onSchedule(
+  { schedule: '0 3 * * *', timeZone: 'UTC', region: 'europe-west2' },
+  async () => {
   try {
     return await updateGoalTargetYears();
   } catch (e) {
@@ -205,6 +226,8 @@ function makeAssignmentId({ planId, itemType, itemId }) {
 
 const MS_IN_MINUTE = 60 * 1000;
 const CHORE_LOOKAHEAD_DAYS = 90;
+const CHORE_DUE_ROLLOVER_DAYS = 3;
+const CHORE_DUE_ROLLOVER_MS = CHORE_DUE_ROLLOVER_DAYS * 24 * 60 * 60 * 1000;
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
 const AI_PRIORITY_MODEL = GEMINI_MODEL;
 
@@ -234,9 +257,10 @@ function toMillis(value) {
 function inferTaskType(data) {
   const rawTitle = String(data?.title || '').toLowerCase();
   const rawList = String(data?.reminderListName || data?.reminderListId || '').toLowerCase();
-  const tags = Array.isArray(data?.tags) ? data.tags.map((t) => String(t || '').toLowerCase()) : [];
+  const tags = Array.isArray(data?.tags) ? data.tags.map((t) => String(t || '').toLowerCase().replace(/^#/, '')) : [];
   const note = String(data?.note || '').toLowerCase();
   const candidates = [rawTitle, rawList, note, ...tags];
+  if (candidates.some((s) => s.includes('habit'))) return 'habit';
   if (candidates.some((s) => s.includes('routine'))) return 'routine';
   if (candidates.some((s) => s.includes('chore'))) return 'chore';
   return null;
@@ -283,6 +307,16 @@ function normaliseRecurrence(data) {
   return { changed, patch: out };
 }
 
+function isRecurringChoreTask(task) {
+  const type = String(task?.type || '').toLowerCase();
+  if (!['chore', 'routine', 'habit'].includes(type)) return false;
+  const freq = task?.repeatFrequency || task?.repeatInterval || task?.recurrence?.frequency || task?.recurrence?.freq || null;
+  const days = Array.isArray(task?.daysOfWeek) && task.daysOfWeek.length;
+  const recurDays = Array.isArray(task?.repeatDaysOfWeek) && task.repeatDaysOfWeek.length;
+  const recurMeta = Array.isArray(task?.recurrence?.daysOfWeek) && task.recurrence.daysOfWeek.length;
+  return !!(freq || days || recurDays || recurMeta);
+}
+
 function* iterateNextDays(startDate, count) {
   const d = new Date(startDate);
   for (let i = 0; i < count; i++) {
@@ -313,10 +347,18 @@ function toISODate(date) {
   return `${y}-${m}-${d}`;
 }
 
+function isSameDay(a, b) {
+  return startOfDay(new Date(a)).getTime() === startOfDay(new Date(b)).getTime();
+}
+
 function shouldScheduleOnDay(task, date) {
   const freq = task?.repeatFrequency;
   const interval = Number(task?.repeatInterval || 1) || 1;
-  if (!freq) return false;
+  if (!freq) {
+    const dueMs = toMillis(task?.dueDate || task?.dueDateMs || task?.targetDate);
+    if (!dueMs) return false;
+    return isSameDay(date, dueMs);
+  }
   if (freq === 'daily') {
     // If we have a baseline, respect interval
     const base = toMillis(task?.lastDoneAt) || toMillis(task?.createdAt) || Date.now();
@@ -324,16 +366,49 @@ function shouldScheduleOnDay(task, date) {
     return daysDiff % interval === 0;
   }
   if (freq === 'weekly') {
-    const allowed = Array.isArray(task?.daysOfWeek) ? task.daysOfWeek : [];
-    return allowed.includes(dayOfWeekKey(date));
+    const normalizeDayToken = (value) => {
+      if (value === null || value === undefined) return null;
+      if (typeof value === 'number') {
+        const map = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+        if (value >= 1 && value <= 7) return map[value - 1] || null;
+        if (value >= 0 && value <= 6) return map[value] || null;
+        return null;
+      }
+      const raw = String(value).toLowerCase().trim();
+      if (!raw) return null;
+      if (['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'].includes(raw)) return raw;
+      if (raw.startsWith('su')) return 'sun';
+      if (raw.startsWith('mo')) return 'mon';
+      if (raw.startsWith('tu')) return 'tue';
+      if (raw.startsWith('we')) return 'wed';
+      if (raw.startsWith('th')) return 'thu';
+      if (raw.startsWith('fr')) return 'fri';
+      if (raw.startsWith('sa')) return 'sat';
+      return null;
+    };
+    const allowedRaw = []
+      .concat(task?.daysOfWeek || [])
+      .concat(task?.repeatDaysOfWeek || [])
+      .concat(task?.recurrence?.daysOfWeek || []);
+    const allowed = Array.from(new Set(allowedRaw.map(normalizeDayToken).filter(Boolean)));
+    const base = new Date(toMillis(task?.lastDoneAt) || toMillis(task?.createdAt) || Date.now());
+    const fallback = dayOfWeekKey(base);
+    const days = allowed.length ? allowed : [fallback];
+    if (!days.includes(dayOfWeekKey(date))) return false;
+    const weeksDiff = Math.floor((startOfWeek(date).getTime() - startOfWeek(base).getTime()) / MS_IN_WEEK);
+    return weeksDiff % interval === 0;
   }
   if (freq === 'monthly') {
     const base = new Date(toMillis(task?.createdAt) || Date.now());
-    return date.getDate() === base.getDate();
+    if (date.getDate() !== base.getDate()) return false;
+    const monthsDiff = (date.getFullYear() - base.getFullYear()) * 12 + (date.getMonth() - base.getMonth());
+    return monthsDiff % interval === 0;
   }
   if (freq === 'yearly') {
     const base = new Date(toMillis(task?.createdAt) || Date.now());
-    return date.getMonth() === base.getMonth() && date.getDate() === base.getDate();
+    if (date.getMonth() !== base.getMonth() || date.getDate() !== base.getDate()) return false;
+    const yearsDiff = date.getFullYear() - base.getFullYear();
+    return yearsDiff % interval === 0;
   }
   return false;
 }
@@ -344,12 +419,158 @@ function startOfDay(d) {
   return nd;
 }
 
+function startOfWeek(d) {
+  const nd = startOfDay(d);
+  const day = nd.getDay(); // 0 = Sunday
+  nd.setDate(nd.getDate() - day);
+  return nd;
+}
+
+function hasTimeComponent(ms) {
+  if (!ms) return false;
+  const d = new Date(ms);
+  return d.getHours() !== 0 || d.getMinutes() !== 0 || d.getSeconds() !== 0;
+}
+
+function applyTimeOfDay(day, timeMs) {
+  const base = new Date(timeMs);
+  const d = new Date(day.getTime());
+  d.setHours(base.getHours(), base.getMinutes(), 0, 0);
+  return d.getTime();
+}
+
+function durationMinutesFromTask(task) {
+  const points = Number(task?.points || 0);
+  const estimateMin = Number(task?.estimateMin || 0);
+  const type = String(task?.type || '').toLowerCase();
+  const isChoreLike = ['chore', 'routine', 'habit'].includes(type);
+  const choreMin = 10;
+  if (estimateMin > 0) return Math.min(180, Math.max(isChoreLike ? choreMin : 15, Math.round(estimateMin)));
+  if (points > 0) return Math.min(240, Math.max(isChoreLike ? choreMin : 30, Math.round(points * 60)));
+  return isChoreLike ? choreMin : 30;
+}
+
+async function resolveSprintIdForDate(db, ownerUid, persona, dueDateMs, cache) {
+  if (!dueDateMs || !ownerUid) return null;
+  const key = `${ownerUid}:${persona || ''}`;
+  let sprints = cache?.get(key);
+  if (!sprints) {
+    let qs = db.collection('sprints').where('ownerUid', '==', ownerUid);
+    if (persona) qs = qs.where('persona', '==', persona);
+    const snap = await qs.get().catch(() => ({ docs: [] }));
+    sprints = (snap.docs || []).map((doc) => {
+      const data = doc.data() || {};
+      return {
+        id: doc.id,
+        start: toMillis(data.startDate),
+        end: toMillis(data.endDate),
+      };
+    }).filter((s) => s.start && s.end);
+    cache?.set(key, sprints);
+  }
+  const match = sprints.find((s) => dueDateMs >= s.start && dueDateMs <= s.end);
+  return match?.id ?? null;
+}
+
+async function findSlotForDay(db, ownerUid, dayStartMs, dayEndMs, durationMs) {
+  const busy = [];
+  const snap = await db.collection('calendar_blocks')
+    .where('ownerUid', '==', ownerUid)
+    .where('start', '>=', dayStartMs)
+    .where('start', '<=', dayEndMs)
+    .get()
+    .catch(() => ({ docs: [] }));
+  snap.docs.forEach((doc) => {
+    const data = doc.data() || {};
+    const start = toMillis(data.start);
+    const end = toMillis(data.end) || (start ? start + durationMs : null);
+    if (start && end) busy.push([start, end]);
+  });
+  busy.sort((a, b) => a[0] - b[0]);
+  let cursor = dayStartMs + (8 * 60 * 60 * 1000);
+  const windowEnd = dayEndMs - durationMs;
+  for (let i = 0; i <= busy.length; i++) {
+    const nextBusyStart = i < busy.length ? busy[i][0] : dayEndMs;
+    if (cursor + durationMs <= nextBusyStart) {
+      if (cursor <= windowEnd) return cursor;
+      return null;
+    }
+    if (i < busy.length) {
+      cursor = Math.max(cursor, busy[i][1] || cursor);
+    }
+  }
+  return null;
+}
+
 async function upsertChoreBlocksForTask(db, task, lookaheadDays = 14) {
   if (!task?.ownerUid || !task?.id) return { created: 0, updated: 0 };
   const ownerUid = task.ownerUid;
   const today = startOfDay(new Date());
   const snoozedUntil = toMillis(task?.snoozedUntil) || 0;
   let created = 0, updated = 0;
+  let nextStartMs = null;
+  const nowMs = Date.now();
+  const durationMin = durationMinutesFromTask(task);
+  const durationMs = durationMin * MS_IN_MINUTE;
+  const taskDueMs = toMillis(task?.dueDate || task?.dueDateMs || task?.targetDate);
+  const dueHasTime = hasTimeComponent(taskDueMs);
+  const dayCtxCache = new Map();
+  const sprintCache = new Map();
+
+  const loadDayCtx = async (dayStartMs, dayEndMs, dayKey) => {
+    if (dayCtxCache.has(dayKey)) return dayCtxCache.get(dayKey);
+    const snap = await db.collection('calendar_blocks')
+      .where('ownerUid', '==', ownerUid)
+      .where('start', '>=', dayStartMs)
+      .where('start', '<=', dayEndMs)
+      .get()
+      .catch(() => ({ docs: [] }));
+    const windows = [];
+    const occupied = [];
+    snap.docs.forEach((docSnap) => {
+      const data = docSnap.data() || {};
+      const start = toMillis(data.start);
+      const end = toMillis(data.end);
+      if (!start || !end || end <= start) return;
+      const source = String(data.source || data.entityType || data.entry_method || '').toLowerCase();
+      const entityType = String(data.entityType || '').toLowerCase();
+      const isChoreEvent = source === 'chore' || entityType === 'chore';
+      const themeLabel = themeLabelFromValue(
+        data.theme ?? data.theme_id ?? data.themeId ?? data.category ?? data.title ?? ''
+      );
+      const isChoreTheme = String(themeLabel || '').toLowerCase().includes('chore');
+      if (isChoreEvent) {
+        occupied.push({ id: docSnap.id, start, end });
+      } else if (isChoreTheme) {
+        windows.push({ start, end });
+      }
+    });
+    windows.sort((a, b) => a.start - b.start);
+    occupied.sort((a, b) => a.start - b.start);
+    const ctx = { windows, occupied };
+    dayCtxCache.set(dayKey, ctx);
+    return ctx;
+  };
+
+  const fitsInWindows = (startMs, endMs, windows) =>
+    windows.some((w) => startMs >= w.start && endMs <= w.end);
+
+  const overlapsAny = (startMs, endMs, occupied) =>
+    occupied.some((o) => startMs < o.end && endMs > o.start);
+
+  const findSlotInWindows = (windows, occupied, duration) => {
+    for (const window of windows) {
+      let cursor = window.start;
+      for (const occ of occupied) {
+        if (occ.end <= window.start || occ.start >= window.end) continue;
+        if (cursor + duration <= occ.start) return cursor;
+        cursor = Math.max(cursor, occ.end);
+        if (cursor >= window.end) break;
+      }
+      if (cursor + duration <= window.end) return cursor;
+    }
+    return null;
+  };
   for (const day of iterateNextDays(today, lookaheadDays)) {
     if (snoozedUntil && day.getTime() < startOfDay(new Date(snoozedUntil)).getTime()) continue;
     if (!shouldScheduleOnDay(task, day)) continue;
@@ -358,6 +579,60 @@ async function upsertChoreBlocksForTask(db, task, lookaheadDays = 14) {
     const docId = `chore_${task.id}_${dayKey}`;
     const ref = db.collection('calendar_blocks').doc(docId);
     const snap = await ref.get();
+    const dayStartMs = startOfDay(day).getTime();
+    const dayEndMs = dayStartMs + (24 * 60 * 60 * 1000) - 1;
+    const dayCtx = await loadDayCtx(dayStartMs, dayEndMs, dayKey);
+    if (!dayCtx.windows.length) {
+      if (snap.exists) {
+        await ref.delete();
+        dayCtx.occupied = dayCtx.occupied.filter((o) => o.id !== docId);
+      }
+      continue;
+    }
+
+    const occupiedWithoutSelf = dayCtx.occupied.filter((o) => o.id !== docId);
+    let startMs = null;
+    let endMs = null;
+
+    if (snap.exists) {
+      const existing = snap.data() || {};
+      const existingStart = toMillis(existing.start);
+      const existingEnd = toMillis(existing.end);
+      if (existingStart && existingEnd &&
+        fitsInWindows(existingStart, existingEnd, dayCtx.windows) &&
+        !overlapsAny(existingStart, existingEnd, occupiedWithoutSelf)) {
+        startMs = existingStart;
+        endMs = existingEnd;
+      }
+    }
+
+    if (startMs == null && taskDueMs && dueHasTime) {
+      const preferred = applyTimeOfDay(day, taskDueMs);
+      const preferredEnd = preferred + durationMs;
+      if (fitsInWindows(preferred, preferredEnd, dayCtx.windows) &&
+        !overlapsAny(preferred, preferredEnd, occupiedWithoutSelf)) {
+        startMs = preferred;
+        endMs = preferredEnd;
+      }
+    }
+
+    if (startMs == null) {
+      const slot = findSlotInWindows(dayCtx.windows, occupiedWithoutSelf, durationMs);
+      if (!slot) {
+        if (snap.exists) {
+          await ref.delete();
+          dayCtx.occupied = occupiedWithoutSelf;
+        }
+        continue;
+      }
+      startMs = slot;
+      endMs = slot + durationMs;
+    }
+
+    if (startMs >= nowMs && (nextStartMs == null || startMs < nextStartMs)) {
+      nextStartMs = startMs;
+    }
+    const checklistLink = `/chores/checklist?date=${encodeURIComponent(iso)}&taskId=${encodeURIComponent(task.id)}`;
     const base = {
       ownerUid,
       entityType: 'chore',
@@ -365,8 +640,11 @@ async function upsertChoreBlocksForTask(db, task, lookaheadDays = 14) {
       date: iso,
       title: task.title || 'Chore',
       status: 'planned',
-      start: startOfDay(day).getTime(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      start: startMs,
+      end: endMs,
+      source: 'chore',
+      syncToGoogle: false,
+      deepLink: checklistLink,
       metadata: {
         frequency: task.repeatFrequency || null,
         interval: Number(task.repeatInterval || 1) || 1,
@@ -375,11 +653,42 @@ async function upsertChoreBlocksForTask(db, task, lookaheadDays = 14) {
     };
     if (snap.exists) {
       const existing = snap.data() || {};
-      const needsUpdate = existing.title !== base.title || existing.status === undefined || existing.ownerUid !== ownerUid;
-      if (needsUpdate) { await ref.set({ ...existing, ...base }, { merge: true }); updated++; }
+      const needsUpdate = existing.title !== base.title
+        || existing.status === undefined
+        || existing.ownerUid !== ownerUid
+        || existing.start !== base.start
+        || existing.end !== base.end
+        || existing.syncToGoogle !== base.syncToGoogle
+        || existing.deepLink !== base.deepLink;
+      if (needsUpdate) {
+        await ref.set({ ...existing, ...base, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        updated++;
+      }
     } else {
-      await ref.set({ ...base, createdAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      await ref.set({ ...base, createdAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
       created++;
+    }
+    dayCtx.occupied = [...occupiedWithoutSelf, { id: docId, start: base.start, end: base.end }];
+  }
+
+  if (nextStartMs && isRecurringChoreTask(task) && !isTaskLocked(task)) {
+    const dueMs = toMillis(task?.dueDate || task?.dueDateMs || task?.targetDate);
+    const isMissing = !dueMs;
+    const isOverdueBeyondGrace = !!dueMs && dueMs < (nowMs - CHORE_DUE_ROLLOVER_MS);
+    const isFutureMismatch = !!dueMs && dueMs >= nowMs && Math.abs(dueMs - nextStartMs) > (5 * MS_IN_MINUTE);
+    if (isMissing || isOverdueBeyondGrace || isFutureMismatch) {
+      const hasStory = !!(task?.storyId || (task?.parentType === 'story' && task?.parentId));
+      const sprintId = hasStory
+        ? (task?.sprintId || null)
+        : await resolveSprintIdForDate(db, ownerUid, task?.persona || null, nextStartMs, sprintCache);
+      await db.collection('tasks').doc(task.id).set({
+        dueDate: nextStartMs,
+        sprintId: sprintId ?? null,
+        dueDateReason: isOverdueBeyondGrace ? 'chore_rollover' : 'chore_block',
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        serverUpdatedAt: Date.now(),
+        syncState: 'dirty',
+      }, { merge: true });
     }
   }
   return { created, updated };
@@ -1047,6 +1356,7 @@ exports.planBlocksV2 = httpsV2.onCall(async (req) => {
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
 
   const timezone = req?.data?.timezone || DEFAULT_TIMEZONE;
+  const persona = req?.data?.persona || 'personal';
   const startDate = req?.data?.startDate || DateTime.now().setZone(timezone).toISODate();
   const days = Math.min(Math.max(Number(req?.data?.days || 7), 1), 30);
   const start = DateTime.fromISO(startDate, { zone: timezone }).startOf('day');
@@ -1093,6 +1403,91 @@ exports.planBlocksV2 = httpsV2.onCall(async (req) => {
     console.warn('[planBlocksV2] quiet hours application failed', e?.message || e);
   }
 
+  const isMainGigLabel = (value) => {
+    const raw = String(value || '').toLowerCase();
+    if (!raw) return false;
+    if (raw.includes('workout')) return false;
+    if (raw.includes('main gig') || raw.includes('work shift')) return true;
+    return /\bwork\b/.test(raw);
+  };
+
+  const isMainGigBlock = (block) => {
+    if (!block) return false;
+    if (block.entityType === 'work_shift' || block.sourceType === 'work_shift_allocation') return true;
+    const label = block.theme || block.category || block.title || '';
+    return isMainGigLabel(label);
+  };
+
+  // Apply calendar blocks as busy windows (persona-aware for work shift blocks)
+  try {
+    const blocksSnap = await db.collection('calendar_blocks')
+      .where('ownerUid', '==', uid)
+      .where('start', '>=', start.toMillis())
+      .where('start', '<=', end.toMillis())
+      .get()
+      .catch(() => ({ docs: [] }));
+    const blocks = blocksSnap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+
+    const busyPersonal = [...busy];
+    const busyWork = [...busy];
+    const mainGigBlocks = blocks.filter((b) => isMainGigBlock(b) && b.start && b.end);
+
+    for (const b of blocks) {
+      if (!b.start || !b.end) continue;
+      const interval = {
+        start: DateTime.fromMillis(b.start, { zone: timezone }).toISO(),
+        end: DateTime.fromMillis(b.end, { zone: timezone }).toISO(),
+      };
+      if (isMainGigBlock(b)) {
+        busyPersonal.push(interval);
+      } else {
+        busyPersonal.push(interval);
+        busyWork.push(interval);
+      }
+    }
+
+    if (persona === 'work') {
+      // Block any time outside main gig blocks to keep work scheduling within work windows
+      const daysSpan = Math.max(1, Math.round(end.diff(start, 'days').days) + 1);
+      for (let i = 0; i < daysSpan; i++) {
+        const dayStart = start.plus({ days: i }).startOf('day');
+        const dayEnd = dayStart.endOf('day');
+        const dayBlocks = mainGigBlocks
+          .filter((b) => b.start && b.end)
+          .filter((b) => {
+            const blockStart = DateTime.fromMillis(b.start, { zone: timezone });
+            const blockEnd = DateTime.fromMillis(b.end, { zone: timezone });
+            return blockEnd > dayStart && blockStart < dayEnd;
+          })
+          .map((b) => ({
+            start: DateTime.fromMillis(b.start, { zone: timezone }),
+            end: DateTime.fromMillis(b.end, { zone: timezone }),
+          }))
+          .sort((a, b) => a.start.toMillis() - b.start.toMillis());
+
+        if (!dayBlocks.length) {
+          busyWork.push({ start: dayStart.toISO(), end: dayEnd.toISO() });
+          continue;
+        }
+
+        let cursor = dayStart;
+        for (const block of dayBlocks) {
+          if (block.start > cursor) {
+            busyWork.push({ start: cursor.toISO(), end: block.start.toISO() });
+          }
+          cursor = block.end > cursor ? block.end : cursor;
+        }
+        if (cursor < dayEnd) {
+          busyWork.push({ start: cursor.toISO(), end: dayEnd.toISO() });
+        }
+      }
+    }
+
+    busy = persona === 'work' ? busyWork : busyPersonal;
+  } catch (err) {
+    console.warn('[planBlocksV2] calendar block busy merge failed', err?.message || err);
+  }
+
   // Fetch Theme Allocations
   let themeAllocations = [];
   try {
@@ -1108,6 +1503,7 @@ exports.planBlocksV2 = httpsV2.onCall(async (req) => {
     busy,
     themeAllocations,
     includeChores: true, // allow routines/chores/habits to populate scheduled_instances
+    persona,
   });
 
   const existingIds = new Set(plan.existingIds || []);
@@ -1130,12 +1526,15 @@ exports.planBlocksV2 = httpsV2.onCall(async (req) => {
     }
     batch.set(ref, payload, { merge: true });
 
-    // Mirror routines/chores/habits into calendar_blocks for GCal sync
+    // Mirror routines/chores/habits into calendar_blocks for internal tracking
     const blockId = `sched_${instance.id}`;
     const blockRef = db.collection('calendar_blocks').doc(blockId);
     const startMs = instance.plannedStart ? new Date(instance.plannedStart).getTime() : null;
     const endMs = instance.plannedEnd ? new Date(instance.plannedEnd).getTime() : null;
     if (startMs && endMs) {
+      const sourceType = String(instance.sourceType || 'routine').toLowerCase();
+      const hasThemeContext = instance.theme != null || instance.goalId != null;
+      const syncRoutineLikeToGoogle = (sourceType === 'routine' || sourceType === 'habit') && hasThemeContext;
       batch.set(blockRef, {
         ownerUid: uid,
         title: instance.title || 'Routine',
@@ -1149,9 +1548,12 @@ exports.planBlocksV2 = httpsV2.onCall(async (req) => {
         placementReason: (instance.schedulingContext && instance.schedulingContext.policyMode) || 'routine',
         theme: instance.theme || null,
         goalId: instance.goalId || null,
+        choreId: sourceType === 'chore' ? instance.sourceId || null : null,
+        routineId: sourceType === 'routine' ? instance.sourceId || null : null,
+        habitId: sourceType === 'habit' ? instance.sourceId || null : null,
         updatedAt: nowMs,
         createdAt: nowMs,
-        syncToGoogle: true,
+        syncToGoogle: syncRoutineLikeToGoogle,
       }, { merge: true });
     }
   }
@@ -1269,6 +1671,7 @@ exports.planBlocksV2Http = httpsV2.onRequest({ invoker: 'public' }, async (req, 
 
     const uid = decoded.uid;
     const timezone = req.body?.timezone || DEFAULT_TIMEZONE;
+    const persona = req.body?.persona || 'personal';
     const startDate = req.body?.startDate || DateTime.now().setZone(timezone).toISODate();
     const days = Math.min(Math.max(Number(req.body?.days || 7), 1), 30);
     const start = DateTime.fromISO(startDate, { zone: timezone }).startOf('day');
@@ -1309,7 +1712,90 @@ exports.planBlocksV2Http = httpsV2.onRequest({ invoker: 'public' }, async (req, 
       console.warn('[planBlocksV2Http] quiet hours apply failed', e?.message || e);
     }
 
-    const plan = await planSchedule({ db, userId: uid, windowStart: start, windowEnd: end, busy, includeChores: true });
+    const isMainGigLabel = (value) => {
+      const raw = String(value || '').toLowerCase();
+      if (!raw) return false;
+      if (raw.includes('workout')) return false;
+      if (raw.includes('main gig') || raw.includes('work shift')) return true;
+      return /\bwork\b/.test(raw);
+    };
+
+    const isMainGigBlock = (block) => {
+      if (!block) return false;
+      if (block.entityType === 'work_shift' || block.sourceType === 'work_shift_allocation') return true;
+      const label = block.theme || block.category || block.title || '';
+      return isMainGigLabel(label);
+    };
+
+    try {
+      const blocksSnap = await db.collection('calendar_blocks')
+        .where('ownerUid', '==', uid)
+        .where('start', '>=', start.toMillis())
+        .where('start', '<=', end.toMillis())
+        .get()
+        .catch(() => ({ docs: [] }));
+      const blocks = blocksSnap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+
+      const busyPersonal = [...busy];
+      const busyWork = [...busy];
+      const mainGigBlocks = blocks.filter((b) => isMainGigBlock(b) && b.start && b.end);
+
+      for (const b of blocks) {
+        if (!b.start || !b.end) continue;
+        const interval = {
+          start: DateTime.fromMillis(b.start, { zone: timezone }).toISO(),
+          end: DateTime.fromMillis(b.end, { zone: timezone }).toISO(),
+        };
+        if (isMainGigBlock(b)) {
+          busyPersonal.push(interval);
+        } else {
+          busyPersonal.push(interval);
+          busyWork.push(interval);
+        }
+      }
+
+      if (persona === 'work') {
+        const daysSpan = Math.max(1, Math.round(end.diff(start, 'days').days) + 1);
+        for (let i = 0; i < daysSpan; i++) {
+          const dayStart = start.plus({ days: i }).startOf('day');
+          const dayEnd = dayStart.endOf('day');
+          const dayBlocks = mainGigBlocks
+            .filter((b) => b.start && b.end)
+            .filter((b) => {
+              const blockStart = DateTime.fromMillis(b.start, { zone: timezone });
+              const blockEnd = DateTime.fromMillis(b.end, { zone: timezone });
+              return blockEnd > dayStart && blockStart < dayEnd;
+            })
+            .map((b) => ({
+              start: DateTime.fromMillis(b.start, { zone: timezone }),
+              end: DateTime.fromMillis(b.end, { zone: timezone }),
+            }))
+            .sort((a, b) => a.start.toMillis() - b.start.toMillis());
+
+          if (!dayBlocks.length) {
+            busyWork.push({ start: dayStart.toISO(), end: dayEnd.toISO() });
+            continue;
+          }
+
+          let cursor = dayStart;
+          for (const block of dayBlocks) {
+            if (block.start > cursor) {
+              busyWork.push({ start: cursor.toISO(), end: block.start.toISO() });
+            }
+            cursor = block.end > cursor ? block.end : cursor;
+          }
+          if (cursor < dayEnd) {
+            busyWork.push({ start: cursor.toISO(), end: dayEnd.toISO() });
+          }
+        }
+      }
+
+      busy = persona === 'work' ? busyWork : busyPersonal;
+    } catch (err) {
+      console.warn('[planBlocksV2Http] calendar block busy merge failed', err?.message || err);
+    }
+
+    const plan = await planSchedule({ db, userId: uid, windowStart: start, windowEnd: end, busy, includeChores: true, persona });
     const existingIds = new Set(plan.existingIds || []);
     const batch = db.batch();
     const nowMs = Date.now();
@@ -1349,7 +1835,7 @@ exports.planBlocksV2Http = httpsV2.onRequest({ invoker: 'public' }, async (req, 
           goalId: instance.goalId || null,
           updatedAt: nowMs,
           createdAt: nowMs,
-          syncToGoogle: true,
+          syncToGoogle: false,
         }, { merge: true });
       }
     }
@@ -2510,7 +2996,7 @@ exports.listChoresWithStats = httpsV2.onCall(async (req) => {
       id: chore.id,
       title: chore.title || 'Chore',
       cadence: chore.recurrence?.rrule || null,
-      durationMinutes: Number(chore.durationMinutes || 15),
+      durationMinutes: Number(chore.durationMinutes || 10),
       priority: chore.priority || 3,
       tags: chore.tags || [],
       requiredBlockId: chore.requiredBlockId || null,
@@ -2950,6 +3436,15 @@ function getGoogleRedirectUri() {
   return `https://europe-west2-${projectId}.cloudfunctions.net/oauthCallback`;
 }
 
+function getYouTubeRedirectUri() {
+  try {
+    if (process.env.GOOGLE_OAUTH_YOUTUBE_REDIRECT_URI) return process.env.GOOGLE_OAUTH_YOUTUBE_REDIRECT_URI;
+  } catch { }
+  const projectId = process.env.GCLOUD_PROJECT;
+  if (!projectId) return null;
+  return `https://europe-west2-${projectId}.cloudfunctions.net/youtubeOAuthCallback`;
+}
+
 exports.oauthStart = httpsV2.onRequest({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET], invoker: 'public' }, async (req, res) => {
   try {
     const uid = String(req.query.uid || "");
@@ -2978,6 +3473,37 @@ exports.oauthStart = httpsV2.onRequest({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGL
     res.redirect(authUrl);
   } catch (e) {
     res.status(500).send("OAuth start error: " + e.message);
+  }
+});
+
+// ===== YouTube OAuth: start
+exports.youtubeOAuthStart = httpsV2.onRequest({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET], invoker: 'public' }, async (req, res) => {
+  try {
+    const uid = String(req.query.uid || "");
+    const nonce = String(req.query.nonce || "");
+    if (!uid || !nonce) return res.status(400).send("Missing uid/nonce");
+
+    const redirectUri = getYouTubeRedirectUri();
+    if (!redirectUri) return res.status(500).send("Missing redirect URI configuration (GCLOUD_PROJECT or GOOGLE_OAUTH_YOUTUBE_REDIRECT_URI)");
+    const clientId = (process.env.GOOGLE_OAUTH_CLIENT_ID || '').trim();
+    const clientSecret = (process.env.GOOGLE_OAUTH_CLIENT_SECRET || '').trim();
+
+    if (!clientId || !/\.apps\.googleusercontent\.com$/.test(String(clientId))) {
+      return res.status(500).send(
+        [
+          'Google OAuth is not configured. Please set GOOGLE_OAUTH_CLIENT_ID (Web application client) and GOOGLE_OAUTH_CLIENT_SECRET as Functions secrets.',
+          'Also add this Redirect URI in the Google Cloud Console:',
+          redirectUri
+        ].join('\n')
+      );
+    }
+
+    const state = stateEncode({ uid, nonce });
+    const scope = encodeURIComponent("https://www.googleapis.com/auth/youtube.readonly");
+    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&access_type=offline&include_granted_scopes=true&prompt=consent%20select_account&scope=${scope}&state=${state}`;
+    res.redirect(authUrl);
+  } catch (e) {
+    res.status(500).send("YouTube OAuth start error: " + e.message);
   }
 });
 
@@ -3595,6 +4121,70 @@ exports.oauthCallback = httpsV2.onRequest({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GO
   } catch (e) {
     try { console.error('OAuth callback error:', e?.message || e); } catch { }
     res.status(500).send("OAuth callback error: " + (e?.message || String(e)));
+  }
+});
+
+// ===== YouTube OAuth: callback
+exports.youtubeOAuthCallback = httpsV2.onRequest({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET], invoker: 'public' }, async (req, res) => {
+  try {
+    const code = String(req.query.code || "");
+    const state = stateDecode(req.query.state);
+    const uid = state.uid;
+    if (!code || !uid) return res.status(400).send("Missing code/uid");
+
+    const redirectUri = getYouTubeRedirectUri();
+    if (!redirectUri) return res.status(500).send("Missing redirect URI configuration (GCLOUD_PROJECT or GOOGLE_OAUTH_YOUTUBE_REDIRECT_URI)");
+
+    let tokenData;
+    try {
+      tokenData = await fetchJson("https://oauth2.googleapis.com/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          code,
+          client_id: (process.env.GOOGLE_OAUTH_CLIENT_ID || '').trim(),
+          client_secret: (process.env.GOOGLE_OAUTH_CLIENT_SECRET || '').trim(),
+          redirect_uri: redirectUri,
+          grant_type: "authorization_code",
+        }).toString(),
+      });
+    } catch (tokenError) {
+      console.error('YouTube OAuth token exchange failed:', tokenError);
+      return res.status(401).send(
+        `OAuth token error: ${tokenError?.message || String(tokenError)}. ` +
+        'This usually means the Google OAuth client credentials are invalid or the redirect URI doesn\'t match. ' +
+        'Verify GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET secrets are set correctly.'
+      );
+    }
+
+    const refresh = tokenData.refresh_token;
+    const access = tokenData.access_token;
+    const expiresIn = tokenData.expires_in || 3600;
+    if (!refresh) {
+      return res.status(400).send("No refresh_token returned. Ensure prompt=consent and access_type=offline.");
+    }
+
+    const db = admin.firestore();
+    const expiresAt = Math.floor(Date.now() / 1000) + Number(expiresIn || 0);
+    await db.collection("tokens").doc(`${uid}_youtube`).set({
+      provider: "google_youtube",
+      ownerUid: uid,
+      refresh_token: refresh,
+      access_token: access || null,
+      expires_at: expiresAt,
+      scope: tokenData.scope || null,
+      access_at: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    await db.collection('profiles').doc(uid).set({
+      youtubeConnected: true,
+    }, { merge: true });
+
+    res.status(200).send("<script>window.close();</script>Connected to YouTube. You can close this window.");
+  } catch (e) {
+    try { console.error('YouTube OAuth callback error:', e?.message || e); } catch { }
+    res.status(500).send("YouTube OAuth callback error: " + (e?.message || String(e)));
   }
 });
 
@@ -4837,8 +5427,13 @@ exports.setTransactionCategoryOverride = httpsV2.onCall({ secrets: [MONZO_CLIENT
   const docIdOverride = String(req.data?.docId || '').trim();
   const categoryKey = String(req.data?.categoryKey || '').trim();
   const categoryLabel = req.data?.categoryLabel ? String(req.data.categoryLabel).trim() : null;
+  const categoryType = req.data?.categoryType ? String(req.data.categoryType).trim().toLowerCase() : null;
+  const allowedTypes = new Set(['mandatory', 'optional', 'savings', 'income']);
 
   if (!transactionId || !categoryKey) throw new httpsV2.HttpsError('invalid-argument', 'transactionId and categoryKey are required');
+  if (categoryType && !allowedTypes.has(categoryType)) {
+    throw new httpsV2.HttpsError('invalid-argument', 'categoryType must be mandatory, optional, savings, or income');
+  }
 
   const db = admin.firestore();
   const col = db.collection('monzo_transactions');
@@ -4858,12 +5453,14 @@ exports.setTransactionCategoryOverride = httpsV2.onCall({ secrets: [MONZO_CLIENT
   if (!snap || !snap.exists) throw new httpsV2.HttpsError('not-found', 'Transaction not found');
   if (snap.data().ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Not your transaction');
 
-  await docRef.update({
+  const updatePayload = {
     userCategoryKey: categoryKey,
     userCategoryLabel: categoryLabel,
     manualCategory: true,
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-  });
+  };
+  if (categoryType) updatePayload.userCategoryType = categoryType;
+  await docRef.update(updatePayload);
 
   return { ok: true };
 });
@@ -5192,14 +5789,18 @@ exports.monzoIntegrationMonitor = schedulerV2.onSchedule('every 60 minutes', asy
   return { stale: snap.size };
 });
 
-async function syncMonzoTransactionsForAccount({ uid, accountId, accessToken, since }) {
+async function syncMonzoTransactionsForAccount({ uid, accountId, accessToken, since, fullRefresh = false, historyStart = null }) {
   const db = admin.firestore();
   const transactionsCol = db.collection('monzo_transactions');
   const limit = 200;
-  let cursor = since || null;
-  let prevCursor = cursor || null;
+  let sinceCursor = since || null;
+  let refreshSinceCursor = fullRefresh ? (historyStart || null) : null;
+  let beforeCursor = null;
+  let fullRefreshDirection = null; // asc | desc
   let total = 0;
   let lastCreated = since || null;
+  let firstCreated = null;
+  const historyFloorMs = historyStart ? Date.parse(historyStart) : null;
 
   // Preload merchant mappings for this user to auto-apply categorisation
   const merchantMappingsSnap = await db.collection('merchant_mappings')
@@ -5238,7 +5839,12 @@ async function syncMonzoTransactionsForAccount({ uid, accountId, accessToken, si
     const params = new URLSearchParams();
     params.set('account_id', accountId);
     params.set('limit', String(limit));
-    if (cursor) params.set('since', cursor);
+    if (fullRefresh) {
+      if (refreshSinceCursor) params.set('since', refreshSinceCursor);
+      if (beforeCursor) params.set('before', beforeCursor);
+    } else if (sinceCursor) {
+      params.set('since', sinceCursor);
+    }
     params.append('expand[]', 'merchant');
 
     const data = await monzoApi(accessToken, '/transactions', params);
@@ -5246,6 +5852,9 @@ async function syncMonzoTransactionsForAccount({ uid, accountId, accessToken, si
     if (!transactions.length) break;
 
     const batch = db.batch();
+    let pageNewestCreated = null;
+    let pageOldestCreated = null;
+
     for (const tx of transactions) {
       const docRef = transactionsCol.doc(`${uid}_${tx.id}`);
       const defaultCategoryType = inferDefaultCategoryType(tx);
@@ -5338,18 +5947,51 @@ async function syncMonzoTransactionsForAccount({ uid, accountId, accessToken, si
       }
 
       batch.set(docRef, docData, { merge: true });
+
+      if (tx.created) {
+        if (!pageNewestCreated || tx.created > pageNewestCreated) pageNewestCreated = tx.created;
+        if (!pageOldestCreated || tx.created < pageOldestCreated) pageOldestCreated = tx.created;
+      }
     }
 
     await batch.commit();
 
     total += transactions.length;
+    if (pageNewestCreated && (!lastCreated || pageNewestCreated > lastCreated)) lastCreated = pageNewestCreated;
+    if (pageOldestCreated && (!firstCreated || pageOldestCreated < firstCreated)) firstCreated = pageOldestCreated;
+
+    if (fullRefresh) {
+      if (!fullRefreshDirection && transactions.length >= 2) {
+        const firstMs = Date.parse(transactions[0]?.created || '');
+        const lastMs = Date.parse(transactions[transactions.length - 1]?.created || '');
+        if (Number.isFinite(firstMs) && Number.isFinite(lastMs)) {
+          fullRefreshDirection = firstMs >= lastMs ? 'desc' : 'asc';
+        }
+      }
+      if (transactions.length < limit) break;
+
+      if (fullRefreshDirection === 'asc') {
+        if (!pageNewestCreated) break;
+        const nextSince = new Date(new Date(pageNewestCreated).getTime() + 1).toISOString();
+        if (nextSince === refreshSinceCursor) break;
+        refreshSinceCursor = nextSince;
+      } else {
+        if (!pageOldestCreated) break;
+        const oldestMs = Date.parse(pageOldestCreated);
+        if (Number.isFinite(historyFloorMs) && Number.isFinite(oldestMs) && oldestMs <= historyFloorMs) break;
+        const nextBefore = new Date(oldestMs - 1).toISOString();
+        if (nextBefore === beforeCursor) break;
+        beforeCursor = nextBefore;
+      }
+      continue;
+    }
+
     const lastTx = transactions[transactions.length - 1];
     if (lastTx?.created) {
-      lastCreated = lastTx.created;
-      prevCursor = cursor;
       const nextDate = new Date(lastTx.created);
-      cursor = new Date(nextDate.getTime() + 1).toISOString();
-      if (cursor === prevCursor) break;
+      const nextSince = new Date(nextDate.getTime() + 1).toISOString();
+      if (nextSince === sinceCursor) break;
+      sinceCursor = nextSince;
     } else {
       break;
     }
@@ -5357,7 +5999,7 @@ async function syncMonzoTransactionsForAccount({ uid, accountId, accessToken, si
     if (transactions.length < limit) break;
   }
 
-  return { count: total, lastCreated };
+  return { count: total, lastCreated, firstCreated };
 }
 
 const loadFinanceCategoriesForUser = async (db, uid) => {
@@ -5821,6 +6463,31 @@ exports.monzoSpendAnomalySweep = schedulerV2.onSchedule({
 });
 
 
+async function findEarliestMonzoTransactionCreated(db, uid, accountId) {
+  const snap = await db.collection('monzo_transactions')
+    .where('ownerUid', '==', uid)
+    .where('accountId', '==', accountId)
+    .select('createdISO', 'createdAt')
+    .get();
+
+  let earliestMs = null;
+  snap.forEach((docSnap) => {
+    const data = docSnap.data() || {};
+    let candidateMs = NaN;
+    if (data.createdAt?.toDate) {
+      candidateMs = data.createdAt.toDate().getTime();
+    } else if (data.createdAt?._seconds) {
+      candidateMs = Number(data.createdAt._seconds) * 1_000;
+    } else if (typeof data.createdISO === 'string' && data.createdISO) {
+      candidateMs = Date.parse(data.createdISO);
+    }
+    if (!Number.isFinite(candidateMs)) return;
+    earliestMs = earliestMs === null ? candidateMs : Math.min(earliestMs, candidateMs);
+  });
+
+  return earliestMs === null ? null : new Date(earliestMs).toISOString();
+}
+
 async function syncMonzoDataForUser(uid, { since, fullRefresh } = {}) {
   const { accessToken } = await ensureMonzoAccessToken(uid);
   const db = admin.firestore();
@@ -5902,10 +6569,34 @@ async function syncMonzoDataForUser(uid, { since, fullRefresh } = {}) {
     const syncSnap = await syncStateRef.get();
     const stateData = syncSnap.data() || {};
     const sinceCursor = fullRefresh ? null : (since || stateData.lastTransactionCreated || null);
+    const historyFloorISO = '2018-01-01T00:00:00.000Z';
+    const parsedAccountCreatedMs = Date.parse(String(account?.created || ''));
+    const accountCreatedISO = Number.isNaN(parsedAccountCreatedMs)
+      ? null
+      : new Date(parsedAccountCreatedMs).toISOString();
+    const historyStart = fullRefresh
+      ? (accountCreatedISO && accountCreatedISO > historyFloorISO ? accountCreatedISO : historyFloorISO)
+      : null;
 
-    const txSummary = await syncMonzoTransactionsForAccount({ uid, accountId, accessToken, since: sinceCursor });
+    const txSummary = await syncMonzoTransactionsForAccount({
+      uid,
+      accountId,
+      accessToken,
+      since: sinceCursor,
+      fullRefresh: !!fullRefresh,
+      historyStart,
+    });
+    let firstCreated = txSummary.firstCreated || null;
+    if (fullRefresh && !firstCreated) {
+      firstCreated = await findEarliestMonzoTransactionCreated(db, uid, accountId);
+    }
     summary.transactions += txSummary.count;
-    summary.accountsSynced.push({ accountId, transactions: txSummary.count, lastCreated: txSummary.lastCreated || null });
+    summary.accountsSynced.push({
+      accountId,
+      transactions: txSummary.count,
+      lastCreated: txSummary.lastCreated || null,
+      firstCreated,
+    });
 
     const update = {
       ownerUid: uid,
@@ -5917,6 +6608,10 @@ async function syncMonzoDataForUser(uid, { since, fullRefresh } = {}) {
     if (txSummary.lastCreated) {
       update.lastTransactionCreated = txSummary.lastCreated;
       update.lastTransactionTs = admin.firestore.Timestamp.fromDate(new Date(txSummary.lastCreated));
+    }
+    if (firstCreated) {
+      update.firstTransactionCreated = firstCreated;
+      update.firstTransactionTs = admin.firestore.Timestamp.fromDate(new Date(firstCreated));
     }
 
     await syncStateRef.set(update, { merge: true });
@@ -5964,31 +6659,61 @@ exports.syncMonzoNow = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_
 
     return { success: true, summary: result };
   } catch (error) {
+    const normalizedError = error instanceof httpsV2.HttpsError ? error : null;
+    const errorCode = normalizedError?.code || 'internal';
+    const errorMessage = normalizedError?.message || error?.message || String(error);
+    const reconnectRequired =
+      errorCode === 'failed-precondition' &&
+      /missing monzo refresh token|refresh token/i.test(errorMessage);
+    const userMessage = reconnectRequired
+      ? 'Monzo connection expired. Reconnect Monzo in Integrations, then run sync again.'
+      : errorMessage;
+    console.error('[syncMonzoNow] manual sync failed', {
+      uid,
+      errorCode,
+      errorMessage,
+      stack: error?.stack || null,
+    });
+
     const db = admin.firestore();
     await db.collection('integration_logs').add({
       integration: 'monzo',
       type: 'manual_sync',
       status: 'error',
       userId: uid,
-      error: error.message,
+      errorCode,
+      error: userMessage,
       timestamp: admin.firestore.FieldValue.serverTimestamp()
     });
 
-    // Email admin on failure
-    try {
-      await sendEmail({
-        to: 'support@jc1.tech',
-        subject: `Monzo Manual Sync Failed - ${uid}`,
-        html: `<h3>Monzo manual sync failed</h3>
-               <p><strong>User:</strong> ${uid}</p>
-               <p><strong>Error:</strong> ${error.message}</p>
-               <pre>${JSON.stringify(error, null, 2)}</pre>`
-      });
-    } catch (emailError) {
-      console.error('Failed to send alert email:', emailError);
+    // Email admin only for unexpected server-side failures when Brevo is configured on this revision.
+    if (errorCode === 'internal' || errorCode === 'unknown') {
+      if (process.env.BREVO_API_KEY) {
+        try {
+          await sendEmail({
+            to: 'support@jc1.tech',
+            subject: `Monzo Manual Sync Failed - ${uid}`,
+            html: `<h3>Monzo manual sync failed</h3>
+                 <p><strong>User:</strong> ${uid}</p>
+                 <p><strong>Error:</strong> ${errorMessage}</p>
+                 <pre>${JSON.stringify(error, null, 2)}</pre>`
+          });
+        } catch (emailError) {
+          console.error('Failed to send alert email:', emailError);
+        }
+      } else {
+        console.warn('[syncMonzoNow] Brevo not configured, skipping alert email');
+      }
     }
 
-    throw new httpsV2.HttpsError('internal', `Sync failed: ${error.message}`);
+    if (normalizedError) {
+      if (userMessage !== normalizedError.message) {
+        throw new httpsV2.HttpsError(errorCode, userMessage);
+      }
+      throw normalizedError;
+    }
+
+    throw new httpsV2.HttpsError('internal', `Sync failed: ${userMessage}`);
   }
 });
 
@@ -6207,7 +6932,7 @@ exports.runPlanner = functionsV2.https.onCall(async (req) => {
 
   try {
     if (!exports.planBlocksV2?.run) throw new Error('planBlocksV2 unavailable');
-    const schedRes = await exports.planBlocksV2.run({ auth: { uid }, data: { timezone, startDate, days, includeBusy: true } });
+    const schedRes = await exports.planBlocksV2.run({ auth: { uid }, data: { timezone, startDate, days, includeBusy: true, persona } });
     results.schedule = schedRes?.data || schedRes || null;
   } catch (e) {
     console.warn('[runPlanner] planBlocksV2 failed', e?.message || e);
@@ -6265,8 +6990,10 @@ exports.generateStoriesForGoal = functionsV2.https.onCall({ secrets: [GOOGLE_AI_
       basePrompt = settingsDoc.exists ? (settingsDoc.data().storyGenPrompt || null) : null;
     } catch { }
 
+    const goalPersona = goal?.persona || 'personal';
+    const personaLabel = goalPersona === 'work' ? 'work' : 'personal';
     const prompt = promptOverride || basePrompt || (
-      `Generate between 3 and 6 user stories for the following personal goal. ` +
+      `Generate between 3 and 6 user stories for the following ${personaLabel} goal. ` +
       `Each story must include a clear title and a 1-2 sentence description. ` +
       `Return STRICT JSON: {"stories":[{"title":"...","description":"..."}, ...]}. ` +
       `Do not include markdown or prose, JSON only.`
@@ -6298,7 +7025,7 @@ exports.generateStoriesForGoal = functionsV2.https.onCall({ secrets: [GOOGLE_AI_
       batch.set(ref, {
         id: ref.id,
         ref: `STY-${now}-${Math.floor(Math.random() * 10000)}`,
-        persona: 'personal',
+        persona: goalPersona,
         title: String(s.title).slice(0, 140),
         description: String(s.description || ''),
         goalId: goalId,
@@ -6471,20 +7198,17 @@ async function assemblePlanningContext(uid, persona, horizonDays) {
 
   const tasks = tasksQuery.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-  // Get goals (if personal)
-  let goals = [];
-  if (persona === 'personal') {
-    const goalsQuery = await db.collection('goals')
-      .where('ownerUid', '==', uid)
-      .where('status', 'in', ['new', 'active'])
-      .get();
-    goals = goalsQuery.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-  }
+  // Get goals for this persona
+  const goalsQuery = await db.collection('goals')
+    .where('ownerUid', '==', uid)
+    .where('persona', '==', persona)
+    .where('status', 'in', ['new', 'active'])
+    .get();
+  const goals = goalsQuery.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
   // Get existing calendar blocks
   const blocksQuery = await db.collection('calendar_blocks')
     .where('ownerUid', '==', uid)
-    .where('persona', '==', persona)
     .where('start', '>=', startDate.getTime())
     .where('start', '<=', endDate.getTime())
     .get();
@@ -6706,10 +7430,11 @@ exports.orchestrateGoalPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_AI
   // 3) Create a primary Research story and tasks
   const storyRef = db.collection('stories').doc();
   const baseTheme = goal.theme || 'Learning & Education';
+  const goalPersona = goal.persona || 'personal';
   await storyRef.set({
     id: storyRef.id,
     ownerUid: uid,
-    persona: 'personal',
+    persona: goalPersona,
     title: `Deep Research: ${goal.title}`,
     description: `Auto-generated research package for goal. Research Doc: /research/${researchRef.id}`,
     goalId,
@@ -6727,7 +7452,7 @@ exports.orchestrateGoalPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_AI
     await tRef.set(ensureTaskPoints({
       id: tRef.id,
       ownerUid: uid,
-      persona: 'personal',
+      persona: goalPersona,
       title: String(a?.title || 'Next step'),
       description: 'Auto-generated from research plan',
       storyId: storyRef.id,
@@ -7042,6 +7767,7 @@ exports.sendGoalChatMessage = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KE
   const goalSnap = await db.collection('goals').doc(goalId).get();
   if (!goalSnap.exists) throw new httpsV2.HttpsError('not-found', 'Goal not found');
   if (goalSnap.data().ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Not your goal');
+  const goalPersona = goalSnap.data().persona || 'personal';
 
   const threadRef = db.collection('goal_chats').doc(goalId);
   if (isUnsafeMessage(message)) {
@@ -7087,7 +7813,7 @@ exports.sendGoalChatMessage = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KE
     await taskRef.set(ensureTaskPoints({
       id: taskRef.id,
       ownerUid: uid,
-      persona: 'personal',
+      persona: goalPersona,
       title: String(t?.title || 'Follow-up'),
       description: 'AI-suggested from goal chat',
       status: 0,
@@ -7118,6 +7844,19 @@ async function validateCalendarBlocks(blocks, context) {
   const warnings = [];
   const blockAnnotations = (blocks || []).map(() => ({ errors: [], warnings: [] }));
   let score = 1.0;
+  const isMainGigLabel = (value) => {
+    const raw = String(value || '').toLowerCase();
+    if (!raw) return false;
+    if (raw.includes('workout')) return false;
+    if (raw.includes('main gig') || raw.includes('work shift')) return true;
+    return /\bwork\b/.test(raw);
+  };
+  const isMainGigBlock = (block) => {
+    if (!block) return false;
+    if (block.entityType === 'work_shift' || block.sourceType === 'work_shift_allocation') return true;
+    const label = block.theme || block.category || block.title || '';
+    return isMainGigLabel(label);
+  };
 
   for (let i = 0; i < (blocks || []).length; i++) {
     const block = blocks[i];
@@ -7134,6 +7873,7 @@ async function validateCalendarBlocks(blocks, context) {
 
     // Conflicts with existing AI calendar blocks
     for (const existing of context.existingBlocks) {
+      if (context.persona === 'work' && isMainGigBlock(existing)) continue;
       if (isTimeOverlap(block.start, block.end, existing.start, existing.end)) {
         const msg = `Block conflicts with existing calendar block`;
         errors.push(msg);
@@ -7627,7 +8367,7 @@ async function importGoogleCalendarEvents(uid, { startDate, endDate }) {
 
     const payload = {
       ownerUid: uid,
-      persona: 'personal',
+      persona: null,
       title: event.summary || 'Calendar Event',
       description: event.description || null,
       theme: 'Growth',
@@ -8247,6 +8987,7 @@ async function prioritizeTasksForUser({ db, userId, runId = null }) {
       aiPriorityUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
       aiPriorityRunId: runId || null,
       aiPriorityScore: admin.firestore.FieldValue.delete(),
+      aiTop3Reason: admin.firestore.FieldValue.delete(),
       aiPriorityReason: admin.firestore.FieldValue.delete(),
     }, { merge: true });
     const base = detailById.get(matchedId) || {};
@@ -8657,12 +9398,15 @@ async function generateCalendarPlanForUser({ db, userId, profile, runId }) {
     }
     batch.set(ref, payload, { merge: true });
 
-    // Mirror routines/chores/habits into calendar_blocks for GCal sync
+    // Mirror routines/chores/habits into calendar_blocks for internal tracking
     const blockId = `sched_${instance.id}`;
     const blockRef = db.collection('calendar_blocks').doc(blockId);
     const startMs = instance.plannedStart ? new Date(instance.plannedStart).getTime() : null;
     const endMs = instance.plannedEnd ? new Date(instance.plannedEnd).getTime() : null;
     if (startMs && endMs) {
+      const sourceType = String(instance.sourceType || 'routine').toLowerCase();
+      const hasThemeContext = instance.theme != null || instance.goalId != null;
+      const syncRoutineLikeToGoogle = (sourceType === 'routine' || sourceType === 'habit') && hasThemeContext;
       batch.set(blockRef, {
         ownerUid: userId,
         title: instance.title || 'Routine',
@@ -8676,9 +9420,12 @@ async function generateCalendarPlanForUser({ db, userId, profile, runId }) {
         placementReason: (instance.schedulingContext && instance.schedulingContext.policyMode) || 'routine',
         theme: instance.theme || null,
         goalId: instance.goalId || null,
+        choreId: sourceType === 'chore' ? instance.sourceId || null : null,
+        routineId: sourceType === 'routine' ? instance.sourceId || null : null,
+        habitId: sourceType === 'habit' ? instance.sourceId || null : null,
         updatedAt: nowMs,
         createdAt: nowMs,
-        syncToGoogle: true,
+        syncToGoogle: syncRoutineLikeToGoogle,
       }, { merge: true });
     }
   }
@@ -9830,10 +10577,6 @@ function assembleDailyChecklist(summaryData) {
     // completedAt when transitioning to done (status=2)
     const beforeStatus = Number(before?.status ?? null);
     const afterStatus = Number(after?.status ?? null);
-    if ((beforeStatus !== 2) && (afterStatus === 2) && !after?.completedAt) {
-      patch.completedAt = admin.firestore.FieldValue.serverTimestamp();
-      needsPatch = true;
-    }
 
     // One-time type inference if missing
     if (!after?.type) {
@@ -9845,15 +10588,42 @@ function assembleDailyChecklist(summaryData) {
     const { changed, patch: norm } = normaliseRecurrence(after);
     if (changed) { Object.assign(patch, norm); needsPatch = true; }
 
+    // Enforce chores theme for chore-type tasks
+    const effectiveType = String(after?.type || patch?.type || '').toLowerCase();
+    const isChoreLike = effectiveType === 'chore' || effectiveType === 'routine' || effectiveType === 'habit';
+    const effectiveTask = { ...(after || {}), ...(patch || {}), type: effectiveType };
+    const isRecurringChore = isRecurringChoreTask(effectiveTask);
+    if (effectiveType === 'chore') {
+      const currentTheme = after?.theme ?? patch?.theme ?? null;
+      const currentLabel = themeLabelFromValue(currentTheme);
+      if (String(currentLabel || '').toLowerCase() !== 'chores') {
+        patch.theme = 'Chores';
+        needsPatch = true;
+      }
+    }
+
+    if ((beforeStatus !== 2) && (afterStatus === 2)) {
+      if (isRecurringChore) {
+        patch.status = 0;
+        patch.completedAt = admin.firestore.FieldValue.delete();
+        patch.deleteAfter = admin.firestore.FieldValue.delete();
+        patch.lastDoneAt = admin.firestore.FieldValue.serverTimestamp();
+        needsPatch = true;
+      } else if (!after?.completedAt) {
+        patch.completedAt = admin.firestore.FieldValue.serverTimestamp();
+        needsPatch = true;
+      }
+    }
+
     if (needsPatch) {
       // Avoid infinite loops: keep patch minimal and idempotent
       await ref.set(patch, { merge: true });
     }
 
     // Materialize chore/routine calendar blocks for next 14 days (active only)
-    const type = (after?.type || patch?.type || '').toLowerCase();
-    const active = Number(afterStatus) !== 2;
-    const isChoreLike = type === 'chore' || type === 'routine';
+    const type = effectiveType;
+    const effectiveStatus = Number(patch?.status ?? afterStatus);
+    const active = Number(effectiveStatus) !== 2;
     if (isChoreLike && active) {
       const task = { id, ...(after || {}), ...(patch || {}) };
       await upsertChoreBlocksForTask(db, task, 14);
@@ -9917,7 +10687,7 @@ function assembleDailyChecklist(summaryData) {
   exports.ensureChoreBlocksHourly = schedulerV2.onSchedule('every 1 hours', async () => {
     const db = admin.firestore();
     let scanned = 0, created = 0, updated = 0;
-    for (const t of ['chore', 'routine']) {
+    for (const t of ['chore', 'routine', 'habit']) {
       // Only open tasks (status == 0)
       const snap = await db.collection('tasks').where('type', '==', t).where('status', '==', 0).get();
       for (const doc of snap.docs) {
@@ -9951,11 +10721,22 @@ function assembleDailyChecklist(summaryData) {
     const task = snap.data() || {};
     if (task.ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Cannot modify this task');
     const type = String(task?.type || '').toLowerCase();
-    if (type !== 'chore' && type !== 'routine') throw new httpsV2.HttpsError('failed-precondition', 'Not a chore/routine');
-    const todayKey = toDayKey(new Date());
+    if (type !== 'chore' && type !== 'routine' && type !== 'habit') throw new httpsV2.HttpsError('failed-precondition', 'Not a chore/routine/habit');
+    const today = new Date();
+    const todayKey = toDayKey(today);
+    const todayIso = today.toISOString().slice(0, 10);
     const blockId = `chore_${taskId}_${todayKey}`;
     await db.collection('calendar_blocks').doc(blockId)
-      .set({ ownerUid: uid, taskId, entityType: 'chore', status: 'done', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      .set({
+        ownerUid: uid,
+        taskId,
+        entityType: 'chore',
+        status: 'done',
+        source: 'chore',
+        syncToGoogle: false,
+        deepLink: `/chores/checklist?date=${encodeURIComponent(todayIso)}&taskId=${encodeURIComponent(taskId)}`,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
     await taskRef.set({ lastDoneAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
     return { ok: true };
   });
@@ -10360,6 +11141,47 @@ async function getAccessToken(uid) {
     }).toString(),
   });
   return token.access_token;
+}
+
+async function getYouTubeTokenDoc(uid) {
+  const db = admin.firestore();
+  const snap = await db.collection('tokens').doc(`${uid}_youtube`).get();
+  return snap.exists ? { id: snap.id, ...snap.data() } : null;
+}
+
+async function getYouTubeAccessToken(uid) {
+  const doc = await getYouTubeTokenDoc(uid);
+  if (!doc) throw new Error('YouTube not connected. Connect via Settings > Integrations > YouTube.');
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (doc.access_token && doc.expires_at && doc.expires_at > nowSec + 60) {
+    return doc.access_token;
+  }
+  const refresh = doc.refresh_token;
+  if (!refresh) throw new Error('Missing refresh_token for YouTube');
+  const tokenData = await fetchJson("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: (process.env.GOOGLE_OAUTH_CLIENT_ID || '').trim(),
+      client_secret: (process.env.GOOGLE_OAUTH_CLIENT_SECRET || '').trim(),
+      refresh_token: refresh,
+      grant_type: "refresh_token",
+    }).toString(),
+  });
+  const access = tokenData.access_token;
+  const expiresAt = tokenData.expires_at || (Math.floor(Date.now() / 1000) + Number(tokenData.expires_in || 0));
+  const newRefresh = tokenData.refresh_token || refresh;
+  const db = admin.firestore();
+  await db.collection('tokens').doc(`${uid}_youtube`).set({
+    provider: 'google_youtube',
+    ownerUid: uid,
+    access_token: access,
+    refresh_token: newRefresh,
+    expires_at: expiresAt,
+    scope: tokenData.scope || doc.scope || null,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+  return access;
 }
 
 // ===== Calendar callables
@@ -11067,7 +11889,7 @@ exports.syncCalendarBlocksBidirectional = httpsV2.onCall({ secrets: [GOOGLE_OAUT
         if (!blockDoc) {
           const ref = db.collection('calendar_blocks').doc(String(linkedId));
           batch.set(ref, {
-            id: String(linkedId), ownerUid: uid, persona: priv['bob-persona'] || 'personal',
+            id: String(linkedId), ownerUid: uid, persona: priv['bob-persona'] || null,
             title: ev.summary || 'Event', rationale: ev.description || null,
             theme: priv['bob-theme'] || 'Growth', theme_id: priv['bob-theme-id'] ? Number(priv['bob-theme-id']) : null,
             category: priv['bob-category'] || 'General', flexibility: priv['bob-flexibility'] || 'soft',
@@ -11099,7 +11921,7 @@ exports.syncCalendarBlocksBidirectional = httpsV2.onCall({ secrets: [GOOGLE_OAUT
         if (!existing) {
           const ref = db.collection('calendar_blocks').doc();
           batch.set(ref, {
-            id: ref.id, ownerUid: uid, persona: 'personal',
+            id: ref.id, ownerUid: uid, persona: null,
             title: ev.summary || 'Event', rationale: ev.description || null,
             theme: 'Growth', category: 'External', flexibility: 'soft',
             start: evStart, end: evEnd, googleEventId: ev.id, source: 'gcal', status: 'applied',
@@ -11425,6 +12247,8 @@ async function syncPlanToGoogleForUser(uid, dayStr) {
             for (const item of storyCtx.ac) descLines.push(`- ${item}`);
           }
         }
+        descLines.push(`Calendar: ${buildAbsoluteUrl('/calendar')}`);
+        descLines.push(`Overview: ${buildAbsoluteUrl('/dashboard')}`);
         const body = {
           summary,
           description: descLines.join('\n') || 'BOB block',
@@ -11489,6 +12313,8 @@ async function syncPlanToGoogleForUser(uid, dayStr) {
             for (const item of storyCtx2.ac) descLines2.push(`- ${item}`);
           }
         }
+        descLines2.push(`Calendar: ${buildAbsoluteUrl('/calendar')}`);
+        descLines2.push(`Overview: ${buildAbsoluteUrl('/dashboard')}`);
         const body2 = {
           summary: summary2,
           description: descLines2.join('\n') || 'BOB block',
@@ -11721,6 +12547,18 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
       if (routineHints.some(k => t.includes(k))) return 'routine';
       return 'reminder';
     };
+    const hasWorkToken = (value) => {
+      const lowered = String(value || '').toLowerCase();
+      if (lowered.includes('workout')) return false;
+      const tokens = lowered.split(/[^a-z0-9]+/).filter(Boolean);
+      if (tokens.includes('work')) return true;
+      return lowered.includes('work');
+    };
+    const resolvePersona = (list, tags) => {
+      if (Array.isArray(tags) && tags.some((t) => hasWorkToken(t))) return 'work';
+      if (hasWorkToken(list)) return 'work';
+      return 'personal';
+    };
 
     // Sprint metadata (used to tag new stories to current sprint)
     const sprintMeta = new Map();
@@ -11746,13 +12584,20 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
       const reminderId = u.reminderId ? String(u.reminderId) : null;
       const completed = !!u.completed;
       const title = String(u.title || '');
-      const iosTags = Array.isArray(u.tags) ? u.tags.filter(x => typeof x === 'string').slice(0, 12) : [];
+      const iosTagsRaw = Array.isArray(u.tags) ? u.tags.filter(x => typeof x === 'string').slice(0, 12) : [];
+      const iosTags = iosTagsRaw.filter((tag) => {
+        const key = String(tag || '').trim().replace(/^#/, '').toLowerCase();
+        if (!key) return false;
+        if (key.startsWith('goal-') || key.startsWith('story-')) return false;
+        return true;
+      });
       if (!id && !reminderId && !title) continue;
 
       const listName = String(u.list || u.reminderListName || '').toLowerCase();
       const kind = String(u.type || u.entityType || '').toLowerCase();
       const titleLower = title.toLowerCase();
       const tagsLower = iosTags.map((t) => String(t || '').toLowerCase());
+      const personaValue = resolvePersona(listName, tagsLower);
       const isStoryCandidate = kind === 'story'
         || titleLower.includes('#story')
         || tagsLower.some((t) => t.includes('story'))
@@ -11777,6 +12622,7 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
           const patch = {
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
             syncState: 'dirty',
+            persona: personaValue,
           };
           if (reminderId) patch['reminderId'] = reminderId;
           if (completed) {
@@ -11797,7 +12643,7 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
           const base = {
             id: newRef.id,
             ownerUid: uid,
-            persona: 'personal',
+            persona: personaValue,
             title: title || 'Story (Reminders)',
             status: completed ? 4 : 0,
             reminderId: reminderId || null,
@@ -11831,7 +12677,7 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
       }
       if (ref) {
         const task_type = classifyType(title);
-        const data = { updatedAt: admin.firestore.FieldValue.serverTimestamp(), task_type, syncState: 'dirty' };
+        const data = { updatedAt: admin.firestore.FieldValue.serverTimestamp(), task_type, syncState: 'dirty', persona: personaValue };
         if (reminderId) data['reminderId'] = reminderId;
         if (reminderId) data['duplicateKey'] = `reminder:${String(reminderId).toLowerCase()}`;
         if (completed) {
@@ -11876,7 +12722,7 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
             await newRef.set(ensureTaskPoints({
               id: newRef.id,
               ownerUid: uid,
-              persona: 'personal',
+              persona: personaValue,
               title: title || 'Reminder',
               status: completed ? 2 : 0,
               task_type,
@@ -11898,7 +12744,7 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
           await newRef.set(ensureTaskPoints({
             id: newRef.id,
             ownerUid: uid,
-            persona: 'personal',
+            persona: personaValue,
             title: title || 'Reminder',
             status: completed ? 2 : 0,
             task_type,
@@ -11946,11 +12792,38 @@ exports.onStorySprintChange = functionsV2.firestore.onDocumentUpdated("stories/{
     if (!tasksSnapshot.empty) {
       const batch = db.batch();
       tasksSnapshot.docs.forEach(doc => {
-        batch.update(doc.ref, { sprintId: newSprintId, dueDate: newDueDate });
+        const task = doc.data() || {};
+        const hasDue = task.dueDate || task.dueDateMs || task.targetDate;
+        const isLocked = task.dueDateLocked || task.lockDueDate || task.immovable === true || task.status === 'immovable';
+        const patch = { sprintId: newSprintId };
+        if (!hasDue && newDueDate && !isLocked) {
+          patch.dueDate = newDueDate;
+        }
+        batch.update(doc.ref, patch);
       });
       await batch.commit();
     }
   }
+});
+
+// Auto-map story sprintId from due date updates
+exports.onStoryDueDateAutoSprint = functionsV2.firestore.onDocumentUpdated("stories/{storyId}", async (event) => {
+  const storyId = event.params.storyId;
+  const beforeData = event.data.before.data() || {};
+  const afterData = event.data.after.data() || {};
+  const beforeDue = toMillis(beforeData.dueDate || beforeData.targetDate);
+  const afterDue = toMillis(afterData.dueDate || afterData.targetDate);
+  if ((beforeDue ?? null) === (afterDue ?? null)) return;
+
+  const ownerUid = afterData.ownerUid || beforeData.ownerUid;
+  if (!ownerUid) return;
+  const persona = afterData.persona || beforeData.persona || null;
+  const db = admin.firestore();
+  const sprintId = afterDue
+    ? await resolveSprintIdForDate(db, ownerUid, persona, afterDue, new Map())
+    : null;
+  if ((afterData.sprintId || null) === (sprintId ?? null)) return;
+  await db.collection('stories').doc(storyId).set({ sprintId: sprintId ?? null }, { merge: true });
 });
 
 // ===== Task lifecycle maintenance (completed/duplicates TTL and flags)
@@ -12088,6 +12961,29 @@ exports.onTaskWritten = firestoreV2.onDocumentWritten('tasks/{taskId}', async (e
     console.warn('[onTaskWritten] sprint snap skipped', e?.message || e);
   }
 
+  // Auto-map sprintId from due date changes (non-story tasks)
+  try {
+    const ownerUidTask = after.ownerUid || before?.ownerUid || null;
+    const persona = after.persona || before?.persona || null;
+    const hasStory = !!(after.storyId || (after.parentType === 'story' && after.parentId));
+    const beforeDueMs = toMillis(before?.dueDate || before?.dueDateMs || before?.targetDate);
+    const afterDueMs = toMillis(after?.dueDate || after?.dueDateMs || after?.targetDate);
+    const dueDateChanged = (beforeDueMs ?? null) !== (afterDueMs ?? null);
+    if (ownerUidTask && !hasStory && dueDateChanged && afterDueMs) {
+      const sprintId = await resolveSprintIdForDate(db, ownerUidTask, persona, afterDueMs, new Map());
+      if ((after.sprintId || null) !== (sprintId ?? null)) {
+        patch.sprintId = sprintId ?? null;
+      }
+    }
+    if (ownerUidTask && !hasStory && dueDateChanged && !afterDueMs) {
+      if (after.sprintId) {
+        patch.sprintId = null;
+      }
+    }
+  } catch (e) {
+    console.warn('[onTaskWritten] sprint auto-map skipped', e?.message || e);
+  }
+
   if (Object.keys(patch).length) {
     try { await ref.set(patch, { merge: true }); } catch (e) { console.warn('[onTaskWritten] patch failed', id, e?.message || e); }
   }
@@ -12179,10 +13075,29 @@ exports.onTaskWritten = firestoreV2.onDocumentWritten('tasks/{taskId}', async (e
       priority: after.priority ?? null,
       aiCriticalityScore: after.aiCriticalityScore ?? null,
       aiCriticalityReason: after.aiCriticalityReason ?? null,
+      aiFlaggedTop: after.aiFlaggedTop ?? false,
+      aiPriorityRank: after.aiPriorityRank ?? null,
+      aiTop3ForDay: after.aiTop3ForDay ?? false,
+      aiTop3Date: after.aiTop3Date ?? null,
+      aiPriorityLabel: after.aiPriorityLabel ?? null,
+      aiTop3Reason: after.aiTop3Reason ?? after.aiPriorityReason ?? null,
       effort: after.effort ?? null,
       estimateMin: after.estimateMin ?? null,
+      type: after.type ?? null,
+      repeatFrequency: after.repeatFrequency ?? null,
+      repeatInterval: after.repeatInterval ?? null,
+      daysOfWeek: Array.isArray(after.daysOfWeek) ? after.daysOfWeek : [],
+      lastDoneAt: after.lastDoneAt || null,
+      snoozedUntil: after.snoozedUntil || null,
       title: after.title || 'Task',
       description: after.description || null,
+      theme: after.theme ?? null,
+      goalId: after.goalId ?? null,
+      syncState: after.syncState ?? null,
+      deviceUpdatedAt: after.deviceUpdatedAt ?? null,
+      serverUpdatedAt: after.serverUpdatedAt ?? null,
+      macSyncedAt: after.macSyncedAt ?? null,
+      tags: Array.isArray(after.tags) ? after.tags : [],
       parentType: after.parentType || null,
       parentId: after.parentId || null,
       storyId: storyId,
@@ -12602,6 +13517,218 @@ async function recordAiLog(uid, event, status, message, metadata = {}) {
     console.error('Failed to write AI log', { event, status, message, metadata, error });
   }
 }
+
+const YOUTUBE_API_BASE = 'https://www.googleapis.com/youtube/v3';
+const YOUTUBE_LONGFORM_THRESHOLD_SEC = 30 * 60;
+
+function parseIsoDurationToSeconds(value) {
+  if (!value || typeof value !== 'string') return null;
+  const match = value.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+  if (!match) return null;
+  const hours = Number(match[1] || 0);
+  const minutes = Number(match[2] || 0);
+  const seconds = Number(match[3] || 0);
+  if (![hours, minutes, seconds].every((n) => Number.isFinite(n))) return null;
+  return hours * 3600 + minutes * 60 + seconds;
+}
+
+function pickThumbnail(thumbnails = {}) {
+  return thumbnails.maxres?.url || thumbnails.standard?.url || thumbnails.high?.url || thumbnails.medium?.url || thumbnails.default?.url || null;
+}
+
+async function fetchYouTubeWatchLater(accessToken, opts = {}) {
+  const maxPages = Math.max(1, Math.min(10, Number(opts?.maxPages || 6)));
+  let pageToken = null;
+  const items = [];
+  for (let page = 0; page < maxPages; page += 1) {
+    const params = new URLSearchParams({
+      part: 'snippet,contentDetails',
+      maxResults: '50',
+      playlistId: 'WL',
+    });
+    if (pageToken) params.append('pageToken', pageToken);
+    const data = await fetchJson(`${YOUTUBE_API_BASE}/playlistItems?${params.toString()}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    const batch = Array.isArray(data?.items) ? data.items : [];
+    items.push(...batch);
+    pageToken = data?.nextPageToken || null;
+    if (!pageToken) break;
+  }
+  return items;
+}
+
+async function fetchYouTubeDurations(accessToken, videoIds = []) {
+  const map = new Map();
+  for (let i = 0; i < videoIds.length; i += 50) {
+    const chunk = videoIds.slice(i, i + 50);
+    if (!chunk.length) continue;
+    const params = new URLSearchParams({
+      part: 'contentDetails',
+      id: chunk.join(','),
+      maxResults: '50',
+    });
+    const data = await fetchJson(`${YOUTUBE_API_BASE}/videos?${params.toString()}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    const rows = Array.isArray(data?.items) ? data.items : [];
+    rows.forEach((row) => {
+      const vid = row?.id;
+      const dur = parseIsoDurationToSeconds(row?.contentDetails?.duration);
+      if (vid) map.set(vid, dur);
+    });
+  }
+  return map;
+}
+
+exports.syncYouTubeWatchLater = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const startedAt = Date.now();
+  const accessToken = await getYouTubeAccessToken(uid);
+  const items = await fetchYouTubeWatchLater(accessToken, { maxPages: req?.data?.maxPages || 6 });
+  const videoIds = Array.from(new Set(items.map((item) => item?.contentDetails?.videoId).filter(Boolean)));
+  const durations = await fetchYouTubeDurations(accessToken, videoIds);
+
+  const db = admin.firestore();
+  let written = 0;
+  let longformCount = 0;
+
+  for (let i = 0; i < items.length; i += 400) {
+    const batch = db.batch();
+    const slice = items.slice(i, i + 400);
+    for (const item of slice) {
+      const videoId = item?.contentDetails?.videoId;
+      if (!videoId) continue;
+      const durationSec = durations.get(videoId);
+      const hasDuration = Number.isFinite(durationSec);
+      const isLongform = hasDuration && durationSec >= YOUTUBE_LONGFORM_THRESHOLD_SEC;
+      if (isLongform) longformCount += 1;
+      const snippet = item?.snippet || {};
+      const publishedAt = toMillis(snippet?.publishedAt) || null;
+      const docId = `${uid}_yt_${videoId}`;
+      const ref = db.collection('youtube_history').doc(docId);
+      batch.set(ref, {
+        id: docId,
+        ownerUid: uid,
+        videoId,
+        title: snippet?.title || 'YouTube video',
+        channelTitle: snippet?.videoOwnerChannelTitle || snippet?.channelTitle || null,
+        publishedAt,
+        thumbnailUrl: pickThumbnail(snippet?.thumbnails || {}),
+        durationSec: hasDuration ? durationSec : null,
+        durationMinutes: hasDuration ? Math.round(durationSec / 60) : null,
+        watchLater: true,
+        list: 'watch-later',
+        longformCandidate: isLongform,
+        persona: 'personal',
+        source: 'youtube',
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+      written += 1;
+    }
+    await batch.commit();
+  }
+
+  await db.collection('profiles').doc(uid).set({
+    youtubeLastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
+    youtubeWatchLaterCount: items.length,
+    youtubeLongformCount: longformCount,
+    youtubeConnected: true,
+  }, { merge: true });
+
+  await recordIntegrationLog(uid, 'youtube', 'success', `Synced ${written} watch-later videos`, {
+    totalItems: items.length,
+    longformCount,
+    durationMs: Date.now() - startedAt,
+  });
+
+  return { ok: true, written, total: items.length, longform: longformCount };
+});
+
+exports.importYouTubeTakeout = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const items = Array.isArray(req?.data?.items) ? req.data.items : [];
+  if (!items.length) return { ok: true, written: 0, skipped: 0, total: 0 };
+
+  const startedAt = Date.now();
+  const db = admin.firestore();
+
+  let accessToken = null;
+  try {
+    accessToken = await getYouTubeAccessToken(uid);
+  } catch (e) {
+    console.warn('[youtube_takeout] no access token; skipping duration lookup');
+  }
+
+  const rawVideoIds = items.map((i) => i?.videoId).filter(Boolean);
+  const uniqueVideoIds = Array.from(new Set(rawVideoIds));
+  let durations = new Map();
+  if (accessToken && uniqueVideoIds.length) {
+    try {
+      durations = await fetchYouTubeDurations(accessToken, uniqueVideoIds);
+    } catch (e) {
+      console.warn('[youtube_takeout] duration fetch failed', e?.message || e);
+    }
+  }
+
+  let written = 0;
+  let skipped = 0;
+
+  for (let i = 0; i < items.length; i += 400) {
+    const batch = db.batch();
+    const slice = items.slice(i, i + 400);
+    for (const item of slice) {
+      const videoId = String(item?.videoId || '').trim();
+      const watchedAtMs = Number(item?.watchedAtMs || item?.watchedAt || 0);
+      if (!videoId || !Number.isFinite(watchedAtMs) || watchedAtMs <= 0) {
+        skipped += 1;
+        continue;
+      }
+      const title = String(item?.title || 'YouTube video');
+      const channelTitle = item?.channelTitle ? String(item.channelTitle) : null;
+      const titleUrl = item?.titleUrl ? String(item.titleUrl) : null;
+      const durationSec = durations.get(videoId) ?? null;
+      const docId = `${uid}_yt_hist_${videoId}_${watchedAtMs}`;
+      const ref = db.collection('youtube').doc(docId);
+      batch.set(ref, {
+        id: docId,
+        ownerUid: uid,
+        videoId,
+        title,
+        channelTitle,
+        titleUrl,
+        watchedAt: watchedAtMs,
+        durationSec,
+        durationMinutes: durationSec ? Math.round(durationSec / 60) : null,
+        watchTimeSec: null,
+        watchTimeMinutes: null,
+        watchLater: false,
+        list: 'history',
+        persona: 'personal',
+        source: 'youtube_takeout',
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+      written += 1;
+    }
+    await batch.commit();
+  }
+
+  await db.collection('profiles').doc(uid).set({
+    youtubeTakeoutLastImportAt: admin.firestore.FieldValue.serverTimestamp(),
+    youtubeWatchHistoryCount: written,
+    youtubeConnected: true,
+  }, { merge: true });
+
+  await recordIntegrationLog(uid, 'youtube_takeout', 'success', `Imported ${written} watch history rows`, {
+    total: items.length,
+    skipped,
+    durationMs: Date.now() - startedAt,
+  });
+
+  return { ok: true, written, skipped, total: items.length };
+});
 
 exports.traktDeviceCodeStart = httpsV2.onCall({ secrets: [TRAKT_CLIENT_ID] }, async (req) => {
   if (!req?.auth?.uid) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
@@ -14264,7 +15391,7 @@ async function dispatchDailySummaryForUser({ db, userId, profile, nowUtc, runCon
     summaryData.financeCommentary = await buildFinanceCommentary({
       summary: summaryData.financeDaily,
       userId,
-      windowLabel: summaryData.metadata.dayIso || 'today',
+      windowLabel: summaryData.metadata.financeWindowLabel || `last ${summaryData.metadata.financeWindowDays || 5} days`,
     });
   }
 
@@ -15605,14 +16732,36 @@ async function buildTaskContext(db, task) {
   let goalId = task.goalId || null;
   let storyId = task.storyId || task.parentId || null;
   if (storyId && !goalId) {
-    try { const s = await db.collection('stories').doc(String(storyId)).get(); if (s.exists) { const d = s.data() || {}; goalId = d.goalId || goalId; ctx.storyRef = d.ref || null; if (d.sprintId) { try { const sp = await db.collection('sprints').doc(String(d.sprintId)).get(); if (sp.exists) ctx.sprintRef = (sp.data() || {}).ref || (sp.data() || {}).name || sp.id; } catch { } } } } catch { }
+    try {
+      const s = await db.collection('stories').doc(String(storyId)).get();
+      if (s.exists) {
+        const d = s.data() || {};
+        goalId = d.goalId || goalId;
+        ctx.storyRef = d.ref || null;
+        if (d.sprintId) {
+          try {
+            const sp = await db.collection('sprints').doc(String(d.sprintId)).get();
+            if (sp.exists) {
+              const spd = sp.data() || {};
+              ctx.sprintRef = spd.name || spd.title || spd.ref || sp.id;
+            }
+          } catch { }
+        }
+      }
+    } catch { }
   }
   if (goalId) {
     try { const g = await db.collection('goals').doc(String(goalId)).get(); if (g.exists) { const gd = g.data() || {}; ctx.goalRef = gd.ref || g.id; if (!ctx.themeName && gd.theme != null) ctx.themeName = themeLabelFromValue(gd.theme); } } catch { }
   }
   // Fallback sprint from task
   if (!ctx.sprintRef && task.sprintId) {
-    try { const sp = await db.collection('sprints').doc(String(task.sprintId)).get(); if (sp.exists) ctx.sprintRef = (sp.data() || {}).ref || (sp.data() || {}).name || sp.id; } catch { }
+    try {
+      const sp = await db.collection('sprints').doc(String(task.sprintId)).get();
+      if (sp.exists) {
+        const spd = sp.data() || {};
+        ctx.sprintRef = spd.name || spd.title || spd.ref || sp.id;
+      }
+    } catch { }
   }
   return ctx;
 }
@@ -15627,25 +16776,115 @@ function mergeTags(existing, toAdd) {
   return Array.from(set).slice(0, 12);
 }
 
+function normalizeTaskTagKey(value) {
+  return String(value || '').trim().replace(/^#/, '').toLowerCase();
+}
+
+function buildSprintTagValue(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return null;
+  const digits = text.match(/\d+/g);
+  if (digits && digits.length) {
+    return `sprint${digits.join('')}`;
+  }
+  const slug = text.toLowerCase().replace(/[^a-z0-9]+/g, '');
+  return slug ? `sprint${slug}` : null;
+}
+
+function normalizeTaskTagsForSystem({
+  tags = [],
+  type,
+  persona,
+  sprintRef,
+  themeLabel,
+  goalRef,
+  storyRef,
+  themeLabels = [],
+}) {
+  const cleaned = [];
+  const seen = new Set();
+  const goalKey = goalRef ? normalizeTaskTagKey(goalRef) : null;
+  const storyKey = storyRef ? normalizeTaskTagKey(storyRef) : null;
+  const themeKeys = new Set(themeLabels.map((label) => normalizeTaskTagKey(label)));
+  const typeKey = normalizeTaskTagKey(type);
+  const personaKey = normalizeTaskTagKey(persona);
+
+  for (const tag of Array.isArray(tags) ? tags : []) {
+    const raw = String(tag || '').trim();
+    if (!raw) continue;
+    const key = normalizeTaskTagKey(raw);
+    if (['task', 'chore', 'habit', 'habitual', 'routine'].includes(key)) continue;
+    if (['work', 'personal'].includes(key)) continue;
+    if (key.startsWith('goal-') || key.startsWith('story-')) continue;
+    if (goalKey && key === goalKey) continue;
+    if (storyKey && key === storyKey) continue;
+    if (key.startsWith('sprint')) continue;
+    if (key.startsWith('theme-')) continue;
+    if (themeKeys.has(key)) continue;
+    if (!seen.has(key)) {
+      seen.add(key);
+      cleaned.push(raw);
+    }
+  }
+
+  const append = (value) => {
+    const raw = String(value || '').trim();
+    if (!raw) return;
+    const key = normalizeTaskTagKey(raw);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    cleaned.push(raw);
+  };
+
+  if (['task', 'chore', 'habit', 'habitual', 'routine'].includes(typeKey)) {
+    append(typeKey === 'habitual' ? 'habit' : typeKey);
+  }
+  if (['work', 'personal'].includes(personaKey)) append(personaKey);
+  append(buildSprintTagValue(sprintRef));
+  append(themeLabel);
+
+  return cleaned;
+}
+
 exports.tagTasksAndBuildDeepLinks = schedulerV2.onSchedule({ schedule: 'every 30 minutes', timeZone: 'UTC' }, async () => {
   const db = admin.firestore();
   const now = Date.now();
   const cutoff = now - 24 * 60 * 60 * 1000; // process tasks touched in last 24h
   let processed = 0, updated = 0;
+  const themeCache = new Map();
   try {
     const snap = await db.collection('tasks').orderBy('updatedAt', 'desc').limit(500).get();
     const batch = db.batch();
     for (const docSnap of snap.docs) {
       const t = docSnap.data() || {};
       processed += 1;
+      const ownerUid = t.ownerUid || t.userId;
+      if (!ownerUid) continue;
       // Skip very old if updatedAt is numeric and older than cutoff
       if (typeof t.updatedAt === 'number' && t.updatedAt < cutoff) continue;
+      if (!themeCache.has(ownerUid)) {
+        try {
+          const themes = await loadThemesForUser(ownerUid);
+          const labels = Array.isArray(themes)
+            ? themes.map((th) => th.label || th.name || String(th.id))
+            : [];
+          themeCache.set(ownerUid, labels);
+        } catch {
+          themeCache.set(ownerUid, []);
+        }
+      }
+      const themeLabels = themeCache.get(ownerUid) || [];
       const ctx = await buildTaskContext(db, t);
-      const themeTag = ctx.themeName ? `theme-${ctx.themeName}` : null;
-      const sprintTag = ctx.sprintRef ? `sprint-${ctx.sprintRef}` : null;
-      const storyTag = ctx.storyRef ? `story-${ctx.storyRef}` : null;
-      const goalTag = ctx.goalRef ? `goal-${ctx.goalRef}` : null;
-      const newTags = mergeTags(t.tags, [themeTag, sprintTag, storyTag, goalTag].filter(Boolean));
+      const newTags = normalizeTaskTagsForSystem({
+        tags: t.tags || [],
+        type: t.type || t.task_type || t.taskType || null,
+        persona: t.persona || null,
+        sprintRef: ctx.sprintRef || null,
+        themeLabel: ctx.themeName || null,
+        goalRef: ctx.goalRef || null,
+        storyRef: ctx.storyRef || null,
+        themeLabels,
+      });
 
       // Deep links (absolute) for task + parents
       const taskRef = t.ref || t.referenceNumber || t.reference || t.id;
@@ -15735,7 +16974,7 @@ Keep it professional, actionable, and encourage the team.`;
 });
 
 // ===== Theme Allocations =====
-exports.saveThemeAllocations = httpsV2.onCall({ region: ['europe-west2', 'us-central1'] }, async (req) => {
+exports.saveThemeAllocations = httpsV2.onCall({ region: 'europe-west2' }, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   const uid = req.auth.uid;
   const allocations = req.data.allocations || [];
@@ -15748,7 +16987,7 @@ exports.saveThemeAllocations = httpsV2.onCall({ region: ['europe-west2', 'us-cen
   return { ok: true };
 });
 
-exports.getThemeAllocations = httpsV2.onCall({ region: ['europe-west2', 'us-central1'] }, async (req) => {
+exports.getThemeAllocations = httpsV2.onCall({ region: 'europe-west2' }, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   const uid = req.auth.uid;
   const db = admin.firestore();

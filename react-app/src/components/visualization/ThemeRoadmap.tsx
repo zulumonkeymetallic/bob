@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Card, Container, Row, Col, Button, Form, Badge, Modal } from 'react-bootstrap';
 import { useAuth } from '../../contexts/AuthContext';
+import { usePersona } from '../../contexts/PersonaContext';
 import { collection, onSnapshot, query, updateDoc, where, doc } from 'firebase/firestore';
 import { db, functions } from '../../firebase';
 import { httpsCallable } from 'firebase/functions';
@@ -20,6 +21,7 @@ interface ThemeRoadmapProps { onBackToTimeline?: () => void }
 
 const ThemeRoadmap: React.FC<ThemeRoadmapProps> = ({ onBackToTimeline }) => {
   const { currentUser } = useAuth();
+  const { currentPersona } = usePersona();
 
   // Data
   const [goals, setGoals] = useState<Goal[]>([]);
@@ -150,7 +152,7 @@ const ThemeRoadmap: React.FC<ThemeRoadmapProps> = ({ onBackToTimeline }) => {
           'theme',
           goal.theme,
           themeId,
-          'personal',
+          currentPersona || 'personal',
           (goal as any).ref || '',
           'human'
         );
@@ -401,7 +403,7 @@ const ThemeRoadmap: React.FC<ThemeRoadmapProps> = ({ onBackToTimeline }) => {
             if (!noteGoalId || !currentUser) return;
             try {
               await updateDoc(doc(db, 'goals', noteGoalId), { recentNote: noteDraft, recentNoteAt: Date.now() });
-              await ActivityStreamService.addNote(noteGoalId, 'goal', noteDraft, currentUser.uid, currentUser.email || undefined, 'personal', '', 'human');
+              await ActivityStreamService.addNote(noteGoalId, 'goal', noteDraft, currentUser.uid, currentUser.email || undefined, currentPersona || 'personal', '', 'human');
               setNoteGoalId(null);
               setNoteDraft('');
             } catch (e) {

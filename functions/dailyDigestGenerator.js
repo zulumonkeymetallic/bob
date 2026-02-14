@@ -123,6 +123,10 @@ async function processDigestForUser({ db, userId, userProfile, today, todayStr, 
     userData.todayBlocks = norm(userData.todayBlocks);
     userData.news = norm(userData.news);
     userData.focusStories = Array.isArray(userData.focusStories) ? userData.focusStories : norm(userData.stories);
+    userData.topTasksPersonal = norm(userData.topTasksPersonal);
+    userData.topTasksWork = norm(userData.topTasksWork);
+    userData.topStoriesPersonal = norm(userData.topStoriesPersonal);
+    userData.topStoriesWork = norm(userData.topStoriesWork);
 
     // Log the LLM input context for observability
     try {
@@ -135,6 +139,10 @@ async function processDigestForUser({ db, userId, userProfile, today, todayStr, 
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
         date: todayStr,
         topTasksDueToday: userData.topTasksDueToday.map(t => t.title || t.ref || t.id),
+        topTasksPersonal: userData.topTasksPersonal.map(t => t.title || t.ref || t.id),
+        topTasksWork: userData.topTasksWork.map(t => t.title || t.ref || t.id),
+        topStoriesPersonal: userData.topStoriesPersonal.map(s => s.title || s.ref || s.id),
+        topStoriesWork: userData.topStoriesWork.map(s => s.title || s.ref || s.id),
         todayBlocks: userData.todayBlocks.map(b => b.title || b.category || b.id),
         counts: {
           tasksDueToday: userData.tasksDueToday.length,
@@ -227,6 +235,17 @@ const { fetchWeather, fetchNews } = require('./services/newsWeather');
  */
 async function gatherUserData(db, userId, today, userProfile = {}) {
   const todayStr = today.toISOString().split('T')[0];
+  const normalizePersona = (value) => String(value || 'personal').toLowerCase() === 'work' ? 'work' : 'personal';
+  const isTaskDone = (status) => {
+    if (typeof status === 'number') return status >= 2;
+    const s = String(status || '').toLowerCase();
+    return ['done', 'complete', 'completed', 'finished', 'closed'].includes(s);
+  };
+  const isStoryDone = (status) => {
+    if (typeof status === 'number') return status >= 4;
+    const s = String(status || '').toLowerCase();
+    return ['done', 'complete', 'completed', 'finished', 'closed'].includes(s);
+  };
   const nextWeek = new Date(today);
   nextWeek.setDate(today.getDate() + 7);
   const nextWeekStr = nextWeek.toISOString().split('T')[0];
@@ -277,6 +296,55 @@ async function gatherUserData(db, userId, today, userProfile = {}) {
     const bDue = b.dueDate ? new Date(b.dueDate).getTime() : 0;
     return aDue - bDue;
   });
+
+  // Top 3 tasks/stories (flagged by nightly scoring)
+  const [topTasksSnap, topStoriesSnap] = await Promise.all([
+    db.collection('tasks')
+      .where('ownerUid', '==', userId)
+      .where('aiTop3ForDay', '==', true)
+      .get()
+      .catch(() => ({ docs: [] })),
+    db.collection('stories')
+      .where('ownerUid', '==', userId)
+      .where('aiTop3ForDay', '==', true)
+      .get()
+      .catch(() => ({ docs: [] })),
+  ]);
+
+  const topTasksRaw = topTasksSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+  const topStoriesRaw = topStoriesSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+  const topTasksFiltered = topTasksRaw
+    .filter(t => !t.deleted)
+    .filter(t => !isTaskDone(t.status))
+    .filter(t => !t.aiTop3Date || String(t.aiTop3Date).slice(0, 10) === todayStr);
+  const topStoriesFiltered = topStoriesRaw
+    .filter(s => !isStoryDone(s.status))
+    .filter(s => !s.aiTop3Date || String(s.aiTop3Date).slice(0, 10) === todayStr);
+
+  const sortTopTasks = (items) => [...items].sort((a, b) => {
+    const ar = Number(a.aiPriorityRank || 0) || 99;
+    const br = Number(b.aiPriorityRank || 0) || 99;
+    if (ar !== br) return ar - br;
+    const as = Number(a.aiCriticalityScore ?? -1);
+    const bs = Number(b.aiCriticalityScore ?? -1);
+    if (as !== bs) return bs - as;
+    return String(a.title || '').localeCompare(String(b.title || ''));
+  });
+  const sortTopStories = (items) => [...items].sort((a, b) => {
+    const ar = Number(a.aiFocusStoryRank || 0) || 99;
+    const br = Number(b.aiFocusStoryRank || 0) || 99;
+    if (ar !== br) return ar - br;
+    const as = Number(a.aiCriticalityScore ?? -1);
+    const bs = Number(b.aiCriticalityScore ?? -1);
+    if (as !== bs) return bs - as;
+    return String(a.title || '').localeCompare(String(b.title || ''));
+  });
+
+  const topTasksPersonal = sortTopTasks(topTasksFiltered.filter(t => normalizePersona(t.persona) === 'personal')).slice(0, 3);
+  const topTasksWork = sortTopTasks(topTasksFiltered.filter(t => normalizePersona(t.persona) === 'work')).slice(0, 3);
+  const topStoriesPersonal = sortTopStories(topStoriesFiltered.filter(s => normalizePersona(s.persona) === 'personal')).slice(0, 3);
+  const topStoriesWork = sortTopStories(topStoriesFiltered.filter(s => normalizePersona(s.persona) === 'work')).slice(0, 3);
 
   // Get active stories (started or planned)
   const activeStoriesSnapshot = await db.collection('stories')
@@ -377,6 +445,10 @@ async function gatherUserData(db, userId, today, userProfile = {}) {
     date: todayStr,
     dayOfWeek: today.toLocaleDateString('en-US', { weekday: 'long' }),
     topTasksDueToday: tasksDueTodaySorted.slice(0, 3),
+    topTasksPersonal,
+    topTasksWork,
+    topStoriesPersonal,
+    topStoriesWork,
     plannerStats,
   };
 }
@@ -394,15 +466,36 @@ async function generateAIInsights(userData) {
   - Top News: ${userData.news.map(n => `• ${n.title}`).join('\n')}
   - Current Sprint: ${userData.currentSprint ? `"${userData.currentSprint.title}" (Goal: ${userData.currentSprint.goal || 'None'})` : 'None'}
   - Active Stories (prefer STARTED): ${userData.stories.map(s => `• [${s.isStarted ? 'STARTED' : 'PLANNED'}] ${s.title} (Status: ${s.status})`).join('\n')}
-  - Top 3 Tasks Due Today (prefer highest AI score): ${userData.topTasksDueToday.map(t => `• ${t.title || t.ref || t.id} (AI score ${t.aiCriticalityScore ?? 'n/a'}${t.aiPriorityBucket ? ' bucket '+t.aiPriorityBucket : ''}${t.aiCriticalityReason ? ' reason: '+t.aiCriticalityReason : ''}, priority ${t.priority ?? 'n/a'}, due ${t.dueDateDisplay || 'today'}, theme ${t.theme || 'n/a'})`).join('\n') || 'None'}
-  - Tasks Due Today (${userData.tasksDueToday.length}): ${(userData.tasksDueTodaySorted || userData.tasksDueToday).map(t => `• ${t.title} (AI score ${t.aiCriticalityScore ?? 'n/a'}${t.aiCriticalityReason ? ' reason: '+t.aiCriticalityReason : ''}, due ${t.dueDateDisplay || 'today'})`).join('\n') || 'None'}
+  - Top 3 Tasks (Personal): ${userData.topTasksPersonal.map(t => {
+    const aiReason = t.aiTop3ForDay && t.aiTop3Reason ? t.aiTop3Reason : t.aiCriticalityReason;
+    return `• ${t.title || t.ref || t.id} (AI score ${t.aiCriticalityScore ?? 'n/a'}${aiReason ? ' reason: '+aiReason : ''}, priority ${t.priority ?? 'n/a'}, due ${t.dueDateDisplay || 'n/a'})`;
+  }).join('\\n') || 'None'}
+  - Top 3 Stories (Personal): ${userData.topStoriesPersonal.map(s => {
+    const aiReason = s.aiTop3ForDay && s.aiTop3Reason ? s.aiTop3Reason : s.aiCriticalityReason;
+    return `• ${s.title || s.ref || s.id} (AI score ${s.aiCriticalityScore ?? 'n/a'}${aiReason ? ' reason: '+aiReason : ''}, status ${s.status ?? 'n/a'})`;
+  }).join('\\n') || 'None'}
+  - Top 3 Tasks (Work): ${userData.topTasksWork.map(t => {
+    const aiReason = t.aiTop3ForDay && t.aiTop3Reason ? t.aiTop3Reason : t.aiCriticalityReason;
+    return `• ${t.title || t.ref || t.id} (AI score ${t.aiCriticalityScore ?? 'n/a'}${aiReason ? ' reason: '+aiReason : ''}, priority ${t.priority ?? 'n/a'}, due ${t.dueDateDisplay || 'n/a'})`;
+  }).join('\\n') || 'None'}
+  - Top 3 Stories (Work): ${userData.topStoriesWork.map(s => {
+    const aiReason = s.aiTop3ForDay && s.aiTop3Reason ? s.aiTop3Reason : s.aiCriticalityReason;
+    return `• ${s.title || s.ref || s.id} (AI score ${s.aiCriticalityScore ?? 'n/a'}${aiReason ? ' reason: '+aiReason : ''}, status ${s.status ?? 'n/a'})`;
+  }).join('\\n') || 'None'}
+  - Tasks Due Today (${userData.tasksDueToday.length}): ${(userData.tasksDueTodaySorted || userData.tasksDueToday).map(t => {
+    const aiReason = t.aiTop3ForDay && t.aiTop3Reason ? t.aiTop3Reason : t.aiCriticalityReason;
+    return `• ${t.title} (AI score ${t.aiCriticalityScore ?? 'n/a'}${aiReason ? ' reason: '+aiReason : ''}, due ${t.dueDateDisplay || 'today'})`;
+  }).join('\\n') || 'None'}
   - Today’s Calendar Blocks: ${userData.todayBlocks.map(b => `• ${b.startTime}-${b.endTime} ${b.title || b.category || 'Block'} (theme ${b.theme || 'n/a'})`).join('\n') || 'None'}
   - Overdue Tasks (${userData.overdueTasks.length}): ${userData.overdueTasks.map(t => `• ${t.title} (due ${t.dueDateDisplay || 'overdue'})`).join('\n') || 'None'}
   - Calendar (next 7 days, first 10): ${userData.calendarBlocks.slice(0, 10).map(b => `• ${b.startDate} ${b.startTime}-${b.endTime}: ${b.title}`).join('\n')}
 
   OUTPUT REQUIREMENTS (plain text, no JSON):
   1) Briefing: 2-3 sentences. Name the single highest-priority item (task or story) and why (due date, sprint, started status, or overdue). If an AI score is present, use it to justify the pick. Weave in weather or one headline naturally.
-  2) Focus list: 3 bullets, in order, naming exact refs/titles for the top 3 items (prefer highest AI score from Top 3 Tasks Due Today, then started stories, then overdue tasks). Include due date and AI score when present.
+  2) Focus list: For each persona present (Personal and/or Work), list:
+     - Top 3 Tasks (use the Top 3 Tasks list for that persona first; if empty, fall back to highest AI score due-today or overdue tasks).
+     - Top 3 Stories (use the Top 3 Stories list for that persona first; if empty, fall back to started stories).
+     Include due date and AI score when present.
   3) Schedule call-out: Mention how today’s calendar blocks support those priorities (or highlight a gap/conflict to resolve today).
   4) Heads up: one short risk/warning (overdue, crowded calendar, or missing blocks).
   Tone: concise, directive, specific. No generic wellness tips.`;
@@ -488,6 +581,23 @@ async function createDigestHTML(userData, aiInsights) {
     return `${when} · calendar entries +${plannerStats.created || 0}, replaced ${plannerStats.replaced || 0}, blocked ${plannerStats.blocked || 0}`;
   })();
 
+  const renderTopList = (items, label, type) => {
+    if (!items || !items.length) return '';
+    return `
+      <div style="margin-top:8px;">
+        <div class="item-meta" style="font-weight:600">${label}</div>
+        ${items.map(it => `
+          <div class="item">
+            <div>
+              <div class="item-title">${it.title || it.ref || it.id}</div>
+              <div class="item-meta">AI ${it.aiCriticalityScore ?? 'n/a'} · ${type === 'task' ? `Priority ${it.priority ?? 'n/a'}` : `Status ${it.status ?? 'n/a'}`}</div>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    `;
+  };
+
   return `
 <!DOCTYPE html>
 <html>
@@ -536,6 +646,14 @@ async function createDigestHTML(userData, aiInsights) {
               </div>
               <span class="tag tag-started">${plannerStats?.source || 'replan'}</span>
             </div>
+
+            ${(userData.topTasksPersonal?.length || userData.topStoriesPersonal?.length || userData.topTasksWork?.length || userData.topStoriesWork?.length) ? `
+            <div class="section-title">Top 3 Priorities</div>
+            ${renderTopList(userData.topTasksPersonal, 'Personal · Tasks', 'task')}
+            ${renderTopList(userData.topStoriesPersonal, 'Personal · Stories', 'story')}
+            ${renderTopList(userData.topTasksWork, 'Work · Tasks', 'task')}
+            ${renderTopList(userData.topStoriesWork, 'Work · Stories', 'story')}
+            ` : ''}
 
             ${userData.stories.length > 0 ? `
             <div class="section-title">Active Stories</div>

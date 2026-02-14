@@ -15,6 +15,7 @@ import ModernStoriesTable from './ModernStoriesTable';
 import ModernTaskTable from './ModernTaskTable';
 import { usePersona } from '../contexts/PersonaContext';
 import { useSprint } from '../contexts/SprintContext';
+import { cascadeGoalPersona } from '../utils/personaCascade';
 
 interface EditGoalModalProps {
   goal: Goal | null;
@@ -23,6 +24,30 @@ interface EditGoalModalProps {
   currentUserId: string;
   allGoals?: Goal[];
 }
+
+const parseDateInput = (value: string) => {
+  if (!value) return null;
+  const parsed = new Date(`${value}T00:00:00`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const formatDateInput = (date: Date) => date.toISOString().slice(0, 10);
+
+const calculateDurationDays = (start?: string, end?: string) => {
+  const startDate = parseDateInput(start || '');
+  const endDate = parseDateInput(end || '');
+  if (!startDate || !endDate) return '';
+  const diff = Math.round((endDate.getTime() - startDate.getTime()) / 86400000);
+  return diff >= 0 ? diff : '';
+};
+
+const addDaysToStart = (start: string, days: number) => {
+  const startDate = parseDateInput(start);
+  if (!startDate) return '';
+  const next = new Date(startDate);
+  next.setDate(next.getDate() + days);
+  return formatDateInput(next);
+};
 
 const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, currentUserId, allGoals = [] }) => {
   const { currentPersona } = usePersona();
@@ -43,8 +68,10 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
     parentGoalId: '',
     linkedPotId: '',
     tags: [] as string[],
-    autoCreatePot: false
+    autoCreatePot: false,
+    persona: (currentPersona || 'personal') as 'personal' | 'work',
   });
+  const [durationDays, setDurationDays] = useState<number | ''>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState<string | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
@@ -100,6 +127,28 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
     { value: 1, label: 'Low' }
   ];
 
+  const handleStartDateChange = (value: string) => {
+    setFormData(prev => {
+      let nextEnd = prev.endDate;
+      if (value && durationDays !== '') {
+        const days = Number(durationDays);
+        if (Number.isFinite(days)) {
+          nextEnd = addDaysToStart(value, days);
+        }
+      }
+      return { ...prev, startDate: value, endDate: nextEnd };
+    });
+  };
+
+  const handleDurationChange = (value: string) => {
+    const parsed = value ? Math.max(0, Number(value)) : '';
+    setDurationDays(parsed === '' || Number.isNaN(parsed) ? '' : parsed);
+    if (formData.startDate && parsed !== '' && Number.isFinite(parsed)) {
+      const nextEnd = addDaysToStart(formData.startDate, Number(parsed));
+      setFormData(prev => ({ ...prev, endDate: nextEnd }));
+    }
+  };
+
   const goalIndex = useMemo(() => {
     const map = new Map<string, Goal>();
     allGoals.forEach((g) => map.set(g.id, g));
@@ -140,7 +189,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
     });
   }, [parentCandidates, parentSearch]);
 
-  const activePersona = (goal as any)?.persona || currentPersona;
+  const activePersona = (formData.persona || (goal as any)?.persona || currentPersona || 'personal') as 'personal' | 'work';
 
   useEffect(() => {
     const loadLinkedStories = async () => {
@@ -310,7 +359,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         setFormData({
           title: goal.title || '',
           description: goal.description || '',
-          theme: canonicalThemeId || 1,
+          theme: canonicalThemeId ?? 1,
           size: sizeMap[goal.size as keyof typeof sizeMap] || 'M',
           timeToMasterHours: goal.timeToMasterHours || 40,
           confidence: goal.confidence || 0.5,
@@ -323,7 +372,8 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
           parentGoalId: goal.parentGoalId || '',
           linkedPotId: (goal as any).linkedPotId || (goal as any).potId || '',
           tags: (goal as any).tags || [],
-          autoCreatePot: !!(goal as any).autoCreatePot
+          autoCreatePot: !!(goal as any).autoCreatePot,
+          persona: ((goal as any).persona || currentPersona || 'personal') as 'personal' | 'work',
         });
         const current = canonicalThemeId;
         const themeObj = themes.find(t => String(t.id) === String(current));
@@ -348,7 +398,8 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
           parentGoalId: '',
           linkedPotId: '',
           tags: [],
-          autoCreatePot: false
+          autoCreatePot: false,
+          persona: (currentPersona || 'personal') as 'personal' | 'work',
         });
         setThemeInput('');
         setParentSearch('');
@@ -375,6 +426,11 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
       }
     }
   }, [show, themeTouched, themeInput, formData.theme, themeLabelForId, resolveThemeId]);
+
+  useEffect(() => {
+    const derived = calculateDurationDays(formData.startDate, formData.endDate);
+    setDurationDays(derived);
+  }, [formData.startDate, formData.endDate]);
 
   // Load user's Monzo pots for optional explicit mapping
   useEffect(() => {
@@ -462,7 +518,8 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         parentGoalId: formData.parentGoalId ? formData.parentGoalId : null,
         updatedAt: serverTimestamp(),
         tags: formData.tags,
-        autoCreatePot: formData.autoCreatePot
+        autoCreatePot: formData.autoCreatePot,
+        persona: formData.persona || currentPersona || 'personal',
       };
 
       // Read optional cost metadata and pot mapping from form elements
@@ -505,6 +562,17 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         // UPDATE existing goal
         console.log('🚀 EditGoalModal: Starting GOAL update', { goalId: goal.id });
         await updateDoc(doc(db, 'goals', goal.id), goalData);
+        const prevPersona = ((goal as any).persona || currentPersona || 'personal') as 'personal' | 'work';
+        const nextPersona = (goalData.persona || prevPersona) as 'personal' | 'work';
+        if (prevPersona !== nextPersona) {
+          try {
+            await cascadeGoalPersona(currentUserId, goal.id, nextPersona);
+            setLinkedStories((prev) => prev.map((story) => ({ ...story, persona: nextPersona } as Story)));
+            setLinkedTasks((prev) => prev.map((task) => ({ ...task, persona: nextPersona } as Task)));
+          } catch (err) {
+            console.warn('Failed to cascade persona for goal', err);
+          }
+        }
         if (goal && previousThemeId != null && String(previousThemeId) !== String(themeId)) {
           const referenceNumber = (goal as any)?.ref || (goal as any)?.referenceNumber || goal.id;
           await trackFieldChange(
@@ -694,6 +762,17 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
                 />
               </Form.Group>
 
+              <Form.Group className="mb-3">
+                <Form.Label>Persona</Form.Label>
+                <Form.Select
+                  value={formData.persona}
+                  onChange={(e) => setFormData({ ...formData, persona: e.target.value as 'personal' | 'work' })}
+                >
+                  <option value="personal">Personal</option>
+                  <option value="work">Work</option>
+                </Form.Select>
+              </Form.Group>
+
               <div className="row">
                 <div className="col-md-6">
                   <Form.Group className="mb-3">
@@ -791,17 +870,17 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
               </div>
 
               <div className="row">
-                <div className="col-md-6">
+                <div className="col-md-4">
                   <Form.Group className="mb-3">
                     <Form.Label>Start Date</Form.Label>
                     <Form.Control
                       type="date"
                       value={formData.startDate}
-                      onChange={(e) => setFormData({ ...formData, startDate: e.target.value })}
+                      onChange={(e) => handleStartDateChange(e.target.value)}
                     />
                   </Form.Group>
                 </div>
-                <div className="col-md-6">
+                <div className="col-md-4">
                   <Form.Group className="mb-3">
                     <Form.Label>End Date (Planned)</Form.Label>
                     <Form.Control
@@ -809,6 +888,20 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
                       value={formData.endDate}
                       onChange={(e) => setFormData({ ...formData, endDate: e.target.value })}
                     />
+                  </Form.Group>
+                </div>
+                <div className="col-md-4">
+                  <Form.Group className="mb-3">
+                    <Form.Label>Duration (days)</Form.Label>
+                    <Form.Control
+                      type="number"
+                      min={0}
+                      value={durationDays}
+                      onChange={(e) => handleDurationChange(e.target.value)}
+                    />
+                    <Form.Text className="text-muted">
+                      Updates end date when start date changes.
+                    </Form.Text>
                   </Form.Group>
                 </div>
               </div>

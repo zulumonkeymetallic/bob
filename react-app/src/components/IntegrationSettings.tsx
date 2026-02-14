@@ -23,6 +23,12 @@ interface ProfileData {
   traktWatchlistSize?: number;
   steamId?: string;
   steamLastSyncAt?: any;
+  youtubeConnected?: boolean;
+  youtubeLastSyncAt?: any;
+  youtubeWatchLaterCount?: number;
+  youtubeLongformCount?: number;
+  youtubeTakeoutLastImportAt?: any;
+  youtubeWatchHistoryCount?: number;
 }
 
 interface MonzoTransactionPreview {
@@ -57,7 +63,7 @@ const relativeTime = (value: any) => {
   return formatDistanceToNow(date, { addSuffix: true });
 };
 
-type IntegrationSection = 'google' | 'monzo' | 'strava' | 'steam' | 'trakt' | 'hardcover' | 'all';
+type IntegrationSection = 'google' | 'youtube' | 'monzo' | 'strava' | 'steam' | 'trakt' | 'hardcover' | 'all';
 
 interface IntegrationSettingsProps {
   section?: IntegrationSection;
@@ -89,6 +95,12 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
   const [steamMessage, setSteamMessage] = useState<string | null>(null);
   const [steamLoading, setSteamLoading] = useState(false);
   const [steamIdInput, setSteamIdInput] = useState('');
+
+  const [youtubeMessage, setYouTubeMessage] = useState<string | null>(null);
+  const [youtubeLoading, setYouTubeLoading] = useState(false);
+  const [youtubeImporting, setYouTubeImporting] = useState(false);
+  const [youtubeTakeoutFile, setYouTubeTakeoutFile] = useState<File | null>(null);
+  const [youtubeTakeoutMsg, setYouTubeTakeoutMsg] = useState<string | null>(null);
 
   const [traktHistory, setTraktHistory] = useState<any[]>([]);
   const [traktMessage, setTraktMessage] = useState<string | null>(null);
@@ -160,6 +172,9 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
   const monzoLastErrorAt = monzoIntegrationStatus?.lastErrorAt || null;
   const monzoLastErrorMessage = monzoIntegrationStatus?.lastErrorMessage || null;
   const steamLastSync = profile?.steamLastSyncAt;
+  const youtubeConnected = !!profile?.youtubeConnected;
+  const youtubeLastSync = profile?.youtubeLastSyncAt;
+  const youtubeTakeoutLastImport = profile?.youtubeTakeoutLastImportAt;
   const traktLastSync = profile?.traktLastSyncAt;
   const googleLastSync = profile?.googleCalendarLastSyncAt;
   const stravaLastSync = profile?.stravaLastSyncAt;
@@ -490,6 +505,112 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
         }
       }, 800);
       trackPopupTimer(timer);
+    }
+  };
+
+  const connectYouTube = () => {
+    if (!currentUser) return;
+    const nonce = Math.random().toString(36).slice(2);
+    const region = 'europe-west2';
+    const projectId = firebaseConfig.projectId;
+    const url = `https://${region}-${projectId}.cloudfunctions.net/youtubeOAuthStart?uid=${currentUser.uid}&nonce=${nonce}`;
+    const popup = window.open(url, 'youtube-oauth', 'width=520,height=720');
+    if (popup) {
+      const timer = window.setInterval(() => {
+        if (popup.closed) {
+          clearPopupTimer(timer);
+        }
+      }, 800);
+      trackPopupTimer(timer);
+    }
+  };
+
+  const syncYouTube = async () => {
+    if (!currentUser) return;
+    setYouTubeLoading(true);
+    setYouTubeMessage(null);
+    try {
+      const fn = httpsCallable(functions, 'syncYouTubeWatchLater');
+      const res = await fn({});
+      const data = res.data as any;
+      setYouTubeMessage(`Synced ${data?.written || 0} videos (${data?.longform || 0} longform)`);
+    } catch (err: any) {
+      console.error('syncYouTubeWatchLater failed', err);
+      setYouTubeMessage(err?.message || 'YouTube sync failed');
+    } finally {
+      setYouTubeLoading(false);
+    }
+  };
+
+  const parseYouTubeTakeout = async (file: File) => {
+    const text = await file.text();
+    let raw: any = null;
+    try {
+      raw = JSON.parse(text);
+    } catch (e) {
+      throw new Error('Invalid JSON file. Please select watch-history.json from Google Takeout.');
+    }
+    const rows = Array.isArray(raw) ? raw : (raw?.watchHistory || raw?.history || raw?.items || []);
+    if (!Array.isArray(rows)) return [];
+    const normalizeTitle = (title: string) => {
+      const trimmed = String(title || '').trim();
+      return trimmed.replace(/^Watched\s+/i, '').trim();
+    };
+    const extractVideoId = (url: string) => {
+      if (!url) return null;
+      try {
+        const u = new URL(url);
+        const v = u.searchParams.get('v');
+        if (v) return v;
+      } catch { }
+      const match = String(url).match(/v=([a-zA-Z0-9_-]{6,})/);
+      return match ? match[1] : null;
+    };
+    return rows.map((row: any) => {
+      const time = row?.time || row?.timeWatched || row?.timestamp || row?.watched_at || null;
+      const watchedAtMs = time ? Date.parse(time) : null;
+      const titleUrl = row?.titleUrl || row?.title_url || row?.url || null;
+      const videoId = extractVideoId(String(titleUrl || ''));
+      const title = normalizeTitle(row?.title || row?.name || '');
+      const subtitle = Array.isArray(row?.subtitles) ? row.subtitles[0] : null;
+      const channelTitle = subtitle?.name || row?.channelTitle || null;
+      return {
+        videoId,
+        watchedAtMs: watchedAtMs && Number.isFinite(watchedAtMs) ? watchedAtMs : null,
+        title,
+        titleUrl: titleUrl || null,
+        channelTitle: channelTitle || null,
+      };
+    }).filter((row: any) => row.videoId && row.watchedAtMs);
+  };
+
+  const importYouTubeTakeout = async () => {
+    if (!currentUser || !youtubeTakeoutFile) return;
+    setYouTubeImporting(true);
+    setYouTubeTakeoutMsg(null);
+    try {
+      const items = await parseYouTubeTakeout(youtubeTakeoutFile);
+      if (!items.length) {
+        setYouTubeTakeoutMsg('No watch history entries found in this file.');
+        return;
+      }
+      const fn = httpsCallable(functions, 'importYouTubeTakeout');
+      const chunkSize = 350;
+      let written = 0;
+      let skipped = 0;
+      for (let i = 0; i < items.length; i += chunkSize) {
+        const chunk = items.slice(i, i + chunkSize);
+        const res: any = await fn({ items: chunk });
+        const data = res?.data || res;
+        written += Number(data?.written || 0);
+        skipped += Number(data?.skipped || 0);
+      }
+      setYouTubeTakeoutMsg(`Imported ${written} watch history rows${skipped ? ` (${skipped} skipped)` : ''}.`);
+    } catch (err: any) {
+      console.error('importYouTubeTakeout failed', err);
+      setYouTubeTakeoutMsg(err?.message || 'YouTube Takeout import failed');
+    } finally {
+      setYouTubeImporting(false);
     }
   };
 
@@ -950,6 +1071,68 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
               </tbody>
             </Table>
           )}
+        </Card.Body>
+      </Card>
+      )}
+
+      {show('youtube') && (
+      <Card>
+        <Card.Header className="d-flex justify-content-between align-items-center">
+          <div>
+            <h4 className="mb-0">YouTube</h4>
+            <small>Sync Watch Later (longform focus)</small>
+          </div>
+          <Badge bg={youtubeConnected ? 'success' : 'secondary'}>
+            {youtubeConnected ? 'Connected' : 'Not Connected'}
+          </Badge>
+        </Card.Header>
+        <Card.Body>
+          <Row className="mb-3">
+            <Col md={6}>
+              <div><strong>Last sync:</strong> {formatTimestamp(youtubeLastSync)} ({relativeTime(youtubeLastSync)})</div>
+              <div><strong>Watch Later:</strong> {profile?.youtubeWatchLaterCount ?? '—'} items</div>
+              <div><strong>Longform:</strong> {profile?.youtubeLongformCount ?? '—'} items</div>
+              <div><strong>Takeout import:</strong> {formatTimestamp(youtubeTakeoutLastImport)} ({relativeTime(youtubeTakeoutLastImport)})</div>
+              <div><strong>History rows:</strong> {profile?.youtubeWatchHistoryCount ?? '—'} items</div>
+            </Col>
+            <Col md={6} className="text-md-end mt-3 mt-md-0">
+              <Button variant="outline-primary" className="me-2" onClick={connectYouTube}>
+                {youtubeConnected ? 'Reconnect' : 'Connect'}
+              </Button>
+              <Button variant="primary" onClick={syncYouTube} disabled={youtubeLoading || !youtubeConnected}>
+                {youtubeLoading ? <Spinner size="sm" animation="border" className="me-2" /> : null}
+                Sync Now
+              </Button>
+              <div className="mt-2">
+                <Button variant="outline-secondary" size="sm" onClick={() => navigate('/videos-backlog')}>
+                  Open Videos Backlog
+                </Button>
+              </div>
+            </Col>
+          </Row>
+
+          {youtubeMessage && <Alert variant="info">{youtubeMessage}</Alert>}
+          <div className="text-muted small">Only Watch Later videos ≥ 30 mins are imported into the backlog.</div>
+          <hr />
+          <div className="d-flex flex-column gap-2">
+            <div className="fw-semibold">Google Takeout (watch history)</div>
+            <div className="text-muted small">
+              Upload the `watch-history.json` file from Google Takeout to populate your 24h YouTube time metric.
+            </div>
+            <Form.Control
+              type="file"
+              accept=".json,application/json"
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setYouTubeTakeoutFile(e.target.files?.[0] || null)}
+            />
+            <div className="d-flex gap-2">
+              <Button variant="primary" size="sm" onClick={importYouTubeTakeout} disabled={youtubeImporting || !youtubeTakeoutFile}>
+                {youtubeImporting ? <Spinner size="sm" animation="border" className="me-2" /> : null}
+                Import Watch History
+              </Button>
+              {youtubeTakeoutFile && <Button variant="outline-secondary" size="sm" onClick={() => setYouTubeTakeoutFile(null)}>Clear</Button>}
+            </div>
+            {youtubeTakeoutMsg && <Alert variant="info" className="mb-0">{youtubeTakeoutMsg}</Alert>}
+          </div>
         </Card.Body>
       </Card>
       )}

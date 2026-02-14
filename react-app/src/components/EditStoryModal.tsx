@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Modal, Button, Form, Row, Col, Alert } from 'react-bootstrap';
 import { updateDoc, doc, serverTimestamp, collection, query, where, getDocs, addDoc, deleteDoc } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -11,6 +11,8 @@ import { normalizePriorityValue } from '../utils/priorityUtils';
 import TagInput from './common/TagInput';
 import ActivityStreamPanel from './common/ActivityStreamPanel';
 import ModernTaskTable from './ModernTaskTable';
+import { cascadeStoryPersona } from '../utils/personaCascade';
+import { useNavigate } from 'react-router-dom';
 
 interface EditStoryModalProps {
   show: boolean;
@@ -29,6 +31,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
   onStoryUpdated,
   container
 }) => {
+  const navigate = useNavigate();
   const { sprints } = useSprint();
   const { currentPersona } = usePersona();
   const [editedStory, setEditedStory] = useState({
@@ -42,7 +45,8 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
     acceptanceCriteria: '',
     sprintId: '' as string | '',
     blocked: false as boolean,
-    tags: [] as string[]
+    tags: [] as string[],
+    persona: (currentPersona || 'personal') as 'personal' | 'work',
   });
 
   const [loading, setLoading] = useState(false);
@@ -64,6 +68,10 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
   const selectedSprintStatus = selectedSprint
     ? (isStatus(selectedSprint.status, 'closed') ? 'Completed' : (isStatus(selectedSprint.status, 'cancelled') ? 'Cancelled' : ''))
     : '';
+  const linkedGoal = useMemo(
+    () => (editedStory.goalId ? goals.find((g) => g.id === editedStory.goalId) : null),
+    [editedStory.goalId, goals],
+  );
 
   // Initialize form when story changes
   useEffect(() => {
@@ -83,7 +91,8 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
           : story.acceptanceCriteria || '',
         sprintId: (story as any).sprintId || '',
         blocked: Boolean((story as any).blocked),
-        tags: (story as any).tags || []
+        tags: (story as any).tags || [],
+        persona: ((story as any).persona || currentPersona || 'personal') as 'personal' | 'work',
       });
       setError(null);
       const currentGoal = goals.find(g => g.id === story.goalId);
@@ -158,7 +167,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
       dueDate: (newTask as any).dueDate || null,
       points: (newTask as any).points ?? 1,
       ownerUid: currentUser.uid,
-      persona: (story as any)?.persona || currentPersona || 'personal',
+      persona: (editedStory as any).persona || (story as any)?.persona || currentPersona || 'personal',
       storyId: story.id,
       parentType: 'story',
       parentId: story.id,
@@ -193,6 +202,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
         blocked: !!editedStory.blocked,
         points: editedStory.points,
         sprintId: editedStory.sprintId || null,
+        persona: editedStory.persona || currentPersona || 'personal',
         acceptanceCriteria: editedStory.acceptanceCriteria.trim()
           ? editedStory.acceptanceCriteria.split('\n').map(line => line.trim()).filter(line => line.length > 0)
           : [],
@@ -204,6 +214,16 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
         updates.theme = (selectedGoal as any).theme;
       }
       await updateDoc(doc(db, 'stories', story.id), updates);
+      const prevPersona = ((story as any).persona || currentPersona || 'personal') as 'personal' | 'work';
+      const nextPersona = (updates.persona || prevPersona) as 'personal' | 'work';
+      if (prevPersona !== nextPersona && currentUser?.uid) {
+        try {
+          await cascadeStoryPersona(currentUser.uid, story.id, nextPersona);
+          setLinkedTasks((prev) => prev.map((task) => ({ ...task, persona: nextPersona } as Task)));
+        } catch (err) {
+          console.warn('Failed to cascade persona for story', err);
+        }
+      }
 
       console.log('✅ EditStoryModal: Story updated successfully');
       onStoryUpdated?.();
@@ -307,6 +327,18 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
                         <option key={g.id} value={g.title} />
                       ))}
                     </datalist>
+                    {editedStory.goalId ? (
+                      <div className="form-text">
+                        <Button
+                          size="sm"
+                          variant="link"
+                          className="p-0"
+                          onClick={() => navigate(`/goals/${(linkedGoal as any)?.ref || editedStory.goalId}`)}
+                        >
+                          View linked goal
+                        </Button>
+                      </div>
+                    ) : null}
                   </Form.Group>
                 </Col>
 
@@ -373,6 +405,17 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
                   onChange={(tags) => handleInputChange('tags', tags)}
                   placeholder="Add tags..."
                 />
+              </Form.Group>
+
+              <Form.Group className="mb-3">
+                <Form.Label>Persona</Form.Label>
+                <Form.Select
+                  value={editedStory.persona}
+                  onChange={(e) => handleInputChange('persona', e.target.value as 'personal' | 'work')}
+                >
+                  <option value="personal">Personal</option>
+                  <option value="work">Work</option>
+                </Form.Select>
               </Form.Group>
 
               <Form.Group className="mb-3">

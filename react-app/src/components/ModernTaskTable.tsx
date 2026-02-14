@@ -33,6 +33,7 @@ import {
 import { Task, Story, Goal, Sprint } from '../types';
 import { Toast, ToastContainer } from 'react-bootstrap';
 import TagInput from './common/TagInput';
+import { formatTaskTagLabel } from '../utils/tagDisplay';
 import { useSidebar } from '../contexts/SidebarContext';
 import { useActivityTracking } from '../hooks/useActivityTracking';
 import { useThemeAwareColors, getContrastTextColor } from '../hooks/useThemeAwareColors';
@@ -41,8 +42,11 @@ import { themeVars, rgbaCard } from '../utils/themeVars';
 import { taskStatusText } from '../utils/storyCardFormatting';
 import { httpsCallable } from 'firebase/functions';
 import { functions, db } from '../firebase';
-import { deriveTaskSprint, effectiveSprintId, isDueDateWithinStorySprint, sprintNameForId } from '../utils/taskSprintHelpers';
+import { deriveTaskSprint, effectiveSprintId, findSprintForDate, isDueDateWithinStorySprint, sprintNameForId } from '../utils/taskSprintHelpers';
 import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { usePersona } from '../contexts/PersonaContext';
+import { useGlobalThemes } from '../hooks/useGlobalThemes';
+import { normalizeTaskTags } from '../utils/taskTagging';
 
 interface TaskTableRow extends Task {
   storyTitle?: string;
@@ -109,6 +113,15 @@ const defaultColumns: Column[] = [
     // values are numeric-as-string for editing; labels are rendered via taskStatusText
     // Standardize to Backlog/To Do (0), In Progress (1), Done (2)
     options: ['0', '1', '2']
+  },
+  {
+    key: 'type',
+    label: 'Type',
+    width: '10%',
+    visible: false,
+    editable: true,
+    type: 'select',
+    options: ['task', 'chore', 'routine', 'habit']
   },
   {
     key: 'priority',
@@ -368,9 +381,12 @@ const SortableRow: React.FC<SortableRowProps> = ({
   if (key === 'aiCriticalityScore' && typeof value === 'number') {
     return String(Math.round(value));
   }
-    if (key === 'aiCriticalityReason') {
-      return String(value || '');
-    }
+  if (key === 'aiCriticalityReason') {
+    return String(value || '');
+  }
+  if (key === 'type') {
+    return String(value || 'task');
+  }
     if (key === 'theme' && typeof value === 'number') {
       const theme = GLOBAL_THEMES.find(t => t.id === value);
       return theme ? theme.name : '';
@@ -693,6 +709,8 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
   compact = false,
 }) => {
   const { isDark, colors, backgrounds } = useThemeAwareColors();
+  const { currentPersona } = usePersona();
+  const { themes: globalThemes } = useGlobalThemes();
 
   // Initialize columns based on defaultColumns prop or use all columns
   const initializeColumns = () => {
@@ -724,6 +742,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
   const [editForm, setEditForm] = useState<Partial<TaskTableRow>>({});
   const [storySearch, setStorySearch] = useState('');
   const [sprintFilter, setSprintFilter] = useState<string>('all');
+  const [typeFilter, setTypeFilter] = useState<string>('all');
   const [convertLoadingId, setConvertLoadingId] = useState<string | null>(null);
   const [toastState, setToastState] = useState<{ show: boolean; message: string; variant: 'danger' | 'info' | 'success' }>({ show: false, message: '', variant: 'danger' });
 
@@ -768,6 +787,8 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
 
       if ('dueDate' in updates) {
         payload.dueDate = derivation.dueDateMs ?? null;
+        payload.dueDateLocked = true;
+        (payload as any).dueDateReason = 'user';
       }
 
       if (payload.estimatedHours !== undefined) {
@@ -787,6 +808,9 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
 
       if (derivation.story?.sprintId) {
         payload.sprintId = derivation.story.sprintId;
+      } else if ('dueDate' in updates) {
+        const matched = findSprintForDate(sprints, derivation.dueDateMs ?? null);
+        payload.sprintId = matched?.id ?? null;
       } else if ('sprintId' in payload || derivation.sprintId !== existingTask.sprintId) {
         payload.sprintId = derivation.sprintId ?? null;
       }
@@ -795,15 +819,56 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
         delete payload.sprintId;
       }
 
+      const nextStoryId = ('storyId' in updates) ? (updates.storyId as any) : existingTask.storyId;
+      const nextStory = nextStoryId ? stories.find((s) => s.id === nextStoryId) : null;
+      const goalIdFromUpdates = ('goalId' in updates) ? (updates.goalId as any) : existingTask.goalId;
+      const resolvedGoalId = nextStory?.goalId || goalIdFromUpdates || null;
+      if ('storyId' in updates) {
+        payload.goalId = nextStory?.goalId || null;
+      }
+
+      const shouldNormalizeTags = (
+        'type' in updates
+        || 'persona' in updates
+        || 'sprintId' in updates
+        || 'storyId' in updates
+        || 'goalId' in updates
+        || 'tags' in updates
+      );
+
+      if (shouldNormalizeTags) {
+        const sprintIdForTag = payload.sprintId ?? derivation.sprintId ?? existingTask.sprintId ?? null;
+        const sprintForTag = sprintIdForTag ? sprints.find((s) => s.id === sprintIdForTag) : null;
+        const goalForTag = resolvedGoalId ? goals.find((g) => g.id === resolvedGoalId) : null;
+        const themeValue = (goalForTag as any)?.theme
+          ?? (nextStory as any)?.theme
+          ?? (existingTask as any)?.theme
+          ?? (existingTask as any)?.themeId
+          ?? (existingTask as any)?.theme_id
+          ?? null;
+        const normalizedTags = normalizeTaskTags({
+          tags: Array.isArray(updates.tags) ? updates.tags : (existingTask.tags || []),
+          type: (updates.type as any) ?? existingTask.type,
+          persona: (updates.persona as any) ?? (existingTask as any).persona ?? currentPersona ?? 'personal',
+          sprint: sprintForTag || null,
+          themeValue,
+          goalRef: (goalForTag as any)?.ref || null,
+          storyRef: (nextStory as any)?.ref || null,
+          themes: globalThemes,
+        });
+        payload.tags = normalizedTags as any;
+      }
+
       await onTaskUpdate(taskId, payload);
 
       // Activity stream annotation when due date causes sprint alignment
-      if ('dueDate' in updates && (derivation.sprintId ?? null) !== (existingTask.sprintId ?? null)) {
-        const sprintName = sprintNameForId(sprints, derivation.sprintId ?? null);
+      const alignedSprintId = (payload as any).sprintId ?? derivation.sprintId ?? null;
+      if ('dueDate' in updates && (alignedSprintId ?? null) !== (existingTask.sprintId ?? null)) {
+        const sprintName = sprintNameForId(sprints, alignedSprintId ?? null);
         const due = derivation.dueDateMs ? new Date(derivation.dueDateMs).toISOString().slice(0, 10) : 'unknown';
         try {
           await addNote(taskId, 'task', `Auto-aligned to sprint "${sprintName}" because due date ${due} falls within its window.`, (existingTask as any).ref);
-          await trackFieldChange(taskId, 'task', 'sprintId', String(existingTask.sprintId || ''), String(derivation.sprintId || ''), (existingTask as any).ref);
+          await trackFieldChange(taskId, 'task', 'sprintId', String(existingTask.sprintId || ''), String(alignedSprintId || ''), (existingTask as any).ref);
         } catch { }
       }
     } catch (error: any) {
@@ -819,10 +884,20 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
     })
   );
 
+  const editType = (editForm as any)?.type || 'task';
+  const isRecurringEditType = editType === 'chore' || editType === 'routine' || editType === 'habit';
+  const selectedStoryId = (editForm as any)?.storyId || null;
+  const selectedStory = selectedStoryId ? stories.find((s) => s.id === selectedStoryId) : null;
+  const selectedGoalId = (selectedStory as any)?.goalId || (editForm as any)?.goalId || '';
+  const selectedGoal = selectedGoalId ? goals.find((g) => g.id === selectedGoalId) : null;
+
   const filteredTasks = tasks.filter((task) => {
     const derivedSprintId = effectiveSprintId(task, stories, sprints);
     if (sprintFilter === 'none') return !derivedSprintId;
     if (sprintFilter !== 'all') return derivedSprintId === sprintFilter;
+    const rawType = String((task as any)?.type || (task as any)?.task_type || 'task').toLowerCase();
+    const normalizedType = rawType === 'habitual' ? 'habit' : rawType;
+    if (typeFilter !== 'all' && normalizedType !== typeFilter) return false;
     return true;
   });
 
@@ -1064,6 +1139,27 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                   ))}
                 </select>
               </label>
+              <label style={{ fontSize: '12px', color: themeVars.muted as string, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                Type
+                <select
+                  value={typeFilter}
+                  onChange={(e) => setTypeFilter(e.target.value)}
+                  style={{
+                    padding: '4px 8px',
+                    borderRadius: 6,
+                    border: `1px solid ${themeVars.border}`,
+                    backgroundColor: themeVars.panel as string,
+                    color: themeVars.text as string,
+                    fontSize: '12px'
+                  }}
+                >
+                  <option value="all">All Types</option>
+                  <option value="task">Task</option>
+                  <option value="chore">Chore</option>
+                  <option value="habit">Habit</option>
+                  <option value="routine">Routine</option>
+                </select>
+              </label>
             </div>
           </div>
           <button
@@ -1189,8 +1285,10 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                         onTaskUpdate={handleValidatedUpdate}
                         onTaskDelete={onTaskDelete}
                         onEditRequest={(t) => {
+                          const story = t.storyId ? stories.find((s) => s.id === t.storyId) : null;
+                          const derivedGoalId = t.goalId || (story as any)?.goalId || '';
                           setEditingTask(t);
-                          setEditForm({ ...t });
+                          setEditForm({ ...t, goalId: derivedGoalId });
                           setStorySearch(t.storyTitle || '');
                           setShowEditModal(true);
                         }}
@@ -1214,7 +1312,18 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                         <button
                           onClick={() => {
                             setEditingTask(null);
-                            setEditForm({ title: '', description: '', priority: 2, status: 0 as any, tags: [] });
+                            setEditForm({
+                              title: '',
+                              description: '',
+                              priority: 2,
+                              status: 0 as any,
+                              tags: [],
+                              type: 'task',
+                              goalId: '',
+                              repeatFrequency: null,
+                              repeatInterval: 1,
+                              daysOfWeek: [],
+                            });
                             setStorySearch('');
                             setShowEditModal(true);
                           }}
@@ -1510,8 +1619,88 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                     value={editForm.tags || []}
                     onChange={(tags) => setEditForm({ ...editForm, tags })}
                     placeholder="Add tags..."
+                    formatTag={(tag) => formatTaskTagLabel(tag, goals, sprints)}
                   />
                 </div>
+                <div className="mb-3">
+                  <label className="form-label">Task type</label>
+                  <select
+                    className="form-select"
+                    value={editType}
+                    onChange={(e) => setEditForm({ ...editForm, type: e.target.value as any })}
+                  >
+                    <option value="task">Task</option>
+                    <option value="chore">Chore</option>
+                    <option value="routine">Routine</option>
+                    <option value="habit">Habit</option>
+                  </select>
+                </div>
+                {isRecurringEditType && (
+                  <div className="mb-3">
+                    <div className="row">
+                      <div className="col-md-4 mb-2">
+                        <label className="form-label">Frequency</label>
+                        <select
+                          className="form-select"
+                          value={(editForm as any).repeatFrequency || ''}
+                          onChange={(e) => setEditForm({ ...editForm, repeatFrequency: e.target.value as any })}
+                        >
+                          <option value="">None</option>
+                          <option value="daily">Daily</option>
+                          <option value="weekly">Weekly</option>
+                          <option value="monthly">Monthly</option>
+                          <option value="yearly">Yearly</option>
+                        </select>
+                      </div>
+                      <div className="col-md-4 mb-2">
+                        <label className="form-label">Interval</label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={365}
+                          className="form-control"
+                          value={(editForm as any).repeatInterval || 1}
+                          onChange={(e) => setEditForm({ ...editForm, repeatInterval: Number(e.target.value) || 1 })}
+                        />
+                      </div>
+                    </div>
+                    {(editForm as any).repeatFrequency === 'weekly' && (
+                      <div className="mt-2">
+                        <label className="form-label">Days of week</label>
+                        <div className="d-flex flex-wrap gap-3">
+                          {[
+                            { label: 'Mon', value: 'mon' },
+                            { label: 'Tue', value: 'tue' },
+                            { label: 'Wed', value: 'wed' },
+                            { label: 'Thu', value: 'thu' },
+                            { label: 'Fri', value: 'fri' },
+                            { label: 'Sat', value: 'sat' },
+                            { label: 'Sun', value: 'sun' },
+                          ].map((day) => {
+                            const days = Array.isArray((editForm as any).daysOfWeek) ? (editForm as any).daysOfWeek : [];
+                            const checked = days.includes(day.value);
+                            return (
+                              <label key={day.value} className="form-check form-check-inline">
+                                <input
+                                  type="checkbox"
+                                  className="form-check-input"
+                                  checked={checked}
+                                  onChange={() => {
+                                    const next = checked
+                                      ? days.filter((d: string) => d !== day.value)
+                                      : [...days, day.value];
+                                    setEditForm({ ...editForm, daysOfWeek: next });
+                                  }}
+                                />
+                                <span className="form-check-label">{day.label}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
                 <div className="row">
                   <div className="col-md-6 mb-3">
                     <label className="form-label">Link to Story</label>
@@ -1520,12 +1709,35 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                       {stories.filter(s => s.title?.toLowerCase().includes((storySearch || '').toLowerCase())).slice(0, 10).map(s => (
                         <button key={s.id} type="button" className="list-group-item list-group-item-action"
                           onClick={() => {
-                            setEditForm({ ...editForm, storyId: s.id, storyTitle: s.title, priority: (editingTask ? editingTask.priority : (editForm.priority as any)) || (s as any).priority || 2 });
+                            setEditForm({
+                              ...editForm,
+                              storyId: s.id,
+                              storyTitle: s.title,
+                              goalId: (s as any).goalId || '',
+                              priority: (editingTask ? editingTask.priority : (editForm.priority as any)) || (s as any).priority || 2,
+                            });
                             setStorySearch(s.title || '');
                           }}
                         >{s.title}</button>
                       ))}
                     </div>
+                  </div>
+                  <div className="col-md-6 mb-3">
+                    <label className="form-label">Link to Goal</label>
+                    <select
+                      className="form-select"
+                      value={selectedGoalId}
+                      onChange={(e) => setEditForm({ ...editForm, goalId: e.target.value })}
+                      disabled={!!selectedStoryId}
+                    >
+                      <option value="">No goal</option>
+                      {goals.map((goal) => (
+                        <option key={goal.id} value={goal.id}>{goal.title}</option>
+                      ))}
+                    </select>
+                    {selectedStoryId && selectedGoal && (
+                      <div className="form-text">Goal derived from linked story.</div>
+                    )}
                   </div>
                   <div className="col-md-3 mb-3">
                     <label className="form-label">Priority</label>
@@ -1547,21 +1759,68 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                 <button type="button" className="btn btn-secondary" onClick={() => setShowEditModal(false)}>Cancel</button>
                 <button type="button" className="btn btn-primary" onClick={async () => {
                   if (!editForm.title) return;
-                  if (editingTask) {
-                    await handleValidatedUpdate(editingTask.id, {
-                      title: editForm.title,
-                      description: editForm.description,
-                      priority: editForm.priority as any,
-                      dueDate: editForm.dueDate as any,
-                      storyId: (editForm as any).storyId
+                  const isRecurring = editType === 'chore' || editType === 'routine' || editType === 'habit';
+                  const normalizedFrequency = isRecurring ? ((editForm as any).repeatFrequency || null) : null;
+                  const normalizedInterval = isRecurring ? Math.max(1, Number((editForm as any).repeatInterval || 1)) : null;
+                  const normalizedDays = isRecurring && (editForm as any).repeatFrequency === 'weekly'
+                    ? (Array.isArray((editForm as any).daysOfWeek) ? (editForm as any).daysOfWeek : [])
+                    : [];
+                  const linkedStoryId = (editForm as any).storyId || (editingTask as any)?.storyId || null;
+                  const linkedStory = linkedStoryId ? stories.find((s) => s.id === linkedStoryId) : null;
+                  const linkedGoalId = linkedStory?.goalId || (editForm as any)?.goalId || (editingTask as any)?.goalId || null;
+                  const linkedGoal = linkedGoalId ? goals.find((g) => g.id === linkedGoalId) : null;
+                  const sprintIdValue = (editForm as any).sprintId
+                    || (editingTask as any)?.sprintId
+                    || (linkedStory as any)?.sprintId
+                    || null;
+                  const sprintForTag = sprintIdValue ? sprints.find((s) => s.id === sprintIdValue) : null;
+                  const themeValue = (linkedGoal as any)?.theme
+                    ?? (linkedStory as any)?.theme
+                    ?? (editingTask as any)?.theme
+                    ?? (editingTask as any)?.themeId
+                    ?? (editingTask as any)?.theme_id
+                    ?? null;
+                  const personaValue = (editForm as any).persona
+                    || (editingTask as any)?.persona
+                    || currentPersona
+                    || 'personal';
+                  const normalizedTags = normalizeTaskTags({
+                    tags: (editForm as any).tags || [],
+                    type: editType,
+                    persona: personaValue,
+                    sprint: sprintForTag || null,
+                    themeValue,
+                    goalRef: (linkedGoal as any)?.ref || null,
+                    storyRef: (linkedStory as any)?.ref || null,
+                    themes: globalThemes,
+                  });
+                    if (editingTask) {
+                      await handleValidatedUpdate(editingTask.id, {
+                        title: editForm.title,
+                        description: editForm.description,
+                        priority: editForm.priority as any,
+                        dueDate: editForm.dueDate as any,
+                        storyId: (editForm as any).storyId,
+                        goalId: linkedGoalId as any,
+                        type: editType,
+                        tags: normalizedTags as any,
+                        repeatFrequency: normalizedFrequency as any,
+                        repeatInterval: normalizedInterval as any,
+                        daysOfWeek: normalizedDays as any,
                     });
-                  } else if (onTaskCreate) {
-                    await onTaskCreate({
-                      title: editForm.title,
-                      description: editForm.description,
-                      priority: editForm.priority as any,
-                      dueDate: editForm.dueDate as any,
-                      storyId: (editForm as any).storyId
+                    } else if (onTaskCreate) {
+                      await onTaskCreate({
+                        title: editForm.title,
+                        description: editForm.description,
+                        priority: editForm.priority as any,
+                        dueDate: editForm.dueDate as any,
+                        storyId: (editForm as any).storyId,
+                        goalId: linkedGoalId as any,
+                        type: editType,
+                        tags: normalizedTags as any,
+                        repeatFrequency: normalizedFrequency as any,
+                        repeatInterval: normalizedInterval as any,
+                        daysOfWeek: normalizedDays as any,
                     });
                   }
                   setShowEditModal(false);

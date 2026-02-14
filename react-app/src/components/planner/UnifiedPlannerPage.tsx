@@ -5,6 +5,7 @@ import {
   differenceInMinutes,
   format,
   getDay,
+  isSameDay,
   parse,
   startOfWeek,
   startOfDay,
@@ -54,7 +55,7 @@ import {
   updateDoc,
   where,
 } from 'firebase/firestore';
-import type { CalendarBlock } from '../../types';
+import type { CalendarBlock, Story, Task } from '../../types';
 import type { ScheduledInstanceModel } from '../../domain/scheduler/repository';
 import { humanizePolicyMode } from '../../utils/schedulerPolicy';
 import '../../styles/unified-planner.css';
@@ -63,8 +64,8 @@ import { useGlobalThemes } from '../../hooks/useGlobalThemes';
 import { LEGACY_THEME_MAP } from '../../constants/globalThemes';
 import { pushDiagnosticLog } from '../../hooks/useDiagnosticsLog';
 import { usePersona } from '../../contexts/PersonaContext';
-import type { Task } from '../../types';
 import { getBadgeVariant, getPriorityBadge, getStatusName } from '../../utils/statusHelpers';
+import { isRecurringDueOnDate, resolveRecurringDueMs } from '../../utils/recurringTaskDue';
 
 const locales = { 'en-GB': enGB } as const;
 const localizer = dateFnsLocalizer({
@@ -121,6 +122,7 @@ interface BlockFormState {
   end: string;
   syncToGoogle: boolean;
   subTheme: string;
+  persona?: 'personal' | 'work' | null;
   storyId?: string;
   taskId?: string;
   aiScore?: number | null;
@@ -141,6 +143,7 @@ const DEFAULT_BLOCK_FORM: BlockFormState = {
   end: '',
   syncToGoogle: true,
   subTheme: '',
+  persona: null,
   storyId: undefined,
   taskId: undefined,
   aiScore: null,
@@ -160,39 +163,6 @@ const getInitialRange = (): PlannerRange => {
 };
 
 const toInputValue = (date: Date) => format(date, "yyyy-MM-dd'T'HH:mm");
-
-const formatInstanceTime = (instance: ScheduledInstanceModel) => {
-  try {
-    if (instance.plannedStart && instance.plannedEnd) {
-      const start = new Date(instance.plannedStart);
-      const end = new Date(instance.plannedEnd);
-      return `${format(start, 'HH:mm')} - ${format(end, 'HH:mm')}`;
-    }
-    if (instance.plannedStart) {
-      return format(new Date(instance.plannedStart), 'HH:mm');
-    }
-    return 'Flexible window';
-  } catch (err) {
-    console.warn('Failed to format instance window', err);
-    return 'Flexible window';
-  }
-};
-
-const statusVariant = (status: ScheduledInstanceModel['status']) => {
-  switch (status) {
-    case 'completed':
-      return 'success';
-    case 'missed':
-    case 'cancelled':
-      return 'danger';
-    case 'unscheduled':
-      return 'warning';
-    case 'committed':
-      return 'primary';
-    default:
-      return 'secondary';
-  }
-};
 
 const hexToRgba = (hex: string, alpha: number) => {
   if (!hex) return `rgba(99, 102, 241, ${alpha})`;
@@ -294,6 +264,12 @@ const UnifiedPlannerPage: React.FC = () => {
       if (direct) return direct;
 
       const normalized = String(themeValue).trim().toLowerCase();
+      const legacyEntry = Object.entries(LEGACY_THEME_MAP).find(([key]) => key.toLowerCase() === normalized);
+      if (legacyEntry) {
+        const legacyId = legacyEntry[1];
+        const byId = themePalette.get(String(legacyId));
+        if (byId) return byId;
+      }
       // Attempt a case-insensitive match
       for (const [key, appearance] of themePalette.entries()) {
         if (key.toLowerCase() === normalized) {
@@ -307,6 +283,10 @@ const UnifiedPlannerPage: React.FC = () => {
 
   const [range, setRange] = useState<PlannerRange>(() => getInitialRange());
   const [view, setView] = useState<ViewType>(Views.WEEK as ViewType);
+  const [calendarScrollTime, setCalendarScrollTime] = useState<Date>(() => {
+    const now = new Date();
+    return new Date(1970, 0, 1, now.getHours(), now.getMinutes(), 0);
+  });
   const [blockForm, setBlockForm] = useState<BlockFormState>(() => ({
     ...DEFAULT_BLOCK_FORM,
     theme: blockDefaultTheme as CalendarBlock['theme'],
@@ -322,7 +302,12 @@ const UnifiedPlannerPage: React.FC = () => {
   const [lastActionPatch, setLastActionPatch] = useState<{ id: string; prevStart: Date; prevEnd: Date } | null>(null);
   const [tasksDueToday, setTasksDueToday] = useState<Task[]>([]);
   const [tasksLoading, setTasksLoading] = useState(false);
-  const [tasksSortMode, setTasksSortMode] = useState<'due' | 'ai'>('due');
+  const [tasksSortMode, setTasksSortMode] = useState<'due' | 'ai'>('ai');
+  const [top3Collapsed, setTop3Collapsed] = useState(true);
+  const [top3Tasks, setTop3Tasks] = useState<Task[]>([]);
+  const [top3Stories, setTop3Stories] = useState<Story[]>([]);
+  const [top3Loading, setTop3Loading] = useState(false);
+  const [choreCompletionBusy, setChoreCompletionBusy] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     setBlockForm((prev) => {
@@ -332,6 +317,33 @@ const UnifiedPlannerPage: React.FC = () => {
       return { ...prev, theme: blockDefaultTheme as CalendarBlock['theme'] };
     });
   }, [blockDefaultTheme, resolveThemeAppearance]);
+
+  useEffect(() => {
+    const updateScrollTime = () => {
+      const now = new Date();
+      const inRange = now >= startOfDay(range.start) && now <= endOfDay(range.end);
+      if (view === Views.DAY) {
+        setCalendarScrollTime(
+          isSameDay(now, range.start)
+            ? new Date(1970, 0, 1, now.getHours(), now.getMinutes(), 0)
+            : new Date(1970, 0, 1, 6, 0, 0),
+        );
+        return;
+      }
+      if (view === Views.WEEK) {
+        setCalendarScrollTime(
+          inRange
+            ? new Date(1970, 0, 1, now.getHours(), now.getMinutes(), 0)
+            : new Date(1970, 0, 1, 6, 0, 0),
+        );
+        return;
+      }
+      setCalendarScrollTime(new Date(1970, 0, 1, 6, 0, 0));
+    };
+    updateScrollTime();
+    const id = window.setInterval(updateScrollTime, 60000);
+    return () => window.clearInterval(id);
+  }, [range.start, range.end, view]);
 
   const planner = useUnifiedPlannerData(range);
   const location = useLocation();
@@ -368,21 +380,35 @@ const UnifiedPlannerPage: React.FC = () => {
     const displayBlocks = planner.blocks.filter((block) => {
       const source = String((block as any).source || '').toLowerCase();
       const entryMethod = String((block as any).entry_method || '').toLowerCase();
-      return source !== 'gcal' && entryMethod !== 'google_calendar';
+      const isGcal = source === 'gcal' || entryMethod === 'google_calendar';
+      const blockId = String((block as any).id || '');
+      const isMirrorBlock = blockId.startsWith('sched_') || blockId.startsWith('chore_');
+      if (isMirrorBlock) return false;
+      if (isGcal) {
+        const hasLink = Boolean(block.taskId || block.storyId || block.goalId || (block as any).deepLink);
+        return hasLink;
+      }
+      return true;
     });
 
     const blockEvents = displayBlocks.map((block) => {
       const start = new Date(block.start);
       const end = new Date(block.end);
       const title = (block as any).title || `${block.category} • ${block.theme}`;
-      const appearance = resolveThemeAppearance(block.theme || block.subTheme);
+      const appearance = resolveThemeAppearance(
+        block.theme
+          ?? (block as any).theme_id
+          ?? block.subTheme
+          ?? block.category,
+      );
       return {
         id: block.id,
         title,
         start,
         end,
         type: 'block' as const,
-        color: appearance?.color || FALLBACK_THEME_COLORS[block.theme] || '#14b8a6',
+        color: appearance?.color
+          || FALLBACK_THEME_COLORS[String(block.theme || block.category)] || '#14b8a6',
         textColor: appearance?.textColor || '#ffffff',
         themeLabel: appearance?.label,
         block,
@@ -419,6 +445,7 @@ const UnifiedPlannerPage: React.FC = () => {
             if (tagMatch) return tagMatch;
           }
           if (block?.theme) return block.theme;
+          if (block?.category) return block.category;
           return null;
         })();
 
@@ -461,28 +488,35 @@ const UnifiedPlannerPage: React.FC = () => {
         if (blockIdFromExt && planner.blocks.some(b => b.id === blockIdFromExt)) return false;
         return true;
       })
-      .map((external) => ({
-        id: external.id,
-        title: external.title,
-        start: external.start,
-        end: external.end,
-        type: 'external' as const,
-        external,
-      } satisfies PlannerCalendarEvent));
+      .map((external) => {
+        const raw = external.raw as any;
+        const privateMeta = raw?.extendedProperties?.private || {};
+        const themeCandidate =
+          privateMeta.theme
+          ?? privateMeta.themeId
+          ?? privateMeta.theme_id
+          ?? privateMeta['bob-theme']
+          ?? privateMeta['bob-theme-id']
+          ?? privateMeta['bob_theme_id']
+          ?? privateMeta['bob-category']
+          ?? privateMeta.category
+          ?? privateMeta.themeName
+          ?? external.title;
+        const appearance = resolveThemeAppearance(themeCandidate);
+        return {
+          id: external.id,
+          title: external.title,
+          start: external.start,
+          end: external.end,
+          type: 'external' as const,
+          color: appearance?.color,
+          textColor: appearance?.textColor,
+          external,
+        } satisfies PlannerCalendarEvent;
+      });
 
     return [...externalEvents, ...blockEvents, ...instanceEvents];
   }, [planner.blocks, planner.externalEvents, planner.instances, resolveThemeAppearance]);
-
-  const scheduledToday = useMemo(() => {
-    const todayKey = format(new Date(), 'yyyyMMdd');
-    return planner.instances.filter((instance) => instance.occurrenceDate === todayKey);
-  }, [planner.instances]);
-
-  const completionRate = useMemo(() => {
-    if (scheduledToday.length === 0) return 0;
-    const completed = scheduledToday.filter((instance) => instance.status === 'completed').length;
-    return Math.round((completed / scheduledToday.length) * 100);
-  }, [scheduledToday]);
 
   const storyLabel = useCallback((story: any) => {
     if (!story) return '';
@@ -529,6 +563,36 @@ const UnifiedPlannerPage: React.FC = () => {
     return null;
   }, []);
 
+  const getTaskLastDoneMs = useCallback((task: Task): number | null => {
+    const raw: any = (task as any).lastDoneAt ?? (task as any).completedAt;
+    if (!raw) return null;
+    if (typeof raw === 'number') return raw;
+    if (typeof raw === 'string') {
+      const parsed = new Date(raw).getTime();
+      return Number.isNaN(parsed) ? null : parsed;
+    }
+    if (raw instanceof Date) return raw.getTime();
+    if (typeof raw.toDate === 'function') {
+      const d = raw.toDate();
+      return d instanceof Date ? d.getTime() : null;
+    }
+    if (typeof raw.toMillis === 'function') return raw.toMillis();
+    if (raw.seconds != null) return (raw.seconds * 1000) + Math.floor((raw.nanoseconds || 0) / 1e6);
+    return null;
+  }, []);
+
+  const getChoreKind = useCallback((task: Task): 'chore' | 'routine' | 'habit' | null => {
+    const raw = String((task as any)?.type || (task as any)?.task_type || '').toLowerCase();
+    const normalized = raw === 'habitual' ? 'habit' : raw;
+    if (['chore', 'routine', 'habit'].includes(normalized)) return normalized as any;
+    const tags = Array.isArray((task as any)?.tags) ? (task as any).tags : [];
+    const tagKeys = tags.map((tag) => String(tag || '').toLowerCase().replace(/^#/, ''));
+    if (tagKeys.includes('chore')) return 'chore';
+    if (tagKeys.includes('routine')) return 'routine';
+    if (tagKeys.includes('habit') || tagKeys.includes('habitual')) return 'habit';
+    return null;
+  }, []);
+
   const formatDueLabel = useCallback((dueMs: number) => {
     const dueDate = new Date(dueMs);
     const dateLabel = format(dueDate, 'MMM d, yyyy');
@@ -554,21 +618,30 @@ const UnifiedPlannerPage: React.FC = () => {
     const unsubscribe = onSnapshot(
       q,
       (snap) => {
-        const todayStart = startOfDay(new Date()).getTime();
-        const todayEnd = endOfDay(new Date()).getTime();
+        const todayDate = new Date();
+        todayDate.setHours(0, 0, 0, 0);
+        const todayStart = startOfDay(todayDate).getTime();
+        const todayEnd = endOfDay(todayDate).getTime();
         const rows = snap.docs
           .map((doc) => ({ id: doc.id, ...(doc.data() as any) } as Task))
           .filter((task) => !task.deleted)
           .filter((task) => {
             const due = getTaskDueMs(task);
-            if (!due) return false;
-            return due >= todayStart && due <= todayEnd;
+            if (due) return due <= todayEnd;
+            const kind = getChoreKind(task);
+            return !!kind && isRecurringDueOnDate(task, todayDate, due);
           })
-          .filter((task) => (task.status ?? 0) !== 2);
+          .filter((task) => (task.status ?? 0) !== 2)
+          .filter((task) => {
+            if (!getChoreKind(task)) return true;
+            const lastDone = getTaskLastDoneMs(task);
+            if (!lastDone) return true;
+            return lastDone < todayStart || lastDone > todayEnd;
+          });
 
         rows.sort((a, b) => {
-          const aDue = getTaskDueMs(a) || 0;
-          const bDue = getTaskDueMs(b) || 0;
+          const aDue = resolveRecurringDueMs(a, todayDate, todayStart) || 0;
+          const bDue = resolveRecurringDueMs(b, todayDate, todayStart) || 0;
           if (aDue !== bDue) return aDue - bDue;
           const aScore = Number((a as any).aiCriticalityScore || 0);
           const bScore = Number((b as any).aiCriticalityScore || 0);
@@ -586,7 +659,119 @@ const UnifiedPlannerPage: React.FC = () => {
     );
 
     return () => unsubscribe();
-  }, [currentPersona, currentUser, getTaskDueMs]);
+  }, [currentPersona, currentUser, getTaskDueMs, getChoreKind, getTaskLastDoneMs]);
+
+  useEffect(() => {
+    if (!currentUser || !currentPersona) {
+      setTop3Tasks([]);
+      setTop3Stories([]);
+      setTop3Loading(false);
+      return;
+    }
+    setTop3Loading(true);
+    const todayIso = new Date().toISOString().slice(0, 10);
+    let tasksReady = false;
+    let storiesReady = false;
+    const markReady = () => {
+      if (tasksReady && storiesReady) setTop3Loading(false);
+    };
+
+    const isTaskDone = (status: any) => {
+      if (typeof status === 'number') return status >= 2;
+      const s = String(status || '').toLowerCase();
+      return ['done', 'complete', 'completed', 'finished', 'closed'].includes(s);
+    };
+    const isStoryDone = (status: any) => {
+      if (typeof status === 'number') return status >= 4;
+      const s = String(status || '').toLowerCase();
+      return ['done', 'complete', 'completed', 'finished', 'closed'].includes(s);
+    };
+
+    const taskQuery = query(
+      collection(db, 'tasks'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+      where('aiTop3ForDay', '==', true),
+    );
+    const storyQuery = query(
+      collection(db, 'stories'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+      where('aiTop3ForDay', '==', true),
+    );
+
+    const unsubTasks = onSnapshot(
+      taskQuery,
+      (snap) => {
+        const rows = snap.docs
+          .map((doc) => ({ id: doc.id, ...(doc.data() as any) } as Task))
+          .filter((task) => !task.deleted)
+          .filter((task) => !isTaskDone(task.status))
+          .filter((task) => {
+            const aiDate = (task as any).aiTop3Date;
+            if (!aiDate) return true;
+            return String(aiDate).slice(0, 10) === todayIso;
+          })
+          .sort((a, b) => {
+            const ar = Number((a as any).aiPriorityRank || 0) || 99;
+            const br = Number((b as any).aiPriorityRank || 0) || 99;
+            if (ar !== br) return ar - br;
+            const as = Number((a as any).aiCriticalityScore ?? -1);
+            const bs = Number((b as any).aiCriticalityScore ?? -1);
+            if (as !== bs) return bs - as;
+            return String(a.title || '').localeCompare(String(b.title || ''));
+          })
+          .slice(0, 3);
+        setTop3Tasks(rows);
+        tasksReady = true;
+        markReady();
+      },
+      (err) => {
+        console.warn('Failed to load top 3 tasks', err);
+        setTop3Tasks([]);
+        tasksReady = true;
+        markReady();
+      },
+    );
+
+    const unsubStories = onSnapshot(
+      storyQuery,
+      (snap) => {
+        const rows = snap.docs
+          .map((doc) => ({ id: doc.id, ...(doc.data() as any) } as Story))
+          .filter((story) => !isStoryDone(story.status))
+          .filter((story) => {
+            const aiDate = (story as any).aiTop3Date;
+            if (!aiDate) return true;
+            return String(aiDate).slice(0, 10) === todayIso;
+          })
+          .sort((a, b) => {
+            const ar = Number((a as any).aiFocusStoryRank || 0) || 99;
+            const br = Number((b as any).aiFocusStoryRank || 0) || 99;
+            if (ar !== br) return ar - br;
+            const as = Number((a as any).aiCriticalityScore ?? -1);
+            const bs = Number((b as any).aiCriticalityScore ?? -1);
+            if (as !== bs) return bs - as;
+            return String(a.title || '').localeCompare(String(b.title || ''));
+          })
+          .slice(0, 3);
+        setTop3Stories(rows);
+        storiesReady = true;
+        markReady();
+      },
+      (err) => {
+        console.warn('Failed to load top 3 stories', err);
+        setTop3Stories([]);
+        storiesReady = true;
+        markReady();
+      },
+    );
+
+    return () => {
+      unsubTasks();
+      unsubStories();
+    };
+  }, [currentUser, currentPersona]);
 
   const topChores = useMemo(() => planner.chores.slice(0, 5), [planner.chores]);
   const topRoutines = useMemo(() => planner.routines.slice(0, 5), [planner.routines]);
@@ -620,9 +805,10 @@ const UnifiedPlannerPage: React.FC = () => {
       start: toInputValue(start),
       end: toInputValue(end),
       syncToGoogle: true,
+      persona: currentPersona || 'personal',
     });
     setComposerOpen(true);
-  }, [blockDefaultTheme]);
+  }, [blockDefaultTheme, currentPersona]);
 
   const openComposerForBlock = useCallback((block: CalendarBlock) => {
     const mergedTheme = resolveThemeAppearance(block.theme)
@@ -644,6 +830,7 @@ const UnifiedPlannerPage: React.FC = () => {
       end: toInputValue(new Date(block.end)),
       syncToGoogle: true,
       subTheme: block.subTheme || '',
+      persona: (block as any).persona || currentPersona || 'personal',
       storyId: (block as any).storyId,
       taskId: (block as any).taskId,
       aiScore,
@@ -654,7 +841,7 @@ const UnifiedPlannerPage: React.FC = () => {
       recurrenceUntil: untilStr,
     });
     setComposerOpen(true);
-  }, [blockDefaultTheme, resolveThemeAppearance, stories, storyLabel]);
+  }, [blockDefaultTheme, resolveThemeAppearance, stories, storyLabel, currentPersona]);
 
   const handleSelectSlot = useCallback(
     ({ start, end }: { start: Date; end: Date }) => {
@@ -866,7 +1053,7 @@ const UnifiedPlannerPage: React.FC = () => {
       storyId: blockForm.storyId || null,
       habitId: null,
       subTheme: blockForm.subTheme || null,
-      persona: 'personal',
+      persona: blockForm.persona || currentPersona || 'personal',
       theme: blockForm.theme,
       category: blockForm.category,
       start: start.getTime(),
@@ -1010,22 +1197,48 @@ const UnifiedPlannerPage: React.FC = () => {
     }
   }, []);
 
+  const handleCompleteChoreTask = useCallback(async (task: Task) => {
+    if (!currentUser) return;
+    const taskId = task.id;
+    if (!taskId || choreCompletionBusy[taskId]) return;
+    setChoreCompletionBusy((prev) => ({ ...prev, [taskId]: true }));
+    try {
+      const fn = httpsCallable(functions, 'completeChoreTask');
+      await fn({ taskId });
+    } catch (err) {
+      console.warn('Unified planner: failed to complete chore task', err);
+      setFeedback({ variant: 'danger', message: 'Could not complete chore or habit item.' });
+      setChoreCompletionBusy((prev) => ({ ...prev, [taskId]: false }));
+      return;
+    }
+    setTimeout(() => {
+      setChoreCompletionBusy((prev) => {
+        const next = { ...prev };
+        delete next[taskId];
+        return next;
+      });
+    }, 1500);
+  }, [currentUser, choreCompletionBusy]);
+
   const sortedTasksDueToday = useMemo(() => {
+    const todayDate = new Date();
+    todayDate.setHours(0, 0, 0, 0);
+    const todayStart = todayDate.getTime();
     const rows = [...tasksDueToday];
     if (tasksSortMode === 'ai') {
       rows.sort((a, b) => {
         const aScore = Number((a as any).aiCriticalityScore ?? (a as any).aiPriorityScore ?? 0);
         const bScore = Number((b as any).aiCriticalityScore ?? (b as any).aiPriorityScore ?? 0);
         if (aScore !== bScore) return bScore - aScore;
-        const aDue = getTaskDueMs(a) || 0;
-        const bDue = getTaskDueMs(b) || 0;
+        const aDue = resolveRecurringDueMs(a, todayDate, todayStart) || getTaskDueMs(a) || 0;
+        const bDue = resolveRecurringDueMs(b, todayDate, todayStart) || getTaskDueMs(b) || 0;
         return aDue - bDue;
       });
       return rows;
     }
     rows.sort((a, b) => {
-      const aDue = getTaskDueMs(a) || 0;
-      const bDue = getTaskDueMs(b) || 0;
+      const aDue = resolveRecurringDueMs(a, todayDate, todayStart) || getTaskDueMs(a) || 0;
+      const bDue = resolveRecurringDueMs(b, todayDate, todayStart) || getTaskDueMs(b) || 0;
       if (aDue !== bDue) return aDue - bDue;
       const aScore = Number((a as any).aiCriticalityScore ?? (a as any).aiPriorityScore ?? 0);
       const bScore = Number((b as any).aiCriticalityScore ?? (b as any).aiPriorityScore ?? 0);
@@ -1033,6 +1246,16 @@ const UnifiedPlannerPage: React.FC = () => {
     });
     return rows;
   }, [tasksDueToday, tasksSortMode, getTaskDueMs]);
+
+  const sortedTaskItemsDueToday = useMemo(
+    () => sortedTasksDueToday.filter((task) => !getChoreKind(task)),
+    [sortedTasksDueToday, getChoreKind],
+  );
+
+  const sortedChoreItemsDueToday = useMemo(
+    () => sortedTasksDueToday.filter((task) => !!getChoreKind(task)),
+    [sortedTasksDueToday, getChoreKind],
+  );
 
   const handleAutoPlan = useCallback(async () => {
     setPlanning(true);
@@ -1110,6 +1333,16 @@ const UnifiedPlannerPage: React.FC = () => {
     };
     const hasConflict = events.some(e => e.id !== event.id && overlaps(e, event) && e.type !== 'external' && event.type !== 'external');
     if (event.type === 'external') {
+      if (event.color) {
+        return {
+          className: 'planner-event-external',
+          style: {
+            backgroundColor: event.color,
+            borderColor: event.color,
+            color: event.textColor || '#1e3a8a',
+          },
+        };
+      }
       return {
         className: 'planner-event-external',
         style: {
@@ -1316,7 +1549,7 @@ const UnifiedPlannerPage: React.FC = () => {
   return (
     <Container fluid className="py-4 unified-planner">
       <Row className="g-4">
-        <Col lg={8} xl={9}>
+        <Col lg={7} xl={8}>
           <Card className="shadow-sm border-0 h-100">
             <Card.Header className="d-flex flex-wrap align-items-center justify-content-between gap-3">
               <div className="d-flex align-items-center gap-3">
@@ -1429,6 +1662,8 @@ const UnifiedPlannerPage: React.FC = () => {
                     onSelectSlot={handleSelectSlot}
                     onSelectEvent={handleSelectEvent}
                     eventPropGetter={eventStyleGetter}
+                    scrollToTime={calendarScrollTime}
+                    getNow={() => new Date()}
                     style={{ height: 'calc(100vh - 220px)' }}
                     min={new Date(1970, 1, 1, 5, 0)}
                     max={new Date(1970, 1, 1, 23, 30)}
@@ -1452,135 +1687,215 @@ const UnifiedPlannerPage: React.FC = () => {
             </Card.Body>
           </Card>
         </Col>
-        <Col lg={4} xl={3}>
+        <Col lg={5} xl={4}>
           <Card className="shadow-sm border-0 mb-4">
             <Card.Header className="d-flex align-items-center justify-content-between">
               <div className="fw-semibold d-flex align-items-center gap-2">
-                <ListChecks size={18} /> Today&apos;s Focus
+                <ListChecks size={18} /> Top 3 priorities
               </div>
-              <Badge bg={completionRate === 100 ? 'success' : completionRate > 0 ? 'info' : 'secondary'} pill>
-                {completionRate}%
-              </Badge>
+              <div className="d-flex align-items-center gap-2">
+                <Badge bg="secondary" pill>{currentPersona === 'work' ? 'Work' : 'Personal'}</Badge>
+                <Button
+                  size="sm"
+                  variant="outline-secondary"
+                  onClick={() => setTop3Collapsed((prev) => !prev)}
+                >
+                  {top3Collapsed ? 'Show' : 'Hide'}
+                </Button>
+              </div>
             </Card.Header>
-            <Card.Body className="p-3 d-flex flex-column gap-3">
-              {scheduledToday.length === 0 ? (
-                <div className="text-muted small">AI hasn&apos;t planned anything today. Press “Auto-plan with AI” to populate your calendar.</div>
-              ) : (
-                scheduledToday.map((instance) => {
-                  const isCompleted = instance.status === 'completed';
-                  return (
-                    <div key={instance.id} className={`focus-item p-3 rounded ${isCompleted ? 'completed' : ''}`}>
-                      <div className="d-flex justify-content-between align-items-start">
-                        <div>
-                          <div className="fw-semibold">{instance.title || instance.sourceId}</div>
-                          <div className="text-muted small d-flex align-items-center gap-2">
-                            <Clock size={14} /> {formatInstanceTime(instance)}
-                          </div>
-                        </div>
-                        <Badge bg={statusVariant(instance.status)}>{instance.status}</Badge>
-                      </div>
-                      <div className="d-flex gap-2 mt-2">
-                        <Form.Check
-                          type="checkbox"
-                          id={`instance-${instance.id}`}
-                          label="Completed"
-                          checked={isCompleted}
-                          onChange={(event) =>
-                            handleInstanceStatusChange(
-                              instance,
-                              event.target.checked ? 'completed' : 'planned',
-                            )
-                          }
-                        />
-                        <Button
-                          size="sm"
-                          variant="outline-secondary"
-                          onClick={() => handleInstanceStatusChange(instance, 'missed')}
-                        >
-                          Skip
-                        </Button>
-                      </div>
+            {!top3Collapsed && (
+              <Card.Body className="p-3 d-flex flex-column gap-3">
+                {top3Loading ? (
+                  <div className="d-flex align-items-center gap-2 text-muted">
+                    <Spinner size="sm" animation="border" /> Loading top 3…
+                  </div>
+                ) : (top3Tasks.length === 0 && top3Stories.length === 0) ? (
+                  <div className="text-muted small">No Top 3 items flagged for this persona yet.</div>
+                ) : (
+                  <>
+                    <div>
+                      <div className="text-uppercase text-muted small fw-semibold mb-1">Stories</div>
+                      {top3Stories.length === 0 ? (
+                        <div className="text-muted small">No stories flagged.</div>
+                      ) : (
+                        top3Stories.map((story, idx) => {
+                          const label = storyLabel(story);
+                          const aiScore = (story as any).aiCriticalityScore ?? (story as any).aiPriorityScore;
+                          const href = `/stories/${(story as any).ref || story.id}`;
+                          return (
+                            <div key={story.id} className="border rounded p-2 mb-2">
+                              <div className="fw-semibold">
+                                <a href={href} className="text-decoration-none">{label}</a>
+                              </div>
+                              <div className="text-muted small d-flex justify-content-between">
+                                <span>Rank {idx + 1}</span>
+                                <span>AI {aiScore != null ? Math.round(aiScore) : '—'}</span>
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
                     </div>
-                  );
-                })
-              )}
-            </Card.Body>
+                    <div>
+                      <div className="text-uppercase text-muted small fw-semibold mb-1">Tasks</div>
+                      {top3Tasks.length === 0 ? (
+                        <div className="text-muted small">No tasks flagged.</div>
+                      ) : (
+                        top3Tasks.map((task, idx) => {
+                          const refLabel = taskRefLabel(task);
+                          const label = refLabel ? `${refLabel} — ${task.title}` : task.title;
+                          const aiScore = (task as any).aiCriticalityScore ?? (task as any).aiPriorityScore;
+                          const href = `/tasks/${(task as any).ref || task.id}`;
+                          return (
+                            <div key={task.id} className="border rounded p-2 mb-2">
+                              <div className="fw-semibold">
+                                <a href={href} className="text-decoration-none">{label}</a>
+                              </div>
+                              <div className="text-muted small d-flex justify-content-between">
+                                <span>Rank {idx + 1}</span>
+                                <span>AI {aiScore != null ? Math.round(aiScore) : '—'}</span>
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </>
+                )}
+              </Card.Body>
+            )}
           </Card>
 
           <Card className="shadow-sm border-0 mb-4">
-            <Card.Header className="d-flex align-items-center justify-content-between">
-              <div className="fw-semibold d-flex align-items-center gap-2">
-                <Clock size={16} /> Tasks due today
-              </div>
-              <div className="d-flex align-items-center gap-2">
-                <Form.Select
-                  size="sm"
-                  value={tasksSortMode}
-                  onChange={(e) => setTasksSortMode(e.target.value as 'due' | 'ai')}
-                >
-                  <option value="due">Sort: Due time</option>
-                  <option value="ai">Sort: AI score</option>
-                </Form.Select>
-                <Badge bg={sortedTasksDueToday.length > 0 ? 'info' : 'secondary'} pill>
-                  {sortedTasksDueToday.length}
-                </Badge>
-              </div>
-            </Card.Header>
-            <Card.Body className="p-3 d-flex flex-column gap-2">
-              {tasksLoading ? (
-                <div className="d-flex align-items-center gap-2 text-muted">
-                  <Spinner size="sm" animation="border" /> Loading tasks…
-                </div>
-              ) : sortedTasksDueToday.length === 0 ? (
-                <div className="text-muted small">No tasks due today.</div>
-              ) : (
-                sortedTasksDueToday.map((task) => {
-                  const dueMs = getTaskDueMs(task);
-                  const aiScore = (task as any).aiCriticalityScore ?? (task as any).aiPriorityScore;
-                  const refLabel = taskRefLabel(task);
-                  const priorityBadge = getPriorityBadge((task as any).priority);
-                  const dueLabel = dueMs ? formatDueLabel(dueMs) : null;
-                  return (
-                    <div key={task.id} className="border rounded p-2">
-                      <div className="d-flex justify-content-between align-items-start gap-2">
-                        <div>
-                          <div className="fw-semibold">{task.title}</div>
-                          {refLabel && (
-                            <div className="text-muted small">
-                              <a href={`/tasks/${task.id}`} className="text-decoration-none">
-                                <code className="text-primary">{refLabel}</code>
-                              </a>
+                <Card.Header className="d-flex align-items-center justify-content-between">
+                  <div className="fw-semibold d-flex align-items-center gap-2">
+                    <Clock size={16} /> Tasks due today & overdue
+                  </div>
+                  <div className="d-flex align-items-center gap-2">
+                    <Form.Select
+                      size="sm"
+                      value={tasksSortMode}
+                      onChange={(e) => setTasksSortMode(e.target.value as 'due' | 'ai')}
+                    >
+                      <option value="due">Sort: Due time</option>
+                      <option value="ai">Sort: AI score</option>
+                    </Form.Select>
+                    <Badge bg={sortedTaskItemsDueToday.length > 0 ? 'info' : 'secondary'} pill>
+                      {sortedTaskItemsDueToday.length}
+                    </Badge>
+                  </div>
+                </Card.Header>
+                <Card.Body className="p-3 d-flex flex-column gap-2">
+                  {tasksLoading ? (
+                    <div className="d-flex align-items-center gap-2 text-muted">
+                      <Spinner size="sm" animation="border" /> Loading tasks…
+                    </div>
+                  ) : sortedTaskItemsDueToday.length === 0 ? (
+                    <div className="text-muted small">No tasks due today or overdue.</div>
+                  ) : (
+                    sortedTaskItemsDueToday.map((task) => {
+                      const dueMs = getTaskDueMs(task);
+                      const aiScore = (task as any).aiCriticalityScore ?? (task as any).aiPriorityScore;
+                      const refLabel = taskRefLabel(task);
+                      const priorityBadge = getPriorityBadge((task as any).priority);
+                      const dueLabel = dueMs ? formatDueLabel(dueMs) : null;
+                      return (
+                        <div key={task.id} className="border rounded p-2">
+                          <div className="d-flex justify-content-between align-items-start gap-2">
+                            <div className="flex-grow-1">
+                              <div className="fw-semibold">{task.title}</div>
+                              {refLabel && (
+                                <div className="text-muted small">
+                                  <a href={`/tasks/${task.id}`} className="text-decoration-none">
+                                    <code className="text-primary">{refLabel}</code>
+                                  </a>
+                                </div>
+                              )}
+                              <div className="text-muted small d-flex align-items-center gap-1">
+                                <Clock size={12} /> Due {dueLabel ?? '—'}
+                              </div>
                             </div>
-                          )}
-                          <div className="text-muted small d-flex align-items-center gap-1">
-                            <Clock size={12} /> Due {dueLabel ?? '—'}
+                          </div>
+                          <div className="d-flex align-items-center justify-content-between mt-2 gap-2 flex-wrap">
+                            <div className="d-flex align-items-center gap-2 flex-wrap">
+                              <Badge bg={priorityBadge.bg}>{priorityBadge.text}</Badge>
+                              <span className="text-muted small">
+                                AI {aiScore != null ? Math.round(aiScore) : '—'}
+                              </span>
+                            </div>
+                            <Form.Select
+                              size="sm"
+                              value={Number(task.status ?? 0)}
+                              onChange={(e) => handleTaskStatusChange(task, Number(e.target.value))}
+                              aria-label="Update task status"
+                              style={{ width: 106, fontSize: '0.75rem' }}
+                            >
+                              <option value={0}>To do</option>
+                              <option value={1}>Doing</option>
+                              <option value={2}>Done</option>
+                            </Form.Select>
                           </div>
                         </div>
-                        <Form.Select
-                          size="sm"
-                          value={Number(task.status ?? 0)}
-                          onChange={(e) => handleTaskStatusChange(task, Number(e.target.value))}
-                          aria-label="Update task status"
-                          style={{ width: 140 }}
-                        >
-                          <option value={0}>To Do</option>
-                          <option value={1}>In Progress</option>
-                          <option value={2}>Done</option>
-                        </Form.Select>
-                      </div>
-                      <div className="d-flex align-items-center justify-content-between mt-2">
-                        <div className="d-flex align-items-center gap-2 flex-wrap">
-                          <Badge bg={priorityBadge.bg}>{priorityBadge.text}</Badge>
-                        </div>
-                        <span className="text-muted small">
-                          AI score {aiScore != null ? Math.round(aiScore) : '—'}
-                        </span>
-                      </div>
+                      );
+                    })
+                  )}
+                </Card.Body>
+          </Card>
+          <Card className="shadow-sm border-0 mb-4">
+                <Card.Header className="d-flex align-items-center justify-content-between">
+                  <div className="fw-semibold d-flex align-items-center gap-2">
+                    <ListChecks size={16} /> Chores & Habits
+                  </div>
+                  <div className="d-flex align-items-center gap-2">
+                    <Button size="sm" variant="outline-secondary" href="/chores/checklist">
+                      Checklist
+                    </Button>
+                    <Badge bg={sortedChoreItemsDueToday.length > 0 ? 'info' : 'secondary'} pill>
+                      {sortedChoreItemsDueToday.length}
+                    </Badge>
+                  </div>
+                </Card.Header>
+                <Card.Body className="p-3 d-flex flex-column gap-2">
+                  {tasksLoading ? (
+                    <div className="d-flex align-items-center gap-2 text-muted">
+                      <Spinner size="sm" animation="border" /> Loading chores…
                     </div>
-                  );
-                })
-              )}
-            </Card.Body>
+                  ) : sortedChoreItemsDueToday.length === 0 ? (
+                    <div className="text-muted small">No chores, habits, or routines due today.</div>
+                  ) : (
+                    sortedChoreItemsDueToday.map((task) => {
+                      const kind = getChoreKind(task) || 'chore';
+                      const dueMs = resolveRecurringDueMs(task, new Date(), startOfDay(new Date()).getTime());
+                      const dueLabel = dueMs ? formatDueLabel(dueMs) : 'today';
+                      const isOverdue = !!dueMs && dueMs < startOfDay(new Date()).getTime();
+                      const badgeVariant = kind === 'routine' ? 'success' : kind === 'habit' ? 'secondary' : 'primary';
+                      const badgeLabel = kind === 'routine' ? 'Routine' : kind === 'habit' ? 'Habit' : 'Chore';
+                      const busy = !!choreCompletionBusy[task.id];
+                      return (
+                        <div key={task.id} className="border rounded p-2 d-flex align-items-start gap-2">
+                          <Form.Check
+                            type="checkbox"
+                            checked={busy}
+                            disabled={busy}
+                            onChange={() => handleCompleteChoreTask(task)}
+                            aria-label={`Complete ${task.title}`}
+                          />
+                          <div className="flex-grow-1">
+                            <div className="fw-semibold">{task.title}</div>
+                            <div className="text-muted small d-flex align-items-center gap-1">
+                              <Clock size={12} /> {isOverdue ? `Overdue · ${dueLabel}` : `Due ${dueLabel}`}
+                            </div>
+                          </div>
+                          <div className="d-flex flex-column align-items-end gap-1">
+                            {isOverdue && <Badge bg="danger">Overdue</Badge>}
+                            <Badge bg={badgeVariant}>{badgeLabel}</Badge>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </Card.Body>
           </Card>
 
           <Card className="shadow-sm border-0 mb-4">

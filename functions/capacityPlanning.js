@@ -2,6 +2,7 @@ const functions = require('firebase-functions');
 const admin = require('firebase-admin');
 const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { onCall, HttpsError } = require('firebase-functions/v2/https');
+const { DateTime } = require('luxon');
 
 const parseToMinutes = (value) => {
     if (!value) return null;
@@ -31,6 +32,80 @@ const getWeeklyPlannerMinutes = async (db, userId) => {
     }
 };
 
+const resolveUserTimezone = async (db, userId) => {
+    try {
+        const profileSnap = await db.collection('profiles').doc(userId).get();
+        if (profileSnap.exists) {
+            const data = profileSnap.data() || {};
+            const tz = data.timezone || data.settings?.timezone || data.preferences?.timezone;
+            if (tz) return String(tz);
+        }
+    } catch (err) {
+        console.warn('Failed to resolve timezone from profile:', err.message || err);
+    }
+    return 'UTC';
+};
+
+const calculateCalendarCapacityRange = async (db, userId, { start, end, timezone }) => {
+    const startMs = start.toMillis();
+    const endMs = end.toMillis();
+    const days = Math.max(1, Math.ceil(end.diff(start, 'days').days) + 1);
+
+    const blocksSnap = await db.collection('calendar_blocks')
+        .where('ownerUid', '==', userId)
+        .where('start', '>=', startMs)
+        .where('start', '<=', endMs)
+        .get()
+        .catch(() => ({ docs: [] }));
+
+    let scheduledHours = 0;
+    const scheduledByTheme = {};
+
+    blocksSnap.docs.forEach((doc) => {
+        const b = doc.data() || {};
+        if (!b.start || !b.end) return;
+        const source = String(b.source || '').toLowerCase();
+        const entryMethod = String(b.entry_method || '').toLowerCase();
+        const isGcal = source === 'gcal' || entryMethod === 'google_calendar' || !!b.googleEventId;
+        if (!isGcal) return;
+        const durationHours = (b.end - b.start) / (1000 * 60 * 60);
+        if (!Number.isFinite(durationHours) || durationHours <= 0) return;
+        scheduledHours += durationHours;
+        const theme = b.theme || b.category || 'External';
+        scheduledByTheme[theme] = (scheduledByTheme[theme] || 0) + durationHours;
+    });
+
+    const totalCapacityHours = days * 16; // 24h minus 8h sleep default
+    const freeCapacityHours = Math.max(0, totalCapacityHours - scheduledHours);
+    const utilization = totalCapacityHours > 0 ? scheduledHours / totalCapacityHours : 0;
+
+    return {
+        mode: 'calendar',
+        rangeStart: start.toISO(),
+        rangeEnd: end.toISO(),
+        timezone,
+        totalCapacityHours,
+        allocatedHours: scheduledHours,
+        utilizedHours: scheduledHours,
+        remainingHours: freeCapacityHours,
+        freeCapacityHours,
+        utilization,
+        progressPercent: utilization,
+        breakdownByGoal: {},
+        breakdownByTheme: {},
+        scheduledHours,
+        scheduledByGoal: {},
+        scheduledByTheme,
+        weeklyPlannerMinutes: 0,
+        weeklyPlannerHours: 0,
+        plannerCapacityHours: totalCapacityHours,
+        plannedCapacityHours: totalCapacityHours,
+        plannedFreeHours: freeCapacityHours,
+        plannedUtilization: utilization,
+        sprintWeeks: 1,
+    };
+};
+
 /**
  * Calculate Capacity for a specific Sprint
  * Callable Function: Can be called from frontend or other functions
@@ -50,6 +125,30 @@ exports.calculateSprintCapacity = onCall({
 
     const db = admin.firestore();
     return await calculateCapacityInternal(db, userId, sprintId);
+});
+
+/**
+ * Calculate Capacity for next week based on Google Calendar entries
+ */
+exports.calculateNextWeekCapacity = onCall({
+    region: 'europe-west2'
+}, async (request) => {
+    if (!request.auth) {
+        throw new HttpsError('unauthenticated', 'User must be logged in.');
+    }
+    const userId = request.auth.uid;
+    const db = admin.firestore();
+    const timezone = await resolveUserTimezone(db, userId);
+
+    const days = Math.max(1, Number(request.data?.days || 7));
+    const startDateIso = request.data?.startDate || null;
+    let start = startDateIso
+        ? DateTime.fromISO(startDateIso, { zone: timezone }).startOf('day')
+        : DateTime.now().setZone(timezone).plus({ weeks: 1 }).startOf('week');
+    if (!start.isValid) start = DateTime.now().setZone(timezone).plus({ weeks: 1 }).startOf('week');
+    const end = start.plus({ days: days - 1 }).endOf('day');
+
+    return await calculateCalendarCapacityRange(db, userId, { start, end, timezone });
 });
 
 /**
@@ -257,7 +356,7 @@ async function calculateCapacityInternal(db, userId, sprintId) {
             plannedCapacityHours,
             plannedFreeHours,
             plannedUtilization,
-            sprintWeeks
+            sprintWeeks: weeksInSprint
         };
     } catch (error) {
         console.error('Error in calculateCapacityInternal:', error);

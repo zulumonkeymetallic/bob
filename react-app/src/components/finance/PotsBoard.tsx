@@ -30,6 +30,7 @@ const PotsBoard: React.FC = () => {
   const [pots, setPots] = useState<Pot[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string>('');
 
   useEffect(() => {
     if (!currentUser) return;
@@ -44,26 +45,41 @@ const PotsBoard: React.FC = () => {
       where('ownerUid', '==', currentUser.uid)
     );
 
-    const unsubPots = onSnapshot(potsQuery, (snap) => {
-      const list: Pot[] = snap.docs.map((d) => {
-        const data = d.data() as any;
-        return {
-          id: d.id,
-          name: data.name || 'Pot',
-          balance: data.balance || 0,
-          currency: data.currency || 'GBP',
-          deleted: !!data.deleted,
-          closed: !!data.closed,
-        };
-      });
-      setPots(list.filter((p) => !p.deleted && !p.closed));
-      setLoading(false);
-    });
+    const unsubPots = onSnapshot(
+      potsQuery,
+      (snap) => {
+        const list: Pot[] = snap.docs.map((d) => {
+          const data = d.data() as any;
+          return {
+            id: d.id,
+            name: data.name || 'Pot',
+            balance: data.balance || 0,
+            currency: data.currency || 'GBP',
+            deleted: !!data.deleted,
+            closed: !!data.closed,
+          };
+        });
+        setPots(list.filter((p) => !p.deleted && !p.closed));
+        setLoading(false);
+      },
+      (err) => {
+        console.error('Failed to load Monzo pots', err);
+        setError((err as any)?.message || 'Missing permission to load Monzo pots.');
+        setLoading(false);
+      }
+    );
 
-    const unsubGoals = onSnapshot(goalsQuery, (snap) => {
-      const list: Goal[] = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
-      setGoals(list);
-    });
+    const unsubGoals = onSnapshot(
+      goalsQuery,
+      (snap) => {
+        const list: Goal[] = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+        setGoals(list);
+      },
+      (err) => {
+        console.error('Failed to load goals for pots board', err);
+        setError((err as any)?.message || 'Missing permission to load goals.');
+      }
+    );
 
     return () => {
       unsubPots();
@@ -95,6 +111,7 @@ const PotsBoard: React.FC = () => {
 
   return (
     <div className="container py-3">
+      {error && <Alert variant="danger">{error}</Alert>}
       <div className="d-flex justify-content-between align-items-center mb-3">
         <div>
           <h3 className="mb-1">Pots</h3>

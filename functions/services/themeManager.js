@@ -5,23 +5,23 @@ const admin = require('firebase-admin');
 
 // Default themes fallback (colorId maps to Google Calendar palette 1–11)
 const DEFAULT_THEMES = [
-  { id: 'General', order: 0, colorId: '1' },                 // neutral lavender
-  { id: 'Health & Fitness', order: 1, colorId: '11' },        // bold red
-  { id: 'Career & Professional', order: 2, colorId: '7' },    // peacock blue
-  { id: 'Finance & Wealth', order: 3, colorId: '10' },        // basil green
-  { id: 'Learning & Education', order: 4, colorId: '3' },     // grape purple
-  { id: 'Family & Relationships', order: 5, colorId: '4' },   // flamingo pink
-  { id: 'Hobbies & Interests', order: 6, colorId: '9' },      // blueberry
-  { id: 'Travel & Adventure', order: 7, colorId: '6' },       // tangerine
-  { id: 'Home & Living', order: 8, colorId: '8' },            // graphite
-  { id: 'Spiritual & Personal Growth', order: 9, colorId: '2' }, // sage
-  { id: 'Chores', order: 10, colorId: '5' },                  // banana
-  { id: 'Routine', order: 11, colorId: '5' },                 // banana
-  { id: 'Dev Tasks', order: 12, colorId: '9' },               // blueberry
-  { id: 'Work (Main Gig)', order: 13, colorId: '7' },         // peacock
-  { id: 'Side Gig', order: 14, colorId: '2' },                // sage
-  { id: 'Sleep', order: 15, colorId: '1' },                   // calm lavender
-  { id: 'Random', order: 16, colorId: '8' },                  // graphite
+  { id: 'General', name: 'General', label: 'General', order: 0, colorId: '1' },                 // neutral lavender
+  { id: 'Health & Fitness', name: 'Health & Fitness', label: 'Health & Fitness', order: 1, colorId: '11' },        // bold red
+  { id: 'Career & Professional', name: 'Career & Professional', label: 'Career & Professional', order: 2, colorId: '7' },    // peacock blue
+  { id: 'Finance & Wealth', name: 'Finance & Wealth', label: 'Finance & Wealth', order: 3, colorId: '10' },        // basil green
+  { id: 'Learning & Education', name: 'Learning & Education', label: 'Learning & Education', order: 4, colorId: '3' },     // grape purple
+  { id: 'Family & Relationships', name: 'Family & Relationships', label: 'Family & Relationships', order: 5, colorId: '4' },   // flamingo pink
+  { id: 'Hobbies & Interests', name: 'Hobbies & Interests', label: 'Hobbies & Interests', order: 6, colorId: '9' },      // blueberry
+  { id: 'Travel & Adventure', name: 'Travel & Adventure', label: 'Travel & Adventure', order: 7, colorId: '6' },       // tangerine
+  { id: 'Home & Living', name: 'Home & Living', label: 'Home & Living', order: 8, colorId: '8' },            // graphite
+  { id: 'Spiritual & Personal Growth', name: 'Spiritual & Personal Growth', label: 'Spiritual & Personal Growth', order: 9, colorId: '2' }, // sage
+  { id: 'Chores', name: 'Chores', label: 'Chores', order: 10, colorId: '5' },                  // banana
+  { id: 'Routine', name: 'Routine', label: 'Routine', order: 11, colorId: '5' },                 // banana
+  { id: 'Dev Tasks', name: 'Dev Tasks', label: 'Dev Tasks', order: 12, colorId: '9' },               // blueberry
+  { id: 'Work (Main Gig)', name: 'Work (Main Gig)', label: 'Work (Main Gig)', order: 13, colorId: '7' },         // peacock
+  { id: 'Side Gig', name: 'Side Gig', label: 'Side Gig', order: 14, colorId: '2' },                // sage
+  { id: 'Sleep', name: 'Sleep', label: 'Sleep', order: 15, colorId: '1' },                   // calm lavender
+  { id: 'Random', name: 'Random', label: 'Random', order: 16, colorId: '8' },                  // graphite
 ];
 
 async function loadThemesForUser(uid) {
@@ -44,7 +44,11 @@ function mapThemeLabelToId(label, themes = DEFAULT_THEMES) {
   const norm = String(label).trim().toLowerCase();
   const canonical = norm.replace(/[^a-z0-9]/g, '');
   const canonicalize = (value) => String(value || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
-  const direct = themes.find((t) => canonicalize(t.id) === canonical);
+  const direct = themes.find((t) => {
+    const idMatch = canonicalize(t.id) === canonical;
+    const labelMatch = canonicalize(t.label || t.name) === canonical;
+    return idMatch || labelMatch;
+  });
   if (direct) return direct.id;
   if (['work', 'maingig', 'workmaingig'].includes(canonical)) return 'Work (Main Gig)';
   if (['sidegig', 'sidegigwork', 'sidegigproject'].includes(canonical) || norm.includes('side gig')) return 'Side Gig';
@@ -64,7 +68,11 @@ function mapThemeLabelToId(label, themes = DEFAULT_THEMES) {
   if (['general'].includes(canonical)) return 'General';
   const partial = themes.find((t) => {
     const idCanonical = canonicalize(t.id);
-    return idCanonical.includes(canonical) || canonical.includes(idCanonical);
+    const labelCanonical = canonicalize(t.label || t.name);
+    return idCanonical.includes(canonical)
+      || canonical.includes(idCanonical)
+      || labelCanonical.includes(canonical)
+      || canonical.includes(labelCanonical);
   });
   return partial ? partial.id : 'General';
 }
@@ -72,7 +80,8 @@ function mapThemeLabelToId(label, themes = DEFAULT_THEMES) {
 function mapThemeIdToLabel(id, themes = DEFAULT_THEMES) {
   if (!id) return 'General';
   const found = themes.find(t => String(t.id) === String(id));
-  return found ? found.id : 'General';
+  if (!found) return 'General';
+  return found.label || found.name || found.id || 'General';
 }
 
 function getGoogleColorForThemeId(themeId, themes = DEFAULT_THEMES) {

@@ -24,6 +24,7 @@ import PageHeader from './common/PageHeader';
 import { SkeletonStatCard } from './common/SkeletonLoader';
 import EmptyState from './common/EmptyState';
 import { colors } from '../utils/colors';
+import { findSprintForDate } from '../utils/taskSprintHelpers';
 
 const StoriesManagement: React.FC = () => {
   const { currentUser } = useAuth();
@@ -190,12 +191,49 @@ const StoriesManagement: React.FC = () => {
     setActiveSprintId(active?.id ?? null);
   }, [sprints, selectedSprintIdContext]);
 
+  const toMillis = useCallback((value: any): number | null => {
+    if (value == null) return null;
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (value instanceof Date) return value.getTime();
+    if (value?.toMillis) return value.toMillis();
+    if (value?.toDate) return value.toDate().getTime();
+    if (typeof value === 'string') {
+      const parsed = Date.parse(value);
+      return Number.isNaN(parsed) ? null : parsed;
+    }
+    if (value?.seconds != null) {
+      return (Number(value.seconds) * 1000) + Math.round((Number(value.nanoseconds || 0) || 0) / 1e6);
+    }
+    return null;
+  }, []);
+
   // Handler functions for ModernStoriesTable
   const handleStoryUpdate = async (storyId: string, updates: Partial<Story>) => {
     try {
-      await updateDoc(doc(db, 'stories', storyId), {
+      const existing = stories.find((s) => s.id === storyId);
+      const existingDueMs = toMillis((existing as any)?.dueDate ?? (existing as any)?.targetDate ?? null);
+      const hasDueUpdate = ('dueDate' in updates) || ('targetDate' in updates);
+      const nextDueRaw = ('dueDate' in updates)
+        ? (updates as any).dueDate
+        : (('targetDate' in updates) ? (updates as any).targetDate : (existing as any)?.dueDate ?? (existing as any)?.targetDate ?? null);
+      const nextDueMs = toMillis(nextDueRaw);
+      const dueDateChanged = hasDueUpdate && (existingDueMs ?? null) !== (nextDueMs ?? null);
+
+      const payload: any = {
         ...updates,
         updatedAt: serverTimestamp()
+      };
+
+      if (dueDateChanged) {
+        payload.dueDate = nextDueMs ?? null;
+        payload.dueDateLocked = true;
+        payload.dueDateReason = 'user';
+        const matched = findSprintForDate(sprints, nextDueMs ?? null);
+        payload.sprintId = matched?.id ?? null;
+      }
+
+      await updateDoc(doc(db, 'stories', storyId), {
+        ...payload,
       });
     } catch (error) {
       console.error('Error updating story:', error);
@@ -274,7 +312,7 @@ const StoriesManagement: React.FC = () => {
         ref: refNumber,
         referenceNumber: refNumber,
         ownerUid: currentUser!.uid,
-        persona: 'personal' as const, // Explicitly set to 'personal' to match Story type
+        persona: currentPersona || 'personal',
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
         // Default values if not provided
@@ -421,20 +459,20 @@ const StoriesManagement: React.FC = () => {
         />
 
         {/* Dashboard Cards */}
-        <Row className="mb-4">
+        <Row className="mb-2">
           {loading ? (
             <>
               <Col lg={3} md={6} className="mb-3">
-                <SkeletonStatCard />
+                <SkeletonStatCard compact />
               </Col>
               <Col lg={3} md={6} className="mb-3">
-                <SkeletonStatCard />
+                <SkeletonStatCard compact />
               </Col>
               <Col lg={3} md={6} className="mb-3">
-                <SkeletonStatCard />
+                <SkeletonStatCard compact />
               </Col>
               <Col lg={3} md={6} className="mb-3">
-                <SkeletonStatCard />
+                <SkeletonStatCard compact />
               </Col>
             </>
           ) : (
@@ -445,6 +483,7 @@ const StoriesManagement: React.FC = () => {
                   value={storyCounts.total}
                   icon={BookOpen}
                   iconColor={colors.brand.primary}
+                  compact
                 />
               </Col>
               <Col lg={3} md={6} className="mb-3">
@@ -453,6 +492,7 @@ const StoriesManagement: React.FC = () => {
                   value={storyCounts.backlog}
                   icon={Inbox}
                   iconColor={colors.neutral[500]}
+                  compact
                 />
               </Col>
               <Col lg={3} md={6} className="mb-3">
@@ -461,6 +501,7 @@ const StoriesManagement: React.FC = () => {
                   value={storyCounts.active}
                   icon={TrendingUp}
                   iconColor={colors.info.primary}
+                  compact
                 />
               </Col>
               <Col lg={3} md={6} className="mb-3">
@@ -469,6 +510,7 @@ const StoriesManagement: React.FC = () => {
                   value={storyCounts.done}
                   icon={CheckCircle}
                   iconColor={colors.success.primary}
+                  compact
                 />
               </Col>
             </>
@@ -476,14 +518,15 @@ const StoriesManagement: React.FC = () => {
         </Row>
 
         {/* Filters */}
-        <Card style={{ marginBottom: '24px', border: 'none', boxShadow: 'var(--glass-shadow, 0 2px 4px var(--glass-shadow-color))' }}>
-          <Card.Body style={{ padding: '24px' }}>
+        <Card style={{ marginBottom: '12px', border: 'none', boxShadow: 'var(--glass-shadow, 0 2px 4px var(--glass-shadow-color))' }}>
+          <Card.Body style={{ padding: '8px' }}>
             <Row>
               <Col md={4}>
                 <Form.Group>
-                  <Form.Label style={{ fontWeight: '500', marginBottom: '8px' }}>Search Stories</Form.Label>
+                  <Form.Label style={{ fontWeight: '500', marginBottom: '2px', fontSize: '11px' }}>Search Stories</Form.Label>
                   <InputGroup>
                     <Form.Control
+                      size="sm"
                       type="text"
                       placeholder="Search by title..."
                       value={searchTerm}
@@ -495,8 +538,9 @@ const StoriesManagement: React.FC = () => {
               </Col>
               <Col md={4}>
                 <Form.Group>
-                  <Form.Label style={{ fontWeight: '500', marginBottom: '8px' }}>Status</Form.Label>
+                  <Form.Label style={{ fontWeight: '500', marginBottom: '2px', fontSize: '11px' }}>Status</Form.Label>
                   <Form.Select
+                    size="sm"
                     value={filterStatus}
                     onChange={(e) => setFilterStatus(e.target.value)}
                     style={{ border: '1px solid var(--line)' }}
@@ -511,19 +555,20 @@ const StoriesManagement: React.FC = () => {
               </Col>
               <Col md={4}>
                 <Form.Group>
-                  <Form.Label style={{ fontWeight: '500', marginBottom: '8px' }}>Goal</Form.Label>
+                  <Form.Label style={{ fontWeight: '500', marginBottom: '2px', fontSize: '11px' }}>Goal</Form.Label>
                   <Form.Control
+                    size="sm"
                     type="text"
                     placeholder="Search goals..."
                     value={goalSearch}
                     onChange={(e) => setGoalSearch(e.target.value)}
                     style={{ border: `1px solid ${themeVars.border}` }}
                   />
-                  <Form.Text muted>Filters stories by goal title match.</Form.Text>
+                  <Form.Text muted style={{ fontSize: '10px' }}>Filters stories by goal title match.</Form.Text>
                 </Form.Group>
               </Col>
             </Row>
-            <Row style={{ marginTop: '16px' }}>
+            <Row style={{ marginTop: '6px' }}>
               <Col>
                 {filterTheme !== 'all' && (
                   <div className="mb-2">
@@ -536,6 +581,7 @@ const StoriesManagement: React.FC = () => {
                   </div>
                 )}
                 <Button
+                  size="sm"
                   variant="outline-secondary"
                   onClick={() => {
                     setFilterStatus('all');

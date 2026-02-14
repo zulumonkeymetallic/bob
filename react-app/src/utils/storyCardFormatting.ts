@@ -1,6 +1,7 @@
 import { Goal } from '../types';
-import { getThemeById, migrateThemeValue } from '../constants/globalThemes';
+import type { GlobalTheme } from '../constants/globalThemes';
 import { themeVars } from './themeVars';
+import { resolveThemeDefinition } from './themeResolver';
 
 export const toSentenceCase = (value: string): string => {
   return value
@@ -93,10 +94,10 @@ export const priorityPillClass = (priority: any): string => {
   return base;
 };
 
-export const goalThemeColor = (goal?: Goal | null): string => {
+export const goalThemeColor = (goal?: Goal | null, themes?: GlobalTheme[]): string => {
   if (!goal) return themeVars.muted as string;
-  const themeId = migrateThemeValue((goal as any).theme);
-  const theme = getThemeById(Number(themeId));
+  const themeValue = (goal as any).theme ?? (goal as any).themeId ?? (goal as any).theme_id ?? (goal as any).themeLabel ?? (goal as any).themeName;
+  const theme = resolveThemeDefinition(themeValue, themes);
   return theme?.color || (themeVars.muted as string);
 };
 

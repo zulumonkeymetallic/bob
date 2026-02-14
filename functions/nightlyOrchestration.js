@@ -30,6 +30,21 @@ const toMinutes = (hhmm) => {
   return Number(h) * 60 + Number(m);
 };
 
+const isMainGigLabel = (value) => {
+  const raw = String(value || '').toLowerCase();
+  if (!raw) return false;
+  if (raw.includes('workout')) return false;
+  if (raw.includes('main gig') || raw.includes('work shift')) return true;
+  return /\bwork\b/.test(raw);
+};
+
+const isMainGigBlock = (block) => {
+  if (!block) return false;
+  if (block.entityType === 'work_shift' || block.sourceType === 'work_shift_allocation') return true;
+  const label = block.theme || block.category || block.title || '';
+  return isMainGigLabel(label);
+};
+
 const buildPickSlots = (themeAllocations) => {
   const getUserSlots = (themeLabel, day) => {
     const matches = (Array.isArray(themeAllocations) ? themeAllocations : []).filter((a) => {
@@ -177,12 +192,16 @@ async function scorePriorityWithLLM({ userId, items }) {
       acceptanceCriteria: item.acceptanceCriteria || [],
       theme: item.theme || null,
       goal: trimText(item.goalTitle, 120) || null,
+      persona: item.persona || null,
+      dueInDays: Number.isFinite(Number(item.dueInDays)) ? Number(item.dueInDays) : null,
+      userPriority: item.userPriority || null,
     }));
 
   const system = [
     'You are a prioritization analyst for a productivity app.',
-    'Score importance based on title/description/acceptance criteria, focusing on: exams or training,',
-    'revenue/money/tax/compliance impact, and long-term growth or career leverage.',
+    'Score importance based on title/description/acceptance criteria and the provided dueInDays + userPriority.',
+    'Prefer family/health/safety/finance/compliance over hobbies/low-stakes items.',
+    'If items are tied, use the text to break ties (be decisive).',
     'Return JSON {"items":[{"id":string,"score":number,"reason":string}]} where score is 0-20.',
     'Keep reason under 120 characters, and use only the provided ids.',
   ].join(' ');
@@ -280,6 +299,22 @@ const isStoryDoneStatus = (status) => {
   return ['done', 'complete', 'completed', 'finished', 'closed'].includes(normalized);
 };
 
+const isTaskOpenStatus = (status) => {
+  if (status === null || status === undefined || status === '') return true;
+  const num = parseStatusNumber(status);
+  if (num != null) return num === 0 || num === 1;
+  const normalized = normalizeStatusValue(status);
+  return ['backlog', 'todo', 'to do', 'in-progress', 'in progress', 'open', 'active', 'pending', 'planned', '0', '1'].includes(normalized);
+};
+
+const isStoryOpenStatus = (status) => {
+  if (status === null || status === undefined || status === '') return true;
+  const num = parseStatusNumber(status);
+  if (num != null) return num >= 0 && num < 4;
+  const normalized = normalizeStatusValue(status);
+  return ['backlog', 'planned', 'in-progress', 'in progress', 'open', 'active', 'pending', '0', '1', '2', '3'].includes(normalized);
+};
+
 function clampStoryStatus(status) {
   return isStoryDoneStatus(status) ? 4 : 0;
 }
@@ -295,7 +330,7 @@ function hasRecurrence(entity) {
 function isRoutineChoreHabit(entity) {
   const type = String(entity?.type || entity?.category || '').toLowerCase();
   if (['routine', 'chore', 'habit', 'habitual'].some((k) => type.includes(k))) return true;
-  const tags = Array.isArray(entity?.tags) ? entity.tags.map((t) => String(t || '').toLowerCase()) : [];
+  const tags = Array.isArray(entity?.tags) ? entity.tags.map((t) => String(t || '').toLowerCase().replace(/^#/, '')) : [];
   if (tags.some((t) => ['routine', 'chore', 'habit', 'habitual'].includes(t))) return true;
   const listName = String(entity?.reminderListName || '').toLowerCase();
   if (['routine', 'chore', 'habit'].some((k) => listName.includes(k))) return true;
@@ -379,7 +414,10 @@ async function appendToDescription(ref, existing, line) {
   await ref.set({ description: updated }, { merge: true });
 }
 
+const resolvePersona = (value) => (String(value || '').toLowerCase() === 'work' ? 'work' : 'personal');
+
 const isTaskLocked = (task) => task.dueDateLocked || task.lockDueDate || task.immovable === true || task.status === 'immovable';
+const isStoryLocked = (story) => story?.dueDateLocked || story?.lockDueDate || story?.immovable === true || story?.status === 'immovable';
 
 async function materializePlannerThemeBlocks({
   db,
@@ -521,6 +559,82 @@ async function materializePlannerThemeBlocks({
   return results;
 }
 
+async function dedupePlannerBlocksForUser({ db, userId, windowStart, windowEnd }) {
+  if (!userId) return { blocks: [], removed: 0, groups: 0 };
+  const windowStartMs = windowStart?.toMillis ? windowStart.toMillis() : toMillis(windowStart);
+  const windowEndMs = windowEnd?.toMillis ? windowEnd.toMillis() : toMillis(windowEnd);
+  const snap = await db.collection('calendar_blocks')
+    .where('ownerUid', '==', userId)
+    .where('start', '>=', windowStartMs)
+    .where('start', '<=', windowEndMs)
+    .get()
+    .catch(() => ({ docs: [] }));
+
+  const entries = snap.docs.map((doc) => ({ id: doc.id, ref: doc.ref, data: doc.data() || {} }));
+  const isPlannerCandidate = (data) => {
+    const source = String(data.source || data.sourceType || '').toLowerCase();
+    const entityType = String(data.entityType || data.category || '').toLowerCase();
+    const isAi = data.aiGenerated === true || data.isAiGenerated === true || data.createdBy === 'ai';
+    const isPlanner = source.includes('theme_allocation') || source.includes('health_allocation') || source.includes('work_shift_allocation');
+    const isExternal = source === 'gcal' || source === 'google_calendar' || data.createdBy === 'google';
+    if (isExternal) return false;
+    return isAi || isPlanner || ['health', 'work_shift', 'task', 'story'].includes(entityType);
+  };
+  const buildKey = (data) => {
+    const start = toMillis(data.start) || 0;
+    const end = toMillis(data.end) || 0;
+    const title = String(data.title || '').trim().toLowerCase();
+    const entityType = String(data.entityType || data.category || '').trim().toLowerCase();
+    const sourceType = String(data.sourceType || data.source || '').trim().toLowerCase();
+    const persona = String(data.persona || '').trim().toLowerCase();
+    const taskId = data.taskId || '';
+    const storyId = data.storyId || '';
+    const goalId = data.goalId || '';
+    return [start, end, title, entityType, sourceType, persona, taskId, storyId, goalId].join('|');
+  };
+
+  const groups = new Map();
+  const keptBlocks = [];
+
+  entries.forEach((entry) => {
+    if (!isPlannerCandidate(entry.data)) {
+      keptBlocks.push({ id: entry.id, ...(entry.data || {}) });
+      return;
+    }
+    const key = buildKey(entry.data);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(entry);
+  });
+
+  const deletions = [];
+  let removed = 0;
+  let groupsWithDupes = 0;
+  groups.forEach((group) => {
+    if (group.length === 1) {
+      keptBlocks.push({ id: group[0].id, ...(group[0].data || {}) });
+      return;
+    }
+    groupsWithDupes += 1;
+    group.sort((a, b) => {
+      const aTime = toMillis(a.data?.createdAt) || toMillis(a.data?.updatedAt) || toMillis(a.data?.start) || 0;
+      const bTime = toMillis(b.data?.createdAt) || toMillis(b.data?.updatedAt) || toMillis(b.data?.start) || 0;
+      return aTime - bTime;
+    });
+    const [keep, ...dupes] = group;
+    keptBlocks.push({ id: keep.id, ...(keep.data || {}) });
+    dupes.forEach((dup) => {
+      deletions.push(dup.ref.delete());
+      removed += 1;
+    });
+  });
+
+  if (deletions.length) {
+    await Promise.allSettled(deletions);
+  }
+
+  return { blocks: keptBlocks, removed, groups: groupsWithDupes };
+}
+
 async function replanExistingBlocksForUser({
   db,
   userId,
@@ -606,13 +720,16 @@ async function replanExistingBlocksForUser({
     else fixedBlocks.push(block);
   });
 
-  const busy = [];
+  const busyPersonal = [];
+  const busyWork = [];
   const mainGigBlocks = []; // Track main gig planner blocks separately  
   const capCounts = new Map();
-  const addBusy = (startMs, endMs) => {
+  const addBusy = (list, startMs, endMs) => {
     if (!startMs || !endMs) return;
-    busy.push({ start: startMs, end: endMs });
+    list.push({ start: startMs, end: endMs });
   };
+  const addBusyPersonal = (startMs, endMs) => addBusy(busyPersonal, startMs, endMs);
+  const addBusyWork = (startMs, endMs) => addBusy(busyWork, startMs, endMs);
   const addCap = (startMs) => {
     if (!startMs) return;
     const dayKey = DateTime.fromMillis(startMs, { zone: nowLocal.zoneName }).toISODate();
@@ -624,15 +741,13 @@ async function replanExistingBlocksForUser({
     const startMs = toMillis(block.start);
     const endMs = toMillis(block.end);
     if (!startMs || !endMs) return;
-    addBusy(startMs, endMs);
-    
-    // Track main gig blocks separately to prevent task/story placement
     const blockTheme = block.theme || block.category || '';
-    const isMainGigBlock = String(blockTheme).toLowerCase().includes('work') || 
-                          String(blockTheme).toLowerCase().includes('main gig') ||
-                          block.entityType === 'work_shift';
-    if (isMainGigBlock) {
+    if (isMainGigBlock(block)) {
       mainGigBlocks.push({ start: startMs, end: endMs, theme: blockTheme });
+      addBusyPersonal(startMs, endMs);
+    } else {
+      addBusyPersonal(startMs, endMs);
+      addBusyWork(startMs, endMs);
     }
     
     const entityType = String(block.entityType || '').toLowerCase();
@@ -641,9 +756,9 @@ async function replanExistingBlocksForUser({
     }
   });
 
-  const findGapInSlot = ({ slotStartMs, slotEndMs, durationMs }) => {
+  const findGapInSlot = ({ slotStartMs, slotEndMs, durationMs, busyList }) => {
     if (slotEndMs - slotStartMs < durationMs) return null;
-    const overlaps = busy
+    const overlaps = (busyList || [])
       .filter((b) => b.end > slotStartMs && b.start < slotEndMs)
       .sort((a, b) => a.start - b.start);
     let cursor = slotStartMs;
@@ -663,11 +778,37 @@ async function replanExistingBlocksForUser({
 
   const findSlotForBlock = (block, durationMinutes) => {
     const durationMs = durationMinutes * 60000;
+    const isWorkPersona = String(block?.persona || '').toLowerCase() === 'work';
+    const busyList = isWorkPersona ? busyWork : busyPersonal;
     const blockStart = toDateTime(block.start, { defaultValue: null });
     const blockDay = blockStart ? blockStart.setZone(nowLocal.zoneName).startOf('day') : windowStartDt;
     const totalDays = Math.max(1, Math.round(windowEndDt.diff(windowStartDt, 'days').days) + 1);
     const startOffset = Math.max(0, Math.floor(blockDay.diff(windowStartDt, 'days').days));
     const themeLabel = resolveThemeLabel(block.theme || block.theme_id || block.category || null);
+
+    if (isWorkPersona) {
+      if (!mainGigBlocks.length) return null;
+      const sortedMainGig = mainGigBlocks
+        .filter((mg) => mg.start && mg.end)
+        .sort((a, b) => a.start - b.start);
+      for (const mg of sortedMainGig) {
+        const slotStart = DateTime.fromMillis(mg.start, { zone: nowLocal.zoneName });
+        const slotEnd = DateTime.fromMillis(mg.end, { zone: nowLocal.zoneName });
+        if (slotEnd <= slotStart) continue;
+        const slotStartMs = slotStart.toMillis();
+        const slotEndMs = slotEnd.toMillis();
+        if (slotEndMs - slotStartMs < durationMs) continue;
+
+        const gap = findGapInSlot({
+          slotStartMs,
+          slotEndMs,
+          durationMs,
+          busyList,
+        });
+        if (gap) return gap;
+      }
+      return null;
+    }
 
     for (let offset = startOffset; offset < totalDays; offset += 1) {
       const day = windowStartDt.plus({ days: offset });
@@ -677,10 +818,7 @@ async function replanExistingBlocksForUser({
       const slots = pickSlots(themeLabel, day);
       for (const slot of slots) {
         // Skip main gig blocks for tasks/stories
-        const isMainGigSlot = slot.label && 
-          (slot.label.toLowerCase().includes('main gig') || 
-           slot.label.toLowerCase().includes('work') ||
-           slot.label.toLowerCase().includes('theme block: work'));
+        const isMainGigSlot = isMainGigLabel(slot.label);
         if (isMainGigSlot) continue;
         
         const slotDays = slot.days || [1, 2, 3, 4, 5, 6, 7];
@@ -713,6 +851,7 @@ async function replanExistingBlocksForUser({
           slotStartMs: effectiveStart.toMillis(),
           slotEndMs: slotEnd.toMillis(),
           durationMs,
+          busyList,
         });
         if (gap) return gap;
       }
@@ -734,9 +873,12 @@ async function replanExistingBlocksForUser({
     const durationMinutes = Math.max(15, Math.round((endMs - startMs) / 60000));
     const startDt = DateTime.fromMillis(startMs, { zone: nowLocal.zoneName });
     const endDt = DateTime.fromMillis(endMs, { zone: nowLocal.zoneName });
+    const isWorkPersona = String(block?.persona || '').toLowerCase() === 'work';
+    const busyList = isWorkPersona ? busyWork : busyPersonal;
 
-    if (!hasOverlap({ start: startDt, end: endDt }, busy)) {
-      addBusy(startMs, endMs);
+    if (!hasOverlap({ start: startDt, end: endDt }, busyList)) {
+      addBusyPersonal(startMs, endMs);
+      addBusyWork(startMs, endMs);
       addCap(startMs);
       continue;
     }
@@ -759,7 +901,8 @@ async function replanExistingBlocksForUser({
         conflictStatus: null,
       };
       await blockRef.set(patch, { merge: true });
-      addBusy(slot.start, slot.end);
+      addBusyPersonal(slot.start, slot.end);
+      addBusyWork(slot.start, slot.end);
       addCap(slot.start);
       rescheduled += 1;
 
@@ -779,7 +922,8 @@ async function replanExistingBlocksForUser({
         conflictStatus: 'blocked',
         rescheduleAttemptedAt: admin.firestore.FieldValue.serverTimestamp(),
       }, { merge: true });
-      addBusy(startMs, endMs);
+      addBusyPersonal(startMs, endMs);
+      addBusyWork(startMs, endMs);
       addCap(startMs);
       blocked += 1;
     }
@@ -793,7 +937,8 @@ async function replanExistingBlocksForUser({
     blocked,
     created,
     totalMovable: movableBlocks.length,
-    busy,
+    busy: busyPersonal,
+    busyWork,
     capCounts,
     windowStart: windowStartDt.toISO(),
     windowEnd: windowEndDt.toISO(),
@@ -1099,6 +1244,20 @@ async function runPriorityScoringJob() {
       return Array.from(seen.values());
     };
 
+    const isDueInActiveSprint = (dueMs) => {
+      if (!dueMs) return false;
+      for (const sprintId of activeSprintIds) {
+        const sprint = sprintMap.get(sprintId);
+        if (!sprint) continue;
+        const start = sprint.startDateMs;
+        const end = sprint.endDateMs;
+        if (start && end && dueMs >= start && dueMs <= end) {
+          return true;
+        }
+      }
+      return false;
+    };
+
     const activeSprintList = Array.from(activeSprintIds);
 
     const taskDocs = await fetchActiveTasks();
@@ -1153,7 +1312,6 @@ async function runPriorityScoringJob() {
       if (isDone || data.deleted) return;
       const isEntityActiveSprint = data.sprintId ? activeSprintIds.has(data.sprintId) : false;
       const isLinkedActiveSprint = data.storyId ? activeStoryIds.has(data.storyId) : false;
-      if (!isEntityActiveSprint && !isLinkedActiveSprint) return;
       if (hasRecurrence(data)) return;
       const dueMs = toDateTime(data.dueDate || data.targetDate, { defaultValue: null })?.toMillis() || null;
       if (isRoutineChoreHabit(data) && !isTodayOrOverdue(dueMs)) return;
@@ -1178,6 +1336,8 @@ async function runPriorityScoringJob() {
         points: data.points,
       });
       const preScore = Math.min(100, baseScore + bonus);
+      const persona = String(data.persona || 'personal').toLowerCase() === 'work' ? 'work' : 'personal';
+      const dueInDays = dueMs ? Math.round((dueMs - Date.now()) / 86400000) : null;
       addCandidate({
         id: doc.id,
         kind: 'task',
@@ -1188,6 +1348,9 @@ async function runPriorityScoringJob() {
         theme: effectiveTheme,
         goalTitle: goal?.title || null,
         preScore,
+        persona,
+        dueInDays,
+        userPriority: priorityLevel,
       });
     });
 
@@ -1197,8 +1360,6 @@ async function runPriorityScoringJob() {
       const statusStr = String(statusRaw || '').toLowerCase();
       const isDone = statusStr === 'done' || statusStr === 'completed' || statusStr === 'complete' || Number(statusRaw) >= 4;
       if (isDone) return;
-      if (!data.sprintId || !activeSprintIds.has(data.sprintId)) return;
-
       const goal = data.goalId ? goalMap.get(data.goalId) : null;
       const createdMs = toDateTime(data.createdAt || data.serverCreatedAt, { defaultValue: null })?.toMillis() || null;
       const dueMs = toDateTime(data.dueDate || data.targetDate, { defaultValue: null })?.toMillis() || null;
@@ -1216,6 +1377,8 @@ async function runPriorityScoringJob() {
         points: data.points,
       });
       const preScore = Math.min(100, baseScore + bonus);
+      const persona = String(data.persona || 'personal').toLowerCase() === 'work' ? 'work' : 'personal';
+      const dueInDays = dueMs ? Math.round((dueMs - Date.now()) / 86400000) : null;
       addCandidate({
         id: doc.id,
         kind: 'story',
@@ -1226,6 +1389,9 @@ async function runPriorityScoringJob() {
         theme,
         goalTitle: goal?.title || null,
         preScore,
+        persona,
+        dueInDays,
+        userPriority: priorityLevel,
       });
     });
 
@@ -1292,7 +1458,7 @@ async function runPriorityScoringJob() {
       const textSignal = textSignals.get(ref.id);
       const textScore = textSignal ? clampTextScore(textSignal.score) : 0;
       const textReason = textSignal?.reason ? `Text signal: ${textSignal.reason} (+${textScore})` : '';
-      let score = Math.min(100, baseScore + bonus + textScore);
+      let score = Math.min(99, baseScore + bonus + textScore);
       if (isHobbyTheme) {
         // Hard cap hobby items below other themes
         score = Math.min(score, 45);
@@ -1308,6 +1474,7 @@ async function runPriorityScoringJob() {
         aiCriticalityReason: reason,
         aiPriorityUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
         aiPriorityScore: admin.firestore.FieldValue.delete(),
+        aiTop3Reason: admin.firestore.FieldValue.delete(),
         aiPriorityReason: admin.firestore.FieldValue.delete(),
         aiPriorityTextScore: admin.firestore.FieldValue.delete(),
         aiPriorityTextReason: admin.firestore.FieldValue.delete(),
@@ -1332,14 +1499,6 @@ async function runPriorityScoringJob() {
       if (entityType === 'story' && !entity.deepLink) {
         patch.deepLink = buildEntityUrl('story', ref.id, ref.ref);
       }
-      // Promote small due-today tasks to high priority
-      if (entityType === 'task' && dueMs) {
-        const isToday = DateTime.fromMillis(dueMs).hasSame(DateTime.now(), 'day');
-        if (isToday && (entity.points || 0) <= 4) {
-          patch.priority = 'high';
-          patch.iosPriority = '!!';
-        }
-      }
       await ref.set(patch, { merge: true });
       await db.collection('activity_stream').add(activityPayload({
         ownerUid: userId,
@@ -1351,32 +1510,11 @@ async function runPriorityScoringJob() {
       }));
 
       if (entityType === 'story') {
-        storyScores.push({ id: ref.id, score, data: entity, reason, dueMs, createdMs, refObj: ref });
+        storyScores.push({ id: ref.id, score, data: entity, reason, dueMs, createdMs, refObj: ref, persona: entity.persona || 'personal' });
       }
 
       if (entityType === 'task') {
-        taskScores.push({ id: ref.id, score, data: entity, reason, dueMs, refObj: ref });
-        // Force due today for very old unlinked tasks (if not locked)
-        if (oldUnlinked && !isTaskLocked(entity)) {
-          const todayEnd = DateTime.now().endOf('day').toMillis();
-          await ref.set({
-            dueDate: todayEnd,
-            priority: 'high',
-            iosPriority: '!!',
-            aiDueDateSetAt: admin.firestore.FieldValue.serverTimestamp(),
-            dueDateReason: `AI priority promotion (aged unlinked >90d, score ${score}/100${bonusReasons.length ? `, ${bonusReasons.join(', ')}` : ''})`,
-            syncState: 'dirty',
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          }, { merge: true });
-          await db.collection('activity_stream').add(activityPayload({
-            ownerUid: userId,
-            entityId: ref.id,
-            entityType: 'task',
-            activityType: 'ai_due_date_adjustment',
-            description: 'Moved due date to today (aged > 90 days, unlinked)',
-            metadata: { reason: 'aged_unlinked', ageDays, newDueDate: todayEnd, run: '03:00_priority' },
-          }));
-        }
+        taskScores.push({ id: ref.id, score, data: entity, reason, dueMs, refObj: ref, persona: entity.persona || 'personal' });
       }
     };
 
@@ -1390,6 +1528,7 @@ async function runPriorityScoringJob() {
         aiCriticalityTextUpdatedAt: admin.firestore.FieldValue.delete(),
         aiCriticalityTextModel: admin.firestore.FieldValue.delete(),
         aiPriorityScore: admin.firestore.FieldValue.delete(),
+        aiTop3Reason: admin.firestore.FieldValue.delete(),
         aiPriorityReason: admin.firestore.FieldValue.delete(),
         aiPriorityTextScore: admin.firestore.FieldValue.delete(),
         aiPriorityTextReason: admin.firestore.FieldValue.delete(),
@@ -1400,11 +1539,21 @@ async function runPriorityScoringJob() {
       if (entityType === 'task') {
         patch.aiFlaggedTop = false;
         patch.aiPriorityRank = admin.firestore.FieldValue.delete();
+        patch.aiTop3ForDay = false;
+        patch.aiTop3Date = admin.firestore.FieldValue.delete();
+        patch.aiPriorityLabel = admin.firestore.FieldValue.delete();
+        patch.aiTop3Reason = admin.firestore.FieldValue.delete();
+        patch.aiPriorityReason = admin.firestore.FieldValue.delete();
         patch.syncState = 'dirty';
       }
       if (entityType === 'story') {
         patch.aiFocusStoryRank = admin.firestore.FieldValue.delete();
         patch.aiFocusStoryAt = admin.firestore.FieldValue.delete();
+        patch.aiTop3ForDay = false;
+        patch.aiTop3Date = admin.firestore.FieldValue.delete();
+        patch.aiPriorityLabel = admin.firestore.FieldValue.delete();
+        patch.aiTop3Reason = admin.firestore.FieldValue.delete();
+        patch.aiPriorityReason = admin.firestore.FieldValue.delete();
         patch.syncState = 'dirty';
       }
       await ref.set(patch, { merge: true });
@@ -1415,20 +1564,21 @@ async function runPriorityScoringJob() {
       const statusRaw = data.status;
       const statusStr = String(statusRaw || '').toLowerCase();
       const isDone = statusStr === 'done' || statusStr === 'completed' || statusStr === 'complete' || Number(statusRaw) >= 2;
-      if (isDone || data.deleted) continue;
-      const isEntityActiveSprint = data.sprintId ? activeSprintIds.has(data.sprintId) : false;
-      const isLinkedActiveSprint = data.storyId ? activeStoryIds.has(data.storyId) : false;
-      if (!isEntityActiveSprint && !isLinkedActiveSprint) {
+      if (isDone || data.deleted) {
         await clearPriorityFields(doc.ref, 'task');
         continue;
       }
-      // Skip recurring items entirely from AI priority/focus
-      if (hasRecurrence(data)) {
+      // Never score recurring chores/routines/habits
+      if (hasRecurrence(data) || isRoutineChoreHabit(data)) {
         await clearPriorityFields(doc.ref, 'task');
         continue;
       }
-      const dueMs = toDateTime(data.dueDate, { defaultValue: null })?.toMillis() || null;
-      if (isRoutineChoreHabit(data) && !isTodayOrOverdue(dueMs)) {
+      const dueMs = toDateTime(data.dueDate || data.targetDate, { defaultValue: null })?.toMillis() || null;
+      const storyMeta = data.storyId ? (storyMetaMap.get(data.storyId) || {}) : {};
+      const inActiveSprint = (data.sprintId && activeSprintIds.has(data.sprintId))
+        || (storyMeta.sprintId && activeSprintIds.has(storyMeta.sprintId));
+      const mustScore = inActiveSprint || isDueInActiveSprint(dueMs);
+      if (!mustScore && !isTaskOpenStatus(statusRaw)) {
         await clearPriorityFields(doc.ref, 'task');
         continue;
       }
@@ -1440,144 +1590,236 @@ async function runPriorityScoringJob() {
       const statusRaw = data.status;
       const statusStr = String(statusRaw || '').toLowerCase();
       const isDone = statusStr === 'done' || statusStr === 'completed' || statusStr === 'complete' || Number(statusRaw) >= 4;
-      if (isDone) continue;
-      if (!data.sprintId || !activeSprintIds.has(data.sprintId)) {
+      if (isDone) {
+        await clearPriorityFields(doc.ref, 'story');
+        continue;
+      }
+      const dueMs = toDateTime(data.dueDate || data.targetDate, { defaultValue: null })?.toMillis() || null;
+      const inActiveSprint = data.sprintId && activeSprintIds.has(data.sprintId);
+      const mustScore = inActiveSprint || isDueInActiveSprint(dueMs);
+      if (!mustScore && !isStoryOpenStatus(statusRaw)) {
         await clearPriorityFields(doc.ref, 'story');
         continue;
       }
       await applyScore(doc.ref, data, 'story');
     }
 
-    // Select focus tasks (3–5) preferring active sprint, then fall back by score
-    const sortedTasks = taskScores
-      .map((t) => {
-        const createdMs = toDateTime(t.data.createdAt || t.data.serverCreatedAt, { defaultValue: null })?.toMillis() || null;
-        const storyMeta = t.data.storyId ? (storyMetaMap.get(t.data.storyId) || {}) : {};
-        const sprintCandidate = t.data.sprintId || storyMeta.sprintId || null;
-        const active = sprintCandidate && activeSprintIds.has(sprintCandidate);
-        return { ...t, createdMs, sprintCandidate, active };
-      })
-      .filter((t) => !isTaskLocked(t.data) && !isRoutineChoreHabit(t.data))
-      .sort((a, b) => {
-        if ((b.score || 0) !== (a.score || 0)) return (b.score || 0) - (a.score || 0);
-        return (a.createdMs || 0) - (b.createdMs || 0);
-      });
-
-    const preferred = sortedTasks.filter((t) => t.active);
-    const fallback = sortedTasks.filter((t) => !t.active);
-    let focusTasks = [...preferred, ...fallback].slice(0, 5);
-    if (focusTasks.length < 3) {
-      focusTasks = sortedTasks.slice(0, Math.min(5, sortedTasks.length));
-    }
-
-    // Align due dates for top focus tasks (top 3) to today or next day depending on time
     const nowLocal = DateTime.now();
+    const todayIso = nowLocal.toISODate();
     const todayEnd = nowLocal.endOf('day').toMillis();
     const tomorrowEnd = nowLocal.plus({ days: 1 }).endOf('day').toMillis();
-    const eveningCutoffHour = 17; // after 5pm, push to next day
-    for (let idx = 0; idx < focusTasks.length; idx += 1) {
-      if (idx >= 3) break; // only adjust top 3
-      const task = focusTasks[idx];
-      if (isTaskLocked(task.data)) continue;
-      const dueMs = toDateTime(task.data.dueDate, { defaultValue: null })?.toMillis() || null;
-      const targetDue = (nowLocal.hour >= eveningCutoffHour) ? tomorrowEnd : todayEnd;
-      const shouldMove = !dueMs || dueMs > targetDue;
-      if (!shouldMove) continue;
-      const detailedReason = [
-        'AI focus (top 3)',
-        `score=${task.score}`,
-        task.reason ? `why=${task.reason}` : null,
-      ].filter(Boolean).join(' | ');
-      await task.refObj.set({
-        dueDate: targetDue,
-        priority: 4, // critical
-        iosPriority: '!!!',
-        aiDueDateSetAt: admin.firestore.FieldValue.serverTimestamp(),
-        dueDateReason: detailedReason,
-        aiFlaggedTop: true,
-        aiPriorityRank: idx + 1,
-        syncState: 'dirty',
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      }, { merge: true });
-      await db.collection('activity_stream').add(activityPayload({
-        ownerUid: userId,
-        entityId: task.id,
-        entityType: 'task',
-        activityType: 'ai_due_date_adjustment',
-        description: `Moved due date to ${nowLocal.hour >= eveningCutoffHour ? 'tomorrow' : 'today'} (top ${idx + 1}/3 focus task) · score ${task.score}/100`,
-        metadata: { score: task.score, reason: task.reason || 'focus_top3', run: '03:00_priority_top3', rank: idx + 1, newDueDate: targetDue },
+    const eveningCutoffHour = 17;
+    const focusDueDate = (nowLocal.hour >= eveningCutoffHour) ? tomorrowEnd : todayEnd;
+
+    const taskCandidates = taskScores
+      .map((t) => ({
+        ...t,
+        createdMs: toDateTime(t.data.createdAt || t.data.serverCreatedAt, { defaultValue: null })?.toMillis() || null,
+        persona: String(t.data.persona || 'personal').toLowerCase() === 'work' ? 'work' : 'personal',
+      }))
+      .filter((t) => !isRoutineChoreHabit(t.data));
+
+    const storyCandidates = storyScores
+      .map((s) => ({
+        ...s,
+        createdMs: toDateTime(s.data.createdAt || s.data.serverCreatedAt, { defaultValue: null })?.toMillis() || null,
+        persona: String(s.data.persona || 'personal').toLowerCase() === 'work' ? 'work' : 'personal',
       }));
+
+    const sortByScore = (a, b) => {
+      if ((b.score || 0) !== (a.score || 0)) return (b.score || 0) - (a.score || 0);
+      return (a.createdMs || 0) - (b.createdMs || 0);
+    };
+
+    const pickTop = (items, { rankKey, flagKey }) => {
+      const prev = items.filter((it) => {
+        const rank = Number(it.data?.[rankKey] || 0);
+        if (rank > 0) return true;
+        if (flagKey && it.data?.[flagKey] === true) return true;
+        return it.data?.aiTop3ForDay === true;
+      });
+      const prevSorted = prev
+        .slice()
+        .sort((a, b) => {
+          const ar = Number(a.data?.[rankKey] || 0);
+          const br = Number(b.data?.[rankKey] || 0);
+          if (ar && br && ar !== br) return ar - br;
+          return (a.createdMs || 0) - (b.createdMs || 0);
+        });
+      const prevIds = new Set(prevSorted.map((p) => p.id));
+      const remaining = items.filter((it) => !prevIds.has(it.id)).sort(sortByScore);
+      return [...prevSorted, ...remaining].slice(0, 3);
+    };
+
+    const topTaskIdsByPersona = { personal: new Set(), work: new Set() };
+    const topStoryIdsByPersona = { personal: new Set(), work: new Set() };
+
+    for (const persona of ['personal', 'work']) {
+      const personaTasks = taskCandidates.filter((t) => t.persona === persona);
+      const personaStories = storyCandidates.filter((s) => s.persona === persona);
+
+      const focusTasks = pickTop(personaTasks, { rankKey: 'aiPriorityRank', flagKey: 'aiFlaggedTop' });
+      const focusStories = pickTop(personaStories, { rankKey: 'aiFocusStoryRank' });
+
+      topTaskIdsByPersona[persona] = new Set(focusTasks.map((t) => t.id));
+      topStoryIdsByPersona[persona] = new Set(focusStories.map((s) => s.id));
+
+      const taskBatch = db.batch();
+      focusTasks.forEach((task, idx) => {
+        const tags = Array.isArray(task.data?.tags) ? [...task.data.tags] : [];
+        if (!tags.includes('Top3')) tags.push('Top3');
+        const reason = [
+          'Top 3 priority',
+          `score=${Math.round(task.score || 0)}`,
+          task.reason ? `why=${task.reason}` : null,
+        ].filter(Boolean).join(' | ');
+        const patch = {
+          aiFlaggedTop: true,
+          aiPriorityRank: idx + 1,
+          aiTop3ForDay: true,
+          aiTop3Date: todayIso,
+          aiTop3Reason: reason,
+          aiCriticalityScore: 100,
+          aiPriorityReason: admin.firestore.FieldValue.delete(),
+          tags,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          syncState: 'dirty',
+        };
+        if (!isTaskLocked(task.data)) {
+          patch.dueDate = focusDueDate;
+          patch.aiDueDateSetAt = admin.firestore.FieldValue.serverTimestamp();
+          patch.dueDateReason = reason;
+        }
+        taskBatch.set(task.refObj, patch, { merge: true });
+
+        db.collection('activity_stream').add(activityPayload({
+          ownerUid: userId,
+          entityId: task.id,
+          entityType: 'task',
+          activityType: 'ai_top3_selected',
+          description: `Selected as top ${idx + 1}/3 (${persona}) · score ${Math.round(task.score || 0)}/100`,
+          metadata: { persona, rank: idx + 1, score: task.score, reason: task.reason || null, run: '03:00_priority_top3' },
+        })).catch(() => { });
+      });
+      await taskBatch.commit();
+
+      const storyBatch = db.batch();
+      focusStories.forEach((story, idx) => {
+        const reason = [
+          'Top 3 priority',
+          `score=${Math.round(story.score || 0)}`,
+          story.reason ? `why=${story.reason}` : null,
+        ].filter(Boolean).join(' | ');
+        const patch = {
+          aiFocusStoryRank: idx + 1,
+          aiFocusStoryAt: admin.firestore.FieldValue.serverTimestamp(),
+          aiTop3ForDay: true,
+          aiTop3Date: todayIso,
+          aiTop3Reason: reason,
+          aiCriticalityScore: 100,
+          aiPriorityReason: admin.firestore.FieldValue.delete(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          syncState: 'dirty',
+        };
+        if (focusDueDate && !isStoryLocked(story.data)) {
+          patch.dueDate = focusDueDate;
+          patch.aiDueDateSetAt = admin.firestore.FieldValue.serverTimestamp();
+          patch.dueDateReason = reason;
+        }
+        storyBatch.set(story.refObj, patch, { merge: true });
+
+        db.collection('activity_stream').add(activityPayload({
+          ownerUid: userId,
+          entityId: story.id,
+          entityType: 'story',
+          activityType: 'ai_top3_selected',
+          description: `Selected as top ${idx + 1}/3 (${persona}) · score ${Math.round(story.score || 0)}/100`,
+          metadata: { persona, rank: idx + 1, score: story.score, reason: story.reason || null, run: '03:00_priority_top3' },
+        })).catch(() => { });
+      });
+      await storyBatch.commit();
     }
 
-    // Flag top 3 for Reminders (and clear previous flags), track focus ranks for up to 5
-    const focusFlagIds = new Set(focusTasks.slice(0, 3).map((t) => t.id));
-    const flaggedQuery = await db.collection('tasks')
-      .where('ownerUid', '==', userId)
-      .where('aiFlaggedTop', '==', true)
-      .limit(100)
-      .get()
-      .catch(() => ({ docs: [] }));
-
-    const batchFlag = db.batch();
-    for (const doc of flaggedQuery.docs) {
-      if (!focusFlagIds.has(doc.id)) {
-        batchFlag.set(doc.ref, {
+    // Clear flags for tasks no longer in top 3 (per persona)
+    const flaggedSnaps = await Promise.all([
+      db.collection('tasks')
+        .where('ownerUid', '==', userId)
+        .where('aiFlaggedTop', '==', true)
+        .limit(500)
+        .get()
+        .catch(() => ({ docs: [] })),
+      db.collection('tasks')
+        .where('ownerUid', '==', userId)
+        .where('aiTop3ForDay', '==', true)
+        .limit(500)
+        .get()
+        .catch(() => ({ docs: [] })),
+      db.collection('tasks')
+        .where('ownerUid', '==', userId)
+        .where('aiPriorityRank', '>', 0)
+        .limit(500)
+        .get()
+        .catch(() => ({ docs: [] })),
+    ]);
+    const flaggedMap = new Map();
+    flaggedSnaps.forEach((snap) => {
+      (snap?.docs || []).forEach((doc) => {
+        if (!flaggedMap.has(doc.id)) flaggedMap.set(doc.id, doc);
+      });
+    });
+    const clearTasksBatch = db.batch();
+    flaggedMap.forEach((doc) => {
+      const data = doc.data() || {};
+      const persona = String(data.persona || 'personal').toLowerCase() === 'work' ? 'work' : 'personal';
+      if (!topTaskIdsByPersona[persona].has(doc.id)) {
+        clearTasksBatch.set(doc.ref, {
           aiFlaggedTop: false,
           aiPriorityRank: admin.firestore.FieldValue.delete(),
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          syncState: 'dirty',
-        }, { merge: true });
-      }
-    }
-    focusTasks.forEach((task, idx) => {
-      batchFlag.set(task.refObj, {
-        aiFlaggedTop: idx < 3,
-        aiPriorityRank: idx + 1,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        syncState: 'dirty',
-      }, { merge: true });
-    });
-    await batchFlag.commit();
-
-    // Focus stories: pick top 3 (prefer active sprint) and clear previous ranks
-    const storyCandidates = storyScores
-      .map((s) => {
-        const createdMs = toDateTime(s.data.createdAt || s.data.serverCreatedAt, { defaultValue: null })?.toMillis() || null;
-        const sprintCandidate = s.data.sprintId || null;
-        const active = sprintCandidate && activeSprintIds.has(sprintCandidate);
-        return { ...s, createdMs, sprintCandidate, active };
-      })
-      .sort((a, b) => {
-        if ((b.score || 0) !== (a.score || 0)) return (b.score || 0) - (a.score || 0);
-        return (a.createdMs || 0) - (b.createdMs || 0);
-      });
-
-    const preferredStories = storyCandidates.filter((s) => s.active);
-    const fallbackStories = storyCandidates.filter((s) => !s.active);
-    let focusStories = [...preferredStories, ...fallbackStories].slice(0, 3);
-    if (focusStories.length < 3) focusStories = storyCandidates.slice(0, Math.min(3, storyCandidates.length));
-
-    const focusStoryIds = new Set(focusStories.map((s) => s.id));
-    const storyBatch = db.batch();
-    storyScores.forEach((s) => {
-      const currentRank = Number(s.data?.aiFocusStoryRank || 0);
-      if (currentRank > 0 && !focusStoryIds.has(s.id)) {
-        storyBatch.set(s.refObj, {
-          aiFocusStoryRank: admin.firestore.FieldValue.delete(),
+          aiTop3ForDay: false,
+          aiTop3Date: admin.firestore.FieldValue.delete(),
+          aiPriorityLabel: admin.firestore.FieldValue.delete(),
+          aiTop3Reason: admin.firestore.FieldValue.delete(),
+          aiPriorityReason: admin.firestore.FieldValue.delete(),
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
           syncState: 'dirty',
         }, { merge: true });
       }
     });
-    focusStories.forEach((story, idx) => {
-      storyBatch.set(story.refObj, {
-        aiFocusStoryRank: idx + 1,
-        aiFocusStoryAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        syncState: 'dirty',
-      }, { merge: true });
+    await clearTasksBatch.commit();
+
+    // Clear/update story focus ranks and ensure non-top stories use sprint end date
+    const storyClearBatch = db.batch();
+    storiesSnap.docs.forEach((doc) => {
+      const data = doc.data() || {};
+      if (isStoryDoneStatus(data.status)) return;
+      const persona = String(data.persona || 'personal').toLowerCase() === 'work' ? 'work' : 'personal';
+      const isTop = topStoryIdsByPersona[persona].has(doc.id);
+      const sprint = data.sprintId ? sprintMap.get(data.sprintId) : null;
+      const sprintEnd = sprint?.endDateMs || null;
+      const patch = {};
+      if (isTop) {
+        patch.aiTop3ForDay = true;
+        patch.aiTop3Date = todayIso;
+      } else {
+        if (Number(data.aiFocusStoryRank || 0) > 0 || data.aiTop3ForDay) {
+          patch.aiFocusStoryRank = admin.firestore.FieldValue.delete();
+          patch.aiTop3ForDay = false;
+          patch.aiTop3Date = admin.firestore.FieldValue.delete();
+          patch.aiPriorityLabel = admin.firestore.FieldValue.delete();
+          patch.aiTop3Reason = admin.firestore.FieldValue.delete();
+          patch.aiPriorityReason = admin.firestore.FieldValue.delete();
+        }
+        if (sprintEnd && !isStoryLocked(data)) {
+          patch.dueDate = sprintEnd;
+        }
+      }
+      if (Object.keys(patch).length) {
+        patch.updatedAt = admin.firestore.FieldValue.serverTimestamp();
+        patch.syncState = 'dirty';
+        storyClearBatch.set(doc.ref, patch, { merge: true });
+      }
     });
-    await storyBatch.commit();
+    await storyClearBatch.commit();
   }
 }
 
@@ -1665,13 +1907,11 @@ async function runCalendarPlannerJob() {
       .get()
       .catch(() => ({ docs: [] }));
 
-    const blocksSnap = await db.collection('calendar_blocks')
-      .where('ownerUid', '==', userId)
-      .where('start', '>=', windowStart.toMillis())
-      .where('start', '<=', windowEnd.toMillis())
-      .get()
-      .catch(() => ({ docs: [] }));
-    const existingBlocks = blocksSnap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+    const dedupeResult = await dedupePlannerBlocksForUser({ db, userId, windowStart, windowEnd });
+    if (dedupeResult.removed > 0) {
+      console.log(`[calendar-planner] removed ${dedupeResult.removed} duplicate blocks for ${userId}`);
+    }
+    const existingBlocks = dedupeResult.blocks;
 
     const plannerBlockResult = await materializePlannerThemeBlocks({
       db,
@@ -1699,7 +1939,8 @@ async function runCalendarPlannerJob() {
       console.log(`[calendar-planner] rescheduled blocks for ${userId}: ${rescheduleResult.rescheduled}, blocked: ${rescheduleResult.blocked}`);
     }
 
-    const busy = rescheduleResult.busy || [];
+    const busyPersonal = Array.isArray(rescheduleResult.busy) ? [...rescheduleResult.busy] : [];
+    const busyWork = Array.isArray(rescheduleResult.busyWork) ? [...rescheduleResult.busyWork] : [];
     const scoreWithBonus = (priority, base) => (Number(priority) >= 4 ? Number(base || 0) + 500 : Number(base || 0));
 
     // Build sprint map for gating and metadata
@@ -1708,23 +1949,50 @@ async function runCalendarPlannerJob() {
 
     const openStories = storiesSnap.docs
       .map((d) => ({ id: d.id, ...(d.data() || {}) }))
-      .filter((s) => !isStoryDoneStatus(s.status) && s.sprintId && activeSprintIds.has(s.sprintId));
+      .filter((s) => !isStoryDoneStatus(s.status));
 
     const openTasks = tasksSnap.docs
       .map((d) => ({ id: d.id, ...(d.data() || {}) }))
-      .filter((t) => {
-        return !isTaskDoneStatus(t.status) && !t.deleted && t.sprintId && activeSprintIds.has(t.sprintId);
+      .filter((t) => !isTaskDoneStatus(t.status) && !t.deleted)
+      .filter((t) => !isRoutineChoreHabit(t));
+
+    const todayIso = nowLocal.toISODate();
+    const isTopTask = (t) => {
+      if (t.aiTop3ForDay !== true) return false;
+      if (t.aiTop3Date && String(t.aiTop3Date).slice(0, 10) !== todayIso) return false;
+      return true;
+    };
+    const isTopStory = (s) => {
+      if (s.aiTop3ForDay !== true) return false;
+      if (s.aiTop3Date && String(s.aiTop3Date).slice(0, 10) !== todayIso) return false;
+      return true;
+    };
+    const rankSort = (a, b, key) => {
+      const ar = Number(a?.[key] || 0) || 99;
+      const br = Number(b?.[key] || 0) || 99;
+      if (ar !== br) return ar - br;
+      const as = scoreWithBonus(a.priority, a.aiCriticalityScore);
+      const bs = scoreWithBonus(b.priority, b.aiCriticalityScore);
+      return bs - as;
+    };
+
+    const selectTop = (items, rankKey, filterFn) => {
+      const flagged = items.filter(filterFn);
+      const base = flagged.length ? flagged : items;
+      return base.slice().sort((a, b) => rankSort(a, b, rankKey)).slice(0, 3);
+    };
+
+    const topStories = ['personal', 'work']
+      .flatMap((persona) => {
+        const personaStories = openStories.filter((s) => resolvePersona(s.persona) === persona);
+        return selectTop(personaStories, 'aiFocusStoryRank', isTopStory);
       });
 
-    const topStories = openStories
-      .map((s) => ({ ...s, aiScore: scoreWithBonus(s.priority, s.aiCriticalityScore) }))
-      .sort((a, b) => (b.aiScore || 0) - (a.aiScore || 0))
-      .slice(0, 3);
-
-    const topTasks = openTasks
-      .map((t) => ({ ...t, aiScore: scoreWithBonus(t.priority, t.aiCriticalityScore) }))
-      .sort((a, b) => (b.aiScore || 0) - (a.aiScore || 0))
-      .slice(0, 3);
+    const topTasks = ['personal', 'work']
+      .flatMap((persona) => {
+        const personaTasks = openTasks.filter((t) => resolvePersona(t.persona) === persona);
+        return selectTop(personaTasks, 'aiPriorityRank', isTopTask);
+      });
 
     const topIds = new Set([
       ...topStories.map((s) => `story:${s.id}`),
@@ -1749,19 +2017,16 @@ async function runCalendarPlannerJob() {
       }
     }
 
-    const busyMap = [];
     const mainGigBlocks = []; // Track main gig planner blocks separately
     remainingBlocks.forEach((b) => {
       if (b.start && b.end) {
-        busyMap.push({ start: b.start, end: b.end });
-        
-        // Track main gig blocks separately to prevent task/story placement
         const blockTheme = b.theme || b.category || '';
-        const isMainGigBlock = String(blockTheme).toLowerCase().includes('work') || 
-                              String(blockTheme).toLowerCase().includes('main gig') ||
-                              b.entityType === 'work_shift';
-        if (isMainGigBlock) {
+        if (isMainGigBlock(b)) {
           mainGigBlocks.push({ start: b.start, end: b.end, theme: blockTheme });
+          busyPersonal.push({ start: b.start, end: b.end });
+        } else {
+          busyPersonal.push({ start: b.start, end: b.end });
+          busyWork.push({ start: b.start, end: b.end });
         }
       }
     });
@@ -1770,12 +2035,77 @@ async function runCalendarPlannerJob() {
       const sprint = candidate.sprintId ? sprintMap.get(candidate.sprintId) : null;
       const sprintStart = sprint?.start ? toMillis(sprint.start) : null;
       const sprintEnd = sprint?.end ? toMillis(sprint.end) : null;
+      const isWorkPersona = String(candidate?.persona || '').toLowerCase() === 'work';
+      const busyList = isWorkPersona ? busyWork : busyPersonal;
 
       const durationMinutesRaw = kind === 'task'
         ? (Number(candidate.points) * 60) || Number(candidate.estimateMin) || 60
         : (Number(candidate.points) * 60) || 90;
       const durationMinutes = Math.min(kind === 'task' ? 180 : 240, Math.max(kind === 'task' ? 30 : 60, durationMinutesRaw || 60));
       const durationMs = durationMinutes * 60000;
+
+      if (isWorkPersona) {
+        if (!mainGigBlocks.length) return { created: 0, blocked: 1 };
+        const sortedMainGig = mainGigBlocks
+          .filter((mg) => mg.start && mg.end)
+          .sort((a, b) => a.start - b.start);
+
+        for (const mg of sortedMainGig) {
+          const slotStart = DateTime.fromMillis(mg.start, { zone: windowStart.zoneName });
+          const slotEnd = DateTime.fromMillis(mg.end, { zone: windowStart.zoneName });
+          if (slotEnd <= slotStart) continue;
+          if (sprintStart && slotEnd.toMillis() < sprintStart) continue;
+          if (sprintEnd && slotStart.toMillis() > sprintEnd) continue;
+          if (slotEnd.toMillis() - slotStart.toMillis() < durationMs) continue;
+
+          const overlaps = busyList
+            .filter((b) => b.end > slotStart.toMillis() && b.start < slotEnd.toMillis())
+            .sort((a, b) => a.start - b.start);
+          let cursor = slotStart.toMillis();
+          for (const o of overlaps) {
+            if (o.start - cursor >= durationMs) break;
+            cursor = Math.max(cursor, o.end);
+            if (cursor + durationMs > slotEnd.toMillis()) cursor = null;
+          }
+          if (cursor == null || cursor + durationMs > slotEnd.toMillis()) continue;
+
+          const blockRef = db.collection('calendar_blocks').doc();
+          const payload = {
+            ownerUid: userId,
+            start: cursor,
+            end: cursor + durationMs,
+            title: candidate.ref ? `${candidate.ref}: ${candidate.title}` : candidate.title,
+            entityType: kind,
+            taskId: kind === 'task' ? candidate.id : null,
+            storyId: kind === 'story' ? candidate.id : null,
+            sprintId: candidate.sprintId || null,
+            theme: candidate.theme || null,
+            goalId: candidate.goalId || null,
+            status: 'planned',
+            aiGenerated: true,
+            aiScore: candidate.aiScore || null,
+            aiReason: candidate.aiCriticalityReason || null,
+            placementReason: 'Nightly planner: top priority item',
+            deepLink: buildEntityUrl(kind === 'story' ? 'story' : 'task', candidate.id, candidate.ref || null),
+            persona: candidate.persona || 'work',
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          };
+          await blockRef.set(payload);
+          busyPersonal.push({ start: payload.start, end: payload.end });
+          busyWork.push({ start: payload.start, end: payload.end });
+          await db.collection('activity_stream').add(activityPayload({
+            ownerUid: userId,
+            entityId: candidate.id,
+            entityType: kind,
+            activityType: 'calendar_insertion',
+            description: `Calendar block created (${slotStart.toISODate()} ${slotStart.toFormat('HH:mm')}–${slotEnd.toFormat('HH:mm')})`,
+            metadata: { blockId: blockRef.id, reason: payload.placementReason, theme: payload.theme || null, goalId: payload.goalId || null },
+          }));
+          return { created: 1 };
+        }
+        return { created: 0, blocked: 1 };
+      }
 
       for (let offset = 0; offset < 7; offset++) {
         const day = windowStart.plus({ days: offset });
@@ -1786,10 +2116,7 @@ async function runCalendarPlannerJob() {
         const slots = pickSlots(candidate.theme || candidate.goal || null, day);
         for (const slot of slots) {
           // Skip main gig blocks for tasks/stories
-          const isMainGigSlot = slot.label && 
-            (slot.label.toLowerCase().includes('main gig') || 
-             slot.label.toLowerCase().includes('work') ||
-             slot.label.toLowerCase().includes('theme block: work'));
+          const isMainGigSlot = isMainGigLabel(slot.label);
           if (isMainGigSlot) continue;
           
           const slotDays = slot.days || [1, 2, 3, 4, 5, 6, 7];
@@ -1800,7 +2127,7 @@ async function runCalendarPlannerJob() {
           if (sprintEnd && slotStart.toMillis() > sprintEnd) continue;
           if (slotEnd.toMillis() - slotStart.toMillis() < durationMs) continue;
 
-          const overlaps = busyMap
+          const overlaps = busyList
             .filter((b) => b.end > slotStart.toMillis() && b.start < slotEnd.toMillis())
             .sort((a, b) => a.start - b.start);
           let cursor = slotStart.toMillis();
@@ -1840,11 +2167,13 @@ async function runCalendarPlannerJob() {
             aiReason: candidate.aiCriticalityReason || null,
             placementReason: 'Nightly planner: top priority item',
             deepLink: buildEntityUrl(kind === 'story' ? 'story' : 'task', candidate.id, candidate.ref || null),
+            persona: candidate.persona || 'personal',
             createdAt: admin.firestore.FieldValue.serverTimestamp(),
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
           };
           await blockRef.set(payload);
-          busyMap.push({ start: payload.start, end: payload.end });
+          busyPersonal.push({ start: payload.start, end: payload.end });
+          busyWork.push({ start: payload.start, end: payload.end });
           await db.collection('activity_stream').add(activityPayload({
             ownerUid: userId,
             entityId: candidate.id,
@@ -1912,13 +2241,11 @@ exports.materializeFitnessBlocksNow = onCall({
     if (allocDoc.exists) themeAllocations = allocDoc.data()?.allocations || [];
   } catch { /* ignore */ }
 
-  const blocksSnap = await db.collection('calendar_blocks')
-    .where('ownerUid', '==', uid)
-    .where('start', '>=', windowStart.toMillis())
-    .where('start', '<=', windowEnd.toMillis())
-    .get()
-    .catch(() => ({ docs: [] }));
-  const existingBlocks = blocksSnap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+  const dedupeResult = await dedupePlannerBlocksForUser({ db, userId: uid, windowStart, windowEnd });
+  if (dedupeResult.removed > 0) {
+    console.log(`[calendar-planner] removed ${dedupeResult.removed} duplicate blocks for ${uid}`);
+  }
+  const existingBlocks = dedupeResult.blocks;
 
   const result = await materializePlannerThemeBlocks({
     db,
@@ -2022,27 +2349,43 @@ exports.replanCalendarNow = onCall({
     .catch(() => ({ docs: [] }));
 
   const scoreWithBonus = (priority, base) => (Number(priority) >= 4 ? Number(base || 0) + 500 : Number(base || 0));
+  const todayIso = DateTime.now().toISODate();
+  const isTopTask = (t) => {
+    if (t.aiTop3ForDay !== true) return false;
+    if (t.aiTop3Date && String(t.aiTop3Date).slice(0, 10) !== todayIso) return false;
+    return true;
+  };
+  const isTopStory = (s) => {
+    if (s.aiTop3ForDay !== true) return false;
+    if (s.aiTop3Date && String(s.aiTop3Date).slice(0, 10) !== todayIso) return false;
+    return true;
+  };
   const openStories = storiesSnap.docs
     .map((d) => ({ id: d.id, ...(d.data() || {}) }))
     .filter((s) => !isStoryDoneStatus(s.status) && activeSprintIds.length > 0 && activeSprintIds.includes(s.sprintId));
   const openTasks = tasksSnap.docs
     .map((d) => ({ id: d.id, ...(d.data() || {}) }))
     .filter((t) => !isTaskDoneStatus(t.status))
+    .filter((t) => !isRoutineChoreHabit(t))
     .filter((t) => !t.sprintId || activeSprintIds.includes(t.sprintId));
 
-  const topStories = openStories
-    .map((s) => ({
-      ...s,
-      aiScore: scoreWithBonus(s.priority, s.aiCriticalityScore),
-    }))
+  const scoredStories = openStories.map((s) => ({
+    ...s,
+    aiScore: scoreWithBonus(s.priority, s.aiCriticalityScore),
+  }));
+  const scoredTasks = openTasks.map((t) => ({
+    ...t,
+    aiScore: scoreWithBonus(t.priority, t.aiCriticalityScore),
+  }));
+
+  const flaggedStories = scoredStories.filter(isTopStory);
+  const flaggedTasks = scoredTasks.filter(isTopTask);
+
+  const topStories = (flaggedStories.length ? flaggedStories : scoredStories)
     .sort((a, b) => (b.aiScore || 0) - (a.aiScore || 0))
     .slice(0, 3);
 
-  const topTasks = openTasks
-    .map((t) => ({
-      ...t,
-      aiScore: scoreWithBonus(t.priority, t.aiCriticalityScore),
-    }))
+  const topTasks = (flaggedTasks.length ? flaggedTasks : scoredTasks)
     .sort((a, b) => (b.aiScore || 0) - (a.aiScore || 0))
     .slice(0, 3);
 
@@ -2065,21 +2408,22 @@ exports.replanCalendarNow = onCall({
     }
   }
 
-  const busy = [];
+  const busyPersonal = [];
+  const busyWork = [];
   const mainGigBlocks = []; // Track main gig planner blocks separately
-  const addBusy = (start, end) => {
-    if (start && end) busy.push({ start, end });
+  const addBusyPersonal = (start, end) => {
+    if (start && end) busyPersonal.push({ start, end });
+  };
+  const addBusyWork = (start, end) => {
+    if (start && end) busyWork.push({ start, end });
   };
   remainingBlocks.forEach((b) => {
-    addBusy(b.start, b.end);
-    
-    // Track main gig blocks separately to prevent task/story placement
-    const blockTheme = b.theme || b.category || '';
-    const isMainGigBlock = String(blockTheme).toLowerCase().includes('work') || 
-                          String(blockTheme).toLowerCase().includes('main gig') ||
-                          b.entityType === 'work_shift';
-    if (isMainGigBlock) {
-      mainGigBlocks.push({ start: b.start, end: b.end, theme: blockTheme });
+    if (isMainGigBlock(b)) {
+      mainGigBlocks.push({ start: b.start, end: b.end, theme: b.theme || b.category || '' });
+      addBusyPersonal(b.start, b.end);
+    } else {
+      addBusyPersonal(b.start, b.end);
+      addBusyWork(b.start, b.end);
     }
   });
 
@@ -2089,12 +2433,68 @@ exports.replanCalendarNow = onCall({
     const sprint = candidate.sprintId ? sprintMap.get(candidate.sprintId) : null;
     const sprintStart = sprint?.start ? toMillis(sprint.start) : null;
     const sprintEnd = sprint?.end ? toMillis(sprint.end) : null;
+    const isWorkPersona = String(candidate?.persona || '').toLowerCase() === 'work';
+    const busyList = isWorkPersona ? busyWork : busyPersonal;
 
     const durationMinutesRaw = kind === 'task'
       ? (Number(candidate.points) * 60) || Number(candidate.estimateMin) || 60
       : (Number(candidate.points) * 60) || 90;
     const durationMinutes = Math.min(kind === 'task' ? 180 : 240, Math.max(kind === 'task' ? 30 : 60, durationMinutesRaw || 60));
     const durationMs = durationMinutes * 60000;
+
+    if (isWorkPersona) {
+      if (!mainGigBlocks.length) return { created: 0, blocked: 1 };
+      const sortedMainGig = mainGigBlocks
+        .filter((mg) => mg.start && mg.end)
+        .sort((a, b) => a.start - b.start);
+      for (const mg of sortedMainGig) {
+        const slotStart = DateTime.fromMillis(mg.start, { zone: windowStart.zoneName });
+        const slotEnd = DateTime.fromMillis(mg.end, { zone: windowStart.zoneName });
+        if (slotEnd <= slotStart) continue;
+        if (sprintStart && slotEnd.toMillis() < sprintStart) continue;
+        if (sprintEnd && slotStart.toMillis() > sprintEnd) continue;
+        if (slotEnd.toMillis() - slotStart.toMillis() < durationMs) continue;
+
+        const overlaps = busyList
+          .filter((b) => b.end > slotStart.toMillis() && b.start < slotEnd.toMillis())
+          .sort((a, b) => a.start - b.start);
+        let cursor = slotStart.toMillis();
+        for (const o of overlaps) {
+          if (o.start - cursor >= durationMs) break;
+          cursor = Math.max(cursor, o.end);
+          if (cursor + durationMs > slotEnd.toMillis()) cursor = null;
+        }
+        if (cursor == null || cursor + durationMs > slotEnd.toMillis()) continue;
+
+        const blockRef = db.collection('calendar_blocks').doc();
+        const payload = {
+          ownerUid: uid,
+          start: cursor,
+          end: cursor + durationMs,
+          title: candidate.ref ? `${candidate.ref}: ${candidate.title}` : candidate.title,
+          entityType: kind,
+          taskId: kind === 'task' ? candidate.id : null,
+          storyId: kind === 'story' ? candidate.id : null,
+          sprintId: candidate.sprintId || null,
+          theme: candidate.theme || null,
+          goalId: candidate.goalId || null,
+          status: 'planned',
+          aiGenerated: true,
+          aiScore: candidate.aiScore || null,
+          aiReason: candidate.aiCriticalityReason || null,
+          placementReason: 'Replan: top priority item',
+          deepLink: buildEntityUrl(kind === 'story' ? 'story' : 'task', candidate.id, candidate.ref || null),
+          persona: candidate.persona || 'work',
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        };
+        await blockRef.set(payload);
+        busyPersonal.push({ start: payload.start, end: payload.end });
+        busyWork.push({ start: payload.start, end: payload.end });
+        return { created: 1, gcalLink: payload.gcalEventUrl || null };
+      }
+      return { created: 0, blocked: 1 };
+    }
 
     for (let offset = 0; offset < days; offset++) {
       const day = windowStart.plus({ days: offset });
@@ -2105,10 +2505,7 @@ exports.replanCalendarNow = onCall({
       const slots = pickSlots(candidate.theme || candidate.goal || null, day);
       for (const slot of slots) {
         // Skip main gig blocks for tasks/stories
-        const isMainGigSlot = slot.label && 
-          (slot.label.toLowerCase().includes('main gig') || 
-           slot.label.toLowerCase().includes('work') ||
-           slot.label.toLowerCase().includes('theme block: work'));
+        const isMainGigSlot = isMainGigLabel(slot.label);
         if (isMainGigSlot) continue;
         
         const slotDays = slot.days || [1, 2, 3, 4, 5, 6, 7];
@@ -2119,7 +2516,7 @@ exports.replanCalendarNow = onCall({
         if (sprintEnd && slotStart.toMillis() > sprintEnd) continue;
         if (slotEnd.toMillis() - slotStart.toMillis() < durationMs) continue;
 
-        const overlaps = busy.filter((b) => b.end > slotStart.toMillis() && b.start < slotEnd.toMillis()).sort((a, b) => a.start - b.start);
+        const overlaps = busyList.filter((b) => b.end > slotStart.toMillis() && b.start < slotEnd.toMillis()).sort((a, b) => a.start - b.start);
         let cursor = slotStart.toMillis();
         for (const o of overlaps) {
           if (o.start - cursor >= durationMs) break;
@@ -2157,11 +2554,13 @@ exports.replanCalendarNow = onCall({
           aiReason: candidate.aiCriticalityReason || null,
           placementReason: 'Replan: top priority item',
           deepLink: buildEntityUrl(kind === 'story' ? 'story' : 'task', candidate.id, candidate.ref || null),
+          persona: candidate.persona || 'personal',
           createdAt: admin.firestore.FieldValue.serverTimestamp(),
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         };
         await blockRef.set(payload);
-        busy.push({ start: payload.start, end: payload.end });
+        busyPersonal.push({ start: payload.start, end: payload.end });
+        busyWork.push({ start: payload.start, end: payload.end });
         return { created: 1, gcalLink: payload.gcalEventUrl || null };
       }
     }

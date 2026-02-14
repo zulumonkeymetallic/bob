@@ -1,14 +1,23 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { format } from 'date-fns';
 import { Modal, Button, Form, Row, Col } from 'react-bootstrap';
-import { doc, updateDoc, serverTimestamp, collection, query, where, orderBy, limit, onSnapshot } from 'firebase/firestore';
-import { db } from '../firebase';
+import { doc, updateDoc, serverTimestamp, collection, query, where, orderBy, limit, onSnapshot, setDoc, addDoc } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
+import { useNavigate } from 'react-router-dom';
+import { db, functions } from '../firebase';
 import { useSprint } from '../contexts/SprintContext';
-import { Task, Sprint, Story } from '../types';
+import { Task, Sprint, Story, Goal } from '../types';
 import { useAuth } from '../contexts/AuthContext';
+import { usePersona } from '../contexts/PersonaContext';
+import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { isStatus } from '../utils/statusHelpers';
 import { normalizePriorityValue } from '../utils/priorityUtils';
 import ActivityStreamPanel from './common/ActivityStreamPanel';
+import TagInput from './common/TagInput';
+import { cascadeTaskPersona } from '../utils/personaCascade';
+import { formatTaskTagLabel } from '../utils/tagDisplay';
+import { normalizeTaskTags } from '../utils/taskTagging';
+import { findSprintForDate } from '../utils/taskSprintHelpers';
 
 interface EditTaskModalProps {
   show: boolean;
@@ -56,8 +65,11 @@ const formatSprintLabel = (sprint: Sprint, statusOverride?: string) => {
 };
 
 const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpdated, container }) => {
+  const navigate = useNavigate();
   const { currentUser } = useAuth();
+  const { currentPersona } = usePersona();
   const { sprints } = useSprint();
+  const { themes: globalThemes } = useGlobalThemes();
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
     title: '',
@@ -68,9 +80,18 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
     points: 1 as number,
     dueDate: '' as string,
     storyId: '' as string,
+    goalId: '' as string,
+    tags: [] as string[],
+    type: 'task' as 'task' | 'chore' | 'routine' | 'habit',
+    repeatFrequency: '' as '' | 'daily' | 'weekly' | 'monthly' | 'yearly',
+    repeatInterval: 1 as number,
+    daysOfWeek: [] as string[],
+    persona: 'personal' as 'personal' | 'work',
   });
   const [storyInput, setStoryInput] = useState('');
   const [stories, setStories] = useState<Story[]>([]);
+  const [goals, setGoals] = useState<Goal[]>([]);
+  const [converting, setConverting] = useState(false);
   const visibleSprints = sprints.filter((sprint) => !isHiddenSprint(sprint));
   const selectedSprint = form.sprintId ? sprints.find((sprint) => sprint.id === form.sprintId) : null;
   const selectedSprintStatus = selectedSprint
@@ -83,6 +104,16 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
     || (task as any).createdBy === 'mac_app'
   );
 
+  const linkedStory = useMemo(
+    () => (form.storyId ? stories.find((s) => s.id === form.storyId) : null),
+    [form.storyId, stories],
+  );
+  const linkedGoalId = form.goalId || linkedStory?.goalId || '';
+  const linkedGoal = useMemo(
+    () => (linkedGoalId ? goals.find((g) => g.id === linkedGoalId) : null),
+    [linkedGoalId, goals],
+  );
+
   useEffect(() => {
     if (!currentUser?.uid) return;
     const q = query(
@@ -92,13 +123,54 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
       limit(200)
     );
     const unsub = onSnapshot(q, (snap) => {
-      setStories(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Story[]);
+      const rows = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Story[];
+      const persona = (task as any)?.persona || currentPersona;
+      const filtered = persona ? rows.filter((s) => !s.persona || s.persona === persona) : rows;
+      setStories(filtered);
     });
     return () => unsub();
-  }, [currentUser?.uid]);
+  }, [currentUser?.uid, currentPersona, task]);
 
   useEffect(() => {
-    if (!task) return;
+    if (!currentUser?.uid) return;
+    const q = query(
+      collection(db, 'goals'),
+      where('ownerUid', '==', currentUser.uid),
+      orderBy('createdAt', 'desc'),
+      limit(500)
+    );
+    const unsub = onSnapshot(q, (snap) => {
+      const rows = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Goal[];
+      const persona = (task as any)?.persona || currentPersona;
+      const filtered = persona ? rows.filter((g) => !g.persona || g.persona === persona) : rows;
+      setGoals(filtered);
+    });
+    return () => unsub();
+  }, [currentUser?.uid, currentPersona, task]);
+
+  useEffect(() => {
+    if (!show) return;
+    if (!task) {
+      setForm({
+        title: '',
+        description: '',
+        status: 0,
+        priority: 2,
+        sprintId: '',
+        points: 1,
+        dueDate: '',
+        storyId: '',
+        goalId: '',
+        tags: [],
+        type: 'task',
+        repeatFrequency: '',
+        repeatInterval: 1,
+        daysOfWeek: [],
+        persona: ((currentPersona || 'personal') as 'personal' | 'work'),
+      });
+      setStoryInput('');
+      return;
+    }
     const storyLabel = (s: Story) => {
       const ref = (s as any).ref || (s as any).referenceNumber || (s as any).reference || s.id.slice(-6).toUpperCase();
       return `${ref} — ${s.title}`;
@@ -122,9 +194,16 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
       points: (task as any).points ?? 1,
       dueDate: resolveDue((task as any).dueDate || (task as any).dueDateMs || (task as any).targetDate),
       storyId: linkedStoryId,
+      goalId: (task as any).goalId || linkedStory?.goalId || '',
+      tags: Array.isArray((task as any).tags) ? (task as any).tags : [],
+      type: ((task as any).type || 'task') as 'task' | 'chore' | 'routine' | 'habit',
+      repeatFrequency: ((task as any).repeatFrequency || '') as '' | 'daily' | 'weekly' | 'monthly' | 'yearly',
+      repeatInterval: Number((task as any).repeatInterval || 1) || 1,
+      daysOfWeek: Array.isArray((task as any).daysOfWeek) ? (task as any).daysOfWeek : [],
+      persona: ((task as any).persona || 'personal') as 'personal' | 'work',
     });
     setStoryInput(linkedStory ? storyLabel(linkedStory) : '');
-  }, [task, show, stories]);
+  }, [task, show, stories, currentPersona]);
 
   const storyLabel = (s: Story) => {
     const ref = (s as any).ref || (s as any).referenceNumber || (s as any).reference || s.id.slice(-6).toUpperCase();
@@ -137,7 +216,7 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
       return s.id === value || s.title === value || ref === value || storyLabel(s) === value;
     });
     if (match) {
-      setForm((prev) => ({ ...prev, storyId: match.id }));
+      setForm((prev) => ({ ...prev, storyId: match.id, goalId: match.goalId || prev.goalId }));
       setStoryInput(storyLabel(match));
     } else if (finalize) {
       setForm((prev) => ({ ...prev, storyId: '' }));
@@ -145,29 +224,145 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
   };
 
   const handleSave = async () => {
-    if (!task) return;
     setSaving(true);
+    const linkedStory = form.storyId ? stories.find((s) => s.id === form.storyId) : null;
+    if (!form.title.trim()) {
+      alert('Please add a task title.');
+      setSaving(false);
+      return;
+    }
     try {
+      const isRecurringType = form.type === 'chore' || form.type === 'routine' || form.type === 'habit';
+      const normalizedFrequency = isRecurringType ? (form.repeatFrequency || null) : null;
+      const normalizedInterval = isRecurringType ? Math.max(1, Number(form.repeatInterval) || 1) : null;
+      const normalizedDays = isRecurringType && form.repeatFrequency === 'weekly'
+        ? Array.isArray(form.daysOfWeek) ? form.daysOfWeek : []
+        : [];
       const dueDateMs = form.dueDate ? new Date(`${form.dueDate}T00:00:00`).getTime() : null;
-      const updates: any = {
-        title: form.title.trim() || task.title,
+      let nextSprintId = form.sprintId || null;
+      let dueDateChanged = false;
+      if (task) {
+        const originalDueDateMs = resolveTimestampMs((task as any).dueDate || (task as any).dueDateMs || (task as any).targetDate);
+        dueDateChanged = (originalDueDateMs ?? null) !== (dueDateMs ?? null);
+      }
+      if (dueDateChanged || (!task && dueDateMs && !nextSprintId)) {
+        const matched = findSprintForDate(sprints, dueDateMs);
+        nextSprintId = matched?.id ?? null;
+      }
+      const basePayload: any = {
+        title: form.title.trim(),
         description: form.description,
         status: typeof form.status === 'string' ? Number(form.status) || form.status : form.status,
         priority: typeof form.priority === 'string' ? Number(form.priority) || form.priority : form.priority,
         points: Number(form.points) || 1,
-        sprintId: form.sprintId || null,
+        sprintId: nextSprintId,
         dueDate: dueDateMs,
         storyId: form.storyId || null,
         parentType: form.storyId ? 'story' : null,
         parentId: form.storyId || null,
-        updatedAt: serverTimestamp(),
+        goalId: form.goalId || null,
+        tags: Array.isArray(form.tags) ? form.tags.map((tag) => tag.trim()).filter(Boolean) : [],
+        type: form.type || 'task',
+        repeatFrequency: normalizedFrequency,
+        repeatInterval: normalizedInterval,
+        daysOfWeek: normalizedDays,
+        persona: form.persona || 'personal',
       };
       if (form.storyId) {
         const linked = stories.find((s) => s.id === form.storyId);
-        if (linked?.goalId) updates.goalId = linked.goalId;
-        if (!updates.sprintId && (linked as any)?.sprintId) updates.sprintId = (linked as any).sprintId;
+        if (linked?.goalId) basePayload.goalId = linked.goalId;
+        if ((linked as any)?.sprintId) basePayload.sprintId = (linked as any).sprintId;
       }
-      await updateDoc(doc(db, 'tasks', task.id), updates);
+      const storySprintId = linkedStory?.sprintId || (linkedStory as any)?.sprintId || null;
+      const resolvedGoalId = basePayload.goalId || linkedStory?.goalId || null;
+      const resolvedGoal = resolvedGoalId ? goals.find((g) => g.id === resolvedGoalId) : null;
+      const sprintForTag = (basePayload.sprintId || storySprintId)
+        ? sprints.find((sprint) => sprint.id === (basePayload.sprintId || storySprintId))
+        : null;
+      const themeValue = (resolvedGoal as any)?.theme
+        ?? (linkedStory as any)?.theme
+        ?? (task as any)?.theme
+        ?? (task as any)?.themeId
+        ?? (task as any)?.theme_id
+        ?? null;
+      basePayload.tags = normalizeTaskTags({
+        tags: basePayload.tags || [],
+        type: basePayload.type,
+        persona: basePayload.persona,
+        sprint: sprintForTag || null,
+        themeValue,
+        goalRef: (resolvedGoal as any)?.ref || null,
+        storyRef: (linkedStory as any)?.ref || null,
+        themes: globalThemes,
+      });
+
+      let savedTaskId = task?.id || null;
+      const existingRef = (task as any)?.ref || (task as any)?.reference || null;
+      const prevPersona = (((task as any)?.persona) || 'personal') as 'personal' | 'work';
+      if (task) {
+        const updates: any = {
+          ...basePayload,
+          title: basePayload.title || task.title,
+          updatedAt: serverTimestamp(),
+        };
+        if (dueDateChanged) {
+          updates.dueDateLocked = true;
+          updates.dueDateReason = 'user';
+        }
+        await updateDoc(doc(db, 'tasks', task.id), updates);
+      } else {
+        if (!currentUser?.uid) {
+          throw new Error('You must be signed in to create tasks.');
+        }
+        const createPayload: any = {
+          ...basePayload,
+          ownerUid: currentUser.uid,
+          persona: basePayload.persona || (currentPersona || 'personal'),
+          deleted: false,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+          dueDateLocked: dueDateMs != null,
+          dueDateReason: dueDateMs != null ? 'user' : null,
+        };
+        const createdRef = await addDoc(collection(db, 'tasks'), createPayload);
+        savedTaskId = createdRef.id;
+      }
+
+      if (currentUser?.uid && savedTaskId) {
+        const sprintKey = (basePayload.sprintId || storySprintId || '') || '__none__';
+        const statusValue = basePayload.status;
+        const isDone = typeof statusValue === 'number'
+          ? statusValue >= 2
+          : String(statusValue || '').toLowerCase().includes('done') || String(statusValue || '').toLowerCase().includes('complete');
+        const indexPayload: any = {
+          id: savedTaskId,
+          ownerUid: currentUser.uid,
+          persona: basePayload.persona || prevPersona,
+          sprintId: sprintKey,
+          status: basePayload.status,
+          isOpen: !isDone,
+          dueDate: basePayload.dueDate ?? null,
+          priority: basePayload.priority ?? null,
+          title: basePayload.title,
+          description: basePayload.description || null,
+          goalId: basePayload.goalId || null,
+          storyId: basePayload.storyId || null,
+          parentType: basePayload.parentType || null,
+          parentId: basePayload.parentId || null,
+          tags: basePayload.tags || [],
+          ref: existingRef,
+          updatedAt: Date.now(),
+        };
+        await setDoc(doc(db, 'sprint_task_index', savedTaskId), indexPayload, { merge: true });
+      }
+      const nextPersona = (basePayload.persona || prevPersona) as 'personal' | 'work';
+      if (task?.id && prevPersona !== nextPersona && currentUser?.uid) {
+        try {
+          await cascadeTaskPersona(currentUser.uid, task.id, nextPersona);
+        } catch (err) {
+          console.warn('Failed to cascade persona for task', err);
+        }
+      }
       onUpdated?.();
       onHide();
     } catch (error) {
@@ -178,14 +373,57 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
     }
   };
 
+  const handleConvertToStory = async () => {
+    if (!task || converting) return;
+    const linkedStory = (form.storyId || (task as any).storyId || (task as any).parentId) ? true : false;
+    if (linkedStory) {
+      alert('This task is already linked to a story.');
+      return;
+    }
+    const confirmed = window.confirm('Convert this task to a story? The task will be marked complete and removed from tasks.');
+    if (!confirmed) return;
+    setConverting(true);
+    try {
+      const suggestCallable = httpsCallable(functions, 'suggestTaskStoryConversions');
+      const convertCallable = httpsCallable(functions, 'convertTasksToStories');
+      const response: any = await suggestCallable({
+        persona: form.persona || (task as any).persona || 'personal',
+        taskIds: [task.id],
+        limit: 1,
+      });
+      const suggestions: any[] = Array.isArray(response?.data?.suggestions) ? response.data.suggestions : [];
+      const suggestion = suggestions.find(item => item.taskId === task.id) || suggestions[0] || null;
+      const storyTitle = (suggestion?.storyTitle || form.title || task.title || 'New Story').slice(0, 140);
+      const storyDescription = (suggestion?.storyDescription || form.description || (task as any).description || '').slice(0, 1200);
+      const goalId = suggestion?.goalId || (task as any).goalId || null;
+      const sprintId = suggestion?.sprintId || (task as any).sprintId || null;
+
+      await convertCallable({
+        conversions: [{
+          taskId: task.id,
+          storyTitle,
+          storyDescription,
+          goalId,
+          sprintId,
+        }],
+      });
+      onUpdated?.();
+      onHide();
+    } catch (error) {
+      console.error('Error converting task to story:', error);
+      alert('Could not convert this task to a story. Please try again.');
+    } finally {
+      setConverting(false);
+    }
+  };
+
   return (
     <Modal show={show} onHide={onHide} size="lg" container={container || undefined}>
       <Modal.Header closeButton>
-        <Modal.Title>Edit Task</Modal.Title>
+        <Modal.Title>{task ? 'Edit Task' : 'Add Task'}</Modal.Title>
       </Modal.Header>
       <Modal.Body>
-        {task ? (
-          <Row className="g-3">
+        <Row className="g-3">
             <Col lg={8}>
               <Form>
                 <Form.Group className="mb-3">
@@ -204,6 +442,98 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
                     value={form.description}
                     onChange={(e) => setForm({ ...form, description: e.target.value })}
                   />
+                </Form.Group>
+                <Form.Group className="mb-3">
+                  <Form.Label>Tags</Form.Label>
+                  <TagInput
+                    value={form.tags}
+                    onChange={(tags) => setForm({ ...form, tags })}
+                    placeholder="Add tags..."
+                    formatTag={(tag) => formatTaskTagLabel(tag, goals, sprints)}
+                  />
+                </Form.Group>
+                <Form.Group className="mb-3">
+                  <Form.Label>Task type</Form.Label>
+                  <Form.Select
+                    value={form.type}
+                    onChange={(e) => setForm({ ...form, type: e.target.value as 'task' | 'chore' | 'routine' | 'habit' })}
+                  >
+                    <option value="task">Task</option>
+                    <option value="chore">Chore</option>
+                    <option value="routine">Routine</option>
+                    <option value="habit">Habit</option>
+                  </Form.Select>
+                </Form.Group>
+                {(form.type === 'chore' || form.type === 'routine' || form.type === 'habit') && (
+                  <div className="mb-3">
+                    <Row className="g-3 align-items-end">
+                      <Col md={4}>
+                        <Form.Label>Frequency</Form.Label>
+                        <Form.Select
+                          value={form.repeatFrequency || ''}
+                          onChange={(e) => setForm({ ...form, repeatFrequency: e.target.value as any })}
+                        >
+                          <option value="">None</option>
+                          <option value="daily">Daily</option>
+                          <option value="weekly">Weekly</option>
+                          <option value="monthly">Monthly</option>
+                          <option value="yearly">Yearly</option>
+                        </Form.Select>
+                      </Col>
+                      <Col md={4}>
+                        <Form.Label>Interval</Form.Label>
+                        <Form.Control
+                          type="number"
+                          min={1}
+                          max={365}
+                          value={form.repeatInterval || 1}
+                          onChange={(e) => setForm({ ...form, repeatInterval: Number(e.target.value) || 1 })}
+                        />
+                      </Col>
+                    </Row>
+                    {form.repeatFrequency === 'weekly' && (
+                      <div className="mt-2">
+                        <Form.Label>Days of week</Form.Label>
+                        <div className="d-flex flex-wrap gap-3">
+                          {[
+                            { label: 'Mon', value: 'mon' },
+                            { label: 'Tue', value: 'tue' },
+                            { label: 'Wed', value: 'wed' },
+                            { label: 'Thu', value: 'thu' },
+                            { label: 'Fri', value: 'fri' },
+                            { label: 'Sat', value: 'sat' },
+                            { label: 'Sun', value: 'sun' },
+                          ].map((day) => (
+                            <Form.Check
+                              key={day.value}
+                              inline
+                              type="checkbox"
+                              id={`task-${day.value}`}
+                              label={day.label}
+                              checked={form.daysOfWeek.includes(day.value)}
+                              onChange={(e) => {
+                                const exists = form.daysOfWeek.includes(day.value);
+                                const next = exists
+                                  ? form.daysOfWeek.filter((d) => d !== day.value)
+                                  : [...form.daysOfWeek, day.value];
+                                setForm({ ...form, daysOfWeek: next });
+                              }}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+                <Form.Group className="mb-3">
+                  <Form.Label>Persona</Form.Label>
+                  <Form.Select
+                    value={form.persona}
+                    onChange={(e) => setForm({ ...form, persona: e.target.value as 'personal' | 'work' })}
+                  >
+                    <option value="personal">Personal</option>
+                    <option value="work">Work</option>
+                  </Form.Select>
                 </Form.Group>
                 <Row>
                   <Col md={4}>
@@ -279,7 +609,40 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
                       />
                     </Form.Group>
                   </Col>
-                  <Col md={8}>
+                  <Col md={4}>
+                    <Form.Group className="mb-3">
+                      <Form.Label>Link to goal</Form.Label>
+                      <Form.Select
+                        value={form.goalId || ''}
+                        onChange={(e) => setForm({ ...form, goalId: e.target.value })}
+                      >
+                        <option value="">No goal</option>
+                        {goals.map((g) => (
+                          <option key={g.id} value={g.id}>
+                            {g.title || g.id.slice(-6).toUpperCase()}
+                          </option>
+                        ))}
+                      </Form.Select>
+                      {linkedGoalId ? (
+                        <div className="form-text">
+                          <Button
+                            size="sm"
+                            variant="link"
+                            className="p-0"
+                            onClick={() => navigate(`/goals/${(linkedGoal as any)?.ref || linkedGoalId}`)}
+                          >
+                            View linked goal
+                          </Button>
+                        </div>
+                      ) : null}
+                      {(form.type === 'habit' || form.type === 'chore' || form.type === 'routine') && (
+                        <div className="form-text">Linking a goal is recommended for better planner/theme placement.</div>
+                      )}
+                    </Form.Group>
+                  </Col>
+                </Row>
+                <Row>
+                  <Col md={12}>
                     <Form.Group className="mb-3">
                       <Form.Label>Link to story</Form.Label>
                       <Form.Control
@@ -298,21 +661,36 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
                           <option key={s.id} value={storyLabel(s)} />
                         ))}
                       </datalist>
+                      {linkedStory ? (
+                        <div className="form-text">
+                          <Button
+                            size="sm"
+                            variant="link"
+                            className="p-0"
+                            onClick={() => navigate(`/stories/${(linkedStory as any).ref || linkedStory.id}`)}
+                          >
+                            View linked story
+                          </Button>
+                        </div>
+                      ) : null}
                       <div className="form-text">
                         Selecting a story will also inherit its goal and sprint when available.
                       </div>
                     </Form.Group>
                   </Col>
                 </Row>
-                {(task as Task).aiCriticalityScore != null && (
+                {task && (task as Task).aiCriticalityScore != null && (
                   <div className="mb-3">
                     <strong>AI Score:</strong>{' '}
                     {Number.isFinite(Number((task as Task).aiCriticalityScore))
                       ? Math.round(Number((task as Task).aiCriticalityScore))
                       : (task as Task).aiCriticalityScore}
-                    {(task as Task).aiCriticalityReason && (
-                      <div className="small text-muted">{(task as Task).aiCriticalityReason}</div>
-                    )}
+                    {(() => {
+                      const t = task as Task;
+                      const top3Reason = (t as any).aiTop3ForDay ? (t as any).aiTop3Reason : null;
+                      const reason = top3Reason || (t as any).aiCriticalityReason || null;
+                      return reason ? <div className="small text-muted">{reason}</div> : null;
+                    })()}
                   </div>
                 )}
                 {showMacSync && (
@@ -323,22 +701,37 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
                 )}
               </Form>
             </Col>
-            <Col lg={4}>
-              <ActivityStreamPanel
-                entityId={task?.id}
-                entityType="task"
-                referenceNumber={(task as any)?.ref || (task as any)?.reference || (task as any)?.referenceNumber}
-              />
-            </Col>
+            {task && (
+              <Col lg={4}>
+                <ActivityStreamPanel
+                  entityId={task?.id}
+                  entityType="task"
+                  referenceNumber={(task as any)?.ref || (task as any)?.reference || (task as any)?.referenceNumber}
+                />
+              </Col>
+            )}
           </Row>
-        ) : null}
       </Modal.Body>
       <Modal.Footer>
+        <Button
+          variant="outline-danger"
+          onClick={handleConvertToStory}
+          disabled={
+            converting
+            || saving
+            || !task
+            || !!(task as any)?.convertedToStoryId
+            || !!(task as any)?.deleted
+            || !!form.storyId
+          }
+        >
+          {converting ? 'Converting...' : 'Convert to Story'}
+        </Button>
         <Button variant="secondary" onClick={onHide}>
           Cancel
         </Button>
         <Button variant="primary" onClick={handleSave} disabled={saving}>
-          {saving ? 'Saving...' : 'Save'}
+          {saving ? 'Saving...' : task ? 'Save' : 'Create task'}
         </Button>
       </Modal.Footer>
     </Modal>

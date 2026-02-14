@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Container, Card, Button, Alert, Row, Col, Form, Badge, ListGroup } from 'react-bootstrap';
 import { useAuth } from '../contexts/AuthContext';
+import { usePersona } from '../contexts/PersonaContext';
 import { httpsCallable } from 'firebase/functions';
 import { functions, db } from '../firebase';
 import { collection, query, where, orderBy, limit, onSnapshot } from 'firebase/firestore';
-import { isStatus, isTheme } from '../utils/statusHelpers';
+import { useGlobalThemes } from '../hooks/useGlobalThemes';
+import { resolveThemeFromValue } from '../utils/themeResolver';
 
 interface CalendarEvent {
   id: string;
@@ -35,6 +37,8 @@ interface CalendarBlock {
 
 const CalendarSyncManager: React.FC = () => {
   const { currentUser } = useAuth();
+  const { currentPersona } = usePersona();
+  const { themes: globalThemes } = useGlobalThemes();
   const [isConnected, setIsConnected] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [syncStatus, setSyncStatus] = useState<string>('');
@@ -156,7 +160,7 @@ const CalendarSyncManager: React.FC = () => {
       setSyncStatus('🤖 Planning window with unified scheduler...');
       const runPlanner = httpsCallable(functions, 'runPlanner');
       const today = new Date().toISOString().slice(0,10);
-      const result = await runPlanner({ startDate: today, days: 7, persona: 'personal' });
+      const result = await runPlanner({ startDate: today, days: 7, persona: currentPersona || 'personal' });
       const data: any = result.data || {};
       const blocksCreated = data?.llm?.blocksCreated || 0;
       const planned = Array.isArray(data?.schedule?.planned) ? data.schedule.planned.length : (data?.schedule?.plannedCount || 0);
@@ -208,15 +212,9 @@ const CalendarSyncManager: React.FC = () => {
     return new Date(dateTime).toLocaleString();
   };
 
-  const getThemeColor = (theme: string) => {
-    const colors = {
-      Health: '#e53e3e',
-      Growth: '#3182ce',
-      Wealth: '#38a169',
-      Tribe: '#805ad5',
-      Home: '#d69e2e'
-    };
-    return colors[theme as keyof typeof colors] || '#6c757d';
+  const getThemeColor = (theme: any) => {
+    const resolved = resolveThemeFromValue(theme, globalThemes);
+    return resolved?.color || '#6c757d';
   };
 
   if (!currentUser) {
@@ -315,7 +313,7 @@ const CalendarSyncManager: React.FC = () => {
                         <div className="d-flex align-items-center mb-1">
                           <strong className="me-2">{block.title}</strong>
                           <Badge 
-                            style={{ backgroundColor: getThemeColor(block.theme), color: 'white' }}
+                            style={{ backgroundColor: getThemeColor(block.theme ?? (block as any).theme_id ?? (block as any).themeId), color: 'white' }}
                           >
                             {block.theme}
                           </Badge>

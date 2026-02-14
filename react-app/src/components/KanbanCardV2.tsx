@@ -9,6 +9,8 @@ import { useSidebar } from '../contexts/SidebarContext';
 import { displayRefForEntity, validateRef } from '../utils/referenceGenerator';
 import { storyStatusText, taskStatusText, priorityLabel as formatPriorityLabel, priorityPillClass, colorWithAlpha, goalThemeColor } from '../utils/storyCardFormatting';
 import { themeVars } from '../utils/themeVars';
+import type { GlobalTheme } from '../constants/globalThemes';
+import { resolveThemeFromValue } from '../utils/themeResolver';
 import { useAuth } from '../contexts/AuthContext';
 import { addDoc, collection, serverTimestamp, updateDoc, doc } from 'firebase/firestore';
 import { ActivityStreamService } from '../services/ActivityStreamService';
@@ -20,11 +22,14 @@ interface KanbanCardV2Props {
     story?: Story; // For tasks, the parent story
     taskCount?: number; // For stories
     themeColor?: string;
+    themes?: GlobalTheme[];
+    formatTag?: (tag: string) => string;
     onEdit?: (item: Story | Task) => void;
     onDelete?: (item: Story | Task) => void;
     onItemSelect?: (item: Story | Task, type: 'story' | 'task') => void;
     showDescription?: boolean;
     showLatestNote?: boolean;
+    showTags?: boolean;
     latestNote?: string;
     steamMeta?: {
         appId?: string | number;
@@ -41,6 +46,8 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
     story: parentStory,
     taskCount = 0,
     themeColor,
+    themes,
+    formatTag,
     onEdit,
     onDelete,
     onItemSelect,
@@ -48,6 +55,7 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
     showLatestNote = false,
     latestNote,
     steamMeta,
+    showTags,
 }) => {
     const ref = useRef<HTMLDivElement>(null);
     const [dragging, setDragging] = useState(false);
@@ -67,7 +75,11 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
         });
     }, [item, type]);
 
-    const resolvedThemeColor = themeColor || goalThemeColor(goal) || '#2563eb';
+    const themeValue = (goal as any)?.theme ?? (goal as any)?.themeId ?? (goal as any)?.theme_id
+        ?? (parentStory as any)?.theme ?? (parentStory as any)?.themeId ?? (parentStory as any)?.theme_id
+        ?? (item as any)?.theme ?? (item as any)?.themeId ?? (item as any)?.theme_id;
+    const resolvedTheme = resolveThemeFromValue(themeValue, themes);
+    const resolvedThemeColor = themeColor || resolvedTheme?.color || goalThemeColor(goal, themes) || '#2563eb';
 
     const handleCardClick = () => {
         if (onItemSelect) {
@@ -99,8 +111,15 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
         ? storyStatusText((item as any).status)
         : taskStatusText((item as any).status);
 
-    const priorityClass = priorityPillClass(item.priority);
-    const priorityLabel = formatPriorityLabel(item.priority);
+    const isTop3 = (item as any).aiTop3ForDay === true
+        || (item as any).aiFlaggedTop === true
+        || Number((item as any).aiPriorityRank || 0) > 0
+        || Number((item as any).aiFocusStoryRank || 0) > 0;
+    const aiReason = isTop3 && (item as any).aiTop3Reason
+        ? (item as any).aiTop3Reason
+        : ((item as any).aiCriticalityReason || null);
+    const priorityClass = isTop3 ? priorityPillClass(4) : priorityPillClass(item.priority);
+    const priorityLabel = isTop3 ? 'Critical' : formatPriorityLabel(item.priority);
     const dueDateMs = (() => {
         const raw = (item as any).dueDate ?? (item as any).targetDate ?? (item as any).dueDateMs ?? null;
         if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
@@ -129,10 +148,23 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
     const steamSyncDate = toDate(steamMeta?.lastSyncAt);
     const steamSyncLabel = steamSyncDate ? steamSyncDate.toLocaleDateString() : null;
     const showSteamInfo = type === 'story' && steamMeta && (steamPlaytimeHours != null || steamSyncLabel);
-    const reminderSyncedAt = toDate((item as any).deviceUpdatedAt || (item as any).reminderCreatedAt);
-    const reminderSyncLabel = reminderSyncedAt
-        ? `${reminderSyncedAt.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit' })} ${reminderSyncedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+    const macSyncedAt = toDate((item as any).macSyncedAt ?? (item as any).deviceUpdatedAt ?? (item as any).reminderCreatedAt ?? null);
+    const macSyncLabel = macSyncedAt
+        ? `${macSyncedAt.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit' })} ${macSyncedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
         : null;
+    const readKanbanTagPreference = () => {
+        if (typeof window === 'undefined') return true;
+        try {
+            const stored = window.localStorage.getItem('kanbanShowTags');
+            return stored ? stored === 'true' : true;
+        } catch {
+            return true;
+        }
+    };
+    const resolvedShowTags = typeof showTags === 'boolean' ? showTags : readKanbanTagPreference();
+    const itemTags = Array.isArray((item as any).tags) ? (item as any).tags : [];
+    const visibleTags = itemTags.slice(0, 4);
+    const remainingTags = itemTags.length - visibleTags.length;
 
     const handleStyle: React.CSSProperties = {
         color: resolvedThemeColor,
@@ -389,6 +421,25 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                         {item.description}
                     </div>
                 )}
+                {resolvedShowTags && visibleTags.length > 0 && (
+                    <div className="kanban-card__tags">
+                        {visibleTags.map((tag: string) => {
+                            const formatted = formatTag ? formatTag(tag) : tag;
+                            const display = formatted && String(formatted).trim().length > 0 ? formatted : tag;
+                            const title = display !== tag ? `#${tag}` : undefined;
+                            return (
+                                <span key={tag} className="kanban-card__tag" title={title}>
+                                    #{display}
+                                </span>
+                            );
+                        })}
+                        {remainingTags > 0 && (
+                            <span className="kanban-card__tag kanban-card__tag--muted">
+                                +{remainingTags}
+                            </span>
+                        )}
+                    </div>
+                )}
                 {showLatestNote && trimmedNote && (
                     <div className="kanban-card__note">
                         <span className="kanban-card__note-label">Last note:</span>{' '}
@@ -404,17 +455,15 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                         )}
                     </div>
                 )}
-                {(item as any).reminderId && reminderSyncLabel && (
-                    <div className="kanban-card__steam" style={{ justifyContent: 'flex-end' }}>
-                        <span className="kanban-card__steam-label">Reminder sync</span>
-                        <span className="kanban-card__steam-muted"> · {reminderSyncLabel}</span>
-                    </div>
-                )}
-
                 <div className="kanban-card__meta">
                     <span className={priorityClass} title={`Priority: ${priorityLabel}`}>
                         {priorityLabel}
                     </span>
+                    {isTop3 && (
+                        <span className="kanban-card__meta-badge kanban-card__meta-badge--top3" title="Top 3 priority">
+                            Top 3
+                        </span>
+                    )}
                     {dueDateLabel && (
                         <span className="kanban-card__meta-badge" title="Due date">
                             Due {dueDateLabel}
@@ -439,7 +488,7 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                         </span>
                     )}
                     {(item as any).aiCriticalityScore != null ? (
-                        <span className="kanban-card__meta-badge" title="AI score">
+                        <span className="kanban-card__meta-badge" title={aiReason ? `AI reason: ${aiReason}` : 'AI score'}>
                             AI&nbsp;
                             {Math.round(Number((item as any).aiCriticalityScore))}
                         </span>
@@ -463,6 +512,11 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                             <span title={parentStory?.title || 'No parent story'}>
                                 {parentStory?.title || 'No parent story'}
                             </span>
+                            {macSyncLabel && (
+                                <span className="kanban-card__meta-text" style={{ marginLeft: 'auto' }}>
+                                    Mac sync {macSyncLabel}
+                                </span>
+                            )}
                         </>
                     )}
                 </div>

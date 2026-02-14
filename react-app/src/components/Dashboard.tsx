@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Container, Card, Row, Col, Badge, Button, Alert, Collapse, OverlayTrigger, Tooltip, Form, Spinner } from 'react-bootstrap';
 import { useNavigate } from 'react-router-dom';
-import { Target, BookOpen, TrendingUp, Wallet, Clock } from 'lucide-react';
+import { Target, BookOpen, TrendingUp, Wallet, Clock, ListChecks } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { collection, query, where, onSnapshot, orderBy, limit, getDocs, doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
@@ -12,7 +12,7 @@ import { useSprint } from '../contexts/SprintContext';
 import { functions } from '../firebase';
 import { httpsCallable } from 'firebase/functions';
 import ThemeBreakdown from './ThemeBreakdown';
-import { addDays, addMinutes, endOfDay, endOfMonth, format, getDay, parse, startOfDay, startOfMonth, startOfWeek } from 'date-fns';
+import { addDays, addMinutes, endOfDay, endOfMonth, format, getDay, isSameDay, parse, startOfDay, startOfMonth, startOfWeek } from 'date-fns';
 import { enGB } from 'date-fns/locale';
 import { Calendar as RBC, Views, dateFnsLocalizer } from 'react-big-calendar';
 import withDragAndDrop from 'react-big-calendar/lib/addons/dragAndDrop';
@@ -23,9 +23,11 @@ import { nextDueAt } from '../utils/recurrence';
 import StatCard from './common/StatCard';
 import { colors } from '../utils/colors';
 import SprintMetricsPanel from './SprintMetricsPanel';
-import { GLOBAL_THEMES } from '../constants/globalThemes';
+import { GLOBAL_THEMES, LEGACY_THEME_MAP } from '../constants/globalThemes';
+import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { useUnifiedPlannerData, type PlannerRange } from '../hooks/useUnifiedPlannerData';
 import '../styles/Dashboard.css';
+import { isRecurringDueOnDate, resolveRecurringDueMs, resolveTaskDueMs } from '../utils/recurringTaskDue';
 
 const locales = { 'en-GB': enGB } as const;
 const localizer = dateFnsLocalizer({
@@ -88,6 +90,13 @@ interface MonzoSummary {
   updatedAt?: any;
 }
 
+interface FinanceWindowSummary {
+  windowDays: number;
+  mandatoryPence: number;
+  discretionaryPence: number;
+  uncategorisedPence: number;
+}
+
 interface ChecklistSnapshotItem {
   id: string;
   title: string;
@@ -95,10 +104,28 @@ interface ChecklistSnapshotItem {
   type: 'chore' | 'routine';
 }
 
+const FINANCE_WINDOW_DAYS = 5;
+const FINANCE_INCOME_BUCKETS = new Set(['income', 'net_salary', 'irregular_income']);
+const FINANCE_UNCATEGORISED_BUCKETS = new Set(['unknown', 'uncategorized', 'uncategorised']);
+
+const extractMonzoAmountPence = (tx: any): number => {
+  if (Number.isFinite(tx?.amountMinor)) return Number(tx.amountMinor);
+  const raw = Number(tx?.amount || 0);
+  if (!Number.isFinite(raw)) return 0;
+  return Math.abs(raw) < 10 ? Math.round(raw * 100) : Math.round(raw);
+};
+
+const resolveMonzoBucket = (tx: any): string => {
+  const raw = tx?.aiBucket ?? tx?.userCategoryType ?? tx?.defaultCategoryType ?? tx?.categoryType ?? tx?.category ?? 'unknown';
+  const bucket = String(raw || '').toLowerCase();
+  return bucket === 'optional' ? 'discretionary' : bucket;
+};
+
 const Dashboard: React.FC = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const navigate = useNavigate();
+  const { themes: globalThemes } = useGlobalThemes();
 
   // Debug logging for authentication
   console.log('🔍 Dashboard: currentUser:', currentUser);
@@ -136,17 +163,27 @@ const Dashboard: React.FC = () => {
   const [tasksDueToday, setTasksDueToday] = useState<number>(0);
   const [tasksDueTodayList, setTasksDueTodayList] = useState<Task[]>([]);
   const [tasksDueTodayLoading, setTasksDueTodayLoading] = useState(false);
-  const [tasksDueTodaySortMode, setTasksDueTodaySortMode] = useState<'due' | 'ai'>('due');
-  const [scheduledToday, setScheduledToday] = useState<ScheduledInstanceModel[]>([]);
-  const [scheduledTodayLoading, setScheduledTodayLoading] = useState(false);
+  const [tasksDueTodaySortMode, setTasksDueTodaySortMode] = useState<'due' | 'ai'>('ai');
+  const [top3Collapsed, setTop3Collapsed] = useState(false);
+  const [top3Tasks, setTop3Tasks] = useState<Task[]>([]);
+  const [top3Stories, setTop3Stories] = useState<Story[]>([]);
+  const [top3Loading, setTop3Loading] = useState(false);
   const [unscheduledToday, setUnscheduledToday] = useState<ScheduledInstanceModel[]>([]);
   const [calendarView, setCalendarView] = useState<'day' | 'week' | 'month'>('day');
   const [calendarDate, setCalendarDate] = useState<Date>(startOfDay(new Date()));
+  const [calendarScrollTime, setCalendarScrollTime] = useState<Date>(() => {
+    const now = new Date();
+    return new Date(1970, 0, 1, now.getHours(), now.getMinutes(), 0);
+  });
   const [plannerStats, setPlannerStats] = useState<any | null>(null);
   const [remindersDueToday, setRemindersDueToday] = useState<ReminderItem[]>([]);
   const [choresDueToday, setChoresDueToday] = useState<ChecklistSnapshotItem[]>([]);
   const [routinesDueToday, setRoutinesDueToday] = useState<ChecklistSnapshotItem[]>([]);
   const [monzoSummary, setMonzoSummary] = useState<MonzoSummary | null>(null);
+  const [financeWindowSummary, setFinanceWindowSummary] = useState<FinanceWindowSummary | null>(null);
+  const [monzoIntegrationStatus, setMonzoIntegrationStatus] = useState<any | null>(null);
+  const [monzoReconnectBusy, setMonzoReconnectBusy] = useState(false);
+  const [monzoReconnectMsg, setMonzoReconnectMsg] = useState<string | null>(null);
   const [weeklySummary, setWeeklySummary] = useState<{ total: number; byType: Record<string, number> } | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
   const [sprintStories, setSprintStories] = useState<Story[]>([]);
@@ -162,6 +199,8 @@ const Dashboard: React.FC = () => {
   const [capacityData, setCapacityData] = useState<any | null>(null);
   const [capacityLoading, setCapacityLoading] = useState(false);
   const [capacityError, setCapacityError] = useState<string | null>(null);
+  const [profileSnapshot, setProfileSnapshot] = useState<any | null>(null);
+  const [choreCompletionBusy, setChoreCompletionBusy] = useState<Record<string, boolean>>({});
 
   const decodeToDate = useCallback((value: any): Date | null => {
     if (value == null) return null;
@@ -186,6 +225,15 @@ const Dashboard: React.FC = () => {
     return pounds.toLocaleString('en-GB', { style: 'currency', currency });
   }, []);
 
+  const formatPenceCompact = useCallback((pence: number, currency = 'GBP') => {
+    const pounds = Number(pence || 0) / 100;
+    return pounds.toLocaleString('en-GB', {
+      style: 'currency',
+      currency,
+      maximumFractionDigits: 0,
+    });
+  }, []);
+
   const formatInstanceTime = useCallback((instance: ScheduledInstanceModel) => {
     try {
       if (instance.plannedStart && instance.plannedEnd) {
@@ -203,21 +251,102 @@ const Dashboard: React.FC = () => {
     }
   }, []);
 
-  const focusStatusVariant = useCallback((status: ScheduledInstanceModel['status']) => {
-    switch (status) {
-      case 'completed':
-        return 'success';
-      case 'missed':
-      case 'cancelled':
-        return 'danger';
-      case 'unscheduled':
-        return 'warning';
-      case 'committed':
-        return 'primary';
-      default:
-        return 'secondary';
+  const monzoLastSyncDate = useMemo(() => {
+    if (!monzoIntegrationStatus) return null;
+    return decodeToDate(
+      monzoIntegrationStatus.lastSyncAt
+      ?? monzoIntegrationStatus.lastSyncedAt
+      ?? monzoIntegrationStatus.lastSync,
+    );
+  }, [decodeToDate, monzoIntegrationStatus]);
+
+  const monzoSyncAgeDays = useMemo(() => {
+    if (!monzoLastSyncDate) return null;
+    const diffMs = Date.now() - monzoLastSyncDate.getTime();
+    return Math.floor(diffMs / (24 * 60 * 60 * 1000));
+  }, [monzoLastSyncDate]);
+
+  const showMonzoReconnectBanner = useMemo(() => {
+    const connected = !!monzoIntegrationStatus?.connected;
+    if (!connected || monzoSyncAgeDays == null) return false;
+    return monzoSyncAgeDays >= 3;
+  }, [monzoIntegrationStatus, monzoSyncAgeDays]);
+
+  useEffect(() => {
+    if (!currentUser) {
+      setProfileSnapshot(null);
+      return;
     }
-  }, []);
+    const unsub = onSnapshot(doc(db, 'profiles', currentUser.uid), (snap) => {
+      setProfileSnapshot(snap.exists() ? snap.data() : null);
+    }, (err) => {
+      console.warn('Failed to load profile snapshot', err);
+      setProfileSnapshot(null);
+    });
+    return () => unsub();
+  }, [currentUser]);
+
+  const youtubeTakeoutLastImportDate = useMemo(() => {
+    if (!profileSnapshot) return null;
+    return decodeToDate(profileSnapshot.youtubeTakeoutLastImportAt);
+  }, [profileSnapshot, decodeToDate]);
+
+  const youtubeTakeoutAgeDays = useMemo(() => {
+    if (!youtubeTakeoutLastImportDate) return null;
+    const diffMs = Date.now() - youtubeTakeoutLastImportDate.getTime();
+    return Math.floor(diffMs / (24 * 60 * 60 * 1000));
+  }, [youtubeTakeoutLastImportDate]);
+
+  const showYouTubeTakeoutBanner = useMemo(() => {
+    if (!currentUser) return false;
+    if (!youtubeTakeoutLastImportDate) return true;
+    return (youtubeTakeoutAgeDays ?? 0) >= 60;
+  }, [currentUser, youtubeTakeoutAgeDays, youtubeTakeoutLastImportDate]);
+
+  const handleMonzoReconnect = useCallback(async () => {
+    if (!currentUser) return;
+    setMonzoReconnectMsg(null);
+    setMonzoReconnectBusy(true);
+    try {
+      const createSession = httpsCallable(functions, 'createMonzoOAuthSession');
+      const res: any = await createSession({ origin: window.location.origin });
+      const data = res?.data || res;
+      const sessionId = data?.sessionId;
+      const startUrl = data?.startUrl || (sessionId ? `${window.location.origin}/api/monzo/start?session=${sessionId}` : null);
+      if (!startUrl) throw new Error('Unable to resolve Monzo start URL');
+      const popup = window.open(startUrl, 'monzo-oauth', 'width=480,height=720');
+      if (!popup) {
+        setMonzoReconnectMsg('Popup blocked. Please allow popups for Monzo connect.');
+      }
+    } catch (err: any) {
+      console.error('Monzo reconnect failed', err);
+      setMonzoReconnectMsg(err?.message || 'Failed to start Monzo OAuth');
+    } finally {
+      setMonzoReconnectBusy(false);
+    }
+  }, [currentUser]);
+
+  useEffect(() => {
+    const updateScrollTime = () => {
+      const now = new Date();
+      const isToday = isSameDay(calendarDate, now);
+      if (calendarView === 'week') {
+        const weekStart = startOfWeek(calendarDate, { weekStartsOn: 1 });
+        const weekEnd = endOfDay(addDays(weekStart, 6));
+        const inWeek = now >= weekStart && now <= weekEnd;
+        setCalendarScrollTime(inWeek ? new Date(1970, 0, 1, now.getHours(), now.getMinutes(), 0) : new Date(1970, 0, 1, 6, 0, 0));
+        return;
+      }
+      if (calendarView === 'day' && isToday) {
+        setCalendarScrollTime(new Date(1970, 0, 1, now.getHours(), now.getMinutes(), 0));
+        return;
+      }
+      setCalendarScrollTime(new Date(1970, 0, 1, 6, 0, 0));
+    };
+    updateScrollTime();
+    const id = window.setInterval(updateScrollTime, 60000);
+    return () => window.clearInterval(id);
+  }, [calendarDate, calendarView]);
 
   const taskRefLabel = useCallback((task: Task) => {
     if (!task) return '';
@@ -229,6 +358,17 @@ const Dashboard: React.FC = () => {
       || (task.id ? task.id.slice(-6).toUpperCase() : '');
     if (typeof ref === 'string') return ref.trim();
     return ref ? String(ref) : '';
+  }, []);
+
+  const storyLabel = useCallback((story: Story) => {
+    if (!story) return '';
+    const ref = (story as any).ref
+      || (story as any).referenceNumber
+      || (story as any).reference
+      || (story as any).code
+      || (story.id ? story.id.slice(-6).toUpperCase() : '');
+    if (ref) return `${String(ref).trim()} — ${story.title || 'Story'}`;
+    return story.title || 'Story';
   }, []);
 
 
@@ -243,12 +383,10 @@ const Dashboard: React.FC = () => {
     return ref ? String(ref) : '';
   }, []);
 
-  const getTaskDueMs = useCallback((task: Task): number | null => {
-    const raw: any = (task as any).dueDateMs
-      ?? (task as any).dueDate
-      ?? (task as any).targetDate
-      ?? (task as any).dueAt
-      ?? (task as any).due;
+  const getTaskDueMs = useCallback((task: Task): number | null => resolveTaskDueMs(task), []);
+
+  const getTaskLastDoneMs = useCallback((task: Task): number | null => {
+    const raw: any = (task as any).lastDoneAt ?? (task as any).completedAt;
     if (!raw) return null;
     if (typeof raw === 'number') return raw;
     if (typeof raw === 'string') {
@@ -262,6 +400,18 @@ const Dashboard: React.FC = () => {
     }
     if (typeof raw.toMillis === 'function') return raw.toMillis();
     if (raw.seconds != null) return (raw.seconds * 1000) + Math.floor((raw.nanoseconds || 0) / 1e6);
+    return null;
+  }, []);
+
+  const getChoreKind = useCallback((task: Task): 'chore' | 'routine' | 'habit' | null => {
+    const raw = String((task as any)?.type || (task as any)?.task_type || '').toLowerCase();
+    const normalized = raw === 'habitual' ? 'habit' : raw;
+    if (['chore', 'routine', 'habit'].includes(normalized)) return normalized as any;
+    const tags = Array.isArray((task as any)?.tags) ? (task as any).tags : [];
+    const tagKeys = tags.map((tag) => String(tag || '').toLowerCase().replace(/^#/, ''));
+    if (tagKeys.includes('chore')) return 'chore';
+    if (tagKeys.includes('routine')) return 'routine';
+    if (tagKeys.includes('habit') || tagKeys.includes('habitual')) return 'habit';
     return null;
   }, []);
 
@@ -285,6 +435,29 @@ const Dashboard: React.FC = () => {
       console.error('Failed to update task status', err);
     }
   }, []);
+
+  const handleCompleteChoreTask = useCallback(async (task: Task) => {
+    if (!currentUser) return;
+    const taskId = task.id;
+    if (!taskId || choreCompletionBusy[taskId]) return;
+    setChoreCompletionBusy((prev) => ({ ...prev, [taskId]: true }));
+    try {
+      const fn = httpsCallable(functions, 'completeChoreTask');
+      await fn({ taskId });
+    } catch (err) {
+      console.warn('Failed to complete chore task', err);
+      setChoreCompletionBusy((prev) => ({ ...prev, [taskId]: false }));
+      return;
+    }
+    // allow list refresh to remove the item
+    setTimeout(() => {
+      setChoreCompletionBusy((prev) => {
+        const next = { ...prev };
+        delete next[taskId];
+        return next;
+      });
+    }, 1500);
+  }, [currentUser, choreCompletionBusy]);
 
   const loadDailySummary = useCallback(async () => {
     if (!currentUser) return;
@@ -371,10 +544,35 @@ const Dashboard: React.FC = () => {
     }
   }, [currentUser]);
 
-  const themeFor = (value: any) => {
+  const themePalette = useMemo(
+    () => (globalThemes && globalThemes.length ? globalThemes : GLOBAL_THEMES),
+    [globalThemes],
+  );
+
+  const themeFor = useCallback((value: any) => {
+    if (value == null) return undefined;
     const idNum = Number(value);
-    return GLOBAL_THEMES.find(t => t.id === idNum || t.label === value || t.name === value);
-  };
+    if (Number.isFinite(idNum)) {
+      const match = themePalette.find(t => t.id === idNum);
+      if (match) return match;
+    }
+    const asString = String(value).trim();
+    const lower = asString.toLowerCase();
+    const direct = themePalette.find(t =>
+      t.label === asString
+      || t.name === asString
+      || String(t.id) === asString
+      || t.label.toLowerCase() === lower
+      || t.name.toLowerCase() === lower,
+    );
+    if (direct) return direct;
+    const legacyEntry = Object.entries(LEGACY_THEME_MAP).find(([key]) => key.toLowerCase() === lower);
+    if (legacyEntry) {
+      const legacyId = Number(legacyEntry[1]);
+      return themePalette.find(t => t.id === legacyId);
+    }
+    return undefined;
+  }, [themePalette]);
 
   const hexToRgba = (hex: string, alpha = 0.12) => {
     const clean = hex.replace('#', '');
@@ -409,11 +607,19 @@ const Dashboard: React.FC = () => {
     const displayBlocks = planner.blocks.filter((block) => {
       const source = String((block as any).source || '').toLowerCase();
       const entryMethod = String((block as any).entry_method || '').toLowerCase();
-      return source !== 'gcal' && entryMethod !== 'google_calendar';
+      const isGcal = source === 'gcal' || entryMethod === 'google_calendar';
+      const blockId = String((block as any).id || '');
+      const isMirrorBlock = blockId.startsWith('sched_') || blockId.startsWith('chore_');
+      if (isMirrorBlock) return false;
+      if (isGcal) {
+        const hasLink = Boolean(block.taskId || block.storyId || block.goalId || (block as any).deepLink);
+        return hasLink;
+      }
+      return true;
     });
 
     const blockEvents = displayBlocks.map((block) => {
-      const theme = themeFor(block.theme || block.subTheme);
+      const theme = themeFor((block as any).theme_id ?? block.theme ?? block.subTheme ?? block.category);
       const color = theme?.color || '#3b82f6';
       return {
         id: block.id,
@@ -438,7 +644,13 @@ const Dashboard: React.FC = () => {
         const end = instance.plannedEnd
           ? new Date(instance.plannedEnd)
           : addMinutes(new Date(start), instance.durationMinutes || 30);
-        const theme = themeFor((instance as any).theme || block?.theme || (instance as any).sourceTheme);
+        const theme = themeFor(
+          (instance as any).theme
+            ?? (instance as any).sourceTheme
+            ?? block?.theme_id
+            ?? block?.theme
+            ?? block?.category,
+        );
         const fallback = instance.sourceType === 'chore'
           ? '#f59e0b'
           : instance.sourceType === 'routine'
@@ -472,16 +684,32 @@ const Dashboard: React.FC = () => {
         if (blockIdFromExt && planner.blocks.some(b => b.id === blockIdFromExt)) return false;
         return true;
       })
-      .map((external) => ({
-        id: external.id,
-        title: external.title,
-        start: external.start,
-        end: external.end,
-        type: 'external' as const,
-        color: '#9ca3af',
-        textColor: '#111827',
-        external,
-      }));
+      .map((external) => {
+        const raw = external.raw as any;
+        const privateMeta = raw?.extendedProperties?.private || {};
+        const themeCandidate =
+          privateMeta.theme
+          ?? privateMeta.themeId
+          ?? privateMeta.theme_id
+          ?? privateMeta['bob-theme']
+          ?? privateMeta['bob-theme-id']
+          ?? privateMeta['bob_theme_id']
+          ?? privateMeta['bob-category']
+          ?? privateMeta.category
+          ?? privateMeta.themeName
+          ?? external.title;
+        const theme = themeFor(themeCandidate);
+        return {
+          id: external.id,
+          title: external.title,
+          start: external.start,
+          end: external.end,
+          type: 'external' as const,
+          color: theme?.color || '#9ca3af',
+          textColor: theme?.textColor || '#111827',
+          external,
+        };
+      });
 
     return [...externalEvents, ...blockEvents, ...instanceEvents];
   }, [planner.blocks, planner.externalEvents, planner.instances, themeFor]);
@@ -549,7 +777,7 @@ const Dashboard: React.FC = () => {
   }, [handleCalendarEventMove]);
   const dailyBrief = () => {
     const parts: string[] = [];
-    if (tasksDueToday > 0) parts.push(`${tasksDueToday} due today`);
+    if (tasksDueToday > 0) parts.push(`${tasksDueToday} due/overdue`);
     if (todayBlocks.length > 0) parts.push(`${todayBlocks.length} blocks scheduled`);
     if (priorityBanner?.title) parts.push(`Focus: ${priorityBanner.title}`);
     return parts.length ? parts.join(' · ') : 'No urgent items. Plan or review your goals.';
@@ -592,6 +820,7 @@ const Dashboard: React.FC = () => {
     const tasksQuery = query(
       collection(db, 'sprint_task_index'),
       where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
       where('isOpen', '==', true),
       orderBy('dueDate', 'asc'),
       limit(60)
@@ -785,42 +1014,20 @@ const Dashboard: React.FC = () => {
 
   useEffect(() => {
     if (!currentUser) {
-      setScheduledToday([]);
-      setScheduledTodayLoading(false);
+      setMonzoIntegrationStatus(null);
       return;
     }
-    setScheduledTodayLoading(true);
-    const todayKey = format(new Date(), 'yyyyMMdd');
-    const q = query(
-      collection(db, 'scheduled_instances'),
-      where('ownerUid', '==', currentUser.uid),
-      where('occurrenceDate', '==', todayKey),
-    );
+    const integrationDoc = doc(db, 'integration_status', `monzo_${currentUser.uid}`);
     const unsub = onSnapshot(
-      q,
-      (snap) => {
-        const rows = snap.docs
-          .map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) }) as ScheduledInstanceModel)
-          .filter((instance) => {
-            if (!currentPersona || !instance.persona) return true;
-            return instance.persona === currentPersona;
-          })
-          .sort((a, b) => {
-            const aStart = a.plannedStart ? new Date(a.plannedStart).getTime() : 0;
-            const bStart = b.plannedStart ? new Date(b.plannedStart).getTime() : 0;
-            return aStart - bStart;
-          });
-        setScheduledToday(rows);
-        setScheduledTodayLoading(false);
-      },
+      integrationDoc,
+      (snap) => setMonzoIntegrationStatus(snap.exists() ? snap.data() : null),
       (err) => {
-        console.error('Failed to load scheduled instances', err);
-        setScheduledToday([]);
-        setScheduledTodayLoading(false);
+        console.warn('Failed to load Monzo integration status', err);
+        setMonzoIntegrationStatus(null);
       },
     );
     return () => unsub();
-  }, [currentUser, currentPersona]);
+  }, [currentUser]);
 
   useEffect(() => {
     if (!currentUser || !currentPersona) {
@@ -834,31 +1041,32 @@ const Dashboard: React.FC = () => {
       where('ownerUid', '==', currentUser.uid),
       where('persona', '==', currentPersona),
     );
-    const sprintStart = selectedSprint?.startDate ? startOfDay(new Date(selectedSprint.startDate)).getTime() : null;
-    const sprintEnd = selectedSprint?.endDate ? endOfDay(new Date(selectedSprint.endDate)).getTime() : null;
-
     const unsub = onSnapshot(
       q,
       (snap) => {
-        const todayStart = startOfDay(new Date()).getTime();
-        const todayEnd = endOfDay(new Date()).getTime();
+        const todayDate = new Date();
+        const todayStart = startOfDay(todayDate).getTime();
+        const todayEnd = endOfDay(todayDate).getTime();
         const rows = snap.docs
           .map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) } as Task))
           .filter((task) => !task.deleted)
           .filter((task) => {
             const due = getTaskDueMs(task);
-            if (!due) return false;
-            return due >= todayStart && due <= todayEnd;
-          })
-          .filter((task) => {
-            if (sprintStart == null || sprintEnd == null) return true;
-            const due = getTaskDueMs(task);
-            if (!due) return false;
-            return due >= sprintStart && due <= sprintEnd;
+            const isChore = !!getChoreKind(task);
+            if (due) return due <= todayEnd;
+            if (isChore) return isRecurringDueOnDate(task, todayDate, due);
+            return false;
           })
           .filter((task) => (task.status ?? 0) !== 2);
 
-        rows.sort((a, b) => {
+        const filtered = rows.filter((task) => {
+          if (!getChoreKind(task)) return true;
+          const lastDone = getTaskLastDoneMs(task);
+          if (!lastDone) return true;
+          return lastDone < todayStart || lastDone > todayEnd;
+        });
+
+        filtered.sort((a, b) => {
           const aDue = getTaskDueMs(a) || 0;
           const bDue = getTaskDueMs(b) || 0;
           if (aDue !== bDue) return aDue - bDue;
@@ -867,7 +1075,7 @@ const Dashboard: React.FC = () => {
           return bScore - aScore;
         });
 
-        setTasksDueTodayList(rows);
+        setTasksDueTodayList(filtered);
         setTasksDueTodayLoading(false);
       },
       (err) => {
@@ -877,35 +1085,138 @@ const Dashboard: React.FC = () => {
       },
     );
     return () => unsub();
-  }, [currentUser, currentPersona, getTaskDueMs, selectedSprint?.startDate, selectedSprint?.endDate]);
+  }, [currentUser, currentPersona, getTaskDueMs, getChoreKind, getTaskLastDoneMs]);
+
+  useEffect(() => {
+    if (!currentUser || !currentPersona) {
+      setTop3Tasks([]);
+      setTop3Stories([]);
+      setTop3Loading(false);
+      return;
+    }
+    setTop3Loading(true);
+    const todayIso = new Date().toISOString().slice(0, 10);
+    let tasksReady = false;
+    let storiesReady = false;
+    const markReady = () => {
+      if (tasksReady && storiesReady) setTop3Loading(false);
+    };
+
+    const isTaskDone = (status: any) => {
+      if (typeof status === 'number') return status >= 2;
+      const s = String(status || '').toLowerCase();
+      return ['done', 'complete', 'completed', 'finished', 'closed'].includes(s);
+    };
+    const isStoryDone = (status: any) => {
+      if (typeof status === 'number') return status >= 4;
+      const s = String(status || '').toLowerCase();
+      return ['done', 'complete', 'completed', 'finished', 'closed'].includes(s);
+    };
+
+    const taskQuery = query(
+      collection(db, 'tasks'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+      where('aiTop3ForDay', '==', true),
+    );
+    const storyQuery = query(
+      collection(db, 'stories'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+      where('aiTop3ForDay', '==', true),
+    );
+
+    const unsubTasks = onSnapshot(
+      taskQuery,
+      (snap) => {
+        const rows = snap.docs
+          .map((doc) => ({ id: doc.id, ...(doc.data() as any) } as Task))
+          .filter((task) => !task.deleted)
+          .filter((task) => !isTaskDone(task.status))
+          .filter((task) => {
+            const aiDate = (task as any).aiTop3Date;
+            if (!aiDate) return true;
+            return String(aiDate).slice(0, 10) === todayIso;
+          })
+          .sort((a, b) => {
+            const ar = Number((a as any).aiPriorityRank || 0) || 99;
+            const br = Number((b as any).aiPriorityRank || 0) || 99;
+            if (ar !== br) return ar - br;
+            const as = Number((a as any).aiCriticalityScore ?? -1);
+            const bs = Number((b as any).aiCriticalityScore ?? -1);
+            if (as !== bs) return bs - as;
+            return String(a.title || '').localeCompare(String(b.title || ''));
+          })
+          .slice(0, 3);
+        setTop3Tasks(rows);
+        tasksReady = true;
+        markReady();
+      },
+      (err) => {
+        console.warn('Failed to load top 3 tasks', err);
+        setTop3Tasks([]);
+        tasksReady = true;
+        markReady();
+      },
+    );
+
+    const unsubStories = onSnapshot(
+      storyQuery,
+      (snap) => {
+        const rows = snap.docs
+          .map((doc) => ({ id: doc.id, ...(doc.data() as any) } as Story))
+          .filter((story) => !isStoryDone(story.status))
+          .filter((story) => {
+            const aiDate = (story as any).aiTop3Date;
+            if (!aiDate) return true;
+            return String(aiDate).slice(0, 10) === todayIso;
+          })
+          .sort((a, b) => {
+            const ar = Number((a as any).aiFocusStoryRank || 0) || 99;
+            const br = Number((b as any).aiFocusStoryRank || 0) || 99;
+            if (ar !== br) return ar - br;
+            const as = Number((a as any).aiCriticalityScore ?? -1);
+            const bs = Number((b as any).aiCriticalityScore ?? -1);
+            if (as !== bs) return bs - as;
+            return String(a.title || '').localeCompare(String(b.title || ''));
+          })
+          .slice(0, 3);
+        setTop3Stories(rows);
+        storiesReady = true;
+        markReady();
+      },
+      (err) => {
+        console.warn('Failed to load top 3 stories', err);
+        setTop3Stories([]);
+        storiesReady = true;
+        markReady();
+      },
+    );
+
+    return () => {
+      unsubTasks();
+      unsubStories();
+    };
+  }, [currentUser, currentPersona]);
 
   const unscheduledSummary = unscheduledToday.slice(0, 3);
-  const scheduledCompletionRate = useMemo(() => {
-    if (scheduledToday.length === 0) return 0;
-    const completed = scheduledToday.filter((instance) => instance.status === 'completed').length;
-    return Math.round((completed / scheduledToday.length) * 100);
-  }, [scheduledToday]);
 
-  const nowNextLater = useMemo(() => {
-    const now = Date.now();
-    const mapped = scheduledToday.map((instance) => {
-      const base = instance.occurrenceDate
-        ? parse(instance.occurrenceDate, 'yyyyMMdd', new Date())
-        : new Date(instance.plannedStart || now);
-      const start = instance.plannedStart ? new Date(instance.plannedStart) : addMinutes(base, 8 * 60);
-      const end = instance.plannedEnd
-        ? new Date(instance.plannedEnd)
-        : addMinutes(new Date(start), instance.durationMinutes || 30);
-      return { instance, startMs: start.getTime(), endMs: end.getTime() };
+  const todayDate = useMemo(() => new Date(), []);
+  const todayStartMs = useMemo(() => startOfDay(new Date()).getTime(), []);
+
+  const choresDueTodayTasks = useMemo(() => {
+    const rows = tasksDueTodayList.filter((task) => !!getChoreKind(task));
+    rows.sort((a, b) => {
+      const aDue = resolveRecurringDueMs(a, todayDate, todayStartMs) ?? 0;
+      const bDue = resolveRecurringDueMs(b, todayDate, todayStartMs) ?? 0;
+      return aDue - bDue;
     });
-    const upcoming = mapped
-      .filter((item) => item.endMs >= now)
-      .sort((a, b) => a.startMs - b.startMs);
-    return {
-      nowNext: upcoming.slice(0, 2).map((item) => item.instance),
-      later: upcoming.slice(2, 6).map((item) => item.instance),
-    };
-  }, [scheduledToday]);
+    return rows;
+  }, [tasksDueTodayList, getChoreKind, todayDate, todayStartMs]);
+
+  const nonChoreTasksDueToday = useMemo(() => {
+    return tasksDueTodayList.filter((task) => !getChoreKind(task));
+  }, [tasksDueTodayList, getChoreKind]);
 
   const tasksDueTodayCombined = useMemo(() => {
     const items: Array<{
@@ -916,7 +1227,7 @@ const Dashboard: React.FC = () => {
       task?: Task;
     }> = [];
 
-    tasksDueTodayList.forEach((task) => {
+    nonChoreTasksDueToday.forEach((task) => {
       items.push({
         id: task.id,
         kind: 'task',
@@ -926,27 +1237,8 @@ const Dashboard: React.FC = () => {
       });
     });
 
-    choresDueToday.forEach((chore) => {
-      items.push({
-        id: `chore-${chore.id}`,
-        kind: 'chore',
-        title: chore.title || 'Chore',
-        dueMs: chore.dueAt ? chore.dueAt.getTime() : null,
-      });
-    });
-
-    routinesDueToday.forEach((routine) => {
-      items.push({
-        id: `routine-${routine.id}`,
-        kind: 'routine',
-        title: routine.title || 'Routine',
-        dueMs: routine.dueAt ? routine.dueAt.getTime() : null,
-      });
-    });
-
     if (tasksDueTodaySortMode === 'ai') {
       const tasks = items.filter((item) => item.kind === 'task');
-      const habits = items.filter((item) => item.kind !== 'task');
       tasks.sort((a, b) => {
         const aScore = Number((a.task as any)?.aiCriticalityScore ?? (a.task as any)?.aiPriorityScore ?? 0);
         const bScore = Number((b.task as any)?.aiCriticalityScore ?? (b.task as any)?.aiPriorityScore ?? 0);
@@ -955,13 +1247,12 @@ const Dashboard: React.FC = () => {
         const bDue = b.dueMs ?? 0;
         return aDue - bDue;
       });
-      habits.sort((a, b) => (a.dueMs ?? 0) - (b.dueMs ?? 0));
-      return [...tasks, ...habits];
+      return tasks;
     }
 
     items.sort((a, b) => (a.dueMs ?? 0) - (b.dueMs ?? 0));
     return items;
-  }, [tasksDueTodayList, choresDueToday, routinesDueToday, tasksDueTodaySortMode, getTaskDueMs]);
+  }, [nonChoreTasksDueToday, tasksDueTodaySortMode, getTaskDueMs]);
 
   const tasksByRef = useMemo(() => {
     const map = new Map<string, Task>();
@@ -1029,6 +1320,39 @@ const Dashboard: React.FC = () => {
     return Object.values(map);
   }, [goalsList, potsById]);
 
+  const savingsMetrics = useMemo(() => {
+    let totalEstimated = 0;
+    let totalSavedPence = 0;
+    const seenPotIds = new Set<string>();
+
+    goalsList.forEach((goal) => {
+      const est = Number((goal as any).estimatedCost || 0);
+      totalEstimated += Number.isFinite(est) ? est : 0;
+
+      const rawPotId = (goal as any).linkedPotId || (goal as any).potId;
+      if (!rawPotId) return;
+      const raw = String(rawPotId);
+      const candidates = [raw];
+      if (currentUser?.uid && raw.startsWith(`${currentUser.uid}_`)) {
+        candidates.push(raw.replace(`${currentUser.uid}_`, ''));
+      }
+      const potId = candidates.find((id) => potsById[id]);
+      if (!potId || seenPotIds.has(potId)) return;
+      seenPotIds.add(potId);
+      const balance = Number(potsById[potId]?.balance || 0);
+      totalSavedPence += Number.isFinite(balance) ? balance : 0;
+    });
+
+    const savedMajor = totalSavedPence / 100;
+    const savingsPct = totalEstimated > 0 ? Math.min(100, Math.round((savedMajor / totalEstimated) * 100)) : 0;
+
+    return {
+      totalEstimated,
+      totalSavedPence,
+      savingsPct,
+    };
+  }, [goalsList, potsById, currentUser?.uid]);
+
   const loadLLMPriority = async () => {
     if (!currentUser) return;
     try {
@@ -1082,25 +1406,35 @@ const Dashboard: React.FC = () => {
   };
 
   const countTasksDueToday = async () => {
-    if (!currentUser) return;
+    if (!currentUser || !currentPersona) return;
     const start = new Date(); start.setHours(0, 0, 0, 0);
     const end = new Date(); end.setHours(23, 59, 59, 999);
-    // Tasks due today
+    const isPersonaMatch = (value: any) => {
+      if (currentPersona === 'work') return value === 'work';
+      return value == null || value === 'personal';
+    };
+    // Tasks due today or overdue
     const tq = query(
       collection(db, 'tasks'),
       where('ownerUid', '==', currentUser.uid),
-      where('dueDate', '>=', start.getTime()),
       where('dueDate', '<=', end.getTime())
     );
     const ts = await getDocs(tq);
-    let count = ts.size;
+    let count = 0;
+    ts.forEach((docSnap) => {
+      const data = docSnap.data() as any;
+      if (data?.deleted) return;
+      if ((data?.status ?? 0) === 2) return;
+      if (!isPersonaMatch(data?.persona)) return;
+      count += 1;
+    });
     // Chores due today via nextDueAt precompute
     const cq = query(collection(db, 'chores'), where('ownerUid', '==', currentUser.uid));
     const cs = await getDocs(cq);
     cs.forEach(d => {
       const c: any = d.data() || {};
       const due = c.nextDueAt;
-      if (due && due >= start.getTime() && due <= end.getTime()) count += 1;
+      if (due && due <= end.getTime()) count += 1;
     });
     setTasksDueToday(count);
   };
@@ -1204,29 +1538,82 @@ const Dashboard: React.FC = () => {
   const loadMonzoSummary = async () => {
     if (!currentUser) {
       setMonzoSummary(null);
+      setFinanceWindowSummary(null);
       return;
     }
     try {
-      const budgetSnap = await getDoc(doc(db, 'monzo_budget_summary', currentUser.uid));
-      const alignmentSnap = await getDoc(doc(db, 'monzo_goal_alignment', currentUser.uid));
+      const windowStart = startOfDay(addDays(new Date(), -(FINANCE_WINDOW_DAYS - 1)));
+      const windowEnd = startOfDay(addDays(new Date(), 1));
+
+      const [budgetSnap, alignmentSnap, txSnap] = await Promise.all([
+        getDoc(doc(db, 'monzo_budget_summary', currentUser.uid)),
+        getDoc(doc(db, 'monzo_goal_alignment', currentUser.uid)),
+        getDocs(query(
+          collection(db, 'monzo_transactions'),
+          where('ownerUid', '==', currentUser.uid),
+          where('createdAt', '>=', windowStart),
+          where('createdAt', '<', windowEnd),
+          orderBy('createdAt', 'desc'),
+          limit(500),
+        )).catch(() => null),
+      ]);
+
       if (!budgetSnap.exists && !alignmentSnap.exists) {
         setMonzoSummary(null);
-        return;
+      } else {
+        const summary: MonzoSummary = {};
+        if (budgetSnap.exists) {
+          const data = budgetSnap.data() as any;
+          summary.totals = data?.totals || null;
+          summary.categories = Array.isArray(data?.categories) ? data.categories.slice(0, 4) : [];
+          summary.updatedAt = data?.updatedAt || null;
+        }
+        if (alignmentSnap.exists) {
+          summary.goalAlignment = alignmentSnap.data();
+        }
+        setMonzoSummary(summary);
       }
-      const summary: MonzoSummary = {};
-      if (budgetSnap.exists) {
-        const data = budgetSnap.data() as any;
-        summary.totals = data?.totals || null;
-        summary.categories = Array.isArray(data?.categories) ? data.categories.slice(0, 4) : [];
-        summary.updatedAt = data?.updatedAt || null;
+
+      if (!txSnap) {
+        setFinanceWindowSummary(null);
+      } else {
+        let mandatoryPence = 0;
+        let discretionaryPence = 0;
+        let uncategorisedPence = 0;
+
+        txSnap.forEach((docSnap) => {
+          const tx: any = docSnap.data() || {};
+          const amount = extractMonzoAmountPence(tx);
+          if (amount >= 0) return;
+
+          const bucket = resolveMonzoBucket(tx);
+          if (FINANCE_INCOME_BUCKETS.has(bucket)) return;
+
+          const spendPence = Math.abs(amount);
+          if (bucket === 'mandatory') {
+            mandatoryPence += spendPence;
+            return;
+          }
+          if (bucket === 'discretionary') {
+            discretionaryPence += spendPence;
+            return;
+          }
+          if (FINANCE_UNCATEGORISED_BUCKETS.has(bucket)) {
+            uncategorisedPence += spendPence;
+          }
+        });
+
+        setFinanceWindowSummary({
+          windowDays: FINANCE_WINDOW_DAYS,
+          mandatoryPence,
+          discretionaryPence,
+          uncategorisedPence,
+        });
       }
-      if (alignmentSnap.exists) {
-        summary.goalAlignment = alignmentSnap.data();
-      }
-      setMonzoSummary(summary);
     } catch (error) {
       console.warn('Failed to load Monzo summary', error);
       setMonzoSummary(null);
+      setFinanceWindowSummary(null);
     }
   };
 
@@ -1249,23 +1636,6 @@ const Dashboard: React.FC = () => {
   const handleThemeSelect = (themeId: string) => {
     navigate('/stories', { state: { themeId } });
   };
-
-
-  const handleInstanceStatusChange = useCallback(
-    async (instance: ScheduledInstanceModel, status: ScheduledInstanceModel['status']) => {
-      try {
-        const ref = doc(db, 'scheduled_instances', instance.id);
-        await updateDoc(ref, {
-          status,
-          statusUpdatedAt: Date.now(),
-          updatedAt: Date.now(),
-        });
-      } catch (err) {
-        console.error('Failed to update instance status', err);
-      }
-    },
-    [],
-  );
 
   // Sprint-scoped data for metrics panel
   useEffect(() => {
@@ -1372,7 +1742,7 @@ const Dashboard: React.FC = () => {
   };
 
   const automationSnapshot = [
-    { label: 'Tasks due today', value: tasksDueToday },
+    { label: 'Tasks due/overdue', value: tasksDueToday },
     { label: 'Reminders pending', value: remindersDueToday.length },
     { label: 'Chores today', value: choresDueToday.length },
     { label: 'Routines today', value: routinesDueToday.length },
@@ -1393,12 +1763,28 @@ const Dashboard: React.FC = () => {
   };
 
   const financeSummary = useMemo(() => {
+    if (financeWindowSummary) {
+      const currency = 'GBP';
+      return `Last ${financeWindowSummary.windowDays}d · M ${formatPenceCompact(financeWindowSummary.mandatoryPence, currency)} · D ${formatPenceCompact(financeWindowSummary.discretionaryPence, currency)} · U ${formatPenceCompact(financeWindowSummary.uncategorisedPence, currency)}`;
+    }
     const spent = monzoSummary?.totals?.spent;
     const budget = monzoSummary?.totals?.budget;
     if (spent == null || budget == null) return '£0 spent';
     const remaining = budget - spent;
     return `£${(spent / 100).toFixed(0)} spent · £${(remaining / 100).toFixed(0)} left`;
-  }, [monzoSummary]);
+  }, [financeWindowSummary, formatPenceCompact, monzoSummary]);
+
+  const financeSyncSummary = useMemo(() => {
+    const syncDate = monzoLastSyncDate || decodeToDate(monzoSummary?.updatedAt);
+    if (!syncDate) return 'Last sync unavailable';
+    const stamp = syncDate.toLocaleString('en-GB', {
+      day: '2-digit',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+    return `Last sync ${stamp}`;
+  }, [decodeToDate, monzoLastSyncDate, monzoSummary]);
 
   const plannerSummary = useMemo(() => {
     if (!plannerStats) return 'Not yet run';
@@ -1468,86 +1854,61 @@ const Dashboard: React.FC = () => {
   }
 
   return (
-    <Container fluid className="p-4">
+    <Container fluid className="p-2 dashboard-compact">
       <Row>
         <Col>
-          <div className="d-flex justify-content-between flex-wrap gap-3 align-items-start mb-3">
-            <div>
-              <div className="d-flex align-items-center gap-3 flex-wrap">
-                <h2 className="mb-0">Dashboard</h2>
-                <div className="d-flex align-items-center gap-2 flex-wrap">
-                  <button
-                    type="button"
-                    className="btn btn-sm"
-                    onClick={() => navigate('/metrics/progress')}
-                    style={{
-                      border: '1px solid var(--bs-border-color, #dee2e6)',
-                      backgroundColor: 'var(--bs-body-bg)',
-                      color: 'var(--bs-body-color)',
-                      textAlign: 'left'
-                    }}
-                  >
-                    <div className="text-muted" style={{ fontSize: 10 }}>Story Points</div>
-                    <div className="fw-semibold" style={{ fontSize: 12 }}>
-                      {stats.doneStoryPoints}/{stats.totalStoryPoints} pts
-                      {stats.totalStoryPoints > 0 ? ` · ${stats.storyPointsCompletion}%` : ' · 0%'}
-                    </div>
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-sm"
-                    onClick={() => navigate('/metrics/progress')}
-                    style={{
-                      border: '1px solid var(--bs-border-color, #dee2e6)',
-                      backgroundColor: 'var(--bs-body-bg)',
-                      color: 'var(--bs-body-color)',
-                      textAlign: 'left'
-                    }}
-                  >
-                    <div className="text-muted" style={{ fontSize: 10 }}>Goals</div>
-                    <div className="fw-semibold" style={{ fontSize: 12 }}>
-                      {stats.doneGoals}/{stats.totalGoals}
-                      {stats.totalGoals > 0 ? ` · ${stats.goalCompletion}%` : ' · 0%'}
-                    </div>
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-sm"
-                    style={{
-                      border: '1px solid var(--bs-border-color, #dee2e6)',
-                      backgroundColor: 'var(--bs-body-bg)',
-                      color: 'var(--bs-body-color)',
-                      textAlign: 'left'
-                    }}
-                    disabled
-                  >
-                    <div className="text-muted" style={{ fontSize: 10 }}>AI Planning</div>
-                    <div className="fw-semibold" style={{ fontSize: 12 }}>
-                      {plannerSummary}
-                    </div>
-                  </button>
-                </div>
-                {stats.tasksUnlinked > 0 && (
-                  <Badge bg="warning" text="dark" pill>
-                    {stats.tasksUnlinked} unlinked tasks
-                  </Badge>
-                )}
-              </div>
-              <div className="text-muted small mt-2">{dailyBrief()}</div>
+          {stats.tasksUnlinked > 0 && (
+            <div className="mb-2">
+              <Badge bg="warning" text="dark" pill>
+                {stats.tasksUnlinked} unlinked tasks
+              </Badge>
             </div>
-            <div className="d-flex align-items-center gap-2">
-              <small className="text-muted">Last updated {lastUpdated.toLocaleTimeString()}</small>
-              <Button
-                variant="outline-primary"
-                size="sm"
-                onClick={() => loadDashboardData()}
-              >
-                Refresh
-              </Button>
-            </div>
-          </div>
+          )}
 
-          <Row className="g-3 mb-3">
+          {showMonzoReconnectBanner && (
+            <Alert variant="warning" className="d-flex align-items-center justify-content-between flex-wrap gap-2">
+              <div>
+                <div className="fw-semibold">Monzo sync is stale</div>
+                <div className="text-muted small">
+                  Last sync {monzoSyncAgeDays} days ago
+                  {monzoLastSyncDate ? ` (${monzoLastSyncDate.toLocaleString()})` : ''}.
+                </div>
+                {monzoReconnectMsg && <div className="text-muted small mt-1">{monzoReconnectMsg}</div>}
+              </div>
+              <Button
+                variant="outline-dark"
+                size="sm"
+                onClick={handleMonzoReconnect}
+                disabled={monzoReconnectBusy}
+              >
+                {monzoReconnectBusy ? <Spinner size="sm" animation="border" className="me-2" /> : null}
+                Reconnect Monzo
+              </Button>
+            </Alert>
+          )}
+
+          {showYouTubeTakeoutBanner && (
+            <Alert variant="warning" className="d-flex align-items-center justify-content-between flex-wrap gap-2">
+              <div>
+                <div className="fw-semibold">YouTube watch history import is due</div>
+                <div className="text-muted small">
+                  {youtubeTakeoutLastImportDate
+                    ? `Last import ${youtubeTakeoutAgeDays ?? 0} days ago (${youtubeTakeoutLastImportDate.toLocaleString()}).`
+                    : 'No Google Takeout import detected yet.'}
+                  {' '}Upload <code>watch-history.json</code> every 60 days to keep your 7-day YouTube metric accurate.
+                </div>
+              </div>
+              <Button
+                variant="outline-dark"
+                size="sm"
+                onClick={() => navigate('/settings/integrations/youtube')}
+              >
+                Import YouTube data
+              </Button>
+            </Alert>
+          )}
+
+          <Row className="g-2 mb-1">
             <Col xl={12}>
               <Card className="shadow-sm border-0">
                 <Card.Header className="d-flex justify-content-between align-items-center">
@@ -1562,9 +1923,9 @@ const Dashboard: React.FC = () => {
                   </Button>
                 </Card.Header>
                 <Card.Body className="py-2">
-                  <Row className="g-2 mb-2">
+                  <Row className="g-2 mb-2 dashboard-inline-row dashboard-key-metrics">
                     {/* Finance Group */}
-                    <Col xs={12} sm={6} lg={3}>
+                    <Col xs={12} sm={6} lg={4}>
                       <div 
                         className="d-flex align-items-center gap-2 px-2 py-1 rounded border h-100" 
                         style={{ 
@@ -1588,12 +1949,13 @@ const Dashboard: React.FC = () => {
                           <div className="fw-semibold">
                             {financeSummary}
                           </div>
+                          <div className="text-muted small">{financeSyncSummary}</div>
                         </div>
                       </div>
                     </Col>
 
                     {/* Capacity Group */}
-                    <Col xs={12} sm={6} lg={3}>
+                    <Col xs={12} sm={6} lg={4}>
                       <div 
                         className="d-flex align-items-center gap-2 px-2 py-1 rounded border h-100" 
                         style={{ 
@@ -1627,7 +1989,7 @@ const Dashboard: React.FC = () => {
                     </Col>
 
                     {/* Sprint Progress Group */}
-                    <Col xs={12} sm={6} lg={3}>
+                    <Col xs={12} sm={6} lg={4}>
                       <div 
                         className="d-flex align-items-center gap-2 px-2 py-1 rounded border h-100" 
                         style={{ 
@@ -1684,12 +2046,16 @@ const Dashboard: React.FC = () => {
                         <div className="flex-grow-1">
                           <div className="text-muted small">Overall Progress</div>
                           <div className="fw-semibold">
-                            {stats.storyPointsCompletion || 0}% pts · {stats.goalCompletion || 0}% goals
+                            {stats.storyPointsCompletion || 0}% pts · {stats.goalCompletion || 0}% goals · {savingsMetrics.savingsPct}% saved
+                          </div>
+                          <div className="text-muted small">
+                            Saved {formatPotBalance(savingsMetrics.totalSavedPence)} of {savingsMetrics.totalEstimated ? savingsMetrics.totalEstimated.toLocaleString('en-GB', { style: 'currency', currency: 'GBP' }) : '£0'}
                           </div>
                           <div className="text-muted small">AI {plannerSummary}</div>
                         </div>
                       </div>
                     </Col>
+
                   </Row>
 
                   {!metricsCollapsed && hasSelectedSprint && capacitySummary && (
@@ -1814,270 +2180,335 @@ const Dashboard: React.FC = () => {
             </Col>
           </Row>
 
-          <Row className="g-3 mb-4">
+          <Row className="g-3 mb-1">
             <Col xl={12}>
               <Card className="h-100 shadow-sm border-0">
-                <Card.Header className="d-flex justify-content-between align-items-center">
+                <Card.Header className="d-flex justify-content-between align-items-center py-2">
                   <span className="fw-semibold">Today’s Plan</span>
-                  <Button variant="link" size="sm" className="text-decoration-none" onClick={handleOpenChecklist}>
-                    Open planner
-                  </Button>
+                  <div className="d-flex align-items-center gap-2">
+                    <Button variant="link" size="sm" className="text-decoration-none" onClick={handleOpenChecklist}>
+                      View calendar
+                    </Button>
+                    <Button variant="link" size="sm" className="text-decoration-none" onClick={() => navigate('/sprints/kanban')}>
+                      View kanban
+                    </Button>
+                  </div>
                 </Card.Header>
                 <Card.Body>
-                  <Row className="g-3">
-                    <Col lg={8}>
-                      <Row className="g-3 mb-3">
-                        <Col lg={7}>
-                          {dailySummaryLines.length > 0 && (
-                            <div>
-                              <div className="fw-semibold mb-1">Daily Summary</div>
-                              {dailySummarySource && (
-                                <div className="text-muted small mb-1">Source: {dailySummarySource}</div>
-                              )}
-                              <ul className="mb-0 small">
-                                {dailySummaryLines.map((line, idx) => (
-                                  <li key={idx}>{line}</li>
-                                ))}
-                              </ul>
-                            </div>
-                          )}
-                        </Col>
-                        <Col lg={5}>
-                          {aiFocusItems.length > 0 && (
-                            <div>
-                              <div className="fw-semibold mb-1">AI focus</div>
-                              {prioritySource && <div className="text-muted small mb-1">Source: {prioritySource}</div>}
-                              <ul className="mb-0 small">
-                                {aiFocusItems.slice(0, 3).map((it: any, idx: number) => {
-                                  const refKey = (it.ref || '').toUpperCase();
-                                  const matchedTask = refKey ? tasksByRef.get(refKey) : undefined;
-                                  const matchedStory = !matchedTask && refKey ? storiesByRef.get(refKey) : undefined;
-                                  const directType = String(it.type || it.entityType || '').toLowerCase();
-                                  const directId = it.id || it.entityId || null;
-                                  const href = directId && directType === 'task'
-                                    ? `/tasks/${directId}`
-                                    : directId && directType === 'story'
-                                      ? `/stories/${directId}`
-                                      : matchedTask
-                                        ? `/tasks/${matchedTask.id}`
-                                        : matchedStory
-                                          ? `/stories/${matchedStory.id}`
-                                          : undefined;
-                                  const label = [it.ref, it.title || it.summary].filter(Boolean).join(' — ') || 'Focus';
-                                  const rationale = it.rationale || it.nextStep ? ` — ${it.rationale || it.nextStep}` : '';
-                                  return (
-                                    <li key={idx}>
-                                      {href ? (
-                                        <>
-                                          <a href={href} className="text-decoration-none">{label}</a>{rationale}
-                                        </>
-                                      ) : (
-                                        <>
-                                          {label}{rationale}
-                                        </>
-                                      )}
-                                    </li>
-                                  );
-                                })}
-                              </ul>
-                            </div>
-                          )}
-                        </Col>
-                      </Row>
-                      {unscheduledToday.length > 0 && (
-                        <Alert variant="warning" className="py-2">
-                          <div className="fw-semibold mb-1">Scheduling issues</div>
-                          <ul className="mb-0 small">
-                            {unscheduledSummary.map((item) => (
-                              <li key={item.id}>{item.title || item.sourceId}</li>
-                            ))}
-                            {unscheduledToday.length > unscheduledSummary.length && (
-                              <li className="text-muted">+{unscheduledToday.length - unscheduledSummary.length} more</li>
+                  <Row className="g-3 today-plan-layout">
+                    <Col md={12} className="today-plan-col today-plan-col-summary">
+                      {(dailySummaryLines.length > 0 || aiFocusItems.length > 0) && (
+                        <Card className="shadow-sm border-0 mb-3">
+                          <Card.Header className="d-flex align-items-center justify-content-between">
+                            <div className="fw-semibold">Daily Summary</div>
+                            <Badge bg="secondary" pill>Today</Badge>
+                          </Card.Header>
+                          <Card.Body className="p-3" style={{ maxHeight: 260, overflowY: 'auto' }}>
+                            {dailySummaryLines.length > 0 && (
+                              <div className="mb-3">
+                                {dailySummarySource && (
+                                  <div className="text-muted small mb-1">Source: {dailySummarySource}</div>
+                                )}
+                                <ul className="mb-0 small">
+                                  {dailySummaryLines.map((line, idx) => (
+                                    <li key={idx}>{line}</li>
+                                  ))}
+                                </ul>
+                              </div>
                             )}
-                          </ul>
-                        </Alert>
+                            {aiFocusItems.length > 0 && (
+                              <div>
+                                <div className="fw-semibold mb-1">AI focus</div>
+                                {prioritySource && <div className="text-muted small mb-1">Source: {prioritySource}</div>}
+                                <ul className="mb-0 small">
+                                  {aiFocusItems.slice(0, 3).map((it: any, idx: number) => {
+                                    const refKey = (it.ref || '').toUpperCase();
+                                    const matchedTask = refKey ? tasksByRef.get(refKey) : undefined;
+                                    const matchedStory = !matchedTask && refKey ? storiesByRef.get(refKey) : undefined;
+                                    const directType = String(it.type || it.entityType || '').toLowerCase();
+                                    const directId = it.id || it.entityId || null;
+                                    const href = directId && directType === 'task'
+                                      ? `/tasks/${directId}`
+                                      : directId && directType === 'story'
+                                        ? `/stories/${directId}`
+                                        : matchedTask
+                                          ? `/tasks/${matchedTask.id}`
+                                          : matchedStory
+                                            ? `/stories/${matchedStory.id}`
+                                            : undefined;
+                                    const label = [it.ref, it.title || it.summary].filter(Boolean).join(' — ') || 'Focus';
+                                    const rationale = it.rationale || it.nextStep ? ` — ${it.rationale || it.nextStep}` : '';
+                                    return (
+                                      <li key={idx}>
+                                        {href ? (
+                                          <>
+                                            <a href={href} className="text-decoration-none">{label}</a>{rationale}
+                                          </>
+                                        ) : (
+                                          <>
+                                            {label}{rationale}
+                                          </>
+                                        )}
+                                      </li>
+                                    );
+                                  })}
+                                </ul>
+                              </div>
+                            )}
+                          </Card.Body>
+                        </Card>
                       )}
-                      <div className="fw-semibold mb-2">Calendar</div>
-                      <div className="calendar-dashboard-wrap">
-                        <DragAndDropCalendar
-                          localizer={localizer}
-                          events={calendarEvents}
-                          startAccessor="start"
-                          endAccessor="end"
-                          views={['day', 'week', 'month']}
-                          view={calendarView}
-                          date={calendarDate}
-                          defaultView={Views.DAY}
-                          onView={(view) => setCalendarView(view as 'day' | 'week' | 'month')}
-                          onNavigate={(date) => setCalendarDate(date)}
-                          onEventDrop={handleCalendarEventMove}
-                          onEventResize={handleCalendarEventResize}
-                          resizable
-                          popup
-                          scrollToTime={new Date(1970, 0, 1, 6, 0, 0)}
-                          style={{ height: 520 }}
-                          eventPropGetter={calendarEventStyleGetter}
-                        />
-                      </div>
-                    </Col>
-                    <Col lg={4}>
                       <Card className="shadow-sm border-0 mb-3">
                         <Card.Header className="d-flex align-items-center justify-content-between">
-                          <div className="fw-semibold">Now / Next</div>
-                          <Badge bg={scheduledToday.length > 0 ? 'info' : 'secondary'} pill>
-                            {scheduledCompletionRate}%
-                          </Badge>
-                        </Card.Header>
-                        <Card.Body className="p-3">
-                          {scheduledTodayLoading ? (
-                            <div className="d-flex align-items-center gap-2 text-muted">
-                              <Spinner size="sm" animation="border" /> Loading schedule…
-                            </div>
-                          ) : nowNextLater.nowNext.length === 0 ? (
-                            <div className="text-muted small">Nothing scheduled right now.</div>
-                          ) : (
-                            nowNextLater.nowNext.map((instance) => (
-                              <div key={instance.id} className="border rounded p-2 mb-2">
-                                <div className="d-flex justify-content-between align-items-start">
-                                  <div>
-                                    <div className="fw-semibold">{instance.title || instance.sourceId}</div>
-                                    <div className="text-muted small d-flex align-items-center gap-1">
-                                      <Clock size={12} /> {formatInstanceTime(instance)}
-                                    </div>
-                                  </div>
-                                  <Badge bg={focusStatusVariant(instance.status)}>{instance.status}</Badge>
-                                </div>
-                                <div className="d-flex gap-2 mt-2">
-                                  <Form.Check
-                                    type="checkbox"
-                                    id={`dashboard-instance-${instance.id}`}
-                                    label="Completed"
-                                    checked={instance.status === 'completed'}
-                                    onChange={(event) =>
-                                      handleInstanceStatusChange(
-                                        instance,
-                                        event.target.checked ? 'completed' : 'planned',
-                                      )
-                                    }
-                                  />
-                                  <Button
-                                    size="sm"
-                                    variant="outline-secondary"
-                                    onClick={() => handleInstanceStatusChange(instance, 'missed')}
-                                  >
-                                    Skip
-                                  </Button>
-                                </div>
-                              </div>
-                            ))
-                          )}
-                          <div className="fw-semibold text-muted mt-3 mb-2">Later Today</div>
-                          {scheduledTodayLoading ? null : nowNextLater.later.length === 0 ? (
-                            <div className="text-muted small">Nothing later today.</div>
-                          ) : (
-                            nowNextLater.later.map((instance) => (
-                              <div key={instance.id} className="border rounded p-2 mb-2">
-                                <div className="d-flex justify-content-between align-items-start">
-                                  <div>
-                                    <div className="fw-semibold">{instance.title || instance.sourceId}</div>
-                                    <div className="text-muted small d-flex align-items-center gap-1">
-                                      <Clock size={12} /> {formatInstanceTime(instance)}
-                                    </div>
-                                  </div>
-                                  <Badge bg={focusStatusVariant(instance.status)}>{instance.status}</Badge>
-                                </div>
-                              </div>
-                            ))
-                          )}
-                        </Card.Body>
-                      </Card>
-                      <Card className="shadow-sm border-0">
-                        <Card.Header className="d-flex align-items-center justify-content-between">
                           <div className="fw-semibold d-flex align-items-center gap-2">
-                            <Clock size={16} /> Tasks due today
+                            <ListChecks size={16} /> Top 3 priorities
                           </div>
                           <div className="d-flex align-items-center gap-2">
-                            <Form.Select
+                            <Badge bg="secondary" pill>{currentPersona === 'work' ? 'Work' : 'Personal'}</Badge>
+                            <Button
                               size="sm"
-                              value={tasksDueTodaySortMode}
-                              onChange={(e) => setTasksDueTodaySortMode(e.target.value as 'due' | 'ai')}
+                              variant="outline-secondary"
+                              onClick={() => setTop3Collapsed((prev) => !prev)}
                             >
-                              <option value="due">Sort: Due time</option>
-                              <option value="ai">Sort: AI score</option>
-                            </Form.Select>
-                            <Badge bg={tasksDueTodayCombined.length > 0 ? 'info' : 'secondary'} pill>
-                              {tasksDueTodayCombined.length}
+                              {top3Collapsed ? 'Show' : 'Hide'}
+                            </Button>
+                          </div>
+                        </Card.Header>
+                        {!top3Collapsed && (
+                          <Card.Body className="p-3 d-flex flex-column gap-3">
+                            {top3Loading ? (
+                              <div className="d-flex align-items-center gap-2 text-muted">
+                                <Spinner size="sm" animation="border" /> Loading top 3…
+                              </div>
+                            ) : (top3Tasks.length === 0 && top3Stories.length === 0) ? (
+                              <div className="text-muted small">No Top 3 items flagged for this persona yet.</div>
+                            ) : (
+                              <>
+                                <div>
+                                  <div className="text-uppercase text-muted small fw-semibold mb-1">Stories</div>
+                                  {top3Stories.length === 0 ? (
+                                    <div className="text-muted small">No stories flagged.</div>
+                                  ) : (
+                                    top3Stories.map((story, idx) => {
+                                      const label = storyLabel(story);
+                                      const aiScore = (story as any).aiCriticalityScore ?? (story as any).aiPriorityScore;
+                                      const href = `/stories/${(story as any).ref || story.id}`;
+                                      return (
+                                        <div key={story.id} className="border rounded p-2 mb-2">
+                                          <div className="fw-semibold">
+                                            <a href={href} className="text-decoration-none">{label}</a>
+                                          </div>
+                                          <div className="text-muted small d-flex justify-content-between">
+                                            <span>Rank {idx + 1}</span>
+                                            <span>AI {aiScore != null ? Math.round(aiScore) : '—'}</span>
+                                          </div>
+                                        </div>
+                                      );
+                                    })
+                                  )}
+                                </div>
+                                <div>
+                                  <div className="text-uppercase text-muted small fw-semibold mb-1">Tasks</div>
+                                  {top3Tasks.length === 0 ? (
+                                    <div className="text-muted small">No tasks flagged.</div>
+                                  ) : (
+                                    top3Tasks.map((task, idx) => {
+                                      const refLabel = taskRefLabel(task);
+                                      const label = refLabel ? `${refLabel} — ${task.title}` : task.title;
+                                      const aiScore = (task as any).aiCriticalityScore ?? (task as any).aiPriorityScore;
+                                      const href = `/tasks/${(task as any).ref || task.id}`;
+                                      return (
+                                        <div key={task.id} className="border rounded p-2 mb-2">
+                                          <div className="fw-semibold">
+                                            <a href={href} className="text-decoration-none">{label}</a>
+                                          </div>
+                                          <div className="text-muted small d-flex justify-content-between">
+                                            <span>Rank {idx + 1}</span>
+                                            <span>AI {aiScore != null ? Math.round(aiScore) : '—'}</span>
+                                          </div>
+                                        </div>
+                                      );
+                                    })
+                                  )}
+                                </div>
+                              </>
+                            )}
+                          </Card.Body>
+                        )}
+                      </Card>
+                    </Col>
+                    <Col md={12} className="today-plan-col today-plan-col-calendar">
+                      <Card className="shadow-sm border-0 h-100 dashboard-calendar-card">
+                        <Card.Header className="fw-semibold">Calendar</Card.Header>
+                        <Card.Body className="p-2 d-flex flex-column">
+                          {unscheduledToday.length > 0 && (
+                            <Alert variant="warning" className="py-2 mb-2">
+                              <div className="fw-semibold mb-1">Scheduling issues</div>
+                              <ul className="mb-0 small">
+                                {unscheduledSummary.map((item) => (
+                                  <li key={item.id}>{item.title || item.sourceId}</li>
+                                ))}
+                                {unscheduledToday.length > unscheduledSummary.length && (
+                                  <li className="text-muted">+{unscheduledToday.length - unscheduledSummary.length} more</li>
+                                )}
+                              </ul>
+                            </Alert>
+                          )}
+                          <div className="calendar-dashboard-wrap flex-grow-1">
+                            <DragAndDropCalendar
+                              localizer={localizer}
+                              events={calendarEvents}
+                              startAccessor="start"
+                              endAccessor="end"
+                              views={['day', 'week', 'month']}
+                              view={calendarView}
+                              date={calendarDate}
+                              defaultView={Views.DAY}
+                              onView={(view) => setCalendarView(view as 'day' | 'week' | 'month')}
+                              onNavigate={(date) => setCalendarDate(date)}
+                              onEventDrop={handleCalendarEventMove}
+                              onEventResize={handleCalendarEventResize}
+                              resizable
+                              popup
+                              scrollToTime={calendarScrollTime}
+                              getNow={() => new Date()}
+                              style={{ height: '100%' }}
+                              eventPropGetter={calendarEventStyleGetter}
+                            />
+                          </div>
+                        </Card.Body>
+                      </Card>
+                    </Col>
+                    <Col md={6} className="today-plan-col today-plan-col-due">
+                      <Card className="shadow-sm border-0 h-100 dashboard-due-card">
+                          <Card.Header className="d-flex align-items-center justify-content-between">
+                            <div className="fw-semibold d-flex align-items-center gap-2">
+                              <Clock size={16} /> Tasks due today & overdue
+                            </div>
+                            <div className="d-flex align-items-center gap-2">
+                              <Form.Select
+                                size="sm"
+                                value={tasksDueTodaySortMode}
+                                onChange={(e) => setTasksDueTodaySortMode(e.target.value as 'due' | 'ai')}
+                              >
+                                <option value="due">Sort: Due time</option>
+                                <option value="ai">Sort: AI score</option>
+                              </Form.Select>
+                              <Badge bg={tasksDueTodayCombined.length > 0 ? 'info' : 'secondary'} pill>
+                                {tasksDueTodayCombined.length}
+                              </Badge>
+                            </div>
+                          </Card.Header>
+                          <Card.Body className="p-3 d-flex flex-column gap-2">
+                            {tasksDueTodayLoading ? (
+                              <div className="d-flex align-items-center gap-2 text-muted">
+                                <Spinner size="sm" animation="border" /> Loading tasks…
+                              </div>
+                            ) : tasksDueTodayCombined.length === 0 ? (
+                              <div className="text-muted small">No tasks due today or overdue.</div>
+                            ) : (
+                              tasksDueTodayCombined.map((item) => {
+                                if (item.kind === 'task' && item.task) {
+                                  const task = item.task;
+                                  const dueMs = getTaskDueMs(task);
+                                  const aiScore = (task as any).aiCriticalityScore ?? (task as any).aiPriorityScore;
+                                  const refLabel = taskRefLabel(task);
+                                  const priorityBadge = getPriorityBadge((task as any).priority);
+                                  const dueLabel = dueMs ? formatDueDetail(dueMs) : null;
+                                  return (
+                                    <div key={item.id} className="border rounded p-3 dashboard-due-item">
+                                      <div className="d-flex justify-content-between align-items-start gap-2">
+                                        <div className="flex-grow-1">
+                                          <div className="fw-semibold">{task.title}</div>
+                                          {refLabel && (
+                                            <div className="text-muted small">
+                                              <a href={`/tasks/${task.id}`} className="text-decoration-none">
+                                                <code className="text-primary">{refLabel}</code>
+                                              </a>
+                                            </div>
+                                          )}
+                                          <div className="text-muted small d-flex align-items-center gap-1">
+                                            <Clock size={12} /> Due {dueLabel ?? '—'}
+                                          </div>
+                                        </div>
+                                      </div>
+                                      <div className="d-flex align-items-end justify-content-between mt-2 gap-2">
+                                        <div className="d-flex align-items-center gap-2 flex-wrap">
+                                          <Badge bg={priorityBadge.bg}>{priorityBadge.text}</Badge>
+                                          <span className="text-muted small">
+                                            AI score {aiScore != null ? Math.round(aiScore) : '—'}
+                                          </span>
+                                        </div>
+                                        <Form.Select
+                                          size="sm"
+                                          value={Number(task.status ?? 0)}
+                                          onChange={(e) => handleTaskStatusChange(task, Number(e.target.value))}
+                                          aria-label="Update task status"
+                                          className="dashboard-task-status-select"
+                                        >
+                                          <option value={0}>To do</option>
+                                          <option value={1}>Doing</option>
+                                          <option value={2}>Done</option>
+                                        </Form.Select>
+                                      </div>
+                                    </div>
+                                  );
+                                }
+                                return null;
+                              })
+                            )}
+                          </Card.Body>
+                        </Card>
+                    </Col>
+                    <Col md={6} className="today-plan-col today-plan-col-chores">
+                      <Card className="shadow-sm border-0 h-100 dashboard-chores-card">
+                        <Card.Header className="d-flex align-items-center justify-content-between">
+                          <div className="fw-semibold d-flex align-items-center gap-2">
+                            <ListChecks size={16} /> Chores & Habits
+                          </div>
+                          <div className="d-flex align-items-center gap-2">
+                            <Button size="sm" variant="outline-secondary" href="/chores/checklist">
+                              Checklist
+                            </Button>
+                            <Badge bg={choresDueTodayTasks.length > 0 ? 'info' : 'secondary'} pill>
+                              {choresDueTodayTasks.length}
                             </Badge>
                           </div>
                         </Card.Header>
                         <Card.Body className="p-3 d-flex flex-column gap-2">
                           {tasksDueTodayLoading ? (
                             <div className="d-flex align-items-center gap-2 text-muted">
-                              <Spinner size="sm" animation="border" /> Loading tasks…
+                              <Spinner size="sm" animation="border" /> Loading chores…
                             </div>
-                          ) : tasksDueTodayCombined.length === 0 ? (
-                            <div className="text-muted small">No tasks or habits due today.</div>
+                          ) : choresDueTodayTasks.length === 0 ? (
+                            <div className="text-muted small">No chores, habits, or routines due today.</div>
                           ) : (
-                            tasksDueTodayCombined.map((item) => {
-                              if (item.kind === 'task' && item.task) {
-                                const task = item.task;
-                                const dueMs = getTaskDueMs(task);
-                                const aiScore = (task as any).aiCriticalityScore ?? (task as any).aiPriorityScore;
-                                const refLabel = taskRefLabel(task);
-                                const priorityBadge = getPriorityBadge((task as any).priority);
-                                const dueLabel = dueMs ? formatDueDetail(dueMs) : null;
-                                return (
-                                  <div key={item.id} className="border rounded p-2">
-                                    <div className="d-flex justify-content-between align-items-start gap-2">
-                                      <div>
-                                        <div className="fw-semibold">{task.title}</div>
-                                        {refLabel && (
-                                          <div className="text-muted small">
-                                            <a href={`/tasks/${task.id}`} className="text-decoration-none">
-                                              <code className="text-primary">{refLabel}</code>
-                                            </a>
-                                          </div>
-                                        )}
-                                        <div className="text-muted small d-flex align-items-center gap-1">
-                                          <Clock size={12} /> Due {dueLabel ?? '—'}
-                                        </div>
-                                      </div>
-                                      <Form.Select
-                                        size="sm"
-                                        value={Number(task.status ?? 0)}
-                                        onChange={(e) => handleTaskStatusChange(task, Number(e.target.value))}
-                                        aria-label="Update task status"
-                                        style={{ width: 140 }}
-                                      >
-                                        <option value={0}>To Do</option>
-                                        <option value={1}>In Progress</option>
-                                        <option value={2}>Done</option>
-                                      </Form.Select>
-                                    </div>
-                                    <div className="d-flex align-items-center justify-content-between mt-2">
-                                      <div className="d-flex align-items-center gap-2 flex-wrap">
-                                        <Badge bg={priorityBadge.bg}>{priorityBadge.text}</Badge>
-                                      </div>
-                                      <span className="text-muted small">
-                                        AI score {aiScore != null ? Math.round(aiScore) : '—'}
-                                      </span>
+                            choresDueTodayTasks.map((task) => {
+                              const kind = getChoreKind(task) || 'chore';
+                              const dueMs = resolveRecurringDueMs(task, todayDate, todayStartMs);
+                              const dueLabel = dueMs ? formatDueDetail(dueMs) : 'today';
+                              const isOverdue = !!dueMs && dueMs < todayStartMs;
+                              const badgeVariant = kind === 'routine' ? 'success' : kind === 'habit' ? 'secondary' : 'primary';
+                              const badgeLabel = kind === 'routine' ? 'Routine' : kind === 'habit' ? 'Habit' : 'Chore';
+                              const busy = !!choreCompletionBusy[task.id];
+                              return (
+                                <div key={task.id} className="border rounded p-2 d-flex align-items-start gap-2">
+                                  <Form.Check
+                                    type="checkbox"
+                                    checked={busy}
+                                    disabled={busy}
+                                    onChange={() => handleCompleteChoreTask(task)}
+                                    aria-label={`Complete ${task.title}`}
+                                  />
+                                  <div className="flex-grow-1">
+                                    <div className="fw-semibold">{task.title}</div>
+                                    <div className="text-muted small d-flex align-items-center gap-1">
+                                      <Clock size={12} /> {isOverdue ? `Overdue · ${dueLabel}` : `Due ${dueLabel}`}
                                     </div>
                                   </div>
-                                );
-                              }
-                              const dueLabel = item.dueMs ? new Date(item.dueMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'today';
-                              const badge = item.kind === 'routine' ? 'Routine' : 'Habit';
-                              const badgeVariant = item.kind === 'routine' ? 'success' : 'secondary';
-                              return (
-                                <div key={item.id} className="border rounded p-2">
-                                  <div className="d-flex justify-content-between align-items-start gap-2">
-                                    <div>
-                                      <div className="fw-semibold">{item.title}</div>
-                                      <div className="text-muted small d-flex align-items-center gap-1">
-                                        <Clock size={12} /> Due {dueLabel}
-                                      </div>
-                                    </div>
-                                    <Badge bg={badgeVariant}>{badge}</Badge>
+                                  <div className="d-flex flex-column align-items-end gap-1">
+                                    {isOverdue && <Badge bg="danger">Overdue</Badge>}
+                                    <Badge bg={badgeVariant}>{badgeLabel}</Badge>
                                   </div>
                                 </div>
                               );

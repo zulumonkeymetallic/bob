@@ -7,9 +7,11 @@ import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDo
 import { useAuth } from '../contexts/AuthContext';
 import { Story, Goal, Task } from '../types';
 import { useSprint } from '../contexts/SprintContext';
+import { usePersona } from '../contexts/PersonaContext';
 
 const ModernKanbanPage: React.FC = () => {
   const { currentUser } = useAuth();
+  const { currentPersona } = usePersona();
   const { selectedSprintId } = useSprint();
   const [stories, setStories] = useState<Story[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
@@ -68,12 +70,14 @@ const ModernKanbanPage: React.FC = () => {
     const goalsQuery = query(
       collection(db, 'goals'),
       where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
       orderBy('updatedAt', 'desc'),
       limit(1000)
     );
     const storiesQuery = query(
       collection(db, 'stories'),
       where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
       orderBy('updatedAt', 'desc'),
       limit(1000)
     );
@@ -102,7 +106,7 @@ const ModernKanbanPage: React.FC = () => {
       unsubscribeGoals();
       unsubscribeStories();
     };
-  }, [currentUser]);
+  }, [currentUser, currentPersona]);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -111,6 +115,7 @@ const ModernKanbanPage: React.FC = () => {
       ? query(
           collection(db, 'sprint_task_index'),
           where('ownerUid', '==', currentUser.uid),
+          where('persona', '==', currentPersona),
           where('sprintId', '==', selectedSprintId),
           where('isOpen', '==', true),
           orderBy('dueDate', 'asc'),
@@ -119,6 +124,7 @@ const ModernKanbanPage: React.FC = () => {
       : query(
           collection(db, 'sprint_task_index'),
           where('ownerUid', '==', currentUser.uid),
+          where('persona', '==', currentPersona),
           where('sprintId', '==', '__none__'),
           where('isOpen', '==', true),
           orderBy('dueDate', 'asc'),
@@ -141,6 +147,7 @@ const ModernKanbanPage: React.FC = () => {
           parentId: x.parentId || x.storyId || '',
           storyId: x.storyId || null,
           sprintId: x.sprintId && x.sprintId !== '__none__' ? x.sprintId : null,
+          persona: x.persona || currentPersona,
           ownerUid: currentUser.uid,
           ref: x.ref || `TASK-${String(docSnap.id).slice(-4).toUpperCase()}`,
         };
@@ -152,7 +159,7 @@ const ModernKanbanPage: React.FC = () => {
     });
 
     return unsubscribe;
-  }, [currentUser, selectedSprintId]);
+  }, [currentUser, selectedSprintId, currentPersona]);
 
   const handleAddStory = async () => {
     if (!currentUser || !newStory.title.trim()) return;
@@ -166,6 +173,7 @@ const ModernKanbanPage: React.FC = () => {
         priority: newStory.priority,
         points: newStory.points,
         orderIndex: stories.length,
+        persona: currentPersona || 'personal',
         ownerUid: currentUser.uid,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
@@ -189,7 +197,7 @@ const ModernKanbanPage: React.FC = () => {
 
     try {
       await addDoc(collection(db, 'tasks'), {
-        persona: 'personal',
+        persona: currentPersona || 'personal',
         parentType: 'story',
         parentId: selectedStory.id,
         title: newTask.title,

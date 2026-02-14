@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Card, Button, Badge, Form, Row, Col, Modal, ListGroup } from 'react-bootstrap';
 import { X, Edit3, Save, Calendar, Target, BookOpen, Clock, Hash, ChevronLeft, ChevronRight, Trash2, Plus, MessageCircle, Link as LinkIcon, Copy, MessageSquare, Wand2, ExternalLink } from 'lucide-react';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from '../firebase';
-import { getThemeById, migrateThemeValue } from '../constants/globalThemes';
+import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { Story, Goal, Task, Sprint } from '../types';
 import { useSidebar } from '../contexts/SidebarContext';
 import { useTestMode } from '../contexts/TestModeContext';
@@ -15,12 +15,15 @@ import ResearchDocModal from './ResearchDocModal';
 import EditStoryModal from './EditStoryModal';
 import EditGoalModal from './EditGoalModal';
 import EditTaskModal from './EditTaskModal';
+import TagInput from './common/TagInput';
+import { formatTaskTagLabel } from '../utils/tagDisplay';
 import { domainThemePrimaryVar, themeVars, rgbaCard } from '../utils/themeVars';
 import { ChoiceHelper } from '../config/choices';
 import { EntitySummary, searchEntities, loadEntitySummary, formatEntityLabel } from '../utils/entityLookup';
 import { useNavigate } from 'react-router-dom';
 import { isStatus, getPriorityBadge } from '../utils/statusHelpers';
 import { normalizePriorityValue } from '../utils/priorityUtils';
+import { resolveThemeFromValue } from '../utils/themeResolver';
 
 interface EntityLookupInputProps {
   type: 'goal' | 'story';
@@ -209,6 +212,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
   const { selectedItem, selectedType, isVisible, isCollapsed, hideSidebar, toggleCollapse, updateItem } = useSidebar();
   const { isTestMode, testModeLabel } = useTestMode();
   const { currentUser } = useAuth();
+  const { themes: globalThemes } = useGlobalThemes();
   const navigate = useNavigate();
   const [isEditing, setIsEditing] = useState(false);
   const [showFullEditor, setShowFullEditor] = useState(false);
@@ -231,6 +235,10 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
     ? (quickEdit.goalId || (selectedItem as any)?.goalId || '')
     : '';
   const linkedGoal = linkedGoalId ? goals.find((g) => g.id === linkedGoalId) : null;
+  const formatTag = useCallback(
+    (tag: string) => formatTaskTagLabel(tag, goals, sprints),
+    [goals, sprints]
+  );
 
   // Ensure status labels/variants match each entity’s board semantics
   const getStatusDisplay = (
@@ -342,7 +350,11 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
     const normalizedPriority = rawPriority === null || rawPriority === undefined || rawPriority === ''
       ? ''
       : normalizePriorityValue(rawPriority);
-    setEditForm({ ...selectedItem, priority: normalizedPriority });
+    setEditForm({
+      ...selectedItem,
+      priority: normalizedPriority,
+      tags: Array.isArray((selectedItem as any)?.tags) ? (selectedItem as any).tags : [],
+    });
     setIsEditing(false);
 
     if (!currentUser?.uid) return;
@@ -653,9 +665,12 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
 
   const goal = getGoalForItem();
   const story = selectedType === 'task' ? getStoryForTask() : (selectedType === 'story' ? selectedItem as Story : null);
-  const themeId = goal?.theme != null ? migrateThemeValue(goal.theme as any) : null;
-  const themeHex = themeId != null ? getThemeById(themeId).color : '#6b7280';
-  const themeColor = themeHex; // use hex for colors/gradients
+  const themeValue = (goal as any)?.theme ?? (goal as any)?.themeId ?? (goal as any)?.theme_id
+    ?? (story as any)?.theme ?? (story as any)?.themeId ?? (story as any)?.theme_id
+    ?? (selectedItem as any)?.theme ?? (selectedItem as any)?.themeId ?? (selectedItem as any)?.theme_id;
+  const themeDef = resolveThemeFromValue(themeValue, globalThemes);
+  const themeColor = themeDef?.color || '#6b7280';
+  const themeHex = themeColor;
   const actionIconColor = themeVars.text as string;
 
   const formatDate = (timestamp: any) => {
@@ -676,17 +691,6 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
     if (!s) return null;
     const ms = Date.parse(s);
     return Number.isNaN(ms) ? null : ms;
-  };
-
-  const getThemeName = (themeValue: number): string => {
-    const themeNames: { [key: number]: string } = {
-      1: 'Health',
-      2: 'Growth',
-      3: 'Wealth',
-      4: 'Tribe',
-      5: 'Home'
-    };
-    return themeNames[themeValue] || 'Home';
   };
 
   const generateReferenceNumber = () => {
@@ -1010,6 +1014,38 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                 )}
               </div>
 
+              {/* Tags */}
+              <div style={{ marginBottom: '20px' }}>
+                <label style={{ fontSize: '14px', fontWeight: '500', color: themeVars.text, marginBottom: '6px', display: 'block' }}>
+                  Tags
+                </label>
+                {isEditing ? (
+                  <TagInput
+                    value={Array.isArray(editForm.tags) ? editForm.tags : []}
+                    onChange={(tags) => setEditForm({ ...editForm, tags })}
+                    placeholder="Add tags..."
+                    formatTag={formatTag}
+                  />
+                ) : (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                    {(selectedItem as any)?.tags?.length ? (
+                      (selectedItem as any).tags.map((tag: string) => {
+                        const formatted = formatTag(tag);
+                        const display = formatted && String(formatted).trim().length > 0 ? formatted : tag;
+                        const title = display !== tag ? `#${tag}` : undefined;
+                        return (
+                          <Badge key={tag} bg="secondary" style={{ fontSize: '12px' }} title={title}>
+                            #{display}
+                          </Badge>
+                        );
+                      })
+                    ) : (
+                      <span style={{ color: themeVars.muted }}>No tags</span>
+                    )}
+                  </div>
+                )}
+              </div>
+
               {/* Status and Priority */}
               <Row style={{ marginBottom: '20px' }}>
                 <Col xs={6}>
@@ -1136,6 +1172,21 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                   </div>
                 </div>
               </div>
+
+              {/* Save Button */}
+              {isEditing && (
+                <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: `1px solid ${themeVars.border}` }}>
+                  <div style={{ display: 'flex', gap: '12px' }}>
+                    <Button variant="primary" onClick={handleSave} style={{ flex: 1 }}>
+                      <Save size={16} style={{ marginRight: '6px' }} />
+                      Save Changes
+                    </Button>
+                    <Button variant="outline-secondary" onClick={() => setIsEditing(false)}>
+                      Cancel
+                    </Button>
+                  </div>
+                </div>
+              )}
 
               {/* Activity Stream */}
               <div style={{ borderTop: `1px solid ${themeVars.border}`, paddingTop: '20px', marginTop: '20px' }}>
@@ -1344,21 +1395,6 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                   )}
                 </div>
               </div>
-
-              {/* Save Button */}
-              {isEditing && (
-                <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: `1px solid ${themeVars.border}` }}>
-                  <div style={{ display: 'flex', gap: '12px' }}>
-                    <Button variant="primary" onClick={handleSave} style={{ flex: 1 }}>
-                      <Save size={16} style={{ marginRight: '6px' }} />
-                      Save Changes
-                    </Button>
-                    <Button variant="outline-secondary" onClick={() => setIsEditing(false)}>
-                      Cancel
-                    </Button>
-                  </div>
-                </div>
-              )}
             </div>
           </>
         )}

@@ -78,10 +78,6 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
 
   const handleSubmit = async () => {
     if (!currentUser || !formData.title.trim()) return;
-    if (currentPersona !== 'personal') {
-      setSubmitResult('❌ Goals are only available for Personal persona');
-      return;
-    }
 
     setIsSubmitting(true);
     setSubmitResult(null);
@@ -135,7 +131,7 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
         status: statusMap[formData.status as keyof typeof statusMap] || 0,
         priority: formData.priority,
         kpis: formData.kpis,
-        persona: 'personal',
+        persona: currentPersona || 'personal',
         ownerUid: currentUser.uid, // Ensure ownerUid is included
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
@@ -213,12 +209,6 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
         <Modal.Title>Add New Goal</Modal.Title>
       </Modal.Header>
       <Modal.Body>
-        {currentPersona !== 'personal' && (
-          <Alert variant="warning">
-            Goals are only available for the Personal persona. Switch to Personal to create goals.
-          </Alert>
-        )}
-        
         <Form>
           <Form.Group className="mb-3">
             <Form.Label>Title *</Form.Label>
@@ -228,7 +218,6 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
               onChange={(e) => setFormData({ ...formData, title: e.target.value })}
               placeholder="Enter goal title..."
               autoFocus
-              disabled={currentPersona !== 'personal'}
             />
           </Form.Group>
 
@@ -240,7 +229,6 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
               value={formData.description}
               onChange={(e) => setFormData({ ...formData, description: e.target.value })}
               placeholder="Describe this goal in detail..."
-              disabled={currentPersona !== 'personal'}
             />
           </Form.Group>
 
@@ -258,7 +246,6 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
                     setFormData({ ...formData, theme: match ? match.id : (parseInt(val) || formData.theme) });
                   }}
                   placeholder="Search themes..."
-                  disabled={currentPersona !== 'personal'}
                 />
                 <datalist id="goal-theme-options">
                   {themes.map(t => (
@@ -281,7 +268,6 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
                       timeToMasterHours: sizeData?.hours || 40 
                     });
                   }}
-                  disabled={currentPersona !== 'personal'}
                 >
                   {sizes.map(size => (
                     <option key={size.value} value={size.value}>{size.label}</option>
@@ -301,7 +287,6 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
                   min={0}
                   max={1}
                   step={0.1}
-                  disabled={currentPersona !== 'personal'}
                 />
                 <Form.Text className="text-muted">
                   {Math.round(formData.confidence * 100)}% - How confident are you about achieving this?
@@ -315,7 +300,6 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
                   type="date"
                   value={formData.startDate}
                   onChange={(e) => setFormData({ ...formData, startDate: e.target.value })}
-                  disabled={currentPersona !== 'personal'}
                 />
               </Form.Group>
             </div>
@@ -326,7 +310,6 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
                   type="date"
                   value={formData.endDate}
                   onChange={(e) => setFormData({ ...formData, endDate: e.target.value })}
-                  disabled={currentPersona !== 'personal'}
                 />
               </Form.Group>
             </div>
@@ -339,7 +322,6 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
                 <Form.Select
                   value={formData.status}
                   onChange={(e) => setFormData({ ...formData, status: e.target.value })}
-                  disabled={currentPersona !== 'personal'}
                 >
                   {statuses.map(status => (
                     <option key={status} value={status}>{status}</option>
@@ -353,7 +335,6 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
                 <Form.Select
                   value={formData.priority}
                   onChange={(e) => setFormData({ ...formData, priority: parseInt(e.target.value) })}
-                  disabled={currentPersona !== 'personal'}
                 >
                   {priorities.map(priority => (
                     <option key={priority.value} value={priority.value}>{priority.label}</option>
@@ -371,7 +352,6 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
               onChange={(e) => setFormData({ ...formData, timeToMasterHours: parseInt(e.target.value) })}
               min={1}
               max={1000}
-              disabled={currentPersona !== 'personal'}
             />
             <Form.Text className="text-muted">
               Total time you expect to invest in this goal
@@ -386,7 +366,6 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
                 variant="outline-primary"
                 size="sm"
                 onClick={addKPI}
-                disabled={currentPersona !== 'personal'}
               >
                 + Add KPI
               </Button>
@@ -400,7 +379,6 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
                       placeholder="KPI Name (e.g., Weight Lost)"
                       value={kpi.name}
                       onChange={(e) => updateKPI(index, 'name', e.target.value)}
-                      disabled={currentPersona !== 'personal'}
                     />
                   </div>
                   <div className="col-md-3">
@@ -409,7 +387,6 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
                       placeholder="Target"
                       value={kpi.target}
                       onChange={(e) => updateKPI(index, 'target', parseFloat(e.target.value))}
-                      disabled={currentPersona !== 'personal'}
                     />
                   </div>
                   <div className="col-md-3">
@@ -418,7 +395,6 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
                       placeholder="Unit (e.g., lbs, books)"
                       value={kpi.unit}
                       onChange={(e) => updateKPI(index, 'unit', e.target.value)}
-                      disabled={currentPersona !== 'personal'}
                     />
                   </div>
                   <div className="col-md-2">
@@ -426,7 +402,6 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
                       variant="outline-danger"
                       size="sm"
                       onClick={() => removeKPI(index)}
-                      disabled={currentPersona !== 'personal'}
                     >
                       Remove
                     </Button>
@@ -453,7 +428,7 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
         <Button
           variant="primary"
           onClick={handleSubmit}
-          disabled={isSubmitting || !formData.title.trim() || currentPersona !== 'personal'}
+          disabled={isSubmitting || !formData.title.trim()}
         >
           {isSubmitting ? 'Creating...' : 'Create Goal'}
         </Button>

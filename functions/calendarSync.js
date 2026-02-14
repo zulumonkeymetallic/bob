@@ -36,13 +36,21 @@ const NUMERIC_THEME_MAP = {
 };
 
 async function resolveThemeLabelForBlock(block, uid, themes) {
-  let themeLabel = block.theme_id ? mapThemeIdToLabel(block.theme_id, themes) : (block.theme || null);
+  const rawThemeId = block.theme_id ?? block.themeId ?? null;
+  let themeLabel = rawThemeId
+    ? mapThemeIdToLabel(rawThemeId, themes)
+    : (block.theme || block.category || null);
 
   // Parse numeric theme (legacy/numeric scale 1-15)
   // If mapThemeIdToLabel returns a number or if themeLabel is numeric
-  if (Number.isFinite(Number(themeLabel)) || Number.isFinite(Number(block.theme))) {
-    const val = Number(themeLabel) || Number(block.theme);
-    if (NUMERIC_THEME_MAP[val]) {
+  if (Number.isFinite(Number(themeLabel)) || Number.isFinite(Number(block.theme)) || Number.isFinite(Number(rawThemeId))) {
+    const val = Number(themeLabel) || Number(block.theme) || Number(rawThemeId);
+    const direct = Array.isArray(themes)
+      ? themes.find((t) => String(t.id) === String(val))
+      : null;
+    if (direct) {
+      themeLabel = direct.label || direct.name || direct.id;
+    } else if (NUMERIC_THEME_MAP[val]) {
       themeLabel = NUMERIC_THEME_MAP[val];
     }
   }
@@ -80,7 +88,7 @@ async function resolveThemeLabelForBlock(block, uid, themes) {
       if (g.exists) {
         const gd = g.data() || {};
         themeLabel = gd.theme || gd.themeLabel || themeLabel;
-        if (!block.theme_id && gd.themeId) block.theme_id = gd.themeId;
+        if (!block.theme_id && !block.themeId && gd.themeId) block.theme_id = gd.themeId;
       }
     } catch { /* ignore */ }
   }
@@ -109,6 +117,122 @@ function toMillis(value) {
     }
   }
   return 0;
+}
+
+function normalizeDayToken(value) {
+  if (value === undefined || value === null) return null;
+  if (typeof value === 'number') {
+    const idx = Math.max(0, Math.min(6, value % 7));
+    return ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][idx];
+  }
+  const raw = String(value).toLowerCase().trim();
+  if (!raw) return null;
+  if (['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'].includes(raw)) return raw;
+  if (raw.startsWith('su')) return 'sun';
+  if (raw.startsWith('mo')) return 'mon';
+  if (raw.startsWith('tu')) return 'tue';
+  if (raw.startsWith('we')) return 'wed';
+  if (raw.startsWith('th')) return 'thu';
+  if (raw.startsWith('fr')) return 'fri';
+  if (raw.startsWith('sa')) return 'sat';
+  return null;
+}
+
+function isDoneStatus(value) {
+  if (value === null || value === undefined || value === '') return false;
+  if (typeof value === 'number') return value === 2;
+  const normalized = String(value).trim().toLowerCase();
+  return ['done', 'complete', 'completed', 'finished', 'closed', '2'].includes(normalized);
+}
+
+function getTaskDueMs(task) {
+  return toMillis(task?.dueDateMs ?? task?.dueDate ?? task?.targetDate ?? task?.dueAt ?? task?.due);
+}
+
+function isRecurringDueOnDay(task, dayMs) {
+  const day = new Date(dayMs);
+  const dayStart = new Date(day);
+  dayStart.setHours(0, 0, 0, 0);
+  const dayEnd = new Date(day);
+  dayEnd.setHours(23, 59, 59, 999);
+  const dueMs = getTaskDueMs(task);
+  if (dueMs) {
+    return dueMs >= dayStart.getTime() && dueMs <= dayEnd.getTime();
+  }
+  const recurrence = task?.recurrence || {};
+  const freq = String(task?.repeatFrequency || recurrence.frequency || recurrence.freq || '').toLowerCase();
+  if (!freq) return false;
+  if (freq === 'daily') return true;
+  const dayToken = normalizeDayToken(day.getDay());
+  const daysRaw = []
+    .concat(task?.daysOfWeek || [])
+    .concat(task?.repeatDaysOfWeek || [])
+    .concat(recurrence?.daysOfWeek || []);
+  const daySet = new Set(daysRaw.map(normalizeDayToken).filter(Boolean));
+  if (freq === 'weekly') {
+    if (dayToken && daySet.size > 0) return daySet.has(dayToken);
+    return false;
+  }
+  if (freq === 'monthly') {
+    const daysOfMonth = []
+      .concat(recurrence?.daysOfMonth || [])
+      .map((value) => Number(value))
+      .filter((value) => Number.isFinite(value));
+    if (!daysOfMonth.length) return false;
+    return daysOfMonth.includes(day.getDate());
+  }
+  return false;
+}
+
+async function buildChecklistItemsForDay(uid, dayMs) {
+  const dayIso = new Date(dayMs).toISOString().slice(0, 10);
+  const dayStart = new Date(dayMs);
+  dayStart.setHours(0, 0, 0, 0);
+  const dayStartMs = dayStart.getTime();
+  const dayEnd = new Date(dayMs);
+  dayEnd.setHours(23, 59, 59, 999);
+  const dayEndMs = dayEnd.getTime();
+
+  try {
+    const tasksSnap = await admin.firestore().collection('tasks')
+      .where('ownerUid', '==', uid)
+      .get();
+    const rows = tasksSnap.docs
+      .map((doc) => ({ id: doc.id, ...(doc.data() || {}) }))
+      .filter((task) => {
+        const type = String(task.type || task.task_type || '').toLowerCase();
+        return ['chore', 'routine', 'habit', 'habitual'].includes(type);
+      })
+      .filter((task) => !task.deleted)
+      .filter((task) => !isDoneStatus(task.status))
+      .filter((task) => isRecurringDueOnDay(task, dayMs))
+      .filter((task) => {
+        const lastDoneMs = toMillis(task.lastDoneAt || task.completedAt || 0);
+        if (!lastDoneMs) return true;
+        return lastDoneMs < dayStartMs || lastDoneMs > dayEndMs;
+      })
+      .map((task) => {
+        const type = String(task.type || task.task_type || '').toLowerCase();
+        const kind = type === 'habitual' ? 'habit' : (type || 'chore');
+        return {
+          id: task.id,
+          title: task.title || 'Checklist item',
+          kind,
+          dueMs: getTaskDueMs(task) || dayStartMs,
+        };
+      })
+      .sort((a, b) => (a.dueMs || dayStartMs) - (b.dueMs || dayStartMs))
+      .slice(0, 12);
+
+    const lines = rows.map((item) => {
+      const label = item.kind === 'routine' ? 'Routine' : item.kind === 'habit' ? 'Habit' : 'Chore';
+      return `${item.title} (${label})`;
+    });
+    return { dayIso, lines };
+  } catch (error) {
+    console.warn('[calendar-sync] failed to build checklist items', error?.message || error);
+    return { dayIso, lines: [] };
+  }
 }
 
 function isValidUrl(value) {
@@ -145,14 +269,28 @@ function buildPrivateProps(values) {
 
 function resolveBlockDeepLink(block) {
   if (!block) return null;
+  const raw = block.deepLink || block.linkUrl || block.url || block.link || null;
+  const entityType = String(block.entityType || '').toLowerCase();
+  const source = String(block.source || '').toLowerCase();
+  const isChoreBlock = entityType === 'chore' || source === 'chore';
+  if (raw && isChoreBlock) return buildAbsoluteUrl(String(raw));
   if (block.storyId) {
     return buildEntityUrl('story', String(block.storyId), block.storyRef || block.storyReference || null);
   }
   if (block.taskId) {
     return buildEntityUrl('task', String(block.taskId), block.taskRef || block.taskReference || null);
   }
-  const raw = block.deepLink || block.linkUrl || block.url || block.link || null;
   if (raw) return buildAbsoluteUrl(String(raw));
+  const category = String(block.category || block.title || '').toLowerCase();
+  const themeLabel = String(block.theme_label || block.themeLabel || '').toLowerCase();
+  const isChoreWindow = category.includes('chore') || themeLabel.includes('chore');
+  if (isChoreWindow) {
+    const startMs = toMillis(block.start);
+    if (startMs) {
+      const dayIso = new Date(startMs).toISOString().slice(0, 10);
+      return buildAbsoluteUrl(`/chores/checklist?date=${encodeURIComponent(dayIso)}`);
+    }
+  }
   if (block.choreId) return buildAbsoluteUrl(`/chores?choreId=${encodeURIComponent(String(block.choreId))}`);
   if (block.routineId) return buildAbsoluteUrl(`/routines?routineId=${encodeURIComponent(String(block.routineId))}`);
   if (block.habitId) return buildAbsoluteUrl(`/habits?habitId=${encodeURIComponent(String(block.habitId))}`);
@@ -555,10 +693,16 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
       block = snap.data();
     }
 
+    if (block && block.syncToGoogle === false && action !== 'delete') {
+      debugLogs.push({ step: 'sync_skipped', reason: 'syncToGoogle=false' });
+      return { skipped: true, reason: 'syncToGoogle=false' };
+    }
+
     if (action === 'create') {
       const themes = await loadThemesForUser(uid);
       const googleEventColors = await getGoogleEventColors(calendar);
       const themeLabel = await resolveThemeLabelForBlock(block, uid, themes);
+      const themeIdForBlock = block.theme_id ?? block.themeId ?? null;
       const activityName = block.title || block.category || 'BOB Block';
       const refPart = block.storyRef || block.taskRef || '';
       const summaryParts = [];
@@ -613,7 +757,8 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
       }
       let enrichedDesc = block.rationale || '';
       let aiScoreVal = block.aiScore ?? block.aiCriticalityScore ?? null;
-      let aiReasonVal = block.aiReason || block.aiCriticalityReason || block.dueDateReason || '';
+      const blockTopReason = block.aiTop3ForDay && block.aiTop3Reason ? block.aiTop3Reason : null;
+      let aiReasonVal = block.aiReason || blockTopReason || block.aiCriticalityReason || block.dueDateReason || '';
       try {
         if (block.storyId) {
           const s = await admin.firestore().collection('stories').doc(String(block.storyId)).get();
@@ -627,8 +772,11 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
             if (sd.aiCriticalityScore != null) {
               aiScoreVal = aiScoreVal ?? sd.aiCriticalityScore;
             }
-            if (!aiReasonVal && sd.aiCriticalityReason) {
-              aiReasonVal = sd.aiCriticalityReason || '';
+            if (!aiReasonVal) {
+              const sdTopReason = sd.aiTop3ForDay && sd.aiTop3Reason ? sd.aiTop3Reason : null;
+              if (sdTopReason || sd.aiCriticalityReason) {
+                aiReasonVal = sdTopReason || sd.aiCriticalityReason || '';
+              }
             }
             const acArr = Array.isArray(sd.acceptanceCriteria)
               ? sd.acceptanceCriteria.filter(Boolean).map((x) => String(x)).slice(0, 3)
@@ -653,7 +801,8 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
               lines.push(`Goal Link: ${buildEntityUrl('goal', sd.goalId, goalRef)}`);
             }
             if (sd.sprintId) lines.push(`Sprint Link: ${buildAbsoluteUrl(`/sprints?sprintId=${sd.sprintId}`)}`);
-            lines.push(`Planner: ${buildAbsoluteUrl('/calendar/planner')}`);
+            lines.push(`Calendar: ${buildAbsoluteUrl('/calendar')}`);
+            lines.push(`Overview: ${buildAbsoluteUrl('/dashboard')}`);
 
             const aiLineParts = [];
             if (aiScoreVal != null) aiLineParts.push(`AI score ${aiScoreVal}/100`);
@@ -686,8 +835,11 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
             if (td.aiCriticalityScore != null) {
               aiScoreVal = aiScoreVal ?? td.aiCriticalityScore;
             }
-            if (!aiReasonVal && td.aiCriticalityReason) {
-              aiReasonVal = td.aiCriticalityReason || '';
+            if (!aiReasonVal) {
+              const tdTopReason = td.aiTop3ForDay && td.aiTop3Reason ? td.aiTop3Reason : null;
+              if (tdTopReason || td.aiCriticalityReason) {
+                aiReasonVal = tdTopReason || td.aiCriticalityReason || '';
+              }
             }
             const lines = [];
             if (enrichedDesc) lines.push(enrichedDesc);
@@ -734,7 +886,8 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
               lines.push(`Goal Link: ${buildEntityUrl('goal', td.goalId, goalRef)}`);
             }
             if (td.sprintId) lines.push(`Sprint Link: ${buildAbsoluteUrl(`/sprints?sprintId=${td.sprintId}`)}`);
-            lines.push(`Planner: ${buildAbsoluteUrl('/calendar/planner')}`);
+            lines.push(`Calendar: ${buildAbsoluteUrl('/calendar')}`);
+            lines.push(`Overview: ${buildAbsoluteUrl('/dashboard')}`);
 
             const aiLineParts = [];
             if (aiScoreVal != null) aiLineParts.push(`AI score ${aiScoreVal}/100`);
@@ -747,6 +900,24 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
         }
       } catch { }
       if (!block.storyId && !block.taskId) {
+        const routineType = String(block.entityType || block.sourceType || block.category || '').toLowerCase();
+        const themeLower = String(block.theme || block.theme_label || block.themeLabel || '').toLowerCase();
+        const isChecklistWindow = ['chore', 'routine', 'habit'].some((key) => routineType.includes(key) || themeLower.includes(key));
+        const dayMs = toMillis(block.start);
+        if (isChecklistWindow && dayMs) {
+          const checklist = await buildChecklistItemsForDay(uid, dayMs);
+          const checklistUrl = buildAbsoluteUrl(`/chores/checklist?date=${encodeURIComponent(checklist.dayIso)}`);
+          const checklistLines = [
+            `Checklist Link: ${checklistUrl}`,
+          ];
+          if (checklist.lines.length) {
+            checklistLines.push('', 'Expected items in this block:');
+            checklist.lines.forEach((line) => checklistLines.push(`- ${line}`));
+          }
+          const checklistBlock = checklistLines.join('\n');
+          enrichedDesc = enrichedDesc ? `${enrichedDesc}\n${checklistBlock}` : checklistBlock;
+          eventDeepLink = checklistUrl;
+        }
         if (eventDeepLink) {
           const linkLabel = block.taskId
             ? 'Task Link'
@@ -760,6 +931,11 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
           const linkLine = `${linkLabel}: ${eventDeepLink}`;
           enrichedDesc = enrichedDesc ? `${enrichedDesc}\n${linkLine}` : linkLine;
         }
+        const calendarLine = `Calendar: ${buildAbsoluteUrl('/calendar')}`;
+        enrichedDesc = enrichedDesc
+          ? `${enrichedDesc}\n${calendarLine}`
+          : `${calendarLine}`;
+
         const aiLineParts = [];
         if (aiScoreVal != null) aiLineParts.push(`AI score ${aiScoreVal}/100`);
         if (aiReasonVal) aiLineParts.push(aiReasonVal);
@@ -821,8 +997,12 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
         'bob-entity-type': entityType,
         'bob-persona': block.persona,
         'bob-theme': themeLabel,
-        'bob-theme-id': block.theme_id,
+        'bob-theme-id': themeIdForBlock,
         'bob-category': block.category,
+        'theme': themeLabel,
+        'themeId': themeIdForBlock,
+        'theme_id': themeIdForBlock,
+        'category': block.category,
         'bob-story-id': block.storyId,
         'bob-story-ref': eventContext.storyRef,
         'bob-story-title': eventContext.storyTitle,
@@ -846,7 +1026,7 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
         description: enrichedDesc || 'BOB calendar block',
         start: { dateTime: new Date(startMs).toISOString(), timeZone: 'UTC' },
         end: { dateTime: new Date(endMs).toISOString(), timeZone: 'UTC' },
-        colorId: resolveGoogleEventColorId({ themeId: block.theme_id, themeLabel, themes, eventColors: googleEventColors }),
+        colorId: resolveGoogleEventColorId({ themeId: themeIdForBlock, themeLabel, themes, eventColors: googleEventColors }),
         source: eventSource,
         extendedProperties: Object.keys(privateProps).length ? { private: privateProps } : undefined
       };
@@ -895,6 +1075,7 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
       const themes = await loadThemesForUser(uid);
       const googleEventColors = await getGoogleEventColors(calendar);
       const themeLabel = await resolveThemeLabelForBlock(block, uid, themes);
+      const themeIdForBlock = block.theme_id ?? block.themeId ?? null;
       const activityName = block.title || block.category || 'BOB Block';
       const refPart = block.storyRef || block.taskRef || '';
       const summaryParts = [];
@@ -904,7 +1085,8 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
       const summaryText = summaryParts.filter(Boolean).join(' - ');
       let enrichedDesc2 = block.rationale || '';
       let aiScoreVal2 = block.aiScore ?? block.aiCriticalityScore ?? null;
-      let aiReasonVal2 = block.aiReason || block.aiCriticalityReason || block.dueDateReason || '';
+      const blockTopReason2 = block.aiTop3ForDay && block.aiTop3Reason ? block.aiTop3Reason : null;
+      let aiReasonVal2 = block.aiReason || blockTopReason2 || block.aiCriticalityReason || block.dueDateReason || '';
       let eventDeepLink = resolveBlockDeepLink(block);
       const eventContext = {
         storyRef: block.storyRef || null,
@@ -928,8 +1110,11 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
             if (sd.aiCriticalityScore != null) {
               aiScoreVal2 = aiScoreVal2 ?? sd.aiCriticalityScore;
             }
-            if (!aiReasonVal2 && sd.aiCriticalityReason) {
-              aiReasonVal2 = sd.aiCriticalityReason || '';
+            if (!aiReasonVal2) {
+              const sdTopReason = sd.aiTop3ForDay && sd.aiTop3Reason ? sd.aiTop3Reason : null;
+              if (sdTopReason || sd.aiCriticalityReason) {
+                aiReasonVal2 = sdTopReason || sd.aiCriticalityReason || '';
+              }
             }
             const acArr = Array.isArray(sd.acceptanceCriteria)
               ? sd.acceptanceCriteria.filter(Boolean).map((x) => String(x)).slice(0, 3)
@@ -954,7 +1139,8 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
               lines.push(`Goal Link: ${buildEntityUrl('goal', sd.goalId, goalRef)}`);
             }
             if (sd.sprintId) lines.push(`Sprint Link: ${buildAbsoluteUrl(`/sprints?sprintId=${sd.sprintId}`)}`);
-            lines.push(`Planner: ${buildAbsoluteUrl('/calendar/planner')}`);
+            lines.push(`Calendar: ${buildAbsoluteUrl('/calendar')}`);
+            lines.push(`Overview: ${buildAbsoluteUrl('/dashboard')}`);
 
             const aiLineParts = [];
             if (aiScoreVal2 != null) aiLineParts.push(`AI score ${aiScoreVal2}/100`);
@@ -987,8 +1173,11 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
             if (td.aiCriticalityScore != null) {
               aiScoreVal2 = aiScoreVal2 ?? td.aiCriticalityScore;
             }
-            if (!aiReasonVal2 && td.aiCriticalityReason) {
-              aiReasonVal2 = td.aiCriticalityReason || '';
+            if (!aiReasonVal2) {
+              const tdTopReason = td.aiTop3ForDay && td.aiTop3Reason ? td.aiTop3Reason : null;
+              if (tdTopReason || td.aiCriticalityReason) {
+                aiReasonVal2 = tdTopReason || td.aiCriticalityReason || '';
+              }
             }
             const lines = [];
             if (enrichedDesc2) lines.push(enrichedDesc2);
@@ -1035,7 +1224,8 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
               lines.push(`Goal Link: ${buildEntityUrl('goal', td.goalId, goalRef)}`);
             }
             if (td.sprintId) lines.push(`Sprint Link: ${buildAbsoluteUrl(`/sprints?sprintId=${td.sprintId}`)}`);
-            lines.push(`Planner: ${buildAbsoluteUrl('/calendar/planner')}`);
+            lines.push(`Calendar: ${buildAbsoluteUrl('/calendar')}`);
+            lines.push(`Overview: ${buildAbsoluteUrl('/dashboard')}`);
 
             const aiLineParts = [];
             if (aiScoreVal2 != null) aiLineParts.push(`AI score ${aiScoreVal2}/100`);
@@ -1061,6 +1251,11 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
           const linkLine = `${linkLabel}: ${eventDeepLink}`;
           enrichedDesc2 = enrichedDesc2 ? `${enrichedDesc2}\n${linkLine}` : linkLine;
         }
+        const calendarLine = `Calendar: ${buildAbsoluteUrl('/calendar')}`;
+        enrichedDesc2 = enrichedDesc2
+          ? `${enrichedDesc2}\n${calendarLine}`
+          : `${calendarLine}`;
+
         const aiLineParts = [];
         if (aiScoreVal2 != null) aiLineParts.push(`AI score ${aiScoreVal2}/100`);
         if (aiReasonVal2) aiLineParts.push(aiReasonVal2);
@@ -1096,8 +1291,12 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
         'bob-entity-type': entityType,
         'bob-persona': block.persona,
         'bob-theme': themeLabel,
-        'bob-theme-id': block.theme_id,
+        'bob-theme-id': themeIdForBlock,
         'bob-category': block.category,
+        'theme': themeLabel,
+        'themeId': themeIdForBlock,
+        'theme_id': themeIdForBlock,
+        'category': block.category,
         'bob-story-id': block.storyId,
         'bob-story-ref': eventContext.storyRef,
         'bob-story-title': eventContext.storyTitle,
@@ -1121,7 +1320,7 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
         description: enrichedDesc2 || 'BOB calendar block',
         start: { dateTime: new Date(startMs).toISOString(), timeZone: 'UTC' },
         end: { dateTime: new Date(endMs).toISOString(), timeZone: 'UTC' },
-        colorId: resolveGoogleEventColorId({ themeId: block.theme_id, themeLabel, themes, eventColors: googleEventColors }),
+        colorId: resolveGoogleEventColorId({ themeId: themeIdForBlock, themeLabel, themes, eventColors: googleEventColors }),
         source: eventSource,
         extendedProperties: Object.keys(privateProps).length ? { private: privateProps } : undefined
       };
@@ -1261,6 +1460,19 @@ exports.onCalendarBlockWrite = functions.firestore.document('calendar_blocks/{bl
   const uid = after.ownerUid;
   if (!uid) return;
 
+  const beforeSync = before ? before.syncToGoogle !== false : true;
+  const afterSync = after.syncToGoogle !== false;
+  if (!afterSync) {
+    if (beforeSync && before && before.googleEventId) {
+      const source = String(before.source || before.entry_method || '').toLowerCase();
+      const isExternal = source === 'gcal' || source === 'google_calendar';
+      if (!isExternal) {
+        await syncBlockToGoogle(blockId, 'delete', before.ownerUid || uid, before);
+      }
+    }
+    return;
+  }
+
   // Create
   if (!before) {
     // If created with googleEventId, it's likely from syncFromGoogleCalendar, so skip
@@ -1288,6 +1500,7 @@ exports.onCalendarBlockWrite = functions.firestore.document('calendar_blocks/{bl
     'aiCriticalityScore',
     'aiReason',
     'aiCriticalityReason',
+    'aiTop3Reason',
     'placementReason',
   ];
   const hasChanges = relevantFields.some(f => JSON.stringify(before[f]) !== JSON.stringify(after[f]));
@@ -1430,7 +1643,7 @@ async function pullGoogleEventsForUser(uid, { windowStart, windowEnd }) {
           source: 'gcal',
           entry_method: 'google_calendar',
           status: 'imported',
-          persona: priv['bob-persona'] || 'personal',
+          persona: priv['bob-persona'] || null,
           theme: priv['bob-theme'] || null,
           theme_id: priv['bob-theme-id'] || null,
           storyId: priv['bob-story-id'] || null,

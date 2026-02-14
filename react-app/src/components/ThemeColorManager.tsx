@@ -228,25 +228,71 @@ const ThemeColorManager: React.FC = () => {
       try {
         const root = document.documentElement;
         const keyMap: Record<string, string> = {
+          general: 'growth',
           health: 'health',
+          fitness: 'health',
           growth: 'growth',
+          spiritual: 'growth',
+          learning: 'tribe',
+          education: 'tribe',
           wealth: 'wealth',
+          finance: 'wealth',
           tribe: 'tribe',
+          family: 'tribe',
+          relationship: 'tribe',
           home: 'home',
+          living: 'home',
+          career: 'home',
+          professional: 'home',
           work: 'work',
           'side gig': 'sidegig',
           sidegig: 'sidegig',
           sleep: 'sleep',
-          random: 'random'
+          random: 'random',
+          hobby: 'growth',
+          interest: 'growth',
+          travel: 'growth',
+          adventure: 'growth',
+          chores: 'chores',
+          rest: 'rest',
+          recovery: 'rest'
         };
+        const normalizeHex = (hex: string) => {
+          const clean = hex.replace('#', '').trim();
+          if (clean.length === 3) {
+            return clean.split('').map((c) => c + c).join('');
+          }
+          return clean.padEnd(6, '0').slice(0, 6);
+        };
+        const mixColor = (hex: string, mixWith: string, amount: number) => {
+          const src = normalizeHex(hex);
+          const mix = normalizeHex(mixWith);
+          const amt = Math.max(0, Math.min(1, amount));
+          const sr = parseInt(src.slice(0, 2), 16);
+          const sg = parseInt(src.slice(2, 4), 16);
+          const sb = parseInt(src.slice(4, 6), 16);
+          const mr = parseInt(mix.slice(0, 2), 16);
+          const mg = parseInt(mix.slice(2, 4), 16);
+          const mb = parseInt(mix.slice(4, 6), 16);
+          const r = Math.round(sr + (mr - sr) * amt);
+          const g = Math.round(sg + (mg - sg) * amt);
+          const b = Math.round(sb + (mb - sb) * amt);
+          return `#${[r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+        };
+        const lighten = (hex: string, amount: number) => mixColor(hex, '#ffffff', amount);
+        const darken = (hex: string, amount: number) => mixColor(hex, '#000000', amount);
         const applied: Record<string, string> = {};
         globalThemes.forEach(t => {
           const name = (t.name || t.label || '').toLowerCase();
           const match = Object.keys(keyMap).find(k => name.includes(k));
           if (match && t.color) {
-            const varName = `--theme-${keyMap[match]}-primary`;
-            root.style.setProperty(varName, t.color);
-            applied[keyMap[match]] = t.color;
+            const key = keyMap[match];
+            root.style.setProperty(`--theme-${key}-primary`, t.color);
+            root.style.setProperty(`--theme-${key}-light`, lighten(t.color, 0.35));
+            root.style.setProperty(`--theme-${key}-lighter`, lighten(t.color, 0.7));
+            root.style.setProperty(`--theme-${key}-dark`, darken(t.color, 0.2));
+            root.style.setProperty(`--theme-${key}-darker`, darken(t.color, 0.35));
+            applied[key] = t.color;
           }
         });
         localStorage.setItem('bob-global-themes', JSON.stringify(applied));

@@ -4,7 +4,9 @@ import { X, Edit3, Save, Calendar, User, Target, BookOpen, Clock, AlertCircle, H
 import { Story, Goal, Task, Sprint } from '../types';
 import { isStatus, isTheme, isPriority, getThemeClass, getPriorityBadge } from '../utils/statusHelpers';
 import { normalizePriorityValue } from '../utils/priorityUtils';
-import { themeVars, domainThemePrimaryVar } from '../utils/themeVars';
+import { themeVars } from '../utils/themeVars';
+import { useGlobalThemes } from '../hooks/useGlobalThemes';
+import { resolveThemeFromValue } from '../utils/themeResolver';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from '../firebase';
 
@@ -34,14 +36,7 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
   const [aiBusy, setAiBusy] = useState(false);
   const [aiMsg, setAiMsg] = useState<string | null>(null);
 
-  // Theme colors mapping
-  const themeColors = {
-    Health: domainThemePrimaryVar('Health'),
-    Growth: domainThemePrimaryVar('Growth'),
-    Wealth: domainThemePrimaryVar('Wealth'),
-    Tribe: domainThemePrimaryVar('Tribe'),
-    Home: domainThemePrimaryVar('Home')
-  } as const;
+  const { themes: globalThemes } = useGlobalThemes();
 
   const deriveEstimatedHours = (task: Task): number | undefined => {
     if (typeof task.estimatedHours === 'number' && !Number.isNaN(task.estimatedHours)) {
@@ -104,7 +99,11 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
 
   const goal = getGoalForItem();
   const story = type === 'task' ? getStoryForTask(item.id) : null;
-  const themeColor = goal?.theme ? themeColors[goal.theme] : (themeVars.muted as string);
+  const themeValue = (goal as any)?.theme ?? (goal as any)?.themeId ?? (goal as any)?.theme_id
+    ?? (story as any)?.theme ?? (story as any)?.themeId ?? (story as any)?.theme_id
+    ?? (item as any)?.theme ?? (item as any)?.themeId ?? (item as any)?.theme_id;
+  const themeDef = resolveThemeFromValue(themeValue, globalThemes);
+  const themeColor = themeDef?.color || (themeVars.muted as string);
   const derivedEstimatedHours = type === 'task' ? deriveEstimatedHours(item as Task) : undefined;
   const aiScoreValue = type === 'task' ? Number(((item as Task).aiCriticalityScore ?? null)) : null;
   const formattedAiScore = aiScoreValue != null && Number.isFinite(aiScoreValue) ? Math.round(aiScoreValue) : null;
@@ -554,11 +553,16 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
                     <div style={{ marginBottom: '8px' }}>
                       <strong>AI Score:</strong> {formattedAiScore ?? (item as Task).aiCriticalityScore}
                     </div>
-                    {(item as Task).aiCriticalityReason && (
-                      <div style={{ marginBottom: '8px' }}>
-                        <strong>AI Rationale:</strong> {(item as Task).aiCriticalityReason}
-                      </div>
-                    )}
+                    {(() => {
+                      const t = item as Task;
+                      const top3Reason = (t as any).aiTop3ForDay ? (t as any).aiTop3Reason : null;
+                      const reason = top3Reason || (t as any).aiCriticalityReason || null;
+                      return reason ? (
+                        <div style={{ marginBottom: '8px' }}>
+                          <strong>AI Rationale:</strong> {reason}
+                        </div>
+                      ) : null;
+                    })()}
                   </>
                 )}
               </>

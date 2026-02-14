@@ -7,7 +7,7 @@ interface SkeletonProps {
     width?: string | number;
     height?: string | number;
     borderRadius?: string;
-    marginBottom?: string;
+    marginBottom?: string | number;
     style?: React.CSSProperties;
 }
 
@@ -69,24 +69,32 @@ export const SkeletonTable: React.FC<{ rows?: number }> = ({ rows = 5 }) => (
     </div>
 );
 
-export const SkeletonStatCard: React.FC = () => (
+export const SkeletonStatCard: React.FC<{ compact?: boolean }> = ({ compact = false }) => (
     <Card style={{
         border: 'none',
         boxShadow: elevation.base,
         borderRadius: '12px',
         height: '100%',
     }}>
-        <Card.Body style={{ padding: spacing[6] }}>
+        <Card.Body style={{ padding: compact ? spacing[3] : spacing[6] }}>
             <div style={{
                 display: 'flex',
                 justifyContent: 'space-between',
-                marginBottom: spacing[4],
+                marginBottom: compact ? spacing[2] : spacing[4],
             }}>
-                <Skeleton width="40px" height="40px" borderRadius="10px" />
-                <Skeleton width="60px" height="24px" borderRadius="12px" />
+                <Skeleton
+                    width={compact ? '28px' : '40px'}
+                    height={compact ? '28px' : '40px'}
+                    borderRadius={compact ? '7px' : '10px'}
+                />
+                <Skeleton
+                    width={compact ? '42px' : '60px'}
+                    height={compact ? '18px' : '24px'}
+                    borderRadius="12px"
+                />
             </div>
-            <Skeleton height="36px" width="80px" marginBottom={spacing[2]} />
-            <Skeleton height="13px" width="120px" />
+            <Skeleton height={compact ? '22px' : '36px'} width="72px" marginBottom={compact ? 4 : spacing[2]} />
+            <Skeleton height={compact ? '10px' : '13px'} width="110px" />
         </Card.Body>
     </Card>
 );

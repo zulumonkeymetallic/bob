@@ -33,11 +33,12 @@ import { useSidebar } from '../contexts/SidebarContext';
 import { Story, Goal, Task, Sprint } from '../types';
 import { useSprint } from '../contexts/SprintContext';
 import { isStatus } from '../utils/statusHelpers';
-import { deriveTaskSprint, sprintNameForId } from '../utils/taskSprintHelpers';
+import { deriveTaskSprint, findSprintForDate, sprintNameForId } from '../utils/taskSprintHelpers';
 import { useActivityTracking } from '../hooks/useActivityTracking';
 import { generateRef, displayRefForEntity, validateRef } from '../utils/referenceGenerator';
 import EditStoryModal from './EditStoryModal';
 import AddStoryModal from './AddStoryModal';
+import TagInput from './common/TagInput';
 import { DnDMutationHandler } from '../utils/dndMutations';
 import { themeVars } from '../utils/themeVars';
 import '../styles/KanbanCards.css';
@@ -45,6 +46,9 @@ import '../styles/KanbanFixes.css';
 import { storyStatusText, taskStatusText, priorityLabel as formatPriorityLabel, priorityPillClass, goalThemeColor, colorWithAlpha } from '../utils/storyCardFormatting';
 import SortableStoryCard from './stories/SortableStoryCard';
 import { normalizePriorityValue, isCriticalPriority } from '../utils/priorityUtils';
+import { cascadeTaskPersona } from '../utils/personaCascade';
+import { formatTaskTagLabel } from '../utils/tagDisplay';
+import { useGlobalThemes } from '../hooks/useGlobalThemes';
 
 const formatDueDate = (task: Task): string => {
   const ms = getTaskDueMs(task);
@@ -103,6 +107,17 @@ const getAiScoreValue = (item: Story | Task): number => {
   return Number.isFinite(parsed) ? parsed : -Infinity;
 };
 
+const isTop3Task = (task: Task): boolean => {
+  return (task as any).aiTop3ForDay === true
+    || (task as any).aiFlaggedTop === true
+    || Number((task as any).aiPriorityRank || 0) > 0;
+};
+
+const isTop3Story = (story: Story): boolean => {
+  return (story as any).aiTop3ForDay === true
+    || Number((story as any).aiFocusStoryRank || 0) > 0;
+};
+
 const matchesCriticalOrHighAi = (item: Story | Task): boolean => {
   return isCriticalPriority(item.priority) || getAiScoreValue(item) >= 90;
 };
@@ -157,7 +172,9 @@ const SortableTaskCard: React.FC<{
   themeColor: string;
   onEdit: (task: Task) => void;
   onItemClick: (task: Task) => void;
-}> = ({ task, story, themeColor, onEdit, onItemClick }) => {
+  showTags?: boolean;
+  formatTag?: (tag: string) => string;
+}> = ({ task, story, themeColor, onEdit, onItemClick, showTags = false, formatTag }) => {
   const { showSidebar } = useSidebar();
   const {
     attributes,
@@ -198,6 +215,9 @@ const SortableTaskCard: React.FC<{
 
   const taskPriorityValue = normalizePriorityValue(task.priority);
   const isCriticalTask = taskPriorityValue >= 4;
+  const taskTags = Array.isArray((task as any).tags) ? (task as any).tags : [];
+  const visibleTags = taskTags.slice(0, 4);
+  const remainingTags = taskTags.length - visibleTags.length;
   const criticalAccent = isCriticalTask
     ? {
       boxShadow: '0 0 0 2px rgba(251, 191, 36, 0.45)',
@@ -335,6 +355,26 @@ const SortableTaskCard: React.FC<{
             </div>
           )}
 
+          {showTags && visibleTags.length > 0 && (
+            <div className="kanban-card__tags">
+              {visibleTags.map((tag) => {
+                const formatted = formatTag ? formatTag(tag) : tag;
+                const display = formatted && String(formatted).trim().length > 0 ? formatted : tag;
+                const title = display !== tag ? `#${tag}` : undefined;
+                return (
+                  <span key={tag} className="kanban-card__tag" title={title}>
+                    #{display}
+                  </span>
+                );
+              })}
+              {remainingTags > 0 && (
+                <span className="kanban-card__tag kanban-card__tag--muted">
+                  +{remainingTags}
+                </span>
+              )}
+            </div>
+          )}
+
           <div className="kanban-card__meta">
             <span className={priorityClass} title={`Priority: ${priorityLabel}`}>
               {priorityLabel}
@@ -396,6 +436,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
   const { currentPersona } = usePersona();
   const { showSidebar, setUpdateHandler } = useSidebar();
   const { selectedSprintId } = useSprint();
+  const { themes: globalThemes } = useGlobalThemes();
   const navigate = useNavigate();
   const boardContainerRef = useRef<HTMLDivElement | null>(null);
   const [boardHeight, setBoardHeight] = useState<number | null>(null);
@@ -439,7 +480,29 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
   const [filterOverdueOnly, setFilterOverdueOnly] = useState(false);
   const [filterUnlinkedStoriesOnly, setFilterUnlinkedStoriesOnly] = useState(false);
   const [filterUnlinkedTasksOnly, setFilterUnlinkedTasksOnly] = useState(false);
-  const [sortMode, setSortMode] = useState<'default' | 'ai' | 'overdue' | 'priority' | 'due'>('default');
+  const [filterTop3Only, setFilterTop3Only] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    try {
+      const stored = window.localStorage.getItem('kanbanTop3Only');
+      return stored ? stored === 'true' : false;
+    } catch {
+      return false;
+    }
+  });
+  const [sortMode, setSortMode] = useState<'default' | 'ai' | 'overdue' | 'priority' | 'due'>('ai');
+  const [showTags, setShowTags] = useState(() => {
+    if (typeof window === 'undefined') return true;
+    try {
+      const stored = window.localStorage.getItem('kanbanShowTags');
+      return stored ? stored === 'true' : true;
+    } catch {
+      return true;
+    }
+  });
+  const formatTaskTag = useCallback(
+    (tag: string) => formatTaskTagLabel(tag, goals, sprints),
+    [goals, sprints]
+  );
 
   // DnD sensors
   const sensors = useSensors(
@@ -507,6 +570,20 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
     };
   }, []);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem('kanbanShowTags', showTags ? 'true' : 'false');
+    } catch { }
+  }, [showTags]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem('kanbanTop3Only', filterTop3Only ? 'true' : 'false');
+    } catch { }
+  }, [filterTop3Only]);
+
   // Wire sidebar inline editor to Firestore updates
   useEffect(() => {
     const handler = async (item: Story | Task, type: 'story' | 'task', updates: any) => {
@@ -514,17 +591,21 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
       const docRef = doc(db, col, (item as any).id);
       let payload: any = { ...updates, updatedAt: serverTimestamp() };
       if (type === 'task' && 'dueDate' in updates) {
+        payload.dueDateLocked = true;
+        payload.dueDateReason = 'user';
         try {
           const existing = tasks.find(t => t.id === (item as any).id);
           if (existing) {
             const derivation = deriveTaskSprint({ task: existing, updates, stories, sprints });
-            if (derivation.sprintId && derivation.sprintId !== (existing as any).sprintId) {
-              payload.sprintId = derivation.sprintId;
-              const sprintName = sprintNameForId(sprints, derivation.sprintId) || derivation.sprintId;
+            const storySprintId = derivation.story?.sprintId ?? null;
+            const matchedSprintId = storySprintId ?? (findSprintForDate(sprints, derivation.dueDateMs ?? null)?.id ?? null);
+            if (matchedSprintId !== (existing as any).sprintId) {
+              payload.sprintId = matchedSprintId;
+              const sprintName = sprintNameForId(sprints, matchedSprintId) || matchedSprintId || 'Unassigned';
               const due = derivation.dueDateMs ? new Date(derivation.dueDateMs).toISOString().slice(0, 10) : 'unknown';
               try {
                 await addNote(existing.id, 'task', `Auto-aligned to sprint "${sprintName}" because due date ${due} falls within its window.`, (existing as any).ref);
-                await trackFieldChange(existing.id, 'task', 'sprintId', String((existing as any).sprintId || ''), String(derivation.sprintId || ''), (existing as any).ref);
+                await trackFieldChange(existing.id, 'task', 'sprintId', String((existing as any).sprintId || ''), String(matchedSprintId || ''), (existing as any).ref);
               } catch { }
             }
           }
@@ -544,7 +625,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
   const laneIds: LaneStatus[] = swimLanes.map(lane => lane.id);
 
   // Resolve theme color from goal's theme id or name consistently
-  const themeColorForGoal = (goal?: Goal): string => goalThemeColor(goal);
+  const themeColorForGoal = (goal?: Goal): string => goalThemeColor(goal, globalThemes);
 
   const normalizeStatusValue = (value: any): string | null => {
     if (typeof value === 'string') {
@@ -679,14 +760,16 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
     : tasks;
 
   const filteredStories = storiesInScope.filter((story) => {
-    if (filterCriticalOnly && !isCriticalPriority(story.priority)) return false;
+    if (filterTop3Only && !isTop3Story(story)) return false;
+    if (filterCriticalOnly && !(isCriticalPriority(story.priority) || isTop3Story(story))) return false;
     if (filterCriticalAiOnly && !matchesCriticalOrHighAi(story)) return false;
     if (filterUnlinkedStoriesOnly && isStoryLinkedToGoal(story)) return false;
     return true;
   });
 
   const filteredTasks = tasksInScope.filter((task) => {
-    if (filterCriticalOnly && !isCriticalPriority(task.priority)) return false;
+    if (filterTop3Only && !isTop3Task(task)) return false;
+    if (filterCriticalOnly && !(isCriticalPriority(task.priority) || isTop3Task(task))) return false;
     if (filterCriticalAiOnly && !matchesCriticalOrHighAi(task)) return false;
     if (filterOverdueOnly && !isTaskOverdue(task)) return false;
     if (filterUnlinkedTasksOnly && isTaskLinkedToStory(task)) return false;
@@ -859,14 +942,23 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
       // Map index docs to Task-like shape expected by board UI
       const tasksData = snapshot.docs.map(d => {
         const x = d.data() as any;
-        const t: any = {
-          id: d.id,
-          title: x.title,
-          description: x.description || '',
-          status: x.status,
-          priority: x.priority ?? 2,
-          effort: x.effort ?? 'M',
-          estimateMin: x.estimateMin ?? 0,
+          const t: any = {
+            id: d.id,
+            title: x.title,
+            description: x.description || '',
+            status: x.status,
+            priority: x.priority ?? 2,
+            aiCriticalityScore: x.aiCriticalityScore ?? null,
+            aiCriticalityReason: x.aiCriticalityReason ?? null,
+            aiFlaggedTop: x.aiFlaggedTop ?? false,
+            aiPriorityRank: x.aiPriorityRank ?? null,
+            aiTop3ForDay: x.aiTop3ForDay ?? false,
+            aiTop3Date: x.aiTop3Date ?? null,
+            aiPriorityLabel: x.aiPriorityLabel ?? null,
+            aiTop3Reason: x.aiTop3Reason ?? x.aiPriorityReason ?? null,
+            effort: x.effort ?? 'M',
+            estimateMin: x.estimateMin ?? 0,
+            tags: Array.isArray(x.tags) ? x.tags : [],
           dueDate: x.dueDate || null,
           parentType: x.parentType || 'story',
           parentId: x.parentId || x.storyId || '',
@@ -976,6 +1068,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
     setSelectedItem(item);
     setSelectedType(type);
     setEditForm(item);
+    setFilterTop3Only(true);
     setShowEditModal(true);
   };
 
@@ -1007,6 +1100,11 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
       const collection_name = selectedType === 'story' ? 'stories' : 'tasks';
       const docRef = doc(db, collection_name, selectedItem.id);
       let payload: any = { ...editForm, updatedAt: serverTimestamp() };
+      if ('tags' in payload) {
+        payload.tags = Array.isArray(payload.tags)
+          ? payload.tags.map((tag: string) => String(tag).trim()).filter(Boolean)
+          : [];
+      }
 
       if (selectedType === 'task') {
         const existing = tasks.find(t => t.id === selectedItem.id);
@@ -1014,15 +1112,24 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
           const updates: any = {};
           if ('dueDate' in editForm) updates.dueDate = (editForm as any).dueDate;
           if (Object.keys(updates).length) {
+            const existingDue = (existing as any).dueDate ?? (existing as any).dueDateMs ?? (existing as any).targetDate ?? null;
+            const nextDue = updates.dueDate ?? null;
+            const dueDateChanged = (existingDue ?? null) !== (nextDue ?? null);
             const derivation = deriveTaskSprint({ task: existing, updates, stories, sprints });
-            if (derivation.sprintId && derivation.sprintId !== (existing as any).sprintId) {
-              payload.sprintId = derivation.sprintId;
+            if (dueDateChanged) {
+              payload.dueDateLocked = true;
+              payload.dueDateReason = 'user';
+            }
+            const storySprintId = derivation.story?.sprintId ?? null;
+            const matchedSprintId = storySprintId ?? (findSprintForDate(sprints, derivation.dueDateMs ?? null)?.id ?? null);
+            if (dueDateChanged && matchedSprintId !== (existing as any).sprintId) {
+              payload.sprintId = matchedSprintId;
               // log alignment reason
-              const sprintName = sprintNameForId(sprints, derivation.sprintId) || derivation.sprintId;
+              const sprintName = sprintNameForId(sprints, matchedSprintId) || matchedSprintId || 'Unassigned';
               const due = derivation.dueDateMs ? new Date(derivation.dueDateMs).toISOString().slice(0, 10) : 'unknown';
               try {
                 await addNote(existing.id, 'task', `Auto-aligned to sprint "${sprintName}" because due date ${due} falls within its window.`, (existing as any).ref);
-                await trackFieldChange(existing.id, 'task', 'sprintId', String((existing as any).sprintId || ''), String(derivation.sprintId), (existing as any).ref);
+                await trackFieldChange(existing.id, 'task', 'sprintId', String((existing as any).sprintId || ''), String(matchedSprintId || ''), (existing as any).ref);
               } catch { }
             }
           }
@@ -1030,6 +1137,17 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
       }
 
       await updateDoc(docRef, payload);
+      if (selectedType === 'task' && selectedItem && currentUser?.uid) {
+        const prevPersona = ((selectedItem as any).persona || currentPersona || 'personal') as 'personal' | 'work';
+        const nextPersona = (payload.persona || prevPersona) as 'personal' | 'work';
+        if (prevPersona !== nextPersona) {
+          try {
+            await cascadeTaskPersona(currentUser.uid, selectedItem.id, nextPersona);
+          } catch (err) {
+            console.warn('[Kanban] persona cascade failed', err);
+          }
+        }
+      }
       setShowEditModal(false);
     } catch (error) {
       console.error('Error updating item:', error);
@@ -1159,6 +1277,14 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
         <Form.Check
           inline
           type="switch"
+          id="filter-top3"
+          label="Top 3 only"
+          checked={filterTop3Only}
+          onChange={(e) => setFilterTop3Only(e.currentTarget.checked)}
+        />
+        <Form.Check
+          inline
+          type="switch"
           id="filter-overdue"
           label="Overdue tasks only"
           checked={filterOverdueOnly}
@@ -1179,6 +1305,14 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
           label="Unlinked tasks"
           checked={filterUnlinkedTasksOnly}
           onChange={(e) => setFilterUnlinkedTasksOnly(e.currentTarget.checked)}
+        />
+        <Form.Check
+          inline
+          type="switch"
+          id="toggle-tags"
+          label="Show tags"
+          checked={showTags}
+          onChange={(e) => setShowTags(e.currentTarget.checked)}
         />
         <Form.Group className="d-flex align-items-center mb-0">
           <Form.Label className="me-2 mb-0">Sort</Form.Label>
@@ -1283,9 +1417,11 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
                                       goal={goal}
                                       taskCount={taskCount}
                                       themeColor={themeColor}
+                                      themes={globalThemes}
                                       onEdit={(story) => handleEdit(story, 'story')}
                                       onDelete={(story) => handleDelete(story, 'story')}
                                       onItemClick={(story) => handleItemClick(story, 'story')}
+                                      showTags={showTags}
                                     />
                                   );
                                 })}
@@ -1316,6 +1452,8 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
                                       themeColor={themeColor}
                                       onEdit={(task) => handleEdit(task, 'task')}
                                       onItemClick={(task) => handleItemClick(task, 'task')}
+                                      showTags={showTags}
+                                      formatTag={formatTaskTag}
                                     />
                                   );
                                 })}
@@ -1384,6 +1522,25 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
                       value={(editForm as any).description || ''}
                       onChange={(e) => setEditForm({ ...(editForm as any), description: e.target.value })}
                     />
+                  </Form.Group>
+                  <Form.Group className="mb-3">
+                  <Form.Label>Tags</Form.Label>
+                  <TagInput
+                    value={Array.isArray((editForm as any).tags) ? (editForm as any).tags : []}
+                    onChange={(tags) => setEditForm({ ...(editForm as any), tags })}
+                    placeholder="Add tags..."
+                    formatTag={formatTaskTag}
+                  />
+                </Form.Group>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Persona</Form.Label>
+                    <Form.Select
+                      value={(editForm as any).persona || currentPersona || 'personal'}
+                      onChange={(e) => setEditForm({ ...(editForm as any), persona: e.target.value })}
+                    >
+                      <option value="personal">Personal</option>
+                      <option value="work">Work</option>
+                    </Form.Select>
                   </Form.Group>
                   <Row>
                     <Col md={4}>

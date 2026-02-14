@@ -15,7 +15,7 @@ const TIME_SLOTS = Array.from(
     { length: ((END_HOUR - START_HOUR) * 60) / SLOT_MINUTES },
     (_, i) => START_HOUR * 60 + i * SLOT_MINUTES
 );
-const HEALTH_SUBTHEMES = ['Bike', 'Run', 'Swim', 'S&C', 'Crossfit', 'Meal Prep'];
+const HEALTH_SUBTHEMES = ['Bike', 'Run', 'Swim', 'Walk', 'S&C', 'Crossfit', 'Meal Prep'];
 const WORK_MAIN_GIG_THEME: GlobalTheme = {
     id: 12,
     name: 'Work (Main Gig)',

@@ -79,32 +79,35 @@
 
 .unified-planner .planner-calendar-wrapper .rbc-event,
 .unified-planner .planner-calendar-wrapper .rbc-event .rbc-event-label {
-  background: linear-gradient(135deg, rgba(249, 115, 22, 0.2), rgba(249, 115, 22, 0.4));
-  border-color: rgba(249, 115, 22, 0.6);
+  background-color: rgba(59, 130, 246, 0.3);
+  background-image: none;
+  border-color: rgba(59, 130, 246, 0.6);
   color: #fff;
 }
 
 .unified-planner .planner-calendar-wrapper .rbc-event.planner-event-external {
-  background: rgba(191, 219, 254, 0.4) !important;
-  border-color: #60a5fa !important;
-  color: #1e3a8a !important;
+  background-color: rgba(191, 219, 254, 0.4);
+  background-image: none;
+  border-color: #60a5fa;
+  color: #1e3a8a;
 }
 
 .unified-planner .planner-calendar-wrapper .rbc-event.planner-event-external .rbc-event-label,
 .unified-planner .planner-calendar-wrapper .rbc-event.planner-event-external .rbc-event-content {
-  background: transparent !important;
-  color: #1e3a8a !important;
+  background: transparent;
+  color: #1e3a8a;
 }
 
 [data-bs-theme="dark"] .unified-planner .planner-calendar-wrapper .rbc-event.planner-event-external {
-  background: rgba(59, 130, 246, 0.25) !important;
-  border-color: #93c5fd !important;
-  color: #e2e8f0 !important;
+  background-color: rgba(59, 130, 246, 0.25);
+  background-image: none;
+  border-color: #93c5fd;
+  color: #e2e8f0;
 }
 
 [data-bs-theme="dark"] .unified-planner .planner-calendar-wrapper .rbc-event.planner-event-external .rbc-event-label,
 [data-bs-theme="dark"] .unified-planner .planner-calendar-wrapper .rbc-event.planner-event-external .rbc-event-content {
-  color: #e2e8f0 !important;
+  color: #e2e8f0;
 }
 
 .unified-planner .planner-calendar-wrapper .rbc-time-header {
@@ -143,4 +146,14 @@
   background: rgba(15, 23, 42, 0.9);
   color: var(--bs-body-color, #e2e8f0);
   border-bottom: 1px solid rgba(226, 232, 240, 0.15);
+}
+
+.unified-planner .planner-calendar-wrapper .rbc-current-time-indicator {
+  background-color: #dc3545;
+  height: 2px;
+  z-index: 3;
+}
+
+.unified-planner .planner-calendar-wrapper .rbc-current-time-indicator::before {
+  background-color: #dc3545;
 }

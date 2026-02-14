@@ -11,6 +11,7 @@ interface StatCardProps {
     value: string | number;
     icon?: LucideIcon;
     iconColor?: string;
+    compact?: boolean;
     trend?: {
         value: number;
         direction: 'up' | 'down';
@@ -25,6 +26,7 @@ export const StatCard: React.FC<StatCardProps> = ({
     value,
     icon: Icon,
     iconColor,
+    compact = false,
     trend,
     onClick,
     variant = 'default',
@@ -43,16 +45,16 @@ export const StatCard: React.FC<StatCardProps> = ({
         border: 'none',
         borderRadius: '12px',
         boxShadow: isHovered ? elevationTransitions.card.hover : elevationTransitions.card.rest,
-        transform: isHovered ? 'translateY(-4px)' : 'translateY(0)',
+        transform: isHovered ? (compact ? 'translateY(-2px)' : 'translateY(-4px)') : 'translateY(0)',
         transition: `all 0.2s cubic-bezier(0.4, 0, 0.2, 1), ${elevationTransition}`,
         cursor: onClick ? 'pointer' : 'default',
         height: '100%',
     };
 
     const iconStyles: React.CSSProperties = {
-        width: '40px',
-        height: '40px',
-        borderRadius: '10px',
+        width: compact ? '28px' : '40px',
+        height: compact ? '28px' : '40px',
+        borderRadius: compact ? '7px' : '10px',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -67,25 +69,25 @@ export const StatCard: React.FC<StatCardProps> = ({
             onMouseLeave={() => setIsHovered(false)}
             onClick={onClick}
         >
-            <Card.Body style={{ padding: spacing[6] }}>
+            <Card.Body style={{ padding: compact ? spacing[3] : spacing[6] }}>
                 <div style={{
                     display: 'flex',
                     justifyContent: 'space-between',
                     alignItems: 'flex-start',
-                    marginBottom: spacing[4]
+                    marginBottom: compact ? spacing[2] : spacing[4]
                 }}>
                     {Icon && (
                         <div style={iconStyles}>
-                            <Icon size={20} />
+                            <Icon size={compact ? 16 : 20} />
                         </div>
                     )}
                     {trend && (
                         <Badge
                             bg={trend.direction === 'up' ? 'success' : 'danger'}
                             style={{
-                                fontSize: '12px',
+                                fontSize: compact ? '11px' : '12px',
                                 fontWeight: '600',
-                                padding: '4px 8px',
+                                padding: compact ? '2px 6px' : '4px 8px',
                             }}
                         >
                             {trend.direction === 'up' ? '↑' : '↓'} {trend.value}%
@@ -94,30 +96,30 @@ export const StatCard: React.FC<StatCardProps> = ({
                 </div>
 
                 <div style={{
-                    fontSize: '36px',
+                    fontSize: compact ? '22px' : '36px',
                     fontWeight: '700',
                     lineHeight: '1.1',
                     color: 'var(--text)',
-                    marginBottom: spacing[2],
+                    marginBottom: compact ? 4 : spacing[2],
                 }}>
                     {value}
                 </div>
 
                 <div style={{
-                    fontSize: '13px',
+                    fontSize: compact ? '10px' : '13px',
                     fontWeight: '500',
                     color: 'var(--muted)',
                     textTransform: 'uppercase',
-                    letterSpacing: '0.5px',
+                    letterSpacing: compact ? '0.35px' : '0.5px',
                 }}>
                     {label}
                 </div>
 
                 {trend?.label && (
                     <div style={{
-                        fontSize: '12px',
+                        fontSize: compact ? '10px' : '12px',
                         color: 'var(--muted)',
-                        marginTop: spacing[2],
+                        marginTop: compact ? 4 : spacing[2],
                     }}>
                         {trend.label}
                     </div>

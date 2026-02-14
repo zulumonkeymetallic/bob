@@ -22,7 +22,57 @@ type MerchantRow = {
   isSubscription?: boolean;
 };
 
+type MerchantSortColumn = 'merchant' | 'spend' | 'transactionsTotal' | 'transactions12' | 'transactions6' | 'category' | 'bucket' | 'subscription' | 'lastTransaction';
+type MerchantSortDirection = 'asc' | 'desc';
+
 const formatMoney = (v: number) => v.toLocaleString('en-GB', { style: 'currency', currency: 'GBP' });
+const toText = (value: any, fallback = ''): string => {
+  if (value === null || value === undefined) return fallback;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed || fallback;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (typeof value === 'object') {
+    const candidate = value.name || value.label || value.title || value.displayName || value.merchantName || value.id || '';
+    if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
+    if (typeof candidate === 'number') return String(candidate);
+  }
+  return fallback;
+};
+const MERCHANT_SORT_COLUMNS: MerchantSortColumn[] = [
+  'merchant',
+  'spend',
+  'transactionsTotal',
+  'transactions12',
+  'transactions6',
+  'category',
+  'bucket',
+  'subscription',
+  'lastTransaction',
+];
+const MERCHANT_SORT_LABELS: Record<MerchantSortColumn, string> = {
+  merchant: 'Merchant',
+  spend: 'Spend',
+  transactionsTotal: 'Tx (Total)',
+  transactions12: 'Tx (12mo)',
+  transactions6: 'Tx (6mo)',
+  category: 'Category',
+  bucket: 'Bucket',
+  subscription: 'Subscription',
+  lastTransaction: 'Last tx',
+};
+const MERCHANT_DEFAULT_SORT_DIRECTION: Record<MerchantSortColumn, MerchantSortDirection> = {
+  merchant: 'asc',
+  spend: 'desc',
+  transactionsTotal: 'desc',
+  transactions12: 'desc',
+  transactions6: 'desc',
+  category: 'asc',
+  bucket: 'asc',
+  subscription: 'desc',
+  lastTransaction: 'desc',
+};
 
 const MerchantMappings: React.FC = () => {
   const { currentUser } = useAuth();
@@ -36,8 +86,8 @@ const MerchantMappings: React.FC = () => {
   const [subNote, setSubNote] = useState('');
   const [search, setSearch] = useState('');
   const [missingOnly, setMissingOnly] = useState(false);
-  const [sortMode, setSortMode] = useState<'merchant' | 'spend_desc' | 'transactions_desc'>('transactions_desc');
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const [sortColumn, setSortColumn] = useState<MerchantSortColumn>('transactions12');
+  const [sortDirection, setSortDirection] = useState<MerchantSortDirection>('desc');
   const [tableRef, bounds] = useMeasure();
   const [pots, setPots] = useState<Record<string, { name: string }>>({});
   const [txSample, setTxSample] = useState<any[]>([]);
@@ -45,33 +95,63 @@ const MerchantMappings: React.FC = () => {
   useEffect(() => {
     if (!currentUser) return;
     const ref = doc(db, 'monzo_budget_summary', currentUser.uid);
-    const unsub = onSnapshot(ref, (snap) => setSummary(snap.exists() ? snap.data() : null));
+    const unsub = onSnapshot(
+      ref,
+      (snap) => setSummary(snap.exists() ? snap.data() : null),
+      (err) => {
+        console.error('Failed to load Monzo budget summary', err);
+        setStatus((err as any)?.message || 'Missing permission to load budget summary.');
+      }
+    );
     const potQ = query(collection(db, 'monzo_pots'), where('ownerUid', '==', currentUser.uid));
-    const unsubPots = onSnapshot(potQ, (snap) => {
-      const map: Record<string, { name: string }> = {};
-      snap.docs.forEach((d) => {
-        const data = d.data() as any;
-        const id = data.potId || d.id;
-        if (!id) return;
-        map[id] = { name: data.name || id };
-      });
-      setPots(map);
-    });
+    const unsubPots = onSnapshot(
+      potQ,
+      (snap) => {
+        const map: Record<string, { name: string }> = {};
+        snap.docs.forEach((d) => {
+          const data = d.data() as any;
+          const id = data.potId || d.id;
+          if (!id) return;
+          map[id] = { name: data.name || id };
+        });
+        setPots(map);
+      },
+      (err) => {
+        console.error('Failed to load Monzo pots', err);
+        setStatus((err as any)?.message || 'Missing permission to load Monzo pots.');
+      }
+    );
     // Lightweight fallback sample of transactions so UI isn't empty if summary hasn't been built yet
     const txQ = query(collection(db, 'monzo_transactions'), where('ownerUid', '==', currentUser.uid));
-    const unsubTx = onSnapshot(txQ, (snap) => {
-      const rows: any[] = [];
-      snap.docs.slice(0, 500).forEach((d) => {
-        const data = d.data() as any;
-        rows.push({
-          merchantKey: data.merchantKey || data.merchantId || data.merchant || data.merchant_normalized || data.description,
-          merchantName: data.merchant || data.merchantName || data.description,
-          amount: typeof data.amount === 'number' ? data.amount : Number(data.amount || 0),
+    const unsubTx = onSnapshot(
+      txQ,
+      (snap) => {
+        const rows: any[] = [];
+        snap.docs.slice(0, 500).forEach((d) => {
+          const data = d.data() as any;
+          const merchantName = toText(data.merchantName || data.merchant || data.description, 'Unknown merchant');
+          const merchantKey = toText(
+            data.merchantKey || data.merchantId || data.merchant || data.merchant_normalized || merchantName,
+            merchantName
+          );
+          rows.push({
+            merchantKey,
+            merchantName,
+            amount: typeof data.amount === 'number' ? data.amount : Number(data.amount || 0),
+          });
         });
-      });
-      setTxSample(rows);
-    });
-    return () => { unsub(); unsubPots(); unsubTx(); };
+        setTxSample(rows);
+      },
+      (err) => {
+        console.error('Failed to load Monzo transaction sample', err);
+        setStatus((err as any)?.message || 'Missing permission to load transaction sample.');
+      }
+    );
+    return () => {
+      unsub();
+      unsubPots();
+      unsubTx();
+    };
   }, [currentUser]);
 
   useEffect(() => {
@@ -87,7 +167,10 @@ const MerchantMappings: React.FC = () => {
         const arr = Array.isArray(data?.categories) ? data.categories : [];
         setCustomCategories(arr.filter((c) => c?.key) as FinanceCategory[]);
       },
-      (err) => console.error('Failed to load finance categories', err)
+      (err) => {
+        console.error('Failed to load finance categories', err);
+        setStatus((err as any)?.message || 'Missing permission to load finance categories.');
+      }
     );
     return () => unsub();
   }, [currentUser]);
@@ -103,19 +186,29 @@ const MerchantMappings: React.FC = () => {
   }, [allCategories]);
 
   const rows: MerchantRow[] = useMemo(() => {
+    const normalizeRows = (input: any[]): MerchantRow[] => input
+      .map((row: any) => ({
+        ...row,
+        merchantKey: toText(row?.merchantKey || row?.merchantName, ''),
+        merchantName: toText(row?.merchantName || row?.merchantKey, 'Unknown merchant'),
+      }))
+      .filter((row) => !!row.merchantKey);
+
     const list = (summary?.merchantSummary || []) as MerchantRow[];
     if (Array.isArray((summary as any)?.allMerchants)) {
-      return (summary as any).allMerchants as MerchantRow[];
+      return normalizeRows((summary as any).allMerchants as MerchantRow[]);
     }
-    if (list && list.length) return list;
+    if (list && list.length) return normalizeRows(list);
     if (txSample.length) {
       const agg = new Map<string, { spend: number; count: number; name: string }>();
       txSample.forEach((t) => {
-        const key = (t.merchantKey || t.merchantName || 'unknown').toString();
+        const key = toText(t.merchantKey || t.merchantName, 'unknown');
+        const name = toText(t.merchantName || t.merchantKey, key);
         if (!agg.has(key)) agg.set(key, { spend: 0, count: 0, name: t.merchantName || key });
         const entry = agg.get(key)!;
         entry.count += 1;
         entry.spend += Math.abs(t.amount || 0);
+        entry.name = name;
       });
       return Array.from(agg.entries()).map(([merchantKey, val]) => ({
         merchantKey,
@@ -133,7 +226,7 @@ const MerchantMappings: React.FC = () => {
     let list = rows;
     if (search.trim()) {
       const q = search.toLowerCase();
-      list = list.filter((r) => (r.merchantName || r.merchantKey || '').toLowerCase().includes(q));
+      list = list.filter((r) => toText(r.merchantName || r.merchantKey, '').toLowerCase().includes(q));
     }
     if (missingOnly) {
       list = list.filter((r) => !r.primaryCategoryKey && !r.primaryCategoryType);
@@ -147,23 +240,40 @@ const MerchantMappings: React.FC = () => {
       return { ...r, transactions12: tx12 || tx, transactions6: tx6 || tx };
     });
 
+    const sortableValue = (row: MerchantRow & { transactions12?: number; transactions6?: number }, column: MerchantSortColumn): number | string => {
+      const selectedCategoryKey = edits[row.merchantKey]?.categoryKey || row.primaryCategoryKey || '';
+      const selectedCategoryLabel = selectedCategoryKey
+        ? getCategoryByKey(selectedCategoryKey, allCategories)?.label || selectedCategoryKey
+        : '';
+      const bucketValue = selectedCategoryKey
+        ? BUCKET_LABELS[(getCategoryByKey(selectedCategoryKey, allCategories)?.bucket || 'optional') as keyof typeof BUCKET_LABELS]
+        : (row.primaryCategoryType || 'optional');
+      if (column === 'merchant') return (row.merchantName || row.merchantKey || '').toLowerCase();
+      if (column === 'spend') return row.totalSpend || 0;
+      if (column === 'transactionsTotal') return row.transactions || 0;
+      if (column === 'transactions12') return row.transactions12 || row.transactions || 0;
+      if (column === 'transactions6') return row.transactions6 || row.transactions || 0;
+      if (column === 'category') return selectedCategoryLabel.toLowerCase();
+      if (column === 'bucket') return String(bucketValue || '').toLowerCase();
+      if (column === 'subscription') return edits[row.merchantKey]?.isSubscription ?? row.isSubscription ? 1 : 0;
+      if (column === 'lastTransaction') return row.lastTransactionISO ? new Date(row.lastTransactionISO).getTime() : 0;
+      return 0;
+    };
+
     const sorted = [...decorated];
-    if (sortMode === 'merchant') {
-      sorted.sort((a, b) => {
-        const cmp = (a.merchantName || '').localeCompare(b.merchantName || '');
-        return sortDir === 'asc' ? cmp : -cmp;
-      });
-    } else if (sortMode === 'spend_desc') {
-      sorted.sort((a, b) => (b.totalSpend || 0) - (a.totalSpend || 0));
-    } else if (sortMode === 'transactions_desc') {
-      sorted.sort((a, b) => {
-        const txA = a.transactions12 || a.transactions || 0;
-        const txB = b.transactions12 || b.transactions || 0;
-        return txB - txA;
-      });
-    }
+    sorted.sort((a, b) => {
+      const aVal = sortableValue(a, sortColumn);
+      const bVal = sortableValue(b, sortColumn);
+      let comparison = 0;
+      if (typeof aVal === 'number' && typeof bVal === 'number') {
+        comparison = aVal - bVal;
+      } else {
+        comparison = String(aVal).localeCompare(String(bVal), undefined, { numeric: true, sensitivity: 'base' });
+      }
+      return sortDirection === 'asc' ? comparison : -comparison;
+    });
     return sorted;
-  }, [rows, search, missingOnly, sortMode, sortDir]);
+  }, [allCategories, edits, rows, search, missingOnly, sortColumn, sortDirection]);
 
   // Prevent an empty grid when filters hide everything
   useEffect(() => {
@@ -267,8 +377,42 @@ const MerchantMappings: React.FC = () => {
     } finally { setBusy(false); }
   };
 
+  const toggleHeaderSort = (column: MerchantSortColumn) => {
+    if (sortColumn === column) {
+      setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+      return;
+    }
+    setSortColumn(column);
+    setSortDirection(MERCHANT_DEFAULT_SORT_DIRECTION[column]);
+  };
+
+  const sortIndicator = (column: MerchantSortColumn) => {
+    if (sortColumn !== column) return '↕';
+    return sortDirection === 'asc' ? '↑' : '↓';
+  };
+
+  const renderSortableHeader = (
+    column: MerchantSortColumn,
+    label: string,
+    tooltip: string,
+    endAligned = false
+  ) => (
+    <OverlayTrigger placement="top" overlay={<Tooltip>{tooltip}</Tooltip>}>
+      <button
+        type="button"
+        className={`merchant-sort-header${endAligned ? ' merchant-sort-header--end' : ''}${sortColumn === column ? ' is-active' : ''}`}
+        onClick={() => toggleHeaderSort(column)}
+      >
+        <span>{label}</span>
+        <span className="merchant-sort-indicator">{sortIndicator(column)}</span>
+      </button>
+    </OverlayTrigger>
+  );
+
+  const tableWidth = Math.max(Math.floor(bounds.width || 0), 980);
+
   return (
-    <div className="container py-3" ref={tableRef}>
+    <div className="container-fluid finance-merchant-container py-3" ref={tableRef}>
       <div className="d-flex justify-content-between align-items-center mb-2">
         <span className="small text-muted">Signed in as: <code>{currentUser?.uid || '—'}</code></span>
       </div>
@@ -366,23 +510,21 @@ const MerchantMappings: React.FC = () => {
           <div className="d-flex align-items-center gap-2">
             <Form.Select
               size="sm"
-              value={sortMode}
-              onChange={(e) => setSortMode(e.target.value as 'merchant' | 'spend_desc' | 'transactions_desc')}
+              value={sortColumn}
+              onChange={(e) => setSortColumn(e.target.value as MerchantSortColumn)}
             >
-              <option value="merchant">Sort by merchant A→Z</option>
-              <option value="transactions_desc">Sort by tx count (high → low)</option>
-              <option value="spend_desc">Sort by total spend (high → low)</option>
+              {MERCHANT_SORT_COLUMNS.map((column) => (
+                <option key={column} value={column}>{MERCHANT_SORT_LABELS[column]}</option>
+              ))}
             </Form.Select>
-            {sortMode === 'merchant' && (
-              <Form.Select
-                size="sm"
-                value={sortDir}
-                onChange={(e) => setSortDir(e.target.value as 'asc' | 'desc')}
-              >
-                <option value="asc">Ascending</option>
-                <option value="desc">Descending</option>
-              </Form.Select>
-            )}
+            <Form.Select
+              size="sm"
+              value={sortDirection}
+              onChange={(e) => setSortDirection(e.target.value as MerchantSortDirection)}
+            >
+              <option value="asc">Ascending</option>
+              <option value="desc">Descending</option>
+            </Form.Select>
           </div>
         </Card.Header>
         <Card.Body className="p-0">
@@ -399,20 +541,20 @@ const MerchantMappings: React.FC = () => {
             </Alert>
           ) : (
             <div className="merchant-table" style={{ height: 540 }}>
-              <div className="merchant-header">
-                <span>Merchant</span>
-                <OverlayTrigger placement="top" overlay={<Tooltip>Total spend (ex VAT)</Tooltip>}><span>Spend</span></OverlayTrigger>
-                <OverlayTrigger placement="top" overlay={<Tooltip>Total transactions</Tooltip>}><span>Tx (Total)</span></OverlayTrigger>
-                <OverlayTrigger placement="top" overlay={<Tooltip>12mo = projected from months/transactions or YTD if present</Tooltip>}><span>Tx (12mo)</span></OverlayTrigger>
-                <OverlayTrigger placement="top" overlay={<Tooltip>6mo = projected from months/transactions</Tooltip>}><span>Tx (6mo)</span></OverlayTrigger>
-                <OverlayTrigger placement="top" overlay={<Tooltip>Category label to apply</Tooltip>}><span>Category</span></OverlayTrigger>
-                <OverlayTrigger placement="top" overlay={<Tooltip>Bucket derived from category</Tooltip>}><span>Bucket</span></OverlayTrigger>
-                <OverlayTrigger placement="top" overlay={<Tooltip>Mark as subscription for override</Tooltip>}><span>Subscription</span></OverlayTrigger>
-                <OverlayTrigger placement="top" overlay={<Tooltip>Flags and save/apply actions</Tooltip>}><span className="text-end">Actions</span></OverlayTrigger>
+              <div className="merchant-header" style={{ minWidth: tableWidth }}>
+                {renderSortableHeader('merchant', 'Merchant', 'Merchant name')}
+                {renderSortableHeader('spend', 'Spend', 'Total spend (ex VAT)')}
+                {renderSortableHeader('transactionsTotal', 'Tx (Total)', 'Total transactions')}
+                {renderSortableHeader('transactions12', 'Tx (12mo)', '12mo = projected from months/transactions or YTD if present')}
+                {renderSortableHeader('transactions6', 'Tx (6mo)', '6mo = projected from months/transactions')}
+                {renderSortableHeader('category', 'Category', 'Category label to apply')}
+                {renderSortableHeader('bucket', 'Bucket', 'Bucket derived from category')}
+                {renderSortableHeader('subscription', 'Subscription', 'Mark as subscription for override')}
+                <span className="text-end">Actions</span>
               </div>
               <List
                 height={480}
-                width={bounds.width || 1200}
+                width={tableWidth}
                 itemCount={filteredRows.length}
                 itemSize={98}
                 itemKey={(idx) => filteredRows[idx].merchantKey}
@@ -428,8 +570,8 @@ const MerchantMappings: React.FC = () => {
                   return (
                     <div style={style} className="merchant-row">
                       <div className="merchant-cell">
-                        <div className="merchant-label text-truncate">{m.merchantName}</div>
-                        <div className="merchant-sub">{m.merchantKey}</div>
+                        <div className="merchant-label text-truncate">{toText(m.merchantName, 'Unknown merchant')}</div>
+                        <div className="merchant-sub">{toText(m.merchantKey, 'unknown')}</div>
                         <div className="merchant-sub">Last: {m.lastTransactionISO ? new Date(m.lastTransactionISO).toLocaleDateString() : '—'}</div>
                       </div>
                       <div className="merchant-cell">
@@ -463,7 +605,7 @@ const MerchantMappings: React.FC = () => {
                         <Form.Control
                           size="sm"
                           className="merchant-input mt-1"
-                          value={edits[m.merchantKey]?.label || m.merchantName}
+                          value={edits[m.merchantKey]?.label || toText(m.merchantName, toText(m.merchantKey, ''))}
                           onChange={(e) => setEdit(m.merchantKey, { label: e.target.value })}
                         />
                       </div>

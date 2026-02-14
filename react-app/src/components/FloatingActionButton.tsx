@@ -8,6 +8,7 @@ import { useSprint } from '../contexts/SprintContext';
 import { generateRef } from '../utils/referenceGenerator';
 import { emergencyCreateTask } from '../utils/emergencyTaskCreation';
 import { GLOBAL_THEMES } from '../constants/globalThemes';
+import { normalizeTaskTags } from '../utils/taskTagging';
 import '../styles/MaterialDesign.css';
 import BulkCreateModal from './BulkCreateModal';
 import GoalChatModal from './GoalChatModal';
@@ -38,7 +39,11 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
     effort: 'M',
     priority: 'med',
     goalId: '',
-    sprintId: ''
+    sprintId: '',
+    type: 'task',
+    repeatFrequency: '',
+    repeatInterval: 1,
+    daysOfWeek: [] as string[]
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState<string | null>(null);
@@ -55,6 +60,7 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
     { value: 'M', label: 'Medium (30-60 min)', minutes: 45 },
     { value: 'L', label: 'Large (1-2 hours)', minutes: 90 }
   ];
+  const isRecurringQuickAdd = quickAddType === 'task' && ['chore', 'routine', 'habit'].includes(String(quickAddData.type || '').toLowerCase());
 
   // Load goals and sprints when component mounts or when quickAddType changes to 'story'
   useEffect(() => {
@@ -222,6 +228,24 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
         const effortData = efforts.find(e => e.value === quickAddData.effort);
         const estimateMinutes = effortData?.minutes || 45;
         const estimatedHours = Math.round((estimateMinutes / 60) * 100) / 100;
+        const taskType = (quickAddData.type || 'task') as string;
+        const isRecurring = ['chore', 'routine', 'habit'].includes(taskType);
+        const normalizedFrequency = isRecurring ? (quickAddData.repeatFrequency || null) : null;
+        const normalizedInterval = isRecurring ? Math.max(1, Number(quickAddData.repeatInterval || 1)) : null;
+        const normalizedDays = isRecurring && quickAddData.repeatFrequency === 'weekly'
+          ? (Array.isArray(quickAddData.daysOfWeek) ? quickAddData.daysOfWeek : [])
+          : [];
+        const themeValue = taskType === 'chore' ? 'Chores' : quickAddData.theme;
+        const normalizedTags = normalizeTaskTags({
+          tags: [],
+          type: taskType,
+          persona: currentPersona,
+          sprint: null,
+          themeValue,
+          goalRef: null,
+          storyRef: null,
+          themes: GLOBAL_THEMES as any,
+        });
         const taskData = {
           ...baseData,
           ref: taskRef,
@@ -232,7 +256,12 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
           estimateMin: estimateMinutes,
           estimatedHours,
           status: 0,
-          theme: quickAddData.theme,
+          theme: themeValue,
+          type: taskType,
+          repeatFrequency: normalizedFrequency,
+          repeatInterval: normalizedInterval,
+          daysOfWeek: normalizedDays,
+          tags: normalizedTags,
           hasGoal: false,
           alignedToGoal: false,
           source: 'web',
@@ -277,7 +306,19 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
         setSubmitResult(`✅ ${itemTypeCapitalized} created successfully!`);
       }
 
-      setQuickAddData({ title: '', description: '', theme: 'Growth', effort: 'M', priority: 'med', goalId: '', sprintId: '' });
+      setQuickAddData({
+        title: '',
+        description: '',
+        theme: 'Growth',
+        effort: 'M',
+        priority: 'med',
+        goalId: '',
+        sprintId: '',
+        type: 'task',
+        repeatFrequency: '',
+        repeatInterval: 1,
+        daysOfWeek: [],
+      });
       
       // Auto-close after success
       setTimeout(() => {
@@ -483,6 +524,93 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
             )}
 
             {/* Story-specific fields are handled by AddStoryModal; this quick-add modal is for goal/task only */}
+
+            {quickAddType === 'task' && (
+              <Form.Group className="mb-3">
+                <Form.Label>Task type</Form.Label>
+                <Form.Select
+                  value={quickAddData.type}
+                  onChange={(e) => {
+                    const nextType = e.target.value;
+                    setQuickAddData({
+                      ...quickAddData,
+                      type: nextType,
+                      theme: nextType === 'chore' ? 'Chores' : quickAddData.theme,
+                    });
+                  }}
+                >
+                  <option value="task">Task</option>
+                  <option value="chore">Chore</option>
+                  <option value="routine">Routine</option>
+                  <option value="habit">Habit</option>
+                </Form.Select>
+              </Form.Group>
+            )}
+
+            {quickAddType === 'task' && isRecurringQuickAdd && (
+              <div className="mb-3">
+                <div className="row">
+                  <div className="col-md-4 mb-2">
+                    <Form.Label>Frequency</Form.Label>
+                    <Form.Select
+                      value={quickAddData.repeatFrequency || ''}
+                      onChange={(e) => setQuickAddData({ ...quickAddData, repeatFrequency: e.target.value })}
+                    >
+                      <option value="">None</option>
+                      <option value="daily">Daily</option>
+                      <option value="weekly">Weekly</option>
+                      <option value="monthly">Monthly</option>
+                      <option value="yearly">Yearly</option>
+                    </Form.Select>
+                  </div>
+                  <div className="col-md-4 mb-2">
+                    <Form.Label>Interval</Form.Label>
+                    <Form.Control
+                      type="number"
+                      min={1}
+                      max={365}
+                      value={quickAddData.repeatInterval || 1}
+                      onChange={(e) => setQuickAddData({ ...quickAddData, repeatInterval: Number(e.target.value) || 1 })}
+                    />
+                  </div>
+                </div>
+                {quickAddData.repeatFrequency === 'weekly' && (
+                  <div className="mt-2">
+                    <Form.Label>Days of week</Form.Label>
+                    <div className="d-flex flex-wrap gap-3">
+                      {[
+                        { label: 'Mon', value: 'mon' },
+                        { label: 'Tue', value: 'tue' },
+                        { label: 'Wed', value: 'wed' },
+                        { label: 'Thu', value: 'thu' },
+                        { label: 'Fri', value: 'fri' },
+                        { label: 'Sat', value: 'sat' },
+                        { label: 'Sun', value: 'sun' },
+                      ].map((day) => {
+                        const days = Array.isArray(quickAddData.daysOfWeek) ? quickAddData.daysOfWeek : [];
+                        const checked = days.includes(day.value);
+                        return (
+                          <label key={day.value} className="form-check form-check-inline">
+                            <input
+                              type="checkbox"
+                              className="form-check-input"
+                              checked={checked}
+                              onChange={() => {
+                                const next = checked
+                                  ? days.filter((d: string) => d !== day.value)
+                                  : [...days, day.value];
+                                setQuickAddData({ ...quickAddData, daysOfWeek: next });
+                              }}
+                            />
+                            <span className="form-check-label">{day.label}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             {quickAddType === 'task' && (
               <Form.Group className="mb-3">

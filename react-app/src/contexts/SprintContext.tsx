@@ -50,6 +50,22 @@ function fromCachedSprint(cached: CachedSprint): Sprint {
   };
 }
 
+function isSprintActive(sprint: Sprint, nowMs = Date.now()) {
+  const status = String((sprint as any)?.status ?? '').toLowerCase();
+  const statusActive = ['active', 'current', 'in-progress', 'inprogress', '1', 'true'].includes(status);
+  const start = typeof sprint.startDate === 'number' ? sprint.startDate : null;
+  const end = typeof sprint.endDate === 'number' ? sprint.endDate : null;
+  const inWindow = start != null && end != null ? nowMs >= start && nowMs <= end : false;
+  return statusActive || inWindow;
+}
+
+function pickActiveSprint(sprints: Sprint[]) {
+  if (!Array.isArray(sprints) || sprints.length === 0) return null;
+  const active = sprints.filter((s) => isSprintActive(s));
+  if (!active.length) return null;
+  return active.sort((a, b) => (b.startDate ?? 0) - (a.startDate ?? 0))[0];
+}
+
 function loadCachedSprints(uid: string, persona: string) {
   try {
     const raw = localStorage.getItem(cacheKey(uid, persona));
@@ -106,6 +122,7 @@ export const SprintProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const { currentPersona } = usePersona();
   const didFallbackCheckRef = React.useRef(false);
   const cacheHydratedRef = React.useRef(false);
+  const autoSelectedActiveRef = React.useRef(false);
 
   // Keep a ref of selectedSprintId to avoid resubscribing when it changes
   const selectedSprintIdRef = React.useRef<string>('');
@@ -141,8 +158,11 @@ export const SprintProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       // Only hydrate from cache if feature flag allows and no local preference key exists at all.
       if (!DEFAULT_TO_ALL_SPRINTS) {
         try {
-          const savedPref = localStorage.getItem('bob_selected_sprint');
-          if ((savedPref === null || savedPref === undefined) && typeof cached.selectedSprintId === 'string') {
+          const active = pickActiveSprint(cached.sprints) ?? pickActiveSprint(cached.allSprints);
+          if (active?.id) {
+            setSelectedSprintId(active.id);
+            autoSelectedActiveRef.current = true;
+          } else if (typeof cached.selectedSprintId === 'string') {
             setSelectedSprintId(cached.selectedSprintId);
           }
         } catch { }
@@ -241,7 +261,12 @@ export const SprintProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       let nextSelectedId = selectedSprintIdRef.current;
       const savedPref = (() => { try { return localStorage.getItem('bob_selected_sprint'); } catch { return null; } })();
       const noSavedPreference = savedPref === null || savedPref === undefined;
-      if ((!nextSelectedId || nextSelectedId === '') && noSavedPreference && data.length > 0) {
+      const activeSprint = pickActiveSprint(data);
+      if (!DEFAULT_TO_ALL_SPRINTS && activeSprint?.id && !autoSelectedActiveRef.current && nextSelectedId !== activeSprint.id) {
+        nextSelectedId = activeSprint.id;
+        setSelectedSprintId(nextSelectedId);
+        autoSelectedActiveRef.current = true;
+      } else if ((!nextSelectedId || nextSelectedId === '') && noSavedPreference && data.length > 0) {
         nextSelectedId = data[0].id;
         setSelectedSprintId(nextSelectedId);
       } else if (nextSelectedId && !data.some((s) => s.id === nextSelectedId)) {

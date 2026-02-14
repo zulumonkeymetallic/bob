@@ -18,6 +18,7 @@ const TaskListView: React.FC = () => {
   const [goals, setGoals] = useState<Goal[]>([]);
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [filterTheme, setFilterTheme] = useState<string>('all');
+  const [filterType, setFilterType] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
   const { selectedSprintId, setSelectedSprintId, sprints } = useSprint();
@@ -120,6 +121,9 @@ const TaskListView: React.FC = () => {
       if (p && p !== currentPersona) return false;
     }
     if (filterStatus !== 'all' && !isStatus(task.status, filterStatus)) return false;
+    const rawType = String((task as any)?.type || (task as any)?.task_type || 'task').toLowerCase();
+    const normalizedType = rawType === 'habitual' ? 'habit' : rawType;
+    if (filterType !== 'all' && normalizedType !== filterType) return false;
     if (searchTerm && !task.title.toLowerCase().includes(searchTerm.toLowerCase())) return false;
     return true;
   });
@@ -145,50 +149,51 @@ const TaskListView: React.FC = () => {
       </div>
 
       {/* Dashboard Cards */}
-      <Row className="mb-4">
+      <Row className="mb-2">
         <Col lg={3} md={6} className="mb-3">
           <Card className="h-100">
-            <Card.Body className="text-center">
-              <h3 className="mb-1">{taskCounts.total}</h3>
-              <p className="text-muted mb-0">Total Tasks</p>
+            <Card.Body className="text-center" style={{ padding: '12px' }}>
+              <h3 className="mb-1" style={{ fontSize: '26px' }}>{taskCounts.total}</h3>
+              <p className="text-muted mb-0" style={{ fontSize: '12px' }}>Total Tasks</p>
             </Card.Body>
           </Card>
         </Col>
         <Col lg={3} md={6} className="mb-3">
           <Card className="h-100">
-            <Card.Body className="text-center">
-              <h3 className="mb-1">{taskCounts.planned}</h3>
-              <p className="text-muted mb-0">Planned</p>
+            <Card.Body className="text-center" style={{ padding: '12px' }}>
+              <h3 className="mb-1" style={{ fontSize: '26px' }}>{taskCounts.planned}</h3>
+              <p className="text-muted mb-0" style={{ fontSize: '12px' }}>Planned</p>
             </Card.Body>
           </Card>
         </Col>
         <Col lg={3} md={6} className="mb-3">
           <Card className="h-100">
-            <Card.Body className="text-center">
-              <h3 className="mb-1">{taskCounts.inProgress}</h3>
-              <p className="text-muted mb-0">In Progress</p>
+            <Card.Body className="text-center" style={{ padding: '12px' }}>
+              <h3 className="mb-1" style={{ fontSize: '26px' }}>{taskCounts.inProgress}</h3>
+              <p className="text-muted mb-0" style={{ fontSize: '12px' }}>In Progress</p>
             </Card.Body>
           </Card>
         </Col>
         <Col lg={3} md={6} className="mb-3">
           <Card className="h-100">
-            <Card.Body className="text-center">
-              <h3 className="mb-1">{taskCounts.done}</h3>
-              <p className="text-muted mb-0">Done</p>
+            <Card.Body className="text-center" style={{ padding: '12px' }}>
+              <h3 className="mb-1" style={{ fontSize: '26px' }}>{taskCounts.done}</h3>
+              <p className="text-muted mb-0" style={{ fontSize: '12px' }}>Done</p>
             </Card.Body>
           </Card>
         </Col>
       </Row>
 
       {/* Filters */}
-      <Card className="mb-4">
-        <Card.Body>
+      <Card className="mb-3">
+        <Card.Body style={{ padding: '8px' }}>
           <Row>
             <Col md={3}>
               <Form.Group>
-                <Form.Label>Search Tasks</Form.Label>
+                <Form.Label className="small mb-0">Search Tasks</Form.Label>
                 <InputGroup>
                   <Form.Control
+                    size="sm"
                     type="text"
                     placeholder="Search by title..."
                     value={searchTerm}
@@ -199,8 +204,9 @@ const TaskListView: React.FC = () => {
             </Col>
             <Col md={3}>
               <Form.Group>
-                <Form.Label>Status</Form.Label>
+                <Form.Label className="small mb-0">Status</Form.Label>
                 <Form.Select
+                  size="sm"
                   value={filterStatus}
                   onChange={(e) => setFilterStatus(e.target.value)}
                 >
@@ -213,8 +219,9 @@ const TaskListView: React.FC = () => {
             </Col>
             <Col md={3}>
               <Form.Group>
-                <Form.Label>Sprint</Form.Label>
+                <Form.Label className="small mb-0">Sprint</Form.Label>
                 <Form.Select
+                  size="sm"
                   value={selectedSprintId || 'all'}
                   onChange={(e) => {
                     const value = e.target.value;
@@ -230,8 +237,9 @@ const TaskListView: React.FC = () => {
             </Col>
             <Col md={3}>
               <Form.Group>
-                <Form.Label>Theme</Form.Label>
+                <Form.Label className="small mb-0">Theme</Form.Label>
                 <Form.Select
+                  size="sm"
                   value={filterTheme}
                   onChange={(e) => setFilterTheme(e.target.value)}
                 >
@@ -244,15 +252,33 @@ const TaskListView: React.FC = () => {
                 </Form.Select>
               </Form.Group>
             </Col>
+            <Col md={3}>
+              <Form.Group>
+                <Form.Label className="small mb-0">Type</Form.Label>
+                <Form.Select
+                  size="sm"
+                  value={filterType}
+                  onChange={(e) => setFilterType(e.target.value)}
+                >
+                  <option value="all">All Types</option>
+                  <option value="task">Task</option>
+                  <option value="chore">Chore</option>
+                  <option value="habit">Habit</option>
+                  <option value="routine">Routine</option>
+                </Form.Select>
+              </Form.Group>
+            </Col>
           </Row>
-          <Row className="mt-3">
+          <Row className="mt-1">
             <Col>
               <Button 
+                size="sm"
                 variant="outline-secondary" 
                 onClick={() => {
                   setFilterStatus('all');
                   setSelectedSprintId('');
                   setFilterTheme('all');
+                  setFilterType('all');
                   setSearchTerm('');
                 }}
               >

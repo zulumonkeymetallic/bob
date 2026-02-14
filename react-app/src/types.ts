@@ -1,7 +1,7 @@
 export interface Goal {
   id: string;
   ref?: string;
-  persona: 'personal'; // Goals are personal-only per requirements
+  persona: 'personal' | 'work';
   title: string;
   description?: string;
   theme: number; // 1=Health, 2=Growth, 3=Wealth, 4=Tribe, 5=Home
@@ -36,7 +36,7 @@ export interface Story {
   id: string;
   ref: string;
   referenceNumber?: string;
-  persona: 'personal'; // Stories are personal-only per requirements
+  persona: 'personal' | 'work';
   title: string;
   description?: string;
   goalId: string;
@@ -59,6 +59,13 @@ export interface Story {
   taskCount?: number;
   doneTaskCount?: number;
   metadata?: Record<string, any>;
+  aiCriticalityScore?: number;
+  aiCriticalityReason?: string;
+  aiFocusStoryRank?: number;
+  aiTop3ForDay?: boolean;
+  aiTop3Date?: string;
+  aiPriorityLabel?: string;
+  aiTop3Reason?: string;
   // Optional travel/location metadata
   countryCode?: string; // ISO alpha-2
   city?: string;
@@ -115,6 +122,9 @@ export interface Task {
   startDate?: number;
   dueDate?: number;
   dueDateMs?: number;
+  dueDateLocked?: boolean;
+  dueDateReason?: string;
+  lockDueDate?: boolean;
   targetDate?: number | string;
   labels?: string[];
   blockedBy?: string[];
@@ -148,6 +158,21 @@ export interface Task {
   convertedToStoryId?: string;
   aiCriticalityScore?: number;
   aiCriticalityReason?: string;
+  aiFlaggedTop?: boolean;
+  aiPriorityRank?: number;
+  aiTop3ForDay?: boolean;
+  aiTop3Date?: string;
+  aiPriorityLabel?: string;
+  aiTop3Reason?: string;
+  iosPriority?: string;
+  type?: 'task' | 'chore' | 'routine' | 'habit' | string;
+  repeatFrequency?: 'daily' | 'weekly' | 'monthly' | 'yearly' | null;
+  repeatInterval?: number | null;
+  daysOfWeek?: string[] | null;
+  rrule?: string | null;
+  lastDoneAt?: any;
+  snoozedUntil?: number;
+  typeInferredAt?: any;
   // Enhanced fields for v2.1.4+
   sprintId?: string;
   projectId?: string;
@@ -191,6 +216,7 @@ export interface IHabit {
 export interface IHabitEntry {
   id: string; // Could be a date string like "YYYY-MM-DD"
   habitId: string;
+  ownerUid?: string;
   date: number; // Using number for Firebase Timestamp (start of day)
   value: number; // Actual value achieved for the habit on that day
   isCompleted: boolean; // Derived or explicitly set
@@ -221,6 +247,8 @@ export interface CalendarBlock {
   subTheme?: string;
   persona: 'personal' | 'work';
   theme: 'Health' | 'Growth' | 'Wealth' | 'Tribe' | 'Home' | string;
+  theme_id?: number | string;
+  themeId?: number | string;
   category: 'Tribe' | 'Chores' | 'Gaming' | 'Fitness' | 'Wellbeing' | 'Sauna' | 'Sleep' | 'Work Shift' | 'Work (Main Gig)' | 'Side Gig';
   start: number; // timestamp
   end: number; // timestamp
