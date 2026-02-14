@@ -82,7 +82,7 @@ interface TransactionRow {
 
 const CATEGORY_OPTIONS = [
   { value: 'mandatory', label: 'Mandatory' },
-  { value: 'optional', label: 'Optional' },
+  { value: 'discretionary', label: 'Discretionary' },
   { value: 'savings', label: 'Savings / Pots' },
   { value: 'income', label: 'Income' },
 ];
@@ -571,25 +571,37 @@ const FinanceDashboard: React.FC = () => {
                   <Table responsive hover size="sm" className="align-middle">
                     <thead>
                       <tr>
-                        <th style={{ width: '18%' }}>Date</th>
+                        <th style={{ width: '15%' }}>Date</th>
                         <th>Description</th>
-                        <th style={{ width: '12%' }} className="text-end">Amount</th>
-                        <th style={{ width: '18%' }}>Category</th>
-                        <th style={{ width: '22%' }}>Label</th>
-                        <th style={{ width: '12%' }}></th>
+                        <th style={{ width: '10%' }} className="text-end">Amount</th>
+                        <th style={{ width: '12%' }}>Bucket</th>
+                        <th style={{ width: '16%' }}>Category</th>
+                        <th style={{ width: '20%' }}>Label</th>
+                        <th style={{ width: '10%' }}></th>
                       </tr>
                     </thead>
                     <tbody>
                       {transactions.length === 0 && (
                         <tr>
-                          <td colSpan={6} className="text-center text-muted py-4">
+                          <td colSpan={7} className="text-center text-muted py-4">
                             No transactions synced yet. Connect Monzo from Settings → Integrations.
                           </td>
                         </tr>
                       )}
                       {transactions.map((tx) => {
-                        const edit = rowEdits[tx.transactionId] || { categoryType: tx.userCategoryType || tx.defaultCategoryType || 'optional', label: tx.userCategoryLabel || tx.defaultCategoryLabel || tx.description };
+                        const edit = rowEdits[tx.transactionId] || { categoryType: tx.userCategoryType || tx.defaultCategoryType || 'discretionary', label: tx.userCategoryLabel || tx.defaultCategoryLabel || tx.description };
                         const formattedDate = tx.createdISO ? new Date(tx.createdISO).toLocaleDateString('en-GB', { year: 'numeric', month: 'short', day: 'numeric' }) : '—';
+                        const bucket = (tx.userCategoryType || tx.defaultCategoryType || '').toLowerCase();
+                        const bucketLabel = bucket.includes('mandatory') || bucket === 'debt_repayment' ? 'Mandatory' :
+                                           bucket === 'discretionary' || bucket === 'optional' ? 'Discretionary' :
+                                           bucket.includes('saving') || bucket === 'investment' ? 'Savings' :
+                                           bucket === 'net_salary' || bucket === 'irregular_income' || bucket === 'income' ? 'Income' :
+                                           'Other';
+                        const bucketVariant = bucketLabel === 'Mandatory' ? 'danger' :
+                                             bucketLabel === 'Discretionary' ? 'warning' :
+                                             bucketLabel === 'Savings' ? 'info' :
+                                             bucketLabel === 'Income' ? 'success' :
+                                             'secondary';
                         return (
                           <tr key={tx.transactionId}>
                             <td>{formattedDate}</td>
@@ -603,6 +615,15 @@ const FinanceDashboard: React.FC = () => {
                               <span className={tx.amount < 0 ? 'text-danger' : 'text-success'}>
                                 {formatMoney(Math.abs(tx.amount))}
                               </span>
+                            </td>
+                            <td>
+                              <Badge
+                                bg={bucketVariant}
+                                className="text-uppercase"
+                                style={{ fontSize: '0.65rem' }}
+                              >
+                                {bucketLabel}
+                              </Badge>
                             </td>
                             <td>
                               <Form.Select
