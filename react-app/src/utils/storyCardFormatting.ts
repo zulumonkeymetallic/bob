@@ -72,14 +72,17 @@ export const priorityLabel = (priority: any, fallback: string = 'None'): string 
 };
 
 export const priorityPillClass = (priority: any): string => {
-  let level: 'high' | 'medium' | 'low' | 'default' = 'default';
+  let level: 'critical' | 'high' | 'medium' | 'low' | 'default' = 'default';
   if (typeof priority === 'number') {
-    if (priority >= 3) level = 'high';
+    if (priority >= 4) level = 'critical';
+    else if (priority >= 3) level = 'high';
     else if (priority === 2) level = 'medium';
     else if (priority >= 0) level = 'low';
   } else if (priority != null) {
     const normalized = String(priority).toLowerCase();
-    if (normalized.includes('crit') || normalized === 'p0' || normalized === 'p1' || normalized.includes('high')) {
+    if (normalized.includes('crit') || normalized === 'p0' || normalized.includes('urgent')) {
+      level = 'critical';
+    } else if (normalized === 'p1' || normalized.includes('high')) {
       level = 'high';
     } else if (normalized.includes('med') || normalized.includes('medium') || normalized === 'p2') {
       level = 'medium';
@@ -88,7 +91,8 @@ export const priorityPillClass = (priority: any): string => {
     }
   }
   const base = 'kanban-card__meta-pill';
-  if (level === 'high') return `${base} kanban-card__meta-pill--danger`;
+  if (level === 'critical') return `${base} kanban-card__meta-pill--danger`;
+  if (level === 'high') return `${base} kanban-card__meta-pill--orange`;
   if (level === 'medium') return `${base} kanban-card__meta-pill--warning`;
   if (level === 'low') return `${base} kanban-card__meta-pill--success`;
   return base;

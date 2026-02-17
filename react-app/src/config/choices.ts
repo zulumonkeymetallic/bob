@@ -71,7 +71,7 @@ export const CHOICES: ChoiceTable = {
     ],
     priority: [
       { value: 4, label: 'Critical', color: 'var(--danger)', description: 'Critical priority — LLM assigned' },
-      { value: 1, label: 'High', color: 'var(--red)', description: 'Urgent priority' },
+      { value: 1, label: 'High', color: 'var(--orange)', description: 'Urgent priority' },
       { value: 2, label: 'Medium', color: 'var(--orange)', description: 'Normal priority' },
       { value: 3, label: 'Low', color: themeVars.muted as string, description: 'Low priority' }
     ]

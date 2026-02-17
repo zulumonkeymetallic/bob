@@ -7,7 +7,7 @@ import { db, functions } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { Goal, Task } from '../types';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { isRecurringDueOnDate, resolveRecurringDueMs } from '../utils/recurringTaskDue';
 
 interface Occurrence {
@@ -26,7 +26,8 @@ interface TaskStats {
 }
 
 const LOOKBACK_DAYS = 180;
-const TARGET_OCCURRENCES = 15;
+const TARGET_OCCURRENCES = 100;
+const VISIBLE_DOTS = 25;
 
 const getLastDoneMs = (task: Task): number | null => {
   const raw: any = (task as any).lastDoneAt ?? (task as any).completedAt;
@@ -91,6 +92,7 @@ const HabitsChoresDashboard: React.FC = () => {
   const [loadingTasks, setLoadingTasks] = useState(false);
   const [loadingBlocks, setLoadingBlocks] = useState(false);
   const [completing, setCompleting] = useState<Record<string, boolean>>({});
+  const [sortMode, setSortMode] = useState<'type' | 'due' | 'streak'>('type');
 
   const todayStartMs = useMemo(() => startOfDay(new Date()).getTime(), []);
   const todayEndMs = useMemo(() => endOfDay(new Date()).getTime(), []);
@@ -240,6 +242,34 @@ const HabitsChoresDashboard: React.FC = () => {
       }
       groups.get(goalId)!.tasks.push(task);
     });
+    // Sort tasks within each group
+    const kindOrder = (t: Task) => {
+      const k = getHabitKind(t);
+      if (k === 'habit') return 0;
+      if (k === 'routine') return 1;
+      return 2; // chore
+    };
+    groups.forEach((group) => {
+      group.tasks.sort((a, b) => {
+        if (sortMode === 'type') {
+          const ka = kindOrder(a);
+          const kb = kindOrder(b);
+          if (ka !== kb) return ka - kb;
+          return (a.title || '').localeCompare(b.title || '');
+        }
+        if (sortMode === 'due') {
+          const aDue = resolveRecurringDueMs(a, new Date(), todayStartMs) ?? Infinity;
+          const bDue = resolveRecurringDueMs(b, new Date(), todayStartMs) ?? Infinity;
+          return aDue - bDue;
+        }
+        if (sortMode === 'streak') {
+          const aStreak = taskStats[a.id]?.streak ?? 0;
+          const bStreak = taskStats[b.id]?.streak ?? 0;
+          return bStreak - aStreak; // highest streak first
+        }
+        return 0;
+      });
+    });
     const ordered = Array.from(groups.entries()).map(([goalId, data]) => ({ goalId, ...data }));
     ordered.sort((a, b) => {
       if (a.goalId === 'unlinked') return 1;
@@ -247,7 +277,7 @@ const HabitsChoresDashboard: React.FC = () => {
       return String(a.goal?.title || '').localeCompare(String(b.goal?.title || ''));
     });
     return ordered;
-  }, [filteredTasks, goalsById]);
+  }, [filteredTasks, goalsById, sortMode, todayStartMs, taskStats]);
 
   const handleComplete = useCallback(async (task: Task) => {
     if (!currentUser?.uid) return;
@@ -274,10 +304,20 @@ const HabitsChoresDashboard: React.FC = () => {
       <div className="d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-2 mb-3">
         <div>
           <h4 className="mb-1">Habit Tracking</h4>
-          <div className="text-muted small">Track routines and habits only, with a 15-instance completion view by expected cadence.</div>
+          <div className="text-muted small">Track routines and habits with 100-instance completion history, streaks and linked goals.</div>
         </div>
-        <div className="d-flex gap-2">
-          <Button variant="outline-secondary" size="sm" onClick={() => navigate('/chores/checklist')}>Open today’s checklist</Button>
+        <div className="d-flex align-items-center gap-2">
+          <Form.Select
+            size="sm"
+            value={sortMode}
+            onChange={(e) => setSortMode(e.target.value as 'type' | 'due' | 'streak')}
+            style={{ width: 160 }}
+          >
+            <option value="type">Sort: Habits first</option>
+            <option value="due">Sort: Next due</option>
+            <option value="streak">Sort: Streak</option>
+          </Form.Select>
+          <Button variant="outline-secondary" size="sm" onClick={() => navigate('/chores/checklist')}>Open today's checklist</Button>
           <Button variant="primary" size="sm" onClick={() => navigate('/tasks')}>Manage tasks</Button>
         </div>
       </div>
@@ -298,8 +338,26 @@ const HabitsChoresDashboard: React.FC = () => {
           return (
             <Card key={group.goalId} className="mb-3">
               <Card.Header className="d-flex align-items-center justify-content-between">
-                <div className="fw-semibold">{goalTitle}</div>
-                <Badge bg="secondary" pill>{group.tasks.length} item{group.tasks.length === 1 ? '' : 's'}</Badge>
+                <div className="d-flex align-items-center gap-2">
+                  <span className="fw-semibold">{goalTitle}</span>
+                  {group.goal && (
+                    <Link to={`/goals/${(group.goal as any).ref || group.goalId}`} className="text-decoration-none small">View goal</Link>
+                  )}
+                </div>
+                <div className="d-flex align-items-center gap-2">
+                  {group.goal && (() => {
+                    const groupStats = group.tasks.map((t) => taskStats[t.id]).filter(Boolean);
+                    const totalCompleted = groupStats.reduce((s, ts) => s + ts.completedCount, 0);
+                    const totalExpected = groupStats.reduce((s, ts) => s + ts.totalCount, 0);
+                    const adherence = totalExpected ? Math.round((totalCompleted / totalExpected) * 100) : 0;
+                    return (
+                      <Badge bg={adherence >= 80 ? 'success' : adherence >= 50 ? 'warning' : 'danger'} pill>
+                        {adherence}% adherence
+                      </Badge>
+                    );
+                  })()}
+                  <Badge bg="secondary" pill>{group.tasks.length} item{group.tasks.length === 1 ? '' : 's'}</Badge>
+                </div>
               </Card.Header>
               <Card.Body className="p-0">
                 <div className="table-responsive">
@@ -309,7 +367,8 @@ const HabitsChoresDashboard: React.FC = () => {
                         <th style={{ width: 260 }}>Item</th>
                         <th>Next Due</th>
                         <th>Last Done</th>
-                        <th>Last 15</th>
+                        <th>Streak</th>
+                        <th>Last 100</th>
                         <th>Status</th>
                         <th style={{ width: 120 }}>Today</th>
                       </tr>
@@ -334,41 +393,70 @@ const HabitsChoresDashboard: React.FC = () => {
                               <div className="fw-semibold">{task.title}</div>
                               <div className="text-muted small d-flex align-items-center gap-2">
                                 <Badge bg={badgeVariant}>{badgeLabel}</Badge>
-                                <a href={`/tasks/${encodeURIComponent(task.ref || task.id)}`} className="text-decoration-none">Open</a>
+                                <Link to={`/tasks/${encodeURIComponent(task.ref || task.id)}`} className="text-decoration-none">Open</Link>
                               </div>
                             </td>
                             <td>{dueLabel}</td>
                             <td>{lastLabel}</td>
                             <td>
+                              <div className="fw-semibold" style={{ fontSize: 18 }}>{stats.streak}</div>
+                              <div className="text-muted" style={{ fontSize: 10 }}>day{stats.streak !== 1 ? 's' : ''}</div>
+                            </td>
+                            <td>
                               {stats.expectedSlots.length === 0 ? (
                                 <span className="text-muted">—</span>
                               ) : (
-                                <div className="d-flex align-items-center gap-2">
-                                  <span className="small text-muted">{stats.completedCount}/{stats.totalCount}</span>
-                                  <div className="d-flex gap-1">
-                                    {stats.expectedSlots.map((slot, idx) => (
+                                <div>
+                                  <div className="d-flex align-items-center gap-2 mb-1">
+                                    <span className="small text-muted">{stats.completedCount}/{stats.totalCount}</span>
+                                    <span className="small text-muted">({stats.totalCount ? Math.round((stats.completedCount / stats.totalCount) * 100) : 0}%)</span>
+                                  </div>
+                                  <div className="d-flex align-items-center gap-1 flex-wrap">
+                                    {stats.expectedSlots.slice(0, VISIBLE_DOTS).map((slot, idx) => (
                                       <span
                                         key={`${task.id}-${slot.dayMs}-${idx}`}
                                         title={`${format(new Date(slot.dayMs), 'EEE d MMM')}: ${slot.done ? 'completed' : 'not completed'}`}
                                         style={{
-                                          width: 12,
-                                          height: 12,
+                                          width: 10,
+                                          height: 10,
                                           borderRadius: 999,
                                           display: 'inline-block',
                                           backgroundColor: slot.done ? '#16a34a' : '#dc2626',
-                                          border: '1px solid rgba(15, 23, 42, 0.2)',
+                                          border: '1px solid rgba(15, 23, 42, 0.15)',
                                         }}
                                       />
                                     ))}
+                                    {stats.expectedSlots.length > VISIBLE_DOTS && (() => {
+                                      const older = stats.expectedSlots.slice(VISIBLE_DOTS);
+                                      const olderDone = older.filter((s) => s.done).length;
+                                      const olderTotal = older.length;
+                                      const pct = olderTotal ? Math.round((olderDone / olderTotal) * 100) : 0;
+                                      return (
+                                        <span
+                                          title={`Older ${olderTotal}: ${olderDone}/${olderTotal} (${pct}%)`}
+                                          className="small"
+                                          style={{
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: 2,
+                                            padding: '1px 6px',
+                                            borderRadius: 8,
+                                            fontSize: 10,
+                                            fontWeight: 600,
+                                            backgroundColor: pct >= 80 ? '#dcfce7' : pct >= 50 ? '#fef9c3' : '#fee2e2',
+                                            color: pct >= 80 ? '#15803d' : pct >= 50 ? '#a16207' : '#b91c1c',
+                                          }}
+                                        >
+                                          +{olderTotal} ({pct}%)
+                                        </span>
+                                      );
+                                    })()}
                                   </div>
                                 </div>
                               )}
                             </td>
                             <td>
                               <Badge bg={consistency.variant}>{consistency.label}</Badge>
-                              {stats.streak > 1 && (
-                                <div className="text-muted small">Streak {stats.streak}</div>
-                              )}
                             </td>
                             <td>
                               <Form.Check

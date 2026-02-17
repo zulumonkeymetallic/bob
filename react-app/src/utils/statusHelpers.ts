@@ -183,7 +183,7 @@ export const getPriorityColor = (priority: any): string => {
   if (typeof priority === 'number') {
     switch (priority) {
       case 4: return 'danger';    // Critical
-      case 3: return 'danger';    // High  
+      case 3: return 'orange';    // High
       case 2: return 'warning';   // Medium
       case 1: return 'secondary'; // Low
       case 0: return 'light';     // None
@@ -192,7 +192,7 @@ export const getPriorityColor = (priority: any): string => {
   }
   
   // Handle string priority (legacy)
-  if (priority === 'high' || priority === 'High') return 'danger';
+  if (priority === 'high' || priority === 'High') return 'orange';
   if (priority === 'med' || priority === 'Medium') return 'warning';
   if (priority === 'low' || priority === 'Low') return 'secondary';
   
@@ -213,7 +213,7 @@ export const getPriorityIcon = (priority: any): string => {
   }
   
   // Handle string priority (legacy)
-  if (priority === 'high' || priority === 'High') return '🔴';
+  if (priority === 'high' || priority === 'High') return '🟠';
   if (priority === 'med' || priority === 'Medium') return '🟡';
   if (priority === 'low' || priority === 'Low') return '🔵';
   
@@ -247,7 +247,7 @@ export const getPriorityBadge = (priority: any): { bg: string; text: string } =>
   const normalized = normalizePriorityValue(priority);
   switch (normalized) {
     case 4: return { bg: 'danger', text: 'Critical' };
-    case 3: return { bg: 'danger', text: 'High' };
+    case 3: return { bg: 'orange', text: 'High' };
     case 2: return { bg: 'warning', text: 'Medium' };
     case 1: return { bg: 'secondary', text: 'Low' };
     default: return { bg: 'light', text: 'None' };

@@ -1,18 +1,19 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { draggable } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
-import { Button } from 'react-bootstrap';
-import { GripVertical, Activity, Wand2, Edit3, Trash2, Target, BookOpen, Shuffle } from 'lucide-react';
+import { Button, Modal, Spinner } from 'react-bootstrap';
+import { GripVertical, Activity, Wand2, Edit3, Trash2, Target, BookOpen, Shuffle, CalendarClock } from 'lucide-react';
 import { httpsCallable } from 'firebase/functions';
 import { functions, db } from '../firebase';
 import { Story, Task, Goal } from '../types';
 import { useSidebar } from '../contexts/SidebarContext';
 import { displayRefForEntity, validateRef } from '../utils/referenceGenerator';
-import { storyStatusText, taskStatusText, priorityLabel as formatPriorityLabel, priorityPillClass, colorWithAlpha, goalThemeColor } from '../utils/storyCardFormatting';
+import { colorWithAlpha, goalThemeColor } from '../utils/storyCardFormatting';
+import { getPriorityBadge } from '../utils/statusHelpers';
 import { themeVars } from '../utils/themeVars';
 import type { GlobalTheme } from '../constants/globalThemes';
 import { resolveThemeFromValue } from '../utils/themeResolver';
 import { useAuth } from '../contexts/AuthContext';
-import { addDoc, collection, serverTimestamp, updateDoc, doc } from 'firebase/firestore';
+import { addDoc, collection, serverTimestamp, updateDoc, doc, getDocs, query, where } from 'firebase/firestore';
 import { ActivityStreamService } from '../services/ActivityStreamService';
 
 interface KanbanCardV2Props {
@@ -62,6 +63,9 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
     const { showSidebar } = useSidebar();
     const { currentUser } = useAuth();
     const [actionMessage, setActionMessage] = useState<string | null>(null);
+    const [flaggingPriority, setFlaggingPriority] = useState(false);
+    const [showPriorityReplanPrompt, setShowPriorityReplanPrompt] = useState(false);
+    const [priorityReplanLoading, setPriorityReplanLoading] = useState(false);
 
     useEffect(() => {
         const el = ref.current;
@@ -107,9 +111,30 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
         }
     })();
 
-    const statusLabel = type === 'story'
-        ? storyStatusText((item as any).status)
-        : taskStatusText((item as any).status);
+    const normalizeStatusValue = (rawStatus: any, entityType: 'story' | 'task') => {
+        if (typeof rawStatus === 'number' && Number.isFinite(rawStatus)) return rawStatus;
+        const status = String(rawStatus || '').toLowerCase();
+        if (entityType === 'story') {
+            if (['done', 'complete', 'completed', 'finished'].includes(status)) return 4;
+            if (['testing', 'qa', 'review'].includes(status)) return 3;
+            if (['in-progress', 'active', 'doing', 'blocked', 'in progress'].includes(status)) return 2;
+            if (['planned', 'ready'].includes(status)) return 1;
+            return 0;
+        }
+        if (['done', 'complete', 'completed', 'finished'].includes(status)) return 2;
+        if (['blocked'].includes(status)) return 3;
+        if (['in-progress', 'active', 'doing', 'in progress'].includes(status)) return 1;
+        return 0;
+    };
+
+    const toDateInputValue = (value: number | null) => {
+        if (!value) return '';
+        const d = new Date(value);
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        return `${y}-${m}-${day}`;
+    };
 
     const isTop3 = (item as any).aiTop3ForDay === true
         || (item as any).aiFlaggedTop === true
@@ -118,8 +143,6 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
     const aiReason = isTop3 && (item as any).aiTop3Reason
         ? (item as any).aiTop3Reason
         : ((item as any).aiCriticalityReason || null);
-    const priorityClass = isTop3 ? priorityPillClass(4) : priorityPillClass(item.priority);
-    const priorityLabel = isTop3 ? 'Critical' : formatPriorityLabel(item.priority);
     const dueDateMs = (() => {
         const raw = (item as any).dueDate ?? (item as any).targetDate ?? (item as any).dueDateMs ?? null;
         if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
@@ -127,9 +150,99 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
         const parsed = raw ? Date.parse(String(raw)) : NaN;
         return Number.isNaN(parsed) ? null : parsed;
     })();
-    const dueDateLabel = dueDateMs
-        ? new Date(dueDateMs).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: '2-digit' })
-        : null;
+    const [priorityValue, setPriorityValue] = useState<number>(Number((item as any).priority ?? 0));
+    const [statusValue, setStatusValue] = useState<number>(normalizeStatusValue((item as any).status, type));
+    const [dueInputValue, setDueInputValue] = useState<string>(toDateInputValue(dueDateMs));
+    const [updatingField, setUpdatingField] = useState<'priority' | 'status' | 'dueDate' | null>(null);
+    const priorityBadge = getPriorityBadge(priorityValue);
+    const statusBadge = type === 'story'
+        ? ({
+            0: { bg: 'secondary', text: 'Backlog' },
+            1: { bg: 'info', text: 'Planned' },
+            2: { bg: 'primary', text: 'In progress' },
+            3: { bg: 'warning', text: 'Testing' },
+            4: { bg: 'success', text: 'Done' },
+        } as Record<number, { bg: string; text: string }>)[statusValue] || { bg: 'secondary', text: 'Backlog' }
+        : ({
+            0: { bg: 'secondary', text: 'To do' },
+            1: { bg: 'primary', text: 'Doing' },
+            2: { bg: 'success', text: 'Done' },
+            3: { bg: 'danger', text: 'Blocked' },
+        } as Record<number, { bg: string; text: string }>)[statusValue] || { bg: 'secondary', text: 'To do' };
+
+    useEffect(() => {
+        setPriorityValue(Number((item as any).priority ?? 0));
+        setStatusValue(normalizeStatusValue((item as any).status, type));
+        setDueInputValue(toDateInputValue(dueDateMs));
+    }, [item.id, (item as any).priority, (item as any).status, dueDateMs, type]);
+
+    const applyQuickPatch = async (patch: Record<string, any>) => {
+        const collectionName = type === 'story' ? 'stories' : 'tasks';
+        await updateDoc(doc(db, collectionName, item.id), {
+            ...patch,
+            updatedAt: serverTimestamp(),
+        });
+    };
+
+    const handlePriorityChange = async (event: React.ChangeEvent<HTMLSelectElement>) => {
+        event.stopPropagation();
+        const previous = priorityValue;
+        const next = Number(event.target.value);
+        setPriorityValue(next);
+        setUpdatingField('priority');
+        try {
+            await applyQuickPatch({ priority: next });
+        } catch (error) {
+            console.warn('Failed to update priority on kanban card', error);
+            setPriorityValue(previous);
+            setActionMessage('Priority update failed');
+            setTimeout(() => setActionMessage(null), 2200);
+        } finally {
+            setUpdatingField(null);
+        }
+    };
+
+    const handleStatusChange = async (event: React.ChangeEvent<HTMLSelectElement>) => {
+        event.stopPropagation();
+        const previous = statusValue;
+        const next = Number(event.target.value);
+        setStatusValue(next);
+        setUpdatingField('status');
+        try {
+            await applyQuickPatch({ status: next });
+        } catch (error) {
+            console.warn('Failed to update status on kanban card', error);
+            setStatusValue(previous);
+            setActionMessage('Status update failed');
+            setTimeout(() => setActionMessage(null), 2200);
+        } finally {
+            setUpdatingField(null);
+        }
+    };
+
+    const handleDueDateChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+        event.stopPropagation();
+        const previous = dueInputValue;
+        const next = event.target.value;
+        setDueInputValue(next);
+        setUpdatingField('dueDate');
+        try {
+            const dueMs = next ? new Date(`${next}T12:00:00`).getTime() : null;
+            if (type === 'story') {
+                await applyQuickPatch({ targetDate: dueMs });
+            } else {
+                await applyQuickPatch({ dueDate: dueMs });
+            }
+        } catch (error) {
+            console.warn('Failed to update due date on kanban card', error);
+            setDueInputValue(previous);
+            setActionMessage('Due date update failed');
+            setTimeout(() => setActionMessage(null), 2200);
+        } finally {
+            setUpdatingField(null);
+        }
+    };
+
     const overdueDays = dueDateMs && dueDateMs < Date.now()
         ? Math.max(1, Math.floor((Date.now() - dueDateMs) / 86400000))
         : 0;
@@ -292,7 +405,84 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
         }
     };
 
+    const handleFlagPriorityStory = async (event: React.MouseEvent<HTMLButtonElement>) => {
+        event.stopPropagation();
+        if (!currentUser || type !== 'story') return;
+        const story = item as Story;
+        const storyPersona = String((story as any).persona || 'personal');
+        setActionMessage(null);
+        setFlaggingPriority(true);
+        try {
+            const storiesSnap = await getDocs(
+                query(
+                    collection(db, 'stories'),
+                    where('ownerUid', '==', currentUser.uid)
+                )
+            );
+            const existingFlagged = storiesSnap.docs
+                .map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) }))
+                .filter((s: any) => (
+                    s.id !== story.id
+                    && s.userPriorityFlag === true
+                    && String(s.persona || 'personal') === storyPersona
+                ));
+
+            for (const flagged of existingFlagged) {
+                await updateDoc(doc(db, 'stories', flagged.id), {
+                    userPriorityFlag: false,
+                    userPriorityFlagAt: null,
+                    updatedAt: serverTimestamp(),
+                });
+            }
+
+            const isAlreadyFlagged = (story as any).userPriorityFlag === true;
+            await updateDoc(doc(db, 'stories', story.id), {
+                userPriorityFlag: !isAlreadyFlagged,
+                userPriorityFlagAt: isAlreadyFlagged ? null : new Date().toISOString(),
+                updatedAt: serverTimestamp(),
+            });
+
+            if (!isAlreadyFlagged) {
+                const rescore = httpsCallable(functions, 'deltaPriorityRescore');
+                await rescore({ entityId: story.id, entityType: 'story' }).catch(() => { });
+                setActionMessage('Marked as #1 priority');
+                setShowPriorityReplanPrompt(true);
+            } else {
+                setActionMessage('Removed #1 priority');
+            }
+            setTimeout(() => setActionMessage(null), 2200);
+        } catch (error) {
+            console.warn('Failed to toggle #1 priority on kanban card', error);
+            setActionMessage('Priority flag update failed');
+            setTimeout(() => setActionMessage(null), 2200);
+        } finally {
+            setFlaggingPriority(false);
+        }
+    };
+
+    const handlePriorityPromptReplanNow = async () => {
+        setPriorityReplanLoading(true);
+        try {
+            const replan = httpsCallable(functions, 'replanCalendarNow');
+            const response = await replan({ days: 7 });
+            const payload = response.data as { rescheduled?: number; blocked?: number; created?: number };
+            const parts: string[] = [];
+            if (payload?.created) parts.push(`${payload.created} created`);
+            if (payload?.rescheduled) parts.push(`${payload.rescheduled} moved`);
+            if (payload?.blocked) parts.push(`${payload.blocked} blocked`);
+            setActionMessage(parts.length ? `Delta replan complete: ${parts.join(', ')}` : 'Delta replan complete.');
+            setShowPriorityReplanPrompt(false);
+        } catch (error) {
+            console.warn('Delta replan failed after #1 priority flag', error);
+            setActionMessage('Delta replan failed');
+        } finally {
+            setPriorityReplanLoading(false);
+            setTimeout(() => setActionMessage(null), 2400);
+        }
+    };
+
     return (
+        <>
         <div
             ref={ref}
             className={`kanban-card kanban-card--${type} kanban-card__clickable${dragging ? ' dragging' : ''}`}
@@ -375,6 +565,25 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                                 <Shuffle size={12} />
                             </Button>
                         )}
+                        {type === 'story' && (
+                            <Button
+                                variant="link"
+                                size="sm"
+                                className="p-0"
+                                style={{
+                                    width: 24,
+                                    height: 24,
+                                    color: (item as any).userPriorityFlag ? 'var(--bs-danger)' : themeVars.muted,
+                                    opacity: flaggingPriority ? 0.6 : 1,
+                                }}
+                                title={(item as any).userPriorityFlag ? 'Remove #1 priority flag' : 'Set as #1 priority'}
+                                onClick={handleFlagPriorityStory}
+                                onPointerDown={(e) => e.stopPropagation()}
+                                disabled={flaggingPriority}
+                            >
+                                <CalendarClock size={12} />
+                            </Button>
+                        )}
 
                         {onEdit && (
                             <Button
@@ -421,6 +630,69 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                         {item.description}
                     </div>
                 )}
+
+                <div className="kanban-card__quick-edit">
+                    <select
+                        className="kanban-card__chip-select"
+                        value={priorityValue}
+                        onChange={handlePriorityChange}
+                        onClick={(e) => e.stopPropagation()}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        disabled={updatingField === 'priority'}
+                        title="Priority"
+                        style={{
+                            backgroundColor: `var(--bs-${priorityBadge.bg})`,
+                            color: priorityBadge.bg === 'warning' || priorityBadge.bg === 'orange' || priorityBadge.bg === 'light' ? '#000' : '#fff',
+                        }}
+                    >
+                        <option value={0}>None</option>
+                        <option value={1}>Low</option>
+                        <option value={2}>Medium</option>
+                        <option value={3}>High</option>
+                        <option value={4}>Critical</option>
+                    </select>
+                    <input
+                        type="date"
+                        className="kanban-card__chip-date"
+                        value={dueInputValue}
+                        onChange={handleDueDateChange}
+                        onClick={(e) => e.stopPropagation()}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        disabled={updatingField === 'dueDate'}
+                        title="Due date"
+                    />
+                    <select
+                        className="kanban-card__chip-select"
+                        value={statusValue}
+                        onChange={handleStatusChange}
+                        onClick={(e) => e.stopPropagation()}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        disabled={updatingField === 'status'}
+                        title="Status"
+                        style={{
+                            backgroundColor: `var(--bs-${statusBadge.bg})`,
+                            color: statusBadge.bg === 'warning' || statusBadge.bg === 'light' ? '#000' : '#fff',
+                        }}
+                    >
+                        {type === 'story' ? (
+                            <>
+                                <option value={0}>Backlog</option>
+                                <option value={1}>Planned</option>
+                                <option value={2}>In progress</option>
+                                <option value={3}>Testing</option>
+                                <option value={4}>Done</option>
+                            </>
+                        ) : (
+                            <>
+                                <option value={0}>To do</option>
+                                <option value={1}>Doing</option>
+                                <option value={3}>Blocked</option>
+                                <option value={2}>Done</option>
+                            </>
+                        )}
+                    </select>
+                </div>
+
                 {resolvedShowTags && visibleTags.length > 0 && (
                     <div className="kanban-card__tags">
                         {visibleTags.map((tag: string) => {
@@ -456,22 +728,24 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                     </div>
                 )}
                 <div className="kanban-card__meta">
-                    <span className={priorityClass} title={`Priority: ${priorityLabel}`}>
-                        {priorityLabel}
-                    </span>
+                    {type === 'story' && (item as any).userPriorityFlag && (
+                        <span
+                            className="kanban-card__meta-badge"
+                            style={{
+                                borderColor: 'rgba(220, 53, 69, 0.45)',
+                                backgroundColor: 'rgba(220, 53, 69, 0.12)',
+                                color: 'var(--bs-danger)',
+                            }}
+                            title="User #1 priority flag"
+                        >
+                            #1 Priority
+                        </span>
+                    )}
                     {isTop3 && (
                         <span className="kanban-card__meta-badge kanban-card__meta-badge--top3" title="Top 3 priority">
                             Top 3
                         </span>
                     )}
-                    {dueDateLabel && (
-                        <span className="kanban-card__meta-badge" title="Due date">
-                            Due {dueDateLabel}
-                        </span>
-                    )}
-                    <span className="kanban-card__meta-badge" title="Status">
-                        {statusLabel}
-                    </span>
                     {overdueDays > 0 && (
                         <span className="kanban-card__meta-badge" style={{ color: 'var(--red)' }} title="Overdue">
                             {overdueDays}d overdue
@@ -527,6 +801,34 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                 </div>
             )}
         </div>
+        <Modal show={showPriorityReplanPrompt} onHide={() => setShowPriorityReplanPrompt(false)} centered>
+            <Modal.Header closeButton>
+                <Modal.Title style={{ fontSize: 16 }}>Run Delta Replan?</Modal.Title>
+            </Modal.Header>
+            <Modal.Body>
+                <p className="mb-2">
+                    <strong>{(item as Story).title || 'This story'}</strong> is now flagged as #1 priority.
+                </p>
+                <p className="mb-0 text-muted small">
+                    Run delta replan now to create or rebalance calendar blocks for the new priority.
+                </p>
+            </Modal.Body>
+            <Modal.Footer>
+                <Button variant="secondary" size="sm" onClick={() => setShowPriorityReplanPrompt(false)}>
+                    Not now
+                </Button>
+                <Button
+                    variant="primary"
+                    size="sm"
+                    onClick={handlePriorityPromptReplanNow}
+                    disabled={priorityReplanLoading}
+                >
+                    {priorityReplanLoading ? <Spinner animation="border" size="sm" className="me-1" /> : null}
+                    Run delta replan
+                </Button>
+            </Modal.Footer>
+        </Modal>
+        </>
     );
 };
 

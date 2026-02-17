@@ -1,10 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { getFunctions, httpsCallable } from 'firebase/functions';
+import { getFirestore, doc, getDoc, setDoc } from 'firebase/firestore';
 import { Button, Modal, Form, Container, Spinner, Alert } from 'react-bootstrap';
-import { Save } from 'lucide-react';
+import { Calendar as CalendarIcon, LayoutDashboard, RefreshCw, Save, Sparkles } from 'lucide-react';
 import { GLOBAL_THEMES, type GlobalTheme } from '../../constants/globalThemes';
 import { useGlobalThemes } from '../../hooks/useGlobalThemes';
+import { useNavigate } from 'react-router-dom';
 import './WeeklyThemePlanner.css';
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
@@ -62,6 +64,7 @@ interface DragSelection {
 
 const WeeklyThemePlanner: React.FC = () => {
     const { currentUser } = useAuth();
+    const navigate = useNavigate();
     const { themes: globalThemes } = useGlobalThemes();
     const themeOptions = useMemo(() => {
         const base = globalThemes.length ? globalThemes : GLOBAL_THEMES;
@@ -85,13 +88,14 @@ const WeeklyThemePlanner: React.FC = () => {
     const [selectedSubTheme, setSelectedSubTheme] = useState('');
     const [applyFeedback, setApplyFeedback] = useState<{ variant: 'success' | 'danger' | 'info'; message: string } | null>(null);
     const [applying, setApplying] = useState(false);
+    const [deltaReplanLoading, setDeltaReplanLoading] = useState(false);
     const [nightlyRunning, setNightlyRunning] = useState(false);
 
     const functions = getFunctions();
-    const getAllocations = httpsCallable(functions, 'getThemeAllocations');
-    const saveAllocationsFn = httpsCallable(functions, 'saveThemeAllocations');
+    const db = getFirestore();
     const materializePlannerBlocks = httpsCallable(functions, 'materializeFitnessBlocksNow');
-    const runNightlyChainFn = httpsCallable(functions, 'runNightlyChain');
+    const replanCalendarNowFn = httpsCallable(functions, 'replanCalendarNow');
+    const runNightlyChainFn = httpsCallable(functions, 'runNightlyChainNow');
 
     useEffect(() => {
         if (currentUser) loadAllocations();
@@ -106,11 +110,12 @@ const WeeklyThemePlanner: React.FC = () => {
     }, [themeOptions, selectedTheme]);
 
     const loadAllocations = async () => {
+        if (!currentUser) return;
         setLoading(true);
         try {
-            const res = await getAllocations();
-            const data = res.data as { allocations: Allocation[] };
-            setAllocations(data.allocations || []);
+            const docRef = doc(db, 'theme_allocations', currentUser.uid);
+            const docSnap = await getDoc(docRef);
+            setAllocations(docSnap.exists() ? docSnap.data().allocations || [] : []);
         } catch (e) {
             console.error(e);
         } finally {
@@ -119,10 +124,15 @@ const WeeklyThemePlanner: React.FC = () => {
     };
 
     const saveAllocations = async () => {
+        if (!currentUser) return;
         setSaving(true);
         setApplyFeedback(null);
         try {
-            await saveAllocationsFn({ allocations });
+            const docRef = doc(db, 'theme_allocations', currentUser.uid);
+            await setDoc(docRef, {
+                allocations,
+                updatedAt: new Date().toISOString()
+            });
         } catch (e) {
             console.error(e);
         } finally {
@@ -149,6 +159,30 @@ const WeeklyThemePlanner: React.FC = () => {
             setApplyFeedback({ variant: 'danger', message: e?.message || 'Failed to apply planner blocks.' });
         } finally {
             setApplying(false);
+        }
+    };
+
+    const replanAroundCalendar = async () => {
+        if (!currentUser) return;
+        setDeltaReplanLoading(true);
+        setApplyFeedback(null);
+        try {
+            const res = await replanCalendarNowFn({ days: 7 });
+            const data = res.data as { created?: number; rescheduled?: number; blocked?: number };
+            const parts: string[] = [];
+            if (data?.created) parts.push(`${data.created} created`);
+            if (data?.rescheduled) parts.push(`${data.rescheduled} moved`);
+            if (data?.blocked) parts.push(`${data.blocked} blocked`);
+            setApplyFeedback({
+                variant: 'success',
+                message: parts.length
+                    ? `Delta replan complete: ${parts.join(', ')}.`
+                    : 'Delta replan complete.',
+            });
+        } catch (e: any) {
+            setApplyFeedback({ variant: 'danger', message: e?.message || 'Failed to run delta replan.' });
+        } finally {
+            setDeltaReplanLoading(false);
         }
     };
 
@@ -373,13 +407,18 @@ const WeeklyThemePlanner: React.FC = () => {
     };
 
     const commitAllocations = async (nextAllocations: Allocation[]) => {
+        if (!currentUser) return;
         setAllocations(nextAllocations);
         setShowModal(false);
         setPendingSelection(null);
         clearDragState();
         setSaving(true);
         try {
-            await saveAllocationsFn({ allocations: nextAllocations });
+            const docRef = doc(db, 'theme_allocations', currentUser.uid);
+            await setDoc(docRef, {
+                allocations: nextAllocations,
+                updatedAt: new Date().toISOString()
+            });
         } catch (e) {
             console.error('save allocations failed', e);
         } finally {
@@ -505,16 +544,54 @@ const WeeklyThemePlanner: React.FC = () => {
                     <small className="text-muted d-block">Tip: click and drag across time slots to create. Use the top/bottom handles to resize and drag the label to move. Use Clear to remove only the selected range.</small>
                 </div>
                 <div className="d-flex flex-wrap gap-2">
-                    <Button onClick={saveAllocations} disabled={saving || applying}>
+                    <Button onClick={saveAllocations} disabled={saving || applying || deltaReplanLoading || nightlyRunning}>
                     {saving ? <Spinner size="sm" animation="border" className="me-2" /> : <Save size={18} className="me-2" />}
                     Save Changes
                     </Button>
-                    <Button variant="outline-primary" onClick={applyPlannerBlocksNow} disabled={saving || applying}>
+                    <Button
+                        variant="outline-primary"
+                        onClick={applyPlannerBlocksNow}
+                        disabled={saving || applying || deltaReplanLoading || nightlyRunning}
+                        title="Apply Planner Blocks Now: materializes Fitness and Work (Main Gig) allocations into calendar blocks for the next 7 days."
+                    >
                         {applying ? <Spinner size="sm" animation="border" className="me-2" /> : null}
                         Apply Planner Blocks Now
                     </Button>
-                    <Button variant="outline-secondary" onClick={() => window.open('https://bob.jc1.tech/calendar/planner', '_blank', 'noopener,noreferrer')} disabled={saving || applying}>
+                    <Button
+                        variant="outline-secondary"
+                        onClick={replanAroundCalendar}
+                        disabled={saving || applying || deltaReplanLoading || nightlyRunning}
+                        title="Replan Around Calendar (Delta): rebalances existing calendar blocks around your latest priorities and planner changes."
+                    >
+                        {deltaReplanLoading ? <Spinner size="sm" animation="border" className="me-2" /> : <RefreshCw size={16} className="me-2" />}
                         Replan Around Calendar
+                    </Button>
+                    <Button
+                        variant="primary"
+                        onClick={runNightlyChainNow}
+                        disabled={saving || applying || deltaReplanLoading || nightlyRunning}
+                        title="Full replan: runs the complete nightly orchestration (pointing, conversions, priority scoring, and calendar planning)."
+                    >
+                        {nightlyRunning ? <Spinner size="sm" animation="border" className="me-2" /> : <Sparkles size={16} className="me-2" />}
+                        Full replan
+                    </Button>
+                    <Button
+                        variant="outline-secondary"
+                        onClick={() => navigate('/calendar')}
+                        disabled={saving || applying || deltaReplanLoading || nightlyRunning}
+                        title="Open calendar"
+                    >
+                        <CalendarIcon size={16} className="me-2" />
+                        View calendar
+                    </Button>
+                    <Button
+                        variant="outline-secondary"
+                        onClick={() => navigate('/dashboard')}
+                        disabled={saving || applying || deltaReplanLoading || nightlyRunning}
+                        title="Open overview dashboard"
+                    >
+                        <LayoutDashboard size={16} className="me-2" />
+                        View overview
                     </Button>
                 </div>
             </div>

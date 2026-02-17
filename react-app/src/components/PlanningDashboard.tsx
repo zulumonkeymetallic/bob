@@ -137,7 +137,7 @@ const PlanningDashboard: React.FC = () => {
                           <Badge bg="outline-secondary">{task.effort}</Badge>
                         </td>
                         <td>
-                          <Badge bg={isPriority(task.priority, 'high') ? 'danger' : isPriority(task.priority, 'med') ? 'warning' : 'info'}>
+                          <Badge bg={isPriority(task.priority, 'high') ? 'orange' : isPriority(task.priority, 'med') ? 'warning' : 'info'}>
                             {task.priority}
                           </Badge>
                         </td>

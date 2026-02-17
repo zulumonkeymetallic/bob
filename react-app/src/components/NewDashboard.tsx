@@ -250,7 +250,7 @@ const Dashboard: React.FC = () => {
                       <div className="d-flex justify-content-between align-items-start mb-1">
                         <h6 className="md-subtitle-2 mb-0">{task.title}</h6>
                         <Badge 
-                          bg={isPriority(task.priority, 'high') ? 'danger' : isPriority(task.priority, 'med') ? 'warning' : 'secondary'}
+                          bg={isPriority(task.priority, 'high') ? 'orange' : isPriority(task.priority, 'med') ? 'warning' : 'secondary'}
                           className="ms-2"
                         >
                           {task.priority}

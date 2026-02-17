@@ -123,7 +123,7 @@ const DashboardTaskTable: React.FC<DashboardTaskTableProps> = ({ maxTasks = 10, 
 
   const getPriorityBadge = (priority: number) => {
     switch (priority) {
-      case 3: return <Badge bg="danger">High</Badge>;
+      case 3: return <Badge bg="orange">High</Badge>;
       case 2: return <Badge bg="warning">Medium</Badge>;
       case 1: return <Badge bg="info">Low</Badge>;
       default: return <Badge bg="secondary">None</Badge>;

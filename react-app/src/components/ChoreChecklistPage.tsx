@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Badge, Button, Card, Form, ListGroup, Spinner } from 'react-bootstrap';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, Link } from 'react-router-dom';
 import { collection, doc, getDoc, onSnapshot, query, where } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { endOfDay, format, startOfDay } from 'date-fns';
@@ -233,7 +233,7 @@ const ChoreChecklistPage: React.FC = () => {
                       </div>
                       <div className="d-flex flex-column align-items-end gap-1">
                         <Badge bg={badgeVariant}>{badgeLabel}</Badge>
-                        <Button size="sm" variant="outline-secondary" href={`/tasks/${encodeURIComponent(taskRef)}`}>Open</Button>
+                        <Link to={`/tasks/${encodeURIComponent(taskRef)}`} className="btn btn-sm btn-outline-secondary">Open</Link>
                       </div>
                     </div>
                   </ListGroup.Item>

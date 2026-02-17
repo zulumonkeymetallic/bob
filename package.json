@@ -3,16 +3,18 @@
   "version": "4.5.0",
   "private": true,
   "dependencies": {
+    "minimist": "^1.2.8",
     "react-dnd": "^16.0.1",
     "react-dnd-html5-backend": "^16.0.1"
   },
   "devDependencies": {
-    "firebase-admin": "^12.6.0",
+    "@google/generative-ai": "^0.24.1",
     "@playwright/test": "^1.47.2",
-    "playwright": "^1.47.2",
     "concurrently": "^9.0.1",
     "cross-env": "^7.0.3",
+    "firebase-admin": "^12.6.0",
     "firebase-tools": "^13.24.0",
+    "playwright": "^1.47.2",
     "serve": "^14.2.4",
     "wait-on": "^7.2.0"
   },
@@ -31,9 +33,9 @@
     "preview:test": "concurrently -k -s first \"npm:emulators\" \"npm:preview:build\"",
     "backfill:sprint-persona": "node scripts/backfill-sprint-persona.js",
     "validate:sprints": "node scripts/validate-sprints-perf.js --serviceAccount=/Users/jim/GitHub/secrets/bob20250810-firebase-adminsdk-fbsvc-e80020e8a4.json --uid=3L3nnXSuTPfr08c8DTXG5zYX37A2 --project=bob20250810",
-    "backfill:owner-uid": "node scripts/backfill-ownerUid-multi.js --serviceAccount=/Users/jim/GitHub/secrets/bob20250810-firebase-adminsdk-fbsvc-e80020e8a4.json"
-    ,"backfill:task-refs:tk": "node scripts/backfill-task-refs-tk.js --project bob20250810"
-    ,"audit:title-dupes": "node scripts/audit-title-duplicates.js"
-    ,"backfill:task-points": "node scripts/backfill-task-points.js --serviceAccount=/Users/jim/GitHub/secret/bob20250810-firebase-adminsdk-fbsvc-887b88b3ae.json"
+    "backfill:owner-uid": "node scripts/backfill-ownerUid-multi.js --serviceAccount=/Users/jim/GitHub/secrets/bob20250810-firebase-adminsdk-fbsvc-e80020e8a4.json",
+    "backfill:task-refs:tk": "node scripts/backfill-task-refs-tk.js --project bob20250810",
+    "audit:title-dupes": "node scripts/audit-title-duplicates.js",
+    "backfill:task-points": "node scripts/backfill-task-points.js --serviceAccount=/Users/jim/GitHub/secret/bob20250810-firebase-adminsdk-fbsvc-887b88b3ae.json"
   }
 }

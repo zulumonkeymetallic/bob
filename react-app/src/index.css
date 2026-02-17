@@ -15,6 +15,7 @@
   --green: #28a745;
   --red: #dc3545;
   --orange: #fd7e14;
+  --bs-orange: var(--orange);
   /* Text color for content drawn on top of accent/brand backgrounds */
   --on-accent: #ffffff;
 
@@ -39,6 +40,7 @@
   --green: #93C47D;
   --red: #E06666;
   --orange: #F6B26B;
+  --bs-orange: var(--orange);
   --on-accent: #ffffff;
 
   /* Glassmorphism for dark theme */

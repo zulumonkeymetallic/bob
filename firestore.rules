@@ -436,8 +436,10 @@ service cloud.firestore {
 
       // Habit Entries as a subcollection
       match /habitEntries/{entryId} {
-        allow create: if isOwner(); // Owner of the parent habit can create entries
-        allow read, update, delete: if isOwner(); // Owner of the parent habit can manage entries
+        // FIX: For create, check request.resource since resource doesn't exist yet
+        allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+        // For read/update/delete, check existing resource
+        allow read, update, delete: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
       }
     }
 
@@ -453,6 +455,10 @@ service cloud.firestore {
     }
     // Per-user theme settings (legacy hook)
     match /theme_settings/{uid} {
+      allow read, write: if isSignedIn() && request.auth.uid == uid;
+    }
+    // Per-user weekly theme allocations
+    match /theme_allocations/{uid} {
       allow read, write: if isSignedIn() && request.auth.uid == uid;
     }
 

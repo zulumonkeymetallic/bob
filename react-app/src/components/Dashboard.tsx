@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Container, Card, Row, Col, Badge, Button, Alert, Collapse, OverlayTrigger, Tooltip, Form, Spinner } from 'react-bootstrap';
 import { useNavigate, Link } from 'react-router-dom';
-import { Target, BookOpen, TrendingUp, Wallet, Clock, ListChecks, Calendar as CalendarIcon, LayoutGrid, RefreshCw, Sparkles } from 'lucide-react';
+import { Target, BookOpen, TrendingUp, Wallet, Clock, ListChecks, Calendar as CalendarIcon, LayoutGrid, RefreshCw, Sparkles, Activity } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { collection, query, where, onSnapshot, orderBy, limit, getDocs, doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
@@ -30,6 +30,7 @@ import '../styles/Dashboard.css';
 import { isRecurringDueOnDate, resolveRecurringDueMs, resolveTaskDueMs } from '../utils/recurringTaskDue';
 import EditTaskModal from './EditTaskModal';
 import EditStoryModal from './EditStoryModal';
+import { useSidebar } from '../contexts/SidebarContext';
 
 const locales = { 'en-GB': enGB } as const;
 const localizer = dateFnsLocalizer({
@@ -126,6 +127,7 @@ const resolveMonzoBucket = (tx: any): string => {
 const Dashboard: React.FC = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
+  const { showSidebar } = useSidebar();
   const navigate = useNavigate();
   const { themes: globalThemes } = useGlobalThemes();
 
@@ -2446,8 +2448,28 @@ const Dashboard: React.FC = () => {
                                       const storyS = storyStatusMap[storyStatusVal] || storyStatusMap[0];
                                       return (
                                         <div key={story.id} className="border rounded p-2 mb-2 dashboard-due-item">
-                                          <div className="fw-semibold small">
-                                            <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditStory(story); }}>{label}</a>
+                                          <div className="d-flex align-items-start justify-content-between gap-2">
+                                            <div className="fw-semibold small flex-grow-1">
+                                              <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditStory(story); }}>{label}</a>
+                                            </div>
+                                            <button
+                                              type="button"
+                                              className="d-none d-md-inline-flex align-items-center justify-content-center"
+                                              onClick={() => showSidebar(story as any, 'story')}
+                                              title="Activity stream"
+                                              style={{
+                                                color: 'var(--bs-secondary-color)',
+                                                padding: 4,
+                                                borderRadius: 4,
+                                                border: 'none',
+                                                background: 'transparent',
+                                                cursor: 'pointer',
+                                                lineHeight: 0,
+                                                flexShrink: 0,
+                                              }}
+                                            >
+                                              <Activity size={14} />
+                                            </button>
                                           </div>
                                           <div className="d-flex align-items-center gap-2 mt-1 flex-wrap">
                                             <span className="text-muted d-inline-flex align-items-center gap-1" style={{ fontSize: 11 }}>
@@ -2519,8 +2541,28 @@ const Dashboard: React.FC = () => {
                                       const dueMs = getTaskDueMs(task);
                                       return (
                                         <div key={task.id} className="border rounded p-2 mb-2 dashboard-due-item">
-                                          <div className="fw-semibold small">
-                                            <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>{task.title}</a>
+                                          <div className="d-flex align-items-start justify-content-between gap-2">
+                                            <div className="fw-semibold small flex-grow-1">
+                                              <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>{task.title}</a>
+                                            </div>
+                                            <button
+                                              type="button"
+                                              className="d-none d-md-inline-flex align-items-center justify-content-center"
+                                              onClick={() => showSidebar(task as any, 'task')}
+                                              title="Activity stream"
+                                              style={{
+                                                color: 'var(--bs-secondary-color)',
+                                                padding: 4,
+                                                borderRadius: 4,
+                                                border: 'none',
+                                                background: 'transparent',
+                                                cursor: 'pointer',
+                                                lineHeight: 0,
+                                                flexShrink: 0,
+                                              }}
+                                            >
+                                              <Activity size={14} />
+                                            </button>
                                           </div>
                                           {refLabel && (
                                             <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>
@@ -2549,7 +2591,7 @@ const Dashboard: React.FC = () => {
                                                 onChange={(e) => handleTaskPriorityChange(task, Number(e.target.value))}
                                                 style={{
                                                   backgroundColor: `var(--bs-${priorityBadge.bg})`,
-                                                  color: priorityBadge.bg === 'warning' || priorityBadge.bg === 'light' ? '#000' : '#fff',
+                                                  color: priorityBadge.bg === 'warning' || priorityBadge.bg === 'orange' || priorityBadge.bg === 'light' ? '#000' : '#fff',
                                                 }}
                                               >
                                                 <option value={0}>None</option>
@@ -2663,7 +2705,7 @@ const Dashboard: React.FC = () => {
                               </Badge>
                             </div>
                           </Card.Header>
-                          <Card.Body className="p-3 d-flex flex-column gap-2">
+                          <Card.Body className="p-3">
                             {tasksDueTodayLoading ? (
                               <div className="d-flex align-items-center gap-2 text-muted">
                                 <Spinner size="sm" animation="border" /> Loading tasks…
@@ -2680,9 +2722,29 @@ const Dashboard: React.FC = () => {
                                   const priorityBadge = getPriorityBadge((task as any).priority);
                                   const dueLabel = dueMs ? formatDueDetail(dueMs) : null;
                                   return (
-                                    <div key={item.id} className="border rounded p-2 dashboard-due-item">
-                                      <div className="fw-semibold small">
-                                        <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>{task.title}</a>
+                                    <div key={item.id} className="border rounded p-2 mb-2 dashboard-due-item">
+                                      <div className="d-flex align-items-start justify-content-between gap-2">
+                                        <div className="fw-semibold small flex-grow-1">
+                                          <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>{task.title}</a>
+                                        </div>
+                                        <button
+                                          type="button"
+                                          className="d-none d-md-inline-flex align-items-center justify-content-center"
+                                          onClick={() => showSidebar(task as any, 'task')}
+                                          title="Activity stream"
+                                          style={{
+                                            color: 'var(--bs-secondary-color)',
+                                            padding: 4,
+                                            borderRadius: 4,
+                                            border: 'none',
+                                            background: 'transparent',
+                                            cursor: 'pointer',
+                                            lineHeight: 0,
+                                            flexShrink: 0,
+                                          }}
+                                        >
+                                          <Activity size={14} />
+                                        </button>
                                       </div>
                                       {refLabel && (
                                         <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>
@@ -2711,7 +2773,7 @@ const Dashboard: React.FC = () => {
                                             onChange={(e) => handleTaskPriorityChange(task, Number(e.target.value))}
                                             style={{
                                               backgroundColor: `var(--bs-${priorityBadge.bg})`,
-                                              color: priorityBadge.bg === 'warning' || priorityBadge.bg === 'light' ? '#000' : '#fff',
+                                              color: priorityBadge.bg === 'warning' || priorityBadge.bg === 'orange' || priorityBadge.bg === 'light' ? '#000' : '#fff',
                                             }}
                                           >
                                             <option value={0}>None</option>
@@ -2778,7 +2840,7 @@ const Dashboard: React.FC = () => {
                             </Badge>
                           </div>
                         </Card.Header>
-                        <Card.Body className="p-3 d-flex flex-column gap-2">
+                          <Card.Body className="p-3">
                           {tasksDueTodayLoading ? (
                             <div className="d-flex align-items-center gap-2 text-muted">
                               <Spinner size="sm" animation="border" /> Loading chores…
@@ -2795,7 +2857,7 @@ const Dashboard: React.FC = () => {
                               const badgeLabel = kind === 'routine' ? 'Routine' : kind === 'habit' ? 'Habit' : 'Chore';
                               const busy = !!choreCompletionBusy[task.id];
                               return (
-                                <div key={task.id} className="border rounded p-2 d-flex align-items-start gap-2">
+                                <div key={task.id} className="border rounded p-2 mb-2 d-flex align-items-start gap-2">
                                   <Form.Check
                                     type="checkbox"
                                     checked={busy}
@@ -2810,14 +2872,30 @@ const Dashboard: React.FC = () => {
                                       {(task as any).ref && (
                                         <>
                                           <span className="mx-1">·</span>
-                                          <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>
-                                            <code className="text-primary" style={{ fontSize: 10 }}>{(task as any).ref}</code>
-                                          </a>
+                                          <code className="text-primary" style={{ fontSize: 10 }}>{(task as any).ref}</code>
                                         </>
                                       )}
                                     </div>
                                   </div>
                                   <div className="d-flex flex-column align-items-end gap-1">
+                                    <button
+                                      type="button"
+                                      className="d-none d-md-inline-flex align-items-center justify-content-center"
+                                      onClick={() => showSidebar(task as any, 'task')}
+                                      title="Activity stream"
+                                      style={{
+                                        color: 'var(--bs-secondary-color)',
+                                        padding: 4,
+                                        borderRadius: 4,
+                                        border: 'none',
+                                        background: 'transparent',
+                                        cursor: 'pointer',
+                                        lineHeight: 0,
+                                        flexShrink: 0,
+                                      }}
+                                    >
+                                      <Activity size={14} />
+                                    </button>
                                     {isOverdue && <Badge bg="danger">Overdue</Badge>}
                                     <Badge bg={badgeVariant}>{badgeLabel}</Badge>
                                   </div>

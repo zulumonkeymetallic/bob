@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useLayoutEffect, useRef } from 'react';
-import { startOfWeek, endOfWeek, format } from 'date-fns';
+import { startOfWeek, endOfWeek, startOfDay, subDays, format } from 'date-fns';
 import { Card, Badge, Button, Modal, Alert, Toast, ToastContainer } from 'react-bootstrap';
 import { Edit3, Target, Calendar, User, CalendarPlus, Wand2, Activity } from 'lucide-react';
 import { Goal, Story } from '../types';
@@ -57,6 +57,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
   const [goalTimeAllocations, setGoalTimeAllocations] = useState<{ [goalId: string]: number }>({});
   const [generatingForGoal, setGeneratingForGoal] = useState<string | null>(null);
   const [habitAdherenceData, setHabitAdherenceData] = useState<Record<string, { planned: number; completed: number; progress: number }>>({});
+  const [goalHabitMetrics, setGoalHabitMetrics] = useState<Record<string, { count: number; adherence: number; streak: number }>>({});
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [toastVariant, setToastVariant] = useState<'success' | 'danger' | 'info'>('success');
   const [rowSpans, setRowSpans] = useState<Record<string, number>>({});
@@ -345,6 +346,76 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
     });
     return () => unsub();
   }, [currentUser?.uid]);
+
+  // Compute 100-day habit/routine metrics per goal from calendar_blocks
+  useEffect(() => {
+    if (!currentUser?.uid || !goals.length) return;
+    const goalIds = goals.map((g) => g.id);
+    const startMs = startOfDay(subDays(new Date(), 100)).getTime();
+    const endMs = Date.now();
+    const q = query(
+      collection(db, 'calendar_blocks'),
+      where('ownerUid', '==', currentUser.uid),
+      where('start', '>=', startMs),
+      where('start', '<=', endMs),
+    );
+    const unsub = onSnapshot(q, (snap) => {
+      // Group occurrences by goalId → taskId → sorted days
+      const goalTaskDays: Record<string, Record<string, { dayMs: number; done: boolean }[]>> = {};
+      snap.docs.forEach((docSnap) => {
+        const data = docSnap.data() as any;
+        const entityType = String(data.entityType || '').toLowerCase();
+        if (!['routine', 'habit', 'chore'].includes(entityType)) return;
+        const goalId = String(data.goalId || '').trim();
+        if (!goalId || !goalIds.includes(goalId)) return;
+        const taskId = String(data.taskId || '').trim();
+        if (!taskId) return;
+        const start = typeof data.start === 'number' ? data.start : null;
+        if (!start) return;
+        const status = String(data.status || '').toLowerCase();
+        const done = ['done', 'complete', 'completed'].includes(status);
+        const dayMs = startOfDay(new Date(start)).getTime();
+        if (!goalTaskDays[goalId]) goalTaskDays[goalId] = {};
+        if (!goalTaskDays[goalId][taskId]) goalTaskDays[goalId][taskId] = [];
+        // Only keep one entry per day per task
+        const existing = goalTaskDays[goalId][taskId].find((d) => d.dayMs === dayMs);
+        if (existing) {
+          if (done) existing.done = true;
+        } else {
+          goalTaskDays[goalId][taskId].push({ dayMs, done });
+        }
+      });
+      const metrics: Record<string, { count: number; adherence: number; streak: number }> = {};
+      for (const goalId of Object.keys(goalTaskDays)) {
+        const taskMap = goalTaskDays[goalId];
+        const taskIds = Object.keys(taskMap);
+        let totalPlanned = 0;
+        let totalCompleted = 0;
+        let minStreak = Infinity;
+        for (const tid of taskIds) {
+          const days = taskMap[tid].sort((a, b) => b.dayMs - a.dayMs); // newest first
+          totalPlanned += days.length;
+          totalCompleted += days.filter((d) => d.done).length;
+          let streak = 0;
+          for (const d of days) {
+            if (d.done) streak++;
+            else break;
+          }
+          minStreak = Math.min(minStreak, streak);
+        }
+        const adherence = totalPlanned > 0 ? Math.round((totalCompleted / totalPlanned) * 100) : 0;
+        metrics[goalId] = {
+          count: taskIds.length,
+          adherence,
+          streak: minStreak === Infinity ? 0 : minStreak,
+        };
+      }
+      setGoalHabitMetrics(metrics);
+    }, (err) => {
+      console.warn('GoalsCardView: habit metrics load failed', err);
+    });
+    return () => unsub();
+  }, [currentUser?.uid, goals]);
 
   // Fetch time allocations for goals from calendar blocks
   useEffect(() => {
@@ -881,6 +952,29 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                     </div>
                     {/* This Week removed */}
                     </div>
+                    {(() => {
+                      const hm = goalHabitMetrics[goal.id];
+                      if (!hm || hm.count === 0) return null;
+                      return (
+                        <div style={{ marginTop: 8, padding: '8px 12px', borderRadius: 8, backgroundColor: withAlpha(themeColor, 0.08) }}>
+                          <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 4, color: textColor }}>
+                            Habits &amp; Routines ({hm.count})
+                          </div>
+                          <div style={{ display: 'flex', gap: 16, fontSize: 12 }}>
+                            <div>
+                              <span style={{ color: mutedTextColor }}>100-day adherence: </span>
+                              <span style={{ fontWeight: 600, color: hm.adherence >= 80 ? '#16a34a' : hm.adherence >= 50 ? '#ca8a04' : '#dc2626' }}>
+                                {hm.adherence}%
+                              </span>
+                            </div>
+                            <div>
+                              <span style={{ color: mutedTextColor }}>Streak: </span>
+                              <span style={{ fontWeight: 600, color: textColor }}>{hm.streak} day{hm.streak !== 1 ? 's' : ''}</span>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </>
                 )}
 

@@ -26,10 +26,13 @@ import {
   Spinner,
 } from 'react-bootstrap';
 import {
+  Activity,
   Calendar as CalendarIcon,
   CheckCircle,
   Clock,
   ExternalLink,
+  LayoutDashboard,
+  LayoutGrid,
   Link as LinkIcon,
   ListChecks,
   RefreshCw,
@@ -68,6 +71,7 @@ import { getBadgeVariant, getPriorityBadge, getStatusName } from '../../utils/st
 import { isRecurringDueOnDate, resolveRecurringDueMs } from '../../utils/recurringTaskDue';
 import EditTaskModal from '../EditTaskModal';
 import EditStoryModal from '../EditStoryModal';
+import { useSidebar } from '../../contexts/SidebarContext';
 
 const locales = { 'en-GB': enGB } as const;
 const localizer = dateFnsLocalizer({
@@ -184,6 +188,7 @@ const hexToRgba = (hex: string, alpha: number) => {
 
 const UnifiedPlannerPage: React.FC = () => {
   const { currentUser } = useAuth();
+  const { showSidebar } = useSidebar();
   const { themes: globalThemes } = useGlobalThemes();
   const [stories, setStories] = useState<any[]>([]);
 
@@ -305,7 +310,7 @@ const UnifiedPlannerPage: React.FC = () => {
   const [tasksDueToday, setTasksDueToday] = useState<Task[]>([]);
   const [tasksLoading, setTasksLoading] = useState(false);
   const [tasksSortMode, setTasksSortMode] = useState<'due' | 'ai' | 'top3'>('ai');
-  const [top3Collapsed, setTop3Collapsed] = useState(true);
+  const [top3Collapsed, setTop3Collapsed] = useState(false);
   const [top3Tasks, setTop3Tasks] = useState<Task[]>([]);
   const [top3Stories, setTop3Stories] = useState<Story[]>([]);
   const [top3Loading, setTop3Loading] = useState(false);
@@ -1625,44 +1630,6 @@ const UnifiedPlannerPage: React.FC = () => {
                   </small>
                 </div>
               </div>
-              <div className="d-flex flex-wrap gap-2">
-                <Button
-                  variant="outline-secondary"
-                  size="sm"
-                  onClick={() => planner.refreshExternalEvents()}
-                  disabled={planner.loading}
-                >
-                  <RefreshCw size={16} className="me-1" /> Sync Google
-                </Button>
-                <Button
-                  variant="outline-primary"
-                  size="sm"
-                  onClick={handleReplanCalendar}
-                  disabled={planner.loading || replanLoading}
-                  title="Delta replan: quickly rebalance existing calendar blocks using current priorities."
-                >
-                  {replanLoading ? (
-                    <Spinner size="sm" animation="border" className="me-2" />
-                  ) : (
-                    <Clock size={16} className="me-1" />
-                  )}
-                  Delta replan
-                </Button>
-                <Button
-                  variant="primary"
-                  size="sm"
-                  onClick={handleRunNightlyOrchestration}
-                  disabled={planner.loading || orchestrationLoading}
-                  title="Full replan: runs full nightly orchestration (pointing, conversions, priority scoring, and calendar planning)."
-                >
-                  {orchestrationLoading ? (
-                    <Spinner size="sm" animation="border" className="me-2" />
-                  ) : (
-                    <Sparkles size={16} className="me-1" />
-                  )}
-                  Full replan
-                </Button>
-              </div>
             </Card.Header>
             {feedback && (
               <Alert
@@ -1682,7 +1649,7 @@ const UnifiedPlannerPage: React.FC = () => {
                 </div>
               ) : (
                 <div className="planner-calendar-wrapper">
-                  <div className="d-flex justify-content-between align-items-center px-3 py-2 border-bottom">
+                  <div className="d-flex justify-content-between align-items-center px-3 py-2 border-bottom gap-2 flex-wrap">
                     <div className="d-flex align-items-center gap-2">
                       <ButtonGroup size="sm">
                         <Button
@@ -1705,9 +1672,71 @@ const UnifiedPlannerPage: React.FC = () => {
                         </Button>
                       </ButtonGroup>
                     </div>
-                    <Button size="sm" variant="outline-primary" onClick={() => openComposerForSlot(new Date(), addMinutes(new Date(), 60))}>
-                      + New Entry
-                    </Button>
+                    <div className="d-flex align-items-center gap-2 flex-wrap ms-auto">
+                      <Button
+                        variant="outline-secondary"
+                        size="sm"
+                        onClick={() => planner.refreshExternalEvents()}
+                        disabled={planner.loading}
+                      >
+                        <RefreshCw size={16} className="me-1" /> Sync Google
+                      </Button>
+                      <Button
+                        variant="outline-primary"
+                        size="sm"
+                        onClick={handleReplanCalendar}
+                        disabled={planner.loading || replanLoading}
+                        title="Delta replan: quickly rebalance existing calendar blocks using current priorities."
+                      >
+                        {replanLoading ? (
+                          <Spinner size="sm" animation="border" className="me-2" />
+                        ) : (
+                          <Clock size={16} className="me-1" />
+                        )}
+                        Delta replan
+                      </Button>
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        onClick={handleRunNightlyOrchestration}
+                        disabled={planner.loading || orchestrationLoading}
+                        title="Full replan: runs full nightly orchestration (pointing, conversions, priority scoring, and calendar planning)."
+                      >
+                        {orchestrationLoading ? (
+                          <Spinner size="sm" animation="border" className="me-2" />
+                        ) : (
+                          <Sparkles size={16} className="me-1" />
+                        )}
+                        Full replan
+                      </Button>
+                      <Button
+                        variant="outline-secondary"
+                        size="sm"
+                        onClick={() => navigate('/dashboard')}
+                        title="Open overview dashboard"
+                      >
+                        <LayoutDashboard size={16} className="me-1" /> View overview
+                      </Button>
+                      <Button
+                        variant="outline-secondary"
+                        size="sm"
+                        onClick={() => navigate('/calendar/planner')}
+                        title="Open weekly theme planner"
+                      >
+                        <CalendarIcon size={16} className="me-1" /> View planner
+                      </Button>
+                      <Button
+                        variant="outline-secondary"
+                        size="sm"
+                        onClick={() => navigate('/sprints/kanban')}
+                        title="Open sprint kanban board"
+                      >
+                        <LayoutGrid size={16} className="me-1" /> View kanban
+                      </Button>
+                      <Button size="sm" variant="outline-primary" onClick={() => openComposerForSlot(new Date(), addMinutes(new Date(), 60))}>
+                        + New Entry
+                      </Button>
+                    </div>
                   </div>
                   <DragAndDropCalendar
                     localizer={localizer}
@@ -1806,8 +1835,28 @@ const UnifiedPlannerPage: React.FC = () => {
                           const storyS = storyStatusMap[storyStatusVal] || storyStatusMap[0];
                           return (
                             <div key={story.id} className="border rounded p-2 mb-2 dashboard-due-item">
-                              <div className="fw-semibold small">
-                                <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditStory(story); }}>{label}</a>
+                              <div className="d-flex align-items-start justify-content-between gap-2">
+                                <div className="fw-semibold small flex-grow-1">
+                                  <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditStory(story); }}>{label}</a>
+                                </div>
+                                <button
+                                  type="button"
+                                  className="d-none d-md-inline-flex align-items-center justify-content-center"
+                                  onClick={() => showSidebar(story as any, 'story')}
+                                  title="Activity stream"
+                                  style={{
+                                    color: 'var(--bs-secondary-color)',
+                                    padding: 4,
+                                    borderRadius: 4,
+                                    border: 'none',
+                                    background: 'transparent',
+                                    cursor: 'pointer',
+                                    lineHeight: 0,
+                                    flexShrink: 0,
+                                  }}
+                                >
+                                  <Activity size={14} />
+                                </button>
                               </div>
                               <div className="d-flex align-items-center gap-2 mt-1 flex-wrap">
                                 <span className="text-muted d-inline-flex align-items-center gap-1" style={{ fontSize: 11 }}>
@@ -1879,8 +1928,28 @@ const UnifiedPlannerPage: React.FC = () => {
                           const dueMs = getTaskDueMs(task);
                           return (
                             <div key={task.id} className="border rounded p-2 mb-2 dashboard-due-item">
-                              <div className="fw-semibold small">
-                                <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>{task.title}</a>
+                              <div className="d-flex align-items-start justify-content-between gap-2">
+                                <div className="fw-semibold small flex-grow-1">
+                                  <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>{task.title}</a>
+                                </div>
+                                <button
+                                  type="button"
+                                  className="d-none d-md-inline-flex align-items-center justify-content-center"
+                                  onClick={() => showSidebar(task as any, 'task')}
+                                  title="Activity stream"
+                                  style={{
+                                    color: 'var(--bs-secondary-color)',
+                                    padding: 4,
+                                    borderRadius: 4,
+                                    border: 'none',
+                                    background: 'transparent',
+                                    cursor: 'pointer',
+                                    lineHeight: 0,
+                                    flexShrink: 0,
+                                  }}
+                                >
+                                  <Activity size={14} />
+                                </button>
                               </div>
                               {refLabel && (
                                 <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>
@@ -1909,7 +1978,7 @@ const UnifiedPlannerPage: React.FC = () => {
                                     onChange={(e) => handleTaskPriorityChange(task, Number(e.target.value))}
                                     style={{
                                       backgroundColor: `var(--bs-${priorityBadge.bg})`,
-                                      color: priorityBadge.bg === 'warning' || priorityBadge.bg === 'light' ? '#000' : '#fff',
+                                      color: priorityBadge.bg === 'warning' || priorityBadge.bg === 'orange' || priorityBadge.bg === 'light' ? '#000' : '#fff',
                                     }}
                                   >
                                     <option value={0}>None</option>
@@ -2002,8 +2071,28 @@ const UnifiedPlannerPage: React.FC = () => {
                       const s = statusMap[statusVal] || statusMap[0];
                       return (
                         <div key={task.id} className="border rounded p-2 dashboard-due-item">
-                          <div className="fw-semibold small">
-                            <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>{task.title}</a>
+                          <div className="d-flex align-items-start justify-content-between gap-2">
+                            <div className="fw-semibold small flex-grow-1">
+                              <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>{task.title}</a>
+                            </div>
+                            <button
+                              type="button"
+                              className="d-none d-md-inline-flex align-items-center justify-content-center"
+                              onClick={() => showSidebar(task as any, 'task')}
+                              title="Activity stream"
+                              style={{
+                                color: 'var(--bs-secondary-color)',
+                                padding: 4,
+                                borderRadius: 4,
+                                border: 'none',
+                                background: 'transparent',
+                                cursor: 'pointer',
+                                lineHeight: 0,
+                                flexShrink: 0,
+                              }}
+                            >
+                              <Activity size={14} />
+                            </button>
                           </div>
                           {refLabel && (
                             <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>
@@ -2032,7 +2121,7 @@ const UnifiedPlannerPage: React.FC = () => {
                                 onChange={(e) => handleTaskPriorityChange(task, Number(e.target.value))}
                                 style={{
                                   backgroundColor: `var(--bs-${priorityBadge.bg})`,
-                                  color: priorityBadge.bg === 'warning' || priorityBadge.bg === 'light' ? '#000' : '#fff',
+                                  color: priorityBadge.bg === 'warning' || priorityBadge.bg === 'orange' || priorityBadge.bg === 'light' ? '#000' : '#fff',
                                 }}
                               >
                                 <option value={0}>None</option>
