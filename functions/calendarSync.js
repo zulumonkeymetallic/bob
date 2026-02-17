@@ -755,7 +755,10 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
         eventId = existingEvent.id;
         debugLogs.push({ step: 'existing_event_found', eventId });
       }
-      let enrichedDesc = block.rationale || '';
+      // Use original rationale only; if it contains enriched content from a prior
+      // push→pull feedback loop (URLs, newlines), discard it to avoid duplication.
+      const rawRationale = block.rationale || '';
+      let enrichedDesc = (rawRationale.includes('\n') || rawRationale.includes('http')) ? '' : rawRationale;
       let aiScoreVal = block.aiScore ?? block.aiCriticalityScore ?? null;
       const blockTopReason = block.aiTop3ForDay && block.aiTop3Reason ? block.aiTop3Reason : null;
       let aiReasonVal = block.aiReason || blockTopReason || block.aiCriticalityReason || block.dueDateReason || '';
@@ -1083,7 +1086,8 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
       if (refPart) summaryParts.push(refPart);
       summaryParts.push(`[${themeLabel}]`);
       const summaryText = summaryParts.filter(Boolean).join(' - ');
-      let enrichedDesc2 = block.rationale || '';
+      const rawRationale2 = block.rationale || '';
+      let enrichedDesc2 = (rawRationale2.includes('\n') || rawRationale2.includes('http')) ? '' : rawRationale2;
       let aiScoreVal2 = block.aiScore ?? block.aiCriticalityScore ?? null;
       const blockTopReason2 = block.aiTop3ForDay && block.aiTop3Reason ? block.aiTop3Reason : null;
       let aiReasonVal2 = block.aiReason || blockTopReason2 || block.aiCriticalityReason || block.dueDateReason || '';
@@ -1569,15 +1573,15 @@ async function pullGoogleEventsForUser(uid, { windowStart, windowEnd }) {
             const needsUpdate = updatedMs > blockUpdated + 500
               || data.start !== startMs
               || data.end !== endMs
-              || data.googleEventId !== event.id
-              || (!data.rationale && !!event.description);
+              || data.googleEventId !== event.id;
             if (needsUpdate) {
+              // Don't write event.description back to rationale for BOB-owned blocks
+              // to prevent enrichment feedback loop (push enriches → pull stores → push re-enriches)
               await ref.set({
                 start: startMs,
                 end: endMs,
                 googleEventId: event.id,
                 calendarId,
-                rationale: event.description || data.rationale || '',
                 status: data.status || 'synced',
                 updatedAt: admin.firestore.FieldValue.serverTimestamp(),
               }, { merge: true });
@@ -1609,15 +1613,15 @@ async function pullGoogleEventsForUser(uid, { windowStart, windowEnd }) {
           const needsUpdate = updatedMs > blockUpdated + 500
             || data.start !== startMs
             || data.end !== endMs
-            || data.googleEventId !== event.id
-            || (!data.rationale && !!event.description);
+            || data.googleEventId !== event.id;
           if (needsUpdate) {
+            // Don't write event.description back to rationale for BOB-owned blocks
+            // to prevent enrichment feedback loop
             await ref.set({
               start: startMs,
               end: endMs,
               googleEventId: event.id,
               calendarId,
-              rationale: event.description || data.rationale || '',
               status: data.status || 'synced',
               updatedAt: admin.firestore.FieldValue.serverTimestamp(),
             }, { merge: true });
@@ -1998,63 +2002,6 @@ exports.syncCalendarNow = functions.https.onCall(async (data, context) => {
       error: error?.message || String(error),
     });
     throw new functions.https.HttpsError('internal', error.message || 'Failed to sync calendar');
-  }
-});
-
-// Diagnostic: attempt a single minimal insert for a given blockId (for troubleshooting Google errors)
-exports.syncCalendarTestInsert = functions.https.onCall(async (data, context) => {
-  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Must be authenticated');
-  const { blockId } = data;
-  const uid = context.auth.uid;
-  try {
-    const { calendar } = await getCalendarClientForUser(uid);
-    const snap = await admin.firestore().collection('calendar_blocks').doc(blockId).get();
-    if (!snap.exists) throw new Error('Block not found');
-    const block = snap.data();
-    const startMs = toMillis(block.start);
-    const endMs = toMillis(block.end);
-    const minimalEvent = {
-      summary: block.title || block.category || 'BOB Block',
-      start: { dateTime: new Date(startMs).toISOString(), timeZone: 'UTC' },
-      end: { dateTime: new Date(endMs).toISOString(), timeZone: 'UTC' },
-    };
-    let insertResponse = null;
-    try {
-      insertResponse = await calendar.events.insert({ calendarId: 'primary', resource: minimalEvent });
-      await logCalendarIntegration(uid, {
-        action: 'push',
-        direction: 'test_insert',
-        status: 'success',
-        blockId,
-        blockTitle: block.title || null,
-        eventId: insertResponse.data.id,
-      });
-      return { success: true, eventId: insertResponse.data.id };
-    } catch (err) {
-      const rawBody = err?.response?.data || null;
-      const rawStatus = err?.response?.status || null;
-      let rawText = null;
-      try {
-        if (err?.response?.data) rawText = JSON.stringify(err.response.data);
-        else if (typeof err?.response?.text === 'function') rawText = await err.response.text();
-      } catch (_) { /* ignore */ }
-      await logCalendarIntegration(uid, {
-        action: 'push',
-        direction: 'test_insert',
-        status: 'error',
-        blockId,
-        blockTitle: block.title || null,
-        error: err?.message || String(err),
-        errorPayload: err?.response?.data || err?.errors || null,
-        rawStatus,
-        rawBody,
-        rawText,
-      });
-      throw new functions.https.HttpsError('internal', 'Test insert failed');
-    }
-  } catch (error) {
-    console.error('syncCalendarTestInsert failed', error);
-    throw new functions.https.HttpsError('internal', error.message || 'Failed');
   }
 });
 

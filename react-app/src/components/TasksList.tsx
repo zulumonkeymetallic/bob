@@ -699,7 +699,7 @@ const TasksList: React.FC = () => {
 
   const getPriorityColor = (priority: string) => {
     switch (priority) {
-      case 'high': return 'danger';
+      case 'high': return 'orange';
       case 'med': return 'warning';
       case 'low': return 'info';
       default: return 'secondary';

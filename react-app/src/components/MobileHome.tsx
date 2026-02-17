@@ -10,7 +10,7 @@ import { Goal, Story, Task, Sprint as SprintType } from '../types';
 import { ActivityStreamService } from '../services/ActivityStreamService';
 import { ChoiceHelper, StoryStatus } from '../config/choices';
 import { getBadgeVariant, getPriorityBadge, getStatusName } from '../utils/statusHelpers';
-import { storyStatusText, taskStatusText } from '../utils/storyCardFormatting';
+import { taskStatusText } from '../utils/storyCardFormatting';
 import { extractWeatherSummary, extractWeatherTemp, formatWeatherLine } from '../utils/weatherFormat';
 import { isRecurringDueOnDate, resolveRecurringDueMs, resolveTaskDueMs } from '../utils/recurringTaskDue';
 import { Wand2, CalendarClock, RefreshCw, Sparkles } from 'lucide-react';
@@ -49,14 +49,6 @@ const formatShortDate = (value?: number) => {
   return new Date(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 };
 
-const getStoryBadgeVariant = (status: any): string => {
-  const label = storyStatusText(status);
-  if (label === 'Done') return 'success';
-  if (label === 'In Progress') return 'primary';
-  if (label === 'Blocked') return 'danger';
-  return 'secondary';
-};
-
 const MobileHome: React.FC = () => {
   const { currentUser } = useAuth();
   const { selectedSprintId, setSelectedSprintId, sprints } = useSprint();
@@ -88,6 +80,7 @@ const MobileHome: React.FC = () => {
   const [convertingTaskId, setConvertingTaskId] = useState<string | null>(null);
   const [flaggingStoryId, setFlaggingStoryId] = useState<string | null>(null);
   const [priorityFlagConfirm, setPriorityFlagConfirm] = useState<{ story: Story; existing: Story } | null>(null);
+  const [priorityReplanPromptStory, setPriorityReplanPromptStory] = useState<Story | null>(null);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [editingStory, setEditingStory] = useState<Story | null>(null);
   const todayIso = useMemo(() => new Date().toISOString().split('T')[0], []);
@@ -125,6 +118,24 @@ const MobileHome: React.FC = () => {
       ''
     );
   };
+  const worldNewsItems = (() => {
+    const candidates = [
+      summary?.worldSummary?.news,
+      summary?.worldSummary?.highlights,
+      summary?.worldSummary?.headlines,
+      summary?.worldSummary?.summary?.news,
+      summary?.dailyBrief?.news,
+    ];
+    for (const bucket of candidates) {
+      if (!Array.isArray(bucket) || bucket.length === 0) continue;
+      const lines = bucket
+        .map((item: any) => renderBriefText(item))
+        .map((text: any) => String(text || '').trim())
+        .filter(Boolean);
+      if (lines.length) return lines.slice(0, 3);
+    }
+    return [] as string[];
+  })();
 
   const getTaskDueMs = useCallback((task: Task): number | null => resolveTaskDueMs(task), []);
 
@@ -553,6 +564,11 @@ const MobileHome: React.FC = () => {
     await applyPriorityFlag(story);
   };
 
+  const handlePriorityPromptReplanNow = async () => {
+    setPriorityReplanPromptStory(null);
+    await handleReplan();
+  };
+
   const applyPriorityFlag = async (story: Story) => {
     setFlaggingStoryId(story.id);
     try {
@@ -577,8 +593,7 @@ const MobileHome: React.FC = () => {
       if (!isAlreadyFlagged) {
         const rescore = httpsCallable(functions, 'deltaPriorityRescore');
         await rescore({ entityId: story.id, entityType: 'story' }).catch(() => {});
-        const replan = httpsCallable(functions, 'replanCalendarNow');
-        await replan({ days: 7 }).catch(() => {});
+        setPriorityReplanPromptStory(story);
       }
     } catch (e) {
       console.error('Failed to flag priority story', e);
@@ -899,28 +914,6 @@ const MobileHome: React.FC = () => {
               <option key={s.id} value={s.id}>{s.name}</option>
             ))}
           </Form.Select>
-          <Button
-            size="sm"
-            variant="outline-primary"
-            disabled={replanLoading || fullReplanLoading}
-            onClick={handleReplan}
-            title="Delta replan: quickly rebalance existing calendar blocks using current priorities."
-            style={{ fontSize: 11, padding: '3px 6px', whiteSpace: 'nowrap' }}
-          >
-            {replanLoading ? <Spinner animation="border" size="sm" className="me-1" role="status" /> : <RefreshCw size={12} className="me-1" />}
-            {replanLoading ? 'Delta…' : 'Delta replan'}
-          </Button>
-          <Button
-            size="sm"
-            variant="primary"
-            disabled={fullReplanLoading || replanLoading}
-            onClick={handleFullReplan}
-            title="Full replan: runs full nightly orchestration (pointing, conversions, priority scoring, and calendar planning)."
-            style={{ fontSize: 11, padding: '3px 6px', whiteSpace: 'nowrap' }}
-          >
-            {fullReplanLoading ? <Spinner animation="border" size="sm" className="me-1" role="status" /> : <Sparkles size={12} className="me-1" />}
-            {fullReplanLoading ? 'Full…' : 'Full replan'}
-          </Button>
         </div>
       </div>
 
@@ -1034,24 +1027,6 @@ const MobileHome: React.FC = () => {
           </Card.Body>
         </Card>
       </div>
-      {replanFeedback && (
-        <div className="text-muted small mb-2">
-          {replanFeedback}
-        </div>
-      )}
-      {replanLoading && (
-        <div className="mb-2 small d-flex align-items-center text-primary" role="status" aria-live="polite">
-          <Spinner animation="border" size="sm" className="me-2" />
-          Delta replan is in progress—calendar blocks are being rebalanced.
-        </div>
-      )}
-      {fullReplanLoading && (
-        <div className="mb-2 small d-flex align-items-center text-primary" role="status" aria-live="polite">
-          <Spinner animation="border" size="sm" className="me-2" />
-          Full replan is in progress—running the complete nightly orchestration chain.
-        </div>
-      )}
-
       {/* AI Daily Summary + Focus */}
       {/* Tabs: Overview | Tasks | Stories | Goals | Chores */}
       <div className="mobile-filter-tabs mb-3">
@@ -1287,20 +1262,6 @@ const MobileHome: React.FC = () => {
             </Card.Body>
           </Card>
 
-          <Card className="mb-3" style={{ background: '#eef2ff' }}>
-            <Card.Body>
-              <div className="d-flex justify-content-between align-items-center">
-                <div>
-                  <div className="small text-muted">AI Planning summary</div>
-                  <div className="fw-semibold" style={{ fontSize: 14 }}>{formatPlannerLine(plannerStats)}</div>
-                </div>
-                <Badge bg="secondary" pill>
-                  {plannerStats?.source || 'replan'}
-                </Badge>
-              </div>
-            </Card.Body>
-          </Card>
-
           {summary?.priorities?.items?.length > 0 && (
             <Card className="mb-3" style={{ background: '#f0f9ff' }}>
               <Card.Header className="py-2" style={{ background: 'transparent', border: 'none' }}>
@@ -1347,21 +1308,84 @@ const MobileHome: React.FC = () => {
 
           {renderChoresHabitsWidget()}
 
-          {summary?.worldSummary && (
+          {(summary?.worldSummary || worldWeatherLine || worldNewsItems.length > 0) && (
             <Card className="mb-3" style={{ background: '#fff7ed' }}>
               <Card.Header className="py-2" style={{ background: 'transparent', border: 'none' }}>
                 <strong>World & Weather</strong>
               </Card.Header>
               <Card.Body>
-                {renderBriefText(summary.worldSummary.summary) && (
-                  <div className="mb-2" style={{ fontSize: 14 }}>{renderBriefText(summary.worldSummary.summary)}</div>
+                {renderBriefText(summary?.worldSummary?.summary) && (
+                  <div className="mb-2" style={{ fontSize: 14 }}>{renderBriefText(summary?.worldSummary?.summary)}</div>
                 )}
                 {worldWeatherLine && (
                   <div className="text-muted" style={{ fontSize: 13 }}>{worldWeatherLine}</div>
                 )}
+                {worldNewsItems.length > 0 && (
+                  <div className="mt-2">
+                    <div className="fw-semibold" style={{ fontSize: 14 }}>News</div>
+                    <ul className="mb-0 small">
+                      {worldNewsItems.map((headline: string, idx: number) => (
+                        <li key={idx}>{headline}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
               </Card.Body>
             </Card>
           )}
+
+          <Card className="mb-3" style={{ background: '#eef2ff' }}>
+            <Card.Body>
+              <div className="d-flex justify-content-between align-items-center">
+                <div>
+                  <div className="small text-muted">AI Planning summary</div>
+                  <div className="fw-semibold" style={{ fontSize: 14 }}>{formatPlannerLine(plannerStats)}</div>
+                </div>
+                <Badge bg="secondary" pill>
+                  {plannerStats?.source || 'replan'}
+                </Badge>
+              </div>
+              <div className="d-flex flex-wrap gap-2 mt-2">
+                <Button
+                  size="sm"
+                  variant="outline-primary"
+                  disabled={replanLoading || fullReplanLoading}
+                  onClick={handleReplan}
+                  title="Delta replan: quickly rebalance existing calendar blocks using current priorities."
+                >
+                  {replanLoading ? <Spinner animation="border" size="sm" className="me-1" role="status" /> : <RefreshCw size={12} className="me-1" />}
+                  {replanLoading ? 'Delta…' : 'Delta replan'}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="primary"
+                  disabled={fullReplanLoading || replanLoading}
+                  onClick={handleFullReplan}
+                  title="Full replan: runs full nightly orchestration (pointing, conversions, priority scoring, and calendar planning)."
+                >
+                  {fullReplanLoading ? <Spinner animation="border" size="sm" className="me-1" role="status" /> : <Sparkles size={12} className="me-1" />}
+                  {fullReplanLoading ? 'Full…' : 'Full replan'}
+                </Button>
+              </div>
+              {replanFeedback && (
+                <div className="text-muted small mt-2">
+                  {replanFeedback}
+                </div>
+              )}
+              {replanLoading && (
+                <div className="mt-2 small d-flex align-items-center text-primary" role="status" aria-live="polite">
+                  <Spinner animation="border" size="sm" className="me-2" />
+                  Delta replan is in progress—calendar blocks are being rebalanced.
+                </div>
+              )}
+              {fullReplanLoading && (
+                <div className="mt-2 small d-flex align-items-center text-primary" role="status" aria-live="polite">
+                  <Spinner animation="border" size="sm" className="me-2" />
+                  Full replan is in progress—running the complete nightly orchestration chain.
+                </div>
+              )}
+            </Card.Body>
+          </Card>
         </div>
       )}
 
@@ -1510,7 +1534,6 @@ const MobileHome: React.FC = () => {
                       )}
                     </div>
                     <div className="d-flex flex-column align-items-end gap-1">
-                      <Badge bg={getStoryBadgeVariant(story.status)}>{storyStatusText(story.status)}</Badge>
                       {(() => {
                         const stPr = getPriorityBadge(story.priority);
                         return (
@@ -1718,6 +1741,34 @@ const MobileHome: React.FC = () => {
             onClick={() => priorityFlagConfirm && applyPriorityFlag(priorityFlagConfirm.story)}
           >
             {flaggingStoryId ? <Spinner animation="border" size="sm" /> : 'Replace'}
+          </Button>
+        </Modal.Footer>
+      </Modal>
+
+      <Modal show={!!priorityReplanPromptStory} onHide={() => setPriorityReplanPromptStory(null)} centered>
+        <Modal.Header closeButton>
+          <Modal.Title style={{ fontSize: 16 }}>Run Delta Replan?</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <p className="mb-2">
+            <strong>{priorityReplanPromptStory?.title || 'This story'}</strong> is now flagged as your #1 priority.
+          </p>
+          <p className="mb-0 text-muted small">
+            Run delta replan now to create or rebalance calendar blocks around the new priority.
+          </p>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" size="sm" onClick={() => setPriorityReplanPromptStory(null)}>
+            Not now
+          </Button>
+          <Button
+            variant="primary"
+            size="sm"
+            disabled={replanLoading || fullReplanLoading}
+            onClick={handlePriorityPromptReplanNow}
+          >
+            {replanLoading ? <Spinner animation="border" size="sm" className="me-1" /> : <RefreshCw size={12} className="me-1" />}
+            Run delta replan
           </Button>
         </Modal.Footer>
       </Modal>

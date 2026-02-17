@@ -614,7 +614,7 @@ const SprintManagementView: React.FC = () => {
                           </td>
                           <td>
                             <Badge bg={
-                              task.priority === 1 ? 'danger' : 
+                              task.priority === 1 ? 'orange' : 
                               task.priority === 2 ? 'warning' : 'secondary'
                             }>
                               P{task.priority}

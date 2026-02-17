@@ -303,7 +303,7 @@ const BacklogManager: React.FC = () => {
 
   const getPriorityColor = (priority: BacklogItem['priority']) => {
     switch (priority) {
-      case 'high': return 'danger';
+      case 'high': return 'orange';
       case 'medium': return 'warning';
       case 'low': return 'info';
       default: return 'secondary';

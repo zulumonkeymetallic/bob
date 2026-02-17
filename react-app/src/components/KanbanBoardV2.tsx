@@ -14,6 +14,8 @@ import { isStatus } from '../utils/statusHelpers';
 import { isCriticalPriority } from '../utils/priorityUtils';
 import { useActivityTracking } from '../hooks/useActivityTracking';
 import { formatTaskTagLabel } from '../utils/tagDisplay';
+import '../styles/KanbanCards.css';
+import '../styles/KanbanFixes.css';
 
 interface KanbanBoardV2Props {
     sprintId?: string | null;

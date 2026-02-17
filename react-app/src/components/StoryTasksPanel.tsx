@@ -192,7 +192,7 @@ const StoryTasksPanel: React.FC<StoryTasksPanelProps> = ({ story, onClose }) => 
 
   const getPriorityColor = (priority: number) => {
     switch (priority) {
-      case 1: return 'danger';    // High
+      case 1: return 'orange';    // High
       case 2: return 'warning';   // Medium
       case 3: return 'info';      // Low
       default: return 'secondary';

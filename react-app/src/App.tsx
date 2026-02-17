@@ -205,19 +205,30 @@ function AppContent() {
     type: 'story' | 'task' | 'goal'
   ) => {
     const itemId = item?.id;
-    if (!itemId) return;
+    const uid = currentUser?.uid;
+    if (!itemId || !uid) return;
+
+    const claimOwnership = async (collectionName: 'tasks' | 'stories' | 'goals') => {
+      await updateDoc(doc(db, collectionName, itemId), {
+        ownerUid: uid,
+        updatedAt: serverTimestamp(),
+      });
+    };
+
     try {
       if (type === 'task') {
-        await updateDoc(doc(db, 'tasks', itemId), {
-          deleted: true,
-          updatedAt: serverTimestamp(),
-        });
+        // Legacy guardrail: tasks without ownerUid can be claimed by current owner before delete.
+        await claimOwnership('tasks');
+        await deleteDoc(doc(db, 'tasks', itemId));
         return;
       }
       if (type === 'story') {
+        // Legacy guardrail: stories without ownerUid can be claimed by current owner before delete.
+        await claimOwnership('stories');
         await deleteDoc(doc(db, 'stories', itemId));
         return;
       }
+      // Keep goals as strict owner-only delete path.
       await deleteDoc(doc(db, 'goals', itemId));
     } catch (error) {
       console.error('[global-sidebar] delete failed', { type, itemId, error });

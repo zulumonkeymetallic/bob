@@ -406,7 +406,7 @@ const TasksList: React.FC = () => {
               </td>
               <td>
                 <Badge bg={
-                  isPriority(task.priority, 'high') ? 'danger' :
+                  isPriority(task.priority, 'high') ? 'orange' :
                   isPriority(task.priority, 'med') ? 'warning' : 'info'
                 }>
                   {task.priority}

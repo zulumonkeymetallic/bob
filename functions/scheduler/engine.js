@@ -73,6 +73,73 @@ function normaliseBlock(block) {
   };
 }
 
+/**
+ * Intelligent Chore Placement Heuristics
+ * Evaluates whether a chore is suitable for a given block based on context
+ */
+function isChoreEligibleForBlock(occurrence, block) {
+  // Only apply heuristics to chores/routines
+  if (occurrence.sourceType !== 'chore' && occurrence.sourceType !== 'routine') {
+    return { eligible: true, reason: null };
+  }
+
+  const title = (occurrence.title || '').toLowerCase();
+  const blockName = (block.name || '').toLowerCase();
+
+  // Get block time window (first window start time)
+  const firstWindow = Array.isArray(block.windows) && block.windows.length > 0 ? block.windows[0] : null;
+  const startTime = firstWindow ? firstWindow.startTime : '00:00';
+  const endTime = firstWindow ? firstWindow.endTime : '23:59';
+  const [startHour] = startTime.split(':').map(Number);
+  const [endHour] = endTime.split(':').map(Number);
+
+  // ========== OUTDOOR TASK HEURISTICS ==========
+  // Don't schedule outdoor tasks at night (before 7am or after 6pm)
+  const outdoorKeywords = ['car wash', 'lawn', 'mow', 'garden', 'outdoor', 'outside', 'yard', 'driveway', 'patio'];
+  const isOutdoorTask = outdoorKeywords.some(kw => title.includes(kw));
+
+  if (isOutdoorTask) {
+    if (startHour < 7 || endHour > 18) {
+      return { eligible: false, reason: 'outdoor-task-nighttime' };
+    }
+  }
+
+  // ========== MORNING/EVENING PREFERENCE HEURISTICS ==========
+  const morningKeywords = ['morning', 'breakfast', 'wake'];
+  const eveningKeywords = ['evening', 'dinner', 'bedtime', 'night'];
+
+  const isMorningTask = morningKeywords.some(kw => title.includes(kw));
+  const isEveningTask = eveningKeywords.some(kw => title.includes(kw));
+
+  if (isMorningTask && startHour > 10) {
+    return { eligible: false, reason: 'morning-task-too-late' };
+  }
+
+  if (isEveningTask && endHour < 17) {
+    return { eligible: false, reason: 'evening-task-too-early' };
+  }
+
+  // ========== WORK BLOCK EXCLUSION ==========
+  // Never place household chores/routines in work/main-gig blocks
+  const isWorkBlock = /\bwork\b/.test(blockName)
+    || blockName.includes('main gig')
+    || blockName.includes('work shift');
+  if (isWorkBlock) {
+    return { eligible: false, reason: 'chore-in-work-block' };
+  }
+
+  // ========== ENERGY LEVEL HEURISTICS ==========
+  // High-energy tasks (keywords: "deep clean", "organize", "heavy") best in morning/afternoon
+  const highEnergyKeywords = ['deep clean', 'organize', 'heavy', 'move', 'scrub'];
+  const isHighEnergyTask = highEnergyKeywords.some(kw => title.includes(kw));
+
+  if (isHighEnergyTask && (startHour < 8 || startHour > 16)) {
+    return { eligible: false, reason: 'high-energy-task-low-energy-time' };
+  }
+
+  return { eligible: true, reason: null };
+}
+
 function computeEligibleBlocks(blocks, occurrence) {
   const required = occurrence.requiredBlockId
     ? blocks.filter((b) => b.id === occurrence.requiredBlockId)
@@ -98,8 +165,17 @@ function computeEligibleBlocks(blocks, occurrence) {
       return !excludedTags.length;
     });
 
-  // Theme Filtering with Override Logic
-  const themeFiltered = tagFiltered.filter(b => {
+  // ========== APPLY INTELLIGENT CHORE HEURISTICS ==========
+  const choreFiltered = tagFiltered.filter((b) => {
+    const { eligible, reason} = isChoreEligibleForBlock(occurrence, b);
+    if (!eligible && reason) {
+      console.log(`[Scheduler] Filtered block "${b.name || b.id}" for chore "${occurrence.title}": ${reason}`);
+    }
+    return eligible;
+  });
+
+  // Theme Filtering with Override Logic (applied AFTER chore filtering)
+  const themeFiltered = choreFiltered.filter(b => {
     // If block has no theme, it accepts all items
     if (!b.theme) return true;
 
@@ -504,9 +580,30 @@ async function computeStoryOccurrences(stories, windowStart, windowEnd, userId, 
 }
 
 function sortOccurrences(a, b) {
+  // ========== TOP 3 PRIORITY ENFORCEMENT ==========
+  // Top 3 tasks/stories ALWAYS get scheduled first during replan
+  const aIsTop3 = a.aiTop3ForDay === true || (a.tags && Array.isArray(a.tags) && a.tags.includes('Top3'));
+  const bIsTop3 = b.aiTop3ForDay === true || (b.tags && Array.isArray(b.tags) && b.tags.includes('Top3'));
+
+  if (aIsTop3 && !bIsTop3) return -1; // a (Top 3) before b
+  if (!aIsTop3 && bIsTop3) return 1;  // b (Top 3) before a
+
+  // If both are Top 3, sort by aiPriorityRank (lower rank = higher priority)
+  if (aIsTop3 && bIsTop3) {
+    const aRank = Number(a.aiPriorityRank || 99);
+    const bRank = Number(b.aiPriorityRank || 99);
+    if (aRank !== bRank) return aRank - bRank;
+  }
+  // ========== END TOP 3 PRIORITY ==========
+
+  // Standard priority sorting
   if (a.priority !== b.priority) return a.priority - b.priority;
+
+  // Chores before other types (within same priority)
   if (a.sourceType === 'chore' && b.sourceType !== 'chore') return -1;
   if (a.sourceType !== 'chore' && b.sourceType === 'chore') return 1;
+
+  // Alphabetical by source ID as final tie-breaker
   return a.sourceId.localeCompare(b.sourceId);
 }
 
