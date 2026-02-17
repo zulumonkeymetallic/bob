@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { Link } from 'react-router-dom';
 import { Container, Row, Col, Card, Button, Badge, Modal, Form, Spinner } from 'react-bootstrap';
 import { db, functions } from '../firebase';
 import { collection, query, where, onSnapshot, updateDoc, deleteDoc, doc, addDoc } from 'firebase/firestore';
@@ -79,7 +80,10 @@ const Calendar: React.FC = () => {
   const [choreCompletionBusy, setChoreCompletionBusy] = useState<Record<string, boolean>>({});
   const [tasksDueTodayList, setTasksDueTodayList] = useState<Task[]>([]);
   const [tasksDueTodayLoading, setTasksDueTodayLoading] = useState(false);
-  const [tasksDueTodaySortMode, setTasksDueTodaySortMode] = useState<'due' | 'ai'>('due');
+  const [tasksDueTodaySortMode, setTasksDueTodaySortMode] = useState<'due' | 'ai' | 'top3'>('due');
+  const [replanLoading, setReplanLoading] = useState(false);
+  const [fullReplanLoading, setFullReplanLoading] = useState(false);
+  const [replanFeedback, setReplanFeedback] = useState<string | null>(null);
 
   const getTaskDueMs = useCallback((task: Task): number | null => resolveTaskDueMs(task), []);
 
@@ -214,7 +218,16 @@ const Calendar: React.FC = () => {
   }, [currentUser?.uid, currentPersona, getTaskDueMs, getChoreKind, getTaskLastDoneMs, todayStartMs]);
 
   const tasksDueTodaySorted = useMemo(() => {
-    const rows = [...tasksDueTodayList];
+    let rows = [...tasksDueTodayList];
+    if (tasksDueTodaySortMode === 'top3') {
+      rows = rows.filter((t) => (t as any).aiTop3ForDay === true);
+      rows.sort((a, b) => {
+        const ar = Number((a as any).aiPriorityRank || 0) || 99;
+        const br = Number((b as any).aiPriorityRank || 0) || 99;
+        return ar - br;
+      });
+      return rows;
+    }
     if (tasksDueTodaySortMode === 'ai') {
       rows.sort((a, b) => {
         const aScore = Number((a as any).aiCriticalityScore ?? (a as any).aiPriorityScore ?? 0);
@@ -301,6 +314,52 @@ const Calendar: React.FC = () => {
     setCurrentStart(newStart);
   };
 
+  const handleDeltaReplan = useCallback(async () => {
+    if (!currentUser) return;
+    setReplanFeedback(null);
+    setReplanLoading(true);
+    try {
+      const callable = httpsCallable(functions, 'replanCalendarNow');
+      const response = await callable({ days: 7 });
+      const payload = response.data as { created?: number; rescheduled?: number; blocked?: number };
+      const parts: string[] = [];
+      if (payload?.created) parts.push(`${payload.created} created`);
+      if (payload?.rescheduled) parts.push(`${payload.rescheduled} moved`);
+      if (payload?.blocked) parts.push(`${payload.blocked} blocked`);
+      setReplanFeedback(parts.length ? `Delta replan complete: ${parts.join(', ')}.` : 'Delta replan complete.');
+    } catch (err) {
+      console.error('Delta replan failed', err);
+      setReplanFeedback('Delta replan failed. Please retry.');
+    } finally {
+      setReplanLoading(false);
+    }
+  }, [currentUser]);
+
+  const handleFullReplan = useCallback(async () => {
+    if (!currentUser) return;
+    setReplanFeedback(null);
+    setFullReplanLoading(true);
+    try {
+      const callable = httpsCallable(functions, 'runNightlyChainNow');
+      const response = await callable({});
+      const payload = response.data as { results?: Array<{ status?: string }> };
+      const total = payload?.results?.length || 0;
+      const ok = (payload?.results || []).filter((item) => item.status === 'ok').length;
+      if (total > 0 && ok === total) {
+        setReplanFeedback(`Full replan complete: ${ok}/${total} orchestration steps succeeded.`);
+      } else if (total > 0 && ok > 0) {
+        setReplanFeedback(`Full replan partial: ${ok}/${total} orchestration steps succeeded.`);
+      } else {
+        setReplanFeedback('Full replan finished with errors. Check logs.');
+      }
+    } catch (err) {
+      console.error('Full replan failed', err);
+      setReplanFeedback('Full replan failed. Please retry.');
+    } finally {
+      setFullReplanLoading(false);
+    }
+  }, [currentUser]);
+
   if (!currentUser) return <div>Please sign in.</div>;
 
   return (
@@ -311,9 +370,32 @@ const Calendar: React.FC = () => {
           <Button variant="outline-secondary" onClick={() => navigate(-1)} className="me-2">Prev</Button>
           <Button variant="outline-secondary" onClick={() => setCurrentStart(new Date())} className="me-2">Today</Button>
           <Button variant="outline-secondary" onClick={() => navigate(1)} className="me-2">Next</Button>
+          <Button
+            variant="outline-primary"
+            onClick={handleDeltaReplan}
+            className="me-2"
+            disabled={replanLoading || fullReplanLoading}
+            title="Delta replan: quickly rebalance existing calendar blocks using current priorities."
+          >
+            {replanLoading ? <Spinner size="sm" animation="border" className="me-1" /> : null}
+            Delta replan
+          </Button>
+          <Button
+            variant="primary"
+            onClick={handleFullReplan}
+            className="me-2"
+            disabled={fullReplanLoading || replanLoading}
+            title="Full replan: runs full nightly orchestration (pointing, conversions, priority scoring, and calendar planning)."
+          >
+            {fullReplanLoading ? <Spinner size="sm" animation="border" className="me-1" /> : null}
+            Full replan
+          </Button>
           <Button variant="primary" onClick={() => setShowCreateEvent(true)}>+ Event</Button>
         </div>
       </div>
+      {replanFeedback && (
+        <div className="text-muted small mb-3">{replanFeedback}</div>
+      )}
 
       <Row className="g-3">
         <Col lg={9} md={12}>
@@ -372,16 +454,17 @@ const Calendar: React.FC = () => {
           <Card className="shadow-sm border-0 mb-3">
             <Card.Header className="d-flex align-items-center justify-content-between">
               <div className="fw-semibold d-flex align-items-center gap-2">
-                <Clock size={16} /> Tasks due today &amp; overdue
+                <Clock size={16} /> Tasks due today
               </div>
               <div className="d-flex align-items-center gap-2">
                 <Form.Select
                   size="sm"
                   value={tasksDueTodaySortMode}
-                  onChange={(e) => setTasksDueTodaySortMode(e.target.value as 'due' | 'ai')}
+                  onChange={(e) => setTasksDueTodaySortMode(e.target.value as 'due' | 'ai' | 'top3')}
                 >
                   <option value="due">Sort: Due time</option>
                   <option value="ai">Sort: AI score</option>
+                  <option value="top3">Top 3 (AI)</option>
                 </Form.Select>
                 <Badge bg={tasksDueTodaySorted.length > 0 ? 'info' : 'secondary'} pill>
                   {tasksDueTodaySorted.length}
@@ -394,7 +477,7 @@ const Calendar: React.FC = () => {
                   <Spinner size="sm" animation="border" /> Loading tasks…
                 </div>
               ) : tasksDueTodaySorted.length === 0 ? (
-                <div className="text-muted small">No tasks due today or overdue.</div>
+                <div className="text-muted small">No tasks due today.</div>
               ) : (
                 tasksDueTodaySorted.map((task) => {
                   const dueMs = resolveRecurringDueMs(task, new Date(), todayStartMs);
@@ -405,9 +488,9 @@ const Calendar: React.FC = () => {
                     <div key={task.id} className="border rounded p-2 d-flex align-items-start gap-2">
                       <div className="flex-grow-1">
                         <div className="fw-semibold">
-                          <a href={`/tasks/${encodeURIComponent(refLabel)}`} className="text-decoration-none">
+                          <Link to={`/tasks/${encodeURIComponent(refLabel)}`} className="text-decoration-none">
                             {task.title}
-                          </a>
+                          </Link>
                         </div>
                         <div className="text-muted small d-flex align-items-center gap-1">
                           <Clock size={12} /> {isOverdue ? `Overdue · ${dueLabel}` : `Due ${dueLabel}`}

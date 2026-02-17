@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Container, Card, Row, Col, Badge, Button, Alert, Collapse, OverlayTrigger, Tooltip, Form, Spinner } from 'react-bootstrap';
-import { useNavigate } from 'react-router-dom';
-import { Target, BookOpen, TrendingUp, Wallet, Clock, ListChecks } from 'lucide-react';
+import { useNavigate, Link } from 'react-router-dom';
+import { Target, BookOpen, TrendingUp, Wallet, Clock, ListChecks, Calendar as CalendarIcon, LayoutGrid, RefreshCw, Sparkles } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { collection, query, where, onSnapshot, orderBy, limit, getDocs, doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
@@ -28,6 +28,8 @@ import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { useUnifiedPlannerData, type PlannerRange } from '../hooks/useUnifiedPlannerData';
 import '../styles/Dashboard.css';
 import { isRecurringDueOnDate, resolveRecurringDueMs, resolveTaskDueMs } from '../utils/recurringTaskDue';
+import EditTaskModal from './EditTaskModal';
+import EditStoryModal from './EditStoryModal';
 
 const locales = { 'en-GB': enGB } as const;
 const localizer = dateFnsLocalizer({
@@ -163,12 +165,17 @@ const Dashboard: React.FC = () => {
   const [tasksDueToday, setTasksDueToday] = useState<number>(0);
   const [tasksDueTodayList, setTasksDueTodayList] = useState<Task[]>([]);
   const [tasksDueTodayLoading, setTasksDueTodayLoading] = useState(false);
-  const [tasksDueTodaySortMode, setTasksDueTodaySortMode] = useState<'due' | 'ai'>('ai');
+  const [tasksDueTodaySortMode, setTasksDueTodaySortMode] = useState<'due' | 'ai' | 'top3'>('ai');
   const [top3Collapsed, setTop3Collapsed] = useState(false);
   const [top3Tasks, setTop3Tasks] = useState<Task[]>([]);
   const [top3Stories, setTop3Stories] = useState<Story[]>([]);
   const [top3Loading, setTop3Loading] = useState(false);
   const [unscheduledToday, setUnscheduledToday] = useState<ScheduledInstanceModel[]>([]);
+  const [inlineEditTask, setInlineEditTask] = useState<Task | null>(null);
+  const [inlineEditStory, setInlineEditStory] = useState<Story | null>(null);
+  const [replanLoading, setReplanLoading] = useState(false);
+  const [fullReplanLoading, setFullReplanLoading] = useState(false);
+  const [replanFeedback, setReplanFeedback] = useState<string | null>(null);
   const [calendarView, setCalendarView] = useState<'day' | 'week' | 'month'>('day');
   const [calendarDate, setCalendarDate] = useState<Date>(startOfDay(new Date()));
   const [calendarScrollTime, setCalendarScrollTime] = useState<Date>(() => {
@@ -423,6 +430,11 @@ const Dashboard: React.FC = () => {
     return hasTime ? `${dateLabel} • ${timeLabel}` : dateLabel;
   }, []);
 
+  const triggerDeltaRescore = useCallback((entityId: string, entityType: 'task' | 'story') => {
+    httpsCallable(functions, 'deltaPriorityRescore')({ entityId, entityType })
+      .catch((err) => console.warn('Delta rescore failed (non-blocking)', err));
+  }, []);
+
   const handleTaskStatusChange = useCallback(async (task: Task, status: number) => {
     try {
       const ref = doc(db, 'tasks', task.id);
@@ -431,10 +443,61 @@ const Dashboard: React.FC = () => {
         completedAt: status === 2 ? serverTimestamp() : null,
         updatedAt: serverTimestamp(),
       });
+      triggerDeltaRescore(task.id, 'task');
     } catch (err) {
       console.error('Failed to update task status', err);
     }
-  }, []);
+  }, [triggerDeltaRescore]);
+
+  const handleTaskPriorityChange = useCallback(async (task: Task, priority: number) => {
+    try {
+      const ref = doc(db, 'tasks', task.id);
+      await updateDoc(ref, { priority, updatedAt: serverTimestamp() });
+      triggerDeltaRescore(task.id, 'task');
+    } catch (err) {
+      console.error('Failed to update task priority', err);
+    }
+  }, [triggerDeltaRescore]);
+
+  const handleTaskDueDateChange = useCallback(async (task: Task, dueDate: number) => {
+    try {
+      const ref = doc(db, 'tasks', task.id);
+      await updateDoc(ref, { dueDate, updatedAt: serverTimestamp() });
+      triggerDeltaRescore(task.id, 'task');
+    } catch (err) {
+      console.error('Failed to update task due date', err);
+    }
+  }, [triggerDeltaRescore]);
+
+  const handleStoryStatusChange = useCallback(async (story: Story, status: number) => {
+    try {
+      const ref = doc(db, 'stories', story.id);
+      await updateDoc(ref, { status, updatedAt: serverTimestamp() });
+      triggerDeltaRescore(story.id, 'story');
+    } catch (err) {
+      console.error('Failed to update story status', err);
+    }
+  }, [triggerDeltaRescore]);
+
+  const handleStoryPriorityChange = useCallback(async (story: Story, priority: number) => {
+    try {
+      const ref = doc(db, 'stories', story.id);
+      await updateDoc(ref, { priority, updatedAt: serverTimestamp() });
+      triggerDeltaRescore(story.id, 'story');
+    } catch (err) {
+      console.error('Failed to update story priority', err);
+    }
+  }, [triggerDeltaRescore]);
+
+  const handleStoryDueDateChange = useCallback(async (story: Story, dueDate: number) => {
+    try {
+      const ref = doc(db, 'stories', story.id);
+      await updateDoc(ref, { targetDate: dueDate, dueDate, updatedAt: serverTimestamp() });
+      triggerDeltaRescore(story.id, 'story');
+    } catch (err) {
+      console.error('Failed to update story due date', err);
+    }
+  }, [triggerDeltaRescore]);
 
   const handleCompleteChoreTask = useCallback(async (task: Task) => {
     if (!currentUser) return;
@@ -1237,7 +1300,7 @@ const Dashboard: React.FC = () => {
       });
     });
 
-    if (tasksDueTodaySortMode === 'ai') {
+    if (tasksDueTodaySortMode === 'ai' || tasksDueTodaySortMode === 'top3') {
       const tasks = items.filter((item) => item.kind === 'task');
       tasks.sort((a, b) => {
         const aScore = Number((a.task as any)?.aiCriticalityScore ?? (a.task as any)?.aiPriorityScore ?? 0);
@@ -1247,6 +1310,7 @@ const Dashboard: React.FC = () => {
         const bDue = b.dueMs ?? 0;
         return aDue - bDue;
       });
+      if (tasksDueTodaySortMode === 'top3') return tasks.slice(0, 3);
       return tasks;
     }
 
@@ -1617,6 +1681,52 @@ const Dashboard: React.FC = () => {
     }
   };
 
+  const handleReplan = async () => {
+    if (!currentUser) return;
+    setReplanFeedback(null);
+    setReplanLoading(true);
+    try {
+      const call = httpsCallable(functions, 'replanCalendarNow');
+      const response = await call({ days: 7 });
+      const payload = response.data as { created?: number; rescheduled?: number; blocked?: number };
+      const parts: string[] = [];
+      if (payload?.created) parts.push(`${payload.created} created`);
+      if (payload?.rescheduled) parts.push(`${payload.rescheduled} moved`);
+      if (payload?.blocked) parts.push(`${payload.blocked} blocked`);
+      setReplanFeedback(parts.length ? `Delta replan complete: ${parts.join(', ')}.` : 'Delta replan complete.');
+    } catch (e) {
+      console.error('Replan failed', e);
+      setReplanFeedback('Delta replan failed. Please retry.');
+    } finally {
+      setReplanLoading(false);
+    }
+  };
+
+  const handleFullReplan = async () => {
+    if (!currentUser) return;
+    setReplanFeedback(null);
+    setFullReplanLoading(true);
+    try {
+      const call = httpsCallable(functions, 'runNightlyChainNow');
+      const response = await call({});
+      const payload = response.data as { results?: Array<{ status?: string }> };
+      const total = payload?.results?.length || 0;
+      const ok = (payload?.results || []).filter((item) => item.status === 'ok').length;
+      if (total > 0 && ok === total) {
+        setReplanFeedback(`Full replan complete: ${ok}/${total} orchestration steps succeeded.`);
+      } else if (total > 0 && ok > 0) {
+        setReplanFeedback(`Full replan partial: ${ok}/${total} orchestration steps succeeded.`);
+      } else {
+        setReplanFeedback('Full replan finished with errors. Check logs.');
+      }
+    } catch (e) {
+      console.error('Full replan failed', e);
+      setReplanFeedback('Full replan failed. Please retry.');
+    } finally {
+      setFullReplanLoading(false);
+    }
+  };
+
   const handleNavigateToTasksToday = () => {
     navigate('/tasks', { state: { preset: 'dueToday' } });
   };
@@ -1854,6 +1964,7 @@ const Dashboard: React.FC = () => {
   }
 
   return (
+    <>
     <Container fluid className="p-2 dashboard-compact">
       <Row>
         <Col>
@@ -2186,15 +2297,38 @@ const Dashboard: React.FC = () => {
                 <Card.Header className="d-flex justify-content-between align-items-center py-2">
                   <span className="fw-semibold">Today’s Plan</span>
                   <div className="d-flex align-items-center gap-2">
-                    <Button variant="link" size="sm" className="text-decoration-none" onClick={handleOpenChecklist}>
-                      View calendar
+                    <Button variant="outline-secondary" size="sm" onClick={handleOpenChecklist}>
+                      <CalendarIcon size={14} className="me-1" /> View calendar
                     </Button>
-                    <Button variant="link" size="sm" className="text-decoration-none" onClick={() => navigate('/sprints/kanban')}>
-                      View kanban
+                    <Button variant="outline-secondary" size="sm" onClick={() => navigate('/sprints/kanban')}>
+                      <LayoutGrid size={14} className="me-1" /> View kanban
+                    </Button>
+                    <Button
+                      variant="outline-primary"
+                      size="sm"
+                      disabled={replanLoading}
+                      onClick={handleReplan}
+                      title="Delta replan: quickly rebalance existing calendar blocks using current priorities."
+                    >
+                      {replanLoading ? <Spinner size="sm" animation="border" className="me-1" /> : <RefreshCw size={14} className="me-1" />}
+                      Delta replan
+                    </Button>
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      disabled={fullReplanLoading}
+                      onClick={handleFullReplan}
+                      title="Full replan: runs full nightly orchestration (pointing, conversions, priority scoring, and calendar planning)."
+                    >
+                      {fullReplanLoading ? <Spinner size="sm" animation="border" className="me-1" /> : <Sparkles size={14} className="me-1" />}
+                      Full replan
                     </Button>
                   </div>
                 </Card.Header>
                 <Card.Body>
+                  {replanFeedback && (
+                    <div className="text-muted small mb-2">{replanFeedback}</div>
+                  )}
                   <Row className="g-3 today-plan-layout">
                     <Col md={12} className="today-plan-col today-plan-col-summary">
                       {(dailySummaryLines.length > 0 || aiFocusItems.length > 0) && (
@@ -2293,14 +2427,80 @@ const Dashboard: React.FC = () => {
                                       const label = storyLabel(story);
                                       const aiScore = (story as any).aiCriticalityScore ?? (story as any).aiPriorityScore;
                                       const href = `/stories/${(story as any).ref || story.id}`;
+                                      const storyPriorityBadge = getPriorityBadge((story as any).priority);
+                                      const storyDueMs = (() => {
+                                        const raw = (story as any).targetDate ?? (story as any).dueDate ?? null;
+                                        if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+                                        if (raw?.toDate) return raw.toDate().getTime();
+                                        const parsed = raw ? Date.parse(String(raw)) : NaN;
+                                        return Number.isNaN(parsed) ? null : parsed;
+                                      })();
+                                      const storyStatusVal = Number(story.status ?? 0);
+                                      const storyStatusMap: Record<number, { bg: string; label: string }> = {
+                                        0: { bg: 'light', label: 'Backlog' },
+                                        1: { bg: 'info', label: 'Planned' },
+                                        2: { bg: 'primary', label: 'In Progress' },
+                                        3: { bg: 'warning', label: 'Testing' },
+                                        4: { bg: 'success', label: 'Done' },
+                                      };
+                                      const storyS = storyStatusMap[storyStatusVal] || storyStatusMap[0];
                                       return (
-                                        <div key={story.id} className="border rounded p-2 mb-2">
-                                          <div className="fw-semibold">
-                                            <a href={href} className="text-decoration-none">{label}</a>
+                                        <div key={story.id} className="border rounded p-2 mb-2 dashboard-due-item">
+                                          <div className="fw-semibold small">
+                                            <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditStory(story); }}>{label}</a>
                                           </div>
-                                          <div className="text-muted small d-flex justify-content-between">
-                                            <span>Rank {idx + 1}</span>
-                                            <span>AI {aiScore != null ? Math.round(aiScore) : '—'}</span>
+                                          <div className="d-flex align-items-center gap-2 mt-1 flex-wrap">
+                                            <span className="text-muted d-inline-flex align-items-center gap-1" style={{ fontSize: 11 }}>
+                                              <Clock size={11} />
+                                              <input
+                                                type="date"
+                                                className="dashboard-due-date-input"
+                                                value={storyDueMs ? format(new Date(storyDueMs), 'yyyy-MM-dd') : ''}
+                                                onChange={(e) => {
+                                                  const val = e.target.value;
+                                                  if (!val) return;
+                                                  const newDue = new Date(val + 'T12:00:00').getTime();
+                                                  handleStoryDueDateChange(story, newDue);
+                                                }}
+                                              />
+                                            </span>
+                                            <span className="dashboard-chip-select-wrap">
+                                              <select
+                                                className="dashboard-chip-select"
+                                                value={Number((story as any).priority ?? 0)}
+                                                onChange={(e) => handleStoryPriorityChange(story, Number(e.target.value))}
+                                                style={{
+                                                  backgroundColor: `var(--bs-${storyPriorityBadge.bg})`,
+                                                  color: storyPriorityBadge.bg === 'warning' || storyPriorityBadge.bg === 'light' ? '#000' : '#fff',
+                                                }}
+                                              >
+                                                <option value={0}>None</option>
+                                                <option value={1}>Low</option>
+                                                <option value={2}>Medium</option>
+                                                <option value={3}>High</option>
+                                                <option value={4}>Critical</option>
+                                              </select>
+                                            </span>
+                                            <span className="dashboard-chip-select-wrap">
+                                              <select
+                                                className="dashboard-chip-select"
+                                                value={storyStatusVal}
+                                                onChange={(e) => handleStoryStatusChange(story, Number(e.target.value))}
+                                                style={{
+                                                  backgroundColor: `var(--bs-${storyS.bg})`,
+                                                  color: storyS.bg === 'light' || storyS.bg === 'warning' ? '#000' : '#fff',
+                                                }}
+                                              >
+                                                <option value={0}>Backlog</option>
+                                                <option value={1}>Planned</option>
+                                                <option value={2}>In Progress</option>
+                                                <option value={3}>Testing</option>
+                                                <option value={4}>Done</option>
+                                              </select>
+                                            </span>
+                                            <span className="text-muted" style={{ fontSize: 11 }}>
+                                              AI {aiScore != null ? Math.round(aiScore) : '—'}
+                                            </span>
                                           </div>
                                         </div>
                                       );
@@ -2314,17 +2514,80 @@ const Dashboard: React.FC = () => {
                                   ) : (
                                     top3Tasks.map((task, idx) => {
                                       const refLabel = taskRefLabel(task);
-                                      const label = refLabel ? `${refLabel} — ${task.title}` : task.title;
                                       const aiScore = (task as any).aiCriticalityScore ?? (task as any).aiPriorityScore;
-                                      const href = `/tasks/${(task as any).ref || task.id}`;
+                                      const priorityBadge = getPriorityBadge((task as any).priority);
+                                      const dueMs = getTaskDueMs(task);
                                       return (
-                                        <div key={task.id} className="border rounded p-2 mb-2">
-                                          <div className="fw-semibold">
-                                            <a href={href} className="text-decoration-none">{label}</a>
+                                        <div key={task.id} className="border rounded p-2 mb-2 dashboard-due-item">
+                                          <div className="fw-semibold small">
+                                            <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>{task.title}</a>
                                           </div>
-                                          <div className="text-muted small d-flex justify-content-between">
-                                            <span>Rank {idx + 1}</span>
-                                            <span>AI {aiScore != null ? Math.round(aiScore) : '—'}</span>
+                                          {refLabel && (
+                                            <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>
+                                              <code className="text-primary" style={{ fontSize: 11 }}>{refLabel}</code>
+                                            </a>
+                                          )}
+                                          <div className="d-flex align-items-center gap-2 mt-1 flex-wrap">
+                                            <span className="text-muted d-inline-flex align-items-center gap-1" style={{ fontSize: 11 }}>
+                                              <Clock size={11} />
+                                              <input
+                                                type="date"
+                                                className="dashboard-due-date-input"
+                                                value={dueMs ? format(new Date(dueMs), 'yyyy-MM-dd') : ''}
+                                                onChange={(e) => {
+                                                  const val = e.target.value;
+                                                  if (!val) return;
+                                                  const newDue = new Date(val + 'T12:00:00').getTime();
+                                                  handleTaskDueDateChange(task, newDue);
+                                                }}
+                                              />
+                                            </span>
+                                            <span className="dashboard-chip-select-wrap">
+                                              <select
+                                                className="dashboard-chip-select"
+                                                value={Number((task as any).priority ?? 0)}
+                                                onChange={(e) => handleTaskPriorityChange(task, Number(e.target.value))}
+                                                style={{
+                                                  backgroundColor: `var(--bs-${priorityBadge.bg})`,
+                                                  color: priorityBadge.bg === 'warning' || priorityBadge.bg === 'light' ? '#000' : '#fff',
+                                                }}
+                                              >
+                                                <option value={0}>None</option>
+                                                <option value={1}>Low</option>
+                                                <option value={2}>Medium</option>
+                                                <option value={3}>High</option>
+                                                <option value={4}>Critical</option>
+                                              </select>
+                                            </span>
+                                            {(() => {
+                                              const statusVal = Number(task.status ?? 0);
+                                              const statusMap: Record<number, { bg: string; label: string }> = {
+                                                0: { bg: 'secondary', label: 'To do' },
+                                                1: { bg: 'primary', label: 'Doing' },
+                                                2: { bg: 'success', label: 'Done' },
+                                              };
+                                              const s = statusMap[statusVal] || statusMap[0];
+                                              return (
+                                                <span className="dashboard-chip-select-wrap">
+                                                  <select
+                                                    className="dashboard-chip-select"
+                                                    value={statusVal}
+                                                    onChange={(e) => handleTaskStatusChange(task, Number(e.target.value))}
+                                                    style={{
+                                                      backgroundColor: `var(--bs-${s.bg})`,
+                                                      color: '#fff',
+                                                    }}
+                                                  >
+                                                    <option value={0}>To do</option>
+                                                    <option value={1}>Doing</option>
+                                                    <option value={2}>Done</option>
+                                                  </select>
+                                                </span>
+                                              );
+                                            })()}
+                                            <span className="text-muted" style={{ fontSize: 11 }}>
+                                              AI {aiScore != null ? Math.round(aiScore) : '—'}
+                                            </span>
                                           </div>
                                         </div>
                                       );
@@ -2383,16 +2646,17 @@ const Dashboard: React.FC = () => {
                       <Card className="shadow-sm border-0 h-100 dashboard-due-card">
                           <Card.Header className="d-flex align-items-center justify-content-between">
                             <div className="fw-semibold d-flex align-items-center gap-2">
-                              <Clock size={16} /> Tasks due today & overdue
+                              <Clock size={16} /> Tasks due today
                             </div>
                             <div className="d-flex align-items-center gap-2">
                               <Form.Select
                                 size="sm"
                                 value={tasksDueTodaySortMode}
-                                onChange={(e) => setTasksDueTodaySortMode(e.target.value as 'due' | 'ai')}
+                                onChange={(e) => setTasksDueTodaySortMode(e.target.value as 'due' | 'ai' | 'top3')}
                               >
                                 <option value="due">Sort: Due time</option>
                                 <option value="ai">Sort: AI score</option>
+                                <option value="top3">Top 3 (AI)</option>
                               </Form.Select>
                               <Badge bg={tasksDueTodayCombined.length > 0 ? 'info' : 'secondary'} pill>
                                 {tasksDueTodayCombined.length}
@@ -2405,7 +2669,7 @@ const Dashboard: React.FC = () => {
                                 <Spinner size="sm" animation="border" /> Loading tasks…
                               </div>
                             ) : tasksDueTodayCombined.length === 0 ? (
-                              <div className="text-muted small">No tasks due today or overdue.</div>
+                              <div className="text-muted small">No tasks due today.</div>
                             ) : (
                               tasksDueTodayCombined.map((item) => {
                                 if (item.kind === 'task' && item.task) {
@@ -2416,40 +2680,76 @@ const Dashboard: React.FC = () => {
                                   const priorityBadge = getPriorityBadge((task as any).priority);
                                   const dueLabel = dueMs ? formatDueDetail(dueMs) : null;
                                   return (
-                                    <div key={item.id} className="border rounded p-3 dashboard-due-item">
-                                      <div className="d-flex justify-content-between align-items-start gap-2">
-                                        <div className="flex-grow-1">
-                                          <div className="fw-semibold">{task.title}</div>
-                                          {refLabel && (
-                                            <div className="text-muted small">
-                                              <a href={`/tasks/${task.id}`} className="text-decoration-none">
-                                                <code className="text-primary">{refLabel}</code>
-                                              </a>
-                                            </div>
-                                          )}
-                                          <div className="text-muted small d-flex align-items-center gap-1">
-                                            <Clock size={12} /> Due {dueLabel ?? '—'}
-                                          </div>
-                                        </div>
+                                    <div key={item.id} className="border rounded p-2 dashboard-due-item">
+                                      <div className="fw-semibold small">
+                                        <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>{task.title}</a>
                                       </div>
-                                      <div className="d-flex align-items-end justify-content-between mt-2 gap-2">
-                                        <div className="d-flex align-items-center gap-2 flex-wrap">
-                                          <Badge bg={priorityBadge.bg}>{priorityBadge.text}</Badge>
-                                          <span className="text-muted small">
-                                            AI score {aiScore != null ? Math.round(aiScore) : '—'}
-                                          </span>
-                                        </div>
-                                        <Form.Select
-                                          size="sm"
-                                          value={Number(task.status ?? 0)}
-                                          onChange={(e) => handleTaskStatusChange(task, Number(e.target.value))}
-                                          aria-label="Update task status"
-                                          className="dashboard-task-status-select"
-                                        >
-                                          <option value={0}>To do</option>
-                                          <option value={1}>Doing</option>
-                                          <option value={2}>Done</option>
-                                        </Form.Select>
+                                      {refLabel && (
+                                        <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>
+                                          <code className="text-primary" style={{ fontSize: 11 }}>{refLabel}</code>
+                                        </a>
+                                      )}
+                                      <div className="d-flex align-items-center gap-2 mt-1 flex-wrap">
+                                        <span className="text-muted d-inline-flex align-items-center gap-1" style={{ fontSize: 11 }}>
+                                          <Clock size={11} />
+                                          <input
+                                            type="date"
+                                            className="dashboard-due-date-input"
+                                            value={dueMs ? format(new Date(dueMs), 'yyyy-MM-dd') : ''}
+                                            onChange={(e) => {
+                                              const val = e.target.value;
+                                              if (!val) return;
+                                              const newDue = new Date(val + 'T12:00:00').getTime();
+                                              handleTaskDueDateChange(task, newDue);
+                                            }}
+                                          />
+                                        </span>
+                                        <span className="dashboard-chip-select-wrap">
+                                          <select
+                                            className="dashboard-chip-select"
+                                            value={Number((task as any).priority ?? 0)}
+                                            onChange={(e) => handleTaskPriorityChange(task, Number(e.target.value))}
+                                            style={{
+                                              backgroundColor: `var(--bs-${priorityBadge.bg})`,
+                                              color: priorityBadge.bg === 'warning' || priorityBadge.bg === 'light' ? '#000' : '#fff',
+                                            }}
+                                          >
+                                            <option value={0}>None</option>
+                                            <option value={1}>Low</option>
+                                            <option value={2}>Medium</option>
+                                            <option value={3}>High</option>
+                                            <option value={4}>Critical</option>
+                                          </select>
+                                        </span>
+                                        {(() => {
+                                          const statusVal = Number(task.status ?? 0);
+                                          const statusMap: Record<number, { bg: string; label: string }> = {
+                                            0: { bg: 'secondary', label: 'To do' },
+                                            1: { bg: 'primary', label: 'Doing' },
+                                            2: { bg: 'success', label: 'Done' },
+                                          };
+                                          const s = statusMap[statusVal] || statusMap[0];
+                                          return (
+                                            <span className="dashboard-chip-select-wrap">
+                                              <select
+                                                className="dashboard-chip-select"
+                                                value={statusVal}
+                                                onChange={(e) => handleTaskStatusChange(task, Number(e.target.value))}
+                                                style={{
+                                                  backgroundColor: `var(--bs-${s.bg})`,
+                                                  color: '#fff',
+                                                }}
+                                              >
+                                                <option value={0}>To do</option>
+                                                <option value={1}>Doing</option>
+                                                <option value={2}>Done</option>
+                                              </select>
+                                            </span>
+                                          );
+                                        })()}
+                                        <span className="text-muted" style={{ fontSize: 11 }}>
+                                          AI {aiScore != null ? Math.round(aiScore) : '—'}
+                                        </span>
                                       </div>
                                     </div>
                                   );
@@ -2467,9 +2767,12 @@ const Dashboard: React.FC = () => {
                             <ListChecks size={16} /> Chores & Habits
                           </div>
                           <div className="d-flex align-items-center gap-2">
-                            <Button size="sm" variant="outline-secondary" href="/chores/checklist">
+                            <Link to="/dashboard/habit-tracking" className="btn btn-sm btn-outline-secondary">
+                              Tracking
+                            </Link>
+                            <Link to="/chores/checklist" className="btn btn-sm btn-outline-secondary">
                               Checklist
-                            </Button>
+                            </Link>
                             <Badge bg={choresDueTodayTasks.length > 0 ? 'info' : 'secondary'} pill>
                               {choresDueTodayTasks.length}
                             </Badge>
@@ -2504,6 +2807,14 @@ const Dashboard: React.FC = () => {
                                     <div className="fw-semibold">{task.title}</div>
                                     <div className="text-muted small d-flex align-items-center gap-1">
                                       <Clock size={12} /> {isOverdue ? `Overdue · ${dueLabel}` : `Due ${dueLabel}`}
+                                      {(task as any).ref && (
+                                        <>
+                                          <span className="mx-1">·</span>
+                                          <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>
+                                            <code className="text-primary" style={{ fontSize: 10 }}>{(task as any).ref}</code>
+                                          </a>
+                                        </>
+                                      )}
                                     </div>
                                   </div>
                                   <div className="d-flex flex-column align-items-end gap-1">
@@ -2551,6 +2862,19 @@ const Dashboard: React.FC = () => {
         </Col>
       </Row>
     </Container>
+
+    <EditTaskModal
+      show={!!inlineEditTask}
+      task={inlineEditTask}
+      onHide={() => setInlineEditTask(null)}
+    />
+    <EditStoryModal
+      show={!!inlineEditStory}
+      story={inlineEditStory}
+      goals={goalsList}
+      onHide={() => setInlineEditStory(null)}
+    />
+    </>
   );
 };
 

@@ -47,6 +47,7 @@ import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { usePersona } from '../contexts/PersonaContext';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { normalizeTaskTags } from '../utils/taskTagging';
+import EditTaskModal from './EditTaskModal';
 
 interface TaskTableRow extends Task {
   storyTitle?: string;
@@ -741,6 +742,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
   const [editingTask, setEditingTask] = useState<TaskTableRow | null>(null);
   const [editForm, setEditForm] = useState<Partial<TaskTableRow>>({});
   const [storySearch, setStorySearch] = useState('');
+  const [goalSearch, setGoalSearch] = useState('');
   const [sprintFilter, setSprintFilter] = useState<string>('all');
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [convertLoadingId, setConvertLoadingId] = useState<string | null>(null);
@@ -890,6 +892,45 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
   const selectedStory = selectedStoryId ? stories.find((s) => s.id === selectedStoryId) : null;
   const selectedGoalId = (selectedStory as any)?.goalId || (editForm as any)?.goalId || '';
   const selectedGoal = selectedGoalId ? goals.find((g) => g.id === selectedGoalId) : null;
+  const resolveStoryCreateSelection = (value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      setEditForm((prev) => ({ ...prev, storyId: '', storyTitle: '' }));
+      setStorySearch('');
+      return;
+    }
+    const match = stories.find((s) => s.title === trimmed || s.id === trimmed);
+    if (!match) {
+      setEditForm((prev) => ({ ...prev, storyId: '', storyTitle: '' }));
+      return;
+    }
+    const linkedGoalId = (match as any).goalId || '';
+    const linkedGoal = linkedGoalId ? goals.find((g) => g.id === linkedGoalId) : null;
+    setEditForm((prev) => ({
+      ...prev,
+      storyId: match.id,
+      storyTitle: match.title,
+      goalId: linkedGoalId || prev.goalId || '',
+      priority: (prev.priority as any) || (match as any).priority || 2,
+    }));
+    setStorySearch(match.title || '');
+    if (linkedGoal) setGoalSearch(linkedGoal.title || '');
+  };
+  const resolveGoalCreateSelection = (value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      setEditForm((prev) => ({ ...prev, goalId: '' }));
+      setGoalSearch('');
+      return;
+    }
+    const match = goals.find((g) => g.title === trimmed || g.id === trimmed);
+    if (!match) {
+      setEditForm((prev) => ({ ...prev, goalId: '' }));
+      return;
+    }
+    setEditForm((prev) => ({ ...prev, goalId: match.id }));
+    setGoalSearch(match.title || '');
+  };
 
   const filteredTasks = tasks.filter((task) => {
     const derivedSprintId = effectiveSprintId(task, stories, sprints);
@@ -1285,11 +1326,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                         onTaskUpdate={handleValidatedUpdate}
                         onTaskDelete={onTaskDelete}
                         onEditRequest={(t) => {
-                          const story = t.storyId ? stories.find((s) => s.id === t.storyId) : null;
-                          const derivedGoalId = t.goalId || (story as any)?.goalId || '';
                           setEditingTask(t);
-                          setEditForm({ ...t, goalId: derivedGoalId });
-                          setStorySearch(t.storyTitle || '');
                           setShowEditModal(true);
                         }}
                         onSprintAssign={handleSprintAssign}
@@ -1325,6 +1362,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                               daysOfWeek: [],
                             });
                             setStorySearch('');
+                            setGoalSearch('');
                             setShowEditModal(true);
                           }}
                           style={{
@@ -1595,13 +1633,20 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
         </div>
       </div>
 
-      {/* Edit/Create Modal (lightweight) */}
-      {showEditModal && (
+      {/* Edit Task Modal (consistent with sidebar) */}
+      <EditTaskModal
+        show={showEditModal && !!editingTask}
+        task={editingTask as Task | null}
+        onHide={() => { setShowEditModal(false); setEditingTask(null); }}
+      />
+
+      {/* Create Task Modal (lightweight, only used for inline add) */}
+      {showEditModal && !editingTask && (
         <div className="modal d-block" tabIndex={-1} role="dialog" style={{ background: 'var(--bs-backdrop-bg)' }}>
           <div className="modal-dialog modal-lg" role="document">
             <div className="modal-content">
               <div className="modal-header">
-                <h5 className="modal-title">{editingTask ? 'Edit Task' : 'Add Task'}</h5>
+                <h5 className="modal-title">Add Task</h5>
                 <button type="button" className="btn-close" onClick={() => setShowEditModal(false)} />
               </div>
               <div className="modal-body">
@@ -1704,37 +1749,36 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                 <div className="row">
                   <div className="col-md-6 mb-3">
                     <label className="form-label">Link to Story</label>
-                    <input className="form-control" placeholder="Type to search..." value={storySearch} onChange={(e) => setStorySearch(e.target.value)} />
-                    <div className="list-group" style={{ maxHeight: 180, overflow: 'auto' }}>
-                      {stories.filter(s => s.title?.toLowerCase().includes((storySearch || '').toLowerCase())).slice(0, 10).map(s => (
-                        <button key={s.id} type="button" className="list-group-item list-group-item-action"
-                          onClick={() => {
-                            setEditForm({
-                              ...editForm,
-                              storyId: s.id,
-                              storyTitle: s.title,
-                              goalId: (s as any).goalId || '',
-                              priority: (editingTask ? editingTask.priority : (editForm.priority as any)) || (s as any).priority || 2,
-                            });
-                            setStorySearch(s.title || '');
-                          }}
-                        >{s.title}</button>
+                    <input
+                      className="form-control"
+                      list="modern-task-create-story-options"
+                      placeholder="Search story by title..."
+                      value={storySearch}
+                      onChange={(e) => setStorySearch(e.target.value)}
+                      onBlur={(e) => resolveStoryCreateSelection(e.target.value)}
+                    />
+                    <datalist id="modern-task-create-story-options">
+                      {stories.map((s) => (
+                        <option key={s.id} value={s.title || ''} />
                       ))}
-                    </div>
+                    </datalist>
                   </div>
                   <div className="col-md-6 mb-3">
                     <label className="form-label">Link to Goal</label>
-                    <select
-                      className="form-select"
-                      value={selectedGoalId}
-                      onChange={(e) => setEditForm({ ...editForm, goalId: e.target.value })}
+                    <input
+                      className="form-control"
+                      list="modern-task-create-goal-options"
+                      placeholder="Search goal by title..."
+                      value={selectedStoryId ? (selectedGoal?.title || '') : goalSearch}
+                      onChange={(e) => setGoalSearch(e.target.value)}
+                      onBlur={(e) => resolveGoalCreateSelection(e.target.value)}
                       disabled={!!selectedStoryId}
-                    >
-                      <option value="">No goal</option>
+                    />
+                    <datalist id="modern-task-create-goal-options">
                       {goals.map((goal) => (
-                        <option key={goal.id} value={goal.id}>{goal.title}</option>
+                        <option key={goal.id} value={goal.title || ''} />
                       ))}
-                    </select>
+                    </datalist>
                     {selectedStoryId && selectedGoal && (
                       <div className="form-text">Goal derived from linked story.</div>
                     )}

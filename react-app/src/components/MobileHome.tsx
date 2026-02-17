@@ -13,6 +13,9 @@ import { getBadgeVariant, getPriorityBadge, getStatusName } from '../utils/statu
 import { storyStatusText, taskStatusText } from '../utils/storyCardFormatting';
 import { extractWeatherSummary, extractWeatherTemp, formatWeatherLine } from '../utils/weatherFormat';
 import { isRecurringDueOnDate, resolveRecurringDueMs, resolveTaskDueMs } from '../utils/recurringTaskDue';
+import { Wand2, CalendarClock, RefreshCw, Sparkles } from 'lucide-react';
+import EditTaskModal from './EditTaskModal';
+import EditStoryModal from './EditStoryModal';
 
 type TabKey = 'overview' | 'tasks' | 'stories' | 'goals' | 'chores';
 type TaskViewFilter = 'top3' | 'due_today' | 'overdue' | 'all';
@@ -77,10 +80,16 @@ const MobileHome: React.FC = () => {
   const [goalsViewFilter, setGoalsViewFilter] = useState<GoalsViewFilter>('active_sprint');
   const [isSmallScreen, setIsSmallScreen] = useState<boolean>(typeof window !== 'undefined' ? window.innerWidth <= 768 : false);
   const [replanLoading, setReplanLoading] = useState(false);
+  const [fullReplanLoading, setFullReplanLoading] = useState(false);
   const [replanFeedback, setReplanFeedback] = useState<string | null>(null);
   const [choresDueToday, setChoresDueToday] = useState<Task[]>([]);
   const [choresLoading, setChoresLoading] = useState(false);
   const [choreCompletionBusy, setChoreCompletionBusy] = useState<Record<string, boolean>>({});
+  const [convertingTaskId, setConvertingTaskId] = useState<string | null>(null);
+  const [flaggingStoryId, setFlaggingStoryId] = useState<string | null>(null);
+  const [priorityFlagConfirm, setPriorityFlagConfirm] = useState<{ story: Story; existing: Story } | null>(null);
+  const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [editingStory, setEditingStory] = useState<Story | null>(null);
   const todayIso = useMemo(() => new Date().toISOString().split('T')[0], []);
   const activePlanningSprints = useMemo(
     () => sprints.filter((s) => s.status === 0 || s.status === 1),
@@ -470,14 +479,114 @@ const MobileHome: React.FC = () => {
       if (payload?.created) parts.push(`${payload.created} calendar entries created`);
       if (payload?.rescheduled) parts.push(`${payload.rescheduled} moved`);
       if (payload?.blocked) parts.push(`${payload.blocked} blocked`);
-      setReplanFeedback(parts.length ? `Replan complete: ${parts.join(', ')}` : 'Replan complete. No entries needed moving.');
+      setReplanFeedback(parts.length ? `Delta replan complete: ${parts.join(', ')}` : 'Delta replan complete. No entries needed moving.');
     } catch (err) {
       console.error('Calendar replan failed', err);
-      setReplanFeedback('Replan failed. Please retry in a moment.');
+      setReplanFeedback('Delta replan failed. Please retry in a moment.');
     } finally {
       setReplanLoading(false);
     }
   }, [currentUser]);
+
+  const handleFullReplan = useCallback(async () => {
+    if (!currentUser) {
+      setReplanFeedback('Please sign in to run full replan.');
+      return;
+    }
+    setFullReplanLoading(true);
+    setReplanFeedback(null);
+    try {
+      const callable = httpsCallable(functions, 'runNightlyChainNow');
+      const response = await callable({});
+      const payload = response.data as { results?: Array<{ status?: string }> };
+      const total = payload?.results?.length || 0;
+      const ok = (payload?.results || []).filter((item) => item.status === 'ok').length;
+      if (total > 0 && ok === total) {
+        setReplanFeedback(`Full replan complete: ${ok}/${total} orchestration steps succeeded.`);
+      } else if (total > 0 && ok > 0) {
+        setReplanFeedback(`Full replan partial: ${ok}/${total} orchestration steps succeeded.`);
+      } else {
+        setReplanFeedback('Full replan finished with errors. Check logs.');
+      }
+    } catch (err) {
+      console.error('Full replan failed', err);
+      setReplanFeedback('Full replan failed. Please retry in a moment.');
+    } finally {
+      setFullReplanLoading(false);
+    }
+  }, [currentUser]);
+
+  const handleConvertTaskToStory = async (task: Task) => {
+    if (!task || convertingTaskId) return;
+    setConvertingTaskId(task.id);
+    try {
+      const suggestCallable = httpsCallable(functions, 'suggestTaskStoryConversions');
+      const convertCallable = httpsCallable(functions, 'convertTasksToStories');
+      const response: any = await suggestCallable({
+        persona: task.persona || 'personal',
+        taskIds: [task.id],
+        limit: 1,
+      });
+      const suggestions: any[] = Array.isArray(response?.data?.suggestions) ? response.data.suggestions : [];
+      const suggestion = suggestions.find((item: any) => item.taskId === task.id) || suggestions[0] || null;
+      const storyTitle = (suggestion?.storyTitle || task.title || 'New Story').slice(0, 140);
+      const storyDescription = (suggestion?.storyDescription || (task as any).description || '').slice(0, 1200);
+      const goalId = suggestion?.goalId || (task as any).goalId || null;
+      await convertCallable({
+        conversions: [{ taskId: task.id, storyTitle, storyDescription, goalId }],
+      });
+    } catch (error) {
+      console.error('Error converting task to story:', error);
+    } finally {
+      setConvertingTaskId(null);
+    }
+  };
+
+  const handleFlagPriorityStory = async (story: Story) => {
+    const existing = stories.find(
+      (s) => s.id !== story.id && (s as any).userPriorityFlag === true && s.status !== 4
+    );
+    if (existing) {
+      setPriorityFlagConfirm({ story, existing });
+      return;
+    }
+    await applyPriorityFlag(story);
+  };
+
+  const applyPriorityFlag = async (story: Story) => {
+    setFlaggingStoryId(story.id);
+    try {
+      // Clear any existing flag
+      const existingFlagged = stories.filter(
+        (s) => s.id !== story.id && (s as any).userPriorityFlag === true
+      );
+      for (const s of existingFlagged) {
+        await updateDoc(doc(db, 'stories', s.id), {
+          userPriorityFlag: false,
+          updatedAt: serverTimestamp(),
+        });
+      }
+      // Set new flag (toggle if already flagged)
+      const isAlreadyFlagged = (story as any).userPriorityFlag === true;
+      await updateDoc(doc(db, 'stories', story.id), {
+        userPriorityFlag: !isAlreadyFlagged,
+        userPriorityFlagAt: isAlreadyFlagged ? null : new Date().toISOString(),
+        updatedAt: serverTimestamp(),
+      });
+      // Trigger rescore + replan
+      if (!isAlreadyFlagged) {
+        const rescore = httpsCallable(functions, 'deltaPriorityRescore');
+        await rescore({ entityId: story.id, entityType: 'story' }).catch(() => {});
+        const replan = httpsCallable(functions, 'replanCalendarNow');
+        await replan({ days: 7 }).catch(() => {});
+      }
+    } catch (e) {
+      console.error('Failed to flag priority story', e);
+    } finally {
+      setFlaggingStoryId(null);
+      setPriorityFlagConfirm(null);
+    }
+  };
 
   const updateTaskField = async (task: Task, updates: Partial<Task>) => {
     try {
@@ -793,12 +902,24 @@ const MobileHome: React.FC = () => {
           <Button
             size="sm"
             variant="outline-primary"
-            disabled={replanLoading}
+            disabled={replanLoading || fullReplanLoading}
             onClick={handleReplan}
+            title="Delta replan: quickly rebalance existing calendar blocks using current priorities."
             style={{ fontSize: 11, padding: '3px 6px', whiteSpace: 'nowrap' }}
           >
-            {replanLoading && <Spinner animation="border" size="sm" className="me-1" role="status" />}
-            {replanLoading ? 'Replanning…' : 'Replan'}
+            {replanLoading ? <Spinner animation="border" size="sm" className="me-1" role="status" /> : <RefreshCw size={12} className="me-1" />}
+            {replanLoading ? 'Delta…' : 'Delta replan'}
+          </Button>
+          <Button
+            size="sm"
+            variant="primary"
+            disabled={fullReplanLoading || replanLoading}
+            onClick={handleFullReplan}
+            title="Full replan: runs full nightly orchestration (pointing, conversions, priority scoring, and calendar planning)."
+            style={{ fontSize: 11, padding: '3px 6px', whiteSpace: 'nowrap' }}
+          >
+            {fullReplanLoading ? <Spinner animation="border" size="sm" className="me-1" role="status" /> : <Sparkles size={12} className="me-1" />}
+            {fullReplanLoading ? 'Full…' : 'Full replan'}
           </Button>
         </div>
       </div>
@@ -921,7 +1042,13 @@ const MobileHome: React.FC = () => {
       {replanLoading && (
         <div className="mb-2 small d-flex align-items-center text-primary" role="status" aria-live="polite">
           <Spinner animation="border" size="sm" className="me-2" />
-          Replan is in progress—calendar blocks are being created/updated for the chosen tasks.
+          Delta replan is in progress—calendar blocks are being rebalanced.
+        </div>
+      )}
+      {fullReplanLoading && (
+        <div className="mb-2 small d-flex align-items-center text-primary" role="status" aria-live="polite">
+          <Spinner animation="border" size="sm" className="me-2" />
+          Full replan is in progress—running the complete nightly orchestration chain.
         </div>
       )}
 
@@ -1187,17 +1314,28 @@ const MobileHome: React.FC = () => {
                         const refKey = (it.ref || '').toUpperCase();
                         const matchedTask = refKey ? tasksByRef.get(refKey) : undefined;
                         const matchedStory = !matchedTask && refKey ? storiesByRef.get(refKey) : undefined;
-                        const href = matchedTask
-                          ? `/tasks/${matchedTask.id}`
-                          : matchedStory
-                            ? `/stories/${matchedStory.id}`
-                            : undefined;
                         const label = it.title || it.id || it.ref || 'Task';
-                        return href ? (
-                          <a href={href} className="text-decoration-none">{label}</a>
-                        ) : (
-                          label
-                        );
+                        if (matchedTask) {
+                          return (
+                            <span
+                              style={{ cursor: 'pointer', color: 'var(--bs-primary)' }}
+                              onClick={() => setEditingTask(matchedTask)}
+                            >
+                              {label}
+                            </span>
+                          );
+                        }
+                        if (matchedStory) {
+                          return (
+                            <span
+                              style={{ cursor: 'pointer', color: 'var(--bs-primary)' }}
+                              onClick={() => setEditingStory(matchedStory)}
+                            >
+                              {label}
+                            </span>
+                          );
+                        }
+                        return label;
                       })()}
                     </span>
                     <Badge bg={idx < 2 ? 'danger' : idx < 4 ? 'warning' : 'secondary'}>{Math.round(it.score || 0)}</Badge>
@@ -1278,10 +1416,18 @@ const MobileHome: React.FC = () => {
                           <div className="text-muted small">{goalLabel}</div>
                         </div>
                         <div className="d-flex flex-column align-items-end gap-1">
-                          <Badge bg={pr.bg}>{pr.text}</Badge>
-                          {isCriticalTask && (
-                            <Badge pill bg="warning" text="dark">Critical</Badge>
-                          )}
+                          <select
+                            className="dashboard-chip-select"
+                            value={Number(task.priority ?? 0)}
+                            onChange={(e) => updateTaskField(task, { priority: Number(e.target.value) as any })}
+                            style={{ backgroundColor: `var(--bs-${pr.bg})`, color: pr.bg === 'warning' || pr.bg === 'light' ? '#000' : '#fff' }}
+                          >
+                            <option value={0}>None</option>
+                            <option value={1}>Low</option>
+                            <option value={2}>Medium</option>
+                            <option value={3}>High</option>
+                            <option value={4}>Critical</option>
+                          </select>
                           {aiScore != null && (
                             <Badge pill bg="secondary">AI {Math.round(aiScore)}/100</Badge>
                           )}
@@ -1315,7 +1461,16 @@ const MobileHome: React.FC = () => {
                       </div>
                       <div className="d-flex flex-wrap gap-2 mt-2 align-items-center">
                         <Button variant="outline-secondary" size="sm" onClick={() => openNoteModal('task', task.id)}>Note</Button>
-                        <Button variant="outline-primary" size="sm" onClick={() => openDeepLink(task)}>Open</Button>
+                        <Button variant="outline-primary" size="sm" onClick={() => setEditingTask(task)}>Edit</Button>
+                        <Button
+                          variant="outline-info"
+                          size="sm"
+                          disabled={convertingTaskId === task.id}
+                          onClick={() => handleConvertTaskToStory(task)}
+                          title="Convert to Story"
+                        >
+                          <Wand2 size={14} /> {convertingTaskId === task.id ? '...' : 'Story'}
+                        </Button>
                         {task.points != null && (
                           <Badge pill bg="dark">Pts {task.points}</Badge>
                         )}
@@ -1356,8 +1511,25 @@ const MobileHome: React.FC = () => {
                     </div>
                     <div className="d-flex flex-column align-items-end gap-1">
                       <Badge bg={getStoryBadgeVariant(story.status)}>{storyStatusText(story.status)}</Badge>
-                      {isCriticalStory && (
-                        <Badge pill bg="warning" text="dark">Critical</Badge>
+                      {(() => {
+                        const stPr = getPriorityBadge(story.priority);
+                        return (
+                          <select
+                            className="dashboard-chip-select"
+                            value={Number(story.priority ?? 0)}
+                            onChange={(e) => updateStoryField(story, { priority: Number(e.target.value) as any })}
+                            style={{ backgroundColor: `var(--bs-${stPr.bg})`, color: stPr.bg === 'warning' || stPr.bg === 'light' ? '#000' : '#fff' }}
+                          >
+                            <option value={0}>None</option>
+                            <option value={1}>Low</option>
+                            <option value={2}>Medium</option>
+                            <option value={3}>High</option>
+                            <option value={4}>Critical</option>
+                          </select>
+                        );
+                      })()}
+                      {(story as any).userPriorityFlag && (
+                        <Badge pill bg="danger">#1 Priority</Badge>
                       )}
                       {aiScore != null && (
                         <Badge pill bg="secondary">AI {Math.round(aiScore)}/100</Badge>
@@ -1376,14 +1548,16 @@ const MobileHome: React.FC = () => {
                       ))}
                     </Form.Select>
                     <Button variant="outline-secondary" size="sm" onClick={() => openNoteModal('story', story.id)}>Add Note</Button>
-                    <a
-                      href={`https://bob.jc1.tech/stories/${story.id}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="small text-decoration-none text-muted"
+                    <Button
+                      variant={(story as any).userPriorityFlag ? 'danger' : 'outline-warning'}
+                      size="sm"
+                      disabled={flaggingStoryId === story.id}
+                      onClick={() => handleFlagPriorityStory(story)}
+                      title={(story as any).userPriorityFlag ? 'Remove #1 priority flag' : 'Flag as #1 priority for calendar'}
                     >
-                      Open story
-                    </a>
+                      <CalendarClock size={14} /> {(story as any).userPriorityFlag ? '#1' : 'Priority'}
+                    </Button>
+                    <Button variant="outline-primary" size="sm" onClick={() => setEditingStory(story)}>Edit</Button>
                   </div>
                   <div className="d-flex flex-wrap gap-2 mt-2">
                     <Badge pill bg="dark">Pts {story.points || 0}</Badge>
@@ -1523,6 +1697,43 @@ const MobileHome: React.FC = () => {
           </Button>
         </Modal.Footer>
       </Modal>
+
+      {/* Priority flag confirmation modal */}
+      <Modal show={!!priorityFlagConfirm} onHide={() => setPriorityFlagConfirm(null)} centered>
+        <Modal.Header closeButton>
+          <Modal.Title style={{ fontSize: 16 }}>#1 Priority Already Set</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <p>
+            <strong>{priorityFlagConfirm?.existing?.title}</strong> is already flagged as the #1 priority story.
+          </p>
+          <p>Replace it with <strong>{priorityFlagConfirm?.story?.title}</strong>?</p>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" size="sm" onClick={() => setPriorityFlagConfirm(null)}>Cancel</Button>
+          <Button
+            variant="danger"
+            size="sm"
+            disabled={!!flaggingStoryId}
+            onClick={() => priorityFlagConfirm && applyPriorityFlag(priorityFlagConfirm.story)}
+          >
+            {flaggingStoryId ? <Spinner animation="border" size="sm" /> : 'Replace'}
+          </Button>
+        </Modal.Footer>
+      </Modal>
+
+      {/* Edit modals */}
+      <EditTaskModal
+        show={!!editingTask}
+        task={editingTask}
+        onHide={() => setEditingTask(null)}
+      />
+      <EditStoryModal
+        show={!!editingStory}
+        story={editingStory}
+        goals={goals}
+        onHide={() => setEditingStory(null)}
+      />
     </Container>
   );
 };

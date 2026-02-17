@@ -55,17 +55,19 @@ import {
   updateDoc,
   where,
 } from 'firebase/firestore';
-import type { CalendarBlock, Story, Task } from '../../types';
+import type { CalendarBlock, Goal, Story, Task } from '../../types';
 import type { ScheduledInstanceModel } from '../../domain/scheduler/repository';
 import { humanizePolicyMode } from '../../utils/schedulerPolicy';
 import '../../styles/unified-planner.css';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate, Link } from 'react-router-dom';
 import { useGlobalThemes } from '../../hooks/useGlobalThemes';
 import { LEGACY_THEME_MAP } from '../../constants/globalThemes';
 import { pushDiagnosticLog } from '../../hooks/useDiagnosticsLog';
 import { usePersona } from '../../contexts/PersonaContext';
 import { getBadgeVariant, getPriorityBadge, getStatusName } from '../../utils/statusHelpers';
 import { isRecurringDueOnDate, resolveRecurringDueMs } from '../../utils/recurringTaskDue';
+import EditTaskModal from '../EditTaskModal';
+import EditStoryModal from '../EditStoryModal';
 
 const locales = { 'en-GB': enGB } as const;
 const localizer = dateFnsLocalizer({
@@ -302,12 +304,14 @@ const UnifiedPlannerPage: React.FC = () => {
   const [lastActionPatch, setLastActionPatch] = useState<{ id: string; prevStart: Date; prevEnd: Date } | null>(null);
   const [tasksDueToday, setTasksDueToday] = useState<Task[]>([]);
   const [tasksLoading, setTasksLoading] = useState(false);
-  const [tasksSortMode, setTasksSortMode] = useState<'due' | 'ai'>('ai');
+  const [tasksSortMode, setTasksSortMode] = useState<'due' | 'ai' | 'top3'>('ai');
   const [top3Collapsed, setTop3Collapsed] = useState(true);
   const [top3Tasks, setTop3Tasks] = useState<Task[]>([]);
   const [top3Stories, setTop3Stories] = useState<Story[]>([]);
   const [top3Loading, setTop3Loading] = useState(false);
   const [choreCompletionBusy, setChoreCompletionBusy] = useState<Record<string, boolean>>({});
+  const [inlineEditTask, setInlineEditTask] = useState<Task | null>(null);
+  const [inlineEditStory, setInlineEditStory] = useState<Story | null>(null);
 
   useEffect(() => {
     setBlockForm((prev) => {
@@ -1183,6 +1187,11 @@ const UnifiedPlannerPage: React.FC = () => {
     }
   }, []);
 
+  const triggerDeltaRescore = useCallback((entityId: string, entityType: 'task' | 'story') => {
+    httpsCallable(functions, 'deltaPriorityRescore')({ entityId, entityType })
+      .catch((err) => console.warn('Delta rescore failed (non-blocking)', err));
+  }, []);
+
   const handleTaskStatusChange = useCallback(async (task: Task, status: number) => {
     try {
       const ref = doc(db, 'tasks', task.id);
@@ -1191,11 +1200,62 @@ const UnifiedPlannerPage: React.FC = () => {
         completedAt: status === 2 ? serverTimestamp() : null,
         updatedAt: serverTimestamp(),
       });
+      triggerDeltaRescore(task.id, 'task');
     } catch (err) {
       console.error('Failed to update task status', err);
       setFeedback({ variant: 'danger', message: 'Could not update task status.' });
     }
-  }, []);
+  }, [triggerDeltaRescore]);
+
+  const handleTaskPriorityChange = useCallback(async (task: Task, priority: number) => {
+    try {
+      const ref = doc(db, 'tasks', task.id);
+      await updateDoc(ref, { priority, updatedAt: serverTimestamp() });
+      triggerDeltaRescore(task.id, 'task');
+    } catch (err) {
+      console.error('Failed to update task priority', err);
+    }
+  }, [triggerDeltaRescore]);
+
+  const handleTaskDueDateChange = useCallback(async (task: Task, dueDateMs: number) => {
+    try {
+      const ref = doc(db, 'tasks', task.id);
+      await updateDoc(ref, { dueDate: dueDateMs, dueDateMs, updatedAt: serverTimestamp() });
+      triggerDeltaRescore(task.id, 'task');
+    } catch (err) {
+      console.error('Failed to update task due date', err);
+    }
+  }, [triggerDeltaRescore]);
+
+  const handleStoryStatusChange = useCallback(async (story: Story, status: number) => {
+    try {
+      const ref = doc(db, 'stories', story.id);
+      await updateDoc(ref, { status, updatedAt: serverTimestamp() });
+      triggerDeltaRescore(story.id, 'story');
+    } catch (err) {
+      console.error('Failed to update story status', err);
+    }
+  }, [triggerDeltaRescore]);
+
+  const handleStoryPriorityChange = useCallback(async (story: Story, priority: number) => {
+    try {
+      const ref = doc(db, 'stories', story.id);
+      await updateDoc(ref, { priority, updatedAt: serverTimestamp() });
+      triggerDeltaRescore(story.id, 'story');
+    } catch (err) {
+      console.error('Failed to update story priority', err);
+    }
+  }, [triggerDeltaRescore]);
+
+  const handleStoryDueDateChange = useCallback(async (story: Story, dueDate: number) => {
+    try {
+      const ref = doc(db, 'stories', story.id);
+      await updateDoc(ref, { targetDate: dueDate, dueDate, updatedAt: serverTimestamp() });
+      triggerDeltaRescore(story.id, 'story');
+    } catch (err) {
+      console.error('Failed to update story due date', err);
+    }
+  }, [triggerDeltaRescore]);
 
   const handleCompleteChoreTask = useCallback(async (task: Task) => {
     if (!currentUser) return;
@@ -1225,7 +1285,7 @@ const UnifiedPlannerPage: React.FC = () => {
     todayDate.setHours(0, 0, 0, 0);
     const todayStart = todayDate.getTime();
     const rows = [...tasksDueToday];
-    if (tasksSortMode === 'ai') {
+    if (tasksSortMode === 'ai' || tasksSortMode === 'top3') {
       rows.sort((a, b) => {
         const aScore = Number((a as any).aiCriticalityScore ?? (a as any).aiPriorityScore ?? 0);
         const bScore = Number((b as any).aiCriticalityScore ?? (b as any).aiPriorityScore ?? 0);
@@ -1234,6 +1294,7 @@ const UnifiedPlannerPage: React.FC = () => {
         const bDue = resolveRecurringDueMs(b, todayDate, todayStart) || getTaskDueMs(b) || 0;
         return aDue - bDue;
       });
+      if (tasksSortMode === 'top3') return rows.slice(0, 3);
       return rows;
     }
     rows.sort((a, b) => {
@@ -1511,7 +1572,7 @@ const UnifiedPlannerPage: React.FC = () => {
 
   const handleRunNightlyOrchestration = useCallback(async () => {
     if (!currentUser) {
-      setFeedback({ variant: 'danger', message: 'Please sign in to run orchestration.' });
+      setFeedback({ variant: 'danger', message: 'Please sign in to run full replan.' });
       return;
     }
     
@@ -1525,11 +1586,11 @@ const UnifiedPlannerPage: React.FC = () => {
       const totalSteps = results.length;
       
       if (successSteps === totalSteps) {
-        setFeedback({ variant: 'success', message: `Nightly orchestration complete: all ${totalSteps} steps succeeded.` });
+        setFeedback({ variant: 'success', message: `Full replan complete: all ${totalSteps} orchestration steps succeeded.` });
       } else if (successSteps > 0) {
-        setFeedback({ variant: 'info', message: `Orchestration partial: ${successSteps}/${totalSteps} steps completed.` });
+        setFeedback({ variant: 'info', message: `Full replan partial: ${successSteps}/${totalSteps} orchestration steps completed.` });
       } else {
-        setFeedback({ variant: 'danger', message: 'Nightly orchestration failed. Check logs and try again.' });
+        setFeedback({ variant: 'danger', message: 'Full replan failed. Check logs and try again.' });
       }
     } catch (err) {
       console.error('Nightly orchestration failed', err);
@@ -1540,13 +1601,14 @@ const UnifiedPlannerPage: React.FC = () => {
         message: 'Failed to trigger nightly orchestration.',
         details: err instanceof Error ? err.message : String(err),
       });
-      setFeedback({ variant: 'danger', message: 'Orchestration failed. Please retry in a moment.' });
+      setFeedback({ variant: 'danger', message: 'Full replan failed. Please retry in a moment.' });
     } finally {
       setOrchestrationLoading(false);
     }
   }, [currentUser]);
 
   return (
+    <>
     <Container fluid className="py-4 unified-planner">
       <Row className="g-4">
         <Col lg={7} xl={8}>
@@ -1577,26 +1639,28 @@ const UnifiedPlannerPage: React.FC = () => {
                   size="sm"
                   onClick={handleReplanCalendar}
                   disabled={planner.loading || replanLoading}
+                  title="Delta replan: quickly rebalance existing calendar blocks using current priorities."
                 >
                   {replanLoading ? (
                     <Spinner size="sm" animation="border" className="me-2" />
                   ) : (
                     <Clock size={16} className="me-1" />
                   )}
-                  Replan around calendar
+                  Delta replan
                 </Button>
                 <Button
                   variant="primary"
                   size="sm"
                   onClick={handleRunNightlyOrchestration}
                   disabled={planner.loading || orchestrationLoading}
+                  title="Full replan: runs full nightly orchestration (pointing, conversions, priority scoring, and calendar planning)."
                 >
                   {orchestrationLoading ? (
                     <Spinner size="sm" animation="border" className="me-2" />
                   ) : (
                     <Sparkles size={16} className="me-1" />
                   )}
-                  Run nightly orchestration
+                  Full replan
                 </Button>
               </div>
             </Card.Header>
@@ -1719,18 +1783,84 @@ const UnifiedPlannerPage: React.FC = () => {
                       {top3Stories.length === 0 ? (
                         <div className="text-muted small">No stories flagged.</div>
                       ) : (
-                        top3Stories.map((story, idx) => {
+                        top3Stories.map((story) => {
                           const label = storyLabel(story);
                           const aiScore = (story as any).aiCriticalityScore ?? (story as any).aiPriorityScore;
                           const href = `/stories/${(story as any).ref || story.id}`;
+                          const storyPriorityBadge = getPriorityBadge((story as any).priority);
+                          const storyDueMs = (() => {
+                            const raw = (story as any).targetDate ?? (story as any).dueDate ?? null;
+                            if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+                            if (raw?.toDate) return raw.toDate().getTime();
+                            const parsed = raw ? Date.parse(String(raw)) : NaN;
+                            return Number.isNaN(parsed) ? null : parsed;
+                          })();
+                          const storyStatusVal = Number(story.status ?? 0);
+                          const storyStatusMap: Record<number, { bg: string; label: string }> = {
+                            0: { bg: 'light', label: 'Backlog' },
+                            1: { bg: 'info', label: 'Planned' },
+                            2: { bg: 'primary', label: 'In Progress' },
+                            3: { bg: 'warning', label: 'Testing' },
+                            4: { bg: 'success', label: 'Done' },
+                          };
+                          const storyS = storyStatusMap[storyStatusVal] || storyStatusMap[0];
                           return (
-                            <div key={story.id} className="border rounded p-2 mb-2">
-                              <div className="fw-semibold">
-                                <a href={href} className="text-decoration-none">{label}</a>
+                            <div key={story.id} className="border rounded p-2 mb-2 dashboard-due-item">
+                              <div className="fw-semibold small">
+                                <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditStory(story); }}>{label}</a>
                               </div>
-                              <div className="text-muted small d-flex justify-content-between">
-                                <span>Rank {idx + 1}</span>
-                                <span>AI {aiScore != null ? Math.round(aiScore) : '—'}</span>
+                              <div className="d-flex align-items-center gap-2 mt-1 flex-wrap">
+                                <span className="text-muted d-inline-flex align-items-center gap-1" style={{ fontSize: 11 }}>
+                                  <Clock size={11} />
+                                  <input
+                                    type="date"
+                                    className="dashboard-due-date-input"
+                                    value={storyDueMs ? format(new Date(storyDueMs), 'yyyy-MM-dd') : ''}
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      if (!val) return;
+                                      const newDue = new Date(val + 'T12:00:00').getTime();
+                                      handleStoryDueDateChange(story, newDue);
+                                    }}
+                                  />
+                                </span>
+                                <span className="dashboard-chip-select-wrap">
+                                  <select
+                                    className="dashboard-chip-select"
+                                    value={Number((story as any).priority ?? 0)}
+                                    onChange={(e) => handleStoryPriorityChange(story, Number(e.target.value))}
+                                    style={{
+                                      backgroundColor: `var(--bs-${storyPriorityBadge.bg})`,
+                                      color: storyPriorityBadge.bg === 'warning' || storyPriorityBadge.bg === 'light' ? '#000' : '#fff',
+                                    }}
+                                  >
+                                    <option value={0}>None</option>
+                                    <option value={1}>Low</option>
+                                    <option value={2}>Medium</option>
+                                    <option value={3}>High</option>
+                                    <option value={4}>Critical</option>
+                                  </select>
+                                </span>
+                                <span className="dashboard-chip-select-wrap">
+                                  <select
+                                    className="dashboard-chip-select"
+                                    value={storyStatusVal}
+                                    onChange={(e) => handleStoryStatusChange(story, Number(e.target.value))}
+                                    style={{
+                                      backgroundColor: `var(--bs-${storyS.bg})`,
+                                      color: storyS.bg === 'light' || storyS.bg === 'warning' ? '#000' : '#fff',
+                                    }}
+                                  >
+                                    <option value={0}>Backlog</option>
+                                    <option value={1}>Planned</option>
+                                    <option value={2}>In Progress</option>
+                                    <option value={3}>Testing</option>
+                                    <option value={4}>Done</option>
+                                  </select>
+                                </span>
+                                <span className="text-muted" style={{ fontSize: 11 }}>
+                                  AI {aiScore != null ? Math.round(aiScore) : '—'}
+                                </span>
                               </div>
                             </div>
                           );
@@ -1742,19 +1872,82 @@ const UnifiedPlannerPage: React.FC = () => {
                       {top3Tasks.length === 0 ? (
                         <div className="text-muted small">No tasks flagged.</div>
                       ) : (
-                        top3Tasks.map((task, idx) => {
+                        top3Tasks.map((task) => {
                           const refLabel = taskRefLabel(task);
-                          const label = refLabel ? `${refLabel} — ${task.title}` : task.title;
                           const aiScore = (task as any).aiCriticalityScore ?? (task as any).aiPriorityScore;
-                          const href = `/tasks/${(task as any).ref || task.id}`;
+                          const priorityBadge = getPriorityBadge((task as any).priority);
+                          const dueMs = getTaskDueMs(task);
                           return (
-                            <div key={task.id} className="border rounded p-2 mb-2">
-                              <div className="fw-semibold">
-                                <a href={href} className="text-decoration-none">{label}</a>
+                            <div key={task.id} className="border rounded p-2 mb-2 dashboard-due-item">
+                              <div className="fw-semibold small">
+                                <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>{task.title}</a>
                               </div>
-                              <div className="text-muted small d-flex justify-content-between">
-                                <span>Rank {idx + 1}</span>
-                                <span>AI {aiScore != null ? Math.round(aiScore) : '—'}</span>
+                              {refLabel && (
+                                <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>
+                                  <code className="text-primary" style={{ fontSize: 11 }}>{refLabel}</code>
+                                </a>
+                              )}
+                              <div className="d-flex align-items-center gap-2 mt-1 flex-wrap">
+                                <span className="text-muted d-inline-flex align-items-center gap-1" style={{ fontSize: 11 }}>
+                                  <Clock size={11} />
+                                  <input
+                                    type="date"
+                                    className="dashboard-due-date-input"
+                                    value={dueMs ? format(new Date(dueMs), 'yyyy-MM-dd') : ''}
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      if (!val) return;
+                                      const newDue = new Date(val + 'T12:00:00').getTime();
+                                      handleTaskDueDateChange(task, newDue);
+                                    }}
+                                  />
+                                </span>
+                                <span className="dashboard-chip-select-wrap">
+                                  <select
+                                    className="dashboard-chip-select"
+                                    value={Number((task as any).priority ?? 0)}
+                                    onChange={(e) => handleTaskPriorityChange(task, Number(e.target.value))}
+                                    style={{
+                                      backgroundColor: `var(--bs-${priorityBadge.bg})`,
+                                      color: priorityBadge.bg === 'warning' || priorityBadge.bg === 'light' ? '#000' : '#fff',
+                                    }}
+                                  >
+                                    <option value={0}>None</option>
+                                    <option value={1}>Low</option>
+                                    <option value={2}>Medium</option>
+                                    <option value={3}>High</option>
+                                    <option value={4}>Critical</option>
+                                  </select>
+                                </span>
+                                {(() => {
+                                  const statusVal = Number(task.status ?? 0);
+                                  const statusMap: Record<number, { bg: string; label: string }> = {
+                                    0: { bg: 'secondary', label: 'To do' },
+                                    1: { bg: 'primary', label: 'Doing' },
+                                    2: { bg: 'success', label: 'Done' },
+                                  };
+                                  const s = statusMap[statusVal] || statusMap[0];
+                                  return (
+                                    <span className="dashboard-chip-select-wrap">
+                                      <select
+                                        className="dashboard-chip-select"
+                                        value={statusVal}
+                                        onChange={(e) => handleTaskStatusChange(task, Number(e.target.value))}
+                                        style={{
+                                          backgroundColor: `var(--bs-${s.bg})`,
+                                          color: '#fff',
+                                        }}
+                                      >
+                                        <option value={0}>To do</option>
+                                        <option value={1}>Doing</option>
+                                        <option value={2}>Done</option>
+                                      </select>
+                                    </span>
+                                  );
+                                })()}
+                                <span className="text-muted" style={{ fontSize: 11 }}>
+                                  AI {aiScore != null ? Math.round(aiScore) : '—'}
+                                </span>
                               </div>
                             </div>
                           );
@@ -1770,16 +1963,17 @@ const UnifiedPlannerPage: React.FC = () => {
           <Card className="shadow-sm border-0 mb-4">
                 <Card.Header className="d-flex align-items-center justify-content-between">
                   <div className="fw-semibold d-flex align-items-center gap-2">
-                    <Clock size={16} /> Tasks due today & overdue
+                    <Clock size={16} /> Tasks due today
                   </div>
                   <div className="d-flex align-items-center gap-2">
                     <Form.Select
                       size="sm"
                       value={tasksSortMode}
-                      onChange={(e) => setTasksSortMode(e.target.value as 'due' | 'ai')}
+                      onChange={(e) => setTasksSortMode(e.target.value as 'due' | 'ai' | 'top3')}
                     >
                       <option value="due">Sort: Due time</option>
                       <option value="ai">Sort: AI score</option>
+                      <option value="top3">Top 3 (AI)</option>
                     </Form.Select>
                     <Badge bg={sortedTaskItemsDueToday.length > 0 ? 'info' : 'secondary'} pill>
                       {sortedTaskItemsDueToday.length}
@@ -1792,49 +1986,80 @@ const UnifiedPlannerPage: React.FC = () => {
                       <Spinner size="sm" animation="border" /> Loading tasks…
                     </div>
                   ) : sortedTaskItemsDueToday.length === 0 ? (
-                    <div className="text-muted small">No tasks due today or overdue.</div>
+                    <div className="text-muted small">No tasks due today.</div>
                   ) : (
                     sortedTaskItemsDueToday.map((task) => {
                       const dueMs = getTaskDueMs(task);
                       const aiScore = (task as any).aiCriticalityScore ?? (task as any).aiPriorityScore;
                       const refLabel = taskRefLabel(task);
                       const priorityBadge = getPriorityBadge((task as any).priority);
-                      const dueLabel = dueMs ? formatDueLabel(dueMs) : null;
+                      const statusVal = Number(task.status ?? 0);
+                      const statusMap: Record<number, { bg: string; label: string }> = {
+                        0: { bg: 'secondary', label: 'To do' },
+                        1: { bg: 'primary', label: 'Doing' },
+                        2: { bg: 'success', label: 'Done' },
+                      };
+                      const s = statusMap[statusVal] || statusMap[0];
                       return (
-                        <div key={task.id} className="border rounded p-2">
-                          <div className="d-flex justify-content-between align-items-start gap-2">
-                            <div className="flex-grow-1">
-                              <div className="fw-semibold">{task.title}</div>
-                              {refLabel && (
-                                <div className="text-muted small">
-                                  <a href={`/tasks/${task.id}`} className="text-decoration-none">
-                                    <code className="text-primary">{refLabel}</code>
-                                  </a>
-                                </div>
-                              )}
-                              <div className="text-muted small d-flex align-items-center gap-1">
-                                <Clock size={12} /> Due {dueLabel ?? '—'}
-                              </div>
-                            </div>
+                        <div key={task.id} className="border rounded p-2 dashboard-due-item">
+                          <div className="fw-semibold small">
+                            <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>{task.title}</a>
                           </div>
-                          <div className="d-flex align-items-center justify-content-between mt-2 gap-2 flex-wrap">
-                            <div className="d-flex align-items-center gap-2 flex-wrap">
-                              <Badge bg={priorityBadge.bg}>{priorityBadge.text}</Badge>
-                              <span className="text-muted small">
-                                AI {aiScore != null ? Math.round(aiScore) : '—'}
-                              </span>
-                            </div>
-                            <Form.Select
-                              size="sm"
-                              value={Number(task.status ?? 0)}
-                              onChange={(e) => handleTaskStatusChange(task, Number(e.target.value))}
-                              aria-label="Update task status"
-                              style={{ width: 106, fontSize: '0.75rem' }}
-                            >
-                              <option value={0}>To do</option>
-                              <option value={1}>Doing</option>
-                              <option value={2}>Done</option>
-                            </Form.Select>
+                          {refLabel && (
+                            <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>
+                              <code className="text-primary" style={{ fontSize: 11 }}>{refLabel}</code>
+                            </a>
+                          )}
+                          <div className="d-flex align-items-center gap-2 mt-1 flex-wrap">
+                            <span className="text-muted d-inline-flex align-items-center gap-1" style={{ fontSize: 11 }}>
+                              <Clock size={11} />
+                              <input
+                                type="date"
+                                className="dashboard-due-date-input"
+                                value={dueMs ? format(new Date(dueMs), 'yyyy-MM-dd') : ''}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  if (!val) return;
+                                  const newDue = new Date(val + 'T12:00:00').getTime();
+                                  handleTaskDueDateChange(task, newDue);
+                                }}
+                              />
+                            </span>
+                            <span className="dashboard-chip-select-wrap">
+                              <select
+                                className="dashboard-chip-select"
+                                value={Number((task as any).priority ?? 0)}
+                                onChange={(e) => handleTaskPriorityChange(task, Number(e.target.value))}
+                                style={{
+                                  backgroundColor: `var(--bs-${priorityBadge.bg})`,
+                                  color: priorityBadge.bg === 'warning' || priorityBadge.bg === 'light' ? '#000' : '#fff',
+                                }}
+                              >
+                                <option value={0}>None</option>
+                                <option value={1}>Low</option>
+                                <option value={2}>Medium</option>
+                                <option value={3}>High</option>
+                                <option value={4}>Critical</option>
+                              </select>
+                            </span>
+                            <span className="dashboard-chip-select-wrap">
+                              <select
+                                className="dashboard-chip-select"
+                                value={statusVal}
+                                onChange={(e) => handleTaskStatusChange(task, Number(e.target.value))}
+                                style={{
+                                  backgroundColor: `var(--bs-${s.bg})`,
+                                  color: '#fff',
+                                }}
+                              >
+                                <option value={0}>To do</option>
+                                <option value={1}>Doing</option>
+                                <option value={2}>Done</option>
+                              </select>
+                            </span>
+                            {aiScore != null && (
+                              <span className="text-muted" style={{ fontSize: 10 }}>AI {Math.round(aiScore)}</span>
+                            )}
                           </div>
                         </div>
                       );
@@ -2207,37 +2432,36 @@ const UnifiedPlannerPage: React.FC = () => {
               <Form.Label>Link to story (optional)</Form.Label>
               <Form.Control
                 list="planner-story-options"
-                placeholder="Search story by ref or title..."
+                placeholder="Search story by title..."
                 value={blockForm.storyInput || ''}
                 onChange={(event) => {
                   const value = event.target.value;
-                  const match = stories.find((s) => {
-                    const label = storyLabel(s);
-                    return s.id === value || s.title === value || label === value || (s.ref && s.ref === value);
-                  });
                   setBlockForm((prev) => ({
                     ...prev,
-                    storyId: match ? match.id : undefined,
                     storyInput: value,
-                    title: match ? `${storyLabel(match)}` : prev.title,
-                    theme: match?.theme || prev.theme || blockDefaultTheme,
-                    aiScore: (match as any)?.aiCriticalityScore ?? (match as any)?.aiScore ?? prev.aiScore ?? null,
-                    aiReason: (match as any)?.aiCriticalityReason ?? prev.aiReason ?? null,
                   }));
                 }}
                 onBlur={(event) => {
-                  const value = event.target.value;
-                  const match = stories.find((s) => storyLabel(s) === value || s.title === value || s.id === value);
+                  const value = event.target.value.trim();
+                  const match = stories.find((s) => s.title === value || s.id === value);
                   setBlockForm((prev) => ({
                     ...prev,
                     storyId: match ? match.id : undefined,
-                    storyInput: match ? storyLabel(match) : value,
+                    storyInput: match ? (match.title || '') : value,
+                    title: match ? `${match.title || ''}` : prev.title,
+                    theme: match?.theme || prev.theme || blockDefaultTheme,
+                    aiScore: match
+                      ? ((match as any)?.aiCriticalityScore ?? (match as any)?.aiScore ?? prev.aiScore ?? null)
+                      : prev.aiScore,
+                    aiReason: match
+                      ? ((match as any)?.aiCriticalityReason ?? prev.aiReason ?? null)
+                      : prev.aiReason,
                   }));
                 }}
               />
               <datalist id="planner-story-options">
                 {stories.map((s) => (
-                  <option key={s.id} value={storyLabel(s)} />
+                  <option key={s.id} value={s.title || ''} />
                 ))}
               </datalist>
             </Form.Group>
@@ -2338,6 +2562,19 @@ const UnifiedPlannerPage: React.FC = () => {
         </Modal.Footer>
       </Modal>
     </Container>
+
+    <EditTaskModal
+      show={!!inlineEditTask}
+      task={inlineEditTask}
+      onHide={() => setInlineEditTask(null)}
+    />
+    <EditStoryModal
+      show={!!inlineEditStory}
+      story={inlineEditStory}
+      goals={[] as Goal[]}
+      onHide={() => setInlineEditStory(null)}
+    />
+    </>
   );
 };
 

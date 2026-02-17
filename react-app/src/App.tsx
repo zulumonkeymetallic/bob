@@ -81,6 +81,7 @@ import TasksManagement from './components/TasksManagement';
 import SprintPlanningMatrix from './components/SprintPlanningMatrix';
 import WorkoutsDashboard from './components/WorkoutsDashboard';
 import FinanceDashboardModern from './components/FinanceDashboardModern';
+import FinanceHub from './components/finance/FinanceHub';
 import MerchantMappings from './components/finance/MerchantMappings';
 import CategoriesBuckets from './components/finance/CategoriesBuckets';
 import BudgetsPage from './components/finance/BudgetsPage';
@@ -108,9 +109,9 @@ import QueryDeepLinkGate from './components/routes/QueryDeepLinkGate';
 import AdvancedOverview from './components/AdvancedOverview';
 import FinanceDashboardAdvanced from './components/finance/FinanceDashboardAdvanced';
 import CapacityDashboard from './components/CapacityDashboard';
-import { collection, limit, onSnapshot, orderBy, query, where } from 'firebase/firestore';
+import { collection, deleteDoc, doc, limit, onSnapshot, orderBy, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
 import { db } from './firebase';
-import type { Goal, Story } from './types';
+import type { Goal, Story, Task } from './types';
 
 
 // Lazy-loaded heavy routes
@@ -144,10 +145,14 @@ function AppContent() {
   const [showImportModal, setShowImportModal] = useState(false);
   const [showAssistant, setShowAssistant] = useState(false);
 
-  // Root path redirect that is mobile-aware
+  // Root path redirect: mobile -> /mobile, desktop -> alternate between overview and kanban
   const RootRedirect: React.FC = () => {
     const dev = useDeviceInfo();
-    return <Navigate to={dev?.isMobile ? '/mobile' : '/sprints/kanban'} replace />;
+    if (dev?.isMobile) return <Navigate to="/mobile" replace />;
+    // Alternate landing page based on even/odd hour
+    const hour = new Date().getHours();
+    const target = hour % 2 === 0 ? '/dashboard' : '/sprints/kanban';
+    return <Navigate to={target} replace />;
   };
 
   // Data for the global sidebar
@@ -194,6 +199,31 @@ function AppContent() {
       unsubStories();
     };
   }, [currentUser?.uid, currentPersona]);
+
+  const handleGlobalSidebarDelete = async (
+    item: Story | Task | Goal,
+    type: 'story' | 'task' | 'goal'
+  ) => {
+    const itemId = item?.id;
+    if (!itemId) return;
+    try {
+      if (type === 'task') {
+        await updateDoc(doc(db, 'tasks', itemId), {
+          deleted: true,
+          updatedAt: serverTimestamp(),
+        });
+        return;
+      }
+      if (type === 'story') {
+        await deleteDoc(doc(db, 'stories', itemId));
+        return;
+      }
+      await deleteDoc(doc(db, 'goals', itemId));
+    } catch (error) {
+      console.error('[global-sidebar] delete failed', { type, itemId, error });
+      alert(`Failed to delete ${type}. Please try again.`);
+    }
+  };
 
   // 🖱️ Initialize global click tracking service
   useEffect(() => {
@@ -343,7 +373,7 @@ function AppContent() {
             <Route path="/mobile" element={<MobileHome />} />
             <Route path="/mobile-view" element={<MobileView />} />
             <Route path="/mobile-checklist" element={<MobileChecklistView />} />
-            <Route path="/habits" element={<HabitsManagement />} />
+            <Route path="/habits" element={<Navigate to="/dashboard/habit-tracking" replace />} />
             <Route path="/routines" element={<Navigate to="/chores" replace />} />
             <Route path="/ai-planner" element={<PlanningDashboard />} />
             <Route path="/ai-usage" element={<AIUsageDashboard />} />
@@ -397,7 +427,7 @@ function AppContent() {
             <Route path="/calendar/themes" element={<Navigate to="/calendar/planner" replace />} />
             <Route path="/running-results" element={<WorkoutsDashboard />} />
             <Route path="/workouts" element={<Navigate to="/running-results" replace />} />
-            <Route path="/finance" element={<FinanceDashboardModern />} />
+            <Route path="/finance" element={<FinanceHub />} />
             <Route path="/finance/merchants" element={<MerchantMappings />} />
             <Route path="/finance/categories" element={<CategoriesBuckets />} />
             <Route path="/finance/budgets" element={<BudgetsPage />} />
@@ -443,6 +473,7 @@ function AppContent() {
             goals={goals}
             stories={stories}
             sprints={sprints}
+            onDelete={handleGlobalSidebarDelete}
           />
         </SidebarLayout>
       </MigrationManager>
