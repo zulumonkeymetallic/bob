@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Modal, Button, Form, Row, Col, Alert } from 'react-bootstrap';
 import { updateDoc, doc, serverTimestamp, collection, query, where, getDocs, addDoc, deleteDoc } from 'firebase/firestore';
-import { db } from '../firebase';
+import { db, functions } from '../firebase';
+import { httpsCallable } from 'firebase/functions';
 import { Story, Goal, Sprint, Task } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import { useSprint } from '../contexts/SprintContext';
@@ -226,6 +227,9 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
       }
 
       console.log('✅ EditStoryModal: Story updated successfully');
+      // Fire-and-forget delta rescore for priority/top3 recalculation
+      httpsCallable(functions, 'deltaPriorityRescore')({ entityId: story.id, entityType: 'story' })
+        .catch((err) => console.warn('Delta rescore failed (non-blocking)', err));
       onStoryUpdated?.();
       onHide();
     } catch (err) {

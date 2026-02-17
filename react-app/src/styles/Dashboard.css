@@ -105,6 +105,22 @@
 
 .dashboard-calendar-card .calendar-dashboard-wrap {
   min-height: 520px;
+  max-height: clamp(520px, 60vh, 700px);
+}
+
+/*
+ * Due-tasks and chores cards: use viewport-relative max-height so they
+ * scale with the screen (Mac Air ~65vh, iPad ~55vh) and only scroll
+ * when content actually exceeds available space.
+ */
+.dashboard-due-card > .card-body {
+  max-height: clamp(300px, 55vh, 700px);
+  overflow-y: auto;
+}
+
+.dashboard-chores-card > .card-body {
+  max-height: clamp(300px, 55vh, 700px);
+  overflow-y: auto;
 }
 
 .dashboard-task-status-select {
@@ -121,8 +137,70 @@
   font-size: 12px;
 }
 
+/* Due-item card: auto height to fit wrapped chips */
 .dashboard-due-item {
-  min-height: 116px;
+  min-height: 0;
+  overflow: visible;
+  height: auto !important;
+}
+
+/* Force the chips row inside due-items to wrap properly in narrow columns */
+.dashboard-due-item .d-flex.align-items-center {
+  flex-wrap: wrap !important;
+  gap: 4px 6px !important;
+  row-gap: 4px !important;
+}
+
+/* Ensure the chip selects and badges never get hidden */
+.dashboard-due-item .dashboard-chip-select-wrap,
+.dashboard-due-item .badge,
+.dashboard-due-item .dashboard-due-date-input {
+  flex-shrink: 0;
+  overflow: visible;
+}
+
+/* Chip-style select for priority and status */
+.dashboard-chip-select-wrap {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.dashboard-chip-select {
+  appearance: none;
+  -webkit-appearance: none;
+  border: none;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 18px 2px 8px;
+  line-height: 1.4;
+  cursor: pointer;
+  white-space: nowrap;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='rgba(255,255,255,0.7)' stroke-width='1.5' fill='none'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 5px center;
+  background-size: 10px 6px;
+}
+
+.dashboard-chip-select:focus {
+  outline: 2px solid var(--bs-primary);
+  outline-offset: 1px;
+}
+
+/* Inline due-date input */
+.dashboard-due-date-input {
+  border: none;
+  background: transparent;
+  font-size: 11px;
+  color: inherit;
+  padding: 0 2px;
+  cursor: pointer;
+  width: 105px;
+}
+
+.dashboard-due-date-input:focus {
+  outline: 1px solid var(--bs-primary);
+  border-radius: 3px;
 }
 
 @media (min-width: 992px) {
@@ -142,6 +220,7 @@
 
   .dashboard-calendar-card .calendar-dashboard-wrap {
     min-height: 640px;
+    max-height: clamp(640px, 65vh, 800px);
   }
 
   .today-plan-layout > .today-plan-col-due {
@@ -165,6 +244,7 @@
 
   .dashboard-calendar-card .calendar-dashboard-wrap {
     min-height: 620px;
+    max-height: clamp(620px, 65vh, 800px);
   }
 
   .today-plan-layout > .today-plan-col-due {

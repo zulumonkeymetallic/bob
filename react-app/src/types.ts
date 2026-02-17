@@ -66,6 +66,9 @@ export interface Story {
   aiTop3Date?: string;
   aiPriorityLabel?: string;
   aiTop3Reason?: string;
+  // User-set #1 priority flag for gcal override
+  userPriorityFlag?: boolean;
+  userPriorityFlagAt?: string;
   // Optional travel/location metadata
   countryCode?: string; // ISO alpha-2
   city?: string;

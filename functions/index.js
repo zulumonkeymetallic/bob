@@ -89,7 +89,6 @@ try {
     exports.syncFromGoogleCalendar = calendarSync.syncFromGoogleCalendar;
     exports.syncCalendarNow = calendarSync.syncCalendarNow;
     exports.scheduledCalendarSync = calendarSync.scheduledCalendarSync;
-    exports.syncCalendarTestInsert = calendarSync.syncCalendarTestInsert;
   }
 } catch (e) {
   console.warn('[init] calendarSync not loaded', e?.message || e);
@@ -127,6 +126,9 @@ try {
     exports.runNightlyChainNow = nightlyOrchestration.runNightlyChainNow;
     if (nightlyOrchestration.runNightlyChainNowHttp) {
       exports.runNightlyChainNowHttp = nightlyOrchestration.runNightlyChainNowHttp;
+    }
+    if (nightlyOrchestration.deltaPriorityRescore) {
+      exports.deltaPriorityRescore = nightlyOrchestration.deltaPriorityRescore;
     }
   }
 } catch (e) {
@@ -1210,6 +1212,72 @@ exports.autoEnrichTasks = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }
 
   return { processed: candidates.length, updated, estimatesAdded, linksSuggested };
 });
+
+// ===== enhanceNewTask: spell-check title, estimate points, score on new task creation
+exports.enhanceNewTask = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY], memory: '512MiB' }, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const { taskId } = req?.data || {};
+  if (!taskId) throw new httpsV2.HttpsError('invalid-argument', 'taskId required');
+
+  const db = ensureFirestore();
+  const taskDoc = await db.collection('tasks').doc(taskId).get();
+  if (!taskDoc.exists) return { ok: false, reason: 'not_found' };
+  const task = taskDoc.data();
+  if (task.ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Not your task');
+
+  const patch = { updatedAt: admin.firestore.FieldValue.serverTimestamp() };
+  let correctedTitle = task.title || '';
+  let estimatedPoints = null;
+
+  try {
+    const system = 'You are a task management assistant. Return compact JSON only.';
+    const user = [
+      'Given this task title and description, do two things:',
+      '1. Fix any spelling/grammar errors in the title (keep it concise)',
+      '2. Estimate the effort in story points (1=trivial, 2=small, 3=medium, 5=large, 8=very large)',
+      '',
+      `Title: "${task.title || ''}"`,
+      `Description: "${(task.description || '').slice(0, 400)}"`,
+      '',
+      'Respond as: {"correctedTitle": "string", "points": number, "reason": "string"}',
+    ].join('\n');
+    const text = await callLLMJson({ system, user, purpose: 'enhanceNewTask', userId: uid, expectJson: true, temperature: 0.1 });
+    const obj = JSON.parse(text || '{}');
+
+    if (obj.correctedTitle && typeof obj.correctedTitle === 'string' && obj.correctedTitle.trim() !== (task.title || '').trim()) {
+      correctedTitle = obj.correctedTitle.trim().slice(0, 200);
+      patch.title = correctedTitle;
+      patch.titleCorrectedByAi = true;
+    }
+    if (obj.points && Number(obj.points) > 0 && !(Number(task.points) > 0)) {
+      estimatedPoints = Math.max(1, Math.min(13, Math.round(Number(obj.points))));
+      patch.points = estimatedPoints;
+      patch.pointsEstimatedByAi = true;
+    }
+  } catch (e) {
+    console.warn('[enhanceNewTask] LLM call failed', e?.message || e);
+  }
+
+  const hasChanges = patch.title || patch.points;
+  if (hasChanges) {
+    await taskDoc.ref.set(patch, { merge: true });
+  }
+
+  // Run delta rescore to compute criticality and update top3
+  try {
+    const persona = String(task.persona || 'personal').toLowerCase() === 'work' ? 'work' : 'personal';
+    const { computeCriticalityScore, buildCriticalityReason, priorityBoostFor, normalizeUserPriority, normalizeTheme, _deltaTop3ForPersona } = require('./nightlyOrchestration');
+    if (typeof _deltaTop3ForPersona === 'function') {
+      await _deltaTop3ForPersona(db, uid, persona);
+    }
+  } catch (e) {
+    console.warn('[enhanceNewTask] delta rescore failed', e?.message || e);
+  }
+
+  return { ok: true, correctedTitle, estimatedPoints };
+});
+
 
 exports.taskStoryConversion = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
   const uid = req?.auth?.uid;
@@ -3657,15 +3725,6 @@ exports.diagnosticsStatus = httpsV2.onCall({}, async (req) => {
 });
 
 // Diagnostics: test LLM (Gemini) round-trip
-exports.testLLM = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
-  const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
-  const raw = await callLLMJson({ system: 'Return JSON {"ok":true}', user: 'ping', purpose: 'diagnostics', userId: uid, expectJson: true, temperature: 0 });
-  return { ok: true, model: 'gemini', response: raw.slice(0, 200) };
-});
-
-const TRAVEL_GOAL_MATCH_PROMPT_VERSION = '2025-09-05-01';
-
-// LLM matcher: pick best travel goal for a place (or suggest a new goal title)
 exports.matchTravelGoal = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
@@ -3912,25 +3971,6 @@ exports.normalizeStatuses = httpsV2.onCall({}, async (req) => {
 });
 
 // Diagnostics: quick check that sprints are readable for the current user
-exports.debugSprintsNow = httpsV2.onCall(async (req) => {
-  const uid = req?.auth?.uid;
-  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
-  const db = ensureFirestore();
-  const snap = await db.collection('sprints').where('ownerUid', '==', uid).orderBy('startDate', 'desc').limit(10).get();
-  const items = snap.docs.map((d) => {
-    const data = d.data() || {};
-    return {
-      id: d.id,
-      name: data.name || null,
-      status: data.status || null,
-      startDate: data.startDate || null,
-      persona: data.persona || null,
-    };
-  });
-  return { ok: true, count: snap.size, items };
-});
-
-// Assistant Chat: aggregates calendar + backlog + goals to provide insights and suggested actions
 exports.sendAssistantMessage = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
   const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   const message = String(req?.data?.message || '').trim();
@@ -8522,29 +8562,84 @@ exports.syncGoogleCalendarsHourly = schedulerV2.onSchedule({ schedule: 'every 60
 });
 
 // ===== Duplicate Detection for iOS Reminders (AC11 - Issue #124)
-exports.detectDuplicateReminders = httpsV2.onCall(async (request) => {
-  const uid = request.auth?.uid;
-  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
-  try {
-    const db = admin.firestore();
-    return await detectDuplicateRemindersForUser({ db, userId: uid });
-  } catch (e) {
-    console.error('detectDuplicateReminders error:', e);
-    throw new httpsV2.HttpsError('internal', e.message);
+exports.generateWeeklySummaries = schedulerV2.onSchedule({ schedule: 'every monday 08:00', timeZone: 'Europe/London' }, async (event) => {
+  const db = ensureFirestore();
+  try { await ensureBudgetDefault(db, 'generateWeeklySummaries', { reads: 3000, writes: 500 }); } catch (e) { console.warn('[weekly summaries] budget exceeded, skipping run'); return { ok: false, skipped: true }; }
+  const now = new Date();
+  const periodStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7).getTime();
+  const profiles = await db.collection('profiles').get().catch(() => ({ empty: true, docs: [] }));
+  for (const doc of profiles.docs) {
+    const uid = doc.id;
+    try {
+      const q = await db.collection('activity_stream')
+        .where('ownerUid', '==', uid)
+        .where('timestamp', '>=', admin.firestore.Timestamp.fromMillis(periodStart))
+        .get();
+      const counts = {};
+      let total = 0;
+      q.docs.forEach(d => {
+        const t = String(d.data()?.activityType || 'unknown');
+        counts[t] = (counts[t] || 0) + 1;
+        total += 1;
+      });
+      const weekKey = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (now.getDay() || 7)).toISOString().slice(0, 10);
+      const summaryRef = db.collection('weekly_summaries').doc(`${uid}_${weekKey}`);
+      await summaryRef.set({
+        id: summaryRef.id,
+        userId: uid,
+        week: weekKey,
+        total,
+        byType: counts,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+    } catch (e) {
+      console.warn('[weekly summaries] failed for user', uid, e?.message || e);
+    }
   }
+  return { ok: true, users: profiles.docs.length };
 });
 
-// Helpers for conservative title-based dedupe
-function normalizeTitle(s) {
-  if (!s) return '';
-  let str = String(s).toLowerCase();
-  str = str.replace(/https?:\/\/\S+/g, ' ');
-  str = str.replace(/www\.[^\s]+/g, ' ');
-  str = str.replace(/[\[\]{}()"'`“”‘’.,!?;:<>_~*^#%\\/\\|+-=]/g, ' ');
-  str = str.replace(/\s+/g, ' ').trim();
-  return str;
+async function detectDuplicateRemindersForUser({ db, userId }) {
+  const snap = await db.collection('tasks').where('ownerUid', '==', userId).get();
+  const tasks = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+  const reminderTasks = tasks.filter((t) => t.source === 'ios_reminder');
+  const norm = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  const hash = (s) => crypto.createHash('sha1').update(String(s || '')).digest('hex');
+  const groups = new Map();
+
+  for (const task of reminderTasks) {
+    const key1 = task.reminderId ? `rid:${task.reminderId}` : null;
+    const key2 = `title:${norm(task.title)}|src:${norm(task.sourceRef || '')}`;
+    const key3 = `title:${norm(task.title)}|hash:${hash((task.description || '') + '|' + JSON.stringify(task.checklist || []))}`;
+    for (const key of [key1, key2, key3].filter(Boolean)) {
+      if (!groups.has(key)) groups.set(key, new Set());
+      groups.get(key).add(task.id);
+    }
+  }
+
+  let created = 0;
+  for (const [key, idSet] of groups.entries()) {
+    const ids = Array.from(idSet);
+    if (ids.length < 2) continue;
+    const docId = `dup_${userId}_${hash(key)}`;
+    await db.collection('potential_duplicates').doc(docId).set({
+      id: docId,
+      ownerUid: userId,
+      key,
+      method: key.startsWith('rid:') ? 'reminderId' : (key.includes('|src:') ? 'title+sourceRef' : 'title+hash'),
+      taskIds: ids,
+      count: ids.length,
+      status: 'open',
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+    created += 1;
+  }
+
+  return { groupsCreated: created, reminderTasks: reminderTasks.length };
 }
-// Hardened title normalizer: Unicode NFKD, strip diacritics, remove zero-width/formatting chars
+
 function normalizeTitleHardened(s) {
   if (!s) return '';
   let str = String(s);
@@ -8554,7 +8649,7 @@ function normalizeTitleHardened(s) {
   str = str.toLowerCase();
   str = str.replace(/https?:\/\/\S+/g, ' ');
   str = str.replace(/www\.[^\s]+/g, ' ');
-  str = str.replace(/[\[\]{}()\"'`“”‘’.,!?;:<>_~*^#%\\/\\|+\-=]/g, ' ');
+  str = str.replace(/[\[\]{}()\"'`\u201C\u201D\u2018\u2019.,!?;:<>_~*^#%\\/\\|+\-=]/g, ' ');
   return str.replace(/\s+/g, ' ').trim();
 }
 
@@ -8562,20 +8657,6 @@ function textHasUrl(s) {
   if (!s) return false;
   const str = String(s);
   return /https?:\/\/\S+/.test(str) || /www\.[^\s]+/.test(str);
-}
-function resolveListKey(task) {
-  const id = task.reminderListId || task.listId || null;
-  const name = task.reminderListName || task.listName || null;
-  if (id) return `id:${String(id).toLowerCase()}`;
-  if (name) return `name:${String(name).toLowerCase()}`;
-  return 'none';
-}
-function dueMs(task) { return toMillis(task.dueDate || task.dueDateMs || task.targetDate); }
-const DUE_CLOSE_MS = 36 * 60 * 60 * 1000; // 36h
-function isDone(task) {
-  const status = String(task.status ?? '').toLowerCase();
-  const done = status === 'done' || status === 'complete' || Number(task.status) === 2;
-  return done || task.deleted === true;
 }
 
 async function deduplicateUserTasks({ db, userId, dryRun = false, hardDelete = false, logActivity = true, activityActor = 'AI_Agent', runId = null, includeTitleDedupe = true }) {
@@ -9601,7 +9682,6 @@ exports.generateWeeklySummaries = schedulerV2.onSchedule({ schedule: 'every mond
   }
   return { ok: true, users: profiles.docs.length };
 });
-
 async function runNightlyMaintenanceForUser({ db, userId, profile, nowUtc, runId }) {
   const duplicateReminders = await detectDuplicateRemindersForUser({ db, userId });
 
@@ -10640,6 +10720,45 @@ function assembleDailyChecklist(summaryData) {
         await blockRef.set({ status: 'done', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
       }
       await ref.set({ lastDoneAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    }
+
+    // Auto-enhance new tasks: spell-check title, estimate points, score
+    if (!before && after && !isChoreLike && after.ownerUid) {
+      try {
+        const uid = after.ownerUid;
+        const enhanceTask = async () => {
+          const system = 'You are a task management assistant. Return compact JSON only.';
+          const user = [
+            'Given this task title and description, do two things:',
+            '1. Fix any spelling/grammar errors in the title (keep it concise)',
+            '2. Estimate the effort in story points (1=trivial, 2=small, 3=medium, 5=large, 8=very large)',
+            '',
+            `Title: "${after.title || ''}"`,
+            `Description: "${(after.description || '').slice(0, 400)}"`,
+            '',
+            'Respond as: {"correctedTitle": "string", "points": number}',
+          ].join('\n');
+          const text = await callLLMJson({ system, user, purpose: 'enhanceNewTask', userId: uid, expectJson: true, temperature: 0.1 });
+          const obj = JSON.parse(text || '{}');
+          const enhancePatch = {};
+          if (obj.correctedTitle && typeof obj.correctedTitle === 'string' && obj.correctedTitle.trim() !== (after.title || '').trim()) {
+            enhancePatch.title = obj.correctedTitle.trim().slice(0, 200);
+            enhancePatch.titleCorrectedByAi = true;
+          }
+          if (obj.points && Number(obj.points) > 0 && !(Number(after.points) > 0)) {
+            enhancePatch.points = Math.max(1, Math.min(13, Math.round(Number(obj.points))));
+            enhancePatch.pointsEstimatedByAi = true;
+          }
+          if (Object.keys(enhancePatch).length > 0) {
+            enhancePatch.updatedAt = admin.firestore.FieldValue.serverTimestamp();
+            await ref.set(enhancePatch, { merge: true });
+          }
+        };
+        // Fire and don't await to avoid slowing down the trigger
+        enhanceTask().catch((e) => console.warn('[onTaskWriteNormalize] auto-enhance failed', e?.message || e));
+      } catch (e) {
+        console.warn('[onTaskWriteNormalize] auto-enhance setup failed', e?.message || e);
+      }
     }
   });
 
@@ -13646,90 +13765,6 @@ exports.syncYouTubeWatchLater = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_I
   return { ok: true, written, total: items.length, longform: longformCount };
 });
 
-exports.importYouTubeTakeout = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
-  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
-  const uid = req.auth.uid;
-  const items = Array.isArray(req?.data?.items) ? req.data.items : [];
-  if (!items.length) return { ok: true, written: 0, skipped: 0, total: 0 };
-
-  const startedAt = Date.now();
-  const db = admin.firestore();
-
-  let accessToken = null;
-  try {
-    accessToken = await getYouTubeAccessToken(uid);
-  } catch (e) {
-    console.warn('[youtube_takeout] no access token; skipping duration lookup');
-  }
-
-  const rawVideoIds = items.map((i) => i?.videoId).filter(Boolean);
-  const uniqueVideoIds = Array.from(new Set(rawVideoIds));
-  let durations = new Map();
-  if (accessToken && uniqueVideoIds.length) {
-    try {
-      durations = await fetchYouTubeDurations(accessToken, uniqueVideoIds);
-    } catch (e) {
-      console.warn('[youtube_takeout] duration fetch failed', e?.message || e);
-    }
-  }
-
-  let written = 0;
-  let skipped = 0;
-
-  for (let i = 0; i < items.length; i += 400) {
-    const batch = db.batch();
-    const slice = items.slice(i, i + 400);
-    for (const item of slice) {
-      const videoId = String(item?.videoId || '').trim();
-      const watchedAtMs = Number(item?.watchedAtMs || item?.watchedAt || 0);
-      if (!videoId || !Number.isFinite(watchedAtMs) || watchedAtMs <= 0) {
-        skipped += 1;
-        continue;
-      }
-      const title = String(item?.title || 'YouTube video');
-      const channelTitle = item?.channelTitle ? String(item.channelTitle) : null;
-      const titleUrl = item?.titleUrl ? String(item.titleUrl) : null;
-      const durationSec = durations.get(videoId) ?? null;
-      const docId = `${uid}_yt_hist_${videoId}_${watchedAtMs}`;
-      const ref = db.collection('youtube').doc(docId);
-      batch.set(ref, {
-        id: docId,
-        ownerUid: uid,
-        videoId,
-        title,
-        channelTitle,
-        titleUrl,
-        watchedAt: watchedAtMs,
-        durationSec,
-        durationMinutes: durationSec ? Math.round(durationSec / 60) : null,
-        watchTimeSec: null,
-        watchTimeMinutes: null,
-        watchLater: false,
-        list: 'history',
-        persona: 'personal',
-        source: 'youtube_takeout',
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      }, { merge: true });
-      written += 1;
-    }
-    await batch.commit();
-  }
-
-  await db.collection('profiles').doc(uid).set({
-    youtubeTakeoutLastImportAt: admin.firestore.FieldValue.serverTimestamp(),
-    youtubeWatchHistoryCount: written,
-    youtubeConnected: true,
-  }, { merge: true });
-
-  await recordIntegrationLog(uid, 'youtube_takeout', 'success', `Imported ${written} watch history rows`, {
-    total: items.length,
-    skipped,
-    durationMs: Date.now() - startedAt,
-  });
-
-  return { ok: true, written, skipped, total: items.length };
-});
-
 exports.traktDeviceCodeStart = httpsV2.onCall({ secrets: [TRAKT_CLIENT_ID] }, async (req) => {
   if (!req?.auth?.uid) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
   const uid = req.auth.uid;
@@ -14835,69 +14870,6 @@ exports.nightlyTaskMaintenance = schedulerV2.onSchedule({
 });
 
 // ===== Cleanup: delete completed/duplicate tasks past TTL
-exports.cleanupOldTasksNow = httpsV2.onCall(async (req) => {
-  const uid = req?.auth?.uid;
-  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
-  const limit = Number(req?.data?.limit || 200);
-  const db = ensureFirestore();
-  const now = Date.now();
-  let deleted = 0;
-  const writer = db.bulkWriter();
-  const cutoff = now - TASK_TTL_DAYS * MS_IN_DAY;
-  const doneStatuses = [2, 3, 4, 'done', 'completed', 'complete', 'closed', 'archived'];
-  const isDone = (status) => {
-    if (status === undefined || status === null) return false;
-    if (typeof status === 'number') return doneStatuses.includes(status);
-    const norm = String(status).toLowerCase();
-    return doneStatuses.includes(norm);
-  };
-  try {
-    // Primary: deleteAfter reached
-    const snap1 = await db.collection('tasks')
-      .where('ownerUid', '==', uid)
-      .where('deleteAfter', '<=', now)
-      .limit(limit)
-      .get();
-    for (const d of snap1.docs) {
-      writer.delete(d.ref); deleted++;
-    }
-    if (deleted < limit) {
-      const remain = limit - deleted;
-      // Backfill/delete completed tasks missing deleteAfter (covers string statuses)
-      const snap2 = await db.collection('tasks')
-        .where('ownerUid', '==', uid)
-        .where('status', 'in', doneStatuses)
-        .limit(Math.min(500, remain * 2 || 200))
-        .get();
-
-      for (const d of snap2.docs) {
-        const data = d.data() || {};
-        const deleteAfterMs = toMillis(data.deleteAfter);
-        const completedAtMs = toMillis(data.completedAt);
-        if (deleteAfterMs && deleteAfterMs <= now) {
-          writer.delete(d.ref); deleted++;
-          if (deleted >= limit) break;
-          continue;
-        }
-        if (!isDone(data.status)) continue;
-        if (!completedAtMs) continue;
-        const plannedDelete = completedAtMs + TASK_TTL_DAYS * MS_IN_DAY;
-        if (plannedDelete <= now) {
-          writer.delete(d.ref); deleted++;
-          if (deleted >= limit) break;
-        } else if (!deleteAfterMs) {
-          writer.update(d.ref, { deleteAfter: plannedDelete });
-        }
-      }
-    }
-    await writer.close();
-    return { ok: true, deleted };
-  } catch (e) {
-    try { await writer.close(); } catch { }
-    throw new httpsV2.HttpsError('internal', 'cleanup failed: ' + (e?.message || e));
-  }
-});
-
 exports.cleanupOldTasksNightly = schedulerV2.onSchedule({ schedule: '15 2 * * *', timeZone: 'UTC' }, async () => {
   const db = ensureFirestore();
   const now = Date.now();
@@ -14952,168 +14924,6 @@ exports.cleanupOldTasksNightly = schedulerV2.onSchedule({ schedule: '15 2 * * *'
 
 // ===== On-demand duplicate cleanup for the authenticated user
 // Groups by duplicateKey or reminderId; keeps the oldest, deletes others.
-exports.cleanupDuplicateTasksNow = httpsV2.onCall(async (req) => {
-  const uid = req?.auth?.uid;
-  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
-  const forceImmediate = !!req?.data?.forceImmediate; // delete vs. schedule via deleteAfter=now
-  const pageSize = Math.min(Number(req?.data?.pageSize || 5000), 20000);
-  const db = ensureFirestore();
-  let processed = 0;
-  let deleted = 0;
-  let scheduled = 0;
-  try {
-    // Read user's tasks in batches by updatedAt to avoid timeouts
-    let cursor = null;
-    const buckets = new Map(); // key -> array of {id, data}
-    const loadBatch = async () => {
-      let q = db.collection('tasks').where('ownerUid', '==', uid).orderBy('updatedAt', 'desc');
-      if (cursor) q = q.startAfter(cursor);
-      q = q.limit(pageSize);
-      const snap = await q.get();
-      if (snap.empty) return null;
-      snap.docs.forEach((d) => {
-        const data = d.data() || {};
-        const key = data.duplicateKey || (data.reminderId ? `reminder:${String(data.reminderId).toLowerCase()}` : null);
-        if (!key) return; // skip non-keyed
-        const arr = buckets.get(key) || [];
-        arr.push({ id: d.id, data });
-        buckets.set(key, arr);
-      });
-      cursor = snap.docs[snap.docs.length - 1];
-      return snap.size;
-    };
-
-    // Load at least one batch
-    while (true) {
-      const count = await loadBatch();
-      if (!count || count < pageSize) break;
-      // If buckets become very large, break to limit memory
-      if (buckets.size > 20000) break;
-    }
-
-    // Decide deletions (all but oldest per key)
-    const writer = db.bulkWriter();
-    const activityGroups = [];
-    for (const [key, arr] of buckets.entries()) {
-      if (!Array.isArray(arr) || arr.length < 2) continue;
-      // Oldest = min(createdAt/reminderCreatedAt/serverUpdatedAt)
-      const scored = arr.map(({ id, data }) => {
-        const ca = typeof data.createdAt === 'number' ? data.createdAt : 0;
-        const ra = typeof data.reminderCreatedAt === 'number' ? data.reminderCreatedAt : 0;
-        const su = typeof data.serverUpdatedAt === 'number' ? data.serverUpdatedAt : 0;
-        const age = Math.min(...[ca || Infinity, ra || Infinity, su || Infinity].filter(x => Number.isFinite(x)));
-        return { id, data, age: Number.isFinite(age) ? age : Date.now() };
-      });
-      scored.sort((a, b) => a.age - b.age);
-      const keep = scored[0];
-      const drop = scored.slice(1);
-      processed += arr.length;
-      if (drop.length) {
-        activityGroups.push({ kept: keep.id, removed: drop.map((x) => x.id), keys: [key] });
-      }
-      for (const d of drop) {
-        if (forceImmediate) {
-          writer.delete(db.collection('tasks').doc(d.id));
-          deleted++;
-        } else {
-          writer.set(db.collection('tasks').doc(d.id), { deleteAfter: Date.now() }, { merge: true });
-          scheduled++;
-        }
-      }
-    }
-    await writer.close();
-    // Activity log for Data Quality reporting
-    try {
-      if (activityGroups.length) {
-        const ref = db.collection('activity_stream').doc();
-        await ref.set({
-          id: ref.id,
-          entityId: `tasks_${uid}`,
-          entityType: 'task',
-          activityType: 'deduplicate_tasks',
-          userId: uid,
-          ownerUid: uid,
-          description: `Deduplicated ${activityGroups.reduce((acc, g) => acc + (Array.isArray(g.removed) ? g.removed.length : 0), 0)} tasks across ${activityGroups.length} groups`,
-          metadata: { groups: activityGroups, hardDelete: !!forceImmediate },
-          createdAt: admin.firestore.FieldValue.serverTimestamp(),
-          updatedAt: admin.firestore.FieldValue.serverTimestamp()
-        });
-      }
-    } catch (e) {
-      console.warn('[cleanupDuplicateTasksNow] failed to log activity', e?.message || e);
-    }
-    return { ok: true, processed, deleted, scheduled, keys: buckets.size };
-  } catch (e) {
-    throw new httpsV2.HttpsError('internal', 'duplicate cleanup failed: ' + (e?.message || e));
-  }
-});
-
-// Dry-run preview for duplicate cleanup (per-user; no writes)
-// Identifies duplicate groups by duplicateKey or reminderId, and reports which docs would be deleted.
-exports.previewDuplicateTasksCleanup = httpsV2.onCall(async (req) => {
-  const uid = req?.auth?.uid;
-  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
-  const db = ensureFirestore();
-
-  const pageSize = Math.min(Number(req?.data?.pageSize || 5000), 20000);
-  const maxGroups = Math.min(Number(req?.data?.maxGroups || 100), 1000);
-
-  let processed = 0;
-  const buckets = new Map(); // key -> array of {id, data}
-  let cursor = null;
-  const normKey = (t) => t.duplicateKey || (t.reminderId ? `reminder:${String(t.reminderId).toLowerCase()}` : null);
-  const toAge = (data) => {
-    const ca = Number(data.createdAt || 0);
-    const ra = Number(data.reminderCreatedAt || 0);
-    const su = Number(data.serverUpdatedAt || 0);
-    const vals = [ca, ra, su].filter((x) => Number.isFinite(x) && x > 0);
-    return vals.length ? Math.min(...vals) : Date.now();
-  };
-
-  while (true) {
-    let q = db.collection('tasks').where('ownerUid', '==', uid).orderBy('updatedAt', 'desc').limit(pageSize);
-    if (cursor) q = q.startAfter(cursor);
-    const snap = await q.get();
-    if (snap.empty) break;
-    for (const d of snap.docs) {
-      const data = d.data() || {};
-      processed++;
-      const key = normKey(data);
-      if (!key) continue;
-      const arr = buckets.get(key) || [];
-      arr.push({ id: d.id, data });
-      buckets.set(key, arr);
-    }
-    cursor = snap.docs[snap.docs.length - 1];
-    if (snap.size < pageSize) break;
-  }
-
-  let groups = 0;
-  let candidates = 0;
-  const preview = [];
-  for (const [key, arr] of buckets.entries()) {
-    if (!Array.isArray(arr) || arr.length < 2) continue;
-    groups++;
-    const scored = arr.map(({ id, data }) => ({ id, data, age: toAge(data) })).sort((a, b) => a.age - b.age);
-    const keep = scored[0];
-    const drop = scored.slice(1);
-    candidates += drop.length;
-    if (preview.length < maxGroups) {
-      preview.push({ key, count: arr.length, keepId: keep.id, deleteIds: drop.map((x) => x.id) });
-    }
-  }
-
-  return {
-    ok: true,
-    processed,
-    groups,
-    candidates, // number of docs that would be deleted
-    sample: preview,
-    note: 'dry-run only; no writes performed',
-  };
-});
-
-// ===== DUR-2: Auto-reschedule missed items (hourly)
 exports.autoRescheduleMissed = httpsV2.onCall(async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
@@ -15752,47 +15562,6 @@ exports.previewDataQualityReport = httpsV2.onCall(async (req) => {
   return { ok: true, snapshot, html };
 });
 
-exports.sendTestEmail = httpsV2.onCall({ secrets: [BREVO_API_KEY] }, async (req) => {
-  const uid = req?.auth?.uid;
-  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
-
-  const db = ensureFirestore();
-  const profileSnap = await db.collection('profiles').doc(uid).get();
-  const profile = profileSnap.exists ? profileSnap.data() || {} : {};
-  const email = req?.data?.email || profile.email;
-  if (!email) {
-    throw new httpsV2.HttpsError('failed-precondition', 'No email configured on profile.');
-  }
-
-  const html = `
-    <h1>BOB SMTP Test</h1>
-    <p>This is a test email sent at ${new Date().toISOString()} to confirm SMTP settings.</p>
-    <p>User: ${email}</p>
-  `;
-
-  try {
-    const result = await sendEmail({ to: email, subject: 'BOB SMTP Test Email', html, text: 'SMTP configuration test successful.' });
-    await db.collection('email_tests').add({
-      userId: uid,
-      email,
-      result: { messageId: result?.messageId || null, response: result?.response || null },
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-    await recordIntegrationLog(uid, 'email', 'success', 'SMTP test email sent', {
-      messageId: result?.messageId || null,
-      to: email,
-    });
-    return { ok: true, messageId: result?.messageId || null };
-  } catch (error) {
-    console.error('[email-test] failed', error);
-    await recordIntegrationLog(uid, 'email', 'error', error?.message || 'SMTP test email failed', {
-      to: email,
-    });
-    throw new httpsV2.HttpsError('internal', error?.message || 'Failed to send test email');
-  }
-});
-
-// Save SMTP email configuration (admin-only)
 exports.saveEmailSettings = httpsV2.onCall(async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
@@ -15871,199 +15640,6 @@ exports.cleanupUserLogs = schedulerV2.onSchedule({
 
 // Daily Digest Email Generation (uses Nylas)
 // Legacy simple digest (kept for reference); renamed to avoid clashing with LLM version
-exports.generateDailyDigestLegacy = schedulerV2.onSchedule({ schedule: "30 6 * * *", timeZone: 'UTC', secrets: [defineSecret('BREVO_API_KEY')] }, async () => {
-  try {
-    const usersSnapshot = await admin.firestore().collection('users').where('emailDigest', '==', true).get();
-    for (const userDoc of usersSnapshot.docs) {
-      const userId = userDoc.id;
-      const userData = userDoc.data();
-      await generateUserDigest(userId, userData);
-    }
-    console.log('Daily digest generation completed');
-  } catch (error) {
-    console.error('Error generating daily digest:', error);
-  }
-});
-
-async function generateUserDigest(userId, userData) {
-  try {
-    const today = new Date();
-    const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-    const endOfDay = new Date(startOfDay.getTime() + 24 * 60 * 60 * 1000);
-
-    // Get tasks due today
-    const tasksSnapshot = await admin.firestore().collection('tasks')
-      .where('ownerUid', '==', userId)
-      .where('dueDate', '>=', startOfDay.getTime())
-      .where('dueDate', '<', endOfDay.getTime())
-      .orderBy('priority')
-      .limit(10)
-      .get();
-
-    const tasksDue = tasksSnapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data()
-    }));
-
-    // Generate simple HTML digest
-    const html = `
-      <h1>BOB Daily Digest - ${today.toLocaleDateString()}</h1>
-      <h2>Tasks Due Today (${tasksDue.length})</h2>
-      ${tasksDue.map(task => `
-        <div style="border-left: 4px solid #3b82f6; padding: 10px; margin: 10px 0;">
-          <strong>${task.title}</strong><br>
-          Priority: ${task.priority} | Effort: ${task.effort}
-        </div>
-      `).join('')}
-      <p>Generated at ${new Date().toLocaleString()}</p>
-    `;
-
-    // Save digest to database
-    await admin.firestore().collection('digests').add({
-      ownerUid: userId,
-      date: admin.firestore.Timestamp.fromDate(today),
-      tasksDue,
-      html,
-      createdAt: admin.firestore.Timestamp.now()
-    });
-
-    // Send email if user has email (Nylas)
-    if (userData.email) {
-      await sendEmail({
-        to: userData.email,
-        subject: `BOB Daily Digest - ${today.toLocaleDateString()}`,
-        html,
-      });
-      console.log(`Daily digest sent to ${userData.email}`);
-    }
-
-  } catch (error) {
-    console.error(`Error generating digest for user ${userId}:`, error);
-  }
-}
-
-// Manual trigger for daily digest (per-user)
-exports.sendDailyDigestNowLegacy = httpsV2.onCall(async (req) => {
-  const uid = req?.auth?.uid;
-  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
-  const db = ensureFirestore();
-  // Try to load profile then fallback to users/{uid}
-  let email = null;
-  try {
-    const p = await db.collection('profiles').doc(uid).get();
-    if (p.exists) email = p.data()?.email || null;
-  } catch { }
-  if (!email) {
-    try {
-      const u = await db.collection('users').doc(uid).get();
-      if (u.exists) email = u.data()?.email || null;
-    } catch { }
-  }
-  await generateUserDigest(uid, { email });
-  return { ok: true };
-});
-
-// Test Authentication Functions
-exports.generateTestToken = httpsV2.onCall(async (request) => {
-  // Only allow in development/test environments
-  if (process.env.NODE_ENV === 'production') {
-    throw new Error('Test tokens not available in production');
-  }
-
-  const { uid, scope } = request.data;
-
-  if (!uid) {
-    throw new Error('UID is required');
-  }
-
-  try {
-    const { v4: uuidv4 } = require('uuid');
-    const token = uuidv4();
-    const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour from now
-
-    await admin.firestore().collection('test_login_tokens').add({
-      token,
-      uid,
-      expiresAt: admin.firestore.Timestamp.fromDate(expiresAt),
-      scope: scope || 'full',
-      createdAt: admin.firestore.Timestamp.now()
-    });
-
-    return { token, expiresAt: expiresAt.toISOString() };
-  } catch (error) {
-    console.error('Error generating test token:', error);
-    throw new Error('Failed to generate test token');
-  }
-});
-
-exports.testLogin = httpsV2.onRequest(async (req, res) => {
-  // Only allow in development/test environments
-  if (process.env.NODE_ENV === 'production') {
-    res.status(403).json({ error: 'Test login not available in production' });
-    return;
-  }
-
-  const { token } = req.query;
-
-  if (!token) {
-    res.status(400).json({ error: 'Token is required' });
-    return;
-  }
-
-  try {
-    // Find the token in the database
-    const tokensSnapshot = await admin.firestore().collection('test_login_tokens')
-      .where('token', '==', token)
-      .where('expiresAt', '>', admin.firestore.Timestamp.now())
-      .limit(1)
-      .get();
-
-    if (tokensSnapshot.empty) {
-      res.status(401).json({ error: 'Invalid or expired token' });
-      return;
-    }
-
-    const tokenDoc = tokensSnapshot.docs[0];
-    const tokenData = tokenDoc.data();
-
-    // Create a custom token for the user
-    const customToken = await admin.auth().createCustomToken(tokenData.uid);
-
-    // Clean up the test token (one-time use)
-    await tokenDoc.ref.delete();
-
-    res.json({
-      customToken,
-      uid: tokenData.uid,
-      scope: tokenData.scope
-    });
-
-  } catch (error) {
-    console.error('Error processing test login:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-// Cleanup expired test tokens
-exports.cleanupTestTokens = schedulerV2.onSchedule("every 6 hours", async (event) => {
-  try {
-    const expiredTokens = await admin.firestore().collection('test_login_tokens')
-      .where('expiresAt', '<', admin.firestore.Timestamp.now())
-      .get();
-
-    const batch = admin.firestore().batch();
-    expiredTokens.docs.forEach(doc => {
-      batch.delete(doc.ref);
-    });
-
-    await batch.commit();
-    console.log(`Cleaned up ${expiredTokens.size} expired test tokens`);
-  } catch (error) {
-    console.error('Error cleaning up test tokens:', error);
-  }
-});
-
-// Export the daily digest function
 exports.generateDailyDigest = generateDailyDigest;
 
 // ===== Task → Story Conversion Automation (Issue #206)
@@ -16974,141 +16550,3 @@ Keep it professional, actionable, and encourage the team.`;
 });
 
 // ===== Theme Allocations =====
-exports.saveThemeAllocations = httpsV2.onCall({ region: 'europe-west2' }, async (req) => {
-  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
-  const uid = req.auth.uid;
-  const allocations = req.data.allocations || [];
-  const db = admin.firestore();
-  await db.collection('theme_allocations').doc(uid).set({
-    ownerUid: uid,
-    allocations,
-    updatedAt: admin.firestore.FieldValue.serverTimestamp()
-  });
-  return { ok: true };
-});
-
-exports.getThemeAllocations = httpsV2.onCall({ region: 'europe-west2' }, async (req) => {
-  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
-  const uid = req.auth.uid;
-  const db = admin.firestore();
-  const doc = await db.collection('theme_allocations').doc(uid).get();
-  return { allocations: doc.exists ? doc.data().allocations : [] };
-});
-
-// Legacy aliases retained to avoid deletions while clients migrate
-exports.getThemeAllocationsLegacy = exports.getThemeAllocations;
-exports.saveThemeAllocationsLegacy = exports.saveThemeAllocations;
-
-
-// ===== Monday.com Integration =====
-exports.pushGoalToMonday = httpsV2.onCall({ secrets: [MONDAY_API_TOKEN] }, async (req) => {
-  if (!req?.auth?.uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
-  const uid = req.auth.uid;
-  const goalId = req.data?.goalId;
-  if (!goalId) throw new httpsV2.HttpsError('invalid-argument', 'goalId required');
-  const db = admin.firestore();
-  const goalSnap = await db.collection('goals').doc(goalId).get();
-  if (!goalSnap.exists) throw new httpsV2.HttpsError('not-found', 'Goal not found');
-  const goal = goalSnap.data() || {};
-  if (goal.ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Not your goal');
-  const token = MONDAY_API_TOKEN.value();
-  const { boardId, groupId } = await ensureBoardForGoal({ token, goalDoc: goal, goalId });
-  return { boardId, groupId };
-});
-
-exports.onStoryWriteToMonday = firestoreV2.onDocumentWritten({
-  document: 'stories/{storyId}',
-  secrets: [MONDAY_API_TOKEN],
-}, async (event) => {
-  const after = event.data?.after?.data();
-  if (!after) return; // deletes ignored
-  // Avoid loops if Monday webhook sets this marker
-  if (after.mondaySyncSource === 'monday') return;
-  const storyId = event.params.storyId;
-  const goalId = after.goalId;
-  if (!goalId || !after.ownerUid) return;
-  const db = admin.firestore();
-  const goalSnap = await db.collection('goals').doc(goalId).get();
-  if (!goalSnap.exists) return;
-  const goal = goalSnap.data() || {};
-  if (!goal.mondayBoardId) return; // only sync if goal linked
-  const token = MONDAY_API_TOKEN.value();
-  try {
-    await ensureBoardForGoal({ token, goalDoc: goal, goalId });
-    await upsertMondayItemForStory({ token, storyDoc: after, storyId, goalDoc: goal, goalId });
-  } catch (e) {
-    console.warn('[monday-sync] upsert failed', e?.message || e);
-  }
-});
-
-// Basic Monday webhook to sync status back to Bob
-exports.mondayWebhook = httpsV2.onRequest({ secrets: [MONDAY_API_TOKEN] }, async (req, res) => {
-  // Monday tests the URL with GET; respond OK for validation
-  if (req.method === 'GET') {
-    return res.status(200).send('ok');
-  }
-  try {
-    const body = req.body || {};
-    const event = body.event || {};
-    const itemId = event.pulseId || event.itemId || event.item_id || event.pulse_id;
-    const boardId = event.boardId || event.board_id || event.boardIdValue;
-    const itemName = event.pulseName || event.itemName || event.item_name || event.pulse_name;
-    const newStatus = event.columnTitle || event.value?.label?.text || event.value?.label?.text_en || event.value?.label;
-    const assignees = extractAssignees(event);
-    if (!itemId) return res.status(400).send('missing itemId');
-    const db = admin.firestore();
-    const snap = await db.collection('stories').where('mondayItemId', '==', String(itemId)).limit(1).get();
-    if (snap.empty) {
-      // Create a Bob story from Monday item if we can resolve the goal via boardId
-      if (!boardId) return res.status(200).send('ok');
-      const goalSnap = await db.collection('goals').where('mondayBoardId', '==', String(boardId)).limit(1).get();
-      if (goalSnap.empty) return res.status(200).send('ok');
-      const goalDoc = goalSnap.docs[0];
-      const goal = goalDoc.data() || {};
-      // If Monday assignees include the mapped user, assign to that owner; otherwise leave unassigned (null) so it won't clutter your personal Kanban.
-      let ownerUid = null;
-      if ((assignees || []).some((id) => MONDAY_USER_MAP[id])) {
-        const mapped = assignees.map((id) => MONDAY_USER_MAP[id]).find(Boolean);
-        ownerUid = mapped || goal.ownerUid;
-      } else {
-        ownerUid = goal.ownerUid || null;
-      }
-      if (!ownerUid) return res.status(200).send('ok');
-      const newId = makeRef('story');
-      await db.collection('stories').doc(newId).set({
-        ref: newId,
-        title: itemName || newId,
-        goalId: goalDoc.id,
-        ownerUid,
-        persona: goal.persona || 'personal',
-        status: mapStatusToBob(newStatus),
-        mondayItemId: String(itemId),
-        mondayBoardId: String(boardId),
-        mondayGroupId: goal.mondayGroupId || null,
-        mondayUrl: boardId ? `https://view.monday.com/boards/${boardId}/pulses/${itemId}` : null,
-        mondaySyncSource: 'monday',
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      }, { merge: true });
-      return res.status(200).send('created');
-    } else {
-      const doc = snap.docs[0];
-      const status = mapStatusToBob(newStatus);
-      const updates = {
-        status,
-        title: itemName || doc.data().title,
-        mondaySyncSource: 'monday',
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      };
-      if ((assignees || []).some((id) => MONDAY_USER_MAP[id])) {
-        const mapped = assignees.map((id) => MONDAY_USER_MAP[id]).find(Boolean);
-        if (mapped) updates.ownerUid = mapped;
-      }
-      await doc.ref.set(updates, { merge: true });
-    }
-    return res.status(200).send('ok');
-  } catch (e) {
-    console.error('[monday-webhook] failed', e?.message || e);
-    return res.status(500).send('error');
-  }
-});

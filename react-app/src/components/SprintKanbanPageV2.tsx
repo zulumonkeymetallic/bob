@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Container, Row, Col, Button, Dropdown, Badge, Form } from 'react-bootstrap';
-import { db } from '../firebase';
-import { collection, query, where, onSnapshot, orderBy, limit, updateDoc, doc, serverTimestamp } from 'firebase/firestore';
+import { Card, Container, Row, Col, Button, Dropdown, Badge, Form, Spinner } from 'react-bootstrap';
+import { db, functions } from '../firebase';
+import { httpsCallable } from 'firebase/functions';
+import { collection, query, where, onSnapshot, orderBy, limit } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { Story, Task, Goal } from '../types';
 import KanbanBoardV2 from './KanbanBoardV2';
-import { ChevronLeft, ChevronRight, Calendar, Target, BarChart3, Maximize2, Minimize2, Search, LayoutGrid } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { ChevronLeft, ChevronRight, Maximize2, Minimize2, LayoutGrid, RefreshCw, Sparkles } from 'lucide-react';
 import { displayRefForEntity } from '../utils/referenceGenerator';
 import { useSprint } from '../contexts/SprintContext';
 import { isStatus } from '../utils/statusHelpers';
@@ -18,6 +20,7 @@ import EditTaskModal from './EditTaskModal';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
 
 const SprintKanbanPageV2: React.FC = () => {
+    const navigate = useNavigate();
     const { currentUser } = useAuth();
     const { currentPersona } = usePersona();
     const { selectedSprintId, setSelectedSprintId, sprints } = useSprint();
@@ -39,6 +42,9 @@ const SprintKanbanPageV2: React.FC = () => {
     const [editTask, setEditTask] = useState<Task | null>(null);
     const [dueFilter, setDueFilter] = useState<'all' | 'today' | 'overdue' | 'top3' | 'critical'>('top3');
     const [sortBy, setSortBy] = useState<'ai' | 'due' | 'priority' | 'default'>('ai');
+    const [replanLoading, setReplanLoading] = useState(false);
+    const [fullReplanLoading, setFullReplanLoading] = useState(false);
+    const [replanFeedback, setReplanFeedback] = useState<string | null>(null);
     const boardContainerRef = React.useRef<HTMLDivElement>(null);
 
     const resolveTimestampMs = (value: any): number | null => {
@@ -249,6 +255,52 @@ const SprintKanbanPageV2: React.FC = () => {
         }
     };
 
+    const handleDeltaReplan = async () => {
+        if (!currentUser) return;
+        setReplanFeedback(null);
+        setReplanLoading(true);
+        try {
+            const callable = httpsCallable(functions, 'replanCalendarNow');
+            const response = await callable({ days: 7 });
+            const payload = response.data as { created?: number; rescheduled?: number; blocked?: number };
+            const parts: string[] = [];
+            if (payload?.created) parts.push(`${payload.created} created`);
+            if (payload?.rescheduled) parts.push(`${payload.rescheduled} moved`);
+            if (payload?.blocked) parts.push(`${payload.blocked} blocked`);
+            setReplanFeedback(parts.length ? `Delta replan complete: ${parts.join(', ')}.` : 'Delta replan complete.');
+        } catch (error) {
+            console.error('Delta replan failed', error);
+            setReplanFeedback('Delta replan failed. Please retry.');
+        } finally {
+            setReplanLoading(false);
+        }
+    };
+
+    const handleFullReplan = async () => {
+        if (!currentUser) return;
+        setReplanFeedback(null);
+        setFullReplanLoading(true);
+        try {
+            const callable = httpsCallable(functions, 'runNightlyChainNow');
+            const response = await callable({});
+            const payload = response.data as { results?: Array<{ status?: string }> };
+            const total = payload?.results?.length || 0;
+            const ok = (payload?.results || []).filter((item) => item.status === 'ok').length;
+            if (total > 0 && ok === total) {
+                setReplanFeedback(`Full replan complete: ${ok}/${total} orchestration steps succeeded.`);
+            } else if (total > 0 && ok > 0) {
+                setReplanFeedback(`Full replan partial: ${ok}/${total} orchestration steps succeeded.`);
+            } else {
+                setReplanFeedback('Full replan finished with errors. Check logs.');
+            }
+        } catch (error) {
+            console.error('Full replan failed', error);
+            setReplanFeedback('Full replan failed. Please retry.');
+        } finally {
+            setFullReplanLoading(false);
+        }
+    };
+
     return (
         <Container fluid style={{ padding: '24px', backgroundColor: 'var(--bg)', minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
             {/* Header */}
@@ -265,10 +317,8 @@ const SprintKanbanPageV2: React.FC = () => {
                         </Badge>
                     </div>
 
-                    {/* Sprint Selector + Sidebar collapse */}
+                    {/* Right-side controls */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                            {/* Removed inline sprint selector to avoid duplication with global selector */}
-
                         <Button
                             variant="outline-secondary"
                                 size="sm"
@@ -403,7 +453,7 @@ const SprintKanbanPageV2: React.FC = () => {
                 </Col>
             </Row>
 
-            {/* Helper: Assign unassigned stories to the selected sprint */}
+            {/* Selected sprint helper + navigation + replanning actions */}
             {currentSprint && (
                 <Row className="mb-3 flex-shrink-0">
                     <Col>
@@ -420,28 +470,48 @@ const SprintKanbanPageV2: React.FC = () => {
                             </div>
                             <div className="d-flex gap-2">
                                 <Button
+                                    variant="outline-secondary"
+                                    size="sm"
+                                    onClick={() => navigate('/dashboard')}
+                                >
+                                    View overview
+                                </Button>
+                                <Button
+                                    variant="outline-secondary"
+                                    size="sm"
+                                    onClick={() => navigate('/sprints/planning')}
+                                >
+                                    View planner
+                                </Button>
+                                <Button
                                     variant="outline-primary"
                                     size="sm"
-                                    onClick={async () => {
-                                        try {
-                                            const unassigned = stories.filter(s => !('sprintId' in s) || !(s as any).sprintId);
-                                            const toAssign = unassigned.slice(0, 10);
-                                            if (toAssign.length === 0) {
-                                                alert('No unassigned stories found.');
-                                                return;
-                                            }
-                                            const ops = toAssign.map(s => updateDoc(doc(db, 'stories', s.id), { sprintId: currentSprint.id, updatedAt: serverTimestamp() } as any));
-                                            await Promise.all(ops);
-                                        } catch (e) {
-                                            console.error('Failed to assign stories to sprint', e);
-                                            alert('Failed to assign stories.');
-                                        }
-                                    }}
+                                    onClick={handleDeltaReplan}
+                                    disabled={replanLoading || fullReplanLoading}
+                                    title="Delta replan: quickly rebalance existing calendar blocks using current priorities."
                                 >
-                                    Assign unassigned stories to this sprint
+                                    {replanLoading ? <Spinner size="sm" animation="border" className="me-1" /> : <RefreshCw size={14} className="me-1" />}
+                                    Delta replan
+                                </Button>
+                                <Button
+                                    variant="primary"
+                                    size="sm"
+                                    onClick={handleFullReplan}
+                                    disabled={fullReplanLoading || replanLoading}
+                                    title="Full replan: runs full nightly orchestration (pointing, conversions, priority scoring, and calendar planning)."
+                                >
+                                    {fullReplanLoading ? <Spinner size="sm" animation="border" className="me-1" /> : <Sparkles size={14} className="me-1" />}
+                                    Full replan
                                 </Button>
                             </div>
                         </div>
+                    </Col>
+                </Row>
+            )}
+            {replanFeedback && (
+                <Row className="mb-3 flex-shrink-0">
+                    <Col>
+                        <div className="text-muted small">{replanFeedback}</div>
                     </Col>
                 </Row>
             )}

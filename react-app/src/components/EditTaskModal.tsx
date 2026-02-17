@@ -89,6 +89,7 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
     persona: 'personal' as 'personal' | 'work',
   });
   const [storyInput, setStoryInput] = useState('');
+  const [goalInput, setGoalInput] = useState('');
   const [stories, setStories] = useState<Story[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [converting, setConverting] = useState(false);
@@ -169,12 +170,9 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
         persona: ((currentPersona || 'personal') as 'personal' | 'work'),
       });
       setStoryInput('');
+      setGoalInput('');
       return;
     }
-    const storyLabel = (s: Story) => {
-      const ref = (s as any).ref || (s as any).referenceNumber || (s as any).reference || s.id.slice(-6).toUpperCase();
-      return `${ref} — ${s.title}`;
-    };
     const resolveDue = (value: any) => {
       if (!value) return '';
       const dateMs = typeof value === 'number'
@@ -202,24 +200,43 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
       daysOfWeek: Array.isArray((task as any).daysOfWeek) ? (task as any).daysOfWeek : [],
       persona: ((task as any).persona || 'personal') as 'personal' | 'work',
     });
-    setStoryInput(linkedStory ? storyLabel(linkedStory) : '');
-  }, [task, show, stories, currentPersona]);
+    setStoryInput(linkedStory ? (linkedStory.title || '') : '');
+    const resolvedGoalId = (task as any)?.goalId || linkedStory?.goalId || '';
+    const linkedGoalInit = resolvedGoalId ? goals.find((g) => g.id === resolvedGoalId) : undefined;
+    setGoalInput(linkedGoalInit ? (linkedGoalInit.title || '') : '');
+  }, [task, show, stories, goals, currentPersona]);
 
-  const storyLabel = (s: Story) => {
-    const ref = (s as any).ref || (s as any).referenceNumber || (s as any).reference || s.id.slice(-6).toUpperCase();
-    return `${ref} — ${s.title}`;
-  };
+  const storyLabel = (s: Story) => s.title || '(untitled)';
 
-  const resolveStorySelection = (value: string, finalize = false) => {
-    const match = stories.find((s) => {
-      const ref = (s as any).ref || (s as any).referenceNumber || (s as any).reference || '';
-      return s.id === value || s.title === value || ref === value || storyLabel(s) === value;
-    });
+  const resolveStorySelection = (value: string) => {
+    const val = value.trim();
+    if (!val) {
+      setForm((prev) => ({ ...prev, storyId: '' }));
+      return;
+    }
+    const match = stories.find((s) => s.title === val || s.id === val);
     if (match) {
       setForm((prev) => ({ ...prev, storyId: match.id, goalId: match.goalId || prev.goalId }));
-      setStoryInput(storyLabel(match));
-    } else if (finalize) {
+      setStoryInput(match.title || '');
+    } else {
       setForm((prev) => ({ ...prev, storyId: '' }));
+    }
+  };
+
+  const goalLabel = (g: Goal) => g.title || '(untitled)';
+
+  const resolveGoalSelection = (value: string) => {
+    const val = value.trim();
+    if (!val) {
+      setForm((prev) => ({ ...prev, goalId: '' }));
+      return;
+    }
+    const match = goals.find((g) => g.title === val || g.id === val);
+    if (match) {
+      setForm((prev) => ({ ...prev, goalId: match.id }));
+      setGoalInput(match.title || '');
+    } else {
+      setForm((prev) => ({ ...prev, goalId: '' }));
     }
   };
 
@@ -353,7 +370,12 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
           ref: existingRef,
           updatedAt: Date.now(),
         };
-        await setDoc(doc(db, 'sprint_task_index', savedTaskId), indexPayload, { merge: true });
+        try {
+          await setDoc(doc(db, 'sprint_task_index', savedTaskId), indexPayload, { merge: true });
+        } catch (indexErr) {
+          // sprint_task_index is server-managed; client writes may be denied by rules
+          console.warn('sprint_task_index update skipped (server-managed)', indexErr);
+        }
       }
       const nextPersona = (basePayload.persona || prevPersona) as 'personal' | 'work';
       if (task?.id && prevPersona !== nextPersona && currentUser?.uid) {
@@ -362,6 +384,11 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
         } catch (err) {
           console.warn('Failed to cascade persona for task', err);
         }
+      }
+      // Fire-and-forget delta rescore for priority/top3 recalculation
+      if (savedTaskId) {
+        httpsCallable(functions, 'deltaPriorityRescore')({ entityId: savedTaskId, entityType: 'task' })
+          .catch((err) => console.warn('Delta rescore failed (non-blocking)', err));
       }
       onUpdated?.();
       onHide();
@@ -612,17 +639,20 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
                   <Col md={4}>
                     <Form.Group className="mb-3">
                       <Form.Label>Link to goal</Form.Label>
-                      <Form.Select
-                        value={form.goalId || ''}
-                        onChange={(e) => setForm({ ...form, goalId: e.target.value })}
-                      >
-                        <option value="">No goal</option>
+                      <Form.Control
+                        list="task-goal-options"
+                        placeholder="Search goal by title..."
+                        value={goalInput}
+                        onChange={(e) => {
+                          setGoalInput(e.target.value);
+                        }}
+                        onBlur={(e) => resolveGoalSelection(e.target.value)}
+                      />
+                      <datalist id="task-goal-options">
                         {goals.map((g) => (
-                          <option key={g.id} value={g.id}>
-                            {g.title || g.id.slice(-6).toUpperCase()}
-                          </option>
+                          <option key={g.id} value={goalLabel(g)} />
                         ))}
-                      </Form.Select>
+                      </datalist>
                       {linkedGoalId ? (
                         <div className="form-text">
                           <Button
@@ -647,14 +677,12 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
                       <Form.Label>Link to story</Form.Label>
                       <Form.Control
                         list="task-story-options"
-                        placeholder="Search story by ref or title..."
+                        placeholder="Search story by title..."
                         value={storyInput}
                         onChange={(e) => {
-                          const value = e.target.value;
-                          setStoryInput(value);
-                          resolveStorySelection(value);
+                          setStoryInput(e.target.value);
                         }}
-                        onBlur={(e) => resolveStorySelection(e.target.value, true)}
+                        onBlur={(e) => resolveStorySelection(e.target.value)}
                       />
                       <datalist id="task-story-options">
                         {stories.map((s) => (

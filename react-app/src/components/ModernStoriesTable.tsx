@@ -32,7 +32,7 @@ import {
   ChevronRight,
   ChevronDown
 } from 'lucide-react';
-import { Activity, Pencil, Trash2, Wand2, ExternalLink } from 'lucide-react';
+import { Activity, Pencil, Trash2, Wand2, ExternalLink, CalendarClock } from 'lucide-react';
 import { Story, Goal, Sprint, Task } from '../types';
 import StoryTasksPanel from './StoryTasksPanel';
 import ModernTaskTable from './ModernTaskTable';
@@ -67,6 +67,7 @@ interface ModernStoriesTableProps {
   onStoryAdd: (storyData: Omit<Story, 'ref' | 'id' | 'updatedAt' | 'createdAt'>) => Promise<void>;
   onStorySelect?: (story: Story) => void; // New prop for story selection
   onEditStory?: (story: Story) => void; // New prop for story editing
+  onPriorityFlag?: (story: Story) => void; // Flag story as #1 priority for gcal
   highlightStoryId?: string;
   goalId?: string; // Made optional for full stories table
   enableInlineTasks?: boolean; // Only show green caret + inline tasks when true
@@ -360,21 +361,23 @@ interface SortableRowProps {
   onStoryDelete: (storyId: string) => Promise<void>;
   onStorySelect?: (story: Story) => void;
   onEditStory?: (story: Story) => void;
+  onPriorityFlag?: (story: Story) => void;
   onToggleExpand?: (storyId: string) => void;
   isExpanded?: boolean;
   isHighlighted?: boolean;
 }
 
-const SortableRow: React.FC<SortableRowProps> = ({ 
-  story, 
-  columns, 
-  index, 
+const SortableRow: React.FC<SortableRowProps> = ({
+  story,
+  columns,
+  index,
   sprints,
   goals,
-  onStoryUpdate, 
+  onStoryUpdate,
   onStoryDelete,
   onStorySelect,
   onEditStory,
+  onPriorityFlag,
   onToggleExpand,
   isExpanded,
   isHighlighted
@@ -883,6 +886,23 @@ const SortableRow: React.FC<SortableRowProps> = ({
           >
             <Wand2 size={14} />
           </button>
+          {onPriorityFlag && (
+            <button
+              onClick={() => onPriorityFlag(story)}
+              style={{
+                color: (story as any).userPriorityFlag ? 'var(--bs-danger)' : themeVars.brand as string,
+                padding: '4px',
+                borderRadius: '4px',
+                border: 'none',
+                backgroundColor: 'transparent',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease',
+              }}
+              title={(story as any).userPriorityFlag ? 'Remove #1 priority flag' : 'Flag as #1 priority for calendar'}
+            >
+              <CalendarClock size={14} />
+            </button>
+          )}
           <button
             onClick={() => onEditStory ? onEditStory(story) : handleCellEdit('title', story.title)}
             style={{
@@ -946,6 +966,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
   onStoryAdd,
   onStorySelect,
   onEditStory,
+  onPriorityFlag,
   highlightStoryId,
   goalId,
   enableInlineTasks = false,
@@ -1643,6 +1664,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
                         onStoryDelete={onStoryDelete}
                         onStorySelect={onStorySelect}
                         onEditStory={onEditStory}
+                        onPriorityFlag={onPriorityFlag}
                         onToggleExpand={handleToggleExpand}
                         isExpanded={expandedStoryId === story.id}
                         isHighlighted={highlightStoryId === story.id}
