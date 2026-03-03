@@ -401,9 +401,9 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
               setShowTranscriptModal(true);
               setShowMenu(false);
             }}
-            title="Transcript Intake"
+            title="Process Text"
           >
-            T
+            P
           </button>
           <button
             className="md-fab-mini"

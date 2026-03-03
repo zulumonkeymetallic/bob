@@ -108,7 +108,7 @@ const TranscriptIntakeModal: React.FC<TranscriptIntakeModalProps> = ({ show, onH
       });
       const body = await response.json().catch(() => null);
       if (!response.ok) {
-        throw new Error(extractErrorMessage(body, 'Transcript ingestion failed'));
+        throw new Error(extractErrorMessage(body, 'Text processing failed'));
       }
       console.info('[TranscriptIntakeModal] ingest success', {
         requestId: nextRequestId,
@@ -122,7 +122,7 @@ const TranscriptIntakeModal: React.FC<TranscriptIntakeModalProps> = ({ show, onH
         requestId: nextRequestId,
         error: submissionError,
       });
-      setError(submissionError?.message || 'Transcript ingestion failed');
+      setError(submissionError?.message || 'Text processing failed');
     } finally {
       setSubmitting(false);
     }
@@ -131,29 +131,29 @@ const TranscriptIntakeModal: React.FC<TranscriptIntakeModalProps> = ({ show, onH
   return (
     <Modal show={show} onHide={onHide} centered size="lg">
       <Modal.Header closeButton>
-        <Modal.Title>Transcript Intake</Modal.Title>
+        <Modal.Title>Process Text</Modal.Title>
       </Modal.Header>
       <Modal.Body>
         {error && <Alert variant="danger">{error}</Alert>}
         {result?.duplicate && (
           <Alert variant="info">
-            {result.message || 'This transcript was already processed. No new ingestion was started.'}
+            {result.message || 'This text was already processed. No new ingestion was started.'}
           </Alert>
         )}
         {result && !result.duplicate && (
           <Alert variant="success">
-            Transcript processed successfully.
+            Text processed successfully.
           </Alert>
         )}
 
         <Form.Group className="mb-3">
-          <Form.Label>Transcript or URLs</Form.Label>
+          <Form.Label>Text or URLs</Form.Label>
           <Form.Control
             as="textarea"
             rows={10}
             value={transcript}
             onChange={(event) => setTranscript(event.target.value)}
-            placeholder="Paste a transcript, notes, or URLs here. Exact duplicate submissions are ignored before they reach the model."
+            placeholder="Paste a transcript, journal entry, notes, or URLs here. Exact duplicate submissions are ignored before they reach the model."
             disabled={submitting || !!result}
           />
           <Form.Text className="text-muted">
@@ -182,7 +182,7 @@ const TranscriptIntakeModal: React.FC<TranscriptIntakeModalProps> = ({ show, onH
 
         {result?.structuredEntry && (
           <div className="mb-3">
-            <h6>Journal Entry</h6>
+            <h6>Processed Text</h6>
             <div style={{ whiteSpace: 'pre-wrap' }}>{result.structuredEntry}</div>
           </div>
         )}
@@ -226,6 +226,14 @@ const TranscriptIntakeModal: React.FC<TranscriptIntakeModalProps> = ({ show, onH
           </div>
         )}
 
+        {result?.journalId && (
+          <div className="mb-2">
+            <a href={`/journals/${result.journalId}`}>
+              Open journal entry
+            </a>
+          </div>
+        )}
+
         {result?.docUrl && (
           <div className="mb-1">
             <a href={result.docUrl} target="_blank" rel="noreferrer">
@@ -246,7 +254,7 @@ const TranscriptIntakeModal: React.FC<TranscriptIntakeModalProps> = ({ show, onH
                 Processing…
               </>
             ) : (
-              'Process Transcript'
+              'Process Text'
             )}
           </Button>
         )}
