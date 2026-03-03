@@ -16,10 +16,14 @@ interface TranscriptIngestionResult {
   ok: boolean;
   duplicate?: boolean;
   message?: string;
+  resultType?: string;
   journalId?: string | null;
   docUrl?: string | null;
+  dateHeading?: string | null;
   oneLineSummary?: string | null;
+  structuredEntry?: string | null;
   advice?: string | null;
+  fullTranscript?: string | null;
   createdTasks?: TranscriptEntityLink[];
   createdStories?: TranscriptEntityLink[];
 }
@@ -104,6 +108,13 @@ const TranscriptIntakeModal: React.FC<TranscriptIntakeModalProps> = ({ show, onH
           <div className="mb-3">
             <h6>Summary</h6>
             <div>{result.oneLineSummary}</div>
+          </div>
+        )}
+
+        {result?.structuredEntry && (
+          <div className="mb-3">
+            <h6>Journal Entry</h6>
+            <div style={{ whiteSpace: 'pre-wrap' }}>{result.structuredEntry}</div>
           </div>
         )}
 
