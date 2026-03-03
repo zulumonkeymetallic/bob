@@ -23,6 +23,97 @@ const GEMINI_MODEL = String(process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite')
 const GOOGLE_REGION = 'europe-west2';
 const MAX_DIAGNOSTIC_TEXT = 500;
 const DEFAULT_CALENDAR_QUERY_COUNT = 4;
+const DEFAULT_TOP_PRIORITY_COUNT = 3;
+const DEFAULT_REPLAN_DAYS = 3;
+const AGENT_INTENTS = [
+  'process_text',
+  'create_task',
+  'create_journal',
+  'create_story',
+  'ingest_url',
+  'query_calendar_next',
+  'query_top_priorities',
+  'run_replan',
+  'unknown',
+];
+const AGENT_MODES = ['write', 'query', 'action', 'unknown'];
+const ROUTER_RESPONSE_SCHEMA = {
+  type: 'object',
+  properties: {
+    intent: { type: 'string', format: 'enum', enum: AGENT_INTENTS },
+    mode: { type: 'string', format: 'enum', enum: AGENT_MODES },
+    confidence: { type: 'number' },
+    calendarQuery: {
+      type: 'object',
+      nullable: true,
+      properties: {
+        count: { type: 'integer' },
+      },
+      required: ['count'],
+    },
+    topPriorityQuery: {
+      type: 'object',
+      nullable: true,
+      properties: {
+        count: { type: 'integer' },
+      },
+      required: ['count'],
+    },
+    replan: {
+      type: 'object',
+      nullable: true,
+      properties: {
+        days: { type: 'integer' },
+      },
+      required: ['days'],
+    },
+  },
+  required: ['intent', 'mode', 'confidence', 'calendarQuery', 'topPriorityQuery', 'replan'],
+};
+const TRANSCRIPT_ANALYSIS_SCHEMA = {
+  type: 'object',
+  properties: {
+    entryType: { type: 'string', format: 'enum', enum: ['journal', 'task_list', 'url_only', 'mixed'] },
+    shouldCreateJournal: { type: 'boolean' },
+    oneLineSummary: { type: 'string' },
+    structuredEntry: { type: 'string' },
+    advice: { type: 'string' },
+    stories: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          title: { type: 'string' },
+          description: { type: 'string' },
+          priority: { type: 'integer' },
+          points: { type: 'integer' },
+          acceptanceCriteria: { type: 'array', items: { type: 'string' } },
+          theme: { type: 'string' },
+        },
+        required: ['title', 'description', 'priority', 'points', 'acceptanceCriteria', 'theme'],
+      },
+    },
+    tasks: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          title: { type: 'string' },
+          description: { type: 'string' },
+          priority: { type: 'integer' },
+          estimateMin: { type: 'integer' },
+          points: { type: 'integer' },
+          effort: { type: 'string', format: 'enum', enum: ['S', 'M', 'L', 'XL'] },
+          kind: { type: 'string', format: 'enum', enum: ['task', 'read', 'watch'] },
+          theme: { type: 'string' },
+          storyTitle: { type: 'string', nullable: true },
+        },
+        required: ['title', 'description', 'priority', 'estimateMin', 'points', 'effort', 'kind', 'theme', 'storyTitle'],
+      },
+    },
+  },
+  required: ['entryType', 'shouldCreateJournal', 'oneLineSummary', 'structuredEntry', 'advice', 'stories', 'tasks'],
+};
 
 function summarizeForLog(value, depth = 0) {
   if (value == null) return value;
@@ -43,6 +134,85 @@ function summarizeForLog(value, depth = 0) {
     );
   }
   return String(value);
+}
+
+function stripJsonCodeFence(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return raw;
+  const fenced = raw.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  if (fenced) return fenced[1].trim();
+  return raw.replace(/^json\s*/i, '').trim();
+}
+
+function removeTrailingCommasJsonLike(text) {
+  return String(text || '').replace(/,\s*([}\]])/g, '$1');
+}
+
+function extractBalancedJsonSnippet(text) {
+  const raw = String(text || '');
+  const start = raw.search(/[\[{]/);
+  if (start < 0) return null;
+
+  const opening = raw[start];
+  const closing = opening === '{' ? '}' : ']';
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+
+  for (let index = start; index < raw.length; index += 1) {
+    const char = raw[index];
+    if (inString) {
+      if (escape) {
+        escape = false;
+      } else if (char === '\\') {
+        escape = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+    if (char === opening) depth += 1;
+    if (char === closing) {
+      depth -= 1;
+      if (depth === 0) {
+        return raw.slice(start, index + 1);
+      }
+    }
+  }
+  return raw.slice(start).trim() || null;
+}
+
+function parseModelJson(text, label) {
+  const raw = String(text || '').trim();
+  if (!raw) throw new Error(`${label} returned empty JSON`);
+
+  const stripped = stripJsonCodeFence(raw);
+  const extracted = extractBalancedJsonSnippet(stripped);
+  const candidates = [
+    raw,
+    stripped,
+    extracted,
+    removeTrailingCommasJsonLike(raw),
+    removeTrailingCommasJsonLike(stripped),
+    extracted ? removeTrailingCommasJsonLike(extracted) : null,
+  ]
+    .filter(Boolean)
+    .map((value) => String(value).trim());
+
+  let lastError = null;
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(candidate);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw new Error(`${label} returned invalid JSON: ${lastError?.message || 'Unknown parse error'}`);
 }
 
 function createIngestionLogger({ lockRef, uid, fingerprint, source, channel, authMode }) {
@@ -305,15 +475,23 @@ async function callAgentRouterModel({ transcript, persona, timezone, urlPreviews
     'You are an intent router for a productivity assistant.',
     'Return STRICT JSON only with this shape:',
     '{',
-    '  "intent": "process_text"|"create_task"|"create_journal"|"create_story"|"ingest_url"|"query_calendar_next"|"unknown",',
-    '  "mode": "write"|"query"|"unknown",',
+    '  "intent": "process_text"|"create_task"|"create_journal"|"create_story"|"ingest_url"|"query_calendar_next"|"query_top_priorities"|"run_replan"|"unknown",',
+    '  "mode": "write"|"query"|"action"|"unknown",',
     '  "confidence": number,',
     '  "calendarQuery": {',
     '    "count": number',
+    '  }|null,',
+    '  "topPriorityQuery": {',
+    '    "count": number',
+    '  }|null,',
+    '  "replan": {',
+    '    "days": number',
     '  }|null',
     '}',
     'Rules:',
     'Use mode="query" and intent="query_calendar_next" only when the user is explicitly asking what is next, upcoming, or on their calendar/schedule.',
+    'Use mode="query" and intent="query_top_priorities" when the user is asking what to focus on, their top priorities, or what matters most today.',
+    'Use mode="action" and intent="run_replan" when the user is explicitly asking you to replan, plan the day, plan the week, or reshuffle their schedule.',
     'For reflective narrative, journaling, planning, reminders, tasks, projects, and URLs to consume, use mode="write".',
     'Use intent="ingest_url" when the input is mostly one or more URLs.',
     'Use intent="create_journal" when it is primarily reflective narrative or a journal-style note.',
@@ -323,6 +501,8 @@ async function callAgentRouterModel({ transcript, persona, timezone, urlPreviews
     'If the request is ambiguous, prefer mode="write" and intent="process_text" rather than "unknown".',
     'Only return "unknown" when there is genuinely no actionable or queryable request.',
     'Set calendarQuery.count to a sensible value between 1 and 10. Default to 4 for "what is next on my calendar".',
+    'Set topPriorityQuery.count to a sensible value between 1 and 5. Default to 3 for top priorities questions.',
+    'Set replan.days between 1 and 14. Use 1 for day-level replans, 7 for week-level replans, and 3 if the request is vague.',
   ].join('\n');
 
   const user = [
@@ -348,13 +528,14 @@ async function callAgentRouterModel({ transcript, persona, timezone, urlPreviews
       topK: 40,
       maxOutputTokens: 1024,
       responseMimeType: 'application/json',
+      responseSchema: ROUTER_RESPONSE_SCHEMA,
     },
   });
 
   const response = await model.generateContent(`${system}\n\n${user}`);
   const text = response?.response?.text?.();
   if (!text) throw new Error('Gemini returned an empty routing response');
-  return JSON.parse(text);
+  return parseModelJson(text, 'Gemini routing response');
 }
 
 async function callTranscriptModel({ transcript, persona, timezone, urlPreviews }) {
@@ -439,13 +620,14 @@ async function callTranscriptModel({ transcript, persona, timezone, urlPreviews 
       topK: 40,
       maxOutputTokens: 8192,
       responseMimeType: 'application/json',
+      responseSchema: TRANSCRIPT_ANALYSIS_SCHEMA,
     },
   });
 
   const response = await model.generateContent(`${system}\n\n${user}`);
   const text = response?.response?.text?.();
   if (!text) throw new Error('Gemini returned an empty response');
-  return JSON.parse(text);
+  return parseModelJson(text, 'Gemini transcript analysis response');
 }
 
 function stripUrlsForHeuristics(text) {
@@ -455,23 +637,40 @@ function stripUrlsForHeuristics(text) {
     .trim();
 }
 
+function looksLikeAgentQueryOrAction(text) {
+  const lowered = stripUrlsForHeuristics(text).toLowerCase();
+  if (!lowered) return false;
+  if (/\b(calendar|schedule|agenda)\b/.test(lowered) && /\b(next|upcoming|what('| i)?s next|what is next)\b/.test(lowered)) {
+    return true;
+  }
+  if (/\b(top\s*(3|three)|top priorities|priorities today|what should i focus on|what matters most|focus today)\b/.test(lowered)) {
+    return true;
+  }
+  if (/\b(replan|re-plan|plan my day|plan today|plan my week|replan my day|replan my week|schedule my day|schedule my week|rebuild my plan)\b/.test(lowered)) {
+    return true;
+  }
+  return false;
+}
+
 function normalizeAgentIntent(rawIntent, normalizedTranscript, sourceUrls = []) {
   const intent = String(rawIntent || '').trim().toLowerCase();
-  if ([
-    'process_text',
-    'create_task',
-    'create_journal',
-    'create_story',
-    'ingest_url',
-    'query_calendar_next',
-    'unknown',
-  ].includes(intent)) {
+  if (AGENT_INTENTS.includes(intent)) {
     return intent;
   }
 
   const lowered = String(normalizedTranscript || '').trim().toLowerCase();
   if (/\b(calendar|schedule|agenda)\b/.test(lowered) && /\b(next|upcoming|what('| i)?s next|what is next)\b/.test(lowered)) {
     return 'query_calendar_next';
+  }
+  if (
+    /\b(top\s*(3|three)|top priorities|priorities today|what should i focus on|what should i do next|what matters most|focus today)\b/.test(lowered)
+  ) {
+    return 'query_top_priorities';
+  }
+  if (
+    /\b(replan|re-plan|plan my day|plan today|plan my week|replan my day|replan my week|schedule my day|schedule my week|rebuild my plan)\b/.test(lowered)
+  ) {
+    return 'run_replan';
   }
   if (Array.isArray(sourceUrls) && sourceUrls.length > 0 && stripUrlsForHeuristics(normalizedTranscript).split(/\s+/).filter(Boolean).length <= 6) {
     return 'ingest_url';
@@ -481,8 +680,10 @@ function normalizeAgentIntent(rawIntent, normalizedTranscript, sourceUrls = []) 
 
 function normalizeAgentMode(rawMode, intent) {
   const mode = String(rawMode || '').trim().toLowerCase();
-  if (mode === 'write' || mode === 'query' || mode === 'unknown') return mode;
+  if (mode === 'write' || mode === 'query' || mode === 'action' || mode === 'unknown') return mode;
   if (intent === 'query_calendar_next') return 'query';
+  if (intent === 'query_top_priorities') return 'query';
+  if (intent === 'run_replan') return 'action';
   if (intent === 'unknown') return 'unknown';
   return 'write';
 }
@@ -498,12 +699,40 @@ function normalizeCalendarQuery(rawQuery) {
   return { count };
 }
 
+function normalizeTopPriorityQuery(rawQuery) {
+  const count = Math.max(
+    1,
+    Math.min(
+      5,
+      Math.round(Number(rawQuery?.count || DEFAULT_TOP_PRIORITY_COUNT)) || DEFAULT_TOP_PRIORITY_COUNT
+    )
+  );
+  return { count };
+}
+
+function normalizeReplanRequest(rawRequest, normalizedTranscript) {
+  const lowered = String(normalizedTranscript || '').toLowerCase();
+  let fallbackDays = DEFAULT_REPLAN_DAYS;
+  if (/\b(today|this afternoon|this evening|plan my day|replan my day)\b/.test(lowered)) {
+    fallbackDays = 1;
+  } else if (/\b(week|this week|next week|plan my week|replan my week)\b/.test(lowered)) {
+    fallbackDays = 7;
+  }
+  const days = Math.max(
+    1,
+    Math.min(14, Math.round(Number(rawRequest?.days || fallbackDays)) || fallbackDays)
+  );
+  return { days };
+}
+
 function sanitizeAgentRoute(raw, normalizedTranscript, sourceUrls = []) {
   const payload = raw && typeof raw === 'object' ? raw : {};
   const intent = normalizeAgentIntent(payload.intent, normalizedTranscript, sourceUrls);
   let mode = normalizeAgentMode(payload.mode, intent);
   if (intent === 'query_calendar_next') mode = 'query';
-  if (intent !== 'unknown' && intent !== 'query_calendar_next' && mode !== 'write') {
+  if (intent === 'query_top_priorities') mode = 'query';
+  if (intent === 'run_replan') mode = 'action';
+  if (!['unknown', 'query_calendar_next', 'query_top_priorities', 'run_replan'].includes(intent) && mode !== 'write') {
     mode = 'write';
   }
 
@@ -517,6 +746,8 @@ function sanitizeAgentRoute(raw, normalizedTranscript, sourceUrls = []) {
     mode,
     confidence,
     calendarQuery: normalizeCalendarQuery(payload.calendarQuery),
+    topPriorityQuery: normalizeTopPriorityQuery(payload.topPriorityQuery),
+    replan: normalizeReplanRequest(payload.replan, normalizedTranscript),
   };
 }
 
@@ -1094,6 +1325,263 @@ function buildCalendarQueryResponse({ intent, confidence, events, processedAt, c
     resultType: 'calendar',
     processedAt: normalizeTimestampOutput(processedAt || new Date()),
     calendarEvents: events,
+    createdTasks: [],
+    createdStories: [],
+    hasJournal: false,
+    journalId: null,
+    docUrl: null,
+  };
+}
+
+function resolvePersona(value) {
+  return String(value || 'personal').trim().toLowerCase() === 'work' ? 'work' : 'personal';
+}
+
+function isTaskDoneStatus(status) {
+  if (status == null) return false;
+  if (typeof status === 'number') return status >= 2;
+  const normalized = String(status).trim().toLowerCase();
+  return ['done', 'completed', 'complete', 'cancelled', 'canceled'].includes(normalized);
+}
+
+function isStoryDoneStatus(status) {
+  if (status == null) return false;
+  if (typeof status === 'number') return status >= 2;
+  const normalized = String(status).trim().toLowerCase();
+  return ['done', 'completed', 'complete', 'archived', 'cancelled', 'canceled'].includes(normalized);
+}
+
+function isRoutineLikeTask(task) {
+  const type = String(task?.type || task?.taskType || task?.entityType || '').trim().toLowerCase();
+  return ['routine', 'habit', 'chore'].includes(type);
+}
+
+function normalizeRank(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : 99;
+}
+
+function normalizeDueDateMs(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
+}
+
+function buildTopPriorityItem(entityType, id, data) {
+  const ref = String(data?.ref || id);
+  const priorityRank = entityType === 'task'
+    ? normalizeRank(data?.aiPriorityRank)
+    : normalizeRank(data?.aiFocusStoryRank);
+  return {
+    entityType,
+    id,
+    ref,
+    title: String(data?.title || '').trim() || ref,
+    deepLink: String(
+      data?.deepLink ||
+      buildEntityUrl(entityType === 'story' ? 'story' : 'task', id, ref)
+    ),
+    reason: String(data?.aiTop3Reason || data?.aiPriorityReason || '').trim() || null,
+    priorityRank,
+    priority: normalizePriority(data?.priority, 2),
+    userPriorityFlag: data?.userPriorityFlag === true,
+    dueDateMs: normalizeDueDateMs(data?.dueDate),
+  };
+}
+
+function priorityItemSort(a, b) {
+  if (Boolean(b?.userPriorityFlag) !== Boolean(a?.userPriorityFlag)) {
+    return b?.userPriorityFlag ? 1 : -1;
+  }
+  if ((a?.priorityRank || 99) !== (b?.priorityRank || 99)) {
+    return (a?.priorityRank || 99) - (b?.priorityRank || 99);
+  }
+  if ((b?.priority || 0) !== (a?.priority || 0)) {
+    return (b?.priority || 0) - (a?.priority || 0);
+  }
+  const aDue = a?.dueDateMs || Number.MAX_SAFE_INTEGER;
+  const bDue = b?.dueDateMs || Number.MAX_SAFE_INTEGER;
+  if (aDue !== bDue) return aDue - bDue;
+  if (a?.entityType !== b?.entityType) return a?.entityType === 'task' ? -1 : 1;
+  return String(a?.title || '').localeCompare(String(b?.title || ''));
+}
+
+async function fetchPriorityCandidateDocs(db, collectionName, uid) {
+  try {
+    const prioritized = await db.collection(collectionName)
+      .where('ownerUid', '==', uid)
+      .where('aiTop3ForDay', '==', true)
+      .limit(25)
+      .get();
+    if (prioritized?.docs?.length) return prioritized.docs;
+  } catch (error) {
+    console.warn('[transcriptIngestion] top priority query failed', collectionName, error?.message || error);
+  }
+
+  const fallback = await db.collection(collectionName)
+    .where('ownerUid', '==', uid)
+    .limit(500)
+    .get()
+    .catch(() => ({ docs: [] }));
+  return Array.isArray(fallback?.docs) ? fallback.docs : [];
+}
+
+async function listTopPriorityItems({ db, uid, persona, timezone, count = DEFAULT_TOP_PRIORITY_COUNT, refresh = true }) {
+  const safePersona = resolvePersona(persona);
+  const safeCount = Math.max(1, Math.min(5, Number(count) || DEFAULT_TOP_PRIORITY_COUNT));
+  const todayIso = DateTime.now().setZone(timezone || DEFAULT_TIMEZONE).toISODate();
+
+  if (refresh) {
+    try {
+      const nightlyOrchestration = require('./nightlyOrchestration');
+      if (nightlyOrchestration?._deltaTop3ForPersona) {
+        await nightlyOrchestration._deltaTop3ForPersona(db, uid, safePersona);
+      }
+    } catch (error) {
+      console.warn('[transcriptIngestion] top priority refresh failed', uid, safePersona, error?.message || error);
+    }
+  }
+
+  const [taskDocs, storyDocs] = await Promise.all([
+    fetchPriorityCandidateDocs(db, 'tasks', uid),
+    fetchPriorityCandidateDocs(db, 'stories', uid),
+  ]);
+
+  const tasks = taskDocs
+    .map((doc) => ({ id: doc.id, data: doc.data() || {} }))
+    .filter(({ data }) => resolvePersona(data.persona) === safePersona)
+    .filter(({ data }) => !isTaskDoneStatus(data.status) && data.deleted !== true)
+    .filter(({ data }) => !isRoutineLikeTask(data))
+    .filter(({ data }) => {
+      if (data.aiTop3ForDay !== true) return false;
+      if (data.aiTop3Date && String(data.aiTop3Date).slice(0, 10) !== todayIso) return false;
+      return true;
+    })
+    .map(({ id, data }) => buildTopPriorityItem('task', id, data));
+
+  const stories = storyDocs
+    .map((doc) => ({ id: doc.id, data: doc.data() || {} }))
+    .filter(({ data }) => resolvePersona(data.persona) === safePersona)
+    .filter(({ data }) => !isStoryDoneStatus(data.status) && data.deleted !== true)
+    .filter(({ data }) => {
+      if (data.aiTop3ForDay !== true) return false;
+      if (data.aiTop3Date && String(data.aiTop3Date).slice(0, 10) !== todayIso) return false;
+      return true;
+    })
+    .map(({ id, data }) => buildTopPriorityItem('story', id, data));
+
+  return [...tasks, ...stories].sort(priorityItemSort).slice(0, safeCount);
+}
+
+function buildTopPrioritiesSpokenResponse(items) {
+  if (!Array.isArray(items) || !items.length) {
+    return 'You do not have any active top priorities right now.';
+  }
+  const listed = items.slice(0, 5).map((item, index) => `${index + 1}, ${item.title}`);
+  if (listed.length === 1) {
+    return `Your top priority is ${listed[0]}.`;
+  }
+  if (listed.length === 2) {
+    return `Your top priorities are ${listed[0]} and ${listed[1]}.`;
+  }
+  return `Your top priorities are ${listed.slice(0, -1).join(', ')}, and ${listed[listed.length - 1]}.`;
+}
+
+function buildTopPrioritiesResponse({ intent, confidence, items, processedAt }) {
+  return {
+    ok: true,
+    mode: 'query',
+    intent,
+    confidence,
+    spokenResponse: buildTopPrioritiesSpokenResponse(items),
+    actionsExecuted: ['query_top_priorities'],
+    resultType: 'priorities',
+    processedAt: normalizeTimestampOutput(processedAt || new Date()),
+    topPriorities: Array.isArray(items) ? items : [],
+    calendarEvents: [],
+    createdTasks: [],
+    createdStories: [],
+    hasJournal: false,
+    journalId: null,
+    docUrl: null,
+  };
+}
+
+function normalizePushSummary(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const created = Number(raw.createdCount || raw.created || 0);
+  const updated = Number(raw.updatedCount || raw.updated || 0);
+  const deleted = Number(raw.deletedCount || raw.deleted || 0);
+  if (!created && !updated && !deleted) return null;
+  return { created, updated, deleted };
+}
+
+async function runPlannerFromAgent({ uid, persona, timezone, days }) {
+  const indexModule = require('./index');
+  if (!indexModule?.runPlanner?.run) {
+    throw new httpsV2.HttpsError('failed-precondition', 'Planner is not available.');
+  }
+
+  const safeDays = Math.max(1, Math.min(14, Number(days) || DEFAULT_REPLAN_DAYS));
+  const startDate = DateTime.now().setZone(timezone || DEFAULT_TIMEZONE).toISODate();
+  const raw = await indexModule.runPlanner.run({
+    auth: { uid },
+    data: {
+      persona: resolvePersona(persona),
+      timezone: timezone || DEFAULT_TIMEZONE,
+      startDate,
+      days: safeDays,
+      pushToGoogle: true,
+    },
+  });
+  const payload = raw?.data || raw || {};
+  const llm = payload?.llm || null;
+  const schedule = payload?.schedule || null;
+  const pushed = payload?.pushed || null;
+
+  return {
+    startDate,
+    days: safeDays,
+    llmBlocksCreated: Number(llm?.blocksCreated || 0),
+    llmApplied: llm?.applied === true,
+    plannedCount: Array.isArray(schedule?.planned) ? schedule.planned.length : Number(schedule?.plannedCount || 0),
+    unscheduledCount: Array.isArray(schedule?.unscheduled) ? schedule.unscheduled.length : Number(schedule?.unscheduledCount || 0),
+    pushSummary: normalizePushSummary(pushed),
+    raw: summarizeForLog(payload),
+  };
+}
+
+function buildReplanSpokenResponse(summary, topPriorities) {
+  if (!summary) {
+    return 'I could not complete the replan.';
+  }
+  const parts = [
+    `I replanned the next ${summary.days} day${summary.days === 1 ? '' : 's'}.`,
+    summary.llmBlocksCreated
+      ? `The planner created ${summary.llmBlocksCreated} AI block${summary.llmBlocksCreated === 1 ? '' : 's'}.`
+      : null,
+    summary.plannedCount
+      ? `There are ${summary.plannedCount} scheduled item${summary.plannedCount === 1 ? '' : 's'} in the current window.`
+      : null,
+    Array.isArray(topPriorities) && topPriorities.length
+      ? `Current top priorities: ${topPriorities.map((item) => item.title).join(', ')}.`
+      : null,
+  ].filter(Boolean);
+  return parts.join(' ');
+}
+
+function buildReplanResponse({ intent, confidence, summary, topPriorities, processedAt }) {
+  return {
+    ok: true,
+    mode: 'action',
+    intent,
+    confidence,
+    spokenResponse: buildReplanSpokenResponse(summary, topPriorities),
+    actionsExecuted: ['run_replan', 'query_top_priorities'],
+    resultType: 'replan',
+    processedAt: normalizeTimestampOutput(processedAt || new Date()),
+    topPriorities: Array.isArray(topPriorities) ? topPriorities : [],
+    replan: summary,
+    calendarEvents: [],
     createdTasks: [],
     createdStories: [],
     hasJournal: false,
@@ -1791,21 +2279,26 @@ async function processAgentRequest({
   }
 
   const fingerprint = sha256(normalizedTranscript);
-  const duplicateState = await findExistingProcessedIngestion(db, uid, fingerprint);
-  if (duplicateState) {
-    console.log('[transcriptIngestion] agent_duplicate_short_circuit', JSON.stringify({
-      uid,
-      fingerprint,
-      source: source || 'transcript',
-      channel: channel || 'unknown',
-      authMode: authMode || 'unknown',
-      sourceProvidedId: sourceProvidedId || null,
-      priorStatus: duplicateState.status || null,
-    }));
-    return annotateAgentWriteResponse(buildDuplicateResponse(duplicateState), {
-      intent: 'process_text',
-      confidence: 1,
-    });
+  const likelyQueryOrAction = looksLikeAgentQueryOrAction(normalizedTranscript);
+  let duplicateChecked = false;
+  if (!likelyQueryOrAction) {
+    duplicateChecked = true;
+    const duplicateState = await findExistingProcessedIngestion(db, uid, fingerprint);
+    if (duplicateState) {
+      console.log('[transcriptIngestion] agent_duplicate_short_circuit', JSON.stringify({
+        uid,
+        fingerprint,
+        source: source || 'transcript',
+        channel: channel || 'unknown',
+        authMode: authMode || 'unknown',
+        sourceProvidedId: sourceProvidedId || null,
+        priorStatus: duplicateState.status || null,
+      }));
+      return annotateAgentWriteResponse(buildDuplicateResponse(duplicateState), {
+        intent: 'process_text',
+        confidence: 1,
+      });
+    }
   }
 
   const { profile } = await resolveProfile(db, uid);
@@ -1824,7 +2317,10 @@ async function processAgentRequest({
     urlPreviews,
   });
   const route = sanitizeAgentRoute(rawRoute, normalizedTranscript, sourceUrls);
-  const effectiveRoute = (route.mode === 'query' && route.intent === 'query_calendar_next')
+  const effectiveRoute = (
+    (route.mode === 'query' && ['query_calendar_next', 'query_top_priorities'].includes(route.intent)) ||
+    (route.mode === 'action' && route.intent === 'run_replan')
+  )
     ? route
     : (route.intent === 'unknown' || route.mode === 'unknown'
       ? { ...route, intent: 'process_text', mode: 'write' }
@@ -1841,7 +2337,26 @@ async function processAgentRequest({
     mode: effectiveRoute.mode,
     confidence: effectiveRoute.confidence,
     calendarQuery: effectiveRoute.calendarQuery,
+    topPriorityQuery: effectiveRoute.topPriorityQuery,
+    replan: effectiveRoute.replan,
   }));
+
+  if (effectiveRoute.mode === 'write' && !duplicateChecked) {
+    const duplicateState = await findExistingProcessedIngestion(db, uid, fingerprint);
+    if (duplicateState) {
+      console.log('[transcriptIngestion] agent_duplicate_short_circuit', JSON.stringify({
+        uid,
+        fingerprint,
+        source: source || 'transcript',
+        channel: channel || 'unknown',
+        authMode: authMode || 'unknown',
+        sourceProvidedId: sourceProvidedId || null,
+        priorStatus: duplicateState.status || null,
+        routeIntent: effectiveRoute.intent,
+      }));
+      return annotateAgentWriteResponse(buildDuplicateResponse(duplicateState), effectiveRoute);
+    }
+  }
 
   if (effectiveRoute.mode === 'query' && effectiveRoute.intent === 'query_calendar_next') {
     console.log('[transcriptIngestion] calendar_query_start', JSON.stringify({
@@ -1866,6 +2381,70 @@ async function processAgentRequest({
       events,
       processedAt: new Date(),
       count: effectiveRoute.calendarQuery.count,
+    });
+  }
+
+  if (effectiveRoute.mode === 'query' && effectiveRoute.intent === 'query_top_priorities') {
+    console.log('[transcriptIngestion] top_priorities_start', JSON.stringify({
+      uid,
+      fingerprint,
+      persona: persona || 'personal',
+      count: effectiveRoute.topPriorityQuery.count,
+    }));
+    const topPriorities = await listTopPriorityItems({
+      db,
+      uid,
+      persona: persona || 'personal',
+      timezone,
+      count: effectiveRoute.topPriorityQuery.count,
+      refresh: true,
+    });
+    console.log('[transcriptIngestion] top_priorities_complete', JSON.stringify({
+      uid,
+      fingerprint,
+      count: topPriorities.length,
+    }));
+    return buildTopPrioritiesResponse({
+      intent: effectiveRoute.intent,
+      confidence: effectiveRoute.confidence,
+      items: topPriorities,
+      processedAt: new Date(),
+    });
+  }
+
+  if (effectiveRoute.mode === 'action' && effectiveRoute.intent === 'run_replan') {
+    console.log('[transcriptIngestion] replan_start', JSON.stringify({
+      uid,
+      fingerprint,
+      persona: persona || 'personal',
+      days: effectiveRoute.replan.days,
+    }));
+    const summary = await runPlannerFromAgent({
+      uid,
+      persona: persona || 'personal',
+      timezone,
+      days: effectiveRoute.replan.days,
+    });
+    const topPriorities = await listTopPriorityItems({
+      db,
+      uid,
+      persona: persona || 'personal',
+      timezone,
+      count: DEFAULT_TOP_PRIORITY_COUNT,
+      refresh: true,
+    });
+    console.log('[transcriptIngestion] replan_complete', JSON.stringify({
+      uid,
+      fingerprint,
+      summary,
+      topPriorityCount: topPriorities.length,
+    }));
+    return buildReplanResponse({
+      intent: effectiveRoute.intent,
+      confidence: effectiveRoute.confidence,
+      summary,
+      topPriorities,
+      processedAt: new Date(),
     });
   }
 
@@ -2087,3 +2666,5 @@ exports.ingestTranscriptHttp = httpsV2.onRequest({
     mapHttpError(error, res);
   }
 });
+
+exports.processAgentRequestInternal = processAgentRequest;

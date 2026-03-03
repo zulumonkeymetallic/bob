@@ -1,82 +1,17 @@
 import React, { useEffect, useState } from 'react';
-import { Alert, Button, Form, ListGroup, Modal, Spinner } from 'react-bootstrap';
+import { Alert, Button, Form, Modal, Spinner } from 'react-bootstrap';
 
-import { auth, firebaseConfig } from '../firebase';
 import { usePersona } from '../contexts/PersonaContext';
-
-interface TranscriptEntityLink {
-  id: string;
-  ref: string;
-  title: string;
-  deepLink: string;
-  existing?: boolean;
-}
-
-interface CalendarEventResult {
-  id: string;
-  title: string;
-  start?: string | null;
-  end?: string | null;
-  when?: string | null;
-  isAllDay?: boolean;
-  location?: string | null;
-  htmlLink?: string | null;
-  status?: string | null;
-}
-
-interface TranscriptIngestionResult {
-  ok: boolean;
-  duplicate?: boolean;
-  message?: string;
-  mode?: string | null;
-  intent?: string | null;
-  confidence?: number | null;
-  spokenResponse?: string | null;
-  actionsExecuted?: string[];
-  ingestionId?: string | null;
-  entryType?: string | null;
-  hasJournal?: boolean;
-  resultType?: string;
-  journalId?: string | null;
-  docUrl?: string | null;
-  dateHeading?: string | null;
-  oneLineSummary?: string | null;
-  structuredEntry?: string | null;
-  advice?: string | null;
-  fullTranscript?: string | null;
-  createdTasks?: TranscriptEntityLink[];
-  createdStories?: TranscriptEntityLink[];
-  calendarEvents?: CalendarEventResult[];
-}
+import AgentResponsePanel from './AgentResponsePanel';
+import {
+  AgentResponse,
+  buildRequestId,
+  submitTranscriptAgentRequest,
+} from '../services/agentClient';
 
 interface TranscriptIntakeModalProps {
   show: boolean;
   onHide: () => void;
-}
-
-const TRANSCRIPT_REGION = 'europe-west2';
-
-function buildTranscriptEndpoint() {
-  return `https://${TRANSCRIPT_REGION}-${firebaseConfig.projectId}.cloudfunctions.net/ingestTranscriptHttp`;
-}
-
-function buildRequestId() {
-  const rand = Math.random().toString(36).slice(2, 8);
-  return `web_fab_${Date.now()}_${rand}`;
-}
-
-function extractErrorMessage(errorBody: any, fallback: string) {
-  const details = errorBody?.details || errorBody?.error?.details || {};
-  const message = (
-    errorBody?.error?.message ||
-    errorBody?.message ||
-    fallback
-  );
-  const pieces = [
-    message,
-    details?.ingestionId ? `Ingestion ID: ${details.ingestionId}` : null,
-  ].filter(Boolean);
-  return pieces.join(' ');
 }
 
 const TranscriptIntakeModal: React.FC<TranscriptIntakeModalProps> = ({ show, onHide }) => {
@@ -84,7 +19,7 @@ const TranscriptIntakeModal: React.FC<TranscriptIntakeModalProps> = ({ show, onH
   const [transcript, setTranscript] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<TranscriptIngestionResult | null>(null);
+  const [result, setResult] = useState<AgentResponse | null>(null);
   const [requestId, setRequestId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -106,35 +41,19 @@ const TranscriptIntakeModal: React.FC<TranscriptIntakeModalProps> = ({ show, onH
     setResult(null);
     setRequestId(nextRequestId);
     try {
-      const user = auth.currentUser;
-      if (!user) {
-        throw new Error('Sign in required');
-      }
-      const token = await user.getIdToken();
-      const response = await fetch(buildTranscriptEndpoint(), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          transcript: value,
-          persona: currentPersona,
-          source: 'web_fab',
-          sourceProvidedId: nextRequestId,
-        }),
+      const body = await submitTranscriptAgentRequest({
+        text: value,
+        persona: currentPersona,
+        source: 'web_fab',
+        sourceProvidedId: nextRequestId,
       });
-      const body = await response.json().catch(() => null);
-      if (!response.ok) {
-        throw new Error(extractErrorMessage(body, 'Text processing failed'));
-      }
       console.info('[TranscriptIntakeModal] ingest success', {
         requestId: nextRequestId,
         ingestionId: body?.ingestionId || null,
         resultType: body?.resultType || null,
         entryType: body?.entryType || null,
       });
-      setResult((body || {}) as TranscriptIngestionResult);
+      setResult((body || {}) as AgentResponse);
     } catch (submissionError: any) {
       console.error('[TranscriptIntakeModal] ingest failed', {
         requestId: nextRequestId,
@@ -164,9 +83,9 @@ const TranscriptIntakeModal: React.FC<TranscriptIntakeModalProps> = ({ show, onH
           </Alert>
         )}
 
-        <Form.Group className="mb-3">
-          <Form.Label>Text or URLs</Form.Label>
-          <Form.Control
+      <Form.Group className="mb-3">
+        <Form.Label>Text or URLs</Form.Label>
+        <Form.Control
             as="textarea"
             rows={10}
             value={transcript}
@@ -190,99 +109,7 @@ const TranscriptIntakeModal: React.FC<TranscriptIntakeModalProps> = ({ show, onH
             Ingestion ID: {result.ingestionId}
           </div>
         )}
-
-        {result?.spokenResponse && (
-          <div className="mb-3">
-            <h6>Response</h6>
-            <div>{result.spokenResponse}</div>
-          </div>
-        )}
-
-        {result?.oneLineSummary && (
-          <div className="mb-3">
-            <h6>Summary</h6>
-            <div>{result.oneLineSummary}</div>
-          </div>
-        )}
-
-        {!!result?.calendarEvents?.length && (
-          <div className="mb-3">
-            <h6>Calendar</h6>
-            <ListGroup>
-              {result.calendarEvents.map((event) => (
-                <ListGroup.Item key={event.id}>
-                  <div style={{ fontWeight: 600 }}>{event.title}</div>
-                  <div className="text-muted small">{event.when || 'Time unavailable'}</div>
-                  {event.location && (
-                    <div className="text-muted small">{event.location}</div>
-                  )}
-                </ListGroup.Item>
-              ))}
-            </ListGroup>
-          </div>
-        )}
-
-        {result?.structuredEntry && (
-          <div className="mb-3">
-            <h6>Processed Text</h6>
-            <div style={{ whiteSpace: 'pre-wrap' }}>{result.structuredEntry}</div>
-          </div>
-        )}
-
-        {result?.advice && (
-          <div className="mb-3">
-            <h6>Advice</h6>
-            <div style={{ whiteSpace: 'pre-wrap' }}>{result.advice}</div>
-          </div>
-        )}
-
-        {!!result?.createdStories?.length && (
-          <div className="mb-3">
-            <h6>Stories</h6>
-            <ListGroup>
-              {result.createdStories.map((story) => (
-                <ListGroup.Item key={story.id}>
-                  <a href={story.deepLink}>{story.ref}</a>
-                  {' — '}
-                  {story.title}
-                  {story.existing ? ' (existing)' : ''}
-                </ListGroup.Item>
-              ))}
-            </ListGroup>
-          </div>
-        )}
-
-        {!!result?.createdTasks?.length && (
-          <div className="mb-3">
-            <h6>Tasks</h6>
-            <ListGroup>
-              {result.createdTasks.map((task) => (
-                <ListGroup.Item key={task.id}>
-                  <a href={task.deepLink}>{task.ref}</a>
-                  {' — '}
-                  {task.title}
-                  {task.existing ? ' (existing)' : ''}
-                </ListGroup.Item>
-              ))}
-            </ListGroup>
-          </div>
-        )}
-
-        {result?.journalId && (
-          <div className="mb-2">
-            <a href={`/journals/${result.journalId}`}>
-              Open journal entry
-            </a>
-          </div>
-        )}
-
-        {result?.docUrl && (
-          <div className="mb-1">
-            <a href={result.docUrl} target="_blank" rel="noreferrer">
-              Open Google Doc
-            </a>
-          </div>
-        )}
+        {result && <AgentResponsePanel result={result} />}
       </Modal.Body>
       <Modal.Footer>
         <Button variant="secondary" onClick={onHide}>
