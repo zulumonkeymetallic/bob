@@ -19,8 +19,72 @@ const IOS_SHORTCUT_WEBHOOK_SECRET = defineSecret('IOS_SHORTCUT_WEBHOOK_SECRET');
 const REMINDERS_WEBHOOK_SECRET = defineSecret('REMINDERS_WEBHOOK_SECRET');
 
 const DEFAULT_TIMEZONE = 'Europe/London';
-const TRANSCRIPT_MODEL = process.env.TRANSCRIPT_INGESTION_MODEL || 'gemini-1.5-pro';
+const GEMINI_MODEL = String(process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite').trim();
 const GOOGLE_REGION = 'europe-west2';
+const MAX_DIAGNOSTIC_TEXT = 500;
+
+function summarizeForLog(value, depth = 0) {
+  if (value == null) return value;
+  if (depth > 3) return '[truncated]';
+  if (Array.isArray(value)) return value.slice(0, 20).map((item) => summarizeForLog(item, depth + 1));
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === 'string') {
+    return value.length > MAX_DIAGNOSTIC_TEXT
+      ? `${value.slice(0, MAX_DIAGNOSTIC_TEXT)}…`
+      : value;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') return value;
+  if (typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value)
+        .slice(0, 40)
+        .map(([key, entryValue]) => [key, summarizeForLog(entryValue, depth + 1)])
+    );
+  }
+  return String(value);
+}
+
+function createIngestionLogger({ lockRef, uid, fingerprint, source, channel, authMode }) {
+  const base = {
+    uid,
+    fingerprint,
+    source: source || 'transcript',
+    channel: channel || 'unknown',
+    authMode: authMode || 'unknown',
+    lockId: lockRef.id,
+  };
+
+  return {
+    async event(stage, message, data = null, level = 'info') {
+      const payload = {
+        ...base,
+        stage,
+        level,
+        message,
+        data: summarizeForLog(data),
+      };
+      const printer = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log;
+      printer('[transcriptIngestion]', JSON.stringify(payload));
+
+      try {
+        await Promise.all([
+          lockRef.collection('events').doc().set({
+            ...payload,
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          }),
+          lockRef.set({
+            diagnosticStage: stage,
+            diagnosticLevel: level,
+            diagnosticMessage: message,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          }, { merge: true }),
+        ]);
+      } catch (error) {
+        console.warn('[transcriptIngestion] diagnostic write failed', error?.message || error);
+      }
+    },
+  };
+}
 
 function escapeHtml(value) {
   if (value == null) return '';
@@ -240,6 +304,8 @@ async function callTranscriptModel({ transcript, persona, timezone, urlPreviews 
     'You process voice-note transcripts for a productivity app.',
     'Return STRICT JSON only with this shape:',
     '{',
+    '  "entryType": "journal"|"task_list"|"url_only"|"mixed",',
+    '  "shouldCreateJournal": boolean,',
     '  "oneLineSummary": string,',
     '  "structuredEntry": string,',
     '  "advice": string,',
@@ -264,6 +330,11 @@ async function callTranscriptModel({ transcript, persona, timezone, urlPreviews 
     '  }]',
     '}',
     'Rules:',
+    'Use entryType="journal" when this is primarily reflective narrative or a journal-style log with little or no actionable extraction.',
+    'Use entryType="task_list" when this is primarily a to-do list or planning list and should NOT create a journal entry.',
+    'Use entryType="url_only" when the input is just one or more URLs with little surrounding text and should NOT create a journal entry.',
+    'Use entryType="mixed" when it is clearly a journal/reflection that also contains actionable tasks or stories.',
+    'Set shouldCreateJournal=true only for entryType="journal" or entryType="mixed".',
     [
       'Keep structuredEntry 99% faithful to the transcript.',
       'Fix punctuation, capitalization, and obvious dictation errors only.',
@@ -294,7 +365,7 @@ async function callTranscriptModel({ transcript, persona, timezone, urlPreviews 
 
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({
-    model: TRANSCRIPT_MODEL,
+    model: GEMINI_MODEL,
     safetySettings: [
       { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
       { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
@@ -316,6 +387,28 @@ async function callTranscriptModel({ transcript, persona, timezone, urlPreviews 
   return JSON.parse(text);
 }
 
+function stripUrlsForHeuristics(text) {
+  return String(text || '')
+    .replace(/https?:\/\/[^\s<>"')]+/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normalizeEntryType(rawType, transcript, sourceUrls, tasks, stories) {
+  const type = String(rawType || '').trim().toLowerCase();
+  if (type === 'journal' || type === 'task_list' || type === 'url_only' || type === 'mixed') {
+    return type;
+  }
+
+  const stripped = stripUrlsForHeuristics(transcript);
+  const wordCount = stripped ? stripped.split(/\s+/).length : 0;
+  const likelyUrlOnly = Array.isArray(sourceUrls) && sourceUrls.length > 0 && wordCount <= 6;
+  if (likelyUrlOnly) return 'url_only';
+  if ((tasks?.length || stories?.length) && wordCount <= 50) return 'task_list';
+  if ((tasks?.length || stories?.length) && wordCount > 50) return 'mixed';
+  return 'journal';
+}
+
 function sanitizeAcceptanceCriteria(value) {
   if (!Array.isArray(value)) return [];
   return value
@@ -324,7 +417,7 @@ function sanitizeAcceptanceCriteria(value) {
     .slice(0, 12);
 }
 
-function sanitizeAnalysis(raw, transcript) {
+function sanitizeAnalysis(raw, transcript, sourceUrls = []) {
   const analysis = raw && typeof raw === 'object' ? raw : {};
   const oneLineSummary = String(analysis.oneLineSummary || '').trim().replace(/\s+/g, ' ').slice(0, 140);
   const structuredEntry = String(analysis.structuredEntry || '').trim() || String(transcript || '').trim();
@@ -375,7 +468,12 @@ function sanitizeAnalysis(raw, transcript) {
     })
     .slice(0, 16);
 
+  const entryType = normalizeEntryType(analysis.entryType, transcript, sourceUrls, tasks, stories);
+  const shouldCreateJournal = entryType === 'journal' || entryType === 'mixed';
+
   return {
+    entryType,
+    shouldCreateJournal,
     oneLineSummary: oneLineSummary || 'Transcript summary',
     structuredEntry,
     advice,
@@ -422,9 +520,69 @@ function computeUpcomingSaturdayMs(timezone) {
   return now.plus({ days: daysUntil }).endOf('day').toMillis();
 }
 
-function buildStoryRecords({ uid, persona, fingerprint, analysis }) {
+function buildExistingEntityRecord(collectionName, doc) {
+  const data = doc.data() || {};
+  return {
+    id: doc.id,
+    ref: String(data.ref || doc.id),
+    title: String(data.title || ''),
+    deepLink: String(data.deepLink || buildEntityUrl(collectionName === 'stories' ? 'story' : 'task', doc.id, data.ref || doc.id)),
+    payload: { id: doc.id, ...data },
+    existing: true,
+  };
+}
+
+async function findExistingEntityRecord(db, collectionName, uid, title) {
+  const normalized = normalizeTitle(title);
+  if (!normalized) return null;
+
+  const runQuery = async (field, value) => {
+    try {
+      const snapshot = await db.collection(collectionName)
+        .where('ownerUid', '==', uid)
+        .where(field, '==', value)
+        .limit(10)
+        .get();
+      const doc = snapshot.docs.find((candidate) => candidate.data()?.deleted !== true) || null;
+      return doc ? buildExistingEntityRecord(collectionName, doc) : null;
+    } catch (error) {
+      console.warn('[transcriptIngestion] existing entity lookup failed', collectionName, field, error?.message || error);
+      return null;
+    }
+  };
+
+  const byNormalized = await runQuery('normalizedTitle', normalized);
+  if (byNormalized) return byNormalized;
+
+  const byTitle = await runQuery('title', title);
+  if (byTitle) return byTitle;
+
+  const fallback = await db.collection(collectionName).where('ownerUid', '==', uid).limit(400).get().catch(() => null);
+  const doc = fallback?.docs?.find((candidate) => {
+    const data = candidate.data() || {};
+    if (data.deleted === true) return false;
+    return normalizeTitle(data.normalizedTitle || data.title || '') === normalized;
+  }) || null;
+  return doc ? buildExistingEntityRecord(collectionName, doc) : null;
+}
+
+async function buildStoryRecords({ db, uid, persona, fingerprint, analysis }) {
   const createdAtOrder = Date.now();
-  return analysis.stories.map((story, index) => {
+  const records = [];
+  const existingStories = new Map();
+
+  for (let index = 0; index < analysis.stories.length; index++) {
+    const story = analysis.stories[index];
+    const titleKey = normalizeTitle(story.title);
+    if (titleKey && !existingStories.has(titleKey)) {
+      existingStories.set(titleKey, await findExistingEntityRecord(db, 'stories', uid, story.title));
+    }
+    const existing = titleKey ? existingStories.get(titleKey) : null;
+    if (existing) {
+      records.push(existing);
+      continue;
+    }
+
     const id = buildStableDocId('story', uid, fingerprint, index);
     const ref = buildStableRef('story', id);
     const sized = estimateSize({
@@ -448,6 +606,7 @@ function buildStoryRecords({ uid, persona, fingerprint, analysis }) {
       wipLimit: 10,
       tags: [],
       sprintId: null,
+      normalizedTitle: normalizeTitle(story.title),
       orderIndex: createdAtOrder + index,
       acceptanceCriteria: story.acceptanceCriteria,
       theme: story.theme || 'Growth',
@@ -459,17 +618,21 @@ function buildStoryRecords({ uid, persona, fingerprint, analysis }) {
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     };
-    return {
+    records.push({
       id,
       ref,
       title: story.title,
       deepLink: payload.deepLink,
+      existing: false,
       payload,
-    };
-  });
+    });
+  }
+
+  return records;
 }
 
 async function buildTaskRecords({
+  db,
   uid,
   persona,
   fingerprint,
@@ -479,8 +642,19 @@ async function buildTaskRecords({
 }) {
   const saturdayDueMs = computeUpcomingSaturdayMs(timezone);
   const records = [];
+  const existingTasks = new Map();
   for (let index = 0; index < analysis.tasks.length; index++) {
     const task = analysis.tasks[index];
+    const titleKey = normalizeTitle(task.title);
+    if (titleKey && !existingTasks.has(titleKey)) {
+      existingTasks.set(titleKey, await findExistingEntityRecord(db, 'tasks', uid, task.title));
+    }
+    const existing = titleKey ? existingTasks.get(titleKey) : null;
+    if (existing) {
+      records.push(existing);
+      continue;
+    }
+
     const id = buildStableDocId('task', uid, fingerprint, index);
     const ref = buildStableRef('task', id);
     const linkedStory = task.storyTitle ? storyMap.get(normalizeTitle(task.storyTitle)) || null : null;
@@ -505,6 +679,7 @@ async function buildTaskRecords({
       parentType: 'story',
       parentId: linkedStory?.id || '',
       title: task.title,
+      normalizedTitle: normalizeTitle(task.title),
       description: task.description || 'Captured from transcript intake',
       status: 0,
       priority: prioritized.priority,
@@ -546,6 +721,7 @@ async function buildTaskRecords({
       ref,
       title: task.title,
       deepLink: payload.deepLink,
+      existing: false,
       payload,
     });
   }
@@ -557,6 +733,7 @@ function buildJournalRecord({
   persona,
   fingerprint,
   docUrl,
+  entryType,
   originalTranscript,
   sections,
   storyRecords,
@@ -577,6 +754,7 @@ function buildJournalRecord({
       oneLineSummary: sections.oneLineSummary,
       advice: sections.advice,
       docUrl,
+      entryType: entryType || 'journal',
       transcriptFingerprint: fingerprint,
       source: source || 'transcript',
       sourceUrls,
@@ -657,12 +835,12 @@ async function appendJournalToGoogleDoc({ uid, docUrl, sections }) {
     throw new httpsV2.HttpsError('failed-precondition', 'The default journal Google Doc URL is invalid.');
   }
   const docs = await getGoogleDocsClient(uid);
-  const document = await docs.documents.get({ documentId: docId });
-  const bodyContent = document?.data?.body?.content || [];
-  const insertAt = Math.max(1, Number(bodyContent[bodyContent.length - 1]?.endIndex || 1) - 1);
-  const plan = buildDocAppendPlan(sections);
-
   try {
+    const document = await docs.documents.get({ documentId: docId });
+    const bodyContent = document?.data?.body?.content || [];
+    const insertAt = Math.max(1, Number(bodyContent[bodyContent.length - 1]?.endIndex || 1) - 1);
+    const plan = buildDocAppendPlan(sections);
+
     await docs.documents.batchUpdate({
       documentId: docId,
       requestBody: {
@@ -707,7 +885,7 @@ async function appendJournalToGoogleDoc({ uid, docUrl, sections }) {
     if (status === 401 || status === 403) {
       throw new httpsV2.HttpsError(
         'failed-precondition',
-        'Google Docs access is missing. Reconnect Google Calendar to grant Google Docs permissions.'
+        'Google Docs access is missing or missing the Docs scope. Reconnect Google Calendar to grant Google Docs permissions.'
       );
     }
     throw error;
@@ -749,7 +927,9 @@ function buildEmailHtml({ sections, taskRecords, storyRecords, docUrl }) {
     `<div style="white-space:pre-wrap;margin-bottom:16px;">${escapeHtml(sections.fullTranscript)}</div>`,
     '<h2 style="font-size:18px;margin:16px 0 8px;">Actionable items</h2>',
     actionRows ? `<ul>${actionRows}</ul>` : '<p>No tasks or stories were created.</p>',
-    `<p style="margin-top:16px;">Google Doc: <a href="${escapeHtml(docUrl)}">${escapeHtml(docUrl)}</a></p>`,
+    docUrl
+      ? `<p style="margin-top:16px;">Google Doc: <a href="${escapeHtml(docUrl)}">${escapeHtml(docUrl)}</a></p>`
+      : '',
     '</body></html>',
   ].join('');
 }
@@ -786,11 +966,15 @@ async function reserveTranscriptIngestion(db, uid, fingerprint, transcriptPrevie
   return { ref, ...result };
 }
 
-function inferResultType(createdTasks, createdStories) {
+function inferResultType(hasJournal, createdTasks, createdStories, entryType = null) {
+  if (hasJournal && !createdTasks.length && !createdStories.length) return 'journal';
+  if (hasJournal && (createdTasks.length || createdStories.length)) return 'mixed';
   if (createdTasks.length && createdStories.length) return 'mixed';
   if (createdTasks.length) return 'tasks';
   if (createdStories.length) return 'stories';
-  return 'journal';
+  if (entryType === 'journal') return 'journal';
+  if (entryType === 'task_list' || entryType === 'url_only') return 'tasks';
+  return hasJournal ? 'journal' : 'tasks';
 }
 
 function serializeTaskRecord(task) {
@@ -810,6 +994,7 @@ function serializeTaskRecord(task) {
     dueDateMs: payload.dueDateMs ?? payload.dueDate ?? null,
     storyId: payload.storyId || null,
     deepLink: task?.deepLink || payload.deepLink || buildEntityUrl('task', id, ref),
+    existing: Boolean(task?.existing),
   };
 }
 
@@ -827,6 +1012,7 @@ function serializeStoryRecord(story) {
     acceptanceCriteria: Array.isArray(payload.acceptanceCriteria) ? payload.acceptanceCriteria : [],
     theme: payload.theme || null,
     deepLink: story?.deepLink || payload.deepLink || buildEntityUrl('story', id, ref),
+    existing: Boolean(story?.existing),
   };
 }
 
@@ -834,6 +1020,9 @@ function buildTranscriptResponse({
   duplicate = false,
   message = null,
   fingerprint = null,
+  ingestionId = null,
+  hasJournal = false,
+  entryType = null,
   journalId = null,
   docUrl = null,
   processedAt = null,
@@ -849,8 +1038,11 @@ function buildTranscriptResponse({
     ok: true,
     duplicate,
     message,
+    ingestionId,
     fingerprint,
-    resultType: inferResultType(safeTasks, safeStories),
+    entryType,
+    hasJournal,
+    resultType: inferResultType(hasJournal, safeTasks, safeStories, entryType),
     journalId,
     docUrl,
     processedAt: normalizeTimestampOutput(processedAt),
@@ -873,7 +1065,10 @@ function buildDuplicateResponse(data) {
   return buildTranscriptResponse({
     duplicate: true,
     message,
+    ingestionId: data?.id || null,
     fingerprint: data?.fingerprint || null,
+    entryType: data?.entryType || null,
+    hasJournal: Boolean(data?.journalId),
     journalId: data?.journalId || null,
     docUrl: data?.docUrl || null,
     processedAt: data?.processedAt || null,
@@ -942,6 +1137,7 @@ async function hydrateDuplicateState(db, uid, fingerprint, data) {
     ...base,
     status: base.status || 'processed',
     fingerprint,
+    entryType: base.entryType || ((createdTasks.length || createdStories.length) ? 'mixed' : 'journal'),
     journalId,
     docUrl: journal.docUrl || base.docUrl || null,
     processedAt: base.processedAt || journal.updatedAt || journal.createdAt || null,
@@ -968,19 +1164,20 @@ async function findExistingJournalDuplicate(db, uid, fingerprint) {
   });
 }
 
-async function logIngestionActivity({ uid, fingerprint, journalId, storyRecords, taskRecords }) {
+async function logIngestionActivity({ uid, fingerprint, journalId, storyRecords, taskRecords, entryType }) {
   try {
     const ref = admin.firestore().collection('activity_stream').doc();
     await ref.set({
       id: ref.id,
-      entityId: journalId,
-      entityType: 'journal',
+      entityId: journalId || fingerprint,
+      entityType: journalId ? 'journal' : 'transcript_ingestion',
       activityType: 'transcript_ingestion',
       userId: uid,
       ownerUid: uid,
-      description: `Processed transcript into ${storyRecords.length} stories and ${taskRecords.length} tasks`,
+      description: `Processed ${entryType || 'transcript'} into ${storyRecords.length} stories and ${taskRecords.length} tasks`,
       metadata: {
         fingerprint,
+        entryType: entryType || null,
         stories: storyRecords.map((story) => ({ id: story.id, ref: story.ref })),
         tasks: taskRecords.map((task) => ({ id: task.id, ref: task.ref })),
       },
@@ -999,6 +1196,8 @@ async function processTranscriptIngestion({
   source,
   sourceUrl,
   sourceProvidedId,
+  channel,
+  authMode,
 }) {
   const db = admin.firestore();
   const normalizedTranscript = normalizeTranscriptForFingerprint(transcript);
@@ -1008,15 +1207,35 @@ async function processTranscriptIngestion({
 
   const fingerprint = sha256(normalizedTranscript);
   const reservation = await reserveTranscriptIngestion(db, uid, fingerprint, normalizedTranscript.slice(0, 500));
+  const lockRef = reservation.ref;
+  const logger = createIngestionLogger({
+    lockRef,
+    uid,
+    fingerprint,
+    source,
+    channel,
+    authMode,
+  });
+
   if (reservation.duplicate) {
+    await logger.event('duplicate_lock', 'Transcript already processing or processed', {
+      priorStatus: reservation.data?.status || null,
+    }, 'warn');
     const duplicateState = await hydrateDuplicateState(db, uid, fingerprint, reservation.data);
     return buildDuplicateResponse(duplicateState);
   }
 
-  const lockRef = reservation.ref;
   try {
+    await logger.event('ingestion_start', 'Transcript ingestion started', {
+      sourceProvidedId: sourceProvidedId || null,
+      transcriptPreview: normalizedTranscript.slice(0, 280),
+    });
+
     const existingJournal = await findExistingJournalDuplicate(db, uid, fingerprint);
     if (existingJournal) {
+      await logger.event('duplicate_journal', 'Matched previously ingested journal duplicate', {
+        journalId: existingJournal.journalId || null,
+      });
       await lockRef.set({
         status: 'processed',
         fingerprint,
@@ -1044,29 +1263,41 @@ async function processTranscriptIngestion({
       profile?.settings?.timezone ||
       DEFAULT_TIMEZONE
     ).trim() || DEFAULT_TIMEZONE;
-    const docUrl = String(profile?.defaultJournalDocUrl || '').trim();
-    if (!docUrl) {
-      throw new httpsV2.HttpsError(
-        'failed-precondition',
-        'Set a default journal Google Doc URL in Settings before ingesting transcripts.'
-      );
-    }
-
-    // Fail fast if Google is not configured before any LLM or write work happens.
-    await getGoogleDocsClient(uid);
 
     const sourceUrls = extractUrls(normalizedTranscript, sourceUrl);
     const existingLock = reservation.data || {};
     const urlPreviews = Array.isArray(existingLock.urlPreviews)
       ? existingLock.urlPreviews
       : await fetchUrlPreviews(sourceUrls);
+    await logger.event('analysis_prepare', 'Prepared transcript analysis context', {
+      urlCount: sourceUrls.length,
+      previewCount: urlPreviews.length,
+      timezone,
+    });
+
     const rawAnalysis = existingLock.analysis || await callTranscriptModel({
       transcript: normalizedTranscript,
       persona: persona || 'personal',
       timezone,
       urlPreviews,
     });
-    const analysis = sanitizeAnalysis(rawAnalysis, normalizedTranscript);
+    const analysis = sanitizeAnalysis(rawAnalysis, normalizedTranscript, sourceUrls);
+    await logger.event('analysis_complete', 'Transcript classified and structured', {
+      entryType: analysis.entryType,
+      shouldCreateJournal: analysis.shouldCreateJournal,
+      taskCount: analysis.tasks.length,
+      storyCount: analysis.stories.length,
+    });
+
+    const docUrl = analysis.shouldCreateJournal
+      ? String(profile?.defaultJournalDocUrl || '').trim()
+      : null;
+    if (analysis.shouldCreateJournal && !docUrl) {
+      throw new httpsV2.HttpsError(
+        'failed-precondition',
+        'Set a default journal Google Doc URL in Settings before ingesting transcripts.'
+      );
+    }
 
     await lockRef.set({
       status: 'processing',
@@ -1075,13 +1306,18 @@ async function processTranscriptIngestion({
       sourceUrls,
       urlPreviews,
       analysis,
-      docUrl,
+      entryType: analysis.entryType,
+      shouldCreateJournal: analysis.shouldCreateJournal,
+      docUrl: docUrl || null,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     }, { merge: true });
 
     const sections = buildDocSections(analysis, transcript, timezone);
 
-    if (existingLock.docAppendStatus !== 'done') {
+    if (analysis.shouldCreateJournal && existingLock.docAppendStatus !== 'done') {
+      await logger.event('google_docs_append_start', 'Appending journal entry to Google Docs', {
+        docUrl,
+      });
       await appendJournalToGoogleDoc({
         uid,
         docUrl,
@@ -1092,9 +1328,13 @@ async function processTranscriptIngestion({
         docAppendedAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       }, { merge: true });
+      await logger.event('google_docs_append_done', 'Google Docs append completed', {
+        docUrl,
+      });
     }
 
-    const storyRecords = buildStoryRecords({
+    const storyRecords = await buildStoryRecords({
+      db,
       uid,
       persona: persona || 'personal',
       fingerprint,
@@ -1102,6 +1342,7 @@ async function processTranscriptIngestion({
     });
     const storyMap = new Map(storyRecords.map((story) => [normalizeTitle(story.title), story]));
     const taskRecords = await buildTaskRecords({
+      db,
       uid,
       persona: persona || 'personal',
       fingerprint,
@@ -1109,34 +1350,53 @@ async function processTranscriptIngestion({
       timezone,
       storyMap,
     });
-    const journalRecord = buildJournalRecord({
-      uid,
-      persona: persona || 'personal',
-      fingerprint,
-      docUrl,
-      originalTranscript: transcript,
-      sections,
-      storyRecords,
-      taskRecords,
-      source,
-      sourceUrls,
+    await logger.event('entity_resolution', 'Built task and story records', {
+      stories: storyRecords.map((story) => ({ id: story.id, existing: Boolean(story.existing) })),
+      tasks: taskRecords.map((task) => ({ id: task.id, existing: Boolean(task.existing) })),
     });
 
+    const journalRecord = analysis.shouldCreateJournal
+      ? buildJournalRecord({
+        uid,
+        persona: persona || 'personal',
+        fingerprint,
+        docUrl,
+        entryType: analysis.entryType,
+        originalTranscript: transcript,
+        sections,
+        storyRecords,
+        taskRecords,
+        source,
+        sourceUrls,
+      })
+      : null;
+
     const batch = db.batch();
-    batch.set(db.collection('journals').doc(journalRecord.id), journalRecord.payload, { merge: true });
+    if (journalRecord) {
+      batch.set(db.collection('journals').doc(journalRecord.id), journalRecord.payload, { merge: true });
+    }
     storyRecords.forEach((story) => {
-      batch.set(db.collection('stories').doc(story.id), story.payload, { merge: true });
+      if (!story.existing) {
+        batch.set(db.collection('stories').doc(story.id), story.payload, { merge: true });
+      }
     });
     taskRecords.forEach((task) => {
-      batch.set(db.collection('tasks').doc(task.id), task.payload, { merge: true });
+      if (!task.existing) {
+        batch.set(db.collection('tasks').doc(task.id), task.payload, { merge: true });
+      }
     });
     await batch.commit();
+    await logger.event('firestore_commit_done', 'Firestore entities committed', {
+      journalId: journalRecord?.id || null,
+      newStories: storyRecords.filter((story) => !story.existing).length,
+      newTasks: taskRecords.filter((task) => !task.existing).length,
+    });
 
     const emailHtml = buildEmailHtml({
       sections,
       taskRecords,
       storyRecords,
-      docUrl,
+      docUrl: docUrl || null,
     });
 
     if (!existingLock.emailSentAt) {
@@ -1145,15 +1405,21 @@ async function processTranscriptIngestion({
         subject: `BOB Transcript Summary · ${sections.oneLineSummary}`,
         html: emailHtml,
       });
+      await logger.event('email_sent', 'Summary email sent', {
+        recipient: email,
+      });
     }
 
     const createdTasks = taskRecords.map((task) => serializeTaskRecord(task));
     const createdStories = storyRecords.map((story) => serializeStoryRecord(story));
     const response = buildTranscriptResponse({
       duplicate: false,
+      ingestionId: lockRef.id,
       fingerprint,
-      journalId: journalRecord.id,
-      docUrl,
+      entryType: analysis.entryType,
+      hasJournal: Boolean(journalRecord),
+      journalId: journalRecord?.id || null,
+      docUrl: docUrl || null,
       processedAt: new Date(),
       sections,
       createdTasks,
@@ -1163,8 +1429,11 @@ async function processTranscriptIngestion({
     await lockRef.set({
       status: 'processed',
       fingerprint,
-      journalId: journalRecord.id,
-      docUrl,
+      journalId: journalRecord?.id || null,
+      docUrl: docUrl || null,
+      entryType: analysis.entryType,
+      hasJournal: Boolean(journalRecord),
+      shouldCreateJournal: analysis.shouldCreateJournal,
       processedDocument: response.processedDocument,
       resultType: response.resultType,
       createdTasks: response.createdTasks,
@@ -1177,30 +1446,65 @@ async function processTranscriptIngestion({
     await logIngestionActivity({
       uid,
       fingerprint,
-      journalId: journalRecord.id,
+      journalId: journalRecord?.id || null,
       storyRecords,
       taskRecords,
+      entryType: analysis.entryType,
+    });
+    await logger.event('ingestion_complete', 'Transcript ingestion completed', {
+      resultType: response.resultType,
+      journalId: journalRecord?.id || null,
+      taskCount: createdTasks.length,
+      storyCount: createdStories.length,
     });
 
     return response;
   } catch (error) {
+    await logger.event('ingestion_failed', 'Transcript ingestion failed', {
+      code: error?.code || null,
+      message: error?.message || String(error),
+      stack: error?.stack || null,
+    }, 'error');
     await lockRef.set({
       status: 'failed',
+      errorCode: error?.code || 'internal',
       errorMessage: error?.message || String(error),
       failedAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     }, { merge: true }).catch(() => null);
-    throw error;
+    if (error instanceof httpsV2.HttpsError) {
+      throw new httpsV2.HttpsError(
+        error.code,
+        error.message,
+        {
+          ...(error.details || {}),
+          ingestionId: lockRef.id,
+          fingerprint,
+        }
+      );
+    }
+    throw new httpsV2.HttpsError(
+      'internal',
+      `Transcript ingestion failed at ${lockRef.id}: ${error?.message || 'Unknown error'}`,
+      {
+        ingestionId: lockRef.id,
+        fingerprint,
+      }
+    );
   }
 }
 
 function mapHttpError(error, res) {
   const code = error?.code;
-  if (code === 'unauthenticated') return res.status(401).json({ error: error.message });
-  if (code === 'permission-denied') return res.status(403).json({ error: error.message });
-  if (code === 'invalid-argument') return res.status(400).json({ error: error.message });
-  if (code === 'failed-precondition') return res.status(412).json({ error: error.message });
-  return res.status(500).json({ error: error?.message || 'Internal error' });
+  const payload = {
+    error: error?.message || 'Internal error',
+    details: error?.details || null,
+  };
+  if (code === 'unauthenticated') return res.status(401).json(payload);
+  if (code === 'permission-denied') return res.status(403).json(payload);
+  if (code === 'invalid-argument') return res.status(400).json(payload);
+  if (code === 'failed-precondition') return res.status(412).json(payload);
+  return res.status(500).json(payload);
 }
 
 function resolveShortcutSecret() {
@@ -1211,12 +1515,40 @@ function resolveShortcutSecret() {
   ).trim();
 }
 
+function readHeaderValue(req, name) {
+  const direct = req?.headers?.[name];
+  if (Array.isArray(direct)) return String(direct[0] || '').trim();
+  if (typeof direct === 'string') return direct.trim();
+
+  const lower = req?.headers?.[name.toLowerCase()];
+  if (Array.isArray(lower)) return String(lower[0] || '').trim();
+  if (typeof lower === 'string') return lower.trim();
+
+  const getterValue = req?.get?.(name);
+  if (typeof getterValue === 'string') return getterValue.trim();
+  return '';
+}
+
+function isHeaderSafeAscii(value) {
+  return /^[\x20-\x7E]+$/.test(String(value || ''));
+}
+
 async function resolveHttpCaller(req) {
-  const authHeader = String(req.get('authorization') || req.get('Authorization') || '');
+  const authHeader = readHeaderValue(req, 'authorization');
   if (authHeader.startsWith('Bearer ')) {
     const token = authHeader.slice(7).trim();
     if (!token) throw new httpsV2.HttpsError('unauthenticated', 'Missing bearer token.');
-    const decoded = await admin.auth().verifyIdToken(token);
+    let decoded;
+    try {
+      decoded = await admin.auth().verifyIdToken(token);
+    } catch (error) {
+      console.warn('[transcriptIngestion] http_auth_failed', JSON.stringify({
+        authMode: 'firebase',
+        reason: 'invalid_bearer_token',
+        message: error?.message || String(error),
+      }));
+      throw new httpsV2.HttpsError('unauthenticated', 'Invalid bearer token.');
+    }
     return {
       uid: decoded.uid,
       authMode: 'firebase',
@@ -1224,19 +1556,55 @@ async function resolveHttpCaller(req) {
   }
 
   const configuredSecret = resolveShortcutSecret();
+  const headerSecret = String(
+    readHeaderValue(req, 'x-bob-shortcut-key') ||
+    readHeaderValue(req, 'x-api-key') ||
+    readHeaderValue(req, 'x-shortcut-secret') ||
+    readHeaderValue(req, 'x-reminders-secret') ||
+    ''
+  ).trim();
   const providedSecret = String(
-    req.get('x-shortcut-secret') ||
-    req.get('x-reminders-secret') ||
+    headerSecret ||
     req.body?.secret ||
     req.query?.secret ||
     ''
   ).trim();
+  const providedViaHeader = Boolean(headerSecret);
+  const configuredSecretHeaderSafe = isHeaderSafeAscii(configuredSecret);
+  if (providedViaHeader && configuredSecret && !configuredSecretHeaderSafe) {
+    console.warn('[transcriptIngestion] http_auth_failed', JSON.stringify({
+      authMode: 'shortcut_secret',
+      reason: 'configured_secret_not_header_safe',
+      hasUid: Boolean(String(req.body?.uid || req.query?.uid || '').trim()),
+      source: String(req.body?.source || req.query?.source || '').trim() || null,
+    }));
+    throw new httpsV2.HttpsError(
+      'failed-precondition',
+      'The configured shortcut secret contains non-ASCII characters and cannot be used in an HTTP header. Reset it to a plain ASCII string or send it in the JSON body as `secret`.'
+    );
+  }
   if (!configuredSecret || !providedSecret || providedSecret !== configuredSecret) {
+    console.warn('[transcriptIngestion] http_auth_failed', JSON.stringify({
+      authMode: 'shortcut_secret',
+      reason: !configuredSecret ? 'secret_not_configured' : !providedSecret ? 'secret_not_provided' : 'secret_mismatch',
+      hasUid: Boolean(String(req.body?.uid || req.query?.uid || '').trim()),
+      providedViaHeader,
+      providedViaBody: Boolean(req.body?.secret),
+      configuredSecretHeaderSafe,
+      source: String(req.body?.source || req.query?.source || '').trim() || null,
+    }));
     throw new httpsV2.HttpsError('unauthenticated', 'Missing or invalid shortcut secret.');
   }
 
   const uid = String(req.body?.uid || req.query?.uid || '').trim();
-  if (!uid) throw new httpsV2.HttpsError('invalid-argument', 'uid is required when using the shortcut secret.');
+  if (!uid) {
+    console.warn('[transcriptIngestion] http_auth_failed', JSON.stringify({
+      authMode: 'shortcut_secret',
+      reason: 'uid_missing',
+      source: String(req.body?.source || req.query?.source || '').trim() || null,
+    }));
+    throw new httpsV2.HttpsError('invalid-argument', 'uid is required when using the shortcut secret.');
+  }
   return {
     uid,
     authMode: 'shortcut_secret',
@@ -1253,6 +1621,12 @@ exports.ingestTranscript = httpsV2.onCall({
 }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  console.log('[transcriptIngestion] callable_request', JSON.stringify({
+    uid,
+    source: String(req?.data?.source || 'web_fab'),
+    sourceProvidedId: String(req?.data?.sourceProvidedId || ''),
+    transcriptLength: String(req?.data?.transcript || '').trim().length,
+  }));
   return processTranscriptIngestion({
     uid,
     transcript: String(req?.data?.transcript || ''),
@@ -1260,6 +1634,8 @@ exports.ingestTranscript = httpsV2.onCall({
     source: String(req?.data?.source || 'web_fab'),
     sourceUrl: String(req?.data?.sourceUrl || ''),
     sourceProvidedId: String(req?.data?.sourceProvidedId || ''),
+    channel: 'callable',
+    authMode: 'firebase',
   });
 });
 
@@ -1275,7 +1651,7 @@ exports.ingestTranscriptHttp = httpsV2.onRequest({
   ],
 }, async (req, res) => {
   res.set('Access-Control-Allow-Origin', '*');
-  res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-shortcut-secret, x-reminders-secret');
+  res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-bob-shortcut-key, x-api-key, x-shortcut-secret, x-reminders-secret');
   res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
   if (req.method === 'OPTIONS') {
     res.status(204).send('');
@@ -1288,6 +1664,13 @@ exports.ingestTranscriptHttp = httpsV2.onRequest({
 
   try {
     const caller = await resolveHttpCaller(req);
+    console.log('[transcriptIngestion] http_request', JSON.stringify({
+      uid: caller.uid,
+      authMode: caller.authMode,
+      source: String(req.body?.source || 'ios_shortcut'),
+      sourceProvidedId: String(req.body?.sourceProvidedId || ''),
+      transcriptLength: String(req.body?.transcript || '').trim().length,
+    }));
     const result = await processTranscriptIngestion({
       uid: caller.uid,
       transcript: String(req.body?.transcript || ''),
@@ -1295,9 +1678,18 @@ exports.ingestTranscriptHttp = httpsV2.onRequest({
       source: String(req.body?.source || 'ios_shortcut'),
       sourceUrl: String(req.body?.sourceUrl || ''),
       sourceProvidedId: String(req.body?.sourceProvidedId || ''),
+      channel: 'http',
+      authMode: caller.authMode,
     });
     res.status(200).json(result);
   } catch (error) {
+    console.error('[transcriptIngestion] http_request_failed', JSON.stringify({
+      code: error?.code || 'internal',
+      message: error?.message || String(error),
+      details: summarizeForLog(error?.details || null),
+      source: String(req.body?.source || ''),
+      sourceProvidedId: String(req.body?.sourceProvidedId || ''),
+    }));
     mapHttpError(error, res);
   }
 });
