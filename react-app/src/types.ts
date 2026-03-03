@@ -84,10 +84,13 @@ export interface JournalEntry {
   persona: 'personal' | 'work';
   ownerUid: string;
   originalTranscript?: string;
+  journalDateKey?: string | null;
   dateHeading?: string;
   structuredEntry?: string;
   oneLineSummary?: string;
   advice?: string;
+  entryCount?: number;
+  summaryHistory?: string[];
   docUrl?: string | null;
   googleDoc?: {
     attempted?: boolean;
@@ -103,6 +106,24 @@ export interface JournalEntry {
   sourceUrls?: string[];
   storyIds?: string[];
   taskIds?: string[];
+  linkedStories?: Array<{
+    id: string;
+    ref?: string;
+    title?: string;
+    url?: string | null;
+    deepLink?: string | null;
+    existing?: boolean;
+    updated?: boolean;
+  }>;
+  linkedTasks?: Array<{
+    id: string;
+    ref?: string;
+    title?: string;
+    url?: string | null;
+    deepLink?: string | null;
+    existing?: boolean;
+    updated?: boolean;
+  }>;
   createdAt: any;
   updatedAt: any;
 }
@@ -199,7 +220,7 @@ export interface Task {
   aiPriorityLabel?: string;
   aiTop3Reason?: string;
   iosPriority?: string;
-  type?: 'task' | 'chore' | 'routine' | 'habit' | string;
+  type?: 'task' | 'chore' | 'routine' | 'habit' | 'read' | 'watch' | string;
   repeatFrequency?: 'daily' | 'weekly' | 'monthly' | 'yearly' | null;
   repeatInterval?: number | null;
   daysOfWeek?: string[] | null;

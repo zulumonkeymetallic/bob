@@ -820,12 +820,14 @@ function enrichAnalysisWithUrlMetadata(analysis, sourceUrls = [], urlPreviews = 
 
 function buildDocSections(analysis, originalTranscript, timezone) {
   const zone = timezone || DEFAULT_TIMEZONE;
-  const dateHeading = DateTime.now().setZone(zone).setLocale('en-US').toLocaleString(DateTime.DATE_FULL);
+  const now = DateTime.now().setZone(zone);
+  const dateHeading = now.setLocale('en-US').toLocaleString(DateTime.DATE_FULL);
   const oneLineSummary = String(analysis?.oneLineSummary || '').trim() || 'Transcript summary';
   const structuredEntry = String(analysis?.structuredEntry || '').trim() || String(originalTranscript || '').trim();
   const advice = String(analysis?.advice || '').trim() || 'No additional advice generated.';
   const fullTranscript = String(originalTranscript || '').trim();
   return {
+    journalDateKey: now.toISODate(),
     dateHeading,
     oneLineSummary,
     structuredEntry,
@@ -836,6 +838,7 @@ function buildDocSections(analysis, originalTranscript, timezone) {
 
 function serializeSections(sections) {
   return {
+    journalDateKey: sections?.journalDateKey || null,
     dateHeading: sections?.dateHeading || null,
     oneLineSummary: sections?.oneLineSummary || null,
     structuredEntry: sections?.structuredEntry || null,
@@ -844,7 +847,74 @@ function serializeSections(sections) {
   };
 }
 
-function buildDocAppendPlan(sections) {
+function buildStableJournalDayId(uid, journalDateKey) {
+  const compactDate = String(journalDateKey || '').replace(/[^0-9]/g, '');
+  return `journal_${uid}_${compactDate || 'day'}`;
+}
+
+function mergeDistinctText(existingValue, nextValue) {
+  const existing = String(existingValue || '').trim();
+  const next = String(nextValue || '').trim();
+  if (!existing) return next;
+  if (!next) return existing;
+  if (existing === next || existing.includes(next)) return existing;
+  if (next.includes(existing)) return next;
+  return `${existing}\n\n${next}`;
+}
+
+function mergeUniqueStrings(...groups) {
+  return Array.from(new Set(groups.flatMap((group) => (
+    Array.isArray(group) ? group.map((item) => String(item || '').trim()).filter(Boolean) : []
+  ))));
+}
+
+function mergeJournalEntryType(existingType, nextType, storyRecords, taskRecords) {
+  if (String(existingType || '').trim().toLowerCase() === 'mixed') return 'mixed';
+  if (String(nextType || '').trim().toLowerCase() === 'mixed') return 'mixed';
+  return (Array.isArray(storyRecords) && storyRecords.length) || (Array.isArray(taskRecords) && taskRecords.length)
+    ? 'mixed'
+    : 'journal';
+}
+
+async function findExistingJournalForDate({ db, uid, persona, sections }) {
+  const journalDateKey = String(sections?.journalDateKey || '').trim();
+  const dateHeading = String(sections?.dateHeading || '').trim();
+  const dailyId = buildStableJournalDayId(uid, journalDateKey);
+  const dailySnap = await db.collection('journals').doc(dailyId).get();
+  if (dailySnap.exists) {
+    return { id: dailySnap.id, data: dailySnap.data() || {}, existed: true, matchType: 'daily_id' };
+  }
+
+  const queries = [
+    db.collection('journals')
+      .where('ownerUid', '==', uid)
+      .where('persona', '==', persona)
+      .where('journalDateKey', '==', journalDateKey)
+      .limit(1),
+    db.collection('journals')
+      .where('ownerUid', '==', uid)
+      .where('persona', '==', persona)
+      .where('dateHeading', '==', dateHeading)
+      .limit(1),
+  ];
+
+  for (const candidateQuery of queries) {
+    try {
+      const snap = await candidateQuery.get();
+      if (!snap.empty) {
+        const match = snap.docs[0];
+        return { id: match.id, data: match.data() || {}, existed: true, matchType: 'query_match' };
+      }
+    } catch (error) {
+      console.warn('[transcriptIngestion] findExistingJournalForDate failed', error?.message || error);
+    }
+  }
+
+  return { id: dailyId, data: null, existed: false, matchType: 'new_daily_id' };
+}
+
+function buildDocAppendPlan(sections, options = {}) {
+  const includeDateHeading = options?.includeDateHeading !== false;
   const dateHeading = `${sections.dateHeading}\n`;
   const summaryHeading = `${sections.oneLineSummary}\n`;
   const structuredBody = `${sections.structuredEntry}\n\n`;
@@ -853,7 +923,7 @@ function buildDocAppendPlan(sections) {
   const transcriptHeading = 'Full transcript\n';
   const transcriptBody = `${sections.fullTranscript}\n\n`;
   const text = [
-    dateHeading,
+    includeDateHeading ? dateHeading : '',
     summaryHeading,
     structuredBody,
     adviceHeading,
@@ -863,8 +933,12 @@ function buildDocAppendPlan(sections) {
   ].join('');
 
   let cursor = 0;
-  const dateRange = { start: cursor, end: cursor + dateHeading.length };
-  cursor += dateHeading.length;
+  const dateRange = includeDateHeading
+    ? { start: cursor, end: cursor + dateHeading.length }
+    : null;
+  if (includeDateHeading) {
+    cursor += dateHeading.length;
+  }
   const summaryRange = { start: cursor, end: cursor + summaryHeading.length };
   cursor += summaryHeading.length + structuredBody.length;
   const adviceRange = { start: cursor, end: cursor + adviceHeading.length };
@@ -873,6 +947,7 @@ function buildDocAppendPlan(sections) {
 
   return {
     text,
+    includeDateHeading,
     dateRange,
     summaryRange,
     adviceRange,
@@ -995,7 +1070,13 @@ async function callTranscriptModel({ transcript, persona, timezone, urlPreviews 
     'Use entryType="mixed" when it is clearly a journal/reflection that also contains actionable tasks or stories.',
     'Set shouldCreateJournal=true only for entryType="journal" or entryType="mixed".',
     'If the text is mainly a task brain dump, product requirement list, backlog grooming note, or feature request with action items, use entryType="task_list" even if it contains repetition or a little incidental personal narrative.',
+    'If the input is mainly application logs, console output, stack traces, diagnostics, or error dumps, use entryType="task_list" and do NOT create a journal entry.',
+    'For application logs, console output, stack traces, diagnostics, or error dumps, do not create tasks or stories unless the user explicitly asks you to investigate, debug, fix, or resolve something.',
     'Do not create a journal entry just because the speaker is thinking out loud while listing tasks.',
+    'For entryType="journal" or entryType="mixed", act as a professional journal editor.',
+    'Turn raw spoken thoughts into cohesive first-person journal prose while staying faithful to the speaker\'s meaning, chronology, and tone.',
+    'Remove filler words, false starts, repeated dictation fragments, and obvious transcription artifacts such as "um", "uh", "#um", duplicated partial phrases, and speech-to-text glitches when they do not change meaning.',
+    'Keep the journal entry emotionally honest and detailed, but make it readable and well-structured with clear paragraphs when the topic shifts.',
     [
       'Keep structuredEntry 99% faithful to the transcript.',
       'Fix punctuation, capitalization, and obvious dictation errors only.',
@@ -1086,6 +1167,30 @@ function looksLikeTaskBrainDump(text) {
   if (/\b(requirement|requirements|bulk paste tasks|extract all of the tasks)\b/.test(lowered)) score += 2;
 
   return score >= 4;
+}
+
+function looksLikeDiagnosticLogDump(text) {
+  const raw = String(text || '');
+  if (!raw.trim()) return false;
+  const lowered = raw.toLowerCase();
+  let score = 0;
+
+  if (/\[(log|info|warn|warning|error|debug)\]/i.test(raw)) score += 2;
+  if ((raw.match(/\[(log|info|warn|warning|error|debug)\]/ig) || []).length >= 4) score += 3;
+  if (/firebaseerror|permission-denied|uncaught error in snapshot listener|stack trace|exception|traceback/i.test(raw)) score += 3;
+  if (/@firebase\/firestore|firestore \(\d+\.\d+\.\d+\)|main\.[a-z0-9]+\.(js|css)/i.test(raw)) score += 2;
+  if (/(^|\s)(at\s+[^\n]+:\d+:\d+|\w+\s+\(main\.[a-z0-9]+\.(js|css):\d+:\d+\))/im.test(raw)) score += 2;
+  if (/\b(console|snapshot listener|permission|missing or insufficient permissions|route changed|location changed|rendering)\b/i.test(raw)) score += 2;
+  if ((raw.match(/\b(line \d+|\d+:\d+)\b/g) || []).length >= 4) score += 1;
+  if ((lowered.match(/\bobject\b/g) || []).length >= 4) score += 1;
+
+  return score >= 5;
+}
+
+function looksLikeExplicitDiagnosticAction(text) {
+  const lowered = String(text || '').toLowerCase();
+  if (!lowered.trim()) return false;
+  return /\b(fix|resolve|investigate|debug|look into|check|triage|diagnose|why is|why was|help me|can you|please|find out)\b/.test(lowered);
 }
 
 function countHeuristicWords(text) {
@@ -1219,6 +1324,9 @@ function sanitizeAgentRoute(raw, normalizedTranscript, sourceUrls = []) {
 }
 
 function normalizeEntryType(rawType, transcript, sourceUrls, tasks, stories) {
+  if (looksLikeDiagnosticLogDump(transcript)) {
+    return 'task_list';
+  }
   const type = String(rawType || '').trim().toLowerCase();
   if (type === 'journal' || type === 'task_list' || type === 'url_only' || type === 'mixed') {
     return type;
@@ -1251,14 +1359,28 @@ function normalizeDueDateIso(value, timezone = DEFAULT_TIMEZONE) {
   return parsed.startOf('day').toISODate();
 }
 
+function polishJournalNarrative(value) {
+  return String(value || '')
+    .replace(/\b#?(?:um+|uh+|erm+|mm+|hmm+)\b/gi, ' ')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n[ \t]+/g, '\n')
+    .replace(/\s+([,.;:!?])/g, '$1')
+    .replace(/([,.;:!?])(?=[^\s\n])/g, '$1 ')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 function sanitizeAnalysis(raw, transcript, sourceUrls = [], timezone = DEFAULT_TIMEZONE) {
   const analysis = raw && typeof raw === 'object' ? raw : {};
+  const diagnosticLog = looksLikeDiagnosticLogDump(transcript);
+  const explicitDiagnosticAction = looksLikeExplicitDiagnosticAction(transcript);
   const oneLineSummary = String(analysis.oneLineSummary || '').trim().replace(/\s+/g, ' ').slice(0, 140);
-  const structuredEntry = String(analysis.structuredEntry || '').trim() || String(transcript || '').trim();
-  const advice = String(analysis.advice || '').trim() || 'No additional advice generated.';
+  const structuredEntrySource = String(analysis.structuredEntry || '').trim() || String(transcript || '').trim();
+  const adviceSource = String(analysis.advice || '').trim() || 'No additional advice generated.';
 
   const seenStories = new Set();
-  const stories = (Array.isArray(analysis.stories) ? analysis.stories : [])
+  let stories = (Array.isArray(analysis.stories) ? analysis.stories : [])
     .map((story) => ({
       title: String(story?.title || '').trim().slice(0, 140),
       description: String(story?.description || '').trim().slice(0, 2000),
@@ -1277,7 +1399,7 @@ function sanitizeAnalysis(raw, transcript, sourceUrls = [], timezone = DEFAULT_T
     .slice(0, 8);
 
   const seenTasks = new Set();
-  const tasks = (Array.isArray(analysis.tasks) ? analysis.tasks : [])
+  let tasks = (Array.isArray(analysis.tasks) ? analysis.tasks : [])
     .map((task) => {
       const title = String(task?.title || '').trim().slice(0, 140);
       const storyTitle = task?.storyTitle == null ? null : String(task.storyTitle || '').trim().slice(0, 140);
@@ -1305,8 +1427,15 @@ function sanitizeAnalysis(raw, transcript, sourceUrls = [], timezone = DEFAULT_T
     })
     .slice(0, 16);
 
+  if (diagnosticLog && !explicitDiagnosticAction) {
+    stories = [];
+    tasks = [];
+  }
+
   const entryType = normalizeEntryType(analysis.entryType, transcript, sourceUrls, tasks, stories);
   const shouldCreateJournal = entryType === 'journal' || entryType === 'mixed';
+  const structuredEntry = shouldCreateJournal ? polishJournalNarrative(structuredEntrySource) : structuredEntrySource;
+  const advice = shouldCreateJournal ? polishJournalNarrative(adviceSource) : adviceSource;
 
   return {
     entryType,
@@ -1735,6 +1864,7 @@ async function buildTaskRecords({
 }
 
 function buildJournalRecord({
+  journalTarget,
   uid,
   persona,
   fingerprint,
@@ -1748,35 +1878,66 @@ function buildJournalRecord({
   source,
   sourceUrls,
 }) {
-  const id = buildStableDocId('journal', uid, fingerprint);
+  const existingJournal = journalTarget?.data || null;
+  const journalDateKey = String(sections?.journalDateKey || existingJournal?.journalDateKey || '').trim() || null;
+  const id = journalTarget?.id || buildStableJournalDayId(uid, journalDateKey);
+  const mergedStoryIds = mergeUniqueStrings(existingJournal?.storyIds, storyRecords.map((story) => story.id));
+  const mergedTaskIds = mergeUniqueStrings(existingJournal?.taskIds, taskRecords.map((task) => task.id));
+  const mergedSourceUrls = mergeUniqueStrings(existingJournal?.sourceUrls, sourceUrls);
+  const summaryHistory = mergeUniqueStrings(existingJournal?.summaryHistory, [sections.oneLineSummary]);
+  const mergedSections = {
+    journalDateKey,
+    dateHeading: existingJournal?.dateHeading || sections.dateHeading,
+    oneLineSummary: sections.oneLineSummary || existingJournal?.oneLineSummary || 'Transcript summary',
+    structuredEntry: mergeDistinctText(existingJournal?.structuredEntry, sections.structuredEntry),
+    advice: mergeDistinctText(existingJournal?.advice, sections.advice),
+    fullTranscript: mergeDistinctText(existingJournal?.originalTranscript, originalTranscript),
+  };
   const payload = {
     id,
     ownerUid: uid,
     persona,
-    originalTranscript,
-    dateHeading: sections.dateHeading,
-    structuredEntry: sections.structuredEntry,
-    oneLineSummary: sections.oneLineSummary,
-    advice: sections.advice,
-    docUrl,
-    entryType: entryType || 'journal',
+    originalTranscript: mergedSections.fullTranscript,
+    journalDateKey,
+    dateHeading: mergedSections.dateHeading,
+    structuredEntry: mergedSections.structuredEntry,
+    oneLineSummary: mergedSections.oneLineSummary,
+    advice: mergedSections.advice,
+    docUrl: docUrl || existingJournal?.docUrl || null,
+    entryType: mergeJournalEntryType(existingJournal?.entryType, entryType, storyRecords, taskRecords),
     transcriptFingerprint: fingerprint,
+    transcriptFingerprints: mergeUniqueStrings(existingJournal?.transcriptFingerprints, [fingerprint]),
     source: source || 'transcript',
-    sourceUrls,
-    storyIds: storyRecords.map((story) => story.id),
-    taskIds: taskRecords.map((task) => task.id),
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    sourceUrls: mergedSourceUrls,
+    storyIds: mergedStoryIds,
+    taskIds: mergedTaskIds,
+    entryCount: Math.max(1, Number(existingJournal?.entryCount || 0) + 1),
+    summaryHistory,
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   };
+  if (!existingJournal) {
+    payload.createdAt = admin.firestore.FieldValue.serverTimestamp();
+  }
   if (googleDoc) {
     payload.googleDoc = googleDoc;
     if (googleDoc.appended === true) {
       payload.googleDocAppendedAt = admin.firestore.FieldValue.serverTimestamp();
     }
   }
+  payload.linkedStories = mergeLinkedEntitySummaries(
+    existingJournal?.linkedStories,
+    buildLinkedEntitySummaries(storyRecords, 'story'),
+    'story'
+  );
+  payload.linkedTasks = mergeLinkedEntitySummaries(
+    existingJournal?.linkedTasks,
+    buildLinkedEntitySummaries(taskRecords, 'task'),
+    'task'
+  );
   return {
     id,
     payload,
+    mergedSections,
   };
 }
 
@@ -1858,7 +2019,7 @@ async function getGoogleCalendarClient(uid) {
   return google.calendar({ version: 'v3', auth });
 }
 
-async function appendJournalToGoogleDoc({ uid, docUrl, sections }) {
+async function appendJournalToGoogleDoc({ uid, docUrl, sections, includeDateHeading = true }) {
   const docId = parseGoogleDocId(docUrl);
   if (!docId) {
     throw new httpsV2.HttpsError('failed-precondition', 'The default journal Google Doc URL is invalid.');
@@ -1868,45 +2029,51 @@ async function appendJournalToGoogleDoc({ uid, docUrl, sections }) {
     const document = await docs.documents.get({ documentId: docId });
     const bodyContent = document?.data?.body?.content || [];
     const insertAt = Math.max(1, Number(bodyContent[bodyContent.length - 1]?.endIndex || 1) - 1);
-    const plan = buildDocAppendPlan(sections);
+    const plan = buildDocAppendPlan(sections, { includeDateHeading });
+
+    const requests = [
+      { insertText: { location: { index: insertAt }, text: plan.text } },
+    ];
+    if (plan.dateRange) {
+      requests.push({
+        updateParagraphStyle: {
+          range: { startIndex: insertAt + plan.dateRange.start, endIndex: insertAt + plan.dateRange.end },
+          paragraphStyle: { namedStyleType: 'HEADING_1' },
+          fields: 'namedStyleType',
+        },
+      });
+    }
+    requests.push(
+      {
+        updateParagraphStyle: {
+          range: { startIndex: insertAt + plan.summaryRange.start, endIndex: insertAt + plan.summaryRange.end },
+          paragraphStyle: { namedStyleType: 'HEADING_2' },
+          fields: 'namedStyleType',
+        },
+      },
+      {
+        updateParagraphStyle: {
+          range: { startIndex: insertAt + plan.adviceRange.start, endIndex: insertAt + plan.adviceRange.end },
+          paragraphStyle: { namedStyleType: 'HEADING_2' },
+          fields: 'namedStyleType',
+        },
+      },
+      {
+        updateParagraphStyle: {
+          range: {
+            startIndex: insertAt + plan.transcriptRange.start,
+            endIndex: insertAt + plan.transcriptRange.end,
+          },
+          paragraphStyle: { namedStyleType: 'HEADING_2' },
+          fields: 'namedStyleType',
+        },
+      },
+    );
 
     await docs.documents.batchUpdate({
       documentId: docId,
       requestBody: {
-        requests: [
-          { insertText: { location: { index: insertAt }, text: plan.text } },
-          {
-            updateParagraphStyle: {
-              range: { startIndex: insertAt + plan.dateRange.start, endIndex: insertAt + plan.dateRange.end },
-              paragraphStyle: { namedStyleType: 'HEADING_1' },
-              fields: 'namedStyleType',
-            },
-          },
-          {
-            updateParagraphStyle: {
-              range: { startIndex: insertAt + plan.summaryRange.start, endIndex: insertAt + plan.summaryRange.end },
-              paragraphStyle: { namedStyleType: 'HEADING_2' },
-              fields: 'namedStyleType',
-            },
-          },
-          {
-            updateParagraphStyle: {
-              range: { startIndex: insertAt + plan.adviceRange.start, endIndex: insertAt + plan.adviceRange.end },
-              paragraphStyle: { namedStyleType: 'HEADING_2' },
-              fields: 'namedStyleType',
-            },
-          },
-          {
-            updateParagraphStyle: {
-              range: {
-                startIndex: insertAt + plan.transcriptRange.start,
-                endIndex: insertAt + plan.transcriptRange.end,
-              },
-              paragraphStyle: { namedStyleType: 'HEADING_2' },
-              fields: 'namedStyleType',
-            },
-          },
-        ],
+        requests,
       },
     });
   } catch (error) {
@@ -2537,6 +2704,42 @@ function dedupeIds(ids) {
   return Array.from(new Set((Array.isArray(ids) ? ids : []).map((id) => String(id || '').trim()).filter(Boolean)));
 }
 
+function buildLinkedEntitySummaries(records, entityType) {
+  return (Array.isArray(records) ? records : []).map((record) => ({
+    id: record.id,
+    ref: record.ref || record.id,
+    title: record.title || (entityType === 'task' ? 'Task' : 'Story'),
+    url: record.url || null,
+    deepLink: record.deepLink || buildEntityUrl(entityType, record.id, record.ref || record.id),
+    existing: record.existing === true,
+    updated: record.updated === true,
+  }));
+}
+
+function mergeLinkedEntitySummaries(existingRecords, nextRecords, entityType) {
+  const merged = new Map();
+  const allRecords = [
+    ...(Array.isArray(existingRecords) ? existingRecords : []),
+    ...(Array.isArray(nextRecords) ? nextRecords : []),
+  ];
+  allRecords.forEach((record) => {
+    const id = String(record?.id || '').trim();
+    if (!id) return;
+    const prior = merged.get(id) || {};
+    const ref = record?.ref || prior.ref || id;
+    merged.set(id, {
+      id,
+      ref,
+      title: record?.title || prior.title || (entityType === 'task' ? 'Task' : 'Story'),
+      url: record?.url ?? prior.url ?? null,
+      deepLink: record?.deepLink || prior.deepLink || buildEntityUrl(entityType, id, ref),
+      existing: record?.existing === true || prior.existing === true,
+      updated: record?.updated === true || prior.updated === true,
+    });
+  });
+  return Array.from(merged.values());
+}
+
 async function autoConvertOversizedTaskRecords({ db, profile, fingerprint, taskRecords, logger }) {
   const candidates = (Array.isArray(taskRecords) ? taskRecords : []).filter((task) => task && task.existing !== true);
   if (!candidates.length) return [];
@@ -2977,6 +3180,15 @@ async function processTranscriptIngestion({
     const docUrl = analysis.shouldCreateJournal
       ? String(profile?.defaultJournalDocUrl || '').trim()
       : null;
+    const sections = buildDocSections(analysis, transcript, timezone);
+    const journalTarget = analysis.shouldCreateJournal
+      ? await findExistingJournalForDate({
+        db,
+        uid,
+        persona: persona || 'personal',
+        sections,
+      })
+      : null;
     const warnings = [];
     let googleDoc = analysis.shouldCreateJournal
       ? {
@@ -3010,12 +3222,11 @@ async function processTranscriptIngestion({
       entryType: analysis.entryType,
       shouldCreateJournal: analysis.shouldCreateJournal,
       docUrl: docUrl || null,
+      journalId: journalTarget?.id || null,
       warnings,
       googleDoc,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     }, { merge: true });
-
-    const sections = buildDocSections(analysis, transcript, timezone);
 
     if (analysis.shouldCreateJournal && existingLock.docAppendStatus === 'done') {
       googleDoc = {
@@ -3030,12 +3241,15 @@ async function processTranscriptIngestion({
     if (analysis.shouldCreateJournal && docUrl && existingLock.docAppendStatus !== 'done') {
       await logger.event('google_docs_append_start', 'Appending journal entry to Google Docs', {
         docUrl,
+        journalId: journalTarget?.id || null,
+        includeDateHeading: !journalTarget?.existed,
       });
       try {
         await appendJournalToGoogleDoc({
           uid,
           docUrl,
           sections,
+          includeDateHeading: !journalTarget?.existed,
         });
         googleDoc = {
           attempted: true,
@@ -3128,6 +3342,7 @@ async function processTranscriptIngestion({
 
     const journalRecord = analysis.shouldCreateJournal
       ? buildJournalRecord({
+        journalTarget,
         uid,
         persona: persona || 'personal',
         fingerprint,
@@ -3188,16 +3403,23 @@ async function processTranscriptIngestion({
       ...autoConversions.map((item) => item.storyId),
     ]);
 
+    const mergedJournalTaskIds = journalRecord
+      ? dedupeIds([...(Array.isArray(journalRecord.payload?.taskIds) ? journalRecord.payload.taskIds : []), ...finalTaskIds])
+      : finalTaskIds;
+    const mergedJournalStoryIds = journalRecord
+      ? dedupeIds([...(Array.isArray(journalRecord.payload?.storyIds) ? journalRecord.payload.storyIds : []), ...finalStoryIds])
+      : finalStoryIds;
+
     if (journalRecord && autoConversions.length) {
       await db.collection('journals').doc(journalRecord.id).set({
-        taskIds: finalTaskIds,
-        storyIds: finalStoryIds,
+        taskIds: mergedJournalTaskIds,
+        storyIds: mergedJournalStoryIds,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       }, { merge: true });
       await logger.event('journal_links_updated', 'Journal links updated after task auto-conversion', {
         journalId: journalRecord.id,
-        taskIds: finalTaskIds,
-        storyIds: finalStoryIds,
+        taskIds: mergedJournalTaskIds,
+        storyIds: mergedJournalStoryIds,
       });
     }
 
@@ -3214,6 +3436,23 @@ async function processTranscriptIngestion({
       existing: existingTaskIds.has(String(task.id || '')),
       updated: updatedTaskIds.has(String(task.id || '')),
     }));
+
+    if (journalRecord) {
+      const journalPatch = {
+        taskIds: mergedJournalTaskIds,
+        storyIds: mergedJournalStoryIds,
+        linkedTasks: mergeLinkedEntitySummaries(journalRecord.payload?.linkedTasks, buildLinkedEntitySummaries(createdTasks, 'task'), 'task'),
+        linkedStories: mergeLinkedEntitySummaries(journalRecord.payload?.linkedStories, buildLinkedEntitySummaries(createdStories, 'story'), 'story'),
+        googleDoc: googleDoc || null,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+      if (googleDoc?.appended === true) {
+        journalPatch.googleDocAppendedAt = admin.firestore.FieldValue.serverTimestamp();
+      }
+      await db.collection('journals').doc(journalRecord.id).set(journalPatch, { merge: true });
+    }
+
+    const responseSections = journalRecord?.mergedSections || sections;
 
     const emailHtml = buildEmailHtml({
       sections,
@@ -3259,7 +3498,7 @@ async function processTranscriptIngestion({
       journalId: journalRecord?.id || null,
       docUrl: docUrl || null,
       processedAt: new Date(),
-      sections,
+      sections: responseSections,
       createdTasks,
       createdStories,
       warnings,
