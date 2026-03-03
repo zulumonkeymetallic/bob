@@ -1,8 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Alert, Button, Form, ListGroup, Modal, Spinner } from 'react-bootstrap';
-import { httpsCallable } from 'firebase/functions';
 
-import { functions } from '../firebase';
+import { auth, firebaseConfig } from '../firebase';
 import { usePersona } from '../contexts/PersonaContext';
 
 interface TranscriptEntityLink {
@@ -10,12 +9,16 @@ interface TranscriptEntityLink {
   ref: string;
   title: string;
   deepLink: string;
+  existing?: boolean;
 }
 
 interface TranscriptIngestionResult {
   ok: boolean;
   duplicate?: boolean;
   message?: string;
+  ingestionId?: string | null;
+  entryType?: string | null;
+  hasJournal?: boolean;
   resultType?: string;
   journalId?: string | null;
   docUrl?: string | null;
@@ -33,12 +36,38 @@ interface TranscriptIntakeModalProps {
   onHide: () => void;
 }
 
+const TRANSCRIPT_REGION = 'europe-west2';
+
+function buildTranscriptEndpoint() {
+  return `https://${TRANSCRIPT_REGION}-${firebaseConfig.projectId}.cloudfunctions.net/ingestTranscriptHttp`;
+}
+
+function buildRequestId() {
+  const rand = Math.random().toString(36).slice(2, 8);
+  return `web_fab_${Date.now()}_${rand}`;
+}
+
+function extractErrorMessage(errorBody: any, fallback: string) {
+  const details = errorBody?.details || errorBody?.error?.details || {};
+  const message = (
+    errorBody?.error?.message ||
+    errorBody?.message ||
+    fallback
+  );
+  const pieces = [
+    message,
+    details?.ingestionId ? `Ingestion ID: ${details.ingestionId}` : null,
+  ].filter(Boolean);
+  return pieces.join(' ');
+}
+
 const TranscriptIntakeModal: React.FC<TranscriptIntakeModalProps> = ({ show, onHide }) => {
   const { currentPersona } = usePersona();
   const [transcript, setTranscript] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<TranscriptIngestionResult | null>(null);
+  const [requestId, setRequestId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!show) {
@@ -46,25 +75,53 @@ const TranscriptIntakeModal: React.FC<TranscriptIntakeModalProps> = ({ show, onH
       setSubmitting(false);
       setError(null);
       setResult(null);
+      setRequestId(null);
     }
   }, [show]);
 
   const handleSubmit = async () => {
     const value = transcript.trim();
     if (!value) return;
+    const nextRequestId = buildRequestId();
     setSubmitting(true);
     setError(null);
     setResult(null);
+    setRequestId(nextRequestId);
     try {
-      const ingestTranscript = httpsCallable(functions, 'ingestTranscript');
-      const response: any = await ingestTranscript({
-        transcript: value,
-        persona: currentPersona,
-        source: 'web_fab',
+      const user = auth.currentUser;
+      if (!user) {
+        throw new Error('Sign in required');
+      }
+      const token = await user.getIdToken();
+      const response = await fetch(buildTranscriptEndpoint(), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          transcript: value,
+          persona: currentPersona,
+          source: 'web_fab',
+          sourceProvidedId: nextRequestId,
+        }),
       });
-      setResult((response?.data || response) as TranscriptIngestionResult);
+      const body = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(extractErrorMessage(body, 'Transcript ingestion failed'));
+      }
+      console.info('[TranscriptIntakeModal] ingest success', {
+        requestId: nextRequestId,
+        ingestionId: body?.ingestionId || null,
+        resultType: body?.resultType || null,
+        entryType: body?.entryType || null,
+      });
+      setResult((body || {}) as TranscriptIngestionResult);
     } catch (submissionError: any) {
-      console.error('[TranscriptIntakeModal] ingest failed', submissionError);
+      console.error('[TranscriptIntakeModal] ingest failed', {
+        requestId: nextRequestId,
+        error: submissionError,
+      });
       setError(submissionError?.message || 'Transcript ingestion failed');
     } finally {
       setSubmitting(false);
@@ -100,9 +157,21 @@ const TranscriptIntakeModal: React.FC<TranscriptIntakeModalProps> = ({ show, onH
             disabled={submitting || !!result}
           />
           <Form.Text className="text-muted">
-            The journal entry is cleaned, appended to your configured Google Doc, then any extracted tasks or stories are created as top-level items.
+            The input is classified first. Journal entries append to your Google Doc and create a journal record. Task lists or URL-only inputs skip Google Docs and create top-level tasks/stories only.
           </Form.Text>
         </Form.Group>
+
+        {requestId && (
+          <div className="mb-1 text-muted small">
+            Request ID: {requestId}
+          </div>
+        )}
+
+        {result?.ingestionId && (
+          <div className="mb-3 text-muted small">
+            Ingestion ID: {result.ingestionId}
+          </div>
+        )}
 
         {result?.oneLineSummary && (
           <div className="mb-3">
@@ -134,6 +203,7 @@ const TranscriptIntakeModal: React.FC<TranscriptIntakeModalProps> = ({ show, onH
                   <a href={story.deepLink}>{story.ref}</a>
                   {' — '}
                   {story.title}
+                  {story.existing ? ' (existing)' : ''}
                 </ListGroup.Item>
               ))}
             </ListGroup>
@@ -149,6 +219,7 @@ const TranscriptIntakeModal: React.FC<TranscriptIntakeModalProps> = ({ show, onH
                   <a href={task.deepLink}>{task.ref}</a>
                   {' — '}
                   {task.title}
+                  {task.existing ? ' (existing)' : ''}
                 </ListGroup.Item>
               ))}
             </ListGroup>
