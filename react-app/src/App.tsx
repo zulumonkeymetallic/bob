@@ -38,6 +38,7 @@ import { useAuth } from './contexts/AuthContext';
 import { PersonaProvider, usePersona } from './contexts/PersonaContext';
 import { SprintProvider, useSprint } from './contexts/SprintContext';
 import { SidebarProvider } from './contexts/SidebarContext';
+import { ProcessTextActivityProvider } from './contexts/ProcessTextActivityContext';
 
 // Import theme-aware styles
 import './styles/theme-aware.css';
@@ -121,11 +122,13 @@ function App() {
     <TestModeProvider>
       <PersonaProvider>
         <SprintProvider>
-          <SidebarProvider>
-            <Router>
-              <AppContent />
-            </Router>
-          </SidebarProvider>
+          <ProcessTextActivityProvider>
+            <SidebarProvider>
+              <Router>
+                <AppContent />
+              </Router>
+            </SidebarProvider>
+          </ProcessTextActivityProvider>
         </SprintProvider>
       </PersonaProvider>
     </TestModeProvider>
