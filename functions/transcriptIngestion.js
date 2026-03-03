@@ -2239,7 +2239,7 @@ function buildReplanResponse({ intent, confidence, summary, topPriorities, proce
   };
 }
 
-function buildEmailHtml({ sections, taskRecords, storyRecords, docUrl }) {
+function buildEmailHtml({ sections, taskRecords, storyRecords, docUrl, warnings = [], googleDoc = null }) {
   const actionRows = [
     ...storyRecords.map(
       (story) => (
@@ -2254,6 +2254,16 @@ function buildEmailHtml({ sections, taskRecords, storyRecords, docUrl }) {
       )
     ),
   ].join('');
+  const warningRows = (Array.isArray(warnings) ? warnings : [])
+    .map((warning) => {
+      const message = typeof warning === 'string'
+        ? warning
+        : String(warning?.message || warning?.error || '').trim();
+      if (!message) return '';
+      return `<li>${escapeHtml(message)}</li>`;
+    })
+    .filter(Boolean)
+    .join('');
 
   return [
     [
@@ -2269,8 +2279,14 @@ function buildEmailHtml({ sections, taskRecords, storyRecords, docUrl }) {
     `<div style="white-space:pre-wrap;margin-bottom:16px;">${escapeHtml(sections.fullTranscript)}</div>`,
     '<h2 style="font-size:18px;margin:16px 0 8px;">Actionable items</h2>',
     actionRows ? `<ul>${actionRows}</ul>` : '<p>No tasks or stories were created.</p>',
+    warningRows
+      ? [
+        '<h2 style="font-size:18px;margin:16px 0 8px;">Warnings</h2>',
+        `<ul>${warningRows}</ul>`,
+      ].join('')
+      : '',
     docUrl
-      ? `<p style="margin-top:16px;">Google Doc: <a href="${escapeHtml(docUrl)}">${escapeHtml(docUrl)}</a></p>`
+      ? `<p style="margin-top:16px;">Google Doc${googleDoc?.appended === false ? ' (not updated)' : ''}: <a href="${escapeHtml(docUrl)}">${escapeHtml(docUrl)}</a></p>`
       : '',
     '</body></html>',
   ].join('');
@@ -2409,10 +2425,31 @@ function buildTranscriptResponse({
   sections = null,
   createdTasks = [],
   createdStories = [],
+  warnings = [],
+  googleDoc = null,
 }) {
   const processedDocument = serializeSections(sections);
   const safeTasks = Array.isArray(createdTasks) ? createdTasks : [];
   const safeStories = Array.isArray(createdStories) ? createdStories : [];
+  const safeWarnings = (Array.isArray(warnings) ? warnings : [])
+    .map((warning) => {
+      if (!warning) return null;
+      if (typeof warning === 'string') {
+        return {
+          code: null,
+          scope: null,
+          message: warning,
+        };
+      }
+      const normalizedMessage = String(warning.message || warning.error || '').trim();
+      if (!normalizedMessage) return null;
+      return {
+        code: warning.code ? String(warning.code) : null,
+        scope: warning.scope ? String(warning.scope) : null,
+        message: normalizedMessage,
+      };
+    })
+    .filter(Boolean);
 
   return {
     ok: true,
@@ -2432,6 +2469,8 @@ function buildTranscriptResponse({
     structuredEntry: processedDocument.structuredEntry,
     advice: processedDocument.advice,
     fullTranscript: processedDocument.fullTranscript,
+    warnings: safeWarnings,
+    googleDoc: googleDoc || null,
     createdTasks: safeTasks,
     createdStories: safeStories,
   };
@@ -2455,6 +2494,8 @@ function buildDuplicateResponse(data) {
     sections: data?.processedDocument || null,
     createdTasks: Array.isArray(data?.createdTasks) ? data.createdTasks : [],
     createdStories: Array.isArray(data?.createdStories) ? data.createdStories : [],
+    warnings: Array.isArray(data?.warnings) ? data.warnings : [],
+    googleDoc: data?.googleDoc || null,
   });
 }
 
@@ -2571,6 +2612,8 @@ async function hydrateDuplicateState(db, uid, fingerprint, data) {
       advice: journal.advice || null,
       fullTranscript: journal.originalTranscript || null,
     },
+    warnings: Array.isArray(base.warnings) ? base.warnings : [],
+    googleDoc: base.googleDoc || null,
     createdTasks,
     createdStories,
   };
@@ -2724,10 +2767,16 @@ function buildWriteSpokenResponse(response) {
   const tasks = taskList.length;
   const stories = storyList.length;
   const hasJournal = Boolean(response.hasJournal || response.journalId);
+  const warnings = Array.isArray(response.warnings) ? response.warnings : [];
+  const firstWarning = warnings.length
+    ? String(warnings[0]?.message || warnings[0] || '').trim()
+    : '';
   const parts = [];
 
   if (hasJournal && tasks === 0 && stories === 0) {
-    return 'I created a journal entry.';
+    return firstWarning
+      ? `I created a journal entry. ${firstWarning}`
+      : 'I created a journal entry.';
   }
   if (hasJournal) {
     parts.push('I created a journal entry.');
@@ -2772,7 +2821,8 @@ function buildWriteSpokenResponse(response) {
         : `I found ${existingStories.length} existing stories: ${storyRefs}.`
     );
   }
-  return parts.length ? parts.join(' ') : 'Text processed.';
+  const base = parts.length ? parts.join(' ') : 'Text processed.';
+  return firstWarning ? `${base} ${firstWarning}` : base;
 }
 
 function annotateAgentWriteResponse(response, route) {
@@ -2919,11 +2969,27 @@ async function processTranscriptIngestion({
     const docUrl = analysis.shouldCreateJournal
       ? String(profile?.defaultJournalDocUrl || '').trim()
       : null;
+    const warnings = [];
+    let googleDoc = analysis.shouldCreateJournal
+      ? {
+        attempted: false,
+        appended: false,
+        status: docUrl ? 'pending' : 'not_configured',
+        message: docUrl
+          ? null
+          : 'Set a default journal Google Doc URL in Settings before ingesting transcripts.',
+        url: docUrl || null,
+      }
+      : null;
     if (analysis.shouldCreateJournal && !docUrl) {
-      throw new httpsV2.HttpsError(
-        'failed-precondition',
-        'Set a default journal Google Doc URL in Settings before ingesting transcripts.'
-      );
+      warnings.push({
+        code: 'google_doc_missing',
+        scope: 'google_docs',
+        message: 'Set a default journal Google Doc URL in Settings before ingesting transcripts.',
+      });
+      await logger.event('google_docs_append_skipped', 'Google Docs append skipped because no default document URL is configured', {
+        docUrl: null,
+      }, 'warning');
     }
 
     await lockRef.set({
@@ -2936,28 +3002,79 @@ async function processTranscriptIngestion({
       entryType: analysis.entryType,
       shouldCreateJournal: analysis.shouldCreateJournal,
       docUrl: docUrl || null,
+      warnings,
+      googleDoc,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     }, { merge: true });
 
     const sections = buildDocSections(analysis, transcript, timezone);
 
-    if (analysis.shouldCreateJournal && existingLock.docAppendStatus !== 'done') {
+    if (analysis.shouldCreateJournal && existingLock.docAppendStatus === 'done') {
+      googleDoc = {
+        attempted: true,
+        appended: true,
+        status: 'done',
+        message: null,
+        url: docUrl || null,
+      };
+    }
+
+    if (analysis.shouldCreateJournal && docUrl && existingLock.docAppendStatus !== 'done') {
       await logger.event('google_docs_append_start', 'Appending journal entry to Google Docs', {
         docUrl,
       });
-      await appendJournalToGoogleDoc({
-        uid,
-        docUrl,
-        sections,
-      });
-      await lockRef.set({
-        docAppendStatus: 'done',
-        docAppendedAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      }, { merge: true });
-      await logger.event('google_docs_append_done', 'Google Docs append completed', {
-        docUrl,
-      });
+      try {
+        await appendJournalToGoogleDoc({
+          uid,
+          docUrl,
+          sections,
+        });
+        googleDoc = {
+          attempted: true,
+          appended: true,
+          status: 'done',
+          message: null,
+          url: docUrl || null,
+        };
+        await lockRef.set({
+          docAppendStatus: 'done',
+          docAppendErrorMessage: admin.firestore.FieldValue.delete(),
+          docAppendedAt: admin.firestore.FieldValue.serverTimestamp(),
+          googleDoc,
+          warnings,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+        await logger.event('google_docs_append_done', 'Google Docs append completed', {
+          docUrl,
+        });
+      } catch (error) {
+        const warningMessage = error?.message || 'Google Docs append failed.';
+        const warning = {
+          code: error?.code || 'google_docs_append_failed',
+          scope: 'google_docs',
+          message: warningMessage,
+        };
+        warnings.push(warning);
+        googleDoc = {
+          attempted: true,
+          appended: false,
+          status: 'failed',
+          message: warningMessage,
+          url: docUrl || null,
+        };
+        await lockRef.set({
+          docAppendStatus: 'failed',
+          docAppendErrorMessage: warningMessage,
+          googleDoc,
+          warnings,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+        await logger.event('google_docs_append_failed', 'Google Docs append failed but transcript processing will continue', {
+          docUrl,
+          code: error?.code || null,
+          message: warningMessage,
+        }, 'warning');
+      }
     }
 
     const existingEntityCatalog = await loadExistingEntityCatalog(db, uid);
@@ -3094,6 +3211,8 @@ async function processTranscriptIngestion({
       taskRecords: createdTasks,
       storyRecords: createdStories,
       docUrl: docUrl || null,
+      warnings,
+      googleDoc,
     });
 
     const shouldSendEmail = await claimTranscriptSummaryEmail(lockRef);
@@ -3134,6 +3253,8 @@ async function processTranscriptIngestion({
       sections,
       createdTasks,
       createdStories,
+      warnings,
+      googleDoc,
     });
 
     await lockRef.set({
@@ -3146,6 +3267,8 @@ async function processTranscriptIngestion({
       shouldCreateJournal: analysis.shouldCreateJournal,
       processedDocument: response.processedDocument,
       resultType: response.resultType,
+      warnings: response.warnings,
+      googleDoc: response.googleDoc,
       createdTasks: response.createdTasks,
       createdStories: response.createdStories,
       processedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -3165,6 +3288,7 @@ async function processTranscriptIngestion({
       journalId: journalRecord?.id || null,
       taskCount: createdTasks.length,
       storyCount: createdStories.length,
+      warningCount: Array.isArray(response.warnings) ? response.warnings.length : 0,
     });
 
     return response;

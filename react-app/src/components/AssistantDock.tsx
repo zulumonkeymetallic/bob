@@ -4,8 +4,9 @@ import { collection, onSnapshot, orderBy, query } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
+import { useProcessTextActivity } from '../contexts/ProcessTextActivityContext';
 import AgentResponsePanel from './AgentResponsePanel';
-import { AgentResponse, submitAssistantAgentRequest } from '../services/agentClient';
+import { AgentResponse, buildRequestId, submitAssistantAgentRequest } from '../services/agentClient';
 
 interface AssistantDockProps {
   open: boolean;
@@ -15,6 +16,7 @@ interface AssistantDockProps {
 const AssistantDock: React.FC<AssistantDockProps> = ({ open, onClose }) => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
+  const { reportAgentResult } = useProcessTextActivity();
   const [messages, setMessages] = useState<Array<{ id?: string; role: 'user'|'assistant'; content: string }>>([]);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
@@ -35,12 +37,22 @@ const AssistantDock: React.FC<AssistantDockProps> = ({ open, onClose }) => {
     if (!content) return;
     setSending(true);
     setError(null);
+    const requestId = buildRequestId('assistant_ui');
     try {
       const data = await submitAssistantAgentRequest({
         text: content,
         persona: currentPersona || 'personal',
+        sourceProvidedId: requestId,
       });
       setLatestResult(data);
+      if (data?.mode === 'write') {
+        reportAgentResult({
+          requestId,
+          submittedText: content,
+          result: data,
+          source: 'assistant_ui',
+        });
+      }
       if (!text) setDraft('');
     } catch (e: any) {
       setError(e?.message || 'Failed to send');

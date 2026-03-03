@@ -53,6 +53,20 @@ export interface AgentProcessedDocument {
   fullTranscript?: string | null;
 }
 
+export interface AgentWarning {
+  code?: string | null;
+  scope?: string | null;
+  message: string;
+}
+
+export interface AgentGoogleDocStatus {
+  attempted?: boolean;
+  appended?: boolean;
+  status?: string | null;
+  message?: string | null;
+  url?: string | null;
+}
+
 export interface AgentResponse {
   ok: boolean;
   duplicate?: boolean;
@@ -75,6 +89,8 @@ export interface AgentResponse {
   structuredEntry?: string | null;
   advice?: string | null;
   fullTranscript?: string | null;
+  warnings?: AgentWarning[];
+  googleDoc?: AgentGoogleDocStatus | null;
   createdTasks?: AgentEntityLink[];
   createdStories?: AgentEntityLink[];
   calendarEvents?: AgentCalendarEventResult[];

@@ -18,6 +18,19 @@ const AgentResponsePanel: React.FC<AgentResponsePanelProps> = ({ result }) => {
         </Alert>
       )}
 
+      {!!result.warnings?.length && (
+        <Alert variant="warning">
+          <div className="fw-semibold mb-1">Warnings</div>
+          <ul className="mb-0 ps-3">
+            {result.warnings.map((warning, index) => (
+              <li key={`${warning.code || warning.scope || 'warning'}_${index}`}>
+                {warning.message}
+              </li>
+            ))}
+          </ul>
+        </Alert>
+      )}
+
       {result.spokenResponse && (
         <div className="mb-3">
           <h6>Response</h6>
@@ -150,6 +163,9 @@ const AgentResponsePanel: React.FC<AgentResponsePanelProps> = ({ result }) => {
       {result.docUrl && (
         <div className="mb-1">
           <a href={result.docUrl} target="_blank" rel="noreferrer">Open Google Doc</a>
+          {result.googleDoc?.appended === false ? (
+            <span className="text-muted small"> {' '}(not updated)</span>
+          ) : null}
         </div>
       )}
     </>
