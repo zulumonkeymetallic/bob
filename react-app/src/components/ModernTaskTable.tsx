@@ -80,6 +80,34 @@ interface ModernTaskTableProps {
   onTaskCreate?: (newTask: Partial<Task>) => Promise<void>;
 }
 
+const TASK_TYPE_OPTIONS = ['task', 'read', 'watch', 'chore', 'routine', 'habit'] as const;
+const RECURRING_TASK_TYPES = new Set(['chore', 'routine', 'habit']);
+
+function normalizeTaskType(value: any): string {
+  const raw = String(value || 'task').toLowerCase();
+  return raw === 'habitual' ? 'habit' : raw;
+}
+
+function formatTaskTypeLabel(value: any): string {
+  const normalized = normalizeTaskType(value);
+  switch (normalized) {
+    case 'read':
+      return 'Read';
+    case 'watch':
+      return 'Watch';
+    case 'chore':
+      return 'Chore';
+    case 'routine':
+      return 'Routine';
+    case 'habit':
+      return 'Habit';
+    case 'task':
+      return 'Task';
+    default:
+      return normalized ? normalized.charAt(0).toUpperCase() + normalized.slice(1) : 'Task';
+  }
+}
+
 const defaultColumns: Column[] = [
   {
     key: 'ref',
@@ -128,10 +156,10 @@ const defaultColumns: Column[] = [
     key: 'type',
     label: 'Type',
     width: '10%',
-    visible: false,
+    visible: true,
     editable: true,
     type: 'select',
-    options: ['task', 'chore', 'routine', 'habit']
+    options: [...TASK_TYPE_OPTIONS]
   },
   {
     key: 'priority',
@@ -412,7 +440,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
     return String(value || '');
   }
   if (key === 'type') {
-    return String(value || 'task');
+    return formatTaskTypeLabel(value);
   }
     if (key === 'url') {
       return formatExternalUrlLabel(value);
@@ -927,8 +955,8 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
     })
   );
 
-  const editType = (editForm as any)?.type || 'task';
-  const isRecurringEditType = editType === 'chore' || editType === 'routine' || editType === 'habit';
+  const editType = normalizeTaskType((editForm as any)?.type || 'task');
+  const isRecurringEditType = RECURRING_TASK_TYPES.has(editType);
   const selectedStoryId = (editForm as any)?.storyId || null;
   const selectedStory = selectedStoryId ? stories.find((s) => s.id === selectedStoryId) : null;
   const selectedGoalId = (selectedStory as any)?.goalId || (editForm as any)?.goalId || '';
@@ -977,8 +1005,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
     const derivedSprintId = effectiveSprintId(task, stories, sprints);
     if (sprintFilter === 'none') return !derivedSprintId;
     if (sprintFilter !== 'all') return derivedSprintId === sprintFilter;
-    const rawType = String((task as any)?.type || (task as any)?.task_type || 'task').toLowerCase();
-    const normalizedType = rawType === 'habitual' ? 'habit' : rawType;
+    const normalizedType = normalizeTaskType((task as any)?.type || (task as any)?.task_type || 'task');
     if (typeFilter !== 'all' && normalizedType !== typeFilter) return false;
     return true;
   });
@@ -1237,6 +1264,8 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                 >
                   <option value="all">All Types</option>
                   <option value="task">Task</option>
+                  <option value="read">Read</option>
+                  <option value="watch">Watch</option>
                   <option value="chore">Chore</option>
                   <option value="habit">Habit</option>
                   <option value="routine">Routine</option>
@@ -1721,6 +1750,8 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                     onChange={(e) => setEditForm({ ...editForm, type: e.target.value as any })}
                   >
                     <option value="task">Task</option>
+                    <option value="read">Read</option>
+                    <option value="watch">Watch</option>
                     <option value="chore">Chore</option>
                     <option value="routine">Routine</option>
                     <option value="habit">Habit</option>
@@ -1849,7 +1880,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                 <button type="button" className="btn btn-secondary" onClick={() => setShowEditModal(false)}>Cancel</button>
                 <button type="button" className="btn btn-primary" onClick={async () => {
                   if (!editForm.title) return;
-                  const isRecurring = editType === 'chore' || editType === 'routine' || editType === 'habit';
+                  const isRecurring = RECURRING_TASK_TYPES.has(editType);
                   const normalizedFrequency = isRecurring ? ((editForm as any).repeatFrequency || null) : null;
                   const normalizedInterval = isRecurring ? Math.max(1, Number((editForm as any).repeatInterval || 1)) : null;
                   const normalizedDays = isRecurring && (editForm as any).repeatFrequency === 'weekly'

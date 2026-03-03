@@ -1,15 +1,29 @@
 import React, { useEffect, useState } from 'react';
 import { Alert, Badge, Button, Card, Col, Container, Form, ListGroup, Row, Spinner } from 'react-bootstrap';
 import { BookOpen } from 'lucide-react';
-import { collection, doc, getDoc, onSnapshot, query, where } from 'firebase/firestore';
+import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { Link as RouterLink, useNavigate, useParams } from 'react-router-dom';
 
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
-import type { JournalEntry, Story, Task } from '../types';
+import type { JournalEntry } from '../types';
 import EmptyState from './common/EmptyState';
 import PageHeader from './common/PageHeader';
+
+type LinkedEntitySummary = {
+  id: string;
+  ref?: string;
+  title?: string;
+  url?: string | null;
+  deepLink?: string | null;
+  existing?: boolean;
+  updated?: boolean;
+  inaccessible?: boolean;
+  source?: 'live' | 'journal';
+};
+
+type JournalLinkedSummary = NonNullable<JournalEntry['linkedStories']>[number];
 
 function timestampToMillis(value: any): number {
   if (value == null) return 0;
@@ -62,24 +76,64 @@ function getGoogleDocBadge(entry: JournalEntry): { label: string; bg: string; te
   return entry?.docUrl ? { label: 'Doc linked', bg: 'secondary' } : null;
 }
 
-async function loadDocsById<T>(collectionName: 'stories' | 'tasks', ids: string[]): Promise<T[]> {
-  const docs = await Promise.all(
-    ids.map(async (id) => {
-      const snap = await getDoc(doc(db, collectionName, id));
-      if (!snap.exists()) return null;
-      return { id: snap.id, ...(snap.data() as T) };
-    })
-  );
-
-  return docs.filter(Boolean) as T[];
+function normalizeLinkedSummary(
+  collectionName: 'stories' | 'tasks',
+  item: any,
+  fallbackId: string,
+  source: 'live' | 'journal',
+  inaccessible = false
+): LinkedEntitySummary {
+  const id = String(item?.id || fallbackId || '').trim();
+  const ref = String(item?.ref || id).trim();
+  const title = String(item?.title || (collectionName === 'tasks' ? 'Task' : 'Story')).trim();
+  const entityType = collectionName === 'tasks' ? 'task' : 'story';
+  return {
+    id,
+    ref,
+    title,
+    url: item?.url || null,
+    deepLink: item?.deepLink || `/${entityType === 'task' ? 'tasks' : 'stories'}/${encodeURIComponent(ref || id)}`,
+    existing: item?.existing === true,
+    updated: item?.updated === true,
+    inaccessible,
+    source,
+  };
 }
 
-function buildStoryPath(story: Story): string {
-  return `/stories/${encodeURIComponent(String(story.ref || story.id))}`;
+function mergeLinkedEntities(primaryDocs: LinkedEntitySummary[], fallbackDocs: LinkedEntitySummary[]): LinkedEntitySummary[] {
+  const merged = new Map<string, LinkedEntitySummary>();
+  primaryDocs.forEach((item) => {
+    if (!item?.id) return;
+    merged.set(String(item.id), item);
+  });
+  fallbackDocs.forEach((item) => {
+    if (!item?.id) return;
+    if (!merged.has(String(item.id))) {
+      merged.set(String(item.id), item);
+    }
+  });
+  return Array.from(merged.values());
 }
 
-function buildTaskPath(task: Task): string {
-  return `/tasks/${encodeURIComponent(String(task.ref || task.id))}`;
+function buildJournalLinkedEntities(
+  collectionName: 'stories' | 'tasks',
+  ids: string[],
+  items: JournalLinkedSummary[] | undefined
+): LinkedEntitySummary[] {
+  const embedded = Array.isArray(items)
+    ? items
+      .filter((item) => item?.id)
+      .map((item) => normalizeLinkedSummary(collectionName, item, String(item.id), 'journal', true))
+    : [];
+
+  const embeddedIds = new Set(embedded.map((item) => String(item.id)));
+  const genericFallbacks = ids
+    .filter(Boolean)
+    .map((id) => String(id).trim())
+    .filter((id) => id && !embeddedIds.has(id))
+    .map((id) => normalizeLinkedSummary(collectionName, { id }, id, 'journal', true));
+
+  return mergeLinkedEntities(embedded, genericFallbacks);
 }
 
 const sectionHeadingStyle: React.CSSProperties = {
@@ -105,9 +159,8 @@ const JournalsManagement: React.FC = () => {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedJournalId, setSelectedJournalId] = useState<string | null>(routeJournalId || null);
-  const [linkedStories, setLinkedStories] = useState<Story[]>([]);
-  const [linkedTasks, setLinkedTasks] = useState<Task[]>([]);
-  const [linkedLoading, setLinkedLoading] = useState(false);
+  const [linkedStories, setLinkedStories] = useState<LinkedEntitySummary[]>([]);
+  const [linkedTasks, setLinkedTasks] = useState<LinkedEntitySummary[]>([]);
   const [linkedError, setLinkedError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -162,56 +215,45 @@ const JournalsManagement: React.FC = () => {
     journals.find((journal) => journal.id === (routeJournalId || selectedJournalId || '')) || null;
 
   useEffect(() => {
-    let cancelled = false;
-
     if (!selectedJournal) {
       setLinkedStories([]);
       setLinkedTasks([]);
-      setLinkedLoading(false);
       setLinkedError(null);
       return undefined;
     }
 
-    const storyIds = Array.isArray(selectedJournal.storyIds) ? selectedJournal.storyIds.filter(Boolean) : [];
-    const taskIds = Array.isArray(selectedJournal.taskIds) ? selectedJournal.taskIds.filter(Boolean) : [];
+    const storyIds = Array.isArray(selectedJournal.storyIds)
+      ? selectedJournal.storyIds.filter(Boolean)
+      : [];
+    const taskIds = Array.isArray(selectedJournal.taskIds)
+      ? selectedJournal.taskIds.filter(Boolean)
+      : [];
+    const embeddedStoryCount = Array.isArray(selectedJournal.linkedStories)
+      ? selectedJournal.linkedStories.filter((item) => item?.id).length
+      : 0;
+    const embeddedTaskCount = Array.isArray(selectedJournal.linkedTasks)
+      ? selectedJournal.linkedTasks.filter((item) => item?.id).length
+      : 0;
+    const fallbackStoryDocs = buildJournalLinkedEntities('stories', storyIds, selectedJournal.linkedStories);
+    const fallbackTaskDocs = buildJournalLinkedEntities('tasks', taskIds, selectedJournal.linkedTasks);
 
-    if (!storyIds.length && !taskIds.length) {
-      setLinkedStories([]);
-      setLinkedTasks([]);
-      setLinkedLoading(false);
+    if (!fallbackStoryDocs.length && !fallbackTaskDocs.length) {
+      setLinkedStories(fallbackStoryDocs);
+      setLinkedTasks(fallbackTaskDocs);
       setLinkedError(null);
       return undefined;
     }
 
-    setLinkedLoading(true);
-    setLinkedError(null);
-
-    (async () => {
-      try {
-        const [storyDocs, taskDocs] = await Promise.all([
-          loadDocsById<Story>('stories', storyIds),
-          loadDocsById<Task>('tasks', taskIds),
-        ]);
-
-        if (cancelled) return;
-        setLinkedStories(storyDocs);
-        setLinkedTasks(taskDocs);
-      } catch (error: any) {
-        if (cancelled) return;
-        console.warn('[JournalsManagement] linked entity load error', error?.message || error);
-        setLinkedError(error?.message || 'Failed to load linked tasks and stories.');
-        setLinkedStories([]);
-        setLinkedTasks([]);
-      } finally {
-        if (!cancelled) {
-          setLinkedLoading(false);
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
+    setLinkedStories(fallbackStoryDocs);
+    setLinkedTasks(fallbackTaskDocs);
+    const usedGenericFallback =
+      storyIds.length > embeddedStoryCount
+      || taskIds.length > embeddedTaskCount;
+    setLinkedError(
+      usedGenericFallback
+        ? 'Some linked items only have stored journal references available. Reprocess a fresh transcript to capture richer task and story metadata.'
+        : null
+    );
   }, [selectedJournal]);
 
   const normalizedSearch = searchTerm.trim().toLowerCase();
@@ -409,18 +451,15 @@ const JournalsManagement: React.FC = () => {
                     </div>
 
                     <h2 style={sectionHeadingStyle}>Actionable items</h2>
-                    {linkedLoading ? (
-                      <div className="py-3">
-                        <Spinner animation="border" role="status" size="sm" className="me-2" />
-                        Loading linked tasks and stories…
-                      </div>
-                    ) : linkedError ? (
-                      <Alert variant="danger">{linkedError}</Alert>
-                    ) : !hasLinkedEntities ? (
+                    <>
+                      {linkedError ? (
+                        <Alert variant={hasLinkedEntities ? 'warning' : 'danger'}>{linkedError}</Alert>
+                      ) : null}
+                      {!hasLinkedEntities ? (
                       <p style={{ color: 'var(--muted)', marginBottom: 0 }}>
                         No tasks or stories were linked to this journal entry.
                       </p>
-                    ) : (
+                      ) : (
                       <>
                         {linkedStories.length > 0 && (
                           <div className="mb-3">
@@ -429,10 +468,13 @@ const JournalsManagement: React.FC = () => {
                               {linkedStories.map((story) => (
                                 <ListGroup.Item key={story.id} className="d-flex justify-content-between align-items-center gap-3">
                                   <div>
-                                    <RouterLink to={buildStoryPath(story)} style={{ fontWeight: 700, textDecoration: 'none' }}>
+                                    <RouterLink to={`/stories/${encodeURIComponent(String(story.ref || story.id))}`} style={{ fontWeight: 700, textDecoration: 'none' }}>
                                       {String(story.ref || story.id)}
                                     </RouterLink>
                                     <div>{story.title}</div>
+                                    {story.inaccessible ? (
+                                      <div className="text-muted small">Loaded from journal snapshot</div>
+                                    ) : null}
                                   </div>
                                   <Badge bg="secondary">Story</Badge>
                                 </ListGroup.Item>
@@ -448,10 +490,13 @@ const JournalsManagement: React.FC = () => {
                               {linkedTasks.map((task) => (
                                 <ListGroup.Item key={task.id} className="d-flex justify-content-between align-items-center gap-3">
                                   <div>
-                                    <RouterLink to={buildTaskPath(task)} style={{ fontWeight: 700, textDecoration: 'none' }}>
+                                    <RouterLink to={`/tasks/${encodeURIComponent(String(task.ref || task.id))}`} style={{ fontWeight: 700, textDecoration: 'none' }}>
                                       {String(task.ref || task.id)}
                                     </RouterLink>
                                     <div>{task.title}</div>
+                                    {task.inaccessible ? (
+                                      <div className="text-muted small">Loaded from journal snapshot</div>
+                                    ) : null}
                                   </div>
                                   <Badge bg="primary">Task</Badge>
                                 </ListGroup.Item>
@@ -460,7 +505,8 @@ const JournalsManagement: React.FC = () => {
                           </div>
                         )}
                       </>
-                    )}
+                      )}
+                    </>
 
                     {!!selectedJournal.sourceUrls?.length && (
                       <>

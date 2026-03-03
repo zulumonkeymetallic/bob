@@ -28,6 +28,9 @@ interface EditTaskModalProps {
   container?: HTMLElement | null;
 }
 
+const TASK_TYPE_OPTIONS = ['task', 'read', 'watch', 'chore', 'routine', 'habit'] as const;
+const RECURRING_TASK_TYPES = new Set(['chore', 'routine', 'habit']);
+
 const normalizeTaskStatus = (status: any) => {
   if (typeof status === 'number') return status;
   const value = String(status || '').toLowerCase();
@@ -85,7 +88,7 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
     storyId: '' as string,
     goalId: '' as string,
     tags: [] as string[],
-    type: 'task' as 'task' | 'chore' | 'routine' | 'habit',
+    type: 'task' as 'task' | 'chore' | 'routine' | 'habit' | 'read' | 'watch',
     repeatFrequency: '' as '' | 'daily' | 'weekly' | 'monthly' | 'yearly',
     repeatInterval: 1 as number,
     daysOfWeek: [] as string[],
@@ -199,7 +202,7 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
       storyId: linkedStoryId,
       goalId: (task as any).goalId || linkedStory?.goalId || '',
       tags: Array.isArray((task as any).tags) ? (task as any).tags : [],
-      type: ((task as any).type || 'task') as 'task' | 'chore' | 'routine' | 'habit',
+      type: ((task as any).type || 'task') as 'task' | 'chore' | 'routine' | 'habit' | 'read' | 'watch',
       repeatFrequency: ((task as any).repeatFrequency || '') as '' | 'daily' | 'weekly' | 'monthly' | 'yearly',
       repeatInterval: Number((task as any).repeatInterval || 1) || 1,
       daysOfWeek: Array.isArray((task as any).daysOfWeek) ? (task as any).daysOfWeek : [],
@@ -254,7 +257,7 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
       return;
     }
     try {
-      const isRecurringType = form.type === 'chore' || form.type === 'routine' || form.type === 'habit';
+      const isRecurringType = RECURRING_TASK_TYPES.has(form.type);
       const normalizedFrequency = isRecurringType ? (form.repeatFrequency || null) : null;
       const normalizedInterval = isRecurringType ? Math.max(1, Number(form.repeatInterval) || 1) : null;
       const normalizedDays = isRecurringType && form.repeatFrequency === 'weekly'
@@ -517,15 +520,16 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
                   <Form.Label>Task type</Form.Label>
                   <Form.Select
                     value={form.type}
-                    onChange={(e) => setForm({ ...form, type: e.target.value as 'task' | 'chore' | 'routine' | 'habit' })}
+                    onChange={(e) => setForm({ ...form, type: e.target.value as 'task' | 'chore' | 'routine' | 'habit' | 'read' | 'watch' })}
                   >
-                    <option value="task">Task</option>
-                    <option value="chore">Chore</option>
-                    <option value="routine">Routine</option>
-                    <option value="habit">Habit</option>
+                    {TASK_TYPE_OPTIONS.map((option) => (
+                      <option key={option} value={option}>
+                        {option.charAt(0).toUpperCase() + option.slice(1)}
+                      </option>
+                    ))}
                   </Form.Select>
                 </Form.Group>
-                {(form.type === 'chore' || form.type === 'routine' || form.type === 'habit') && (
+                {RECURRING_TASK_TYPES.has(form.type) && (
                   <div className="mb-3">
                     <Row className="g-3 align-items-end">
                       <Col md={4}>
@@ -702,7 +706,7 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
                           </Button>
                         </div>
                       ) : null}
-                      {(form.type === 'habit' || form.type === 'chore' || form.type === 'routine') && (
+                      {RECURRING_TASK_TYPES.has(form.type) && (
                         <div className="form-text">Linking a goal is recommended for better planner/theme placement.</div>
                       )}
                     </Form.Group>
