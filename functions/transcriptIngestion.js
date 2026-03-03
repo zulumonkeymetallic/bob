@@ -107,8 +107,9 @@ const TRANSCRIPT_ANALYSIS_SCHEMA = {
           kind: { type: 'string', format: 'enum', enum: ['task', 'read', 'watch'] },
           theme: { type: 'string' },
           storyTitle: { type: 'string', nullable: true },
+          dueDateIso: { type: 'string', nullable: true },
         },
-        required: ['title', 'description', 'priority', 'estimateMin', 'points', 'effort', 'kind', 'theme', 'storyTitle'],
+        required: ['title', 'description', 'priority', 'estimateMin', 'points', 'effort', 'kind', 'theme', 'storyTitle', 'dueDateIso'],
       },
     },
   },
@@ -541,6 +542,7 @@ async function callAgentRouterModel({ transcript, persona, timezone, urlPreviews
 async function callTranscriptModel({ transcript, persona, timezone, urlPreviews }) {
   const apiKey = String(process.env.GOOGLEAISTUDIOAPIKEY || '').trim();
   if (!apiKey) throw new Error('GOOGLEAISTUDIOAPIKEY not configured');
+  const currentDate = DateTime.now().setZone(timezone || DEFAULT_TIMEZONE);
 
   const system = [
     'You process voice-note transcripts for a productivity app.',
@@ -568,7 +570,8 @@ async function callTranscriptModel({ transcript, persona, timezone, urlPreviews 
     '    "effort": "S"|"M"|"L"|"XL",',
     '    "kind": "task"|"read"|"watch",',
     '    "theme": string,',
-    '    "storyTitle": string|null',
+    '    "storyTitle": string|null,',
+    '    "dueDateIso": "YYYY-MM-DD"|null',
     '  }]',
     '}',
     'Rules:',
@@ -595,11 +598,15 @@ async function callTranscriptModel({ transcript, persona, timezone, urlPreviews 
       'Use kind="watch" for videos/shows/movies to consume.',
     ].join(' '),
     'Use storyTitle on a task only when that task clearly belongs to one of the returned stories.',
+    'Set dueDateIso only when the transcript clearly implies a due date such as today, tomorrow, tonight, a weekday, next week, or an explicit date.',
+    'Resolve dueDateIso to a local calendar date in YYYY-MM-DD using the provided timezone and current local date.',
+    'If no clear due date is requested, set dueDateIso to null.',
   ].join('\n');
 
   const user = [
     `Persona: ${persona || 'personal'}`,
     `Timezone: ${timezone || DEFAULT_TIMEZONE}`,
+    `Current local date: ${currentDate.toISODate()} (${currentDate.toLocaleString(DateTime.DATE_FULL)})`,
     urlPreviews?.length ? `Resolved URL previews:\n${JSON.stringify(urlPreviews, null, 2)}` : null,
     'Transcript:',
     transcript,
@@ -774,7 +781,15 @@ function sanitizeAcceptanceCriteria(value) {
     .slice(0, 12);
 }
 
-function sanitizeAnalysis(raw, transcript, sourceUrls = []) {
+function normalizeDueDateIso(value, timezone = DEFAULT_TIMEZONE) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const parsed = DateTime.fromISO(raw, { zone: timezone || DEFAULT_TIMEZONE });
+  if (!parsed.isValid) return null;
+  return parsed.startOf('day').toISODate();
+}
+
+function sanitizeAnalysis(raw, transcript, sourceUrls = [], timezone = DEFAULT_TIMEZONE) {
   const analysis = raw && typeof raw === 'object' ? raw : {};
   const oneLineSummary = String(analysis.oneLineSummary || '').trim().replace(/\s+/g, ' ').slice(0, 140);
   const structuredEntry = String(analysis.structuredEntry || '').trim() || String(transcript || '').trim();
@@ -815,6 +830,7 @@ function sanitizeAnalysis(raw, transcript, sourceUrls = []) {
         kind: normalizeTaskKind(task?.kind, title),
         theme: String(task?.theme || '').trim() || 'Growth',
         storyTitle: storyTitle || null,
+        dueDateIso: normalizeDueDateIso(task?.dueDateIso, timezone),
       };
     })
     .filter((task) => {
@@ -875,6 +891,13 @@ function computeUpcomingSaturdayMs(timezone) {
   let daysUntil = (6 - now.weekday + 7) % 7;
   if (daysUntil === 0) daysUntil = 7;
   return now.plus({ days: daysUntil }).endOf('day').toMillis();
+}
+
+function dueDateMsFromIsoDate(dateIso, timezone = DEFAULT_TIMEZONE) {
+  const normalized = normalizeDueDateIso(dateIso, timezone);
+  if (!normalized) return null;
+  const parsed = DateTime.fromISO(normalized, { zone: timezone || DEFAULT_TIMEZONE }).endOf('day');
+  return parsed.isValid ? parsed.toMillis() : null;
 }
 
 function buildExistingEntityRecord(collectionName, doc) {
@@ -1027,7 +1050,13 @@ async function buildTaskRecords({
       kind: task.kind,
     });
     const prioritized = prioritizeTask(sized);
-    const dueDate = prioritized.kind === 'read' || prioritized.kind === 'watch' ? saturdayDueMs : null;
+    const llmDueDate = dueDateMsFromIsoDate(task.dueDateIso, timezone);
+    const dueDate = llmDueDate || (prioritized.kind === 'read' || prioritized.kind === 'watch' ? saturdayDueMs : null);
+    const dueDateReason = llmDueDate
+      ? 'llm_due_date'
+      : dueDate
+        ? 'upcoming_saturday_read_watch'
+        : null;
     const payload = ensureTaskPoints({
       id,
       ref,
@@ -1045,7 +1074,8 @@ async function buildTaskRecords({
       estimatedHours: prioritized.estimatedHours,
       dueDate,
       dueDateMs: dueDate,
-      dueDateReason: dueDate ? 'upcoming_saturday_read_watch' : null,
+      dueDateIso: task.dueDateIso || null,
+      dueDateReason,
       labels: [],
       blockedBy: [],
       dependsOn: [],
@@ -1674,6 +1704,7 @@ function serializeTaskRecord(task) {
   const payload = task?.payload || {};
   const id = task?.id || payload.id || null;
   const ref = task?.ref || payload.ref || id || null;
+  const dueDateIso = normalizeDueDateIso(payload.dueDateIso || null);
   return {
     id,
     ref,
@@ -1685,6 +1716,8 @@ function serializeTaskRecord(task) {
     effort: payload.effort || null,
     type: payload.type || null,
     dueDateMs: payload.dueDateMs ?? payload.dueDate ?? null,
+    dueDateIso,
+    dueDateReason: payload.dueDateReason || null,
     storyId: payload.storyId || null,
     deepLink: task?.deepLink || payload.deepLink || buildEntityUrl('task', id, ref),
     existing: Boolean(task?.existing),
@@ -1892,32 +1925,73 @@ async function logIngestionActivity({ uid, fingerprint, journalId, storyRecords,
   }
 }
 
+function summarizeEntityRefs(items, label, limit = 3) {
+  const refs = (Array.isArray(items) ? items : [])
+    .map((item) => String(item?.ref || '').trim())
+    .filter(Boolean);
+  if (!refs.length) return null;
+  const visible = refs.slice(0, limit);
+  const prefix = visible.join(', ');
+  if (refs.length === 1) return `${label} ${prefix}`;
+  return refs.length > limit ? `${prefix} and ${refs.length - limit} more` : prefix;
+}
+
 function buildWriteSpokenResponse(response) {
   if (!response || typeof response !== 'object') return 'Text processed.';
   if (response.duplicate) {
     return String(response.message || 'This text was already processed.');
   }
 
-  const tasks = Array.isArray(response.createdTasks) ? response.createdTasks.length : 0;
-  const stories = Array.isArray(response.createdStories) ? response.createdStories.length : 0;
+  const taskList = Array.isArray(response.createdTasks) ? response.createdTasks : [];
+  const storyList = Array.isArray(response.createdStories) ? response.createdStories : [];
+  const newTasks = taskList.filter((task) => task?.existing !== true);
+  const existingTasks = taskList.filter((task) => task?.existing === true);
+  const newStories = storyList.filter((story) => story?.existing !== true);
+  const existingStories = storyList.filter((story) => story?.existing === true);
+  const tasks = taskList.length;
+  const stories = storyList.length;
   const hasJournal = Boolean(response.hasJournal || response.journalId);
+  const parts = [];
 
   if (hasJournal && tasks === 0 && stories === 0) {
     return 'I created a journal entry.';
   }
-  if (hasJournal && (tasks || stories)) {
-    const parts = ['I created a journal entry'];
-    if (tasks) parts.push(`${tasks} task${tasks === 1 ? '' : 's'}`);
-    if (stories) parts.push(`${stories} stor${stories === 1 ? 'y' : 'ies'}`);
-    return `${parts.join(', and ')}.`;
+  if (hasJournal) {
+    parts.push('I created a journal entry.');
   }
-  if (tasks && !stories) {
-    return `I created ${tasks} task${tasks === 1 ? '' : 's'}.`;
+  if (newTasks.length) {
+    const taskRefs = summarizeEntityRefs(newTasks, 'task');
+    parts.push(
+      newTasks.length === 1
+        ? `I created ${taskRefs}.`
+        : `I created ${newTasks.length} tasks: ${taskRefs}.`
+    );
   }
-  if (stories && !tasks) {
-    return `I created ${stories} stor${stories === 1 ? 'y' : 'ies'}.`;
+  if (newStories.length) {
+    const storyRefs = summarizeEntityRefs(newStories, 'story');
+    parts.push(
+      newStories.length === 1
+        ? `I created ${storyRefs}.`
+        : `I created ${newStories.length} stories: ${storyRefs}.`
+    );
   }
-  return 'Text processed.';
+  if (!newTasks.length && existingTasks.length) {
+    const taskRefs = summarizeEntityRefs(existingTasks, 'task');
+    parts.push(
+      existingTasks.length === 1
+        ? `I found existing ${taskRefs}.`
+        : `I found ${existingTasks.length} existing tasks: ${taskRefs}.`
+    );
+  }
+  if (!newStories.length && existingStories.length) {
+    const storyRefs = summarizeEntityRefs(existingStories, 'story');
+    parts.push(
+      existingStories.length === 1
+        ? `I found existing ${storyRefs}.`
+        : `I found ${existingStories.length} existing stories: ${storyRefs}.`
+    );
+  }
+  return parts.length ? parts.join(' ') : 'Text processed.';
 }
 
 function annotateAgentWriteResponse(response, route) {
@@ -2049,7 +2123,7 @@ async function processTranscriptIngestion({
       timezone,
       urlPreviews,
     });
-    const analysis = sanitizeAnalysis(rawAnalysis, normalizedTranscript, sourceUrls);
+    const analysis = sanitizeAnalysis(rawAnalysis, normalizedTranscript, sourceUrls, timezone);
     await logger.event('analysis_complete', 'Transcript classified and structured', {
       entryType: analysis.entryType,
       shouldCreateJournal: analysis.shouldCreateJournal,
