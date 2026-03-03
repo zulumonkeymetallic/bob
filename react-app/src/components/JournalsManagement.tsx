@@ -44,6 +44,24 @@ function formatProcessedAt(entry: JournalEntry): string {
   });
 }
 
+function getGoogleDocBadge(entry: JournalEntry): { label: string; bg: string; text?: 'dark' } | null {
+  if (!entry?.docUrl && !entry?.googleDoc) return null;
+  const status = String(entry?.googleDoc?.status || '').trim().toLowerCase();
+  if (entry?.googleDoc?.appended === true || status === 'done') {
+    return { label: 'Doc synced', bg: 'success' };
+  }
+  if (status === 'failed') {
+    return { label: 'Doc not updated', bg: 'warning', text: 'dark' };
+  }
+  if (status === 'not_configured') {
+    return { label: 'Doc not configured', bg: 'secondary' };
+  }
+  if (status === 'pending') {
+    return { label: 'Doc pending', bg: 'info' };
+  }
+  return entry?.docUrl ? { label: 'Doc linked', bg: 'secondary' } : null;
+}
+
 async function loadDocsById<T>(collectionName: 'stories' | 'tasks', ids: string[]): Promise<T[]> {
   const docs = await Promise.all(
     ids.map(async (id) => {
@@ -197,6 +215,7 @@ const JournalsManagement: React.FC = () => {
   }, [selectedJournal]);
 
   const normalizedSearch = searchTerm.trim().toLowerCase();
+  const selectedGoogleDocBadge = selectedJournal ? getGoogleDocBadge(selectedJournal) : null;
   const filteredJournals = journals.filter((journal) => {
     if (!normalizedSearch) return true;
     const haystack = [
@@ -274,6 +293,7 @@ const JournalsManagement: React.FC = () => {
                     const isSelected = journal.id === selectedJournal?.id;
                     const taskCount = Array.isArray(journal.taskIds) ? journal.taskIds.length : 0;
                     const storyCount = Array.isArray(journal.storyIds) ? journal.storyIds.length : 0;
+                    const googleDocBadge = getGoogleDocBadge(journal);
 
                     return (
                       <ListGroup.Item
@@ -299,6 +319,11 @@ const JournalsManagement: React.FC = () => {
                         <div className="d-flex flex-wrap gap-2 align-items-center">
                           <Badge bg="light" text="dark">{taskCount} task{taskCount === 1 ? '' : 's'}</Badge>
                           <Badge bg="light" text="dark">{storyCount} stor{storyCount === 1 ? 'y' : 'ies'}</Badge>
+                          {googleDocBadge ? (
+                            <Badge bg={googleDocBadge.bg} text={googleDocBadge.text}>
+                              {googleDocBadge.label}
+                            </Badge>
+                          ) : null}
                           <span className="text-muted small">{formatProcessedAt(journal)}</span>
                         </div>
                       </ListGroup.Item>
@@ -335,6 +360,11 @@ const JournalsManagement: React.FC = () => {
                       <Badge bg="light" text="dark">
                         {formatProcessedAt(selectedJournal)}
                       </Badge>
+                      {selectedGoogleDocBadge ? (
+                        <Badge bg={selectedGoogleDocBadge.bg} text={selectedGoogleDocBadge.text}>
+                          {selectedGoogleDocBadge.label}
+                        </Badge>
+                      ) : null}
                     </div>
                     <div className="d-flex flex-wrap gap-2">
                       {selectedJournal.docUrl && (
@@ -350,6 +380,12 @@ const JournalsManagement: React.FC = () => {
                       )}
                     </div>
                   </div>
+
+                  {selectedJournal.googleDoc?.appended === false && selectedJournal.googleDoc?.message ? (
+                    <Alert variant="warning">
+                      {selectedJournal.googleDoc.message}
+                    </Alert>
+                  ) : null}
 
                   <article>
                     <h1 style={{ fontSize: '2rem', fontWeight: 800, marginBottom: '0.75rem' }}>

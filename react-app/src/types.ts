@@ -89,6 +89,14 @@ export interface JournalEntry {
   oneLineSummary?: string;
   advice?: string;
   docUrl?: string | null;
+  googleDoc?: {
+    attempted?: boolean;
+    appended?: boolean;
+    status?: string | null;
+    message?: string | null;
+    url?: string | null;
+  } | null;
+  googleDocAppendedAt?: any;
   entryType?: 'journal' | 'mixed' | 'task_list' | 'url_only' | string;
   transcriptFingerprint?: string;
   source?: string;

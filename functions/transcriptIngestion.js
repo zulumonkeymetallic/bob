@@ -1739,6 +1739,7 @@ function buildJournalRecord({
   persona,
   fingerprint,
   docUrl,
+  googleDoc,
   entryType,
   originalTranscript,
   sections,
@@ -1748,27 +1749,34 @@ function buildJournalRecord({
   sourceUrls,
 }) {
   const id = buildStableDocId('journal', uid, fingerprint);
+  const payload = {
+    id,
+    ownerUid: uid,
+    persona,
+    originalTranscript,
+    dateHeading: sections.dateHeading,
+    structuredEntry: sections.structuredEntry,
+    oneLineSummary: sections.oneLineSummary,
+    advice: sections.advice,
+    docUrl,
+    entryType: entryType || 'journal',
+    transcriptFingerprint: fingerprint,
+    source: source || 'transcript',
+    sourceUrls,
+    storyIds: storyRecords.map((story) => story.id),
+    taskIds: taskRecords.map((task) => task.id),
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+  if (googleDoc) {
+    payload.googleDoc = googleDoc;
+    if (googleDoc.appended === true) {
+      payload.googleDocAppendedAt = admin.firestore.FieldValue.serverTimestamp();
+    }
+  }
   return {
     id,
-    payload: {
-      id,
-      ownerUid: uid,
-      persona,
-      originalTranscript,
-      dateHeading: sections.dateHeading,
-      structuredEntry: sections.structuredEntry,
-      oneLineSummary: sections.oneLineSummary,
-      advice: sections.advice,
-      docUrl,
-      entryType: entryType || 'journal',
-      transcriptFingerprint: fingerprint,
-      source: source || 'transcript',
-      sourceUrls,
-      storyIds: storyRecords.map((story) => story.id),
-      taskIds: taskRecords.map((task) => task.id),
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    },
+    payload,
   };
 }
 
@@ -2613,7 +2621,7 @@ async function hydrateDuplicateState(db, uid, fingerprint, data) {
       fullTranscript: journal.originalTranscript || null,
     },
     warnings: Array.isArray(base.warnings) ? base.warnings : [],
-    googleDoc: base.googleDoc || null,
+    googleDoc: journal.googleDoc || base.googleDoc || null,
     createdTasks,
     createdStories,
   };
@@ -3124,6 +3132,7 @@ async function processTranscriptIngestion({
         persona: persona || 'personal',
         fingerprint,
         docUrl,
+        googleDoc,
         entryType: analysis.entryType,
         originalTranscript: transcript,
         sections,
