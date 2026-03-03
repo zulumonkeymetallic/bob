@@ -43,6 +43,13 @@ function sha256(value) {
   return crypto.createHash('sha256').update(String(value || '')).digest('hex');
 }
 
+function normalizeTimestampOutput(value) {
+  if (!value) return null;
+  const date = typeof value?.toDate === 'function' ? value.toDate() : new Date(value);
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return null;
+  return date.toISOString();
+}
+
 function normalizeTitle(value) {
   return String(value || '')
     .trim()
@@ -176,6 +183,16 @@ function buildDocSections(analysis, originalTranscript, timezone) {
     structuredEntry,
     advice,
     fullTranscript,
+  };
+}
+
+function serializeSections(sections) {
+  return {
+    dateHeading: sections?.dateHeading || null,
+    oneLineSummary: sections?.oneLineSummary || null,
+    structuredEntry: sections?.structuredEntry || null,
+    advice: sections?.advice || null,
+    fullTranscript: sections?.fullTranscript || null,
   };
 }
 
@@ -555,6 +572,7 @@ function buildJournalRecord({
       ownerUid: uid,
       persona,
       originalTranscript,
+      dateHeading: sections.dateHeading,
       structuredEntry: sections.structuredEntry,
       oneLineSummary: sections.oneLineSummary,
       advice: sections.advice,
@@ -768,19 +786,101 @@ async function reserveTranscriptIngestion(db, uid, fingerprint, transcriptPrevie
   return { ref, ...result };
 }
 
-function buildDuplicateResponse(data) {
+function inferResultType(createdTasks, createdStories) {
+  if (createdTasks.length && createdStories.length) return 'mixed';
+  if (createdTasks.length) return 'tasks';
+  if (createdStories.length) return 'stories';
+  return 'journal';
+}
+
+function serializeTaskRecord(task) {
+  const payload = task?.payload || {};
+  const id = task?.id || payload.id || null;
+  const ref = task?.ref || payload.ref || id || null;
+  return {
+    id,
+    ref,
+    title: task?.title || payload.title || '',
+    description: payload.description || '',
+    priority: payload.priority ?? null,
+    estimateMin: payload.estimateMin ?? null,
+    points: payload.points ?? null,
+    effort: payload.effort || null,
+    type: payload.type || null,
+    dueDateMs: payload.dueDateMs ?? payload.dueDate ?? null,
+    storyId: payload.storyId || null,
+    deepLink: task?.deepLink || payload.deepLink || buildEntityUrl('task', id, ref),
+  };
+}
+
+function serializeStoryRecord(story) {
+  const payload = story?.payload || {};
+  const id = story?.id || payload.id || null;
+  const ref = story?.ref || payload.ref || id || null;
+  return {
+    id,
+    ref,
+    title: story?.title || payload.title || '',
+    description: payload.description || '',
+    priority: payload.priority ?? null,
+    points: payload.points ?? null,
+    acceptanceCriteria: Array.isArray(payload.acceptanceCriteria) ? payload.acceptanceCriteria : [],
+    theme: payload.theme || null,
+    deepLink: story?.deepLink || payload.deepLink || buildEntityUrl('story', id, ref),
+  };
+}
+
+function buildTranscriptResponse({
+  duplicate = false,
+  message = null,
+  fingerprint = null,
+  journalId = null,
+  docUrl = null,
+  processedAt = null,
+  sections = null,
+  createdTasks = [],
+  createdStories = [],
+}) {
+  const processedDocument = serializeSections(sections);
+  const safeTasks = Array.isArray(createdTasks) ? createdTasks : [];
+  const safeStories = Array.isArray(createdStories) ? createdStories : [];
+
   return {
     ok: true,
+    duplicate,
+    message,
+    fingerprint,
+    resultType: inferResultType(safeTasks, safeStories),
+    journalId,
+    docUrl,
+    processedAt: normalizeTimestampOutput(processedAt),
+    processedDocument,
+    dateHeading: processedDocument.dateHeading,
+    oneLineSummary: processedDocument.oneLineSummary,
+    structuredEntry: processedDocument.structuredEntry,
+    advice: processedDocument.advice,
+    fullTranscript: processedDocument.fullTranscript,
+    createdTasks: safeTasks,
+    createdStories: safeStories,
+  };
+}
+
+function buildDuplicateResponse(data) {
+  const message = data?.status === 'processing'
+    ? 'This transcript is already being processed.'
+    : 'This transcript has already been processed.';
+
+  return buildTranscriptResponse({
     duplicate: true,
-    message: data?.status === 'processing'
-      ? 'This transcript is already being processed.'
-      : 'This transcript has already been processed.',
+    message,
+    fingerprint: data?.fingerprint || null,
     journalId: data?.journalId || null,
     docUrl: data?.docUrl || null,
+    processedAt: data?.processedAt || null,
+    sections: data?.processedDocument || null,
     createdTasks: Array.isArray(data?.createdTasks) ? data.createdTasks : [],
     createdStories: Array.isArray(data?.createdStories) ? data.createdStories : [],
-    processedAt: data?.processedAt || null,
-  };
+  });
 }
 
 async function loadEntitySummaries(db, collectionName, ids, type) {
@@ -794,13 +894,67 @@ async function loadEntitySummaries(db, collectionName, ids, type) {
       const data = snap.data() || {};
       const id = snap.id;
       const ref = String(data.ref || id);
-      return {
+      const record = {
         id,
         ref,
         title: String(data.title || type),
-        deepLink: data.deepLink || buildEntityUrl(type, id, ref),
+        payload: {
+          ...data,
+          id,
+          ref,
+          deepLink: data.deepLink || buildEntityUrl(type, id, ref),
+        },
       };
+      return type === 'task' ? serializeTaskRecord(record) : serializeStoryRecord(record);
     });
+}
+
+async function hydrateDuplicateState(db, uid, fingerprint, data) {
+  const base = data && typeof data === 'object' ? { ...data } : {};
+  if (
+    base.processedDocument &&
+    Array.isArray(base.createdTasks) &&
+    Array.isArray(base.createdStories)
+  ) {
+    return base;
+  }
+
+  const journalId = base.journalId || buildStableDocId('journal', uid, fingerprint);
+  const snap = await db.collection('journals').doc(journalId).get().catch(() => null);
+  if (!snap?.exists) {
+    return {
+      ...base,
+      fingerprint,
+      journalId: base.journalId || null,
+      docUrl: base.docUrl || null,
+      createdTasks: Array.isArray(base.createdTasks) ? base.createdTasks : [],
+      createdStories: Array.isArray(base.createdStories) ? base.createdStories : [],
+    };
+  }
+
+  const journal = snap.data() || {};
+  const [createdStories, createdTasks] = await Promise.all([
+    loadEntitySummaries(db, 'stories', journal.storyIds, 'story'),
+    loadEntitySummaries(db, 'tasks', journal.taskIds, 'task'),
+  ]);
+
+  return {
+    ...base,
+    status: base.status || 'processed',
+    fingerprint,
+    journalId,
+    docUrl: journal.docUrl || base.docUrl || null,
+    processedAt: base.processedAt || journal.updatedAt || journal.createdAt || null,
+    processedDocument: {
+      dateHeading: journal.dateHeading || null,
+      oneLineSummary: journal.oneLineSummary || null,
+      structuredEntry: journal.structuredEntry || null,
+      advice: journal.advice || null,
+      fullTranscript: journal.originalTranscript || null,
+    },
+    createdTasks,
+    createdStories,
+  };
 }
 
 async function findExistingJournalDuplicate(db, uid, fingerprint) {
@@ -808,20 +962,10 @@ async function findExistingJournalDuplicate(db, uid, fingerprint) {
   const snap = await db.collection('journals').doc(journalId).get();
   if (!snap.exists) return null;
 
-  const data = snap.data() || {};
-  const [createdStories, createdTasks] = await Promise.all([
-    loadEntitySummaries(db, 'stories', data.storyIds, 'story'),
-    loadEntitySummaries(db, 'tasks', data.taskIds, 'task'),
-  ]);
-
-  return {
+  return hydrateDuplicateState(db, uid, fingerprint, {
     status: 'processed',
     journalId,
-    docUrl: data.docUrl || null,
-    createdTasks,
-    createdStories,
-    processedAt: data.updatedAt || data.createdAt || null,
-  };
+  });
 }
 
 async function logIngestionActivity({ uid, fingerprint, journalId, storyRecords, taskRecords }) {
@@ -865,7 +1009,8 @@ async function processTranscriptIngestion({
   const fingerprint = sha256(normalizedTranscript);
   const reservation = await reserveTranscriptIngestion(db, uid, fingerprint, normalizedTranscript.slice(0, 500));
   if (reservation.duplicate) {
-    return buildDuplicateResponse(reservation.data);
+    const duplicateState = await hydrateDuplicateState(db, uid, fingerprint, reservation.data);
+    return buildDuplicateResponse(duplicateState);
   }
 
   const lockRef = reservation.ref;
@@ -874,8 +1019,11 @@ async function processTranscriptIngestion({
     if (existingJournal) {
       await lockRef.set({
         status: 'processed',
+        fingerprint,
         journalId: existingJournal.journalId,
         docUrl: existingJournal.docUrl,
+        processedDocument: existingJournal.processedDocument || null,
+        resultType: existingJournal.resultType || null,
         createdTasks: existingJournal.createdTasks,
         createdStories: existingJournal.createdStories,
         processedAt: existingJournal.processedAt || admin.firestore.FieldValue.serverTimestamp(),
@@ -999,32 +1147,26 @@ async function processTranscriptIngestion({
       });
     }
 
-    const response = {
-      ok: true,
+    const createdTasks = taskRecords.map((task) => serializeTaskRecord(task));
+    const createdStories = storyRecords.map((story) => serializeStoryRecord(story));
+    const response = buildTranscriptResponse({
       duplicate: false,
       fingerprint,
       journalId: journalRecord.id,
       docUrl,
-      createdTasks: taskRecords.map((task) => ({
-        id: task.id,
-        ref: task.ref,
-        title: task.title,
-        deepLink: task.deepLink,
-      })),
-      createdStories: storyRecords.map((story) => ({
-        id: story.id,
-        ref: story.ref,
-        title: story.title,
-        deepLink: story.deepLink,
-      })),
-      oneLineSummary: sections.oneLineSummary,
-      advice: sections.advice,
-    };
+      processedAt: new Date(),
+      sections,
+      createdTasks,
+      createdStories,
+    });
 
     await lockRef.set({
       status: 'processed',
+      fingerprint,
       journalId: journalRecord.id,
       docUrl,
+      processedDocument: response.processedDocument,
+      resultType: response.resultType,
       createdTasks: response.createdTasks,
       createdStories: response.createdStories,
       processedAt: admin.firestore.FieldValue.serverTimestamp(),
