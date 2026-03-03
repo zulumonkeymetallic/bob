@@ -178,11 +178,12 @@ exports.updateGoalTargetYears = schedulerV2.onSchedule(
 functionsV2.setGlobalOptions({ region: "europe-west2", maxInstances: 10 });
 admin.initializeApp();
 
+let transcriptIngestionModule = null;
 try {
-  const transcriptIngestion = require('./transcriptIngestion');
-  if (transcriptIngestion) {
-    exports.ingestTranscript = transcriptIngestion.ingestTranscript;
-    exports.ingestTranscriptHttp = transcriptIngestion.ingestTranscriptHttp;
+  transcriptIngestionModule = require('./transcriptIngestion');
+  if (transcriptIngestionModule) {
+    exports.ingestTranscript = transcriptIngestionModule.ingestTranscript;
+    exports.ingestTranscriptHttp = transcriptIngestionModule.ingestTranscriptHttp;
   }
 } catch (e) {
   console.warn('[init] transcriptIngestion not loaded', e?.message || e);
@@ -4019,48 +4020,15 @@ exports.normalizeStatuses = httpsV2.onCall({}, async (req) => {
 });
 
 // Diagnostics: quick check that sprints are readable for the current user
-exports.sendAssistantMessage = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
+exports.sendAssistantMessage = httpsV2.onCall({
+  secrets: [GOOGLE_AI_STUDIO_API_KEY, BREVO_API_KEY, GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET],
+}, async (req) => {
   const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   const message = String(req?.data?.message || '').trim();
   const persona = String(req?.data?.persona || 'personal');
   if (!message) throw new httpsV2.HttpsError('invalid-argument', 'message is required');
 
   const db = ensureFirestore();
-  const horizonDays = Number(req?.data?.days || 2);
-  const context = await assemblePlanningContext(uid, persona, horizonDays);
-  context.userId = uid;
-
-  // Load stories (active/backlog, top by priority/order)
-  let stories = [];
-  try {
-    const snap = await db.collection('stories')
-      .where('ownerUid', '==', uid)
-      .where('persona', '==', persona)
-      .limit(50)
-      .get();
-    stories = snap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }));
-  } catch { }
-
-  // Compute proposed approvals count
-  let approvals = 0;
-  try {
-    const ps = await db.collection('planning_jobs')
-      .where('ownerUid', '==', uid)
-      .where('status', '==', 'proposed')
-      .get();
-    approvals = ps.size;
-  } catch { }
-
-  // Build condensed context for LLM
-  const topTasks = (context.tasks || [])
-    .filter(t => ['todo', 'planned', 'in-progress', 0, 1].includes(t.status))
-    .slice(0, 20)
-    .map(t => ({ id: t.id, title: t.title, priority: t.priority, theme: t.theme || null, goalId: t.goalId || null, estimated: t.estimated_duration || null }));
-  const topGoals = (context.goals || []).slice(0, 10).map(g => ({ id: g.id, title: g.title, theme: g.theme, priority: g.priority }));
-  const todayEvents = (context.gcalEvents || []).slice(0, 20).map(e => ({ title: e.summary, start: e.start, end: e.end }));
-  const plannedBlocks = (context.existingBlocks || []).slice(0, 20);
-
-  // Persist user message
   const threadRef = db.collection('assistant_chats').doc(uid);
   if (isUnsafeMessage(message)) {
     await threadRef.collection('messages').add({ ownerUid: uid, role: 'assistant', content: 'Sorry — I can\'t assist with that request.', createdAt: admin.firestore.FieldValue.serverTimestamp() });
@@ -4068,49 +4036,46 @@ exports.sendAssistantMessage = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_K
   }
   await threadRef.collection('messages').add({ id: undefined, ownerUid: uid, role: 'user', content: message, createdAt: admin.firestore.FieldValue.serverTimestamp() });
 
-  const latestSummary = await getLatestSummary(threadRef);
-  const recent = await getRecentMessages(threadRef, 10);
-  const system = [
-    'You are BOB, a concise productivity assistant. Keep replies under 120 words.',
-    'Use the provided context to identify priorities for the next 1–2 days.',
-    'RETURN STRICT JSON ONLY with the shape:',
-    '{',
-    '  "reply": string,',
-    '  "insights": { "priorities": string[], "warnings": string[] },',
-    '  "suggested_actions": [',
-    '     { "type": "plan_today" | "open_approvals" | "create_task" | "open_goal",',
-    '       "title"?: string, "estimateMin"?: number, "goalId"?: string }',
-    '  ]',
-    '}',
-  ].join('\n');
-  const user = JSON.stringify({
-    approvals,
-    horizonDays,
-    goals: topGoals,
-    tasks: topTasks,
-    todayEvents: todayEvents.map(e => ({ title: e.title, start: e.start, end: e.end })),
-    plannedBlocks: plannedBlocks.map(b => ({ title: b.title, start: b.start, end: b.end, theme: b.theme || null })),
-    summary: latestSummary || null,
-    recent: recent.map(m => ({ role: m.role, content: m.content })),
-    note: message,
-  });
-
-  let parsed = { reply: 'OK', insights: { priorities: [], warnings: [] }, suggested_actions: [] };
-  try {
-    const raw = await callLLMJson({ system, user, purpose: 'assistantChat', userId: uid, expectJson: true, temperature: 0.2 });
-    parsed = JSON.parse(raw);
-  } catch (e) {
-    // fallback minimal response
+  if (!transcriptIngestionModule?.processAgentRequestInternal) {
+    throw new httpsV2.HttpsError('failed-precondition', 'Shared assistant agent is not available.');
   }
 
-  const reply = String(parsed?.reply || '').slice(0, 1200);
-  await threadRef.collection('messages').add({ ownerUid: uid, role: 'assistant', content: reply, createdAt: admin.firestore.FieldValue.serverTimestamp() });
+  const result = await transcriptIngestionModule.processAgentRequestInternal({
+    uid,
+    transcript: message,
+    persona,
+    source: 'assistant_ui',
+    sourceUrl: '',
+    sourceProvidedId: String(req?.data?.sourceProvidedId || ''),
+    channel: 'callable',
+    authMode: 'firebase',
+  });
+
+  const reply = String(result?.spokenResponse || result?.message || 'Done.').slice(0, 1200);
+  await threadRef.collection('messages').add({
+    ownerUid: uid,
+    role: 'assistant',
+    content: reply,
+    intent: result?.intent || null,
+    mode: result?.mode || null,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  try { await maybeSummarizeThread(threadRef, uid); } catch { }
+
+  const topPriorityTitles = Array.isArray(result?.topPriorities)
+    ? result.topPriorities.map((item) => String(item?.title || '').trim()).filter(Boolean).slice(0, 3)
+    : [];
 
   return {
     ok: true,
     reply,
-    insights: parsed?.insights || { priorities: [], warnings: [] },
-    suggested_actions: Array.isArray(parsed?.suggested_actions) ? parsed.suggested_actions.slice(0, 6) : [],
+    insights: {
+      priorities: topPriorityTitles,
+      warnings: [],
+    },
+    suggested_actions: [],
+    ...result,
   };
 });
 
