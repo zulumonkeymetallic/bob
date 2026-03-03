@@ -295,6 +295,67 @@ function normalizeTitle(value) {
     .replace(/\s+/g, ' ');
 }
 
+const ENTITY_MATCH_STOPWORDS = new Set([
+  'a', 'an', 'and', 'at', 'by', 'for', 'from', 'get', 'i', 'if', 'in', 'into', 'it',
+  'its', 'me', 'my', 'of', 'on', 'or', 'our', 'out', 'set', 'start', 'the', 'then',
+  'to', 'up', 'via', 'we', 'with', 'work',
+]);
+
+function normalizeMatchToken(token) {
+  const cleaned = String(token || '').toLowerCase().replace(/[^a-z0-9]+/g, '').trim();
+  if (!cleaned) return '';
+  if (cleaned.endsWith('ies') && cleaned.length > 4) return `${cleaned.slice(0, -3)}y`;
+  if (cleaned.endsWith('sses') && cleaned.length > 5) return cleaned.slice(0, -2);
+  if (cleaned.endsWith('s') && !cleaned.endsWith('ss') && cleaned.length > 4) return cleaned.slice(0, -1);
+  return cleaned;
+}
+
+function buildEntityMatchTokens(value) {
+  return Array.from(new Set(
+    normalizeTitle(value)
+      .split(/[^a-z0-9]+/i)
+      .map((token) => normalizeMatchToken(token))
+      .filter((token) => token && token.length >= 3 && !ENTITY_MATCH_STOPWORDS.has(token))
+  ));
+}
+
+function computeEntityTitleMatch(inputTitle, candidateTitle) {
+  const inputNormalized = normalizeTitle(inputTitle);
+  const candidateNormalized = normalizeTitle(candidateTitle);
+  if (!inputNormalized || !candidateNormalized) {
+    return { score: 0, sharedCount: 0, contains: false };
+  }
+  if (inputNormalized === candidateNormalized) {
+    return { score: 1, sharedCount: Math.max(1, buildEntityMatchTokens(inputNormalized).length), contains: true };
+  }
+
+  const contains = inputNormalized.includes(candidateNormalized) || candidateNormalized.includes(inputNormalized);
+  const inputTokens = buildEntityMatchTokens(inputNormalized);
+  const candidateTokens = buildEntityMatchTokens(candidateNormalized);
+  if (!inputTokens.length || !candidateTokens.length) {
+    return { score: contains ? 0.7 : 0, sharedCount: 0, contains };
+  }
+
+  const candidateSet = new Set(candidateTokens);
+  const sharedCount = inputTokens.filter((token) => candidateSet.has(token)).length;
+  if (sharedCount < 2 && !contains) {
+    return { score: 0, sharedCount, contains };
+  }
+
+  const coverage = sharedCount / Math.max(1, Math.min(inputTokens.length, candidateTokens.length));
+  const unionSize = new Set([...inputTokens, ...candidateTokens]).size || 1;
+  const jaccard = sharedCount / unionSize;
+  let score = coverage * 0.72 + jaccard * 0.28;
+  if (contains) score += 0.08;
+  if (sharedCount >= 3) score += 0.05;
+  if (sharedCount >= 2 && Math.min(inputTokens.length, candidateTokens.length) <= 3) score += 0.12;
+  return {
+    score: Math.min(1, score),
+    sharedCount,
+    contains,
+  };
+}
+
 function normalizePriority(value, fallback = 2) {
   if (typeof value === 'number' && Number.isFinite(value)) {
     return Math.max(1, Math.min(4, Math.round(value)));
@@ -1263,15 +1324,89 @@ function dueDateMsFromIsoDate(dateIso, timezone = DEFAULT_TIMEZONE) {
 
 function buildExistingEntityRecord(collectionName, doc) {
   const data = doc.data() || {};
+  const entityType = collectionName === 'stories' ? 'story' : 'task';
   return {
     id: doc.id,
     ref: String(data.ref || doc.id),
     title: String(data.title || ''),
     url: normalizeUrlValue(data.url),
-    deepLink: String(data.deepLink || buildEntityUrl(collectionName === 'stories' ? 'story' : 'task', doc.id, data.ref || doc.id)),
+    normalizedTitle: normalizeTitle(data.normalizedTitle || data.title || ''),
+    collectionName,
+    entityType,
+    deepLink: String(data.deepLink || buildEntityUrl(entityType, doc.id, data.ref || doc.id)),
     payload: { id: doc.id, ...data },
     existing: true,
   };
+}
+
+function dedupeEntityRecords(records = []) {
+  const ordered = [];
+  const seen = new Set();
+  for (const record of Array.isArray(records) ? records : []) {
+    if (!record?.id) continue;
+    const entityType = String(record.entityType || (record.collectionName === 'stories' ? 'story' : 'task') || '').trim();
+    const key = `${entityType}:${record.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    ordered.push(record);
+  }
+  return ordered;
+}
+
+async function loadExistingEntityCatalog(db, uid) {
+  const [taskSnap, storySnap] = await Promise.all([
+    db.collection('tasks').where('ownerUid', '==', uid).limit(800).get().catch(() => null),
+    db.collection('stories').where('ownerUid', '==', uid).limit(800).get().catch(() => null),
+  ]);
+
+  const tasks = (taskSnap?.docs || [])
+    .filter((doc) => doc.data()?.deleted !== true)
+    .map((doc) => buildExistingEntityRecord('tasks', doc));
+  const stories = (storySnap?.docs || [])
+    .filter((doc) => doc.data()?.deleted !== true)
+    .map((doc) => buildExistingEntityRecord('stories', doc));
+
+  return {
+    tasks,
+    stories,
+    all: [...tasks, ...stories],
+  };
+}
+
+function findExistingEntityMatch(catalog, title, url = null, preferredEntityType = 'task') {
+  const normalized = normalizeTitle(title);
+  const normalizedUrl = normalizeUrlValue(url);
+  const preferred = preferredEntityType === 'story' ? 'story' : 'task';
+  const candidates = Array.isArray(catalog?.all) ? catalog.all : [];
+  if (!normalized && !normalizedUrl) return null;
+
+  const preferredCandidates = candidates.filter((candidate) => candidate?.entityType === preferred);
+  const crossCandidates = candidates.filter((candidate) => candidate?.entityType !== preferred);
+
+  const byUrl = [...preferredCandidates, ...crossCandidates].find((candidate) => normalizedUrl && candidate?.url === normalizedUrl) || null;
+  if (byUrl) return byUrl;
+
+  const byExactPreferred = preferredCandidates.find((candidate) => candidate?.normalizedTitle === normalized) || null;
+  if (byExactPreferred) return byExactPreferred;
+
+  const byExactCross = crossCandidates.find((candidate) => candidate?.normalizedTitle === normalized) || null;
+  if (byExactCross) return byExactCross;
+
+  let best = null;
+  let bestScore = 0;
+
+  for (const candidate of [...preferredCandidates, ...crossCandidates]) {
+    const { score, sharedCount, contains } = computeEntityTitleMatch(normalized, candidate?.normalizedTitle || candidate?.title || '');
+    if (score < 0.68) continue;
+    if (sharedCount < 2 && !contains) continue;
+    const adjustedScore = score + (candidate?.entityType === preferred ? 0.03 : 0);
+    if (!best || adjustedScore > bestScore) {
+      best = candidate;
+      bestScore = adjustedScore;
+    }
+  }
+
+  return best || null;
 }
 
 async function findExistingEntityRecord(db, collectionName, uid, title, url = null) {
@@ -1317,9 +1452,10 @@ async function findExistingEntityRecord(db, collectionName, uid, title, url = nu
   return doc ? buildExistingEntityRecord(collectionName, doc) : null;
 }
 
-async function buildStoryRecords({ db, uid, persona, fingerprint, analysis }) {
+async function buildStoryRecords({ db, uid, persona, fingerprint, analysis, existingEntityCatalog }) {
   const createdAtOrder = Date.now();
   const records = [];
+  const matchedTaskRecords = new Map();
   const existingStories = new Map();
 
   for (let index = 0; index < analysis.stories.length; index++) {
@@ -1327,11 +1463,19 @@ async function buildStoryRecords({ db, uid, persona, fingerprint, analysis }) {
     const titleKey = normalizeTitle(story.title);
     const lookupKey = story.url ? `url:${story.url}` : titleKey;
     if (lookupKey && !existingStories.has(lookupKey)) {
-      existingStories.set(lookupKey, await findExistingEntityRecord(db, 'stories', uid, story.title, story.url));
+      if (existingEntityCatalog) {
+        existingStories.set(lookupKey, findExistingEntityMatch(existingEntityCatalog, story.title, story.url, 'story'));
+      } else {
+        existingStories.set(lookupKey, await findExistingEntityRecord(db, 'stories', uid, story.title, story.url));
+      }
     }
     const existing = lookupKey ? existingStories.get(lookupKey) : null;
     if (existing) {
-      records.push(existing);
+      if (existing.entityType === 'story') {
+        records.push(existing);
+      } else {
+        matchedTaskRecords.set(existing.id, existing);
+      }
       continue;
     }
 
@@ -1376,13 +1520,18 @@ async function buildStoryRecords({ db, uid, persona, fingerprint, analysis }) {
       ref,
       title: story.title,
       url: payload.url,
+      entityType: 'story',
+      collectionName: 'stories',
       deepLink: payload.deepLink,
       existing: false,
       payload,
     });
   }
 
-  return records;
+  return {
+    storyRecords: dedupeEntityRecords(records),
+    matchedTaskRecords: dedupeEntityRecords(Array.from(matchedTaskRecords.values())),
+  };
 }
 
 async function buildTaskRecords({
@@ -1393,19 +1542,29 @@ async function buildTaskRecords({
   analysis,
   timezone,
   storyMap,
+  existingEntityCatalog,
 }) {
   const saturdayDueMs = computeUpcomingSaturdayMs(timezone);
   const records = [];
+  const matchedStoryRecords = new Map();
   const existingTasks = new Map();
   for (let index = 0; index < analysis.tasks.length; index++) {
     const task = analysis.tasks[index];
     const titleKey = normalizeTitle(task.title);
     const lookupKey = task.url ? `url:${task.url}` : titleKey;
     if (lookupKey && !existingTasks.has(lookupKey)) {
-      existingTasks.set(lookupKey, await findExistingEntityRecord(db, 'tasks', uid, task.title, task.url));
+      if (existingEntityCatalog) {
+        existingTasks.set(lookupKey, findExistingEntityMatch(existingEntityCatalog, task.title, task.url, 'task'));
+      } else {
+        existingTasks.set(lookupKey, await findExistingEntityRecord(db, 'tasks', uid, task.title, task.url));
+      }
     }
     const existing = lookupKey ? existingTasks.get(lookupKey) : null;
     if (existing) {
+      if (existing.entityType === 'story') {
+        matchedStoryRecords.set(existing.id, existing);
+        continue;
+      }
       const existingType = String(existing?.payload?.type || '').trim().toLowerCase();
       const shouldEscalateExisting = !['read', 'watch'].includes(existingType || String(task?.kind || '').trim().toLowerCase());
       if (!shouldEscalateExisting) {
@@ -1440,7 +1599,14 @@ async function buildTaskRecords({
 
     const id = buildStableDocId('task', uid, fingerprint, index);
     const ref = buildStableRef('task', id);
-    const linkedStory = task.storyTitle ? storyMap.get(normalizeTitle(task.storyTitle)) || null : null;
+    let linkedStory = task.storyTitle ? storyMap.get(normalizeTitle(task.storyTitle)) || null : null;
+    if (!linkedStory && task.storyTitle && existingEntityCatalog) {
+      const matchedStory = findExistingEntityMatch(existingEntityCatalog, task.storyTitle, null, 'story');
+      if (matchedStory?.entityType === 'story') {
+        linkedStory = matchedStory;
+        matchedStoryRecords.set(matchedStory.id, matchedStory);
+      }
+    }
     const sized = estimateSize({
       entityType: 'task',
       title: task.title,
@@ -1512,13 +1678,18 @@ async function buildTaskRecords({
       ref,
       title: task.title,
       url: payload.url,
+      entityType: 'task',
+      collectionName: 'tasks',
       deepLink: payload.deepLink,
       existing: false,
       updated: false,
       payload,
     });
   }
-  return records;
+  return {
+    taskRecords: dedupeEntityRecords(records),
+    matchedStoryRecords: dedupeEntityRecords(Array.from(matchedStoryRecords.values())),
+  };
 }
 
 function buildJournalRecord({
@@ -2061,6 +2232,37 @@ function buildEmailHtml({ sections, taskRecords, storyRecords, docUrl }) {
       : '',
     '</body></html>',
   ].join('');
+}
+
+const EMAIL_DISPATCH_LEASE_MS = 15 * 60 * 1000;
+
+async function claimTranscriptSummaryEmail(lockRef) {
+  const db = admin.firestore();
+  return db.runTransaction(async (tx) => {
+    const snap = await tx.get(lockRef);
+    const data = snap.data() || {};
+    if (data.emailSentAt) return false;
+
+    const claimedAt = typeof data.emailDispatchClaimedAt?.toDate === 'function'
+      ? data.emailDispatchClaimedAt.toDate()
+      : (data.emailDispatchClaimedAt ? new Date(data.emailDispatchClaimedAt) : null);
+    if (claimedAt instanceof Date && !Number.isNaN(claimedAt.getTime()) && (Date.now() - claimedAt.getTime()) < EMAIL_DISPATCH_LEASE_MS) {
+      return false;
+    }
+
+    tx.set(lockRef, {
+      emailDispatchClaimedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+    return true;
+  });
+}
+
+async function releaseTranscriptSummaryEmailClaim(lockRef) {
+  await lockRef.set({
+    emailDispatchClaimedAt: admin.firestore.FieldValue.delete(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
 }
 
 async function reserveTranscriptIngestion(db, uid, fingerprint, transcriptPreview) {
@@ -2716,15 +2918,23 @@ async function processTranscriptIngestion({
       });
     }
 
-    const storyRecords = await buildStoryRecords({
+    const existingEntityCatalog = await loadExistingEntityCatalog(db, uid);
+    const {
+      storyRecords: rawStoryRecords,
+      matchedTaskRecords: crossMatchedTaskRecords,
+    } = await buildStoryRecords({
       db,
       uid,
       persona: persona || 'personal',
       fingerprint,
       analysis,
+      existingEntityCatalog,
     });
-    const storyMap = new Map(storyRecords.map((story) => [normalizeTitle(story.title), story]));
-    const taskRecords = await buildTaskRecords({
+    const storyMap = new Map(rawStoryRecords.map((story) => [normalizeTitle(story.title), story]));
+    const {
+      taskRecords: rawTaskRecords,
+      matchedStoryRecords: crossMatchedStoryRecords,
+    } = await buildTaskRecords({
       db,
       uid,
       persona: persona || 'personal',
@@ -2732,10 +2942,21 @@ async function processTranscriptIngestion({
       analysis,
       timezone,
       storyMap,
+      existingEntityCatalog,
     });
+    const storyRecords = dedupeEntityRecords([...rawStoryRecords, ...crossMatchedStoryRecords]);
+    const taskRecords = dedupeEntityRecords([...rawTaskRecords, ...crossMatchedTaskRecords]);
     await logger.event('entity_resolution', 'Built task and story records', {
-      stories: storyRecords.map((story) => ({ id: story.id, existing: Boolean(story.existing) })),
-      tasks: taskRecords.map((task) => ({ id: task.id, existing: Boolean(task.existing) })),
+      stories: storyRecords.map((story) => ({
+        id: story.id,
+        existing: Boolean(story.existing),
+        entityType: story.entityType || 'story',
+      })),
+      tasks: taskRecords.map((task) => ({
+        id: task.id,
+        existing: Boolean(task.existing),
+        entityType: task.entityType || 'task',
+      })),
     });
 
     const journalRecord = analysis.shouldCreateJournal
@@ -2833,13 +3054,28 @@ async function processTranscriptIngestion({
       docUrl: docUrl || null,
     });
 
-    if (!existingLock.emailSentAt) {
-      await sendEmail({
-        to: email,
-        subject: `BOB Transcript Summary · ${sections.oneLineSummary}`,
-        html: emailHtml,
-      });
-      await logger.event('email_sent', 'Summary email sent', {
+    const shouldSendEmail = await claimTranscriptSummaryEmail(lockRef);
+    if (shouldSendEmail) {
+      try {
+        await sendEmail({
+          to: email,
+          subject: `BOB Transcript Summary · ${sections.oneLineSummary}`,
+          html: emailHtml,
+        });
+        await lockRef.set({
+          emailSentAt: admin.firestore.FieldValue.serverTimestamp(),
+          emailDispatchClaimedAt: admin.firestore.FieldValue.delete(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+        await logger.event('email_sent', 'Summary email sent', {
+          recipient: email,
+        });
+      } catch (error) {
+        await releaseTranscriptSummaryEmailClaim(lockRef).catch(() => null);
+        throw error;
+      }
+    } else {
+      await logger.event('email_skipped', 'Summary email skipped because it was already dispatched for this transcript', {
         recipient: email,
       });
     }
@@ -2871,7 +3107,6 @@ async function processTranscriptIngestion({
       createdTasks: response.createdTasks,
       createdStories: response.createdStories,
       processedAt: admin.firestore.FieldValue.serverTimestamp(),
-      emailSentAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     }, { merge: true });
 
