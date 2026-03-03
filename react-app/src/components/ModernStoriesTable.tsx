@@ -100,6 +100,14 @@ const defaultColumns: Column[] = [
     editable: true, 
     type: 'text' 
   },
+  {
+    key: 'url',
+    label: 'URL',
+    width: '20%',
+    visible: true,
+    editable: true,
+    type: 'text'
+  },
   { 
     key: 'goalTitle', 
     label: 'Goal', 
@@ -182,6 +190,19 @@ interface NewStoryRowProps {
   onSave: () => void;
   onCancel: () => void;
 }
+
+const formatExternalUrlLabel = (value: unknown): string => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    const parsed = new URL(raw);
+    const host = parsed.hostname.replace(/^www\./i, '');
+    const path = parsed.pathname === '/' ? '' : parsed.pathname.replace(/\/+$/, '');
+    return `${host}${path}`.slice(0, 64);
+  } catch {
+    return raw.slice(0, 64);
+  }
+};
 
 const NewStoryRow: React.FC<NewStoryRowProps> = ({ 
   columns, 
@@ -539,6 +560,9 @@ const SortableRow: React.FC<SortableRowProps> = ({
     if (key === 'aiCriticalityReason') {
       return String(value || '');
     }
+    if (key === 'url') {
+      return formatExternalUrlLabel(value);
+    }
     return value || '';
   };
 
@@ -686,7 +710,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
             e.currentTarget.style.backgroundColor = 'transparent';
           }
         }}
-        onClick={() => column.editable && handleCellEdit(column.key, displayValue)}
+        onClick={() => column.editable && handleCellEdit(column.key, column.key === 'url' ? String(value || '') : displayValue)}
       >
         <div style={{
           minHeight: '20px',
@@ -741,6 +765,16 @@ const SortableRow: React.FC<SortableRowProps> = ({
                 <ExternalLink size={14} />
               </button>
             </>
+          ) : column.key === 'url' && value ? (
+            <a
+              href={String(value)}
+              target="_blank"
+              rel="noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              title={String(value)}
+            >
+              {formatExternalUrlLabel(value)}
+            </a>
           ) : (
             <span>{displayValue}</span>
           )}
@@ -1083,6 +1117,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
     setNewStoryData({
       title: '',
       description: '',
+      url: '',
       goalId: autoGoalId,
       status: 0, // Backlog
       priority: 3, // P3

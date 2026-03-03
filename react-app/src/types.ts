@@ -21,6 +21,7 @@ export interface Goal {
   ownerUid: string;
   createdAt: any; // Firebase Timestamp
   updatedAt: any; // Firebase Timestamp
+  url?: string | null;
   orderIndex?: number; // Stable ordering for modern tables
   // Relationships
   parentGoalId?: string | null; // Optional parent goal relationship
@@ -53,6 +54,7 @@ export interface Story {
   ownerUid: string;
   createdAt: any; // Firebase Timestamp
   updatedAt: any; // Firebase Timestamp
+  url?: string | null;
   dueDate?: number; // Legacy compatibility
   targetDate?: number | string;
   plannedStartDate?: number | string;
@@ -201,6 +203,7 @@ export interface Task {
   sprintId?: string;
   projectId?: string;
   deepLink?: string; // Optional deep link for navigation
+  url?: string | null;
   // Legacy fields for backward compatibility
   reference?: string;
   storyId?: string;

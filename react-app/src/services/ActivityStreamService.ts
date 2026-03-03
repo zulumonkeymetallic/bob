@@ -24,6 +24,7 @@ export type ActivityType =
   | 'story_status_from_reminder'
   | 'scheduler_due_date_adjustment'
   | 'ai_due_date_adjustment'
+  | 'transcript_ingestion'
   | 'automation_event'
   | 'automation_alert'
   | 'automation_activity';
@@ -31,7 +32,7 @@ export type ActivityType =
 export interface ActivityEntry {
   id?: string;
   entityId: string;
-  entityType: 'goal' | 'story' | 'task' | 'calendar_block';
+  entityType: 'goal' | 'story' | 'task' | 'calendar_block' | 'journal' | 'transcript_ingestion';
   activityType: ActivityType;
   userId: string;
   userEmail?: string;
@@ -55,6 +56,7 @@ export interface ActivityEntry {
   // Source tracking (Human, Function, AI)
   source: ActivitySource;
   sourceDetails?: string;
+  metadata?: Record<string, any>;
 }
 
 export class ActivityStreamService {
@@ -271,7 +273,11 @@ export class ActivityStreamService {
           const desc = String(a.description || '').toLowerCase();
           if (t === 'note_added' && (desc.startsWith('viewed ') || desc.startsWith('opened activity'))) return false;
           return true;
-        }) as ActivityEntry[];
+        }).map((entry) => ({
+          ...entry,
+          sourceDetails: (entry as any).sourceDetails,
+          metadata: (entry as any).metadata || null,
+        })) as ActivityEntry[];
         // Safety: ensure newest first even if some timestamps resolve later
         const sorted = activities.sort((a, b) => {
           const ta = (a.timestamp as any)?.toMillis ? (a.timestamp as any).toMillis() : 0;
@@ -397,7 +403,9 @@ export class ActivityStreamService {
                 description,
                 persona: data.persona,
                 referenceNumber: data.referenceNumber,
-                source: (data.source as ActivitySource) || 'system'
+                source: (data.source as ActivitySource) || 'system',
+                sourceDetails: data.sourceDetails,
+                metadata: data.metadata || null,
               };
             });
             emit();

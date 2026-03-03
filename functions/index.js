@@ -10071,6 +10071,7 @@ exports.convertTasksToStories = httpsV2.onCall(async (req) => {
       description: storyDescription || taskData.description || '',
       goalId: goalId || null,
       sprintId: sprintId || null,
+      url: taskData.url || null,
       priority: conversion?.priority ? Number(conversion.priority) : 2,
       points: clampTaskPoints(conversion?.points)
         ?? clampTaskPoints((Number(taskData.estimateMin || 60) || 60) / 60)
@@ -15301,11 +15302,7 @@ exports.onTaskWritten = firestoreV2.onDocumentWritten('tasks/{taskId}', async (e
     after.autoConverted !== true &&
     after.autoConversionSkip !== true
   ) {
-    const estMinutes = Number(after.estimateMin || 0);
-    const estHours = Number(after.estimatedHours || 0);
-    const points = Number(after.points || 0);
-    const forceStory = after.forceStoryConversion === true;
-    if (forceStory || estMinutes >= 240 || estHours >= 4 || points > 4) {
+    if (shouldAutoConvertTaskData(after)) {
       try {
         const profileSnap = await db.collection('profiles').doc(ownerUidForAuto).get();
         const profileData = profileSnap.exists ? (profileSnap.data() || {}) : {};
@@ -17980,6 +17977,30 @@ function deriveStorySize(task) {
   return 'large';
 }
 
+function shouldAutoConvertTaskData(taskData, profile = {}) {
+  const data = taskData || {};
+  if (data.autoConverted || data.convertedToStoryId) return false;
+  if (data.autoConversionSkip === true) return false;
+  const status = data.status;
+  if (status === 2 || status === 3 || status === 'done' || status === 'completed') return false;
+
+  const thresholdMinutes = Number(profile?.autoConversionThresholdMinutes || 240);
+  const pointsThreshold = Number.isFinite(profile?.autoConversionThresholdPoints)
+    ? Number(profile.autoConversionThresholdPoints)
+    : 4;
+
+  const estMinutes = Number(data.estimateMin || 0);
+  const estHours = Number(data.estimatedHours || 0);
+  const points = Number(data.points || 0);
+  const forceStory = data.forceStoryConversion === true;
+
+  if (forceStory) return true;
+  if (estMinutes >= thresholdMinutes) return true;
+  if (estHours >= 4) return true;
+  if (points > pointsThreshold) return true;
+  return false;
+}
+
 async function autoConvertTask({ db, taskDoc, profile, runId }) {
   const task = taskDoc.data() || {};
   const userId = task.ownerUid;
@@ -18004,6 +18025,7 @@ async function autoConvertTask({ db, taskDoc, profile, runId }) {
     description: task.description || '',
     goalId: task.goalId || null,
     sprintId: task.sprintId || null,
+    url: task.url || null,
     priority: task.priority || 2,
     points: computedPoints,
     status: 0,
@@ -18074,6 +18096,7 @@ async function autoConvertTask({ db, taskDoc, profile, runId }) {
       taskId: taskDoc.id,
       storyId: storyRef.id,
       runId,
+      url: task.url || null,
       acceptanceCriteria,
     },
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -18103,6 +18126,10 @@ async function autoConvertTask({ db, taskDoc, profile, runId }) {
 
   return { taskId: taskDoc.id, storyId: storyRef.id, storyRef: storyRefValue };
 }
+
+exports.shouldAutoConvertTaskInternal = shouldAutoConvertTaskData;
+exports.runTaskAutoConvertInternal = async ({ db, taskDoc, profile, runId }) =>
+  autoConvertTask({ db, taskDoc, profile, runId });
 
 // Run auto-conversion once per day to reduce churn
 exports.autoConvertOversizedTasks = schedulerV2.onSchedule({
