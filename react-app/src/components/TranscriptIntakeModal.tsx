@@ -12,10 +12,27 @@ interface TranscriptEntityLink {
   existing?: boolean;
 }
 
+interface CalendarEventResult {
+  id: string;
+  title: string;
+  start?: string | null;
+  end?: string | null;
+  when?: string | null;
+  isAllDay?: boolean;
+  location?: string | null;
+  htmlLink?: string | null;
+  status?: string | null;
+}
+
 interface TranscriptIngestionResult {
   ok: boolean;
   duplicate?: boolean;
   message?: string;
+  mode?: string | null;
+  intent?: string | null;
+  confidence?: number | null;
+  spokenResponse?: string | null;
+  actionsExecuted?: string[];
   ingestionId?: string | null;
   entryType?: string | null;
   hasJournal?: boolean;
@@ -29,6 +46,7 @@ interface TranscriptIngestionResult {
   fullTranscript?: string | null;
   createdTasks?: TranscriptEntityLink[];
   createdStories?: TranscriptEntityLink[];
+  calendarEvents?: CalendarEventResult[];
 }
 
 interface TranscriptIntakeModalProps {
@@ -173,10 +191,34 @@ const TranscriptIntakeModal: React.FC<TranscriptIntakeModalProps> = ({ show, onH
           </div>
         )}
 
+        {result?.spokenResponse && (
+          <div className="mb-3">
+            <h6>Response</h6>
+            <div>{result.spokenResponse}</div>
+          </div>
+        )}
+
         {result?.oneLineSummary && (
           <div className="mb-3">
             <h6>Summary</h6>
             <div>{result.oneLineSummary}</div>
+          </div>
+        )}
+
+        {!!result?.calendarEvents?.length && (
+          <div className="mb-3">
+            <h6>Calendar</h6>
+            <ListGroup>
+              {result.calendarEvents.map((event) => (
+                <ListGroup.Item key={event.id}>
+                  <div style={{ fontWeight: 600 }}>{event.title}</div>
+                  <div className="text-muted small">{event.when || 'Time unavailable'}</div>
+                  {event.location && (
+                    <div className="text-muted small">{event.location}</div>
+                  )}
+                </ListGroup.Item>
+              ))}
+            </ListGroup>
           </div>
         )}
 

@@ -22,6 +22,7 @@ const DEFAULT_TIMEZONE = 'Europe/London';
 const GEMINI_MODEL = String(process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite').trim();
 const GOOGLE_REGION = 'europe-west2';
 const MAX_DIAGNOSTIC_TEXT = 500;
+const DEFAULT_CALENDAR_QUERY_COUNT = 4;
 
 function summarizeForLog(value, depth = 0) {
   if (value == null) return value;
@@ -296,6 +297,66 @@ function buildDocAppendPlan(sections) {
   };
 }
 
+async function callAgentRouterModel({ transcript, persona, timezone, urlPreviews }) {
+  const apiKey = String(process.env.GOOGLEAISTUDIOAPIKEY || '').trim();
+  if (!apiKey) throw new Error('GOOGLEAISTUDIOAPIKEY not configured');
+
+  const system = [
+    'You are an intent router for a productivity assistant.',
+    'Return STRICT JSON only with this shape:',
+    '{',
+    '  "intent": "process_text"|"create_task"|"create_journal"|"create_story"|"ingest_url"|"query_calendar_next"|"unknown",',
+    '  "mode": "write"|"query"|"unknown",',
+    '  "confidence": number,',
+    '  "calendarQuery": {',
+    '    "count": number',
+    '  }|null',
+    '}',
+    'Rules:',
+    'Use mode="query" and intent="query_calendar_next" only when the user is explicitly asking what is next, upcoming, or on their calendar/schedule.',
+    'For reflective narrative, journaling, planning, reminders, tasks, projects, and URLs to consume, use mode="write".',
+    'Use intent="ingest_url" when the input is mostly one or more URLs.',
+    'Use intent="create_journal" when it is primarily reflective narrative or a journal-style note.',
+    'Use intent="create_task" when it is primarily a reminder, action, to-do, or short planning note.',
+    'Use intent="create_story" when it describes a larger multi-step initiative or project.',
+    'Use intent="process_text" when it should go through the general write-processing pipeline but does not cleanly fit the narrower labels above.',
+    'If the request is ambiguous, prefer mode="write" and intent="process_text" rather than "unknown".',
+    'Only return "unknown" when there is genuinely no actionable or queryable request.',
+    'Set calendarQuery.count to a sensible value between 1 and 10. Default to 4 for "what is next on my calendar".',
+  ].join('\n');
+
+  const user = [
+    `Persona: ${persona || 'personal'}`,
+    `Timezone: ${timezone || DEFAULT_TIMEZONE}`,
+    urlPreviews?.length ? `Resolved URL previews:\n${JSON.stringify(urlPreviews, null, 2)}` : null,
+    'Input text:',
+    transcript,
+  ].filter(Boolean).join('\n\n');
+
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const model = genAI.getGenerativeModel({
+    model: GEMINI_MODEL,
+    safetySettings: [
+      { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
+      { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
+      { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
+      { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
+    ],
+    generationConfig: {
+      temperature: 0.1,
+      topP: 0.9,
+      topK: 40,
+      maxOutputTokens: 1024,
+      responseMimeType: 'application/json',
+    },
+  });
+
+  const response = await model.generateContent(`${system}\n\n${user}`);
+  const text = response?.response?.text?.();
+  if (!text) throw new Error('Gemini returned an empty routing response');
+  return JSON.parse(text);
+}
+
 async function callTranscriptModel({ transcript, persona, timezone, urlPreviews }) {
   const apiKey = String(process.env.GOOGLEAISTUDIOAPIKEY || '').trim();
   if (!apiKey) throw new Error('GOOGLEAISTUDIOAPIKEY not configured');
@@ -392,6 +453,71 @@ function stripUrlsForHeuristics(text) {
     .replace(/https?:\/\/[^\s<>"')]+/gi, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function normalizeAgentIntent(rawIntent, normalizedTranscript, sourceUrls = []) {
+  const intent = String(rawIntent || '').trim().toLowerCase();
+  if ([
+    'process_text',
+    'create_task',
+    'create_journal',
+    'create_story',
+    'ingest_url',
+    'query_calendar_next',
+    'unknown',
+  ].includes(intent)) {
+    return intent;
+  }
+
+  const lowered = String(normalizedTranscript || '').trim().toLowerCase();
+  if (/\b(calendar|schedule|agenda)\b/.test(lowered) && /\b(next|upcoming|what('| i)?s next|what is next)\b/.test(lowered)) {
+    return 'query_calendar_next';
+  }
+  if (Array.isArray(sourceUrls) && sourceUrls.length > 0 && stripUrlsForHeuristics(normalizedTranscript).split(/\s+/).filter(Boolean).length <= 6) {
+    return 'ingest_url';
+  }
+  return 'process_text';
+}
+
+function normalizeAgentMode(rawMode, intent) {
+  const mode = String(rawMode || '').trim().toLowerCase();
+  if (mode === 'write' || mode === 'query' || mode === 'unknown') return mode;
+  if (intent === 'query_calendar_next') return 'query';
+  if (intent === 'unknown') return 'unknown';
+  return 'write';
+}
+
+function normalizeCalendarQuery(rawQuery) {
+  const count = Math.max(
+    1,
+    Math.min(
+      10,
+      Math.round(Number(rawQuery?.count || DEFAULT_CALENDAR_QUERY_COUNT)) || DEFAULT_CALENDAR_QUERY_COUNT
+    )
+  );
+  return { count };
+}
+
+function sanitizeAgentRoute(raw, normalizedTranscript, sourceUrls = []) {
+  const payload = raw && typeof raw === 'object' ? raw : {};
+  const intent = normalizeAgentIntent(payload.intent, normalizedTranscript, sourceUrls);
+  let mode = normalizeAgentMode(payload.mode, intent);
+  if (intent === 'query_calendar_next') mode = 'query';
+  if (intent !== 'unknown' && intent !== 'query_calendar_next' && mode !== 'write') {
+    mode = 'write';
+  }
+
+  const confidenceNumber = Number(payload.confidence);
+  const confidence = Number.isFinite(confidenceNumber)
+    ? Math.max(0, Math.min(1, confidenceNumber))
+    : 0.5;
+
+  return {
+    intent,
+    mode,
+    confidence,
+    calendarQuery: normalizeCalendarQuery(payload.calendarQuery),
+  };
 }
 
 function normalizeEntryType(rawType, transcript, sourceUrls, tasks, stories) {
@@ -799,21 +925,26 @@ function buildGoogleRedirectUri() {
   return `https://${GOOGLE_REGION}-${projectId}.cloudfunctions.net/oauthCallback`;
 }
 
-async function getGoogleDocsClient(uid) {
+async function getGoogleOAuth2Client(uid) {
   const db = admin.firestore();
-  const tokenSnap = await db.collection('tokens').doc(uid).get();
-  if (!tokenSnap.exists) {
-    throw new httpsV2.HttpsError(
-      'failed-precondition',
-      'Google is not connected. Reconnect Google Calendar to grant Google Docs access.'
-    );
-  }
-  const tokenData = tokenSnap.data() || {};
-  const refreshToken = String(tokenData.refresh_token || '').trim();
+  const [tokenSnap, userSnap] = await Promise.all([
+    db.collection('tokens').doc(uid).get().catch(() => null),
+    db.collection('users').doc(uid).get().catch(() => null),
+  ]);
+
+  const tokenData = tokenSnap?.exists ? (tokenSnap.data() || {}) : {};
+  const userData = userSnap?.exists ? (userSnap.data() || {}) : {};
+  const refreshToken = String(
+    tokenData.refresh_token ||
+    tokenData.googleCalendarTokens?.refresh_token ||
+    userData.googleCalendarTokens?.refresh_token ||
+    ''
+  ).trim();
+
   if (!refreshToken) {
     throw new httpsV2.HttpsError(
       'failed-precondition',
-      'Google refresh token missing. Reconnect Google Calendar to grant Google Docs access.'
+      'Google is not connected. Reconnect Google Calendar to grant Google access.'
     );
   }
 
@@ -826,7 +957,17 @@ async function getGoogleDocsClient(uid) {
 
   const auth = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
   auth.setCredentials({ refresh_token: refreshToken });
+  return auth;
+}
+
+async function getGoogleDocsClient(uid) {
+  const auth = await getGoogleOAuth2Client(uid);
   return google.docs({ version: 'v1', auth });
+}
+
+async function getGoogleCalendarClient(uid) {
+  const auth = await getGoogleOAuth2Client(uid);
+  return google.calendar({ version: 'v3', auth });
 }
 
 async function appendJournalToGoogleDoc({ uid, docUrl, sections }) {
@@ -894,6 +1035,70 @@ async function appendJournalToGoogleDoc({ uid, docUrl, sections }) {
   return {
     docId,
     docUrl,
+  };
+}
+
+function formatCalendarEventResponse(event, timezone) {
+  const zone = timezone || DEFAULT_TIMEZONE;
+  const startDateTime = String(event?.start?.dateTime || '').trim();
+  const endDateTime = String(event?.end?.dateTime || '').trim();
+  const startDate = String(event?.start?.date || '').trim();
+  const endDate = String(event?.end?.date || '').trim();
+  const isAllDay = Boolean(!startDateTime && startDate);
+  const startValue = startDateTime || startDate || null;
+  const endValue = endDateTime || endDate || null;
+
+  let when = 'Time unavailable';
+  if (startDateTime) {
+    when = DateTime.fromISO(startDateTime).setZone(zone).toLocaleString(DateTime.DATETIME_MED);
+  } else if (startDate) {
+    when = DateTime.fromISO(startDate).setZone(zone).toLocaleString(DateTime.DATE_FULL);
+  }
+
+  return {
+    id: String(event?.id || ''),
+    title: String(event?.summary || 'Untitled event'),
+    start: startValue,
+    end: endValue,
+    when,
+    isAllDay,
+    location: String(event?.location || '').trim() || null,
+    htmlLink: String(event?.htmlLink || '').trim() || null,
+    status: String(event?.status || '').trim() || null,
+  };
+}
+
+function buildCalendarSpokenResponse(events, limit = null) {
+  if (!Array.isArray(events) || !events.length) {
+    return 'You have no upcoming events on your calendar.';
+  }
+  const safeLimit = Math.max(1, Math.min(10, Number(limit) || events.length));
+  const listed = events.slice(0, safeLimit).map((event) => `${event.title} at ${event.when}`);
+  if (listed.length === 1) {
+    return `Your next event is ${listed[0]}.`;
+  }
+  if (listed.length === 2) {
+    return `Your next events are ${listed[0]} and ${listed[1]}.`;
+  }
+  return `Your next events are ${listed.slice(0, -1).join(', ')}, and ${listed[listed.length - 1]}.`;
+}
+
+function buildCalendarQueryResponse({ intent, confidence, events, processedAt, count }) {
+  return {
+    ok: true,
+    mode: 'query',
+    intent,
+    confidence,
+    spokenResponse: buildCalendarSpokenResponse(events, count),
+    actionsExecuted: ['query_calendar_next'],
+    resultType: 'calendar',
+    processedAt: normalizeTimestampOutput(processedAt || new Date()),
+    calendarEvents: events,
+    createdTasks: [],
+    createdStories: [],
+    hasJournal: false,
+    journalId: null,
+    docUrl: null,
   };
 }
 
@@ -1164,6 +1369,16 @@ async function findExistingJournalDuplicate(db, uid, fingerprint) {
   });
 }
 
+async function findExistingProcessedIngestion(db, uid, fingerprint) {
+  const id = `${uid}_${fingerprint}`;
+  const snap = await db.collection('transcript_ingestions').doc(id).get().catch(() => null);
+  if (!snap?.exists) return null;
+  const data = snap.data() || {};
+  const status = String(data.status || '').toLowerCase();
+  if (status !== 'processed' && status !== 'processing') return null;
+  return hydrateDuplicateState(db, uid, fingerprint, { id, ...data });
+}
+
 async function logIngestionActivity({ uid, fingerprint, journalId, storyRecords, taskRecords, entryType }) {
   try {
     const ref = admin.firestore().collection('activity_stream').doc();
@@ -1186,6 +1401,71 @@ async function logIngestionActivity({ uid, fingerprint, journalId, storyRecords,
     });
   } catch (error) {
     console.warn('[transcriptIngestion] activity log failed', error?.message || error);
+  }
+}
+
+function buildWriteSpokenResponse(response) {
+  if (!response || typeof response !== 'object') return 'Text processed.';
+  if (response.duplicate) {
+    return String(response.message || 'This text was already processed.');
+  }
+
+  const tasks = Array.isArray(response.createdTasks) ? response.createdTasks.length : 0;
+  const stories = Array.isArray(response.createdStories) ? response.createdStories.length : 0;
+  const hasJournal = Boolean(response.hasJournal || response.journalId);
+
+  if (hasJournal && tasks === 0 && stories === 0) {
+    return 'I created a journal entry.';
+  }
+  if (hasJournal && (tasks || stories)) {
+    const parts = ['I created a journal entry'];
+    if (tasks) parts.push(`${tasks} task${tasks === 1 ? '' : 's'}`);
+    if (stories) parts.push(`${stories} stor${stories === 1 ? 'y' : 'ies'}`);
+    return `${parts.join(', and ')}.`;
+  }
+  if (tasks && !stories) {
+    return `I created ${tasks} task${tasks === 1 ? '' : 's'}.`;
+  }
+  if (stories && !tasks) {
+    return `I created ${stories} stor${stories === 1 ? 'y' : 'ies'}.`;
+  }
+  return 'Text processed.';
+}
+
+function annotateAgentWriteResponse(response, route) {
+  return {
+    ...response,
+    mode: 'write',
+    intent: route?.intent || 'process_text',
+    confidence: route?.confidence ?? null,
+    spokenResponse: buildWriteSpokenResponse(response),
+    actionsExecuted: ['process_text'],
+    calendarEvents: [],
+  };
+}
+
+async function listNextCalendarEvents({ uid, count, timezone }) {
+  const calendar = await getGoogleCalendarClient(uid);
+  try {
+    const response = await calendar.events.list({
+      calendarId: 'primary',
+      timeMin: new Date().toISOString(),
+      singleEvents: true,
+      orderBy: 'startTime',
+      showDeleted: false,
+      maxResults: Math.max(1, Math.min(10, Number(count) || DEFAULT_CALENDAR_QUERY_COUNT)),
+    });
+    const items = Array.isArray(response?.data?.items) ? response.data.items : [];
+    return items.map((event) => formatCalendarEventResponse(event, timezone));
+  } catch (error) {
+    const status = Number(error?.code || error?.status || error?.response?.status || 0);
+    if (status === 401 || status === 403) {
+      throw new httpsV2.HttpsError(
+        'failed-precondition',
+        'Google Calendar access is missing or missing the Calendar scope. Reconnect Google Calendar in Settings.'
+      );
+    }
+    throw error;
   }
 }
 
@@ -1494,6 +1774,120 @@ async function processTranscriptIngestion({
   }
 }
 
+async function processAgentRequest({
+  uid,
+  transcript,
+  persona,
+  source,
+  sourceUrl,
+  sourceProvidedId,
+  channel,
+  authMode,
+}) {
+  const db = admin.firestore();
+  const normalizedTranscript = normalizeTranscriptForFingerprint(transcript);
+  if (!normalizedTranscript) {
+    throw new httpsV2.HttpsError('invalid-argument', 'Transcript text is required.');
+  }
+
+  const fingerprint = sha256(normalizedTranscript);
+  const duplicateState = await findExistingProcessedIngestion(db, uid, fingerprint);
+  if (duplicateState) {
+    console.log('[transcriptIngestion] agent_duplicate_short_circuit', JSON.stringify({
+      uid,
+      fingerprint,
+      source: source || 'transcript',
+      channel: channel || 'unknown',
+      authMode: authMode || 'unknown',
+      sourceProvidedId: sourceProvidedId || null,
+      priorStatus: duplicateState.status || null,
+    }));
+    return annotateAgentWriteResponse(buildDuplicateResponse(duplicateState), {
+      intent: 'process_text',
+      confidence: 1,
+    });
+  }
+
+  const { profile } = await resolveProfile(db, uid);
+  const timezone = String(
+    profile?.timezone ||
+    profile?.timeZone ||
+    profile?.settings?.timezone ||
+    DEFAULT_TIMEZONE
+  ).trim() || DEFAULT_TIMEZONE;
+  const sourceUrls = extractUrls(normalizedTranscript, sourceUrl);
+  const urlPreviews = await fetchUrlPreviews(sourceUrls);
+  const rawRoute = await callAgentRouterModel({
+    transcript: normalizedTranscript,
+    persona: persona || 'personal',
+    timezone,
+    urlPreviews,
+  });
+  const route = sanitizeAgentRoute(rawRoute, normalizedTranscript, sourceUrls);
+  const effectiveRoute = (route.mode === 'query' && route.intent === 'query_calendar_next')
+    ? route
+    : (route.intent === 'unknown' || route.mode === 'unknown'
+      ? { ...route, intent: 'process_text', mode: 'write' }
+      : route);
+
+  console.log('[transcriptIngestion] agent_route', JSON.stringify({
+    uid,
+    fingerprint,
+    source: source || 'transcript',
+    channel: channel || 'unknown',
+    authMode: authMode || 'unknown',
+    sourceProvidedId: sourceProvidedId || null,
+    intent: effectiveRoute.intent,
+    mode: effectiveRoute.mode,
+    confidence: effectiveRoute.confidence,
+    calendarQuery: effectiveRoute.calendarQuery,
+  }));
+
+  if (effectiveRoute.mode === 'query' && effectiveRoute.intent === 'query_calendar_next') {
+    console.log('[transcriptIngestion] calendar_query_start', JSON.stringify({
+      uid,
+      fingerprint,
+      count: effectiveRoute.calendarQuery.count,
+      timezone,
+    }));
+    const events = await listNextCalendarEvents({
+      uid,
+      count: effectiveRoute.calendarQuery.count,
+      timezone,
+    });
+    console.log('[transcriptIngestion] calendar_query_complete', JSON.stringify({
+      uid,
+      fingerprint,
+      eventCount: events.length,
+    }));
+    return buildCalendarQueryResponse({
+      intent: effectiveRoute.intent,
+      confidence: effectiveRoute.confidence,
+      events,
+      processedAt: new Date(),
+      count: effectiveRoute.calendarQuery.count,
+    });
+  }
+
+  console.log('[transcriptIngestion] agent_write_handoff', JSON.stringify({
+    uid,
+    fingerprint,
+    intent: effectiveRoute.intent,
+    confidence: effectiveRoute.confidence,
+  }));
+  const response = await processTranscriptIngestion({
+    uid,
+    transcript: normalizedTranscript,
+    persona,
+    source,
+    sourceUrl,
+    sourceProvidedId,
+    channel,
+    authMode,
+  });
+  return annotateAgentWriteResponse(response, effectiveRoute);
+}
+
 function mapHttpError(error, res) {
   const code = error?.code;
   const payload = {
@@ -1625,11 +2019,11 @@ exports.ingestTranscript = httpsV2.onCall({
     uid,
     source: String(req?.data?.source || 'web_fab'),
     sourceProvidedId: String(req?.data?.sourceProvidedId || ''),
-    transcriptLength: String(req?.data?.transcript || '').trim().length,
+    transcriptLength: String(req?.data?.transcript || req?.data?.text || '').trim().length,
   }));
-  return processTranscriptIngestion({
+  return processAgentRequest({
     uid,
-    transcript: String(req?.data?.transcript || ''),
+    transcript: String(req?.data?.transcript || req?.data?.text || ''),
     persona: String(req?.data?.persona || 'personal'),
     source: String(req?.data?.source || 'web_fab'),
     sourceUrl: String(req?.data?.sourceUrl || ''),
@@ -1669,11 +2063,11 @@ exports.ingestTranscriptHttp = httpsV2.onRequest({
       authMode: caller.authMode,
       source: String(req.body?.source || 'ios_shortcut'),
       sourceProvidedId: String(req.body?.sourceProvidedId || ''),
-      transcriptLength: String(req.body?.transcript || '').trim().length,
+      transcriptLength: String(req.body?.transcript || req.body?.text || '').trim().length,
     }));
-    const result = await processTranscriptIngestion({
+    const result = await processAgentRequest({
       uid: caller.uid,
-      transcript: String(req.body?.transcript || ''),
+      transcript: String(req.body?.transcript || req.body?.text || ''),
       persona: String(req.body?.persona || 'personal'),
       source: String(req.body?.source || 'ios_shortcut'),
       sourceUrl: String(req.body?.sourceUrl || ''),
