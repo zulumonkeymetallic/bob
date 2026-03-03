@@ -11,6 +11,7 @@ Environments
 Secrets
 - Service account JSON should NOT be in the repo. Place it on disk and reference it by path.
 - Example (local Mac): `~/.secrets/bob/bob20250810-service-account.json`
+- Current local path in use: `/Users/jim/GitHub/secret/bob20250810-firebase-adminsdk-fbsvc-0f8ac23f94.json`
 
 Key Commands
 - Deploy rules: `npm run deploy:rules`

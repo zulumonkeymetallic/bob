@@ -24,6 +24,7 @@ import { useNavigate } from 'react-router-dom';
 import { isStatus, getPriorityBadge } from '../utils/statusHelpers';
 import { normalizePriorityValue } from '../utils/priorityUtils';
 import { resolveThemeFromValue } from '../utils/themeResolver';
+import { parsePointsValue } from '../utils/points';
 
 interface EntityLookupInputProps {
   type: 'goal' | 'story';
@@ -461,8 +462,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
         const prevGoal = (selectedItem as any).goalId || '';
         if ((newGoalId || '') !== (prevGoal || '')) { updates.goalId = newGoalId || null; before.goalId = prevGoal || null; }
         if (quickEdit.points !== undefined) {
-          const rawPoints = Number(quickEdit.points);
-          const normalized = Math.max(1, Math.min(8, Number.isNaN(rawPoints) ? 1 : Math.round(rawPoints)));
+          const normalized = parsePointsValue(quickEdit.points) ?? 1;
           const prevPoints = Number((selectedItem as any).points);
           if (!Number.isFinite(prevPoints) || prevPoints !== normalized) {
             updates.points = normalized;
@@ -1268,14 +1268,13 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                         <Form.Control
                           size="sm"
                           type="number"
-                          min={1}
-                          max={8}
+                          step="any"
+                          inputMode="decimal"
                           value={quickEdit.points ?? ''}
-                          onChange={(e) => {
-                            const value = Number(e.target.value);
-                            const normalized = Math.max(1, Math.min(8, Number.isNaN(value) ? 1 : Math.round(value)));
-                            setQuickEdit((q: any) => ({ ...q, points: normalized }));
-                          }}
+                          onChange={(e) => setQuickEdit((q: any) => ({
+                            ...q,
+                            points: e.target.value,
+                          }))}
                         />
                       </div>
                     )}

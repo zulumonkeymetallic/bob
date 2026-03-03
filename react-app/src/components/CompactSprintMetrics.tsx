@@ -17,6 +17,11 @@ const CompactSprintMetrics: React.FC<CompactSprintMetricsProps> = ({
   selectedSprintId,
   className = ''
 }) => {
+  const storyPoints = (value: unknown): number => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+
   const [sprint, setSprint] = useState<Sprint | null>(null);
   const [stories, setStories] = useState<Story[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -197,8 +202,10 @@ const CompactSprintMetrics: React.FC<CompactSprintMetricsProps> = ({
       const completedStories = stories.filter(s => s.status === 4).length;
       const totalTasks = tasks.length;
       const completedTasks = tasks.filter(t => t.status === 2).length;
-      const totalPoints = stories.reduce((sum, s) => sum + (s.points || 0), 0);
-      const completedPoints = stories.filter(s => s.status === 4).reduce((sum, s) => sum + (s.points || 0), 0);
+      const totalPoints = stories.reduce((sum, s) => sum + storyPoints(s.points), 0);
+      const completedPoints = stories
+        .filter(s => s.status === 4)
+        .reduce((sum, s) => sum + storyPoints(s.points), 0);
       const standaloneTasksCount = tasks.filter(t => !t.parentId || t.parentType !== 'story').length;
 
       // Calculate overall progress metrics for non-sprint view
@@ -292,8 +299,10 @@ const CompactSprintMetrics: React.FC<CompactSprintMetricsProps> = ({
     const allDoneStories = stories.filter(s => s.status === 4).length;
     const overallStoryCompletion = allStories > 0 ? Math.round((allDoneStories / allStories) * 100) : 0;
     
-    const allStoryPoints = stories.reduce((sum, s) => sum + (s.points || 0), 0);
-    const allDoneStoryPoints = stories.filter(s => s.status === 4).reduce((sum, s) => sum + (s.points || 0), 0);
+    const allStoryPoints = stories.reduce((sum, s) => sum + storyPoints(s.points), 0);
+    const allDoneStoryPoints = stories
+      .filter(s => s.status === 4)
+      .reduce((sum, s) => sum + storyPoints(s.points), 0);
     return {
       hasStarted,
       hasEnded,

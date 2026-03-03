@@ -81,9 +81,7 @@ import TasksManagement from './components/TasksManagement';
 import SprintPlanningMatrix from './components/SprintPlanningMatrix';
 import WorkoutsDashboard from './components/WorkoutsDashboard';
 import FinanceDashboardModern from './components/FinanceDashboardModern';
-import FinanceHub from './components/finance/FinanceHub';
 import MerchantMappings from './components/finance/MerchantMappings';
-import CategoriesBuckets from './components/finance/CategoriesBuckets';
 import BudgetsPage from './components/finance/BudgetsPage';
 import GoalPotLinking from './components/finance/GoalPotLinking';
 import TransactionsList from './components/finance/TransactionsList';
@@ -436,11 +434,13 @@ function AppContent() {
             <Route path="/calendar" element={<UnifiedPlannerPage />} />
             <Route path="/calendar/planner" element={<WeeklyThemePlanner />} />
             <Route path="/calendar/themes" element={<Navigate to="/calendar/planner" replace />} />
-            <Route path="/running-results" element={<WorkoutsDashboard />} />
-            <Route path="/workouts" element={<Navigate to="/running-results" replace />} />
-            <Route path="/finance" element={<FinanceHub />} />
+            <Route path="/fitness" element={<WorkoutsDashboard />} />
+            <Route path="/running-results" element={<Navigate to="/fitness" replace />} />
+            <Route path="/parkrun-results" element={<WorkoutsDashboard />} />
+            <Route path="/workouts" element={<Navigate to="/fitness" replace />} />
+            <Route path="/finance" element={<Navigate to="/finance/dashboard" replace />} />
             <Route path="/finance/merchants" element={<MerchantMappings />} />
-            <Route path="/finance/categories" element={<CategoriesBuckets />} />
+            <Route path="/finance/categories" element={<Navigate to="/finance/merchants" replace />} />
             <Route path="/finance/budgets" element={<BudgetsPage />} />
             <Route path="/finance/goals" element={<GoalPotLinking />} />
             <Route path="/finance/transactions" element={<TransactionsList />} />

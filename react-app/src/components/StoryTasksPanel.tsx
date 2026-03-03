@@ -9,6 +9,7 @@ import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../firebase';
 import { generateRef } from '../utils/referenceGenerator';
 import { useSidebar } from '../contexts/SidebarContext';
+import { parsePointsValue } from '../utils/points';
 
 interface StoryTasksPanelProps {
   story: Story;
@@ -29,7 +30,7 @@ const StoryTasksPanel: React.FC<StoryTasksPanelProps> = ({ story, onClose }) => 
     description: '',
     status: 0, // 0=To Do
     priority: 2, // 2=Medium
-    points: 1
+    points: '1' as string | number
   });
   const [aiPlanning, setAiPlanning] = useState(false);
   const [aiMessage, setAiMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -105,8 +106,7 @@ const StoryTasksPanel: React.FC<StoryTasksPanelProps> = ({ story, onClose }) => 
     try {
       const payload: Partial<Task> = { ...editingValues };
       if (payload.points !== undefined) {
-        const value = Number(payload.points);
-        payload.points = Math.max(1, Math.min(8, Number.isNaN(value) ? 1 : Math.round(value)));
+        payload.points = parsePointsValue(payload.points) ?? 1;
       }
       await updateDoc(doc(db, 'tasks', editingTaskId), {
         ...payload,
@@ -137,7 +137,7 @@ const StoryTasksPanel: React.FC<StoryTasksPanelProps> = ({ story, onClose }) => 
         description: newTask.description,
         status: newTask.status,
         priority: newTask.priority,
-        points: Math.max(1, Math.min(8, Math.round(newTask.points ?? 1))),
+        points: parsePointsValue(newTask.points) ?? 1,
         parentType: 'story',
         parentId: story.id,
         effort: 'M',
@@ -162,7 +162,7 @@ const StoryTasksPanel: React.FC<StoryTasksPanelProps> = ({ story, onClose }) => 
         description: '',
         status: 0,
         priority: 2,
-        points: 1
+        points: '1'
       });
       setIsAddingTask(false);
     } catch (error) {
@@ -320,14 +320,13 @@ const StoryTasksPanel: React.FC<StoryTasksPanelProps> = ({ story, onClose }) => 
                     <Form.Label>Points</Form.Label>
                     <Form.Control
                       type="number"
-                      min={1}
-                      max={8}
-                      value={newTask.points ?? 1}
-                      onChange={(e) => {
-                        const value = Number(e.target.value);
-                        const normalized = Math.max(1, Math.min(8, Number.isNaN(value) ? 1 : Math.round(value)));
-                        setNewTask({ ...newTask, points: normalized });
-                      }}
+                      step="any"
+                      inputMode="decimal"
+                      value={newTask.points ?? ''}
+                      onChange={(e) => setNewTask({
+                        ...newTask,
+                        points: e.target.value as any,
+                      })}
                     />
                   </Form.Group>
                 </Col>
@@ -429,14 +428,13 @@ const StoryTasksPanel: React.FC<StoryTasksPanelProps> = ({ story, onClose }) => 
                             <Form.Label>Points</Form.Label>
                             <Form.Control
                               type="number"
-                              min={1}
-                              max={8}
-                              value={editingValues.points ?? 1}
-                              onChange={(e) => {
-                                const value = Number(e.target.value);
-                                const normalized = Math.max(1, Math.min(8, Number.isNaN(value) ? 1 : Math.round(value)));
-                                setEditingValues({ ...editingValues, points: normalized });
-                              }}
+                              step="any"
+                              inputMode="decimal"
+                              value={editingValues.points ?? ''}
+                              onChange={(e) => setEditingValues({
+                                ...editingValues,
+                                points: e.target.value as any,
+                              })}
                             />
                           </Form.Group>
                         </Col>

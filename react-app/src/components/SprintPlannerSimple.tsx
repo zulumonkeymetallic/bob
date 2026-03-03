@@ -229,7 +229,7 @@ const SprintPlannerSimple: React.FC = () => {
                             ) : (
                 sprints.map(sprint => {
                     const sprintStories = stories.filter(s => s.sprintId === sprint.id);
-                    const totalPoints = sprintStories.reduce((sum, s) => sum + (s.points || 1), 0);
+                    const totalPoints = sprintStories.reduce((sum, s) => sum + (Number.isFinite(Number(s.points)) ? Number(s.points) : 1), 0);
                     const capacity = (sprint as any).capacityPoints || 20;
                     const pct = Math.min(100, Math.round((totalPoints / Math.max(1, capacity)) * 100));
                     

@@ -7,6 +7,7 @@ import { db } from '../firebase';
 import { generateRef } from '../utils/referenceGenerator';
 import { Upload, Download, FileText } from 'lucide-react';
 import * as XLSX from 'xlsx';
+import { parsePointsValue } from '../utils/points';
 
 interface ImportModalProps {
   show: boolean;
@@ -40,10 +41,8 @@ const parseAcceptanceCriteria = (value: any): string[] | null => {
 };
 
 const clampPoints = (value: any): number | null => {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return null;
-  const rounded = Math.round(parsed);
-  return Math.min(8, Math.max(1, rounded));
+  const parsed = parsePointsValue(value);
+  return parsed == null ? null : parsed;
 };
 
 const ImportModal: React.FC<ImportModalProps> = ({ show, onHide, entityType, onImportComplete }) => {

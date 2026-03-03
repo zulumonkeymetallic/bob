@@ -13,6 +13,7 @@ const {
 const { expandRecurrence } = require('../scheduler/engine');
 const { fetchWeather, fetchNews } = require('../services/newsWeather');
 const { buildAbsoluteUrl, buildEntityUrl } = require('../utils/urlHelpers');
+const { computeExpectedProgressPct, evaluateGoalKpiStatus } = require('./goalKpiStatus');
 
 const TASK_DONE_STATUSES = new Set(['done', 'completed', 'complete', 'archived', 2, 3]);
 const STORY_DONE_STATUSES = new Set(['done', 'complete', 'archived', 3]);
@@ -1165,6 +1166,100 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
     };
   }
 
+  let goalKpiStatus = null;
+  if (activeSprint) {
+    try {
+      const sprintStoriesForGoals = storiesAll.filter((story) => story.sprintId === activeSprint.id);
+      const activeSprintGoalIds = Array.from(new Set(
+        sprintStoriesForGoals.map((story) => String(story.goalId || '').trim()).filter(Boolean),
+      ));
+      if (activeSprintGoalIds.length) {
+        const storyProgressByGoal = new Map();
+        sprintStoriesForGoals.forEach((story) => {
+          const goalId = String(story.goalId || '').trim();
+          if (!goalId) return;
+          const points = Number(story.points || 0) || 0;
+          const row = storyProgressByGoal.get(goalId) || {
+            totalPoints: 0,
+            donePoints: 0,
+            totalStories: 0,
+            doneStories: 0,
+          };
+          row.totalPoints += points;
+          row.totalStories += 1;
+          if (normaliseStoryStatus(story.status) === 'done') {
+            row.donePoints += points;
+            row.doneStories += 1;
+          }
+          storyProgressByGoal.set(goalId, row);
+        });
+
+        const metricsSnap = await db.collection('goal_kpi_metrics').where('ownerUid', '==', userId).get().catch(() => ({ docs: [] }));
+        const metricsByGoalId = new Map();
+        (metricsSnap.docs || []).forEach((docSnap) => {
+          const data = docSnap.data() || {};
+          const goalId = String(data.goalId || '').trim();
+          if (!goalId) return;
+          metricsByGoalId.set(goalId, data);
+        });
+
+        const sprintStartMs = toMillis(activeSprint.startDate || activeSprint.start || null);
+        const sprintEndMs = toMillis(activeSprint.endDate || activeSprint.end || null);
+        const expectedProgressPct = computeExpectedProgressPct(sprintStartMs, sprintEndMs);
+
+        const rows = activeSprintGoalIds.map((goalId) => {
+          const goal = goalLookup.get(goalId) || goalsById.get(goalId) || null;
+          const progress = storyProgressByGoal.get(goalId) || null;
+          const storyProgressPct = progress
+            ? (
+              progress.totalPoints > 0
+                ? Math.round((progress.donePoints / progress.totalPoints) * 100)
+                : (progress.totalStories > 0 ? Math.round((progress.doneStories / progress.totalStories) * 100) : null)
+            )
+            : null;
+          const metricData = metricsByGoalId.get(goalId) || {};
+          const resolvedKpis = Array.isArray(metricData.resolvedKpis) ? metricData.resolvedKpis : [];
+          const status = evaluateGoalKpiStatus({
+            resolvedKpis,
+            fallbackProgressPct: storyProgressPct,
+            expectedProgressPct,
+            scopeLabel: activeSprint.name || 'active sprint',
+          });
+          return {
+            goalId,
+            goalTitle: goal?.title || goalId,
+            goalRef: goal ? ensureGoalReference(goal) : null,
+            goalDeepLink: goal ? makeDeepLink('goal', ensureGoalReference(goal)) : null,
+            kpiSummary: status.kpiSummary || 'No KPI attached',
+            progressPct: status.progressPct,
+            expectedProgressPct,
+            status: status.label,
+            reason: status.reason,
+          };
+        });
+
+        const statusOrder = { Behind: 0, 'On target': 1, 'No KPI': 2 };
+        rows.sort((a, b) => {
+          const byStatus = (statusOrder[a.status] ?? 9) - (statusOrder[b.status] ?? 9);
+          if (byStatus !== 0) return byStatus;
+          const aProgress = a.progressPct == null ? -1 : Number(a.progressPct);
+          const bProgress = b.progressPct == null ? -1 : Number(b.progressPct);
+          if (aProgress !== bProgress) return aProgress - bProgress;
+          return String(a.goalTitle || '').localeCompare(String(b.goalTitle || ''));
+        });
+
+        goalKpiStatus = {
+          sprintId: activeSprint.id,
+          sprintName: activeSprint.name || activeSprint.ref || `Sprint ${activeSprint.id.slice(0, 4)}`,
+          expectedProgressPct,
+          rows,
+        };
+      }
+    } catch (error) {
+      console.warn('[reporting] goal KPI status lookup failed', error?.message || error);
+    }
+  }
+
   const budgetProgress = monzo?.totals && monzo?.budgetProgress ? monzo.budgetProgress : null;
 
   const budgetSummary = (() => {
@@ -1252,6 +1347,7 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
     schedulerChanges,
     goalProgress,
     sprintProgress,
+    goalKpiStatus,
     budgetProgress,
     budgetSummary,
     kpis,

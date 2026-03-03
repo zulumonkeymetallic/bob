@@ -13,6 +13,7 @@ import '../styles/MaterialDesign.css';
 import BulkCreateModal from './BulkCreateModal';
 import GoalChatModal from './GoalChatModal';
 import AddStoryModal from './AddStoryModal';
+import TranscriptIntakeModal from './TranscriptIntakeModal';
 
 interface FloatingActionButtonProps {
   onImportClick: () => void;
@@ -49,6 +50,7 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
   const [submitResult, setSubmitResult] = useState<string | null>(null);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [showIntake, setShowIntake] = useState(false);
+  const [showTranscriptModal, setShowTranscriptModal] = useState(false);
   const [intakeTitle, setIntakeTitle] = useState('');
   const [intakeTheme, setIntakeTheme] = useState('Growth');
   const [chatGoalId, setChatGoalId] = useState<string | null>(null);
@@ -396,13 +398,23 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
           <button
             className="md-fab-mini"
             onClick={() => {
+              setShowTranscriptModal(true);
+              setShowMenu(false);
+            }}
+            title="Transcript Intake"
+          >
+            T
+          </button>
+          <button
+            className="md-fab-mini"
+            onClick={() => {
               setQuickAddType('task');
               setShowQuickAdd(true);
               setShowMenu(false);
             }}
-            title="Add Task"
+            title="Quick Task"
           >
-            T
+            Q
           </button>
         </div>
       )}
@@ -667,6 +679,10 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
       <BulkCreateModal
         show={showBulkCreate}
         onHide={() => setShowBulkCreate(false)}
+      />
+      <TranscriptIntakeModal
+        show={showTranscriptModal}
+        onHide={() => setShowTranscriptModal(false)}
       />
 
       {/* Inline Chat Modal for Intake */}

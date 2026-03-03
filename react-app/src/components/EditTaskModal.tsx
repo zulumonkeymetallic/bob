@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { format } from 'date-fns';
 import { Modal, Button, Form, Row, Col } from 'react-bootstrap';
-import { doc, updateDoc, serverTimestamp, collection, query, where, orderBy, limit, onSnapshot, setDoc, addDoc } from 'firebase/firestore';
+import { doc, updateDoc, serverTimestamp, collection, query, where, orderBy, limit, onSnapshot, setDoc, addDoc, deleteDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { useNavigate } from 'react-router-dom';
 import { db, functions } from '../firebase';
@@ -18,6 +18,7 @@ import { cascadeTaskPersona } from '../utils/personaCascade';
 import { formatTaskTagLabel } from '../utils/tagDisplay';
 import { normalizeTaskTags } from '../utils/taskTagging';
 import { findSprintForDate } from '../utils/taskSprintHelpers';
+import { parsePointsValue } from '../utils/points';
 
 interface EditTaskModalProps {
   show: boolean;
@@ -71,13 +72,14 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
   const { sprints } = useSprint();
   const { themes: globalThemes } = useGlobalThemes();
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [form, setForm] = useState({
     title: '',
     description: '',
     status: 0 as number | string,
     priority: 2 as number | string,
     sprintId: '' as string,
-    points: 1 as number,
+    points: '1' as string | number,
     dueDate: '' as string,
     storyId: '' as string,
     goalId: '' as string,
@@ -158,7 +160,7 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
         status: 0,
         priority: 2,
         sprintId: '',
-        points: 1,
+        points: '1',
         dueDate: '',
         storyId: '',
         goalId: '',
@@ -189,7 +191,7 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
       status: normalizeTaskStatus((task as any).status),
       priority: normalizePriorityValue((task as any).priority),
       sprintId: (task as any).sprintId || '',
-      points: (task as any).points ?? 1,
+      points: parsePointsValue((task as any).points) ?? 1,
       dueDate: resolveDue((task as any).dueDate || (task as any).dueDateMs || (task as any).targetDate),
       storyId: linkedStoryId,
       goalId: (task as any).goalId || linkedStory?.goalId || '',
@@ -271,7 +273,7 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
         description: form.description,
         status: typeof form.status === 'string' ? Number(form.status) || form.status : form.status,
         priority: typeof form.priority === 'string' ? Number(form.priority) || form.priority : form.priority,
-        points: Number(form.points) || 1,
+        points: parsePointsValue(form.points) ?? 1,
         sprintId: nextSprintId,
         dueDate: dueDateMs,
         storyId: form.storyId || null,
@@ -441,6 +443,25 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
       alert('Could not convert this task to a story. Please try again.');
     } finally {
       setConverting(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!task || deleting) return;
+    const label = (task as any).ref || task.title || task.id;
+    const confirmed = window.confirm(`Delete task "${label}"? This cannot be undone.`);
+    if (!confirmed) return;
+
+    setDeleting(true);
+    try {
+      await deleteDoc(doc(db, 'tasks', task.id));
+      onUpdated?.();
+      onHide();
+    } catch (error) {
+      console.error('Failed to delete task', error);
+      alert('Failed to delete task. Please try again.');
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -629,10 +650,13 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
                       <Form.Label>Points</Form.Label>
                       <Form.Control
                         type="number"
-                        min={0}
-                        step={1}
-                        value={form.points || 0}
-                        onChange={(e) => setForm({ ...form, points: Number(e.target.value) || 0 })}
+                        step="any"
+                        inputMode="decimal"
+                        value={form.points ?? ''}
+                        onChange={(e) => setForm({
+                          ...form,
+                          points: e.target.value,
+                        })}
                       />
                     </Form.Group>
                   </Col>
@@ -746,6 +770,7 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
           onClick={handleConvertToStory}
           disabled={
             converting
+            || deleting
             || saving
             || !task
             || !!(task as any)?.convertedToStoryId
@@ -755,10 +780,15 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
         >
           {converting ? 'Converting...' : 'Convert to Story'}
         </Button>
-        <Button variant="secondary" onClick={onHide}>
+        {task && (
+          <Button variant="danger" onClick={handleDelete} disabled={saving || converting || deleting}>
+            {deleting ? 'Deleting...' : 'Delete Task'}
+          </Button>
+        )}
+        <Button variant="secondary" onClick={onHide} disabled={deleting}>
           Cancel
         </Button>
-        <Button variant="primary" onClick={handleSave} disabled={saving}>
+        <Button variant="primary" onClick={handleSave} disabled={saving || deleting}>
           {saving ? 'Saving...' : task ? 'Save' : 'Create task'}
         </Button>
       </Modal.Footer>

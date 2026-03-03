@@ -529,8 +529,12 @@ const WeeklyThemePlanner: React.FC = () => {
     };
 
     const getThemeColor = (themeName: string) => {
+        const isDarkTheme = typeof document !== 'undefined'
+            && document.documentElement.getAttribute('data-theme') === 'dark';
         const theme = themeOptions.find(t => t.name === themeName || t.label === themeName);
-        return theme ? theme.lightColor : '#f1f3f4';
+        if (!theme) return isDarkTheme ? 'var(--panel)' : '#f1f3f4';
+        if (isDarkTheme) return theme.darkColor || theme.color || theme.lightColor || 'var(--panel)';
+        return theme.lightColor || theme.color || '#f1f3f4';
     };
 
     if (loading) return <div className="p-5 text-center"><Spinner animation="border" /></div>;
@@ -623,7 +627,7 @@ const WeeklyThemePlanner: React.FC = () => {
                                 <div
                                     key={dIndex}
                                     className={cellClasses}
-                                    style={{ backgroundColor: alloc ? getThemeColor(alloc.theme) : 'white' }}
+                                    style={{ backgroundColor: alloc ? getThemeColor(alloc.theme) : 'var(--panel)' }}
                                     onMouseDown={(e) => {
                                         e.preventDefault();
                                         beginSelection(dIndex, slot);

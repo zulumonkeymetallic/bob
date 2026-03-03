@@ -233,10 +233,10 @@ const SprintKanbanContent: React.FC<SprintKanbanPageProps> = ({
     const completedStories = sprintStories.filter(storyCompleted).length;
     const totalTasks = sprintTasks.length;
     const completedTasks = sprintTasks.filter(taskCompleted).length;
-    const totalPoints = sprintStories.reduce((sum, story) => sum + (story.points || 0), 0);
+    const totalPoints = sprintStories.reduce((sum, story) => sum + (Number.isFinite(Number(story.points)) ? Number(story.points) : 0), 0);
     const completedPoints = sprintStories
       .filter(storyCompleted)
-      .reduce((sum, story) => sum + (story.points || 0), 0);
+      .reduce((sum, story) => sum + (Number.isFinite(Number(story.points)) ? Number(story.points) : 0), 0);
 
     return {
       totalStories,

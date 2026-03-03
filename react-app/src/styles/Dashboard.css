@@ -97,6 +97,45 @@
 
 .today-plan-layout > .today-plan-col {
   width: 100%;
+  position: relative;
+}
+
+.today-plan-col-resize-handle {
+  position: absolute;
+  top: 0;
+  right: -8px;
+  width: 16px;
+  height: 100%;
+  border: none;
+  background: transparent;
+  cursor: col-resize;
+  z-index: 6;
+  touch-action: none;
+}
+
+.today-plan-col-resize-handle::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 10px;
+  bottom: 10px;
+  width: 2px;
+  transform: translateX(-50%);
+  border-radius: 2px;
+  background: var(--bs-border-color);
+  opacity: 0;
+  transition: opacity 120ms ease-in-out;
+}
+
+.today-plan-col-resize-handle:hover::before,
+.today-plan-col-resize-handle:focus-visible::before {
+  opacity: 0.65;
+}
+
+body.today-plan-resizing,
+body.today-plan-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
 }
 
 .dashboard-calendar-card .card-body {
@@ -242,6 +281,10 @@
 }
 
 @media (max-width: 991.98px) {
+  .today-plan-col-resize-handle {
+    display: none;
+  }
+
   .dashboard-calendar-card .calendar-dashboard-wrap {
     max-height: clamp(340px, 56vh, 700px);
   }

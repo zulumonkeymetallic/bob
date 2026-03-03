@@ -348,7 +348,7 @@ const SprintManagementView: React.FC = () => {
                         </div>
                         <div className="text-end">
                           <small className="text-muted d-block">
-                            {getSprintStories().length} stories • {getSprintStories().reduce((sum, s) => sum + (s.points || 0), 0)} points
+                            {getSprintStories().length} stories • {getSprintStories().reduce((sum, s) => sum + (Number.isFinite(Number(s.points)) ? Number(s.points) : 0), 0)} points
                           </small>
                         </div>
                       </div>
@@ -390,7 +390,7 @@ const SprintManagementView: React.FC = () => {
                   <h5>{selectedSprint.name} - Sprint Board</h5>
                   <div>
                     <span className="text-muted me-3">
-                      {getSprintStories().length} stories • {getSprintStories().reduce((sum, s) => sum + (s.points || 0), 0)} points
+                      {getSprintStories().length} stories • {getSprintStories().reduce((sum, s) => sum + (Number.isFinite(Number(s.points)) ? Number(s.points) : 0), 0)} points
                     </span>
                   </div>
                 </div>

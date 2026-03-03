@@ -6,6 +6,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useSprint } from '../contexts/SprintContext';
 import { generateRef } from '../utils/referenceGenerator';
+import { parsePointsValue } from '../utils/points';
 import TagInput from './common/TagInput';
 
 interface AddStoryModalProps {
@@ -202,6 +203,7 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
       });
 
       const linkedGoal = goals.find(g => g.id === formData.goalId);
+      const parsedPoints = parsePointsValue(formData.points);
       const storyData = {
         ref: ref, // Add reference number
         title: formData.title.trim(),
@@ -209,7 +211,7 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
         goalId: formData.goalId,
         sprintId: formData.sprintId || null,
         priority: formData.priority,
-        points: parseInt(formData.points.toString()),
+        points: parsedPoints == null ? 1 : parsedPoints,
         status: 0,
         theme: linkedGoal?.theme ?? 1,
         persona: currentPersona || 'personal',
@@ -372,16 +374,16 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
 
           <Form.Group className="mb-3">
             <Form.Label>Story Points</Form.Label>
-            <Form.Select
+            <Form.Control
+              type="number"
+              step="any"
+              inputMode="decimal"
               value={formData.points}
-              onChange={(e) => setFormData({ ...formData, points: parseInt(e.target.value) })}
-            >
-              <option value={1}>1 - Trivial</option>
-              <option value={2}>2 - Small</option>
-              <option value={3}>3 - Medium</option>
-              <option value={5}>5 - Large</option>
-              <option value={8}>8 - Very Large</option>
-            </Form.Select>
+              onChange={(e) => setFormData({
+                ...formData,
+                points: e.target.value as any,
+              })}
+            />
           </Form.Group>
         </Form>
 

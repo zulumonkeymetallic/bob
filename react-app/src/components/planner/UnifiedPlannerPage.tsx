@@ -1767,12 +1767,12 @@ const UnifiedPlannerPage: React.FC = () => {
                   />
                   {/* Conflict resolution panel */}
                   {isConflicting(activeEvent) && (
-                    <div className="d-flex align-items-center gap-2 p-2 border-top" style={{ background: '#fffbe6' }}>
+                    <div className="d-flex align-items-center gap-2 p-2 border-top" style={{ background: 'var(--bs-warning-bg-subtle, var(--panel))' }}>
                       <span className="text-danger fw-semibold">Resolve conflict:</span>
                       <Button size="sm" variant="outline-primary" onClick={handleConflictMoveNext}>Move to next free slot</Button>
                       <Button size="sm" variant="outline-secondary" onClick={() => handleConflictShorten(15)}>Shorten by 15m</Button>
                       <Button size="sm" variant="outline-secondary" onClick={() => handleConflictShift(15)}>Shift +15m</Button>
-                      <Button size="sm" variant="outline-dark" disabled={!lastActionPatch} onClick={handleUndoLast}>Undo</Button>
+                      <Button size="sm" variant="outline-secondary" disabled={!lastActionPatch} onClick={handleUndoLast}>Undo</Button>
                     </div>
                   )}
                 </div>

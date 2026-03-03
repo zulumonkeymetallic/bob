@@ -12,6 +12,10 @@
 ## 0. Purpose & Audience
 This document merges the **product requirements** and the **engineering blueprint** so another AI/development team can run a gap analysis directly against the codebase. It captures vision, personas, flows, data schemas, acceptance criteria, validator rules, and delivery milestones.
 
+**Local Ops Note (Service Account Path)**
+- Service account files must remain outside the repo.
+- Current local path in use for tooling/validation: `/Users/jim/GitHub/secret/bob20250810-firebase-adminsdk-fbsvc-0f8ac23f94.json`
+
 ---
 
 ## 1. Vision & Personas

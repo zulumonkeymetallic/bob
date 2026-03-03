@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Container, Card, Row, Col, Badge, Button, Alert, Collapse, OverlayTrigger, Tooltip, Form, Spinner } from 'react-bootstrap';
 import { useNavigate, Link } from 'react-router-dom';
 import { Target, BookOpen, TrendingUp, Wallet, Clock, ListChecks, Calendar as CalendarIcon, LayoutGrid, RefreshCw, Sparkles, Activity } from 'lucide-react';
@@ -100,6 +100,26 @@ interface FinanceWindowSummary {
   uncategorisedPence: number;
 }
 
+interface LowerBetterTrendMetric {
+  current: number | null;
+  previous: number | null;
+  delta: number | null;
+}
+
+interface FitnessTrendSummary {
+  avgRpe: LowerBetterTrendMetric;
+  avg5kSec: LowerBetterTrendMetric;
+  avg10kSec: LowerBetterTrendMetric;
+  runDistanceYtdKm: number | null;
+  swimDistanceYtdKm: number | null;
+  bikeDistanceYtdKm: number | null;
+}
+
+interface FinanceTrendSummary {
+  discretionaryPence: LowerBetterTrendMetric;
+  uncategorisedPence: LowerBetterTrendMetric;
+}
+
 interface ChecklistSnapshotItem {
   id: string;
   title: string;
@@ -108,8 +128,69 @@ interface ChecklistSnapshotItem {
 }
 
 const FINANCE_WINDOW_DAYS = 5;
+const INTEGRATION_STALE_DAYS = 7;
 const FINANCE_INCOME_BUCKETS = new Set(['income', 'net_salary', 'irregular_income']);
 const FINANCE_UNCATEGORISED_BUCKETS = new Set(['unknown', 'uncategorized', 'uncategorised']);
+const TODAY_PLAN_COLUMN_STORAGE_KEY = 'bob_dashboard_today_plan_columns_v1';
+const TODAY_PLAN_DESKTOP_BREAKPOINT = 992;
+const TODAY_PLAN_COLUMN_KEYS = ['summary', 'calendar', 'due', 'chores'] as const;
+type TodayPlanColumnKey = (typeof TODAY_PLAN_COLUMN_KEYS)[number];
+type TodayPlanColumnWidths = Record<TodayPlanColumnKey, number>;
+const TODAY_PLAN_DEFAULT_WIDTHS: TodayPlanColumnWidths = {
+  summary: 24,
+  calendar: 31,
+  due: 25,
+  chores: 20,
+};
+const TODAY_PLAN_MIN_WIDTHS: TodayPlanColumnWidths = {
+  summary: 16,
+  calendar: 20,
+  due: 18,
+  chores: 14,
+};
+
+const roundToSingleDecimal = (value: number) => Math.round(value * 10) / 10;
+
+const normalizeTodayPlanWidths = (candidate: Record<string, unknown> | null | undefined): TodayPlanColumnWidths | null => {
+  if (!candidate) return null;
+  const parsed = TODAY_PLAN_COLUMN_KEYS.reduce((acc, key) => {
+    const raw = Number(candidate[key]);
+    acc[key] = Number.isFinite(raw) ? raw : NaN;
+    return acc;
+  }, {} as TodayPlanColumnWidths);
+  const hasInvalid = TODAY_PLAN_COLUMN_KEYS.some((key) => !Number.isFinite(parsed[key]) || parsed[key] <= 0);
+  if (hasInvalid) return null;
+
+  const total = TODAY_PLAN_COLUMN_KEYS.reduce((sum, key) => sum + parsed[key], 0);
+  if (!Number.isFinite(total) || total <= 0) return null;
+
+  const normalized = TODAY_PLAN_COLUMN_KEYS.reduce((acc, key) => {
+    acc[key] = roundToSingleDecimal((parsed[key] / total) * 100);
+    return acc;
+  }, {} as TodayPlanColumnWidths);
+
+  const minViolation = TODAY_PLAN_COLUMN_KEYS.some((key) => normalized[key] < TODAY_PLAN_MIN_WIDTHS[key]);
+  if (minViolation) return null;
+
+  const subtotalWithoutLast = TODAY_PLAN_COLUMN_KEYS.slice(0, -1).reduce((sum, key) => sum + normalized[key], 0);
+  const lastKey = TODAY_PLAN_COLUMN_KEYS[TODAY_PLAN_COLUMN_KEYS.length - 1];
+  normalized[lastKey] = roundToSingleDecimal(100 - subtotalWithoutLast);
+  if (normalized[lastKey] < TODAY_PLAN_MIN_WIDTHS[lastKey]) return null;
+
+  return normalized;
+};
+
+const readTodayPlanWidthsFromStorage = (): TodayPlanColumnWidths => {
+  if (typeof window === 'undefined') return TODAY_PLAN_DEFAULT_WIDTHS;
+  try {
+    const stored = window.localStorage.getItem(TODAY_PLAN_COLUMN_STORAGE_KEY);
+    if (!stored) return TODAY_PLAN_DEFAULT_WIDTHS;
+    const parsed = JSON.parse(stored) as Record<string, unknown>;
+    return normalizeTodayPlanWidths(parsed) ?? TODAY_PLAN_DEFAULT_WIDTHS;
+  } catch {
+    return TODAY_PLAN_DEFAULT_WIDTHS;
+  }
+};
 
 const extractMonzoAmountPence = (tx: any): number => {
   if (Number.isFinite(tx?.amountMinor)) return Number(tx.amountMinor);
@@ -193,6 +274,10 @@ const Dashboard: React.FC = () => {
   const [monzoIntegrationStatus, setMonzoIntegrationStatus] = useState<any | null>(null);
   const [monzoReconnectBusy, setMonzoReconnectBusy] = useState(false);
   const [monzoReconnectMsg, setMonzoReconnectMsg] = useState<string | null>(null);
+  const [fitnessOverviewSnapshot, setFitnessOverviewSnapshot] = useState<any | null>(null);
+  const [runAnalysisSnapshot, setRunAnalysisSnapshot] = useState<any | null>(null);
+  const [fitnessTrendSummary, setFitnessTrendSummary] = useState<FitnessTrendSummary | null>(null);
+  const [financeTrendSummary, setFinanceTrendSummary] = useState<FinanceTrendSummary | null>(null);
   const [weeklySummary, setWeeklySummary] = useState<{ total: number; byType: Record<string, number> } | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
   const [sprintStories, setSprintStories] = useState<Story[]>([]);
@@ -210,6 +295,19 @@ const Dashboard: React.FC = () => {
   const [capacityError, setCapacityError] = useState<string | null>(null);
   const [profileSnapshot, setProfileSnapshot] = useState<any | null>(null);
   const [choreCompletionBusy, setChoreCompletionBusy] = useState<Record<string, boolean>>({});
+  const [todayPlanColumnWidths, setTodayPlanColumnWidths] = useState<TodayPlanColumnWidths>(() => readTodayPlanWidthsFromStorage());
+  const [todayPlanDesktopMode, setTodayPlanDesktopMode] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return window.innerWidth >= TODAY_PLAN_DESKTOP_BREAKPOINT;
+  });
+  const todayPlanLayoutRef = useRef<HTMLDivElement | null>(null);
+  const todayPlanDragRef = useRef<{
+    leftKey: TodayPlanColumnKey;
+    rightKey: TodayPlanColumnKey;
+    startX: number;
+    containerWidth: number;
+    startWidths: TodayPlanColumnWidths;
+  } | null>(null);
 
   const decodeToDate = useCallback((value: any): Date | null => {
     if (value == null) return null;
@@ -243,6 +341,33 @@ const Dashboard: React.FC = () => {
     });
   }, []);
 
+  const formatSecondsDisplay = useCallback((seconds: number | null | undefined) => {
+    const total = Number(seconds);
+    if (!Number.isFinite(total) || total <= 0) return '—';
+    const rounded = Math.max(0, Math.round(total));
+    const h = Math.floor(rounded / 3600);
+    const m = Math.floor((rounded % 3600) / 60);
+    const s = rounded % 60;
+    if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    return `${m}:${String(s).padStart(2, '0')}`;
+  }, []);
+
+  const lowerBetterTrendArrow = useCallback((delta: number | null | undefined) => {
+    const val = Number(delta);
+    if (!Number.isFinite(val) || Math.abs(val) < 0.001) {
+      return <span className="text-muted ms-1">→</span>;
+    }
+    if (val > 0) {
+      return <span className="text-danger ms-1">↑</span>;
+    }
+    return <span className="text-success ms-1">↓</span>;
+  }, []);
+
+  const workoutHasDadMarker = useCallback((data: any) => {
+    const text = `${String(data?.title || '')} ${String(data?.name || '')} ${String(data?.event || '')}`.toLowerCase();
+    return /\bdad\b/i.test(text);
+  }, []);
+
   const formatInstanceTime = useCallback((instance: ScheduledInstanceModel) => {
     try {
       if (instance.plannedStart && instance.plannedEnd) {
@@ -258,6 +383,94 @@ const Dashboard: React.FC = () => {
       console.warn('Failed to format instance window', err);
       return 'Flexible window';
     }
+  }, []);
+
+  const todayPlanColumnStyle = useCallback((key: TodayPlanColumnKey): React.CSSProperties | undefined => {
+    if (!todayPlanDesktopMode) return undefined;
+    return {
+      width: `${todayPlanColumnWidths[key]}%`,
+    };
+  }, [todayPlanColumnWidths, todayPlanDesktopMode]);
+
+  const beginTodayPlanResize = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>, leftKey: TodayPlanColumnKey, rightKey: TodayPlanColumnKey) => {
+      if (!todayPlanDesktopMode) return;
+      const containerWidth = todayPlanLayoutRef.current?.getBoundingClientRect().width ?? 0;
+      if (!containerWidth) return;
+      event.preventDefault();
+      todayPlanDragRef.current = {
+        leftKey,
+        rightKey,
+        startX: event.clientX,
+        containerWidth,
+        startWidths: todayPlanColumnWidths,
+      };
+      document.body.classList.add('today-plan-resizing');
+    },
+    [todayPlanColumnWidths, todayPlanDesktopMode],
+  );
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const handleResize = () => {
+      setTodayPlanDesktopMode(window.innerWidth >= TODAY_PLAN_DESKTOP_BREAKPOINT);
+    };
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(TODAY_PLAN_COLUMN_STORAGE_KEY, JSON.stringify(todayPlanColumnWidths));
+    } catch {
+      // Ignore storage quota and privacy-mode write failures.
+    }
+  }, [todayPlanColumnWidths]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+
+    const handleMouseMove = (event: MouseEvent) => {
+      const dragState = todayPlanDragRef.current;
+      if (!dragState) return;
+      event.preventDefault();
+
+      const deltaPercent = ((event.clientX - dragState.startX) / dragState.containerWidth) * 100;
+      const pairTotal = dragState.startWidths[dragState.leftKey] + dragState.startWidths[dragState.rightKey];
+      const minLeft = TODAY_PLAN_MIN_WIDTHS[dragState.leftKey];
+      const minRight = TODAY_PLAN_MIN_WIDTHS[dragState.rightKey];
+      const maxLeft = pairTotal - minRight;
+      const nextLeft = Math.min(maxLeft, Math.max(minLeft, dragState.startWidths[dragState.leftKey] + deltaPercent));
+      const nextRight = pairTotal - nextLeft;
+
+      const nextWidths: TodayPlanColumnWidths = {
+        ...dragState.startWidths,
+        [dragState.leftKey]: roundToSingleDecimal(nextLeft),
+        [dragState.rightKey]: roundToSingleDecimal(nextRight),
+      };
+
+      const totalWithoutLast = TODAY_PLAN_COLUMN_KEYS.slice(0, -1).reduce((sum, key) => sum + nextWidths[key], 0);
+      const lastKey = TODAY_PLAN_COLUMN_KEYS[TODAY_PLAN_COLUMN_KEYS.length - 1];
+      nextWidths[lastKey] = roundToSingleDecimal(100 - totalWithoutLast);
+
+      setTodayPlanColumnWidths(nextWidths);
+    };
+
+    const stopDrag = () => {
+      if (!todayPlanDragRef.current) return;
+      todayPlanDragRef.current = null;
+      document.body.classList.remove('today-plan-resizing');
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', stopDrag);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', stopDrag);
+      document.body.classList.remove('today-plan-resizing');
+    };
   }, []);
 
   const monzoLastSyncDate = useMemo(() => {
@@ -280,6 +493,107 @@ const Dashboard: React.FC = () => {
     if (!connected || monzoSyncAgeDays == null) return false;
     return monzoSyncAgeDays >= 3;
   }, [monzoIntegrationStatus, monzoSyncAgeDays]);
+
+  const stravaConnected = !!profileSnapshot?.stravaConnected;
+  const stravaLastSyncDate = useMemo(() => {
+    if (!profileSnapshot) return null;
+    return decodeToDate(
+      profileSnapshot.stravaLastSyncAt
+      ?? profileSnapshot.stravaLastSyncEpochMs
+      ?? profileSnapshot.stravaLastSync,
+    );
+  }, [decodeToDate, profileSnapshot]);
+
+  const stravaSyncAgeDays = useMemo(() => {
+    if (!stravaLastSyncDate) return null;
+    const diffMs = Date.now() - stravaLastSyncDate.getTime();
+    return Math.floor(diffMs / (24 * 60 * 60 * 1000));
+  }, [stravaLastSyncDate]);
+
+  const showStravaReconnectBanner = useMemo(() => {
+    if (!stravaConnected || stravaSyncAgeDays == null) return false;
+    return stravaSyncAgeDays >= 3;
+  }, [stravaConnected, stravaSyncAgeDays]);
+
+  const traktConnected = !!(profileSnapshot?.traktConnected || profileSnapshot?.traktUser);
+  const traktLastSyncDate = useMemo(() => {
+    if (!profileSnapshot) return null;
+    return decodeToDate(
+      profileSnapshot.traktLastSyncAt
+      ?? profileSnapshot.traktLastSyncEpochMs
+      ?? profileSnapshot.traktLastSync,
+    );
+  }, [decodeToDate, profileSnapshot]);
+
+  const traktSyncAgeDays = useMemo(() => {
+    if (!traktLastSyncDate) return null;
+    const diffMs = Date.now() - traktLastSyncDate.getTime();
+    return Math.floor(diffMs / (24 * 60 * 60 * 1000));
+  }, [traktLastSyncDate]);
+
+  const showTraktReconnectBanner = useMemo(() => {
+    if (!traktConnected || traktSyncAgeDays == null) return false;
+    return traktSyncAgeDays >= INTEGRATION_STALE_DAYS;
+  }, [traktConnected, traktSyncAgeDays]);
+
+  const hardcoverConfigured = !!profileSnapshot?.hardcoverToken;
+  const hardcoverLastSyncDate = useMemo(() => {
+    if (!profileSnapshot) return null;
+    return decodeToDate(
+      profileSnapshot.hardcoverLastSyncAt
+      ?? profileSnapshot.hardcoverLastSyncEpochMs
+      ?? profileSnapshot.hardcoverLastSync,
+    );
+  }, [decodeToDate, profileSnapshot]);
+
+  const hardcoverSyncAgeDays = useMemo(() => {
+    if (!hardcoverLastSyncDate) return null;
+    const diffMs = Date.now() - hardcoverLastSyncDate.getTime();
+    return Math.floor(diffMs / (24 * 60 * 60 * 1000));
+  }, [hardcoverLastSyncDate]);
+
+  const showHardcoverReconnectBanner = useMemo(() => {
+    if (!hardcoverConfigured || hardcoverSyncAgeDays == null) return false;
+    return hardcoverSyncAgeDays >= INTEGRATION_STALE_DAYS;
+  }, [hardcoverConfigured, hardcoverSyncAgeDays]);
+
+  const rawFitnessScoreSummary = fitnessOverviewSnapshot?.fitnessScore
+    ?? runAnalysisSnapshot?.fitnessScore
+    ?? null;
+  const parsedFitnessScoreSummary = rawFitnessScoreSummary == null
+    ? null
+    : Number(rawFitnessScoreSummary);
+  const fitnessScoreSummary = Number.isFinite(parsedFitnessScoreSummary)
+    ? parsedFitnessScoreSummary
+    : null;
+  const fitnessLevelSummary = fitnessOverviewSnapshot?.fitnessLevel || null;
+  const predicted5kDisplay = fitnessOverviewSnapshot?.predictions?.fiveKDisplay
+    || runAnalysisSnapshot?.predicted5kDisplay
+    || null;
+  const predicted10kDisplay = fitnessOverviewSnapshot?.predictions?.tenKDisplay
+    || runAnalysisSnapshot?.predicted10kDisplay
+    || null;
+  const predictedHalfMarathonDisplay = fitnessOverviewSnapshot?.predictions?.halfMarathonDisplay || null;
+  const predictedSwim800Display = fitnessOverviewSnapshot?.predictions?.swim800mDisplay || null;
+  const predictedBike50Display = fitnessOverviewSnapshot?.predictions?.bike50kDisplay
+    || fitnessOverviewSnapshot?.predictions?.bike30miDisplay
+    || null;
+  const avgRpe30Summary = fitnessOverviewSnapshot?.rpe?.avg30
+    ?? runAnalysisSnapshot?.averagePairRpe
+    ?? null;
+  const avgRpe90 = fitnessTrendSummary?.avgRpe?.current ?? null;
+  const avg5k90Sec = fitnessTrendSummary?.avg5kSec?.current ?? null;
+  const avg10k90Sec = fitnessTrendSummary?.avg10kSec?.current ?? null;
+  const avgRpe90Delta = fitnessTrendSummary?.avgRpe?.delta ?? null;
+  const avg5k90Delta = fitnessTrendSummary?.avg5kSec?.delta ?? null;
+  const avg10k90Delta = fitnessTrendSummary?.avg10kSec?.delta ?? null;
+  const runDistanceYtdKm = fitnessTrendSummary?.runDistanceYtdKm ?? null;
+  const swimDistanceYtdKm = fitnessTrendSummary?.swimDistanceYtdKm ?? null;
+  const bikeDistanceYtdKm = fitnessTrendSummary?.bikeDistanceYtdKm ?? null;
+  const financeDiscretionary90 = financeTrendSummary?.discretionaryPence?.current ?? null;
+  const financeUncategorised90 = financeTrendSummary?.uncategorisedPence?.current ?? null;
+  const financeDiscretionaryDelta = financeTrendSummary?.discretionaryPence?.delta ?? null;
+  const financeUncategorisedDelta = financeTrendSummary?.uncategorisedPence?.delta ?? null;
 
   useEffect(() => {
     if (!currentUser) {
@@ -918,7 +1232,7 @@ const Dashboard: React.FC = () => {
       let doneStories = 0;
       snapshot.docs.forEach((docSnap) => {
         const data = docSnap.data() as any;
-        const points = Number(data.points || 0) || 0;
+        const points = Number.isFinite(Number(data.points)) ? Number(data.points) : 0;
         totalPoints += points;
         totalStories += 1;
         if (isStatus(data.status, 'done')) {
@@ -1038,7 +1352,8 @@ const Dashboard: React.FC = () => {
           loadRemindersDueToday(),
           loadChecklistDueToday(),
           loadDailySummary(),
-          loadMonzoSummary()
+          loadMonzoSummary(),
+          loadFitnessTrendSummary()
         ]);
       } catch (error) {
         console.error("Error loading additional dashboard data:", error);
@@ -1056,7 +1371,7 @@ const Dashboard: React.FC = () => {
       unsubscribeTasks();
       unsubscribePots();
     };
-  }, [currentUser, currentPersona, selectedSprintId, refreshToken, decodeToDate]);
+  }, [currentUser, currentPersona, selectedSprintId, refreshToken, decodeToDate, profileSnapshot?.excludeWithDadFromMetrics]);
 
   useEffect(() => {
     if (!currentUser) {
@@ -1092,6 +1407,26 @@ const Dashboard: React.FC = () => {
       },
     );
     return () => unsub();
+  }, [currentUser]);
+
+  useEffect(() => {
+    if (!currentUser) {
+      setFitnessOverviewSnapshot(null);
+      setRunAnalysisSnapshot(null);
+      return;
+    }
+    const overviewRef = doc(db, 'fitness_overview', currentUser.uid);
+    const analysisRef = doc(db, 'run_analysis', currentUser.uid);
+    const unsubOverview = onSnapshot(overviewRef, (snap) => {
+      setFitnessOverviewSnapshot(snap.exists() ? snap.data() : null);
+    }, () => setFitnessOverviewSnapshot(null));
+    const unsubAnalysis = onSnapshot(analysisRef, (snap) => {
+      setRunAnalysisSnapshot(snap.exists() ? snap.data() : null);
+    }, () => setRunAnalysisSnapshot(null));
+    return () => {
+      unsubOverview();
+      unsubAnalysis();
+    };
   }, [currentUser]);
 
   useEffect(() => {
@@ -1601,15 +1936,123 @@ const Dashboard: React.FC = () => {
     setRoutinesDueToday(routines);
   };
 
+  const loadFitnessTrendSummary = async () => {
+    if (!currentUser) {
+      setFitnessTrendSummary(null);
+      return;
+    }
+    try {
+      const dayMs = 24 * 60 * 60 * 1000;
+      const nowMs = Date.now();
+      const currentStartMs = nowMs - (90 * dayMs);
+      const previousStartMs = nowMs - (180 * dayMs);
+      const yearStartMs = new Date(new Date().getFullYear(), 0, 1).getTime();
+      const snap = await getDocs(query(
+        collection(db, 'metrics_workouts'),
+        where('ownerUid', '==', currentUser.uid),
+        limit(1500)
+      )).catch(() => null);
+
+      if (!snap) {
+        setFitnessTrendSummary(null);
+        return;
+      }
+
+      const current = { rpe: [] as number[], fiveK: [] as number[], tenK: [] as number[] };
+      const previous = { rpe: [] as number[], fiveK: [] as number[], tenK: [] as number[] };
+      const excludeWithDadFromMetrics = profileSnapshot?.excludeWithDadFromMetrics !== false;
+      const avg = (items: number[]) => (items.length ? (items.reduce((sum, value) => sum + value, 0) / items.length) : null);
+      const classifySport = (data: any): 'run' | 'swim' | 'bike' | 'other' => {
+        if (!data) return 'other';
+        if (String(data.provider || '').toLowerCase() === 'parkrun') return 'run';
+        if (data.run === true) return 'run';
+        const type = String(data.type || data.sportType || '').toLowerCase();
+        if (type.includes('swim')) return 'swim';
+        if (type.includes('ride') || type.includes('bike') || type.includes('cycling')) return 'bike';
+        if (type.includes('run') || type.includes('walk') || type.includes('hike')) return 'run';
+        return 'other';
+      };
+      let ytdRunDistanceM = 0;
+      let ytdSwimDistanceM = 0;
+      let ytdBikeDistanceM = 0;
+
+      snap.forEach((docSnap) => {
+        const data: any = docSnap.data() || {};
+        if (excludeWithDadFromMetrics && workoutHasDadMarker(data)) return;
+        const startMsRaw = Number(data.startDate || 0);
+        const startMs = Number.isFinite(startMsRaw) && startMsRaw > 0
+          ? startMsRaw
+          : (data.utcStartDate ? Date.parse(String(data.utcStartDate)) : NaN);
+        if (!Number.isFinite(startMs) || startMs > nowMs) return;
+        const sport = classifySport(data);
+
+        const rpe = Number(data.perceivedExertion ?? data.rpe ?? data.stravaRpe ?? null);
+        const distanceM = Number(data.distance_m || 0);
+        const durationS = Number(data.movingTime_s || data.elapsedTime_s || 0);
+        if (startMs >= yearStartMs && distanceM > 0) {
+          if (sport === 'run') ytdRunDistanceM += distanceM;
+          else if (sport === 'swim') ytdSwimDistanceM += distanceM;
+          else if (sport === 'bike') ytdBikeDistanceM += distanceM;
+        }
+        if (sport !== 'run') return;
+        if (startMs < previousStartMs) return;
+        const target = startMs >= currentStartMs ? current : previous;
+        if (Number.isFinite(rpe) && rpe > 0) target.rpe.push(rpe);
+        if (distanceM <= 0 || durationS <= 0) return;
+        const secPerMeter = durationS / distanceM;
+        if (distanceM >= 4000 && distanceM <= 6000) target.fiveK.push(secPerMeter * 5000);
+        if (distanceM >= 8000 && distanceM <= 12000) target.tenK.push(secPerMeter * 10000);
+      });
+
+      const currentRpe = avg(current.rpe);
+      const previousRpe = avg(previous.rpe);
+      const current5k = avg(current.fiveK);
+      const previous5k = avg(previous.fiveK);
+      const current10k = avg(current.tenK);
+      const previous10k = avg(previous.tenK);
+
+      setFitnessTrendSummary({
+        avgRpe: {
+          current: currentRpe,
+          previous: previousRpe,
+          delta: (currentRpe != null && previousRpe != null) ? Number((currentRpe - previousRpe).toFixed(2)) : null,
+        },
+        avg5kSec: {
+          current: current5k,
+          previous: previous5k,
+          delta: (current5k != null && previous5k != null) ? Number((current5k - previous5k).toFixed(1)) : null,
+        },
+        avg10kSec: {
+          current: current10k,
+          previous: previous10k,
+          delta: (current10k != null && previous10k != null) ? Number((current10k - previous10k).toFixed(1)) : null,
+        },
+        runDistanceYtdKm: Number((ytdRunDistanceM / 1000).toFixed(1)),
+        swimDistanceYtdKm: Number((ytdSwimDistanceM / 1000).toFixed(1)),
+        bikeDistanceYtdKm: Number((ytdBikeDistanceM / 1000).toFixed(1)),
+      });
+    } catch (error) {
+      console.warn('Failed to load fitness trend summary', error);
+      setFitnessTrendSummary(null);
+    }
+  };
+
   const loadMonzoSummary = async () => {
     if (!currentUser) {
       setMonzoSummary(null);
       setFinanceWindowSummary(null);
+      setFinanceTrendSummary(null);
       return;
     }
     try {
       const windowStart = startOfDay(addDays(new Date(), -(FINANCE_WINDOW_DAYS - 1)));
       const windowEnd = startOfDay(addDays(new Date(), 1));
+      const trendCurrentStart = startOfDay(addDays(new Date(), -89));
+      const trendPreviousStart = startOfDay(addDays(new Date(), -179));
+      const windowStartMs = windowStart.getTime();
+      const windowEndMs = windowEnd.getTime();
+      const trendCurrentStartMs = trendCurrentStart.getTime();
+      const trendPreviousStartMs = trendPreviousStart.getTime();
 
       const [budgetSnap, alignmentSnap, txSnap] = await Promise.all([
         getDoc(doc(db, 'monzo_budget_summary', currentUser.uid)),
@@ -1617,10 +2060,10 @@ const Dashboard: React.FC = () => {
         getDocs(query(
           collection(db, 'monzo_transactions'),
           where('ownerUid', '==', currentUser.uid),
-          where('createdAt', '>=', windowStart),
+          where('createdAt', '>=', trendPreviousStart),
           where('createdAt', '<', windowEnd),
           orderBy('createdAt', 'desc'),
-          limit(500),
+          limit(1200),
         )).catch(() => null),
       ]);
 
@@ -1642,10 +2085,15 @@ const Dashboard: React.FC = () => {
 
       if (!txSnap) {
         setFinanceWindowSummary(null);
+        setFinanceTrendSummary(null);
       } else {
         let mandatoryPence = 0;
         let discretionaryPence = 0;
         let uncategorisedPence = 0;
+        let currentDiscretionaryPence = 0;
+        let previousDiscretionaryPence = 0;
+        let currentUncategorisedPence = 0;
+        let previousUncategorisedPence = 0;
 
         txSnap.forEach((docSnap) => {
           const tx: any = docSnap.data() || {};
@@ -1656,16 +2104,29 @@ const Dashboard: React.FC = () => {
           if (FINANCE_INCOME_BUCKETS.has(bucket)) return;
 
           const spendPence = Math.abs(amount);
+          const txDate = decodeToDate(tx.createdAt || tx.createdISO || tx.created_at || tx.settledAt || tx.updatedAt);
+          const txMs = txDate?.getTime() ?? NaN;
+
           if (bucket === 'mandatory') {
-            mandatoryPence += spendPence;
+            if (Number.isFinite(txMs) && txMs >= windowStartMs && txMs < windowEndMs) mandatoryPence += spendPence;
             return;
           }
           if (bucket === 'discretionary') {
-            discretionaryPence += spendPence;
+            if (Number.isFinite(txMs) && txMs >= windowStartMs && txMs < windowEndMs) discretionaryPence += spendPence;
+            if (Number.isFinite(txMs) && txMs >= trendCurrentStartMs && txMs < windowEndMs) {
+              currentDiscretionaryPence += spendPence;
+            } else if (Number.isFinite(txMs) && txMs >= trendPreviousStartMs && txMs < trendCurrentStartMs) {
+              previousDiscretionaryPence += spendPence;
+            }
             return;
           }
           if (FINANCE_UNCATEGORISED_BUCKETS.has(bucket)) {
-            uncategorisedPence += spendPence;
+            if (Number.isFinite(txMs) && txMs >= windowStartMs && txMs < windowEndMs) uncategorisedPence += spendPence;
+            if (Number.isFinite(txMs) && txMs >= trendCurrentStartMs && txMs < windowEndMs) {
+              currentUncategorisedPence += spendPence;
+            } else if (Number.isFinite(txMs) && txMs >= trendPreviousStartMs && txMs < trendCurrentStartMs) {
+              previousUncategorisedPence += spendPence;
+            }
           }
         });
 
@@ -1675,11 +2136,24 @@ const Dashboard: React.FC = () => {
           discretionaryPence,
           uncategorisedPence,
         });
+        setFinanceTrendSummary({
+          discretionaryPence: {
+            current: currentDiscretionaryPence,
+            previous: previousDiscretionaryPence,
+            delta: currentDiscretionaryPence - previousDiscretionaryPence,
+          },
+          uncategorisedPence: {
+            current: currentUncategorisedPence,
+            previous: previousUncategorisedPence,
+            delta: currentUncategorisedPence - previousUncategorisedPence,
+          },
+        });
       }
     } catch (error) {
       console.warn('Failed to load Monzo summary', error);
       setMonzoSummary(null);
       setFinanceWindowSummary(null);
+      setFinanceTrendSummary(null);
     }
   };
 
@@ -1859,6 +2333,14 @@ const Dashboard: React.FC = () => {
     { label: 'Chores today', value: choresDueToday.length },
     { label: 'Routines today', value: routinesDueToday.length },
     { label: 'Unscheduled blocks', value: unscheduledToday.length },
+    { label: 'Fitness score', value: fitnessScoreSummary ?? '—' },
+    { label: 'Fitness level', value: fitnessLevelSummary || '—' },
+    { label: 'Predicted 5K', value: predicted5kDisplay || '—' },
+    { label: 'Predicted 10K', value: predicted10kDisplay || '—' },
+    { label: 'Predicted Half', value: predictedHalfMarathonDisplay || '—' },
+    { label: 'Run distance YTD', value: runDistanceYtdKm != null ? `${runDistanceYtdKm.toFixed(1)} km` : '—' },
+    { label: 'Swim distance YTD', value: swimDistanceYtdKm != null ? `${swimDistanceYtdKm.toFixed(1)} km` : '—' },
+    { label: 'Bike distance YTD', value: bikeDistanceYtdKm != null ? `${bikeDistanceYtdKm.toFixed(1)} km` : '—' },
   ];
 
   const capacitySummary = capacityData ? {
@@ -1926,10 +2408,10 @@ const Dashboard: React.FC = () => {
     const totalTasks = sprintStoryTasks.length;
     const completedTasks = sprintStoryTasks.filter((task) => task.status === 2).length;
 
-    const totalPoints = sprintStories.reduce((sum, story) => sum + (story.points || 0), 0);
+    const totalPoints = sprintStories.reduce((sum, story) => sum + (Number.isFinite(Number(story.points)) ? Number(story.points) : 0), 0);
     const completedPoints = sprintStories
       .filter((story) => story.status === 4)
-      .reduce((sum, story) => sum + (story.points || 0), 0);
+      .reduce((sum, story) => sum + (Number.isFinite(Number(story.points)) ? Number(story.points) : 0), 0);
 
     const progress = totalPoints > 0
       ? Math.round((completedPoints / totalPoints) * 100)
@@ -2000,6 +2482,68 @@ const Dashboard: React.FC = () => {
             </Alert>
           )}
 
+          {showStravaReconnectBanner && (
+            <Alert variant="warning" className="d-flex align-items-center justify-content-between flex-wrap gap-2">
+              <div>
+                <div className="fw-semibold">Strava sync is stale</div>
+                <div className="text-muted small">
+                  Last sync {stravaSyncAgeDays} days ago
+                  {stravaLastSyncDate ? ` (${stravaLastSyncDate.toLocaleString()})` : ''}.
+                </div>
+                {profileSnapshot?.stravaLastErrorMessage && (
+                  <div className="text-muted small mt-1">{String(profileSnapshot.stravaLastErrorMessage)}</div>
+                )}
+              </div>
+              <div className="d-flex align-items-center gap-2">
+                <Button
+                  variant="outline-dark"
+                  size="sm"
+                  onClick={() => navigate('/settings/integrations/strava')}
+                >
+                  Reconnect Strava
+                </Button>
+              </div>
+            </Alert>
+          )}
+
+          {showTraktReconnectBanner && (
+            <Alert variant="warning" className="d-flex align-items-center justify-content-between flex-wrap gap-2">
+              <div>
+                <div className="fw-semibold">Trakt sync is stale</div>
+                <div className="text-muted small">
+                  Last sync {traktSyncAgeDays} days ago
+                  {traktLastSyncDate ? ` (${traktLastSyncDate.toLocaleString()})` : ''}.
+                </div>
+              </div>
+              <Button
+                variant="outline-dark"
+                size="sm"
+                onClick={() => navigate('/settings/integrations/trakt')}
+              >
+                Open Trakt settings
+              </Button>
+            </Alert>
+          )}
+
+          {showHardcoverReconnectBanner && (
+            <Alert variant="warning" className="d-flex align-items-center justify-content-between flex-wrap gap-2">
+              <div>
+                <div className="fw-semibold">Hardcover sync is stale</div>
+                <div className="text-muted small">
+                  Last sync {hardcoverSyncAgeDays} days ago
+                  {hardcoverLastSyncDate ? ` (${hardcoverLastSyncDate.toLocaleString()})` : ''}.
+                </div>
+              </div>
+              <Button
+                variant="outline-dark"
+                size="sm"
+                onClick={() => navigate('/settings/integrations/hardcover')}
+              >
+                Open Hardcover settings
+              </Button>
+            </Alert>
+          )}
+
           {showYouTubeTakeoutBanner && (
             <Alert variant="warning" className="d-flex align-items-center justify-content-between flex-wrap gap-2">
               <div>
@@ -2038,7 +2582,7 @@ const Dashboard: React.FC = () => {
                 <Card.Body className="py-2">
                   <Row className="g-2 mb-2 dashboard-inline-row dashboard-key-metrics">
                     {/* Finance Group */}
-                    <Col xs={12} sm={6} lg={4}>
+                    <Col xs={12} sm={6} lg={6} xl={3}>
                       <div 
                         className="d-flex align-items-center gap-2 px-2 py-1 rounded border h-100" 
                         style={{ 
@@ -2062,13 +2606,19 @@ const Dashboard: React.FC = () => {
                           <div className="fw-semibold">
                             {financeSummary}
                           </div>
+                          <div className="text-muted small">
+                            D90 {financeDiscretionary90 != null ? formatPenceCompact(financeDiscretionary90, 'GBP') : '—'}
+                            {lowerBetterTrendArrow(financeDiscretionaryDelta)}
+                            {' '}· U90 {financeUncategorised90 != null ? formatPenceCompact(financeUncategorised90, 'GBP') : '—'}
+                            {lowerBetterTrendArrow(financeUncategorisedDelta)}
+                          </div>
                           <div className="text-muted small">{financeSyncSummary}</div>
                         </div>
                       </div>
                     </Col>
 
                     {/* Capacity Group */}
-                    <Col xs={12} sm={6} lg={4}>
+                    <Col xs={12} sm={6} lg={6} xl={3}>
                       <div 
                         className="d-flex align-items-center gap-2 px-2 py-1 rounded border h-100" 
                         style={{ 
@@ -2102,7 +2652,7 @@ const Dashboard: React.FC = () => {
                     </Col>
 
                     {/* Sprint Progress Group */}
-                    <Col xs={12} sm={6} lg={4}>
+                    <Col xs={12} sm={6} lg={6} xl={3}>
                       <div 
                         className="d-flex align-items-center gap-2 px-2 py-1 rounded border h-100" 
                         style={{ 
@@ -2136,8 +2686,51 @@ const Dashboard: React.FC = () => {
                       </div>
                     </Col>
 
+                    {/* Fitness Group */}
+                    <Col xs={12} sm={6} lg={6} xl={3}>
+                      <div
+                        className="d-flex align-items-center gap-2 px-2 py-1 rounded border h-100"
+                        style={{
+                          background: 'var(--bs-body-bg)',
+                          cursor: 'pointer',
+                          transition: 'all 0.2s ease'
+                        }}
+                        onClick={() => navigate('/fitness')}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.backgroundColor = 'var(--bs-success-bg-subtle)';
+                          e.currentTarget.style.borderColor = 'var(--bs-success)';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = 'var(--bs-body-bg)';
+                          e.currentTarget.style.borderColor = 'var(--bs-border-color)';
+                        }}
+                      >
+                        <Activity size={16} className="text-success" />
+                        <div className="flex-grow-1">
+                          <div className="text-muted small">Fitness</div>
+                          <div className="fw-semibold">
+                            Score {fitnessScoreSummary ?? '—'}{fitnessLevelSummary ? ` (${fitnessLevelSummary})` : ''}
+                          </div>
+                          <div className="text-muted small">
+                            RPE {avgRpe90 != null ? Number(avgRpe90).toFixed(1) : (avgRpe30Summary != null ? Number(avgRpe30Summary).toFixed(1) : '—')}
+                            {lowerBetterTrendArrow(avgRpe90Delta)}
+                            {' '}· 5K {formatSecondsDisplay(avg5k90Sec)}
+                            {lowerBetterTrendArrow(avg5k90Delta)}
+                            {' '}· 10K {formatSecondsDisplay(avg10k90Sec)}
+                            {lowerBetterTrendArrow(avg10k90Delta)}
+                            {' '}· YTD {runDistanceYtdKm != null ? `${runDistanceYtdKm.toFixed(1)} km` : '—'}
+                            {' '}· Swim {swimDistanceYtdKm != null ? `${swimDistanceYtdKm.toFixed(1)} km` : '—'}
+                            {' '}· Bike {bikeDistanceYtdKm != null ? `${bikeDistanceYtdKm.toFixed(1)} km` : '—'}
+                          </div>
+                          <div className="text-muted small">
+                            Predicted 5K {predicted5kDisplay || '—'} · 10K {predicted10kDisplay || '—'} · Half {predictedHalfMarathonDisplay || '—'} · Swim 800m {predictedSwim800Display || '—'} · Bike 50k {predictedBike50Display || '—'}
+                          </div>
+                        </div>
+                      </div>
+                    </Col>
+
                     {/* Overall Progress Group */}
-                    <Col xs={12} sm={6} lg={3}>
+                    <Col xs={12} sm={6} lg={6} xl={3}>
                       <div 
                         className="d-flex align-items-center gap-2 px-2 py-1 rounded border h-100" 
                         style={{ 
@@ -2331,8 +2924,12 @@ const Dashboard: React.FC = () => {
                   {replanFeedback && (
                     <div className="text-muted small mb-2">{replanFeedback}</div>
                   )}
-                  <Row className="g-3 today-plan-layout">
-                    <Col md={12} className="today-plan-col today-plan-col-summary">
+                  <Row className="g-3 today-plan-layout" ref={todayPlanLayoutRef}>
+                    <Col
+                      md={12}
+                      className="today-plan-col today-plan-col-summary"
+                      style={todayPlanColumnStyle('summary')}
+                    >
                       {(dailySummaryLines.length > 0 || aiFocusItems.length > 0) && (
                         <Card className="shadow-sm border-0 mb-3">
                           <Card.Header className="d-flex align-items-center justify-content-between">
@@ -2641,8 +3238,20 @@ const Dashboard: React.FC = () => {
                           </Card.Body>
                         )}
                       </Card>
+                      {todayPlanDesktopMode && (
+                        <button
+                          type="button"
+                          className="today-plan-col-resize-handle"
+                          onMouseDown={(event) => beginTodayPlanResize(event, 'summary', 'calendar')}
+                          aria-label="Resize summary and calendar columns"
+                        />
+                      )}
                     </Col>
-                    <Col md={12} className="today-plan-col today-plan-col-calendar">
+                    <Col
+                      md={12}
+                      className="today-plan-col today-plan-col-calendar"
+                      style={todayPlanColumnStyle('calendar')}
+                    >
                       <Card className="shadow-sm border-0 h-100 dashboard-calendar-card">
                         <Card.Header className="fw-semibold">Calendar</Card.Header>
                         <Card.Body className="p-2 d-flex flex-column">
@@ -2683,8 +3292,20 @@ const Dashboard: React.FC = () => {
                           </div>
                         </Card.Body>
                       </Card>
+                      {todayPlanDesktopMode && (
+                        <button
+                          type="button"
+                          className="today-plan-col-resize-handle"
+                          onMouseDown={(event) => beginTodayPlanResize(event, 'calendar', 'due')}
+                          aria-label="Resize calendar and tasks-due columns"
+                        />
+                      )}
                     </Col>
-                    <Col md={6} className="today-plan-col today-plan-col-due">
+                    <Col
+                      md={6}
+                      className="today-plan-col today-plan-col-due"
+                      style={todayPlanColumnStyle('due')}
+                    >
                       <Card className="shadow-sm border-0 h-100 dashboard-due-card">
                           <Card.Header className="d-flex align-items-center justify-content-between">
                             <div className="fw-semibold d-flex align-items-center gap-2">
@@ -2821,8 +3442,20 @@ const Dashboard: React.FC = () => {
                             )}
                           </Card.Body>
                         </Card>
+                      {todayPlanDesktopMode && (
+                        <button
+                          type="button"
+                          className="today-plan-col-resize-handle"
+                          onMouseDown={(event) => beginTodayPlanResize(event, 'due', 'chores')}
+                          aria-label="Resize tasks-due and chores columns"
+                        />
+                      )}
                     </Col>
-                    <Col md={6} className="today-plan-col today-plan-col-chores">
+                    <Col
+                      md={6}
+                      className="today-plan-col today-plan-col-chores"
+                      style={todayPlanColumnStyle('chores')}
+                    >
                       <Card className="shadow-sm border-0 h-100 dashboard-chores-card">
                         <Card.Header className="d-flex align-items-center justify-content-between">
                           <div className="fw-semibold d-flex align-items-center gap-2">

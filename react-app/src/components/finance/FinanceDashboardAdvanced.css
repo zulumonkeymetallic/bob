@@ -14,6 +14,25 @@
   min-height: 190px;
 }
 
+.finance-dashboard-clickable-card {
+  border-radius: 16px;
+  cursor: pointer;
+  transition: transform 0.16s ease, box-shadow 0.16s ease;
+}
+
+.finance-dashboard-clickable-card:hover {
+  transform: translateY(-2px);
+}
+
+.finance-dashboard-clickable-card.is-active {
+  box-shadow: 0 0 0 2px rgba(29, 140, 248, 0.45);
+}
+
+.finance-dashboard-clickable-card--small .card-body {
+  padding-top: 1.1rem;
+  padding-bottom: 1.1rem;
+}
+
 @media (max-width: 768px) {
   .finance-dashboard-view-switch .btn-group {
     grid-template-columns: repeat(2, minmax(0, 1fr));
