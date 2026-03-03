@@ -76,6 +76,7 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
   const [form, setForm] = useState({
     title: '',
     description: '',
+    url: '',
     status: 0 as number | string,
     priority: 2 as number | string,
     sprintId: '' as string,
@@ -157,6 +158,7 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
       setForm({
         title: '',
         description: '',
+        url: '',
         status: 0,
         priority: 2,
         sprintId: '',
@@ -188,6 +190,7 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
     setForm({
       title: task.title || '',
       description: (task as any).description || '',
+      url: String((task as any).url || ''),
       status: normalizeTaskStatus((task as any).status),
       priority: normalizePriorityValue((task as any).priority),
       sprintId: (task as any).sprintId || '',
@@ -271,6 +274,7 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
       const basePayload: any = {
         title: form.title.trim(),
         description: form.description,
+        url: form.url.trim() || null,
         status: typeof form.status === 'string' ? Number(form.status) || form.status : form.status,
         priority: typeof form.priority === 'string' ? Number(form.priority) || form.priority : form.priority,
         points: parsePointsValue(form.points) ?? 1,
@@ -489,6 +493,15 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
                     rows={3}
                     value={form.description}
                     onChange={(e) => setForm({ ...form, description: e.target.value })}
+                  />
+                </Form.Group>
+                <Form.Group className="mb-3">
+                  <Form.Label>Source URL</Form.Label>
+                  <Form.Control
+                    type="url"
+                    value={form.url}
+                    onChange={(e) => setForm({ ...form, url: e.target.value })}
+                    placeholder="https://..."
                   />
                 </Form.Group>
                 <Form.Group className="mb-3">

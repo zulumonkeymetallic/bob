@@ -106,6 +106,14 @@ const defaultColumns: Column[] = [
     type: 'text'
   },
   {
+    key: 'url',
+    label: 'URL',
+    width: '20%',
+    visible: true,
+    editable: true,
+    type: 'text'
+  },
+  {
     key: 'status',
     label: 'Status',
     width: '12%',
@@ -214,6 +222,19 @@ const defaultColumns: Column[] = [
 const roundHours = (value: number): number => {
   if (!Number.isFinite(value)) return 0;
   return Math.round(value * 100) / 100;
+};
+
+const formatExternalUrlLabel = (value: unknown): string => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    const parsed = new URL(raw);
+    const host = parsed.hostname.replace(/^www\./i, '');
+    const path = parsed.pathname === '/' ? '' : parsed.pathname.replace(/\/+$/, '');
+    return `${host}${path}`.slice(0, 64);
+  } catch {
+    return raw.slice(0, 64);
+  }
 };
 
 interface SortableRowProps {
@@ -393,6 +414,9 @@ const SortableRow: React.FC<SortableRowProps> = ({
   if (key === 'type') {
     return String(value || 'task');
   }
+    if (key === 'url') {
+      return formatExternalUrlLabel(value);
+    }
     if (key === 'theme' && typeof value === 'number') {
       const theme = GLOBAL_THEMES.find(t => t.id === value);
       return theme ? theme.name : '';
@@ -510,7 +534,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
             e.currentTarget.style.backgroundColor = 'transparent';
           }
         }}
-        onClick={() => column.editable && handleCellEdit(column.key, formattedValue)}
+        onClick={() => column.editable && handleCellEdit(column.key, column.key === 'url' ? String(value || '') : formattedValue)}
       >
         <div style={{
           minHeight: '20px',
@@ -562,6 +586,16 @@ const SortableRow: React.FC<SortableRowProps> = ({
                 </button>
               );
             })()
+          ) : column.key === 'url' && value ? (
+            <a
+              href={String(value)}
+              target="_blank"
+              rel="noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              title={String(value)}
+            >
+              {formatExternalUrlLabel(value)}
+            </a>
           ) : (
             formattedValue
           )}
@@ -1359,6 +1393,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                             setEditForm({
                               title: '',
                               description: '',
+                              url: '',
                               priority: 2,
                               status: 0 as any,
                               tags: [],
@@ -1666,6 +1701,10 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                   <textarea className="form-control" rows={3} value={editForm.description || ''} onChange={(e) => setEditForm({ ...editForm, description: e.target.value })} />
                 </div>
                 <div className="mb-3">
+                  <label className="form-label">Source URL</label>
+                  <input className="form-control" type="url" value={(editForm as any).url || ''} onChange={(e) => setEditForm({ ...editForm, url: e.target.value })} placeholder="https://..." />
+                </div>
+                <div className="mb-3">
                   <label className="form-label">Tags</label>
                   <TagInput
                     value={editForm.tags || []}
@@ -1849,6 +1888,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                       await handleValidatedUpdate(editingTask.id, {
                         title: editForm.title,
                         description: editForm.description,
+                        url: (editForm as any).url,
                         priority: editForm.priority as any,
                         dueDate: editForm.dueDate as any,
                         storyId: (editForm as any).storyId,
@@ -1863,6 +1903,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                       await onTaskCreate({
                         title: editForm.title,
                         description: editForm.description,
+                        url: (editForm as any).url,
                         priority: editForm.priority as any,
                         dueDate: editForm.dueDate as any,
                         storyId: (editForm as any).storyId,

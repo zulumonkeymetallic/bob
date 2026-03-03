@@ -57,6 +57,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
   const [formData, setFormData] = useState({
     title: '',
     description: '',
+    url: '',
     theme: 1, // Default to Health & Fitness theme ID
     size: 'M',
     timeToMasterHours: 40,
@@ -289,6 +290,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
     const normalizedStoryPoints = parsedStoryPoints == null ? 1 : parsedStoryPoints;
     const payload: any = {
       ...storyData,
+      url: (storyData as any).url || null,
       points: normalizedStoryPoints,
       goalId: storyData.goalId || goal.id,
       ownerUid: currentUserId,
@@ -331,6 +333,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
     const payload: any = {
       title: newTask.title || '',
       description: newTask.description || '',
+      url: (newTask as any).url || null,
       status: (newTask as any).status ?? 0,
       priority: (newTask as any).priority ?? 2,
       effort: (newTask as any).effort ?? 'M',
@@ -373,6 +376,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         setFormData({
           title: goal.title || '',
           description: goal.description || '',
+          url: String((goal as any).url || ''),
           theme: canonicalThemeId ?? 1,
           size: sizeMap[goal.size as keyof typeof sizeMap] || 'M',
           timeToMasterHours: goal.timeToMasterHours || 40,
@@ -399,6 +403,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         setFormData({
           title: '',
           description: '',
+          url: '',
           theme: 1,
           size: 'M',
           timeToMasterHours: 40,
@@ -517,6 +522,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
       const goalData: any = {
         title: formData.title.trim(),
         description: formData.description.trim(),
+        url: formData.url.trim() || null,
         theme: themeId,
         theme_id: themeId,
         themeId: themeId,
@@ -820,6 +826,16 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
                   value={formData.description}
                   onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                   placeholder="Describe this goal in detail..."
+                />
+              </Form.Group>
+
+              <Form.Group className="mb-3">
+                <Form.Label>Source URL</Form.Label>
+                <Form.Control
+                  type="url"
+                  value={formData.url}
+                  onChange={(e) => setFormData({ ...formData, url: e.target.value })}
+                  placeholder="https://..."
                 />
               </Form.Group>
 

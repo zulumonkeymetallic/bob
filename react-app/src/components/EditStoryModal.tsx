@@ -40,6 +40,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
   const [editedStory, setEditedStory] = useState({
     title: '',
     description: '',
+    url: '',
     goalId: '',
     priority: 2,
     status: 0,
@@ -116,6 +117,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
       setEditedStory({
         title: story.title || '',
         description: story.description || '',
+        url: String((story as any).url || ''),
         goalId: story.goalId || '',
         priority: normalizedPriority > 0 ? normalizedPriority : 2,
         status: (typeof story.status === 'number' ? (story.status >= 4 ? 4 : story.status >= 2 ? 2 : 0) : 0),
@@ -177,6 +179,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
     const payload: any = {
       title: newTask.title || '',
       description: newTask.description || '',
+      url: (newTask as any).url || null,
       status: (newTask as any).status ?? 0,
       priority: (newTask as any).priority ?? 2,
       effort: (newTask as any).effort ?? 'M',
@@ -214,6 +217,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
       const updates: any = {
         title: editedStory.title.trim(),
         description: editedStory.description.trim(),
+        url: editedStory.url.trim() || null,
         goalId: editedStory.goalId || null,
         priority: normalizedPriority > 0 ? normalizedPriority : 2,
         status: editedStory.status,
@@ -487,6 +491,16 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
                   value={editedStory.description}
                   onChange={(e) => handleInputChange('description', e.target.value)}
                   placeholder="Enter story description"
+                />
+              </Form.Group>
+
+              <Form.Group className="mb-3">
+                <Form.Label>Source URL</Form.Label>
+                <Form.Control
+                  type="url"
+                  value={editedStory.url}
+                  onChange={(e) => handleInputChange('url', e.target.value)}
+                  placeholder="https://..."
                 />
               </Form.Group>
 

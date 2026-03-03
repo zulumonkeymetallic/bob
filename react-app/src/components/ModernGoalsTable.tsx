@@ -116,6 +116,14 @@ const defaultColumns: Column[] = [
     type: 'text'
   },
   {
+    key: 'url',
+    label: 'URL',
+    width: '20%',
+    visible: true,
+    editable: true,
+    type: 'text'
+  },
+  {
     key: 'theme',
     label: 'Theme',
     width: '12%',
@@ -231,6 +239,19 @@ interface SortableRowProps {
   goalKpiStatusByGoalId?: Record<string, GoalKpiStatusRow>;
   highlightStoryId?: string;
 }
+
+const formatExternalUrlLabel = (value: unknown): string => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    const parsed = new URL(raw);
+    const host = parsed.hostname.replace(/^www\./i, '');
+    const path = parsed.pathname === '/' ? '' : parsed.pathname.replace(/\/+$/, '');
+    return `${host}${path}`.slice(0, 64);
+  } catch {
+    return raw.slice(0, 64);
+  }
+};
 
 const SortableRow: React.FC<SortableRowProps> = ({
   goal,
@@ -479,6 +500,9 @@ const SortableRow: React.FC<SortableRowProps> = ({
     if (key === 'status') {
       return getStatusName(value);
     }
+    if (key === 'url') {
+      return formatExternalUrlLabel(value);
+    }
     // theme formatting will be overridden in parent where global themes are known
     return value || '';
   };
@@ -633,6 +657,9 @@ const SortableRow: React.FC<SortableRowProps> = ({
                 const t = globalThemes.find(gt => gt.id === themeId);
                 return t ? t.label : '';
               }
+              if (column.key === 'url') {
+                return String(value || '');
+              }
               return (column.type === 'select') ? formatValue(column.key, value) : formatValue(column.key, value);
             })();
             handleCellEdit(column.key, editValueToUse);
@@ -684,6 +711,19 @@ const SortableRow: React.FC<SortableRowProps> = ({
                   </span>
                 );
               }
+            }
+            if (column.key === 'url' && value) {
+              return (
+                <a
+                  href={String(value)}
+                  target="_blank"
+                  rel="noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  title={String(value)}
+                >
+                  {formatExternalUrlLabel(value)}
+                </a>
+              );
             }
             return (
               <span>{formatValue(column.key, value)}</span>

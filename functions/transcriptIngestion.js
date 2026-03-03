@@ -89,8 +89,9 @@ const TRANSCRIPT_ANALYSIS_SCHEMA = {
           points: { type: 'integer' },
           acceptanceCriteria: { type: 'array', items: { type: 'string' } },
           theme: { type: 'string' },
+          url: { type: 'string', nullable: true },
         },
-        required: ['title', 'description', 'priority', 'points', 'acceptanceCriteria', 'theme'],
+        required: ['title', 'description', 'priority', 'points', 'acceptanceCriteria', 'theme', 'url'],
       },
     },
     tasks: {
@@ -108,8 +109,9 @@ const TRANSCRIPT_ANALYSIS_SCHEMA = {
           theme: { type: 'string' },
           storyTitle: { type: 'string', nullable: true },
           dueDateIso: { type: 'string', nullable: true },
+          url: { type: 'string', nullable: true },
         },
-        required: ['title', 'description', 'priority', 'estimateMin', 'points', 'effort', 'kind', 'theme', 'storyTitle', 'dueDateIso'],
+        required: ['title', 'description', 'priority', 'estimateMin', 'points', 'effort', 'kind', 'theme', 'storyTitle', 'dueDateIso', 'url'],
       },
     },
   },
@@ -315,6 +317,166 @@ function normalizeTaskKind(value, title = '') {
   return 'task';
 }
 
+function normalizeUrlValue(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  try {
+    const parsed = new URL(raw);
+    if (!/^https?:$/i.test(parsed.protocol || '')) return null;
+    parsed.hash = '';
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function escapeRegExp(value) {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function buildUrlDisplayLabel(url) {
+  const normalized = normalizeUrlValue(url);
+  if (!normalized) return '';
+  try {
+    const parsed = new URL(normalized);
+    const host = parsed.hostname.replace(/^www\./i, '');
+    const path = parsed.pathname === '/' ? '' : parsed.pathname.replace(/\/+$/, '');
+    return `${host}${path}`.slice(0, 120);
+  } catch {
+    return normalized.slice(0, 120);
+  }
+}
+
+function isLikelyVideoUrl(url) {
+  const normalized = normalizeUrlValue(url);
+  if (!normalized) return false;
+  try {
+    const parsed = new URL(normalized);
+    const host = parsed.hostname.toLowerCase();
+    return [
+      'youtube.com',
+      'www.youtube.com',
+      'youtu.be',
+      'm.youtube.com',
+      'vimeo.com',
+      'www.vimeo.com',
+      'player.vimeo.com',
+      'netflix.com',
+      'www.netflix.com',
+      'bbc.co.uk',
+      'www.bbc.co.uk',
+      'bbc.com',
+      'www.bbc.com',
+      'twitch.tv',
+      'www.twitch.tv',
+      'player.twitch.tv',
+      'loom.com',
+      'www.loom.com',
+      'dailymotion.com',
+      'www.dailymotion.com',
+    ].includes(host);
+  } catch {
+    return false;
+  }
+}
+
+function cleanPreviewTitle(value, url = '') {
+  let title = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!title) return null;
+
+  const normalizedUrl = normalizeUrlValue(url);
+  const hostLabel = normalizedUrl ? buildUrlDisplayLabel(normalizedUrl).split('/')[0] : '';
+  const removableSuffixes = [
+    /\s*[-|–—]\s*YouTube$/i,
+    /\s*[-|–—]\s*Vimeo$/i,
+    /\s*[-|–—]\s*Netflix$/i,
+    /\s*[-|–—]\s*Medium$/i,
+    /\s*[-|–—]\s*Substack$/i,
+    /\s*[-|–—]\s*BBC(?: News| iPlayer)?$/i,
+    /\s*[-|–—]\s*TED$/i,
+    /\s*[-|–—]\s*Wikipedia$/i,
+  ];
+  removableSuffixes.forEach((pattern) => {
+    title = title.replace(pattern, '').trim();
+  });
+  if (hostLabel) {
+    title = title
+      .replace(new RegExp(`\\s*[-|–—]\\s*${escapeRegExp(hostLabel)}$`, 'i'), '')
+      .trim();
+  }
+  return title.slice(0, 200) || null;
+}
+
+function deriveTitleFromUrl(url, fallbackKind = null) {
+  const normalized = normalizeUrlValue(url);
+  if (!normalized) return fallbackKind === 'watch' ? 'Watch item' : fallbackKind === 'read' ? 'Read item' : 'Linked item';
+  try {
+    const parsed = new URL(normalized);
+    const lastSegment = parsed.pathname
+      .split('/')
+      .filter(Boolean)
+      .pop();
+    if (lastSegment) {
+      const cleaned = decodeURIComponent(lastSegment)
+        .replace(/[-_]+/g, ' ')
+        .replace(/\.[a-z0-9]+$/i, '')
+        .trim();
+      if (cleaned) return cleaned.slice(0, 140);
+    }
+    return parsed.hostname.replace(/^www\./i, '');
+  } catch {
+    return normalized.slice(0, 140);
+  }
+}
+
+function buildConsumptionTitle(kind, previewTitle, url = '') {
+  const cleanTitle = cleanPreviewTitle(previewTitle, url) || deriveTitleFromUrl(url, kind);
+  if (kind === 'watch') return `Watch: ${cleanTitle}`.slice(0, 140);
+  if (kind === 'read') return `Read: ${cleanTitle}`.slice(0, 140);
+  return cleanTitle.slice(0, 140);
+}
+
+function isGenericConsumptionTitle(title, kind = null) {
+  const normalized = normalizeTitle(title).replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!normalized) return true;
+  const generic = new Set([
+    'read',
+    'read this',
+    'read article',
+    'read link',
+    'read page',
+    'article',
+    'link',
+    'resource',
+    'watch',
+    'watch this',
+    'watch video',
+    'watch clip',
+    'watch episode',
+    'video',
+    'clip',
+    'url',
+    'open link',
+    'check link',
+    'review link',
+  ]);
+  if (generic.has(normalized)) return true;
+  if (kind === 'watch' && /^watch( the)?$/.test(normalized)) return true;
+  if (kind === 'read' && /^read( the)?$/.test(normalized)) return true;
+  return normalized.split(' ').length <= 3 && ['read', 'watch', 'video', 'article', 'link', 'url'].some((token) => normalized.includes(token));
+}
+
+function isGenericDescription(value) {
+  const normalized = normalizeTitle(value);
+  if (!normalized) return true;
+  return [
+    'captured from transcript intake',
+    'captured from transcript',
+    'captured from process text',
+    'link from transcript',
+  ].includes(normalized);
+}
+
 function effortFromMinutes(minutes) {
   const total = Number(minutes || 0);
   if (!Number.isFinite(total) || total <= 0) return 'S';
@@ -347,7 +509,7 @@ function buildStableRef(kind, docId) {
 function extractUrls(text, explicitUrl = null) {
   const found = new Set();
   const push = (candidate) => {
-    const value = String(candidate || '').trim();
+    const value = normalizeUrlValue(candidate);
     if (!value) return;
     found.add(value);
   };
@@ -371,13 +533,17 @@ function parseGoogleDocId(url) {
 }
 
 async function fetchUrlPreview(url) {
+  const normalizedUrl = normalizeUrlValue(url) || String(url || '').trim();
   const preview = {
-    url,
+    url: normalizedUrl,
     title: null,
     description: null,
+    siteName: null,
+    textSnippet: null,
+    kindHint: isLikelyVideoUrl(normalizedUrl) ? 'watch' : 'read',
   };
   try {
-    const response = await fetch(url, {
+    const response = await fetch(normalizedUrl, {
       signal: AbortSignal.timeout(8000),
       headers: {
         'user-agent': 'BOB Transcript Intake/1.0',
@@ -389,12 +555,35 @@ async function fetchUrlPreview(url) {
     if (!contentType.includes('text/html')) return preview;
     const html = await response.text();
     const $ = cheerio.load(html);
-    preview.title = $('title').first().text().trim().slice(0, 200) || null;
-    preview.description = (
+    const rawTitle = (
+      $('meta[property="og:title"]').attr('content') ||
+      $('meta[name="twitter:title"]').attr('content') ||
+      $('title').first().text() ||
+      $('h1').first().text() ||
+      ''
+    );
+    const rawDescription = (
       $('meta[name="description"]').attr('content') ||
       $('meta[property="og:description"]').attr('content') ||
+      $('meta[name="twitter:description"]').attr('content') ||
+      $('article p').first().text() ||
+      $('main p').first().text() ||
+      $('p').first().text() ||
       ''
+    );
+    const rawSiteName = (
+      $('meta[property="og:site_name"]').attr('content') ||
+      $('meta[name="application-name"]').attr('content') ||
+      ''
+    );
+    const ogType = String($('meta[property="og:type"]').attr('content') || '').trim().toLowerCase();
+    preview.title = cleanPreviewTitle(rawTitle, normalizedUrl);
+    preview.description = (
+      String(rawDescription || '')
     ).trim().slice(0, 400) || null;
+    preview.siteName = cleanPreviewTitle(rawSiteName, normalizedUrl);
+    preview.textSnippet = String(rawDescription || '').replace(/\s+/g, ' ').trim().slice(0, 240) || null;
+    preview.kindHint = ogType.includes('video') || isLikelyVideoUrl(normalizedUrl) ? 'watch' : 'read';
     return preview;
   } catch {
     return preview;
@@ -404,6 +593,126 @@ async function fetchUrlPreview(url) {
 async function fetchUrlPreviews(urls) {
   if (!Array.isArray(urls) || !urls.length) return [];
   return Promise.all(urls.slice(0, 3).map((url) => fetchUrlPreview(url)));
+}
+
+function buildPreviewLookup(urlPreviews = [], sourceUrls = []) {
+  const ordered = [];
+  const map = new Map();
+  [...sourceUrls, ...urlPreviews.map((preview) => preview?.url)].forEach((candidate) => {
+    const normalized = normalizeUrlValue(candidate);
+    if (!normalized || map.has(normalized)) return;
+    const preview = urlPreviews.find((item) => normalizeUrlValue(item?.url) === normalized) || {
+      url: normalized,
+      title: null,
+      description: null,
+      siteName: null,
+      textSnippet: null,
+      kindHint: isLikelyVideoUrl(normalized) ? 'watch' : 'read',
+    };
+    map.set(normalized, preview);
+    ordered.push(preview);
+  });
+  return { ordered, map };
+}
+
+function findPreviewForEntity(entity, previewLookup, consumedUrls = new Set(), allowImplicit = false) {
+  const explicitUrl = normalizeUrlValue(entity?.url);
+  if (explicitUrl && previewLookup.map.has(explicitUrl)) {
+    return previewLookup.map.get(explicitUrl);
+  }
+
+  const normalizedTitleValue = normalizeTitle(entity?.title || '');
+  if (normalizedTitleValue) {
+    const byTitle = previewLookup.ordered.find((preview) => {
+      const previewTitle = normalizeTitle(preview?.title || '');
+      return previewTitle && (
+        previewTitle.includes(normalizedTitleValue) ||
+        normalizedTitleValue.includes(previewTitle)
+      );
+    });
+    if (byTitle) return byTitle;
+  }
+
+  if (!allowImplicit) return null;
+
+  return previewLookup.ordered.find((preview) => {
+    const normalized = normalizeUrlValue(preview?.url);
+    return normalized && !consumedUrls.has(normalized);
+  }) || null;
+}
+
+function enrichEntityFromPreview(entity, preview, { defaultKind = null } = {}) {
+  const normalizedUrl = normalizeUrlValue(entity?.url) || normalizeUrlValue(preview?.url);
+  const previewTitle = cleanPreviewTitle(preview?.title, normalizedUrl) || deriveTitleFromUrl(normalizedUrl, defaultKind);
+  const previewDescription = String(preview?.description || preview?.textSnippet || '').trim();
+  const treatAsStory = !Object.prototype.hasOwnProperty.call(entity || {}, 'kind');
+  const kind = normalizeTaskKind(entity?.kind || defaultKind, entity?.title || '');
+  const existingTitle = String(entity?.title || '').trim();
+  const next = {
+    ...entity,
+    url: normalizedUrl,
+  };
+
+  if (previewTitle) {
+    const normalizedPreviewTitle = normalizeTitle(previewTitle);
+    const normalizedEntityTitle = normalizeTitle(existingTitle);
+    const needsPreviewName = (
+      !existingTitle ||
+      isGenericConsumptionTitle(existingTitle, kind) ||
+      (kind !== 'task' && normalizedPreviewTitle && !normalizedEntityTitle.includes(normalizedPreviewTitle))
+    );
+    if (needsPreviewName) {
+      next.title = treatAsStory
+        ? previewTitle.slice(0, 140)
+        : buildConsumptionTitle(kind === 'task' ? (preview?.kindHint || defaultKind || 'read') : kind, previewTitle, normalizedUrl);
+    }
+  }
+
+  if ((!next.description || isGenericDescription(next.description)) && previewDescription) {
+    next.description = previewDescription.slice(0, 400);
+  }
+
+  return next;
+}
+
+function enrichAnalysisWithUrlMetadata(analysis, sourceUrls = [], urlPreviews = []) {
+  if (!analysis || typeof analysis !== 'object') return analysis;
+  const previewLookup = buildPreviewLookup(urlPreviews, sourceUrls);
+  if (!previewLookup.ordered.length) return analysis;
+
+  const consumedUrls = new Set();
+  const consume = (url) => {
+    const normalized = normalizeUrlValue(url);
+    if (normalized) consumedUrls.add(normalized);
+    return normalized;
+  };
+
+  const tasks = (Array.isArray(analysis.tasks) ? analysis.tasks : []).map((task) => {
+    const allowImplicit = task?.kind === 'read' || task?.kind === 'watch' || analysis.entryType === 'url_only';
+    const preview = findPreviewForEntity(task, previewLookup, consumedUrls, allowImplicit);
+    const enriched = preview ? enrichEntityFromPreview(task, preview, { defaultKind: preview.kindHint || task?.kind || 'read' }) : {
+      ...task,
+      url: normalizeUrlValue(task?.url),
+    };
+    consume(enriched?.url);
+    return enriched;
+  });
+
+  const stories = (Array.isArray(analysis.stories) ? analysis.stories : []).map((story) => {
+    const preview = findPreviewForEntity(story, previewLookup, consumedUrls, analysis.entryType === 'url_only');
+    const enriched = preview ? enrichEntityFromPreview(story, preview, { defaultKind: preview.kindHint || 'read' }) : {
+      ...story,
+      url: normalizeUrlValue(story?.url),
+    };
+    consume(enriched?.url);
+    return enriched;
+  });
+
+  return {
+    ...analysis,
+    tasks,
+    stories,
+  };
 }
 
 function buildDocSections(analysis, originalTranscript, timezone) {
@@ -559,7 +868,8 @@ async function callTranscriptModel({ transcript, persona, timezone, urlPreviews 
     '    "priority": number,',
     '    "points": number,',
     '    "acceptanceCriteria": string[],',
-    '    "theme": string',
+    '    "theme": string,',
+    '    "url": string|null',
     '  }],',
     '  "tasks": [{',
     '    "title": string,',
@@ -571,7 +881,8 @@ async function callTranscriptModel({ transcript, persona, timezone, urlPreviews 
     '    "kind": "task"|"read"|"watch",',
     '    "theme": string,',
     '    "storyTitle": string|null,',
-    '    "dueDateIso": "YYYY-MM-DD"|null',
+    '    "dueDateIso": "YYYY-MM-DD"|null,',
+    '    "url": string|null',
     '  }]',
     '}',
     'Rules:',
@@ -601,6 +912,10 @@ async function callTranscriptModel({ transcript, persona, timezone, urlPreviews 
     'Set dueDateIso only when the transcript clearly implies a due date such as today, tomorrow, tonight, a weekday, next week, or an explicit date.',
     'Resolve dueDateIso to a local calendar date in YYYY-MM-DD using the provided timezone and current local date.',
     'If no clear due date is requested, set dueDateIso to null.',
+    'When URL previews are provided, use the preview title and page text to name read/watch items clearly.',
+    'Avoid generic titles like "Read article" or "Watch video" when a concrete page or video title is available.',
+    'Set url to the exact matching source URL for any task or story that came from a URL.',
+    'For URL-only inputs, every returned task or story must carry its matching url.',
   ].join('\n');
 
   const user = [
@@ -804,6 +1119,7 @@ function sanitizeAnalysis(raw, transcript, sourceUrls = [], timezone = DEFAULT_T
       points: clampTaskPoints(story?.points) ?? 2,
       acceptanceCriteria: sanitizeAcceptanceCriteria(story?.acceptanceCriteria),
       theme: String(story?.theme || '').trim() || 'Growth',
+      url: normalizeUrlValue(story?.url),
     }))
     .filter((story) => {
       const key = normalizeTitle(story.title);
@@ -831,6 +1147,7 @@ function sanitizeAnalysis(raw, transcript, sourceUrls = [], timezone = DEFAULT_T
         theme: String(task?.theme || '').trim() || 'Growth',
         storyTitle: storyTitle || null,
         dueDateIso: normalizeDueDateIso(task?.dueDateIso, timezone),
+        url: normalizeUrlValue(task?.url),
       };
     })
     .filter((task) => {
@@ -906,15 +1223,17 @@ function buildExistingEntityRecord(collectionName, doc) {
     id: doc.id,
     ref: String(data.ref || doc.id),
     title: String(data.title || ''),
+    url: normalizeUrlValue(data.url),
     deepLink: String(data.deepLink || buildEntityUrl(collectionName === 'stories' ? 'story' : 'task', doc.id, data.ref || doc.id)),
     payload: { id: doc.id, ...data },
     existing: true,
   };
 }
 
-async function findExistingEntityRecord(db, collectionName, uid, title) {
+async function findExistingEntityRecord(db, collectionName, uid, title, url = null) {
   const normalized = normalizeTitle(title);
-  if (!normalized) return null;
+  const normalizedUrl = normalizeUrlValue(url);
+  if (!normalized && !normalizedUrl) return null;
 
   const runQuery = async (field, value) => {
     try {
@@ -931,17 +1250,25 @@ async function findExistingEntityRecord(db, collectionName, uid, title) {
     }
   };
 
-  const byNormalized = await runQuery('normalizedTitle', normalized);
-  if (byNormalized) return byNormalized;
+  if (normalizedUrl) {
+    const byUrl = await runQuery('url', normalizedUrl);
+    if (byUrl) return byUrl;
+  }
 
-  const byTitle = await runQuery('title', title);
-  if (byTitle) return byTitle;
+  if (normalized) {
+    const byNormalized = await runQuery('normalizedTitle', normalized);
+    if (byNormalized) return byNormalized;
+
+    const byTitle = await runQuery('title', title);
+    if (byTitle) return byTitle;
+  }
 
   const fallback = await db.collection(collectionName).where('ownerUid', '==', uid).limit(400).get().catch(() => null);
   const doc = fallback?.docs?.find((candidate) => {
     const data = candidate.data() || {};
     if (data.deleted === true) return false;
-    return normalizeTitle(data.normalizedTitle || data.title || '') === normalized;
+    if (normalizedUrl && normalizeUrlValue(data.url) === normalizedUrl) return true;
+    return normalized ? normalizeTitle(data.normalizedTitle || data.title || '') === normalized : false;
   }) || null;
   return doc ? buildExistingEntityRecord(collectionName, doc) : null;
 }
@@ -954,10 +1281,11 @@ async function buildStoryRecords({ db, uid, persona, fingerprint, analysis }) {
   for (let index = 0; index < analysis.stories.length; index++) {
     const story = analysis.stories[index];
     const titleKey = normalizeTitle(story.title);
-    if (titleKey && !existingStories.has(titleKey)) {
-      existingStories.set(titleKey, await findExistingEntityRecord(db, 'stories', uid, story.title));
+    const lookupKey = story.url ? `url:${story.url}` : titleKey;
+    if (lookupKey && !existingStories.has(lookupKey)) {
+      existingStories.set(lookupKey, await findExistingEntityRecord(db, 'stories', uid, story.title, story.url));
     }
-    const existing = titleKey ? existingStories.get(titleKey) : null;
+    const existing = lookupKey ? existingStories.get(lookupKey) : null;
     if (existing) {
       records.push(existing);
       continue;
@@ -987,6 +1315,7 @@ async function buildStoryRecords({ db, uid, persona, fingerprint, analysis }) {
       tags: [],
       sprintId: null,
       normalizedTitle: normalizeTitle(story.title),
+      url: story.url || null,
       orderIndex: createdAtOrder + index,
       acceptanceCriteria: story.acceptanceCriteria,
       theme: story.theme || 'Growth',
@@ -1002,6 +1331,7 @@ async function buildStoryRecords({ db, uid, persona, fingerprint, analysis }) {
       id,
       ref,
       title: story.title,
+      url: payload.url,
       deepLink: payload.deepLink,
       existing: false,
       payload,
@@ -1026,10 +1356,11 @@ async function buildTaskRecords({
   for (let index = 0; index < analysis.tasks.length; index++) {
     const task = analysis.tasks[index];
     const titleKey = normalizeTitle(task.title);
-    if (titleKey && !existingTasks.has(titleKey)) {
-      existingTasks.set(titleKey, await findExistingEntityRecord(db, 'tasks', uid, task.title));
+    const lookupKey = task.url ? `url:${task.url}` : titleKey;
+    if (lookupKey && !existingTasks.has(lookupKey)) {
+      existingTasks.set(lookupKey, await findExistingEntityRecord(db, 'tasks', uid, task.title, task.url));
     }
-    const existing = titleKey ? existingTasks.get(titleKey) : null;
+    const existing = lookupKey ? existingTasks.get(lookupKey) : null;
     if (existing) {
       records.push(existing);
       continue;
@@ -1081,6 +1412,7 @@ async function buildTaskRecords({
       dependsOn: [],
       checklist: [],
       attachments: [],
+      url: task.url || null,
       alignedToGoal: false,
       theme: prioritized.theme || linkedStory?.payload?.theme || 'Growth',
       source: 'ai',
@@ -1107,6 +1439,7 @@ async function buildTaskRecords({
       id,
       ref,
       title: task.title,
+      url: payload.url,
       deepLink: payload.deepLink,
       existing: false,
       payload,
@@ -1710,6 +2043,7 @@ function serializeTaskRecord(task) {
     ref,
     title: task?.title || payload.title || '',
     description: payload.description || '',
+    url: normalizeUrlValue(payload.url),
     priority: payload.priority ?? null,
     estimateMin: payload.estimateMin ?? null,
     points: payload.points ?? null,
@@ -1719,6 +2053,7 @@ function serializeTaskRecord(task) {
     dueDateIso,
     dueDateReason: payload.dueDateReason || null,
     storyId: payload.storyId || null,
+    entryMethod: payload.entry_method || null,
     deepLink: task?.deepLink || payload.deepLink || buildEntityUrl('task', id, ref),
     existing: Boolean(task?.existing),
   };
@@ -1733,10 +2068,12 @@ function serializeStoryRecord(story) {
     ref,
     title: story?.title || payload.title || '',
     description: payload.description || '',
+    url: normalizeUrlValue(payload.url),
     priority: payload.priority ?? null,
     points: payload.points ?? null,
     acceptanceCriteria: Array.isArray(payload.acceptanceCriteria) ? payload.acceptanceCriteria : [],
     theme: payload.theme || null,
+    entryMethod: payload.entry_method || null,
     deepLink: story?.deepLink || payload.deepLink || buildEntityUrl('story', id, ref),
     existing: Boolean(story?.existing),
   };
@@ -1830,6 +2167,49 @@ async function loadEntitySummaries(db, collectionName, ids, type) {
     });
 }
 
+function dedupeIds(ids) {
+  return Array.from(new Set((Array.isArray(ids) ? ids : []).map((id) => String(id || '').trim()).filter(Boolean)));
+}
+
+async function autoConvertOversizedTaskRecords({ db, profile, fingerprint, taskRecords, logger }) {
+  const candidates = (Array.isArray(taskRecords) ? taskRecords : []).filter((task) => task && task.existing !== true);
+  if (!candidates.length) return [];
+
+  const indexModule = require('./index');
+  if (
+    typeof indexModule?.shouldAutoConvertTaskInternal !== 'function' ||
+    typeof indexModule?.runTaskAutoConvertInternal !== 'function'
+  ) {
+    return [];
+  }
+
+  const conversions = [];
+  for (const task of candidates) {
+    try {
+      const taskSnap = await db.collection('tasks').doc(String(task.id)).get().catch(() => null);
+      if (!taskSnap?.exists) continue;
+      const taskData = taskSnap.data() || {};
+      if (!indexModule.shouldAutoConvertTaskInternal(taskData, profile || {})) continue;
+      const conversion = await indexModule.runTaskAutoConvertInternal({
+        db,
+        taskDoc: taskSnap,
+        profile: profile || {},
+        runId: `transcript_${fingerprint}`,
+      });
+      if (conversion) conversions.push(conversion);
+    } catch (error) {
+      console.warn('[transcriptIngestion] task auto-convert failed', task?.id, error?.message || error);
+      if (logger) {
+        await logger.event('task_auto_convert_failed', 'Transcript task auto-convert failed', {
+          taskId: task?.id || null,
+          message: error?.message || String(error),
+        }, 'warning');
+      }
+    }
+  }
+  return conversions;
+}
+
 async function hydrateDuplicateState(db, uid, fingerprint, data) {
   const base = data && typeof data === 'object' ? { ...data } : {};
   if (
@@ -1900,26 +2280,101 @@ async function findExistingProcessedIngestion(db, uid, fingerprint) {
   return hydrateDuplicateState(db, uid, fingerprint, { id, ...data });
 }
 
+function describeGeneratedEntity(entity, entityType, journalId = null) {
+  const url = normalizeUrlValue(entity?.url);
+  const base = entityType === 'story'
+    ? `Created story ${entity?.ref || entity?.id || ''} via Process Text`
+    : `Created task ${entity?.ref || entity?.id || ''} via Process Text`;
+  const journalSuffix = journalId ? ` while processing journal ${journalId}` : '';
+  const urlSuffix = url
+    ? ` from ${cleanPreviewTitle(entity?.title, url) || buildUrlDisplayLabel(url)}`
+    : '';
+  return `${base}${journalSuffix}${urlSuffix}`.trim();
+}
+
 async function logIngestionActivity({ uid, fingerprint, journalId, storyRecords, taskRecords, entryType }) {
   try {
-    const ref = admin.firestore().collection('activity_stream').doc();
-    await ref.set({
-      id: ref.id,
+    const db = admin.firestore();
+    const batch = db.batch();
+    const aggregateRef = db.collection('activity_stream').doc();
+    batch.set(aggregateRef, {
+      id: aggregateRef.id,
       entityId: journalId || fingerprint,
       entityType: journalId ? 'journal' : 'transcript_ingestion',
       activityType: 'transcript_ingestion',
       userId: uid,
       ownerUid: uid,
+      source: 'ai',
+      sourceDetails: 'process_text',
       description: `Processed ${entryType || 'transcript'} into ${storyRecords.length} stories and ${taskRecords.length} tasks`,
       metadata: {
         fingerprint,
         entryType: entryType || null,
-        stories: storyRecords.map((story) => ({ id: story.id, ref: story.ref })),
-        tasks: taskRecords.map((task) => ({ id: task.id, ref: task.ref })),
+        journalId: journalId || null,
+        stories: storyRecords.map((story) => ({ id: story.id, ref: story.ref, url: story.url || null })),
+        tasks: taskRecords.map((task) => ({ id: task.id, ref: task.ref, url: task.url || null })),
       },
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
+
+    storyRecords
+      .filter((story) => story?.existing !== true)
+      .forEach((story) => {
+        const ref = db.collection('activity_stream').doc();
+        batch.set(ref, {
+          id: ref.id,
+          entityId: story.id,
+          entityType: 'story',
+          activityType: 'created',
+          userId: uid,
+          ownerUid: uid,
+          source: 'ai',
+          sourceDetails: 'process_text',
+          referenceNumber: story.ref || story.id,
+          description: describeGeneratedEntity(story, 'story', journalId),
+          metadata: {
+            fingerprint,
+            entryType: entryType || null,
+            journalId: journalId || null,
+            url: story.url || null,
+            deepLink: story.deepLink || null,
+            title: story.title || null,
+          },
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      });
+
+    taskRecords
+      .filter((task) => task?.existing !== true)
+      .forEach((task) => {
+        const ref = db.collection('activity_stream').doc();
+        batch.set(ref, {
+          id: ref.id,
+          entityId: task.id,
+          entityType: 'task',
+          activityType: 'created',
+          userId: uid,
+          ownerUid: uid,
+          source: 'ai',
+          sourceDetails: 'process_text',
+          referenceNumber: task.ref || task.id,
+          description: describeGeneratedEntity(task, 'task', journalId),
+          metadata: {
+            fingerprint,
+            entryType: entryType || null,
+            journalId: journalId || null,
+            url: task.url || null,
+            deepLink: task.deepLink || null,
+            title: task.title || null,
+          },
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      });
+
+    await batch.commit();
   } catch (error) {
     console.warn('[transcriptIngestion] activity log failed', error?.message || error);
   }
@@ -2123,7 +2578,11 @@ async function processTranscriptIngestion({
       timezone,
       urlPreviews,
     });
-    const analysis = sanitizeAnalysis(rawAnalysis, normalizedTranscript, sourceUrls, timezone);
+    const analysis = enrichAnalysisWithUrlMetadata(
+      sanitizeAnalysis(rawAnalysis, normalizedTranscript, sourceUrls, timezone),
+      sourceUrls,
+      urlPreviews
+    );
     await logger.event('analysis_complete', 'Transcript classified and structured', {
       entryType: analysis.entryType,
       shouldCreateJournal: analysis.shouldCreateJournal,
@@ -2234,10 +2693,59 @@ async function processTranscriptIngestion({
       newTasks: taskRecords.filter((task) => !task.existing).length,
     });
 
+    const autoConversions = await autoConvertOversizedTaskRecords({
+      db,
+      profile,
+      fingerprint,
+      taskRecords,
+      logger,
+    });
+    if (autoConversions.length) {
+      await logger.event('task_auto_convert_complete', 'Transcript oversized tasks auto-converted', {
+        count: autoConversions.length,
+        conversions: autoConversions,
+      });
+    }
+
+    const convertedTaskIds = new Set(autoConversions.map((item) => String(item.taskId || '').trim()).filter(Boolean));
+    const existingTaskIds = new Set(taskRecords.filter((task) => task?.existing === true).map((task) => String(task.id || '')));
+    const existingStoryIds = new Set(storyRecords.filter((story) => story?.existing === true).map((story) => String(story.id || '')));
+    const finalTaskIds = dedupeIds(taskRecords.map((task) => task.id).filter((id) => !convertedTaskIds.has(String(id))));
+    const finalStoryIds = dedupeIds([
+      ...storyRecords.map((story) => story.id),
+      ...autoConversions.map((item) => item.storyId),
+    ]);
+
+    if (journalRecord && autoConversions.length) {
+      await db.collection('journals').doc(journalRecord.id).set({
+        taskIds: finalTaskIds,
+        storyIds: finalStoryIds,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+      await logger.event('journal_links_updated', 'Journal links updated after task auto-conversion', {
+        journalId: journalRecord.id,
+        taskIds: finalTaskIds,
+        storyIds: finalStoryIds,
+      });
+    }
+
+    const [loadedStories, loadedTasks] = await Promise.all([
+      loadEntitySummaries(db, 'stories', finalStoryIds, 'story'),
+      loadEntitySummaries(db, 'tasks', finalTaskIds, 'task'),
+    ]);
+    const createdStories = loadedStories.map((story) => ({
+      ...story,
+      existing: existingStoryIds.has(String(story.id || '')),
+    }));
+    const createdTasks = loadedTasks.map((task) => ({
+      ...task,
+      existing: existingTaskIds.has(String(task.id || '')),
+    }));
+
     const emailHtml = buildEmailHtml({
       sections,
-      taskRecords,
-      storyRecords,
+      taskRecords: createdTasks,
+      storyRecords: createdStories,
       docUrl: docUrl || null,
     });
 
@@ -2252,8 +2760,6 @@ async function processTranscriptIngestion({
       });
     }
 
-    const createdTasks = taskRecords.map((task) => serializeTaskRecord(task));
-    const createdStories = storyRecords.map((story) => serializeStoryRecord(story));
     const response = buildTranscriptResponse({
       duplicate: false,
       ingestionId: lockRef.id,
@@ -2289,8 +2795,8 @@ async function processTranscriptIngestion({
       uid,
       fingerprint,
       journalId: journalRecord?.id || null,
-      storyRecords,
-      taskRecords,
+      storyRecords: createdStories,
+      taskRecords: createdTasks,
       entryType: analysis.entryType,
     });
     await logger.event('ingestion_complete', 'Transcript ingestion completed', {
