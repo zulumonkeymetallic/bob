@@ -77,6 +77,26 @@ export interface Story {
   locationLon?: number;
 }
 
+export interface JournalEntry {
+  id: string;
+  persona: 'personal' | 'work';
+  ownerUid: string;
+  originalTranscript?: string;
+  dateHeading?: string;
+  structuredEntry?: string;
+  oneLineSummary?: string;
+  advice?: string;
+  docUrl?: string | null;
+  entryType?: 'journal' | 'mixed' | 'task_list' | 'url_only' | string;
+  transcriptFingerprint?: string;
+  source?: string;
+  sourceUrls?: string[];
+  storyIds?: string[];
+  taskIds?: string[];
+  createdAt: any;
+  updatedAt: any;
+}
+
 export interface Sprint {
   id: string;
   ref: string;
