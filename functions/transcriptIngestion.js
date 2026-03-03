@@ -891,6 +891,8 @@ async function callTranscriptModel({ transcript, persona, timezone, urlPreviews 
     'Use entryType="url_only" when the input is just one or more URLs with little surrounding text and should NOT create a journal entry.',
     'Use entryType="mixed" when it is clearly a journal/reflection that also contains actionable tasks or stories.',
     'Set shouldCreateJournal=true only for entryType="journal" or entryType="mixed".',
+    'If the text is mainly a task brain dump, product requirement list, backlog grooming note, or feature request with action items, use entryType="task_list" even if it contains repetition or a little incidental personal narrative.',
+    'Do not create a journal entry just because the speaker is thinking out loud while listing tasks.',
     [
       'Keep structuredEntry 99% faithful to the transcript.',
       'Fix punctuation, capitalization, and obvious dictation errors only.',
@@ -960,38 +962,78 @@ function stripUrlsForHeuristics(text) {
 }
 
 function looksLikeAgentQueryOrAction(text) {
+  return (
+    looksLikeCalendarQuery(text) ||
+    looksLikeTopPriorityQuery(text) ||
+    looksLikeReplanCommand(text)
+  );
+}
+
+function looksLikeTaskBrainDump(text) {
   const lowered = stripUrlsForHeuristics(text).toLowerCase();
   if (!lowered) return false;
-  if (/\b(calendar|schedule|agenda)\b/.test(lowered) && /\b(next|upcoming|what('| i)?s next|what is next)\b/.test(lowered)) {
-    return true;
-  }
-  if (/\b(top\s*(3|three)|top priorities|priorities today|what should i focus on|what matters most|focus today)\b/.test(lowered)) {
-    return true;
-  }
-  if (/\b(replan|re-plan|plan my day|plan today|plan my week|replan my day|replan my week|schedule my day|schedule my week|rebuild my plan)\b/.test(lowered)) {
-    return true;
-  }
-  return false;
+
+  let score = 0;
+  if (/\b(task list|to do list|todo list|brain dump of tasks|brain dump|list of things to do)\b/.test(lowered)) score += 3;
+  if (/\b(for today|today's tasks|my tasks for today|additional things for today)\b/.test(lowered)) score += 2;
+  if (/\b(i want to|i need to|it would be good to|if i get time|also i'd like to)\b/.test(lowered)) score += 1;
+  if ((lowered.match(/\bi want to\b/g) || []).length >= 3) score += 2;
+  if ((lowered.match(/\bi need to\b/g) || []).length >= 2) score += 2;
+  if ((lowered.match(/\balso\b/g) || []).length >= 3) score += 1;
+  if (/\b(requirement|requirements|bulk paste tasks|extract all of the tasks)\b/.test(lowered)) score += 2;
+
+  return score >= 4;
+}
+
+function countHeuristicWords(text) {
+  return String(text || '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .length;
+}
+
+function looksLikeCalendarQuery(text) {
+  const lowered = stripUrlsForHeuristics(text).toLowerCase();
+  if (!lowered || looksLikeTaskBrainDump(text)) return false;
+  if (countHeuristicWords(lowered) > 40) return false;
+  return /\b(what('| i)?s next on (my )?(calendar|schedule|agenda)|what is next on (my )?(calendar|schedule|agenda)|what do i have (next|today|tomorrow|this afternoon|this evening)|show (me )?(my )?(next|upcoming) (calendar )?(events|appointments)|next (3|4|five|5|few)? ?(events|appointments) on (my )?(calendar|schedule|agenda)|upcoming (calendar )?(events|appointments))\b/.test(lowered);
+}
+
+function looksLikeTopPriorityQuery(text) {
+  const lowered = stripUrlsForHeuristics(text).toLowerCase();
+  if (!lowered || looksLikeTaskBrainDump(text)) return false;
+  if (countHeuristicWords(lowered) > 30) return false;
+  return /\b(what are my top (3|three) priorities( today)?|top (3|three) priorities( today)?|what should i focus on( today)?|what should i do next|what matters most( today)?|focus today)\b/.test(lowered);
+}
+
+function looksLikeReplanCommand(text) {
+  const lowered = stripUrlsForHeuristics(text).toLowerCase();
+  if (!lowered) return false;
+  const directCommand = /^(please\s+)?(replan my day|re-plan my day|plan my day|schedule my day|replan my week|re-plan my week|plan my week|schedule my week|rebuild my plan)\b/.test(lowered);
+  if (directCommand) return true;
+  if (looksLikeTaskBrainDump(text)) return false;
+  if (countHeuristicWords(lowered) > 20) return false;
+  return /\b(replan my day|re-plan my day|plan my day|plan today|plan my week|replan my week|schedule my day|schedule my week|rebuild my plan)\b/.test(lowered);
 }
 
 function normalizeAgentIntent(rawIntent, normalizedTranscript, sourceUrls = []) {
   const intent = String(rawIntent || '').trim().toLowerCase();
   if (AGENT_INTENTS.includes(intent)) {
+    if (intent === 'query_calendar_next' && !looksLikeCalendarQuery(normalizedTranscript)) return 'process_text';
+    if (intent === 'query_top_priorities' && !looksLikeTopPriorityQuery(normalizedTranscript)) return 'process_text';
+    if (intent === 'run_replan' && !looksLikeReplanCommand(normalizedTranscript)) return 'process_text';
     return intent;
   }
 
   const lowered = String(normalizedTranscript || '').trim().toLowerCase();
-  if (/\b(calendar|schedule|agenda)\b/.test(lowered) && /\b(next|upcoming|what('| i)?s next|what is next)\b/.test(lowered)) {
+  if (looksLikeCalendarQuery(lowered)) {
     return 'query_calendar_next';
   }
-  if (
-    /\b(top\s*(3|three)|top priorities|priorities today|what should i focus on|what should i do next|what matters most|focus today)\b/.test(lowered)
-  ) {
+  if (looksLikeTopPriorityQuery(lowered)) {
     return 'query_top_priorities';
   }
-  if (
-    /\b(replan|re-plan|plan my day|plan today|plan my week|replan my day|replan my week|schedule my day|schedule my week|rebuild my plan)\b/.test(lowered)
-  ) {
+  if (looksLikeReplanCommand(lowered)) {
     return 'run_replan';
   }
   if (Array.isArray(sourceUrls) && sourceUrls.length > 0 && stripUrlsForHeuristics(normalizedTranscript).split(/\s+/).filter(Boolean).length <= 6) {
@@ -1082,7 +1124,9 @@ function normalizeEntryType(rawType, transcript, sourceUrls, tasks, stories) {
   const stripped = stripUrlsForHeuristics(transcript);
   const wordCount = stripped ? stripped.split(/\s+/).length : 0;
   const likelyUrlOnly = Array.isArray(sourceUrls) && sourceUrls.length > 0 && wordCount <= 6;
+  const likelyTaskList = looksLikeTaskBrainDump(transcript);
   if (likelyUrlOnly) return 'url_only';
+  if (likelyTaskList && (tasks?.length || stories?.length)) return 'task_list';
   if ((tasks?.length || stories?.length) && wordCount <= 50) return 'task_list';
   if ((tasks?.length || stories?.length) && wordCount > 50) return 'mixed';
   return 'journal';
@@ -1362,7 +1406,35 @@ async function buildTaskRecords({
     }
     const existing = lookupKey ? existingTasks.get(lookupKey) : null;
     if (existing) {
-      records.push(existing);
+      const existingType = String(existing?.payload?.type || '').trim().toLowerCase();
+      const shouldEscalateExisting = !['read', 'watch'].includes(existingType || String(task?.kind || '').trim().toLowerCase());
+      if (!shouldEscalateExisting) {
+        records.push(existing);
+        continue;
+      }
+      const today = DateTime.now().setZone(timezone || DEFAULT_TIMEZONE);
+      const dueTodayMs = today.endOf('day').toMillis();
+      const payload = ensureTaskPoints({
+        ...(existing.payload || {}),
+        priority: 4,
+        dueDate: dueTodayMs,
+        dueDateMs: dueTodayMs,
+        dueDateIso: today.toISODate(),
+        dueDateReason: 'duplicate_transcript_escalation',
+        source: 'ai',
+        sourceRef: fingerprint,
+        syncState: 'dirty',
+        serverUpdatedAt: Date.now(),
+        aiPriorityBucket: 'TODAY',
+        aiPriorityLabel: 'TODAY',
+        aiIngestionFingerprint: fingerprint,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      records.push({
+        ...existing,
+        updated: true,
+        payload,
+      });
       continue;
     }
 
@@ -1442,6 +1514,7 @@ async function buildTaskRecords({
       url: payload.url,
       deepLink: payload.deepLink,
       existing: false,
+      updated: false,
       payload,
     });
   }
@@ -2400,7 +2473,8 @@ function buildWriteSpokenResponse(response) {
   const taskList = Array.isArray(response.createdTasks) ? response.createdTasks : [];
   const storyList = Array.isArray(response.createdStories) ? response.createdStories : [];
   const newTasks = taskList.filter((task) => task?.existing !== true);
-  const existingTasks = taskList.filter((task) => task?.existing === true);
+  const updatedTasks = taskList.filter((task) => task?.existing === true && task?.updated === true);
+  const existingTasks = taskList.filter((task) => task?.existing === true && task?.updated !== true);
   const newStories = storyList.filter((story) => story?.existing !== true);
   const existingStories = storyList.filter((story) => story?.existing === true);
   const tasks = taskList.length;
@@ -2420,6 +2494,14 @@ function buildWriteSpokenResponse(response) {
       newTasks.length === 1
         ? `I created ${taskRefs}.`
         : `I created ${newTasks.length} tasks: ${taskRefs}.`
+    );
+  }
+  if (updatedTasks.length) {
+    const taskRefs = summarizeEntityRefs(updatedTasks, 'task');
+    parts.push(
+      updatedTasks.length === 1
+        ? `I updated existing ${taskRefs}.`
+        : `I updated ${updatedTasks.length} existing tasks: ${taskRefs}.`
     );
   }
   if (newStories.length) {
@@ -2682,7 +2764,7 @@ async function processTranscriptIngestion({
       }
     });
     taskRecords.forEach((task) => {
-      if (!task.existing) {
+      if (!task.existing || task.updated) {
         batch.set(db.collection('tasks').doc(task.id), task.payload, { merge: true });
       }
     });
@@ -2709,6 +2791,7 @@ async function processTranscriptIngestion({
 
     const convertedTaskIds = new Set(autoConversions.map((item) => String(item.taskId || '').trim()).filter(Boolean));
     const existingTaskIds = new Set(taskRecords.filter((task) => task?.existing === true).map((task) => String(task.id || '')));
+    const updatedTaskIds = new Set(taskRecords.filter((task) => task?.updated === true).map((task) => String(task.id || '')));
     const existingStoryIds = new Set(storyRecords.filter((story) => story?.existing === true).map((story) => String(story.id || '')));
     const finalTaskIds = dedupeIds(taskRecords.map((task) => task.id).filter((id) => !convertedTaskIds.has(String(id))));
     const finalStoryIds = dedupeIds([
@@ -2740,6 +2823,7 @@ async function processTranscriptIngestion({
     const createdTasks = loadedTasks.map((task) => ({
       ...task,
       existing: existingTaskIds.has(String(task.id || '')),
+      updated: updatedTaskIds.has(String(task.id || '')),
     }));
 
     const emailHtml = buildEmailHtml({
@@ -2890,21 +2974,60 @@ async function processAgentRequest({
   ).trim() || DEFAULT_TIMEZONE;
   const sourceUrls = extractUrls(normalizedTranscript, sourceUrl);
   const urlPreviews = await fetchUrlPreviews(sourceUrls);
-  const rawRoute = await callAgentRouterModel({
-    transcript: normalizedTranscript,
-    persona: persona || 'personal',
-    timezone,
-    urlPreviews,
-  });
-  const route = sanitizeAgentRoute(rawRoute, normalizedTranscript, sourceUrls);
-  const effectiveRoute = (
-    (route.mode === 'query' && ['query_calendar_next', 'query_top_priorities'].includes(route.intent)) ||
-    (route.mode === 'action' && route.intent === 'run_replan')
-  )
-    ? route
-    : (route.intent === 'unknown' || route.mode === 'unknown'
-      ? { ...route, intent: 'process_text', mode: 'write' }
-      : route);
+  let effectiveRoute;
+  if (!likelyQueryOrAction) {
+    effectiveRoute = sanitizeAgentRoute({
+      intent: normalizeAgentIntent(null, normalizedTranscript, sourceUrls),
+      mode: 'write',
+      confidence: 0.99,
+    }, normalizedTranscript, sourceUrls);
+    console.log('[transcriptIngestion] agent_route_skipped', JSON.stringify({
+      uid,
+      fingerprint,
+      source: source || 'transcript',
+      channel: channel || 'unknown',
+      authMode: authMode || 'unknown',
+      sourceProvidedId: sourceProvidedId || null,
+      intent: effectiveRoute.intent,
+      mode: effectiveRoute.mode,
+      confidence: effectiveRoute.confidence,
+    }));
+  } else {
+    try {
+      const rawRoute = await callAgentRouterModel({
+        transcript: normalizedTranscript,
+        persona: persona || 'personal',
+        timezone,
+        urlPreviews,
+      });
+      const route = sanitizeAgentRoute(rawRoute, normalizedTranscript, sourceUrls);
+      effectiveRoute = (
+        (route.mode === 'query' && ['query_calendar_next', 'query_top_priorities'].includes(route.intent)) ||
+        (route.mode === 'action' && route.intent === 'run_replan')
+      )
+        ? route
+        : (route.intent === 'unknown' || route.mode === 'unknown'
+          ? { ...route, intent: 'process_text', mode: 'write' }
+          : route);
+    } catch (error) {
+      effectiveRoute = sanitizeAgentRoute({
+        intent: normalizeAgentIntent(null, normalizedTranscript, sourceUrls),
+        mode: 'unknown',
+        confidence: 0,
+      }, normalizedTranscript, sourceUrls);
+      console.warn('[transcriptIngestion] agent_route_fallback', JSON.stringify({
+        uid,
+        fingerprint,
+        source: source || 'transcript',
+        channel: channel || 'unknown',
+        authMode: authMode || 'unknown',
+        sourceProvidedId: sourceProvidedId || null,
+        message: error?.message || String(error),
+        fallbackIntent: effectiveRoute.intent,
+        fallbackMode: effectiveRoute.mode,
+      }));
+    }
+  }
 
   console.log('[transcriptIngestion] agent_route', JSON.stringify({
     uid,

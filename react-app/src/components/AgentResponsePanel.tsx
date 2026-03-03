@@ -134,7 +134,7 @@ const AgentResponsePanel: React.FC<AgentResponsePanelProps> = ({ result }) => {
                 <a href={task.deepLink}>{task.ref}</a>
                 {' — '}
                 {task.title}
-                {task.existing ? ' (existing)' : ''}
+                {task.existing ? (task as any).updated ? ' (updated existing)' : ' (existing)' : ''}
               </ListGroup.Item>
             ))}
           </ListGroup>

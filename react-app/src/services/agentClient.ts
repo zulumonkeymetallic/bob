@@ -8,6 +8,7 @@ export interface AgentEntityLink {
   title: string;
   deepLink: string;
   existing?: boolean;
+  updated?: boolean;
 }
 
 export interface AgentCalendarEventResult {
@@ -44,6 +45,14 @@ export interface AgentReplanSummary {
   } | null;
 }
 
+export interface AgentProcessedDocument {
+  dateHeading?: string | null;
+  oneLineSummary?: string | null;
+  structuredEntry?: string | null;
+  advice?: string | null;
+  fullTranscript?: string | null;
+}
+
 export interface AgentResponse {
   ok: boolean;
   duplicate?: boolean;
@@ -60,6 +69,7 @@ export interface AgentResponse {
   journalId?: string | null;
   docUrl?: string | null;
   processedAt?: string | null;
+  processedDocument?: AgentProcessedDocument | null;
   dateHeading?: string | null;
   oneLineSummary?: string | null;
   structuredEntry?: string | null;

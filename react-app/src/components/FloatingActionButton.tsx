@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Modal, Button, Form, Alert } from 'react-bootstrap';
+import { Modal, Button, Form, Alert, Spinner } from 'react-bootstrap';
 import { db } from '../firebase';
 import { collection, addDoc, getDocs, query, where, orderBy, serverTimestamp } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
@@ -13,7 +13,9 @@ import '../styles/MaterialDesign.css';
 import BulkCreateModal from './BulkCreateModal';
 import GoalChatModal from './GoalChatModal';
 import AddStoryModal from './AddStoryModal';
+import AgentResponsePanel from './AgentResponsePanel';
 import TranscriptIntakeModal from './TranscriptIntakeModal';
+import { AgentResponse, buildRequestId, submitTranscriptAgentRequest } from '../services/agentClient';
 
 interface FloatingActionButtonProps {
   onImportClick: () => void;
@@ -23,6 +25,55 @@ interface Goal {
   id: string;
   title: string;
   theme: string;
+}
+
+interface TranscriptBannerState {
+  status: 'processing' | 'success' | 'error';
+  requestId: string;
+  submittedText: string;
+  result?: AgentResponse | null;
+  error?: string | null;
+}
+
+const transcriptBannerStyle: React.CSSProperties = {
+  position: 'fixed',
+  right: 24,
+  bottom: 96,
+  zIndex: 1200,
+  width: 'min(560px, calc(100vw - 32px))',
+  maxHeight: 'calc(100vh - 140px)',
+  overflowY: 'auto',
+};
+
+function buildTranscriptBannerPayload(result: AgentResponse) {
+  return {
+    ok: result.ok,
+    duplicate: result.duplicate || false,
+    mode: result.mode || null,
+    intent: result.intent || null,
+    confidence: result.confidence ?? null,
+    resultType: result.resultType || null,
+    entryType: result.entryType || null,
+    spokenResponse: result.spokenResponse || null,
+    request: {
+      ingestionId: result.ingestionId || null,
+      journalId: result.journalId || null,
+      docUrl: result.docUrl || null,
+      processedAt: result.processedAt || null,
+    },
+    processedDocument: result.processedDocument || {
+      dateHeading: result.dateHeading || null,
+      oneLineSummary: result.oneLineSummary || null,
+      structuredEntry: result.structuredEntry || null,
+      advice: result.advice || null,
+      fullTranscript: result.fullTranscript || null,
+    },
+    createdTasks: Array.isArray(result.createdTasks) ? result.createdTasks : [],
+    createdStories: Array.isArray(result.createdStories) ? result.createdStories : [],
+    calendarEvents: Array.isArray(result.calendarEvents) ? result.calendarEvents : [],
+    topPriorities: Array.isArray(result.topPriorities) ? result.topPriorities : [],
+    replan: result.replan || null,
+  };
 }
 
 const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportClick }) => {
@@ -51,6 +102,8 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
   const [goals, setGoals] = useState<Goal[]>([]);
   const [showIntake, setShowIntake] = useState(false);
   const [showTranscriptModal, setShowTranscriptModal] = useState(false);
+  const [transcriptDraft, setTranscriptDraft] = useState('');
+  const [transcriptBanner, setTranscriptBanner] = useState<TranscriptBannerState | null>(null);
   const [intakeTitle, setIntakeTitle] = useState('');
   const [intakeTheme, setIntakeTheme] = useState('Growth');
   const [chatGoalId, setChatGoalId] = useState<string | null>(null);
@@ -106,6 +159,64 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
 
     loadGoals();
   }, [currentUser, currentPersona, quickAddType]);
+
+  const openTranscriptModal = (seedText = '') => {
+    setTranscriptDraft(seedText);
+    setShowTranscriptModal(true);
+  };
+
+  const handleTranscriptSubmit = async () => {
+    const value = transcriptDraft.trim();
+    if (!value) return;
+
+    const nextRequestId = buildRequestId('web_fab');
+    setShowTranscriptModal(false);
+    setTranscriptBanner({
+      status: 'processing',
+      requestId: nextRequestId,
+      submittedText: value,
+      result: null,
+      error: null,
+    });
+
+    try {
+      const body = await submitTranscriptAgentRequest({
+        text: value,
+        persona: currentPersona,
+        source: 'web_fab',
+        sourceProvidedId: nextRequestId,
+      });
+
+      console.info('[FloatingActionButton] transcript ingest success', {
+        requestId: nextRequestId,
+        ingestionId: body?.ingestionId || null,
+        resultType: body?.resultType || null,
+        entryType: body?.entryType || null,
+      });
+
+      setTranscriptBanner({
+        status: 'success',
+        requestId: nextRequestId,
+        submittedText: value,
+        result: (body || {}) as AgentResponse,
+        error: null,
+      });
+      setTranscriptDraft('');
+    } catch (submissionError: any) {
+      console.error('[FloatingActionButton] transcript ingest failed', {
+        requestId: nextRequestId,
+        error: submissionError,
+      });
+
+      setTranscriptBanner({
+        status: 'error',
+        requestId: nextRequestId,
+        submittedText: value,
+        result: null,
+        error: submissionError?.message || 'Text processing failed',
+      });
+    }
+  };
 
   const handleQuickAdd = async () => {
     if (!currentUser || !quickAddData.title.trim()) return;
@@ -343,6 +454,82 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
 
   return (
     <>
+      {transcriptBanner && (
+        <div style={transcriptBannerStyle}>
+          <Alert
+            variant={
+              transcriptBanner.status === 'processing'
+                ? 'info'
+                : transcriptBanner.status === 'success'
+                  ? (transcriptBanner.result?.duplicate ? 'info' : 'success')
+                  : 'danger'
+            }
+            dismissible
+            onClose={() => setTranscriptBanner(null)}
+            className="shadow-lg mb-0"
+          >
+            <div className="d-flex align-items-center gap-2 mb-2">
+              {transcriptBanner.status === 'processing' && <Spinner animation="border" size="sm" />}
+              <strong>
+                {transcriptBanner.status === 'processing'
+                  ? 'Processing text'
+                  : transcriptBanner.status === 'success'
+                    ? (transcriptBanner.result?.duplicate ? 'Text already processed' : 'Text processed')
+                    : 'Text processing failed'}
+              </strong>
+            </div>
+
+            <div className="small text-muted mb-2">
+              Request ID: {transcriptBanner.requestId}
+              {transcriptBanner.result?.ingestionId ? ` · Ingestion ID: ${transcriptBanner.result.ingestionId}` : ''}
+            </div>
+
+            {transcriptBanner.status === 'processing' && (
+              <div className="small">
+                The modal has closed. This banner will update with the created task, story, and journal links when the job finishes.
+              </div>
+            )}
+
+            {transcriptBanner.status === 'success' && transcriptBanner.result && (
+              <>
+                <AgentResponsePanel result={transcriptBanner.result} />
+                <details className="mt-3">
+                  <summary style={{ cursor: 'pointer' }}>Response JSON</summary>
+                  <pre
+                    className="mt-2 mb-0 p-2 rounded"
+                    style={{
+                      whiteSpace: 'pre-wrap',
+                      wordBreak: 'break-word',
+                      maxHeight: 280,
+                      overflowY: 'auto',
+                      background: 'rgba(0, 0, 0, 0.04)',
+                      fontSize: 12,
+                    }}
+                  >
+                    {JSON.stringify(buildTranscriptBannerPayload(transcriptBanner.result), null, 2)}
+                  </pre>
+                </details>
+              </>
+            )}
+
+            {transcriptBanner.status === 'error' && (
+              <>
+                <div className="mb-2">{transcriptBanner.error || 'Text processing failed'}</div>
+                <Button
+                  variant="link"
+                  className="p-0"
+                  onClick={() => {
+                    openTranscriptModal(transcriptBanner.submittedText);
+                  }}
+                >
+                  Resubmit in Process Text
+                </Button>
+              </>
+            )}
+          </Alert>
+        </div>
+      )}
+
       {/* FAB Menu Items */}
       {showMenu && (
         <div className="md-fab-menu">
@@ -398,7 +585,7 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
           <button
             className="md-fab-mini"
             onClick={() => {
-              setShowTranscriptModal(true);
+              openTranscriptModal('');
               setShowMenu(false);
             }}
             title="Process Text"
@@ -683,6 +870,9 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
       <TranscriptIntakeModal
         show={showTranscriptModal}
         onHide={() => setShowTranscriptModal(false)}
+        transcript={transcriptDraft}
+        onTranscriptChange={setTranscriptDraft}
+        onSubmit={handleTranscriptSubmit}
       />
 
       {/* Inline Chat Modal for Intake */}
