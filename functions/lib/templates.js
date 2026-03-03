@@ -441,6 +441,60 @@ const renderKpiSummary = (kpis) => {
   return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;">${cards.join('')}</div>`;
 };
 
+const renderGoalKpiStatusTable = (goalKpiStatus) => {
+  const rows = Array.isArray(goalKpiStatus?.rows) ? goalKpiStatus.rows : [];
+  if (!rows.length) {
+    return '<p style="color:#6b7280;">No active sprint goals with KPI status available.</p>';
+  }
+  const sprintName = goalKpiStatus?.sprintName || 'Active sprint';
+  const expectedLabel = Number.isFinite(Number(goalKpiStatus?.expectedProgressPct))
+    ? `${Math.round(Number(goalKpiStatus.expectedProgressPct))}% expected`
+    : 'Expected progress n/a';
+  const maxRows = 25;
+  const body = rows.slice(0, maxRows).map((row) => {
+    const goalRef = row.goalRef ? `${escape(row.goalRef)} — ` : '';
+    const goalLabel = `${goalRef}${escape(row.goalTitle || row.goalId || 'Goal')}`;
+    const goalCell = row.goalDeepLink
+      ? `<a href="${escape(row.goalDeepLink)}" style="color:#2563eb;">${goalLabel}</a>`
+      : goalLabel;
+    const progress = Number.isFinite(Number(row.progressPct)) ? `${Math.round(Number(row.progressPct))}%` : 'n/a';
+    const status = String(row.status || 'No KPI');
+    const statusColor = status === 'Behind' ? '#b91c1c' : status === 'On target' ? '#059669' : '#6b7280';
+    return `
+      <tr>
+        <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${goalCell}</td>
+        <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${escape(row.kpiSummary || 'No KPI attached')}</td>
+        <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${escape(progress)}</td>
+        <td style="padding:8px;border-bottom:1px solid #e5e7eb;color:${statusColor};font-weight:700;">${escape(status)}</td>
+        <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${escape(row.reason || '')}</td>
+      </tr>
+    `;
+  }).join('\n');
+  const overflow = rows.length > maxRows
+    ? `<div style="margin-top:8px;color:#6b7280;font-size:12px;">Showing ${maxRows} of ${rows.length} goals.</div>`
+    : '';
+  return `
+    <div style="margin-bottom:10px;color:#374151;font-size:13px;">
+      <strong>${escape(sprintName)}</strong> • ${escape(expectedLabel)}
+    </div>
+    <table role="presentation" style="width:100%;border-collapse:collapse;font-size:13px;">
+      <thead>
+        <tr style="background:#f3f4f6;text-align:left;">
+          <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Goal</th>
+          <th style="padding:8px;border-bottom:1px solid #e5e7eb;">KPI attached</th>
+          <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Progress</th>
+          <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Status</th>
+          <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Why</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${body}
+      </tbody>
+    </table>
+    ${overflow}
+  `;
+};
+
 const renderPriorityNarrative = (narrative) => {
   if (!narrative) {
     return '<p style="color:#6b7280;">No prioritization narrative yet. Run the nightly chain to generate.</p>';
@@ -1034,6 +1088,11 @@ const renderDailySummaryEmail = (data) => {
       <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
         <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Key Metrics</h2>
         ${renderKpiSummary(data.kpis)}
+      </section>
+
+      <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
+        <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Goal KPI Status (Active Sprint)</h2>
+        ${renderGoalKpiStatusTable(data.goalKpiStatus)}
       </section>
 
       <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">

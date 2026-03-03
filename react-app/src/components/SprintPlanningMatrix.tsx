@@ -94,7 +94,7 @@ const SprintColumn: React.FC<{
   };
 
   const status = getSprintStatus();
-  const totalPoints = stories.reduce((sum, story) => sum + (story.points || 0), 0);
+  const totalPoints = stories.reduce((sum, story) => sum + (Number.isFinite(Number(story.points)) ? Number(story.points) : 0), 0);
   const dateRangeLabel = sprint && !isBacklog && sprint.startDate && sprint.endDate
     ? `${new Date(sprint.startDate).toLocaleDateString()} – ${new Date(sprint.endDate).toLocaleDateString()}`
     : null;

@@ -305,6 +305,8 @@ const StoriesManagement: React.FC = () => {
       const maxOrderIndex = stories.length > 0
         ? Math.max(...stories.map(s => (typeof s.orderIndex === 'number' ? s.orderIndex : 0)))
         : 0;
+      const parsedPoints = Number((storyData as any).points);
+      const normalizedPoints = Number.isFinite(parsedPoints) ? parsedPoints : 1;
 
       // Create the story document
       const newStory = {
@@ -319,7 +321,7 @@ const StoriesManagement: React.FC = () => {
         status: storyData.status || 0, // 0=Backlog
         priority: storyData.priority || 3, // 3=P3
         theme: storyData.theme || 1, // 1=Health
-        points: storyData.points || 1,
+        points: normalizedPoints,
         wipLimit: storyData.wipLimit || 3,
         orderIndex: storyData.orderIndex ?? (maxOrderIndex + 1000)
       };

@@ -107,16 +107,16 @@ const getAiScoreValue = (item: Story | Task): number => {
   return Number.isFinite(parsed) ? parsed : -Infinity;
 };
 
-const isTop3Task = (task: Task): boolean => {
-  return (task as any).aiTop3ForDay === true
-    || (task as any).aiFlaggedTop === true
-    || Number((task as any).aiPriorityRank || 0) > 0;
+const isCurrentTop3 = (item: any): boolean => {
+  if (item?.aiTop3ForDay !== true) return false;
+  const top3Date = item?.aiTop3Date;
+  if (!top3Date) return true;
+  return String(top3Date).slice(0, 10) === new Date().toISOString().slice(0, 10);
 };
 
-const isTop3Story = (story: Story): boolean => {
-  return (story as any).aiTop3ForDay === true
-    || Number((story as any).aiFocusStoryRank || 0) > 0;
-};
+const isTop3Task = (task: Task): boolean => isCurrentTop3(task);
+
+const isTop3Story = (story: Story): boolean => isCurrentTop3(story);
 
 const matchesCriticalOrHighAi = (item: Story | Task): boolean => {
   return isCriticalPriority(item.priority) || getAiScoreValue(item) >= 90;

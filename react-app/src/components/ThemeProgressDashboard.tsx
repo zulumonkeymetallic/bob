@@ -10,6 +10,7 @@ import { Goal, Story, Sprint } from '../types';
 import { getThemeById, migrateThemeValue } from '../constants/globalThemes';
 import { themeVars } from '../utils/themeVars';
 import { useSprintCapacity } from '../hooks/useSprintCapacity';
+import { computeWindowExpectedProgress, evaluateGoalTargetStatus } from '../utils/goalKpiStatus';
 
 const SPRINT_WINDOW = 5;
 
@@ -48,13 +49,16 @@ const ThemeProgressDashboard: React.FC = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const { sprints } = useSprint();
+  const [scope, setScope] = useState<'sprint' | 'year' | 'goal'>('sprint');
   const [goals, setGoals] = useState<Goal[]>([]);
   const [stories, setStories] = useState<Story[]>([]);
   const [pots, setPots] = useState<Record<string, PotInfo>>({});
+  const [goalKpiMetrics, setGoalKpiMetrics] = useState<Record<string, { resolvedKpis?: any[]; updatedAt?: any }>>({});
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [goalsLoading, setGoalsLoading] = useState(true);
   const [storiesLoading, setStoriesLoading] = useState(true);
   const [potsLoading, setPotsLoading] = useState(true);
+  const [kpiLoading, setKpiLoading] = useState(true);
 
   useEffect(() => {
     if (!currentUser) {
@@ -150,6 +154,41 @@ const ThemeProgressDashboard: React.FC = () => {
     return () => unsub();
   }, [currentUser]);
 
+  useEffect(() => {
+    if (!currentUser) {
+      setGoalKpiMetrics({});
+      setKpiLoading(false);
+      return;
+    }
+    setKpiLoading(true);
+    const metricsQuery = query(
+      collection(db, 'goal_kpi_metrics'),
+      where('ownerUid', '==', currentUser.uid),
+    );
+    const unsub = onSnapshot(
+      metricsQuery,
+      (snap) => {
+        const map: Record<string, { resolvedKpis?: any[]; updatedAt?: any }> = {};
+        snap.docs.forEach((docSnap) => {
+          const data = docSnap.data() as any;
+          const goalId = String(data.goalId || '').trim();
+          if (!goalId) return;
+          map[goalId] = {
+            resolvedKpis: Array.isArray(data.resolvedKpis) ? data.resolvedKpis : [],
+            updatedAt: data.updatedAt || null,
+          };
+        });
+        setGoalKpiMetrics(map);
+        setKpiLoading(false);
+      },
+      () => {
+        setGoalKpiMetrics({});
+        setKpiLoading(false);
+      },
+    );
+    return () => unsub();
+  }, [currentUser]);
+
   const upcomingSprints = useMemo(() => {
     const now = Date.now();
     const filtered = (sprints || [])
@@ -167,9 +206,21 @@ const ThemeProgressDashboard: React.FC = () => {
     return filtered.slice(0, SPRINT_WINDOW);
   }, [sprints]);
 
+  const activeSprint = useMemo(() => {
+    const byStatus = upcomingSprints.find((sprint) => {
+      if ((sprint as any).status === 1) return true;
+      const status = String((sprint as any).status || '').toLowerCase();
+      return ['active', 'current', 'in-progress', 'inprogress'].includes(status);
+    });
+    return byStatus || upcomingSprints[0] || null;
+  }, [upcomingSprints]);
+
   const sprintIds = useMemo(() => new Set(upcomingSprints.map((s) => s.id)), [upcomingSprints]);
-  const primarySprintId = upcomingSprints[0]?.id;
+  const primarySprintId = activeSprint?.id;
   const { data: capacityData, loading: capacityLoading } = useSprintCapacity(primarySprintId);
+  const currentYear = new Date().getFullYear();
+  const yearStartMs = new Date(currentYear, 0, 1, 0, 0, 0, 0).getTime();
+  const yearEndMs = new Date(currentYear, 11, 31, 23, 59, 59, 999).getTime();
 
   const capacitySummary = useMemo(() => {
     if (!capacityData) return null;
@@ -221,8 +272,144 @@ const ThemeProgressDashboard: React.FC = () => {
     return pots[String(potId)] || null;
   };
 
+  const scopedStories = useMemo(() => {
+    if (scope === 'goal') return stories;
+    if (scope === 'sprint') {
+      if (!primarySprintId) return [];
+      return stories.filter((story) => String((story as any).sprintId || '') === primarySprintId);
+    }
+    return stories.filter((story) => {
+      const candidates = [
+        (story as any).targetDate,
+        (story as any).dueDate,
+        (story as any).plannedStartDate,
+        (story as any).createdAt,
+        (story as any).updatedAt,
+      ].map((value) => toMillis(value));
+      return candidates.some((ms) => ms > 0 && ms >= yearStartMs && ms <= yearEndMs);
+    });
+  }, [stories, scope, primarySprintId, yearStartMs, yearEndMs]);
+
+  const scopedGoalIdsFromStories = useMemo(() => {
+    const ids = new Set<string>();
+    scopedStories.forEach((story) => {
+      if (story.goalId) ids.add(story.goalId);
+    });
+    return ids;
+  }, [scopedStories]);
+
+  const scopedGoals = useMemo(() => {
+    if (scope === 'goal') return goals;
+    if (scope === 'sprint') return goals.filter((goal) => scopedGoalIdsFromStories.has(goal.id));
+    return goals.filter((goal) => {
+      if (scopedGoalIdsFromStories.has(goal.id)) return true;
+      const targetYear = Number((goal as any).targetYear || 0);
+      if (targetYear === currentYear) return true;
+      const candidates = [
+        (goal as any).startDate,
+        (goal as any).targetDate,
+        (goal as any).endDate,
+        (goal as any).createdAt,
+        (goal as any).updatedAt,
+      ].map((value) => toMillis(value));
+      return candidates.some((ms) => ms > 0 && ms >= yearStartMs && ms <= yearEndMs);
+    });
+  }, [goals, scope, scopedGoalIdsFromStories, currentYear, yearStartMs, yearEndMs]);
+
+  const scopeLabel = useMemo(() => {
+    if (scope === 'sprint') return activeSprint?.name || 'active sprint';
+    if (scope === 'year') return String(currentYear);
+    return 'goal timeline';
+  }, [scope, activeSprint, currentYear]);
+
+  const scopeExpectedProgressPct = useMemo(() => {
+    if (scope === 'sprint') {
+      const startMs = toMillis((activeSprint as any)?.startDate || (activeSprint as any)?.start || null);
+      const endMs = toMillis((activeSprint as any)?.endDate || (activeSprint as any)?.end || null);
+      return computeWindowExpectedProgress(startMs > 0 ? startMs : null, endMs > 0 ? endMs : null);
+    }
+    if (scope === 'year') {
+      return computeWindowExpectedProgress(yearStartMs, yearEndMs);
+    }
+    return null;
+  }, [scope, activeSprint, yearStartMs, yearEndMs]);
+
+  const goalKpiRows = useMemo(() => {
+    const storiesByGoal = new Map<string, Story[]>();
+    scopedStories.forEach((story) => {
+      const goalId = String(story.goalId || '').trim();
+      if (!goalId) return;
+      const list = storiesByGoal.get(goalId) || [];
+      list.push(story);
+      storiesByGoal.set(goalId, list);
+    });
+
+    const rows = scopedGoals.map((goal) => {
+      const goalStories = storiesByGoal.get(goal.id) || [];
+      const totalStoryPoints = goalStories.reduce((sum, story) => sum + (Number((story as any).points || 0) || 0), 0);
+      const doneStoryPoints = goalStories
+        .filter((story) => isStoryDone((story as any).status))
+        .reduce((sum, story) => sum + (Number((story as any).points || 0) || 0), 0);
+      const doneStoryCount = goalStories.filter((story) => isStoryDone((story as any).status)).length;
+      const storyProgressPct = goalStories.length
+        ? (
+          totalStoryPoints > 0
+            ? Math.round((doneStoryPoints / totalStoryPoints) * 100)
+            : Math.round((doneStoryCount / goalStories.length) * 100)
+        )
+        : null;
+      const estimated = Number((goal as any).estimatedCost || 0) || 0;
+      const potInfo = getGoalPotInfo(goal);
+      const saved = potInfo?.balance ? potInfo.balance / 100 : 0;
+      const savingsPct = estimated > 0 ? Math.min(100, Math.round((saved / estimated) * 100)) : null;
+      const fallbackParts = [storyProgressPct, savingsPct].filter((value): value is number => value != null);
+      const fallbackProgressPct = fallbackParts.length
+        ? Math.round(fallbackParts.reduce((sum, value) => sum + value, 0) / fallbackParts.length)
+        : null;
+      const startMs = toMillis((goal as any).startDate || goal.createdAt || null);
+      const endMs = toMillis((goal as any).endDate || (goal as any).targetDate || null);
+      const expectedProgressPct = scope === 'goal'
+        ? computeWindowExpectedProgress(startMs > 0 ? startMs : null, endMs > 0 ? endMs : null)
+        : scopeExpectedProgressPct;
+      const resolvedKpis = Array.isArray(goalKpiMetrics[goal.id]?.resolvedKpis)
+        ? goalKpiMetrics[goal.id]?.resolvedKpis || []
+        : [];
+      const status = evaluateGoalTargetStatus({
+        resolvedKpis,
+        fallbackProgressPct,
+        expectedProgressPct,
+        scopeLabel,
+      });
+      return {
+        goalId: goal.id,
+        goalTitle: goal.title || goal.id,
+        progressPct: status.progressPct,
+        expectedProgressPct,
+        statusLabel: status.label,
+        statusTone: status.tone,
+        reason: status.reason,
+        kpiSummary: status.kpiSummary,
+      };
+    });
+
+    const statusOrder: Record<string, number> = {
+      Behind: 0,
+      'On target': 1,
+      'No KPI': 2,
+    };
+
+    return rows.sort((a, b) => {
+      const byStatus = (statusOrder[a.statusLabel] ?? 9) - (statusOrder[b.statusLabel] ?? 9);
+      if (byStatus !== 0) return byStatus;
+      const aProgress = a.progressPct ?? -1;
+      const bProgress = b.progressPct ?? -1;
+      if (aProgress !== bProgress) return aProgress - bProgress;
+      return a.goalTitle.localeCompare(b.goalTitle);
+    });
+  }, [scopedStories, scopedGoals, goalKpiMetrics, scope, scopeExpectedProgressPct, scopeLabel, pots]);
+
   const themeRows = useMemo(() => {
-    const goalById = new Map(goals.map((g) => [g.id, g]));
+    const goalById = new Map(scopedGoals.map((g) => [g.id, g]));
     const buckets = new Map<string, any>();
 
     const ensureBucket = (themeId: number) => {
@@ -245,7 +432,7 @@ const ThemeProgressDashboard: React.FC = () => {
       return buckets.get(key);
     };
 
-    goals.forEach((goal) => {
+    scopedGoals.forEach((goal) => {
       const themeId = resolveThemeId((goal as any).theme);
       const bucket = ensureBucket(themeId);
       bucket.goalsTotal += 1;
@@ -257,7 +444,7 @@ const ThemeProgressDashboard: React.FC = () => {
       bucket.savingsSaved += saved;
     });
 
-    stories.forEach((story) => {
+    scopedStories.forEach((story) => {
       const goal = story.goalId ? goalById.get(story.goalId) : null;
       const themeValue = (story as any).theme ?? (goal as any)?.theme ?? 0;
       const themeId = resolveThemeId(themeValue);
@@ -276,18 +463,18 @@ const ThemeProgressDashboard: React.FC = () => {
     });
 
     return Array.from(buckets.values()).sort((a, b) => b.pointsTotal - a.pointsTotal);
-  }, [goals, stories, sprintIds, pots]);
+  }, [scopedGoals, scopedStories, sprintIds, pots]);
 
   const overallStats = useMemo(() => {
     let totalPoints = 0;
     let donePoints = 0;
     let totalStories = 0;
     let doneStories = 0;
-    let totalGoals = goals.length;
+    let totalGoals = scopedGoals.length;
     let doneGoals = 0;
     let savingsTotal = 0;
     let savingsSaved = 0;
-    goals.forEach((goal) => {
+    scopedGoals.forEach((goal) => {
       if (isGoalDone((goal as any).status)) doneGoals += 1;
       const estimated = Number((goal as any).estimatedCost || 0) || 0;
       const potInfo = getGoalPotInfo(goal);
@@ -295,7 +482,7 @@ const ThemeProgressDashboard: React.FC = () => {
       savingsTotal += estimated;
       savingsSaved += saved;
     });
-    stories.forEach((story) => {
+    scopedStories.forEach((story) => {
       totalStories += 1;
       const points = Number((story as any).points || 0) || 0;
       totalPoints += points;
@@ -330,7 +517,7 @@ const ThemeProgressDashboard: React.FC = () => {
       savingsPct,
       overallPct
     };
-  }, [goals, stories, pots]);
+  }, [scopedGoals, scopedStories, pots]);
 
   const toggleTheme = (key: string) => {
     setExpanded((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -349,7 +536,7 @@ const ThemeProgressDashboard: React.FC = () => {
     if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
-  const loading = goalsLoading || storiesLoading || potsLoading;
+  const loading = goalsLoading || storiesLoading || potsLoading || kpiLoading;
 
   return (
     <Container fluid className="py-4" style={{ maxWidth: 1200 }}>
@@ -357,20 +544,46 @@ const ThemeProgressDashboard: React.FC = () => {
         <div>
           <h3 className="mb-1">Theme Progress &amp; Capacity</h3>
           <div className="text-muted small">
-            Story points are treated as hours. Capacity uses sprint capacity points. Overall progress reflects all goals and stories in this persona.
+            Story points are treated as hours. KPI and progress views are currently scoped to <strong>{scopeLabel}</strong>.
           </div>
         </div>
-      <div className="text-muted small">
-        Capacity window: next {upcomingSprints.length} sprint{upcomingSprints.length === 1 ? '' : 's'}
+      <div className="d-flex flex-column align-items-end gap-2">
+        <div className="text-muted small">
+          Capacity window: next {upcomingSprints.length} sprint{upcomingSprints.length === 1 ? '' : 's'}
+        </div>
+        <div style={{ display: 'inline-flex', border: `1px solid ${themeVars.border}`, borderRadius: 999, overflow: 'hidden' }}>
+          {([
+            { key: 'sprint', label: 'Sprint' },
+            { key: 'year', label: 'Year' },
+            { key: 'goal', label: 'Goal' },
+          ] as const).map((option) => (
+            <button
+              key={option.key}
+              type="button"
+              onClick={() => setScope(option.key)}
+              style={{
+                border: 'none',
+                padding: '6px 12px',
+                background: scope === option.key ? (themeVars.card as string) : 'transparent',
+                color: scope === option.key ? (themeVars.text as string) : (themeVars.muted as string),
+                fontSize: 12,
+                fontWeight: scope === option.key ? 700 : 500,
+                cursor: 'pointer'
+              }}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
       </div>
     </div>
 
-      {capacityLoading && primarySprintId && (
+      {scope === 'sprint' && capacityLoading && primarySprintId && (
         <div className="text-muted small mb-3">
-          Refreshing capacity for {upcomingSprints[0]?.name || 'selected sprint'}…
+          Refreshing capacity for {activeSprint?.name || 'selected sprint'}…
         </div>
       )}
-      {capacitySummary && (
+      {scope === 'sprint' && capacitySummary && (
         <div className="d-flex flex-wrap gap-3 mb-4">
           <div
             style={{
@@ -416,6 +629,11 @@ const ThemeProgressDashboard: React.FC = () => {
           </div>
         </div>
       )}
+      {scope !== 'sprint' && !loading && (
+        <div className="text-muted small mb-3">
+          Capacity cards are available in Sprint scope. Progress and KPI status are currently shown for {scopeLabel}.
+        </div>
+      )}
 
       {!loading && (
         <div className="d-flex flex-wrap gap-3 mb-4">
@@ -437,7 +655,7 @@ const ThemeProgressDashboard: React.FC = () => {
             <div style={{ fontWeight: 700, fontSize: 20 }}>
               {overallStats.overallPct}%
             </div>
-            <div className="text-muted small">Hover for breakdown</div>
+            <div className="text-muted small">{scopeLabel} breakdown</div>
           </div>
           <div
             style={{
@@ -512,12 +730,66 @@ const ThemeProgressDashboard: React.FC = () => {
         </div>
       )}
 
+      {!loading && (
+        <div
+          style={{
+            border: `1px solid ${themeVars.border}`,
+            borderRadius: 12,
+            padding: 16,
+            background: themeVars.card as string,
+            marginBottom: 16,
+            boxShadow: '0 2px 6px rgba(0,0,0,0.06)'
+          }}
+        >
+          <div className="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
+            <strong>Goal KPI Status</strong>
+            <span className="text-muted small">Scope: {scopeLabel}</span>
+          </div>
+          {goalKpiRows.length === 0 ? (
+            <div className="text-muted small">No goals found for this scope.</div>
+          ) : (
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+              <thead>
+                <tr style={{ textAlign: 'left', color: themeVars.muted as string }}>
+                  <th style={{ padding: '6px 8px' }}>Goal</th>
+                  <th style={{ padding: '6px 8px' }}>KPI attached</th>
+                  <th style={{ padding: '6px 8px' }}>Progress</th>
+                  <th style={{ padding: '6px 8px' }}>Status</th>
+                  <th style={{ padding: '6px 8px' }}>Why</th>
+                </tr>
+              </thead>
+              <tbody>
+                {goalKpiRows.map((row) => {
+                  const statusColor = row.statusTone === 'success'
+                    ? '#059669'
+                    : row.statusTone === 'danger'
+                    ? '#dc2626'
+                    : '#6b7280';
+                  const progressLabel = row.progressPct != null
+                    ? `${Math.round(row.progressPct)}%${row.expectedProgressPct != null ? ` (exp ${Math.round(row.expectedProgressPct)}%)` : ''}`
+                    : 'n/a';
+                  return (
+                    <tr key={row.goalId} style={{ borderTop: `1px solid ${themeVars.border}` }}>
+                      <td style={{ padding: '6px 8px', fontWeight: 600 }}>{row.goalTitle}</td>
+                      <td style={{ padding: '6px 8px' }}>{row.kpiSummary || 'No KPI attached'}</td>
+                      <td style={{ padding: '6px 8px' }}>{progressLabel}</td>
+                      <td style={{ padding: '6px 8px', color: statusColor, fontWeight: 700 }}>{row.statusLabel}</td>
+                      <td style={{ padding: '6px 8px' }}>{row.reason}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+
       {loading && (
         <div className="text-muted">Loading themes…</div>
       )}
 
       {!loading && themeRows.length === 0 && (
-        <div className="text-muted">No stories or goals found for this persona.</div>
+        <div className="text-muted">No stories or goals found for this scope.</div>
       )}
 
       {!loading && (
@@ -601,7 +873,9 @@ const ThemeProgressDashboard: React.FC = () => {
 
             {isOpen && (
               <div style={{ marginTop: 16 }}>
-                {upcomingSprints.length === 0 ? (
+                {scope !== 'sprint' ? (
+                  <div className="text-muted small">Switch to Sprint scope to view sprint capacity details for this theme.</div>
+                ) : upcomingSprints.length === 0 ? (
                   <div className="text-muted small">No upcoming sprints with capacity configured.</div>
                 ) : (
                   <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>

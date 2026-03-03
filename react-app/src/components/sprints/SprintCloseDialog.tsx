@@ -216,8 +216,8 @@ const SprintCloseDialog: React.FC<SprintCloseDialogProps> = ({ show, onHide, spr
   const calculateMetrics = () => {
     const completedStories = stories.filter(s => s.status === 4).length;
     const completedTasks = tasks.filter(t => t.status === 2).length;
-    const completedPoints = stories.filter(s => s.status === 4).reduce((sum, s) => sum + (s.points || 0), 0);
-    const totalPoints = stories.reduce((sum, s) => sum + (s.points || 0), 0);
+    const completedPoints = stories.filter(s => s.status === 4).reduce((sum, s) => sum + (Number.isFinite(Number(s.points)) ? Number(s.points) : 0), 0);
+    const totalPoints = stories.reduce((sum, s) => sum + (Number.isFinite(Number(s.points)) ? Number(s.points) : 0), 0);
 
     // Calculate capacity from calendar blocks in sprint timeframe
     const sprintStart = new Date(sprint.startDate);
@@ -318,7 +318,7 @@ const SprintCloseDialog: React.FC<SprintCloseDialogProps> = ({ show, onHide, spr
 
     const openStories = stories.filter(s => !isStatus(s.status, 'done'));
     const openTasks = tasks.filter(t => !isStatus(t.status, 'done'));
-    const remainingPoints = openStories.reduce((sum, s) => sum + (s.points || 0), 0);
+    const remainingPoints = openStories.reduce((sum, s) => sum + (Number.isFinite(Number(s.points)) ? Number(s.points) : 0), 0);
 
     const targetStart = new Date(targetSprint.startDate);
     const targetEnd = new Date(targetSprint.endDate);

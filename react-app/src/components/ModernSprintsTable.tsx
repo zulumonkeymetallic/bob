@@ -252,10 +252,10 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
 
     const completedStories = sprintStories.filter(story => story.status === 4).length;
     const completedTasks = sprintTasks.filter(task => task.status === 2).length;
-    const totalPoints = sprintStories.reduce((sum, story) => sum + (story.points || 0), 0);
+    const totalPoints = sprintStories.reduce((sum, story) => sum + (Number.isFinite(Number(story.points)) ? Number(story.points) : 0), 0);
     const completedPoints = sprintStories
       .filter(story => story.status === 4)
-      .reduce((sum, story) => sum + (story.points || 0), 0);
+      .reduce((sum, story) => sum + (Number.isFinite(Number(story.points)) ? Number(story.points) : 0), 0);
     const goalCount = Array.from(new Set(sprintStories.map(st => (st as any).goalId).filter(Boolean))).length;
 
     return {

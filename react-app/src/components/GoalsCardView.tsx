@@ -17,6 +17,7 @@ import { getStatusName } from '../utils/statusHelpers';
 import { themeVars, rgbaCard } from '../utils/themeVars';
 import { ActivityStreamService } from '../services/ActivityStreamService';
 import { toDate, formatDate } from '../utils/firestoreAdapters';
+import { computeWindowExpectedProgress, evaluateGoalTargetStatus } from '../utils/goalKpiStatus';
 import type { GlobalTheme } from '../constants/globalThemes';
 import { GLOBAL_THEMES, migrateThemeValue } from '../constants/globalThemes';
 import './GoalsCardView.css';
@@ -31,6 +32,16 @@ interface GoalsCardViewProps {
   themes?: GlobalTheme[];
   cardLayout?: 'grid' | 'comfortable';
   showDescriptions?: boolean;
+  goalKpiStatusByGoalId?: Record<string, {
+    goalId: string;
+    goalTitle: string;
+    kpiSummary: string;
+    progressPct: number | null;
+    expectedProgressPct: number | null;
+    statusLabel: 'On target' | 'Behind' | 'No KPI';
+    statusTone: 'success' | 'danger' | 'muted';
+    reason: string;
+  }>;
 }
 
 const GoalsCardView: React.FC<GoalsCardViewProps> = ({
@@ -42,7 +53,8 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
   selectedGoalId,
   themes,
   cardLayout = 'grid',
-  showDescriptions
+  showDescriptions,
+  goalKpiStatusByGoalId
 }) => {
   const { showSidebar } = useSidebar();
   const { currentUser } = useAuth();
@@ -58,6 +70,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
   const [generatingForGoal, setGeneratingForGoal] = useState<string | null>(null);
   const [habitAdherenceData, setHabitAdherenceData] = useState<Record<string, { planned: number; completed: number; progress: number }>>({});
   const [goalHabitMetrics, setGoalHabitMetrics] = useState<Record<string, { count: number; adherence: number; streak: number }>>({});
+  const [goalKpiMetrics, setGoalKpiMetrics] = useState<Record<string, { resolvedKpis?: any[]; updatedAt?: any }>>({});
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [toastVariant, setToastVariant] = useState<'success' | 'danger' | 'info'>('success');
   const [rowSpans, setRowSpans] = useState<Record<string, number>>({});
@@ -138,6 +151,21 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
     const ng = g + (255 - g) * factor;
     const nb = b + (255 - b) * factor;
     return rgbToHex(nr, ng, nb);
+  };
+
+  const toMillis = (value: any): number | null => {
+    if (value == null) return null;
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (value?.toMillis && typeof value.toMillis === 'function') {
+      try {
+        return Number(value.toMillis());
+      } catch {
+        return null;
+      }
+    }
+    if (value?.seconds != null) return Number(value.seconds) * 1000;
+    const parsed = new Date(value).getTime();
+    return Number.isFinite(parsed) ? parsed : null;
   };
 
   const showDetailed = cardLayout === 'comfortable';
@@ -303,6 +331,38 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
       });
       setPots(map);
     });
+    return () => unsub();
+  }, [currentUser?.uid]);
+
+  useEffect(() => {
+    if (!currentUser?.uid) {
+      setGoalKpiMetrics({});
+      return;
+    }
+    const metricsQuery = query(
+      collection(db, 'goal_kpi_metrics'),
+      where('ownerUid', '==', currentUser.uid),
+    );
+    const unsub = onSnapshot(
+      metricsQuery,
+      (snap) => {
+        const map: Record<string, { resolvedKpis?: any[]; updatedAt?: any }> = {};
+        snap.docs.forEach((docSnap) => {
+          const data = docSnap.data() as any;
+          const goalId = String(data.goalId || '').trim();
+          if (!goalId) return;
+          map[goalId] = {
+            resolvedKpis: Array.isArray(data.resolvedKpis) ? data.resolvedKpis : [],
+            updatedAt: data.updatedAt || null,
+          };
+        });
+        setGoalKpiMetrics(map);
+      },
+      (err) => {
+        console.warn('GoalsCardView: goal KPI metrics load failed', err);
+        setGoalKpiMetrics({});
+      },
+    );
     return () => unsub();
   }, [currentUser?.uid]);
 
@@ -647,6 +707,50 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
           const progressPercent = components.length
             ? Math.round(components.reduce((a, b) => a + b, 0) / components.length)
             : 0;
+          const fallbackProgressParts: number[] = [];
+          if (components.length) fallbackProgressParts.push(progressPercent);
+          if (estimated > 0) fallbackProgressParts.push(savingsPct);
+          const fallbackProgressPct = fallbackProgressParts.length
+            ? Math.round(fallbackProgressParts.reduce((sum, value) => sum + value, 0) / fallbackProgressParts.length)
+            : null;
+          const goalStartMs = toMillis((goal as any).startDate || goal.createdAt);
+          const goalEndMs = toMillis((goal as any).endDate || (goal as any).targetDate);
+          const expectedProgressPct = computeWindowExpectedProgress(goalStartMs, goalEndMs);
+          const resolvedKpis = Array.isArray(goalKpiMetrics[goal.id]?.resolvedKpis)
+            ? goalKpiMetrics[goal.id]?.resolvedKpis || []
+            : [];
+          const goalKpiStatus = evaluateGoalTargetStatus({
+            resolvedKpis,
+            fallbackProgressPct,
+            expectedProgressPct,
+            scopeLabel: 'goal timeline',
+          });
+          const goalKpiFromParent = goalKpiStatusByGoalId?.[goal.id];
+          const effectiveGoalKpiStatus = goalKpiFromParent
+            ? {
+              label: goalKpiFromParent.statusLabel,
+              tone: goalKpiFromParent.statusTone,
+              reason: goalKpiFromParent.reason,
+              progressPct: goalKpiFromParent.progressPct,
+              expectedProgressPct: goalKpiFromParent.expectedProgressPct,
+              kpiSummary: goalKpiFromParent.kpiSummary,
+            }
+            : {
+              label: goalKpiStatus.label,
+              tone: goalKpiStatus.tone,
+              reason: goalKpiStatus.reason,
+              progressPct: goalKpiStatus.progressPct,
+              expectedProgressPct,
+              kpiSummary: goalKpiStatus.kpiSummary,
+            };
+          const kpiStatusColor = effectiveGoalKpiStatus.tone === 'success'
+            ? '#059669'
+            : effectiveGoalKpiStatus.tone === 'danger'
+            ? '#dc2626'
+            : 'var(--muted)';
+          const kpiProgressLabel = effectiveGoalKpiStatus.progressPct != null
+            ? `${Math.round(effectiveGoalKpiStatus.progressPct)}%${effectiveGoalKpiStatus.expectedProgressPct != null ? ` (exp ${Math.round(effectiveGoalKpiStatus.expectedProgressPct)}%)` : ''}`
+            : 'n/a';
           const shouldShowDescription = showDescriptionsResolved && !!goal.description;
           const latestActivityLabel = latestActivity
             ? latestActivity.activityType === 'note_added'
@@ -882,6 +986,9 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                           ? `${doneStories ?? 0} of ${totalStories} stories`
                           : 'No stories yet'}
                       </div>
+                      <div className="goals-card-progress__footer" title={effectiveGoalKpiStatus.reason}>
+                        KPI {effectiveGoalKpiStatus.label} • {kpiProgressLabel}
+                      </div>
                       {estimated > 0 && (
                         <>
                           <div className="goals-card-progress__header">
@@ -921,6 +1028,9 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                         {totalStories && totalStories > 0
                           ? `${doneStories ?? 0} of ${totalStories} stories`
                           : 'No stories yet'}
+                      </div>
+                      <div className="goals-card-progress__footer" style={{ color: textColor }} title={effectiveGoalKpiStatus.reason}>
+                        KPI {effectiveGoalKpiStatus.label} • {kpiProgressLabel}
                       </div>
                       {estimated > 0 && (
                         <>
@@ -1036,6 +1146,16 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                         }}
                       >
                         {getStatusName(goal.status)}
+                      </Badge>
+                      <Badge
+                        title={`${effectiveGoalKpiStatus.kpiSummary || 'No KPI attached'} • ${effectiveGoalKpiStatus.reason}`}
+                        style={{
+                          backgroundColor: kpiStatusColor,
+                          color: 'var(--on-accent)',
+                          fontSize: badgeFontSize
+                        }}
+                      >
+                        KPI: {effectiveGoalKpiStatus.label}
                       </Badge>
                       {(() => {
                         const potId = (goal as any).linkedPotId || (goal as any).potId;

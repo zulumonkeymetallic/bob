@@ -8,6 +8,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { Story, Goal, Task } from '../types';
 import { useSprint } from '../contexts/SprintContext';
 import { usePersona } from '../contexts/PersonaContext';
+import { parsePointsValue } from '../utils/points';
 
 const ModernKanbanPage: React.FC = () => {
   const { currentUser } = useAuth();
@@ -46,7 +47,7 @@ const ModernKanbanPage: React.FC = () => {
     description: '',
     goalId: '',
     priority: 2, // P2 = Medium
-    points: 1
+    points: '1' as string | number
   });
   
   const [newTask, setNewTask] = useState({
@@ -61,7 +62,7 @@ const ModernKanbanPage: React.FC = () => {
     description: '',
     goalId: '',
     priority: 2, // P2 = Medium
-    points: 1
+    points: '1' as string | number
   });
 
   useEffect(() => {
@@ -171,7 +172,7 @@ const ModernKanbanPage: React.FC = () => {
         goalId: newStory.goalId,
         status: 0, // 0 = Backlog
         priority: newStory.priority,
-        points: newStory.points,
+        points: parsePointsValue(newStory.points) ?? 1,
         orderIndex: stories.length,
         persona: currentPersona || 'personal',
         ownerUid: currentUser.uid,
@@ -184,7 +185,7 @@ const ModernKanbanPage: React.FC = () => {
         description: '',
         goalId: '',
         priority: 2, // P2 = Medium
-        points: 1
+        points: '1'
       });
       setShowAddStory(false);
     } catch (error) {
@@ -274,7 +275,7 @@ const ModernKanbanPage: React.FC = () => {
         description: editStory.description,
         goalId: editStory.goalId,
         priority: editStory.priority,
-        points: editStory.points,
+        points: parsePointsValue(editStory.points) ?? 1,
         updatedAt: serverTimestamp()
       });
       setShowEditStory(false);
@@ -623,17 +624,16 @@ const ModernKanbanPage: React.FC = () => {
               <Col md={6}>
                 <Form.Group className="mb-3">
                   <Form.Label>Story Points</Form.Label>
-                  <Form.Select
-                    value={editStory.points}
-                    onChange={(e) => setEditStory({...editStory, points: parseInt(e.target.value)})}
-                  >
-                    <option value={1}>1</option>
-                    <option value={2}>2</option>
-                    <option value={3}>3</option>
-                    <option value={5}>5</option>
-                    <option value={8}>8</option>
-                    <option value={13}>13</option>
-                  </Form.Select>
+                  <Form.Control
+                    type="number"
+                    step="any"
+                    inputMode="decimal"
+                    value={editStory.points ?? ''}
+                    onChange={(e) => setEditStory({
+                      ...editStory,
+                      points: e.target.value as any,
+                    })}
+                  />
                 </Form.Group>
               </Col>
             </Row>

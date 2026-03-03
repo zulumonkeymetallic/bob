@@ -189,11 +189,13 @@ const ChecklistPanel: React.FC<ChecklistPanelProps> = ({ title = "Today's Checkl
         const prioritySnap = await getDocs(query(
           tasksRef,
           where('ownerUid', '==', currentUser.uid),
-          where('aiFlaggedTop', '==', true),
+          where('aiTop3ForDay', '==', true),
         )).catch(() => null);
         if (prioritySnap) {
           prioritySnap.forEach((d) => {
             const t = d.data() as any;
+            const aiDate = t.aiTop3Date;
+            if (aiDate && String(aiDate).slice(0, 10) !== todayIso) return;
             if (taskIds.has(d.id)) return;
             if (isTaskDone(t.status)) return;
             list.push({

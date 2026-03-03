@@ -80,7 +80,12 @@ const SortableStoryCard: React.FC<SortableStoryCardProps> = ({
   })();
 
   const statusLabel = storyStatusText((story as any).status);
-  const isTop3 = (story as any).aiTop3ForDay === true || Number((story as any).aiFocusStoryRank || 0) > 0;
+  const isTop3 = (() => {
+    if ((story as any).aiTop3ForDay !== true) return false;
+    const top3Date = (story as any).aiTop3Date;
+    if (!top3Date) return true;
+    return String(top3Date).slice(0, 10) === new Date().toISOString().slice(0, 10);
+  })();
   const priorityClass = isTop3 ? priorityPillClass(4) : priorityPillClass(story.priority);
   const priorityLabel = isTop3 ? 'Critical' : formatPriorityLabel(story.priority);
   const handleStyle: React.CSSProperties = {

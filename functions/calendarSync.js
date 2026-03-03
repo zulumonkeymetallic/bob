@@ -184,7 +184,27 @@ function isRecurringDueOnDay(task, dayMs) {
   return false;
 }
 
-async function buildChecklistItemsForDay(uid, dayMs) {
+function checklistItemDurationMinutes(task) {
+  const points = Number(task?.points || 0);
+  if (Number.isFinite(points) && points > 0) {
+    return Math.max(3, Math.round(points * 60));
+  }
+  const estimate = Number(task?.estimateMin || task?.estimatedMinutes || task?.estimateMinutes || task?.durationMinutes || 0);
+  if (Number.isFinite(estimate) && estimate > 0) {
+    return Math.max(3, Math.round(estimate));
+  }
+  return 10;
+}
+
+function formatChecklistPoints(points) {
+  const numeric = Number(points);
+  if (!Number.isFinite(numeric) || numeric <= 0) return null;
+  if (Math.abs(numeric - Math.round(numeric)) < 0.001) return String(Math.round(numeric));
+  if (numeric < 1) return numeric.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
+  return numeric.toFixed(1).replace(/0$/, '').replace(/\.$/, '');
+}
+
+async function buildChecklistItemsForDay(uid, dayMs, options = {}) {
   const dayIso = new Date(dayMs).toISOString().slice(0, 10);
   const dayStart = new Date(dayMs);
   dayStart.setHours(0, 0, 0, 0);
@@ -192,12 +212,16 @@ async function buildChecklistItemsForDay(uid, dayMs) {
   const dayEnd = new Date(dayMs);
   dayEnd.setHours(23, 59, 59, 999);
   const dayEndMs = dayEnd.getTime();
+  const capacityMinutesRaw = Number(options?.capacityMinutes);
+  const capacityMinutes = Number.isFinite(capacityMinutesRaw) && capacityMinutesRaw > 0
+    ? Math.max(1, Math.round(capacityMinutesRaw))
+    : null;
 
   try {
     const tasksSnap = await admin.firestore().collection('tasks')
       .where('ownerUid', '==', uid)
       .get();
-    const rows = tasksSnap.docs
+    const allRows = tasksSnap.docs
       .map((doc) => ({ id: doc.id, ...(doc.data() || {}) }))
       .filter((task) => {
         const type = String(task.type || task.task_type || '').toLowerCase();
@@ -218,20 +242,37 @@ async function buildChecklistItemsForDay(uid, dayMs) {
           id: task.id,
           title: task.title || 'Checklist item',
           kind,
+          points: Number(task.points || 0),
+          durationMinutes: checklistItemDurationMinutes(task),
           dueMs: getTaskDueMs(task) || dayStartMs,
         };
       })
-      .sort((a, b) => (a.dueMs || dayStartMs) - (b.dueMs || dayStartMs))
-      .slice(0, 12);
+      .sort((a, b) => {
+        if ((a.dueMs || dayStartMs) !== (b.dueMs || dayStartMs)) {
+          return (a.dueMs || dayStartMs) - (b.dueMs || dayStartMs);
+        }
+        return (a.durationMinutes || 0) - (b.durationMinutes || 0);
+      });
+
+    let plannedMinutes = 0;
+    const rows = [];
+    for (const item of allRows) {
+      if (rows.length >= 12) break;
+      if (capacityMinutes != null && (plannedMinutes + item.durationMinutes) > capacityMinutes) continue;
+      rows.push(item);
+      plannedMinutes += item.durationMinutes;
+    }
 
     const lines = rows.map((item) => {
       const label = item.kind === 'routine' ? 'Routine' : item.kind === 'habit' ? 'Habit' : 'Chore';
-      return `${item.title} (${label})`;
+      const pointsLabel = formatChecklistPoints(item.points);
+      const effortLabel = pointsLabel ? `${pointsLabel} pts` : `${item.durationMinutes} min`;
+      return `${item.title} (${label}, ${effortLabel})`;
     });
-    return { dayIso, lines };
+    return { dayIso, lines, capacityMinutes, plannedMinutes };
   } catch (error) {
     console.warn('[calendar-sync] failed to build checklist items', error?.message || error);
-    return { dayIso, lines: [] };
+    return { dayIso, lines: [], capacityMinutes, plannedMinutes: 0 };
   }
 }
 
@@ -265,6 +306,13 @@ function buildPrivateProps(values) {
     out[key] = asString;
   }
   return out;
+}
+
+function isChecklistWindowBlock(block) {
+  if (!block || block.storyId || block.taskId) return false;
+  const routineType = String(block.entityType || block.sourceType || block.category || '').toLowerCase();
+  const themeLower = String(block.theme || block.theme_label || block.themeLabel || '').toLowerCase();
+  return ['chore', 'routine', 'habit'].some((key) => routineType.includes(key) || themeLower.includes(key));
 }
 
 function resolveBlockDeepLink(block) {
@@ -903,16 +951,55 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
         }
       } catch { }
       if (!block.storyId && !block.taskId) {
-        const routineType = String(block.entityType || block.sourceType || block.category || '').toLowerCase();
-        const themeLower = String(block.theme || block.theme_label || block.themeLabel || '').toLowerCase();
-        const isChecklistWindow = ['chore', 'routine', 'habit'].some((key) => routineType.includes(key) || themeLower.includes(key));
+        const isChecklistWindow = isChecklistWindowBlock(block);
         const dayMs = toMillis(block.start);
+        const blockDurationMinutes = Math.max(1, Math.round((endMs - startMs) / 60000));
         if (isChecklistWindow && dayMs) {
-          const checklist = await buildChecklistItemsForDay(uid, dayMs);
+          const dayStartMs = new Date(new Date(dayMs).setHours(0, 0, 0, 0)).getTime();
+          const dayEndMs = new Date(new Date(dayMs).setHours(23, 59, 59, 999)).getTime();
+          let primaryChecklistBlockId = blockId;
+          try {
+            const dayBlocksSnap = await admin.firestore().collection('calendar_blocks')
+              .where('ownerUid', '==', uid)
+              .where('start', '>=', dayStartMs)
+              .where('start', '<=', dayEndMs)
+              .get();
+            const checklistBlocks = (dayBlocksSnap.docs || [])
+              .map((doc) => ({ id: doc.id, ...(doc.data() || {}) }))
+              .filter((candidate) => isChecklistWindowBlock(candidate))
+              .sort((a, b) => {
+                const startDiff = (toMillis(a.start) || 0) - (toMillis(b.start) || 0);
+                if (startDiff !== 0) return startDiff;
+                return String(a.id || '').localeCompare(String(b.id || ''));
+              });
+            if (checklistBlocks.length > 0) {
+              primaryChecklistBlockId = checklistBlocks[0].id;
+            }
+          } catch (checklistErr) {
+            debugLogs.push({ step: 'checklist_primary_lookup_failed', error: checklistErr?.message || String(checklistErr) });
+          }
+
+          if (primaryChecklistBlockId !== blockId) {
+            debugLogs.push({
+              step: 'checklist_duplicate_skipped',
+              blockId,
+              primaryChecklistBlockId,
+            });
+            return {
+              skipped: true,
+              reason: 'duplicate_checklist_window',
+              primaryChecklistBlockId,
+            };
+          }
+
+          const checklist = await buildChecklistItemsForDay(uid, dayMs, { capacityMinutes: blockDurationMinutes });
           const checklistUrl = buildAbsoluteUrl(`/chores/checklist?date=${encodeURIComponent(checklist.dayIso)}`);
           const checklistLines = [
             `Checklist Link: ${checklistUrl}`,
           ];
+          if (Number.isFinite(Number(checklist.capacityMinutes))) {
+            checklistLines.push(`Planned effort: ${checklist.plannedMinutes || 0}/${checklist.capacityMinutes} min`);
+          }
           if (checklist.lines.length) {
             checklistLines.push('', 'Expected items in this block:');
             checklist.lines.forEach((line) => checklistLines.push(`- ${line}`));

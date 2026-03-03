@@ -42,6 +42,7 @@ import { useNavigate } from 'react-router-dom';
 import { useSprint } from '../contexts/SprintContext';
 import { themeVars, rgbaCard } from '../utils/themeVars';
 import { storyStatusText } from '../utils/storyCardFormatting';
+import { parsePointsValue } from '../utils/points';
 
 interface StoryTableRow extends Story {
   goalTitle?: string;
@@ -275,8 +276,15 @@ const NewStoryRow: React.FC<NewStoryRowProps> = ({
       <td key={column.key} style={{ width: column.width, padding: '12px 8px', borderRight: `1px solid ${themeVars.border}` }}>
         <input
           type={column.type === 'number' ? 'number' : 'text'}
-          value={value || ''}
-          onChange={(e) => onFieldChange(column.key, column.type === 'number' ? parseInt(e.target.value) || 0 : e.target.value)}
+          step={column.key === 'points' ? 'any' : undefined}
+          inputMode={column.key === 'points' ? 'decimal' : undefined}
+          value={value ?? ''}
+          onChange={(e) => onFieldChange(
+            column.key,
+            column.key === 'points'
+              ? e.target.value
+              : (column.type === 'number' ? Number(e.target.value) || 0 : e.target.value),
+          )}
           placeholder={`Enter ${column.label.toLowerCase()}...`}
           style={{
             width: '100%',
@@ -455,6 +463,10 @@ const SortableRow: React.FC<SortableRowProps> = ({
           'complete': 4,
         };
         valueToSave = map[label] ?? editValue;
+      } else if (actualKey === 'points') {
+        const parsedPoints = parsePointsValue(editValue);
+        const fallbackPoints = parsePointsValue((story as any).points) ?? 1;
+        valueToSave = parsedPoints == null ? fallbackPoints : parsedPoints;
       }
       
       // Only proceed if the value actually changed
@@ -625,7 +637,9 @@ const SortableRow: React.FC<SortableRowProps> = ({
       <td key={column.key} style={{ width: column.width }}>
         <div className="relative">
           <input
-            type={column.type === 'date' ? 'date' : 'text'}
+            type={column.type === 'date' ? 'date' : (column.type === 'number' ? 'number' : 'text')}
+            step={column.key === 'points' ? 'any' : undefined}
+            inputMode={column.key === 'points' ? 'decimal' : undefined}
             value={editValue}
             onChange={(e) => setEditValue(e.target.value)}
             onBlur={() => handleCellSave(column.key)}
@@ -1090,8 +1104,10 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
     try {
       console.log('🎯 ModernStoriesTable: Starting new story save...');
       const linkedGoal = goals.find(g => g.id === newStoryData.goalId);
+      const parsedPoints = parsePointsValue((newStoryData as any).points);
       const payload = {
         ...newStoryData,
+        points: parsedPoints == null ? 1 : parsedPoints,
         theme: (linkedGoal && (linkedGoal as any).theme !== undefined) ? (linkedGoal as any).theme : newStoryData.theme
       } as Omit<Story, 'ref' | 'id' | 'updatedAt' | 'createdAt'>;
       await onStoryAdd(payload);

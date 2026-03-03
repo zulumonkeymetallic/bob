@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { Modal, Button, Form, Row, Col, Alert } from 'react-bootstrap';
 import { updateDoc, doc, serverTimestamp, collection, query, where, getDocs, addDoc, deleteDoc } from 'firebase/firestore';
 import { db, functions } from '../firebase';
@@ -9,11 +9,13 @@ import { useSprint } from '../contexts/SprintContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { isStatus } from '../utils/statusHelpers';
 import { normalizePriorityValue } from '../utils/priorityUtils';
+import { parsePointsValue } from '../utils/points';
 import TagInput from './common/TagInput';
 import ActivityStreamPanel from './common/ActivityStreamPanel';
 import ModernTaskTable from './ModernTaskTable';
 import { cascadeStoryPersona } from '../utils/personaCascade';
 import { useNavigate } from 'react-router-dom';
+import { Wand2 } from 'lucide-react';
 
 interface EditStoryModalProps {
   show: boolean;
@@ -42,7 +44,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
     priority: 2,
     status: 0,
     theme: 1,
-    points: 0,
+    points: '' as string | number,
     acceptanceCriteria: '',
     sprintId: '' as string | '',
     blocked: false as boolean,
@@ -51,11 +53,14 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
   });
 
   const [loading, setLoading] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [aiResult, setAiResult] = useState<string | null>(null);
   const [goalInput, setGoalInput] = useState('');
   const { currentUser } = useAuth();
   const [linkedTasks, setLinkedTasks] = useState<Task[]>([]);
   const [tasksLoading, setTasksLoading] = useState(false);
+  const [isGeneratingTasks, setIsGeneratingTasks] = useState(false);
   const isHiddenSprint = (sprint: Sprint) => isStatus(sprint.status, 'closed') || isStatus(sprint.status, 'cancelled');
   const formatSprintLabel = (sprint: Sprint, statusOverride?: string) => {
     const name = sprint.name || sprint.ref || `Sprint ${sprint.id.slice(-4)}`;
@@ -74,10 +79,39 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
     [editedStory.goalId, goals],
   );
 
+  const reloadLinkedTasks = useCallback(async (sourceStory: Story | null) => {
+    if (!sourceStory || !currentUser) {
+      setLinkedTasks([]);
+      return;
+    }
+    setTasksLoading(true);
+    try {
+      const baseQuery = query(
+        collection(db, 'tasks'),
+        where('ownerUid', '==', currentUser.uid)
+      );
+      const snap = await getDocs(baseQuery);
+      const raw = snap.docs.map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) })) as Task[];
+      const persona = (sourceStory as any)?.persona || currentPersona;
+      const filtered = raw.filter((task) => {
+        if (persona && task.persona && task.persona !== persona) return false;
+        return task.parentId === sourceStory.id || task.storyId === sourceStory.id;
+      });
+      setLinkedTasks(filtered);
+    } catch (err) {
+      console.error('Failed to load linked tasks', err);
+      setLinkedTasks([]);
+    } finally {
+      setTasksLoading(false);
+    }
+  }, [currentUser, currentPersona]);
+
   // Initialize form when story changes
   useEffect(() => {
     if (story) {
       console.log('📝 EditStoryModal: Initializing with story:', story);
+      const parsedPoints = parsePointsValue((story as any).points);
+      const normalizedPoints = parsedPoints == null ? 1 : parsedPoints;
       const normalizedPriority = normalizePriorityValue((story as any).priority);
       setEditedStory({
         title: story.title || '',
@@ -86,7 +120,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
         priority: normalizedPriority > 0 ? normalizedPriority : 2,
         status: (typeof story.status === 'number' ? (story.status >= 4 ? 4 : story.status >= 2 ? 2 : 0) : 0),
         theme: story.theme || 1,
-        points: story.points || 0,
+        points: normalizedPoints,
         acceptanceCriteria: Array.isArray(story.acceptanceCriteria)
           ? story.acceptanceCriteria.join('\n')
           : story.acceptanceCriteria || '',
@@ -96,40 +130,19 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
         persona: ((story as any).persona || currentPersona || 'personal') as 'personal' | 'work',
       });
       setError(null);
+      setAiResult(null);
       const currentGoal = goals.find(g => g.id === story.goalId);
       setGoalInput(currentGoal?.title || '');
     }
   }, [story, goals]);
 
   useEffect(() => {
-    const loadTasks = async () => {
-      if (!show || !story || !currentUser) {
-        setLinkedTasks([]);
-        return;
-      }
-      setTasksLoading(true);
-      try {
-        const baseQuery = query(
-          collection(db, 'tasks'),
-          where('ownerUid', '==', currentUser.uid)
-        );
-        const snap = await getDocs(baseQuery);
-        const raw = snap.docs.map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) })) as Task[];
-        const persona = (story as any)?.persona || currentPersona;
-        const filtered = raw.filter((task) => {
-          if (persona && task.persona && task.persona !== persona) return false;
-          return task.parentId === story.id || task.storyId === story.id;
-        });
-        setLinkedTasks(filtered);
-      } catch (err) {
-        console.error('Failed to load linked tasks', err);
-        setLinkedTasks([]);
-      } finally {
-        setTasksLoading(false);
-      }
-    };
-    loadTasks();
-  }, [show, story?.id, currentUser?.uid, currentPersona]);
+    if (!show || !story) {
+      setLinkedTasks([]);
+      return;
+    }
+    reloadLinkedTasks(story);
+  }, [show, story, reloadLinkedTasks]);
 
   const handleTaskUpdate = async (taskId: string, updates: Partial<Task>) => {
     if (!currentUser) return;
@@ -159,6 +172,8 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
 
   const handleTaskCreate = async (newTask: Partial<Task>) => {
     if (!currentUser || !story) return;
+    const parsedTaskPoints = parsePointsValue((newTask as any).points);
+    const normalizedTaskPoints = parsedTaskPoints == null ? 1 : parsedTaskPoints;
     const payload: any = {
       title: newTask.title || '',
       description: newTask.description || '',
@@ -166,7 +181,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
       priority: (newTask as any).priority ?? 2,
       effort: (newTask as any).effort ?? 'M',
       dueDate: (newTask as any).dueDate || null,
-      points: (newTask as any).points ?? 1,
+      points: normalizedTaskPoints,
       ownerUid: currentUser.uid,
       persona: (editedStory as any).persona || (story as any)?.persona || currentPersona || 'personal',
       storyId: story.id,
@@ -194,6 +209,8 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
 
       const selectedGoal = goals.find(g => g.id === editedStory.goalId);
       const normalizedPriority = normalizePriorityValue(editedStory.priority);
+      const parsedStoryPoints = parsePointsValue(editedStory.points);
+      const normalizedStoryPoints = parsedStoryPoints == null ? 1 : parsedStoryPoints;
       const updates: any = {
         title: editedStory.title.trim(),
         description: editedStory.description.trim(),
@@ -201,7 +218,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
         priority: normalizedPriority > 0 ? normalizedPriority : 2,
         status: editedStory.status,
         blocked: !!editedStory.blocked,
-        points: editedStory.points,
+        points: normalizedStoryPoints,
         sprintId: editedStory.sprintId || null,
         persona: editedStory.persona || currentPersona || 'personal',
         acceptanceCriteria: editedStory.acceptanceCriteria.trim()
@@ -240,6 +257,26 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
     }
   };
 
+  const handleDelete = async () => {
+    if (!story) return;
+    const label = story.ref || story.title || story.id;
+    const confirmed = window.confirm(`Delete story "${label}"? This cannot be undone.`);
+    if (!confirmed) return;
+
+    setDeleting(true);
+    setError(null);
+    try {
+      await deleteDoc(doc(db, 'stories', story.id));
+      onStoryUpdated?.();
+      onHide();
+    } catch (err) {
+      console.error('❌ EditStoryModal: Error deleting story:', err);
+      setError('Failed to delete story. Please try again.');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const handleInputChange = (field: string, value: any) => {
     setEditedStory(prev => ({
       ...prev,
@@ -247,16 +284,67 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
     }));
   };
 
+  const handleGenerateTasks = async () => {
+    if (!story || !currentUser || isGeneratingTasks) return;
+    setIsGeneratingTasks(true);
+    setError(null);
+    setAiResult(null);
+    try {
+      let created = 0;
+      let usedFallback = false;
+      try {
+        const fn = httpsCallable(functions, 'generateTasksForStory');
+        const res: any = await fn({ storyId: story.id });
+        created = Number(res?.data?.created ?? res?.data?.tasksCreated ?? 0);
+      } catch {
+        // Fallback to the callable currently deployed in this repo.
+        const alt = httpsCallable(functions, 'orchestrateStoryPlanning');
+        const res: any = await alt({ storyId: story.id, research: false });
+        created = Number(res?.data?.tasksCreated ?? res?.data?.created ?? 0);
+        usedFallback = true;
+      }
+      await reloadLinkedTasks(story);
+      const base = created > 0
+        ? `Generated ${created} tasks for this story.`
+        : 'AI generation completed with no new tasks.';
+      setAiResult(usedFallback ? `${base} (via orchestration)` : base);
+    } catch (err: any) {
+      console.error('AI task generation failed', err);
+      setError(err?.message || 'Failed to generate tasks for this story.');
+    } finally {
+      setIsGeneratingTasks(false);
+    }
+  };
+
   return (
     <Modal show={show} onHide={onHide} size="xl" container={container || undefined} fullscreen="lg-down" scrollable>
       <Modal.Header closeButton>
-        <Modal.Title>Edit Story: {story?.ref}</Modal.Title>
+        <div className="d-flex w-100 align-items-center justify-content-between gap-2">
+          <Modal.Title>Edit Story: {story?.ref}</Modal.Title>
+          {story && (
+            <Button
+              variant="outline-primary"
+              size="sm"
+              onClick={handleGenerateTasks}
+              disabled={isGeneratingTasks || loading || deleting}
+              title="Auto-generate tasks for this story"
+            >
+              <Wand2 size={14} className="me-1" />
+              {isGeneratingTasks ? 'Generating...' : 'AI Tasks'}
+            </Button>
+          )}
+        </div>
       </Modal.Header>
 
       <Modal.Body>
         {error && (
           <Alert variant="danger" onClose={() => setError(null)} dismissible>
             {error}
+          </Alert>
+        )}
+        {aiResult && (
+          <Alert variant="success" onClose={() => setAiResult(null)} dismissible>
+            {aiResult}
           </Alert>
         )}
 
@@ -281,10 +369,10 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
                     <Form.Label>Story Points</Form.Label>
                     <Form.Control
                       type="number"
-                      min="0"
-                      max="21"
+                      step="any"
+                      inputMode="decimal"
                       value={editedStory.points}
-                      onChange={(e) => handleInputChange('points', parseInt(e.target.value) || 0)}
+                      onChange={(e) => handleInputChange('points', e.target.value)}
                     />
                   </Form.Group>
                 </Col>
@@ -468,10 +556,15 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
       </Modal.Body>
 
       <Modal.Footer>
-        <Button variant="secondary" onClick={onHide} disabled={loading}>
+        {story && (
+          <Button variant="outline-danger" onClick={handleDelete} disabled={loading || deleting}>
+            {deleting ? 'Deleting...' : 'Delete Story'}
+          </Button>
+        )}
+        <Button variant="secondary" onClick={onHide} disabled={loading || deleting}>
           Cancel
         </Button>
-        <Button variant="primary" onClick={handleSave} disabled={loading}>
+        <Button variant="primary" onClick={handleSave} disabled={loading || deleting}>
           {loading ? 'Saving...' : 'Save Changes'}
         </Button>
       </Modal.Footer>

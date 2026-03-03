@@ -16,6 +16,8 @@ import ModernTaskTable from './ModernTaskTable';
 import { usePersona } from '../contexts/PersonaContext';
 import { useSprint } from '../contexts/SprintContext';
 import { cascadeGoalPersona } from '../utils/personaCascade';
+import { parsePointsValue } from '../utils/points';
+import { Wand2 } from 'lucide-react';
 
 interface EditGoalModalProps {
   goal: Goal | null;
@@ -73,6 +75,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
   });
   const [durationDays, setDurationDays] = useState<number | ''>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [submitResult, setSubmitResult] = useState<string | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const { themes } = useGlobalThemes();
@@ -112,6 +115,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
   const [linkedTasks, setLinkedTasks] = useState<Task[]>([]);
   const [storiesLoading, setStoriesLoading] = useState(false);
   const [tasksLoading, setTasksLoading] = useState(false);
+  const [isGeneratingStories, setIsGeneratingStories] = useState(false);
   const sizes = [
     { value: 'XS', label: 'XS - Quick (1-10 hours)', hours: 5 },
     { value: 'S', label: 'S - Small (10-40 hours)', hours: 25 },
@@ -191,41 +195,46 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
 
   const activePersona = (formData.persona || (goal as any)?.persona || currentPersona || 'personal') as 'personal' | 'work';
 
-  useEffect(() => {
-    const loadLinkedStories = async () => {
-      if (!show || !goal || !currentUserId) {
-        setLinkedStories([]);
-        return;
-      }
-      setStoriesLoading(true);
+  const reloadLinkedStories = useCallback(async () => {
+    if (!goal || !currentUserId) {
+      setLinkedStories([]);
+      return;
+    }
+    setStoriesLoading(true);
+    try {
+      let list: Story[] = [];
       try {
-        let list: Story[] = [];
-        try {
-          const baseQuery = query(
-            collection(db, 'stories'),
-            where('ownerUid', '==', currentUserId),
-            where('goalId', '==', goal.id)
-          );
-          const snap = await getDocs(baseQuery);
-          list = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Story[];
-        } catch (err) {
-          const fallback = await getDocs(query(collection(db, 'stories'), where('ownerUid', '==', currentUserId)));
-          list = fallback.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Story[];
-          list = list.filter((story) => story.goalId === goal.id);
-        }
-        if (activePersona) {
-          list = list.filter((story) => !story.persona || story.persona === activePersona);
-        }
-        setLinkedStories(list);
+        const baseQuery = query(
+          collection(db, 'stories'),
+          where('ownerUid', '==', currentUserId),
+          where('goalId', '==', goal.id)
+        );
+        const snap = await getDocs(baseQuery);
+        list = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Story[];
       } catch (err) {
-        console.error('Failed to load linked stories', err);
-        setLinkedStories([]);
-      } finally {
-        setStoriesLoading(false);
+        const fallback = await getDocs(query(collection(db, 'stories'), where('ownerUid', '==', currentUserId)));
+        list = fallback.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Story[];
+        list = list.filter((story) => story.goalId === goal.id);
       }
-    };
-    loadLinkedStories();
-  }, [show, goal?.id, currentUserId, activePersona]);
+      if (activePersona) {
+        list = list.filter((story) => !story.persona || story.persona === activePersona);
+      }
+      setLinkedStories(list);
+    } catch (err) {
+      console.error('Failed to load linked stories', err);
+      setLinkedStories([]);
+    } finally {
+      setStoriesLoading(false);
+    }
+  }, [goal, currentUserId, activePersona]);
+
+  useEffect(() => {
+    if (!show) {
+      setLinkedStories([]);
+      return;
+    }
+    reloadLinkedStories();
+  }, [show, reloadLinkedStories]);
 
   useEffect(() => {
     const loadLinkedTasks = async () => {
@@ -276,8 +285,11 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
 
   const handleStoryAdd = async (storyData: Omit<Story, 'ref' | 'id' | 'updatedAt' | 'createdAt'>) => {
     if (!goal) return;
+    const parsedStoryPoints = parsePointsValue((storyData as any).points);
+    const normalizedStoryPoints = parsedStoryPoints == null ? 1 : parsedStoryPoints;
     const payload: any = {
       ...storyData,
+      points: normalizedStoryPoints,
       goalId: storyData.goalId || goal.id,
       ownerUid: currentUserId,
       persona: activePersona || 'personal',
@@ -314,6 +326,8 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
     if (!goal) return;
     const storyId = (newTask as any).storyId || null;
     const linkedStory = storyId ? linkedStories.find((story) => story.id === storyId) : null;
+    const parsedTaskPoints = parsePointsValue((newTask as any).points);
+    const normalizedTaskPoints = parsedTaskPoints == null ? 1 : parsedTaskPoints;
     const payload: any = {
       title: newTask.title || '',
       description: newTask.description || '',
@@ -321,7 +335,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
       priority: (newTask as any).priority ?? 2,
       effort: (newTask as any).effort ?? 'M',
       dueDate: (newTask as any).dueDate || null,
-      points: (newTask as any).points ?? 1,
+      points: normalizedTaskPoints,
       ownerUid: currentUserId,
       persona: activePersona || 'personal',
       goalId: linkedStory?.goalId || goal.id,
@@ -647,6 +661,48 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
     onClose();
   };
 
+  const handleDelete = async () => {
+    if (!goal || isDeleting) return;
+    const label = (goal as any).ref || goal.title || goal.id;
+    const confirmed = window.confirm(`Delete goal "${label}"? This cannot be undone.`);
+    if (!confirmed) return;
+
+    setIsDeleting(true);
+    setSubmitResult(null);
+    try {
+      await deleteDoc(doc(db, 'goals', goal.id));
+      setToastMsg('Goal deleted');
+      onClose();
+    } catch (error: any) {
+      console.error('❌ EditGoalModal: Delete failed', error);
+      setSubmitResult(`❌ Failed to delete goal: ${error?.message || 'Unknown error'}`);
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const handleGenerateStories = async () => {
+    if (!goal || isGeneratingStories) return;
+    setIsGeneratingStories(true);
+    setSubmitResult(null);
+    try {
+      const callable = httpsCallable(functions, 'generateStoriesForGoal');
+      const resp: any = await callable({ goalId: goal.id });
+      const created = Number(resp?.data?.created ?? 0);
+      setSubmitResult(
+        created > 0
+          ? `✅ Generated ${created} stories for "${goal.title}".`
+          : '✅ AI generation completed with no new stories.'
+      );
+      await reloadLinkedStories();
+    } catch (error: any) {
+      console.error('generateStoriesForGoal failed', error);
+      setSubmitResult(`❌ Failed to generate stories: ${error?.message || 'Unknown error'}`);
+    } finally {
+      setIsGeneratingStories(false);
+    }
+  };
+
   // if (!goal) return null; // Removed to allow create mode
 
   return (
@@ -657,7 +713,21 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         </Toast>
       </ToastContainer>
       <Modal.Header closeButton>
-        <Modal.Title>{goal ? `Edit Goal: ${goal.title}` : 'Create New Goal'}</Modal.Title>
+        <div className="d-flex w-100 align-items-center justify-content-between gap-2">
+          <Modal.Title>{goal ? `Edit Goal: ${goal.title}` : 'Create New Goal'}</Modal.Title>
+          {goal && (
+            <Button
+              variant="outline-primary"
+              size="sm"
+              onClick={handleGenerateStories}
+              disabled={isGeneratingStories || isSubmitting || isDeleting}
+              title="Auto-generate stories for this goal"
+            >
+              <Wand2 size={14} className="me-1" />
+              {isGeneratingStories ? 'Generating...' : 'AI Stories'}
+            </Button>
+          )}
+        </div>
       </Modal.Header>
       <Modal.Body>
         <div className="row g-3">
@@ -1085,13 +1155,18 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         )}
       </Modal.Body>
       <Modal.Footer>
-        <Button variant="secondary" onClick={handleClose}>
+        {goal && (
+          <Button variant="danger" onClick={handleDelete} disabled={isSubmitting || isDeleting}>
+            {isDeleting ? 'Deleting...' : 'Delete Goal'}
+          </Button>
+        )}
+        <Button variant="secondary" onClick={handleClose} disabled={isSubmitting || isDeleting}>
           Cancel
         </Button>
         <Button
           variant="primary"
           onClick={handleSubmit}
-          disabled={isSubmitting || !formData.title.trim()}
+          disabled={isSubmitting || isDeleting || !formData.title.trim()}
         >
           {isSubmitting ? (goal ? 'Updating...' : 'Creating...') : (goal ? 'Update Goal' : 'Create Goal')}
         </Button>

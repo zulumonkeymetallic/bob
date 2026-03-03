@@ -52,6 +52,20 @@ import { themeVars, rgbaCard } from '../utils/themeVars';
 interface GoalTableRow extends Goal {
   storiesCount?: number;
   sprintStoriesCount?: number;
+  kpiStatus?: string;
+  kpiProgress?: string;
+  kpiSummary?: string;
+}
+
+interface GoalKpiStatusRow {
+  goalId: string;
+  goalTitle: string;
+  kpiSummary: string;
+  progressPct: number | null;
+  expectedProgressPct: number | null;
+  statusLabel: 'On target' | 'Behind' | 'No KPI';
+  statusTone: 'success' | 'danger' | 'muted';
+  reason: string;
 }
 
 interface Column {
@@ -73,6 +87,7 @@ interface ModernGoalsTableProps {
   onGoalReorder?: (activeId: string, overId: string) => Promise<void>;
   highlightStoryId?: string;
   highlightGoalId?: string;
+  goalKpiStatusByGoalId?: Record<string, GoalKpiStatusRow>;
 }
 
 const defaultColumns: Column[] = [
@@ -143,6 +158,30 @@ const defaultColumns: Column[] = [
     type: 'number'
   },
   {
+    key: 'kpiStatus',
+    label: 'KPI Status',
+    width: '10%',
+    visible: true,
+    editable: false,
+    type: 'text'
+  },
+  {
+    key: 'kpiProgress',
+    label: 'KPI Progress',
+    width: '12%',
+    visible: true,
+    editable: false,
+    type: 'text'
+  },
+  {
+    key: 'kpiSummary',
+    label: 'KPI Metric',
+    width: '22%',
+    visible: false,
+    editable: false,
+    type: 'text'
+  },
+  {
     key: 'startDate',
     label: 'Start Date',
     width: '14%',
@@ -189,6 +228,7 @@ interface SortableRowProps {
   sprintStoryCounts: Record<string, number>;
   storyPointsData: Record<string, { total: number; completed: number; progress: number }>;
   habitAdherenceData: Record<string, { planned: number; completed: number; progress: number }>;
+  goalKpiStatusByGoalId?: Record<string, GoalKpiStatusRow>;
   highlightStoryId?: string;
 }
 
@@ -213,6 +253,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
   sprintStoryCounts,
   storyPointsData,
   habitAdherenceData,
+  goalKpiStatusByGoalId,
   highlightStoryId
 }) => {
   const { isDark, colors, backgrounds } = useThemeAwareColors();
@@ -398,6 +439,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
   };
 
   const formatValue = (key: string, value: any): string => {
+    const goalKpi = goalKpiStatusByGoalId?.[goal.id];
     if (key === 'startDate' || key === 'endDate' || key === 'targetDate') {
       return formatDateForDisplay(value);
     }
@@ -423,6 +465,16 @@ const SortableRow: React.FC<SortableRowProps> = ({
       if (!components.length) return '0%';
       const combined = Math.round(components.reduce((a, b) => a + b, 0) / components.length);
       return `${combined}% (${parts.join(' · ')})`;
+    }
+    if (key === 'kpiStatus') {
+      return goalKpi?.statusLabel || 'No KPI';
+    }
+    if (key === 'kpiProgress') {
+      if (!goalKpi || goalKpi.progressPct == null) return 'n/a';
+      return `${Math.round(goalKpi.progressPct)}%${goalKpi.expectedProgressPct != null ? ` (exp ${Math.round(goalKpi.expectedProgressPct)}%)` : ''}`;
+    }
+    if (key === 'kpiSummary') {
+      return goalKpi?.kpiSummary || 'No KPI attached';
     }
     if (key === 'status') {
       return getStatusName(value);
@@ -590,7 +642,16 @@ const SortableRow: React.FC<SortableRowProps> = ({
         <div style={{
           minHeight: '20px',
           fontSize: '14px',
-          color: column.key === 'ref' ? ('var(--green)' as string) : (themeVars.text as string),
+          color: (() => {
+            if (column.key === 'ref') return 'var(--green)';
+            if (column.key === 'kpiStatus') {
+              const tone = goalKpiStatusByGoalId?.[goal.id]?.statusTone;
+              if (tone === 'success') return '#059669';
+              if (tone === 'danger') return '#dc2626';
+              return themeVars.muted as string;
+            }
+            return themeVars.text as string;
+          })(),
           fontWeight: column.key === 'ref' ? '600' : 'normal',
           fontFamily: column.key === 'ref' ? 'monospace' : 'inherit',
           wordBreak: 'break-word',
@@ -598,6 +659,14 @@ const SortableRow: React.FC<SortableRowProps> = ({
           lineHeight: '1.4',
         }}>
           {(() => {
+            if (column.key === 'kpiStatus' || column.key === 'kpiProgress' || column.key === 'kpiSummary') {
+              const goalKpi = goalKpiStatusByGoalId?.[goal.id];
+              return (
+                <span title={goalKpi?.reason || 'No KPI attached'}>
+                  {formatValue(column.key, value)}
+                </span>
+              );
+            }
             if (column.key === 'theme') {
               const themeId = value as unknown as number;
               const theme = globalThemes.find(t => t.id === themeId);
@@ -859,6 +928,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
   onGoalReorder,
   highlightStoryId,
   highlightGoalId,
+  goalKpiStatusByGoalId,
 }) => {
   const { isDark, colors, backgrounds } = useThemeAwareColors();
   const [columns, setColumns] = useState<Column[]>(defaultColumns);
@@ -1029,7 +1099,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
           pointsData[gid] = { total: 0, completed: 0, progress: 0 };
         }
 
-        const points = s.points || 0;
+        const points = Number.isFinite(Number(s.points)) ? Number(s.points) : 0;
         pointsData[gid].total += points;
 
         // Story status 4 = Done
@@ -1449,6 +1519,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
                       sprintStoryCounts={sprintStoryCounts}
                       storyPointsData={storyPointsData}
                       habitAdherenceData={habitAdherenceData}
+                      goalKpiStatusByGoalId={goalKpiStatusByGoalId}
                       globalThemes={globalThemes}
                       availableGoals={allGoals}
                       expandedGoalId={expandedGoalId}

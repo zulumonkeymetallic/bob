@@ -64,8 +64,14 @@ const SettingsPage: React.FC = () => {
   const [parkrunDefaultEventSlug, setParkrunDefaultEventSlug] = useState('');
   const [parkrunDefaultStartRun, setParkrunDefaultStartRun] = useState<string>('');
   const [parkrunAutoComputePercentiles, setParkrunAutoComputePercentiles] = useState(false);
+  const [parkrunApiUsername, setParkrunApiUsername] = useState('');
+  const [parkrunApiPassword, setParkrunApiPassword] = useState('');
+  const [parkrunApiConnecting, setParkrunApiConnecting] = useState(false);
+  const [parkrunApiMsg, setParkrunApiMsg] = useState('');
+  const [parkrunApiError, setParkrunApiError] = useState('');
   const [autoEnrichStravaHR, setAutoEnrichStravaHR] = useState(false);
   const [autoComputeFitnessMetrics, setAutoComputeFitnessMetrics] = useState(false);
+  const [excludeWithDadFromMetrics, setExcludeWithDadFromMetrics] = useState(true);
   const [locationName, setLocationName] = useState('');
   const [locationLat, setLocationLat] = useState<string>('');
   const [locationLon, setLocationLon] = useState<string>('');
@@ -260,13 +266,15 @@ const SettingsPage: React.FC = () => {
       if (profileSnap.exists()) {
         const p = profileSnap.data() as any;
           setParkrunAthleteId(p.parkrunAthleteId || '');
-          setParkrunAutoSync(!!p.parkrunAutoSync);
-          setStravaAutoSync(!!p.stravaAutoSync);
+          setParkrunAutoSync(p.parkrunAutoSync !== false);
+          setStravaAutoSync(p.stravaAutoSync !== false);
           setParkrunDefaultEventSlug(p.parkrunDefaultEventSlug || '');
           setParkrunDefaultStartRun(p.parkrunDefaultStartRun ? String(p.parkrunDefaultStartRun) : '');
-          setParkrunAutoComputePercentiles(!!p.parkrunAutoComputePercentiles);
-          setAutoEnrichStravaHR(!!p.autoEnrichStravaHR);
-        setAutoComputeFitnessMetrics(!!p.autoComputeFitnessMetrics);
+          setParkrunAutoComputePercentiles(p.parkrunAutoComputePercentiles !== false);
+          setParkrunApiUsername(p.parkrunApiUsername || '');
+          setAutoEnrichStravaHR(p.autoEnrichStravaHR !== false);
+        setAutoComputeFitnessMetrics(p.autoComputeFitnessMetrics !== false);
+        setExcludeWithDadFromMetrics(p.excludeWithDadFromMetrics !== false);
         setMonzoConnected(!!p.monzoConnected);
         setLocationName(p.locationName || '');
         setLocationLat(p.locationLat != null ? String(p.locationLat) : '');
@@ -386,6 +394,32 @@ const SettingsPage: React.FC = () => {
       const res: any = await callable({ accountId: monzoAccountId });
       alert(`Synced ${res?.data?.count || 0} transactions`);
     } catch (e) { alert('Monzo sync failed: ' + ((e as any)?.message || 'unknown')); }
+  };
+
+  const handleConnectParkrunApi = async () => {
+    if (!parkrunApiUsername || !parkrunApiPassword) {
+      setParkrunApiError('Enter Parkrun username and password first.');
+      return;
+    }
+    setParkrunApiConnecting(true);
+    setParkrunApiMsg('');
+    setParkrunApiError('');
+    try {
+      const fn = httpsCallable(functions, 'connectParkrunApi');
+      const res: any = await fn({
+        username: parkrunApiUsername.trim(),
+        password: parkrunApiPassword,
+        athleteId: parkrunAthleteId ? Number(parkrunAthleteId) : null,
+      });
+      const connectedAthlete = res?.data?.athleteId ? String(res.data.athleteId) : '';
+      if (!parkrunAthleteId && connectedAthlete) setParkrunAthleteId(connectedAthlete);
+      setParkrunApiPassword('');
+      setParkrunApiMsg(`Connected Parkrun API${connectedAthlete ? ` (athlete ${connectedAthlete})` : ''}.`);
+    } catch (e: any) {
+      setParkrunApiError(e?.message || 'Failed to connect Parkrun API');
+    } finally {
+      setParkrunApiConnecting(false);
+    }
   };
 
   // Save global theme configuration
@@ -686,7 +720,7 @@ const SettingsPage: React.FC = () => {
                     <p className="text-muted mb-2">Manage budgets, categories, and merchant mappings in the Finance section.</p>
                     <div className="d-flex gap-2 flex-wrap">
                       <a className="btn btn-outline-secondary btn-sm" href="/finance/budgets">Open Budgets</a>
-                      <a className="btn btn-outline-secondary btn-sm" href="/finance/categories">Open Categories</a>
+                      <a className="btn btn-outline-secondary btn-sm" href="/finance/transactions">Open Transactions</a>
                       <a className="btn btn-outline-secondary btn-sm" href="/finance/merchants">Open Merchants</a>
                     </div>
                   </Card.Body>
@@ -1099,7 +1133,8 @@ firebase deploy --only functions:remindersPush,functions:remindersPull --project
                                     parkrunDefaultStartRun: parkrunDefaultStartRun ? Number(parkrunDefaultStartRun) : null,
                                     parkrunAutoComputePercentiles,
                                     autoEnrichStravaHR,
-                                    autoComputeFitnessMetrics
+                                    autoComputeFitnessMetrics,
+                                    excludeWithDadFromMetrics
                                   }, { merge: true });
                                   setSaveProfileMsg('Saved');
                                   setTimeout(() => setSaveProfileMsg(''), 2500);
@@ -1118,6 +1153,45 @@ firebase deploy --only functions:remindersPush,functions:remindersPull --project
                             {saveProfileError && <span className="text-danger">{saveProfileError}</span>}
                           </Col>
                         </Row>
+                        <hr />
+                        <Row className="g-3 align-items-end">
+                          <Col md={4}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Parkrun Account Username</Form.Label>
+                              <Form.Control
+                                type="text"
+                                placeholder="Parkrun username/email"
+                                value={parkrunApiUsername}
+                                onChange={(e) => setParkrunApiUsername(e.target.value)}
+                              />
+                            </Form.Group>
+                          </Col>
+                          <Col md={3}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Parkrun Password</Form.Label>
+                              <Form.Control
+                                type="password"
+                                placeholder="••••••••"
+                                value={parkrunApiPassword}
+                                onChange={(e) => setParkrunApiPassword(e.target.value)}
+                              />
+                            </Form.Group>
+                          </Col>
+                          <Col md={5} className="d-flex gap-2">
+                            <Button variant="outline-primary" disabled={parkrunApiConnecting} onClick={handleConnectParkrunApi}>
+                              {parkrunApiConnecting ? 'Connecting…' : 'Connect Parkrun API'}
+                            </Button>
+                          </Col>
+                        </Row>
+                        {(parkrunApiMsg || parkrunApiError) && (
+                          <div className="mt-2">
+                            {parkrunApiMsg && <div className="text-success small">{parkrunApiMsg}</div>}
+                            {parkrunApiError && <div className="text-danger small">{parkrunApiError}</div>}
+                          </div>
+                        )}
+                        <div className="text-muted small mt-2">
+                          Required once because Parkrun blocks direct HTML scraping from Cloud Run. Token refresh and scheduled sync are automatic after connection.
+                        </div>
                       </Card.Body>
                     </Card>
 
@@ -1126,10 +1200,10 @@ firebase deploy --only functions:remindersPush,functions:remindersPull --project
                         <h6 className="mb-2">Automation</h6>
                         <Row className="g-3">
                           <Col md={6}>
-                            <Form.Check type="checkbox" label="Auto-sync Parkrun (daily)" checked={parkrunAutoSync} onChange={(e)=>setParkrunAutoSync(e.target.checked)} />
+                            <Form.Check type="checkbox" label="Auto-sync Parkrun (weekly, Sat 14:00 UK)" checked={parkrunAutoSync} onChange={(e)=>setParkrunAutoSync(e.target.checked)} />
                           </Col>
                           <Col md={6}>
-                            <Form.Check type="checkbox" label="Auto-sync Strava (daily)" checked={stravaAutoSync} onChange={(e)=>setStravaAutoSync(e.target.checked)} />
+                            <Form.Check type="checkbox" label="Auto-sync Strava (daily, 03:00 UK)" checked={stravaAutoSync} onChange={(e)=>setStravaAutoSync(e.target.checked)} />
                           </Col>
                           <Col md={6}>
                             <Form.Check type="checkbox" label="Auto-compute Parkrun percentiles" checked={parkrunAutoComputePercentiles} onChange={(e)=>setParkrunAutoComputePercentiles(e.target.checked)} />
@@ -1139,6 +1213,9 @@ firebase deploy --only functions:remindersPush,functions:remindersPull --project
                           </Col>
                           <Col md={6}>
                             <Form.Check type="checkbox" label="Auto-compute Fitness Overview/Analysis" checked={autoComputeFitnessMetrics} onChange={(e)=>setAutoComputeFitnessMetrics(e.target.checked)} />
+                          </Col>
+                          <Col md={6}>
+                            <Form.Check type="checkbox" label="Exclude workouts with 'dad' in title/name/event from fitness metrics (default on)" checked={excludeWithDadFromMetrics} onChange={(e)=>setExcludeWithDadFromMetrics(e.target.checked)} />
                           </Col>
                         </Row>
                         <Row className="g-3 mt-2">

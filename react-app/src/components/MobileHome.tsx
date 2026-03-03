@@ -369,9 +369,7 @@ const MobileHome: React.FC = () => {
   }, [normalizeAiScore]);
 
   const isTop3Task = useCallback((task: Task) => {
-    const flagged = (task as any).aiTop3ForDay === true
-      || (task as any).aiFlaggedTop === true
-      || Number((task as any).aiPriorityRank || 0) > 0;
+    const flagged = (task as any).aiTop3ForDay === true;
     if (!flagged) return false;
     const aiDate = (task as any).aiTop3Date;
     if (!aiDate) return true;
@@ -379,8 +377,7 @@ const MobileHome: React.FC = () => {
   }, [todayIso]);
 
   const isTop3Story = useCallback((story: Story) => {
-    const flagged = (story as any).aiTop3ForDay === true
-      || Number((story as any).aiFocusStoryRank || 0) > 0;
+    const flagged = (story as any).aiTop3ForDay === true;
     if (!flagged) return false;
     const aiDate = (story as any).aiTop3Date;
     if (!aiDate) return true;

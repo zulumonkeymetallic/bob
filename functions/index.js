@@ -77,6 +77,12 @@ const MS_IN_WEEK = 7 * MS_IN_DAY;
 const TASK_TTL_DAYS = Number(process.env.TASK_TTL_DAYS || 7);
 const SPRINT_NONE = '__none__';
 
+function clampStoryPoints(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) return null;
+  return numeric;
+}
+
 // Import the daily digest generator
 const { generateDailyDigest } = require("./dailyDigestGenerator");
 
@@ -172,6 +178,16 @@ exports.updateGoalTargetYears = schedulerV2.onSchedule(
 functionsV2.setGlobalOptions({ region: "europe-west2", maxInstances: 10 });
 admin.initializeApp();
 
+try {
+  const transcriptIngestion = require('./transcriptIngestion');
+  if (transcriptIngestion) {
+    exports.ingestTranscript = transcriptIngestion.ingestTranscript;
+    exports.ingestTranscriptHttp = transcriptIngestion.ingestTranscriptHttp;
+  }
+} catch (e) {
+  console.warn('[init] transcriptIngestion not loaded', e?.message || e);
+}
+
 // Secrets
 // Google AI Studio (Gemini)
 const GOOGLE_AI_STUDIO_API_KEY = defineSecret("GOOGLEAISTUDIOAPIKEY");
@@ -232,6 +248,10 @@ const CHORE_DUE_ROLLOVER_DAYS = 3;
 const CHORE_DUE_ROLLOVER_MS = CHORE_DUE_ROLLOVER_DAYS * 24 * 60 * 60 * 1000;
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
 const AI_PRIORITY_MODEL = GEMINI_MODEL;
+const PARKRUN_API_BASE = String(process.env.PARKRUN_API_BASE || 'https://api.parkrun.com').trim().replace(/\/+$/, '');
+const PARKRUN_API_CLIENT_ID = String(process.env.PARKRUN_API_CLIENT_ID || 'netdreams-iphone-s01').trim();
+const PARKRUN_API_CLIENT_SECRET = String(process.env.PARKRUN_API_CLIENT_SECRET || 'gfKbDD6NJkYoFmkisR(iVFopQCKWzbQeQgZAZZKK').trim();
+const PARKRUN_API_USER_AGENT = String(process.env.PARKRUN_API_USER_AGENT || 'parkrun/1.2.7 CFNetwork/1121.2.2 Darwin/19.3.0').trim();
 
 function toMillis(value) {
   if (!value && value !== 0) return null;
@@ -448,7 +468,7 @@ function durationMinutesFromTask(task) {
   const isChoreLike = ['chore', 'routine', 'habit'].includes(type);
   const choreMin = 10;
   if (estimateMin > 0) return Math.min(180, Math.max(isChoreLike ? choreMin : 15, Math.round(estimateMin)));
-  if (points > 0) return Math.min(240, Math.max(isChoreLike ? choreMin : 30, Math.round(points * 30)));
+  if (points > 0) return Math.min(480, Math.max(isChoreLike ? choreMin : 30, Math.round(points * 60)));
   return isChoreLike ? choreMin : 30;
 }
 
@@ -1235,7 +1255,7 @@ exports.enhanceNewTask = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY], m
     const user = [
       'Given this task title and description, do two things:',
       '1. Fix any spelling/grammar errors in the title (keep it concise)',
-      '2. Estimate the effort in story points (1=trivial, 2=small, 3=medium, 5=large, 8=very large)',
+      '2. Estimate effort points as a number (decimals allowed in 0.25 increments, range 0.25-8)',
       '',
       `Title: "${task.title || ''}"`,
       `Description: "${(task.description || '').slice(0, 400)}"`,
@@ -1250,8 +1270,9 @@ exports.enhanceNewTask = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY], m
       patch.title = correctedTitle;
       patch.titleCorrectedByAi = true;
     }
-    if (obj.points && Number(obj.points) > 0 && !(Number(task.points) > 0)) {
-      estimatedPoints = Math.max(1, Math.min(13, Math.round(Number(obj.points))));
+    const normalizedEstimatePoints = clampTaskPoints(obj.points);
+    if (normalizedEstimatePoints != null && !(Number(task.points) > 0)) {
+      estimatedPoints = normalizedEstimatePoints;
       patch.points = estimatedPoints;
       patch.pointsEstimatedByAi = true;
     }
@@ -3280,8 +3301,26 @@ exports.reconcilePlanFromGoogleCalendar = httpsV2.onCall({ secrets: [GOOGLE_OAUT
 // ===== Utilities
 async function fetchJson(url, opts = {}) {
   const res = await fetch(url, opts);
-  if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
-  return res.json();
+  const text = await res.text();
+  let parsed = null;
+  if (text) {
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = null;
+    }
+  }
+  if (!res.ok) {
+    const detail = parsed?.message || parsed?.error || text || `HTTP ${res.status}`;
+    const err = new Error(`HTTP ${res.status}: ${detail}`);
+    err.status = res.status;
+    err.body = text;
+    err.parsed = parsed;
+    throw err;
+  }
+  if (!text) return null;
+  if (parsed != null) return parsed;
+  return JSON.parse(text);
 }
 
 function stateEncode(obj) {
@@ -3289,6 +3328,12 @@ function stateEncode(obj) {
 }
 function stateDecode(s) {
   try { return JSON.parse(Buffer.from(String(s || ""), "base64url").toString("utf8")); } catch { return {}; }
+}
+
+function envTrim(name, fallback = '') {
+  const raw = process.env?.[name];
+  if (raw == null) return String(fallback || '').trim();
+  return String(raw).trim();
 }
 
 const MONZO_KMS_ENV_KEYS = ['MONZO_KMS_KEY', 'MONZO_TOKEN_KMS_KEY'];
@@ -3536,7 +3581,10 @@ exports.oauthStart = httpsV2.onRequest({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGL
     }
 
     const state = stateEncode({ uid, nonce });
-    const scope = encodeURIComponent("https://www.googleapis.com/auth/calendar");
+    const scope = encodeURIComponent([
+      'https://www.googleapis.com/auth/calendar',
+      'https://www.googleapis.com/auth/documents',
+    ].join(' '));
     const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&access_type=offline&include_granted_scopes=true&prompt=consent&scope=${scope}&state=${state}`;
     res.redirect(authUrl);
   } catch (e) {
@@ -4428,11 +4476,12 @@ exports.stravaOAuthStart = httpsV2.onRequest({ secrets: [STRAVA_CLIENT_ID], invo
     if (!uid || !nonce) return res.status(400).send("Missing uid/nonce");
     const projectId = process.env.GCLOUD_PROJECT;
     const region = "europe-west2";
-    const configuredHost = process.env.STRAVA_REDIRECT_HOST; // optional override, e.g., bob.jc1.tech
+    const configuredHost = envTrim('STRAVA_REDIRECT_HOST'); // optional override, e.g., bob.jc1.tech
     const host = String(req.get('host') || '');
     const baseHost = configuredHost || host || `${region}-${projectId}.cloudfunctions.net`;
     const redirectUri = `https://${baseHost}/stravaOAuthCallback`;
-    const clientId = process.env.STRAVA_CLIENT_ID;
+    const clientId = envTrim('STRAVA_CLIENT_ID');
+    if (!clientId) return res.status(500).send('Missing STRAVA_CLIENT_ID secret');
     const state = stateEncode({ uid, nonce });
     const scope = encodeURIComponent("read,activity:read");
     const authUrl = `https://www.strava.com/oauth/authorize?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${scope}&state=${state}`;
@@ -4452,18 +4501,22 @@ exports.stravaOAuthCallback = httpsV2.onRequest({ secrets: [STRAVA_CLIENT_ID, ST
 
     const projectId = process.env.GCLOUD_PROJECT;
     const region = "europe-west2";
-    const configuredHost = process.env.STRAVA_REDIRECT_HOST; // optional override, e.g., bob.jc1.tech
+    const configuredHost = envTrim('STRAVA_REDIRECT_HOST'); // optional override, e.g., bob.jc1.tech
     const host = String(req.get('host') || '');
     const baseHost = configuredHost || host || `${region}-${projectId}.cloudfunctions.net`;
     const redirectUri = `https://${baseHost}/stravaOAuthCallback`;
+
+    const clientId = envTrim('STRAVA_CLIENT_ID');
+    const clientSecret = envTrim('STRAVA_CLIENT_SECRET');
+    if (!clientId || !clientSecret) return res.status(500).send('Missing STRAVA_CLIENT_ID/STRAVA_CLIENT_SECRET secret');
 
     const tokenData = await fetchJson("https://www.strava.com/oauth/token", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
         code,
-        client_id: process.env.STRAVA_CLIENT_ID,
-        client_secret: process.env.STRAVA_CLIENT_SECRET,
+        client_id: clientId,
+        client_secret: clientSecret,
         redirect_uri: redirectUri,
         grant_type: "authorization_code",
       }).toString(),
@@ -4495,7 +4548,11 @@ exports.stravaOAuthCallback = httpsV2.onRequest({ secrets: [STRAVA_CLIENT_ID, ST
     await db.collection('profiles').doc(uid).set({
       stravaConnected: true,
       stravaAthleteId: athlete.id || null,
-      stravaLastSyncAt: null
+      stravaLastSyncAt: null,
+      stravaLastSyncStatus: 'connected',
+      stravaNeedsReconnect: false,
+      stravaLastErrorAt: admin.firestore.FieldValue.delete(),
+      stravaLastErrorMessage: admin.firestore.FieldValue.delete(),
     }, { merge: true });
 
     res.status(200).send("<script>window.close();</script>Strava connected. You can close this window.");
@@ -9064,7 +9121,7 @@ async function prioritizeTasksForUser({ db, userId, runId = null }) {
     bulk.set(docRef, {
       aiCriticalityScore: Number.isFinite(score) ? Math.max(0, Math.min(100, score)) : null,
       aiPriorityBucket: bucket,
-      aiPriorityRank: index + 1,
+      aiDailyRank: index + 1,
       aiPriorityUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
       aiPriorityRunId: runId || null,
       aiPriorityScore: admin.firestore.FieldValue.delete(),
@@ -9253,12 +9310,44 @@ async function detectDuplicateRemindersForUser({ db, userId }) {
   return { groupsCreated: created, reminderTasks: reminderTasks.length };
 }
 
-async function requestWorkEstimateFromLLM({ userId, entityType, title, description }) {
+function normalizeAcceptanceCriteriaForSizing(entity = {}) {
+  const raw = entity.acceptanceCriteria
+    ?? entity.acceptance_criteria
+    ?? entity.criteria
+    ?? entity.acceptance
+    ?? null;
+  let values = [];
+  if (Array.isArray(raw)) {
+    values = raw;
+  } else if (raw && typeof raw === 'object') {
+    values = Object.values(raw);
+  } else if (typeof raw === 'string') {
+    values = raw.split('\n').map((line) => line.replace(/^[-*]\s*/, ''));
+  }
+  return values
+    .map((value) => String(value || '').replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .slice(0, 8);
+}
+
+function isActiveSprintStatus(value) {
+  const status = String(value || '').toLowerCase();
+  return ['active', 'current', 'planning', 'in-progress', 'inprogress', '1', '0', 'true'].includes(status);
+}
+
+async function requestWorkEstimateFromLLM({ userId, entityType, title, description, acceptanceCriteria = [] }) {
   const cleanTitle = String(title || 'Work Item').slice(0, 200);
   const cleanDescription = String(description || '').slice(0, 800);
+  const criteria = Array.isArray(acceptanceCriteria)
+    ? acceptanceCriteria
+      .map((item) => String(item || '').replace(/\s+/g, ' ').trim())
+      .filter(Boolean)
+      .slice(0, 8)
+    : [];
   const systemPrompt = [
     'You are an expert agile estimator. Provide realistic sizing for the supplied item.',
     'Express effort where 1 point equals roughly one hour of focused work.',
+    'Use acceptance criteria as primary scope signals when available.',
     'Return ONLY JSON with shape {"hours": number, "points": number, "rationale": string}.',
     'Do not include markdown or prose outside the JSON.',
   ].join('\n');
@@ -9266,7 +9355,9 @@ async function requestWorkEstimateFromLLM({ userId, entityType, title, descripti
     `Type: ${entityType}`,
     `Title: ${cleanTitle}`,
     cleanDescription ? `Description: ${cleanDescription}` : null,
+    criteria.length ? `Acceptance Criteria:\n${criteria.map((item, index) => `${index + 1}. ${item}`).join('\n')}` : null,
     'Estimate the focused hours required. Use decimals if needed.',
+    'Use point values in 0.25 increments.',
     'Cap points at 8 even if hours exceed that; still include real hours.'
   ].filter(Boolean).join('\n');
 
@@ -9291,7 +9382,7 @@ async function requestWorkEstimateFromLLM({ userId, entityType, title, descripti
   const pointsRaw = Number(parsed?.points);
   const rationale = String(parsed?.rationale || parsed?.reason || '').slice(0, 280);
   if (!Number.isFinite(hours) || hours <= 0) return null;
-  const estimatedPoints = clampTaskPoints(pointsRaw) ?? clampTaskPoints(hours) ?? Math.max(1, Math.round(hours));
+  const estimatedPoints = clampTaskPoints(pointsRaw) ?? clampTaskPoints(hours) ?? 1;
   return {
     hours,
     points: estimatedPoints,
@@ -9299,12 +9390,26 @@ async function requestWorkEstimateFromLLM({ userId, entityType, title, descripti
   };
 }
 
-async function ensureLlmSizingForUser({ db, userId, runId, taskLimit = 4, storyLimit = 3 }) {
+async function ensureLlmSizingForUser({
+  db,
+  userId,
+  runId,
+  taskLimit = Number.POSITIVE_INFINITY,
+  storyLimit = Number.POSITIVE_INFINITY,
+}) {
   const serverNow = admin.firestore.FieldValue.serverTimestamp();
+  const sprintsSnap = await db.collection('sprints')
+    .where('ownerUid', '==', userId)
+    .get()
+    .catch(() => ({ docs: [] }));
+  const activeSprintIds = new Set(
+    sprintsSnap.docs
+      .filter((doc) => isActiveSprintStatus(doc.data()?.status))
+      .map((doc) => doc.id),
+  );
+
   const tasksSnap = await db.collection('tasks')
     .where('ownerUid', '==', userId)
-    .orderBy('updatedAt', 'desc')
-    .limit(75)
     .get()
     .catch(() => ({ empty: true, docs: [] }));
 
@@ -9312,12 +9417,11 @@ async function ensureLlmSizingForUser({ db, userId, runId, taskLimit = 4, storyL
     .filter((doc) => {
       const data = doc.data() || {};
       const done = Number(data.status) === 2 || String(data.status).toLowerCase() === 'done';
-      if (done) return false;
-      const hasEstimate = Number.isFinite(Number(data.estimateMin));
-      const hasPoints = Number.isFinite(Number(data.points));
-      return !hasEstimate || !hasPoints;
+      if (done || data.deleted) return false;
+      const hasPoints = Number.isFinite(Number(data.points)) && Number(data.points) > 0;
+      return !hasPoints;
     })
-    .slice(0, taskLimit);
+    .slice(0, Number.isFinite(taskLimit) ? taskLimit : undefined);
 
   const sizedTasks = [];
   for (const docSnap of taskCandidates) {
@@ -9327,6 +9431,7 @@ async function ensureLlmSizingForUser({ db, userId, runId, taskLimit = 4, storyL
       entityType: 'task',
       title: data.title || data.ref || 'Task',
       description: data.description || '',
+      acceptanceCriteria: normalizeAcceptanceCriteriaForSizing(data),
     });
     if (!estimate) continue;
     const estimateMinutes = Math.max(60, Math.round(estimate.hours * 60));
@@ -9347,8 +9452,6 @@ async function ensureLlmSizingForUser({ db, userId, runId, taskLimit = 4, storyL
 
   const storiesSnap = await db.collection('stories')
     .where('ownerUid', '==', userId)
-    .orderBy('updatedAt', 'desc')
-    .limit(60)
     .get()
     .catch(() => ({ empty: true, docs: [] }));
 
@@ -9356,10 +9459,12 @@ async function ensureLlmSizingForUser({ db, userId, runId, taskLimit = 4, storyL
     .filter((doc) => {
       const data = doc.data() || {};
       const done = Number(data.status) === 4 || String(data.status).toLowerCase() === 'done';
-      if (done) return false;
-      return !Number.isFinite(Number(data.points));
+      if (done || data.deleted) return false;
+      if (!data.sprintId || !activeSprintIds.has(data.sprintId)) return false;
+      const hasPoints = Number.isFinite(Number(data.points)) && Number(data.points) > 0;
+      return !hasPoints;
     })
-    .slice(0, storyLimit);
+    .slice(0, Number.isFinite(storyLimit) ? storyLimit : undefined);
 
   const sizedStories = [];
   for (const docSnap of storyCandidates) {
@@ -9369,6 +9474,7 @@ async function ensureLlmSizingForUser({ db, userId, runId, taskLimit = 4, storyL
       entityType: 'story',
       title: data.title || data.ref || 'Story',
       description: data.description || '',
+      acceptanceCriteria: normalizeAcceptanceCriteriaForSizing(data),
     });
     if (!estimate) continue;
     await docSnap.ref.set({
@@ -9915,7 +10021,7 @@ exports.suggestTaskStoryConversions = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDI
         rationale: item.rationale || '',
         goalId,
         goalTitle: goalId ? (goalTitleById[goalId] || summary?.goal?.title || '') : null,
-        points: Number.isFinite(points) ? Math.max(1, Math.min(8, Math.round(points))) : undefined,
+        points: Number.isFinite(points) ? (clampTaskPoints(points) ?? undefined) : undefined,
       };
     })
     .filter(s => s.taskId);
@@ -10001,7 +10107,9 @@ exports.convertTasksToStories = httpsV2.onCall(async (req) => {
       goalId: goalId || null,
       sprintId: sprintId || null,
       priority: conversion?.priority ? Number(conversion.priority) : 2,
-      points: conversion?.points ? Number(conversion.points) : Math.max(1, Math.min(8, Math.round((Number(taskData.estimateMin || 60) || 60) / 60))),
+      points: clampTaskPoints(conversion?.points)
+        ?? clampTaskPoints((Number(taskData.estimateMin || 60) || 60) / 60)
+        ?? 1,
       status: 0,
       theme: theme || taskData.theme || 1,
       persona,
@@ -10731,7 +10839,7 @@ function assembleDailyChecklist(summaryData) {
           const user = [
             'Given this task title and description, do two things:',
             '1. Fix any spelling/grammar errors in the title (keep it concise)',
-            '2. Estimate the effort in story points (1=trivial, 2=small, 3=medium, 5=large, 8=very large)',
+            '2. Estimate effort points as a number (decimals allowed in 0.25 increments, range 0.25-8)',
             '',
             `Title: "${after.title || ''}"`,
             `Description: "${(after.description || '').slice(0, 400)}"`,
@@ -10745,8 +10853,9 @@ function assembleDailyChecklist(summaryData) {
             enhancePatch.title = obj.correctedTitle.trim().slice(0, 200);
             enhancePatch.titleCorrectedByAi = true;
           }
-          if (obj.points && Number(obj.points) > 0 && !(Number(after.points) > 0)) {
-            enhancePatch.points = Math.max(1, Math.min(13, Math.round(Number(obj.points))));
+          const normalizedEnhancePoints = clampTaskPoints(obj.points);
+          if (normalizedEnhancePoints != null && !(Number(after.points) > 0)) {
+            enhancePatch.points = normalizedEnhancePoints;
             enhancePatch.pointsEstimatedByAi = true;
           }
           if (Object.keys(enhancePatch).length > 0) {
@@ -10986,39 +11095,131 @@ async function buildDailyChecklistBriefing({ summaryData, checklist, userId }) {
 }
 
 // ===== Strava Helpers
+const STRAVA_RETRYABLE_STATUS = new Set([408, 409, 425, 429, 500, 502, 503, 504]);
+const sleepMs = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function isStravaAuthError(error) {
+  const msg = String(error?.message || '').toLowerCase();
+  const body = String(error?.body || '').toLowerCase();
+  const status = Number(error?.status || 0);
+  if (status === 401 || status === 403) return true;
+  if (msg.includes('invalid_grant')) return true;
+  if (body.includes('invalid_grant')) return true;
+  if (msg.includes('authorization error')) return true;
+  if (msg.includes('unauthorized')) return true;
+  return false;
+}
+
+function toMillisSafe(value) {
+  if (!value) return null;
+  if (typeof value === 'number') return value > 1e12 ? value : value * 1000;
+  if (typeof value?.toMillis === 'function') return value.toMillis();
+  if (typeof value?.toDate === 'function') {
+    try { return value.toDate().getTime(); } catch { return null; }
+  }
+  const parsed = Date.parse(String(value));
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+async function updateStravaSyncState(uid, patch = {}) {
+  if (!uid) return;
+  const db = admin.firestore();
+  await db.collection('profiles').doc(uid).set({
+    ...patch,
+    stravaUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+}
+
+async function fetchStravaJson(url, opts = {}, {
+  retries = 2,
+  baseDelayMs = 550,
+} = {}) {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await fetchJson(url, opts);
+    } catch (error) {
+      const status = Number(error?.status || 0);
+      const msg = String(error?.message || '').toLowerCase();
+      const networkish = msg.includes('fetch failed') || msg.includes('network') || msg.includes('econn') || msg.includes('etimedout');
+      const retryable = STRAVA_RETRYABLE_STATUS.has(status) || networkish;
+      if (!retryable || attempt >= retries) throw error;
+      const jitter = Math.floor(Math.random() * 250);
+      const delay = Math.min(8000, Math.round(baseDelayMs * (2 ** attempt)) + jitter);
+      await sleepMs(delay);
+      attempt += 1;
+    }
+  }
+}
+
 async function getStravaTokenDoc(uid) {
   const db = admin.firestore();
   const snap = await db.collection('tokens').doc(`${uid}_strava`).get();
   return snap.exists ? { id: snap.id, ...snap.data() } : null;
 }
 
-async function getStravaAccessToken(uid) {
+async function refreshStravaAccessToken(uid, tokenDoc = null) {
   const db = admin.firestore();
-  const doc = await getStravaTokenDoc(uid);
+  const doc = tokenDoc || await getStravaTokenDoc(uid);
   if (!doc) throw new Error('Strava not connected for this user');
-  const nowSec = Math.floor(Date.now() / 1000);
-  if (doc.access_token && doc.expires_at && doc.expires_at > nowSec + 60) {
-    return doc.access_token;
+  if (!doc.refresh_token) {
+    await updateStravaSyncState(uid, {
+      stravaLastSyncStatus: 'error',
+      stravaNeedsReconnect: true,
+      stravaLastErrorAt: admin.firestore.FieldValue.serverTimestamp(),
+      stravaLastErrorMessage: 'Missing Strava refresh token. Reconnect Strava.',
+    });
+    throw new Error('Missing Strava refresh token. Reconnect Strava in Integrations.');
   }
   // Refresh token
-  const refreshed = await fetchJson("https://www.strava.com/oauth/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      client_id: process.env.STRAVA_CLIENT_ID,
-      client_secret: process.env.STRAVA_CLIENT_SECRET,
-      grant_type: "refresh_token",
-      refresh_token: doc.refresh_token,
-    }).toString(),
-  });
+  let refreshed;
+  try {
+    const clientId = envTrim('STRAVA_CLIENT_ID');
+    const clientSecret = envTrim('STRAVA_CLIENT_SECRET');
+    if (!clientId || !clientSecret) {
+      throw new Error('Missing STRAVA_CLIENT_ID/STRAVA_CLIENT_SECRET secret');
+    }
+    refreshed = await fetchStravaJson("https://www.strava.com/oauth/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: clientId,
+        client_secret: clientSecret,
+        grant_type: "refresh_token",
+        refresh_token: doc.refresh_token,
+      }).toString(),
+    }, { retries: 1 });
+  } catch (error) {
+    const authError = isStravaAuthError(error);
+    await updateStravaSyncState(uid, {
+      stravaLastSyncStatus: 'error',
+      stravaNeedsReconnect: authError || !!doc.refresh_token,
+      stravaLastErrorAt: admin.firestore.FieldValue.serverTimestamp(),
+      stravaLastErrorMessage: authError
+        ? 'Strava authorization expired. Reconnect Strava.'
+        : (error?.message || 'Failed to refresh Strava token'),
+    });
+    throw error;
+  }
   const tokenRef = db.collection('tokens').doc(`${uid}_strava`);
   await tokenRef.set({
     access_token: refreshed.access_token,
     refresh_token: refreshed.refresh_token || doc.refresh_token,
     expires_at: refreshed.expires_at,
+    scope: refreshed.scope || doc.scope || null,
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   }, { merge: true });
   return refreshed.access_token;
+}
+
+async function getStravaAccessToken(uid, { forceRefresh = false } = {}) {
+  const doc = await getStravaTokenDoc(uid);
+  if (!doc) throw new Error('Strava not connected for this user');
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (!forceRefresh && doc.access_token && doc.expires_at && doc.expires_at > nowSec + 60) {
+    return doc.access_token;
+  }
+  return refreshStravaAccessToken(uid, doc);
 }
 
 async function upsertWorkout(uid, activity) {
@@ -11026,24 +11227,39 @@ async function upsertWorkout(uid, activity) {
   const activityId = String(activity.id);
   const docId = `${uid}_${activityId}`;
   const ref = db.collection('metrics_workouts').doc(docId);
+  const startIsoRaw = activity.start_date || activity.start_date_local || null;
+  const startDateMs = startIsoRaw ? Date.parse(startIsoRaw) : Date.now();
+  const activityType = String(activity.type || activity.sport_type || '').trim();
+  const lowerType = activityType.toLowerCase();
+  const isRun = ['run', 'virtualrun', 'trailrun'].includes(lowerType)
+    || ['run', 'virtualrun', 'trailrun'].includes(String(activity.sport_type || '').toLowerCase());
+  const perceivedExertion = activity.perceived_exertion ?? activity.perceivedExertion ?? activity.rpe ?? null;
   const payload = {
     id: docId,
     ownerUid: uid,
     provider: 'strava',
     stravaActivityId: activityId,
     name: activity.name,
-    type: activity.type,
-    startDate: new Date(activity.start_date).getTime(),
-    utcStartDate: new Date(activity.start_date).toISOString(),
+    type: activity.type || null,
+    sportType: activity.sport_type || null,
+    run: isRun,
+    startDate: Number.isFinite(startDateMs) ? startDateMs : Date.now(),
+    utcStartDate: startIsoRaw ? new Date(startDateMs).toISOString() : null,
     distance_m: activity.distance || null,
     movingTime_s: activity.moving_time || null,
     elapsedTime_s: activity.elapsed_time || null,
     elevationGain_m: activity.total_elevation_gain || null,
     averageSpeed_mps: activity.average_speed || null,
     maxSpeed_mps: activity.max_speed || null,
+    averageCadence: activity.average_cadence || null,
+    averageWatts: activity.average_watts || null,
+    weightedAverageWatts: activity.weighted_average_watts || null,
+    kilojoules: activity.kilojoules || null,
     avgHeartrate: activity.average_heartrate || null,
     maxHeartrate: activity.max_heartrate || null,
     hasHeartrate: !!(activity.has_heartrate || activity.average_heartrate || activity.max_heartrate),
+    perceivedExertion: perceivedExertion != null ? Number(perceivedExertion) : null,
+    sufferScore: activity.suffer_score != null ? Number(activity.suffer_score) : null,
     calories: activity.calories || null,
     commute: activity.commute || false,
     gearId: activity.gear_id || null,
@@ -11059,30 +11275,144 @@ async function upsertWorkout(uid, activity) {
   return docId;
 }
 
-async function fetchStravaActivities(uid, { afterSec = null, perPage = 100, maxPages = 3 } = {}) {
-  const accessToken = await getStravaAccessToken(uid);
+function normalizeEpochSec(value) {
+  if (value == null || value === '') return null;
+  const raw = Number(value);
+  if (!Number.isFinite(raw) || raw <= 0) return null;
+  return raw > 1e12 ? Math.floor(raw / 1000) : Math.floor(raw);
+}
+
+async function fetchStravaActivities(uid, {
+  afterSec = null,
+  beforeSec = null,
+  perPage = 100,
+  maxPages = 3,
+} = {}) {
+  const db = admin.firestore();
+  const normalizedBeforeSec = normalizeEpochSec(beforeSec);
+  let resolvedAfterSec = normalizeEpochSec(afterSec);
+  if (!resolvedAfterSec && !normalizedBeforeSec) {
+    try {
+      const profileSnap = await db.collection('profiles').doc(uid).get();
+      const profile = profileSnap.exists ? (profileSnap.data() || {}) : {};
+      const lastSyncMs = toMillisSafe(profile.stravaLastSyncAt);
+      if (lastSyncMs) {
+        // Back off two days to avoid gaps caused by timezone conversions / delayed webhooks.
+        resolvedAfterSec = Math.floor((lastSyncMs - (2 * 24 * 60 * 60 * 1000)) / 1000);
+      }
+    } catch {
+      resolvedAfterSec = afterSec;
+    }
+  }
+
+  let accessToken = await getStravaAccessToken(uid);
   let page = 1;
   let total = 0;
+  let requests = 0;
   let lastDocId = null;
-  while (page <= maxPages) {
-    const params = new URLSearchParams({
-      per_page: String(perPage),
-      page: String(page),
-    });
-    if (afterSec) params.append('after', String(afterSec));
-    const url = `https://www.strava.com/api/v3/athlete/activities?${params.toString()}`;
-    const rows = await fetchJson(url, { headers: { Authorization: `Bearer ${accessToken}` } });
-    if (!Array.isArray(rows) || rows.length === 0) break;
-    for (const act of rows) {
-      lastDocId = await upsertWorkout(uid, act);
-      total += 1;
+  let oldestStartSec = null;
+  let newestStartSec = null;
+  let nextBeforeSec = normalizedBeforeSec;
+  let hasMore = false;
+  let refreshedAfterAuthFailure = false;
+  try {
+    while (requests < maxPages) {
+      const params = new URLSearchParams({ per_page: String(perPage) });
+      if (normalizedBeforeSec) {
+        params.append('page', '1');
+      } else {
+        params.append('page', String(page));
+      }
+      if (resolvedAfterSec) params.append('after', String(resolvedAfterSec));
+      if (nextBeforeSec) params.append('before', String(nextBeforeSec));
+      const url = `https://www.strava.com/api/v3/athlete/activities?${params.toString()}`;
+      let rows = null;
+      try {
+        rows = await fetchStravaJson(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+      } catch (error) {
+        if (isStravaAuthError(error) && !refreshedAfterAuthFailure) {
+          accessToken = await getStravaAccessToken(uid, { forceRefresh: true });
+          refreshedAfterAuthFailure = true;
+          continue;
+        }
+        throw error;
+      }
+      refreshedAfterAuthFailure = false;
+      if (!Array.isArray(rows) || rows.length === 0) break;
+      requests += 1;
+      let pageOldestSec = null;
+      let pageNewestSec = null;
+      for (const act of rows) {
+        lastDocId = await upsertWorkout(uid, act);
+        total += 1;
+        const startSec = normalizeEpochSec(act?.start_date ? Date.parse(act.start_date) : null);
+        if (startSec != null) {
+          if (pageOldestSec == null || startSec < pageOldestSec) pageOldestSec = startSec;
+          if (pageNewestSec == null || startSec > pageNewestSec) pageNewestSec = startSec;
+        }
+      }
+      if (pageOldestSec != null && (oldestStartSec == null || pageOldestSec < oldestStartSec)) oldestStartSec = pageOldestSec;
+      if (pageNewestSec != null && (newestStartSec == null || pageNewestSec > newestStartSec)) newestStartSec = pageNewestSec;
+      if (rows.length < perPage) {
+        hasMore = false;
+        break;
+      }
+      hasMore = true;
+      if (normalizedBeforeSec) {
+        if (pageOldestSec == null) {
+          hasMore = false;
+          break;
+        }
+        const candidateBefore = Math.max(1, pageOldestSec - 1);
+        if (nextBeforeSec != null && candidateBefore >= nextBeforeSec) {
+          hasMore = false;
+          break;
+        }
+        nextBeforeSec = candidateBefore;
+      } else {
+        page += 1;
+      }
     }
-    if (rows.length < perPage) break;
-    page += 1;
+  } catch (error) {
+    const authError = isStravaAuthError(error);
+    await updateStravaSyncState(uid, {
+      stravaLastSyncStatus: 'error',
+      stravaNeedsReconnect: authError,
+      stravaLastErrorAt: admin.firestore.FieldValue.serverTimestamp(),
+      stravaLastErrorMessage: authError
+        ? 'Strava authorization expired. Reconnect Strava.'
+        : (error?.message || 'Strava sync failed'),
+    });
+    throw error;
   }
-  const db = admin.firestore();
-  await db.collection('profiles').doc(uid).set({ stravaLastSyncAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-  return { ok: true, imported: total, lastDocId };
+
+  await updateStravaSyncState(uid, {
+    stravaLastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
+    stravaLastSyncStatus: 'success',
+    stravaNeedsReconnect: false,
+    stravaLastImportCount: total,
+    stravaLastAfterSec: resolvedAfterSec || null,
+    stravaLastBeforeSec: normalizedBeforeSec || null,
+    stravaLastOldestStartSec: oldestStartSec || null,
+    stravaLastNewestStartSec: newestStartSec || null,
+    stravaLastHasMore: hasMore,
+    stravaLastNextBeforeSec: hasMore ? nextBeforeSec : null,
+    stravaLastErrorAt: admin.firestore.FieldValue.delete(),
+    stravaLastErrorMessage: admin.firestore.FieldValue.delete(),
+  });
+
+  return {
+    ok: true,
+    imported: total,
+    lastDocId,
+    afterSec: resolvedAfterSec || null,
+    beforeSec: normalizedBeforeSec || null,
+    oldestStartSec: oldestStartSec || null,
+    newestStartSec: newestStartSec || null,
+    hasMore,
+    nextBeforeSec: hasMore ? nextBeforeSec : null,
+    requests,
+  };
 }
 
 // Callable to sync Strava activities
@@ -11090,22 +11420,104 @@ exports.syncStrava = httpsV2.onCall({ secrets: [STRAVA_CLIENT_ID, STRAVA_CLIENT_
   if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
   const uid = req.auth.uid;
   const after = req.data?.after || null; // ms or sec accepted
-  let afterSec = null;
-  if (after) {
-    afterSec = (String(after).length > 10) ? Math.floor(Number(after) / 1000) : Number(after);
+  const before = req.data?.before || null; // ms or sec accepted
+  const fullHistory = req.data?.fullHistory === true;
+  const perPage = Math.max(1, Math.min(Number(req.data?.perPage || (fullHistory ? 200 : 100)), 200));
+  const maxPages = Math.max(1, Math.min(Number(req.data?.maxPages || (fullHistory ? 12 : 5)), fullHistory ? 30 : 20));
+  let afterSec = normalizeEpochSec(after);
+  let beforeSec = normalizeEpochSec(before);
+
+  const profileRef = admin.firestore().collection('profiles').doc(uid);
+  const profileSnap = await profileRef.get().catch(() => null);
+  const profile = profileSnap?.exists ? (profileSnap.data() || {}) : {};
+  if (fullHistory) {
+    afterSec = null;
+    if (!beforeSec) {
+      const persisted = normalizeEpochSec(profile.stravaBackfillBeforeSec);
+      beforeSec = persisted || Math.floor(Date.now() / 1000);
+    }
   }
-  console.log('[syncStrava] uid', uid, 'after', after, 'afterSec', afterSec);
+
+  console.log('[syncStrava] uid', uid, 'after', after, 'afterSec', afterSec, 'before', before, 'beforeSec', beforeSec, 'fullHistory', fullHistory, 'perPage', perPage, 'maxPages', maxPages);
   try {
-    const result = await fetchStravaActivities(uid, { afterSec });
+    const result = await fetchStravaActivities(uid, { afterSec, beforeSec, perPage, maxPages });
+    const hasMoreHistory = fullHistory && !!result?.hasMore && !!result?.nextBeforeSec;
+    const backfillStatePatch = fullHistory
+      ? {
+        stravaBackfillActive: hasMoreHistory,
+        stravaBackfillCompleted: !hasMoreHistory,
+        stravaBackfillBeforeSec: hasMoreHistory ? result.nextBeforeSec : admin.firestore.FieldValue.delete(),
+        stravaBackfillCompletedAt: hasMoreHistory
+          ? admin.firestore.FieldValue.delete()
+          : admin.firestore.FieldValue.serverTimestamp(),
+        stravaBackfillLastImported: Number(result?.imported || 0),
+        stravaBackfillUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }
+      : null;
+    if (backfillStatePatch) {
+      await profileRef.set(backfillStatePatch, { merge: true });
+    }
+
+    let matchedParkruns = 0;
+    if (!fullHistory || !hasMoreHistory) {
+      try {
+        const matched = await reconcileParkrunToStrava(uid, { maxStrava: 600 });
+        matchedParkruns = Number(matched?.matched || 0);
+      } catch (error) {
+        console.warn('[syncStrava] Parkrun reconciliation failed (non-fatal):', error?.message || error);
+      }
+    }
+
+    if (!fullHistory || !hasMoreHistory) {
+      try {
+        if (profile.autoComputeFitnessMetrics !== false) {
+          const overview = await _getFitnessOverview(uid, 90);
+          await admin.firestore().collection('fitness_overview').doc(uid)
+            .set({ ...overview, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+          const analysis = await _getRunFitnessAnalysis(uid, 365);
+          await admin.firestore().collection('run_analysis').doc(uid)
+            .set({ ...analysis, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+          await computeGoalFitnessKpisForUser(uid, { persist: true });
+        }
+      } catch (error) {
+        console.warn('[syncStrava] Post-sync fitness aggregation failed (non-fatal):', error?.message || error);
+      }
+    }
     await recordIntegrationLog(uid, 'strava', 'success', 'Strava sync completed', {
       imported: result?.imported || 0,
       after: afterSec,
+      before: beforeSec,
+      fullHistory,
+      hasMoreHistory,
+      nextBeforeSec: result?.nextBeforeSec || null,
+      matchedParkruns,
     });
-    return result;
+    return {
+      ...result,
+      matchedParkruns,
+      fullHistory,
+      hasMoreHistory,
+      nextBeforeSec: result?.nextBeforeSec || null,
+      backfillComplete: fullHistory ? !hasMoreHistory : null,
+    };
   } catch (error) {
+    const authError = isStravaAuthError(error);
+    await updateStravaSyncState(uid, {
+      stravaLastSyncStatus: 'error',
+      stravaNeedsReconnect: authError,
+      stravaLastErrorAt: admin.firestore.FieldValue.serverTimestamp(),
+      stravaLastErrorMessage: authError
+        ? 'Strava authorization expired. Reconnect Strava.'
+        : (error?.message || 'Strava sync failed'),
+    });
     await recordIntegrationLog(uid, 'strava', 'error', error?.message || 'Strava sync failed', {
       after: afterSec,
+      before: beforeSec,
+      fullHistory,
     });
+    if (authError) {
+      throw new httpsV2.HttpsError('failed-precondition', 'Strava authorization expired. Reconnect Strava in Integrations.');
+    }
     if (error instanceof httpsV2.HttpsError) throw error;
     throw new httpsV2.HttpsError('internal', error?.message || 'Failed to sync Strava');
   }
@@ -11144,14 +11556,26 @@ async function enrichActivityHr(uid, activityId) {
   let streams;
   try {
     const url = `https://www.strava.com/api/v3/activities/${activityId}/streams?keys=time,heartrate&key_by_type=true`;
-    streams = await fetchJson(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+    streams = await fetchStravaJson(url, { headers: { Authorization: `Bearer ${accessToken}` } }, { retries: 1 });
   } catch (e) {
-    // If fails (permissions), skip quietly
+    // If stream fetch fails (permissions/private activity), mark once and skip future retries.
+    await ref.set({
+      hrZonesUnavailable: true,
+      hrZonesUnavailableReason: 'no_streams',
+      hrZonesUnavailableAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
     return { ok: false, reason: 'no_streams' };
   }
   const hr = Array.isArray(streams?.heartrate?.data) ? streams.heartrate.data : null;
   const tm = Array.isArray(streams?.time?.data) ? streams.time.data : null;
-  if (!hr || !tm || hr.length === 0) return { ok: false, reason: 'empty_stream' };
+  if (!hr || !tm || hr.length === 0) {
+    await ref.set({
+      hrZonesUnavailable: true,
+      hrZonesUnavailableReason: 'empty_stream',
+      hrZonesUnavailableAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+    return { ok: false, reason: 'empty_stream' };
+  }
 
   const maxHr = await getUserMaxHr(uid);
   const zones = hrZonesFromMax(maxHr);
@@ -11166,34 +11590,77 @@ async function enrichActivityHr(uid, activityId) {
     else if (zIdx === 3) totals.z4Time_s += dt;
     else totals.z5Time_s += dt;
   }
-  await ref.set({ hrZones: totals, maxHrUsed: maxHr }, { merge: true });
+  const patch = {
+    hrZones: totals,
+    maxHrUsed: maxHr,
+    hrZonesUnavailable: admin.firestore.FieldValue.delete(),
+    hrZonesUnavailableReason: admin.firestore.FieldValue.delete(),
+    hrZonesUnavailableAt: admin.firestore.FieldValue.delete(),
+  };
+  if (data.perceivedExertion == null || data.sufferScore == null) {
+    try {
+      const detail = await fetchStravaJson(`https://www.strava.com/api/v3/activities/${activityId}`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      }, { retries: 1 });
+      const perceived = detail?.perceived_exertion ?? detail?.perceivedExertion ?? null;
+      if (patch.perceivedExertion == null && perceived != null) patch.perceivedExertion = Number(perceived);
+      if (patch.sufferScore == null && detail?.suffer_score != null) patch.sufferScore = Number(detail.suffer_score);
+    } catch {
+      // Non-fatal: details endpoint can be unavailable for some activities.
+    }
+  }
+  await ref.set(patch, { merge: true });
   return { ok: true, hrZones: totals };
 }
 
-// Enrich recent Strava runs with HR zone breakdown
-exports.enrichStravaHR = httpsV2.onCall({ secrets: [STRAVA_CLIENT_ID, STRAVA_CLIENT_SECRET] }, async (req) => {
-  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
-  const uid = req.auth.uid;
-  const days = Math.min(Number(req.data?.days || 30), 365);
-  console.log('[enrichStravaHR] uid', uid, 'days', days);
-  const since = Date.now() - days * 24 * 60 * 60 * 1000;
+async function enrichRecentStravaHr(uid, days = 30, options = {}) {
+  const force = options?.force === true;
+  const maxActivities = Math.min(Math.max(Number(options?.maxActivities || 120), 1), 500);
+  const safeDays = Math.min(Number(days || 30), 3650);
+  console.log('[enrichStravaHR] uid', uid, 'days', safeDays, 'force', force, 'maxActivities', maxActivities);
+  const since = Date.now() - safeDays * 24 * 60 * 60 * 1000;
   const db = admin.firestore();
   const q = await db.collection('metrics_workouts')
     .where('ownerUid', '==', uid)
     .where('provider', '==', 'strava')
     .get();
-  let enriched = 0, scanned = 0;
-  for (const d of q.docs) {
+  const docs = q.docs.slice().sort((a, b) => {
+    const ad = Number(a.data()?.startDate || 0);
+    const bd = Number(b.data()?.startDate || 0);
+    return bd - ad;
+  });
+  let enriched = 0;
+  let scanned = 0;
+  let eligible = 0;
+  let skippedExisting = 0;
+  for (const d of docs) {
     const w = d.data();
     if ((w.startDate || 0) < since) continue;
     if (!w.hasHeartrate && !w.avgHeartrate) continue;
+    eligible++;
+    if (!force && (w.hrZones || w.hrZonesUnavailable === true)) {
+      skippedExisting++;
+      continue;
+    }
+    if (scanned >= maxActivities) break;
     scanned++;
     const actId = String(w.stravaActivityId || '').trim();
     if (!actId) continue;
     const r = await enrichActivityHr(uid, actId).catch(() => null);
     if (r?.ok) enriched++;
   }
-  return { ok: true, enriched, scanned };
+  const remaining = Math.max(0, eligible - skippedExisting - scanned);
+  return { ok: true, enriched, scanned, eligible, skippedExisting, remaining };
+}
+
+// Enrich recent Strava runs with HR zone breakdown
+exports.enrichStravaHR = httpsV2.onCall({ secrets: [STRAVA_CLIENT_ID, STRAVA_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const days = Math.min(Number(req.data?.days || 30), 3650);
+  const force = req.data?.force === true;
+  const maxActivities = Math.min(Math.max(Number(req.data?.maxActivities || 120), 1), 500);
+  return enrichRecentStravaHr(uid, days, { force, maxActivities });
 });
 
 // Strava Webhook endpoint (verification + events)
@@ -11204,7 +11671,7 @@ exports.stravaWebhook = httpsV2.onRequest({ secrets: [STRAVA_WEBHOOK_VERIFY_TOKE
       const token = req.query['hub.verify_token'];
       const challenge = req.query['hub.challenge'];
       if (mode !== 'subscribe') return res.status(400).send('Invalid mode');
-      if (String(token) !== String(process.env.STRAVA_WEBHOOK_VERIFY_TOKEN)) return res.status(403).send('Invalid verify token');
+      if (String(token) !== envTrim('STRAVA_WEBHOOK_VERIFY_TOKEN')) return res.status(403).send('Invalid verify token');
       return res.status(200).json({ 'hub.challenge': challenge });
     }
     if (req.method === 'POST') {
@@ -11221,7 +11688,7 @@ exports.stravaWebhook = httpsV2.onRequest({ secrets: [STRAVA_WEBHOOK_VERIFY_TOKE
             // Fetch single activity details
             try {
               const accessToken = await getStravaAccessToken(uid);
-              const act = await fetchJson(`https://www.strava.com/api/v3/activities/${body.object_id}`, { headers: { Authorization: `Bearer ${accessToken}` } });
+              const act = await fetchStravaJson(`https://www.strava.com/api/v3/activities/${body.object_id}`, { headers: { Authorization: `Bearer ${accessToken}` } }, { retries: 1 });
               await upsertWorkout(uid, act);
             } catch (e) {
               console.error('Failed to upsert Strava activity from webhook:', e);
@@ -11349,91 +11816,1167 @@ exports.disconnectGoogle = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GO
   return { ok: true };
 });
 
-async function _syncParkrunInternal(uid, athleteId, countryBaseUrl) {
-  const base = countryBaseUrl || 'https://www.parkrun.org.uk';
-  const url = `${base}/results/athleteeventresultshistory/?athleteNumber=${encodeURIComponent(athleteId)}&eventNumber=0`;
-  const html = await (await fetch(url)).text();
-  const cheerio = require('cheerio');
-  const $ = cheerio.load(html);
-  let rows = [];
-  $('table#results tbody tr').each((_, el) => rows.push(el));
-  if (rows.length === 0) {
-    $('table tbody tr').each((_, el) => rows.push(el));
-  }
-  const db = admin.firestore();
-  let imported = 0;
-  const slugify = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+function getParkrunTokenDocId(uid) {
+  return `${uid}_parkrun`;
+}
 
-  async function getParticipantsFromResultUrl(href) {
-    if (!href) return { participants: null, resultUrl: null, runSeq: null };
-    let full = href.startsWith('http') ? href : (href.startsWith('/') ? `https://www.parkrun.org.uk${href}` : `${base}/${href}`);
-    try {
-      const page = await (await fetch(full)).text();
-      const $p = cheerio.load(page);
-      const count = $p('table#results tbody tr').length;
-      const m = full.match(/\/results\/(\d+)/);
-      const runSeq = m ? Number(m[1]) : null;
-      return { participants: count || null, resultUrl: full, runSeq };
-    } catch { return { participants: null, resultUrl: null, runSeq: null }; }
+function formatFormBody(payload = {}) {
+  const params = new URLSearchParams();
+  Object.entries(payload || {}).forEach(([key, value]) => {
+    if (value == null) return;
+    const text = String(value).trim();
+    if (!text) return;
+    params.set(key, text);
+  });
+  return params.toString();
+}
+
+async function fetchParkrunApiJson(path, {
+  method = 'GET',
+  query = {},
+  form = null,
+  useBasicAuth = false,
+} = {}) {
+  const qs = new URLSearchParams();
+  Object.entries(query || {}).forEach(([key, value]) => {
+    if (value == null) return;
+    const text = String(value).trim();
+    if (!text) return;
+    qs.set(key, text);
+  });
+  const url = `${PARKRUN_API_BASE}${path}${qs.toString() ? `?${qs.toString()}` : ''}`;
+  const headers = {
+    'Accept': 'application/json',
+    'User-Agent': PARKRUN_API_USER_AGENT,
+  };
+  if (useBasicAuth) {
+    const basic = Buffer.from(`${PARKRUN_API_CLIENT_ID}:${PARKRUN_API_CLIENT_SECRET}`, 'utf8').toString('base64');
+    headers['Authorization'] = `Basic ${basic}`;
   }
-  for (const el of rows) {
-    const tds = $(el).find('td');
-    if (tds.length < 5) continue;
-    const dateText = $(tds[0]).text().trim();
-    const eventCell = $(tds[1]);
-    const eventText = eventCell.text().trim();
-    const eventHref = eventCell.find('a').attr('href') || '';
-    const timeText = $(tds[2]).text().trim();
-    const positionText = $(tds[3]).text().trim();
-    const ageGradeText = $(tds[4]).text().trim();
-    const ageCatText = tds.length >= 6 ? $(tds[5]).text().trim() : null;
-    if (!dateText || !eventText || !timeText) continue;
-    let dateMs = Date.parse(dateText);
-    if (isNaN(dateMs)) {
-      const m = dateText.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-      if (m) {
-        const d = new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
-        dateMs = d.getTime();
+  let body = undefined;
+  if (form) {
+    headers['Content-Type'] = 'application/x-www-form-urlencoded';
+    body = formatFormBody(form);
+  }
+
+  const res = await fetch(url, {
+    method,
+    headers,
+    body,
+    redirect: 'follow',
+  });
+  const raw = await res.text();
+  let parsed = null;
+  if (raw) {
+    try { parsed = JSON.parse(raw); } catch { parsed = null; }
+  }
+  if (!res.ok) {
+    const detail = parsed?.error?.human_message
+      || parsed?.error?.message
+      || parsed?.error_description
+      || parsed?.message
+      || raw
+      || `HTTP ${res.status}`;
+    const error = new Error(`Parkrun API ${path} failed (HTTP ${res.status}): ${detail}`);
+    error.status = res.status;
+    error.body = raw;
+    error.parsed = parsed;
+    throw error;
+  }
+  return parsed;
+}
+
+function parseParkrunTokenResponse(payload = {}) {
+  const accessToken = String(payload?.access_token || '').trim();
+  const refreshToken = String(payload?.refresh_token || '').trim();
+  const expiresIn = Number(payload?.expires_in || 0) || 0;
+  const scope = String(payload?.scope || 'app').trim() || 'app';
+  const tokenType = String(payload?.token_type || 'bearer').trim() || 'bearer';
+  if (!accessToken) throw new Error('Parkrun API auth missing access_token');
+  return {
+    accessToken,
+    refreshToken: refreshToken || null,
+    scope,
+    tokenType,
+    expiresAt: Math.floor(Date.now() / 1000) + Math.max(0, expiresIn),
+    expiresIn,
+  };
+}
+
+async function authenticateParkrunApiUser(username, password) {
+  const id = String(username || '').trim();
+  const secret = String(password || '');
+  if (!id || !secret) throw new Error('Parkrun username/password required');
+  const payload = await fetchParkrunApiJson('/user_auth.php', {
+    method: 'POST',
+    useBasicAuth: true,
+    form: {
+      username: id,
+      password: secret,
+      scope: 'app',
+      grant_type: 'password',
+    },
+  });
+  return parseParkrunTokenResponse(payload || {});
+}
+
+async function refreshParkrunApiToken(refreshToken) {
+  const token = String(refreshToken || '').trim();
+  if (!token) throw new Error('Parkrun refresh token missing');
+  const payload = await fetchParkrunApiJson('/auth/refresh', {
+    method: 'POST',
+    useBasicAuth: true,
+    form: {
+      refresh_token: token,
+      grant_type: 'refresh_token',
+    },
+  });
+  const parsed = parseParkrunTokenResponse(payload || {});
+  if (!parsed.refreshToken) parsed.refreshToken = token;
+  return parsed;
+}
+
+async function resolveParkrunAthleteIdFromApi(accessToken) {
+  if (!accessToken) return null;
+  try {
+    const me = await fetchParkrunApiJson('/v1/me', {
+      query: {
+        access_token: accessToken,
+        scope: 'app',
+        expandedDetails: true,
+      },
+    });
+    const athleteRaw = me?.data?.Athletes?.[0]?.AthleteID ?? me?.data?.AthleteID ?? null;
+    const athleteId = Number(athleteRaw || 0);
+    return Number.isFinite(athleteId) && athleteId > 0 ? athleteId : null;
+  } catch {
+    return null;
+  }
+}
+
+async function saveParkrunApiToken(uid, tokenData, extras = {}) {
+  if (!uid) return;
+  const patch = {
+    provider: 'parkrun_api',
+    ownerUid: uid,
+    access_token: tokenData?.accessToken || null,
+    refresh_token: tokenData?.refreshToken || null,
+    expires_at: tokenData?.expiresAt || null,
+    scope: tokenData?.scope || 'app',
+    token_type: tokenData?.tokenType || 'bearer',
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    ...extras,
+  };
+  await admin.firestore().collection('tokens').doc(getParkrunTokenDocId(uid)).set(patch, { merge: true });
+}
+
+async function connectParkrunApiForUser(uid, { username, password, athleteIdHint = null } = {}) {
+  if (!uid) throw new Error('uid required');
+  const tokenData = await authenticateParkrunApiUser(username, password);
+  let resolvedAthleteId = Number(athleteIdHint || 0) || null;
+  if (!resolvedAthleteId) {
+    resolvedAthleteId = await resolveParkrunAthleteIdFromApi(tokenData.accessToken);
+  }
+  await saveParkrunApiToken(uid, tokenData, { username: String(username || '').trim() || null });
+
+  const profilePatch = {
+    parkrunApiConnected: true,
+    parkrunApiUsername: String(username || '').trim() || null,
+    parkrunLastErrorAt: admin.firestore.FieldValue.delete(),
+    parkrunLastErrorMessage: admin.firestore.FieldValue.delete(),
+  };
+  if (resolvedAthleteId) profilePatch.parkrunAthleteId = String(resolvedAthleteId);
+  await admin.firestore().collection('profiles').doc(uid).set(profilePatch, { merge: true });
+
+  return { tokenData, athleteId: resolvedAthleteId };
+}
+
+async function getParkrunAccessToken(uid) {
+  const tokenRef = admin.firestore().collection('tokens').doc(getParkrunTokenDocId(uid));
+  const snap = await tokenRef.get();
+  if (!snap.exists) throw new Error('Parkrun API token not found. Connect Parkrun API first.');
+  const data = snap.data() || {};
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (data.access_token && data.expires_at && Number(data.expires_at) > nowSec + 60) {
+    return String(data.access_token);
+  }
+  const refresh = String(data.refresh_token || '').trim();
+  if (!refresh) throw new Error('Parkrun refresh token missing. Reconnect Parkrun API.');
+  const refreshed = await refreshParkrunApiToken(refresh);
+  await saveParkrunApiToken(uid, refreshed, { username: data.username || null });
+  return refreshed.accessToken;
+}
+
+async function fetchParkrunAthleteResultsFromApi(uid, athleteId, { limit = 100, maxPages = 20 } = {}) {
+  const athleteIdSafe = Number(athleteId || 0);
+  if (!Number.isFinite(athleteIdSafe) || athleteIdSafe <= 0) {
+    throw new Error('Valid Parkrun athleteId is required for API sync');
+  }
+
+  let accessToken = await getParkrunAccessToken(uid);
+  const results = [];
+  let offset = 0;
+  let page = 0;
+  let refreshedOnce = false;
+
+  while (page < maxPages) {
+    let payload = null;
+    try {
+      payload = await fetchParkrunApiJson('/v1/results', {
+        query: {
+          access_token: accessToken,
+          scope: 'app',
+          expandedDetails: true,
+          athleteId: String(athleteIdSafe),
+          limit: String(limit),
+          offset: String(offset),
+        },
+      });
+    } catch (error) {
+      const status = Number(error?.status || 0);
+      if (status === 401 && !refreshedOnce) {
+        accessToken = await getParkrunAccessToken(uid);
+        refreshedOnce = true;
+        continue;
+      }
+      throw error;
+    }
+
+    const rows = Array.isArray(payload?.data?.Results) ? payload.data.Results : [];
+    if (!rows.length) break;
+    results.push(...rows);
+
+    offset += rows.length;
+    page += 1;
+    if (rows.length < limit) break;
+  }
+
+  return results;
+}
+
+exports.connectParkrunApi = httpsV2.onCall(async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const username = String(req.data?.username || '').trim();
+  const password = String(req.data?.password || '');
+  const athleteIdHint = Number(req.data?.athleteId || 0) || null;
+  if (!username || !password) {
+    throw new httpsV2.HttpsError('invalid-argument', 'username and password are required');
+  }
+  try {
+    const connected = await connectParkrunApiForUser(uid, { username, password, athleteIdHint });
+    return {
+      ok: true,
+      athleteId: connected?.athleteId || null,
+      expiresAt: connected?.tokenData?.expiresAt || null,
+    };
+  } catch (error) {
+    if (error instanceof httpsV2.HttpsError) throw error;
+    throw new httpsV2.HttpsError('internal', error?.message || 'Failed to connect Parkrun API');
+  }
+});
+
+async function _syncParkrunInternal(uid, athleteId, countryBaseUrl, options = {}) {
+  const base = String(countryBaseUrl || 'https://www.parkrun.org.uk').replace(/\/$/, '');
+  const requestHeaderCandidates = [
+    {
+      // Browser-like profile first.
+      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      'Accept-Language': 'en-GB,en;q=0.9',
+      'Cache-Control': 'no-cache',
+      'Pragma': 'no-cache',
+      'Upgrade-Insecure-Requests': '1',
+    },
+    {
+      // App-like profile as fallback when browser UA gets blocked.
+      'User-Agent': PARKRUN_API_USER_AGENT,
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'en-GB,en;q=0.9',
+      'Cache-Control': 'no-cache',
+      'Pragma': 'no-cache',
+    },
+  ];
+  const cheerio = require('cheerio');
+  const db = admin.firestore();
+  const profileSnap = await db.collection('profiles').doc(uid).get().catch(() => null);
+  const profileData = profileSnap?.exists ? (profileSnap.data() || {}) : {};
+  let imported = 0;
+
+  const slugify = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  const normalizeText = (v) => String(v || '').replace(/\s+/g, ' ').trim();
+
+  const parseNumberLoose = (value) => {
+    const n = Number(String(value || '').replace(/[^0-9.-]/g, ''));
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const parseIntLoose = (value) => {
+    const n = parseNumberLoose(value);
+    if (n == null) return null;
+    const rounded = Math.round(n);
+    return rounded > 0 ? rounded : null;
+  };
+
+  const parseBoolLoose = (value) => {
+    if (typeof value === 'boolean') return value;
+    const text = normalizeText(value).toLowerCase();
+    if (!text) return false;
+    if (['1', 'true', 'yes', 'y', 'pb'].includes(text)) return true;
+    if (['0', 'false', 'no', 'n'].includes(text)) return false;
+    const num = Number(text);
+    if (Number.isFinite(num)) return num > 0;
+    return false;
+  };
+
+  const parseDurationSeconds = (value) => {
+    const text = normalizeText(value);
+    if (!/^\d{1,2}:\d{2}(?::\d{2})?$/.test(text)) return null;
+    const parts = text.split(':').map((x) => Number(x));
+    if (parts.some((x) => !Number.isFinite(x))) return null;
+    if (parts.length === 3) return (parts[0] * 3600) + (parts[1] * 60) + parts[2];
+    if (parts.length === 2) return (parts[0] * 60) + parts[1];
+    return null;
+  };
+
+  const parseDateMs = (value) => {
+    const text = normalizeText(value);
+    if (!text) return null;
+
+    let m = text.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{2,4})$/);
+    if (m) {
+      const day = Number(m[1]);
+      const month = Number(m[2]);
+      let year = Number(m[3]);
+      if (year < 100) year += 2000;
+      if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
+        return Date.UTC(year, month - 1, day);
       }
     }
-    if (!dateMs || isNaN(dateMs)) continue;
-    let secs = 0;
-    const parts = timeText.split(':').map(x => Number(x));
-    if (parts.length === 3) secs = parts[0] * 3600 + parts[1] * 60 + parts[2];
-    else if (parts.length === 2) secs = parts[0] * 60 + parts[1];
-    else continue;
-    const eventSlug = slugify(eventText);
-    const docId = `${uid}_parkrun_${new Date(dateMs).toISOString().slice(0, 10)}_${eventSlug}`;
-    // Try to derive participants from a direct result URL if the row links to it
-    let participantsCount = null; let eventResultUrl = null; let eventRunSeqNumber = null;
-    if (eventHref && /\/results\//.test(eventHref)) {
-      const info = await getParticipantsFromResultUrl(eventHref);
-      participantsCount = info.participants;
-      eventResultUrl = info.resultUrl;
-      eventRunSeqNumber = info.runSeq;
+
+    m = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    if (m) {
+      const year = Number(m[1]);
+      const month = Number(m[2]);
+      const day = Number(m[3]);
+      if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
+        return Date.UTC(year, month - 1, day);
+      }
     }
+
+    const parsed = Date.parse(text);
+    if (Number.isNaN(parsed)) return null;
+    const d = new Date(parsed);
+    return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+  };
+
+  const toDateKey = (ms) => (ms ? new Date(ms).toISOString().slice(0, 10) : null);
+
+  const normalizeParkrunUrl = (href, sourceUrl = base) => {
+    const raw = normalizeText(href);
+    if (!raw) return null;
+    try {
+      return new URL(raw, sourceUrl).toString();
+    } catch {
+      return null;
+    }
+  };
+
+  const parseRunSeqFromUrl = (value) => {
+    const raw = normalizeText(value);
+    if (!raw) return null;
+    let m = raw.match(/\/results\/(\d+)\/?$/i);
+    if (m) return Number(m[1]);
+    m = raw.match(/\/(\d+)\/?$/);
+    if (m) return Number(m[1]);
+    return null;
+  };
+
+  const extractEventSlugFromBaseUrl = (value) => {
+    const raw = normalizeText(value);
+    if (!raw) return null;
+    const m = raw.match(/^https?:\/\/[^/]+\/([^/]+)\/results\/?$/i);
+    return m?.[1] ? String(m[1]).toLowerCase() : null;
+  };
+
+  const toEventBaseUrl = (href, sourceUrl = base) => {
+    const full = normalizeParkrunUrl(href, sourceUrl);
+    if (!full) return null;
+    const m = full.match(/^(https?:\/\/[^/]+\/[^/]+\/results\/)(?:\d+\/?)?/i);
+    return m?.[1] || null;
+  };
+
+  const fetchHtml = async (url, label) => {
+    for (let i = 0; i < requestHeaderCandidates.length; i++) {
+      const headers = requestHeaderCandidates[i];
+      const res = await fetch(url, { headers, redirect: 'follow' });
+      if (res.ok) return await res.text();
+      const err = new Error(`${label || 'Parkrun page'} fetch failed (HTTP ${res.status}) for ${url}`);
+      err.status = res.status;
+      const retryableStatus = new Set([403, 405, 406, 429]);
+      if (i < requestHeaderCandidates.length - 1 && retryableStatus.has(Number(res.status || 0))) continue;
+      throw err;
+    }
+    throw new Error(`${label || 'Parkrun page'} fetch failed for ${url}`);
+  };
+
+  function parseTableRows($, tableEl, sourceUrl) {
+    const headers = $(tableEl).find('thead th').map((_, th) => normalizeText($(th).text()).toLowerCase()).get();
+    const rows = [];
+    const findIdx = (patterns) => headers.findIndex((h) => patterns.some((re) => re.test(h)));
+    const eventIdx = findIdx([/^event$/, /parkrun/]);
+    const dateIdx = findIdx([/^date$/, /run\s*date/]);
+    const runIdx = findIdx([/run\s*number/, /event\s*#/, /^#$/]);
+    const posIdx = findIdx([/^pos$/, /overall position/, /^position$/]);
+    const timeIdx = findIdx([/^time$/, /finish time/]);
+    const ageIdx = findIdx([/age\s*grade/, /agegrade/]);
+    const pbIdx = findIdx([/^pb\??$/, /pb\?/]);
+
+    $(tableEl).find('tbody tr').each((_, tr) => {
+      const tds = $(tr).find('td');
+      if (tds.length < 4) return;
+
+      const cellText = (idx) => (idx >= 0 && idx < tds.length ? normalizeText($(tds[idx]).text()) : '');
+      const cellHtml = (idx) => (idx >= 0 && idx < tds.length ? String($(tds[idx]).html() || '') : '');
+      const cellHref = (idx) => (idx >= 0 && idx < tds.length ? normalizeText($(tds[idx]).find('a').first().attr('href') || '') : '');
+
+      let dateText = cellText(dateIdx);
+      if (!dateText) {
+        tds.each((_, td) => {
+          const txt = normalizeText($(td).text());
+          if (!dateText && (/^\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4}$/.test(txt) || /^\d{4}-\d{2}-\d{2}$/.test(txt))) {
+            dateText = txt;
+          }
+        });
+      }
+
+      let timeText = cellText(timeIdx);
+      if (!timeText) {
+        tds.each((_, td) => {
+          const txt = normalizeText($(td).text());
+          if (!timeText && /^\d{1,2}:\d{2}(?::\d{2})?$/.test(txt)) timeText = txt;
+        });
+      }
+
+      const dateMs = parseDateMs(dateText);
+      const timeSec = parseDurationSeconds(timeText);
+      if (!dateMs || !timeSec) return;
+
+      const eventText = cellText(eventIdx >= 0 ? eventIdx : 0);
+      const eventHref = cellHref(eventIdx);
+      const dateHref = cellHref(dateIdx);
+      const runHref = cellHref(runIdx);
+      const runSeq = parseIntLoose(cellText(runIdx)) || parseRunSeqFromUrl(runHref) || parseRunSeqFromUrl(dateHref);
+      const eventBaseUrl = toEventBaseUrl(eventHref || runHref || dateHref, sourceUrl);
+      const runResultHref = dateHref || runHref;
+      const runResultFull = normalizeParkrunUrl(runResultHref, sourceUrl);
+      const eventResultUrl = runResultFull && /\/results\/\d+\/?$/i.test(runResultFull)
+        ? runResultFull
+        : (eventBaseUrl && runSeq ? `${eventBaseUrl.replace(/\/+$/, '')}/${runSeq}/` : null);
+
+      const position = parseIntLoose(cellText(posIdx));
+      const ageGradeText = cellText(ageIdx) || null;
+      const pbText = normalizeText(cellText(pbIdx));
+      const pbHtml = cellHtml(pbIdx).replace(/<[^>]+>/g, ' ');
+      const hasPbFlag = /\bPB\b/i.test(pbText) || /new\s*pb/i.test(pbText) || /\bPB\b/i.test(pbHtml);
+      const canonicalEventSlug = extractEventSlugFromBaseUrl(eventBaseUrl) || slugify(String(eventText || '').replace(/\bparkrun\b.*$/i, '').trim());
+      const docEventName = eventText && /parkrun/i.test(eventText) ? eventText : (eventText ? `${eventText} parkrun` : '');
+      const docSlug = slugify(docEventName || canonicalEventSlug);
+
+      rows.push({
+        eventText: normalizeText(eventText || canonicalEventSlug || 'parkrun'),
+        eventSlug: canonicalEventSlug || null,
+        docSlug: docSlug || null,
+        eventBaseUrl: eventBaseUrl || null,
+        eventResultUrl: eventResultUrl || null,
+        dateMs,
+        timeSec,
+        position,
+        ageGradeText,
+        runSeq: runSeq || null,
+        isPb: !!hasPbFlag,
+        pbText: pbText || null,
+      });
+    });
+
+    return rows;
+  }
+
+  function parseHeuristicRows($, sourceUrl) {
+    const parsed = [];
+    let rows = [];
+    $('table#results tbody tr').each((_, el) => rows.push(el));
+    if (!rows.length) $('table tbody tr').each((_, el) => rows.push(el));
+
+    for (const el of rows) {
+      const tds = $(el).find('td');
+      if (tds.length < 5) continue;
+      const cells = [];
+      tds.each((_, td) => cells.push(normalizeText($(td).text())));
+      const dateIdx = cells.findIndex((text) => (
+        /^\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4}$/.test(text)
+        || /^\d{1,2}\s+[A-Za-z]+\s+\d{4}$/.test(text)
+        || /^\d{4}-\d{2}-\d{2}$/.test(text)
+      ));
+      const timeIdx = cells.findIndex((text) => /^\d{1,2}:\d{2}(?::\d{2})?$/.test(text));
+      if (dateIdx < 0 || timeIdx < 0) continue;
+
+      let eventIdx = dateIdx === 0 ? 1 : dateIdx - 1;
+      if (eventIdx < 0 || !cells[eventIdx]) eventIdx = 0;
+
+      const eventText = cells[eventIdx];
+      const dateMs = parseDateMs(cells[dateIdx]);
+      const timeSec = parseDurationSeconds(cells[timeIdx]);
+      if (!eventText || !dateMs || !timeSec) continue;
+
+      const numericBeforeTime = cells
+        .slice(0, timeIdx)
+        .map((value) => parseIntLoose(value))
+        .filter((value) => Number.isFinite(value) && value > 0);
+
+      const position = numericBeforeTime.length ? numericBeforeTime[numericBeforeTime.length - 1] : null;
+      const ageGradeText = cells.find((text) => /%$/.test(text)) || null;
+      const eventHref = normalizeText($(tds[dateIdx]).find('a').attr('href') || $(tds[eventIdx]).find('a').attr('href') || '');
+      const eventBaseUrl = toEventBaseUrl(eventHref, sourceUrl);
+      const runSeq = parseRunSeqFromUrl(eventHref);
+      const eventResultUrl = runSeq && eventBaseUrl ? `${eventBaseUrl.replace(/\/+$/, '')}/${runSeq}/` : (normalizeParkrunUrl(eventHref, sourceUrl) || null);
+      const canonicalEventSlug = extractEventSlugFromBaseUrl(eventBaseUrl) || slugify(String(eventText).replace(/\bparkrun\b.*$/i, '').trim());
+      const docEventName = /parkrun/i.test(eventText) ? eventText : `${eventText} parkrun`;
+      const docSlug = slugify(docEventName || canonicalEventSlug);
+
+      parsed.push({
+        eventText,
+        eventSlug: canonicalEventSlug || null,
+        docSlug: docSlug || null,
+        eventBaseUrl: eventBaseUrl || null,
+        eventResultUrl,
+        dateMs,
+        timeSec,
+        position,
+        ageGradeText,
+        runSeq: runSeq || null,
+        isPb: false,
+        pbText: null,
+      });
+    }
+
+    return parsed;
+  }
+
+  function parseAthleteRowsFromHtml(html, sourceUrl) {
+    const $ = cheerio.load(html);
+    const candidates = [];
+    $('table').each((_, tableEl) => {
+      const rows = $(tableEl).find('tbody tr').length;
+      if (!rows) return;
+      const headers = $(tableEl).find('thead th').map((_, th) => normalizeText($(th).text()).toLowerCase()).get();
+      let score = 0;
+      if (headers.some((h) => /run\s*date|^date$/.test(h))) score += 5;
+      if (headers.some((h) => /run\s*number|event\s*#|^#$/.test(h))) score += 4;
+      if (headers.some((h) => /overall position|^pos$|^position$/.test(h))) score += 3;
+      if (headers.some((h) => /^time$|finish time/.test(h))) score += 3;
+      if (headers.some((h) => /^event$|parkrun/.test(h))) score += 3;
+      if (headers.some((h) => /^pb\??$|pb\?/.test(h))) score += 2;
+      candidates.push({ tableEl, rows, score });
+    });
+
+    candidates.sort((a, b) => (b.score - a.score) || (b.rows - a.rows));
+    const best = candidates[0];
+    if (best && best.score >= 6) {
+      const parsed = parseTableRows($, best.tableEl, sourceUrl);
+      if (parsed.length) return parsed;
+    }
+
+    return parseHeuristicRows($, sourceUrl);
+  }
+
+  const athleteIdSafe = String(athleteId || '').trim();
+  const optionEventSlug = slugify(String(options?.eventSlug || '').toLowerCase());
+  const optionStartRun = parseIntLoose(options?.startRun);
+  const optionMaxBack = parseIntLoose(options?.maxBack);
+  const athleteHistoryCandidates = [
+    `${base}/parkrunner/${encodeURIComponent(athleteIdSafe)}/all/`,
+    `${base}/parkrunner/${encodeURIComponent(athleteIdSafe)}/`,
+    `${base}/results/athleteeventresultshistory/?athleteNumber=${encodeURIComponent(athleteIdSafe)}&eventNumber=0`,
+  ];
+
+  let athleteRows = [];
+  let sourceUrlUsed = null;
+  let lastHistoryError = null;
+
+  for (const candidateUrl of athleteHistoryCandidates) {
+    try {
+      const html = await fetchHtml(candidateUrl, 'Parkrun athlete history');
+      const parsed = parseAthleteRowsFromHtml(html, candidateUrl);
+      if (parsed.length) {
+        athleteRows = parsed;
+        sourceUrlUsed = candidateUrl;
+        break;
+      }
+      lastHistoryError = new Error(`No parsable rows at ${candidateUrl}`);
+    } catch (error) {
+      lastHistoryError = error;
+      console.warn('[syncParkrun] athlete history candidate failed:', candidateUrl, error?.message || error);
+    }
+  }
+
+  const eventHistoryCache = new Map();
+  const eventResultCache = new Map();
+  const athleteLinkNeedle = `/parkrunner/${athleteIdSafe}/`;
+
+  async function getEventHistoryIndex(eventBaseUrl) {
+    if (!eventBaseUrl) return null;
+    const key = String(eventBaseUrl).toLowerCase();
+    if (eventHistoryCache.has(key)) return eventHistoryCache.get(key);
+
+    const empty = {
+      byDate: new Map(),
+      byRun: new Map(),
+      eventName: null,
+      eventSlug: extractEventSlugFromBaseUrl(eventBaseUrl),
+      eventHistoryUrl: `${eventBaseUrl.replace(/\/+$/, '')}/eventhistory/`,
+    };
+    try {
+      const eventHistoryUrl = `${eventBaseUrl.replace(/\/+$/, '')}/eventhistory/`;
+      const html = await fetchHtml(eventHistoryUrl, 'Parkrun event history');
+      const $ = cheerio.load(html);
+      const byDate = new Map();
+      const byRun = new Map();
+
+      $('tr.Results-table-row').each((_, tr) => {
+        const row = $(tr);
+        const dateMs = parseDateMs(row.attr('data-date') || row.find('.format-date').first().text());
+        const dateKey = toDateKey(dateMs);
+        const runSeq = parseIntLoose(row.attr('data-parkrun')) || parseRunSeqFromUrl(row.find('td a').first().attr('href'));
+        const participants = parseIntLoose(row.attr('data-finishers'));
+        const href = row.find('td a').first().attr('href') || '';
+        const resultUrl = normalizeParkrunUrl(href, eventHistoryUrl) || (runSeq ? `${eventBaseUrl.replace(/\/+$/, '')}/${runSeq}/` : null);
+        if (!dateKey && !runSeq) return;
+        const entry = {
+          dateMs,
+          dateKey,
+          runSeq: runSeq || null,
+          participants: participants || null,
+          resultUrl: resultUrl || null,
+        };
+        if (dateKey && !byDate.has(dateKey)) byDate.set(dateKey, entry);
+        if (runSeq && !byRun.has(runSeq)) byRun.set(runSeq, entry);
+      });
+
+      if (!byDate.size && !byRun.size) {
+        $('table').each((_, tableEl) => {
+          const table = $(tableEl);
+          const bodyRows = table.find('tbody tr');
+          if (!bodyRows.length) return;
+
+          const headers = table.find('thead th').map((__, th) => normalizeText($(th).text()).toLowerCase()).get();
+          const findIdx = (patterns) => headers.findIndex((h) => patterns.some((re) => re.test(h)));
+          const dateIdx = findIdx([/^date$/, /event\s*date/, /run\s*date/]);
+          const runIdx = findIdx([/run\s*number/, /event\s*#/, /^#$/]);
+          const finishersIdx = findIdx([/finishers/, /participants/, /runners/]);
+
+          bodyRows.each((__, tr) => {
+            const row = $(tr);
+            const tds = row.find('td');
+            if (!tds.length) return;
+            const cells = tds.map((___, td) => normalizeText($(td).text())).get();
+            const pick = (idx) => (idx >= 0 && idx < cells.length ? cells[idx] : '');
+
+            let dateMs = parseDateMs(pick(dateIdx));
+            if (!dateMs) {
+              for (const cellText of cells) {
+                const parsed = parseDateMs(cellText);
+                if (parsed) {
+                  dateMs = parsed;
+                  break;
+                }
+              }
+            }
+            const dateKey = toDateKey(dateMs);
+
+            let runSeq = parseIntLoose(pick(runIdx));
+            const href = row.find('a[href]').first().attr('href') || '';
+            if (!runSeq) runSeq = parseRunSeqFromUrl(href);
+
+            let participants = parseIntLoose(pick(finishersIdx));
+            if (!participants) {
+              const ints = cells
+                .map((value) => parseIntLoose(value))
+                .filter((value) => Number.isFinite(value) && value > 10);
+              participants = ints.length ? ints[ints.length - 1] : null;
+            }
+
+            if (!dateKey && !runSeq) return;
+            const resultUrl = normalizeParkrunUrl(href, eventHistoryUrl) || (runSeq ? `${eventBaseUrl.replace(/\/+$/, '')}/${runSeq}/` : null);
+            const entry = {
+              dateMs,
+              dateKey,
+              runSeq: runSeq || null,
+              participants: participants || null,
+              resultUrl: resultUrl || null,
+            };
+            if (dateKey && !byDate.has(dateKey)) byDate.set(dateKey, entry);
+            if (runSeq && !byRun.has(runSeq)) byRun.set(runSeq, entry);
+          });
+
+          if (byDate.size || byRun.size) return false;
+        });
+      }
+
+      const eventTitleRaw = normalizeText($('.Results-header h1').first().text() || $('h1').first().text());
+      const eventName = normalizeText(eventTitleRaw.replace(/\s*Event History\s*$/i, ''));
+      const indexed = {
+        byDate,
+        byRun,
+        eventName: eventName || null,
+        eventSlug: extractEventSlugFromBaseUrl(eventBaseUrl),
+        eventHistoryUrl,
+      };
+      eventHistoryCache.set(key, indexed);
+      return indexed;
+    } catch (error) {
+      console.warn('[syncParkrun] event history fetch failed:', eventBaseUrl, error?.message || error);
+      eventHistoryCache.set(key, empty);
+      return empty;
+    }
+  }
+
+  async function getEventResultMeta(eventResultUrl) {
+    if (!eventResultUrl) return null;
+    const key = String(eventResultUrl);
+    if (eventResultCache.has(key)) return eventResultCache.get(key);
+
+    const empty = {
+      fetchStatus: null,
+      participants: null,
+      runSeq: parseRunSeqFromUrl(eventResultUrl),
+      athleteFound: false,
+      athletePosition: null,
+      athleteTimeText: null,
+      athleteAgeGrade: null,
+      athleteAchievement: null,
+      eventDateMs: null,
+    };
+
+    try {
+      const html = await fetchHtml(eventResultUrl, 'Parkrun event result');
+      const $ = cheerio.load(html);
+      const rowsPrimary = $('table.Results-table tbody tr');
+      const rowsLegacy = $('table#results tbody tr');
+      const rows = rowsPrimary.length
+        ? rowsPrimary
+        : (rowsLegacy.length ? rowsLegacy : $('table tbody tr'));
+      const participants = rows.length || null;
+      const headerText = normalizeText($('.Results-header h3').first().text() || '');
+      const headerRunSeq = (() => {
+        const m = headerText.match(/#\s*(\d+)/);
+        return m ? Number(m[1]) : null;
+      })();
+      let eventDateMs = null;
+      const dateCandidates = [
+        normalizeText($('time').first().attr('datetime') || $('time').first().text()),
+        normalizeText($('.Results-header h3').first().text()),
+        normalizeText($('.Results-header').first().text()),
+        normalizeText($('h1').first().text()),
+      ].filter(Boolean);
+      for (const candidate of dateCandidates) {
+        const direct = parseDateMs(candidate);
+        if (direct) {
+          eventDateMs = direct;
+          break;
+        }
+        const m = candidate.match(/(\d{1,2}\s+[A-Za-z]+\s+\d{4})/);
+        if (m) {
+          const parsed = parseDateMs(m[1]);
+          if (parsed) {
+            eventDateMs = parsed;
+            break;
+          }
+        }
+      }
+
+      let athleteFound = false;
+      let athletePosition = null;
+      let athleteTimeText = null;
+      let athleteAgeGrade = null;
+      let athleteAchievement = null;
+
+      rows.each((_, tr) => {
+        const row = $(tr);
+        const links = row.find('a[href*="/parkrunner/"]').toArray();
+        const found = links.some((a) => {
+          const href = normalizeText($(a).attr('href'));
+          return href && (href.includes(athleteLinkNeedle) || href.endsWith(athleteLinkNeedle.slice(0, -1)));
+        });
+        if (!found) return;
+        athleteFound = true;
+
+        athletePosition = parseIntLoose(row.attr('data-position')) || parseIntLoose(row.find('td').first().text());
+        athleteTimeText = normalizeText(row.find('.Results-table-td--time .compact').first().text())
+          || normalizeText(row.find('td').last().text());
+        athleteAgeGrade = parseNumberLoose(row.attr('data-agegrade'));
+        athleteAchievement = normalizeText(row.attr('data-achievement') || row.find('.Results-table-td--time .detailed').first().text());
+        if (!athleteTimeText) {
+          const rowTimes = row.find('td').map((__, td) => normalizeText($(td).text())).get();
+          const detected = rowTimes.find((text) => /^\d{1,2}:\d{2}(?::\d{2})?$/.test(text));
+          if (detected) athleteTimeText = detected;
+        }
+        if (athleteAgeGrade == null) {
+          const rowVals = row.find('td').map((__, td) => normalizeText($(td).text())).get();
+          const ageCell = rowVals.find((value) => /%$/.test(value));
+          if (ageCell) athleteAgeGrade = parseNumberLoose(ageCell);
+        }
+        return false;
+      });
+
+      const meta = {
+        fetchStatus: 200,
+        participants: participants || null,
+        runSeq: headerRunSeq || parseRunSeqFromUrl(eventResultUrl),
+        athleteFound,
+        athletePosition: athletePosition || null,
+        athleteTimeText: athleteTimeText || null,
+        athleteAgeGrade: athleteAgeGrade != null ? Number(athleteAgeGrade) : null,
+        athleteAchievement: athleteAchievement || null,
+        eventDateMs: eventDateMs || null,
+      };
+      eventResultCache.set(key, meta);
+      return meta;
+    } catch (error) {
+      console.warn('[syncParkrun] event result fetch failed:', eventResultUrl, error?.message || error);
+      const failed = {
+        ...empty,
+        fetchStatus: Number(error?.status || 0) || null,
+      };
+      eventResultCache.set(key, failed);
+      return failed;
+    }
+  }
+
+  async function buildAthleteRowsFromEventFallback() {
+    const profileEventSlug = slugify(String(profileData?.parkrunDefaultEventSlug || '').toLowerCase());
+    const profileStartRun = parseIntLoose(profileData?.parkrunDefaultStartRun);
+    const profileMaxBack = parseIntLoose(profileData?.parkrunFallbackMaxBack);
+    const maxBack = Math.min(Math.max(optionMaxBack || profileMaxBack || 180, 20), 600);
+
+    const inferSlugFromText = (value) => {
+      const text = normalizeText(value || '');
+      if (!text) return null;
+      let m = text.match(/([A-Za-z][A-Za-z0-9' -]{2,}?)\s+parkrun\b/i);
+      if (m?.[1]) {
+        const candidate = slugify(m[1]);
+        if (candidate && !['pre', 'post', 'warmup', 'warm-up', 'cooldown', 'cool-down'].includes(candidate)) return candidate;
+      }
+      m = text.match(/\bparkrun\s+([A-Za-z][A-Za-z0-9' -]{2,})/i);
+      if (m?.[1]) {
+        const candidate = slugify(m[1]);
+        if (candidate && !['pre', 'post', 'warmup', 'warm-up', 'cooldown', 'cool-down'].includes(candidate)) return candidate;
+      }
+      return null;
+    };
+
+    let eventSlug = optionEventSlug || profileEventSlug;
+    if (!eventSlug) {
+      try {
+        const prSnap = await db.collection('metrics_workouts')
+          .where('ownerUid', '==', uid)
+          .where('provider', '==', 'parkrun')
+          .orderBy('startDate', 'desc')
+          .limit(30)
+          .get();
+        for (const docSnap of prSnap.docs) {
+          const data = docSnap.data() || {};
+          const inferred = slugify(String(data.eventSlug || '').toLowerCase()) || inferSlugFromText(data.event || data.name);
+          if (inferred) {
+            eventSlug = inferred;
+            break;
+          }
+        }
+      } catch { }
+    }
+    if (!eventSlug) {
+      try {
+        const stravaSnap = await db.collection('metrics_workouts')
+          .where('ownerUid', '==', uid)
+          .where('provider', '==', 'strava')
+          .orderBy('startDate', 'desc')
+          .limit(300)
+          .get();
+        for (const docSnap of stravaSnap.docs) {
+          const data = docSnap.data() || {};
+          const inferred = inferSlugFromText(data.name);
+          if (inferred) {
+            eventSlug = inferred;
+            break;
+          }
+        }
+      } catch { }
+    }
+
+    if (!eventSlug) {
+      return {
+        rows: [],
+        sourceUrl: null,
+        error: new Error('Fallback requires a Parkrun event slug. Set parkrunDefaultEventSlug or run a Strava activity named like "<event> parkrun".'),
+      };
+    }
+
+    const eventBaseUrl = `${base}/${eventSlug}/results/`;
+    const historyIndex = await getEventHistoryIndex(eventBaseUrl);
+    const maxRunFromHistory = (() => {
+      const nums = Array.from(historyIndex?.byRun?.keys?.() || [])
+        .map((value) => Number(value))
+        .filter((value) => Number.isFinite(value) && value > 0);
+      if (!nums.length) return null;
+      return Math.max(...nums);
+    })();
+    const startRun = optionStartRun || maxRunFromHistory || profileStartRun;
+    if (!startRun) {
+      return {
+        rows: [],
+        sourceUrl: historyIndex?.eventHistoryUrl || `${eventBaseUrl}eventhistory/`,
+        error: new Error('Fallback requires a start run number. Set parkrunDefaultStartRun or ensure event history is reachable.'),
+      };
+    }
+
+    const rows = [];
+    let lastError = null;
+    let consecutiveBlockedPages = 0;
+
+    for (let i = 0; i < maxBack; i++) {
+      const runSeq = startRun - i;
+      if (runSeq <= 0) break;
+      const historyRow = historyIndex?.byRun?.get(runSeq) || null;
+      const eventResultUrl = historyRow?.resultUrl || `${eventBaseUrl}${runSeq}/`;
+
+      let meta = null;
+      try {
+        meta = await getEventResultMeta(eventResultUrl);
+      } catch (error) {
+        lastError = error;
+        continue;
+      }
+      if (!meta?.athleteFound) {
+        const fetchStatus = Number(meta?.fetchStatus || 0);
+        if (fetchStatus >= 400) {
+          lastError = new Error(`Parkrun event result fetch failed (HTTP ${fetchStatus}) for ${eventResultUrl}`);
+        }
+        if (fetchStatus === 403 || fetchStatus === 405) {
+          consecutiveBlockedPages += 1;
+          if (consecutiveBlockedPages >= 8) break;
+        } else {
+          consecutiveBlockedPages = 0;
+        }
+        continue;
+      }
+      consecutiveBlockedPages = 0;
+
+      const dateMs = historyRow?.dateMs || meta?.eventDateMs || null;
+      const timeSec = parseDurationSeconds(meta?.athleteTimeText || '');
+      if (!dateMs || !timeSec) continue;
+
+      const eventNameRaw = normalizeText(historyIndex?.eventName || `${eventSlug} parkrun`);
+      const eventName = /parkrun/i.test(eventNameRaw) ? eventNameRaw : `${eventNameRaw} parkrun`;
+      const ageGradeText = meta?.athleteAgeGrade != null ? `${Number(meta.athleteAgeGrade).toFixed(2)}%` : null;
+      const achievement = normalizeText(meta?.athleteAchievement || '');
+      const pbFlag = /pb/i.test(achievement);
+      rows.push({
+        eventText: eventName,
+        eventSlug,
+        docSlug: slugify(eventName) || `${eventSlug}-parkrun`,
+        eventBaseUrl,
+        eventResultUrl,
+        dateMs,
+        timeSec,
+        position: meta?.athletePosition || null,
+        ageGradeText,
+        runSeq,
+        participantsCount: historyRow?.participants || meta?.participants || null,
+        isPb: pbFlag,
+        pbText: achievement || null,
+      });
+    }
+
+    if (rows.length && (!profileEventSlug || !profileStartRun)) {
+      await db.collection('profiles').doc(uid).set({
+        parkrunDefaultEventSlug: eventSlug,
+        parkrunDefaultStartRun: startRun,
+      }, { merge: true }).catch(() => { });
+    }
+
+    return {
+      rows,
+      sourceUrl: historyIndex?.eventHistoryUrl || `${eventBaseUrl}eventhistory/`,
+      error: lastError,
+    };
+  }
+
+  async function buildAthleteRowsFromApiFallback() {
+    try {
+      const apiRows = await fetchParkrunAthleteResultsFromApi(uid, athleteIdSafe, { limit: 100, maxPages: 25 });
+      if (!apiRows.length) {
+        return {
+          rows: [],
+          sourceUrl: 'parkrun_api:/v1/results',
+          error: new Error('Parkrun API returned no results'),
+        };
+      }
+
+      const rows = [];
+      for (const raw of apiRows) {
+        const eventNameRaw = normalizeText(raw?.EventLongName || raw?.EventName || raw?.EventShortName || raw?.HomeRunName || '');
+        const eventName = eventNameRaw ? (/parkrun/i.test(eventNameRaw) ? eventNameRaw : `${eventNameRaw} parkrun`) : 'parkrun';
+        const eventSlug = slugify(String(raw?.EventName || raw?.EventShortName || eventNameRaw).replace(/\bparkrun\b.*$/i, '').trim()) || null;
+        const dateMs = parseDateMs(raw?.EventDate || raw?.RunDate || raw?.Date || null);
+        const timeText = normalizeText(raw?.RunTime || raw?.FinishTime || raw?.Time || '');
+        const timeSec = parseDurationSeconds(timeText);
+        if (!dateMs || !timeSec) continue;
+
+        const runSeq = parseIntLoose(raw?.EventNumber || raw?.EventNo || raw?.EventID);
+        const position = parseIntLoose(raw?.FinishPosition || raw?.Position || raw?.Pos);
+        const participantsCount = parseIntLoose(raw?.TotalFinishers || raw?.Finishers || raw?.Participants || raw?.TotalRunners || raw?.FieldSize);
+        const ageGradeNum = parseNumberLoose(raw?.AgeGrading || raw?.AgeGrade || raw?.AgeGradePercent);
+        const ageGradeText = ageGradeNum != null ? `${Number(ageGradeNum).toFixed(2)}%` : null;
+        const isPb = parseBoolLoose(raw?.GenuinePB) || parseBoolLoose(raw?.WasPbRun) || parseBoolLoose(raw?.PB);
+        const pbText = isPb ? (parseBoolLoose(raw?.GenuinePB) ? 'Genuine PB' : 'PB') : null;
+        const eventBaseUrl = eventSlug ? `${base}/${eventSlug}/results/` : null;
+        const eventResultUrl = runSeq && eventBaseUrl ? `${eventBaseUrl}${runSeq}/` : null;
+        const docSlug = slugify(eventName || eventSlug || 'parkrun');
+
+        rows.push({
+          eventText: eventName,
+          eventSlug: eventSlug || null,
+          docSlug: docSlug || null,
+          eventBaseUrl,
+          eventResultUrl,
+          dateMs,
+          timeSec,
+          position: position || null,
+          ageGradeText,
+          runSeq: runSeq || null,
+          participantsCount: participantsCount || null,
+          isPb,
+          pbText,
+          skipHtmlEnrichment: true,
+        });
+      }
+
+      rows.sort((a, b) => (b.dateMs || 0) - (a.dateMs || 0));
+      return {
+        rows,
+        sourceUrl: 'parkrun_api:/v1/results',
+        error: null,
+      };
+    } catch (error) {
+      return {
+        rows: [],
+        sourceUrl: 'parkrun_api:/v1/results',
+        error,
+      };
+    }
+  }
+
+  if (!athleteRows.length) {
+    const fallback = await buildAthleteRowsFromEventFallback();
+    if (fallback?.rows?.length) {
+      athleteRows = fallback.rows;
+      sourceUrlUsed = fallback.sourceUrl || sourceUrlUsed;
+    } else {
+      const apiFallback = await buildAthleteRowsFromApiFallback();
+      if (apiFallback?.rows?.length) {
+        athleteRows = apiFallback.rows;
+        sourceUrlUsed = apiFallback.sourceUrl || sourceUrlUsed;
+      } else {
+      const details = [];
+      if (lastHistoryError?.message) details.push(`athlete history: ${lastHistoryError.message}`);
+      if (fallback?.error?.message) details.push(`fallback: ${fallback.error.message}`);
+      if (apiFallback?.error?.message) details.push(`api fallback: ${apiFallback.error.message}`);
+      const suffix = details.length ? ` Last error: ${details.join(' | ')}` : '';
+      throw new Error(`Parkrun page returned no parsable result rows. Check athlete ID, country base URL, or anti-bot response.${suffix}`);
+      }
+    }
+  }
+
+  for (const row of athleteRows) {
+    const dateMs = row.dateMs;
+    const timeSec = row.timeSec;
+    if (!dateMs || !timeSec) continue;
+
+    let eventName = normalizeText(row.eventText || '');
+    let canonicalEventSlug = row.eventSlug || null;
+    let docSlug = row.docSlug || null;
+    let eventRunSeqNumber = row.runSeq || null;
+    let eventResultUrl = row.eventResultUrl || null;
+    let participantsCount = row.participantsCount || null;
+    let position = row.position || null;
+    let ageGradeText = row.ageGradeText || null;
+    let pbFlag = !!row.isPb;
+    let pbText = row.pbText || null;
+
+    if (row.eventBaseUrl && !row.skipHtmlEnrichment) {
+      const historyIndex = await getEventHistoryIndex(row.eventBaseUrl);
+      const historyMatch = historyIndex?.byDate?.get(toDateKey(dateMs)) || null;
+      if (historyIndex?.eventName) eventName = historyIndex.eventName;
+      if (historyIndex?.eventSlug) canonicalEventSlug = historyIndex.eventSlug;
+      if (historyMatch) {
+        if (!eventRunSeqNumber && historyMatch.runSeq) eventRunSeqNumber = historyMatch.runSeq;
+        if (!participantsCount && historyMatch.participants) participantsCount = historyMatch.participants;
+        if (!eventResultUrl && historyMatch.resultUrl) eventResultUrl = historyMatch.resultUrl;
+      }
+      if (!eventResultUrl && eventRunSeqNumber) {
+        eventResultUrl = `${row.eventBaseUrl.replace(/\/+$/, '')}/${eventRunSeqNumber}/`;
+      }
+    }
+
+    if (eventResultUrl && !row.skipHtmlEnrichment) {
+      const meta = await getEventResultMeta(eventResultUrl);
+      if (!participantsCount && meta?.participants) participantsCount = meta.participants;
+      if (!eventRunSeqNumber && meta?.runSeq) eventRunSeqNumber = meta.runSeq;
+      if (!position && meta?.athletePosition) position = meta.athletePosition;
+      if (!ageGradeText && meta?.athleteAgeGrade != null) ageGradeText = `${Number(meta.athleteAgeGrade).toFixed(2)}%`;
+      if (!pbText && meta?.athleteAchievement) pbText = meta.athleteAchievement;
+      if (!pbFlag && /pb/i.test(String(meta?.athleteAchievement || ''))) pbFlag = true;
+    }
+
+    if (!eventName) eventName = canonicalEventSlug ? `${canonicalEventSlug} parkrun` : 'parkrun';
+    if (!docSlug) {
+      const withParkrun = /parkrun/i.test(eventName) ? eventName : `${eventName} parkrun`;
+      docSlug = slugify(withParkrun) || slugify(canonicalEventSlug || eventName) || 'unknown-parkrun';
+    }
+    if (!canonicalEventSlug) {
+      canonicalEventSlug = slugify(String(eventName).replace(/\bparkrun\b.*$/i, '').trim()) || slugify(docSlug.replace(/-parkrun.*$/, ''));
+    }
+
+    const dateKey = toDateKey(dateMs);
+    const docId = `${uid}_parkrun_${dateKey}_${docSlug}`;
+    const participantsInt = parseIntLoose(participantsCount);
+    const positionInt = parseIntLoose(position);
+    const percentileTop = (participantsInt && positionInt && participantsInt >= positionInt)
+      ? Number((((participantsInt - positionInt + 1) / participantsInt) * 100).toFixed(2))
+      : null;
 
     const payload = {
       id: docId,
       ownerUid: uid,
       provider: 'parkrun',
-      parkrunAthleteId: athleteId,
-      event: eventText,
-      eventSlug,
+      parkrunAthleteId: athleteIdSafe,
+      event: eventName,
+      eventSlug: canonicalEventSlug || null,
       eventResultUrl: eventResultUrl || null,
       eventRunSeqNumber: eventRunSeqNumber || null,
-      name: `parkrun ${eventText}`,
+      name: `parkrun ${eventName}`,
       type: 'Run',
       startDate: dateMs,
       utcStartDate: new Date(dateMs).toISOString(),
-      elapsedTime_s: secs,
-      movingTime_s: secs,
+      elapsedTime_s: row.timeSec || timeSec,
+      movingTime_s: row.timeSec || timeSec,
       distance_m: 5000,
-      position: positionText ? Number(positionText) || null : null,
+      position: positionInt || null,
       ageGrade: ageGradeText || null,
-      ageCategory: ageCatText || null,
-      participantsCount: participantsCount || null,
-      percentileTop: (participantsCount && positionText) ? Number((((participantsCount - (Number(positionText) || 0) + 1) / participantsCount) * 100).toFixed(2)) : null,
+      participantsCount: participantsInt || null,
+      percentileTop,
+      parkrunPb: pbFlag,
+      parkrunAchievement: pbText || null,
       source: 'parkrun',
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -11441,8 +12984,17 @@ async function _syncParkrunInternal(uid, athleteId, countryBaseUrl) {
     await db.collection('metrics_workouts').doc(docId).set(payload, { merge: true });
     imported += 1;
   }
-  await db.collection('profiles').doc(uid).set({ parkrunAthleteId: athleteId, parkrunLastSyncAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-  return { ok: true, imported };
+
+  await db.collection('profiles').doc(uid).set({
+    parkrunAthleteId: athleteIdSafe,
+    parkrunLastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
+    parkrunLastSyncStatus: 'success',
+    parkrunLastSyncImported: imported,
+    parkrunLastSyncSourceUrl: sourceUrlUsed || null,
+    parkrunLastErrorAt: admin.firestore.FieldValue.delete(),
+    parkrunLastErrorMessage: admin.firestore.FieldValue.delete(),
+  }, { merge: true });
+  return { ok: true, imported, sourceUrl: sourceUrlUsed || null };
 }
 
 // Match Parkrun entries to Strava runs to backfill HR and links
@@ -11472,6 +13024,8 @@ async function reconcileParkrunToStrava(uid, { maxStrava = 500 } = {}) {
     .filter((s) => (s.startDate || s.utcStartDate) && (s.distance_m || 0) > 1000);
 
   let matched = 0;
+  const maxTimeDiffMs = 18 * 60 * 60 * 1000; // same-day with timezone drift
+  const maxDistanceDiffM = 2000; // user requirement: allow +/-1-2km
 
   const toMs = (v) => {
     if (!v) return null;
@@ -11490,13 +13044,13 @@ async function reconcileParkrunToStrava(uid, { maxStrava = 500 } = {}) {
         const sd = toMs(s.startDate) || toMs(s.utcStartDate);
         if (!sd) return null;
         const timeDiff = Math.abs(sd - prDate); // ms
-        if (timeDiff > 1000 * 60 * 120) return null; // >2h away
+        if (timeDiff > maxTimeDiffMs) return null;
         const dist = Number(s.distance_m || 0);
-        if (dist && Math.abs(dist - 5000) > 600) return null; // keep near 5k
+        const distancePenalty = dist ? Math.abs(dist - 5000) : 1200;
+        if (dist && distancePenalty > maxDistanceDiffM) return null;
         const name = String(s.name || '').toLowerCase();
         const nameMatch = slug && name.includes(slug);
-        const distancePenalty = dist ? Math.abs(dist - 5000) : 500;
-        const score = timeDiff / (1000 * 60) + distancePenalty / 10 - (nameMatch ? 30 : 0);
+        const score = timeDiff / (1000 * 60) + distancePenalty / 25 - (nameMatch ? 45 : 0);
         return { s, score, timeDiff, distancePenalty, nameMatch };
       })
       .filter(Boolean)
@@ -11506,12 +13060,14 @@ async function reconcileParkrunToStrava(uid, { maxStrava = 500 } = {}) {
     if (!best) continue;
 
     // Apply match if reasonably close
-    if (best.timeDiff <= 1000 * 60 * 120 && best.distancePenalty <= 800) {
+    if (best.timeDiff <= maxTimeDiffMs && best.distancePenalty <= maxDistanceDiffM) {
       const ref = db.collection('metrics_workouts').doc(pr.id);
       await ref.set({
         stravaActivityId: best.s.stravaActivityId || String(best.s.stravaActivityId || '').replace(`${uid}_`, '') || null,
         avgHeartrate: best.s.avgHeartrate || pr.avgHeartrate || null,
         maxHeartrate: best.s.maxHeartrate || pr.maxHeartrate || null,
+        matchedDistanceDelta_m: Math.round(best.distancePenalty),
+        matchedTimeDiffMin: Math.round(best.timeDiff / (60 * 1000)),
         matchedVia: 'strava_matcher',
         matchedAt: admin.firestore.FieldValue.serverTimestamp(),
       }, { merge: true });
@@ -11526,11 +13082,30 @@ async function reconcileParkrunToStrava(uid, { maxStrava = 500 } = {}) {
 exports.syncParkrun = httpsV2.onCall(async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
   const uid = req.auth.uid;
-  let { athleteId, profileUrl, countryBaseUrl } = req.data || {};
+  let { athleteId, profileUrl, countryBaseUrl, eventSlug, startRun, maxBack, username, password } = req.data || {};
   console.log('[syncParkrun] uid', uid, 'athleteId', athleteId, 'profileUrl?', !!profileUrl, 'base?', countryBaseUrl);
   athleteId = (athleteId || '').toString().trim();
   profileUrl = (profileUrl || '').toString().trim();
   countryBaseUrl = (countryBaseUrl || '').toString().trim();
+  eventSlug = (eventSlug || '').toString().trim();
+  username = (username || '').toString().trim();
+  password = (password || '').toString();
+  startRun = Number(startRun || 0) || null;
+  maxBack = Number(maxBack || 0) || null;
+
+  if (username && password) {
+    try {
+      const connected = await connectParkrunApiForUser(uid, {
+        username,
+        password,
+        athleteIdHint: athleteId ? Number(athleteId) : null,
+      });
+      if (!athleteId && connected?.athleteId) athleteId = String(connected.athleteId);
+    } catch (error) {
+      throw new httpsV2.HttpsError('failed-precondition', `Parkrun API authentication failed: ${error?.message || error}`);
+    }
+  }
+
   if (!athleteId && profileUrl) {
     const match1 = profileUrl.match(/athleteNumber=(\d+)/i);
     const match2 = profileUrl.match(/parkrunner\/(\d+)/i);
@@ -11540,17 +13115,26 @@ exports.syncParkrun = httpsV2.onCall(async (req) => {
     throw new httpsV2.HttpsError('invalid-argument', 'Provide Parkrun athleteId or profileUrl containing athleteNumber.');
   }
   try {
-    const result = await _syncParkrunInternal(uid, athleteId, countryBaseUrl);
+    const result = await _syncParkrunInternal(uid, athleteId, countryBaseUrl, { eventSlug, startRun, maxBack });
     await recordIntegrationLog(uid, 'parkrun', 'success', 'Parkrun results synced', {
       imported: result?.imported || 0,
       athleteId,
       countryBaseUrl,
+      eventSlug: eventSlug || null,
+      startRun: startRun || null,
     });
     return result;
   } catch (error) {
+    await admin.firestore().collection('profiles').doc(uid).set({
+      parkrunLastSyncStatus: 'error',
+      parkrunLastErrorAt: admin.firestore.FieldValue.serverTimestamp(),
+      parkrunLastErrorMessage: error?.message || 'Parkrun sync failed',
+    }, { merge: true });
     await recordIntegrationLog(uid, 'parkrun', 'error', error?.message || 'Parkrun sync failed', {
       athleteId,
       countryBaseUrl,
+      eventSlug: eventSlug || null,
+      startRun: startRun || null,
     });
     if (error instanceof httpsV2.HttpsError) throw error;
     throw new httpsV2.HttpsError('internal', error?.message || 'Failed to sync Parkrun results');
@@ -11578,12 +13162,35 @@ exports.getFitnessOverview = httpsV2.onCall(async (req) => {
   return await _getFitnessOverview(uid, days);
 });
 
-async function _getFitnessOverview(uid, days) {
-  const sinceMs = Date.now() - days * 24 * 60 * 60 * 1000;
+function workoutHasDadMarker(workout) {
+  const text = `${String(workout?.title || '')} ${String(workout?.name || '')} ${String(workout?.event || '')}`.toLowerCase();
+  return /\bdad\b/i.test(text);
+}
+
+async function shouldExcludeDadTaggedWorkouts(uid) {
   const db = admin.firestore();
+  return db.collection('profiles').doc(uid).get()
+    .then((snap) => {
+      const data = snap.exists ? (snap.data() || {}) : {};
+      return data.excludeWithDadFromMetrics !== false;
+    })
+    .catch(() => true);
+}
+
+async function _getFitnessOverview(uid, days) {
+  const nowMs = Date.now();
+  const sinceMs = nowMs - days * 24 * 60 * 60 * 1000;
+  const db = admin.firestore();
+  const excludeWithDadFromMetrics = await shouldExcludeDadTaggedWorkouts(uid);
   const workoutsSnap = await db.collection('metrics_workouts').where('ownerUid', '==', uid).limit(1000).get();
-  const workouts = workoutsSnap.docs
+  const rawWorkouts = workoutsSnap.docs
     .map(d => ({ id: d.id, ...d.data() }))
+    .filter((w) => {
+      if (!(w.provider === 'strava' || w.provider === 'parkrun')) return false;
+      if (excludeWithDadFromMetrics && workoutHasDadMarker(w)) return false;
+      return true;
+    });
+  const workouts = rawWorkouts
     .filter(w => (w.startDate || 0) >= sinceMs && (w.provider === 'strava' || w.provider === 'parkrun'))
     .sort((a, b) => (a.startDate || 0) - (b.startDate || 0));
   const hrvSnap = await db.collection('metrics_hrv').where('ownerUid', '==', uid).limit(1000).get();
@@ -11598,6 +13205,65 @@ async function _getFitnessOverview(uid, days) {
     .sort((a, b) => a._ms - b._ms);
   const km = (m) => (typeof m === 'number' ? m / 1000 : 0);
   const sec = (s) => (typeof s === 'number' ? s : 0);
+  const avg = (arr) => arr.length ? (arr.reduce((a, b) => a + b, 0) / arr.length) : null;
+  const clamp01 = (value) => Math.max(0, Math.min(1, value));
+  const fmtSecs = (value) => {
+    if (!value || !Number.isFinite(value)) return null;
+    const total = Math.max(0, Math.round(value));
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    return `${m}:${String(s).padStart(2, '0')}`;
+  };
+  const readRpe = (workout) => {
+    const explicit = Number(workout.perceivedExertion ?? workout.rpe ?? workout.stravaRpe ?? null);
+    if (Number.isFinite(explicit) && explicit > 0) return Math.min(10, Math.max(1, explicit));
+    const suffer = Number(workout.sufferScore ?? null);
+    if (Number.isFinite(suffer) && suffer > 0) return Math.min(10, Math.max(1, suffer / 10));
+    return null;
+  };
+  const classifySport = (workout) => {
+    if (!workout) return 'other';
+    if (String(workout.provider || '').toLowerCase() === 'parkrun') return 'run';
+    if (workout.run === true) return 'run';
+    const type = String(workout.sportType || workout.type || '').toLowerCase();
+    if (type.includes('swim')) return 'swim';
+    if (type.includes('ride') || type.includes('bike') || type.includes('cycling')) return 'bike';
+    if (type.includes('run') || type.includes('walk') || type.includes('hike')) return 'run';
+    return 'other';
+  };
+  const buildNormalizedPredictions = (sport, targetKm, {
+    minKm = 0.2,
+    maxKm = 200,
+    exponent = 1.06,
+  } = {}) => {
+    return workouts
+      .map((w) => {
+        if (classifySport(w) !== sport) return null;
+        const distanceKm = km(w.distance_m);
+        const timeSec = sec(w.elapsedTime_s || w.movingTime_s);
+        if (!distanceKm || !timeSec) return null;
+        if (distanceKm < minKm || distanceKm > maxKm) return null;
+        const normalizedSec = timeSec * Math.pow(targetKm / distanceKm, exponent);
+        return {
+          id: w.id,
+          provider: w.provider || null,
+          startDate: Number(w.startDate || 0),
+          distanceKm,
+          timeSec,
+          normalizedSec,
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.startDate - b.startDate);
+  };
+  const bestNormalized = (items) => {
+    if (!Array.isArray(items) || !items.length) return null;
+    return items.reduce((winner, item) => (!winner || item.normalizedSec < winner.normalizedSec ? item : winner), null);
+  };
+  const yearStartMs = Date.UTC(new Date().getUTCFullYear(), 0, 1);
+
   const weekly = new Map();
   let totalKm = 0, totalSec = 0, sessions = 0;
   for (const w of workouts) {
@@ -11611,27 +13277,53 @@ async function _getFitnessOverview(uid, days) {
     agg.distanceKm += dist; agg.timeSec += time; agg.sessions += 1;
     weekly.set(key, agg); totalKm += dist; totalSec += time; sessions += 1;
   }
-  const since30 = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  const since30 = nowMs - 30 * 24 * 60 * 60 * 1000;
   const last30 = workouts.filter(w => (w.startDate || 0) >= since30);
   const dist30 = last30.reduce((s, w) => s + km(w.distance_m), 0);
   const time30 = last30.reduce((s, w) => s + sec(w.movingTime_s || w.elapsedTime_s), 0);
   const avgPaceMinPerKm = dist30 > 0 ? (time30 / 60) / dist30 : null;
+  const sportDistanceLast30 = { runKm: 0, swimKm: 0, bikeKm: 0 };
+  const sportDistanceRange = { runKm: 0, swimKm: 0, bikeKm: 0 };
+  const sportDistanceYtd = { runKm: 0, swimKm: 0, bikeKm: 0 };
+  for (const w of workouts) {
+    const sport = classifySport(w);
+    const distKmVal = km(w.distance_m);
+    if (sport === 'run') sportDistanceRange.runKm += distKmVal;
+    else if (sport === 'swim') sportDistanceRange.swimKm += distKmVal;
+    else if (sport === 'bike') sportDistanceRange.bikeKm += distKmVal;
+  }
+  for (const w of last30) {
+    const sport = classifySport(w);
+    const distKmVal = km(w.distance_m);
+    if (sport === 'run') sportDistanceLast30.runKm += distKmVal;
+    else if (sport === 'swim') sportDistanceLast30.swimKm += distKmVal;
+    else if (sport === 'bike') sportDistanceLast30.bikeKm += distKmVal;
+  }
+  for (const w of rawWorkouts) {
+    const startMs = Number(w.startDate || 0);
+    if (!startMs || startMs < yearStartMs) continue;
+    const sport = classifySport(w);
+    const distKmVal = km(w.distance_m);
+    if (sport === 'run') sportDistanceYtd.runKm += distKmVal;
+    else if (sport === 'swim') sportDistanceYtd.swimKm += distKmVal;
+    else if (sport === 'bike') sportDistanceYtd.bikeKm += distKmVal;
+  }
   const toVal = (x) => Number(x?.value ?? x?.rMSSD ?? x?.hrv ?? null) || null;
-  const last7Ms = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const last7Ms = nowMs - 7 * 24 * 60 * 60 * 1000;
   const last30Ms = since30;
   const hrvLast7 = hrv.filter(x => x._ms >= last7Ms).map(toVal).filter(Boolean);
   const hrvLast30 = hrv.filter(x => x._ms >= last30Ms).map(toVal).filter(Boolean);
-  const avg = (arr) => arr.length ? (arr.reduce((a, b) => a + b, 0) / arr.length) : null;
   const hrv7 = avg(hrvLast7);
   const hrv30 = avg(hrvLast30);
   const hrvTrendPct = (hrv7 && hrv30) ? ((hrv7 - hrv30) / hrv30) * 100 : null;
   const weeks = Array.from(weekly.values());
   const recentWeeks = weeks.slice(-4);
   const volKm = recentWeeks.reduce((s, x) => s + x.distanceKm, 0) / Math.max(recentWeeks.length, 1);
-  const volScore = Math.max(0, Math.min(1, volKm / 50));
-  const hrvScore = (hrvTrendPct == null) ? 0.5 : Math.max(0, Math.min(1, (hrvTrendPct + 10) / 20));
-  const fitnessScore = Math.round((volScore * 0.6 + hrvScore * 0.4) * 100);
+  const volScore = clamp01(volKm / 50);
+  const hrvScore = (hrvTrendPct == null) ? 0.5 : clamp01((hrvTrendPct + 10) / 20);
   const zoneTotals = { z1Time_s: 0, z2Time_s: 0, z3Time_s: 0, z4Time_s: 0, z5Time_s: 0 };
+  const zoneTotals30 = { z1Time_s: 0, z2Time_s: 0, z3Time_s: 0, z4Time_s: 0, z5Time_s: 0 };
+  const zoneWeights = { z1Time_s: 1, z2Time_s: 2, z3Time_s: 3, z4Time_s: 4, z5Time_s: 5 };
   for (const w of workouts) {
     if (w.hrZones) {
       zoneTotals.z1Time_s += Number(w.hrZones.z1Time_s || 0);
@@ -11639,16 +13331,161 @@ async function _getFitnessOverview(uid, days) {
       zoneTotals.z3Time_s += Number(w.hrZones.z3Time_s || 0);
       zoneTotals.z4Time_s += Number(w.hrZones.z4Time_s || 0);
       zoneTotals.z5Time_s += Number(w.hrZones.z5Time_s || 0);
+      if ((w.startDate || 0) >= since30) {
+        zoneTotals30.z1Time_s += Number(w.hrZones.z1Time_s || 0);
+        zoneTotals30.z2Time_s += Number(w.hrZones.z2Time_s || 0);
+        zoneTotals30.z3Time_s += Number(w.hrZones.z3Time_s || 0);
+        zoneTotals30.z4Time_s += Number(w.hrZones.z4Time_s || 0);
+        zoneTotals30.z5Time_s += Number(w.hrZones.z5Time_s || 0);
+      }
     }
   }
+
+  const zoneTotalMinutes30 = Object.values(zoneTotals30).reduce((sum, value) => sum + (Number(value || 0) / 60), 0);
+  const zoneWeightedMinutes30 = Object.entries(zoneWeights).reduce((sum, [key, weight]) => {
+    return sum + (Number(zoneTotals30[key] || 0) / 60) * weight;
+  }, 0);
+  const intensityIndex30 = zoneTotalMinutes30 > 0 ? zoneWeightedMinutes30 / zoneTotalMinutes30 : null;
+  const intensityScore = intensityIndex30 == null ? 0.5 : clamp01((intensityIndex30 - 1) / 4);
+
+  const rpeSamples = workouts
+    .map((w) => ({ startDate: Number(w.startDate || 0), rpe: readRpe(w), durationMin: sec(w.movingTime_s || w.elapsedTime_s) / 60 }))
+    .filter((item) => item.rpe != null);
+  const rpeLast7 = rpeSamples.filter((item) => item.startDate >= last7Ms).map((item) => Number(item.rpe));
+  const rpeLast30 = rpeSamples.filter((item) => item.startDate >= last30Ms).map((item) => Number(item.rpe));
+  const avgRpe7 = avg(rpeLast7);
+  const avgRpe30 = avg(rpeLast30);
+  const rpeLoad30 = rpeSamples
+    .filter((item) => item.startDate >= last30Ms)
+    .reduce((sum, item) => sum + (Number(item.durationMin || 0) * Number(item.rpe || 0)), 0);
+  const rpeScore = avgRpe30 == null ? 0.5 : clamp01((10 - Math.abs(avgRpe30 - 6)) / 10);
+
+  const normalizedFiveKRuns = buildNormalizedPredictions('run', 5, { minKm: 3, maxKm: 21.2, exponent: 1.06 });
+  const best5k = bestNormalized(normalizedFiveKRuns);
+  const predicted5kSec = best5k ? Number(best5k.normalizedSec) : null;
+  const predictionSource = best5k?.provider || null;
+  const predicted10kSec = predicted5kSec ? predicted5kSec * Math.pow(2, 1.06) : null;
+  const HALF_MARATHON_KM = 21.0975;
+  const normalizedHalfMarathon = buildNormalizedPredictions('run', HALF_MARATHON_KM, { minKm: 3, maxKm: 42.2, exponent: 1.06 });
+  const bestHalfMarathon = bestNormalized(normalizedHalfMarathon);
+  const predictedHalfMarathonSec = bestHalfMarathon ? Number(bestHalfMarathon.normalizedSec) : null;
+
+  const normalizedSwim800 = buildNormalizedPredictions('swim', 0.8, { minKm: 0.2, maxKm: 5, exponent: 1.04 });
+  const bestSwim800 = bestNormalized(normalizedSwim800);
+  const predictedSwim800mSec = bestSwim800 ? Number(bestSwim800.normalizedSec) : null;
+  const predictedSwimSource = bestSwim800?.provider || null;
+
+  const FIFTY_KM = 50;
+  const normalizedBike50k = buildNormalizedPredictions('bike', FIFTY_KM, { minKm: 10, maxKm: 250, exponent: 1.06 });
+  const bestBike50k = bestNormalized(normalizedBike50k);
+  const predictedBike50kSec = bestBike50k ? Number(bestBike50k.normalizedSec) : null;
+  const THIRTY_MILES_KM = 48.28032;
+  const normalizedBike30mi = buildNormalizedPredictions('bike', THIRTY_MILES_KM, { minKm: 10, maxKm: 250, exponent: 1.06 });
+  const bestBike30mi = bestNormalized(normalizedBike30mi);
+  const predictedBike30miSec = bestBike30mi ? Number(bestBike30mi.normalizedSec) : null;
+  const predictedBikeSource = (bestBike50k?.provider || bestBike30mi?.provider || null);
+
+  let trendDirection = 'flat';
+  let trendSec = null;
+  let trendPct = null;
+  if (normalizedFiveKRuns.length >= 4) {
+    const recent = normalizedFiveKRuns.slice(-3).map((item) => item.normalizedSec);
+    const baseline = normalizedFiveKRuns.slice(-6, -3).map((item) => item.normalizedSec);
+    const recentAvg = avg(recent);
+    const baselineAvg = avg(baseline.length ? baseline : normalizedFiveKRuns.slice(0, Math.max(1, normalizedFiveKRuns.length - 3)).map((item) => item.normalizedSec));
+    if (recentAvg != null && baselineAvg != null) {
+      trendSec = Number((recentAvg - baselineAvg).toFixed(1));
+      trendPct = baselineAvg > 0 ? Number((((baselineAvg - recentAvg) / baselineAvg) * 100).toFixed(1)) : null;
+      if (trendSec <= -20) trendDirection = 'up';
+      else if (trendSec >= 20) trendDirection = 'down';
+      else trendDirection = 'flat';
+    }
+  }
+
+  const fitnessScore = Math.round((volScore * 0.4 + hrvScore * 0.2 + intensityScore * 0.25 + rpeScore * 0.15) * 100);
+  const normalizedFitnessScore = Math.max(0, Math.min(100, Number.isFinite(fitnessScore) ? fitnessScore : 0));
+  const fitnessLevel = normalizedFitnessScore >= 85
+    ? 'Peak'
+    : normalizedFitnessScore >= 70
+      ? 'Sharp'
+      : normalizedFitnessScore >= 55
+        ? 'Building'
+        : normalizedFitnessScore >= 40
+          ? 'Base'
+          : 'Rebuild';
+
+  const latestWorkout = workouts.length ? workouts[workouts.length - 1] : null;
   return {
     rangeDays: days,
+    filters: {
+      excludeWithDadFromMetrics,
+    },
     totals: { distanceKm: Number(totalKm.toFixed(2)), timeHours: Number((totalSec / 3600).toFixed(2)), sessions },
     last30: { distanceKm: Number(dist30.toFixed(2)), avgPaceMinPerKm: avgPaceMinPerKm ? Number(avgPaceMinPerKm.toFixed(2)) : null, workouts: last30.length },
+    sportTotals: {
+      range: {
+        runKm: Number(sportDistanceRange.runKm.toFixed(2)),
+        swimKm: Number(sportDistanceRange.swimKm.toFixed(2)),
+        bikeKm: Number(sportDistanceRange.bikeKm.toFixed(2)),
+      },
+      last30: {
+        runKm: Number(sportDistanceLast30.runKm.toFixed(2)),
+        swimKm: Number(sportDistanceLast30.swimKm.toFixed(2)),
+        bikeKm: Number(sportDistanceLast30.bikeKm.toFixed(2)),
+      },
+      ytd: {
+        runKm: Number(sportDistanceYtd.runKm.toFixed(2)),
+        swimKm: Number(sportDistanceYtd.swimKm.toFixed(2)),
+        bikeKm: Number(sportDistanceYtd.bikeKm.toFixed(2)),
+      },
+    },
     hrv: { last7Avg: hrv7 ? Number(hrv7.toFixed(1)) : null, last30Avg: hrv30 ? Number(hrv30.toFixed(1)) : null, trendPct: hrvTrendPct != null ? Number(hrvTrendPct.toFixed(1)) : null },
     hrZones: zoneTotals,
+    hrLoad: {
+      weightedMinutes30: Number(zoneWeightedMinutes30.toFixed(1)),
+      intensityIndex30: intensityIndex30 != null ? Number(intensityIndex30.toFixed(2)) : null,
+    },
+    rpe: {
+      samples: rpeSamples.length,
+      avg7: avgRpe7 != null ? Number(avgRpe7.toFixed(2)) : null,
+      avg30: avgRpe30 != null ? Number(avgRpe30.toFixed(2)) : null,
+      load30: Number(rpeLoad30.toFixed(1)),
+    },
+    predictions: {
+      fiveKSec: predicted5kSec != null ? Math.round(predicted5kSec) : null,
+      tenKSec: predicted10kSec != null ? Math.round(predicted10kSec) : null,
+      halfMarathonSec: predictedHalfMarathonSec != null ? Math.round(predictedHalfMarathonSec) : null,
+      fiveKDisplay: fmtSecs(predicted5kSec),
+      tenKDisplay: fmtSecs(predicted10kSec),
+      halfMarathonDisplay: fmtSecs(predictedHalfMarathonSec),
+      swim800mSec: predictedSwim800mSec != null ? Math.round(predictedSwim800mSec) : null,
+      swim800mDisplay: fmtSecs(predictedSwim800mSec),
+      bike50kSec: predictedBike50kSec != null ? Math.round(predictedBike50kSec) : null,
+      bike50kDisplay: fmtSecs(predictedBike50kSec),
+      bike30miSec: predictedBike30miSec != null ? Math.round(predictedBike30miSec) : null,
+      bike30miDisplay: fmtSecs(predictedBike30miSec),
+      trendDirection,
+      trendSec,
+      trendPct,
+      source: predictionSource,
+      swimSource: predictedSwimSource,
+      bikeSource: predictedBikeSource,
+    },
+    lastWorkout: latestWorkout ? {
+      id: latestWorkout.id || null,
+      provider: latestWorkout.provider || null,
+      title: latestWorkout.title || latestWorkout.name || null,
+      type: latestWorkout.type || latestWorkout.sportType || null,
+      startDate: latestWorkout.startDate || null,
+      distance_m: latestWorkout.distance_m || null,
+      duration_s: latestWorkout.movingTime_s || latestWorkout.elapsedTime_s || null,
+      avgHeartrate: latestWorkout.avgHeartrate || null,
+      perceivedExertion: latestWorkout.perceivedExertion ?? latestWorkout.rpe ?? null,
+      sufferScore: latestWorkout.sufferScore ?? null,
+    } : null,
     weekly: Array.from(weekly.entries()).map(([weekStart, w]) => ({ weekStart, ...w, paceMinPerKm: w.distanceKm > 0 ? Number(((w.timeSec / 60) / w.distanceKm).toFixed(2)) : null })),
-    fitnessScore
+    fitnessScore: normalizedFitnessScore,
+    fitnessLevel,
   };
 }
 
@@ -11689,6 +13526,7 @@ exports.enableFitnessAutomationDefaults = httpsV2.onCall(async (req) => {
     parkrunAutoComputePercentiles: true,
     autoEnrichStravaHR: true,
     autoComputeFitnessMetrics: true,
+    excludeWithDadFromMetrics: true,
   };
   if (defaultSlug && defaultRunSeq) {
     payload['parkrunDefaultEventSlug'] = defaultSlug;
@@ -11707,17 +13545,21 @@ exports.generateGoalStoriesAndKPIs = httpsV2.onCall(async (req) => {
 async function _getRunFitnessAnalysis(uid, days) {
   const sinceMs = Date.now() - days * 24 * 60 * 60 * 1000;
   const db = admin.firestore();
+  const excludeWithDadFromMetrics = await shouldExcludeDadTaggedWorkouts(uid);
   const wSnap = await db.collection('metrics_workouts').where('ownerUid', '==', uid).get();
-  const all = wSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  const all = wSnap.docs
+    .map(d => ({ id: d.id, ...d.data() }))
+    .filter((workout) => !(excludeWithDadFromMetrics && workoutHasDadMarker(workout)));
   const parkruns = all.filter(x => x.provider === 'parkrun' && (x.startDate || 0) >= sinceMs);
   const runs = all.filter(x => x.provider === 'strava' && (x.startDate || 0) >= sinceMs && (x.type === 'Run' || x.run === true));
   const pairs = [];
   for (const p of parkruns) {
     const pStart = p.startDate || 0;
-    const rCandidates = runs.filter(r => Math.abs((r.startDate || 0) - pStart) <= 12 * 3600 * 1000);
+    const rCandidates = runs.filter(r => Math.abs((r.startDate || 0) - pStart) <= 18 * 3600 * 1000);
     let best = null, bestScore = 1e12;
     for (const r of rCandidates) {
       const dist = Number(r.distance_m || 0);
+      if (dist && Math.abs(dist - 5000) > 2000) continue;
       const dScore = Math.abs(dist - 5000) + Math.abs((r.startDate || 0) - pStart) / 1000;
       if (dScore < bestScore) { best = r; bestScore = dScore; }
     }
@@ -11748,6 +13590,27 @@ async function _getRunFitnessAnalysis(uid, days) {
     return den ? num / den : null;
   }
   const corr = pearson(xs, ys);
+  const toSec = (entry) => Number(entry?.elapsedTime_s || entry?.movingTime_s || 0) || 0;
+  const formatSec = (value) => {
+    if (!value || !Number.isFinite(value)) return null;
+    const total = Math.max(0, Math.round(value));
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    return `${m}:${String(s).padStart(2, '0')}`;
+  };
+  const parkrunTimes = parkruns.map(toSec).filter((v) => v > 0).sort((a, b) => a - b);
+  const pbSec = parkrunTimes.length ? parkrunTimes[0] : null;
+  const predicted5kSec = pbSec;
+  const predicted10kSec = predicted5kSec ? predicted5kSec * Math.pow(2, 1.06) : null;
+  const avgPairRpe = (() => {
+    const vals = pairs
+      .map((pair) => Number(pair?.strava?.perceivedExertion ?? pair?.strava?.rpe ?? null))
+      .filter((n) => Number.isFinite(n) && n > 0);
+    if (!vals.length) return null;
+    return Number((vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(2));
+  })();
   const byMonth = new Map();
   for (const p of parkruns) {
     const d = new Date(p.startDate || Date.now());
@@ -11761,16 +13624,299 @@ async function _getRunFitnessAnalysis(uid, days) {
     const med = sorted.length ? sorted[Math.floor(sorted.length / 2)] : null;
     return { month, parkrunMedianSec: med };
   }).sort((a, b) => a.month.localeCompare(b.month));
+
+  const trend = (() => {
+    if (monthly.length < 2) return { direction: 'flat', deltaSec: null, deltaPct: null };
+    const latest = monthly[monthly.length - 1]?.parkrunMedianSec || null;
+    const previous = monthly[monthly.length - 2]?.parkrunMedianSec || null;
+    if (!latest || !previous) return { direction: 'flat', deltaSec: null, deltaPct: null };
+    const deltaSec = Number((latest - previous).toFixed(1));
+    const deltaPct = previous > 0 ? Number((((previous - latest) / previous) * 100).toFixed(1)) : null;
+    const direction = deltaSec <= -10 ? 'up' : deltaSec >= 10 ? 'down' : 'flat';
+    return { direction, deltaSec, deltaPct };
+  })();
+
   return {
     pairs: pairs.map(p => ({
-      parkrun: { date: new Date(p.parkrun.startDate).toISOString(), timeSec: p.parkrun.elapsedTime_s || p.parkrun.movingTime_s, position: p.parkrun.position || null, participants: p.parkrun.participantsCount || null, percentileTop: p.parkrun.percentileTop || null, ageGrade: p.parkrun.ageGrade || null },
-      strava: { activityId: p.strava.stravaActivityId, avgHeartrate: p.strava.avgHeartrate || null, hrZones: p.strava.hrZones || null }
+      parkrun: {
+        date: new Date(p.parkrun.startDate).toISOString(),
+        timeSec: p.parkrun.elapsedTime_s || p.parkrun.movingTime_s,
+        position: p.parkrun.position || null,
+        participants: p.parkrun.participantsCount || null,
+        percentileTop: p.parkrun.percentileTop || null,
+        ageGrade: p.parkrun.ageGrade || null,
+        isPb: pbSec != null && Math.abs(toSec(p.parkrun) - pbSec) < 0.5,
+      },
+      strava: {
+        activityId: p.strava.stravaActivityId,
+        avgHeartrate: p.strava.avgHeartrate || null,
+        perceivedExertion: p.strava.perceivedExertion ?? p.strava.rpe ?? null,
+        sufferScore: p.strava.sufferScore ?? null,
+        hrZones: p.strava.hrZones || null,
+      }
     })),
     correlationTimeVsAvgHR: corr,
     hrZonesAggregate: zoneAgg,
-    monthly
+    monthly,
+    parkrunPbSec: pbSec,
+    parkrunPbDisplay: formatSec(pbSec),
+    predicted5kSec: predicted5kSec ? Math.round(predicted5kSec) : null,
+    predicted5kDisplay: formatSec(predicted5kSec),
+    predicted10kSec: predicted10kSec ? Math.round(predicted10kSec) : null,
+    predicted10kDisplay: formatSec(predicted10kSec),
+    trend,
+    averagePairRpe: avgPairRpe,
   };
 }
+
+function detectFitnessMetricFromKpi(name, unit) {
+  const text = `${String(name || '').toLowerCase()} ${String(unit || '').toLowerCase()}`;
+  if (!text.trim()) return null;
+  if ((text.includes('half marathon') || text.includes('half-marathon') || text.includes('21k') || text.includes('21.1')) && (text.includes('time') || text.includes('pace') || text.includes('min') || text.includes('sec') || text.includes('hour') || text.includes('hr'))) {
+    return { key: 'predictedHalfMarathonSec', lowerIsBetter: true, source: 'strava+parkrun' };
+  }
+  if (text.includes('10k') && (text.includes('time') || text.includes('pace') || text.includes('min') || text.includes('sec'))) {
+    return { key: 'predicted10kSec', lowerIsBetter: true, source: 'strava+parkrun' };
+  }
+  if (text.includes('5k') && (text.includes('time') || text.includes('pace') || text.includes('min') || text.includes('sec'))) {
+    return { key: 'predicted5kSec', lowerIsBetter: true, source: 'strava+parkrun' };
+  }
+  if ((text.includes('800m') || text.includes('0.8k')) && (text.includes('time') || text.includes('pace') || text.includes('min') || text.includes('sec'))) {
+    return { key: 'predictedSwim800mSec', lowerIsBetter: true, source: 'strava' };
+  }
+  if ((text.includes('bike') || text.includes('cycle') || text.includes('ride') || text.includes('cycling')) && (text.includes('50k') || text.includes('50km') || text.includes('50 km')) && (text.includes('time') || text.includes('pace') || text.includes('min') || text.includes('sec') || text.includes('hour') || text.includes('hr'))) {
+    return { key: 'predictedBike50kSec', lowerIsBetter: true, source: 'strava' };
+  }
+  if ((text.includes('30 mile') || text.includes('30mi') || text.includes('30-mile')) && (text.includes('time') || text.includes('pace') || text.includes('min') || text.includes('sec') || text.includes('hour') || text.includes('hr'))) {
+    return { key: 'predictedBike30miSec', lowerIsBetter: true, source: 'strava' };
+  }
+  if (text.includes('fitness')) return { key: 'fitnessScore', lowerIsBetter: false, source: 'strava' };
+  if (text.includes('rpe')) return { key: 'avgRpe30', lowerIsBetter: false, source: 'strava' };
+  if (text.includes('step')) return { key: 'estimatedSteps7d', lowerIsBetter: false, source: 'strava' };
+  if (text.includes('position') && text.includes('park')) return { key: 'latestParkrunPosition', lowerIsBetter: true, source: 'parkrun' };
+  if (text.includes('percentile') || text.includes('top %')) return { key: 'latestParkrunPercentile', lowerIsBetter: false, source: 'parkrun' };
+  if ((text.includes('zone') && text.includes('5')) || text.includes('z5')) return { key: 'zone5Minutes30', lowerIsBetter: false, source: 'strava' };
+  if ((text.includes('zone') && text.includes('4')) || text.includes('z4')) return { key: 'zone4Minutes30', lowerIsBetter: false, source: 'strava' };
+  if ((text.includes('swim') || text.includes('pool') || text.includes('open water')) && (text.includes('distance') || text.includes('km') || text.includes('meter') || text.includes('metre') || text.includes('m'))) {
+    return { key: 'swimDistanceKm30', lowerIsBetter: false, source: 'strava' };
+  }
+  if ((text.includes('bike') || text.includes('cycle') || text.includes('ride') || text.includes('cycling')) && (text.includes('distance') || text.includes('km') || text.includes('mile') || text.includes('mi'))) {
+    return { key: 'bikeDistanceKm30', lowerIsBetter: false, source: 'strava' };
+  }
+  if ((text.includes('run') || text.includes('jog') || text.includes('parkrun')) && (text.includes('distance') || text.includes('km') || text.includes('mile') || text.includes('mi'))) {
+    return { key: 'runDistanceKm30', lowerIsBetter: false, source: 'strava' };
+  }
+  if (text.includes('distance') || text.includes('km')) return { key: 'distanceKm30', lowerIsBetter: false, source: 'strava' };
+  return null;
+}
+
+function toGoalTargetNumber(target, unit, metricKey) {
+  const raw = Number(target);
+  if (!Number.isFinite(raw) || raw <= 0) return null;
+  const u = String(unit || '').toLowerCase();
+  if (metricKey === 'predicted10kSec' || metricKey === 'predicted5kSec' || metricKey === 'predictedHalfMarathonSec' || metricKey === 'predictedSwim800mSec' || metricKey === 'predictedBike30miSec' || metricKey === 'predictedBike50kSec') {
+    if (u.includes('hour') || u.includes('hr')) return raw * 3600;
+    if (u.includes('min')) return raw * 60;
+    if (u.includes('sec')) return raw;
+    // Default to minutes for run-time goals.
+    return raw * 60;
+  }
+  if (metricKey === 'distanceKm30' || metricKey === 'runDistanceKm30' || metricKey === 'swimDistanceKm30' || metricKey === 'bikeDistanceKm30') {
+    if (u.includes('mile') || u.includes('mi')) return raw * 1.60934;
+    if ((u.includes('meter') || u.includes('metre') || u === 'm') && !u.includes('km')) return raw / 1000;
+    return raw;
+  }
+  return raw;
+}
+
+function computeKpiProgressPct(metricKey, currentValue, targetValue, lowerIsBetter) {
+  if (!Number.isFinite(currentValue) || !Number.isFinite(targetValue) || targetValue <= 0) return null;
+  if (lowerIsBetter) {
+    return Number(Math.max(0, Math.min(200, (targetValue / currentValue) * 100)).toFixed(1));
+  }
+  return Number(Math.max(0, Math.min(200, (currentValue / targetValue) * 100)).toFixed(1));
+}
+
+function formatMetricValue(metricKey, value) {
+  if (!Number.isFinite(value)) return null;
+  if (metricKey === 'predicted10kSec' || metricKey === 'predicted5kSec' || metricKey === 'predictedHalfMarathonSec' || metricKey === 'predictedSwim800mSec' || metricKey === 'predictedBike30miSec' || metricKey === 'predictedBike50kSec') {
+    const secVal = Math.max(0, Math.round(value));
+    const h = Math.floor(secVal / 3600);
+    const m = Math.floor((secVal % 3600) / 60);
+    const s = secVal % 60;
+    if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    return `${m}:${String(s).padStart(2, '0')}`;
+  }
+  return String(Number(value.toFixed(2)));
+}
+
+async function computeGoalFitnessKpisForUser(uid, { goalId = null, persist = true } = {}) {
+  const db = admin.firestore();
+  const excludeWithDadFromMetrics = await shouldExcludeDadTaggedWorkouts(uid);
+  let goals = [];
+  if (goalId) {
+    const snap = await db.collection('goals').doc(goalId).get();
+    if (!snap.exists) return [];
+    const data = snap.data() || {};
+    if (data.ownerUid !== uid) return [];
+    goals = [{ id: snap.id, ...data }];
+  } else {
+    const snap = await db.collection('goals').where('ownerUid', '==', uid).limit(300).get();
+    goals = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  }
+
+  if (!goals.length) return [];
+
+  const [overview, analysis, workoutsSnap] = await Promise.all([
+    _getFitnessOverview(uid, 90).catch(() => null),
+    _getRunFitnessAnalysis(uid, 365).catch(() => null),
+    db.collection('metrics_workouts')
+      .where('ownerUid', '==', uid)
+      .where('provider', '==', 'strava')
+      .limit(120)
+      .get()
+      .catch(() => null),
+  ]);
+
+  const stravaRuns = workoutsSnap
+    ? workoutsSnap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }))
+    : [];
+  const filteredStravaRuns = stravaRuns.filter((workout) => !(excludeWithDadFromMetrics && workoutHasDadMarker(workout)));
+  filteredStravaRuns.sort((a, b) => Number(b.startDate || 0) - Number(a.startDate || 0));
+  const classifyStravaSport = (workout) => {
+    if (!workout) return 'other';
+    if (workout.run === true) return 'run';
+    const type = String(workout.sportType || workout.type || '').toLowerCase();
+    if (type.includes('swim')) return 'swim';
+    if (type.includes('ride') || type.includes('bike') || type.includes('cycling')) return 'bike';
+    if (type.includes('run') || type.includes('walk') || type.includes('hike')) return 'run';
+    return 'other';
+  };
+  const since7Ms = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const since30Ms = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  const estimatedSteps7d = filteredStravaRuns
+    .filter((w) => Number(w.startDate || 0) >= since7Ms)
+    .reduce((sum, w) => {
+      const type = classifyStravaSport(w);
+      if (type !== 'run') return sum;
+      const kmVal = Number(w.distance_m || 0) / 1000;
+      // Rough stride conversion; keeps KPI directional without requiring step streams.
+      return sum + Math.round(kmVal * 1312);
+    }, 0);
+  const stravaDistance30 = filteredStravaRuns
+    .filter((w) => Number(w.startDate || 0) >= since30Ms)
+    .reduce((sum, w) => {
+      const bucket = classifyStravaSport(w);
+      const kmVal = Number(w.distance_m || 0) / 1000;
+      if (!Number.isFinite(kmVal) || kmVal <= 0) return sum;
+      if (bucket === 'run') sum.runKm += kmVal;
+      else if (bucket === 'swim') sum.swimKm += kmVal;
+      else if (bucket === 'bike') sum.bikeKm += kmVal;
+      return sum;
+    }, { runKm: 0, swimKm: 0, bikeKm: 0 });
+  const runDistanceKm30 = Number(
+    overview?.sportTotals?.last30?.runKm
+    ?? stravaDistance30.runKm
+    ?? overview?.last30?.distanceKm
+    ?? 0
+  ) || 0;
+  const swimDistanceKm30 = Number(
+    overview?.sportTotals?.last30?.swimKm
+    ?? stravaDistance30.swimKm
+    ?? 0
+  ) || 0;
+  const bikeDistanceKm30 = Number(
+    overview?.sportTotals?.last30?.bikeKm
+    ?? stravaDistance30.bikeKm
+    ?? 0
+  ) || 0;
+
+  const latestParkrun = analysis?.pairs?.length
+    ? analysis.pairs[analysis.pairs.length - 1]?.parkrun
+    : null;
+
+  const derived = {
+    predicted5kSec: Number(analysis?.predicted5kSec || overview?.predictions?.fiveKSec || 0) || null,
+    predicted10kSec: Number(analysis?.predicted10kSec || overview?.predictions?.tenKSec || 0) || null,
+    predictedHalfMarathonSec: Number(overview?.predictions?.halfMarathonSec || 0) || null,
+    predictedSwim800mSec: Number(overview?.predictions?.swim800mSec || 0) || null,
+    predictedBike50kSec: Number(overview?.predictions?.bike50kSec || 0) || null,
+    predictedBike30miSec: Number(overview?.predictions?.bike30miSec || 0) || null,
+    fitnessScore: Number(overview?.fitnessScore || 0) || null,
+    avgRpe30: Number(overview?.rpe?.avg30 || 0) || null,
+    estimatedSteps7d: estimatedSteps7d || null,
+    latestParkrunPosition: Number(latestParkrun?.position || 0) || null,
+    latestParkrunPercentile: Number(latestParkrun?.percentileTop || 0) || null,
+    zone4Minutes30: Number(((overview?.hrZones?.z4Time_s || 0) / 60).toFixed(1)) || 0,
+    zone5Minutes30: Number(((overview?.hrZones?.z5Time_s || 0) / 60).toFixed(1)) || 0,
+    runDistanceKm30,
+    swimDistanceKm30,
+    bikeDistanceKm30,
+    distanceKm30: runDistanceKm30,
+  };
+
+  const results = goals.map((goal) => {
+    const sourceKpis = Array.isArray(goal.kpis) ? goal.kpis : [];
+    const resolved = sourceKpis.map((kpi, idx) => {
+      const metric = detectFitnessMetricFromKpi(kpi?.name, kpi?.unit);
+      if (!metric) return null;
+      const currentValue = Number(derived[metric.key]);
+      if (!Number.isFinite(currentValue) || currentValue <= 0) return null;
+      const targetValue = toGoalTargetNumber(kpi?.target, kpi?.unit, metric.key);
+      const progressPct = targetValue
+        ? computeKpiProgressPct(metric.key, currentValue, targetValue, metric.lowerIsBetter)
+        : null;
+      return {
+        index: idx,
+        name: kpi?.name || '',
+        unit: kpi?.unit || '',
+        source: metric.source,
+        metricKey: metric.key,
+        lowerIsBetter: metric.lowerIsBetter,
+        currentValue,
+        currentDisplay: formatMetricValue(metric.key, currentValue),
+        target: Number.isFinite(Number(kpi?.target)) ? Number(kpi.target) : null,
+        targetNormalized: targetValue,
+        progressPct,
+      };
+    }).filter(Boolean);
+    return {
+      goalId: goal.id,
+      goalRef: goal.ref || null,
+      goalTitle: goal.title || null,
+      updatedAt: new Date().toISOString(),
+      resolvedKpis: resolved,
+    };
+  });
+
+  if (persist) {
+    const batch = db.batch();
+    results.forEach((entry) => {
+      const ref = db.collection('goal_kpi_metrics').doc(`${uid}_${entry.goalId}`);
+      batch.set(ref, {
+        ownerUid: uid,
+        goalId: entry.goalId,
+        goalRef: entry.goalRef || null,
+        goalTitle: entry.goalTitle || null,
+        resolvedKpis: entry.resolvedKpis,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+    });
+    await batch.commit();
+  }
+
+  return results;
+}
+
+exports.resolveGoalFitnessKpis = httpsV2.onCall(async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const goalId = String(req.data?.goalId || '').trim() || null;
+  const persist = req.data?.persist !== false;
+  const rows = await computeGoalFitnessKpisForUser(uid, { goalId, persist });
+  if (goalId) return rows[0] || null;
+  return { goals: rows };
+});
 
 // Compute participants and percentile by scanning event results pages backwards
 exports.computeParkrunPercentiles = httpsV2.onCall(async (req) => {
@@ -11790,6 +13936,23 @@ exports.computeParkrunPercentiles = httpsV2.onCall(async (req) => {
 
 async function _computeParkrunPercentilesInternal(uid, { eventSlug, startRun, base = 'https://www.parkrun.org.uk', maxBack = 120, onlyMissing = false }) {
   const cheerio = require('cheerio');
+  const requestHeaderCandidates = [
+    {
+      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      'Accept-Language': 'en-GB,en;q=0.9',
+      'Cache-Control': 'no-cache',
+      'Pragma': 'no-cache',
+      'Upgrade-Insecure-Requests': '1',
+    },
+    {
+      'User-Agent': PARKRUN_API_USER_AGENT,
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'en-GB,en;q=0.9',
+      'Cache-Control': 'no-cache',
+      'Pragma': 'no-cache',
+    },
+  ];
   function dateOnly(ms) {
     const d = new Date(ms);
     return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
@@ -11798,7 +13961,19 @@ async function _computeParkrunPercentilesInternal(uid, { eventSlug, startRun, ba
 
   async function fetchRun(runNum) {
     const url = `${String(base).replace(/\/$/, '')}/${eventSlug}/results/${runNum}`;
-    const html = await (await fetch(url)).text();
+    let res = null;
+    for (let i = 0; i < requestHeaderCandidates.length; i++) {
+      const candidate = await fetch(url, { headers: requestHeaderCandidates[i], redirect: 'follow' });
+      if (candidate.ok) {
+        res = candidate;
+        break;
+      }
+      const retryableStatus = new Set([403, 405, 406, 429]);
+      if (i < requestHeaderCandidates.length - 1 && retryableStatus.has(Number(candidate.status || 0))) continue;
+      throw new Error(`HTTP ${candidate.status}`);
+    }
+    if (!res) throw new Error('HTTP 0');
+    const html = await res.text();
     const $ = cheerio.load(html);
     const contentText = $('#content').text() || $('body').text();
     let dateMs = null;
@@ -11809,7 +13984,7 @@ async function _computeParkrunPercentilesInternal(uid, { eventSlug, startRun, ba
       const parsed = Date.parse(t || '');
       if (!isNaN(parsed)) dateMs = parsed;
     }
-    const participants = $('table#results tbody tr').length || null;
+    const participants = $('table#results tbody tr').length || $('table tbody tr').length || null;
     return { runNum, url, dateMs, participants };
   }
 
@@ -12196,8 +14371,10 @@ exports.scheduleDueTasksToday = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_I
   };
 
   for (const t of tasks) {
-    const points = Number(t.points ?? t.estimateMin ? Math.round(Number(t.estimateMin) / 60) : 0);
-    const dur = Math.min(180, Math.max(30, points > 0 ? points * 30 : 30));
+    const points = (Number.isFinite(Number(t.points)) && Number(t.points) > 0)
+      ? Number(t.points)
+      : (Number.isFinite(Number(t.estimateMin)) && Number(t.estimateMin) > 0 ? Number(t.estimateMin) / 60 : 0);
+    const dur = Math.min(240, Math.max(30, points > 0 ? points * 60 : 30));
     const slotStart = findSlot(dur);
     if (!slotStart) continue;
     const slotEnd = slotStart + dur * 60000;
@@ -12945,6 +15122,42 @@ exports.onStoryDueDateAutoSprint = functionsV2.firestore.onDocumentUpdated("stor
   await db.collection('stories').doc(storyId).set({ sprintId: sprintId ?? null }, { merge: true });
 });
 
+// Ensure story points are numeric and normalized (supports decimal points).
+exports.onStoryWritten = firestoreV2.onDocumentWritten('stories/{storyId}', async (event) => {
+  const after = event.data?.after?.data() || null;
+  if (!after) return;
+
+  const ref = event.data?.after?.ref || null;
+  if (!ref) return;
+
+  try {
+    const rawPoints = Number(after.points);
+    if (Number.isFinite(rawPoints) && rawPoints === 0) {
+      // Keep explicit zero as a "needs sizing" signal, but enforce numeric storage type.
+      if (!(typeof after.points === 'number' && Number.isFinite(after.points))) {
+        await ref.set({
+          points: 0,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+      }
+      return;
+    }
+    const existingPoints = Number(after.points);
+    const normalizedPoints = clampStoryPoints(after.points);
+    const estimateFallback = clampStoryPoints((Number(after.estimateMin || 0) || 0) / 60);
+    const desiredPoints = normalizedPoints ?? estimateFallback ?? 1;
+    const pointsStoredAsNumber = typeof after.points === 'number' && Number.isFinite(after.points);
+    if (!pointsStoredAsNumber || !Number.isFinite(existingPoints) || existingPoints !== desiredPoints) {
+      await ref.set({
+        points: desiredPoints,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+    }
+  } catch (e) {
+    console.warn('[onStoryWritten] points normalization skipped', e?.message || e);
+  }
+});
+
 // ===== Task lifecycle maintenance (completed/duplicates TTL and flags)
 exports.onTaskWritten = firestoreV2.onDocumentWritten('tasks/{taskId}', async (event) => {
   const before = event.data?.before?.data() || null;
@@ -13036,12 +15249,21 @@ exports.onTaskWritten = firestoreV2.onDocumentWritten('tasks/{taskId}', async (e
 
   // Ensure points are always populated and clamped
   try {
-    const normalizedPoints = clampTaskPoints(after.points);
-    const desiredPoints = (normalizedPoints != null ? normalizedPoints : deriveTaskPoints(after));
-    if (typeof desiredPoints === 'number') {
-      const existingPoints = Number(after.points);
-      if (!Number.isFinite(existingPoints) || existingPoints !== desiredPoints) {
-        patch.points = desiredPoints;
+    const rawPoints = Number(after.points);
+    if (Number.isFinite(rawPoints) && rawPoints === 0) {
+      // Keep explicit zero as a "needs sizing" signal for nightly LLM passes.
+      if (!(typeof after.points === 'number' && Number.isFinite(after.points))) {
+        patch.points = 0;
+      }
+    } else {
+      const normalizedPoints = clampTaskPoints(after.points);
+      const desiredPoints = (normalizedPoints != null ? normalizedPoints : deriveTaskPoints(after));
+      if (typeof desiredPoints === 'number') {
+        const existingPoints = Number(after.points);
+        const pointsStoredAsNumber = typeof after.points === 'number' && Number.isFinite(after.points);
+        if (!pointsStoredAsNumber || !Number.isFinite(existingPoints) || existingPoints !== desiredPoints) {
+          patch.points = desiredPoints;
+        }
       }
     }
   } catch (e) {
@@ -14679,7 +16901,19 @@ exports.scheduleSteamGamesViaN8n = httpsV2.onCall({ secrets: [N8N_SCHEDULE_STEAM
 
 
 // ===== Scheduled Syncs
-exports.dailySync = schedulerV2.onSchedule("every day 03:00", async (event) => {
+exports.dailySync = schedulerV2.onSchedule({
+  schedule: '0 3 * * *',
+  timeZone: 'Europe/London',
+  secrets: [
+    TRAKT_CLIENT_ID,
+    TRAKT_CLIENT_SECRET,
+    STEAM_WEB_API_KEY,
+    STRAVA_CLIENT_ID,
+    STRAVA_CLIENT_SECRET,
+    MONZO_CLIENT_ID,
+    MONZO_CLIENT_SECRET,
+  ],
+}, async () => {
   const db = admin.firestore();
   const profiles = await db.collection('profiles').get();
 
@@ -14703,24 +16937,43 @@ exports.dailySync = schedulerV2.onSchedule("every day 03:00", async (event) => {
       }
     }
 
-    if (data.stravaConnected && data.stravaAutoSync) {
+    if (data.stravaConnected && data.stravaAutoSync !== false) {
       try {
         await fetchStravaActivities(uid, { maxPages: 2 });
       } catch (error) {
         console.error(`Failed to sync Strava for user ${uid}`, error);
       }
-    }
 
-    if (data.parkrunAthleteId && data.parkrunAutoSync) {
       try {
-        await _syncParkrunInternal(uid, data.parkrunAthleteId, data.parkrunBaseUrl || undefined);
+        const backfillCompleted = data.stravaBackfillCompleted === true;
+        if (data.stravaBackfillActive === true || !backfillCompleted) {
+          const beforeSec = normalizeEpochSec(data.stravaBackfillBeforeSec) || Math.floor(Date.now() / 1000);
+          const backfillResult = await fetchStravaActivities(uid, {
+            beforeSec,
+            perPage: 200,
+            maxPages: 8,
+          });
+          const hasMoreHistory = !!backfillResult?.hasMore && !!backfillResult?.nextBeforeSec;
+          await db.collection('profiles').doc(uid).set({
+            stravaBackfillActive: hasMoreHistory,
+            stravaBackfillCompleted: !hasMoreHistory,
+            stravaBackfillBeforeSec: hasMoreHistory
+              ? backfillResult.nextBeforeSec
+              : admin.firestore.FieldValue.delete(),
+            stravaBackfillCompletedAt: hasMoreHistory
+              ? admin.firestore.FieldValue.delete()
+              : admin.firestore.FieldValue.serverTimestamp(),
+            stravaBackfillLastImported: Number(backfillResult?.imported || 0),
+            stravaBackfillUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          }, { merge: true });
+        }
       } catch (error) {
-        console.error(`Failed to sync Parkrun for user ${uid}`, error);
+        console.error(`Failed to run Strava full-history backfill for user ${uid}`, error);
       }
     }
 
     // Attempt to link Parkrun results to Strava runs for HR/links
-    if (data.stravaConnected && data.stravaAutoSync) {
+    if (data.stravaConnected && data.stravaAutoSync !== false) {
       try {
         await reconcileParkrunToStrava(uid, { maxStrava: 400 });
       } catch (error) {
@@ -14728,7 +16981,84 @@ exports.dailySync = schedulerV2.onSchedule("every day 03:00", async (event) => {
       }
     }
 
-    if (data.parkrunAutoComputePercentiles && data.parkrunDefaultEventSlug && data.parkrunDefaultStartRun) {
+    if (data.autoEnrichStravaHR !== false) {
+      try {
+        // Always keep recent activities enriched for dashboard freshness.
+        await enrichRecentStravaHr(uid, 30, { maxActivities: 25 });
+
+        // Continue historical HR zone enrichment daily until all eligible activities are covered.
+        const hrBackfillCompleted = data.stravaHrBackfillCompleted === true;
+        if (data.stravaHrBackfillActive === true || !hrBackfillCompleted) {
+          // Keep batch intentionally small to stay within callable/scheduler memory and timeout limits.
+          const backfillResult = await enrichRecentStravaHr(uid, 3650, { maxActivities: 8 });
+          const remaining = Math.max(0, Number(backfillResult?.remaining || 0));
+          const hasRemaining = remaining > 0;
+          await db.collection('profiles').doc(uid).set({
+            stravaHrBackfillActive: hasRemaining,
+            stravaHrBackfillCompleted: !hasRemaining,
+            stravaHrBackfillRemaining: remaining,
+            stravaHrBackfillLastScanned: Number(backfillResult?.scanned || 0),
+            stravaHrBackfillLastEnriched: Number(backfillResult?.enriched || 0),
+            stravaHrBackfillLastEligible: Number(backfillResult?.eligible || 0),
+            stravaHrBackfillLastSkippedExisting: Number(backfillResult?.skippedExisting || 0),
+            stravaHrBackfillCompletedAt: hasRemaining
+              ? admin.firestore.FieldValue.delete()
+              : admin.firestore.FieldValue.serverTimestamp(),
+            stravaHrBackfillUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          }, { merge: true });
+        }
+      } catch (error) {
+        console.error(`Failed to enrich Strava HR for user ${uid}`, error);
+      }
+    }
+
+    if (data.autoComputeFitnessMetrics !== false) {
+      try {
+        const overview = await _getFitnessOverview(uid, 90);
+        await db.collection('fitness_overview').doc(uid).set({ ...overview, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        const analysis = await _getRunFitnessAnalysis(uid, 365);
+        await db.collection('run_analysis').doc(uid).set({ ...analysis, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        await computeGoalFitnessKpisForUser(uid, { persist: true });
+      } catch (error) {
+        console.error(`Failed to compute fitness metrics for user ${uid}`, error);
+      }
+    }
+
+    if (data.monzoConnected) {
+      try {
+        await syncMonzoDataForUser(uid);
+      } catch (error) {
+        console.error(`Failed to sync Monzo for user ${uid}`, error);
+      }
+    }
+  }
+});
+
+exports.weeklyParkrunSync = schedulerV2.onSchedule({
+  schedule: '0 14 * * 6',
+  timeZone: 'Europe/London',
+}, async () => {
+  const db = admin.firestore();
+  const profiles = await db.collection('profiles').get();
+
+  for (const profile of profiles.docs) {
+    const uid = profile.id;
+    const data = profile.data() || {};
+
+    if (data.parkrunAthleteId && data.parkrunAutoSync !== false) {
+      try {
+        await _syncParkrunInternal(uid, data.parkrunAthleteId, data.parkrunBaseUrl || undefined);
+      } catch (error) {
+        await db.collection('profiles').doc(uid).set({
+          parkrunLastSyncStatus: 'error',
+          parkrunLastErrorAt: admin.firestore.FieldValue.serverTimestamp(),
+          parkrunLastErrorMessage: error?.message || 'Parkrun sync failed',
+        }, { merge: true }).catch(() => { });
+        console.error(`Failed to sync Parkrun for user ${uid}`, error);
+      }
+    }
+
+    if (data.parkrunAutoComputePercentiles !== false && data.parkrunDefaultEventSlug && data.parkrunDefaultStartRun) {
       try {
         await _computeParkrunPercentilesInternal(uid, {
           eventSlug: String(data.parkrunDefaultEventSlug).toLowerCase(),
@@ -14742,33 +17072,25 @@ exports.dailySync = schedulerV2.onSchedule("every day 03:00", async (event) => {
       }
     }
 
-    if (data.autoEnrichStravaHR) {
+    if (data.stravaConnected && data.stravaAutoSync !== false) {
       try {
-        // Enrich last 30 days for HR if missing
-        // reuse callable's logic
-        await exports.enrichStravaHR.run({ auth: { uid }, data: { days: 30 } });
+        await reconcileParkrunToStrava(uid, { maxStrava: 400 });
       } catch (error) {
-        // Swallow, enrichStravaHR may not be directly invocable here; fall back to inline
-        try { await (async () => { /* optional future inline */ })(); } catch { }
+        console.error(`Failed to reconcile Parkrun↔Strava for user ${uid}`, error);
       }
     }
 
-    if (data.autoComputeFitnessMetrics) {
+    if (data.autoComputeFitnessMetrics !== false) {
       try {
         const overview = await _getFitnessOverview(uid, 90);
-        await db.collection('fitness_overview').doc(uid).set({ ...overview, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        await db.collection('fitness_overview').doc(uid)
+          .set({ ...overview, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
         const analysis = await _getRunFitnessAnalysis(uid, 365);
-        await db.collection('run_analysis').doc(uid).set({ ...analysis, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        await db.collection('run_analysis').doc(uid)
+          .set({ ...analysis, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        await computeGoalFitnessKpisForUser(uid, { persist: true });
       } catch (error) {
         console.error(`Failed to compute fitness metrics for user ${uid}`, error);
-      }
-    }
-
-    if (data.monzoConnected) {
-      try {
-        await syncMonzoDataForUser(uid);
-      } catch (error) {
-        console.error(`Failed to sync Monzo for user ${uid}`, error);
       }
     }
   }

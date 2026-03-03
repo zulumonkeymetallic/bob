@@ -76,6 +76,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         icon: 'chart-bar',
       items: [
         { label: 'Habit Tracking', path: '/dashboard/habit-tracking', icon: 'check-square' },
+        { label: 'Fitness', path: '/fitness', icon: 'heartbeat' },
         { label: 'Kanban Board', path: '/sprints/kanban', icon: 'kanban' },
         { label: 'Calendar', path: '/calendar', icon: 'calendar' },
         { label: 'Metrics', path: '/metrics', icon: 'tachometer-alt' },
@@ -86,7 +87,8 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       label: 'Health',
       icon: 'heartbeat',
       items: [
-        { label: 'Running Results', path: '/running-results', icon: 'running' }
+        { label: 'Fitness Results', path: '/fitness', icon: 'running' },
+        { label: 'Parkrun Results', path: '/parkrun-results', icon: 'flag-checkered' }
       ]
     },
     {
@@ -103,12 +105,11 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       label: 'Finance',
       icon: 'piggy-bank',
       items: [
-        { label: 'Finance Hub', path: '/finance', icon: 'piggy-bank' },
         { label: 'Dashboard', path: '/finance/dashboard', icon: 'chart-line' },
         { label: 'Budgets', path: '/finance/budgets', icon: 'wallet' },
-        { label: 'Categorization', path: '/finance/merchants', icon: 'tags' },
+        { label: 'Merchants', path: '/finance/merchants', icon: 'tags' },
         { label: 'Transactions', path: '/finance/transactions', icon: 'receipt' },
-        { label: 'Cash Flow', path: '/finance/flow', icon: 'project-diagram' },
+        { label: 'Spend Breakdown', path: '/finance/flow', icon: 'project-diagram' },
         { label: 'Pots', path: '/finance/pots', icon: 'database' },
         { label: 'Goal Linking', path: '/finance/goals', icon: 'link' }
       ]

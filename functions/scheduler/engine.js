@@ -350,6 +350,18 @@ function inferThemeFromItem(item, type) {
   return 9;
 }
 
+function effortMinutesFromItem(item, { fallback = 10, min = 3, max = 480 } = {}) {
+  const points = Number(item?.points || 0);
+  if (Number.isFinite(points) && points > 0) {
+    return clampDurationMinutes(points * 60, { min, max });
+  }
+  const estimateMinutes = Number(item?.estimateMin || item?.estimatedMinutes || item?.estimateMinutes || item?.durationMinutes || 0);
+  if (Number.isFinite(estimateMinutes) && estimateMinutes > 0) {
+    return clampDurationMinutes(estimateMinutes, { min, max });
+  }
+  return clampDurationMinutes(fallback, { min, max });
+}
+
 function computeChoreRoutineOccurrences(chores, routines, windowStart, windowEnd) {
   const occurrences = [];
   for (const chore of chores) {
@@ -363,7 +375,7 @@ function computeChoreRoutineOccurrences(chores, routines, windowStart, windowEnd
         sourceType: 'chore',
         sourceId: chore.id,
         ownerUid: chore.ownerUid,
-        durationMinutes: chore.durationMinutes || 10,
+        durationMinutes: effortMinutesFromItem(chore, { fallback: 10, min: 3, max: 240 }),
         priority: chore.priority || 3,
         requiredBlockId: chore.requiredBlockId || null,
         eligibleBlockIds: chore.eligibleBlockIds || null,
@@ -388,7 +400,7 @@ function computeChoreRoutineOccurrences(chores, routines, windowStart, windowEnd
         sourceType: 'routine',
         sourceId: routine.id,
         ownerUid: routine.ownerUid,
-        durationMinutes: routine.durationMinutes || 10,
+        durationMinutes: effortMinutesFromItem(routine, { fallback: 10, min: 3, max: 240 }),
         priority: routine.priority || 3,
         requiredBlockId: routine.requiredBlockId || null,
         eligibleBlockIds: routine.eligibleBlockIds || null,
@@ -441,7 +453,7 @@ function computeTaskOccurrences(tasks, windowStart, windowEnd, userId) {
 
     const estimateMinutes = task.estimateMin
       || (Number.isFinite(Number(task.estimatedHours)) ? Number(task.estimatedHours) * 60 : null)
-      || (Number.isFinite(Number(task.points)) ? Number(task.points) * 30 : null);
+      || (Number.isFinite(Number(task.points)) ? Number(task.points) * 60 : null);
     const durationMinutes = clampDurationMinutes(estimateMinutes || 60);
     const priority = task.isDueTodayMandatory ? 1
       : Number.isFinite(Number(task.schedulerPriority))
@@ -540,7 +552,7 @@ async function computeStoryOccurrences(stories, windowStart, windowEnd, userId, 
 
     const estimateMinutes = story.estimateMin
       || (Number.isFinite(Number(story.estimatedHours)) ? Number(story.estimatedHours) * 60 : null)
-      || (Number.isFinite(Number(story.points)) ? Number(story.points) * 30 : null);
+      || (Number.isFinite(Number(story.points)) ? Number(story.points) * 60 : null);
     const durationMinutes = clampDurationMinutes(estimateMinutes || 90, { min: 30, max: 360 });
     const priority = Number.isFinite(Number(story.schedulerPriority))
       ? Number(story.schedulerPriority)
@@ -1005,6 +1017,7 @@ async function planSchedule({
         title: data.title || data.name || 'Habit',
         recurrence: data.recurrence || { rrule: 'FREQ=DAILY', timezone: DEFAULT_ZONE },
         durationMinutes: data.durationMinutes || data.estimateMinutes || 30,
+        points: data.points || null,
         priority: data.priority || 3,
         tags: data.tags || [],
         goalId: data.goalId || null,

@@ -1,10 +1,7 @@
-const POINTS_MIN = 1;
-const POINTS_MAX = 8;
-
 function clampTaskPoints(value) {
   const num = Number(value);
-  if (!Number.isFinite(num) || num <= 0) return null;
-  return Math.max(POINTS_MIN, Math.min(POINTS_MAX, Math.round(num)));
+  if (!Number.isFinite(num) || num < 0) return null;
+  return num;
 }
 
 function deriveMinutesFromPayload(payload = {}) {
@@ -40,14 +37,13 @@ function derivePointsFromEffort(effort) {
 function deriveTaskPoints(payload = {}) {
   const minutes = deriveMinutesFromPayload(payload);
   if (minutes) {
-    const approx = Math.round(minutes / 60);
-    return Math.max(POINTS_MIN, Math.min(POINTS_MAX, approx || POINTS_MIN));
+    return clampTaskPoints(minutes / 60) ?? 1;
   }
   const effortPoints = derivePointsFromEffort(payload.effort);
   if (effortPoints) {
-    return Math.max(POINTS_MIN, Math.min(POINTS_MAX, effortPoints));
+    return clampTaskPoints(effortPoints) ?? 1;
   }
-  return POINTS_MIN;
+  return 1;
 }
 
 function ensureTaskPoints(payload = {}, context = {}) {

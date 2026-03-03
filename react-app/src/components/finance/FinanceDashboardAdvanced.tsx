@@ -8,6 +8,8 @@ import { useTheme } from '../../contexts/ThemeContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { PremiumCard } from '../common/PremiumCard';
 import ReactECharts from 'echarts-for-react';
+import TransactionsList from './TransactionsList';
+import { normalizeMerchantKey } from './financeInsights';
 import {
     TrendingUp,
     PieChart as PieIcon,
@@ -30,13 +32,15 @@ import {
 } from 'lucide-react';
 import './FinanceDashboardAdvanced.css';
 
-type DateFilter = 'month' | 'quarter' | 'year' | 'all' | 'custom';
+type DateFilter = '7d' | '30d' | '60d' | '90d' | '6m' | 'year' | 'all' | 'custom';
 type ViewMode = 'category' | 'bucket';
 type FinanceView = 'overview' | 'spend' | 'discretionary' | 'actions' | 'sources' | 'assets';
 type ExternalSource = 'barclays' | 'paypal' | 'other' | 'monzo_csv';
 type AnalysisDimension = 'bucket' | 'category' | 'merchant';
 type AnalysisChartType = 'trend' | 'pie' | 'breakdown';
+type AnalysisActionFilter = 'all' | 'with' | 'without';
 type ManualAccountType = 'asset' | 'debt' | 'investment' | 'cash' | 'savings';
+type DashboardCardFilter = 'all' | 'subscriptions' | 'discretionary' | 'anomaly' | 'actions' | 'missingCategory';
 
 const THEME_COLORS = ['#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF', '#FF9F40', '#C9CBCF', '#9B59B6', '#00C2A8', '#F39C12'];
 const EMPTY_LIST: any[] = [];
@@ -129,6 +133,37 @@ const parseFinanceView = (tab: string | null): FinanceView | null => {
     return null;
 };
 
+const resolveDateRange = (filter: DateFilter, startDate: string, endDate: string) => {
+    const now = new Date();
+    let rangeStart = new Date(startDate);
+    let rangeEnd = new Date(endDate);
+
+    if (filter === '7d') {
+        rangeEnd = now;
+        rangeStart = new Date(now.getTime() - (7 * 24 * 60 * 60 * 1000));
+    } else if (filter === '30d') {
+        rangeEnd = now;
+        rangeStart = new Date(now.getTime() - (30 * 24 * 60 * 60 * 1000));
+    } else if (filter === '60d') {
+        rangeEnd = now;
+        rangeStart = new Date(now.getTime() - (60 * 24 * 60 * 60 * 1000));
+    } else if (filter === '90d') {
+        rangeEnd = now;
+        rangeStart = new Date(now.getTime() - (90 * 24 * 60 * 60 * 1000));
+    } else if (filter === '6m') {
+        rangeEnd = now;
+        rangeStart = new Date(now.getFullYear(), now.getMonth() - 6, now.getDate());
+    } else if (filter === 'year') {
+        rangeStart = new Date(now.getFullYear(), 0, 1);
+        rangeEnd = new Date(now.getFullYear(), 11, 31);
+    } else if (filter === 'all') {
+        rangeStart = new Date('2018-01-01T00:00:00.000Z');
+        rangeEnd = new Date();
+    }
+
+    return { rangeStart, rangeEnd };
+};
+
 const FinanceDashboardAdvanced: React.FC = () => {
     const { currentUser } = useAuth();
     const { theme } = useTheme();
@@ -136,7 +171,9 @@ const FinanceDashboardAdvanced: React.FC = () => {
     const [searchParams, setSearchParams] = useSearchParams();
 
     const [data, setData] = useState<any>(null);
+    const [yoyData, setYoyData] = useState<any>(null);
     const [enhancementData, setEnhancementData] = useState<any>(null);
+    const [yoyEnhancementData, setYoyEnhancementData] = useState<any>(null);
     const [loading, setLoading] = useState(true);
     const [syncing, setSyncing] = useState(false);
     const [busy, setBusy] = useState(false);
@@ -144,14 +181,15 @@ const FinanceDashboardAdvanced: React.FC = () => {
     const [error, setError] = useState<string | null>(null);
     const [opsMessage, setOpsMessage] = useState<string | null>(null);
     const [lastSync, setLastSync] = useState<Date | null>(null);
-    const [filter, setFilter] = useState<DateFilter>('month');
+    const [filter, setFilter] = useState<DateFilter>('30d');
+    const [compareYoY, setCompareYoY] = useState(false);
     const [startDate, setStartDate] = useState<string>(() => {
         const now = new Date();
-        return new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
+        return new Date(now.getTime() - (30 * 24 * 60 * 60 * 1000)).toISOString().slice(0, 10);
     });
     const [endDate, setEndDate] = useState<string>(() => {
         const now = new Date();
-        return new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().slice(0, 10);
+        return now.toISOString().slice(0, 10);
     });
     const [viewMode, setViewMode] = useState<ViewMode>('category');
     const [activeView, setActiveView] = useState<FinanceView>(() => parseFinanceView(searchParams.get('tab')) || 'overview');
@@ -168,9 +206,11 @@ const FinanceDashboardAdvanced: React.FC = () => {
     const [analysisBucketFilter, setAnalysisBucketFilter] = useState('all');
     const [analysisCategoryFilter, setAnalysisCategoryFilter] = useState('all');
     const [analysisMerchantFilter, setAnalysisMerchantFilter] = useState('all');
+    const [analysisActionFilter, setAnalysisActionFilter] = useState<AnalysisActionFilter>('all');
 
     // Chart drill-down filter state
     const [chartFilter, setChartFilter] = useState<{ type: 'category' | 'bucket' | null; value: string | null }>({ type: null, value: null });
+    const [cardFilter, setCardFilter] = useState<DashboardCardFilter>('all');
 
     const [editingManualAccountId, setEditingManualAccountId] = useState<string | null>(null);
     const [manualForm, setManualForm] = useState<{
@@ -213,38 +253,51 @@ const FinanceDashboardAdvanced: React.FC = () => {
                 }
             }
 
-            const now = new Date();
-            let rangeStart = new Date(startDate);
-            let rangeEnd = new Date(endDate);
-
-            if (filter === 'month') {
-                rangeStart = new Date(now.getFullYear(), now.getMonth(), 1);
-                rangeEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-            } else if (filter === 'quarter') {
-                const q = Math.floor(now.getMonth() / 3);
-                rangeStart = new Date(now.getFullYear(), q * 3, 1);
-                rangeEnd = new Date(now.getFullYear(), (q + 1) * 3, 0);
-            } else if (filter === 'year') {
-                rangeStart = new Date(now.getFullYear(), 0, 1);
-                rangeEnd = new Date(now.getFullYear(), 11, 31);
-            } else if (filter === 'all') {
-                rangeStart = new Date('2018-01-01T00:00:00.000Z');
-                rangeEnd = new Date();
-            }
+            const { rangeStart, rangeEnd } = resolveDateRange(filter, startDate, endDate);
 
             const fetchDashboardData = httpsCallable(functions, 'fetchDashboardData');
             const fetchEnhancementData = httpsCallable(functions, 'fetchFinanceEnhancementData');
 
-            const [dashboardRes, enhancementRes] = await Promise.allSettled([
+            const requests: Array<Promise<any>> = [];
+            requests.push(
                 fetchDashboardData({
                     startDate: rangeStart.toISOString(),
                     endDate: rangeEnd.toISOString(),
-                }),
+                })
+            );
+            requests.push(
                 fetchEnhancementData({
                     startDate: rangeStart.toISOString(),
                     endDate: rangeEnd.toISOString(),
-                }),
-            ]);
+                })
+            );
+
+            let yoyDashboardIndex: number | null = null;
+            let yoyEnhancementIndex: number | null = null;
+            if (compareYoY && filter !== 'all') {
+                const prevStart = new Date(rangeStart);
+                const prevEnd = new Date(rangeEnd);
+                prevStart.setFullYear(prevStart.getFullYear() - 1);
+                prevEnd.setFullYear(prevEnd.getFullYear() - 1);
+                yoyDashboardIndex = requests.push(
+                    fetchDashboardData({
+                        startDate: prevStart.toISOString(),
+                        endDate: prevEnd.toISOString(),
+                    })
+                ) - 1;
+                yoyEnhancementIndex = requests.push(
+                    fetchEnhancementData({
+                        startDate: prevStart.toISOString(),
+                        endDate: prevEnd.toISOString(),
+                    })
+                ) - 1;
+            }
+
+            const settled = await Promise.allSettled(requests);
+            const dashboardRes = settled[0];
+            const enhancementRes = settled[1];
+            const yoyRes = yoyDashboardIndex !== null ? settled[yoyDashboardIndex] : null;
+            const yoyEnhancementRes = yoyEnhancementIndex !== null ? settled[yoyEnhancementIndex] : null;
 
             if (dashboardRes.status !== 'fulfilled') {
                 throw dashboardRes.reason;
@@ -257,13 +310,25 @@ const FinanceDashboardAdvanced: React.FC = () => {
                 console.warn('fetchFinanceEnhancementData failed', enhancementRes.reason);
                 setEnhancementData(null);
             }
+            if (compareYoY && yoyRes && yoyRes.status === 'fulfilled') {
+                setYoyData(((yoyRes.value.data as any)?.data || yoyRes.value.data) as any);
+            } else {
+                setYoyData(null);
+            }
+            if (compareYoY && yoyEnhancementRes && yoyEnhancementRes.status === 'fulfilled') {
+                setYoyEnhancementData((yoyEnhancementRes.value.data as any) || null);
+            } else {
+                setYoyEnhancementData(null);
+            }
         } catch (err: any) {
             console.error(err);
             setError(err?.message || 'Failed to load finance dashboard data');
+            setYoyData(null);
+            setYoyEnhancementData(null);
         } finally {
             setLoading(false);
         }
-    }, [currentUser, filter, startDate, endDate]);
+    }, [currentUser, filter, startDate, endDate, compareYoY]);
 
     useEffect(() => {
         fetchData();
@@ -280,6 +345,12 @@ const FinanceDashboardAdvanced: React.FC = () => {
             setActiveView(tabFromUrl);
         }
     }, [searchParams, activeView]);
+
+    useEffect(() => {
+        if (chartFilter.type && chartFilter.type !== viewMode) {
+            setChartFilter({ type: null, value: null });
+        }
+    }, [chartFilter.type, viewMode]);
 
     const handleViewChange = useCallback((nextView: FinanceView) => {
         setActiveView(nextView);
@@ -511,6 +582,57 @@ const FinanceDashboardAdvanced: React.FC = () => {
         });
     };
 
+    const activeRange = useMemo(
+        () => resolveDateRange(filter, startDate, endDate),
+        [filter, startDate, endDate]
+    );
+
+    const handleCardFilter = useCallback((nextFilter: DashboardCardFilter) => {
+        setChartFilter({ type: null, value: null });
+        setCardFilter((prev) => (prev === nextFilter ? 'all' : nextFilter));
+    }, []);
+
+    const transactionsExternalFilters = useMemo(() => {
+        const next: {
+            dateStartISO: string;
+            dateEndISO: string;
+            bucket?: string;
+            category?: string;
+            missingOnly?: boolean;
+            anomaly?: 'all' | 'flagged' | 'normal';
+            subscriptionOnly?: boolean;
+            action?: 'all' | 'with' | 'without';
+        } = {
+            dateStartISO: activeRange.rangeStart.toISOString(),
+            dateEndISO: activeRange.rangeEnd.toISOString(),
+        };
+
+        if (cardFilter === 'subscriptions') next.subscriptionOnly = true;
+        if (cardFilter === 'discretionary') next.bucket = 'discretionary';
+        if (cardFilter === 'anomaly') next.anomaly = 'flagged';
+        if (cardFilter === 'actions') next.action = 'with';
+        if (cardFilter === 'missingCategory') next.missingOnly = true;
+
+        if (chartFilter.type === 'bucket' && chartFilter.value) {
+            next.bucket = chartFilter.value;
+        }
+        if (chartFilter.type === 'category' && chartFilter.value) {
+            next.category = chartFilter.value;
+        }
+
+        return next;
+    }, [activeRange, cardFilter, chartFilter]);
+
+    const drilldownBadgeLabel = useMemo(() => {
+        if (chartFilter.type && chartFilter.value) return `${chartFilter.type}: ${chartFilter.value}`;
+        if (cardFilter === 'subscriptions') return 'subscriptions';
+        if (cardFilter === 'discretionary') return 'discretionary';
+        if (cardFilter === 'anomaly') return 'anomaly';
+        if (cardFilter === 'actions') return 'with recommendation';
+        if (cardFilter === 'missingCategory') return 'missing category';
+        return null;
+    }, [cardFilter, chartFilter]);
+
     const userBadge = (
         <div className="d-flex justify-content-end mb-2">
             <span className="small text-muted">Signed in as: <code>{currentUser?.uid || '—'}</code></span>
@@ -613,8 +735,10 @@ const FinanceDashboardAdvanced: React.FC = () => {
     // Chart click handlers
     const handleTrendClick = (params: any) => {
         if (params.componentType === 'series') {
-            const categoryName = params.seriesName;
-            setChartFilter({ type: 'category', value: categoryName });
+            const selectedName = params.seriesName;
+            const filterType = viewMode === 'bucket' ? 'bucket' : 'category';
+            setCardFilter('all');
+            setChartFilter({ type: filterType, value: selectedName });
         }
     };
 
@@ -622,12 +746,14 @@ const FinanceDashboardAdvanced: React.FC = () => {
         if (params.componentType === 'series') {
             const selectedName = params.name;
             const filterType = viewMode === 'bucket' ? 'bucket' : 'category';
+            setCardFilter('all');
             setChartFilter({ type: filterType, value: selectedName });
         }
     };
 
     const clearChartFilter = () => {
         setChartFilter({ type: null, value: null });
+        setCardFilter('all');
     };
 
     const filteredRecentTransactions = (data?.recentTransactions || [])
@@ -658,6 +784,14 @@ const FinanceDashboardAdvanced: React.FC = () => {
                     }
                 }
             }
+
+            if (cardFilter === 'subscriptions' && !tx.isSubscription) return false;
+            if (cardFilter === 'discretionary') {
+                const bucketLabel = toText(tx.userCategoryType || tx.aiBucket || tx.categoryType, '').toLowerCase();
+                if (bucketLabel !== 'discretionary' && bucketLabel !== 'optional') return false;
+            }
+            if (cardFilter === 'anomaly' && !tx.aiAnomalyFlag) return false;
+            if (cardFilter === 'missingCategory' && toText(tx.userCategoryKey, '')) return false;
 
             return true;
         })
@@ -785,6 +919,8 @@ const FinanceDashboardAdvanced: React.FC = () => {
     const matchSummary = enhancementData?.matchSummary ?? EMPTY_LIST;
     const debtService = enhancementData?.debtService?.totals || null;
     const analysisRows = enhancementData?.analysisRows ?? EMPTY_LIST;
+    const yoyAnalysisRows = yoyEnhancementData?.analysisRows ?? EMPTY_LIST;
+    const yoyActions = yoyEnhancementData?.actions ?? EMPTY_LIST;
     const budgetHealth = enhancementData?.budgetHealth || null;
     const goalForecasts = enhancementData?.goalForecasts ?? EMPTY_LIST;
     const manualAccounts = enhancementData?.manualAccounts ?? EMPTY_LIST;
@@ -904,17 +1040,51 @@ const FinanceDashboardAdvanced: React.FC = () => {
         return Array.from(set).sort((a, b) => a.localeCompare(b));
     }, [analysisRows]);
 
-    const filteredAnalysisRows = useMemo(() => {
-        return analysisRows.filter((row: any) => {
+    const analysisActionMerchantKeys = useMemo(() => {
+        const keys = new Set<string>();
+        actions.forEach((action: any) => {
+            const key = normalizeMerchantKey(action.merchantKey || action.merchantName || action.__merchantName || '');
+            if (key) keys.add(key);
+        });
+        return keys;
+    }, [actions]);
+
+    const yoyActionMerchantKeys = useMemo(() => {
+        const keys = new Set<string>();
+        yoyActions.forEach((action: any) => {
+            const key = normalizeMerchantKey(action.merchantKey || action.merchantName || action.__merchantName || '');
+            if (key) keys.add(key);
+        });
+        return keys;
+    }, [yoyActions]);
+
+    const applyAnalysisFilters = useCallback((rowsToFilter: any[], actionMerchantKeys: Set<string>) => {
+        return rowsToFilter.filter((row: any) => {
             const bucketLabel = toText(row.bucket, 'unknown');
             if (analysisBucketFilter !== 'all' && bucketLabel !== analysisBucketFilter) return false;
             const categoryKey = toText(row.categoryKey || row.categoryLabel, 'uncategorized');
             if (analysisCategoryFilter !== 'all' && categoryKey !== analysisCategoryFilter) return false;
             const merchantName = toText(row.merchantName || row.merchant, 'Unknown');
             if (analysisMerchantFilter !== 'all' && merchantName !== analysisMerchantFilter) return false;
+            if (analysisActionFilter !== 'all') {
+                const merchantKey = normalizeMerchantKey(row.merchantKey || row.merchantName || row.merchant || '');
+                const hasAction = merchantKey ? actionMerchantKeys.has(merchantKey) : false;
+                if (analysisActionFilter === 'with' && !hasAction) return false;
+                if (analysisActionFilter === 'without' && hasAction) return false;
+            }
             return true;
         });
-    }, [analysisRows, analysisBucketFilter, analysisCategoryFilter, analysisMerchantFilter]);
+    }, [analysisActionFilter, analysisBucketFilter, analysisCategoryFilter, analysisMerchantFilter]);
+
+    const filteredAnalysisRows = useMemo(
+        () => applyAnalysisFilters(analysisRows, analysisActionMerchantKeys),
+        [analysisRows, analysisActionMerchantKeys, applyAnalysisFilters]
+    );
+
+    const filteredYoyAnalysisRows = useMemo(
+        () => applyAnalysisFilters(yoyAnalysisRows, yoyActionMerchantKeys),
+        [yoyAnalysisRows, yoyActionMerchantKeys, applyAnalysisFilters]
+    );
 
     const analysisStats = useMemo(() => {
         const totalPence = filteredAnalysisRows.reduce((sum: number, row: any) => sum + Number(row.amountPence || 0), 0);
@@ -927,12 +1097,12 @@ const FinanceDashboardAdvanced: React.FC = () => {
         };
     }, [filteredAnalysisRows]);
 
-    const analysisGrouped = useMemo(() => {
+    const groupAnalysisRows = useCallback((rowsToGroup: any[]) => {
         const groupedTotals: Record<string, number> = {};
         const groupedByMonth: Record<string, Record<string, number>> = {};
         const monthsSet = new Set<string>();
 
-        filteredAnalysisRows.forEach((row: any) => {
+        rowsToGroup.forEach((row: any) => {
             const month = toText(row.month, 'unknown');
             const key = analysisDimension === 'bucket'
                 ? toText(row.bucket, 'unknown')
@@ -953,7 +1123,17 @@ const FinanceDashboardAdvanced: React.FC = () => {
 
         const months = Array.from(monthsSet).sort();
         return { groups, groupedByMonth, months };
-    }, [filteredAnalysisRows, analysisDimension]);
+    }, [analysisDimension]);
+
+    const analysisGrouped = useMemo(
+        () => groupAnalysisRows(filteredAnalysisRows),
+        [filteredAnalysisRows, groupAnalysisRows]
+    );
+
+    const yoyAnalysisGrouped = useMemo(
+        () => groupAnalysisRows(filteredYoyAnalysisRows),
+        [filteredYoyAnalysisRows, groupAnalysisRows]
+    );
 
     const analysisTrendOption = useMemo(() => {
         const topGroups = analysisGrouped.groups.slice(0, 8);
@@ -979,6 +1159,61 @@ const FinanceDashboardAdvanced: React.FC = () => {
             })),
         };
     }, [analysisGrouped]);
+
+    const analysisYoYTrendOption = useMemo(() => {
+        const allMonths = Array.from(new Set<string>([...analysisGrouped.months, ...yoyAnalysisGrouped.months])).sort();
+        const rankedGroups = new Map<string, number>();
+        analysisGrouped.groups.forEach((group) => {
+            rankedGroups.set(group.name, Math.abs(Number(group.amountPence || 0)));
+        });
+        yoyAnalysisGrouped.groups.forEach((group) => {
+            rankedGroups.set(group.name, (rankedGroups.get(group.name) || 0) + Math.abs(Number(group.amountPence || 0)));
+        });
+        const topGroups = Array.from(rankedGroups.entries())
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 6)
+            .map(([name]) => name);
+
+        return {
+            tooltip: { trigger: 'axis' },
+            legend: {
+                data: topGroups.flatMap((name) => [`${name} (Current)`, `${name} (Prev year)`]),
+                type: 'scroll',
+            },
+            grid: { left: 50, right: 15, top: 45, bottom: 35 },
+            xAxis: {
+                type: 'category',
+                data: allMonths.map((month) => monthLabel(month)),
+            },
+            yAxis: {
+                type: 'value',
+                axisLabel: { formatter: (v: number) => `£${v}` },
+            },
+            series: topGroups.flatMap((groupName, index) => {
+                const color = THEME_COLORS[index % THEME_COLORS.length];
+                return [
+                    {
+                        name: `${groupName} (Current)`,
+                        type: 'line',
+                        smooth: true,
+                        symbolSize: 5,
+                        itemStyle: { color },
+                        lineStyle: { color, width: 2.2 },
+                        data: allMonths.map((month) => toPounds(Number(analysisGrouped.groupedByMonth?.[month]?.[groupName] || 0))),
+                    },
+                    {
+                        name: `${groupName} (Prev year)`,
+                        type: 'line',
+                        smooth: true,
+                        symbolSize: 4,
+                        itemStyle: { color },
+                        lineStyle: { color, width: 1.6, type: 'dashed', opacity: 0.75 },
+                        data: allMonths.map((month) => toPounds(Number(yoyAnalysisGrouped.groupedByMonth?.[month]?.[groupName] || 0))),
+                    },
+                ];
+            }),
+        };
+    }, [analysisGrouped, yoyAnalysisGrouped]);
 
     const analysisPieOption = useMemo(() => {
         const groups = analysisGrouped.groups.slice(0, 10);
@@ -1056,42 +1291,175 @@ const FinanceDashboardAdvanced: React.FC = () => {
         };
     }, [budgetHealth]);
 
+    const yoyCategoryComparison = useMemo(() => {
+        if (!compareYoY || !data || !yoyData) return [];
+        const current = data?.spendByCategory || {};
+        const previous = yoyData?.spendByCategory || {};
+        const keys = new Set<string>([
+            ...Object.keys(current || {}),
+            ...Object.keys(previous || {}),
+        ]);
+        return Array.from(keys)
+            .map((key) => {
+                const currentPence = Math.abs(Number(current?.[key] || 0));
+                const previousPence = Math.abs(Number(previous?.[key] || 0));
+                const deltaPence = currentPence - previousPence;
+                const deltaPct = previousPence > 0 ? Number(((deltaPence / previousPence) * 100).toFixed(1)) : null;
+                return {
+                    key,
+                    currentPence,
+                    previousPence,
+                    deltaPence,
+                    deltaPct,
+                };
+            })
+            .filter((row) => row.currentPence > 0 || row.previousPence > 0)
+            .sort((a, b) => (b.currentPence + b.previousPence) - (a.currentPence + a.previousPence))
+            .slice(0, 15);
+    }, [compareYoY, data, yoyData]);
+
     const totalActionSavings = actions.reduce((sum: number, action: any) => sum + Number(action.estimatedMonthlySavings || 0), 0);
+    const anomalyRows = Array.isArray(data?.anomalyTransactions) ? data.anomalyTransactions : EMPTY_LIST;
+    const anomalyCount = anomalyRows.length;
+    const anomalySpend = anomalyRows.reduce((sum: number, tx: any) => sum + Math.abs(txAmountMinor(tx)), 0);
+    const classifiableCount = Math.max(0, Number(data?.classifiableTransactionCount || 0));
+    const uncategorizedCount = Math.max(0, Number(data?.uncategorizedCount || 0));
+    const uncategorizedPct = classifiableCount > 0 ? Number(data?.uncategorizedPct || 0) : 0;
 
     const renderOverview = () => (
         <>
             <Row className="g-4 mb-4">
-                <Col md={3}>
-                    <PremiumCard icon={DollarSign} title="Total Spend">
-                        <h2 className="fw-bold mb-0" style={{ color: colors.danger }}>
-                            {formatCurrency(filteredTotalSpend)}
-                        </h2>
-                        <p className="text-muted mb-0 mt-2">View excludes bank transfers</p>
-                    </PremiumCard>
+                <Col xxl={2} xl={3} md={6}>
+                    <div
+                        className={`finance-dashboard-clickable-card${cardFilter === 'all' && !chartFilter.type ? ' is-active' : ''}`}
+                        role="button"
+                        tabIndex={0}
+                        onClick={clearChartFilter}
+                        onKeyDown={(event) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                                event.preventDefault();
+                                clearChartFilter();
+                            }
+                        }}
+                    >
+                        <PremiumCard icon={DollarSign} title="Total Spend">
+                            <h2 className="fw-bold mb-0" style={{ color: colors.danger }}>
+                                {formatCurrency(filteredTotalSpend)}
+                            </h2>
+                            <p className="text-muted mb-0 mt-2">View excludes bank transfers</p>
+                        </PremiumCard>
+                    </div>
                 </Col>
-                <Col md={3}>
-                    <PremiumCard icon={CreditCard} title="Discretionary">
-                        <h2 className="fw-bold mb-0" style={{ color: colors.info }}>
-                            {formatCurrency(Math.abs(data?.totalDiscretionarySpend || 0) / 100)}
-                        </h2>
-                        <p className="text-muted mb-0 mt-2">Optional day-to-day spend</p>
-                    </PremiumCard>
+                <Col xxl={2} xl={3} md={6}>
+                    <div
+                        className={`finance-dashboard-clickable-card${cardFilter === 'discretionary' ? ' is-active' : ''}`}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => handleCardFilter('discretionary')}
+                        onKeyDown={(event) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                                event.preventDefault();
+                                handleCardFilter('discretionary');
+                            }
+                        }}
+                    >
+                        <PremiumCard icon={CreditCard} title="Discretionary">
+                            <h2 className="fw-bold mb-0" style={{ color: colors.info }}>
+                                {formatCurrency(Math.abs(data?.totalDiscretionarySpend || 0) / 100)}
+                            </h2>
+                            <p className="text-muted mb-0 mt-2">Optional day-to-day spend</p>
+                        </PremiumCard>
+                    </div>
                 </Col>
-                <Col md={3}>
-                    <PremiumCard icon={Layers} title="Subscriptions">
-                        <h2 className="fw-bold mb-0" style={{ color: colors.warning }}>
-                            {formatCurrency(Math.abs(data?.totalSubscriptionSpend || 0) / 100)}
-                        </h2>
-                        <p className="text-muted mb-0 mt-2">Recurring costs</p>
-                    </PremiumCard>
+                <Col xxl={2} xl={3} md={6}>
+                    <div
+                        className={`finance-dashboard-clickable-card${cardFilter === 'subscriptions' ? ' is-active' : ''}`}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => handleCardFilter('subscriptions')}
+                        onKeyDown={(event) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                                event.preventDefault();
+                                handleCardFilter('subscriptions');
+                            }
+                        }}
+                    >
+                        <PremiumCard icon={Layers} title="Subscriptions">
+                            <h2 className="fw-bold mb-0" style={{ color: colors.warning }}>
+                                {formatCurrency(Math.abs(data?.totalSubscriptionSpend || 0) / 100)}
+                            </h2>
+                            <p className="text-muted mb-0 mt-2">Recurring costs</p>
+                        </PremiumCard>
+                    </div>
                 </Col>
-                <Col md={3}>
-                    <PremiumCard icon={Sparkles} title="Actions Potential">
-                        <h2 className="fw-bold mb-0" style={{ color: colors.success }}>
-                            {formatCurrency(totalActionSavings)}
-                        </h2>
-                        <p className="text-muted mb-0 mt-2">Estimated monthly savings ({actions.length} actions)</p>
-                    </PremiumCard>
+                <Col xxl={2} xl={3} md={6}>
+                    <div
+                        className={`finance-dashboard-clickable-card${cardFilter === 'actions' ? ' is-active' : ''}`}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => handleCardFilter('actions')}
+                        onKeyDown={(event) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                                event.preventDefault();
+                                handleCardFilter('actions');
+                            }
+                        }}
+                    >
+                        <PremiumCard icon={Sparkles} title="Actions Potential">
+                            <h2 className="fw-bold mb-0" style={{ color: colors.success }}>
+                                {formatCurrency(totalActionSavings)}
+                            </h2>
+                            <p className="text-muted mb-0 mt-2">Estimated monthly savings ({actions.length} actions)</p>
+                        </PremiumCard>
+                    </div>
+                </Col>
+                <Col xxl={2} xl={3} md={6}>
+                    <div
+                        className={`finance-dashboard-clickable-card finance-dashboard-clickable-card--small${cardFilter === 'missingCategory' ? ' is-active' : ''}`}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => handleCardFilter('missingCategory')}
+                        onKeyDown={(event) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                                event.preventDefault();
+                                handleCardFilter('missingCategory');
+                            }
+                        }}
+                    >
+                        <PremiumCard icon={AlertTriangle} title="Uncategorized">
+                            <div className="d-flex justify-content-between align-items-end">
+                                <h3 className="fw-bold mb-0" style={{ color: uncategorizedCount > 0 ? colors.warning : colors.success }}>
+                                    {uncategorizedCount}
+                                </h3>
+                                <span className="small text-muted">{uncategorizedPct.toFixed(1)}%</span>
+                            </div>
+                            <p className="text-muted mb-0 mt-2">
+                                {classifiableCount.toLocaleString()} classifiable tx in range
+                            </p>
+                        </PremiumCard>
+                    </div>
+                </Col>
+                <Col xxl={2} xl={3} md={6}>
+                    <div
+                        className={`finance-dashboard-clickable-card finance-dashboard-clickable-card--small${cardFilter === 'anomaly' ? ' is-active' : ''}`}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => handleCardFilter('anomaly')}
+                        onKeyDown={(event) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                                event.preventDefault();
+                                handleCardFilter('anomaly');
+                            }
+                        }}
+                    >
+                        <PremiumCard icon={Activity} title="Spend Anomalies">
+                            <div className="d-flex justify-content-between align-items-end">
+                                <h3 className="fw-bold mb-0" style={{ color: colors.warning }}>{anomalyCount}</h3>
+                                <span className="small text-muted">{formatCurrency(toPounds(anomalySpend))}</span>
+                            </div>
+                            <p className="text-muted mb-0 mt-2">Flagged transactions in range</p>
+                        </PremiumCard>
+                    </div>
                 </Col>
             </Row>
 
@@ -1128,7 +1496,17 @@ const FinanceDashboardAdvanced: React.FC = () => {
 
             <Row className="g-4 mb-4">
                 <Col lg={8}>
-                    <PremiumCard title="Spend Trend (Click bars to filter)" icon={TrendingUp} height={350}>
+                    <PremiumCard
+                        title="Spend Trend (Click bars to filter)"
+                        icon={TrendingUp}
+                        height={350}
+                        action={
+                            <ButtonGroup size="sm">
+                                <Button variant={viewMode === 'category' ? 'primary' : 'outline-secondary'} onClick={() => setViewMode('category')}>Category</Button>
+                                <Button variant={viewMode === 'bucket' ? 'primary' : 'outline-secondary'} onClick={() => setViewMode('bucket')}>Bucket</Button>
+                            </ButtonGroup>
+                        }
+                    >
                         <ReactECharts
                             option={trendOption}
                             style={{ height: '100%' }}
@@ -1143,8 +1521,8 @@ const FinanceDashboardAdvanced: React.FC = () => {
                         height={350}
                         action={
                             <ButtonGroup size="sm">
-                                <Button variant={viewMode === 'category' ? 'primary' : 'outline-secondary'} onClick={() => setViewMode('category')}>Cat</Button>
-                                <Button variant={viewMode === 'bucket' ? 'primary' : 'outline-secondary'} onClick={() => setViewMode('bucket')}>Bkt</Button>
+                                <Button variant={viewMode === 'category' ? 'primary' : 'outline-secondary'} onClick={() => setViewMode('category')}>Category</Button>
+                                <Button variant={viewMode === 'bucket' ? 'primary' : 'outline-secondary'} onClick={() => setViewMode('bucket')}>Bucket</Button>
                             </ButtonGroup>
                         }
                     >
@@ -1157,17 +1535,16 @@ const FinanceDashboardAdvanced: React.FC = () => {
                 </Col>
             </Row>
 
-            {/* Transaction Table with Active Filter Badge */}
-            <Row className="mb-4">
-                <Col>
+            <Row className="g-4">
+                <Col lg={12}>
                     <PremiumCard
-                        title={`Recent Transactions (${filteredRecentTransactions.length})`}
+                        title={`Transactions + AI Recommendations (${filteredRecentTransactions.length})`}
                         icon={CreditCard}
                         action={
-                            chartFilter.type && chartFilter.value ? (
+                            drilldownBadgeLabel ? (
                                 <div className="d-flex align-items-center gap-2">
                                     <Badge bg="primary">
-                                        {chartFilter.type}: {chartFilter.value}
+                                        {drilldownBadgeLabel}
                                     </Badge>
                                     <Button size="sm" variant="outline-secondary" onClick={clearChartFilter}>
                                         Clear Filter
@@ -1176,147 +1553,11 @@ const FinanceDashboardAdvanced: React.FC = () => {
                             ) : undefined
                         }
                     >
-                        <div style={{ maxHeight: '500px', overflowY: 'auto' }}>
-                            <table className="table table-sm table-hover">
-                                <thead className="sticky-top bg-white" style={{ top: 0, zIndex: 1 }}>
-                                    <tr>
-                                        <th>Date</th>
-                                        <th>Merchant</th>
-                                        <th>Category</th>
-                                        <th>Bucket</th>
-                                        <th>Pot</th>
-                                        <th className="text-end">Amount</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {filteredRecentTransactions.length === 0 && (
-                                        <tr>
-                                            <td colSpan={6} className="text-center text-muted py-4">
-                                                No transactions match the current filter
-                                            </td>
-                                        </tr>
-                                    )}
-                                    {filteredRecentTransactions.slice(0, 100).map((tx: any) => {
-                                        const createdDate = parseTxDate(tx);
-                                        const dateStr = createdDate ? createdDate.toLocaleDateString('en-GB', {
-                                            day: 'numeric',
-                                            month: 'short',
-                                            year: 'numeric'
-                                        }) : '—';
-                                        const amount = txAmountMinor(tx) / 100;
-                                        const isNegative = amount < 0;
-
-                                        return (
-                                            <tr key={tx.id || Math.random()}>
-                                                <td style={{ whiteSpace: 'nowrap' }}>{dateStr}</td>
-                                                <td>{tx.__merchantLabel}</td>
-                                                <td>
-                                                    <small className="text-muted">{tx.__categoryLabel}</small>
-                                                </td>
-                                                <td>
-                                                    <Badge
-                                                        bg={
-                                                            tx.__bucketLabel.toLowerCase().includes('mandatory') ? 'danger' :
-                                                            tx.__bucketLabel.toLowerCase().includes('discretionary') ? 'warning' :
-                                                            tx.__bucketLabel.toLowerCase().includes('saving') ? 'info' :
-                                                            'secondary'
-                                                        }
-                                                        className="text-uppercase"
-                                                        style={{ fontSize: '0.65rem' }}
-                                                    >
-                                                        {tx.__bucketLabel}
-                                                    </Badge>
-                                                </td>
-                                                <td><small className="text-muted">{tx.__potLabel}</small></td>
-                                                <td className="text-end" style={{
-                                                    fontWeight: 600,
-                                                    color: isNegative ? '#dc3545' : '#28a745'
-                                                }}>
-                                                    {isNegative ? '-' : '+'}£{Math.abs(amount).toFixed(2)}
-                                                </td>
-                                            </tr>
-                                        );
-                                    })}
-                                </tbody>
-                            </table>
-                            {filteredRecentTransactions.length > 100 && (
-                                <div className="text-center text-muted py-2">
-                                    <small>Showing first 100 of {filteredRecentTransactions.length} transactions</small>
-                                </div>
-                            )}
-                        </div>
-                    </PremiumCard>
-                </Col>
-            </Row>
-
-            <Row className="g-4">
-                <Col lg={8}>
-                    <PremiumCard title="Recent Transactions" icon={CreditCard}>
-                        <div className="table-responsive">
-                            <table className="table table-hover align-middle mb-0" style={{ color: colors.text }}>
-                                <thead>
-                                    <tr style={{ color: colors.textMuted, borderBottom: `1px solid ${colors.grid}` }}>
-                                        <th>Date</th>
-                                        <th>Merchant</th>
-                                        <th>Pot</th>
-                                        <th>Category</th>
-                                        <th className="text-end">Amount</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {filteredRecentTransactions.map((tx: any) => {
-                                        const date = parseTxDate(tx);
-                                        const rowKey = toKeyText(tx.id || tx.transactionId, `${tx.__merchantLabel}-${tx.__categoryLabel}-${txAmountMinor(tx)}`);
-                                        return (
-                                            <tr key={rowKey} style={{ borderColor: colors.grid }}>
-                                                <td>{date ? date.toLocaleDateString('en-GB') : '—'}</td>
-                                                <td>
-                                                    <div className="fw-bold">{tx.__merchantLabel}</div>
-                                                    {tx.isSubscription && <Badge bg="warning" text="dark" className="mt-1">Sub</Badge>}
-                                                </td>
-                                                <td>{tx.__potLabel}</td>
-                                                <td>
-                                                    <Badge bg="light" text="dark" className="border">
-                                                        {tx.__categoryLabel}
-                                                    </Badge>
-                                                </td>
-                                                <td className="text-end fw-bold" style={{ color: Number(txAmountMinor(tx)) < 0 ? colors.text : colors.success }}>
-                                                    {formatCurrency(Math.abs(txAmountMinor(tx)) / 100)}
-                                                </td>
-                                            </tr>
-                                        );
-                                    })}
-                                </tbody>
-                            </table>
-                        </div>
-                    </PremiumCard>
-                </Col>
-                <Col lg={4}>
-                    <PremiumCard title="Spend Anomalies" icon={Activity}>
-                        {Array.isArray(data?.anomalyTransactions) && data.anomalyTransactions.length ? (
-                            <div className="table-responsive">
-                                <table className="table table-hover align-middle mb-0" style={{ color: colors.text }}>
-                                    <thead>
-                                        <tr style={{ color: colors.textMuted, borderBottom: `1px solid ${colors.grid}` }}>
-                                            <th>Merchant</th>
-                                            <th>Reason</th>
-                                            <th className="text-end">Amount</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {data.anomalyTransactions.map((tx: any) => (
-                                            <tr key={toKeyText(tx.id, `anomaly-${toText(tx.merchantName || tx.merchant?.name, 'unknown')}-${txAmountMinor(tx)}`)} style={{ borderColor: colors.grid }}>
-                                                <td>{toText(tx.merchantName || tx.merchant?.name || tx.merchant, 'Unknown')}</td>
-                                                <td className="small text-muted">{tx.aiAnomalyReason || 'Anomaly'}</td>
-                                                <td className="text-end fw-bold">{formatCurrency(Math.abs(txAmountMinor(tx)) / 100)}</td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
-                            </div>
-                        ) : (
-                            <div className="text-muted small">No anomalies detected in the selected period.</div>
-                        )}
+                        <TransactionsList
+                            embedded
+                            autoCollapseFilters
+                            externalFilters={transactionsExternalFilters}
+                        />
                     </PremiumCard>
                 </Col>
             </Row>
@@ -1360,7 +1601,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
                         }
                     >
                         <Row className="g-3 mb-3">
-                            <Col md={3}>
+                            <Col md={2}>
                                 <Form.Label>Group by</Form.Label>
                                 <Form.Select value={analysisDimension} onChange={(event) => setAnalysisDimension(event.target.value as AnalysisDimension)}>
                                     <option value="bucket">Bucket</option>
@@ -1368,7 +1609,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
                                     <option value="merchant">Merchant</option>
                                 </Form.Select>
                             </Col>
-                            <Col md={3}>
+                            <Col md={2}>
                                 <Form.Label>Bucket filter</Form.Label>
                                 <Form.Select value={analysisBucketFilter} onChange={(event) => setAnalysisBucketFilter(event.target.value)}>
                                     <option value="all">All buckets</option>
@@ -1395,14 +1636,87 @@ const FinanceDashboardAdvanced: React.FC = () => {
                                     ))}
                                 </Form.Select>
                             </Col>
+                            <Col md={2}>
+                                <Form.Label>Recommended action</Form.Label>
+                                <Form.Select value={analysisActionFilter} onChange={(event) => setAnalysisActionFilter(event.target.value as AnalysisActionFilter)}>
+                                    <option value="all">All</option>
+                                    <option value="with">With action</option>
+                                    <option value="without">Without action</option>
+                                </Form.Select>
+                            </Col>
                         </Row>
 
-                        {analysisChartType === 'trend' && <ReactECharts option={analysisTrendOption} style={{ height: 360 }} />}
+                        {analysisChartType === 'trend' && (
+                            compareYoY ? (
+                                <Row className="g-3">
+                                    <Col lg={6}>
+                                        <div className="small text-muted mb-2">Current range</div>
+                                        <ReactECharts option={analysisTrendOption} style={{ height: 340 }} />
+                                    </Col>
+                                    <Col lg={6}>
+                                        <div className="small text-muted mb-2">Current vs previous year (same filters)</div>
+                                        {filteredYoyAnalysisRows.length > 0 ? (
+                                            <ReactECharts option={analysisYoYTrendOption} style={{ height: 340 }} />
+                                        ) : (
+                                            <div className="small text-muted p-3 border rounded">
+                                                No prior-year rows match the active bucket/category/merchant filters.
+                                            </div>
+                                        )}
+                                    </Col>
+                                </Row>
+                            ) : (
+                                <ReactECharts option={analysisTrendOption} style={{ height: 360 }} />
+                            )
+                        )}
                         {analysisChartType === 'pie' && <ReactECharts option={analysisPieOption} style={{ height: 360 }} />}
                         {analysisChartType === 'breakdown' && <ReactECharts option={analysisBreakdownOption} style={{ height: 360 }} />}
                     </PremiumCard>
                 </Col>
             </Row>
+
+            {compareYoY && (
+                <Row className="g-4 mb-4">
+                    <Col lg={12}>
+                        <PremiumCard title="Year-on-Year Category Comparison" icon={Calendar}>
+                            {yoyCategoryComparison.length === 0 ? (
+                                <div className="text-muted small">
+                                    {filter === 'all'
+                                        ? 'YoY comparison is disabled for All History. Choose a bounded date range (for example 7D, 30D, Year, or custom).'
+                                        : 'No YoY comparison data available for this range.'}
+                                </div>
+                            ) : (
+                                <div className="table-responsive" style={{ maxHeight: 320, overflowY: 'auto' }}>
+                                    <table className="table table-sm align-middle mb-0">
+                                        <thead>
+                                            <tr>
+                                                <th>Category</th>
+                                                <th className="text-end">Current</th>
+                                                <th className="text-end">Previous year</th>
+                                                <th className="text-end">Delta</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {yoyCategoryComparison.map((row) => (
+                                                <tr key={row.key}>
+                                                    <td>{row.key}</td>
+                                                    <td className="text-end">{formatCurrency(toPounds(row.currentPence))}</td>
+                                                    <td className="text-end">{formatCurrency(toPounds(row.previousPence))}</td>
+                                                    <td className="text-end">
+                                                        <span style={{ color: row.deltaPence <= 0 ? colors.success : colors.warning }}>
+                                                            {formatCurrency(toPounds(row.deltaPence))}
+                                                            {row.deltaPct !== null ? ` (${row.deltaPct > 0 ? '+' : ''}${row.deltaPct}%)` : ''}
+                                                        </span>
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            )}
+                        </PremiumCard>
+                    </Col>
+                </Row>
+            )}
 
             <Row className="g-4 mb-4">
                 <Col lg={8}>
@@ -2175,8 +2489,11 @@ const FinanceDashboardAdvanced: React.FC = () => {
                     <div className="d-flex align-items-center gap-2 text-muted">
                         <Calendar size={16} />
                         <span>
-                            {filter === 'month' && 'This Month'}
-                            {filter === 'quarter' && 'This Quarter'}
+                            {filter === '7d' && 'Last 7 days'}
+                            {filter === '30d' && 'Last 30 days'}
+                            {filter === '60d' && 'Last 60 days'}
+                            {filter === '90d' && 'Last 90 days'}
+                            {filter === '6m' && 'Last 6 months'}
                             {filter === 'year' && 'This Year'}
                             {filter === 'all' && 'All History (since 2018)'}
                             {filter === 'custom' && 'Custom Range'}
@@ -2193,8 +2510,11 @@ const FinanceDashboardAdvanced: React.FC = () => {
 
                 <div className="d-flex flex-wrap gap-2 align-items-center">
                     <ButtonGroup>
-                        <Button variant={filter === 'month' ? 'primary' : 'outline-secondary'} onClick={() => setFilter('month')}>Month</Button>
-                        <Button variant={filter === 'quarter' ? 'primary' : 'outline-secondary'} onClick={() => setFilter('quarter')}>Quarter</Button>
+                        <Button variant={filter === '7d' ? 'primary' : 'outline-secondary'} onClick={() => setFilter('7d')}>7D</Button>
+                        <Button variant={filter === '30d' ? 'primary' : 'outline-secondary'} onClick={() => setFilter('30d')}>30D</Button>
+                        <Button variant={filter === '60d' ? 'primary' : 'outline-secondary'} onClick={() => setFilter('60d')}>60D</Button>
+                        <Button variant={filter === '90d' ? 'primary' : 'outline-secondary'} onClick={() => setFilter('90d')}>90D</Button>
+                        <Button variant={filter === '6m' ? 'primary' : 'outline-secondary'} onClick={() => setFilter('6m')}>6M</Button>
                         <Button variant={filter === 'year' ? 'primary' : 'outline-secondary'} onClick={() => setFilter('year')}>Year</Button>
                         <Button variant={filter === 'all' ? 'primary' : 'outline-secondary'} onClick={() => setFilter('all')}>All</Button>
                         <Button variant={filter === 'custom' ? 'primary' : 'outline-secondary'} onClick={() => setFilter('custom')}>Custom</Button>
@@ -2224,6 +2544,13 @@ const FinanceDashboardAdvanced: React.FC = () => {
                     <Button variant="outline-primary" onClick={handleSync} disabled={syncing}>
                         {syncing ? <Spinner size="sm" animation="border" /> : <RefreshCw size={18} />}
                     </Button>
+                    <Form.Check
+                        type="switch"
+                        id="finance-yoy-compare"
+                        label="YoY"
+                        checked={compareYoY}
+                        onChange={(event) => setCompareYoY(event.target.checked)}
+                    />
                 </div>
             </div>
 

@@ -47,6 +47,7 @@ import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { usePersona } from '../contexts/PersonaContext';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { normalizeTaskTags } from '../utils/taskTagging';
+import { parsePointsValue } from '../utils/points';
 import EditTaskModal from './EditTaskModal';
 
 interface TaskTableRow extends Task {
@@ -324,6 +325,10 @@ const SortableRow: React.FC<SortableRowProps> = ({
         } else if (key === 'priority') {
           const next = Number(editValue);
           updates = { priority: Number.isFinite(next) ? (next as any) : (editValue as any) } as any;
+        } else if (key === 'points') {
+          const parsedPoints = parsePointsValue(editValue);
+          const fallbackPoints = parsePointsValue((task as any).points) ?? 1;
+          updates = { points: parsedPoints == null ? fallbackPoints : parsedPoints } as any;
         } else {
           // Regular field update
           updates = { [key]: editValue };
@@ -460,7 +465,9 @@ const SortableRow: React.FC<SortableRowProps> = ({
         <td key={column.key} style={{ width: column.width }}>
           <div className="relative">
             <input
-              type={column.type === 'date' ? 'date' : 'text'}
+              type={column.type === 'date' ? 'date' : (column.type === 'number' ? 'number' : 'text')}
+              step={column.key === 'points' ? 'any' : undefined}
+              inputMode={column.key === 'points' ? 'decimal' : undefined}
               value={editValue}
               onChange={(e) => setEditValue(e.target.value)}
               onBlur={() => handleCellSave(column.key)}

@@ -11,12 +11,14 @@ import { formatDistanceToNow } from 'date-fns';
 interface ProfileData {
   googleCalendarLastSyncAt?: any;
   googleCalendarEventCount?: number;
+  defaultJournalDocUrl?: string;
   monzoConnected?: boolean;
   monzoLastSyncAt?: any;
   stravaConnected?: boolean;
   stravaLastSyncAt?: any;
   stravaAutoSync?: boolean;
   autoEnrichStravaHR?: boolean;
+  excludeWithDadFromMetrics?: boolean;
   traktUser?: string;
   traktLastSyncAt?: any;
   traktConnected?: boolean;
@@ -78,6 +80,8 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
   const [googleEvents, setGoogleEvents] = useState<any[]>([]);
   const [googleLoading, setGoogleLoading] = useState(false);
   const [showCalendarManager, setShowCalendarManager] = useState(false);
+  const [defaultJournalDocUrl, setDefaultJournalDocUrl] = useState('');
+  const [googleDocMessage, setGoogleDocMessage] = useState<string | null>(null);
 
   const [monzoTotals, setMonzoTotals] = useState<typeof defaultTotals>(defaultTotals);
   const [monzoTransactions, setMonzoTransactions] = useState<MonzoTransactionPreview[]>([]);
@@ -88,8 +92,6 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
   const [monzoPots, setMonzoPots] = useState<Record<string, { name: string }>>({});
 
   const [stravaActivities, setStravaActivities] = useState<any[]>([]);
-  const [stravaMessage, setStravaMessage] = useState<string | null>(null);
-  const [stravaLoading, setStravaLoading] = useState(false);
 
   const [steamGames, setSteamGames] = useState<any[]>([]);
   const [steamMessage, setSteamMessage] = useState<string | null>(null);
@@ -151,6 +153,7 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
     const unsub = onSnapshot(doc(db, 'profiles', currentUser.uid), (snap) => {
       const data = snap.data() as ProfileData | undefined;
       setProfile(data || null);
+      setDefaultJournalDocUrl(data?.defaultJournalDocUrl || '');
       if (data?.steamId) setSteamIdInput(data.steamId);
       if (data?.traktUser) setTraktUserInput(data.traktUser);
       if ((data as any)?.hardcoverToken) setHardcoverTokenInput((data as any).hardcoverToken);
@@ -330,7 +333,7 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
   }, [currentUser]);
 
   const connectGoogle = () => {
-    if (!profile || !currentUser) return;
+    if (!currentUser) return;
     const nonce = Math.random().toString(36).slice(2);
     const region = 'europe-west2';
     const projectId = firebaseConfig.projectId;
@@ -471,23 +474,6 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
         }
       }, 800);
       trackPopupTimer(timer);
-    }
-  };
-
-  const syncStrava = async () => {
-    if (!currentUser) return;
-    setStravaLoading(true);
-    setStravaMessage(null);
-    try {
-      const fn = httpsCallable(functions, 'syncStrava');
-      const res = await fn({});
-      const data = res.data as any;
-      setStravaMessage(`Imported ${data?.imported || 0} activities`);
-    } catch (err: any) {
-      console.error('syncStrava failed', err);
-      setStravaMessage(err?.message || 'Strava sync failed');
-    } finally {
-      setStravaLoading(false);
     }
   };
 
@@ -740,8 +726,8 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
       <Card>
         <Card.Header className="d-flex justify-content-between align-items-center">
           <div>
-            <h4 className="mb-0">Google Calendar</h4>
-            <small>Auto-import hourly + manual sync</small>
+            <h4 className="mb-0">Google Calendar & Docs</h4>
+            <small>Calendar sync plus Google Docs journal append</small>
           </div>
           <Badge bg={googleConnected ? 'success' : 'secondary'}>
             {googleConnected ? 'Connected' : 'Not Connected'}
@@ -782,6 +768,39 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
               </tbody>
             </Table>
           )}
+
+          <hr />
+          <Row className="g-3 align-items-end">
+            <Col md={9}>
+              <Form.Label>Default Journal Google Doc URL</Form.Label>
+              <Form.Control
+                type="url"
+                placeholder="https://docs.google.com/document/d/..."
+                value={defaultJournalDocUrl}
+                onChange={(event) => setDefaultJournalDocUrl(event.target.value)}
+              />
+              <Form.Text className="text-muted">
+                Transcript intake appends to this document. Reconnect Google if you have not yet granted Google Docs access.
+              </Form.Text>
+            </Col>
+            <Col md={3} className="d-grid">
+              <Button
+                variant="outline-secondary"
+                onClick={async () => {
+                  try {
+                    setGoogleDocMessage(null);
+                    await updateProfile({ defaultJournalDocUrl: defaultJournalDocUrl.trim() || null });
+                    setGoogleDocMessage('Default journal doc saved.');
+                  } catch (error: any) {
+                    setGoogleDocMessage(error?.message || 'Failed to save the default journal doc URL.');
+                  }
+                }}
+              >
+                Save Doc URL
+              </Button>
+            </Col>
+          </Row>
+          {googleDocMessage && <Alert variant="info" className="mt-3 mb-0">{googleDocMessage}</Alert>}
 
           <Button variant="link" onClick={() => setShowCalendarManager((v) => !v)}>
             {showCalendarManager ? 'Hide advanced options' : 'Show advanced options'}
@@ -967,19 +986,23 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
                 checked={!!profile?.stravaAutoSync}
                 onChange={(e) => updateProfile({ stravaAutoSync: e.target.checked })}
               />
+              <Form.Check
+                type="switch"
+                id="strava-exclude-dad-metrics"
+                label="Exclude workouts with 'dad' in title/name/event from fitness metrics"
+                checked={profile?.excludeWithDadFromMetrics !== false}
+                onChange={(e) => updateProfile({ excludeWithDadFromMetrics: e.target.checked })}
+              />
             </Col>
             <Col md={6} className="text-md-end mt-3 mt-md-0">
               <Button variant="outline-primary" className="me-2" onClick={connectStrava}>
                 {stravaConnected ? 'Reconnect' : 'Connect'}
               </Button>
-              <Button variant="primary" onClick={syncStrava} disabled={stravaLoading}>
-                {stravaLoading ? <Spinner size="sm" animation="border" className="me-2" /> : null}
-                Sync Now
-              </Button>
             </Col>
           </Row>
-
-          {stravaMessage && <Alert variant="info">{stravaMessage}</Alert>}
+          <Alert variant="light" className="mb-3">
+            Strava data sync is automatic (daily schedule). No manual sync action is required.
+          </Alert>
 
           <h6>Recent Activities</h6>
           {stravaActivities.length === 0 ? (

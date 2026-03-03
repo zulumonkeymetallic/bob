@@ -8,6 +8,7 @@ import { usePersona } from '../contexts/PersonaContext';
 import { GLOBAL_THEMES } from '../constants/globalThemes';
 import { generateRef } from '../utils/referenceGenerator';
 import { emergencyCreateTask } from '../utils/emergencyTaskCreation';
+import { parsePointsValue } from '../utils/points';
 
 type BulkEntityType = 'story' | 'task' | 'goal';
 
@@ -49,7 +50,7 @@ const BulkCreateModal: React.FC<BulkCreateModalProps> = ({ show, onHide, onCompl
   const [selectedGoalId, setSelectedGoalId] = useState('');
   const [selectedTheme, setSelectedTheme] = useState('Growth');
   const [selectedPriority, setSelectedPriority] = useState<'low' | 'med' | 'high'>('med');
-  const [taskPoints, setTaskPoints] = useState(1);
+  const [taskPoints, setTaskPoints] = useState<string | number>(1);
   const [isProcessing, setIsProcessing] = useState(false);
   const [results, setResults] = useState<BulkResult[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -101,7 +102,7 @@ const BulkCreateModal: React.FC<BulkCreateModalProps> = ({ show, onHide, onCompl
       setResults([]);
       setError(null);
       setItemsText('');
-      setTaskPoints(1);
+      setTaskPoints('1');
     }
   }, [show]);
 
@@ -332,7 +333,7 @@ const BulkCreateModal: React.FC<BulkCreateModalProps> = ({ show, onHide, onCompl
               priority: selectedPriority,
               estimateMin: 45,
               estimatedHours: 0.75,
-              points: Math.max(1, Math.min(8, Math.round(taskPoints))),
+              points: parsePointsValue(taskPoints) ?? 1,
               status: 0,
               theme: selectedTheme,
               hasGoal: !!selectedGoalId,
@@ -473,16 +474,14 @@ const BulkCreateModal: React.FC<BulkCreateModalProps> = ({ show, onHide, onCompl
           </Form.Select>
         </Form.Group>
         <Form.Group className="mb-3">
-          <Form.Label>Default Points (1–8)</Form.Label>
+          <Form.Label>Default Points</Form.Label>
           <Form.Control
             type="number"
-            min={1}
-            max={8}
+            step="any"
+            inputMode="decimal"
             value={taskPoints}
             onChange={(event) => {
-              const value = Number(event.target.value);
-              const normalized = Math.max(1, Math.min(8, Number.isNaN(value) ? 1 : Math.round(value)));
-              setTaskPoints(normalized);
+              setTaskPoints(event.target.value);
             }}
           />
         </Form.Group>

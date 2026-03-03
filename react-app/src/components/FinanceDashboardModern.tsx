@@ -330,8 +330,8 @@ const FinanceDashboardModern: React.FC = () => {
     const goalProgress = useMemo(() => {
         return goals.map((g) => {
             const relatedStories = stories.filter((s) => s.goalId === g.id);
-            const totalPoints = relatedStories.reduce((sum, s) => sum + (s.points || 0), 0);
-            const donePoints = relatedStories.filter((s) => s.status === 4).reduce((sum, s) => sum + (s.points || 0), 0);
+            const totalPoints = relatedStories.reduce((sum, s) => sum + (Number.isFinite(Number(s.points)) ? Number(s.points) : 0), 0);
+            const donePoints = relatedStories.filter((s) => s.status === 4).reduce((sum, s) => sum + (Number.isFinite(Number(s.points)) ? Number(s.points) : 0), 0);
             const potId = (g as any).linkedPotId || g.potId || null;
             const potInfo = potId ? pots[potId] : undefined;
             const potBalance = potInfo?.balance || 0; // pence

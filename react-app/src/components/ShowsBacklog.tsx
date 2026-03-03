@@ -239,7 +239,7 @@ const ShowsBacklog: React.FC = () => {
               <td>{renderRatingStars(s)}</td>
               <td>
                 <div className="d-flex gap-2">
-                  <Button size="sm" variant="outline-primary" onClick={() => openConvert(s)} disabled={converted}>Generate Story</Button>
+                  {!converted && <Button size="sm" variant="outline-primary" onClick={() => openConvert(s)}>Generate Story</Button>}
                   {converted && <Button size="sm" variant="outline-secondary" href={`/stories/${s.lastConvertedStoryId}`}>View story</Button>}
                   <Button size="sm" variant="outline-success" onClick={() => markWatched(s)}>Mark watched</Button>
                 </div>
@@ -269,7 +269,11 @@ const ShowsBacklog: React.FC = () => {
                 <div className="d-flex justify-content-between align-items-center mt-auto">
                   {converted ? <Badge bg="success">Story Linked</Badge> : <Badge bg="secondary">Watchlist</Badge>}
                   <div className="d-flex gap-2">
-                    <Button size="sm" variant="outline-primary" onClick={() => openConvert(s)} disabled={converted}>Generate</Button>
+                    {converted ? (
+                      <Button size="sm" variant="outline-secondary" href={`/stories/${s.lastConvertedStoryId}`}>View story</Button>
+                    ) : (
+                      <Button size="sm" variant="outline-primary" onClick={() => openConvert(s)}>Generate</Button>
+                    )}
                     <Button size="sm" variant="outline-success" onClick={() => markWatched(s)}>Watched</Button>
                   </div>
                 </div>

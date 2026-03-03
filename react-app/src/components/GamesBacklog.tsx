@@ -129,6 +129,10 @@ const GamesBacklog: React.FC = () => {
 
   const handleConvert = async () => {
     if (!currentUser || !selectedGame) return;
+    if (selectedGame.lastConvertedStoryId) {
+      window.alert('A story has already been generated for this item.');
+      return;
+    }
     if (!convertForm.goalId) {
       window.alert('Please choose a goal for this story.');
       return;
@@ -233,7 +237,7 @@ const GamesBacklog: React.FC = () => {
               <td>{converted ? <Badge bg="success">Story Linked</Badge> : <Badge bg="secondary">Backlog</Badge>}</td>
               <td>
                 <div className="d-flex gap-2">
-                  <Button size="sm" variant="outline-primary" onClick={() => openConvertModal(game)}>Convert to Story</Button>
+                  {!converted && <Button size="sm" variant="outline-primary" onClick={() => openConvertModal(game)}>Convert to Story</Button>}
                   {converted && <Button size="sm" variant="outline-secondary" href={`/stories/${game.lastConvertedStoryId}`}>View story</Button>}
                 </div>
               </td>
@@ -270,7 +274,11 @@ const GamesBacklog: React.FC = () => {
                 <div className="mb-3">{renderRatingStars(game)}</div>
                 <div className="mt-auto d-flex justify-content-between align-items-center">
                   {converted ? <Badge bg="success">Story Linked</Badge> : <Badge bg="secondary">Backlog</Badge>}
-                  <Button size="sm" variant="outline-primary" onClick={() => openConvertModal(game)}>Convert</Button>
+                  {converted ? (
+                    <Button size="sm" variant="outline-secondary" href={`/stories/${game.lastConvertedStoryId}`}>View story</Button>
+                  ) : (
+                    <Button size="sm" variant="outline-primary" onClick={() => openConvertModal(game)}>Convert</Button>
+                  )}
                 </div>
               </Card.Body>
             </Card>

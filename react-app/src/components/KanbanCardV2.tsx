@@ -136,10 +136,12 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
         return `${y}-${m}-${day}`;
     };
 
-    const isTop3 = (item as any).aiTop3ForDay === true
-        || (item as any).aiFlaggedTop === true
-        || Number((item as any).aiPriorityRank || 0) > 0
-        || Number((item as any).aiFocusStoryRank || 0) > 0;
+    const isTop3 = (() => {
+        if ((item as any).aiTop3ForDay !== true) return false;
+        const top3Date = (item as any).aiTop3Date;
+        if (!top3Date) return true;
+        return String(top3Date).slice(0, 10) === new Date().toISOString().slice(0, 10);
+    })();
     const aiReason = isTop3 && (item as any).aiTop3Reason
         ? (item as any).aiTop3Reason
         : ((item as any).aiCriticalityReason || null);

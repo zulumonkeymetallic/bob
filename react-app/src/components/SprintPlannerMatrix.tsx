@@ -385,7 +385,7 @@ const SprintPlannerMatrix: React.FC<SprintPlannerMatrixProps> = ({
                       </Col>
                       {sprints.map(sprint => {
                         const cap = capacityBySprint[sprint.id] || 20;
-                        const total = stories.filter(st => (st as any).sprintId === sprint.id).reduce((sum, st) => sum + (st.points || 1), 0);
+                        const total = stories.filter(st => (st as any).sprintId === sprint.id).reduce((sum, st) => sum + (Number.isFinite(Number(st.points)) ? Number(st.points) : 1), 0);
                         const over = total > cap;
                         const isSelected = selectedSprintId ? selectedSprintId === sprint.id : false;
                         return (
@@ -530,7 +530,7 @@ const SprintPlannerMatrix: React.FC<SprintPlannerMatrixProps> = ({
                 <div className="d-flex flex-wrap gap-2">
                   {sprints.map((s) => {
                     const cap = capacityBySprint[s.id] || 20;
-                    const total = stories.filter(st => (st as any).sprintId === s.id).reduce((sum, st) => sum + (st.points || 1), 0);
+                    const total = stories.filter(st => (st as any).sprintId === s.id).reduce((sum, st) => sum + (Number.isFinite(Number(st.points)) ? Number(st.points) : 1), 0);
                     const over = total > cap;
                     const pct = Math.min(100, Math.round((total / Math.max(1, cap)) * 100));
                     return (

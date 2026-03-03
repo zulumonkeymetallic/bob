@@ -163,6 +163,7 @@ export interface Task {
   aiCriticalityReason?: string;
   aiFlaggedTop?: boolean;
   aiPriorityRank?: number;
+  aiDailyRank?: number;
   aiTop3ForDay?: boolean;
   aiTop3Date?: string;
   aiPriorityLabel?: string;
