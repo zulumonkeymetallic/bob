@@ -301,18 +301,60 @@ const ENTITY_MATCH_STOPWORDS = new Set([
   'to', 'up', 'via', 'we', 'with', 'work',
 ]);
 
+const ENTITY_MATCH_CANONICAL_TOKENS = new Map([
+  ['cleanup', 'clean'],
+  ['cleaning', 'clean'],
+  ['cleaned', 'clean'],
+  ['tidy', 'clean'],
+  ['tidied', 'clean'],
+  ['tidying', 'clean'],
+  ['wash', 'clean'],
+  ['washed', 'clean'],
+  ['washing', 'clean'],
+  ['emailing', 'email'],
+  ['emailed', 'email'],
+  ['mail', 'email'],
+  ['mailed', 'email'],
+  ['mailing', 'email'],
+  ['message', 'email'],
+  ['messaged', 'email'],
+  ['messaging', 'email'],
+  ['ping', 'email'],
+  ['pinged', 'email'],
+  ['pinging', 'email'],
+  ['wrote', 'email'],
+  ['write', 'email'],
+  ['writing', 'email'],
+  ['drop', 'email'],
+  ['housework', 'house'],
+  ['home', 'house'],
+  ['flat', 'house'],
+  ['vehicle', 'car'],
+  ['motor', 'car'],
+]);
+
+function canonicalizeEntityMatchText(value) {
+  return normalizeTitle(value)
+    .replace(/\b(clean|tidy|wash)\s+up\b/g, '$1')
+    .replace(/\bdrop\s+([a-z0-9]+)\s+an?\s+email\b/g, 'email $1')
+    .replace(/\bsend\s+([a-z0-9]+)\s+an?\s+email\b/g, 'email $1')
+    .trim();
+}
+
 function normalizeMatchToken(token) {
   const cleaned = String(token || '').toLowerCase().replace(/[^a-z0-9]+/g, '').trim();
   if (!cleaned) return '';
   if (cleaned.endsWith('ies') && cleaned.length > 4) return `${cleaned.slice(0, -3)}y`;
   if (cleaned.endsWith('sses') && cleaned.length > 5) return cleaned.slice(0, -2);
-  if (cleaned.endsWith('s') && !cleaned.endsWith('ss') && cleaned.length > 4) return cleaned.slice(0, -1);
-  return cleaned;
+  const singular = cleaned.endsWith('s') && !cleaned.endsWith('ss') && cleaned.length > 4
+    ? cleaned.slice(0, -1)
+    : cleaned;
+  return ENTITY_MATCH_CANONICAL_TOKENS.get(singular) || singular;
 }
 
 function buildEntityMatchTokens(value) {
   return Array.from(new Set(
-    normalizeTitle(value)
+    canonicalizeEntityMatchText(value)
       .split(/[^a-z0-9]+/i)
       .map((token) => normalizeMatchToken(token))
       .filter((token) => token && token.length >= 3 && !ENTITY_MATCH_STOPWORDS.has(token))
