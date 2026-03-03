@@ -41,6 +41,19 @@ service cloud.firestore {
         (request.resource.data.ownerUid == request.auth.uid)
       );
     }
+    match /journals/{id} {
+      allow create: if isOwnerForCreate();
+      allow read, delete: if isOwner();
+      allow update: if isSignedIn() && (
+        (resource.data.ownerUid == request.auth.uid) ||
+        (request.resource.data.ownerUid == request.auth.uid)
+      );
+    }
+    // Server-managed ingestion lock/log documents; expose read-only access to the owner.
+    match /transcript_ingestions/{id} {
+      allow read: if isOwner();
+      allow create, update, delete: if false;
+    }
     match /resources/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /trips/{id}     { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /theme_colors/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
