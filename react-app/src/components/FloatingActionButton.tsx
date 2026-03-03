@@ -403,7 +403,7 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
             }}
             title="Process Text"
           >
-            P
+            T
           </button>
           <button
             className="md-fab-mini"
