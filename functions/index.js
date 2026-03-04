@@ -11695,6 +11695,13 @@ async function getAccessToken(uid) {
   return token.access_token;
 }
 
+function parseGoogleDocIdFromUrl(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const match = raw.match(/\/document\/d\/([a-zA-Z0-9_-]+)/);
+  return match ? match[1] : null;
+}
+
 async function getYouTubeTokenDoc(uid) {
   const db = admin.firestore();
   const snap = await db.collection('tokens').doc(`${uid}_youtube`).get();
@@ -14070,6 +14077,102 @@ exports.listUpcomingEvents = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, 
     headers: { "Authorization": "Bearer " + access },
   });
   return { ok: true, items: data.items || [] };
+});
+
+exports.checkGoogleDocsAccess = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
+  const uid = req.auth.uid;
+  const db = admin.firestore();
+  const profileSnap = await db.collection('profiles').doc(uid).get();
+  const profile = profileSnap.exists ? (profileSnap.data() || {}) : {};
+  const docUrl = String(req.data?.docUrl || profile.defaultJournalDocUrl || '').trim();
+
+  if (!docUrl) {
+    return {
+      ok: false,
+      code: 'missing_doc_url',
+      message: 'No default journal Google Doc URL is saved.',
+      steps: [
+        'Paste a Google Docs URL into Default Journal Google Doc URL in Settings.',
+        'Save the document URL.',
+      ],
+    };
+  }
+
+  const docId = parseGoogleDocIdFromUrl(docUrl);
+  if (!docId) {
+    return {
+      ok: false,
+      code: 'invalid_doc_url',
+      message: 'The saved Google Doc URL is not in the expected Google Docs format.',
+      docUrl,
+      steps: [
+        'Open the target Google Doc in your browser.',
+        'Copy the full https://docs.google.com/document/d/... URL.',
+        'Paste it into Default Journal Google Doc URL and save it again.',
+      ],
+    };
+  }
+
+  let access;
+  try {
+    access = await getAccessToken(uid);
+  } catch (error) {
+    return {
+      ok: false,
+      code: 'google_not_connected',
+      message: 'Google is not connected or no usable refresh token is stored.',
+      docUrl,
+      docId,
+      steps: [
+        'Open Settings -> Integrations -> Google Calendar & Docs.',
+        'Click Reconnect.',
+        'Complete the Google consent screen.',
+      ],
+      details: error?.message || String(error),
+    };
+  }
+
+  try {
+    const data = await fetchJson(`https://docs.googleapis.com/v1/documents/${encodeURIComponent(docId)}`, {
+      headers: { Authorization: `Bearer ${access}` },
+    });
+    return {
+      ok: true,
+      code: 'ok',
+      message: 'Google Docs access is working.',
+      docUrl,
+      docId,
+      title: data?.title || null,
+    };
+  } catch (error) {
+    const message = error?.message || String(error);
+    const statusMatch = String(message).match(/HTTP\s+(\d{3})/i);
+    const status = statusMatch ? Number(statusMatch[1]) : Number(error?.status || error?.code || 0);
+    const scopeOrAccess = status === 401 || status === 403 || status === 404;
+    return {
+      ok: false,
+      code: scopeOrAccess ? 'docs_scope_or_access' : 'docs_probe_failed',
+      message: scopeOrAccess
+        ? 'Google Docs access failed. The connected Google account either lacks the Docs scope or does not have access to this document.'
+        : `Google Docs probe failed: ${message}`,
+      docUrl,
+      docId,
+      status: Number.isFinite(status) && status > 0 ? status : null,
+      steps: scopeOrAccess
+        ? [
+          'Click Reconnect in Google Calendar & Docs.',
+          'Approve the Google consent screen again so the token includes Google Docs access.',
+          'Make sure the same Google account is the owner of the document or has edit access to it.',
+          'Run Test Doc Access again.',
+        ]
+        : [
+          'Retry the test.',
+          'If it still fails, inspect the function logs for checkGoogleDocsAccess.',
+        ],
+      details: message,
+    };
+  }
 });
 
 // Full two-way sync for calendar_blocks within a window (bidirectional)
