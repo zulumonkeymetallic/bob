@@ -257,9 +257,10 @@ const YearDateAdjustModal: React.FC<{
   show: boolean;
   goal: Goal | null;
   targetYear: number | null;
+  sourceYear?: number | null;
   onClose: () => void;
   onSave: (payload: { startDate?: number | null; endDate?: number | null }) => Promise<void>;
-}> = ({ show, goal, targetYear, onClose, onSave }) => {
+}> = ({ show, goal, targetYear, sourceYear, onClose, onSave }) => {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [durationDays, setDurationDays] = useState<number | ''>('');
@@ -313,15 +314,16 @@ const YearDateAdjustModal: React.FC<{
   };
 
   const yearLabel = targetYear ? String(targetYear) : 'No Year';
+  const sourceYearLabel = sourceYear ? String(sourceYear) : 'No Year';
 
   return (
     <Modal show={show} onHide={onClose} centered>
       <Modal.Header closeButton>
-        <Modal.Title>Adjust Goal Dates</Modal.Title>
+        <Modal.Title>Adjust Goal Dates · {yearLabel}</Modal.Title>
       </Modal.Header>
       <Modal.Body>
         <p style={{ fontSize: 13, color: themeVars.muted as string }}>
-          This goal was moved to {yearLabel}. Update start/end dates to fit within that year.
+          This goal was moved from {sourceYearLabel} to {yearLabel}. Update start/end dates to fit within that year.
         </p>
         <div className="row">
           <div className="col-md-4">
@@ -382,7 +384,7 @@ const GoalsYearPlanner: React.FC = () => {
   const [filterStatus, setFilterStatus] = useState('all');
   const [filterTheme, setFilterTheme] = useState('all');
   const currentYear = useMemo(() => new Date().getFullYear(), []);
-  const [allYears, setAllYears] = useState(false);
+  const [allYears, setAllYears] = useState(true);
   const [selectedYears, setSelectedYears] = useState<number[]>([currentYear]);
   const [showNoYear, setShowNoYear] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -391,7 +393,7 @@ const GoalsYearPlanner: React.FC = () => {
   const [activeSprintGoalIds, setActiveSprintGoalIds] = useState<Set<string>>(new Set());
   const [applyActiveSprintFilter, setApplyActiveSprintFilter] = useState(true);
   const [editGoal, setEditGoal] = useState<Goal | null>(null);
-  const [dateAdjustGoal, setDateAdjustGoal] = useState<{ goal: Goal; year: number | null } | null>(null);
+  const [dateAdjustGoal, setDateAdjustGoal] = useState<{ goal: Goal; year: number | null; sourceYear: number | null } | null>(null);
   const [pots, setPots] = useState<Record<string, { name: string; balance: number }>>({});
   const [moveError, setMoveError] = useState<string | null>(null);
 
@@ -617,8 +619,8 @@ const GoalsYearPlanner: React.FC = () => {
           const goal = source.data.item as Goal | undefined;
           if (!goal || !currentUser) return;
 
-          const currentYear = resolveGoalYear(goal);
-          if ((currentYear ?? null) === (targetYear ?? null)) return;
+          const sourceYear = resolveGoalYear(goal);
+          if ((sourceYear ?? null) === (targetYear ?? null)) return;
 
           setGoals(prev => prev.map(g => g.id === goal.id ? { ...g, targetYear: targetYear ?? null } as any : g));
           setMoveError(null);
@@ -637,7 +639,7 @@ const GoalsYearPlanner: React.FC = () => {
             const endYear = endMs ? new Date(endMs).getFullYear() : null;
             const outOfYear = (startYear && startYear !== targetYear) || (endYear && endYear !== targetYear);
             if (outOfYear) {
-              setDateAdjustGoal({ goal, year: targetYear });
+              setDateAdjustGoal({ goal, year: targetYear, sourceYear: sourceYear ?? null });
             }
           }
         } catch (error) {
@@ -973,6 +975,7 @@ const GoalsYearPlanner: React.FC = () => {
         show={!!dateAdjustGoal}
         goal={dateAdjustGoal?.goal || null}
         targetYear={dateAdjustGoal?.year ?? null}
+        sourceYear={dateAdjustGoal?.sourceYear ?? null}
         onClose={() => setDateAdjustGoal(null)}
         onSave={async (payload) => {
           if (!dateAdjustGoal?.goal) return;
