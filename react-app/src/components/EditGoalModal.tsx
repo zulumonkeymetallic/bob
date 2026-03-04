@@ -51,6 +51,14 @@ const addDaysToStart = (start: string, days: number) => {
   return formatDateInput(next);
 };
 
+const shiftDateInputToYear = (value: string, year: number) => {
+  const parsed = parseDateInput(value);
+  if (!parsed) return '';
+  const next = new Date(parsed);
+  next.setFullYear(year);
+  return formatDateInput(next);
+};
+
 const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, currentUserId, allGoals = [] }) => {
   const { currentPersona } = usePersona();
   const { sprints } = useSprint();
@@ -64,6 +72,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
     confidence: 0.5,
     startDate: '',
     endDate: '',
+    targetYear: '',
     status: 'New',
     priority: 2,
     estimatedCost: '',
@@ -152,6 +161,22 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
       const nextEnd = addDaysToStart(formData.startDate, Number(parsed));
       setFormData(prev => ({ ...prev, endDate: nextEnd }));
     }
+  };
+
+  const handleTargetYearChange = (value: string) => {
+    setFormData(prev => {
+      const trimmed = value.trim();
+      const parsedYear = Number(trimmed);
+      if (!trimmed || !Number.isFinite(parsedYear)) {
+        return { ...prev, targetYear: trimmed };
+      }
+      return {
+        ...prev,
+        targetYear: trimmed,
+        startDate: prev.startDate ? shiftDateInputToYear(prev.startDate, parsedYear) : prev.startDate,
+        endDate: prev.endDate ? shiftDateInputToYear(prev.endDate, parsedYear) : prev.endDate,
+      };
+    });
   };
 
   const goalIndex = useMemo(() => {
@@ -372,6 +397,10 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         const resolvedThemeValue = (goal as any).theme ?? (goal as any).themeId ?? (goal as any).theme_id;
         const fallbackThemeId = migrateThemeValue(resolvedThemeValue);
         const canonicalThemeId = resolveThemeId(String(resolvedThemeValue ?? ''), fallbackThemeId);
+        const explicitTargetYear = Number((goal as any).targetYear);
+        const derivedTargetYear = Number.isFinite(explicitTargetYear)
+          ? String(explicitTargetYear)
+          : (endDateStr ? endDateStr.slice(0, 4) : (startDateStr ? startDateStr.slice(0, 4) : ''));
 
         setFormData({
           title: goal.title || '',
@@ -383,6 +412,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
           confidence: goal.confidence || 0.5,
           startDate: startDateStr,
           endDate: endDateStr,
+          targetYear: derivedTargetYear,
           status: statusMap[goal.status as keyof typeof statusMap] || 'New',
           priority: goal.priority ?? 2,
           estimatedCost: goal.estimatedCost != null ? String(goal.estimatedCost) : '',
@@ -410,6 +440,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
           confidence: 0.5,
           startDate: '',
           endDate: '',
+          targetYear: '',
           status: 'New',
           priority: 2,
           estimatedCost: '',
@@ -545,7 +576,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
       // Read optional cost metadata and pot mapping from form elements
       const ct = (document.getElementById('goal-cost-type') as HTMLSelectElement | null)?.value || '';
       const rec = (document.getElementById('goal-recurrence') as HTMLSelectElement | null)?.value || '';
-      const ty = (document.getElementById('goal-target-year') as HTMLInputElement | null)?.value || '';
+      const ty = (formData.targetYear || '').trim();
       const potSel = (document.getElementById('goal-pot-id') as HTMLSelectElement | null)?.value || '';
       if (ct) goalData.costType = ct;
       else goalData.costType = null;
@@ -792,7 +823,18 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
                 <div className="col-md-4">
                   <Form.Group className="mb-3">
                     <Form.Label>Target Year</Form.Label>
-                    <Form.Control id="goal-target-year" type="number" min="2024" step="1" defaultValue={(goal as any)?.targetYear || ''} placeholder="e.g., 2026" />
+                    <Form.Control
+                      id="goal-target-year"
+                      type="number"
+                      min="2024"
+                      step="1"
+                      value={formData.targetYear}
+                      onChange={(e) => handleTargetYearChange(e.target.value)}
+                      placeholder="e.g., 2026"
+                    />
+                    <Form.Text className="text-muted">
+                      Date years: Start {formData.startDate ? formData.startDate.slice(0, 4) : '—'} · End {formData.endDate ? formData.endDate.slice(0, 4) : '—'}
+                    </Form.Text>
                   </Form.Group>
                 </div>
               </div>
