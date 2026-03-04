@@ -54,6 +54,11 @@ service cloud.firestore {
       allow read: if isOwner();
       allow create, update, delete: if false;
     }
+    match /transcript_ingestions/{id}/events/{eventId} {
+      allow read: if isSignedIn() &&
+        get(/databases/$(database)/documents/transcript_ingestions/$(id)).data.ownerUid == request.auth.uid;
+      allow create, update, delete: if false;
+    }
     match /resources/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /trips/{id}     { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /theme_colors/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }

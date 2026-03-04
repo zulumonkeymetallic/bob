@@ -199,7 +199,8 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       icon: 'stream',
       items: [
         { label: 'Integration Logs', path: '/logs/integrations', icon: 'database' },
-        { label: 'AI Diagnostics', path: '/logs/ai', icon: 'robot' }
+        { label: 'AI Diagnostics', path: '/logs/ai', icon: 'robot' },
+        { label: 'Transcript Processing', path: '/logs/transcripts', icon: 'file-alt' }
       ]
     },
     // Removed duplicate Health group at bottom

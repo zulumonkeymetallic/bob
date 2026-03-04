@@ -94,6 +94,7 @@ import IntegrationLogs from './components/IntegrationLogs';
 import SettingsEmailPage from './components/settings/SettingsEmailPage';
 import SettingsPlannerPage from './components/settings/SettingsPlannerPage';
 import AiDiagnosticsLogs from './components/logs/AiDiagnosticsLogs';
+import TranscriptProcessingLogs from './components/logs/TranscriptProcessingLogs';
 import GoogleCalendarSettings from './components/settings/integrations/GoogleCalendarSettings';
 import MonzoSettings from './components/settings/integrations/MonzoSettings';
 import StravaSettings from './components/settings/integrations/StravaSettings';
@@ -429,6 +430,7 @@ function AppContent() {
             <Route path="/finance/integrations" element={<Navigate to="/settings/integrations" replace />} />
             <Route path="/logs/integrations" element={<IntegrationLogs />} />
             <Route path="/logs/ai" element={<AiDiagnosticsLogs />} />
+            <Route path="/logs/transcripts" element={<TranscriptProcessingLogs />} />
             <Route
               path="/travel"
               element={
