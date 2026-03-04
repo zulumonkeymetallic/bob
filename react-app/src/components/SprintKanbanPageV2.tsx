@@ -8,7 +8,7 @@ import { usePersona } from '../contexts/PersonaContext';
 import { Story, Task, Goal } from '../types';
 import KanbanBoardV2 from './KanbanBoardV2';
 import { useNavigate } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Maximize2, Minimize2, LayoutGrid, RefreshCw, Sparkles } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Maximize2, Minimize2, LayoutGrid, RefreshCw, Sparkles, Calendar as CalendarIcon } from 'lucide-react';
 import { displayRefForEntity } from '../utils/referenceGenerator';
 import { useSprint } from '../contexts/SprintContext';
 import { isStatus } from '../utils/statusHelpers';
@@ -262,11 +262,17 @@ const SprintKanbanPageV2: React.FC = () => {
         try {
             const callable = httpsCallable(functions, 'replanCalendarNow');
             const response = await callable({ days: 7 });
-            const payload = response.data as { created?: number; rescheduled?: number; blocked?: number };
+            const payload = response.data as { created?: number; rescheduled?: number; blocked?: number; shortfallMinutes?: number; unscheduledStories?: number; unscheduledTasks?: number };
             const parts: string[] = [];
             if (payload?.created) parts.push(`${payload.created} created`);
             if (payload?.rescheduled) parts.push(`${payload.rescheduled} moved`);
             if (payload?.blocked) parts.push(`${payload.blocked} blocked`);
+            if (payload?.shortfallMinutes) {
+                const shortfallHours = Math.round((payload.shortfallMinutes / 60) * 10) / 10;
+                parts.push(`${shortfallHours}h short`);
+            }
+            if (payload?.unscheduledStories) parts.push(`${payload.unscheduledStories} stories unscheduled`);
+            if (payload?.unscheduledTasks) parts.push(`${payload.unscheduledTasks} tasks unscheduled`);
             setReplanFeedback(parts.length ? `Delta replan complete: ${parts.join(', ')}.` : 'Delta replan complete.');
         } catch (error) {
             console.error('Delta replan failed', error);
@@ -475,6 +481,14 @@ const SprintKanbanPageV2: React.FC = () => {
                                     onClick={() => navigate('/dashboard')}
                                 >
                                     View overview
+                                </Button>
+                                <Button
+                                    variant="outline-secondary"
+                                    size="sm"
+                                    onClick={() => navigate('/calendar')}
+                                >
+                                    <CalendarIcon size={14} className="me-1" />
+                                    View calendar
                                 </Button>
                                 <Button
                                     variant="outline-secondary"

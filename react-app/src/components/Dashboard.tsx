@@ -2165,11 +2165,17 @@ const Dashboard: React.FC = () => {
     try {
       const call = httpsCallable(functions, 'replanCalendarNow');
       const response = await call({ days: 7 });
-      const payload = response.data as { created?: number; rescheduled?: number; blocked?: number };
+      const payload = response.data as { created?: number; rescheduled?: number; blocked?: number; shortfallMinutes?: number; unscheduledStories?: number; unscheduledTasks?: number };
       const parts: string[] = [];
       if (payload?.created) parts.push(`${payload.created} created`);
       if (payload?.rescheduled) parts.push(`${payload.rescheduled} moved`);
       if (payload?.blocked) parts.push(`${payload.blocked} blocked`);
+      if (payload?.shortfallMinutes) {
+        const shortfallHours = Math.round((payload.shortfallMinutes / 60) * 10) / 10;
+        parts.push(`${shortfallHours}h short`);
+      }
+      if (payload?.unscheduledStories) parts.push(`${payload.unscheduledStories} stories unscheduled`);
+      if (payload?.unscheduledTasks) parts.push(`${payload.unscheduledTasks} tasks unscheduled`);
       setReplanFeedback(parts.length ? `Delta replan complete: ${parts.join(', ')}.` : 'Delta replan complete.');
     } catch (e) {
       console.error('Replan failed', e);

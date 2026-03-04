@@ -20,6 +20,7 @@ const TIME_SLOTS = Array.from(
     (_, i) => START_HOUR * 60 + i * SLOT_MINUTES
 );
 const HEALTH_SUBTHEMES = ['Bike', 'Run', 'Swim', 'Walk', 'S&C', 'Crossfit', 'Meal Prep'];
+const CLEAR_THEME_OPTION = 'Clear';
 const WORK_MAIN_GIG_THEME: GlobalTheme = {
     id: 12,
     name: 'Work (Main Gig)',
@@ -161,7 +162,8 @@ const WeeklyThemePlanner: React.FC = () => {
 
     useEffect(() => {
         if (!themeOptions.length) return;
-        const exists = themeOptions.some((theme) => theme.name === selectedTheme || theme.label === selectedTheme);
+        const exists = selectedTheme === CLEAR_THEME_OPTION
+            || themeOptions.some((theme) => theme.name === selectedTheme || theme.label === selectedTheme);
         if (!exists) {
             setSelectedTheme(themeOptions[0].name || themeOptions[0].label);
         }
@@ -279,11 +281,17 @@ const WeeklyThemePlanner: React.FC = () => {
         setApplyFeedback(null);
         try {
             const res = await replanCalendarNowFn({ days: 7, startDate: selectedWeekKey });
-            const data = res.data as { created?: number; rescheduled?: number; blocked?: number };
+            const data = res.data as { created?: number; rescheduled?: number; blocked?: number; shortfallMinutes?: number; unscheduledStories?: number; unscheduledTasks?: number };
             const parts: string[] = [];
             if (data?.created) parts.push(`${data.created} created`);
             if (data?.rescheduled) parts.push(`${data.rescheduled} moved`);
             if (data?.blocked) parts.push(`${data.blocked} blocked`);
+            if (data?.shortfallMinutes) {
+                const shortfallHours = Math.round((data.shortfallMinutes / 60) * 10) / 10;
+                parts.push(`${shortfallHours}h short`);
+            }
+            if (data?.unscheduledStories) parts.push(`${data.unscheduledStories} stories unscheduled`);
+            if (data?.unscheduledTasks) parts.push(`${data.unscheduledTasks} tasks unscheduled`);
             setApplyFeedback({
                 variant: 'success',
                 message: parts.length
@@ -537,7 +545,7 @@ const WeeklyThemePlanner: React.FC = () => {
         });
 
         const nextAllocations: Allocation[] = [...otherAllocations, ...updatedDayAllocations];
-        if (theme !== 'Clear') {
+        if (theme !== CLEAR_THEME_OPTION) {
             nextAllocations.push({
                 dayOfWeek: day,
                 startTime: startStr,
@@ -603,7 +611,7 @@ const WeeklyThemePlanner: React.FC = () => {
             day: dragAlloc.dayOfWeek,
             startMinutes: originalStart,
             endMinutes: originalEnd,
-            theme: 'Clear',
+            theme: CLEAR_THEME_OPTION,
             subTheme: null,
         });
         next = applySelectionToAllocations(next, {
@@ -908,7 +916,7 @@ const WeeklyThemePlanner: React.FC = () => {
                         }}
                     >
                         {themeOptions.map(t => <option key={t.id} value={t.name}>{t.label}</option>)}
-                        <option value="Clear">Clear (No Theme)</option>
+                        <option value={CLEAR_THEME_OPTION}>Clear (No Theme)</option>
                     </Form.Select>
                     {isHealthTheme(selectedTheme) && (
                         <Form.Group className="mt-3">

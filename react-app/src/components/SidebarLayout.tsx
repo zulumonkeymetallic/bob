@@ -14,6 +14,7 @@ import AssistantDock from './AssistantDock';
 import SprintClosureBanner from './sprints/SprintClosureBanner';
 import CheckInBanner from './checkins/CheckInBanner';
 import ProcessTextActivityHost from './ProcessTextActivityHost';
+import PlannerCapacityBanner from './planner/PlannerCapacityBanner';
 // Test mode UI removed per request
 
 interface SidebarLayoutProps {
@@ -679,6 +680,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         <main className="h-100">
           <div className="p-3">
             <CheckInBanner />
+            <PlannerCapacityBanner />
             <SprintClosureBanner />
             <ProcessTextActivityHost />
           </div>
