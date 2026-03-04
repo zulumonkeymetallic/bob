@@ -752,7 +752,14 @@ body.grv6-full-active {
 }
 
 .grv6-milestone-label-above {
-  display: none;
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.2;
+  text-align: left;
+  margin-bottom: 2px;
 }
 
 .grv6-progress-metrics {
