@@ -20,6 +20,10 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import type { JournalEntry } from '../types';
 
+interface JournalInsightsCardProps {
+  compact?: boolean;
+}
+
 function timestampToMillis(value: any): number {
   if (value == null) return 0;
   if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -52,7 +56,7 @@ function sentimentBadgeVariant(sentiment?: string | null): { bg: string; text?: 
   return { bg: 'warning', text: 'dark' };
 }
 
-const JournalInsightsCard: React.FC = () => {
+const JournalInsightsCard: React.FC<JournalInsightsCardProps> = ({ compact = false }) => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const [journals, setJournals] = useState<JournalEntry[]>([]);
@@ -135,7 +139,11 @@ const JournalInsightsCard: React.FC = () => {
       <Card.Header className="d-flex justify-content-between align-items-center flex-wrap gap-2">
         <div>
           <div className="fw-semibold">Journal Signals</div>
-          <div className="text-muted small">Mood, stress, energy, and sentiment from processed journal entries.</div>
+          <div className="text-muted small">
+            {compact
+              ? 'Mood, stress, energy, and sentiment from recent journal entries.'
+              : 'Mood, stress, energy, and sentiment from processed journal entries.'}
+          </div>
         </div>
         <Button as={Link as any} to="/journals" size="sm" variant="outline-secondary">
           Open Journals
@@ -179,7 +187,13 @@ const JournalInsightsCard: React.FC = () => {
               </div>
             )}
 
-            <div style={{ width: '100%', height: 220 }}>
+            {!!latestEntry?.entryMetadata?.primaryThemes?.length && (
+              <div className="text-muted small mb-2">
+                Themes: {latestEntry.entryMetadata.primaryThemes.join(', ')}
+              </div>
+            )}
+
+            <div style={{ width: '100%', height: compact ? 150 : 220 }}>
               <ResponsiveContainer>
                 <LineChart data={trendData} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" />
@@ -194,7 +208,7 @@ const JournalInsightsCard: React.FC = () => {
               </ResponsiveContainer>
             </div>
 
-            {!!sentimentData.length && (
+            {!compact && !!sentimentData.length && (
               <div style={{ width: '100%', height: 180, marginTop: 8 }}>
                 <ResponsiveContainer>
                   <BarChart data={sentimentData} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>

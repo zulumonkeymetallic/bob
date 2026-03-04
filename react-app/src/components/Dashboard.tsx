@@ -2566,14 +2566,8 @@ const Dashboard: React.FC = () => {
             </Alert>
           )}
 
-          <Row className="g-2 mb-2">
-            <Col xl={12}>
-              <JournalInsightsCard />
-            </Col>
-          </Row>
-
           <Row className="g-2 mb-1">
-            <Col xl={12}>
+            <Col xl={9}>
               <Card className="shadow-sm border-0">
                 <Card.Header className="d-flex justify-content-between align-items-center">
                   <div className="fw-semibold">Key Metrics</div>
@@ -2890,6 +2884,9 @@ const Dashboard: React.FC = () => {
                   </div>
                 </Collapse>
               </Card>
+            </Col>
+            <Col xl={3}>
+              <JournalInsightsCard compact />
             </Col>
           </Row>
 

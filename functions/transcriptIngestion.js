@@ -1266,6 +1266,20 @@ function buildDocAppendPlan(sections, options = {}) {
   pushHeading('Full Transcript', 'HEADING_2');
   pushText(`${sections.fullTranscript}\n\n`);
 
+  if (sections.entryMetadata) {
+    pushHeading('Entry Metadata', 'HEADING_2');
+    pushText(
+      [
+        `MoodScore: ${sections.entryMetadata.moodScore ?? '—'}`,
+        `StressLevel: ${sections.entryMetadata.stressLevel ?? '—'}`,
+        `EnergyLevel: ${sections.entryMetadata.energyLevel ?? '—'}`,
+        `PrimaryThemes: ${Array.isArray(sections.entryMetadata.primaryThemes) && sections.entryMetadata.primaryThemes.length ? sections.entryMetadata.primaryThemes.join(', ') : '—'}`,
+        `CognitiveState: ${sections.entryMetadata.cognitiveState || '—'}`,
+        `Sentiment: ${sections.entryMetadata.sentiment || '—'}`,
+      ].join('\n') + '\n\n'
+    );
+  }
+
   return {
     text: textParts.join(''),
     includeDateHeading,
@@ -2829,6 +2843,8 @@ function buildEmailHtml({ sections, taskRecords, storyRecords, docUrl, warnings 
       : '',
     '<h2 style="font-size:18px;margin:16px 0 8px;">Advice</h2>',
     `<div style="white-space:pre-wrap;margin-bottom:16px;">${escapeHtml(sections.advice)}</div>`,
+    '<h2 style="font-size:18px;margin:16px 0 8px;">Full Transcript</h2>',
+    `<div style="white-space:pre-wrap;margin-bottom:16px;">${escapeHtml(sections.fullTranscript)}</div>`,
     metadata
       ? [
         '<h2 style="font-size:18px;margin:16px 0 8px;">Entry Metadata</h2>',
@@ -2842,8 +2858,6 @@ function buildEmailHtml({ sections, taskRecords, storyRecords, docUrl, warnings 
         '</ul>',
       ].join('')
       : '',
-    '<h2 style="font-size:18px;margin:16px 0 8px;">Full Transcript</h2>',
-    `<div style="white-space:pre-wrap;margin-bottom:16px;">${escapeHtml(sections.fullTranscript)}</div>`,
     '<h2 style="font-size:18px;margin:16px 0 8px;">Actionable items</h2>',
     actionRows ? `<ul>${actionRows}</ul>` : '<p>No tasks or stories were created.</p>',
     warningRows
