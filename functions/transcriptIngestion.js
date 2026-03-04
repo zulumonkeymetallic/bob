@@ -8,6 +8,7 @@ const { google } = require('googleapis');
 const { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } = require('@google/generative-ai');
 
 const { sendEmail } = require('./lib/email');
+const { loadThemesForUser, mapThemeLabelToId } = require('./services/themeManager');
 const { buildEntityUrl } = require('./utils/urlHelpers');
 const { ensureTaskPoints, clampTaskPoints } = require('./utils/taskPoints');
 
@@ -852,6 +853,125 @@ function buildConsumptionTitle(kind, previewTitle, url = '') {
   return cleanTitle.slice(0, 140);
 }
 
+function inferConsumptionSubtype(kind, { title = '', description = '', siteName = '', authorName = '', url = '' } = {}) {
+  const haystack = `${title} ${description} ${siteName} ${authorName}`.toLowerCase();
+  if (kind === 'watch') {
+    if (
+      isYouTubeUrl(url) && (
+        /\b(music video|official video|official music video|lyric video|audio|remix|dj set|live set|mix|summer vibes|vevo)\b/.test(haystack) ||
+        /\b(house|techno|trance|dance|afro house|playlist|album|song)\b/.test(haystack)
+      )
+    ) return 'music video';
+    if (/\b(trailer|teaser)\b/.test(haystack)) return 'trailer';
+    if (/\b(tutorial|how to|walkthrough|guide)\b/.test(haystack)) return 'tutorial';
+    if (/\b(podcast|episode)\b/.test(haystack)) return 'podcast';
+    if (/\b(interview)\b/.test(haystack)) return 'interview';
+    if (/\b(documentary|docuseries)\b/.test(haystack)) return 'documentary';
+    if (/\b(talk|lecture|keynote|presentation)\b/.test(haystack)) return 'talk';
+    return 'video';
+  }
+  if (kind === 'read') {
+    if (/\b(api|documentation|docs|reference|manual|guide)\b/.test(haystack)) return 'documentation';
+    if (/\b(newsletter|substack)\b/.test(haystack)) return 'newsletter';
+    if (/\b(paper|study|research|preprint|journal)\b/.test(haystack)) return 'paper';
+    return 'article';
+  }
+  return null;
+}
+
+function buildMeaningfulConsumptionTitle(kind, previewTitle, url = '', options = {}) {
+  const cleanTitle = cleanPreviewTitle(previewTitle, url) || deriveTitleFromUrl(url, kind);
+  const subtype = inferConsumptionSubtype(kind, {
+    title: cleanTitle,
+    description: options.description || '',
+    siteName: options.siteName || '',
+    authorName: options.authorName || '',
+    url,
+  });
+
+  if (kind === 'watch') {
+    if (subtype === 'music video') return 'Watch music video';
+    if (subtype === 'trailer') return 'Watch trailer';
+    if (subtype === 'tutorial') return 'Watch tutorial';
+    if (subtype === 'podcast') return 'Watch podcast episode';
+    if (subtype === 'interview') return 'Watch interview';
+    if (subtype === 'documentary') return 'Watch documentary';
+    if (subtype === 'talk') return 'Watch talk';
+    return `Watch: ${cleanTitle}`.slice(0, 140);
+  }
+  if (kind === 'read') {
+    if (subtype === 'documentation') return `Read docs: ${cleanTitle}`.slice(0, 140);
+    if (subtype === 'newsletter') return `Read newsletter: ${cleanTitle}`.slice(0, 140);
+    if (subtype === 'paper') return `Read paper: ${cleanTitle}`.slice(0, 140);
+    return `Read: ${cleanTitle}`.slice(0, 140);
+  }
+  return cleanTitle.slice(0, 140);
+}
+
+function buildMeaningfulConsumptionDescription(kind, previewTitle, url = '', options = {}) {
+  const cleanTitle = cleanPreviewTitle(previewTitle, url) || deriveTitleFromUrl(url, kind);
+  const description = String(options.description || '').replace(/\s+/g, ' ').trim();
+  const siteName = cleanPreviewTitle(options.siteName || '', url) || '';
+  const authorName = String(options.authorName || '').replace(/\s+/g, ' ').trim();
+  const subtype = inferConsumptionSubtype(kind, {
+    title: cleanTitle,
+    description,
+    siteName,
+    authorName,
+    url,
+  });
+
+  if (kind === 'watch') {
+    const subject = subtype === 'music video' ? 'music video' : subtype || 'video';
+    const siteLabel = siteName || (isYouTubeUrl(url) ? 'YouTube' : '');
+    const sourcePart = siteLabel ? ` on ${siteLabel}` : '';
+    const authorPart = authorName ? ` by ${authorName}` : '';
+    return `Watch the ${subject} "${cleanTitle}"${authorPart}${sourcePart}.`.slice(0, 400);
+  }
+  if (kind === 'read') {
+    const subject = subtype === 'documentation' ? 'documentation' : subtype || 'article';
+    const siteLabel = siteName ? ` on ${siteName}` : '';
+    const summary = description && normalizeTitle(description) !== normalizeTitle(cleanTitle)
+      ? ` ${description}`.slice(0, 220)
+      : '';
+    return `Read the ${subject} "${cleanTitle}"${siteLabel}.${summary}`.trim().slice(0, 400);
+  }
+  return description || cleanTitle;
+}
+
+function inferUrlTheme(kind, url = '', options = {}) {
+  const cleanTitle = cleanPreviewTitle(options.title || '', url) || '';
+  const subtype = inferConsumptionSubtype(kind, {
+    title: cleanTitle,
+    description: options.description || '',
+    siteName: options.siteName || '',
+    authorName: options.authorName || '',
+    url,
+  });
+  if (isYouTubeUrl(url)) return 'Hobbies & Interests';
+  if (kind === 'watch' && subtype === 'music video') return 'Hobbies & Interests';
+  return null;
+}
+
+function normalizeThemeForCatalog(rawTheme, userThemes = [], fallback = 'General') {
+  const availableThemes = Array.isArray(userThemes) && userThemes.length ? userThemes : undefined;
+  const desired = String(rawTheme || '').trim() || fallback;
+  const themeId = mapThemeLabelToId(desired, availableThemes);
+  const themeRecord = Array.isArray(availableThemes)
+    ? availableThemes.find((theme) => String(theme?.id ?? '').trim() === String(themeId ?? '').trim())
+    : null;
+  const themeLabel = String(
+    themeRecord?.label ||
+    themeRecord?.name ||
+    themeId ||
+    fallback
+  ).trim() || fallback;
+  return {
+    theme: themeLabel,
+    themeId,
+  };
+}
+
 function isGenericConsumptionTitle(title, kind = null) {
   const normalized = normalizeTitle(title).replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
   if (!normalized) return true;
@@ -955,6 +1075,7 @@ async function fetchUrlPreview(url) {
     title: null,
     description: null,
     siteName: null,
+    authorName: null,
     textSnippet: null,
     kindHint: isLikelyVideoUrl(normalizedUrl) ? 'watch' : 'read',
   };
@@ -974,6 +1095,7 @@ async function fetchUrlPreview(url) {
       const title = cleanPreviewTitle(payload?.title, normalizedUrl);
       if (title) preview.title = title;
       preview.siteName = cleanPreviewTitle(payload?.provider_name, normalizedUrl) || preview.siteName || 'YouTube';
+      preview.authorName = String(payload?.author_name || '').trim() || preview.authorName || null;
       if (!preview.description) {
         const author = String(payload?.author_name || '').trim();
         preview.description = author ? `YouTube video by ${author}.` : 'YouTube video.';
@@ -1020,12 +1142,18 @@ async function fetchUrlPreview(url) {
       $('meta[name="application-name"]').attr('content') ||
       ''
     );
+    const rawAuthor = (
+      $('meta[name="author"]').attr('content') ||
+      $('meta[property="article:author"]').attr('content') ||
+      ''
+    );
     const ogType = String($('meta[property="og:type"]').attr('content') || '').trim().toLowerCase();
     preview.title = cleanPreviewTitle(rawTitle, normalizedUrl);
     preview.description = (
       String(rawDescription || '')
     ).trim().slice(0, 400) || null;
     preview.siteName = cleanPreviewTitle(rawSiteName, normalizedUrl);
+    preview.authorName = String(rawAuthor || '').trim() || null;
     preview.textSnippet = String(rawDescription || '').replace(/\s+/g, ' ').trim().slice(0, 240) || null;
     preview.kindHint = ogType.includes('video') || isLikelyVideoUrl(normalizedUrl) ? 'watch' : 'read';
     if (!preview.title || isGenericConsumptionTitle(preview.title, preview.kindHint)) {
@@ -1095,29 +1223,60 @@ function enrichEntityFromPreview(entity, preview, { defaultKind = null } = {}) {
   const previewDescription = String(preview?.description || preview?.textSnippet || '').trim();
   const treatAsStory = !Object.prototype.hasOwnProperty.call(entity || {}, 'kind');
   const kind = normalizeTaskKind(entity?.kind || defaultKind, entity?.title || '');
+  const resolvedKind = !treatAsStory && kind === 'task' && preview?.kindHint && normalizedUrl
+    ? preview.kindHint
+    : kind;
   const existingTitle = String(entity?.title || '').trim();
   const next = {
     ...entity,
     url: normalizedUrl,
   };
+  const shouldForcePreviewName = !treatAsStory && normalizedUrl && ['read', 'watch'].includes(resolvedKind);
+  const shouldForcePreviewDescription = shouldForcePreviewName && Boolean(previewTitle || previewDescription);
 
   if (previewTitle) {
     const normalizedPreviewTitle = normalizeTitle(previewTitle);
     const normalizedEntityTitle = normalizeTitle(existingTitle);
     const needsPreviewName = (
       !existingTitle ||
-      isGenericConsumptionTitle(existingTitle, kind) ||
-      (kind !== 'task' && normalizedPreviewTitle && !normalizedEntityTitle.includes(normalizedPreviewTitle))
+      isGenericConsumptionTitle(existingTitle, resolvedKind) ||
+      (resolvedKind !== 'task' && normalizedPreviewTitle && !normalizedEntityTitle.includes(normalizedPreviewTitle))
     );
-    if (needsPreviewName) {
+    if (needsPreviewName || shouldForcePreviewName) {
       next.title = treatAsStory
         ? previewTitle.slice(0, 140)
-        : buildConsumptionTitle(kind === 'task' ? (preview?.kindHint || defaultKind || 'read') : kind, previewTitle, normalizedUrl);
+        : buildMeaningfulConsumptionTitle(resolvedKind, previewTitle, normalizedUrl, {
+          description: previewDescription,
+          siteName: preview?.siteName || '',
+          authorName: preview?.authorName || '',
+        });
     }
   }
 
-  if ((!next.description || isGenericDescription(next.description)) && previewDescription) {
-    next.description = previewDescription.slice(0, 400);
+  if (previewDescription && (
+    shouldForcePreviewDescription ||
+    !next.description ||
+    isGenericDescription(next.description)
+  )) {
+    next.description = buildMeaningfulConsumptionDescription(resolvedKind, previewTitle, normalizedUrl, {
+      description: previewDescription,
+      siteName: preview?.siteName || '',
+      authorName: preview?.authorName || '',
+    });
+  }
+
+  const inferredTheme = inferUrlTheme(resolvedKind, normalizedUrl, {
+    title: previewTitle,
+    description: previewDescription,
+    siteName: preview?.siteName || '',
+    authorName: preview?.authorName || '',
+  });
+  if (inferredTheme) {
+    next.theme = inferredTheme;
+  }
+
+  if (!treatAsStory && resolvedKind !== kind) {
+    next.kind = resolvedKind;
   }
 
   return next;
@@ -2010,6 +2169,7 @@ function findExistingEntityMatch(catalog, title, url = null, preferredEntityType
 
   const byUrl = [...preferredCandidates, ...crossCandidates].find((candidate) => normalizedUrl && candidate?.url === normalizedUrl) || null;
   if (byUrl) return byUrl;
+  if (normalizedUrl) return null;
 
   const byExactPreferred = preferredCandidates.find((candidate) => candidate?.normalizedTitle === normalized) || null;
   if (byExactPreferred) return byExactPreferred;
@@ -2057,6 +2217,7 @@ async function findExistingEntityRecord(db, collectionName, uid, title, url = nu
   if (normalizedUrl) {
     const byUrl = await runQuery('url', normalizedUrl);
     if (byUrl) return byUrl;
+    return null;
   }
 
   if (normalized) {
@@ -2077,7 +2238,7 @@ async function findExistingEntityRecord(db, collectionName, uid, title, url = nu
   return doc ? buildExistingEntityRecord(collectionName, doc) : null;
 }
 
-async function buildStoryRecords({ db, uid, persona, fingerprint, analysis, existingEntityCatalog }) {
+async function buildStoryRecords({ db, uid, persona, fingerprint, analysis, existingEntityCatalog, userThemes = [] }) {
   const createdAtOrder = Date.now();
   const records = [];
   const matchedTaskRecords = new Map();
@@ -2088,11 +2249,19 @@ async function buildStoryRecords({ db, uid, persona, fingerprint, analysis, exis
     const titleKey = normalizeTitle(story.title);
     const lookupKey = story.url ? `url:${story.url}` : titleKey;
     if (lookupKey && !existingStories.has(lookupKey)) {
-      if (existingEntityCatalog) {
-        existingStories.set(lookupKey, findExistingEntityMatch(existingEntityCatalog, story.title, story.url, 'story'));
-      } else {
-        existingStories.set(lookupKey, await findExistingEntityRecord(db, 'stories', uid, story.title, story.url));
+      let existingMatch = existingEntityCatalog
+        ? findExistingEntityMatch(existingEntityCatalog, story.title, story.url, 'story')
+        : null;
+      if (!existingMatch && story.url) {
+        existingMatch = await findExistingEntityRecord(db, 'stories', uid, story.title, story.url);
       }
+      if (!existingMatch && story.url) {
+        existingMatch = await findExistingEntityRecord(db, 'tasks', uid, story.title, story.url);
+      }
+      if (!existingMatch && !existingEntityCatalog) {
+        existingMatch = await findExistingEntityRecord(db, 'stories', uid, story.title, story.url);
+      }
+      existingStories.set(lookupKey, existingMatch);
     }
     const existing = lookupKey ? existingStories.get(lookupKey) : null;
     if (existing) {
@@ -2113,6 +2282,11 @@ async function buildStoryRecords({ db, uid, persona, fingerprint, analysis, exis
       points: clampTaskPoints(story.points) ?? 2,
     });
     const prioritized = prioritizeTask(sized);
+    const normalizedTheme = normalizeThemeForCatalog(
+      prioritized.theme || story.theme || 'Growth',
+      userThemes,
+      'Growth'
+    );
     const payload = {
       id,
       ref,
@@ -2131,7 +2305,9 @@ async function buildStoryRecords({ db, uid, persona, fingerprint, analysis, exis
       url: story.url || null,
       orderIndex: createdAtOrder + index,
       acceptanceCriteria: story.acceptanceCriteria,
-      theme: story.theme || 'Growth',
+      theme: normalizedTheme.theme,
+      theme_id: normalizedTheme.themeId,
+      themeId: normalizedTheme.themeId,
       entry_method: 'ai_transcript_ingestion',
       aiIngestionFingerprint: fingerprint,
       aiPriorityBucket: prioritized.aiPriorityBucket,
@@ -2168,6 +2344,7 @@ async function buildTaskRecords({
   timezone,
   storyMap,
   existingEntityCatalog,
+  userThemes = [],
 }) {
   const saturdayDueMs = computeUpcomingSaturdayMs(timezone);
   const records = [];
@@ -2178,11 +2355,19 @@ async function buildTaskRecords({
     const titleKey = normalizeTitle(task.title);
     const lookupKey = task.url ? `url:${task.url}` : titleKey;
     if (lookupKey && !existingTasks.has(lookupKey)) {
-      if (existingEntityCatalog) {
-        existingTasks.set(lookupKey, findExistingEntityMatch(existingEntityCatalog, task.title, task.url, 'task'));
-      } else {
-        existingTasks.set(lookupKey, await findExistingEntityRecord(db, 'tasks', uid, task.title, task.url));
+      let existingMatch = existingEntityCatalog
+        ? findExistingEntityMatch(existingEntityCatalog, task.title, task.url, 'task')
+        : null;
+      if (!existingMatch && task.url) {
+        existingMatch = await findExistingEntityRecord(db, 'tasks', uid, task.title, task.url);
       }
+      if (!existingMatch && task.url) {
+        existingMatch = await findExistingEntityRecord(db, 'stories', uid, task.title, task.url);
+      }
+      if (!existingMatch && !existingEntityCatalog) {
+        existingMatch = await findExistingEntityRecord(db, 'tasks', uid, task.title, task.url);
+      }
+      existingTasks.set(lookupKey, existingMatch);
     }
     const existing = lookupKey ? existingTasks.get(lookupKey) : null;
     if (existing) {
@@ -2193,6 +2378,53 @@ async function buildTaskRecords({
       const existingType = String(existing?.payload?.type || '').trim().toLowerCase();
       const shouldEscalateExisting = !['read', 'watch'].includes(existingType || String(task?.kind || '').trim().toLowerCase());
       if (!shouldEscalateExisting) {
+        const incomingType = String(task?.kind || existingType || '').trim().toLowerCase();
+        const normalizedTheme = normalizeThemeForCatalog(
+          task.theme || existing?.payload?.theme || 'Growth',
+          userThemes,
+          'Growth'
+        );
+        const currentTitle = String(existing?.payload?.title || '').trim();
+        const currentDescription = String(existing?.payload?.description || '').trim();
+        const currentTheme = String(existing?.payload?.theme ?? '').trim();
+        const currentUrl = normalizeUrlValue(existing?.payload?.url);
+        const desiredTitle = String(task?.title || '').trim();
+        const desiredDescription = String(task?.description || '').trim();
+        const shouldRefreshConsumptionMetadata = (
+          existing?.payload?.entry_method === 'ai_transcript_ingestion' &&
+          ['read', 'watch'].includes(incomingType) &&
+          (
+            !currentTitle ||
+            !new RegExp(`^${incomingType}\\b`, 'i').test(currentTitle) ||
+            !currentDescription ||
+            currentTheme !== normalizedTheme.theme ||
+            currentUrl !== normalizeUrlValue(task.url)
+          )
+        );
+        if (shouldRefreshConsumptionMetadata) {
+          const payload = ensureTaskPoints({
+            ...(existing.payload || {}),
+            title: desiredTitle || currentTitle || existing.payload?.title || '',
+            normalizedTitle: normalizeTitle(desiredTitle || currentTitle || existing.payload?.title || ''),
+            description: desiredDescription || currentDescription || existing.payload?.description || '',
+            url: normalizeUrlValue(task.url) || currentUrl || null,
+            type: incomingType || existingType || existing.payload?.type || 'task',
+            theme: normalizedTheme.theme,
+            theme_id: normalizedTheme.themeId,
+            themeId: normalizedTheme.themeId,
+            syncState: 'dirty',
+            serverUpdatedAt: Date.now(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+          records.push({
+            ...existing,
+            title: payload.title,
+            url: payload.url,
+            updated: true,
+            payload,
+          });
+          continue;
+        }
         records.push(existing);
         continue;
       }
@@ -2251,6 +2483,8 @@ async function buildTaskRecords({
       : dueDate
         ? 'upcoming_saturday_read_watch'
         : null;
+    const inheritedTheme = prioritized.theme || linkedStory?.payload?.theme || task.theme || 'Growth';
+    const normalizedTheme = normalizeThemeForCatalog(inheritedTheme, userThemes, 'Growth');
     const payload = ensureTaskPoints({
       id,
       ref,
@@ -2277,7 +2511,9 @@ async function buildTaskRecords({
       attachments: [],
       url: task.url || null,
       alignedToGoal: false,
-      theme: prioritized.theme || linkedStory?.payload?.theme || 'Growth',
+      theme: normalizedTheme.theme,
+      theme_id: normalizedTheme.themeId,
+      themeId: normalizedTheme.themeId,
       source: 'ai',
       sourceRef: fingerprint,
       aiLinkConfidence: 0,
@@ -3839,6 +4075,7 @@ async function processTranscriptIngestion({
     }
 
     const existingEntityCatalog = await loadExistingEntityCatalog(db, uid);
+    const userThemes = await loadThemesForUser(uid);
     const {
       storyRecords: rawStoryRecords,
       matchedTaskRecords: crossMatchedTaskRecords,
@@ -3849,6 +4086,7 @@ async function processTranscriptIngestion({
       fingerprint,
       analysis,
       existingEntityCatalog,
+      userThemes,
     });
     const storyMap = new Map(rawStoryRecords.map((story) => [normalizeTitle(story.title), story]));
     const {
@@ -3863,6 +4101,7 @@ async function processTranscriptIngestion({
       timezone,
       storyMap,
       existingEntityCatalog,
+      userThemes,
     });
     const storyRecords = dedupeEntityRecords([...rawStoryRecords, ...crossMatchedStoryRecords]);
     const taskRecords = dedupeEntityRecords([...rawTaskRecords, ...crossMatchedTaskRecords]);
