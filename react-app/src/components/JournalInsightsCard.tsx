@@ -263,15 +263,6 @@ const JournalInsightsCard: React.FC<JournalInsightsCardProps> = ({ compact = fal
 
   const latestThemes = latestEntry?.entryMetadata?.primaryThemes || [];
   const latestSummary = String(latestEntry?.oneLineSummary || '').trim();
-  const compactMetricSummary = useMemo(
-    () => metricSummaries
-      .map((metric) => {
-        const arrow = metric.trend?.direction === 'up' ? '↑' : metric.trend?.direction === 'down' ? '↓' : '→';
-        return `${metric.label} ${metric.value}${metric.trend ? ` ${arrow}` : ''}`;
-      })
-      .join(' · '),
-    [metricSummaries]
-  );
 
   const renderTrend = (trend: TrendMeta | null) => {
     if (!trend) {
@@ -361,16 +352,48 @@ const JournalInsightsCard: React.FC<JournalInsightsCardProps> = ({ compact = fal
             </>
           ) : (
             <>
-              <div className="fw-semibold">{compactMetricSummary}</div>
-              <div className="text-muted small d-flex align-items-center gap-2 flex-wrap">
+              <div className="d-flex flex-wrap gap-1 mb-1">
+                {metricSummaries.map((metric) => {
+                  const indicatorColor = metric.trend ? trendToneColor[metric.trend.tone] : '#64748b';
+                  return (
+                    <span
+                      key={metric.key}
+                      className="small d-inline-flex align-items-center gap-1 px-2 py-1 rounded-pill border"
+                      style={{
+                        borderColor: `${metric.accent}33`,
+                        background: `${metric.accent}14`,
+                        color: 'var(--bs-body-color)',
+                        fontWeight: 600,
+                        lineHeight: 1.2,
+                      }}
+                      title={metric.trend?.label || `${metric.label} has no comparison yet`}
+                    >
+                      <span>{metric.label} {metric.value}</span>
+                      {metric.trend?.direction === 'up' ? (
+                        <ArrowUpRight size={12} style={{ color: indicatorColor }} />
+                      ) : metric.trend?.direction === 'down' ? (
+                        <ArrowDownRight size={12} style={{ color: indicatorColor }} />
+                      ) : (
+                        <span style={{ color: indicatorColor }}>→</span>
+                      )}
+                    </span>
+                  );
+                })}
+              </div>
+              <div className="text-muted small d-flex align-items-center gap-2 flex-wrap" style={{ lineHeight: 1.35 }}>
                 {sentimentVariant && latestEntry.entryMetadata.sentiment ? (
                   <Badge bg={sentimentVariant.bg} text={sentimentVariant.text}>
                     {latestEntry.entryMetadata.sentiment}
                   </Badge>
                 ) : null}
-                <span className="text-truncate">{themeSummary}</span>
+                <span style={{ overflowWrap: 'anywhere' }}>{themeSummary}</span>
               </div>
-              <div className="text-muted small text-truncate">{latestSummary || 'Open detailed journal insights'}</div>
+              <div
+                className="text-muted small"
+                style={{ lineHeight: 1.35, overflowWrap: 'anywhere', whiteSpace: 'normal' }}
+              >
+                {latestSummary || 'Open detailed journal insights'}
+              </div>
             </>
           )}
         </div>
