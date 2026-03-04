@@ -15,6 +15,7 @@ import { SkeletonStatCard } from './common/SkeletonLoader';
 import EmptyState from './common/EmptyState';
 import { colors } from '../utils/colors';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
+import { goalNeedsLinkedPot } from '../utils/goalCost';
 
 const GoalsManagement: React.FC = () => {
   const { currentUser } = useAuth();
@@ -23,6 +24,7 @@ const GoalsManagement: React.FC = () => {
   const [goals, setGoals] = useState<Goal[]>([]);
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [filterTheme, setFilterTheme] = useState<string>('all');
+  const [filterMissingPotCost, setFilterMissingPotCost] = useState<boolean>(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
   const [editGoal, setEditGoal] = useState<Goal | null>(null);
@@ -33,9 +35,28 @@ const GoalsManagement: React.FC = () => {
   useEffect(() => {
     const filter = searchParams.get('filter');
     if (filter === 'active') {
-      setFilterStatus('active'); // Active status for goals
+      setFilterStatus('active');
+      setFilterMissingPotCost(false);
+    } else if (filter === 'cost_without_pot') {
+      setFilterStatus('all');
+      setFilterMissingPotCost(true);
     }
   }, [searchParams]);
+
+  const statusFilterMatches = (goal: Goal, statusFilter: string): boolean => {
+    if (statusFilter === 'all') return true;
+    const statusMap: Record<string, number> = {
+      new: 0,
+      active: 1,
+      done: 2,
+      paused: 3,
+      dropped: 4,
+    };
+    const mapped = statusMap[statusFilter.toLowerCase()];
+    if (Number.isFinite(mapped)) return goal.status === mapped;
+    const numeric = Number(statusFilter);
+    return Number.isFinite(numeric) ? goal.status === numeric : true;
+  };
 
   useEffect(() => {
     if (!currentUser) return;
@@ -104,8 +125,9 @@ const GoalsManagement: React.FC = () => {
 
   // Apply filters to goals
   const filteredGoals = goals.filter(goal => {
-    if (filterStatus !== 'all' && goal.status !== parseInt(filterStatus)) return false;
+    if (!statusFilterMatches(goal, filterStatus)) return false;
     if (filterTheme !== 'all' && goal.theme !== parseInt(filterTheme)) return false;
+    if (filterMissingPotCost && !goalNeedsLinkedPot(goal)) return false;
     if (searchTerm && !goal.title.toLowerCase().includes(searchTerm.toLowerCase())) return false;
     return true;
   });
@@ -248,6 +270,17 @@ const GoalsManagement: React.FC = () => {
               </Col>
             </Row>
             <Row className="mt-1">
+              <Col md={4}>
+                <Form.Check
+                  id="toggle-cost-without-pot"
+                  type="switch"
+                  label="Only goals with cost but no pot"
+                  checked={filterMissingPotCost}
+                  onChange={(e) => setFilterMissingPotCost(e.target.checked)}
+                />
+              </Col>
+            </Row>
+            <Row className="mt-1">
               <Col>
                 <Button
                   size="sm"
@@ -255,6 +288,7 @@ const GoalsManagement: React.FC = () => {
                   onClick={() => {
                     setFilterStatus('all');
                     setFilterTheme('all');
+                    setFilterMissingPotCost(false);
                     setSearchTerm('');
                   }}
                 >

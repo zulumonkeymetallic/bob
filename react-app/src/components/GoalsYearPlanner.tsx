@@ -15,6 +15,7 @@ import { themeVars } from '../utils/themeVars';
 import SprintSelector from './SprintSelector';
 import EditGoalModal from './EditGoalModal';
 import { useSidebar } from '../contexts/SidebarContext';
+import { goalNeedsLinkedPot } from '../utils/goalCost';
 import '../styles/KanbanCards.css';
 
 interface GoalYearColumnProps {
@@ -532,8 +533,7 @@ const GoalsYearPlanner: React.FC = () => {
     if (filterStatus !== 'all' && !isStatus(goal.status, filterStatus)) return false;
     if (filterTheme !== 'all' && getThemeName(goal.theme) !== filterTheme) return false;
     if (showNoPotOnly) {
-      const potId = (goal as any).linkedPotId || (goal as any).potId;
-      if (potId) return false;
+      if (!goalNeedsLinkedPot(goal)) return false;
     }
     const derivedYear = resolveGoalYear(goal);
     if (allYears) {
@@ -951,7 +951,7 @@ const GoalsYearPlanner: React.FC = () => {
                 <Form.Check
                   type="switch"
                   id="toggle-goals-no-pots"
-                  label="Only goals without pots"
+                  label="Only goals with cost and no pot"
                   checked={showNoPotOnly}
                   onChange={(e) => setShowNoPotOnly(e.target.checked)}
                   className="text-muted"

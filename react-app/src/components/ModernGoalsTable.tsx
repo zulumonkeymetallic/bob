@@ -48,6 +48,7 @@ import { ChoiceHelper } from '../config/choices';
 import { getStatusName, getThemeName } from '../utils/statusHelpers';
 import ModernStoriesTable from './ModernStoriesTable';
 import { themeVars, rgbaCard } from '../utils/themeVars';
+import { getGoalLinkedPotId, normalizeGoalCostType } from '../utils/goalCost';
 
 interface GoalTableRow extends Goal {
   storiesCount?: number;
@@ -118,6 +119,31 @@ const defaultColumns: Column[] = [
   {
     key: 'url',
     label: 'URL',
+    width: '20%',
+    visible: false,
+    editable: true,
+    type: 'text'
+  },
+  {
+    key: 'costType',
+    label: 'Cost Type',
+    width: '12%',
+    visible: true,
+    editable: true,
+    type: 'select',
+    options: ['Not set', 'None', 'One-off', 'Recurring']
+  },
+  {
+    key: 'estimatedCost',
+    label: 'Est Cost (£)',
+    width: '12%',
+    visible: true,
+    editable: true,
+    type: 'number'
+  },
+  {
+    key: 'linkedPotId',
+    label: 'Linked Pot',
     width: '20%',
     visible: true,
     editable: true,
@@ -231,6 +257,7 @@ interface SortableRowProps {
   onStoryPriorityChange: (storyId: string, newPriority: number) => Promise<void>;
   onStoryAdd: (goalId: string) => (storyData: Omit<Story, 'ref' | 'id' | 'updatedAt' | 'createdAt'>) => Promise<void>;
   globalThemes: GlobalTheme[];
+  monzoPots: Array<{ id: string; name: string }>;
   availableGoals: Goal[];
   storyCounts: Record<string, number>;
   sprintStoryCounts: Record<string, number>;
@@ -253,6 +280,21 @@ const formatExternalUrlLabel = (value: unknown): string => {
   }
 };
 
+const COST_TYPE_LABEL_TO_VALUE: Record<string, 'none' | 'one_off' | 'recurring'> = {
+  'none': 'none',
+  'one-off': 'one_off',
+  'one off': 'one_off',
+  'one_off': 'one_off',
+  'oneoff': 'one_off',
+  'recurring': 'recurring',
+};
+
+const COST_TYPE_VALUE_TO_LABEL: Record<string, string> = {
+  none: 'None',
+  one_off: 'One-off',
+  recurring: 'Recurring',
+};
+
 const SortableRow: React.FC<SortableRowProps> = ({
   goal,
   columns,
@@ -269,6 +311,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
   onStoryPriorityChange,
   onStoryAdd,
   globalThemes,
+  monzoPots,
   availableGoals,
   storyCounts,
   sprintStoryCounts,
@@ -378,43 +421,80 @@ const SortableRow: React.FC<SortableRowProps> = ({
     }
   };
 
-  const handleCellSave = async (key: string) => {
+  const handleCellSave = async (key: string, rawValue?: string) => {
     try {
-      let valueToSave: string | number = editValue;
-      const oldValue = (goal as any)[key]; // Store the original value
+      const sourceValue = rawValue ?? editValue;
+      let valueToSave: string | number | null = sourceValue;
+      const oldValue = key === 'linkedPotId'
+        ? getGoalLinkedPotId(goal)
+        : (goal as any)[key]; // Store the original value
 
       // Convert choice labels back to integer values for ServiceNow choice system
       if (key === 'status') {
-        const statusChoice = ChoiceHelper.getChoices('goal', 'status').find(choice => choice.label === editValue);
-        valueToSave = statusChoice ? statusChoice.value : editValue;
-        console.log(`🎯 Status conversion: "${editValue}" -> ${valueToSave} (oldValue: ${oldValue})`);
+        const statusChoice = ChoiceHelper.getChoices('goal', 'status').find(choice => choice.label === sourceValue);
+        valueToSave = statusChoice ? statusChoice.value : sourceValue;
+        console.log(`🎯 Status conversion: "${sourceValue}" -> ${valueToSave} (oldValue: ${oldValue})`);
       } else if (key === 'theme') {
         // Prefer user-configured global themes over static choices
-        const themeFromSettings = globalThemes.find(t => t.label === editValue || t.name === editValue);
+        const themeFromSettings = globalThemes.find(t => t.label === sourceValue || t.name === sourceValue);
         if (themeFromSettings) {
           valueToSave = themeFromSettings.id;
         } else {
           // Fallback: try static ChoiceHelper mapping or numeric parse
-          const themeChoice = ChoiceHelper.getChoices('goal', 'theme').find(choice => choice.label === editValue);
-          valueToSave = themeChoice ? themeChoice.value : (isNaN(Number(editValue)) ? oldValue : Number(editValue));
+          const themeChoice = ChoiceHelper.getChoices('goal', 'theme').find(choice => choice.label === sourceValue);
+          valueToSave = themeChoice ? themeChoice.value : (isNaN(Number(sourceValue)) ? oldValue : Number(sourceValue));
         }
-        console.log(`🎯 Theme conversion (dynamic): "${editValue}" -> ${valueToSave} (oldValue: ${oldValue})`);
+        console.log(`🎯 Theme conversion (dynamic): "${sourceValue}" -> ${valueToSave} (oldValue: ${oldValue})`);
+      } else if (key === 'costType') {
+        const mapped = COST_TYPE_LABEL_TO_VALUE[String(sourceValue || '').trim().toLowerCase()];
+        valueToSave = mapped || normalizeGoalCostType(sourceValue) || null;
+      } else if (key === 'estimatedCost') {
+        const trimmed = String(sourceValue || '').trim();
+        valueToSave = trimmed === '' ? null : Number(trimmed);
+      } else if (key === 'linkedPotId') {
+        const trimmed = String(sourceValue || '').trim();
+        if (!trimmed) {
+          valueToSave = null;
+        } else {
+          const matched = monzoPots.find((pot) =>
+            pot.id.toLowerCase() === trimmed.toLowerCase() ||
+            pot.name.toLowerCase() === trimmed.toLowerCase()
+          );
+          valueToSave = matched?.id || null;
+        }
       }
       if (defaultColumns.find(c => c.key === key)?.type === 'date') {
-        const d = new Date(String(editValue));
+        const d = new Date(String(sourceValue));
         if (!isNaN(d.getTime())) {
           valueToSave = d.getTime();
         }
       }
       if (key === 'targetYear') {
-        valueToSave = Number(editValue);
+        valueToSave = Number(sourceValue);
+      }
+      if (key === 'estimatedCost' && valueToSave != null && Number.isNaN(Number(valueToSave))) {
+        valueToSave = oldValue ?? null;
       }
 
+      const oldComparable = key === 'linkedPotId'
+        ? (oldValue ? String(oldValue) : '')
+        : (oldValue == null ? '' : String(oldValue));
+      const newComparable = valueToSave == null ? '' : String(valueToSave);
+
       // Only proceed if the value actually changed
-      if (oldValue !== valueToSave) {
+      if (oldComparable !== newComparable) {
         const updates: Partial<Goal> = { [key]: valueToSave };
+        if (key === 'linkedPotId') {
+          (updates as any).linkedPotId = valueToSave || null;
+          (updates as any).potId = valueToSave || null;
+        }
+        if (key === 'costType' && valueToSave === 'none') {
+          (updates as any).estimatedCost = null;
+          (updates as any).linkedPotId = null;
+          (updates as any).potId = null;
+        }
         if (key === 'endDate' || key === 'targetDate') {
-          const d = new Date(String(editValue));
+          const d = new Date(String(sourceValue));
           if (!isNaN(d.getTime())) {
             updates.targetYear = d.getFullYear();
           }
@@ -500,6 +580,21 @@ const SortableRow: React.FC<SortableRowProps> = ({
     if (key === 'status') {
       return getStatusName(value);
     }
+    if (key === 'costType') {
+      const normalized = normalizeGoalCostType(value);
+      return normalized ? COST_TYPE_VALUE_TO_LABEL[normalized] : 'Not set';
+    }
+    if (key === 'estimatedCost') {
+      const cost = Number(value);
+      if (!Number.isFinite(cost) || cost <= 0) return '';
+      return `£${cost.toLocaleString('en-GB', { maximumFractionDigits: 2 })}`;
+    }
+    if (key === 'linkedPotId') {
+      const linkedPotId = getGoalLinkedPotId(goal);
+      if (!linkedPotId) return '';
+      const pot = monzoPots.find((item) => item.id === linkedPotId);
+      return pot?.name || linkedPotId;
+    }
     if (key === 'url') {
       return formatExternalUrlLabel(value);
     }
@@ -522,8 +617,8 @@ const SortableRow: React.FC<SortableRowProps> = ({
                 list={datalistId}
                 value={editValue}
                 onChange={(e) => setEditValue(e.target.value)}
-                onBlur={() => handleCellSave(column.key)}
-                onKeyPress={(e) => e.key === 'Enter' && handleCellSave(column.key)}
+                onBlur={(e) => handleCellSave(column.key, e.currentTarget.value)}
+                onKeyPress={(e) => e.key === 'Enter' && handleCellSave(column.key, (e.currentTarget as HTMLInputElement).value)}
                 style={{
                   width: '100%',
                   padding: '6px 8px',
@@ -543,6 +638,88 @@ const SortableRow: React.FC<SortableRowProps> = ({
                   <option key={t.id} value={t.label} />
                 ))}
               </datalist>
+            </div>
+          </td>
+        );
+      }
+      if (column.key === 'linkedPotId') {
+        const datalistId = `pot-options-${goal.id}`;
+        return (
+          <td key={column.key} style={{ width: column.width }}>
+            <div className="relative">
+              <input
+                list={datalistId}
+                value={editValue}
+                onChange={(e) => setEditValue(e.target.value)}
+                onBlur={(e) => handleCellSave(column.key, e.currentTarget.value)}
+                onKeyPress={(e) => e.key === 'Enter' && handleCellSave(column.key, (e.currentTarget as HTMLInputElement).value)}
+                style={{
+                  width: '100%',
+                  padding: '6px 8px',
+                  border: `2px solid ${themeVars.brand}`,
+                  borderRadius: '4px',
+                  fontSize: '14px',
+                  backgroundColor: themeVars.panel as string,
+                  color: themeVars.text as string,
+                  outline: 'none',
+                  boxShadow: 'none'
+                }}
+                placeholder="Search pots..."
+                autoFocus
+              />
+              <datalist id={datalistId}>
+                {monzoPots.map((pot) => (
+                  <option key={`pot-name-${goal.id}-${pot.id}`} value={pot.name} label={pot.id} />
+                ))}
+                {monzoPots.map((pot) => (
+                  <option key={`pot-id-${goal.id}-${pot.id}`} value={pot.id} />
+                ))}
+              </datalist>
+            </div>
+          </td>
+        );
+      }
+      if (column.key === 'costType') {
+        return (
+          <td key={column.key} style={{ width: column.width }}>
+            <div className="relative">
+              <select
+                value={editValue}
+                onChange={(e) => {
+                  const newValue = e.target.value;
+                  setEditValue(newValue);
+                  trackClick({
+                    elementId: `goal-dropdown-${column.key}`,
+                    elementType: 'dropdown',
+                    entityId: goal.id,
+                    entityType: 'goal',
+                    entityTitle: goal.title,
+                    additionalData: {
+                      field: column.key,
+                      newValue: newValue,
+                      action: 'dropdown_change'
+                    }
+                  });
+                  handleCellSave(column.key, newValue);
+                }}
+                onBlur={(e) => handleCellSave(column.key, e.currentTarget.value)}
+                style={{
+                  width: '100%',
+                  padding: '6px 8px',
+                  border: `2px solid ${themeVars.brand}`,
+                  borderRadius: '4px',
+                  fontSize: '14px',
+                  backgroundColor: themeVars.panel as string,
+                  color: themeVars.text as string,
+                  outline: 'none',
+                }}
+                autoFocus
+              >
+                <option value="">Not set</option>
+                <option value="none">None (no cost)</option>
+                <option value="one_off">One-off</option>
+                <option value="recurring">Recurring</option>
+              </select>
             </div>
           </td>
         );
@@ -569,17 +746,9 @@ const SortableRow: React.FC<SortableRowProps> = ({
                       action: 'dropdown_change'
                     }
                   });
-                  // Auto-save on dropdown change
-                  setTimeout(() => {
-                    handleCellSave(column.key);
-                  }, 50);
+                  handleCellSave(column.key, newValue);
                 }}
-                onBlur={() => {
-                  // For dropdowns, we auto-save on change, so just clear editing state
-                  if (editingCell === column.key) {
-                    setEditingCell(null);
-                  }
-                }}
+                onBlur={(e) => handleCellSave(column.key, e.currentTarget.value)}
                 style={{
                   width: '100%',
                   padding: '6px 8px',
@@ -605,11 +774,11 @@ const SortableRow: React.FC<SortableRowProps> = ({
         <td key={column.key} style={{ width: column.width }}>
           <div className="relative">
             <input
-              type={column.type === 'date' ? 'date' : 'text'}
+              type={column.type === 'date' ? 'date' : (column.type === 'number' ? 'number' : 'text')}
               value={editValue}
               onChange={(e) => setEditValue(e.target.value)}
-              onBlur={() => handleCellSave(column.key)}
-              onKeyPress={(e) => e.key === 'Enter' && handleCellSave(column.key)}
+              onBlur={(e) => handleCellSave(column.key, e.currentTarget.value)}
+              onKeyPress={(e) => e.key === 'Enter' && handleCellSave(column.key, (e.currentTarget as HTMLInputElement).value)}
               style={{
                 width: '100%',
                 padding: '6px 8px',
@@ -656,6 +825,16 @@ const SortableRow: React.FC<SortableRowProps> = ({
                 const themeId = value as unknown as number;
                 const t = globalThemes.find(gt => gt.id === themeId);
                 return t ? t.label : '';
+              }
+              if (column.key === 'costType') {
+                return normalizeGoalCostType(value) || '';
+              }
+              if (column.key === 'linkedPotId') {
+                return formatValue(column.key, value);
+              }
+              if (column.key === 'estimatedCost') {
+                const rawCost = Number((goal as any).estimatedCost);
+                return Number.isFinite(rawCost) && rawCost > 0 ? String(rawCost) : '';
               }
               if (column.key === 'url') {
                 return String(value || '');
@@ -988,6 +1167,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const [globalThemes, setGlobalThemes] = useState<GlobalTheme[]>(GLOBAL_THEMES);
+  const [monzoPots, setMonzoPots] = useState<Array<{ id: string; name: string }>>([]);
   const [storyCounts, setStoryCounts] = useState<Record<string, number>>({});
   const [sprintStoryCounts, setSprintStoryCounts] = useState<Record<string, number>>({});
   const [storyPointsData, setStoryPointsData] = useState<Record<string, { total: number; completed: number; progress: number }>>({});
@@ -1021,6 +1201,39 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
       }
     };
     load();
+  }, [currentUser]);
+
+  useEffect(() => {
+    if (!currentUser) {
+      setMonzoPots([]);
+      return;
+    }
+    const potsQuery = query(
+      collection(db, 'monzo_pots'),
+      where('ownerUid', '==', currentUser.uid)
+    );
+    const unsubscribe = onSnapshot(potsQuery, (snapshot) => {
+      const pots = snapshot.docs
+        .map((docSnap) => {
+          const data = docSnap.data() as any;
+          return {
+            id: String(data.potId || docSnap.id),
+            name: String(data.name || data.potName || 'Pot'),
+            deleted: !!data.deleted,
+            closed: !!data.closed,
+            archived: !!data.archived,
+            isArchived: !!data.isArchived,
+          };
+        })
+        .filter((pot) => !pot.deleted && !pot.closed && !pot.archived && !pot.isArchived)
+        .map(({ id, name }) => ({ id, name }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      setMonzoPots(pots);
+    }, (error) => {
+      console.warn('[ModernGoalsTable] monzo pots subscribe failed', error);
+      setMonzoPots([]);
+    });
+    return unsubscribe;
   }, [currentUser]);
 
   // Sync theme column options with loaded themes
@@ -1561,6 +1774,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
                       habitAdherenceData={habitAdherenceData}
                       goalKpiStatusByGoalId={goalKpiStatusByGoalId}
                       globalThemes={globalThemes}
+                      monzoPots={monzoPots}
                       availableGoals={allGoals}
                       expandedGoalId={expandedGoalId}
                       goalStories={goalStories}
