@@ -941,6 +941,34 @@ async function fetchUrlPreview(url) {
     textSnippet: null,
     kindHint: isLikelyVideoUrl(normalizedUrl) ? 'watch' : 'read',
   };
+  const applyYouTubeOEmbedFallback = async () => {
+    if (!isYouTubeUrl(normalizedUrl)) return;
+    try {
+      const endpoint = `https://www.youtube.com/oembed?url=${encodeURIComponent(normalizedUrl)}&format=json`;
+      const response = await fetch(endpoint, {
+        signal: AbortSignal.timeout(5000),
+        headers: {
+          'user-agent': 'BOB Transcript Intake/1.0',
+          accept: 'application/json',
+        },
+      });
+      if (!response.ok) return;
+      const payload = await response.json().catch(() => null);
+      const title = cleanPreviewTitle(payload?.title, normalizedUrl);
+      if (title) preview.title = title;
+      preview.siteName = cleanPreviewTitle(payload?.provider_name, normalizedUrl) || preview.siteName || 'YouTube';
+      if (!preview.description) {
+        const author = String(payload?.author_name || '').trim();
+        preview.description = author ? `YouTube video by ${author}.` : 'YouTube video.';
+      }
+      if (!preview.textSnippet) {
+        preview.textSnippet = preview.description;
+      }
+      preview.kindHint = 'watch';
+    } catch {
+      // Ignore oEmbed fallback failures and keep the generic preview.
+    }
+  };
   try {
     const response = await fetch(normalizedUrl, {
       signal: AbortSignal.timeout(8000),
@@ -983,8 +1011,12 @@ async function fetchUrlPreview(url) {
     preview.siteName = cleanPreviewTitle(rawSiteName, normalizedUrl);
     preview.textSnippet = String(rawDescription || '').replace(/\s+/g, ' ').trim().slice(0, 240) || null;
     preview.kindHint = ogType.includes('video') || isLikelyVideoUrl(normalizedUrl) ? 'watch' : 'read';
+    if (!preview.title || isGenericConsumptionTitle(preview.title, preview.kindHint)) {
+      await applyYouTubeOEmbedFallback();
+    }
     return preview;
   } catch {
+    await applyYouTubeOEmbedFallback();
     return preview;
   }
 }
@@ -3310,6 +3342,16 @@ async function findExistingProcessedIngestion(db, uid, fingerprint) {
   const data = snap.data() || {};
   const status = String(data.status || '').toLowerCase();
   if (status !== 'processed' && status !== 'processing') return null;
+  if (status === 'processing') {
+    const lastTouchedMs =
+      timestampToMillis(data.updatedAt) ||
+      timestampToMillis(data.lastRequestedAt) ||
+      timestampToMillis(data.createdAt);
+    const isStaleProcessing =
+      typeof lastTouchedMs === 'number' &&
+      (Date.now() - lastTouchedMs) >= INGESTION_PROCESSING_LEASE_MS;
+    if (isStaleProcessing) return null;
+  }
   return hydrateDuplicateState(db, uid, fingerprint, { id, ...data });
 }
 
