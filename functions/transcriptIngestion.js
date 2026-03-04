@@ -779,6 +779,23 @@ function isLikelyVideoUrl(url) {
   }
 }
 
+function isYouTubeUrl(url) {
+  const normalized = normalizeUrlValue(url);
+  if (!normalized) return false;
+  try {
+    const parsed = new URL(normalized);
+    const host = parsed.hostname.toLowerCase();
+    return [
+      'youtube.com',
+      'www.youtube.com',
+      'm.youtube.com',
+      'youtu.be',
+    ].includes(host);
+  } catch {
+    return false;
+  }
+}
+
 function cleanPreviewTitle(value, url = '') {
   let title = String(value || '').replace(/\s+/g, ' ').trim();
   if (!title) return null;
