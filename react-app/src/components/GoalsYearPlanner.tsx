@@ -326,6 +326,20 @@ const YearDateAdjustModal: React.FC<{
           This goal was moved from {sourceYearLabel} to {yearLabel}. Update start/end dates to fit within that year.
         </p>
         <div className="row">
+          <div className="col-md-6">
+            <Form.Group className="mb-3">
+              <Form.Label>Current Year</Form.Label>
+              <Form.Control type="text" value={sourceYearLabel} readOnly />
+            </Form.Group>
+          </div>
+          <div className="col-md-6">
+            <Form.Group className="mb-3">
+              <Form.Label>Target Year</Form.Label>
+              <Form.Control type="text" value={yearLabel} readOnly />
+            </Form.Group>
+          </div>
+        </div>
+        <div className="row">
           <div className="col-md-4">
             <Form.Group className="mb-3">
               <Form.Label>Start Date</Form.Label>
@@ -981,6 +995,7 @@ const GoalsYearPlanner: React.FC = () => {
           if (!dateAdjustGoal?.goal) return;
           await updateDoc(doc(db, 'goals', dateAdjustGoal.goal.id), {
             ...payload,
+            targetYear: dateAdjustGoal.year ?? null,
             updatedAt: serverTimestamp(),
           });
           setDateAdjustGoal(null);
