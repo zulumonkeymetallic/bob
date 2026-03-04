@@ -822,6 +822,61 @@ function sortPlannerCandidates(items, {
   });
 }
 
+function buildUnifiedPlacementQueue({
+  stories = [],
+  tasks = [],
+  isTopStory,
+  isTopTask,
+  storyMap = new Map(),
+}) {
+  const rows = [
+    ...stories.map((story) => ({
+      kind: 'story',
+      candidate: story,
+      manual: story?.userPriorityFlag === true ? 1 : 0,
+      extra: storyForcesTop3Tasks(story) ? 1 : 0,
+      top: isTopStory?.(story) ? 1 : 0,
+      rank: Number(story?.aiFocusStoryRank || 0) || 99,
+      score: Number(story?.aiScore || 0),
+      due: getDueDateMs(story),
+      created: getCreatedAtMs(story) ?? Number.MAX_SAFE_INTEGER,
+      title: String(story?.title || ''),
+    })),
+    ...tasks.map((task) => {
+      const parentStory = task?.storyId ? storyMap.get(task.storyId) : null;
+      return {
+        kind: 'task',
+        candidate: task,
+        manual: task?.userPriorityFlag === true ? 1 : 0,
+        extra: storyForcesTop3Tasks(parentStory) ? 1 : 0,
+        top: isTopTask?.(task) ? 1 : 0,
+        rank: Number(task?.aiPriorityRank || 0) || 99,
+        score: Number(task?.aiScore || 0),
+        due: getDueDateMs(task),
+        created: getCreatedAtMs(task) ?? Number.MAX_SAFE_INTEGER,
+        title: String(task?.title || ''),
+      };
+    }),
+  ];
+
+  rows.sort((a, b) => {
+    if (a.manual !== b.manual) return b.manual - a.manual;
+    if (a.extra !== b.extra) return b.extra - a.extra;
+    if (a.top !== b.top) return b.top - a.top;
+    if (a.rank !== b.rank) return a.rank - b.rank;
+    if (a.score !== b.score) return b.score - a.score;
+    if (a.due != null || b.due != null) {
+      if (a.due == null) return 1;
+      if (b.due == null) return -1;
+      if (a.due !== b.due) return a.due - b.due;
+    }
+    if (a.created !== b.created) return a.created - b.created;
+    return a.title.localeCompare(b.title);
+  });
+
+  return rows.map((row) => ({ kind: row.kind, candidate: row.candidate }));
+}
+
 function collectScheduledMinutesByEntity(blocks) {
   const scheduledMinutesByEntity = new Map();
   for (const block of blocks || []) {
@@ -2431,6 +2486,7 @@ async function runCalendarPlannerJob() {
   const db = ensureFirestore();
   const profiles = await db.collection('profiles').get().catch(() => ({ docs: [] }));
   const now = DateTime.now();
+  const MAX_PLANNING_DAYS = 21;
 
   for (const prof of profiles.docs) {
     const userId = prof.id;
@@ -2438,7 +2494,7 @@ async function runCalendarPlannerJob() {
     const zone = resolveTimezone(profile, 'Europe/London');
     const nowLocal = now.setZone(coerceZone(zone));
     const windowStart = nowLocal.startOf('day');
-    const windowEnd = windowStart.plus({ days: 7 }).endOf('day');
+    let windowEnd = windowStart.plus({ days: 7 }).endOf('day');
 
     // User-defined weekly theme blocks
     let themeAllocations = [];
@@ -2479,6 +2535,28 @@ async function runCalendarPlannerJob() {
         });
       });
     } catch { /* ignore */ }
+
+    const activeSprintEndMs = Array.from(activeSprintIds)
+      .map((sprintId) => toMillis(sprintMetaMap.get(sprintId)?.end))
+      .filter((value) => typeof value === 'number' && Number.isFinite(value));
+    if (activeSprintEndMs.length > 0) {
+      const latestSprintEndMs = Math.max(...activeSprintEndMs);
+      const maxWindowEndMs = windowStart.plus({ days: MAX_PLANNING_DAYS - 1 }).endOf('day').toMillis();
+      const boundedEndMs = Math.min(latestSprintEndMs, maxWindowEndMs);
+      const boundedEnd = DateTime.fromMillis(boundedEndMs, { zone: windowStart.zoneName }).endOf('day');
+      if (boundedEnd.toMillis() > windowEnd.toMillis()) {
+        windowEnd = boundedEnd;
+      }
+    }
+    const planningDays = Math.max(
+      1,
+      Math.min(
+        MAX_PLANNING_DAYS,
+        Math.floor(
+          windowEnd.startOf('day').diff(windowStart.startOf('day'), 'days').days,
+        ) + 1,
+      ),
+    );
 
     await recomputeTop3ForUser(db, userId).catch((err) => {
       console.warn('[calendar-planner] top3 refresh failed', userId, err?.message || err);
@@ -2549,13 +2627,19 @@ async function runCalendarPlannerJob() {
     const openStories = storiesSnap.docs
       .map((d) => ({ id: d.id, ...(d.data() || {}) }))
       .filter((s) => !isStoryDoneStatus(s.status))
-      .filter((s) => activeSprintIds.size === 0 || !s.sprintId || activeSprintIds.has(s.sprintId));
+      .filter((s) => activeSprintIds.size === 0 || (s.sprintId && activeSprintIds.has(s.sprintId)));
+    const openStoryIds = new Set(openStories.map((story) => story.id));
 
     const openTasks = tasksSnap.docs
       .map((d) => ({ id: d.id, ...(d.data() || {}) }))
       .filter((t) => !isTaskDoneStatus(t.status) && !t.deleted)
       .filter((t) => !isRoutineChoreHabit(t))
-      .filter((t) => activeSprintIds.size === 0 || !t.sprintId || activeSprintIds.has(t.sprintId));
+      .filter((t) => {
+        if (activeSprintIds.size === 0) return true;
+        if (t.sprintId && activeSprintIds.has(t.sprintId)) return true;
+        if (t.storyId && openStoryIds.has(t.storyId)) return true;
+        return false;
+      });
 
     const todayIso = nowLocal.toISODate();
     const isTopTask = (t) => {
@@ -2649,6 +2733,14 @@ async function runCalendarPlannerJob() {
       }
     });
 
+    const placementQueue = buildUnifiedPlacementQueue({
+      stories: storyQueue,
+      tasks: taskQueue,
+      isTopStory,
+      isTopTask,
+      storyMap,
+    });
+
     let created = 0;
     let blocked = 0;
 
@@ -2726,7 +2818,7 @@ async function runCalendarPlannerJob() {
         return { created: 0, blocked: 1 };
       }
 
-      for (let offset = 0; offset < 7; offset++) {
+      for (let offset = 0; offset < planningDays; offset++) {
         const day = windowStart.plus({ days: offset });
         const dayStartMs = day.toMillis();
         const dayEndMs = day.endOf('day').toMillis();
@@ -2814,19 +2906,11 @@ async function runCalendarPlannerJob() {
       if (minutes > 0) covered.add(key);
     });
 
-    for (const s of storyQueue) {
-      const key = getEntityKey('story', s.id);
+    for (const entry of placementQueue) {
+      const { kind, candidate } = entry;
+      const key = getEntityKey(kind, candidate?.id);
       if (covered.has(key)) continue;
-      const res = await placeEntry(s, 'story');
-      created += res.created || 0;
-      blocked += res.blocked || 0;
-      if (res.created) covered.add(key);
-    }
-
-    for (const t of taskQueue) {
-      const key = getEntityKey('task', t.id);
-      if (covered.has(key)) continue;
-      const res = await placeEntry(t, 'task');
+      const res = await placeEntry(candidate, kind);
       created += res.created || 0;
       blocked += res.blocked || 0;
       if (res.created) covered.add(key);
@@ -2884,7 +2968,8 @@ exports.materializeFitnessBlocksNow = onCall({
   const profileSnap = await db.collection('profiles').doc(uid).get().catch(() => null);
   const profile = profileSnap && profileSnap.exists ? (profileSnap.data() || {}) : {};
   const zone = resolveTimezone(profile, 'Europe/London');
-  const days = Math.max(1, Math.min(Number(req?.data?.days || 7), 14));
+  const requestedDays = Math.max(1, Math.min(Number(req?.data?.days || 7), 14));
+  const MAX_PLANNING_DAYS = 21;
   const requestedStart = String(req?.data?.startDate || '').trim();
   const requestedStartDt = requestedStart
     ? DateTime.fromISO(requestedStart, { zone: coerceZone(zone) }).startOf('day')
@@ -2892,7 +2977,7 @@ exports.materializeFitnessBlocksNow = onCall({
   const windowStart = requestedStartDt && requestedStartDt.isValid
     ? requestedStartDt
     : DateTime.now().setZone(coerceZone(zone)).startOf('day');
-  const windowEnd = windowStart.plus({ days }).endOf('day');
+  let windowEnd = windowStart.plus({ days: requestedDays }).endOf('day');
 
   let themeAllocations = [];
   try {
@@ -3062,23 +3147,6 @@ exports.replanCalendarNow = onCall({
     console.warn('[replanCalendarNow] top3 refresh failed', uid, err?.message || err);
   });
 
-  const blocksSnap = await db.collection('calendar_blocks')
-    .where('ownerUid', '==', uid)
-    .where('start', '>=', windowStart.toMillis())
-    .where('start', '<=', windowEnd.toMillis())
-    .get()
-    .catch(() => ({ docs: [] }));
-  const existingBlocks = blocksSnap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
-
-  await materializePlannerThemeBlocks({
-    db,
-    userId: uid,
-    windowStart,
-    windowEnd,
-    themeAllocations,
-    existingBlocks,
-  });
-
   // Load sprints for sprint window gating
   const sprintsSnap = await db.collection('sprints')
     .where('ownerUid', '==', uid)
@@ -3101,6 +3169,45 @@ exports.replanCalendarNow = onCall({
       return status === 'active' || status === 'planning' || status === '1' || status === '0';
     })
     .map(([id]) => id);
+
+  const activeSprintEndMs = activeSprintIds
+    .map((sprintId) => toMillis(sprintMap.get(sprintId)?.end))
+    .filter((value) => typeof value === 'number' && Number.isFinite(value));
+  if (activeSprintEndMs.length > 0) {
+    const latestSprintEndMs = Math.max(...activeSprintEndMs);
+    const maxWindowEndMs = windowStart.plus({ days: MAX_PLANNING_DAYS - 1 }).endOf('day').toMillis();
+    const boundedEndMs = Math.min(latestSprintEndMs, maxWindowEndMs);
+    const boundedEnd = DateTime.fromMillis(boundedEndMs, { zone: windowStart.zoneName }).endOf('day');
+    if (boundedEnd.toMillis() > windowEnd.toMillis()) {
+      windowEnd = boundedEnd;
+    }
+  }
+  const planningDays = Math.max(
+    1,
+    Math.min(
+      MAX_PLANNING_DAYS,
+      Math.floor(
+        windowEnd.startOf('day').diff(windowStart.startOf('day'), 'days').days,
+      ) + 1,
+    ),
+  );
+
+  const blocksSnap = await db.collection('calendar_blocks')
+    .where('ownerUid', '==', uid)
+    .where('start', '>=', windowStart.toMillis())
+    .where('start', '<=', windowEnd.toMillis())
+    .get()
+    .catch(() => ({ docs: [] }));
+  const existingBlocks = blocksSnap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+
+  await materializePlannerThemeBlocks({
+    db,
+    userId: uid,
+    windowStart,
+    windowEnd,
+    themeAllocations,
+    existingBlocks,
+  });
 
   let storiesSnap = { docs: [] };
   try {
@@ -3137,12 +3244,19 @@ exports.replanCalendarNow = onCall({
   };
   const openStories = storiesSnap.docs
     .map((d) => ({ id: d.id, ...(d.data() || {}) }))
-    .filter((s) => !isStoryDoneStatus(s.status) && activeSprintIds.length > 0 && activeSprintIds.includes(s.sprintId));
+    .filter((s) => !isStoryDoneStatus(s.status))
+    .filter((s) => activeSprintIds.length === 0 || (s.sprintId && activeSprintIds.includes(s.sprintId)));
+  const openStoryIds = new Set(openStories.map((story) => story.id));
   const openTasks = tasksSnap.docs
     .map((d) => ({ id: d.id, ...(d.data() || {}) }))
     .filter((t) => !isTaskDoneStatus(t.status))
     .filter((t) => !isRoutineChoreHabit(t))
-    .filter((t) => !t.sprintId || activeSprintIds.includes(t.sprintId));
+    .filter((t) => {
+      if (activeSprintIds.length === 0) return true;
+      if (t.sprintId && activeSprintIds.includes(t.sprintId)) return true;
+      if (t.storyId && openStoryIds.has(t.storyId)) return true;
+      return false;
+    });
 
   const scoredStories = openStories.map((story) => ({
     ...story,
@@ -3176,6 +3290,14 @@ exports.replanCalendarNow = onCall({
         },
       });
     });
+
+  const placementQueue = buildUnifiedPlacementQueue({
+    stories: storyQueue,
+    tasks: taskQueue,
+    isTopStory,
+    isTopTask,
+    storyMap,
+  });
 
   const candidateIds = new Set([
     ...storyQueue.map((story) => getEntityKey('story', story.id)),
@@ -3304,7 +3426,7 @@ exports.replanCalendarNow = onCall({
       return { created: 0, blocked: 1 };
     }
 
-    for (let offset = 0; offset < days; offset++) {
+    for (let offset = 0; offset < planningDays; offset++) {
       const day = windowStart.plus({ days: offset });
       const dayStartMs = day.toMillis();
       const dayEndMs = day.endOf('day').toMillis();
@@ -3385,20 +3507,11 @@ exports.replanCalendarNow = onCall({
     if (minutes > 0) alreadyCovered.add(key);
   });
 
-  for (const s of storyQueue) {
-    const key = getEntityKey('story', s.id);
+  for (const entry of placementQueue) {
+    const { kind, candidate } = entry;
+    const key = getEntityKey(kind, candidate?.id);
     if (alreadyCovered.has(key)) continue;
-    const res = await placeEntry(s, 'story');
-    created += res.created || 0;
-    blocked += res.blocked || 0;
-    if (res.gcalLink) gcalLinks.push(res.gcalLink);
-    if (res.created) alreadyCovered.add(key);
-  }
-
-  for (const t of taskQueue) {
-    const key = getEntityKey('task', t.id);
-    if (alreadyCovered.has(key)) continue;
-    const res = await placeEntry(t, 'task');
+    const res = await placeEntry(candidate, kind);
     created += res.created || 0;
     blocked += res.blocked || 0;
     if (res.gcalLink) gcalLinks.push(res.gcalLink);
