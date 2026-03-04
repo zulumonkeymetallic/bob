@@ -191,7 +191,7 @@ const defaultColumns: Column[] = [
     key: 'createdAt',
     label: 'Created',
     width: '16%',
-    visible: true,
+    visible: false,
     editable: false,
     type: 'text'
   },
@@ -894,6 +894,16 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
       }
 
       const payload: Partial<Task> = { ...updates };
+      const existingOwnerUid = (existingTask as any)?.ownerUid;
+      const existingPersona = ((existingTask as any)?.persona || currentPersona || 'personal') as any;
+
+      if (existingOwnerUid) {
+        (payload as any).ownerUid = existingOwnerUid;
+      }
+      if (!(payload as any).persona && existingPersona) {
+        (payload as any).persona = existingPersona;
+      }
+      (payload as any).serverUpdatedAt = Date.now();
 
       if ('dueDate' in updates) {
         payload.dueDate = derivation.dueDateMs ?? null;
