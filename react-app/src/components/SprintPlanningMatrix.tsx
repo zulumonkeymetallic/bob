@@ -17,6 +17,7 @@ import { goalThemeColor } from '../utils/storyCardFormatting';
 import { useNavigate } from 'react-router-dom';
 import { formatTaskTagLabel } from '../utils/tagDisplay';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
+import { isStatus } from '../utils/statusHelpers';
 
 // Normalize sprint identifiers so we handle doc refs, strings, and legacy placeholders
 const normalizeSprintId = (value: any): string | null => {
@@ -192,7 +193,8 @@ const SprintPlanningMatrix: React.FC = () => {
   // Filters
   const [filterGoal, setFilterGoal] = useState<string>('all');
   const [filterTheme, setFilterTheme] = useState<number | null>(null);
-  const [showCompleted, setShowCompleted] = useState(false);
+  const [showCompletedSprints, setShowCompletedSprints] = useState(false);
+  const [showCompletedItems, setShowCompletedItems] = useState(false);
   const [goalSearch, setGoalSearch] = useState('');
 
   useEffect(() => {
@@ -279,6 +281,7 @@ const SprintPlanningMatrix: React.FC = () => {
   // Filter stories
   const filteredStories = useMemo(() => {
     return stories.filter((story) => {
+      if (!showCompletedItems && isStatus((story as any).status, 'done')) return false;
       if (filterGoal !== 'all' && story.goalId !== filterGoal) return false;
       if (filterTheme) {
         const goal = goals.find((g) => g.id === story.goalId);
@@ -287,7 +290,7 @@ const SprintPlanningMatrix: React.FC = () => {
       }
       return true;
     });
-  }, [stories, goals, filterGoal, filterTheme]);
+  }, [stories, goals, filterGoal, filterTheme, showCompletedItems]);
 
   const filteredGoals = useMemo(() => {
     if (!goalSearch.trim()) return goals;
@@ -308,14 +311,14 @@ const SprintPlanningMatrix: React.FC = () => {
   const visibleSprints = useMemo(() => {
     return [...sprints]
       .filter((s) => {
-        if (showCompleted) return true;
+        if (showCompletedSprints) return true;
         const statusValue = (s as any).status;
         if (typeof statusValue === 'number') return statusValue <= 1;
         const normalized = String(statusValue ?? '').toLowerCase();
         return normalized === '' || normalized.includes('plan') || normalized.includes('active');
       })
       .sort((a, b) => (a.startDate ?? 0) - (b.startDate ?? 0));
-  }, [sprints, showCompleted]);
+  }, [sprints, showCompletedSprints]);
 
   // Monitor drag/drop using pragmatic DnD
   useEffect(() => {
@@ -496,14 +499,29 @@ const SprintPlanningMatrix: React.FC = () => {
                   <Form.Group>
                     <Form.Label style={{ fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>
                       <ArrowUpDown size={14} style={{ marginRight: '6px' }} />
+                      Item Visibility
+                    </Form.Label>
+                    <Form.Check
+                      type="switch"
+                      id="toggle-completed-items"
+                      label="Show completed items"
+                      checked={showCompletedItems}
+                      onChange={(e) => setShowCompletedItems(e.target.checked)}
+                    />
+                  </Form.Group>
+                </Col>
+                <Col md={3}>
+                  <Form.Group>
+                    <Form.Label style={{ fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>
+                      <ArrowUpDown size={14} style={{ marginRight: '6px' }} />
                       Sprint Visibility
                     </Form.Label>
                     <Form.Check
                       type="switch"
                       id="toggle-completed-sprints"
                       label="Show completed sprints"
-                      checked={showCompleted}
-                      onChange={(e) => setShowCompleted(e.target.checked)}
+                      checked={showCompletedSprints}
+                      onChange={(e) => setShowCompletedSprints(e.target.checked)}
                     />
                   </Form.Group>
                 </Col>
@@ -530,7 +548,8 @@ const SprintPlanningMatrix: React.FC = () => {
                       onClick={() => {
                         setFilterGoal('all');
                         setFilterTheme(null);
-                        setShowCompleted(false);
+                        setShowCompletedSprints(false);
+                        setShowCompletedItems(false);
                         setShowDescriptions(false);
                         setGoalSearch('');
                       }}
@@ -614,6 +633,7 @@ const SprintPlanningMatrix: React.FC = () => {
                 <h5 style={{ color: '#374151', marginBottom: '8px' }}>No stories found</h5>
                 <p style={{ color: '#6b7280', marginBottom: '24px' }}>
                   Create stories to start planning your sprints, or adjust your filters.
+                  {!showCompletedItems ? ' Completed items are currently hidden.' : ''}
                 </p>
                 <Button variant="primary" href="/stories">
                   Manage Stories
