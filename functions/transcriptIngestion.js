@@ -258,6 +258,14 @@ function parseModelJson(text, label) {
   throw new Error(`${label} returned invalid JSON: ${lastError?.message || 'Unknown parse error'}`);
 }
 
+function sanitizeUserJournalPrompt(value) {
+  return String(value || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\u0000/g, '')
+    .trim()
+    .slice(0, 4000);
+}
+
 function createGeminiJsonModel(apiKey, { schema, maxOutputTokens, temperature, topP, topK }) {
   const genAI = new GoogleGenerativeAI(apiKey);
   return genAI.getGenerativeModel({
@@ -1114,12 +1122,13 @@ async function callAgentRouterModel({ transcript, persona, timezone, urlPreviews
   return parseModelJson(text, 'Gemini routing response');
 }
 
-async function callTranscriptModel({ transcript, persona, timezone, urlPreviews, logger = null }) {
+async function callTranscriptModel({ transcript, persona, timezone, urlPreviews, logger = null, journalPromptOverride = '' }) {
   const apiKey = String(process.env.GOOGLEAISTUDIOAPIKEY || '').trim();
   if (!apiKey) throw new Error('GOOGLEAISTUDIOAPIKEY not configured');
   const currentDate = DateTime.now().setZone(timezone || DEFAULT_TIMEZONE);
+  const customJournalPrompt = sanitizeUserJournalPrompt(journalPromptOverride);
 
-  const system = [
+  const systemParts = [
     'You process voice-note transcripts for a productivity app.',
     'Return STRICT JSON only with this shape:',
     '{',
@@ -1190,7 +1199,16 @@ async function callTranscriptModel({ transcript, persona, timezone, urlPreviews,
     'Avoid generic titles like "Read article" or "Watch video" when a concrete page or video title is available.',
     'Set url to the exact matching source URL for any task or story that came from a URL.',
     'For URL-only inputs, every returned task or story must carry its matching url.',
-  ].join('\n');
+  ];
+  if (customJournalPrompt) {
+    systemParts.push(
+      'Additional user journal editing instructions:',
+      customJournalPrompt,
+      'Apply the additional user journal editing instructions only when processing journal or mixed entries.',
+      'Do not violate the JSON schema, do not invent facts, and remain faithful to the transcript.'
+    );
+  }
+  const system = systemParts.join('\n');
 
   const user = [
     `Persona: ${persona || 'personal'}`,
@@ -3274,6 +3292,7 @@ async function processTranscriptIngestion({
       timezone,
       urlPreviews,
       logger,
+      journalPromptOverride: profile?.journalEditorPrompt || profile?.journalPromptOverride || null,
     });
     const analysis = enrichAnalysisWithUrlMetadata(
       sanitizeAnalysis(rawAnalysis, normalizedTranscript, sourceUrls, timezone),

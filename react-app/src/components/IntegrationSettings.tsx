@@ -12,6 +12,7 @@ interface ProfileData {
   googleCalendarLastSyncAt?: any;
   googleCalendarEventCount?: number;
   defaultJournalDocUrl?: string;
+  journalEditorPrompt?: string;
   monzoConnected?: boolean;
   monzoLastSyncAt?: any;
   stravaConnected?: boolean;
@@ -81,7 +82,10 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
   const [googleLoading, setGoogleLoading] = useState(false);
   const [showCalendarManager, setShowCalendarManager] = useState(false);
   const [defaultJournalDocUrl, setDefaultJournalDocUrl] = useState('');
+  const [journalEditorPrompt, setJournalEditorPrompt] = useState('');
   const [googleDocMessage, setGoogleDocMessage] = useState<string | null>(null);
+  const [googleDocsStatus, setGoogleDocsStatus] = useState<any | null>(null);
+  const [googleDocsTesting, setGoogleDocsTesting] = useState(false);
 
   const [monzoTotals, setMonzoTotals] = useState<typeof defaultTotals>(defaultTotals);
   const [monzoTransactions, setMonzoTransactions] = useState<MonzoTransactionPreview[]>([]);
@@ -154,6 +158,7 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
       const data = snap.data() as ProfileData | undefined;
       setProfile(data || null);
       setDefaultJournalDocUrl(data?.defaultJournalDocUrl || '');
+      setJournalEditorPrompt(data?.journalEditorPrompt || '');
       if (data?.steamId) setSteamIdInput(data.steamId);
       if (data?.traktUser) setTraktUserInput(data.traktUser);
       if ((data as any)?.hardcoverToken) setHardcoverTokenInput((data as any).hardcoverToken);
@@ -362,6 +367,27 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
       setGoogleEvents([]);
     } finally {
       setGoogleLoading(false);
+    }
+  };
+
+  const testGoogleDocs = async () => {
+    if (!currentUser) return;
+    setGoogleDocsTesting(true);
+    setGoogleDocsStatus(null);
+    try {
+      const fn = httpsCallable(functions, 'checkGoogleDocsAccess');
+      const res = await fn({ docUrl: defaultJournalDocUrl.trim() || null });
+      setGoogleDocsStatus((res.data as any) || null);
+    } catch (err: any) {
+      console.error('checkGoogleDocsAccess failed', err);
+      setGoogleDocsStatus({
+        ok: false,
+        code: err?.code || 'unknown',
+        message: err?.message || 'Failed to test Google Docs access.',
+        steps: [],
+      });
+    } finally {
+      setGoogleDocsTesting(false);
     }
   };
 
@@ -743,6 +769,10 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
               <Button variant="outline-primary" className="me-2" onClick={connectGoogle}>
                 {googleConnected ? 'Reconnect' : 'Connect'}
               </Button>
+              <Button variant="outline-secondary" className="me-2" onClick={testGoogleDocs} disabled={googleDocsTesting}>
+                {googleDocsTesting ? <Spinner size="sm" animation="border" className="me-2" /> : null}
+                Test Doc Access
+              </Button>
               <Button variant="primary" onClick={testGoogle} disabled={googleLoading}>
                 {googleLoading ? <Spinner size="sm" animation="border" className="me-2" /> : null}
                 Fetch Upcoming Events
@@ -801,6 +831,56 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
             </Col>
           </Row>
           {googleDocMessage && <Alert variant="info" className="mt-3 mb-0">{googleDocMessage}</Alert>}
+          {googleDocsStatus && (
+            <Alert variant={googleDocsStatus.ok ? 'success' : 'warning'} className="mt-3 mb-0">
+              <div><strong>{googleDocsStatus.ok ? 'Google Docs ready' : 'Google Docs needs attention'}</strong></div>
+              <div>{googleDocsStatus.message}</div>
+              {googleDocsStatus.title && <div className="mt-1"><strong>Document:</strong> {googleDocsStatus.title}</div>}
+              {Array.isArray(googleDocsStatus.steps) && googleDocsStatus.steps.length > 0 && (
+                <ul className="mb-0 mt-2">
+                  {googleDocsStatus.steps.map((step: string, index: number) => (
+                    <li key={`${googleDocsStatus.code || 'step'}_${index}`}>{step}</li>
+                  ))}
+                </ul>
+              )}
+            </Alert>
+          )}
+
+          <hr />
+          <Row className="g-3 align-items-end">
+            <Col md={9}>
+              <Form.Label>Journal Editor Prompt Override</Form.Label>
+              <Form.Control
+                as="textarea"
+                rows={7}
+                placeholder="Optional. Add your own journal editing instructions for transcript processing."
+                value={journalEditorPrompt}
+                onChange={(event) => setJournalEditorPrompt(event.target.value)}
+              />
+              <Form.Text className="text-muted">
+                This is appended to the built-in journal processing prompt. It only affects journal or mixed transcript entries and does not override the required JSON schema or faithfulness rules.
+              </Form.Text>
+            </Col>
+            <Col md={3} className="d-grid">
+              <Button
+                variant="outline-secondary"
+                onClick={async () => {
+                  try {
+                    setGoogleDocMessage(null);
+                    await updateProfile({ journalEditorPrompt: journalEditorPrompt.trim() || null });
+                    setGoogleDocMessage('Journal editor prompt saved.');
+                  } catch (error: any) {
+                    setGoogleDocMessage(error?.message || 'Failed to save the journal editor prompt.');
+                  }
+                }}
+              >
+                Save Prompt
+              </Button>
+            </Col>
+          </Row>
+          <Form.Text className="text-muted d-block mt-2">
+            Built-in base behavior: classify journal vs task list vs URL, keep journal prose highly faithful, remove filler words and dictation glitches, structure it cleanly, and extract only clearly actionable tasks or stories.
+          </Form.Text>
 
           <Button variant="link" onClick={() => setShowCalendarManager((v) => !v)}>
             {showCalendarManager ? 'Hide advanced options' : 'Show advanced options'}
