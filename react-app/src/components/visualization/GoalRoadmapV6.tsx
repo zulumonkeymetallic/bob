@@ -240,6 +240,12 @@ const TaskTemplate: React.FC<{ data: GanttTask }> = ({ data }) => {
   if (data.isMilestone) {
     return (
       <div className="grv6-task-shell grv6-milestone-shell" title={tooltipLabel} style={taskShellStyle}>
+        <div
+          className="grv6-milestone-label-above"
+          style={{ color: data.themeColor, fontSize: `${Math.max(10, titleSize)}px`, fontWeight: 600 }}
+        >
+          {label}
+        </div>
         <div className="grv6-milestone-row">
           <div
             className="grv6-milestone"
@@ -248,12 +254,6 @@ const TaskTemplate: React.FC<{ data: GanttTask }> = ({ data }) => {
             <Star size={16} fill="#fff" strokeWidth={1.5} />
           </div>
           <div className={`grv6-milestone-meta ${isCriticalMilestone ? 'critical' : ''}`}>
-            <div
-              className="grv6-milestone-label"
-              style={{ color: data.themeColor, fontSize: `${Math.max(10, titleSize)}px`, fontWeight: 600 }}
-            >
-              {label}
-            </div>
             <div className="grv6-milestone-actions">
               <button
                 className="grv6-icon-btn grv6-milestone-icon-btn"
