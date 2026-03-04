@@ -76,6 +76,18 @@ function getGoogleDocBadge(entry: JournalEntry): { label: string; bg: string; te
   return entry?.docUrl ? { label: 'Doc linked', bg: 'secondary' } : null;
 }
 
+function sentimentBadgeVariant(sentiment?: string | null): { bg: string; text?: 'dark' } {
+  const normalized = String(sentiment || '').trim().toLowerCase();
+  if (normalized === 'positive') return { bg: 'success' };
+  if (normalized === 'negative') return { bg: 'danger' };
+  if (normalized === 'neutral') return { bg: 'secondary' };
+  return { bg: 'warning', text: 'dark' };
+}
+
+function formatMetricValue(value: number | null | undefined): string {
+  return typeof value === 'number' && Number.isFinite(value) ? `${value}` : '—';
+}
+
 function normalizeLinkedSummary(
   collectionName: 'stories' | 'tasks',
   item: any,
@@ -263,7 +275,16 @@ const JournalsManagement: React.FC = () => {
     const haystack = [
       formatJournalDate(journal),
       journal.oneLineSummary,
+      Array.isArray(journal.aiSummaryBullets) ? journal.aiSummaryBullets.join(' ') : '',
       journal.structuredEntry,
+      journal.mindsetAnalysis?.emotionalTone,
+      journal.mindsetAnalysis?.cognitiveStyle,
+      journal.mindsetAnalysis?.motivationsAndDrivers,
+      journal.mindsetAnalysis?.psychologicalStrengths,
+      journal.mindsetAnalysis?.potentialStressors,
+      Array.isArray(journal.entryMetadata?.primaryThemes) ? journal.entryMetadata?.primaryThemes.join(' ') : '',
+      journal.entryMetadata?.cognitiveState,
+      journal.entryMetadata?.sentiment,
       journal.originalTranscript,
     ]
       .filter(Boolean)
@@ -336,6 +357,9 @@ const JournalsManagement: React.FC = () => {
                     const taskCount = Array.isArray(journal.taskIds) ? journal.taskIds.length : 0;
                     const storyCount = Array.isArray(journal.storyIds) ? journal.storyIds.length : 0;
                     const googleDocBadge = getGoogleDocBadge(journal);
+                    const sentimentBadge = journal.entryMetadata?.sentiment
+                      ? sentimentBadgeVariant(journal.entryMetadata.sentiment)
+                      : null;
 
                     return (
                       <ListGroup.Item
@@ -361,6 +385,14 @@ const JournalsManagement: React.FC = () => {
                         <div className="d-flex flex-wrap gap-2 align-items-center">
                           <Badge bg="light" text="dark">{taskCount} task{taskCount === 1 ? '' : 's'}</Badge>
                           <Badge bg="light" text="dark">{storyCount} stor{storyCount === 1 ? 'y' : 'ies'}</Badge>
+                          {sentimentBadge && (
+                            <Badge bg={sentimentBadge.bg} text={sentimentBadge.text}>
+                              {String(journal.entryMetadata?.sentiment || '')}
+                            </Badge>
+                          )}
+                          {typeof journal.entryMetadata?.moodScore === 'number' && (
+                            <Badge bg="info">Mood {journal.entryMetadata.moodScore}</Badge>
+                          )}
                           {googleDocBadge ? (
                             <Badge bg={googleDocBadge.bg} text={googleDocBadge.text}>
                               {googleDocBadge.label}
@@ -433,19 +465,95 @@ const JournalsManagement: React.FC = () => {
                     <h1 style={{ fontSize: '2rem', fontWeight: 800, marginBottom: '0.75rem' }}>
                       {formatJournalDate(selectedJournal)}
                     </h1>
-                    <h2 style={{ fontSize: '1.3rem', fontWeight: 700, marginBottom: '1rem' }}>
+                    <p style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: '1.25rem' }}>
                       {String(selectedJournal.oneLineSummary || 'Transcript summary')}
-                    </h2>
+                    </p>
+
+                    {!!selectedJournal.aiSummaryBullets?.length && (
+                      <>
+                        <h2 style={sectionHeadingStyle}>AI Summary of the Entry</h2>
+                        <ul style={{ marginBottom: '1.5rem', paddingLeft: '1.25rem' }}>
+                          {selectedJournal.aiSummaryBullets.map((bullet, index) => (
+                            <li key={`journal_ai_summary_${index}`} style={{ marginBottom: '0.35rem' }}>{bullet}</li>
+                          ))}
+                        </ul>
+                      </>
+                    )}
+
+                    <h2 style={sectionHeadingStyle}>The Entry</h2>
                     <div style={sectionBodyStyle}>
                       {String(selectedJournal.structuredEntry || 'No structured entry available.')}
                     </div>
+
+                    {selectedJournal.mindsetAnalysis && (
+                      <>
+                        <h2 style={sectionHeadingStyle}>Analysis of the Author&apos;s Mindset</h2>
+                        {selectedJournal.mindsetAnalysis.emotionalTone && (
+                          <>
+                            <h3 style={{ fontSize: '1rem', fontWeight: 700, margin: '1rem 0 0.5rem' }}>Emotional Tone</h3>
+                            <div style={sectionBodyStyle}>{selectedJournal.mindsetAnalysis.emotionalTone}</div>
+                          </>
+                        )}
+                        {selectedJournal.mindsetAnalysis.cognitiveStyle && (
+                          <>
+                            <h3 style={{ fontSize: '1rem', fontWeight: 700, margin: '1rem 0 0.5rem' }}>Cognitive Style</h3>
+                            <div style={sectionBodyStyle}>{selectedJournal.mindsetAnalysis.cognitiveStyle}</div>
+                          </>
+                        )}
+                        {selectedJournal.mindsetAnalysis.motivationsAndDrivers && (
+                          <>
+                            <h3 style={{ fontSize: '1rem', fontWeight: 700, margin: '1rem 0 0.5rem' }}>Motivations and Internal Drivers</h3>
+                            <div style={sectionBodyStyle}>{selectedJournal.mindsetAnalysis.motivationsAndDrivers}</div>
+                          </>
+                        )}
+                        {selectedJournal.mindsetAnalysis.psychologicalStrengths && (
+                          <>
+                            <h3 style={{ fontSize: '1rem', fontWeight: 700, margin: '1rem 0 0.5rem' }}>Psychological Strengths Observed</h3>
+                            <div style={sectionBodyStyle}>{selectedJournal.mindsetAnalysis.psychologicalStrengths}</div>
+                          </>
+                        )}
+                        {selectedJournal.mindsetAnalysis.potentialStressors && (
+                          <>
+                            <h3 style={{ fontSize: '1rem', fontWeight: 700, margin: '1rem 0 0.5rem' }}>Potential Stressors or Pressures</h3>
+                            <div style={sectionBodyStyle}>{selectedJournal.mindsetAnalysis.potentialStressors}</div>
+                          </>
+                        )}
+                      </>
+                    )}
 
                     <h2 style={sectionHeadingStyle}>Advice</h2>
                     <div style={sectionBodyStyle}>
                       {String(selectedJournal.advice || 'No additional advice generated.')}
                     </div>
 
-                    <h2 style={sectionHeadingStyle}>Full transcript</h2>
+                    {selectedJournal.entryMetadata && (
+                      <>
+                        <h2 style={sectionHeadingStyle}>Entry Metadata</h2>
+                        <div className="d-flex flex-wrap gap-2 mb-2">
+                          <Badge bg="light" text="dark">Mood {formatMetricValue(selectedJournal.entryMetadata.moodScore)}</Badge>
+                          <Badge bg="light" text="dark">Stress {formatMetricValue(selectedJournal.entryMetadata.stressLevel)}</Badge>
+                          <Badge bg="light" text="dark">Energy {formatMetricValue(selectedJournal.entryMetadata.energyLevel)}</Badge>
+                          {selectedJournal.entryMetadata.sentiment ? (
+                            <Badge
+                              bg={sentimentBadgeVariant(selectedJournal.entryMetadata.sentiment).bg}
+                              text={sentimentBadgeVariant(selectedJournal.entryMetadata.sentiment).text}
+                            >
+                              {selectedJournal.entryMetadata.sentiment}
+                            </Badge>
+                          ) : null}
+                          {selectedJournal.entryMetadata.cognitiveState ? (
+                            <Badge bg="info">{selectedJournal.entryMetadata.cognitiveState}</Badge>
+                          ) : null}
+                        </div>
+                        {!!selectedJournal.entryMetadata.primaryThemes?.length && (
+                          <div className="text-muted" style={{ marginBottom: '1rem' }}>
+                            Themes: {selectedJournal.entryMetadata.primaryThemes.join(', ')}
+                          </div>
+                        )}
+                      </>
+                    )}
+
+                    <h2 style={sectionHeadingStyle}>Full Transcript</h2>
                     <div style={sectionBodyStyle}>
                       {String(selectedJournal.originalTranscript || 'No transcript available.')}
                     </div>

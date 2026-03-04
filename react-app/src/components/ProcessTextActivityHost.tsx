@@ -26,8 +26,11 @@ function buildTranscriptBannerPayload(result: AgentResponse) {
     processedDocument: result.processedDocument || {
       dateHeading: result.dateHeading || null,
       oneLineSummary: result.oneLineSummary || null,
+      aiSummaryBullets: result.aiSummaryBullets || [],
       structuredEntry: result.structuredEntry || null,
       advice: result.advice || null,
+      mindsetAnalysis: result.mindsetAnalysis || null,
+      entryMetadata: result.entryMetadata || null,
       fullTranscript: result.fullTranscript || null,
     },
     warnings: Array.isArray(result.warnings) ? result.warnings : [],

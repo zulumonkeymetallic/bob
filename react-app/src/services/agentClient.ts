@@ -48,8 +48,24 @@ export interface AgentReplanSummary {
 export interface AgentProcessedDocument {
   dateHeading?: string | null;
   oneLineSummary?: string | null;
+  aiSummaryBullets?: string[];
   structuredEntry?: string | null;
   advice?: string | null;
+  mindsetAnalysis?: {
+    emotionalTone?: string | null;
+    cognitiveStyle?: string | null;
+    motivationsAndDrivers?: string | null;
+    psychologicalStrengths?: string | null;
+    potentialStressors?: string | null;
+  } | null;
+  entryMetadata?: {
+    moodScore?: number | null;
+    stressLevel?: number | null;
+    energyLevel?: number | null;
+    primaryThemes?: string[];
+    cognitiveState?: string | null;
+    sentiment?: 'negative' | 'neutral' | 'mixed' | 'positive' | string | null;
+  } | null;
   fullTranscript?: string | null;
 }
 
@@ -86,8 +102,11 @@ export interface AgentResponse {
   processedDocument?: AgentProcessedDocument | null;
   dateHeading?: string | null;
   oneLineSummary?: string | null;
+  aiSummaryBullets?: string[];
   structuredEntry?: string | null;
   advice?: string | null;
+  mindsetAnalysis?: AgentProcessedDocument['mindsetAnalysis'];
+  entryMetadata?: AgentProcessedDocument['entryMetadata'];
   fullTranscript?: string | null;
   warnings?: AgentWarning[];
   googleDoc?: AgentGoogleDocStatus | null;

@@ -79,6 +79,23 @@ export interface Story {
   locationLon?: number;
 }
 
+export interface JournalMindsetAnalysis {
+  emotionalTone?: string | null;
+  cognitiveStyle?: string | null;
+  motivationsAndDrivers?: string | null;
+  psychologicalStrengths?: string | null;
+  potentialStressors?: string | null;
+}
+
+export interface JournalEntryMetadata {
+  moodScore?: number | null;
+  stressLevel?: number | null;
+  energyLevel?: number | null;
+  primaryThemes?: string[];
+  cognitiveState?: string | null;
+  sentiment?: 'negative' | 'neutral' | 'mixed' | 'positive' | string | null;
+}
+
 export interface JournalEntry {
   id: string;
   persona: 'personal' | 'work';
@@ -88,7 +105,10 @@ export interface JournalEntry {
   dateHeading?: string;
   structuredEntry?: string;
   oneLineSummary?: string;
+  aiSummaryBullets?: string[];
   advice?: string;
+  mindsetAnalysis?: JournalMindsetAnalysis | null;
+  entryMetadata?: JournalEntryMetadata | null;
   entryCount?: number;
   summaryHistory?: string[];
   docUrl?: string | null;
