@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { format } from 'date-fns';
 import { Modal, Button, Form, Row, Col } from 'react-bootstrap';
-import { doc, updateDoc, serverTimestamp, collection, query, where, orderBy, limit, onSnapshot, setDoc, addDoc, deleteDoc } from 'firebase/firestore';
+import { doc, updateDoc, serverTimestamp, collection, query, where, orderBy, limit, onSnapshot, addDoc, deleteDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { useNavigate } from 'react-router-dom';
 import { db, functions } from '../firebase';
@@ -323,13 +323,15 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
       });
 
       let savedTaskId = task?.id || null;
-      const existingRef = (task as any)?.ref || (task as any)?.reference || null;
       const prevPersona = (((task as any)?.persona) || 'personal') as 'personal' | 'work';
       if (task) {
         const updates: any = {
           ...basePayload,
           title: basePayload.title || task.title,
           updatedAt: serverTimestamp(),
+          serverUpdatedAt: Date.now(),
+          ownerUid: (task as any).ownerUid || currentUser?.uid || null,
+          persona: basePayload.persona || (task as any).persona || currentPersona || 'personal',
         };
         if (dueDateChanged) {
           updates.dueDateLocked = true;
@@ -354,38 +356,7 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
         savedTaskId = createdRef.id;
       }
 
-      if (currentUser?.uid && savedTaskId) {
-        const sprintKey = (basePayload.sprintId || storySprintId || '') || '__none__';
-        const statusValue = basePayload.status;
-        const isDone = typeof statusValue === 'number'
-          ? statusValue >= 2
-          : String(statusValue || '').toLowerCase().includes('done') || String(statusValue || '').toLowerCase().includes('complete');
-        const indexPayload: any = {
-          id: savedTaskId,
-          ownerUid: currentUser.uid,
-          persona: basePayload.persona || prevPersona,
-          sprintId: sprintKey,
-          status: basePayload.status,
-          isOpen: !isDone,
-          dueDate: basePayload.dueDate ?? null,
-          priority: basePayload.priority ?? null,
-          title: basePayload.title,
-          description: basePayload.description || null,
-          goalId: basePayload.goalId || null,
-          storyId: basePayload.storyId || null,
-          parentType: basePayload.parentType || null,
-          parentId: basePayload.parentId || null,
-          tags: basePayload.tags || [],
-          ref: existingRef,
-          updatedAt: Date.now(),
-        };
-        try {
-          await setDoc(doc(db, 'sprint_task_index', savedTaskId), indexPayload, { merge: true });
-        } catch (indexErr) {
-          // sprint_task_index is server-managed; client writes may be denied by rules
-          console.warn('sprint_task_index update skipped (server-managed)', indexErr);
-        }
-      }
+      // sprint_task_index is server-managed by Cloud Functions; skip client writes.
       const nextPersona = (basePayload.persona || prevPersona) as 'personal' | 'work';
       if (task?.id && prevPersona !== nextPersona && currentUser?.uid) {
         try {
