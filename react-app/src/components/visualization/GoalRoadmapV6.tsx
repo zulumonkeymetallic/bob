@@ -1,7 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Gantt } from '@svar-ui/react-gantt';
-import '@svar-ui/react-gantt/all.css';
-import { collection, doc, onSnapshot, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
+import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { Star, Search, Edit3, Wand2, CalendarClock, Activity, Maximize2, Minimize2 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { usePersona } from '../../contexts/PersonaContext';
@@ -52,12 +50,34 @@ interface GanttTask {
   viewLevel?: 'year' | 'quarter' | 'month' | 'week';
   isCritical?: boolean;
   progressSummary?: string;
+  themeId?: number | string;
+  themeName?: string;
+  themeOrder?: number;
 }
 
 const DAY_MS = 86400000;
 const MILESTONE_THRESHOLD_DAYS = 14;
 const PROGRESS_SHOW_MIN_ZOOM = 45;
 const PROGRESS_HIDE_AFTER_ZOOM = 75;
+const ROADMAP_LABEL_COL_WIDTH = 260;
+const ROADMAP_GROUP_HEADER_HEIGHT = 30;
+
+interface AxisBandSegment {
+  key: string;
+  label: string;
+  left: number;
+  width: number;
+}
+
+interface ThemeLaneGroup {
+  key: string;
+  themeId: number | string;
+  themeName: string;
+  themeColor: string;
+  themeOrder: number;
+  lanes: GanttTask[][];
+  height: number;
+}
 
 function toMillis(val: any): number | undefined {
   if (val === undefined || val === null) return undefined;
@@ -73,6 +93,79 @@ function toMillis(val: any): number | undefined {
     return isNaN(d.getTime()) ? undefined : d.getTime();
   }
   return undefined;
+}
+
+function startOfDay(date: Date): Date {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function addDays(date: Date, days: number): Date {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function startOfMonth(date: Date): Date {
+  return new Date(date.getFullYear(), date.getMonth(), 1);
+}
+
+function addMonths(date: Date, count: number): Date {
+  return new Date(date.getFullYear(), date.getMonth() + count, 1);
+}
+
+function startOfQuarter(date: Date): Date {
+  const quarterMonth = Math.floor(date.getMonth() / 3) * 3;
+  return new Date(date.getFullYear(), quarterMonth, 1);
+}
+
+function addQuarters(date: Date, count: number): Date {
+  return new Date(date.getFullYear(), date.getMonth() + (count * 3), 1);
+}
+
+function startOfYear(date: Date): Date {
+  return new Date(date.getFullYear(), 0, 1);
+}
+
+function addYears(date: Date, count: number): Date {
+  return new Date(date.getFullYear() + count, 0, 1);
+}
+
+function startOfWeek(date: Date): Date {
+  const normalized = startOfDay(date);
+  const day = normalized.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  normalized.setDate(normalized.getDate() + diff);
+  return normalized;
+}
+
+function buildAxisRow(
+  chartStart: Date,
+  chartEnd: Date,
+  alignStart: (date: Date) => Date,
+  advance: (date: Date) => Date,
+  format: (date: Date) => string,
+  xFromMs: (ms: number) => number
+): AxisBandSegment[] {
+  const segments: AxisBandSegment[] = [];
+  const rangeEndExclusive = chartEnd.getTime() + DAY_MS;
+  let cursor = alignStart(chartStart);
+
+  while (cursor.getTime() < rangeEndExclusive) {
+    const next = advance(cursor);
+    const clampedStart = Math.max(cursor.getTime(), chartStart.getTime());
+    const clampedEnd = Math.min(next.getTime(), rangeEndExclusive);
+    if (clampedEnd > clampedStart) {
+      segments.push({
+        key: `${cursor.toISOString()}-${next.toISOString()}`,
+        label: format(cursor),
+        left: xFromMs(clampedStart),
+        width: Math.max(1, xFromMs(clampedEnd) - xFromMs(clampedStart))
+      });
+    }
+    cursor = next;
+  }
+
+  return segments;
 }
 
 const TaskTemplate: React.FC<{ data: GanttTask }> = ({ data }) => {
@@ -272,7 +365,6 @@ const GoalRoadmapV6: React.FC = () => {
   const { sprints, selectedSprintId } = useSprint();
   const { showSidebar } = useSidebar();
   const [goals, setGoals] = useState<Goal[]>([]);
-  const goalsById = useMemo(() => goals.reduce<Record<string, Goal>>((acc, g) => { acc[g.id] = g; return acc; }, {}), [goals]);
   const [stories, setStories] = useState<Story[]>([]);
   const [storyPoints, setStoryPoints] = useState<Record<string, number>>({});
   const [storyDonePoints, setStoryDonePoints] = useState<Record<string, number>>({});
@@ -290,7 +382,6 @@ const GoalRoadmapV6: React.FC = () => {
   const [editGoal, setEditGoal] = useState<Goal | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const boardRef = useRef<HTMLDivElement | null>(null);
-  const ganttApiRef = useRef<any | null>(null);
 
   const ENABLE_MONZO_POTS = process.env.REACT_APP_ENABLE_MONZO_POTS === 'true';
 
@@ -315,7 +406,7 @@ const GoalRoadmapV6: React.FC = () => {
     } catch (err: any) {
       alert('Failed to schedule via AI: ' + (err?.message || 'unknown'));
     }
-  }, []);
+  }, [currentPersona]);
 
   // Goals
   useEffect(() => {
@@ -485,83 +576,11 @@ const GoalRoadmapV6: React.FC = () => {
     return enriched.map(e => e.goal);
   }, [filteredGoals, sortMode]);
 
-  const scales = useMemo(() => {
-    const quarterFormatter = (d: Date) => `Q${Math.floor(d.getMonth() / 3) + 1}`;
-    const monthNarrow = (d: Date) => d.toLocaleString('default', { month: 'narrow' });
-    const monthShort = (d: Date) => d.toLocaleString('default', { month: 'short' });
-
-    if (zoomPercent <= 18) {
-      // years + quarters only for ultra-zoomed out views
-      return [
-        { unit: 'year', step: 1, format: 'yyyy' },
-        { unit: 'quarter', step: 1, format: quarterFormatter }
-      ];
-    }
-    if (zoomPercent <= 60) {
-      // quarters primary
-      return [
-        { unit: 'year', step: 1, format: 'yyyy' },
-        { unit: 'quarter', step: 1, format: quarterFormatter }
-      ];
-    }
-    if (zoomPercent <= 88) {
-      // months
-      return [
-        { unit: 'year', step: 1, format: 'yyyy' },
-        { unit: 'month', step: 1, format: monthShort }
-      ];
-    }
-    // weeks
-    return [
-      { unit: 'month', step: 1, format: (d: Date) => `${monthShort(d)} ${d.getFullYear()}` },
-      { unit: 'week', step: 1, format: 'w' }
-    ];
-  }, [zoomPercent]);
-
-  const markers = useMemo(() => {
-    const todayMarker = { start: new Date(), css: 'grv6-today-marker', text: 'Today' };
-    return [todayMarker];
-  }, []);
-
-  const cellHeight = useMemo(() => {
-    const min = 50;
-    const max = 130;
-    return Math.round(min + (zoomPercent / 100) * (max - min));
-  }, [zoomPercent]);
-
-  const cellWidth = useMemo(() => {
-    const min = 24;
-    const max = 110;
-    return Math.round(min + (zoomPercent / 100) * (max - min));
-  }, [zoomPercent]);
-
   const { tasks, chartStart, chartEnd } = useMemo(() => {
     let min: Date | null = null;
     let max: Date | null = null;
     const list: GanttTask[] = [];
-    const rowsByTheme: Record<string, Array<{ rowIndex: number; lastEnd: number }>> = {};
-    let nextRowIndex = 0;
-
-    const spacingBase = 70;
-    const spacingRange = 110;
-    const zoomFactor = Math.max(0, Math.min(1, (100 - zoomPercent) / 100));
-    const dynamicRowSpacing = Math.round(spacingBase + spacingRange * zoomFactor);
-
-    const assignRowIndex = (key: string, startMs: number, endMs: number) => {
-      if (!rowsByTheme[key]) {
-        rowsByTheme[key] = [];
-      }
-      const rows = rowsByTheme[key];
-      for (const row of rows) {
-        if (startMs >= row.lastEnd) {
-          row.lastEnd = endMs;
-          return row.rowIndex;
-        }
-      }
-      const rowIndex = nextRowIndex++;
-      rows.push({ rowIndex, lastEnd: endMs });
-      return rowIndex;
-    };
+    const themeOrderMap = new Map((globalThemes || []).map((t, index) => [String(t.id), index]));
 
     for (const goal of sortedGoals) {
       const startMs = toMillis((goal as any).startDate) ?? toMillis((goal as any).targetDate) ?? Date.now();
@@ -572,9 +591,7 @@ const GoalRoadmapV6: React.FC = () => {
       if (!max || end > max) max = end;
 
       const themeId = migrateThemeValue((goal as any).theme);
-      const themeDef =
-        globalThemes.find(t => t.id === themeId) ||
-        (goal.parentGoalId ? globalThemes.find(t => t.id === migrateThemeValue(goalsById[goal.parentGoalId]?.theme)) : undefined);
+      const themeDef = globalThemes.find(t => t.id === themeId);
       const color = themeDef?.color || '#3b82f6';
 
       const totalPts = storyPoints[goal.id] || 0;
@@ -614,11 +631,8 @@ const GoalRoadmapV6: React.FC = () => {
       const titleSize = Math.max(10, Math.round(10 + (zoomPercent / 100) * 6));
       const showDetails = zoomPercent >= 65;
       const showChips = zoomPercent >= 75;
-
       const normalizedThemeId = themeDef?.id ?? themeId ?? 'unknown';
-      const themeKey = `theme-${normalizedThemeId}`;
-      const rowIndex = assignRowIndex(themeKey, startMs, endMs);
-      const rowSpacingForGoal = Math.max(56, dynamicRowSpacing - (isMilestone ? 6 : 0));
+      const normalizedThemeKey = String(normalizedThemeId);
       const isCriticalGoal = Boolean((goal as any).priority && (goal as any).priority >= 4);
 
       const progressSummaryParts: string[] = [];
@@ -659,10 +673,11 @@ const GoalRoadmapV6: React.FC = () => {
         onSchedule: (g: Goal) => handleScheduleGoal(g),
         onGenerateStories: (g: Goal) => handleGenerateStories(g),
         onOpenStream: (g: Goal) => showSidebar(g, 'goal'),
-        rowIndex,
-        rowSpacing: rowSpacingForGoal,
         isCritical: isCriticalGoal,
-        progressSummary: progressSummaryParts.join(' · ')
+        progressSummary: progressSummaryParts.join(' · '),
+        themeId: normalizedThemeId,
+        themeName: themeDef?.name || themeDef?.label || `Theme ${normalizedThemeId}`,
+        themeOrder: themeOrderMap.get(normalizedThemeKey) ?? Number.MAX_SAFE_INTEGER
       });
     }
 
@@ -676,7 +691,7 @@ const GoalRoadmapV6: React.FC = () => {
               140;
     const endDate = max ? new Date(max.getTime() + longHorizonDays * DAY_MS) : new Date(today.getTime() + longHorizonDays * DAY_MS);
     return { tasks: list, chartStart: startDate, chartEnd: endDate };
-  }, [sortedGoals, globalThemes, storyDonePoints, storyPoints, potBalances, calendarBlocks, goalsById, handleScheduleGoal, handleGenerateStories, showSidebar, zoomPercent, cellHeight]);
+  }, [sortedGoals, globalThemes, storyDonePoints, storyPoints, potBalances, calendarBlocks, handleScheduleGoal, handleGenerateStories, showSidebar, zoomLevel, zoomPercent]);
 
   const handleThemeChange = useCallback((val: string) => {
     if (val === 'all') {
@@ -757,6 +772,179 @@ const GoalRoadmapV6: React.FC = () => {
     setZoomLevel(percentToLevel(pct));
   }, [percentToLevel]);
 
+  const dayWidth = useMemo(() => {
+    return Math.max(1.5, Number((1.1 + (zoomPercent * 0.14)).toFixed(2)));
+  }, [zoomPercent]);
+
+  const totalTimelineDays = useMemo(() => {
+    return Math.max(1, Math.ceil((chartEnd.getTime() - chartStart.getTime()) / DAY_MS) + 1);
+  }, [chartEnd, chartStart]);
+
+  const timelineWidth = useMemo(() => {
+    return Math.max(1200, Math.round(totalTimelineDays * dayWidth));
+  }, [dayWidth, totalTimelineDays]);
+
+  const xFromMs = useCallback((ms: number) => {
+    const clamped = Math.max(chartStart.getTime(), Math.min(ms, chartEnd.getTime() + DAY_MS));
+    return ((clamped - chartStart.getTime()) / DAY_MS) * dayWidth;
+  }, [chartEnd, chartStart, dayWidth]);
+
+  const laneHeight = useMemo(() => {
+    if (zoomLevel === 'week') return 112;
+    if (zoomLevel === 'month') return 100;
+    if (zoomLevel === 'quarter') return 88;
+    return 82;
+  }, [zoomLevel]);
+
+  const themeGroups = useMemo<ThemeLaneGroup[]>(() => {
+    const grouped = new Map<string, {
+      key: string;
+      themeId: number | string;
+      themeName: string;
+      themeColor: string;
+      themeOrder: number;
+      items: GanttTask[];
+    }>();
+
+    tasks.forEach((task) => {
+      const key = String(task.themeId ?? 'unknown');
+      const existing = grouped.get(key);
+      if (existing) {
+        existing.items.push(task);
+        return;
+      }
+      grouped.set(key, {
+        key,
+        themeId: task.themeId ?? 'unknown',
+        themeName: task.themeName || 'Other',
+        themeColor: task.themeColor || '#3b82f6',
+        themeOrder: task.themeOrder ?? Number.MAX_SAFE_INTEGER,
+        items: [task]
+      });
+    });
+
+    return Array.from(grouped.values())
+      .sort((a, b) => {
+        const orderDiff = a.themeOrder - b.themeOrder;
+        if (orderDiff !== 0) return orderDiff;
+        return a.themeName.localeCompare(b.themeName);
+      })
+      .map((group) => {
+        const lanes: Array<{ lastEnd: number; items: GanttTask[] }> = [];
+        group.items.forEach((item) => {
+          const startMs = item.start.getTime();
+          const endMs = item.end.getTime();
+          let lane = lanes.find((candidate) => startMs >= candidate.lastEnd + DAY_MS);
+          if (!lane) {
+            lane = { lastEnd: endMs, items: [] };
+            lanes.push(lane);
+          } else {
+            lane.lastEnd = endMs;
+          }
+          lane.items.push(item);
+        });
+
+        return {
+          key: group.key,
+          themeId: group.themeId,
+          themeName: group.themeName,
+          themeColor: group.themeColor,
+          themeOrder: group.themeOrder,
+          lanes: lanes.map((lane) => lane.items),
+          height: ROADMAP_GROUP_HEADER_HEIGHT + (Math.max(1, lanes.length) * laneHeight)
+        };
+      });
+  }, [laneHeight, tasks]);
+
+  const topAxisSegments = useMemo(() => {
+    if (zoomLevel === 'week') {
+      return buildAxisRow(
+        chartStart,
+        chartEnd,
+        startOfMonth,
+        (date) => addMonths(date, 1),
+        (date) => date.toLocaleDateString('en-GB', { month: 'short', year: 'numeric' }),
+        xFromMs
+      );
+    }
+    return buildAxisRow(chartStart, chartEnd, startOfYear, (date) => addYears(date, 1), (date) => String(date.getFullYear()), xFromMs);
+  }, [chartEnd, chartStart, xFromMs, zoomLevel]);
+
+  const detailAxisSegments = useMemo(() => {
+    if (zoomLevel === 'week') {
+      return buildAxisRow(
+        chartStart,
+        chartEnd,
+        startOfWeek,
+        (date) => addDays(date, 7),
+        (date) => `W/C ${date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}`,
+        xFromMs
+      );
+    }
+    if (zoomLevel === 'month') {
+      return buildAxisRow(
+        chartStart,
+        chartEnd,
+        startOfMonth,
+        (date) => addMonths(date, 1),
+        (date) => date.toLocaleDateString('en-GB', { month: 'short' }),
+        xFromMs
+      );
+    }
+    return buildAxisRow(
+      chartStart,
+      chartEnd,
+      startOfQuarter,
+      (date) => addQuarters(date, 1),
+      (date) => `Q${Math.floor(date.getMonth() / 3) + 1}`,
+      xFromMs
+    );
+  }, [chartEnd, chartStart, xFromMs, zoomLevel]);
+
+  const gridLines = useMemo(() => {
+    const lines: number[] = [];
+    let cursor =
+      zoomLevel === 'week'
+        ? startOfDay(chartStart)
+        : zoomLevel === 'month'
+          ? startOfWeek(chartStart)
+          : startOfMonth(chartStart);
+
+    while (cursor.getTime() <= chartEnd.getTime() + DAY_MS) {
+      lines.push(xFromMs(cursor.getTime()));
+      cursor =
+        zoomLevel === 'week'
+          ? addDays(cursor, 1)
+          : zoomLevel === 'month'
+            ? addDays(cursor, 7)
+            : addMonths(cursor, 1);
+    }
+
+    return lines;
+  }, [chartEnd, chartStart, xFromMs, zoomLevel]);
+
+  const sprintBands = useMemo(() => {
+    return sprints
+      .filter((sprint) => toMillis(sprint.startDate) && toMillis(sprint.endDate))
+      .map((sprint) => {
+        const startMs = toMillis(sprint.startDate)!;
+        const endMs = toMillis(sprint.endDate)! + DAY_MS;
+        const left = xFromMs(startMs);
+        const width = Math.max(0, xFromMs(endMs) - xFromMs(startMs));
+        return {
+          id: sprint.id,
+          label: sprint.name || 'Sprint',
+          left,
+          width
+        };
+      })
+      .filter((band) => band.width > 0);
+  }, [sprints, xFromMs]);
+
+  const todayLineX = useMemo(() => {
+    return xFromMs(Date.now());
+  }, [xFromMs]);
+
   useEffect(() => {
     const handleFullscreenChange = () => {
       setIsFullscreen(document.fullscreenElement === boardRef.current);
@@ -784,70 +972,6 @@ const GoalRoadmapV6: React.FC = () => {
       console.warn('[RoadmapV6] fullscreen toggle failed', err);
     }
   }, []);
-
-  const persistGoalDates = useCallback(async (goalId: string, fallbackTask?: { start?: any; end?: any }) => {
-    if (!currentUser?.uid) return;
-    const task = ganttApiRef.current?.getTask(goalId) || fallbackTask;
-    if (!task) return;
-    const startMs = toMillis(task.start);
-    const endMs = toMillis(task.end ?? task.start);
-    if (startMs === undefined || endMs === undefined) return;
-
-    const goal = goalsById[goalId];
-    const prevStart = goal ? (toMillis((goal as any).startDate) ?? toMillis((goal as any).targetDate)) : undefined;
-    const prevEnd = goal ? (toMillis((goal as any).endDate) ?? toMillis((goal as any).targetDate) ?? prevStart) : undefined;
-    if (prevStart === startMs && prevEnd === endMs) return;
-
-    console.log('[RoadmapV6] gantt change detected', {
-      goalId,
-      startMs,
-      endMs,
-      prevStart,
-      prevEnd,
-      source: fallbackTask ? 'event-task' : 'api-task',
-      at: new Date().toISOString()
-    });
-
-    try {
-      await updateDoc(doc(db, 'goals', goalId), {
-        startDate: startMs,
-        endDate: endMs,
-        updatedAt: serverTimestamp()
-      });
-      console.log('[RoadmapV6] persisted goal dates', {
-        goalId,
-        startMs,
-        endMs,
-        at: new Date().toISOString()
-      });
-    } catch (err) {
-      console.error('[RoadmapV6] Failed to persist gantt change', err);
-    }
-  }, [currentUser?.uid, goalsById]);
-
-  const handleGanttInit = useCallback((api: any) => {
-    ganttApiRef.current = api;
-    api?.on?.('update-task', (ev: any) => {
-      console.log('[RoadmapV6] api update-task', ev);
-      const goalId = String(ev?.id || ev?.task?.id || '');
-      if (!goalId) return;
-      if (ev?.inProgress) return;
-      persistGoalDates(goalId, ev?.task);
-    });
-    api?.on?.('drag-task', (ev: any) => {
-      console.log('[RoadmapV6] api drag-task', ev);
-    });
-  }, [persistGoalDates]);
-
-  const handleTaskUpdate = useCallback((ev: any) => {
-    console.log('[RoadmapV6] onUpdateTask', ev);
-    if (!ev || ev.inProgress) return;
-    const goalId = String(ev.id || ev.task?.id || '');
-    if (!goalId) return;
-    const touchedDates = ev.task?.start || ev.task?.end || typeof ev.diff === 'number';
-    if (!touchedDates) return;
-    requestAnimationFrame(() => persistGoalDates(goalId, ev.task));
-  }, [persistGoalDates]);
 
   if (!currentUser) return null;
 
@@ -969,57 +1093,120 @@ const GoalRoadmapV6: React.FC = () => {
             <p className="text-muted">No goals match your filters, or you don't have permission to view them.</p>
           </div>
         ) : (
-          <div className="grv6-gantt-layered">
-            <div className="grv6-sprint-bands">
-              {sprints
-                .filter(s => toMillis(s.startDate) && toMillis(s.endDate))
-                .map(s => {
-                  const startMs = toMillis(s.startDate)!;
-                  const endMs = toMillis(s.endDate)!;
-                  const total = chartEnd.getTime() - chartStart.getTime();
-                  const leftPct = Math.max(0, ((startMs - chartStart.getTime()) / total) * 100);
-                  const widthPct = Math.max(0, ((endMs - startMs) / total) * 100);
-                  // Only show sprint overlays that are visible within the chart range
-                  if (widthPct <= 0 || leftPct >= 100 || (leftPct + widthPct) <= 0) return null;
-                  return (
-                    <div
-                      key={s.id}
-                      className="grv6-sprint-band"
-                      style={{ 
-                        left: `${Math.min(100, leftPct)}%`, 
-                        width: `${Math.min(100 - leftPct, widthPct)}%` 
-                      }}
-                    >
-                      <span className="grv6-sprint-label">{s.name || 'Sprint'}</span>
-                    </div>
-                  );
-                })}
+          <div className="grv6-roadmap-shell" style={{ width: ROADMAP_LABEL_COL_WIDTH + timelineWidth }}>
+            <div className="grv6-pill-row grv6-roadmap-summary">
+              <span className="grv6-pill">{visibleGoalCount} goals</span>
+              <span className="grv6-pill subtle">{themeGroups.length} themes</span>
+              <span className="grv6-pill subtle">{milestoneCount} milestones</span>
             </div>
-            <Gantt
-              tasks={tasks}
-              links={[]}
-              start={chartStart}
-              end={chartEnd}
-              init={handleGanttInit}
-              cellHeight={cellHeight}
-              cellWidth={cellWidth}
-              columns={false as unknown as any}
-              taskTemplate={TaskTemplate as any}
-              onUpdateTask={handleTaskUpdate}
-              highlightTime={(d: Date) => {
-                if (!sprints.length) return '';
-                const t = d.getTime();
-                const sprint = sprints.find(s => {
-                  const start = toMillis(s.startDate);
-                  const end = toMillis(s.endDate);
-                  return start && end && t >= start && t <= end;
-                });
-                return sprint ? 'grv6-sprint-highlight' : '';
-              }}
-              // @ts-ignore - markers not in type defs but supported by SVAR
-              markers={markers}
-              scales={scales}
-            />
+
+            <div className="grv6-roadmap-header" style={{ width: ROADMAP_LABEL_COL_WIDTH + timelineWidth }}>
+              <div className="grv6-roadmap-label-spacer">
+                <div className="grv6-roadmap-header-title">Themes</div>
+                <div className="grv6-roadmap-header-subtitle">Grouped by theme and packed into shared lanes</div>
+              </div>
+              <div className="grv6-roadmap-axis" style={{ width: timelineWidth }}>
+                <div className="grv6-roadmap-axis-row year">
+                  {topAxisSegments.map((segment) => (
+                    <div
+                      key={`year-${segment.key}`}
+                      className="grv6-roadmap-axis-segment"
+                      style={{ left: segment.left, width: segment.width }}
+                    >
+                      {segment.label}
+                    </div>
+                  ))}
+                </div>
+                <div className="grv6-roadmap-axis-row detail">
+                  {detailAxisSegments.map((segment) => (
+                    <div
+                      key={`detail-${segment.key}`}
+                      className="grv6-roadmap-axis-segment"
+                      style={{ left: segment.left, width: segment.width }}
+                    >
+                      {segment.label}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="grv6-roadmap-body" style={{ width: ROADMAP_LABEL_COL_WIDTH + timelineWidth }}>
+              {themeGroups.map((group) => (
+                <div
+                  key={group.key}
+                  className="grv6-theme-group"
+                  style={{ minHeight: group.height }}
+                >
+                  <div className="grv6-theme-label-cell" style={{ minHeight: group.height }}>
+                    <div className="grv6-theme-label-stack">
+                      <span className="grv6-theme-dot" style={{ backgroundColor: group.themeColor }} />
+                      <div className="grv6-theme-label-copy">
+                        <span className="grv6-theme-label-title">{group.themeName}</span>
+                        <span className="grv6-theme-label-meta">
+                          {group.lanes.reduce((total, lane) => total + lane.length, 0)} goals on {group.lanes.length} line{group.lanes.length === 1 ? '' : 's'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grv6-theme-track" style={{ width: timelineWidth, minHeight: group.height }}>
+                    <div className="grv6-theme-track-header" />
+                    {sprintBands.map((band) => (
+                      <div
+                        key={`${group.key}-${band.id}`}
+                        className="grv6-roadmap-sprint-band"
+                        style={{ left: band.left, width: band.width, height: group.height }}
+                      >
+                        <span className="grv6-roadmap-sprint-label">{band.label}</span>
+                      </div>
+                    ))}
+                    {gridLines.map((lineX, index) => (
+                      <div
+                        key={`${group.key}-grid-${index}`}
+                        className="grv6-roadmap-grid-line"
+                        style={{ left: lineX, height: group.height }}
+                      />
+                    ))}
+                    <div className="grv6-roadmap-today-line" style={{ left: todayLineX, height: group.height }} />
+
+                    {group.lanes.map((lane, laneIndex) => (
+                      <div
+                        key={`${group.key}-lane-${laneIndex}`}
+                        className="grv6-theme-lane-row"
+                        style={{
+                          top: ROADMAP_GROUP_HEADER_HEIGHT + (laneIndex * laneHeight),
+                          height: laneHeight
+                        }}
+                      >
+                        <span className="grv6-theme-lane-label">Line {laneIndex + 1}</span>
+                      </div>
+                    ))}
+
+                    {group.lanes.flatMap((lane, laneIndex) =>
+                      lane.map((task) => {
+                        const startMs = task.start.getTime();
+                        const endMs = Math.max(task.end.getTime() + DAY_MS, startMs + DAY_MS);
+                        const left = xFromMs(startMs);
+                        const width = Math.max(task.isMilestone ? 120 : 72, xFromMs(endMs) - xFromMs(startMs));
+                        const top = ROADMAP_GROUP_HEADER_HEIGHT + (laneIndex * laneHeight) + 8;
+                        const height = laneHeight - 16;
+
+                        return (
+                          <div
+                            key={`${group.key}-${task.id}`}
+                            className={`grv6-roadmap-bar ${task.isMilestone ? 'milestone' : ''}`}
+                            style={{ left, top, width, height }}
+                          >
+                            <TaskTemplate data={task} />
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         )}
       </div>
