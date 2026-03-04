@@ -30,7 +30,7 @@ import { httpsCallable } from 'firebase/functions';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useSidebar } from '../contexts/SidebarContext';
-import { Story, Goal, Task, Sprint } from '../types';
+import { Story, Goal, Task, Sprint, CalendarBlock } from '../types';
 import { useSprint } from '../contexts/SprintContext';
 import { isStatus } from '../utils/statusHelpers';
 import { deriveTaskSprint, findSprintForDate, sprintNameForId } from '../utils/taskSprintHelpers';
@@ -135,6 +135,13 @@ interface ModernKanbanBoardProps {
 
 type LaneStatus = 'backlog' | 'in-progress' | 'done';
 
+interface ScheduledBlockInfo {
+  id: string;
+  start: number;
+  end: number;
+  title?: string;
+}
+
 // Droppable Area Component
 const DroppableArea: React.FC<{
   id: string;
@@ -170,11 +177,12 @@ const SortableTaskCard: React.FC<{
   task: Task;
   story?: Story;
   themeColor: string;
+  scheduledBlock?: ScheduledBlockInfo;
   onEdit: (task: Task) => void;
   onItemClick: (task: Task) => void;
   showTags?: boolean;
   formatTag?: (tag: string) => string;
-}> = ({ task, story, themeColor, onEdit, onItemClick, showTags = false, formatTag }) => {
+}> = ({ task, story, themeColor, scheduledBlock, onEdit, onItemClick, showTags = false, formatTag }) => {
   const { showSidebar } = useSidebar();
   const {
     attributes,
@@ -218,6 +226,15 @@ const SortableTaskCard: React.FC<{
   const taskTags = Array.isArray((task as any).tags) ? (task as any).tags : [];
   const visibleTags = taskTags.slice(0, 4);
   const remainingTags = taskTags.length - visibleTags.length;
+  const scheduledBlockLabel = (() => {
+    if (!scheduledBlock?.start || !scheduledBlock?.end) return null;
+    const start = new Date(scheduledBlock.start);
+    const end = new Date(scheduledBlock.end);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return null;
+    const dayLabel = start.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+    const timeLabel = `${start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}-${end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+    return `Planned ${dayLabel} ${timeLabel}`;
+  })();
   const criticalAccent = isCriticalTask
     ? {
       boxShadow: '0 0 0 2px rgba(251, 191, 36, 0.45)',
@@ -389,6 +406,19 @@ const SortableTaskCard: React.FC<{
                 {pointsLabel}
               </span>
             )}
+            {scheduledBlockLabel && (
+              <span
+                className="kanban-card__meta-badge"
+                style={{
+                  borderColor: 'rgba(37, 99, 235, 0.45)',
+                  backgroundColor: 'rgba(37, 99, 235, 0.12)',
+                  color: '#2563eb',
+                }}
+                title={scheduledBlock?.title || 'Planned calendar block'}
+              >
+                {scheduledBlockLabel}
+              </span>
+            )}
             <span className="kanban-card__meta-text" title="Due date">
               Due {formatDueDate(task)}
             </span>
@@ -456,6 +486,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
   const [stories, setStories] = useState<Story[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [scheduledBlocksByEntity, setScheduledBlocksByEntity] = useState<Record<string, ScheduledBlockInfo>>({});
   const { sprints } = useSprint();
   const [loading, setLoading] = useState(true);
 
@@ -583,6 +614,58 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
       window.localStorage.setItem('kanbanTop3Only', filterTop3Only ? 'true' : 'false');
     } catch { }
   }, [filterTop3Only]);
+
+  useEffect(() => {
+    if (!currentUser?.uid) {
+      setScheduledBlocksByEntity({});
+      return undefined;
+    }
+
+    const blocksQuery = query(
+      collection(db, 'calendar_blocks'),
+      where('ownerUid', '==', currentUser.uid),
+      limit(2000)
+    );
+
+    return onSnapshot(
+      blocksQuery,
+      (snapshot) => {
+        const now = Date.now();
+        const windowEnd = now + (30 * 24 * 60 * 60 * 1000);
+        const nextMap: Record<string, ScheduledBlockInfo> = {};
+        snapshot.docs
+          .map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) }) as CalendarBlock)
+          .filter((block) => {
+            const start = Number(block.start);
+            const end = Number(block.end);
+            if (!Number.isFinite(start) || !Number.isFinite(end)) return false;
+            if (end < now - 5 * 60 * 1000) return false;
+            if (start > windowEnd) return false;
+            const persona = String((block as any).persona || '').toLowerCase();
+            if (currentPersona && persona && persona !== String(currentPersona).toLowerCase()) return false;
+            return Boolean(block.storyId || block.taskId);
+          })
+          .sort((a, b) => Number(a.start) - Number(b.start))
+          .forEach((block) => {
+            const key = block.taskId
+              ? `task:${block.taskId}`
+              : (block.storyId ? `story:${block.storyId}` : null);
+            if (!key || nextMap[key]) return;
+            nextMap[key] = {
+              id: block.id,
+              start: Number(block.start),
+              end: Number(block.end),
+              title: block.title,
+            };
+          });
+        setScheduledBlocksByEntity(nextMap);
+      },
+      (error) => {
+        console.warn('[ModernKanbanBoard] scheduled blocks query error', error?.message || error);
+        setScheduledBlocksByEntity({});
+      }
+    );
+  }, [currentUser?.uid, currentPersona]);
 
   // Wire sidebar inline editor to Firestore updates
   useEffect(() => {
@@ -1416,6 +1499,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
                                       story={story}
                                       goal={goal}
                                       taskCount={taskCount}
+                                      scheduledBlock={scheduledBlocksByEntity[`story:${story.id}`]}
                                       themeColor={themeColor}
                                       themes={globalThemes}
                                       onEdit={(story) => handleEdit(story, 'story')}
@@ -1449,6 +1533,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
                                       key={task.id}
                                       task={task}
                                       story={story}
+                                      scheduledBlock={scheduledBlocksByEntity[`task:${task.id}`]}
                                       themeColor={themeColor}
                                       onEdit={(task) => handleEdit(task, 'task')}
                                       onItemClick={(task) => handleItemClick(task, 'task')}

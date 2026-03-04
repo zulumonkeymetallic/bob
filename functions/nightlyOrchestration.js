@@ -9,6 +9,7 @@ const { ensureFirestore, resolveTimezone } = require('./lib/reporting');
 const { clampTaskPoints } = require('./utils/taskPoints');
 const { buildAbsoluteUrl, buildEntityUrl } = require('./utils/urlHelpers');
 const { coerceZone, toDateTime, toMillis } = require('./lib/time');
+const { normalizeThemeAllocationPlan, resolveThemeAllocationsForDate } = require('./lib/themeAllocations');
 
 // Secrets
 const GOOGLE_AI_STUDIO_API_KEY = defineSecret('GOOGLEAISTUDIOAPIKEY');
@@ -45,9 +46,10 @@ const isMainGigBlock = (block) => {
   return isMainGigLabel(label);
 };
 
-const buildPickSlots = (themeAllocations) => {
+const buildPickSlots = (themeAllocationPlan) => {
   const getUserSlots = (themeLabel, day) => {
-    const matches = (Array.isArray(themeAllocations) ? themeAllocations : []).filter((a) => {
+    const dayAllocations = resolveThemeAllocationsForDate(themeAllocationPlan, day, day.zoneName);
+    const matches = dayAllocations.filter((a) => {
       if (a.dayOfWeek !== day.weekday % 7) return false; // stored as 0=Sun, 1=Mon...
       const label = String(themeLabel || '').toLowerCase();
       const allocTheme = String(a.theme || '').toLowerCase();
@@ -635,7 +637,6 @@ async function materializePlannerThemeBlocks({
   existingBlocks,
 }) {
   const results = { created: 0, skipped: 0, total: 0 };
-  const allocations = Array.isArray(themeAllocations) ? themeAllocations : [];
   const isWorkShiftTheme = (value) => {
     if (value == null) return false;
     if (typeof value === 'number' && Number.isFinite(value)) return value === 12;
@@ -647,16 +648,9 @@ async function materializePlannerThemeBlocks({
     if (raw === 'work' || raw.startsWith('work ') || raw.endsWith(' work') || raw.includes('work (')) return true;
     return false;
   };
-  const healthAllocations = allocations.filter((alloc) => {
-    const themeName = String(alloc?.theme || '').toLowerCase();
-    const subTheme = String(alloc?.subTheme || '').trim();
-    return themeName.includes('health') && subTheme;
-  });
-  const workShiftAllocations = allocations.filter((alloc) => {
-    return isWorkShiftTheme(alloc?.theme) || isWorkShiftTheme(alloc?.subTheme);
-  });
-
-  if (!healthAllocations.length && !workShiftAllocations.length) return results;
+  const themePlan = normalizeThemeAllocationPlan(themeAllocations);
+  const hasAnyAllocations = themePlan.allocations.length > 0 || Object.keys(themePlan.weeklyOverrides).length > 0;
+  if (!hasAnyAllocations) return results;
 
   const existingPlannerKeys = new Set();
   existingBlocks.forEach((block) => {
@@ -755,6 +749,13 @@ async function materializePlannerThemeBlocks({
   for (let offset = 0; offset < daysSpan; offset += 1) {
     const day = windowStart.plus({ days: offset });
     const dayKey = day.weekday % 7;
+    const dayAllocations = resolveThemeAllocationsForDate(themePlan, day, day.zoneName);
+    const healthAllocations = dayAllocations.filter((alloc) => {
+      const themeName = String(alloc?.theme || '').toLowerCase();
+      const subTheme = String(alloc?.subTheme || '').trim();
+      return themeName.includes('health') && subTheme;
+    });
+    const workShiftAllocations = dayAllocations.filter((alloc) => isWorkShiftTheme(alloc?.theme) || isWorkShiftTheme(alloc?.subTheme));
     for (const alloc of healthAllocations) {
       await processAllocation(alloc, 'health', day, dayKey);
     }
@@ -881,9 +882,9 @@ async function replanExistingBlocksForUser({
   if (!allocations) {
     try {
       const allocDoc = await store.collection('theme_allocations').doc(userId).get();
-      if (allocDoc.exists) allocations = allocDoc.data()?.allocations || [];
+      if (allocDoc.exists) allocations = allocDoc.data() || {};
     } catch {
-      allocations = [];
+      allocations = {};
     }
   }
   const { pickSlots } = buildPickSlots(allocations);
@@ -2143,7 +2144,7 @@ async function runCalendarPlannerJob() {
     let themeAllocations = [];
     try {
       const allocDoc = await db.collection('theme_allocations').doc(userId).get();
-      if (allocDoc.exists) themeAllocations = allocDoc.data()?.allocations || [];
+      if (allocDoc.exists) themeAllocations = allocDoc.data() || {};
     } catch { /* ignore */ }
 
     const { pickSlots } = buildPickSlots(themeAllocations);
@@ -2543,13 +2544,19 @@ exports.materializeFitnessBlocksNow = onCall({
   const profile = profileSnap && profileSnap.exists ? (profileSnap.data() || {}) : {};
   const zone = resolveTimezone(profile, 'Europe/London');
   const days = Math.max(1, Math.min(Number(req?.data?.days || 7), 14));
-  const windowStart = DateTime.now().setZone(coerceZone(zone)).startOf('day');
+  const requestedStart = String(req?.data?.startDate || '').trim();
+  const requestedStartDt = requestedStart
+    ? DateTime.fromISO(requestedStart, { zone: coerceZone(zone) }).startOf('day')
+    : null;
+  const windowStart = requestedStartDt && requestedStartDt.isValid
+    ? requestedStartDt
+    : DateTime.now().setZone(coerceZone(zone)).startOf('day');
   const windowEnd = windowStart.plus({ days }).endOf('day');
 
   let themeAllocations = [];
   try {
     const allocDoc = await db.collection('theme_allocations').doc(uid).get();
-    if (allocDoc.exists) themeAllocations = allocDoc.data()?.allocations || [];
+    if (allocDoc.exists) themeAllocations = allocDoc.data() || {};
   } catch { /* ignore */ }
 
   const dedupeResult = await dedupePlannerBlocksForUser({ db, userId: uid, windowStart, windowEnd });
@@ -2695,13 +2702,19 @@ exports.replanCalendarNow = onCall({
   const profile = profileSnap && profileSnap.exists ? (profileSnap.data() || {}) : {};
   const zone = resolveTimezone(profile, 'Europe/London');
   const days = Math.max(1, Math.min(Number(req?.data?.days || 7), 14));
-  const windowStart = DateTime.now().setZone(coerceZone(zone)).startOf('day');
+  const requestedStart = String(req?.data?.startDate || '').trim();
+  const requestedStartDt = requestedStart
+    ? DateTime.fromISO(requestedStart, { zone: coerceZone(zone) }).startOf('day')
+    : null;
+  const windowStart = requestedStartDt && requestedStartDt.isValid
+    ? requestedStartDt
+    : DateTime.now().setZone(coerceZone(zone)).startOf('day');
   const windowEnd = windowStart.plus({ days }).endOf('day');
 
   let themeAllocations = [];
   try {
     const allocDoc = await db.collection('theme_allocations').doc(uid).get();
-    if (allocDoc.exists) themeAllocations = allocDoc.data()?.allocations || [];
+    if (allocDoc.exists) themeAllocations = allocDoc.data() || {};
   } catch { /* ignore */ }
 
   await recomputeTop3ForUser(db, uid).catch((err) => {
