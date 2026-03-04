@@ -858,7 +858,7 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
                 onChange={(event) => setJournalEditorPrompt(event.target.value)}
               />
               <Form.Text className="text-muted">
-                This is appended to the built-in journal processing prompt. It only affects journal or mixed transcript entries and does not override the required JSON schema or faithfulness rules.
+                This is appended to the built-in journal processing prompt. Use it for deltas only, such as house style or extra analytical emphasis, rather than repeating the full base prompt. It only affects journal or mixed transcript entries and does not override the required JSON schema or faithfulness rules.
               </Form.Text>
             </Col>
             <Col md={3} className="d-grid">

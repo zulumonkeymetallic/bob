@@ -76,8 +76,53 @@ const TRANSCRIPT_ANALYSIS_SCHEMA = {
     entryType: { type: 'string', format: 'enum', enum: ['journal', 'task_list', 'url_only', 'mixed'] },
     shouldCreateJournal: { type: 'boolean' },
     oneLineSummary: { type: 'string' },
+    aiSummaryBullets: {
+      type: 'array',
+      items: { type: 'string' },
+    },
     structuredEntry: { type: 'string' },
     advice: { type: 'string' },
+    mindsetAnalysis: {
+      type: 'object',
+      nullable: true,
+      properties: {
+        emotionalTone: { type: 'string' },
+        cognitiveStyle: { type: 'string' },
+        motivationsAndDrivers: { type: 'string' },
+        psychologicalStrengths: { type: 'string' },
+        potentialStressors: { type: 'string' },
+      },
+      required: [
+        'emotionalTone',
+        'cognitiveStyle',
+        'motivationsAndDrivers',
+        'psychologicalStrengths',
+        'potentialStressors',
+      ],
+    },
+    entryMetadata: {
+      type: 'object',
+      nullable: true,
+      properties: {
+        moodScore: { type: 'number' },
+        stressLevel: { type: 'number' },
+        energyLevel: { type: 'number' },
+        primaryThemes: {
+          type: 'array',
+          items: { type: 'string' },
+        },
+        cognitiveState: { type: 'string' },
+        sentiment: { type: 'string', format: 'enum', enum: ['negative', 'neutral', 'mixed', 'positive'] },
+      },
+      required: [
+        'moodScore',
+        'stressLevel',
+        'energyLevel',
+        'primaryThemes',
+        'cognitiveState',
+        'sentiment',
+      ],
+    },
     stories: {
       type: 'array',
       items: {
@@ -115,7 +160,18 @@ const TRANSCRIPT_ANALYSIS_SCHEMA = {
       },
     },
   },
-  required: ['entryType', 'shouldCreateJournal', 'oneLineSummary', 'structuredEntry', 'advice', 'stories', 'tasks'],
+  required: [
+    'entryType',
+    'shouldCreateJournal',
+    'oneLineSummary',
+    'aiSummaryBullets',
+    'structuredEntry',
+    'advice',
+    'mindsetAnalysis',
+    'entryMetadata',
+    'stories',
+    'tasks',
+  ],
 };
 
 function summarizeForLog(value, depth = 0) {
@@ -264,6 +320,118 @@ function sanitizeUserJournalPrompt(value) {
     .replace(/\u0000/g, '')
     .trim()
     .slice(0, 4000);
+}
+
+const JOURNAL_SENTIMENTS = ['negative', 'neutral', 'mixed', 'positive'];
+const JOURNAL_MINDSET_FIELDS = [
+  'emotionalTone',
+  'cognitiveStyle',
+  'motivationsAndDrivers',
+  'psychologicalStrengths',
+  'potentialStressors',
+];
+
+function clampNumber(value, min, max, fallback = null, decimals = 1) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  const clamped = Math.min(max, Math.max(min, numeric));
+  const factor = 10 ** decimals;
+  return Math.round(clamped * factor) / factor;
+}
+
+function sanitizeAiSummaryBullets(items, maxItems = 8) {
+  const seen = new Set();
+  return (Array.isArray(items) ? items : [])
+    .map((item) => String(item || '').trim().replace(/\s+/g, ' '))
+    .filter(Boolean)
+    .filter((item) => {
+      const key = item.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, maxItems);
+}
+
+function normalizeJournalSentiment(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return JOURNAL_SENTIMENTS.includes(normalized) ? normalized : 'mixed';
+}
+
+function normalizeMindsetAnalysis(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const result = {};
+  for (const field of JOURNAL_MINDSET_FIELDS) {
+    result[field] = String(raw?.[field] || '').trim();
+  }
+  const hasContent = JOURNAL_MINDSET_FIELDS.some((field) => result[field]);
+  return hasContent ? result : null;
+}
+
+function normalizeEntryMetadata(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const primaryThemes = Array.from(new Set(
+    (Array.isArray(raw.primaryThemes) ? raw.primaryThemes : [])
+      .map((item) => String(item || '').trim())
+      .filter(Boolean)
+  )).slice(0, 5);
+
+  const normalized = {
+    moodScore: clampNumber(raw.moodScore, -5, 5, null, 1),
+    stressLevel: clampNumber(raw.stressLevel, 0, 10, null, 1),
+    energyLevel: clampNumber(raw.energyLevel, 0, 10, null, 1),
+    primaryThemes,
+    cognitiveState: String(raw.cognitiveState || '').trim() || null,
+    sentiment: normalizeJournalSentiment(raw.sentiment),
+  };
+
+  const hasSignal = normalized.moodScore != null
+    || normalized.stressLevel != null
+    || normalized.energyLevel != null
+    || normalized.primaryThemes.length > 0
+    || normalized.cognitiveState
+    || String(raw.sentiment || '').trim();
+  return hasSignal ? normalized : null;
+}
+
+function mergeAiSummaryBullets(existingBullets, nextBullets) {
+  return sanitizeAiSummaryBullets([...(Array.isArray(existingBullets) ? existingBullets : []), ...(Array.isArray(nextBullets) ? nextBullets : [])], 12);
+}
+
+function mergeMindsetAnalysis(existingAnalysis, nextAnalysis) {
+  const existing = normalizeMindsetAnalysis(existingAnalysis);
+  const next = normalizeMindsetAnalysis(nextAnalysis);
+  if (!existing) return next;
+  if (!next) return existing;
+  const merged = {};
+  for (const field of JOURNAL_MINDSET_FIELDS) {
+    merged[field] = mergeDistinctText(existing[field], next[field]);
+  }
+  return merged;
+}
+
+function mergeEntryMetadata(existingMetadata, nextMetadata, previousEntryCount = 0) {
+  const existing = normalizeEntryMetadata(existingMetadata);
+  const next = normalizeEntryMetadata(nextMetadata);
+  if (!existing) return next;
+  if (!next) return existing;
+
+  const weight = Math.max(1, Number(previousEntryCount || 0));
+  const averageMetric = (existingValue, nextValue, min, max) => {
+    if (existingValue == null && nextValue == null) return null;
+    if (existingValue == null) return nextValue;
+    if (nextValue == null) return existingValue;
+    return clampNumber(((existingValue * weight) + nextValue) / (weight + 1), min, max, null, 1);
+  };
+
+  return {
+    moodScore: averageMetric(existing.moodScore, next.moodScore, -5, 5),
+    stressLevel: averageMetric(existing.stressLevel, next.stressLevel, 0, 10),
+    energyLevel: averageMetric(existing.energyLevel, next.energyLevel, 0, 10),
+    primaryThemes: Array.from(new Set([...(existing.primaryThemes || []), ...(next.primaryThemes || [])])).slice(0, 5),
+    cognitiveState: next.cognitiveState || existing.cognitiveState || null,
+    sentiment: next.sentiment || existing.sentiment || 'mixed',
+  };
 }
 
 function createGeminiJsonModel(apiKey, { schema, maxOutputTokens, temperature, topP, topK }) {
@@ -931,17 +1099,23 @@ function enrichAnalysisWithUrlMetadata(analysis, sourceUrls = [], urlPreviews = 
 function buildDocSections(analysis, originalTranscript, timezone) {
   const zone = timezone || DEFAULT_TIMEZONE;
   const now = DateTime.now().setZone(zone);
-  const dateHeading = now.setLocale('en-US').toLocaleString(DateTime.DATE_FULL);
+  const dateHeading = now.setLocale('en-GB').toLocaleString(DateTime.DATE_FULL);
   const oneLineSummary = String(analysis?.oneLineSummary || '').trim() || 'Transcript summary';
+  const aiSummaryBullets = sanitizeAiSummaryBullets(analysis?.aiSummaryBullets, 8);
   const structuredEntry = String(analysis?.structuredEntry || '').trim() || String(originalTranscript || '').trim();
   const advice = String(analysis?.advice || '').trim() || 'No additional advice generated.';
+  const mindsetAnalysis = normalizeMindsetAnalysis(analysis?.mindsetAnalysis);
+  const entryMetadata = normalizeEntryMetadata(analysis?.entryMetadata);
   const fullTranscript = String(originalTranscript || '').trim();
   return {
     journalDateKey: now.toISODate(),
     dateHeading,
     oneLineSummary,
+    aiSummaryBullets,
     structuredEntry,
     advice,
+    mindsetAnalysis,
+    entryMetadata,
     fullTranscript,
   };
 }
@@ -951,8 +1125,11 @@ function serializeSections(sections) {
     journalDateKey: sections?.journalDateKey || null,
     dateHeading: sections?.dateHeading || null,
     oneLineSummary: sections?.oneLineSummary || null,
+    aiSummaryBullets: Array.isArray(sections?.aiSummaryBullets) ? sections.aiSummaryBullets : [],
     structuredEntry: sections?.structuredEntry || null,
     advice: sections?.advice || null,
+    mindsetAnalysis: normalizeMindsetAnalysis(sections?.mindsetAnalysis),
+    entryMetadata: normalizeEntryMetadata(sections?.entryMetadata),
     fullTranscript: sections?.fullTranscript || null,
   };
 }
@@ -1025,43 +1202,74 @@ async function findExistingJournalForDate({ db, uid, persona, sections }) {
 
 function buildDocAppendPlan(sections, options = {}) {
   const includeDateHeading = options?.includeDateHeading !== false;
-  const dateHeading = `${sections.dateHeading}\n`;
-  const summaryHeading = `${sections.oneLineSummary}\n`;
-  const structuredBody = `${sections.structuredEntry}\n\n`;
-  const adviceHeading = 'Advice\n';
-  const adviceBody = `${sections.advice}\n\n`;
-  const transcriptHeading = 'Full transcript\n';
-  const transcriptBody = `${sections.fullTranscript}\n\n`;
-  const text = [
-    includeDateHeading ? dateHeading : '',
-    summaryHeading,
-    structuredBody,
-    adviceHeading,
-    adviceBody,
-    transcriptHeading,
-    transcriptBody,
-  ].join('');
-
+  const textParts = [];
+  const headingRanges = [];
   let cursor = 0;
-  const dateRange = includeDateHeading
-    ? { start: cursor, end: cursor + dateHeading.length }
-    : null;
+
+  const pushText = (value) => {
+    const text = String(value || '');
+    textParts.push(text);
+    cursor += text.length;
+  };
+
+  const pushHeading = (value, namedStyleType) => {
+    const text = `${String(value || '').trim()}\n`;
+    const start = cursor;
+    pushText(text);
+    headingRanges.push({
+      start,
+      end: start + text.length,
+      namedStyleType,
+    });
+  };
+
   if (includeDateHeading) {
-    cursor += dateHeading.length;
+    pushHeading(sections.dateHeading, 'HEADING_1');
   }
-  const summaryRange = { start: cursor, end: cursor + summaryHeading.length };
-  cursor += summaryHeading.length + structuredBody.length;
-  const adviceRange = { start: cursor, end: cursor + adviceHeading.length };
-  cursor += adviceHeading.length + adviceBody.length;
-  const transcriptRange = { start: cursor, end: cursor + transcriptHeading.length };
+  pushText(`${sections.oneLineSummary}\n`);
+
+  if (Array.isArray(sections.aiSummaryBullets) && sections.aiSummaryBullets.length) {
+    pushHeading('AI Summary of the Entry', 'HEADING_2');
+    pushText(`${sections.aiSummaryBullets.map((bullet) => `- ${bullet}`).join('\n')}\n\n`);
+  }
+
+  pushHeading('The Entry', 'HEADING_2');
+  pushText(`${sections.structuredEntry}\n\n`);
+
+  if (sections.mindsetAnalysis) {
+    pushHeading('Analysis of the Author\'s Mindset', 'HEADING_2');
+    if (sections.mindsetAnalysis.emotionalTone) {
+      pushHeading('Emotional Tone', 'HEADING_3');
+      pushText(`${sections.mindsetAnalysis.emotionalTone}\n\n`);
+    }
+    if (sections.mindsetAnalysis.cognitiveStyle) {
+      pushHeading('Cognitive Style', 'HEADING_3');
+      pushText(`${sections.mindsetAnalysis.cognitiveStyle}\n\n`);
+    }
+    if (sections.mindsetAnalysis.motivationsAndDrivers) {
+      pushHeading('Motivations and Internal Drivers', 'HEADING_3');
+      pushText(`${sections.mindsetAnalysis.motivationsAndDrivers}\n\n`);
+    }
+    if (sections.mindsetAnalysis.psychologicalStrengths) {
+      pushHeading('Psychological Strengths Observed', 'HEADING_3');
+      pushText(`${sections.mindsetAnalysis.psychologicalStrengths}\n\n`);
+    }
+    if (sections.mindsetAnalysis.potentialStressors) {
+      pushHeading('Potential Stressors or Pressures', 'HEADING_3');
+      pushText(`${sections.mindsetAnalysis.potentialStressors}\n\n`);
+    }
+  }
+
+  pushHeading('Advice', 'HEADING_2');
+  pushText(`${sections.advice}\n\n`);
+
+  pushHeading('Full Transcript', 'HEADING_2');
+  pushText(`${sections.fullTranscript}\n\n`);
 
   return {
-    text,
+    text: textParts.join(''),
     includeDateHeading,
-    dateRange,
-    summaryRange,
-    adviceRange,
-    transcriptRange,
+    headingRanges,
   };
 }
 
@@ -1135,8 +1343,24 @@ async function callTranscriptModel({ transcript, persona, timezone, urlPreviews,
     '  "entryType": "journal"|"task_list"|"url_only"|"mixed",',
     '  "shouldCreateJournal": boolean,',
     '  "oneLineSummary": string,',
+    '  "aiSummaryBullets": string[],',
     '  "structuredEntry": string,',
     '  "advice": string,',
+    '  "mindsetAnalysis": {',
+    '    "emotionalTone": string,',
+    '    "cognitiveStyle": string,',
+    '    "motivationsAndDrivers": string,',
+    '    "psychologicalStrengths": string,',
+    '    "potentialStressors": string',
+    '  }|null,',
+    '  "entryMetadata": {',
+    '    "moodScore": number,',
+    '    "stressLevel": number,',
+    '    "energyLevel": number,',
+    '    "primaryThemes": string[],',
+    '    "cognitiveState": string,',
+    '    "sentiment": "negative"|"neutral"|"mixed"|"positive"',
+    '  }|null,',
     '  "stories": [{',
     '    "title": string,',
     '    "description": string,',
@@ -1171,6 +1395,7 @@ async function callTranscriptModel({ transcript, persona, timezone, urlPreviews,
     'For application logs, console output, stack traces, diagnostics, or error dumps, do not create tasks or stories unless the user explicitly asks you to investigate, debug, fix, or resolve something.',
     'Do not create a journal entry just because the speaker is thinking out loud while listing tasks.',
     'For entryType="journal" or entryType="mixed", act as a professional journal editor.',
+    'Use UK English spelling and grammar for journal prose and analysis.',
     'Turn raw spoken thoughts into cohesive first-person journal prose while staying faithful to the speaker\'s meaning, chronology, and tone.',
     'Remove filler words, false starts, repeated dictation fragments, and obvious transcription artifacts such as "um", "uh", "#um", duplicated partial phrases, and speech-to-text glitches when they do not change meaning.',
     'Keep the journal entry emotionally honest and detailed, but make it readable and well-structured with clear paragraphs when the topic shifts.',
@@ -1180,6 +1405,18 @@ async function callTranscriptModel({ transcript, persona, timezone, urlPreviews,
     ].join(' '),
     'Do not invent facts, commitments, or emotions that are not present.',
     'The oneLineSummary must be a single line under 140 characters.',
+    'For journal or mixed entries, aiSummaryBullets must contain 4 to 8 concise bullets covering key events, emotional themes, context, and notable thinking patterns.',
+    'For task_list or url_only entries, set aiSummaryBullets to an empty array, mindsetAnalysis to null, and entryMetadata to null.',
+    'For journal or mixed entries, mindsetAnalysis must stay analytical and observational. Do not make medical diagnoses.',
+    'Use mindsetAnalysis.emotionalTone to describe the dominant emotional tone in the language.',
+    'Use mindsetAnalysis.cognitiveStyle to describe how the author processes experience, such as reflective, analytical, ruminative, rational, or problem-solving.',
+    'Use mindsetAnalysis.motivationsAndDrivers to describe what appears to be motivating the author.',
+    'Use mindsetAnalysis.psychologicalStrengths to identify strengths such as self-awareness, resilience, reflection, or emotional regulation.',
+    'Use mindsetAnalysis.potentialStressors to identify pressures or challenges evident in the text.',
+    'For journal or mixed entries, entryMetadata must be grounded only in the transcript and fit these ranges: moodScore -5 to 5, stressLevel 0 to 10, energyLevel 0 to 10.',
+    'entryMetadata.primaryThemes must contain up to 5 short themes.',
+    'entryMetadata.cognitiveState should be a short description like reflective, analytical, overwhelmed, problem-solving, grieving, calm, or frustrated.',
+    'Do not put AI summary bullets, mindset analysis, or entry metadata inside structuredEntry.',
     'Advice must be concise, practical, and grounded only in the provided content.',
     'Never put tasks inside the journal text just because you extracted them.',
     'Extract only clearly actionable stories/tasks.',
@@ -1503,8 +1740,11 @@ function sanitizeAnalysis(raw, transcript, sourceUrls = [], timezone = DEFAULT_T
   const diagnosticLog = looksLikeDiagnosticLogDump(transcript);
   const explicitDiagnosticAction = looksLikeExplicitDiagnosticAction(transcript);
   const oneLineSummary = String(analysis.oneLineSummary || '').trim().replace(/\s+/g, ' ').slice(0, 140);
+  const aiSummaryBulletsSource = sanitizeAiSummaryBullets(analysis.aiSummaryBullets, 8);
   const structuredEntrySource = String(analysis.structuredEntry || '').trim() || String(transcript || '').trim();
   const adviceSource = String(analysis.advice || '').trim() || 'No additional advice generated.';
+  const mindsetAnalysisSource = normalizeMindsetAnalysis(analysis.mindsetAnalysis);
+  const entryMetadataSource = normalizeEntryMetadata(analysis.entryMetadata);
 
   const seenStories = new Set();
   let stories = (Array.isArray(analysis.stories) ? analysis.stories : [])
@@ -1563,13 +1803,19 @@ function sanitizeAnalysis(raw, transcript, sourceUrls = [], timezone = DEFAULT_T
   const shouldCreateJournal = entryType === 'journal' || entryType === 'mixed';
   const structuredEntry = shouldCreateJournal ? polishJournalNarrative(structuredEntrySource) : structuredEntrySource;
   const advice = shouldCreateJournal ? polishJournalNarrative(adviceSource) : adviceSource;
+  const aiSummaryBullets = shouldCreateJournal ? aiSummaryBulletsSource : [];
+  const mindsetAnalysis = shouldCreateJournal ? mindsetAnalysisSource : null;
+  const entryMetadata = shouldCreateJournal ? entryMetadataSource : null;
 
   return {
     entryType,
     shouldCreateJournal,
     oneLineSummary: oneLineSummary || 'Transcript summary',
+    aiSummaryBullets,
     structuredEntry,
     advice,
+    mindsetAnalysis,
+    entryMetadata,
     stories,
     tasks,
   };
@@ -2008,6 +2254,7 @@ function buildJournalRecord({
   const existingJournal = journalTarget?.data || null;
   const journalDateKey = String(sections?.journalDateKey || existingJournal?.journalDateKey || '').trim() || null;
   const id = journalTarget?.id || buildStableJournalDayId(uid, journalDateKey);
+  const previousEntryCount = Math.max(0, Number(existingJournal?.entryCount || 0));
   const mergedStoryIds = mergeUniqueStrings(existingJournal?.storyIds, storyRecords.map((story) => story.id));
   const mergedTaskIds = mergeUniqueStrings(existingJournal?.taskIds, taskRecords.map((task) => task.id));
   const mergedSourceUrls = mergeUniqueStrings(existingJournal?.sourceUrls, sourceUrls);
@@ -2016,8 +2263,11 @@ function buildJournalRecord({
     journalDateKey,
     dateHeading: existingJournal?.dateHeading || sections.dateHeading,
     oneLineSummary: sections.oneLineSummary || existingJournal?.oneLineSummary || 'Transcript summary',
+    aiSummaryBullets: mergeAiSummaryBullets(existingJournal?.aiSummaryBullets, sections.aiSummaryBullets),
     structuredEntry: mergeDistinctText(existingJournal?.structuredEntry, sections.structuredEntry),
     advice: mergeDistinctText(existingJournal?.advice, sections.advice),
+    mindsetAnalysis: mergeMindsetAnalysis(existingJournal?.mindsetAnalysis, sections.mindsetAnalysis),
+    entryMetadata: mergeEntryMetadata(existingJournal?.entryMetadata, sections.entryMetadata, previousEntryCount),
     fullTranscript: mergeDistinctText(existingJournal?.originalTranscript, originalTranscript),
   };
   const payload = {
@@ -2029,7 +2279,10 @@ function buildJournalRecord({
     dateHeading: mergedSections.dateHeading,
     structuredEntry: mergedSections.structuredEntry,
     oneLineSummary: mergedSections.oneLineSummary,
+    aiSummaryBullets: mergedSections.aiSummaryBullets,
     advice: mergedSections.advice,
+    mindsetAnalysis: mergedSections.mindsetAnalysis,
+    entryMetadata: mergedSections.entryMetadata,
     docUrl: docUrl || existingJournal?.docUrl || null,
     entryType: mergeJournalEntryType(existingJournal?.entryType, entryType, storyRecords, taskRecords),
     transcriptFingerprint: fingerprint,
@@ -2038,7 +2291,7 @@ function buildJournalRecord({
     sourceUrls: mergedSourceUrls,
     storyIds: mergedStoryIds,
     taskIds: mergedTaskIds,
-    entryCount: Math.max(1, Number(existingJournal?.entryCount || 0) + 1),
+    entryCount: Math.max(1, previousEntryCount + 1),
     summaryHistory,
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   };
@@ -2161,41 +2414,18 @@ async function appendJournalToGoogleDoc({ uid, docUrl, sections, includeDateHead
     const requests = [
       { insertText: { location: { index: insertAt }, text: plan.text } },
     ];
-    if (plan.dateRange) {
+    for (const headingRange of Array.isArray(plan.headingRanges) ? plan.headingRanges : []) {
       requests.push({
         updateParagraphStyle: {
-          range: { startIndex: insertAt + plan.dateRange.start, endIndex: insertAt + plan.dateRange.end },
-          paragraphStyle: { namedStyleType: 'HEADING_1' },
+          range: {
+            startIndex: insertAt + headingRange.start,
+            endIndex: insertAt + headingRange.end,
+          },
+          paragraphStyle: { namedStyleType: headingRange.namedStyleType },
           fields: 'namedStyleType',
         },
       });
     }
-    requests.push(
-      {
-        updateParagraphStyle: {
-          range: { startIndex: insertAt + plan.summaryRange.start, endIndex: insertAt + plan.summaryRange.end },
-          paragraphStyle: { namedStyleType: 'HEADING_2' },
-          fields: 'namedStyleType',
-        },
-      },
-      {
-        updateParagraphStyle: {
-          range: { startIndex: insertAt + plan.adviceRange.start, endIndex: insertAt + plan.adviceRange.end },
-          paragraphStyle: { namedStyleType: 'HEADING_2' },
-          fields: 'namedStyleType',
-        },
-      },
-      {
-        updateParagraphStyle: {
-          range: {
-            startIndex: insertAt + plan.transcriptRange.start,
-            endIndex: insertAt + plan.transcriptRange.end,
-          },
-          paragraphStyle: { namedStyleType: 'HEADING_2' },
-          fields: 'namedStyleType',
-        },
-      },
-    );
 
     await docs.documents.batchUpdate({
       documentId: docId,
@@ -2542,6 +2772,11 @@ function buildReplanResponse({ intent, confidence, summary, topPriorities, proce
 }
 
 function buildEmailHtml({ sections, taskRecords, storyRecords, docUrl, warnings = [], googleDoc = null }) {
+  const aiSummaryRows = (Array.isArray(sections.aiSummaryBullets) ? sections.aiSummaryBullets : [])
+    .map((bullet) => `<li>${escapeHtml(bullet)}</li>`)
+    .join('');
+  const mindset = normalizeMindsetAnalysis(sections.mindsetAnalysis);
+  const metadata = normalizeEntryMetadata(sections.entryMetadata);
   const actionRows = [
     ...storyRecords.map(
       (story) => (
@@ -2573,11 +2808,41 @@ function buildEmailHtml({ sections, taskRecords, storyRecords, docUrl, warnings 
       'BlinkMacSystemFont,Segoe UI,Arial,sans-serif;line-height:1.5;color:#111827;">',
     ].join(''),
     `<h1 style="font-size:24px;margin-bottom:8px;">${escapeHtml(sections.dateHeading)}</h1>`,
-    `<h2 style="font-size:18px;margin:16px 0 8px;">${escapeHtml(sections.oneLineSummary)}</h2>`,
+    `<div style="font-size:18px;font-weight:600;margin:0 0 16px;">${escapeHtml(sections.oneLineSummary)}</div>`,
+    aiSummaryRows
+      ? [
+        '<h2 style="font-size:18px;margin:16px 0 8px;">AI Summary of the Entry</h2>',
+        `<ul>${aiSummaryRows}</ul>`,
+      ].join('')
+      : '',
+    '<h2 style="font-size:18px;margin:16px 0 8px;">The Entry</h2>',
     `<div style="white-space:pre-wrap;margin-bottom:16px;">${escapeHtml(sections.structuredEntry)}</div>`,
+    mindset
+      ? [
+        '<h2 style="font-size:18px;margin:16px 0 8px;">Analysis of the Author&apos;s Mindset</h2>',
+        mindset.emotionalTone ? `<h3 style="font-size:15px;margin:12px 0 6px;">Emotional Tone</h3><div style="white-space:pre-wrap;">${escapeHtml(mindset.emotionalTone)}</div>` : '',
+        mindset.cognitiveStyle ? `<h3 style="font-size:15px;margin:12px 0 6px;">Cognitive Style</h3><div style="white-space:pre-wrap;">${escapeHtml(mindset.cognitiveStyle)}</div>` : '',
+        mindset.motivationsAndDrivers ? `<h3 style="font-size:15px;margin:12px 0 6px;">Motivations and Internal Drivers</h3><div style="white-space:pre-wrap;">${escapeHtml(mindset.motivationsAndDrivers)}</div>` : '',
+        mindset.psychologicalStrengths ? `<h3 style="font-size:15px;margin:12px 0 6px;">Psychological Strengths Observed</h3><div style="white-space:pre-wrap;">${escapeHtml(mindset.psychologicalStrengths)}</div>` : '',
+        mindset.potentialStressors ? `<h3 style="font-size:15px;margin:12px 0 6px;">Potential Stressors or Pressures</h3><div style="white-space:pre-wrap;">${escapeHtml(mindset.potentialStressors)}</div>` : '',
+      ].join('')
+      : '',
     '<h2 style="font-size:18px;margin:16px 0 8px;">Advice</h2>',
     `<div style="white-space:pre-wrap;margin-bottom:16px;">${escapeHtml(sections.advice)}</div>`,
-    '<h2 style="font-size:18px;margin:16px 0 8px;">Full transcript</h2>',
+    metadata
+      ? [
+        '<h2 style="font-size:18px;margin:16px 0 8px;">Entry Metadata</h2>',
+        '<ul>',
+        `<li>Mood score: ${escapeHtml(metadata.moodScore)}</li>`,
+        `<li>Stress level: ${escapeHtml(metadata.stressLevel)}</li>`,
+        `<li>Energy level: ${escapeHtml(metadata.energyLevel)}</li>`,
+        `<li>Sentiment: ${escapeHtml(metadata.sentiment)}</li>`,
+        `<li>Cognitive state: ${escapeHtml(metadata.cognitiveState || '—')}</li>`,
+        `<li>Primary themes: ${escapeHtml((metadata.primaryThemes || []).join(', ') || '—')}</li>`,
+        '</ul>',
+      ].join('')
+      : '',
+    '<h2 style="font-size:18px;margin:16px 0 8px;">Full Transcript</h2>',
     `<div style="white-space:pre-wrap;margin-bottom:16px;">${escapeHtml(sections.fullTranscript)}</div>`,
     '<h2 style="font-size:18px;margin:16px 0 8px;">Actionable items</h2>',
     actionRows ? `<ul>${actionRows}</ul>` : '<p>No tasks or stories were created.</p>',
@@ -2768,8 +3033,11 @@ function buildTranscriptResponse({
     processedDocument,
     dateHeading: processedDocument.dateHeading,
     oneLineSummary: processedDocument.oneLineSummary,
+    aiSummaryBullets: processedDocument.aiSummaryBullets,
     structuredEntry: processedDocument.structuredEntry,
     advice: processedDocument.advice,
+    mindsetAnalysis: processedDocument.mindsetAnalysis,
+    entryMetadata: processedDocument.entryMetadata,
     fullTranscript: processedDocument.fullTranscript,
     warnings: safeWarnings,
     googleDoc: googleDoc || null,
@@ -2946,8 +3214,11 @@ async function hydrateDuplicateState(db, uid, fingerprint, data) {
     processedDocument: {
       dateHeading: journal.dateHeading || null,
       oneLineSummary: journal.oneLineSummary || null,
+      aiSummaryBullets: Array.isArray(journal.aiSummaryBullets) ? journal.aiSummaryBullets : [],
       structuredEntry: journal.structuredEntry || null,
       advice: journal.advice || null,
+      mindsetAnalysis: normalizeMindsetAnalysis(journal.mindsetAnalysis),
+      entryMetadata: normalizeEntryMetadata(journal.entryMetadata),
       fullTranscript: journal.originalTranscript || null,
     },
     warnings: Array.isArray(base.warnings) ? base.warnings : [],

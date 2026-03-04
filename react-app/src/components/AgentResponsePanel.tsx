@@ -1,5 +1,5 @@
 import React from 'react';
-import { Alert, ListGroup } from 'react-bootstrap';
+import { Alert, Badge, ListGroup } from 'react-bootstrap';
 
 import { AgentResponse } from '../services/agentClient';
 
@@ -89,6 +89,17 @@ const AgentResponsePanel: React.FC<AgentResponsePanelProps> = ({ result }) => {
         </div>
       )}
 
+      {!!result.aiSummaryBullets?.length && (
+        <div className="mb-3">
+          <h6>AI Summary</h6>
+          <ul className="mb-0 ps-3">
+            {result.aiSummaryBullets.map((bullet, index) => (
+              <li key={`ai_summary_${index}`}>{bullet}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {!!result.calendarEvents?.length && (
         <div className="mb-3">
           <h6>Calendar</h6>
@@ -119,6 +130,70 @@ const AgentResponsePanel: React.FC<AgentResponsePanelProps> = ({ result }) => {
         <div className="mb-3">
           <h6>Advice</h6>
           <div style={{ whiteSpace: 'pre-wrap' }}>{result.advice}</div>
+        </div>
+      )}
+
+      {result.mindsetAnalysis && (
+        <div className="mb-3">
+          <h6>Mindset Analysis</h6>
+          {result.mindsetAnalysis.emotionalTone && (
+            <div className="mb-2">
+              <div className="fw-semibold small">Emotional Tone</div>
+              <div style={{ whiteSpace: 'pre-wrap' }}>{result.mindsetAnalysis.emotionalTone}</div>
+            </div>
+          )}
+          {result.mindsetAnalysis.cognitiveStyle && (
+            <div className="mb-2">
+              <div className="fw-semibold small">Cognitive Style</div>
+              <div style={{ whiteSpace: 'pre-wrap' }}>{result.mindsetAnalysis.cognitiveStyle}</div>
+            </div>
+          )}
+          {result.mindsetAnalysis.motivationsAndDrivers && (
+            <div className="mb-2">
+              <div className="fw-semibold small">Motivations and Internal Drivers</div>
+              <div style={{ whiteSpace: 'pre-wrap' }}>{result.mindsetAnalysis.motivationsAndDrivers}</div>
+            </div>
+          )}
+          {result.mindsetAnalysis.psychologicalStrengths && (
+            <div className="mb-2">
+              <div className="fw-semibold small">Psychological Strengths Observed</div>
+              <div style={{ whiteSpace: 'pre-wrap' }}>{result.mindsetAnalysis.psychologicalStrengths}</div>
+            </div>
+          )}
+          {result.mindsetAnalysis.potentialStressors && (
+            <div className="mb-2">
+              <div className="fw-semibold small">Potential Stressors or Pressures</div>
+              <div style={{ whiteSpace: 'pre-wrap' }}>{result.mindsetAnalysis.potentialStressors}</div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {result.entryMetadata && (
+        <div className="mb-3">
+          <h6>Entry Metadata</h6>
+          <div className="d-flex flex-wrap gap-2 mb-2">
+            {typeof result.entryMetadata.moodScore === 'number' && (
+              <Badge bg="light" text="dark">Mood {result.entryMetadata.moodScore}</Badge>
+            )}
+            {typeof result.entryMetadata.stressLevel === 'number' && (
+              <Badge bg="light" text="dark">Stress {result.entryMetadata.stressLevel}</Badge>
+            )}
+            {typeof result.entryMetadata.energyLevel === 'number' && (
+              <Badge bg="light" text="dark">Energy {result.entryMetadata.energyLevel}</Badge>
+            )}
+            {result.entryMetadata.sentiment && (
+              <Badge bg="secondary">{result.entryMetadata.sentiment}</Badge>
+            )}
+            {result.entryMetadata.cognitiveState && (
+              <Badge bg="info">{result.entryMetadata.cognitiveState}</Badge>
+            )}
+          </div>
+          {!!result.entryMetadata.primaryThemes?.length && (
+            <div className="text-muted small">
+              Themes: {result.entryMetadata.primaryThemes.join(', ')}
+            </div>
+          )}
         </div>
       )}
 

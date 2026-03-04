@@ -23,6 +23,7 @@ import { nextDueAt } from '../utils/recurrence';
 import StatCard from './common/StatCard';
 import { colors } from '../utils/colors';
 import SprintMetricsPanel from './SprintMetricsPanel';
+import JournalInsightsCard from './JournalInsightsCard';
 import { GLOBAL_THEMES, LEGACY_THEME_MAP } from '../constants/globalThemes';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { useUnifiedPlannerData, type PlannerRange } from '../hooks/useUnifiedPlannerData';
@@ -2564,6 +2565,12 @@ const Dashboard: React.FC = () => {
               </Button>
             </Alert>
           )}
+
+          <Row className="g-2 mb-2">
+            <Col xl={12}>
+              <JournalInsightsCard />
+            </Col>
+          </Row>
 
           <Row className="g-2 mb-1">
             <Col xl={12}>
