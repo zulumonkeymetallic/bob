@@ -9,7 +9,12 @@ const { ensureFirestore, resolveTimezone } = require('./lib/reporting');
 const { clampTaskPoints } = require('./utils/taskPoints');
 const { buildAbsoluteUrl, buildEntityUrl } = require('./utils/urlHelpers');
 const { coerceZone, toDateTime, toMillis } = require('./lib/time');
-const { normalizeThemeAllocationPlan, resolveThemeAllocationsForDate } = require('./lib/themeAllocations');
+const {
+  cloneThemeAllocations,
+  getAllocationWeekKey,
+  normalizeThemeAllocationPlan,
+  resolveThemeAllocationsForDate,
+} = require('./lib/themeAllocations');
 
 // Secrets
 const GOOGLE_AI_STUDIO_API_KEY = defineSecret('GOOGLEAISTUDIOAPIKEY');
@@ -78,6 +83,109 @@ const buildPickSlots = (themeAllocationPlan) => {
   };
 
   return { getUserSlots, pickSlots };
+};
+
+const seedPlannerWeekForUser = async ({
+  db,
+  userId,
+  targetWeekKey = null,
+  force = false,
+}) => {
+  const profileSnap = await db.collection('profiles').doc(userId).get().catch(() => null);
+  const profile = profileSnap && profileSnap.exists ? (profileSnap.data() || {}) : {};
+  const zone = coerceZone(resolveTimezone(profile, 'Europe/London'));
+  const planRef = db.collection('theme_allocations').doc(userId);
+  const planSnap = await planRef.get().catch(() => null);
+
+  if (!planSnap || !planSnap.exists) {
+    return { status: 'skipped', reason: 'missing_plan', userId };
+  }
+
+  const plan = normalizeThemeAllocationPlan(planSnap.data() || {});
+  if (!plan.allocations.length && !Object.keys(plan.weeklyOverrides || {}).length) {
+    return { status: 'skipped', reason: 'no_allocations', userId };
+  }
+
+  const targetStart = targetWeekKey
+    ? DateTime.fromISO(String(targetWeekKey), { zone }).startOf('day')
+    : DateTime.now().setZone(zone).startOf('week').plus({ weeks: 1 });
+
+  if (!targetStart.isValid) {
+    return {
+      status: 'skipped',
+      reason: 'invalid_target_week',
+      userId,
+      weekKey: String(targetWeekKey || ''),
+    };
+  }
+
+  const weekKey = getAllocationWeekKey(targetStart, zone);
+  const existingOverride = Array.isArray(plan.weeklyOverrides?.[weekKey]) ? plan.weeklyOverrides[weekKey] : [];
+  if (existingOverride.length && !force) {
+    return { status: 'skipped', reason: 'already_seeded', userId, weekKey };
+  }
+
+  const previousWeekKey = getAllocationWeekKey(targetStart.minus({ weeks: 1 }), zone);
+  const previousWeekAllocations = Array.isArray(plan.weeklyOverrides?.[previousWeekKey]) ? plan.weeklyOverrides[previousWeekKey] : [];
+  const sourceAllocations = previousWeekAllocations.length
+    ? cloneThemeAllocations(previousWeekAllocations)
+    : cloneThemeAllocations(plan.allocations);
+
+  if (!sourceAllocations.length) {
+    return { status: 'skipped', reason: 'no_source_allocations', userId, weekKey };
+  }
+
+  const nextOverrides = {
+    ...(plan.weeklyOverrides || {}),
+    [weekKey]: sourceAllocations,
+  };
+
+  await planRef.set({
+    weeklyOverrides: nextOverrides,
+    updatedAt: new Date().toISOString(),
+  }, { merge: true });
+
+  return {
+    status: 'seeded',
+    userId,
+    weekKey,
+    slots: sourceAllocations.length,
+    source: previousWeekAllocations.length ? `override:${previousWeekKey}` : 'template',
+  };
+};
+
+const seedPlannerWeekForAllUsers = async ({
+  targetWeekKey = null,
+  force = false,
+} = {}) => {
+  const db = ensureFirestore();
+  const allocationsSnap = await db.collection('theme_allocations').get().catch(() => ({ docs: [] }));
+  const results = [];
+
+  for (const docSnap of allocationsSnap.docs) {
+    const userId = docSnap.id;
+    try {
+      const result = await seedPlannerWeekForUser({ db, userId, targetWeekKey, force });
+      results.push(result);
+    } catch (error) {
+      results.push({
+        status: 'error',
+        userId,
+        weekKey: String(targetWeekKey || ''),
+        error: error?.message || String(error),
+      });
+    }
+  }
+
+  const summary = results.reduce((acc, result) => {
+    acc.total += 1;
+    if (result.status === 'seeded') acc.seeded += 1;
+    else if (result.status === 'error') acc.errors += 1;
+    else acc.skipped += 1;
+    return acc;
+  }, { total: 0, seeded: 0, skipped: 0, errors: 0 });
+
+  return { ok: true, ...summary, results };
 };
 
 const hasOverlap = (candidate, existing) => {
@@ -3129,6 +3237,44 @@ exports.runNightlyChainNowHttp = https.onRequest({
   } catch (err) {
     return res.status(500).json({ ok: false, error: err?.message || String(err) });
   }
+});
+
+exports.seedNextWeekPlannerOverridesWeekly = onSchedule({
+  schedule: '0 18 * * 0',
+  timeZone: 'Europe/London',
+  region: 'europe-west2',
+  memory: '256MiB',
+  timeoutSeconds: 180,
+}, async () => {
+  const result = await seedPlannerWeekForAllUsers();
+  console.log('[planner-seed-weekly]', JSON.stringify({
+    total: result.total,
+    seeded: result.seeded,
+    skipped: result.skipped,
+    errors: result.errors,
+  }));
+  return result;
+});
+
+exports.seedNextWeekPlannerOverridesNow = onCall({
+  timeZone: 'Europe/London',
+  memory: '256MiB',
+  timeoutSeconds: 120,
+  region: 'europe-west2',
+  invoker: 'public',
+}, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new https.HttpsError('unauthenticated', 'Sign in required');
+  const targetWeekKey = String(req?.data?.targetWeekKey || '').trim() || null;
+  const force = req?.data?.force === true;
+  const db = ensureFirestore();
+  const result = await seedPlannerWeekForUser({
+    db,
+    userId: uid,
+    targetWeekKey,
+    force,
+  });
+  return { ok: true, ...result };
 });
 
 // ===== Delta re-prioritization callable =====

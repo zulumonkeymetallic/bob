@@ -17,6 +17,7 @@ import BacklogManager from './components/BacklogManager';
 import VisualCanvas from './components/VisualCanvas';
 import StoriesManagement from './components/StoriesManagement';
 import JournalsManagement from './components/JournalsManagement';
+import JournalInsightsPage from './components/JournalInsightsPage';
 import PersonalListsManagement from './components/PersonalListsManagement';
 import GamesBacklog from './components/GamesBacklog';
 import BooksBacklog from './components/BooksBacklog';
@@ -403,6 +404,7 @@ function AppContent() {
               path="/journals"
               element={<QueryDeepLinkGate paramKey="journalId" pathPrefix="/journals" fallback={<JournalsManagement />} />}
             />
+            <Route path="/journals/insights" element={<JournalInsightsPage />} />
             <Route path="/journals/:id" element={<JournalsManagement />} />
             <Route path="/personal-lists" element={<BacklogManager />} />
             <Route path="/personal-lists-modern" element={<PersonalListsManagement />} />

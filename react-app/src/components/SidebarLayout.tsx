@@ -128,7 +128,8 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       label: 'Journals',
       icon: 'book-open',
       items: [
-        { label: 'Journal Entries', path: '/journals', icon: 'book-open' }
+        { label: 'Journal Entries', path: '/journals', icon: 'book-open' },
+        { label: 'Journal Insights', path: '/journals/insights', icon: 'chart-line' }
       ]
     },
     {

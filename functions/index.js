@@ -131,6 +131,12 @@ try {
     exports.materializeFitnessBlocksNow = nightlyOrchestration.materializeFitnessBlocksNow;
     exports.replanCalendarNow = nightlyOrchestration.replanCalendarNow;
     exports.runNightlyChainNow = nightlyOrchestration.runNightlyChainNow;
+    if (nightlyOrchestration.seedNextWeekPlannerOverridesWeekly) {
+      exports.seedNextWeekPlannerOverridesWeekly = nightlyOrchestration.seedNextWeekPlannerOverridesWeekly;
+    }
+    if (nightlyOrchestration.seedNextWeekPlannerOverridesNow) {
+      exports.seedNextWeekPlannerOverridesNow = nightlyOrchestration.seedNextWeekPlannerOverridesNow;
+    }
     if (nightlyOrchestration.runNightlyChainNowHttp) {
       exports.runNightlyChainNowHttp = nightlyOrchestration.runNightlyChainNowHttp;
     }

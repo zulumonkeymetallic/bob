@@ -121,10 +121,12 @@ const WeeklyThemePlanner: React.FC = () => {
     const [applying, setApplying] = useState(false);
     const [deltaReplanLoading, setDeltaReplanLoading] = useState(false);
     const [nightlyRunning, setNightlyRunning] = useState(false);
+    const [seedLoading, setSeedLoading] = useState(false);
 
     const materializePlannerBlocks = httpsCallable(functions, 'materializeFitnessBlocksNow');
     const replanCalendarNowFn = httpsCallable(functions, 'replanCalendarNow');
     const runNightlyChainFn = httpsCallable(functions, 'runNightlyChainNow');
+    const seedNextWeekPlannerOverridesFn = httpsCallable(functions, 'seedNextWeekPlannerOverridesNow');
     const selectedWeekDate = useMemo(() => parseISO(selectedWeekKey), [selectedWeekKey]);
     const selectedWeekLabel = useMemo(() => format(selectedWeekDate, 'd MMM yyyy'), [selectedWeekDate]);
     const hasWeekOverride = useMemo(
@@ -310,6 +312,40 @@ const WeeklyThemePlanner: React.FC = () => {
             setApplyFeedback({ variant: 'danger', message: e?.message || 'Failed to run nightly chain.' });
         } finally {
             setNightlyRunning(false);
+        }
+    };
+
+    const seedSelectedWeek = async () => {
+        if (!currentUser) return;
+        setSeedLoading(true);
+        setApplyFeedback(null);
+        try {
+            const res = await seedNextWeekPlannerOverridesFn({ targetWeekKey: selectedWeekKey });
+            const data = res?.data as { status?: string; source?: string; reason?: string };
+            if (data?.status === 'seeded') {
+                await loadAllocations();
+                setApplyFeedback({
+                    variant: 'success',
+                    message: `Seeded ${selectedWeekLabel} from ${data?.source || 'template'}.`,
+                });
+            } else if (data?.reason === 'already_seeded') {
+                setApplyFeedback({
+                    variant: 'info',
+                    message: `${selectedWeekLabel} already has a saved override.`,
+                });
+            } else {
+                setApplyFeedback({
+                    variant: 'info',
+                    message: data?.reason
+                        ? `No seed applied for ${selectedWeekLabel}: ${data.reason.replace(/_/g, ' ')}.`
+                        : `No seed applied for ${selectedWeekLabel}.`,
+                });
+            }
+        } catch (e: any) {
+            console.error(e);
+            setApplyFeedback({ variant: 'danger', message: e?.message || 'Failed to seed the selected week.' });
+        } finally {
+            setSeedLoading(false);
         }
     };
 
@@ -682,7 +718,7 @@ const WeeklyThemePlanner: React.FC = () => {
                                     size="sm"
                                     variant={option.key === selectedWeekKey ? 'primary' : 'outline-secondary'}
                                     onClick={() => setSelectedWeekKey(option.key)}
-                                    disabled={saving || applying || deltaReplanLoading || nightlyRunning}
+                                    disabled={saving || applying || deltaReplanLoading || nightlyRunning || seedLoading}
                                     style={{ whiteSpace: 'nowrap' }}
                                 >
                                     {option.label}
@@ -692,22 +728,31 @@ const WeeklyThemePlanner: React.FC = () => {
                     </div>
                 </div>
                 <div className="d-flex flex-wrap gap-2">
-                    <Button onClick={saveAllocations} disabled={saving || applying || deltaReplanLoading || nightlyRunning}>
+                    <Button onClick={saveAllocations} disabled={saving || applying || deltaReplanLoading || nightlyRunning || seedLoading}>
                     {saving ? <Spinner size="sm" animation="border" className="me-2" /> : <Save size={18} className="me-2" />}
                     Save Week Plan
                     </Button>
                     <Button
                         variant="outline-secondary"
                         onClick={copyPreviousWeek}
-                        disabled={saving || applying || deltaReplanLoading || nightlyRunning}
+                        disabled={saving || applying || deltaReplanLoading || nightlyRunning || seedLoading}
                         title="Copy the previous week's allocations into this week before making changes."
                     >
                         Copy Previous Week
                     </Button>
                     <Button
                         variant="outline-secondary"
+                        onClick={seedSelectedWeek}
+                        disabled={saving || applying || deltaReplanLoading || nightlyRunning || seedLoading}
+                        title="Seed the selected week from the previous week, falling back to the default template."
+                    >
+                        {seedLoading ? <Spinner size="sm" animation="border" className="me-2" /> : null}
+                        Auto-seed Selected Week
+                    </Button>
+                    <Button
+                        variant="outline-secondary"
                         onClick={resetWeekToTemplate}
-                        disabled={!hasWeekOverride || saving || applying || deltaReplanLoading || nightlyRunning}
+                        disabled={!hasWeekOverride || saving || applying || deltaReplanLoading || nightlyRunning || seedLoading}
                         title="Remove the override for this week and fall back to the default template."
                     >
                         Use Default Template
@@ -715,7 +760,7 @@ const WeeklyThemePlanner: React.FC = () => {
                     <Button
                         variant="outline-secondary"
                         onClick={saveAsDefaultTemplate}
-                        disabled={saving || applying || deltaReplanLoading || nightlyRunning}
+                        disabled={saving || applying || deltaReplanLoading || nightlyRunning || seedLoading}
                         title="Persist the current layout as the reusable default weekly template."
                     >
                         Save as Default Template
@@ -723,7 +768,7 @@ const WeeklyThemePlanner: React.FC = () => {
                     <Button
                         variant="outline-primary"
                         onClick={applyPlannerBlocksNow}
-                        disabled={saving || applying || deltaReplanLoading || nightlyRunning}
+                        disabled={saving || applying || deltaReplanLoading || nightlyRunning || seedLoading}
                         title="Apply Planner Blocks Now: materializes Fitness and Work (Main Gig) allocations into calendar blocks for the next 7 days."
                     >
                         {applying ? <Spinner size="sm" animation="border" className="me-2" /> : null}
@@ -732,7 +777,7 @@ const WeeklyThemePlanner: React.FC = () => {
                     <Button
                         variant="outline-secondary"
                         onClick={replanAroundCalendar}
-                        disabled={saving || applying || deltaReplanLoading || nightlyRunning}
+                        disabled={saving || applying || deltaReplanLoading || nightlyRunning || seedLoading}
                         title="Replan Around Calendar (Delta): rebalances existing calendar blocks around your latest priorities and planner changes."
                     >
                         {deltaReplanLoading ? <Spinner size="sm" animation="border" className="me-2" /> : <RefreshCw size={16} className="me-2" />}
@@ -741,7 +786,7 @@ const WeeklyThemePlanner: React.FC = () => {
                     <Button
                         variant="primary"
                         onClick={runNightlyChainNow}
-                        disabled={saving || applying || deltaReplanLoading || nightlyRunning}
+                        disabled={saving || applying || deltaReplanLoading || nightlyRunning || seedLoading}
                         title="Full replan: runs the complete nightly orchestration (pointing, conversions, priority scoring, and calendar planning)."
                     >
                         {nightlyRunning ? <Spinner size="sm" animation="border" className="me-2" /> : <Sparkles size={16} className="me-2" />}
@@ -750,7 +795,7 @@ const WeeklyThemePlanner: React.FC = () => {
                     <Button
                         variant="outline-secondary"
                         onClick={() => navigate('/calendar')}
-                        disabled={saving || applying || deltaReplanLoading || nightlyRunning}
+                        disabled={saving || applying || deltaReplanLoading || nightlyRunning || seedLoading}
                         title="Open calendar"
                     >
                         <CalendarIcon size={16} className="me-2" />
@@ -759,7 +804,7 @@ const WeeklyThemePlanner: React.FC = () => {
                     <Button
                         variant="outline-secondary"
                         onClick={() => navigate('/dashboard')}
-                        disabled={saving || applying || deltaReplanLoading || nightlyRunning}
+                        disabled={saving || applying || deltaReplanLoading || nightlyRunning || seedLoading}
                         title="Open overview dashboard"
                     >
                         <LayoutDashboard size={16} className="me-2" />
