@@ -3474,7 +3474,15 @@ async function logIngestionActivity({ uid, fingerprint, journalId, storyRecords,
 
 function summarizeEntityRefs(items, label, limit = 3) {
   const refs = (Array.isArray(items) ? items : [])
-    .map((item) => String(item?.ref || '').trim())
+    .map((item) => {
+      const ref = String(item?.ref || '').trim();
+      const title = String(item?.title || '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 100);
+      if (ref && title) return `${ref} (${title})`;
+      return ref || title || null;
+    })
     .filter(Boolean);
   if (!refs.length) return null;
   const visible = refs.slice(0, limit);
