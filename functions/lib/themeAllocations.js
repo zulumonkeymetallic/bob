@@ -8,6 +8,11 @@ const normalizeOverrideMap = (value) => {
   }, {});
 };
 
+const cloneThemeAllocations = (allocations) => {
+  if (!Array.isArray(allocations)) return [];
+  return allocations.map((allocation) => ({ ...allocation }));
+};
+
 const normalizeThemeAllocationPlan = (raw) => {
   if (Array.isArray(raw)) {
     return {
@@ -61,6 +66,7 @@ const resolveThemeAllocationsForDate = (planOrRaw, value, zone = 'Europe/London'
 };
 
 module.exports = {
+  cloneThemeAllocations,
   normalizeThemeAllocationPlan,
   getAllocationWeekKey,
   resolveThemeAllocationsForWeek,
