@@ -5,7 +5,7 @@ import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useSprint } from '../contexts/SprintContext';
-import { Story, Task, Goal, Sprint } from '../types';
+import { Story, Task, Goal, Sprint, CalendarBlock } from '../types';
 import type { GlobalTheme } from '../constants/globalThemes';
 import KanbanColumnV2 from './KanbanColumnV2';
 import KanbanCardV2 from './KanbanCardV2';
@@ -28,6 +28,13 @@ interface KanbanBoardV2Props {
     dueFilter?: 'all' | 'today' | 'overdue' | 'top3' | 'critical';
     sortBy?: 'ai' | 'due' | 'priority' | 'default';
     themes?: GlobalTheme[];
+}
+
+interface ScheduledBlockInfo {
+    id: string;
+    start: number;
+    end: number;
+    title?: string;
 }
 
 const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
@@ -54,6 +61,7 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
     const [latestNotesById, setLatestNotesById] = useState<Record<string, string>>({});
     const [steamByAppId, setSteamByAppId] = useState<Record<string, any>>({});
     const [steamLastSyncAt, setSteamLastSyncAt] = useState<any>(null);
+    const [scheduledBlocksByEntity, setScheduledBlocksByEntity] = useState<Record<string, ScheduledBlockInfo>>({});
     const formatTag = (tag: string) => formatTaskTagLabel(tag, goals, sprints);
 
     // Data fetching
@@ -174,6 +182,60 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
             unsubProfile();
         };
     }, [currentUser]);
+
+    useEffect(() => {
+        if (!currentUser?.uid) {
+            setScheduledBlocksByEntity({});
+            return undefined;
+        }
+
+        const blocksQuery = query(
+            collection(db, 'calendar_blocks'),
+            where('ownerUid', '==', currentUser.uid),
+            limit(2000)
+        );
+
+        return onSnapshot(
+            blocksQuery,
+            (snapshot) => {
+                const now = Date.now();
+                const windowEnd = now + (30 * 24 * 60 * 60 * 1000);
+                const blocks = snapshot.docs
+                    .map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) }) as CalendarBlock)
+                    .filter((block) => {
+                        const start = Number(block.start);
+                        const end = Number(block.end);
+                        if (!Number.isFinite(start) || !Number.isFinite(end)) return false;
+                        if (end < now - 5 * 60 * 1000) return false;
+                        if (start > windowEnd) return false;
+                        const persona = String((block as any).persona || '').toLowerCase();
+                        if (currentPersona && persona && persona !== String(currentPersona).toLowerCase()) return false;
+                        return Boolean(block.storyId || block.taskId);
+                    })
+                    .sort((a, b) => Number(a.start) - Number(b.start));
+
+                const nextMap: Record<string, ScheduledBlockInfo> = {};
+                blocks.forEach((block) => {
+                    const key = block.taskId
+                        ? `task:${block.taskId}`
+                        : (block.storyId ? `story:${block.storyId}` : null);
+                    if (!key) return;
+                    if (nextMap[key]) return;
+                    nextMap[key] = {
+                        id: block.id,
+                        start: Number(block.start),
+                        end: Number(block.end),
+                        title: block.title,
+                    };
+                });
+                setScheduledBlocksByEntity(nextMap);
+            },
+            (error) => {
+                console.warn('[KanbanBoardV2] scheduled blocks query error', error?.message || error);
+                setScheduledBlocksByEntity({});
+            }
+        );
+    }, [currentUser?.uid, currentPersona]);
 
     // Drag and Drop Monitor
     useEffect(() => {
@@ -584,6 +646,7 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
                                 showDescription={showDescriptions}
                                 showLatestNote={showLatestNotes}
                                 latestNote={latestNotesById[item.id]}
+                                scheduledBlock={scheduledBlocksByEntity[`${type}:${item.id}`]}
                                 steamMeta={steamMeta}
                                 onEdit={() => onEdit?.(item, type)}
                                 formatTag={formatTag}

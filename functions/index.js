@@ -70,6 +70,7 @@ try {
 }
 const { sendEmail } = require('./lib/email');
 const { coerceZone, toDateTime, computeDayWindow } = require('./lib/time');
+const { resolveThemeAllocationsForDate } = require('./lib/themeAllocations');
 const crypto = require('crypto');
 const { KeyManagementServiceClient } = require('@google-cloud/kms');
 const MS_IN_DAY = 24 * 60 * 60 * 1000;
@@ -1579,11 +1580,12 @@ exports.planBlocksV2 = httpsV2.onCall(async (req) => {
   }
 
   // Fetch Theme Allocations
-  let themeAllocations = [];
+  let themeAllocationPlan = [];
   try {
     const taDoc = await db.collection('theme_allocations').doc(uid).get();
-    if (taDoc.exists) themeAllocations = taDoc.data().allocations || [];
+    if (taDoc.exists) themeAllocationPlan = taDoc.data() || {};
   } catch (e) { console.warn('Failed to fetch theme allocations', e); }
+  const themeAllocations = resolveThemeAllocationsForDate(themeAllocationPlan, start, timezone);
 
   const plan = await planSchedule({
     db,

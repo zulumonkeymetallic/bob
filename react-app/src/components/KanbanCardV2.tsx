@@ -32,6 +32,12 @@ interface KanbanCardV2Props {
     showLatestNote?: boolean;
     showTags?: boolean;
     latestNote?: string;
+    scheduledBlock?: {
+        id: string;
+        start: number;
+        end: number;
+        title?: string;
+    };
     steamMeta?: {
         appId?: string | number;
         playtimeMinutes?: number | null;
@@ -55,6 +61,7 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
     showDescription = true,
     showLatestNote = false,
     latestNote,
+    scheduledBlock,
     steamMeta,
     showTags,
 }) => {
@@ -280,6 +287,19 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
     const itemTags = Array.isArray((item as any).tags) ? (item as any).tags : [];
     const visibleTags = itemTags.slice(0, 4);
     const remainingTags = itemTags.length - visibleTags.length;
+    const scheduledBlockLabel = (() => {
+        if (!scheduledBlock?.start || !scheduledBlock?.end) return null;
+        const start = new Date(scheduledBlock.start);
+        const end = new Date(scheduledBlock.end);
+        if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return null;
+        const dayLabel = start.toLocaleDateString('en-GB', {
+            weekday: 'short',
+            day: 'numeric',
+            month: 'short',
+        });
+        const timeLabel = `${start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}-${end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+        return `Planned ${dayLabel} ${timeLabel}`;
+    })();
 
     const handleStyle: React.CSSProperties = {
         color: resolvedThemeColor,
@@ -751,6 +771,19 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                     {overdueDays > 0 && (
                         <span className="kanban-card__meta-badge" style={{ color: 'var(--red)' }} title="Overdue">
                             {overdueDays}d overdue
+                        </span>
+                    )}
+                    {scheduledBlockLabel && (
+                        <span
+                            className="kanban-card__meta-badge"
+                            style={{
+                                borderColor: 'rgba(37, 99, 235, 0.45)',
+                                backgroundColor: 'rgba(37, 99, 235, 0.12)',
+                                color: '#2563eb',
+                            }}
+                            title={scheduledBlock?.title || 'Planned calendar block'}
+                        >
+                            {scheduledBlockLabel}
                         </span>
                     )}
                     {type === 'story' && (

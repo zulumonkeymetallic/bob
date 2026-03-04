@@ -18,6 +18,12 @@ interface SortableStoryCardProps {
   story: Story;
   goal?: Goal;
   taskCount?: number;
+  scheduledBlock?: {
+    id: string;
+    start: number;
+    end: number;
+    title?: string;
+  };
   themeColor?: string;
   themes?: GlobalTheme[];
   onEdit?: (story: Story) => void;
@@ -40,6 +46,7 @@ const SortableStoryCard: React.FC<SortableStoryCardProps> = ({
   story,
   goal,
   taskCount = 0,
+  scheduledBlock,
   themeColor,
   themes,
   onEdit,
@@ -98,6 +105,15 @@ const SortableStoryCard: React.FC<SortableStoryCardProps> = ({
   const storyTags = Array.isArray((story as any).tags) ? (story as any).tags : [];
   const visibleTags = storyTags.slice(0, 4);
   const remainingTags = storyTags.length - visibleTags.length;
+  const scheduledBlockLabel = (() => {
+    if (!scheduledBlock?.start || !scheduledBlock?.end) return null;
+    const start = new Date(scheduledBlock.start);
+    const end = new Date(scheduledBlock.end);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return null;
+    const dayLabel = start.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+    const timeLabel = `${start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}-${end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+    return `Planned ${dayLabel} ${timeLabel}`;
+  })();
 
   const safeTaskCount = Number.isFinite(taskCount) ? Number(taskCount) : 0;
 
@@ -239,6 +255,19 @@ const SortableStoryCard: React.FC<SortableStoryCardProps> = ({
             <span className="kanban-card__meta-badge" title="Story points">
               {(story.points ?? 0)} pts
             </span>
+            {scheduledBlockLabel && (
+              <span
+                className="kanban-card__meta-badge"
+                style={{
+                  borderColor: 'rgba(37, 99, 235, 0.45)',
+                  backgroundColor: 'rgba(37, 99, 235, 0.12)',
+                  color: '#2563eb',
+                }}
+                title={scheduledBlock?.title || 'Planned calendar block'}
+              >
+                {scheduledBlockLabel}
+              </span>
+            )}
             <span className="kanban-card__meta-text" title="Status">
               {statusLabel}
             </span>

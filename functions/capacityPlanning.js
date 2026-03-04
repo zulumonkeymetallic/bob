@@ -3,6 +3,7 @@ const admin = require('firebase-admin');
 const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { onCall, HttpsError } = require('firebase-functions/v2/https');
 const { DateTime } = require('luxon');
+const { resolveThemeAllocationsForDate } = require('./lib/themeAllocations');
 
 const parseToMinutes = (value) => {
     if (!value) return null;
@@ -14,11 +15,13 @@ const parseToMinutes = (value) => {
     return h * 60 + m;
 };
 
-const getWeeklyPlannerMinutes = async (db, userId) => {
+const getWeeklyPlannerMinutes = async (db, userId, options = {}) => {
+    const timezone = options.timezone || 'UTC';
+    const weekStart = options.weekStart || DateTime.now().setZone(timezone);
     try {
         const allocDoc = await db.collection('theme_allocations').doc(userId).get();
         if (!allocDoc.exists) return 0;
-        const allocations = allocDoc.data()?.allocations;
+        const allocations = resolveThemeAllocationsForDate(allocDoc.data() || {}, weekStart, timezone);
         if (!Array.isArray(allocations) || !allocations.length) return 0;
         return allocations.reduce((sum, alloc) => {
             const start = parseToMinutes(alloc.startTime);
@@ -215,7 +218,10 @@ async function calculateCapacityInternal(db, userId, sprintId) {
         });
 
         const weeksInSprint = Math.max(1, Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24 * 7)));
-        const weeklyPlannerMinutes = await getWeeklyPlannerMinutes(db, userId);
+        const weeklyPlannerMinutes = await getWeeklyPlannerMinutes(db, userId, {
+            timezone,
+            weekStart: DateTime.fromJSDate(startDate, { zone: timezone }),
+        });
         const plannerCapacityHours = weeklyPlannerMinutes > 0 ? (weeklyPlannerMinutes / 60) * weeksInSprint : null;
         let totalCapacityHours = 0;
         let currentDate = new Date(startDate);

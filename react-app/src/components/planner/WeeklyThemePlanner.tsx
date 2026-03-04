@@ -1,12 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
-import { getFunctions, httpsCallable } from 'firebase/functions';
-import { getFirestore, doc, getDoc, setDoc } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { Button, Modal, Form, Container, Spinner, Alert } from 'react-bootstrap';
 import { Calendar as CalendarIcon, LayoutDashboard, RefreshCw, Save, Sparkles } from 'lucide-react';
 import { GLOBAL_THEMES, type GlobalTheme } from '../../constants/globalThemes';
 import { useGlobalThemes } from '../../hooks/useGlobalThemes';
 import { useNavigate } from 'react-router-dom';
+import { addWeeks, format, parseISO, startOfWeek, subWeeks } from 'date-fns';
+import { db, functions } from '../../firebase';
 import './WeeklyThemePlanner.css';
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
@@ -37,6 +39,12 @@ interface Allocation {
     subTheme?: string | null;
 }
 
+interface ThemeAllocationPlanDoc {
+    allocations?: Allocation[];
+    weeklyOverrides?: Record<string, Allocation[]>;
+    updatedAt?: string;
+}
+
 const toMinutes = (hhmm: string) => {
     const [h = '0', m = '0'] = String(hhmm || '0:0').split(':');
     return Number(h) * 60 + Number(m);
@@ -51,6 +59,26 @@ const toTimeString = (minutes: number) => {
 const isHealthTheme = (themeName: string) => String(themeName || '').toLowerCase().includes('health');
 const getJsDay = (dayIndex: number) => (dayIndex + 1) % 7;
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
+const WEEK_OPTION_COUNT = 8;
+const cloneAllocations = (source: Allocation[]) => source.map((alloc) => ({ ...alloc, subTheme: alloc.subTheme || null }));
+const normalizeWeeklyOverrides = (value: unknown): Record<string, Allocation[]> => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+    return Object.entries(value as Record<string, unknown>).reduce((acc, [key, entry]) => {
+        acc[key] = Array.isArray(entry) ? cloneAllocations(entry as Allocation[]) : [];
+        return acc;
+    }, {} as Record<string, Allocation[]>);
+};
+const weekKeyFromDate = (value: Date) => format(startOfWeek(value, { weekStartsOn: 1 }), 'yyyy-MM-dd');
+const resolveAllocationsForWeek = (
+    templateAllocations: Allocation[],
+    weeklyOverrides: Record<string, Allocation[]>,
+    weekKey: string,
+) => {
+    if (Object.prototype.hasOwnProperty.call(weeklyOverrides, weekKey)) {
+        return cloneAllocations(weeklyOverrides[weekKey] || []);
+    }
+    return cloneAllocations(templateAllocations);
+};
 
 type DragMode = 'create' | 'resize-start' | 'resize-end' | 'move' | null;
 
@@ -74,6 +102,9 @@ const WeeklyThemePlanner: React.FC = () => {
         });
         return hasMainGig ? base : [...base, WORK_MAIN_GIG_THEME];
     }, [globalThemes]);
+    const [templateAllocations, setTemplateAllocations] = useState<Allocation[]>([]);
+    const [weeklyOverrides, setWeeklyOverrides] = useState<Record<string, Allocation[]>>({});
+    const [selectedWeekKey, setSelectedWeekKey] = useState(() => weekKeyFromDate(new Date()));
     const [allocations, setAllocations] = useState<Allocation[]>([]);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
@@ -91,11 +122,36 @@ const WeeklyThemePlanner: React.FC = () => {
     const [deltaReplanLoading, setDeltaReplanLoading] = useState(false);
     const [nightlyRunning, setNightlyRunning] = useState(false);
 
-    const functions = getFunctions();
-    const db = getFirestore();
     const materializePlannerBlocks = httpsCallable(functions, 'materializeFitnessBlocksNow');
     const replanCalendarNowFn = httpsCallable(functions, 'replanCalendarNow');
     const runNightlyChainFn = httpsCallable(functions, 'runNightlyChainNow');
+    const selectedWeekDate = useMemo(() => parseISO(selectedWeekKey), [selectedWeekKey]);
+    const selectedWeekLabel = useMemo(() => format(selectedWeekDate, 'd MMM yyyy'), [selectedWeekDate]);
+    const hasWeekOverride = useMemo(
+        () => Object.prototype.hasOwnProperty.call(weeklyOverrides, selectedWeekKey),
+        [weeklyOverrides, selectedWeekKey],
+    );
+    const weekOptions = useMemo(() => {
+        const base = startOfWeek(new Date(), { weekStartsOn: 1 });
+        const options = Array.from({ length: WEEK_OPTION_COUNT }, (_, index) => {
+            const start = addWeeks(base, index);
+            const key = weekKeyFromDate(start);
+            return {
+                key,
+                start,
+                label: index === 0 ? `This week · ${format(start, 'd MMM')}` : `Week of ${format(start, 'd MMM')}`,
+            };
+        });
+        if (!options.some((option) => option.key === selectedWeekKey)) {
+            const selectedStart = startOfWeek(selectedWeekDate, { weekStartsOn: 1 });
+            options.unshift({
+                key: selectedWeekKey,
+                start: selectedStart,
+                label: `Week of ${format(selectedStart, 'd MMM')}`,
+            });
+        }
+        return options;
+    }, [selectedWeekDate, selectedWeekKey]);
 
     useEffect(() => {
         if (currentUser) loadAllocations();
@@ -109,13 +165,23 @@ const WeeklyThemePlanner: React.FC = () => {
         }
     }, [themeOptions, selectedTheme]);
 
+    useEffect(() => {
+        if (loading) return;
+        setAllocations(resolveAllocationsForWeek(templateAllocations, weeklyOverrides, selectedWeekKey));
+    }, [loading, selectedWeekKey, templateAllocations, weeklyOverrides]);
+
     const loadAllocations = async () => {
         if (!currentUser) return;
         setLoading(true);
         try {
             const docRef = doc(db, 'theme_allocations', currentUser.uid);
             const docSnap = await getDoc(docRef);
-            setAllocations(docSnap.exists() ? docSnap.data().allocations || [] : []);
+            const data = docSnap.exists() ? (docSnap.data() as ThemeAllocationPlanDoc) : null;
+            const nextTemplateAllocations = Array.isArray(data?.allocations) ? cloneAllocations(data?.allocations || []) : [];
+            const nextWeeklyOverrides = normalizeWeeklyOverrides(data?.weeklyOverrides);
+            setTemplateAllocations(nextTemplateAllocations);
+            setWeeklyOverrides(nextWeeklyOverrides);
+            setAllocations(resolveAllocationsForWeek(nextTemplateAllocations, nextWeeklyOverrides, selectedWeekKey));
         } catch (e) {
             console.error(e);
         } finally {
@@ -123,21 +189,64 @@ const WeeklyThemePlanner: React.FC = () => {
         }
     };
 
-    const saveAllocations = async () => {
+    const persistPlan = async (
+        nextTemplateAllocations: Allocation[],
+        nextWeeklyOverrides: Record<string, Allocation[]>,
+        successMessage?: string,
+    ) => {
         if (!currentUser) return;
         setSaving(true);
         setApplyFeedback(null);
         try {
             const docRef = doc(db, 'theme_allocations', currentUser.uid);
             await setDoc(docRef, {
-                allocations,
+                allocations: cloneAllocations(nextTemplateAllocations),
+                weeklyOverrides: nextWeeklyOverrides,
                 updatedAt: new Date().toISOString()
             });
-        } catch (e) {
+            setTemplateAllocations(cloneAllocations(nextTemplateAllocations));
+            setWeeklyOverrides(nextWeeklyOverrides);
+            setAllocations(resolveAllocationsForWeek(nextTemplateAllocations, nextWeeklyOverrides, selectedWeekKey));
+            if (successMessage) {
+                setApplyFeedback({ variant: 'success', message: successMessage });
+            }
+        } catch (e: any) {
             console.error(e);
+            setApplyFeedback({ variant: 'danger', message: e?.message || 'Failed to save weekly plan.' });
         } finally {
             setSaving(false);
         }
+    };
+
+    const saveAllocations = async () => {
+        const nextOverrides = {
+            ...weeklyOverrides,
+            [selectedWeekKey]: cloneAllocations(allocations),
+        };
+        await persistPlan(templateAllocations, nextOverrides, `Saved week plan for ${selectedWeekLabel}.`);
+    };
+
+    const saveAsDefaultTemplate = async () => {
+        await persistPlan(cloneAllocations(allocations), weeklyOverrides, 'Saved current layout as the default weekly template.');
+    };
+
+    const copyPreviousWeek = async () => {
+        const previousWeekDate = subWeeks(selectedWeekDate, 1);
+        const previousWeekKey = weekKeyFromDate(previousWeekDate);
+        const copied = resolveAllocationsForWeek(templateAllocations, weeklyOverrides, previousWeekKey);
+        const nextOverrides = {
+            ...weeklyOverrides,
+            [selectedWeekKey]: cloneAllocations(copied),
+        };
+        setAllocations(copied);
+        await persistPlan(templateAllocations, nextOverrides, `Copied the plan from ${format(previousWeekDate, 'd MMM')} into ${selectedWeekLabel}.`);
+    };
+
+    const resetWeekToTemplate = async () => {
+        const nextOverrides = { ...weeklyOverrides };
+        delete nextOverrides[selectedWeekKey];
+        setAllocations(cloneAllocations(templateAllocations));
+        await persistPlan(templateAllocations, nextOverrides, `Reset ${selectedWeekLabel} to the default template.`);
     };
 
     const applyPlannerBlocksNow = async () => {
@@ -145,7 +254,7 @@ const WeeklyThemePlanner: React.FC = () => {
         setApplying(true);
         setApplyFeedback(null);
         try {
-            const res = await materializePlannerBlocks({ days: 7 });
+            const res = await materializePlannerBlocks({ days: 7, startDate: selectedWeekKey });
             const data = res.data as any;
             const created = Number(data?.created || 0);
             const skipped = Number(data?.skipped || 0);
@@ -167,7 +276,7 @@ const WeeklyThemePlanner: React.FC = () => {
         setDeltaReplanLoading(true);
         setApplyFeedback(null);
         try {
-            const res = await replanCalendarNowFn({ days: 7 });
+            const res = await replanCalendarNowFn({ days: 7, startDate: selectedWeekKey });
             const data = res.data as { created?: number; rescheduled?: number; blocked?: number };
             const parts: string[] = [];
             if (data?.created) parts.push(`${data.created} created`);
@@ -412,18 +521,11 @@ const WeeklyThemePlanner: React.FC = () => {
         setShowModal(false);
         setPendingSelection(null);
         clearDragState();
-        setSaving(true);
-        try {
-            const docRef = doc(db, 'theme_allocations', currentUser.uid);
-            await setDoc(docRef, {
-                allocations: nextAllocations,
-                updatedAt: new Date().toISOString()
-            });
-        } catch (e) {
-            console.error('save allocations failed', e);
-        } finally {
-            setSaving(false);
-        }
+        const nextOverrides = {
+            ...weeklyOverrides,
+            [selectedWeekKey]: cloneAllocations(nextAllocations),
+        };
+        await persistPlan(templateAllocations, nextOverrides);
     };
 
     const finalizeSelection = async () => {
@@ -546,11 +648,77 @@ const WeeklyThemePlanner: React.FC = () => {
                     <h2>Weekly Plan</h2>
                     <p className="text-muted">Define your ideal week by assigning themes to time blocks. The AI will prioritize these themes when scheduling.</p>
                     <small className="text-muted d-block">Tip: click and drag across time slots to create. Use the top/bottom handles to resize and drag the label to move. Use Clear to remove only the selected range.</small>
+                    <div className="d-flex flex-column gap-2 mt-3">
+                        <div className="d-flex flex-wrap align-items-center gap-2">
+                            <span className="text-muted small">Planning week:</span>
+                            <strong>{selectedWeekLabel}</strong>
+                            <span
+                                style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    padding: '2px 8px',
+                                    borderRadius: 999,
+                                    backgroundColor: hasWeekOverride ? 'rgba(37, 99, 235, 0.12)' : 'rgba(100, 116, 139, 0.12)',
+                                    color: hasWeekOverride ? '#2563eb' : 'var(--bs-secondary)',
+                                    fontSize: 12,
+                                    fontWeight: 600,
+                                }}
+                            >
+                                {hasWeekOverride ? 'Week override active' : 'Using default template'}
+                            </span>
+                        </div>
+                        <div
+                            style={{
+                                display: 'flex',
+                                gap: 8,
+                                overflowX: 'auto',
+                                paddingBottom: 4,
+                                maxWidth: '100%',
+                            }}
+                        >
+                            {weekOptions.map((option) => (
+                                <Button
+                                    key={option.key}
+                                    size="sm"
+                                    variant={option.key === selectedWeekKey ? 'primary' : 'outline-secondary'}
+                                    onClick={() => setSelectedWeekKey(option.key)}
+                                    disabled={saving || applying || deltaReplanLoading || nightlyRunning}
+                                    style={{ whiteSpace: 'nowrap' }}
+                                >
+                                    {option.label}
+                                </Button>
+                            ))}
+                        </div>
+                    </div>
                 </div>
                 <div className="d-flex flex-wrap gap-2">
                     <Button onClick={saveAllocations} disabled={saving || applying || deltaReplanLoading || nightlyRunning}>
                     {saving ? <Spinner size="sm" animation="border" className="me-2" /> : <Save size={18} className="me-2" />}
-                    Save Changes
+                    Save Week Plan
+                    </Button>
+                    <Button
+                        variant="outline-secondary"
+                        onClick={copyPreviousWeek}
+                        disabled={saving || applying || deltaReplanLoading || nightlyRunning}
+                        title="Copy the previous week's allocations into this week before making changes."
+                    >
+                        Copy Previous Week
+                    </Button>
+                    <Button
+                        variant="outline-secondary"
+                        onClick={resetWeekToTemplate}
+                        disabled={!hasWeekOverride || saving || applying || deltaReplanLoading || nightlyRunning}
+                        title="Remove the override for this week and fall back to the default template."
+                    >
+                        Use Default Template
+                    </Button>
+                    <Button
+                        variant="outline-secondary"
+                        onClick={saveAsDefaultTemplate}
+                        disabled={saving || applying || deltaReplanLoading || nightlyRunning}
+                        title="Persist the current layout as the reusable default weekly template."
+                    >
+                        Save as Default Template
                     </Button>
                     <Button
                         variant="outline-primary"
