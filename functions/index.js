@@ -4021,6 +4021,8 @@ exports.normalizeStatuses = httpsV2.onCall({}, async (req) => {
 
 // Diagnostics: quick check that sprints are readable for the current user
 exports.sendAssistantMessage = httpsV2.onCall({
+  memory: '512MiB',
+  timeoutSeconds: 180,
   secrets: [GOOGLE_AI_STUDIO_API_KEY, BREVO_API_KEY, GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET],
 }, async (req) => {
   const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');

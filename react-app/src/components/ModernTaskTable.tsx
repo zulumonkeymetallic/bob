@@ -188,6 +188,14 @@ const defaultColumns: Column[] = [
     type: 'date'
   },
   {
+    key: 'createdAt',
+    label: 'Created',
+    width: '16%',
+    visible: true,
+    editable: false,
+    type: 'text'
+  },
+  {
     key: 'points',
     label: 'Points',
     width: '8%',
@@ -263,6 +271,34 @@ const formatExternalUrlLabel = (value: unknown): string => {
   } catch {
     return raw.slice(0, 64);
   }
+};
+
+const timestampToMillis = (value: unknown): number | null => {
+  if (value == null) return null;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof (value as any)?.toMillis === 'function') return (value as any).toMillis();
+  if (typeof (value as any)?.toDate === 'function') {
+    const date = (value as any).toDate();
+    return date instanceof Date && !Number.isNaN(date.getTime()) ? date.getTime() : null;
+  }
+  if (typeof (value as any)?.seconds === 'number') {
+    const nanos = typeof (value as any)?.nanoseconds === 'number' ? (value as any).nanoseconds : 0;
+    return ((value as any).seconds * 1000) + Math.round(nanos / 1e6);
+  }
+  const parsed = Date.parse(String(value));
+  return Number.isNaN(parsed) ? null : parsed;
+};
+
+const formatTimestampCell = (value: unknown): string => {
+  const millis = timestampToMillis(value);
+  if (millis == null) return '';
+  return new Date(millis).toLocaleString('en-GB', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 };
 
 interface SortableRowProps {
@@ -427,21 +463,24 @@ const SortableRow: React.FC<SortableRowProps> = ({
       }
       return '';
     }
-  if (key === 'status') {
-    return taskStatusText(value);
-  }
-  if (key === 'points' && typeof value === 'number') {
-    return String(value);
-  }
-  if (key === 'aiCriticalityScore' && typeof value === 'number') {
-    return String(Math.round(value));
-  }
-  if (key === 'aiCriticalityReason') {
-    return String(value || '');
-  }
-  if (key === 'type') {
-    return formatTaskTypeLabel(value);
-  }
+    if (key === 'createdAt' || key === 'updatedAt') {
+      return formatTimestampCell(value);
+    }
+    if (key === 'status') {
+      return taskStatusText(value);
+    }
+    if (key === 'points' && typeof value === 'number') {
+      return String(value);
+    }
+    if (key === 'aiCriticalityScore' && typeof value === 'number') {
+      return String(Math.round(value));
+    }
+    if (key === 'aiCriticalityReason') {
+      return String(value || '');
+    }
+    if (key === 'type') {
+      return formatTaskTypeLabel(value);
+    }
     if (key === 'url') {
       return formatExternalUrlLabel(value);
     }
@@ -1003,9 +1042,9 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
 
   const filteredTasks = tasks.filter((task) => {
     const derivedSprintId = effectiveSprintId(task, stories, sprints);
-    if (sprintFilter === 'none') return !derivedSprintId;
-    if (sprintFilter !== 'all') return derivedSprintId === sprintFilter;
     const normalizedType = normalizeTaskType((task as any)?.type || (task as any)?.task_type || 'task');
+    if (sprintFilter === 'none' && derivedSprintId) return false;
+    if (sprintFilter !== 'all' && sprintFilter !== 'none' && derivedSprintId !== sprintFilter) return false;
     if (typeFilter !== 'all' && normalizedType !== typeFilter) return false;
     return true;
   });
@@ -1050,6 +1089,14 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
     list.sort((a, b) => {
       const valA = (a as any)[sortConfig.key];
       const valB = (b as any)[sortConfig.key];
+      if (sortConfig.key === 'createdAt' || sortConfig.key === 'updatedAt') {
+        const timeA = timestampToMillis(valA);
+        const timeB = timestampToMillis(valB);
+        if (timeA != null && timeB != null) {
+          if (timeA === timeB) return 0;
+          return timeA > timeB ? dir : -dir;
+        }
+      }
       const numA = typeof valA === 'number' ? valA : (valA ? Number(valA) : null);
       const numB = typeof valB === 'number' ? valB : (valB ? Number(valB) : null);
       if (numA !== null && numB !== null && !Number.isNaN(numA) && !Number.isNaN(numB)) {

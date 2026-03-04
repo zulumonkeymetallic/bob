@@ -501,6 +501,7 @@ const SettingsPage: React.FC = () => {
                 <Button variant="outline-primary" size="sm" onClick={() => navigate('/settings/integrations')}>Integrations Hub</Button>
                 <Button variant="outline-secondary" size="sm" onClick={() => navigate('/logs/integrations')}>View Integration Logs</Button>
                 <Button variant="outline-secondary" size="sm" onClick={() => navigate('/logs/ai')}>View AI Diagnostics</Button>
+                <Button variant="outline-secondary" size="sm" onClick={() => navigate('/logs/transcripts')}>View Transcript Logs</Button>
               </div>
             </Card.Body>
           </Card>

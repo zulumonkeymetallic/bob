@@ -499,11 +499,13 @@ async function repairGeminiJsonResponse({
 function createIngestionLogger({ lockRef, uid, fingerprint, source, channel, authMode }) {
   const base = {
     uid,
+    ownerUid: uid,
     fingerprint,
     source: source || 'transcript',
     channel: channel || 'unknown',
     authMode: authMode || 'unknown',
     lockId: lockRef.id,
+    ingestionId: lockRef.id,
   };
 
   return {
@@ -564,6 +566,22 @@ function normalizeTimestampOutput(value) {
   const date = typeof value?.toDate === 'function' ? value.toDate() : new Date(value);
   if (!(date instanceof Date) || Number.isNaN(date.getTime())) return null;
   return date.toISOString();
+}
+
+function timestampToMillis(value) {
+  if (value == null) return null;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value?.toMillis === 'function') return value.toMillis();
+  if (typeof value?.toDate === 'function') {
+    const date = value.toDate();
+    return date instanceof Date && !Number.isNaN(date.getTime()) ? date.getTime() : null;
+  }
+  if (typeof value?.seconds === 'number') {
+    const nanos = typeof value?.nanoseconds === 'number' ? value.nanoseconds : 0;
+    return (value.seconds * 1000) + Math.round(nanos / 1e6);
+  }
+  const parsed = Date.parse(String(value));
+  return Number.isNaN(parsed) ? null : parsed;
 }
 
 function normalizeTitle(value) {
@@ -2874,6 +2892,7 @@ function buildEmailHtml({ sections, taskRecords, storyRecords, docUrl, warnings 
 }
 
 const EMAIL_DISPATCH_LEASE_MS = 15 * 60 * 1000;
+const INGESTION_PROCESSING_LEASE_MS = 20 * 60 * 1000;
 
 async function claimTranscriptSummaryEmail(lockRef) {
   const db = admin.firestore();
@@ -2911,7 +2930,15 @@ async function reserveTranscriptIngestion(db, uid, fingerprint, transcriptPrevie
     if (snap.exists) {
       const data = snap.data() || {};
       const status = String(data.status || '').toLowerCase();
-      if (status === 'processed' || status === 'processing') {
+      const lastTouchedMs =
+        timestampToMillis(data.updatedAt) ||
+        timestampToMillis(data.lastRequestedAt) ||
+        timestampToMillis(data.createdAt);
+      const isStaleProcessing = status === 'processing' &&
+        typeof lastTouchedMs === 'number' &&
+        (Date.now() - lastTouchedMs) >= INGESTION_PROCESSING_LEASE_MS;
+
+      if ((status === 'processed') || (status === 'processing' && !isStaleProcessing)) {
         tx.set(ref, {
           duplicateCount: admin.firestore.FieldValue.increment(1),
           lastDuplicateAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -2919,6 +2946,29 @@ async function reserveTranscriptIngestion(db, uid, fingerprint, transcriptPrevie
         }, { merge: true });
         return { duplicate: true, data };
       }
+
+      const resetPayload = {
+        id: ref.id,
+        ownerUid: uid,
+        fingerprint,
+        transcriptPreview,
+        status: 'processing',
+        lastRequestedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        errorCode: admin.firestore.FieldValue.delete(),
+        errorMessage: admin.firestore.FieldValue.delete(),
+        failedAt: admin.firestore.FieldValue.delete(),
+        emailDispatchClaimedAt: admin.firestore.FieldValue.delete(),
+        diagnosticStage: isStaleProcessing ? 'stale_reclaimed' : 'retry_requested',
+        diagnosticLevel: isStaleProcessing ? 'warn' : 'info',
+        diagnosticMessage: isStaleProcessing ? 'Recovered stale transcript processing lock' : 'Retrying transcript ingestion',
+      };
+      if (isStaleProcessing) {
+        resetPayload.staleRecoveryCount = admin.firestore.FieldValue.increment(1);
+        resetPayload.lastStaleRecoveryAt = admin.firestore.FieldValue.serverTimestamp();
+      }
+      tx.set(ref, resetPayload, { merge: true });
+      return { duplicate: false, data, reclaimed: isStaleProcessing };
     }
     tx.set(ref, {
       id: ref.id,
@@ -2931,7 +2981,7 @@ async function reserveTranscriptIngestion(db, uid, fingerprint, transcriptPrevie
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       lastRequestedAt: admin.firestore.FieldValue.serverTimestamp(),
     }, { merge: true });
-    return { duplicate: false, data: snap.exists ? (snap.data() || {}) : null };
+    return { duplicate: false, data: snap.exists ? (snap.data() || {}) : null, reclaimed: false };
   });
   return { ref, ...result };
 }
@@ -3519,6 +3569,14 @@ async function processTranscriptIngestion({
     }, 'warn');
     const duplicateState = await hydrateDuplicateState(db, uid, fingerprint, reservation.data);
     return buildDuplicateResponse(duplicateState);
+  }
+
+  if (reservation.reclaimed) {
+    await logger.event('stale_lock_reclaimed', 'Recovered stale transcript processing lock', {
+      priorStatus: reservation.data?.status || null,
+      priorStage: reservation.data?.diagnosticStage || null,
+      priorUpdatedAt: normalizeTimestampOutput(reservation.data?.updatedAt || reservation.data?.lastRequestedAt || reservation.data?.createdAt),
+    }, 'warn');
   }
 
   try {
@@ -4351,6 +4409,8 @@ async function resolveHttpCaller(req) {
 }
 
 exports.ingestTranscript = httpsV2.onCall({
+  memory: '512MiB',
+  timeoutSeconds: 180,
   secrets: [
     GOOGLE_AI_STUDIO_API_KEY,
     BREVO_API_KEY,
@@ -4380,6 +4440,8 @@ exports.ingestTranscript = httpsV2.onCall({
 
 exports.ingestTranscriptHttp = httpsV2.onRequest({
   invoker: 'public',
+  memory: '512MiB',
+  timeoutSeconds: 180,
   secrets: [
     GOOGLE_AI_STUDIO_API_KEY,
     BREVO_API_KEY,

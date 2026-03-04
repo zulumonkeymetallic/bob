@@ -746,6 +746,10 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
             <i className="fas fa-stream me-2"></i>
             Integration Logs
           </Button>
+          <Button variant="outline-secondary" size="sm" className="ms-2" onClick={() => navigate('/logs/transcripts')}>
+            <i className="fas fa-file-alt me-2"></i>
+            Transcript Logs
+          </Button>
         </div>
       </div>
       {show('google') && (
