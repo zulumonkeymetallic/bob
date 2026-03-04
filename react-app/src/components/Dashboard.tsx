@@ -114,6 +114,11 @@ interface FitnessTrendSummary {
   runDistanceYtdKm: number | null;
   swimDistanceYtdKm: number | null;
   bikeDistanceYtdKm: number | null;
+  predicted5kDisplay: string | null;
+  predicted10kDisplay: string | null;
+  predictedHalfMarathonDisplay: string | null;
+  predictedSwim800Display: string | null;
+  predictedBike50Display: string | null;
 }
 
 interface FinanceTrendSummary {
@@ -369,6 +374,40 @@ const Dashboard: React.FC = () => {
     return /\bdad\b/i.test(text);
   }, []);
 
+  const resolveWorkoutStartMs = useCallback((data: any) => {
+    const direct = Number(data?.startDate || 0);
+    if (Number.isFinite(direct) && direct > 0) return direct;
+    const parsed = Date.parse(String(data?.utcStartDate || ''));
+    return Number.isFinite(parsed) ? parsed : 0;
+  }, []);
+
+  const classifyWorkoutSport = useCallback((data: any): 'run' | 'swim' | 'bike' | 'other' => {
+    if (!data) return 'other';
+    if (String(data.provider || '').toLowerCase() === 'parkrun') return 'run';
+    if (data.run === true) return 'run';
+    const type = String(data.type || data.sportType || '').toLowerCase();
+    if (type.includes('swim')) return 'swim';
+    if (type.includes('ride') || type.includes('bike') || type.includes('cycling')) return 'bike';
+    if (type.includes('run') || type.includes('walk') || type.includes('hike')) return 'run';
+    return 'other';
+  }, []);
+
+  const estimateEquivalentRaceSeconds = useCallback((
+    distanceKm: number,
+    timeSec: number,
+    targetKm: number,
+    options: { minKm?: number; maxKm?: number; exponent?: number } = {},
+  ) => {
+    const {
+      minKm = 0.2,
+      maxKm = 250,
+      exponent = 1.06,
+    } = options;
+    if (!Number.isFinite(distanceKm) || !Number.isFinite(timeSec) || distanceKm <= 0 || timeSec <= 0) return null;
+    if (distanceKm < minKm || distanceKm > maxKm) return null;
+    return timeSec * Math.pow(targetKm / distanceKm, exponent);
+  }, []);
+
   const formatInstanceTime = useCallback((instance: ScheduledInstanceModel) => {
     try {
       if (instance.plannedStart && instance.plannedEnd) {
@@ -568,15 +607,22 @@ const Dashboard: React.FC = () => {
     ? parsedFitnessScoreSummary
     : null;
   const fitnessLevelSummary = fitnessOverviewSnapshot?.fitnessLevel || null;
-  const predicted5kDisplay = fitnessOverviewSnapshot?.predictions?.fiveKDisplay
+  const predicted5kDisplay = fitnessTrendSummary?.predicted5kDisplay
+    || fitnessOverviewSnapshot?.predictions?.fiveKDisplay
     || runAnalysisSnapshot?.predicted5kDisplay
     || null;
-  const predicted10kDisplay = fitnessOverviewSnapshot?.predictions?.tenKDisplay
+  const predicted10kDisplay = fitnessTrendSummary?.predicted10kDisplay
+    || fitnessOverviewSnapshot?.predictions?.tenKDisplay
     || runAnalysisSnapshot?.predicted10kDisplay
     || null;
-  const predictedHalfMarathonDisplay = fitnessOverviewSnapshot?.predictions?.halfMarathonDisplay || null;
-  const predictedSwim800Display = fitnessOverviewSnapshot?.predictions?.swim800mDisplay || null;
-  const predictedBike50Display = fitnessOverviewSnapshot?.predictions?.bike50kDisplay
+  const predictedHalfMarathonDisplay = fitnessTrendSummary?.predictedHalfMarathonDisplay
+    || fitnessOverviewSnapshot?.predictions?.halfMarathonDisplay
+    || null;
+  const predictedSwim800Display = fitnessTrendSummary?.predictedSwim800Display
+    || fitnessOverviewSnapshot?.predictions?.swim800mDisplay
+    || null;
+  const predictedBike50Display = fitnessTrendSummary?.predictedBike50Display
+    || fitnessOverviewSnapshot?.predictions?.bike50kDisplay
     || fitnessOverviewSnapshot?.predictions?.bike30miDisplay
     || null;
   const avgRpe30Summary = fitnessOverviewSnapshot?.rpe?.avg30
@@ -1951,7 +1997,8 @@ const Dashboard: React.FC = () => {
       const snap = await getDocs(query(
         collection(db, 'metrics_workouts'),
         where('ownerUid', '==', currentUser.uid),
-        limit(1500)
+        orderBy('startDate', 'desc'),
+        limit(2000)
       )).catch(() => null);
 
       if (!snap) {
@@ -1959,33 +2006,20 @@ const Dashboard: React.FC = () => {
         return;
       }
 
+      const workoutRows = snap.docs.map((docSnap) => docSnap.data() as any);
       const current = { rpe: [] as number[], fiveK: [] as number[], tenK: [] as number[] };
       const previous = { rpe: [] as number[], fiveK: [] as number[], tenK: [] as number[] };
       const excludeWithDadFromMetrics = profileSnapshot?.excludeWithDadFromMetrics !== false;
       const avg = (items: number[]) => (items.length ? (items.reduce((sum, value) => sum + value, 0) / items.length) : null);
-      const classifySport = (data: any): 'run' | 'swim' | 'bike' | 'other' => {
-        if (!data) return 'other';
-        if (String(data.provider || '').toLowerCase() === 'parkrun') return 'run';
-        if (data.run === true) return 'run';
-        const type = String(data.type || data.sportType || '').toLowerCase();
-        if (type.includes('swim')) return 'swim';
-        if (type.includes('ride') || type.includes('bike') || type.includes('cycling')) return 'bike';
-        if (type.includes('run') || type.includes('walk') || type.includes('hike')) return 'run';
-        return 'other';
-      };
       let ytdRunDistanceM = 0;
       let ytdSwimDistanceM = 0;
       let ytdBikeDistanceM = 0;
 
-      snap.forEach((docSnap) => {
-        const data: any = docSnap.data() || {};
+      workoutRows.forEach((data: any) => {
         if (excludeWithDadFromMetrics && workoutHasDadMarker(data)) return;
-        const startMsRaw = Number(data.startDate || 0);
-        const startMs = Number.isFinite(startMsRaw) && startMsRaw > 0
-          ? startMsRaw
-          : (data.utcStartDate ? Date.parse(String(data.utcStartDate)) : NaN);
+        const startMs = resolveWorkoutStartMs(data);
         if (!Number.isFinite(startMs) || startMs > nowMs) return;
-        const sport = classifySport(data);
+        const sport = classifyWorkoutSport(data);
 
         const rpe = Number(data.perceivedExertion ?? data.rpe ?? data.stravaRpe ?? null);
         const distanceM = Number(data.distance_m || 0);
@@ -2004,6 +2038,43 @@ const Dashboard: React.FC = () => {
         if (distanceM >= 4000 && distanceM <= 6000) target.fiveK.push(secPerMeter * 5000);
         if (distanceM >= 8000 && distanceM <= 12000) target.tenK.push(secPerMeter * 10000);
       });
+
+      const computePredictionDisplay = (
+        sport: 'run' | 'swim' | 'bike',
+        targetKm: number,
+        options: { minKm?: number; maxKm?: number; exponent?: number },
+      ) => {
+        const monthMap = new Map<string, { sumSec: number; count: number }>();
+        workoutRows.forEach((data: any) => {
+          if (excludeWithDadFromMetrics && workoutHasDadMarker(data)) return;
+          if (classifyWorkoutSport(data) !== sport) return;
+          const startMs = resolveWorkoutStartMs(data);
+          if (!Number.isFinite(startMs) || startMs <= 0) return;
+          const distanceKm = Number(data.distance_m || 0) / 1000;
+          const timeSec = Number(data.movingTime_s ?? data.elapsedTime_s ?? 0);
+          const normalizedSec = estimateEquivalentRaceSeconds(distanceKm, timeSec, targetKm, options);
+          if (normalizedSec == null) return;
+          const date = new Date(startMs);
+          const monthKey = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
+          const bucket = monthMap.get(monthKey) || { sumSec: 0, count: 0 };
+          bucket.sumSec += normalizedSec;
+          bucket.count += 1;
+          monthMap.set(monthKey, bucket);
+        });
+
+        const latestAvgSec = Array.from(monthMap.values())
+          .map((value) => (value.count > 0 ? value.sumSec / value.count : null))
+          .filter((value): value is number => value != null)
+          .pop();
+
+        return latestAvgSec != null ? formatSecondsDisplay(latestAvgSec) : null;
+      };
+
+      const predicted5kFallback = computePredictionDisplay('run', 5, { minKm: 3, maxKm: 21.2, exponent: 1.06 });
+      const predicted10kFallback = computePredictionDisplay('run', 10, { minKm: 3, maxKm: 42.2, exponent: 1.06 });
+      const predictedHalfFallback = computePredictionDisplay('run', 21.0975, { minKm: 3, maxKm: 42.2, exponent: 1.06 });
+      const predictedSwim800Fallback = computePredictionDisplay('swim', 0.8, { minKm: 0.2, maxKm: 5, exponent: 1.04 });
+      const predictedBike50Fallback = computePredictionDisplay('bike', 50, { minKm: 10, maxKm: 250, exponent: 1.06 });
 
       const currentRpe = avg(current.rpe);
       const previousRpe = avg(previous.rpe);
@@ -2031,6 +2102,11 @@ const Dashboard: React.FC = () => {
         runDistanceYtdKm: Number((ytdRunDistanceM / 1000).toFixed(1)),
         swimDistanceYtdKm: Number((ytdSwimDistanceM / 1000).toFixed(1)),
         bikeDistanceYtdKm: Number((ytdBikeDistanceM / 1000).toFixed(1)),
+        predicted5kDisplay: predicted5kFallback,
+        predicted10kDisplay: predicted10kFallback,
+        predictedHalfMarathonDisplay: predictedHalfFallback,
+        predictedSwim800Display: predictedSwim800Fallback,
+        predictedBike50Display: predictedBike50Fallback,
       });
     } catch (error) {
       console.warn('Failed to load fitness trend summary', error);
@@ -2573,7 +2649,7 @@ const Dashboard: React.FC = () => {
           )}
 
           <Row className="g-2 mb-1">
-            <Col xl={9}>
+            <Col xl={12}>
               <Card className="shadow-sm border-0">
                 <Card.Header className="d-flex justify-content-between align-items-center">
                   <div className="fw-semibold">Key Metrics</div>
@@ -2769,6 +2845,11 @@ const Dashboard: React.FC = () => {
                       </div>
                     </Col>
 
+                    {/* Journal Signals Group */}
+                    <Col xs={12} sm={6} lg={6} xl={3}>
+                      <JournalInsightsCard compact inlineMetric />
+                    </Col>
+
                   </Row>
 
                   {!metricsCollapsed && hasSelectedSprint && capacitySummary && (
@@ -2890,9 +2971,6 @@ const Dashboard: React.FC = () => {
                   </div>
                 </Collapse>
               </Card>
-            </Col>
-            <Col xl={3}>
-              <JournalInsightsCard compact />
             </Col>
           </Row>
 
