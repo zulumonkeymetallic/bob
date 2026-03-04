@@ -133,8 +133,42 @@ interface ChecklistSnapshotItem {
   type: 'chore' | 'routine';
 }
 
+interface NextWorkRecommendedItem {
+  type: 'task' | 'story';
+  id: string;
+  ref: string | null;
+  title: string;
+  label: string;
+  path: string | null;
+  deepLink: string | null;
+  score: number | null;
+  source: string | null;
+  reason: string | null;
+  plannedStart: string | null;
+  plannedEnd: string | null;
+  dueDate: string | null;
+}
+
+interface NextWorkRecommendation {
+  ok: boolean;
+  computedAt: string | null;
+  timezone: string | null;
+  persona: string | null;
+  selectedSprintId: string | null;
+  status: string | null;
+  reasonCode: string | null;
+  spokenResponse: string | null;
+  currentCalendarBlock: {
+    title: string | null;
+    start: string | null;
+    end: string | null;
+  } | null;
+  recommendedItem: NextWorkRecommendedItem | null;
+}
+
 const FINANCE_WINDOW_DAYS = 5;
 const INTEGRATION_STALE_DAYS = 7;
+const NEXT_WORK_REFRESH_MS = 60 * 60 * 1000;
 const FINANCE_INCOME_BUCKETS = new Set(['income', 'net_salary', 'irregular_income']);
 const FINANCE_UNCATEGORISED_BUCKETS = new Set(['unknown', 'uncategorized', 'uncategorised']);
 const TODAY_PLAN_COLUMN_STORAGE_KEY = 'bob_dashboard_today_plan_columns_v1';
@@ -153,6 +187,23 @@ const TODAY_PLAN_MIN_WIDTHS: TodayPlanColumnWidths = {
   calendar: 20,
   due: 18,
   chores: 14,
+};
+
+const getNextWorkBadge = (status: string | null | undefined) => {
+  switch (status) {
+    case 'current_block':
+      return { bg: 'success', label: 'Now' };
+    case 'upcoming_block':
+      return { bg: 'primary', label: 'Queued' };
+    case 'after_busy_event':
+      return { bg: 'warning', label: 'After calendar' };
+    case 'top3':
+      return { bg: 'info', label: 'Top 3' };
+    case 'ai_score':
+      return { bg: 'secondary', label: 'AI score' };
+    default:
+      return { bg: 'secondary', label: 'Next' };
+  }
 };
 
 const roundToSingleDecimal = (value: number) => Math.round(value * 10) / 10;
@@ -265,6 +316,9 @@ const Dashboard: React.FC = () => {
   const [replanLoading, setReplanLoading] = useState(false);
   const [fullReplanLoading, setFullReplanLoading] = useState(false);
   const [replanFeedback, setReplanFeedback] = useState<string | null>(null);
+  const [nextWorkRecommendation, setNextWorkRecommendation] = useState<NextWorkRecommendation | null>(null);
+  const [nextWorkLoading, setNextWorkLoading] = useState(false);
+  const [nextWorkError, setNextWorkError] = useState<string | null>(null);
   const [calendarView, setCalendarView] = useState<'day' | 'week' | 'month'>('day');
   const [calendarDate, setCalendarDate] = useState<Date>(startOfDay(new Date()));
   const [calendarScrollTime, setCalendarScrollTime] = useState<Date>(() => {
@@ -1214,6 +1268,35 @@ const Dashboard: React.FC = () => {
     setLastUpdated(new Date());
   }, []);
 
+  const fetchNextWorkRecommendation = useCallback(async ({ silent = false }: { silent?: boolean } = {}) => {
+    if (!currentUser || !currentPersona) {
+      setNextWorkRecommendation(null);
+      setNextWorkError(null);
+      setNextWorkLoading(false);
+      return;
+    }
+    if (!silent) {
+      setNextWorkLoading(true);
+      setNextWorkError(null);
+    }
+    try {
+      const call = httpsCallable(functions, 'whatToWorkOnNext');
+      const response = await call({
+        persona: currentPersona,
+        selectedSprintId: selectedSprintId || null,
+      });
+      setNextWorkRecommendation((response.data || null) as NextWorkRecommendation);
+      if (!silent) setNextWorkError(null);
+    } catch (error) {
+      console.warn('Failed to load next work recommendation', error);
+      if (!silent) {
+        setNextWorkError('Could not calculate what to work on next.');
+      }
+    } finally {
+      if (!silent) setNextWorkLoading(false);
+    }
+  }, [currentUser, currentPersona, selectedSprintId]);
+
   useEffect(() => {
     console.log('🔍 Dashboard useEffect triggered:', { currentUser: !!currentUser, persona: currentPersona });
     if (!currentUser) {
@@ -1419,6 +1502,20 @@ const Dashboard: React.FC = () => {
       unsubscribePots();
     };
   }, [currentUser, currentPersona, selectedSprintId, refreshToken, decodeToDate, profileSnapshot?.excludeWithDadFromMetrics]);
+
+  useEffect(() => {
+    if (!currentUser || !currentPersona) {
+      setNextWorkRecommendation(null);
+      setNextWorkError(null);
+      setNextWorkLoading(false);
+      return;
+    }
+    fetchNextWorkRecommendation();
+    const intervalId = window.setInterval(() => {
+      fetchNextWorkRecommendation({ silent: true });
+    }, NEXT_WORK_REFRESH_MS);
+    return () => window.clearInterval(intervalId);
+  }, [currentUser, currentPersona, selectedSprintId, refreshToken, fetchNextWorkRecommendation]);
 
   useEffect(() => {
     if (!currentUser) {
@@ -2253,6 +2350,7 @@ const Dashboard: React.FC = () => {
       if (payload?.unscheduledStories) parts.push(`${payload.unscheduledStories} stories unscheduled`);
       if (payload?.unscheduledTasks) parts.push(`${payload.unscheduledTasks} tasks unscheduled`);
       setReplanFeedback(parts.length ? `Delta replan complete: ${parts.join(', ')}.` : 'Delta replan complete.');
+      fetchNextWorkRecommendation({ silent: true });
     } catch (e) {
       console.error('Replan failed', e);
       setReplanFeedback('Delta replan failed. Please retry.');
@@ -2278,6 +2376,7 @@ const Dashboard: React.FC = () => {
       } else {
         setReplanFeedback('Full replan finished with errors. Check logs.');
       }
+      fetchNextWorkRecommendation({ silent: true });
     } catch (e) {
       console.error('Full replan failed', e);
       setReplanFeedback('Full replan failed. Please retry.');
@@ -2977,9 +3076,45 @@ const Dashboard: React.FC = () => {
           <Row className="g-3 mb-1">
             <Col xl={12}>
               <Card className="h-100 shadow-sm border-0">
-                <Card.Header className="d-flex justify-content-between align-items-center py-2">
-                  <span className="fw-semibold">Today’s Plan</span>
-                  <div className="d-flex align-items-center gap-2">
+                <Card.Header className="d-flex justify-content-between align-items-start flex-wrap gap-2 py-2">
+                  <div className="d-flex flex-column gap-1">
+                    <span className="fw-semibold">Today’s Plan</span>
+                    {nextWorkLoading && !nextWorkRecommendation?.recommendedItem && (
+                      <div className="text-muted small d-flex align-items-center gap-2">
+                        <Spinner size="sm" animation="border" />
+                        <span>Calculating what to work on next…</span>
+                      </div>
+                    )}
+                    {!nextWorkLoading && nextWorkRecommendation?.recommendedItem && (
+                      <div className="text-muted small d-flex align-items-center gap-2 flex-wrap">
+                        <span className="fw-semibold text-body">What to work on next</span>
+                        <Badge bg={getNextWorkBadge(nextWorkRecommendation.status).bg}>
+                          {getNextWorkBadge(nextWorkRecommendation.status).label}
+                        </Badge>
+                        {nextWorkRecommendation.recommendedItem.path ? (
+                          <Link to={nextWorkRecommendation.recommendedItem.path} className="text-decoration-none">
+                            {nextWorkRecommendation.recommendedItem.label}
+                          </Link>
+                        ) : (
+                          <span className="text-body">{nextWorkRecommendation.recommendedItem.label}</span>
+                        )}
+                        {nextWorkRecommendation.recommendedItem.reason && (
+                          <span>· {nextWorkRecommendation.recommendedItem.reason}</span>
+                        )}
+                      </div>
+                    )}
+                    {!nextWorkLoading && !nextWorkRecommendation?.recommendedItem && nextWorkRecommendation?.spokenResponse && (
+                      <div className="text-muted small">
+                        <span className="fw-semibold text-body">What to work on next</span>
+                        {' · '}
+                        {nextWorkRecommendation.spokenResponse}
+                      </div>
+                    )}
+                    {nextWorkError && (
+                      <div className="text-danger small">{nextWorkError}</div>
+                    )}
+                  </div>
+                  <div className="d-flex align-items-center gap-2 flex-wrap">
                     <Button variant="outline-secondary" size="sm" onClick={handleOpenChecklist}>
                       <CalendarIcon size={14} className="me-1" /> View calendar
                     </Button>
