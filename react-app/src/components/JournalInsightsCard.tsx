@@ -24,6 +24,7 @@ import type { JournalEntry } from '../types';
 interface JournalInsightsCardProps {
   compact?: boolean;
   showHeader?: boolean;
+  inlineMetric?: boolean;
 }
 
 type TrendMeta = {
@@ -132,7 +133,7 @@ const metricSurfaceStyle = (accent: string): React.CSSProperties => ({
   height: '100%',
 });
 
-const JournalInsightsCard: React.FC<JournalInsightsCardProps> = ({ compact = false, showHeader = true }) => {
+const JournalInsightsCard: React.FC<JournalInsightsCardProps> = ({ compact = false, showHeader = true, inlineMetric = false }) => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const navigate = useNavigate();
@@ -262,6 +263,15 @@ const JournalInsightsCard: React.FC<JournalInsightsCardProps> = ({ compact = fal
 
   const latestThemes = latestEntry?.entryMetadata?.primaryThemes || [];
   const latestSummary = String(latestEntry?.oneLineSummary || '').trim();
+  const compactMetricSummary = useMemo(
+    () => metricSummaries
+      .map((metric) => {
+        const arrow = metric.trend?.direction === 'up' ? '↑' : metric.trend?.direction === 'down' ? '↓' : '→';
+        return `${metric.label} ${metric.value}${metric.trend ? ` ${arrow}` : ''}`;
+      })
+      .join(' · '),
+    [metricSummaries]
+  );
 
   const renderTrend = (trend: TrendMeta | null) => {
     if (!trend) {
@@ -299,6 +309,74 @@ const JournalInsightsCard: React.FC<JournalInsightsCardProps> = ({ compact = fal
         style: { cursor: 'pointer' } as React.CSSProperties,
       }
     : {};
+
+  if (compact && inlineMetric) {
+    const themeSummary = latestThemes.length
+      ? latestThemes.slice(0, 3).join(', ')
+      : 'Open insights for theme and trend detail';
+    const sentimentVariant = latestEntry?.entryMetadata?.sentiment
+      ? sentimentBadgeVariant(latestEntry.entryMetadata.sentiment)
+      : null;
+
+    return (
+      <div
+        className="d-flex align-items-center gap-2 px-2 py-1 rounded border h-100"
+        role="button"
+        tabIndex={0}
+        style={{
+          background: 'var(--bs-body-bg)',
+          cursor: 'pointer',
+          transition: 'all 0.2s ease',
+        }}
+        onClick={handleOpenInsights}
+        onKeyDown={(event: React.KeyboardEvent<HTMLDivElement>) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            handleOpenInsights();
+          }
+        }}
+        onMouseEnter={(event) => {
+          event.currentTarget.style.backgroundColor = 'var(--bs-info-bg-subtle)';
+          event.currentTarget.style.borderColor = 'var(--bs-info)';
+        }}
+        onMouseLeave={(event) => {
+          event.currentTarget.style.backgroundColor = 'var(--bs-body-bg)';
+          event.currentTarget.style.borderColor = 'var(--bs-border-color)';
+        }}
+      >
+        <BrainCircuit size={16} className="text-info" />
+        <div className="flex-grow-1">
+          <div className="text-muted small">Journal Signals</div>
+          {loading ? (
+            <div className="fw-semibold">Loading journal insights…</div>
+          ) : error ? (
+            <>
+              <div className="fw-semibold">Signals unavailable</div>
+              <div className="text-muted small text-truncate">{error}</div>
+            </>
+          ) : !analyticsJournals.length || !latestEntry?.entryMetadata ? (
+            <>
+              <div className="fw-semibold">No journal signals yet</div>
+              <div className="text-muted small">Process a journal entry to start tracking mood, energy, stress, and sentiment.</div>
+            </>
+          ) : (
+            <>
+              <div className="fw-semibold">{compactMetricSummary}</div>
+              <div className="text-muted small d-flex align-items-center gap-2 flex-wrap">
+                {sentimentVariant && latestEntry.entryMetadata.sentiment ? (
+                  <Badge bg={sentimentVariant.bg} text={sentimentVariant.text}>
+                    {latestEntry.entryMetadata.sentiment}
+                  </Badge>
+                ) : null}
+                <span className="text-truncate">{themeSummary}</span>
+              </div>
+              <div className="text-muted small text-truncate">{latestSummary || 'Open detailed journal insights'}</div>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <Card className="shadow-sm border-0 h-100" {...cardProps}>
