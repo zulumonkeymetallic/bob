@@ -10397,6 +10397,444 @@ function buildHeuristicFocus(summaryData, note) {
   };
 }
 
+function normalizeRecommendationPersona(value) {
+  return String(value || '').toLowerCase() === 'work' ? 'work' : 'personal';
+}
+
+function isRecommendationTaskDone(status) {
+  if (status == null) return false;
+  if (typeof status === 'number') return status >= 2;
+  const normalized = String(status).trim().toLowerCase();
+  return ['done', 'complete', 'completed', 'finished', 'closed', 'archived'].includes(normalized);
+}
+
+function isRecommendationStoryDone(status) {
+  if (status == null) return false;
+  if (typeof status === 'number') return status >= 4;
+  const normalized = String(status).trim().toLowerCase();
+  return ['done', 'complete', 'completed', 'finished', 'closed', 'archived'].includes(normalized);
+}
+
+function getRecommendationEntityScore(entity) {
+  const score = Number(entity?.aiCriticalityScore ?? entity?.aiPriorityScore ?? entity?.aiScore ?? 0);
+  return Number.isFinite(score) ? score : 0;
+}
+
+function getRecommendationTaskDueMs(task) {
+  return toMillis(task?.dueDate || task?.dueDateMs || task?.targetDate || task?.plannedStartDate || null);
+}
+
+function getRecommendationStoryDueMs(story) {
+  return toMillis(story?.sprintDueDate || story?.targetDate || story?.dueDate || story?.plannedStartDate || null);
+}
+
+function buildRecommendationLabel(title, ref) {
+  const safeTitle = String(title || '').trim() || 'Untitled item';
+  const safeRef = String(ref || '').trim();
+  return safeRef ? `${safeTitle} (${safeRef})` : safeTitle;
+}
+
+function buildRecommendationCandidate({
+  type,
+  id,
+  data,
+  source,
+  reason,
+  plannedStartMs = null,
+  plannedEndMs = null,
+  calendarTitle = null,
+  top3 = false,
+}) {
+  if (!type || !id || !data) return null;
+  const ref = String(data?.ref || data?.reference || '').trim() || null;
+  const title = String(data?.title || calendarTitle || (type === 'story' ? 'Story' : 'Task')).trim() || (type === 'story' ? 'Story' : 'Task');
+  const dueMs = type === 'story' ? getRecommendationStoryDueMs(data) : getRecommendationTaskDueMs(data);
+  return {
+    type,
+    id,
+    ref,
+    title,
+    label: buildRecommendationLabel(title, ref),
+    path: buildEntityPath(type, id, ref || id),
+    deepLink: buildEntityUrl(type, id, ref || id),
+    score: getRecommendationEntityScore(data),
+    sprintId: data?.sprintId || null,
+    dueMs,
+    plannedStartMs: Number.isFinite(plannedStartMs) ? plannedStartMs : null,
+    plannedEndMs: Number.isFinite(plannedEndMs) ? plannedEndMs : null,
+    source,
+    reason: reason || null,
+    calendarTitle: calendarTitle || null,
+    top3: Boolean(top3 || data?.aiTop3ForDay),
+  };
+}
+
+function scoreRecommendationCandidate(candidate, { selectedSprintId = null, endOfDayMs = null } = {}) {
+  if (!candidate) return -Infinity;
+  let score = Number(candidate.score || 0);
+  if (candidate.top3) score += 18;
+  if (selectedSprintId && candidate.sprintId === selectedSprintId) score += 14;
+  if (candidate.dueMs && Number.isFinite(candidate.dueMs) && endOfDayMs && candidate.dueMs <= endOfDayMs) score += 10;
+  if (candidate.source === 'due_open_task') score += 4;
+  if (candidate.source === 'current_block') score += 1000;
+  if (candidate.source === 'upcoming_block') score += 250;
+  return score;
+}
+
+function formatRecommendationCalendarTime(millis, zone) {
+  if (!Number.isFinite(millis)) return null;
+  const dt = DateTime.fromMillis(millis, { zone: coerceZone(zone) });
+  return dt.isValid ? dt.toFormat('HH:mm') : null;
+}
+
+async function computeNextWorkRecommendation({
+  db,
+  uid,
+  persona,
+  selectedSprintId = null,
+}) {
+  const profileSnap = await db.collection('profiles').doc(uid).get().catch(() => null);
+  const profile = profileSnap && profileSnap.exists ? (profileSnap.data() || {}) : {};
+  const zone = resolveTimezone(profile, DEFAULT_TIMEZONE);
+  const now = DateTime.now().setZone(coerceZone(zone));
+  const dayStartMs = now.startOf('day').toMillis();
+  const dayEndMs = now.endOf('day').toMillis();
+  const nowMs = now.toMillis();
+  const personaValue = normalizeRecommendationPersona(persona);
+  const sprintFilter = selectedSprintId && selectedSprintId !== SPRINT_NONE ? String(selectedSprintId) : null;
+
+  const blocksQuery = db.collection('calendar_blocks')
+    .where('ownerUid', '==', uid)
+    .where('start', '>=', dayStartMs)
+    .where('start', '<=', dayEndMs)
+    .get()
+    .catch(() => ({ docs: [] }));
+
+  const top3TasksQuery = db.collection('tasks')
+    .where('ownerUid', '==', uid)
+    .where('persona', '==', personaValue)
+    .where('aiTop3ForDay', '==', true)
+    .get()
+    .catch(() => ({ docs: [] }));
+
+  const top3StoriesQuery = db.collection('stories')
+    .where('ownerUid', '==', uid)
+    .where('persona', '==', personaValue)
+    .where('aiTop3ForDay', '==', true)
+    .get()
+    .catch(() => ({ docs: [] }));
+
+  const dueOpenTasksQuery = db.collection('sprint_task_index')
+    .where('ownerUid', '==', uid)
+    .where('persona', '==', personaValue)
+    .where('isOpen', '==', true)
+    .orderBy('dueDate', 'asc')
+    .limit(24)
+    .get()
+    .catch(() => ({ docs: [] }));
+
+  const recentStoriesQuery = db.collection('stories')
+    .where('ownerUid', '==', uid)
+    .where('persona', '==', personaValue)
+    .orderBy('updatedAt', 'desc')
+    .limit(18)
+    .get()
+    .catch(() => ({ docs: [] }));
+
+  const [blocksSnap, top3TasksSnap, top3StoriesSnap, dueOpenTasksSnap, recentStoriesSnap] = await Promise.all([
+    blocksQuery,
+    top3TasksQuery,
+    top3StoriesQuery,
+    dueOpenTasksQuery,
+    recentStoriesQuery,
+  ]);
+
+  const dayBlocks = blocksSnap.docs
+    .map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() || {}) }))
+    .filter((block) => Number.isFinite(Number(block?.start)) && Number.isFinite(Number(block?.end)))
+    .sort((a, b) => Number(a.start || 0) - Number(b.start || 0));
+
+  const relevantBlocks = dayBlocks.filter((block) => Number(block.end || 0) >= nowMs - (5 * MS_IN_MINUTE));
+  const taskIds = [...new Set(relevantBlocks.map((block) => String(block?.taskId || '').trim()).filter(Boolean))];
+  const storyIds = [...new Set(relevantBlocks.map((block) => String(block?.storyId || '').trim()).filter(Boolean))];
+
+  const [linkedTaskSnaps, linkedStorySnaps] = await Promise.all([
+    taskIds.length ? db.getAll(...taskIds.map((id) => db.collection('tasks').doc(id))).catch(() => []) : Promise.resolve([]),
+    storyIds.length ? db.getAll(...storyIds.map((id) => db.collection('stories').doc(id))).catch(() => []) : Promise.resolve([]),
+  ]);
+
+  const linkedTasks = new Map();
+  linkedTaskSnaps.forEach((snap) => {
+    if (!snap?.exists) return;
+    linkedTasks.set(snap.id, snap.data() || {});
+  });
+  const linkedStories = new Map();
+  linkedStorySnaps.forEach((snap) => {
+    if (!snap?.exists) return;
+    linkedStories.set(snap.id, snap.data() || {});
+  });
+
+  const blockCandidates = relevantBlocks.map((block) => {
+    const startMs = Number(block.start || 0);
+    const endMs = Number(block.end || 0);
+    if (block.taskId) {
+      const task = linkedTasks.get(String(block.taskId));
+      if (!task || task.ownerUid !== uid || normalizeRecommendationPersona(task.persona) !== personaValue || task.deleted || isRecommendationTaskDone(task.status)) {
+        return { block, candidate: null };
+      }
+      return {
+        block,
+        candidate: buildRecommendationCandidate({
+          type: 'task',
+          id: String(block.taskId),
+          data: task,
+          source: startMs <= nowMs && endMs >= nowMs ? 'current_block' : 'upcoming_block',
+          reason: startMs <= nowMs && endMs >= nowMs
+            ? `Planned now until ${formatRecommendationCalendarTime(endMs, zone)}`
+            : `Planned at ${formatRecommendationCalendarTime(startMs, zone)}`,
+          plannedStartMs: startMs,
+          plannedEndMs: endMs,
+          calendarTitle: block.title || null,
+        }),
+      };
+    }
+    if (block.storyId) {
+      const story = linkedStories.get(String(block.storyId));
+      if (!story || story.ownerUid !== uid || normalizeRecommendationPersona(story.persona) !== personaValue || isRecommendationStoryDone(story.status)) {
+        return { block, candidate: null };
+      }
+      return {
+        block,
+        candidate: buildRecommendationCandidate({
+          type: 'story',
+          id: String(block.storyId),
+          data: story,
+          source: startMs <= nowMs && endMs >= nowMs ? 'current_block' : 'upcoming_block',
+          reason: startMs <= nowMs && endMs >= nowMs
+            ? `Planned now until ${formatRecommendationCalendarTime(endMs, zone)}`
+            : `Planned at ${formatRecommendationCalendarTime(startMs, zone)}`,
+          plannedStartMs: startMs,
+          plannedEndMs: endMs,
+          calendarTitle: block.title || null,
+        }),
+      };
+    }
+    return { block, candidate: null };
+  });
+
+  const currentLinked = blockCandidates.find(({ block, candidate }) => candidate && Number(block.start || 0) <= nowMs && Number(block.end || 0) >= nowMs)?.candidate || null;
+  if (currentLinked) {
+    return {
+      ok: true,
+      computedAt: now.toISO(),
+      timezone: zone,
+      persona: personaValue,
+      selectedSprintId: sprintFilter,
+      status: 'current_block',
+      reasonCode: 'current_block',
+      currentCalendarBlock: {
+        title: currentLinked.calendarTitle || currentLinked.title,
+        start: currentLinked.plannedStartMs ? new Date(currentLinked.plannedStartMs).toISOString() : null,
+        end: currentLinked.plannedEndMs ? new Date(currentLinked.plannedEndMs).toISOString() : null,
+      },
+      recommendedItem: {
+        type: currentLinked.type,
+        id: currentLinked.id,
+        ref: currentLinked.ref,
+        title: currentLinked.title,
+        label: currentLinked.label,
+        path: currentLinked.path,
+        deepLink: currentLinked.deepLink,
+        score: currentLinked.score,
+        source: currentLinked.source,
+        reason: currentLinked.reason,
+        plannedStart: currentLinked.plannedStartMs ? new Date(currentLinked.plannedStartMs).toISOString() : null,
+        plannedEnd: currentLinked.plannedEndMs ? new Date(currentLinked.plannedEndMs).toISOString() : null,
+        dueDate: currentLinked.dueMs ? new Date(currentLinked.dueMs).toISOString() : null,
+      },
+      spokenResponse: `Work on ${currentLinked.label} now.`,
+    };
+  }
+
+  const activeBusyBlock = dayBlocks.find((block) => Number(block.start || 0) <= nowMs && Number(block.end || 0) >= nowMs) || null;
+  const upcomingLinked = blockCandidates.find(({ block, candidate }) => candidate && Number(block.start || 0) > nowMs)?.candidate || null;
+
+  const top3Tasks = top3TasksSnap.docs
+    .map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() || {}) }))
+    .filter((task) => !task.deleted)
+    .filter((task) => !isRecommendationTaskDone(task.status))
+    .filter((task) => {
+      if (!task.aiTop3Date) return true;
+      return String(task.aiTop3Date).slice(0, 10) === now.toISODate();
+    })
+    .map((task) => buildRecommendationCandidate({
+      type: 'task',
+      id: task.id,
+      data: task,
+      source: 'top3',
+      reason: 'Top 3 priority for today',
+      top3: true,
+    }))
+    .filter(Boolean);
+
+  const top3Stories = top3StoriesSnap.docs
+    .map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() || {}) }))
+    .filter((story) => !isRecommendationStoryDone(story.status))
+    .filter((story) => {
+      if (!story.aiTop3Date) return true;
+      return String(story.aiTop3Date).slice(0, 10) === now.toISODate();
+    })
+    .map((story) => buildRecommendationCandidate({
+      type: 'story',
+      id: story.id,
+      data: story,
+      source: 'top3',
+      reason: 'Top 3 priority for today',
+      top3: true,
+    }))
+    .filter(Boolean);
+
+  const dueOpenTasks = dueOpenTasksSnap.docs
+    .map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() || {}) }))
+    .filter((task) => !isRecommendationTaskDone(task.status))
+    .map((task) => buildRecommendationCandidate({
+      type: 'task',
+      id: task.id,
+      data: task,
+      source: 'due_open_task',
+      reason: task.dueDate && Number(task.dueDate) <= dayEndMs ? 'Due today or overdue' : 'Open task',
+      top3: Boolean(task.aiTop3ForDay),
+    }))
+    .filter(Boolean);
+
+  const recentStories = recentStoriesSnap.docs
+    .map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() || {}) }))
+    .filter((story) => !isRecommendationStoryDone(story.status))
+    .map((story) => buildRecommendationCandidate({
+      type: 'story',
+      id: story.id,
+      data: story,
+      source: 'recent_story',
+      reason: 'Open story',
+      top3: Boolean(story.aiTop3ForDay),
+    }))
+    .filter(Boolean);
+
+  const fallbackPool = [];
+  const seenKeys = new Set();
+  [top3Tasks, top3Stories, dueOpenTasks, recentStories].forEach((collection) => {
+    collection.forEach((candidate) => {
+      const key = `${candidate.type}:${candidate.id}`;
+      if (seenKeys.has(key)) return;
+      seenKeys.add(key);
+      fallbackPool.push(candidate);
+    });
+  });
+
+  const sortedFallback = fallbackPool
+    .filter((candidate) => !sprintFilter || !candidate.sprintId || candidate.sprintId === sprintFilter || candidate.top3)
+    .sort((a, b) => {
+      const scoreDiff = scoreRecommendationCandidate(b, { selectedSprintId: sprintFilter, endOfDayMs: dayEndMs })
+        - scoreRecommendationCandidate(a, { selectedSprintId: sprintFilter, endOfDayMs: dayEndMs });
+      if (scoreDiff !== 0) return scoreDiff;
+      const aDue = a.dueMs ?? Number.MAX_SAFE_INTEGER;
+      const bDue = b.dueMs ?? Number.MAX_SAFE_INTEGER;
+      if (aDue !== bDue) return aDue - bDue;
+      return a.label.localeCompare(b.label);
+    });
+
+  let selected = null;
+  let status = 'fallback';
+  let reasonCode = 'fallback';
+  let spokenResponse = 'No clear next item found.';
+  let currentCalendarBlock = null;
+
+  if (activeBusyBlock) {
+    const busyTitle = String(activeBusyBlock.title || activeBusyBlock.summary || 'calendar event').trim();
+    const busyEndLabel = formatRecommendationCalendarTime(Number(activeBusyBlock.end || 0), zone);
+    currentCalendarBlock = {
+      title: busyTitle,
+      start: Number.isFinite(Number(activeBusyBlock.start)) ? new Date(Number(activeBusyBlock.start)).toISOString() : null,
+      end: Number.isFinite(Number(activeBusyBlock.end)) ? new Date(Number(activeBusyBlock.end)).toISOString() : null,
+    };
+    if (upcomingLinked) {
+      selected = {
+        ...upcomingLinked,
+        reason: busyEndLabel ? `After ${busyTitle} ends at ${busyEndLabel}` : `After ${busyTitle}`,
+      };
+      status = 'after_busy_event';
+      reasonCode = 'after_busy_event';
+      spokenResponse = `After ${busyTitle}, work on ${selected.label}.`;
+    } else if (sortedFallback[0]) {
+      selected = {
+        ...sortedFallback[0],
+        reason: busyEndLabel ? `After ${busyTitle} ends at ${busyEndLabel}` : `After ${busyTitle}`,
+      };
+      status = 'after_busy_event';
+      reasonCode = 'after_busy_event';
+      spokenResponse = `After ${busyTitle}, work on ${selected.label}.`;
+    }
+  }
+
+  if (!selected && upcomingLinked && Number(upcomingLinked.plannedStartMs || 0) <= nowMs + (2 * 60 * MS_IN_MINUTE)) {
+    selected = upcomingLinked;
+    status = 'upcoming_block';
+    reasonCode = 'upcoming_block';
+    spokenResponse = `Next up is ${selected.label} at ${formatRecommendationCalendarTime(Number(selected.plannedStartMs || 0), zone)}.`;
+  }
+
+  if (!selected && sortedFallback[0]) {
+    selected = sortedFallback[0];
+    status = selected.source === 'top3' ? 'top3' : 'ai_score';
+    reasonCode = status;
+    spokenResponse = `Next up is ${selected.label}.`;
+  }
+
+  if (!selected) {
+    return {
+      ok: true,
+      computedAt: now.toISO(),
+      timezone: zone,
+      persona: personaValue,
+      selectedSprintId: sprintFilter,
+      status: 'none',
+      reasonCode: 'none',
+      currentCalendarBlock,
+      recommendedItem: null,
+      spokenResponse: activeBusyBlock
+        ? `You are blocked by calendar until ${formatRecommendationCalendarTime(Number(activeBusyBlock.end || 0), zone) || 'later'}.`
+        : 'You have no open task or story to work on next.',
+    };
+  }
+
+  return {
+    ok: true,
+    computedAt: now.toISO(),
+    timezone: zone,
+    persona: personaValue,
+    selectedSprintId: sprintFilter,
+    status,
+    reasonCode,
+    currentCalendarBlock,
+    recommendedItem: {
+      type: selected.type,
+      id: selected.id,
+      ref: selected.ref,
+      title: selected.title,
+      label: selected.label,
+      path: selected.path,
+      deepLink: selected.deepLink,
+      score: selected.score,
+      source: selected.source,
+      reason: selected.reason,
+      plannedStart: selected.plannedStartMs ? new Date(selected.plannedStartMs).toISOString() : null,
+      plannedEnd: selected.plannedEndMs ? new Date(selected.plannedEndMs).toISOString() : null,
+      dueDate: selected.dueMs ? new Date(selected.dueMs).toISOString() : null,
+    },
+    spokenResponse,
+  };
+}
+
 async function buildDailySummaryAiFocus({ summaryData, userId }) {
   try {
     const zone = summaryData?.metadata?.timezone || 'UTC';
@@ -15556,6 +15994,20 @@ exports.prioritizeBacklog = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY]
     console.error('Failed to parse AI response:', parseError);
   }
   return out;
+});
+
+exports.whatToWorkOnNext = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const db = ensureFirestore();
+  const persona = normalizeRecommendationPersona(req?.data?.persona);
+  const selectedSprintId = String(req?.data?.selectedSprintId || '').trim() || null;
+  return computeNextWorkRecommendation({
+    db,
+    uid,
+    persona,
+    selectedSprintId,
+  });
 });
 
 // ===== Import items (goals, okrs, tasks, resources, trips) – same schema as earlier
