@@ -455,20 +455,20 @@ const SortableRow: React.FC<SortableRowProps> = ({
     }
   };
 
-  const handleCellSave = async (key: string) => {
+  const handleCellSave = async (key: string, sourceValue?: string) => {
     try {
       // For goalTitle editing, we're actually editing goalId
       const actualKey = key === 'goalTitle' ? 'goalId' : key;
       const oldValue = (story as any)[actualKey]; // Store the original value
-      let valueToSave: any = editValue;
+      let valueToSave: any = sourceValue ?? editValue;
 
       // If saving goalId, map typed goal title/id to canonical goalId
       if (actualKey === 'goalId') {
-        const match = goals.find(g => g.id === editValue || g.title === editValue);
-        valueToSave = match ? match.id : editValue;
+        const match = goals.find(g => g.id === valueToSave || g.title === valueToSave);
+        valueToSave = match ? match.id : valueToSave;
       } else if (actualKey === 'status') {
         // Map human label/number to canonical numeric status (0,2,4)
-        const label = String(editValue).toLowerCase();
+        const label = String(valueToSave).toLowerCase();
         const map: Record<string, number> = {
           '0': 0,
           '1': 2,
@@ -483,9 +483,9 @@ const SortableRow: React.FC<SortableRowProps> = ({
           'done': 4,
           'complete': 4,
         };
-        valueToSave = map[label] ?? editValue;
+        valueToSave = map[label] ?? valueToSave;
       } else if (actualKey === 'points') {
-        const parsedPoints = parsePointsValue(editValue);
+        const parsedPoints = parsePointsValue(valueToSave);
         const fallbackPoints = parsePointsValue((story as any).points) ?? 1;
         valueToSave = parsedPoints == null ? fallbackPoints : parsedPoints;
       }
@@ -569,6 +569,28 @@ const SortableRow: React.FC<SortableRowProps> = ({
   const renderCell = (column: Column) => {
     const value = story[column.key as keyof StoryTableRow];
     const isEditing = editingCell === column.key;
+    const displayValue = formatValue(column.key, value);
+    const editValueForColumn = (() => {
+      if (column.key === 'goalTitle') {
+        return goals.find(g => g.id === story.goalId)?.title || '';
+      }
+      if (column.key === 'status') {
+        return storyStatusText(value);
+      }
+      if (column.key === 'sprintId') {
+        return value == null ? '' : String(value);
+      }
+      if (column.key === 'points') {
+        return value == null ? '' : String(value);
+      }
+      if (column.key === 'url') {
+        return String(value || '');
+      }
+      if (column.type === 'select') {
+        return value == null ? '' : String(value);
+      }
+      return displayValue;
+    })();
 
     if (isEditing && column.editable) {
       // Searchable goal selector using datalist
@@ -581,15 +603,13 @@ const SortableRow: React.FC<SortableRowProps> = ({
                 list={datalistId}
                 value={editValue}
                 onChange={(e) => setEditValue(e.target.value)}
-                onBlur={() => {
-                  // Map typed goal title or id to goalId
-                  const match = goals.find(g => g.id === editValue || g.title === editValue);
-                  if (match) {
-                    setEditValue(match.id);
-                  }
-                  handleCellSave(column.key);
+                onBlur={(e) => {
+                  const rawValue = e.currentTarget.value;
+                  const match = goals.find(g => g.id === rawValue || g.title === rawValue);
+                  const resolvedGoalId = match ? match.id : rawValue;
+                  handleCellSave(column.key, resolvedGoalId);
                 }}
-                onKeyPress={(e) => e.key === 'Enter' && handleCellSave(column.key)}
+                onKeyPress={(e) => e.key === 'Enter' && handleCellSave(column.key, (e.currentTarget as HTMLInputElement).value)}
                 style={{
                   width: '100%',
                   padding: '6px 8px',
@@ -619,7 +639,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
               <select
                 value={editValue}
                 onChange={(e) => setEditValue(e.target.value)}
-                onBlur={() => handleCellSave(column.key)}
+                onBlur={(e) => handleCellSave(column.key, e.currentTarget.value)}
                 style={{
                   width: '100%',
                   padding: '6px 8px',
@@ -666,8 +686,8 @@ const SortableRow: React.FC<SortableRowProps> = ({
             inputMode={column.key === 'points' ? 'decimal' : undefined}
             value={editValue}
             onChange={(e) => setEditValue(e.target.value)}
-            onBlur={() => handleCellSave(column.key)}
-            onKeyPress={(e) => e.key === 'Enter' && handleCellSave(column.key)}
+            onBlur={(e) => handleCellSave(column.key, e.currentTarget.value)}
+            onKeyPress={(e) => e.key === 'Enter' && handleCellSave(column.key, (e.currentTarget as HTMLInputElement).value)}
             style={{
               width: '100%',
               padding: '6px 8px',
@@ -685,7 +705,6 @@ const SortableRow: React.FC<SortableRowProps> = ({
     );
     }
 
-    const displayValue = formatValue(column.key, value);
     const canLinkGoal = column.key === 'goalTitle' && !!story.goalId;
     const linkedGoal = canLinkGoal ? goals.find((goal) => goal.id === story.goalId) : undefined;
     const goalRefOrId = linkedGoal?.ref || story.goalId;
@@ -710,7 +729,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
             e.currentTarget.style.backgroundColor = 'transparent';
           }
         }}
-        onClick={() => column.editable && handleCellEdit(column.key, column.key === 'url' ? String(value || '') : displayValue)}
+        onClick={() => column.editable && handleCellEdit(column.key, editValueForColumn)}
       >
         <div style={{
           minHeight: '20px',

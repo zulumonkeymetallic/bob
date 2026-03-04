@@ -1,12 +1,12 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Modal, Button, Form, Alert } from 'react-bootstrap';
 import { db } from '../firebase';
 import { collection, addDoc, getDocs, query, where, serverTimestamp } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { generateRef } from '../utils/referenceGenerator';
-import { GLOBAL_THEMES, migrateThemeValue } from '../constants/globalThemes';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
+import { normalizeGoalCostType } from '../utils/goalCost';
 
 interface AddGoalModalProps {
   onClose: () => void;
@@ -27,12 +27,42 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
     endDate: '',
     status: 'New',
     priority: 2,
+    estimatedCost: '',
+    costType: '',
+    linkedPotId: '',
     kpis: [] as Array<{name: string; target: number; unit: string}>
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState<string | null>(null);
   const { themes } = useGlobalThemes();
   const [themeInput, setThemeInput] = useState('');
+  const [monzoPots, setMonzoPots] = useState<Array<{ id: string; name: string }>>([]);
+  const [potSearch, setPotSearch] = useState('');
+
+  useEffect(() => {
+    const loadPots = async () => {
+      if (!show || !currentUser) return;
+      try {
+        const q = query(collection(db, 'monzo_pots'), where('ownerUid', '==', currentUser.uid));
+        const snap = await getDocs(q);
+        const list = snap.docs
+          .map(d => ({
+            id: (d.data() as any).potId || d.id,
+            name: (d.data() as any).name || 'Pot',
+            deleted: (d.data() as any).deleted,
+            closed: (d.data() as any).closed,
+            archived: (d.data() as any).archived,
+            isArchived: (d.data() as any).isArchived,
+          }))
+          .filter(p => !p.deleted && !p.closed && !p.archived && !p.isArchived)
+          .map(p => ({ id: String(p.id), name: String(p.name) }));
+        setMonzoPots(list);
+      } catch {
+        setMonzoPots([]);
+      }
+    };
+    loadPots();
+  }, [show, currentUser]);
 
   // KPI Management functions
   const addKPI = () => {
@@ -69,11 +99,6 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
     { value: 3, label: 'High' },
     { value: 2, label: 'Medium' },
     { value: 1, label: 'Low' }
-  ];
-  const confidenceLevels = [
-    { value: 1, label: 'High Confidence (100%)' },
-    { value: 2, label: 'Medium Confidence (70%)' },
-    { value: 3, label: 'Low Confidence (40%)' }
   ];
 
   const handleSubmit = async () => {
@@ -112,9 +137,14 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
       });
       
       const selectedSize = sizes.find(s => s.value === formData.size);
+      const normalizedCostType = normalizeGoalCostType(formData.costType);
+      const isNoCostGoal = normalizedCostType === 'none';
+      const normalizedEstimatedCost = isNoCostGoal
+        ? null
+        : (formData.estimatedCost.trim() === '' ? null : Number(formData.estimatedCost));
+      const normalizedPotId = isNoCostGoal ? null : (formData.linkedPotId || null);
       
       // Map theme names to numbers for database
-      const themeMap = { 'Health': 1, 'Growth': 2, 'Wealth': 3, 'Tribe': 4, 'Home': 5 };
       const sizeMap = { 'XS': 1, 'S': 2, 'M': 3, 'L': 4, 'XL': 5 };
       const statusMap = { 'New': 0, 'Work in Progress': 1, 'Complete': 2, 'Blocked': 3, 'Deferred': 4 };
       
@@ -130,6 +160,10 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
         endDate: formData.endDate ? new Date(formData.endDate).getTime() : (Date.now() + 30*24*60*60*1000),
         status: statusMap[formData.status as keyof typeof statusMap] || 0,
         priority: formData.priority,
+        estimatedCost: normalizedEstimatedCost,
+        costType: normalizedCostType || null,
+        linkedPotId: normalizedPotId,
+        potId: normalizedPotId,
         kpis: formData.kpis,
         persona: currentPersona || 'personal',
         ownerUid: currentUser.uid, // Ensure ownerUid is included
@@ -164,8 +198,12 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
         endDate: '',
         status: 'New',
         priority: 2,
+        estimatedCost: '',
+        costType: '',
+        linkedPotId: '',
         kpis: []
       });
+      setPotSearch('');
       
       // Auto-close after success
       setTimeout(() => {
@@ -197,8 +235,12 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
       endDate: '',
       status: 'New',
       priority: 2,
+      estimatedCost: '',
+      costType: '',
+      linkedPotId: '',
       kpis: []
     });
+      setPotSearch('');
       setSubmitResult(null);
       onClose();
     };
@@ -231,6 +273,89 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
               placeholder="Describe this goal in detail..."
             />
           </Form.Group>
+
+          <div className="row">
+            <div className="col-md-4">
+              <Form.Group className="mb-3">
+                <Form.Label>Cost Type</Form.Label>
+                <Form.Select
+                  value={formData.costType}
+                  onChange={(e) => {
+                    const nextCostType = e.target.value;
+                    setFormData((prev) => ({
+                      ...prev,
+                      costType: nextCostType,
+                      estimatedCost: nextCostType === 'none' ? '' : prev.estimatedCost,
+                      linkedPotId: nextCostType === 'none' ? '' : prev.linkedPotId,
+                    }));
+                    if (nextCostType === 'none') setPotSearch('');
+                  }}
+                >
+                  <option value="">Not set</option>
+                  <option value="none">None (no cost)</option>
+                  <option value="one_off">One-off</option>
+                  <option value="recurring">Recurring</option>
+                </Form.Select>
+              </Form.Group>
+            </div>
+            <div className="col-md-4">
+              <Form.Group className="mb-3">
+                <Form.Label>Estimated Cost (£)</Form.Label>
+                <Form.Control
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={formData.estimatedCost}
+                  onChange={(e) => setFormData({ ...formData, estimatedCost: e.target.value })}
+                  placeholder="e.g. 1250"
+                  disabled={formData.costType === 'none'}
+                />
+              </Form.Group>
+            </div>
+            <div className="col-md-4">
+              <Form.Group className="mb-3">
+                <Form.Label>Linked Pot (optional)</Form.Label>
+                <Form.Control
+                  list="add-goal-pot-options"
+                  value={potSearch}
+                  disabled={formData.costType === 'none'}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setPotSearch(value);
+                    const matched = monzoPots.find((pot) =>
+                      pot.id.toLowerCase() === value.trim().toLowerCase() ||
+                      pot.name.toLowerCase() === value.trim().toLowerCase()
+                    );
+                    setFormData((prev) => ({ ...prev, linkedPotId: matched?.id || '' }));
+                  }}
+                  onBlur={() => {
+                    const value = potSearch.trim();
+                    if (!value) {
+                      setFormData((prev) => ({ ...prev, linkedPotId: '' }));
+                      return;
+                    }
+                    const matched = monzoPots.find((pot) =>
+                      pot.id.toLowerCase() === value.toLowerCase() ||
+                      pot.name.toLowerCase() === value.toLowerCase()
+                    );
+                    if (matched) {
+                      setFormData((prev) => ({ ...prev, linkedPotId: matched.id }));
+                      setPotSearch(matched.name);
+                    }
+                  }}
+                  placeholder={formData.costType === 'none' ? 'Disabled for no-cost goals' : 'Search pot by name...'}
+                />
+                <datalist id="add-goal-pot-options">
+                  {monzoPots.map((pot) => (
+                    <option key={`add-pot-name-${pot.id}`} value={pot.name} label={pot.id} />
+                  ))}
+                  {monzoPots.map((pot) => (
+                    <option key={`add-pot-id-${pot.id}`} value={pot.id} />
+                  ))}
+                </datalist>
+              </Form.Group>
+            </div>
+          </div>
 
           <div className="row">
             <div className="col-md-6">

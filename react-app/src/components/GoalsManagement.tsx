@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Container, Card, Row, Col, Button, Form, InputGroup } from 'react-bootstrap';
+import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, deleteDoc, serverTimestamp, writeBatch, getDocs } from 'firebase/firestore';
@@ -18,11 +19,13 @@ import { arrayMove } from '@dnd-kit/sortable';
 import { useSidebar } from '../contexts/SidebarContext';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { computeWindowExpectedProgress, evaluateGoalTargetStatus } from '../utils/goalKpiStatus';
+import { goalNeedsLinkedPot } from '../utils/goalCost';
 
 const GoalsManagement: React.FC = () => {
   console.log('[GoalsManagement] Component RENDERING');
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
+  const [searchParams] = useSearchParams();
   const [goals, setGoals] = useState<Goal[]>([]);
   const [stories, setStories] = useState<Story[]>([]);
   const [goalKpiScope, setGoalKpiScope] = useState<'sprint' | 'year' | 'goal'>('sprint');
@@ -52,6 +55,15 @@ const GoalsManagement: React.FC = () => {
   const { selectedSprintId, setSelectedSprintId, sprints } = useSprint();
   const { themes: globalThemes } = useGlobalThemes();
   const { isCollapsed, toggleCollapse } = useSidebar();
+
+  useEffect(() => {
+    const filter = searchParams.get('filter');
+    if (filter === 'cost_without_pot') {
+      setViewMode('list');
+      setShowNoPotOnly(true);
+      setFilterYear('all');
+    }
+  }, [searchParams]);
 
   const toMillis = (value: any): number | null => {
     if (value == null) return null;
@@ -396,8 +408,7 @@ const GoalsManagement: React.FC = () => {
     if (filterStatus !== 'all' && !isStatus(goal.status, filterStatus)) return false;
     if (filterTheme !== 'all' && getThemeName(goal.theme) !== filterTheme) return false;
     if (showNoPotOnly) {
-      const potId = (goal as any).linkedPotId || (goal as any).potId;
-      if (potId) return false;
+      if (!goalNeedsLinkedPot(goal)) return false;
     }
     const derivedYear =
       (goal as any).targetYear ||
@@ -862,6 +873,7 @@ const GoalsManagement: React.FC = () => {
                       setFilterTheme('all');
                       setSearchTerm('');
                       setGoalKpiScope('sprint');
+                      setShowNoPotOnly(false);
                     }}
                     style={{ borderColor: 'var(--notion-border)', color: 'var(--notion-text)' }}
                   >
@@ -878,7 +890,7 @@ const GoalsManagement: React.FC = () => {
                   <Form.Check
                     type="switch"
                     id="toggle-goals-no-pots"
-                    label="Only goals without pots"
+                    label="Only goals with cost and no pot"
                     checked={showNoPotOnly}
                     onChange={(e) => setShowNoPotOnly(e.target.checked)}
                     className="text-muted"

@@ -356,82 +356,99 @@ const SortableRow: React.FC<SortableRowProps> = ({
     setEditValue(value || '');
   };
 
-  const handleCellSave = async (key: string) => {
+  const handleCellSave = async (key: string, sourceValue?: string) => {
     try {
-      const oldValue = (task as any)[key]; // Store the original value
+      const oldValue = (task as any)[key];
+      const valueToSave = sourceValue ?? editValue;
+      let updates: Partial<Task> | null = null;
+      let oldComparable = oldValue == null ? '' : String(oldValue);
+      let newComparable = valueToSave == null ? '' : String(valueToSave);
 
-      // Only proceed if the value actually changed
-      if (oldValue !== editValue) {
-        let updates: Partial<Task>;
+      // Special handling for story selection
+      if (key === 'storyTitle') {
+        const selectedStory = stories.find(story => story.title === valueToSave);
+        const previousStoryId = String((task as any).storyId || '');
+        const nextStoryId = selectedStory ? selectedStory.id : '';
+        oldComparable = previousStoryId;
+        newComparable = nextStoryId;
 
-        // Special handling for story selection
-        if (key === 'storyTitle') {
-          // Find the story by title and update storyId instead
-          const selectedStory = stories.find(story => story.title === editValue);
-          if (selectedStory) {
-            updates = { storyId: selectedStory.id };
+        if (selectedStory) {
+          updates = { storyId: selectedStory.id };
 
-            // Track the field change with story title for display
-            trackFieldChange(
-              task.id,
-              'task',
-              'story',
-              task.storyTitle || 'No story',
-              editValue,
-              task.ref
-            );
-
-            console.log(`🎯 Task story changed: from "${task.storyTitle || 'No story'}" to "${editValue}" (ID: ${selectedStory.id}) for task ${task.id}`);
-          } else {
-            // Clear story assignment
-            updates = { storyId: '' };
-
-            trackFieldChange(
-              task.id,
-              'task',
-              'story',
-              task.storyTitle || 'No story',
-              'No story',
-              task.ref
-            );
-
-            console.log(`🎯 Task story cleared for task ${task.id}`);
-          }
-        } else if (key === 'dueDate') {
-          const normalizedValue = editValue ? new Date(editValue).getTime() : null;
-          updates = { dueDate: normalizedValue ?? null };
-        } else if (key === 'status') {
-          const next = Number(editValue);
-          const canonical = Number.isFinite(next)
-            ? (next >= 2 ? 2 : next <= 0 ? 0 : 1)
-            : editValue;
-          updates = { status: canonical } as any;
-          trackFieldChange(task.id, 'task', 'status', oldValue, canonical, task.ref);
-        } else if (key === 'priority') {
-          const next = Number(editValue);
-          updates = { priority: Number.isFinite(next) ? (next as any) : (editValue as any) } as any;
-        } else if (key === 'points') {
-          const parsedPoints = parsePointsValue(editValue);
-          const fallbackPoints = parsePointsValue((task as any).points) ?? 1;
-          updates = { points: parsedPoints == null ? fallbackPoints : parsedPoints } as any;
-        } else {
-          // Regular field update
-          updates = { [key]: editValue };
-
-          // Track the field change for activity stream
           trackFieldChange(
             task.id,
             'task',
-            key,
-            oldValue,
-            editValue,
+            'story',
+            task.storyTitle || 'No story',
+            valueToSave,
             task.ref
           );
 
-          console.log(`🎯 Task field changed: ${key} from "${oldValue}" to "${editValue}" for task ${task.id}`);
-        }
+          console.log(`🎯 Task story changed: from "${task.storyTitle || 'No story'}" to "${valueToSave}" (ID: ${selectedStory.id}) for task ${task.id}`);
+        } else {
+          updates = { storyId: '' };
 
+          trackFieldChange(
+            task.id,
+            'task',
+            'story',
+            task.storyTitle || 'No story',
+            'No story',
+            task.ref
+          );
+
+          console.log(`🎯 Task story cleared for task ${task.id}`);
+        }
+      } else if (key === 'dueDate') {
+        const dueDateMs = valueToSave ? new Date(valueToSave).getTime() : null;
+        const normalizedValue = Number.isFinite(dueDateMs as number) ? dueDateMs : null;
+        oldComparable = oldValue == null ? '' : String(oldValue);
+        newComparable = normalizedValue == null ? '' : String(normalizedValue);
+        updates = { dueDate: normalizedValue ?? null };
+      } else if (key === 'status') {
+        const next = Number(valueToSave);
+        const canonical = Number.isFinite(next)
+          ? (next >= 3 ? 3 : next >= 2 ? 2 : next <= 0 ? 0 : 1)
+          : valueToSave;
+        oldComparable = oldValue == null ? '' : String(oldValue);
+        newComparable = canonical == null ? '' : String(canonical);
+        updates = { status: canonical } as any;
+        trackFieldChange(task.id, 'task', 'status', oldValue, canonical, task.ref);
+      } else if (key === 'priority') {
+        const next = Number(valueToSave);
+        const canonical = Number.isFinite(next) ? (next as any) : (valueToSave as any);
+        oldComparable = oldValue == null ? '' : String(oldValue);
+        newComparable = canonical == null ? '' : String(canonical);
+        updates = { priority: canonical } as any;
+      } else if (key === 'points') {
+        const fallbackPoints = parsePointsValue((task as any).points) ?? 1;
+        const parsedPoints = parsePointsValue(valueToSave);
+        const normalizedPoints = parsedPoints == null ? fallbackPoints : parsedPoints;
+        const previousPoints = parsePointsValue(oldValue) ?? fallbackPoints;
+        oldComparable = String(previousPoints);
+        newComparable = String(normalizedPoints);
+        updates = { points: normalizedPoints } as any;
+      } else {
+        updates = { [key]: valueToSave };
+        oldComparable = oldValue == null ? '' : String(oldValue);
+        newComparable = valueToSave == null ? '' : String(valueToSave);
+
+        trackFieldChange(
+          task.id,
+          'task',
+          key,
+          oldValue,
+          valueToSave,
+          task.ref
+        );
+
+        console.log(`🎯 Task field changed: ${key} from "${oldValue}" to "${valueToSave}" for task ${task.id}`);
+      }
+
+      if (updates && oldComparable !== newComparable) {
         await onTaskUpdate(task.id, updates);
+      } else {
+        console.log(`🔄 No change detected for ${key}: ${oldComparable} === ${newComparable}`);
       }
 
       setEditingCell(null);
@@ -503,6 +520,35 @@ const SortableRow: React.FC<SortableRowProps> = ({
     const value = task[column.key as keyof TaskTableRow];
     const formattedValue = formatValue(column.key, value);
     const isEditing = editingCell === column.key;
+    const editValueForColumn = (() => {
+      if (column.key === 'url') {
+        return String(value || '');
+      }
+      if (column.key === 'dueDate') {
+        return formatValue(column.key, value);
+      }
+      if (column.key === 'status') {
+        const next = Number(value);
+        if (Number.isFinite(next)) {
+          return String(next >= 2 ? 2 : next <= 0 ? 0 : 1);
+        }
+        const statusLabel = String(value || '').toLowerCase();
+        if (['blocked', 'paused', 'on-hold', 'onhold', 'stalled', 'waiting'].includes(statusLabel)) return '3';
+        if (['done', 'complete', 'completed', 'closed', 'finished'].includes(statusLabel)) return '2';
+        if (['in-progress', 'in progress', 'active', 'doing'].includes(statusLabel)) return '1';
+        return '0';
+      }
+      if (column.key === 'type') {
+        return normalizeTaskType(value || 'task');
+      }
+      if (column.key === 'priority' || column.key === 'points') {
+        return value == null ? '' : String(value);
+      }
+      if (column.type === 'select') {
+        return value == null ? '' : String(value);
+      }
+      return formattedValue;
+    })();
 
     if (isEditing && column.editable) {
       if (column.type === 'select') {
@@ -512,7 +558,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
               <select
                 value={editValue}
                 onChange={(e) => setEditValue(e.target.value)}
-                onBlur={() => handleCellSave(column.key)}
+                onBlur={(e) => handleCellSave(column.key, e.currentTarget.value)}
                 style={{
                   width: '100%',
                   padding: '6px 8px',
@@ -561,8 +607,8 @@ const SortableRow: React.FC<SortableRowProps> = ({
               inputMode={column.key === 'points' ? 'decimal' : undefined}
               value={editValue}
               onChange={(e) => setEditValue(e.target.value)}
-              onBlur={() => handleCellSave(column.key)}
-              onKeyPress={(e) => e.key === 'Enter' && handleCellSave(column.key)}
+              onBlur={(e) => handleCellSave(column.key, e.currentTarget.value)}
+              onKeyPress={(e) => e.key === 'Enter' && handleCellSave(column.key, (e.currentTarget as HTMLInputElement).value)}
               style={{
                 width: '100%',
                 padding: '6px 8px',
@@ -601,7 +647,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
             e.currentTarget.style.backgroundColor = 'transparent';
           }
         }}
-        onClick={() => column.editable && handleCellEdit(column.key, column.key === 'url' ? String(value || '') : formattedValue)}
+        onClick={() => column.editable && handleCellEdit(column.key, editValueForColumn)}
       >
         <div style={{
           minHeight: '20px',

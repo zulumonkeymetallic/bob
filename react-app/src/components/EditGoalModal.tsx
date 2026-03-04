@@ -17,6 +17,7 @@ import { usePersona } from '../contexts/PersonaContext';
 import { useSprint } from '../contexts/SprintContext';
 import { cascadeGoalPersona } from '../utils/personaCascade';
 import { parsePointsValue } from '../utils/points';
+import { normalizeGoalCostType } from '../utils/goalCost';
 import { Wand2 } from 'lucide-react';
 
 interface EditGoalModalProps {
@@ -76,6 +77,8 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
     status: 'New',
     priority: 2,
     estimatedCost: '',
+    costType: '',
+    recurrence: '',
     kpis: [] as Array<{ name: string; target: number; unit: string }>,
     parentGoalId: '',
     linkedPotId: '',
@@ -119,6 +122,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
     return match?.label || match?.name || String(value);
   }, [themes]);
   const [parentSearch, setParentSearch] = useState('');
+  const [potSearch, setPotSearch] = useState('');
   const [monzoPots, setMonzoPots] = useState<Array<{ id: string; name: string }>>([]);
   const [monzoConnected, setMonzoConnected] = useState(false);
   const [linkedStories, setLinkedStories] = useState<Story[]>([]);
@@ -416,6 +420,8 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
           status: statusMap[goal.status as keyof typeof statusMap] || 'New',
           priority: goal.priority ?? 2,
           estimatedCost: goal.estimatedCost != null ? String(goal.estimatedCost) : '',
+          costType: normalizeGoalCostType((goal as any).costType) || '',
+          recurrence: String((goal as any).recurrence || ''),
           kpis: goal.kpis || [],
           parentGoalId: goal.parentGoalId || '',
           linkedPotId: (goal as any).linkedPotId || (goal as any).potId || '',
@@ -426,6 +432,9 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         const current = canonicalThemeId;
         const themeObj = themes.find(t => String(t.id) === String(current));
         setThemeInput(themeObj?.label || themeObj?.name || `${themeObj?.id ?? current ?? ''}`);
+        const linkedPot = (goal as any).linkedPotId || (goal as any).potId || '';
+        const linkedPotName = monzoPots.find((pot) => pot.id === linkedPot)?.name;
+        setPotSearch(linkedPotName || String(linkedPot || ''));
         setParentSearch('');
         setThemeTouched(false);
       } else {
@@ -444,6 +453,8 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
           status: 'New',
           priority: 2,
           estimatedCost: '',
+          costType: '',
+          recurrence: '',
           kpis: [],
           parentGoalId: '',
           linkedPotId: '',
@@ -452,11 +463,12 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
           persona: (currentPersona || 'personal') as 'personal' | 'work',
         });
         setThemeInput('');
+        setPotSearch('');
         setParentSearch('');
         setThemeTouched(false);
       }
     }
-  }, [goal, show, resolveThemeId]);
+  }, [goal, show, resolveThemeId, currentPersona, monzoPots]);
 
   useEffect(() => {
     if (!show) {
@@ -489,14 +501,30 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         const q = query(collection(db, 'monzo_pots'), where('ownerUid', '==', currentUserId));
         const snap = await getDocs(q);
         const list = snap.docs
-          .map(d => ({ id: (d.data() as any).potId || d.id, name: (d.data() as any).name || 'Pot', deleted: (d.data() as any).deleted, closed: (d.data() as any).closed }))
-          .filter(p => !p.deleted && !p.closed)
+          .map(d => ({
+            id: (d.data() as any).potId || d.id,
+            name: (d.data() as any).name || 'Pot',
+            deleted: (d.data() as any).deleted,
+            closed: (d.data() as any).closed,
+            archived: (d.data() as any).archived,
+            isArchived: (d.data() as any).isArchived
+          }))
+          .filter(p => !p.deleted && !p.closed && !p.archived && !p.isArchived)
           .map(p => ({ id: p.id, name: p.name }));
         setMonzoPots(list);
       } catch { }
     };
     if (show && currentUserId) loadPots();
   }, [show, currentUserId]);
+
+  useEffect(() => {
+    if (!show) return;
+    if (!formData.linkedPotId) return;
+    const linkedPotName = monzoPots.find((pot) => pot.id === formData.linkedPotId)?.name;
+    if (linkedPotName && linkedPotName !== potSearch) {
+      setPotSearch(linkedPotName);
+    }
+  }, [show, formData.linkedPotId, monzoPots, potSearch]);
 
   // Check Monzo connection status to decide if pot auto-create can run
   useEffect(() => {
@@ -549,6 +577,15 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
       const themeId = resolveThemeId(themeInput, formData.theme);
       const previousThemeRaw = goal ? ((goal as any).theme ?? (goal as any).themeId ?? (goal as any).theme_id) : null;
       const previousThemeId = goal ? resolveThemeId(String(previousThemeRaw ?? ''), formData.theme) : null;
+      const normalizedCostType = normalizeGoalCostType(formData.costType);
+      const normalizedRecurrence = normalizedCostType === 'recurring'
+        ? String(formData.recurrence || '').trim().toLowerCase()
+        : '';
+      const isNoCostGoal = normalizedCostType === 'none';
+      const normalizedPotId = isNoCostGoal ? '' : String(formData.linkedPotId || '').trim();
+      const normalizedEstimatedCost = isNoCostGoal
+        ? null
+        : (formData.estimatedCost.trim() === '' ? null : Number(formData.estimatedCost));
 
       const goalData: any = {
         title: formData.title.trim(),
@@ -565,34 +602,28 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         status: statusMap[formData.status as keyof typeof statusMap] || 0,
         priority: formData.priority,
         kpis: formData.kpis,
-        estimatedCost: formData.estimatedCost.trim() === '' ? null : Number(formData.estimatedCost),
+        estimatedCost: normalizedEstimatedCost,
         parentGoalId: formData.parentGoalId ? formData.parentGoalId : null,
         updatedAt: serverTimestamp(),
         tags: formData.tags,
         autoCreatePot: formData.autoCreatePot,
         persona: formData.persona || currentPersona || 'personal',
+        costType: normalizedCostType || null,
+        recurrence: normalizedRecurrence || null,
       };
 
-      // Read optional cost metadata and pot mapping from form elements
-      const ct = (document.getElementById('goal-cost-type') as HTMLSelectElement | null)?.value || '';
-      const rec = (document.getElementById('goal-recurrence') as HTMLSelectElement | null)?.value || '';
       const ty = (formData.targetYear || '').trim();
-      const potSel = (document.getElementById('goal-pot-id') as HTMLSelectElement | null)?.value || '';
-      if (ct) goalData.costType = ct;
-      else goalData.costType = null;
-      if (rec) goalData.recurrence = rec;
-      else goalData.recurrence = null;
       goalData.targetYear = ty ? Number(ty) : null;
-      goalData.linkedPotId = formData.linkedPotId || null;
+      goalData.linkedPotId = normalizedPotId || null;
       // Backwards compatibility
-      goalData.potId = formData.linkedPotId || null;
-      const estimatedCostValue = formData.estimatedCost ? Number(formData.estimatedCost) : null;
+      goalData.potId = normalizedPotId || null;
+      const estimatedCostValue = normalizedEstimatedCost;
 
       const maybeCreateMonzoPot = async (goalId: string | null, goalRef?: string | null): Promise<string | null> => {
         if (!goalId) return null;
         if (!formData.autoCreatePot) return null;
         if (!estimatedCostValue || Number.isNaN(estimatedCostValue)) return null;
-        if (formData.linkedPotId) return null;
+        if (normalizedPotId) return null;
         if (!monzoConnected) {
           setToastMsg('Connect Monzo to auto-create a pot.');
           return null;
@@ -792,10 +823,13 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
                     value={formData.estimatedCost}
                     onChange={(e) => setFormData({ ...formData, estimatedCost: e.target.value })}
                     placeholder="e.g. 1250"
+                    disabled={formData.costType === 'none'}
                   />
                 </InputGroup>
                 <Form.Text className="text-muted">
-                  Used for finance projections and Monzo pot alignment.
+                  {formData.costType === 'none'
+                    ? 'Cost disabled for this goal.'
+                    : 'Used for finance projections and Monzo pot alignment.'}
                 </Form.Text>
               </Form.Group>
 
@@ -803,8 +837,25 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
                 <div className="col-md-4">
                   <Form.Group className="mb-3">
                     <Form.Label>Cost Type</Form.Label>
-                    <Form.Select id="goal-cost-type" defaultValue={(goal as any)?.costType || ''}>
+                    <Form.Select
+                      id="goal-cost-type"
+                      value={formData.costType}
+                      onChange={(e) => {
+                        const nextCostType = e.target.value;
+                        setFormData((prev) => ({
+                          ...prev,
+                          costType: nextCostType,
+                          estimatedCost: nextCostType === 'none' ? '' : prev.estimatedCost,
+                          linkedPotId: nextCostType === 'none' ? '' : prev.linkedPotId,
+                          autoCreatePot: nextCostType === 'none' ? false : prev.autoCreatePot,
+                        }));
+                        if (nextCostType === 'none') {
+                          setPotSearch('');
+                        }
+                      }}
+                    >
                       <option value="">Not set</option>
+                      <option value="none">None (no cost)</option>
                       <option value="one_off">One-off</option>
                       <option value="recurring">Recurring</option>
                     </Form.Select>
@@ -813,7 +864,12 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
                 <div className="col-md-4">
                   <Form.Group className="mb-3">
                     <Form.Label>Recurrence</Form.Label>
-                    <Form.Select id="goal-recurrence" defaultValue={(goal as any)?.recurrence || ''}>
+                    <Form.Select
+                      id="goal-recurrence"
+                      value={formData.recurrence}
+                      onChange={(e) => setFormData({ ...formData, recurrence: e.target.value })}
+                      disabled={formData.costType !== 'recurring'}
+                    >
                       <option value="">Not set</option>
                       <option value="monthly">Monthly</option>
                       <option value="annual">Annual</option>
@@ -841,22 +897,56 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
 
               <Form.Group className="mb-3">
                 <Form.Label>Link Monzo Pot (optional)</Form.Label>
-                <Form.Select
-                  value={formData.linkedPotId}
-                  onChange={(e) => setFormData({ ...formData, linkedPotId: e.target.value })}
-                >
-                  <option value="">No pot linked</option>
-                  {monzoPots.map(p => (
-                    <option key={p.id} value={p.id}>{p.name}</option>
+                <Form.Control
+                  list="goal-pot-options"
+                  value={potSearch}
+                  disabled={formData.costType === 'none'}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setPotSearch(value);
+                    const matched = monzoPots.find((pot) =>
+                      pot.id.toLowerCase() === value.trim().toLowerCase() ||
+                      pot.name.toLowerCase() === value.trim().toLowerCase()
+                    );
+                    setFormData((prev) => ({ ...prev, linkedPotId: matched?.id || '' }));
+                  }}
+                  onBlur={() => {
+                    const value = potSearch.trim();
+                    if (!value) {
+                      setFormData((prev) => ({ ...prev, linkedPotId: '' }));
+                      return;
+                    }
+                    const matched = monzoPots.find((pot) =>
+                      pot.id.toLowerCase() === value.toLowerCase() ||
+                      pot.name.toLowerCase() === value.toLowerCase()
+                    );
+                    if (matched) {
+                      setFormData((prev) => ({ ...prev, linkedPotId: matched.id }));
+                      setPotSearch(matched.name);
+                    }
+                  }}
+                  placeholder={formData.costType === 'none' ? 'Disabled for no-cost goals' : 'Search pots by name...'}
+                />
+                <datalist id="goal-pot-options">
+                  {monzoPots.map((pot) => (
+                    <option key={`pot-name-${pot.id}`} value={pot.name} label={pot.id} />
                   ))}
-                </Form.Select>
-                <Form.Text className="text-muted">If set, analytics will use this pot rather than name matching.</Form.Text>
+                  {monzoPots.map((pot) => (
+                    <option key={`pot-id-${pot.id}`} value={pot.id} />
+                  ))}
+                </datalist>
+                <Form.Text className="text-muted">
+                  {formData.costType === 'none'
+                    ? 'No-cost goals are excluded from pot tracking.'
+                    : 'Search and select a non-archived pot by name.'}
+                </Form.Text>
               </Form.Group>
               <Form.Check
                 className="mb-3"
                 type="checkbox"
                 label="Auto-create a Monzo pot for this goal (target = estimated cost)"
                 checked={formData.autoCreatePot}
+                disabled={formData.costType === 'none'}
                 onChange={(e) => setFormData({ ...formData, autoCreatePot: e.target.checked })}
               />
 

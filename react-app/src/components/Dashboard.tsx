@@ -32,6 +32,7 @@ import { isRecurringDueOnDate, resolveRecurringDueMs, resolveTaskDueMs } from '.
 import EditTaskModal from './EditTaskModal';
 import EditStoryModal from './EditStoryModal';
 import { useSidebar } from '../contexts/SidebarContext';
+import { goalNeedsLinkedPot } from '../utils/goalCost';
 
 const locales = { 'en-GB': enGB } as const;
 const localizer = dateFnsLocalizer({
@@ -1898,6 +1899,10 @@ const Dashboard: React.FC = () => {
     };
   }, [goalsList, potsById, currentUser?.uid]);
 
+  const goalsMissingPotWithCostCount = useMemo(() => {
+    return goalsList.filter((goal) => goalNeedsLinkedPot(goal)).length;
+  }, [goalsList]);
+
   const loadLLMPriority = async () => {
     if (!currentUser) return;
     try {
@@ -2795,6 +2800,38 @@ const Dashboard: React.FC = () => {
                             {lowerBetterTrendArrow(financeUncategorisedDelta)}
                           </div>
                           <div className="text-muted small">{financeSyncSummary}</div>
+                        </div>
+                      </div>
+                    </Col>
+
+                    {/* Goals Missing Pot Group */}
+                    <Col xs={12} sm={6} lg={6} xl={3}>
+                      <div
+                        className="d-flex align-items-center gap-2 px-2 py-1 rounded border h-100"
+                        style={{
+                          background: 'var(--bs-body-bg)',
+                          cursor: 'pointer',
+                          transition: 'all 0.2s ease'
+                        }}
+                        onClick={() => navigate('/goals?filter=cost_without_pot')}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.backgroundColor = 'var(--bs-warning-bg-subtle)';
+                          e.currentTarget.style.borderColor = 'var(--bs-warning)';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = 'var(--bs-body-bg)';
+                          e.currentTarget.style.borderColor = 'var(--bs-border-color)';
+                        }}
+                      >
+                        <Target size={16} className="text-warning" />
+                        <div className="flex-grow-1">
+                          <div className="text-muted small">Goals Missing Pot</div>
+                          <div className="fw-semibold">
+                            {goalsMissingPotWithCostCount} goals
+                          </div>
+                          <div className="text-muted small">
+                            Cost-linked goals without a linked pot
+                          </div>
                         </div>
                       </div>
                     </Col>
