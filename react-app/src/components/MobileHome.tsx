@@ -482,11 +482,17 @@ const MobileHome: React.FC = () => {
     try {
       const callable = httpsCallable(functions, 'replanCalendarNow');
       const response = await callable({ days: 7 });
-      const payload = response.data as { rescheduled?: number; blocked?: number; created?: number };
+      const payload = response.data as { rescheduled?: number; blocked?: number; created?: number; shortfallMinutes?: number; unscheduledStories?: number; unscheduledTasks?: number };
       const parts: string[] = [];
       if (payload?.created) parts.push(`${payload.created} calendar entries created`);
       if (payload?.rescheduled) parts.push(`${payload.rescheduled} moved`);
       if (payload?.blocked) parts.push(`${payload.blocked} blocked`);
+      if (payload?.shortfallMinutes) {
+        const shortfallHours = Math.round((payload.shortfallMinutes / 60) * 10) / 10;
+        parts.push(`${shortfallHours}h short`);
+      }
+      if (payload?.unscheduledStories) parts.push(`${payload.unscheduledStories} stories unscheduled`);
+      if (payload?.unscheduledTasks) parts.push(`${payload.unscheduledTasks} tasks unscheduled`);
       setReplanFeedback(parts.length ? `Delta replan complete: ${parts.join(', ')}` : 'Delta replan complete. No entries needed moving.');
     } catch (err) {
       console.error('Calendar replan failed', err);

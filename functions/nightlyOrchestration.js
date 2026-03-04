@@ -736,6 +736,198 @@ function selectTopTasksFresh(items, storyMap = new Map()) {
   return selected.slice(0, 3);
 }
 
+function getEntityKey(kind, id) {
+  if (!kind || !id) return null;
+  return `${kind}:${id}`;
+}
+
+function getDueDateMs(value) {
+  const raw = value?.dueDate ?? value?.targetDate ?? value?.dueDateMs ?? value?.endDate ?? null;
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+  if (raw && typeof raw.toDate === 'function') {
+    const dt = raw.toDate();
+    return dt instanceof Date ? dt.getTime() : null;
+  }
+  const parsed = raw ? Date.parse(String(raw)) : NaN;
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function getCreatedAtMs(value) {
+  const raw = value?.createdAt ?? value?.created_at ?? null;
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+  if (raw && typeof raw.toDate === 'function') {
+    const dt = raw.toDate();
+    return dt instanceof Date ? dt.getTime() : null;
+  }
+  const parsed = raw ? Date.parse(String(raw)) : NaN;
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function estimateSchedulingMinutes(candidate, kind) {
+  const raw = kind === 'task'
+    ? (Number(candidate?.points) * 60) || Number(candidate?.estimateMin) || 60
+    : (Number(candidate?.points) * 60) || Number(candidate?.estimateMin) || 90;
+  const minMinutes = kind === 'task' ? 30 : 60;
+  const maxMinutes = kind === 'task' ? 180 : 240;
+  return Math.min(maxMinutes, Math.max(minMinutes, raw || minMinutes));
+}
+
+function estimateRequiredMinutes(candidate, kind) {
+  const raw = kind === 'task'
+    ? (Number(candidate?.points) * 60) || Number(candidate?.estimateMin) || 60
+    : (Number(candidate?.points) * 60) || Number(candidate?.estimateMin) || 90;
+  const minMinutes = kind === 'task' ? 30 : 60;
+  return Math.max(minMinutes, raw || minMinutes);
+}
+
+function sortPlannerCandidates(items, {
+  rankKey,
+  isTopFn,
+  extraPriorityFn,
+}) {
+  return [...(items || [])].sort((a, b) => {
+    const aManual = a?.userPriorityFlag === true ? 1 : 0;
+    const bManual = b?.userPriorityFlag === true ? 1 : 0;
+    if (aManual !== bManual) return bManual - aManual;
+
+    const aExtra = extraPriorityFn?.(a) ? 1 : 0;
+    const bExtra = extraPriorityFn?.(b) ? 1 : 0;
+    if (aExtra !== bExtra) return bExtra - aExtra;
+
+    const aTop = isTopFn?.(a) ? 1 : 0;
+    const bTop = isTopFn?.(b) ? 1 : 0;
+    if (aTop !== bTop) return bTop - aTop;
+
+    const aRank = Number(a?.[rankKey] || 0) || 99;
+    const bRank = Number(b?.[rankKey] || 0) || 99;
+    if (aRank !== bRank) return aRank - bRank;
+
+    const aScore = Number(a?.aiScore || 0);
+    const bScore = Number(b?.aiScore || 0);
+    if (aScore !== bScore) return bScore - aScore;
+
+    const aDue = getDueDateMs(a);
+    const bDue = getDueDateMs(b);
+    if (aDue != null || bDue != null) {
+      if (aDue == null) return 1;
+      if (bDue == null) return -1;
+      if (aDue !== bDue) return aDue - bDue;
+    }
+
+    const aCreated = getCreatedAtMs(a) ?? Number.MAX_SAFE_INTEGER;
+    const bCreated = getCreatedAtMs(b) ?? Number.MAX_SAFE_INTEGER;
+    if (aCreated !== bCreated) return aCreated - bCreated;
+
+    return String(a?.title || '').localeCompare(String(b?.title || ''));
+  });
+}
+
+function collectScheduledMinutesByEntity(blocks) {
+  const scheduledMinutesByEntity = new Map();
+  for (const block of blocks || []) {
+    const kind = block?.storyId ? 'story' : block?.taskId ? 'task' : null;
+    const entityId = block?.storyId || block?.taskId || null;
+    const key = getEntityKey(kind, entityId);
+    const startMs = toMillis(block?.start);
+    const endMs = toMillis(block?.end);
+    if (!key || !startMs || !endMs || endMs <= startMs) continue;
+    const minutes = Math.max(0, Math.round((endMs - startMs) / 60000));
+    scheduledMinutesByEntity.set(key, (scheduledMinutesByEntity.get(key) || 0) + minutes);
+  }
+  return scheduledMinutesByEntity;
+}
+
+function addScheduledMinutes(scheduledMinutesByEntity, kind, entityId, minutes) {
+  const key = getEntityKey(kind, entityId);
+  if (!scheduledMinutesByEntity || !key || !minutes) return;
+  scheduledMinutesByEntity.set(key, (scheduledMinutesByEntity.get(key) || 0) + Number(minutes || 0));
+}
+
+function buildPlannerCoverageSummary({ stories, tasks, scheduledMinutesByEntity }) {
+  const storyList = stories || [];
+  const taskList = tasks || [];
+  let requiredStoryMinutes = 0;
+  let scheduledStoryMinutes = 0;
+  let requiredTaskMinutes = 0;
+  let scheduledTaskMinutes = 0;
+  let unscheduledStories = 0;
+  let unscheduledTasks = 0;
+
+  for (const story of storyList) {
+    const required = estimateRequiredMinutes(story, 'story');
+    const scheduled = Number(scheduledMinutesByEntity?.get(getEntityKey('story', story.id)) || 0);
+    requiredStoryMinutes += required;
+    scheduledStoryMinutes += scheduled;
+    if (scheduled <= 0) unscheduledStories += 1;
+  }
+
+  for (const task of taskList) {
+    const required = estimateRequiredMinutes(task, 'task');
+    const scheduled = Number(scheduledMinutesByEntity?.get(getEntityKey('task', task.id)) || 0);
+    requiredTaskMinutes += required;
+    scheduledTaskMinutes += scheduled;
+    if (scheduled <= 0) unscheduledTasks += 1;
+  }
+
+  const storyShortfallMinutes = Math.max(0, requiredStoryMinutes - scheduledStoryMinutes);
+  const taskShortfallMinutes = Math.max(0, requiredTaskMinutes - scheduledTaskMinutes);
+  return {
+    candidateStories: storyList.length,
+    candidateTasks: taskList.length,
+    requiredStoryMinutes,
+    scheduledStoryMinutes,
+    requiredTaskMinutes,
+    scheduledTaskMinutes,
+    storyShortfallMinutes,
+    taskShortfallMinutes,
+    shortfallMinutes: storyShortfallMinutes + taskShortfallMinutes,
+    unscheduledStories,
+    unscheduledTasks,
+  };
+}
+
+async function writePlannerStats({
+  db,
+  userId,
+  source,
+  windowStart,
+  windowEnd,
+  result,
+  coverage,
+}) {
+  try {
+    await db.collection('planner_stats').doc(userId).set({
+      lastRunAt: Date.now(),
+      source: source || 'planner',
+      windowDays: windowStart && windowEnd
+        ? Math.max(1, Math.round(windowEnd.startOf('day').diff(windowStart.startOf('day'), 'days').days) + 1)
+        : 7,
+      windowStart: windowStart?.toISO?.() || null,
+      windowEnd: windowEnd?.toISO?.() || null,
+      created: Number(result?.created || 0),
+      blocked: Number(result?.blocked || 0),
+      rescheduled: Number(result?.rescheduled || 0),
+      replaced: Number(result?.replaced || 0),
+      totalMovable: Number(result?.totalMovable || 0),
+      gcalLinksCount: Array.isArray(result?.gcalLinks) ? result.gcalLinks.length : 0,
+      candidateStories: Number(coverage?.candidateStories || 0),
+      candidateTasks: Number(coverage?.candidateTasks || 0),
+      requiredStoryMinutes: Number(coverage?.requiredStoryMinutes || 0),
+      scheduledStoryMinutes: Number(coverage?.scheduledStoryMinutes || 0),
+      requiredTaskMinutes: Number(coverage?.requiredTaskMinutes || 0),
+      scheduledTaskMinutes: Number(coverage?.scheduledTaskMinutes || 0),
+      storyShortfallMinutes: Number(coverage?.storyShortfallMinutes || 0),
+      taskShortfallMinutes: Number(coverage?.taskShortfallMinutes || 0),
+      shortfallMinutes: Number(coverage?.shortfallMinutes || 0),
+      unscheduledStories: Number(coverage?.unscheduledStories || 0),
+      unscheduledTasks: Number(coverage?.unscheduledTasks || 0),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+  } catch (err) {
+    console.warn('[planner_stats] write failed', userId, err?.message || err);
+  }
+}
+
 async function materializePlannerThemeBlocks({
   db,
   userId,
@@ -2356,12 +2548,14 @@ async function runCalendarPlannerJob() {
 
     const openStories = storiesSnap.docs
       .map((d) => ({ id: d.id, ...(d.data() || {}) }))
-      .filter((s) => !isStoryDoneStatus(s.status));
+      .filter((s) => !isStoryDoneStatus(s.status))
+      .filter((s) => activeSprintIds.size === 0 || !s.sprintId || activeSprintIds.has(s.sprintId));
 
     const openTasks = tasksSnap.docs
       .map((d) => ({ id: d.id, ...(d.data() || {}) }))
       .filter((t) => !isTaskDoneStatus(t.status) && !t.deleted)
-      .filter((t) => !isRoutineChoreHabit(t));
+      .filter((t) => !isRoutineChoreHabit(t))
+      .filter((t) => activeSprintIds.size === 0 || !t.sprintId || activeSprintIds.has(t.sprintId));
 
     const todayIso = nowLocal.toISODate();
     const isTopTask = (t) => {
@@ -2383,34 +2577,42 @@ async function runCalendarPlannerJob() {
       return bs - as;
     };
 
-    const selectTop = (items, rankKey, filterFn) => {
-      // User-flagged #1 priority items always come first
-      const userFlagged = items.filter((i) => i.userPriorityFlag === true);
-      if (userFlagged.length > 0) {
-        const remaining = items.filter((i) => !i.userPriorityFlag);
-        const sorted = remaining.slice().sort((a, b) => rankSort(a, b, rankKey));
-        return [...userFlagged.slice(0, 3), ...sorted].slice(0, 3);
-      }
-      const flagged = items.filter(filterFn);
-      const base = flagged.length ? flagged : items;
-      return base.slice().sort((a, b) => rankSort(a, b, rankKey)).slice(0, 3);
-    };
+    const scoredStories = openStories.map((story) => ({
+      ...story,
+      aiScore: scoreWithBonus(story.priority, story.aiCriticalityScore),
+    }));
+    const storyMap = new Map(scoredStories.map((story) => [story.id, story]));
+    const scoredTasks = openTasks.map((task) => ({
+      ...task,
+      aiScore: scoreWithBonus(task.priority, task.aiCriticalityScore),
+    }));
 
-    const topStories = ['personal', 'work']
+    const storyQueue = ['personal', 'work']
       .flatMap((persona) => {
-        const personaStories = openStories.filter((s) => resolvePersona(s.persona) === persona);
-        return selectTop(personaStories, 'aiFocusStoryRank', isTopStory);
+        const personaStories = scoredStories.filter((story) => resolvePersona(story.persona) === persona);
+        return sortPlannerCandidates(personaStories, {
+          rankKey: 'aiFocusStoryRank',
+          isTopFn: isTopStory,
+          extraPriorityFn: (story) => storyForcesTop3Tasks(story),
+        });
       });
 
-    const topTasks = ['personal', 'work']
+    const taskQueue = ['personal', 'work']
       .flatMap((persona) => {
-        const personaTasks = openTasks.filter((t) => resolvePersona(t.persona) === persona);
-        return selectTop(personaTasks, 'aiPriorityRank', isTopTask);
+        const personaTasks = scoredTasks.filter((task) => resolvePersona(task.persona) === persona);
+        return sortPlannerCandidates(personaTasks, {
+          rankKey: 'aiPriorityRank',
+          isTopFn: isTopTask,
+          extraPriorityFn: (task) => {
+            const parentStory = task?.storyId ? storyMap.get(task.storyId) : null;
+            return storyForcesTop3Tasks(parentStory);
+          },
+        });
       });
 
-    const topIds = new Set([
-      ...topStories.map((s) => `story:${s.id}`),
-      ...topTasks.map((t) => `task:${t.id}`),
+    const candidateIds = new Set([
+      ...storyQueue.map((story) => getEntityKey('story', story.id)),
+      ...taskQueue.map((task) => getEntityKey('task', task.id)),
     ]);
 
     // Remove AI blocks that are no longer in the top set, but preserve planner blocks
@@ -2424,12 +2626,14 @@ async function runCalendarPlannerJob() {
       
       // Only delete AI-generated task/story blocks that are no longer in top set
       // Always preserve user-defined planner blocks
-      if (isAi && !isPlannerBlock && key && !topIds.has(key)) {
+      if (isAi && !isPlannerBlock && key && !candidateIds.has(key)) {
         await db.collection('calendar_blocks').doc(block.id).delete().catch(() => { });
       } else {
         remainingBlocks.push(block);
       }
     }
+
+    const scheduledMinutesByEntity = collectScheduledMinutesByEntity(remainingBlocks);
 
     const mainGigBlocks = []; // Track main gig planner blocks separately
     remainingBlocks.forEach((b) => {
@@ -2445,6 +2649,9 @@ async function runCalendarPlannerJob() {
       }
     });
 
+    let created = 0;
+    let blocked = 0;
+
     const placeEntry = async (candidate, kind) => {
       const sprint = candidate.sprintId ? sprintMap.get(candidate.sprintId) : null;
       const sprintStart = sprint?.start ? toMillis(sprint.start) : null;
@@ -2452,10 +2659,7 @@ async function runCalendarPlannerJob() {
       const isWorkPersona = String(candidate?.persona || '').toLowerCase() === 'work';
       const busyList = isWorkPersona ? busyWork : busyPersonal;
 
-      const durationMinutesRaw = kind === 'task'
-        ? (Number(candidate.points) * 60) || Number(candidate.estimateMin) || 60
-        : (Number(candidate.points) * 60) || 90;
-      const durationMinutes = Math.min(kind === 'task' ? 180 : 240, Math.max(kind === 'task' ? 30 : 60, durationMinutesRaw || 60));
+      const durationMinutes = estimateSchedulingMinutes(candidate, kind);
       const durationMs = durationMinutes * 60000;
 
       if (isWorkPersona) {
@@ -2508,6 +2712,7 @@ async function runCalendarPlannerJob() {
           await blockRef.set(payload);
           busyPersonal.push({ start: payload.start, end: payload.end });
           busyWork.push({ start: payload.start, end: payload.end });
+          addScheduledMinutes(scheduledMinutesByEntity, kind, candidate.id, durationMinutes);
           await db.collection('activity_stream').add(activityPayload({
             ownerUid: userId,
             entityId: candidate.id,
@@ -2588,6 +2793,7 @@ async function runCalendarPlannerJob() {
           await blockRef.set(payload);
           busyPersonal.push({ start: payload.start, end: payload.end });
           busyWork.push({ start: payload.start, end: payload.end });
+          addScheduledMinutes(scheduledMinutesByEntity, kind, candidate.id, durationMinutes);
           await db.collection('activity_stream').add(activityPayload({
             ownerUid: userId,
             entityId: candidate.id,
@@ -2604,22 +2810,49 @@ async function runCalendarPlannerJob() {
 
     // Avoid duplicating if already covered
     const covered = new Set();
-    remainingBlocks.forEach((b) => {
-      if (b.taskId) covered.add(`task:${b.taskId}`);
-      if (b.storyId) covered.add(`story:${b.storyId}`);
+    scheduledMinutesByEntity.forEach((minutes, key) => {
+      if (minutes > 0) covered.add(key);
     });
 
-    for (const s of topStories) {
-      const key = `story:${s.id}`;
+    for (const s of storyQueue) {
+      const key = getEntityKey('story', s.id);
       if (covered.has(key)) continue;
-      await placeEntry(s, 'story');
+      const res = await placeEntry(s, 'story');
+      created += res.created || 0;
+      blocked += res.blocked || 0;
+      if (res.created) covered.add(key);
     }
 
-    for (const t of topTasks) {
-      const key = `task:${t.id}`;
+    for (const t of taskQueue) {
+      const key = getEntityKey('task', t.id);
       if (covered.has(key)) continue;
-      await placeEntry(t, 'task');
+      const res = await placeEntry(t, 'task');
+      created += res.created || 0;
+      blocked += res.blocked || 0;
+      if (res.created) covered.add(key);
     }
+
+    const coverage = buildPlannerCoverageSummary({
+      stories: storyQueue,
+      tasks: taskQueue,
+      scheduledMinutesByEntity,
+    });
+
+    await writePlannerStats({
+      db,
+      userId,
+      source: 'nightly',
+      windowStart,
+      windowEnd,
+      result: {
+        created,
+        blocked,
+        rescheduled: rescheduleResult.rescheduled || 0,
+        replaced: dedupeResult.removed || 0,
+        totalMovable: rescheduleResult.totalMovable || 0,
+      },
+      coverage,
+    });
   }
 }
 
@@ -2911,29 +3144,42 @@ exports.replanCalendarNow = onCall({
     .filter((t) => !isRoutineChoreHabit(t))
     .filter((t) => !t.sprintId || activeSprintIds.includes(t.sprintId));
 
-  const scoredStories = openStories.map((s) => ({
-    ...s,
-    aiScore: scoreWithBonus(s.priority, s.aiCriticalityScore),
+  const scoredStories = openStories.map((story) => ({
+    ...story,
+    aiScore: scoreWithBonus(story.priority, story.aiCriticalityScore),
   }));
-  const scoredTasks = openTasks.map((t) => ({
-    ...t,
-    aiScore: scoreWithBonus(t.priority, t.aiCriticalityScore),
+  const storyMap = new Map(scoredStories.map((story) => [story.id, story]));
+  const scoredTasks = openTasks.map((task) => ({
+    ...task,
+    aiScore: scoreWithBonus(task.priority, task.aiCriticalityScore),
   }));
 
-  const flaggedStories = scoredStories.filter(isTopStory);
-  const flaggedTasks = scoredTasks.filter(isTopTask);
+  const storyQueue = ['personal', 'work']
+    .flatMap((persona) => {
+      const personaStories = scoredStories.filter((story) => resolvePersona(story.persona) === persona);
+      return sortPlannerCandidates(personaStories, {
+        rankKey: 'aiFocusStoryRank',
+        isTopFn: isTopStory,
+        extraPriorityFn: (story) => storyForcesTop3Tasks(story),
+      });
+    });
 
-  const topStories = (flaggedStories.length ? flaggedStories : scoredStories)
-    .sort((a, b) => (b.aiScore || 0) - (a.aiScore || 0))
-    .slice(0, 3);
+  const taskQueue = ['personal', 'work']
+    .flatMap((persona) => {
+      const personaTasks = scoredTasks.filter((task) => resolvePersona(task.persona) === persona);
+      return sortPlannerCandidates(personaTasks, {
+        rankKey: 'aiPriorityRank',
+        isTopFn: isTopTask,
+        extraPriorityFn: (task) => {
+          const parentStory = task?.storyId ? storyMap.get(task.storyId) : null;
+          return storyForcesTop3Tasks(parentStory);
+        },
+      });
+    });
 
-  const topTasks = (flaggedTasks.length ? flaggedTasks : scoredTasks)
-    .sort((a, b) => (b.aiScore || 0) - (a.aiScore || 0))
-    .slice(0, 3);
-
-  const topIds = new Set([
-    ...topStories.map((s) => `story:${s.id}`),
-    ...topTasks.map((t) => `task:${t.id}`),
+  const candidateIds = new Set([
+    ...storyQueue.map((story) => getEntityKey('story', story.id)),
+    ...taskQueue.map((task) => getEntityKey('task', task.id)),
   ]);
 
   // Fetch chores/routines to include in valid occurrences
@@ -2944,8 +3190,8 @@ exports.replanCalendarNow = onCall({
 
   // Build list of current valid occurrences for calendar validation
   const currentOccurrences = [
-    ...topStories.map((s) => ({ ...s, sourceType: 'story', sourceId: s.id })),
-    ...topTasks.map((t) => ({ ...t, sourceType: 'task', sourceId: t.id })),
+    ...storyQueue.map((s) => ({ ...s, sourceType: 'story', sourceId: s.id })),
+    ...taskQueue.map((t) => ({ ...t, sourceType: 'task', sourceId: t.id })),
     ...choresRoutines.map((c) => ({ ...c, sourceType: c.type || 'chore', sourceId: c.id })),
   ];
 
@@ -2958,14 +3204,19 @@ exports.replanCalendarNow = onCall({
   let replaced = 0;
   for (const block of existingBlocks) {
     const isAi = block.aiGenerated === true || block.createdBy === 'ai';
-    const key = block.storyId ? `story:${block.storyId}` : block.taskId ? `task:${block.taskId}` : null;
-    if (isAi && key && !topIds.has(key)) {
+    const isPlannerBlock = block.source === 'theme_allocation' ||
+      block.sourceType === 'health_allocation' ||
+      block.sourceType === 'work_shift_allocation';
+    const key = block.storyId ? getEntityKey('story', block.storyId) : block.taskId ? getEntityKey('task', block.taskId) : null;
+    if (isAi && !isPlannerBlock && key && !candidateIds.has(key)) {
       await db.collection('calendar_blocks').doc(block.id).delete().catch(() => { });
       replaced += 1;
     } else {
       remainingBlocks.push(block);
     }
   }
+
+  const scheduledMinutesByEntity = collectScheduledMinutesByEntity(remainingBlocks);
 
   const busyPersonal = [];
   const busyWork = [];
@@ -2995,10 +3246,7 @@ exports.replanCalendarNow = onCall({
     const isWorkPersona = String(candidate?.persona || '').toLowerCase() === 'work';
     const busyList = isWorkPersona ? busyWork : busyPersonal;
 
-    const durationMinutesRaw = kind === 'task'
-      ? (Number(candidate.points) * 60) || Number(candidate.estimateMin) || 60
-      : (Number(candidate.points) * 60) || 90;
-    const durationMinutes = Math.min(kind === 'task' ? 180 : 240, Math.max(kind === 'task' ? 30 : 60, durationMinutesRaw || 60));
+    const durationMinutes = estimateSchedulingMinutes(candidate, kind);
     const durationMs = durationMinutes * 60000;
 
     if (isWorkPersona) {
@@ -3050,6 +3298,7 @@ exports.replanCalendarNow = onCall({
         await blockRef.set(payload);
         busyPersonal.push({ start: payload.start, end: payload.end });
         busyWork.push({ start: payload.start, end: payload.end });
+        addScheduledMinutes(scheduledMinutesByEntity, kind, candidate.id, durationMinutes);
         return { created: 1, gcalLink: payload.gcalEventUrl || null };
       }
       return { created: 0, blocked: 1 };
@@ -3120,6 +3369,7 @@ exports.replanCalendarNow = onCall({
         await blockRef.set(payload);
         busyPersonal.push({ start: payload.start, end: payload.end });
         busyWork.push({ start: payload.start, end: payload.end });
+        addScheduledMinutes(scheduledMinutesByEntity, kind, candidate.id, durationMinutes);
         return { created: 1, gcalLink: payload.gcalEventUrl || null };
       }
     }
@@ -3131,28 +3381,35 @@ exports.replanCalendarNow = onCall({
   let gcalLinks = [];
 
   const alreadyCovered = new Set();
-  remainingBlocks.forEach((b) => {
-    if (b.taskId) alreadyCovered.add(`task:${b.taskId}`);
-    if (b.storyId) alreadyCovered.add(`story:${b.storyId}`);
+  scheduledMinutesByEntity.forEach((minutes, key) => {
+    if (minutes > 0) alreadyCovered.add(key);
   });
 
-  for (const s of topStories) {
-    const key = `story:${s.id}`;
+  for (const s of storyQueue) {
+    const key = getEntityKey('story', s.id);
     if (alreadyCovered.has(key)) continue;
     const res = await placeEntry(s, 'story');
     created += res.created || 0;
     blocked += res.blocked || 0;
     if (res.gcalLink) gcalLinks.push(res.gcalLink);
+    if (res.created) alreadyCovered.add(key);
   }
 
-  for (const t of topTasks) {
-    const key = `task:${t.id}`;
+  for (const t of taskQueue) {
+    const key = getEntityKey('task', t.id);
     if (alreadyCovered.has(key)) continue;
     const res = await placeEntry(t, 'task');
     created += res.created || 0;
     blocked += res.blocked || 0;
     if (res.gcalLink) gcalLinks.push(res.gcalLink);
+    if (res.created) alreadyCovered.add(key);
   }
+
+  const coverage = buildPlannerCoverageSummary({
+    stories: storyQueue,
+    tasks: taskQueue,
+    scheduledMinutesByEntity,
+  });
 
   const result = {
     created,
@@ -3160,24 +3417,18 @@ exports.replanCalendarNow = onCall({
     rescheduled: 0,
     replaced,
     gcalLinks,
+    ...coverage,
   };
 
-  try {
-    await db.collection('planner_stats').doc(uid).set({
-      lastRunAt: Date.now(),
-      source: 'replan',
-      windowDays: days,
-      created: result.created || 0,
-      blocked: result.blocked || 0,
-      rescheduled: result.rescheduled || 0,
-      replaced: result.replaced || 0,
-      totalMovable: result.totalMovable || 0,
-      gcalLinksCount: Array.isArray(result.gcalLinks) ? result.gcalLinks.length : 0,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    }, { merge: true });
-  } catch (err) {
-    console.warn('[replanCalendarNow] planner_stats write failed', err?.message || err);
-  }
+  await writePlannerStats({
+    db,
+    userId: uid,
+    source: 'replan',
+    windowStart,
+    windowEnd,
+    result,
+    coverage,
+  });
 
   return {
     ok: true,
