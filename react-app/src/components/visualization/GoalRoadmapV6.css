@@ -1081,6 +1081,23 @@ body.grv6-full-active {
 .grv6-roadmap-bar {
   position: absolute;
   z-index: 20;
+  cursor: grab;
+  touch-action: none;
+  transition: box-shadow 0.14s ease, transform 0.14s ease;
+}
+
+.grv6-roadmap-bar.dragging {
+  cursor: grabbing;
+  z-index: 40;
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.28);
+}
+
+.grv6-roadmap-bar-content {
+  position: relative;
+  z-index: 10;
+  width: 100%;
+  height: 100%;
 }
 
 .grv6-roadmap-bar .grv6-task-shell,
@@ -1097,6 +1114,46 @@ body.grv6-full-active {
 
 .grv6-roadmap-bar.milestone .grv6-milestone-shell {
   justify-content: center;
+}
+
+.grv6-resize-handle {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  width: 10px;
+  border-radius: 999px;
+  z-index: 30;
+  cursor: ew-resize;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  background: rgba(255, 255, 255, 0.72);
+  opacity: 0;
+  transition: opacity 0.16s ease, background 0.16s ease;
+}
+
+.theme-dark .grv6-resize-handle {
+  background: rgba(15, 23, 42, 0.8);
+}
+
+.grv6-resize-handle.start {
+  left: -4px;
+}
+
+.grv6-resize-handle.end {
+  right: -4px;
+}
+
+.grv6-roadmap-bar:hover .grv6-resize-handle,
+.grv6-roadmap-bar.dragging .grv6-resize-handle {
+  opacity: 1;
+}
+
+.grv6-resize-handle:hover {
+  background: rgba(59, 130, 246, 0.18);
+}
+
+body.grv6-is-dragging {
+  user-select: none;
+  cursor: grabbing !important;
 }
 
 @media (max-width: 1080px) {

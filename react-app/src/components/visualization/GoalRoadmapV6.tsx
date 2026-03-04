@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { collection, onSnapshot, query, where } from 'firebase/firestore';
+import { collection, doc, onSnapshot, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
 import { Star, Search, Edit3, Wand2, CalendarClock, Activity, Maximize2, Minimize2 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { usePersona } from '../../contexts/PersonaContext';
@@ -77,6 +77,23 @@ interface ThemeLaneGroup {
   themeOrder: number;
   lanes: GanttTask[][];
   height: number;
+}
+
+type GoalDragMode = 'move' | 'resize-start' | 'resize-end';
+
+interface GoalDateOverride {
+  startMs: number;
+  endMs: number;
+}
+
+interface GoalDragOperation {
+  goalId: string;
+  mode: GoalDragMode;
+  pointerId: number;
+  originX: number;
+  initialStartMs: number;
+  initialEndMs: number;
+  lastDeltaDays: number | null;
 }
 
 function toMillis(val: any): number | undefined {
@@ -365,12 +382,21 @@ const GoalRoadmapV6: React.FC = () => {
   const { sprints, selectedSprintId } = useSprint();
   const { showSidebar } = useSidebar();
   const [goals, setGoals] = useState<Goal[]>([]);
+  const goalsById = useMemo(
+    () => goals.reduce<Record<string, Goal>>((acc, goal) => {
+      acc[goal.id] = goal;
+      return acc;
+    }, {}),
+    [goals]
+  );
   const [stories, setStories] = useState<Story[]>([]);
   const [storyPoints, setStoryPoints] = useState<Record<string, number>>({});
   const [storyDonePoints, setStoryDonePoints] = useState<Record<string, number>>({});
   const [potBalances, setPotBalances] = useState<Record<string, { balance: number; currency: string }>>({});
   const [calendarBlocks, setCalendarBlocks] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [goalDateOverrides, setGoalDateOverrides] = useState<Record<string, GoalDateOverride>>({});
+  const [activeDragGoalId, setActiveDragGoalId] = useState<string | null>(null);
 
   const [search, setSearch] = useState('');
   const [themeFilter, setThemeFilter] = useState<number | 'all'>('all');
@@ -382,6 +408,15 @@ const GoalRoadmapV6: React.FC = () => {
   const [editGoal, setEditGoal] = useState<Goal | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const boardRef = useRef<HTMLDivElement | null>(null);
+  const dragOperationRef = useRef<GoalDragOperation | null>(null);
+  const dayWidthRef = useRef<number>(1);
+  const chartStartMsRef = useRef<number>(0);
+  const chartEndMsRef = useRef<number>(0);
+  const goalsByIdRef = useRef<Record<string, Goal>>({});
+  const goalDateOverridesRef = useRef<Record<string, GoalDateOverride>>({});
+  const currentUserUidRef = useRef<string | undefined>(undefined);
+  const pointerMoveHandlerRef = useRef<(event: PointerEvent) => void>(() => {});
+  const pointerUpHandlerRef = useRef<(event: PointerEvent) => void>(() => {});
 
   const ENABLE_MONZO_POTS = process.env.REACT_APP_ENABLE_MONZO_POTS === 'true';
 
@@ -583,8 +618,11 @@ const GoalRoadmapV6: React.FC = () => {
     const themeOrderMap = new Map((globalThemes || []).map((t, index) => [String(t.id), index]));
 
     for (const goal of sortedGoals) {
-      const startMs = toMillis((goal as any).startDate) ?? toMillis((goal as any).targetDate) ?? Date.now();
-      const endMs = toMillis((goal as any).endDate) ?? toMillis((goal as any).targetDate) ?? (startMs + 90 * DAY_MS);
+      const fallbackStartMs = toMillis((goal as any).startDate) ?? toMillis((goal as any).targetDate) ?? Date.now();
+      const fallbackEndMs = toMillis((goal as any).endDate) ?? toMillis((goal as any).targetDate) ?? (fallbackStartMs + 90 * DAY_MS);
+      const dateOverride = goalDateOverrides[goal.id];
+      const startMs = dateOverride?.startMs ?? fallbackStartMs;
+      const endMs = Math.max(startMs + DAY_MS, dateOverride?.endMs ?? fallbackEndMs);
       const start = new Date(startMs);
       const end = new Date(endMs);
       if (!min || start < min) min = start;
@@ -691,7 +729,7 @@ const GoalRoadmapV6: React.FC = () => {
               140;
     const endDate = max ? new Date(max.getTime() + longHorizonDays * DAY_MS) : new Date(today.getTime() + longHorizonDays * DAY_MS);
     return { tasks: list, chartStart: startDate, chartEnd: endDate };
-  }, [sortedGoals, globalThemes, storyDonePoints, storyPoints, potBalances, calendarBlocks, handleScheduleGoal, handleGenerateStories, showSidebar, zoomLevel, zoomPercent]);
+  }, [sortedGoals, globalThemes, storyDonePoints, storyPoints, potBalances, calendarBlocks, goalDateOverrides, handleScheduleGoal, handleGenerateStories, showSidebar, zoomLevel, zoomPercent]);
 
   const handleThemeChange = useCallback((val: string) => {
     if (val === 'all') {
@@ -946,6 +984,219 @@ const GoalRoadmapV6: React.FC = () => {
   }, [xFromMs]);
 
   useEffect(() => {
+    dayWidthRef.current = dayWidth;
+  }, [dayWidth]);
+
+  useEffect(() => {
+    chartStartMsRef.current = chartStart.getTime();
+    chartEndMsRef.current = chartEnd.getTime() + DAY_MS;
+  }, [chartEnd, chartStart]);
+
+  useEffect(() => {
+    goalsByIdRef.current = goalsById;
+  }, [goalsById]);
+
+  useEffect(() => {
+    goalDateOverridesRef.current = goalDateOverrides;
+  }, [goalDateOverrides]);
+
+  useEffect(() => {
+    currentUserUidRef.current = currentUser?.uid;
+  }, [currentUser?.uid]);
+
+  useEffect(() => {
+    setGoalDateOverrides((previous) => {
+      let changed = false;
+      const next = { ...previous };
+
+      Object.entries(previous).forEach(([goalId, override]) => {
+        const goal = goalsById[goalId];
+        if (!goal) {
+          delete next[goalId];
+          changed = true;
+          return;
+        }
+
+        const goalStart = toMillis((goal as any).startDate) ?? toMillis((goal as any).targetDate) ?? null;
+        const goalEnd =
+          toMillis((goal as any).endDate) ??
+          toMillis((goal as any).targetDate) ??
+          goalStart;
+
+        if (goalStart === override.startMs && goalEnd === override.endMs) {
+          delete next[goalId];
+          changed = true;
+        }
+      });
+
+      return changed ? next : previous;
+    });
+  }, [goalsById]);
+
+  const persistGoalDates = useCallback(async (goalId: string, startMs: number, endMs: number) => {
+    if (!currentUserUidRef.current) return;
+    try {
+      await updateDoc(doc(db, 'goals', goalId), {
+        startDate: startMs,
+        endDate: endMs,
+        updatedAt: serverTimestamp()
+      });
+    } catch (error) {
+      console.error('[RoadmapV6] Failed to persist goal date change', {
+        goalId,
+        startMs,
+        endMs,
+        error
+      });
+      setGoalDateOverrides((previous) => {
+        if (!previous[goalId]) return previous;
+        const next = { ...previous };
+        delete next[goalId];
+        return next;
+      });
+    }
+  }, []);
+
+  useEffect(() => {
+    pointerMoveHandlerRef.current = (event: PointerEvent) => {
+      const operation = dragOperationRef.current;
+      if (!operation || event.pointerId !== operation.pointerId) return;
+
+      const widthPerDay = Math.max(0.5, dayWidthRef.current);
+      const deltaDays = Math.round((event.clientX - operation.originX) / widthPerDay);
+      if (deltaDays === operation.lastDeltaDays) return;
+      operation.lastDeltaDays = deltaDays;
+
+      const startBoundsMs = chartStartMsRef.current;
+      const endBoundsMs = chartEndMsRef.current;
+
+      let nextStartMs = operation.initialStartMs;
+      let nextEndMs = operation.initialEndMs;
+
+      if (operation.mode === 'move') {
+        nextStartMs = operation.initialStartMs + (deltaDays * DAY_MS);
+        nextEndMs = operation.initialEndMs + (deltaDays * DAY_MS);
+
+        if (nextStartMs < startBoundsMs) {
+          const adjustment = startBoundsMs - nextStartMs;
+          nextStartMs += adjustment;
+          nextEndMs += adjustment;
+        }
+        if (nextEndMs > endBoundsMs) {
+          const adjustment = nextEndMs - endBoundsMs;
+          nextStartMs -= adjustment;
+          nextEndMs -= adjustment;
+        }
+      } else if (operation.mode === 'resize-start') {
+        nextStartMs = operation.initialStartMs + (deltaDays * DAY_MS);
+        nextStartMs = Math.max(startBoundsMs, Math.min(nextStartMs, operation.initialEndMs - DAY_MS));
+      } else {
+        nextEndMs = operation.initialEndMs + (deltaDays * DAY_MS);
+        nextEndMs = Math.min(endBoundsMs, Math.max(nextEndMs, operation.initialStartMs + DAY_MS));
+      }
+
+      setGoalDateOverrides((previous) => {
+        const existing = previous[operation.goalId];
+        if (existing && existing.startMs === nextStartMs && existing.endMs === nextEndMs) {
+          return previous;
+        }
+        return {
+          ...previous,
+          [operation.goalId]: {
+            startMs: nextStartMs,
+            endMs: nextEndMs
+          }
+        };
+      });
+    };
+
+    pointerUpHandlerRef.current = (event: PointerEvent) => {
+      const operation = dragOperationRef.current;
+      if (!operation || event.pointerId !== operation.pointerId) return;
+
+      dragOperationRef.current = null;
+      setActiveDragGoalId(null);
+      document.body.classList.remove('grv6-is-dragging');
+
+      const override = goalDateOverridesRef.current[operation.goalId];
+      if (!override) return;
+
+      const unchanged =
+        override.startMs === operation.initialStartMs &&
+        override.endMs === operation.initialEndMs;
+      if (unchanged) {
+        setGoalDateOverrides((previous) => {
+          if (!previous[operation.goalId]) return previous;
+          const next = { ...previous };
+          delete next[operation.goalId];
+          return next;
+        });
+        return;
+      }
+
+      void persistGoalDates(operation.goalId, override.startMs, override.endMs);
+    };
+  }, [persistGoalDates]);
+
+  useEffect(() => {
+    const handlePointerMove = (event: PointerEvent) => pointerMoveHandlerRef.current(event);
+    const handlePointerUp = (event: PointerEvent) => pointerUpHandlerRef.current(event);
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+    window.addEventListener('pointercancel', handlePointerUp);
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerUp);
+      document.body.classList.remove('grv6-is-dragging');
+    };
+  }, []);
+
+  const startGoalDrag = useCallback((event: React.PointerEvent<HTMLDivElement>, goalId: string, mode: GoalDragMode) => {
+    if (event.pointerType !== 'touch' && event.button !== 0) return;
+
+    if (mode === 'move') {
+      const target = event.target as HTMLElement;
+      if (target.closest('button') || target.closest('.grv6-resize-handle')) {
+        return;
+      }
+    }
+
+    const goal = goalsByIdRef.current[goalId];
+    if (!goal) return;
+
+    const fallbackStartMs = toMillis((goal as any).startDate) ?? toMillis((goal as any).targetDate) ?? Date.now();
+    const fallbackEndMs = toMillis((goal as any).endDate) ?? toMillis((goal as any).targetDate) ?? (fallbackStartMs + DAY_MS);
+    const existingOverride = goalDateOverridesRef.current[goalId];
+    const initialStartMs = existingOverride?.startMs ?? fallbackStartMs;
+    const initialEndMs = Math.max(initialStartMs + DAY_MS, existingOverride?.endMs ?? fallbackEndMs);
+
+    dragOperationRef.current = {
+      goalId,
+      mode,
+      pointerId: event.pointerId,
+      originX: event.clientX,
+      initialStartMs,
+      initialEndMs,
+      lastDeltaDays: null
+    };
+
+    setActiveDragGoalId(goalId);
+    document.body.classList.add('grv6-is-dragging');
+
+    if (event.currentTarget.setPointerCapture) {
+      try {
+        event.currentTarget.setPointerCapture(event.pointerId);
+      } catch (error) {
+        console.debug('[RoadmapV6] pointer capture not applied', error);
+      }
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+  }, []);
+
+  useEffect(() => {
     const handleFullscreenChange = () => {
       setIsFullscreen(document.fullscreenElement === boardRef.current);
     };
@@ -1191,14 +1442,28 @@ const GoalRoadmapV6: React.FC = () => {
                         const width = Math.max(task.isMilestone ? 120 : 72, xFromMs(endMs) - xFromMs(startMs));
                         const top = ROADMAP_GROUP_HEADER_HEIGHT + (laneIndex * laneHeight) + 8;
                         const height = laneHeight - 16;
+                        const isDragging = activeDragGoalId === task.id;
 
                         return (
                           <div
                             key={`${group.key}-${task.id}`}
-                            className={`grv6-roadmap-bar ${task.isMilestone ? 'milestone' : ''}`}
+                            className={`grv6-roadmap-bar ${task.isMilestone ? 'milestone' : ''} ${isDragging ? 'dragging' : ''}`}
                             style={{ left, top, width, height }}
+                            onPointerDown={(event) => startGoalDrag(event, task.id, 'move')}
                           >
-                            <TaskTemplate data={task} />
+                            <div
+                              className="grv6-resize-handle start"
+                              title="Adjust goal start date"
+                              onPointerDown={(event) => startGoalDrag(event, task.id, 'resize-start')}
+                            />
+                            <div className="grv6-roadmap-bar-content">
+                              <TaskTemplate data={task} />
+                            </div>
+                            <div
+                              className="grv6-resize-handle end"
+                              title="Adjust goal end date"
+                              onPointerDown={(event) => startGoalDrag(event, task.id, 'resize-end')}
+                            />
                           </div>
                         );
                       })
