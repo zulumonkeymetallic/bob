@@ -388,12 +388,6 @@ const JournalInsightsCard: React.FC<JournalInsightsCardProps> = ({ compact = fal
                 ) : null}
                 <span style={{ overflowWrap: 'anywhere' }}>{themeSummary}</span>
               </div>
-              <div
-                className="text-muted small"
-                style={{ lineHeight: 1.35, overflowWrap: 'anywhere', whiteSpace: 'normal' }}
-              >
-                {latestSummary || 'Open detailed journal insights'}
-              </div>
             </>
           )}
         </div>

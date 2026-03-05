@@ -1,12 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Badge, Button, Card, Form, ListGroup, Spinner } from 'react-bootstrap';
-import { useSearchParams, Link } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import { collection, doc, getDoc, onSnapshot, query, where } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { endOfDay, format, startOfDay } from 'date-fns';
+import { Activity } from 'lucide-react';
 import { db, functions } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
+import { useSidebar } from '../contexts/SidebarContext';
 import { Task } from '../types';
 import { resolveRecurringDueMs, resolveTaskDueMs } from '../utils/recurringTaskDue';
 
@@ -59,6 +61,7 @@ const formatDueLabel = (dueMs?: number | null) => {
 const ChoreChecklistPage: React.FC = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
+  const { showSidebar } = useSidebar();
   const [searchParams, setSearchParams] = useSearchParams();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(false);
@@ -216,7 +219,6 @@ const ChoreChecklistPage: React.FC = () => {
                 const dueLabel = formatDueLabel(dueMs);
                 const isHighlight = taskHighlightId && taskHighlightId === task.id;
                 const busy = !!completing[task.id];
-                const taskRef = task.ref || task.id;
                 return (
                   <ListGroup.Item key={task.id} className={isHighlight ? 'border border-primary rounded' : ''}>
                     <div className="d-flex align-items-center gap-2">
@@ -233,7 +235,25 @@ const ChoreChecklistPage: React.FC = () => {
                       </div>
                       <div className="d-flex flex-column align-items-end gap-1">
                         <Badge bg={badgeVariant}>{badgeLabel}</Badge>
-                        <Link to={`/tasks/${encodeURIComponent(taskRef)}`} className="btn btn-sm btn-outline-secondary">Open</Link>
+                        <button
+                          type="button"
+                          className="d-inline-flex align-items-center justify-content-center"
+                          onClick={() => showSidebar(task as any, 'task')}
+                          title="Activity stream"
+                          aria-label={`Open activity stream for ${task.title}`}
+                          style={{
+                            color: 'var(--bs-secondary-color)',
+                            padding: 4,
+                            borderRadius: 4,
+                            border: 'none',
+                            background: 'transparent',
+                            cursor: 'pointer',
+                            lineHeight: 0,
+                            flexShrink: 0,
+                          }}
+                        >
+                          <Activity size={14} />
+                        </button>
                       </div>
                     </div>
                   </ListGroup.Item>

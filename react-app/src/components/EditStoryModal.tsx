@@ -9,7 +9,7 @@ import { useSprint } from '../contexts/SprintContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { isStatus } from '../utils/statusHelpers';
 import { normalizePriorityValue } from '../utils/priorityUtils';
-import { parsePointsValue } from '../utils/points';
+import { parsePointsValue, TASK_DEFAULT_POINTS } from '../utils/points';
 import TagInput from './common/TagInput';
 import ActivityStreamPanel from './common/ActivityStreamPanel';
 import ModernTaskTable from './ModernTaskTable';
@@ -175,7 +175,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
   const handleTaskCreate = async (newTask: Partial<Task>) => {
     if (!currentUser || !story) return;
     const parsedTaskPoints = parsePointsValue((newTask as any).points);
-    const normalizedTaskPoints = parsedTaskPoints == null ? 1 : parsedTaskPoints;
+    const normalizedTaskPoints = parsedTaskPoints == null ? TASK_DEFAULT_POINTS : parsedTaskPoints;
     const payload: any = {
       title: newTask.title || '',
       description: newTask.description || '',

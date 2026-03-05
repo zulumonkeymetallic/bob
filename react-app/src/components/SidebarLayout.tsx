@@ -64,6 +64,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   useEffect(() => {
     console.log('[SidebarLayout] Location changed:', { pathname: location.pathname, key: location.key });
   }, [location]);
+  const hidePlannerCapacityBanner = isSmallScreen && /^\/mobile(?:\/|$)/.test(location.pathname);
 
   const navigationGroups: NavigationGroup[] = [
     {
@@ -680,7 +681,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         <main className="h-100">
           <div className="p-3">
             <CheckInBanner />
-            <PlannerCapacityBanner />
+            {!hidePlannerCapacityBanner && <PlannerCapacityBanner />}
             <SprintClosureBanner />
             <ProcessTextActivityHost />
           </div>

@@ -979,7 +979,7 @@ const MobileHome: React.FC = () => {
           }}
         >
           <div style={{ fontSize: 9, textTransform: 'uppercase' }}>Open pts</div>
-          <div>{sprintMetricsSummary.totalOpenPoints}</div>
+          <div>{Math.round(sprintMetricsSummary.totalOpenPoints)}</div>
         </div>
         <div
           style={{
@@ -1220,12 +1220,17 @@ const MobileHome: React.FC = () => {
                       <ListGroup variant="flush">
                         {top3Stories.map((story, idx) => {
                           const label = story.ref ? `${story.ref} — ${story.title}` : story.title;
-                          const href = `/stories/${story.ref || story.id}`;
                           const score = getStoryAiScore(story);
                           return (
                             <ListGroup.Item key={story.id} className="d-flex justify-content-between align-items-center" style={{ fontSize: 14 }}>
                               <span>
-                                <a href={href} className="text-decoration-none">{label}</a>
+                                <button
+                                  type="button"
+                                  className="btn btn-link p-0 text-decoration-none text-start align-baseline"
+                                  onClick={() => setEditingStory(story)}
+                                >
+                                  {label}
+                                </button>
                               </span>
                               <Badge bg={idx === 0 ? 'danger' : idx === 1 ? 'warning' : 'secondary'}>
                                 {score != null ? Math.round(score) : '—'}
@@ -1244,12 +1249,17 @@ const MobileHome: React.FC = () => {
                       <ListGroup variant="flush">
                         {top3Tasks.map((task, idx) => {
                           const label = task.ref ? `${task.ref} — ${task.title}` : task.title;
-                          const href = `/tasks/${task.ref || task.id}`;
                           const score = getTaskAiScore(task);
                           return (
                             <ListGroup.Item key={task.id} className="d-flex justify-content-between align-items-center" style={{ fontSize: 14 }}>
                               <span>
-                                <a href={href} className="text-decoration-none">{label}</a>
+                                <button
+                                  type="button"
+                                  className="btn btn-link p-0 text-decoration-none text-start align-baseline"
+                                  onClick={() => setEditingTask(task)}
+                                >
+                                  {label}
+                                </button>
                               </span>
                               <Badge bg={idx === 0 ? 'danger' : idx === 1 ? 'warning' : 'secondary'}>
                                 {score != null ? Math.round(score) : '—'}

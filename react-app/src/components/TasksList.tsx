@@ -13,7 +13,7 @@ import { isStatus, isTheme, isPriority, getThemeClass, getPriorityColor, getBadg
 import { deriveTaskSprint, effectiveSprintId, isDueDateWithinStorySprint } from '../utils/taskSprintHelpers';
 import { taskStatusText } from '../utils/storyCardFormatting';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
-import { parsePointsValue } from '../utils/points';
+import { parsePointsValue, TASK_DEFAULT_POINTS } from '../utils/points';
 
 interface TaskWithContext extends Task {
   referenceNumber?: string;
@@ -84,7 +84,7 @@ const TasksList: React.FC = () => {
     theme: 0, // Default to General for unlinked tasks
     status: 'planned' as 'planned' | 'in_progress' | 'done',
     estimatedHours: 1,
-    points: '1' as string | number
+    points: String(TASK_DEFAULT_POINTS) as string | number
   });
 
   const [editingField, setEditingField] = useState<{taskId: string, field: string, value: any} | null>(null);
@@ -419,7 +419,7 @@ const TasksList: React.FC = () => {
 
       const statusMap: Record<string, number> = { planned: 0, in_progress: 1, done: 2 };
       const priorityMap: Record<string, number> = { high: 1, med: 2, low: 3 };
-      const normalizedPoints = parsePointsValue(newTask.points) ?? 1;
+      const normalizedPoints = parsePointsValue(newTask.points) ?? TASK_DEFAULT_POINTS;
       const taskData: any = {
         ref: ref, // Add reference number
         title: newTask.title,
@@ -474,7 +474,7 @@ const TasksList: React.FC = () => {
         theme: 0, // Default to General for unlinked tasks
         status: 'planned',
         estimatedHours: 1,
-        points: '1'
+        points: String(TASK_DEFAULT_POINTS)
       });
       setShowAddTask(false);
     } catch (error) {
@@ -539,7 +539,7 @@ const TasksList: React.FC = () => {
       }
 
       if (payload.points !== undefined) {
-        payload.points = parsePointsValue(payload.points) ?? 1;
+        payload.points = parsePointsValue(payload.points) ?? TASK_DEFAULT_POINTS;
       }
 
       if (derivation.story?.sprintId) {

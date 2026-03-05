@@ -35,6 +35,54 @@ const parseDateInput = (value: string) => {
 };
 
 const formatDateInput = (date: Date) => date.toISOString().slice(0, 10);
+const DAY_MS = 86400000;
+
+const toMillis = (value: any): number | null => {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  const fromTs = value?.toDate?.()?.getTime?.();
+  if (typeof fromTs === 'number' && Number.isFinite(fromTs)) return fromTs;
+  return null;
+};
+
+const shiftDateToYear = (ms: number, targetYear: number): number => {
+  const original = new Date(ms);
+  const month = original.getMonth();
+  const day = original.getDate();
+  const shifted = new Date(ms);
+  shifted.setFullYear(targetYear, month, day);
+
+  // Clamp invalid dates (e.g., Feb 29 on non-leap years) to month-end in target year.
+  if (shifted.getMonth() !== month) {
+    const clampedDay = new Date(targetYear, month + 1, 0).getDate();
+    shifted.setFullYear(targetYear, month, clampedDay);
+  }
+
+  return shifted.getTime();
+};
+
+const previewGoalDatesForYear = (
+  goal: Goal,
+  targetYear: number | null,
+): { startMs: number | null; endMs: number | null } => {
+  const startMs = toMillis((goal as any).startDate);
+  const endMs = toMillis((goal as any).endDate);
+  if (!targetYear) {
+    return { startMs, endMs };
+  }
+
+  const shiftedStart = startMs != null ? shiftDateToYear(startMs, targetYear) : null;
+  let shiftedEnd = endMs != null ? shiftDateToYear(endMs, targetYear) : null;
+
+  if (shiftedStart != null && shiftedEnd != null && startMs != null && endMs != null) {
+    const originalDurationDays = Math.max(0, Math.round((endMs - startMs) / DAY_MS));
+    const shiftedDurationDays = Math.max(0, Math.round((shiftedEnd - shiftedStart) / DAY_MS));
+    if (shiftedDurationDays !== originalDurationDays) {
+      shiftedEnd = shiftedStart + (originalDurationDays * DAY_MS);
+    }
+  }
+
+  return { startMs: shiftedStart, endMs: shiftedEnd };
+};
 
 const calculateDurationDays = (start?: string, end?: string) => {
   const startDate = parseDateInput(start || '');
@@ -269,15 +317,12 @@ const YearDateAdjustModal: React.FC<{
 
   useEffect(() => {
     if (!show || !goal) return;
-    const startRaw = (goal as any).startDate;
-    const endRaw = (goal as any).endDate;
-    const startMs = typeof startRaw === 'number' ? startRaw : startRaw?.toDate?.()?.getTime?.();
-    const endMs = typeof endRaw === 'number' ? endRaw : endRaw?.toDate?.()?.getTime?.();
+    const { startMs, endMs } = previewGoalDatesForYear(goal, targetYear);
     const startStr = startMs ? new Date(startMs).toISOString().slice(0, 10) : '';
     const endStr = endMs ? new Date(endMs).toISOString().slice(0, 10) : '';
     setStartDate(startStr);
     setEndDate(endStr);
-  }, [show, goal]);
+  }, [show, goal, targetYear]);
 
   useEffect(() => {
     const derived = calculateDurationDays(startDate, endDate);

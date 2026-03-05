@@ -49,6 +49,7 @@ import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { normalizeTaskTags } from '../utils/taskTagging';
 import { parsePointsValue } from '../utils/points';
 import EditTaskModal from './EditTaskModal';
+import { MISSING_INFO_CELL_BG, MISSING_INFO_CELL_BG_HOVER, hasLinkedId, isBlankText, isMissingPoints } from '../utils/dataQuality';
 
 interface TaskTableRow extends Task {
   storyTitle?: string;
@@ -301,6 +302,23 @@ const formatTimestampCell = (value: unknown): string => {
   });
 };
 
+const taskHasStoryLink = (task: Partial<Task>, stories: Story[]): boolean => {
+  const storyId = String((task as any).storyId || '').trim();
+  return hasLinkedId(storyId) && stories.some((story) => story.id === storyId);
+};
+
+const resolveTaskGoalId = (task: Partial<Task>, stories: Story[]): string => {
+  const storyId = String((task as any).storyId || '').trim();
+  const storyGoalId = storyId ? String((stories.find((story) => story.id === storyId) as any)?.goalId || '').trim() : '';
+  const directGoalId = String((task as any).goalId || '').trim();
+  return storyGoalId || directGoalId;
+};
+
+const taskHasGoalLink = (task: Partial<Task>, stories: Story[], goals: Goal[]): boolean => {
+  const goalId = resolveTaskGoalId(task, stories);
+  return hasLinkedId(goalId) && goals.some((goal) => goal.id === goalId);
+};
+
 interface SortableRowProps {
   task: TaskTableRow;
   columns: Column[];
@@ -520,6 +538,16 @@ const SortableRow: React.FC<SortableRowProps> = ({
     const value = task[column.key as keyof TaskTableRow];
     const formattedValue = formatValue(column.key, value);
     const isEditing = editingCell === column.key;
+    const missingStory = !taskHasStoryLink(task, stories);
+    const missingGoal = !String(task.linkedGoal || '').trim();
+    const missingPoints = isMissingPoints((task as any).points);
+    const missingDescription = isBlankText((task as any).description);
+    const isMissingDataCell =
+      (column.key === 'storyTitle' && missingStory)
+      || (column.key === 'linkedGoal' && missingGoal)
+      || (column.key === 'points' && missingPoints)
+      || (column.key === 'description' && missingDescription);
+    const cellBaseBackground = isMissingDataCell ? MISSING_INFO_CELL_BG : 'transparent';
     const editValueForColumn = (() => {
       if (column.key === 'url') {
         return String(value || '');
@@ -636,15 +664,16 @@ const SortableRow: React.FC<SortableRowProps> = ({
           borderRight: `1px solid ${themeVars.border}`,
           cursor: column.editable ? 'pointer' : 'default',
           transition: 'background-color 0.15s ease',
+          backgroundColor: cellBaseBackground,
         }}
         onMouseEnter={(e) => {
           if (column.editable) {
-            e.currentTarget.style.backgroundColor = themeVars.card as string;
+            e.currentTarget.style.backgroundColor = isMissingDataCell ? MISSING_INFO_CELL_BG_HOVER : (themeVars.card as string);
           }
         }}
         onMouseLeave={(e) => {
           if (column.editable) {
-            e.currentTarget.style.backgroundColor = 'transparent';
+            e.currentTarget.style.backgroundColor = cellBaseBackground;
           }
         }}
         onClick={() => column.editable && handleCellEdit(column.key, editValueForColumn)}
@@ -899,6 +928,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
   const [goalSearch, setGoalSearch] = useState('');
   const [sprintFilter, setSprintFilter] = useState<string>('all');
   const [typeFilter, setTypeFilter] = useState<string>('all');
+  const [dataQualityFilter, setDataQualityFilter] = useState<string>('all');
   const [convertLoadingId, setConvertLoadingId] = useState<string | null>(null);
   const [toastState, setToastState] = useState<{ show: boolean; message: string; variant: 'danger' | 'info' | 'success' }>({ show: false, message: '', variant: 'danger' });
 
@@ -1102,13 +1132,25 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
     if (sprintFilter === 'none' && derivedSprintId) return false;
     if (sprintFilter !== 'all' && sprintFilter !== 'none' && derivedSprintId !== sprintFilter) return false;
     if (typeFilter !== 'all' && normalizedType !== typeFilter) return false;
+    if (dataQualityFilter !== 'all') {
+      const missingStory = !taskHasStoryLink(task, stories);
+      const missingGoal = !taskHasGoalLink(task, stories, goals);
+      const missingPoints = isMissingPoints((task as any).points);
+      const missingDescription = isBlankText((task as any).description);
+      const missingAny = missingStory || missingGoal || missingPoints || missingDescription;
+      if (dataQualityFilter === 'missing_any' && !missingAny) return false;
+      if (dataQualityFilter === 'missing_link' && !(missingStory || missingGoal)) return false;
+      if (dataQualityFilter === 'missing_points' && !missingPoints) return false;
+      if (dataQualityFilter === 'missing_description' && !missingDescription) return false;
+    }
     return true;
   });
 
   // Convert tasks to table rows with sort order and story titles
   const tableRows: TaskTableRow[] = filteredTasks.map((task, index) => {
     const story = stories.find(s => s.id === task.storyId);
-    const goal = story ? goals.find((g) => g.id === story.goalId) : undefined;
+    const resolvedGoalId = (story as any)?.goalId || String((task as any)?.goalId || '').trim();
+    const goal = resolvedGoalId ? goals.find((g) => g.id === resolvedGoalId) : undefined;
     const derivedSprintId = effectiveSprintId(task, stories, sprints);
     return {
       ...task,
@@ -1372,6 +1414,27 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                   <option value="chore">Chore</option>
                   <option value="habit">Habit</option>
                   <option value="routine">Routine</option>
+                </select>
+              </label>
+              <label style={{ fontSize: '12px', color: themeVars.muted as string, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                Data Quality
+                <select
+                  value={dataQualityFilter}
+                  onChange={(e) => setDataQualityFilter(e.target.value)}
+                  style={{
+                    padding: '4px 8px',
+                    borderRadius: 6,
+                    border: `1px solid ${themeVars.border}`,
+                    backgroundColor: themeVars.panel as string,
+                    color: themeVars.text as string,
+                    fontSize: '12px'
+                  }}
+                >
+                  <option value="all">All</option>
+                  <option value="missing_any">Missing Any</option>
+                  <option value="missing_link">Missing Link</option>
+                  <option value="missing_points">Missing Points</option>
+                  <option value="missing_description">Missing Description</option>
                 </select>
               </label>
             </div>

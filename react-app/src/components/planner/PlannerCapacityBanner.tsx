@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Button } from 'react-bootstrap';
 import { ArrowRightLeft, CalendarClock, ChevronDown, ChevronRight, KanbanSquare, Settings2 } from 'lucide-react';
-import { collection, doc, getDocs, onSnapshot, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
+import { collection, doc, getDocs, onSnapshot, query, serverTimestamp, setDoc, updateDoc, where } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
 import { db } from '../../firebase';
 import { useAuth } from '../../contexts/AuthContext';
@@ -85,6 +85,12 @@ const formatPriorityLabel = (value: unknown): string => {
   return 'Low';
 };
 
+const getEndOfTodayMs = (): number => {
+  const end = new Date();
+  end.setHours(23, 59, 59, 999);
+  return end.getTime();
+};
+
 type MoveRecommendation = {
   kind: 'story' | 'task';
   id: string;
@@ -112,6 +118,12 @@ const PlannerCapacityBanner: React.FC = () => {
   const [editingStory, setEditingStory] = useState<Story | null>(null);
   const [storyGoals, setStoryGoals] = useState<Goal[]>([]);
   const [storyGoalsLoaded, setStoryGoalsLoaded] = useState(false);
+  const [dismissedUntilMs, setDismissedUntilMs] = useState<number | null>(null);
+
+  const isDismissedForToday = useMemo(() => {
+    if (!dismissedUntilMs) return false;
+    return Date.now() <= dismissedUntilMs;
+  }, [dismissedUntilMs]);
 
   const sortedUpcomingSprints = useMemo(() => {
     return [...sprints]
@@ -146,6 +158,23 @@ const PlannerCapacityBanner: React.FC = () => {
     const ref = doc(db, 'planner_stats', currentUser.uid);
     const unsub = onSnapshot(ref, (snap) => {
       setPlannerStats(snap.exists() ? snap.data() : null);
+    });
+    return () => unsub();
+  }, [currentUser?.uid]);
+
+  useEffect(() => {
+    if (!currentUser?.uid) {
+      setDismissedUntilMs(null);
+      return;
+    }
+    const ref = doc(db, 'user_settings', currentUser.uid);
+    const unsub = onSnapshot(ref, (snap) => {
+      const raw = Number(snap.data()?.plannerCapacityBannerDismissedUntilMs);
+      if (Number.isFinite(raw) && raw > 0) {
+        setDismissedUntilMs(raw);
+      } else {
+        setDismissedUntilMs(null);
+      }
     });
     return () => unsub();
   }, [currentUser?.uid]);
@@ -393,7 +422,23 @@ const PlannerCapacityBanner: React.FC = () => {
     await loadRecommendations();
   }, [loadRecommendations, moveItemToNextSprint, nextSprint, recommendations]);
 
-  if (!summary) return null;
+  const dismissForToday = useCallback(async () => {
+    if (!currentUser?.uid) return;
+    const untilMs = getEndOfTodayMs();
+    setDismissedUntilMs(untilMs);
+    try {
+      await setDoc(doc(db, 'user_settings', currentUser.uid), {
+        plannerCapacityBannerDismissedUntilMs: untilMs,
+        plannerCapacityBannerDismissedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
+    } catch (error) {
+      console.error('PlannerCapacityBanner: failed to persist dismissal', error);
+      setDismissedUntilMs(null);
+    }
+  }, [currentUser?.uid]);
+
+  if (!summary || isDismissedForToday) return null;
 
   const detailParts = [
     summary.unscheduledStories > 0 ? `${summary.unscheduledStories} ${summary.unscheduledStories === 1 ? 'story' : 'stories'} without a block` : null,
@@ -403,7 +448,14 @@ const PlannerCapacityBanner: React.FC = () => {
 
   return (
     <>
-    <Alert variant="warning" className="border-0 shadow-sm mb-3">
+    <Alert
+      variant="warning"
+      className="border-0 shadow-sm mb-3"
+      dismissible
+      onClose={() => {
+        void dismissForToday();
+      }}
+    >
       <div className="d-flex flex-wrap align-items-center justify-content-between gap-3">
         <div className="d-flex align-items-center gap-2">
           <CalendarClock size={20} />

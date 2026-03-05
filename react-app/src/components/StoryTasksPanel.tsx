@@ -9,7 +9,7 @@ import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../firebase';
 import { generateRef } from '../utils/referenceGenerator';
 import { useSidebar } from '../contexts/SidebarContext';
-import { parsePointsValue } from '../utils/points';
+import { parsePointsValue, TASK_DEFAULT_POINTS } from '../utils/points';
 
 interface StoryTasksPanelProps {
   story: Story;
@@ -30,7 +30,7 @@ const StoryTasksPanel: React.FC<StoryTasksPanelProps> = ({ story, onClose }) => 
     description: '',
     status: 0, // 0=To Do
     priority: 2, // 2=Medium
-    points: '1' as string | number
+    points: String(TASK_DEFAULT_POINTS) as string | number
   });
   const [aiPlanning, setAiPlanning] = useState(false);
   const [aiMessage, setAiMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -96,7 +96,7 @@ const StoryTasksPanel: React.FC<StoryTasksPanelProps> = ({ story, onClose }) => 
       description: task.description,
       status: task.status,
       priority: task.priority,
-      points: task.points ?? 1
+      points: task.points ?? TASK_DEFAULT_POINTS
     });
   };
 
@@ -106,7 +106,7 @@ const StoryTasksPanel: React.FC<StoryTasksPanelProps> = ({ story, onClose }) => 
     try {
       const payload: Partial<Task> = { ...editingValues };
       if (payload.points !== undefined) {
-        payload.points = parsePointsValue(payload.points) ?? 1;
+        payload.points = parsePointsValue(payload.points) ?? TASK_DEFAULT_POINTS;
       }
       await updateDoc(doc(db, 'tasks', editingTaskId), {
         ...payload,
@@ -137,7 +137,7 @@ const StoryTasksPanel: React.FC<StoryTasksPanelProps> = ({ story, onClose }) => 
         description: newTask.description,
         status: newTask.status,
         priority: newTask.priority,
-        points: parsePointsValue(newTask.points) ?? 1,
+        points: parsePointsValue(newTask.points) ?? TASK_DEFAULT_POINTS,
         parentType: 'story',
         parentId: story.id,
         effort: 'M',
@@ -162,7 +162,7 @@ const StoryTasksPanel: React.FC<StoryTasksPanelProps> = ({ story, onClose }) => 
         description: '',
         status: 0,
         priority: 2,
-        points: '1'
+        points: String(TASK_DEFAULT_POINTS)
       });
       setIsAddingTask(false);
     } catch (error) {

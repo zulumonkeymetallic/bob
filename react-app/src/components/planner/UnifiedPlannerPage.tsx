@@ -170,6 +170,14 @@ const getInitialRange = (): PlannerRange => {
 
 const toInputValue = (date: Date) => format(date, "yyyy-MM-dd'T'HH:mm");
 
+const isTaskDoneState = (status: any): boolean => {
+  if (typeof status === 'number') {
+    return status === 2 || status >= 4;
+  }
+  const normalized = String(status ?? '').trim().toLowerCase();
+  return ['done', 'complete', 'completed', 'finished', 'closed'].includes(normalized);
+};
+
 const hexToRgba = (hex: string, alpha: number) => {
   if (!hex) return `rgba(99, 102, 241, ${alpha})`;
   const normalized = hex.replace('#', '');
@@ -640,7 +648,7 @@ const UnifiedPlannerPage: React.FC = () => {
             const kind = getChoreKind(task);
             return !!kind && isRecurringDueOnDate(task, todayDate, due);
           })
-          .filter((task) => (task.status ?? 0) !== 2)
+          .filter((task) => !isTaskDoneState(task.status))
           .filter((task) => {
             if (!getChoreKind(task)) return true;
             const lastDone = getTaskLastDoneMs(task);

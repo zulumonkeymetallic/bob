@@ -1,4 +1,5 @@
 export const POINTS_MIN = 0.25;
+export const TASK_DEFAULT_POINTS = POINTS_MIN;
 export const TASK_POINTS_MAX = 8;
 export const STORY_POINTS_MAX = 13;
 export const POINTS_STEP = 0.25;
@@ -16,7 +17,8 @@ const roundToStep = (value: number, step: number): number => {
 };
 
 export const parsePointsValue = (value: unknown): number | null => {
-  if (value == null || value === '') return null;
+  if (value == null) return null;
+  if (typeof value === 'string' && value.trim() === '') return 0;
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return null;
   if (parsed < 0) return null;

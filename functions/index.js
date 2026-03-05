@@ -77,6 +77,7 @@ const MS_IN_DAY = 24 * 60 * 60 * 1000;
 const MS_IN_WEEK = 7 * MS_IN_DAY;
 const TASK_TTL_DAYS = Number(process.env.TASK_TTL_DAYS || 7);
 const SPRINT_NONE = '__none__';
+const DEFAULT_TASK_POINTS = 0.25;
 
 function clampStoryPoints(value) {
   const numeric = Number(value);
@@ -10434,6 +10435,19 @@ function buildRecommendationLabel(title, ref) {
   return safeRef ? `${safeTitle} (${safeRef})` : safeTitle;
 }
 
+function getRecommendationTaskKind(task) {
+  const rawType = String(task?.type || task?.taskType || '').trim().toLowerCase();
+  const normalizedType = rawType === 'habitual' ? 'habit' : rawType;
+  if (['chore', 'routine', 'habit'].includes(normalizedType)) return normalizedType;
+  const tags = Array.isArray(task?.tags)
+    ? task.tags.map((tag) => String(tag || '').trim().toLowerCase().replace(/^#/, ''))
+    : [];
+  if (tags.includes('chore')) return 'chore';
+  if (tags.includes('routine')) return 'routine';
+  if (tags.includes('habit') || tags.includes('habitual')) return 'habit';
+  return null;
+}
+
 function buildRecommendationCandidate({
   type,
   id,
@@ -10449,14 +10463,21 @@ function buildRecommendationCandidate({
   const ref = String(data?.ref || data?.reference || '').trim() || null;
   const title = String(data?.title || calendarTitle || (type === 'story' ? 'Story' : 'Task')).trim() || (type === 'story' ? 'Story' : 'Task');
   const dueMs = type === 'story' ? getRecommendationStoryDueMs(data) : getRecommendationTaskDueMs(data);
+  const taskKind = type === 'task' ? getRecommendationTaskKind(data) : null;
+  const checklistPath = (type === 'task' && taskKind)
+    ? `/chores/checklist?taskId=${encodeURIComponent(String(id))}`
+    : null;
+  const path = checklistPath || buildEntityPath(type, id, ref || id);
+  const deepLink = path ? buildAbsoluteUrl(path) : null;
   return {
     type,
     id,
     ref,
     title,
     label: buildRecommendationLabel(title, ref),
-    path: buildEntityPath(type, id, ref || id),
-    deepLink: buildEntityUrl(type, id, ref || id),
+    path,
+    deepLink,
+    taskKind,
     score: getRecommendationEntityScore(data),
     sprintId: data?.sprintId || null,
     dueMs,
@@ -10645,6 +10666,7 @@ async function computeNextWorkRecommendation({
         label: currentLinked.label,
         path: currentLinked.path,
         deepLink: currentLinked.deepLink,
+        taskKind: currentLinked.taskKind || null,
         score: currentLinked.score,
         source: currentLinked.source,
         reason: currentLinked.reason,
@@ -10824,6 +10846,7 @@ async function computeNextWorkRecommendation({
       label: selected.label,
       path: selected.path,
       deepLink: selected.deepLink,
+      taskKind: selected.taskKind || null,
       score: selected.score,
       source: selected.source,
       reason: selected.reason,
@@ -15774,7 +15797,9 @@ exports.onTaskWritten = firestoreV2.onDocumentWritten('tasks/{taskId}', async (e
       }
     } else {
       const normalizedPoints = clampTaskPoints(after.points);
-      const desiredPoints = (normalizedPoints != null ? normalizedPoints : deriveTaskPoints(after));
+      const desiredPoints = (normalizedPoints != null
+        ? normalizedPoints
+        : (!before ? DEFAULT_TASK_POINTS : deriveTaskPoints(after)));
       if (typeof desiredPoints === 'number') {
         const existingPoints = Number(after.points);
         const pointsStoredAsNumber = typeof after.points === 'number' && Number.isFinite(after.points);
