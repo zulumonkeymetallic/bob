@@ -13,7 +13,7 @@ import AddGoalModal from './AddGoalModal';
 import { GLOBAL_THEMES } from '../constants/globalThemes';
 import { findSprintForDate } from '../utils/taskSprintHelpers';
 import { useSprint } from '../contexts/SprintContext';
-import { parsePointsValue } from '../utils/points';
+import { parsePointsValue, TASK_DEFAULT_POINTS } from '../utils/points';
 
 interface QuickActionsProps {
   onAction?: (type: string, data: any) => void;
@@ -135,6 +135,10 @@ const QuickActionsPanel: React.FC<QuickActionsProps> = ({ onAction }) => {
     
     // For other types, use the existing modal
     setModalType(type as 'story' | 'task');
+    setFormData((prev) => ({
+      ...prev,
+      points: type === 'task' ? String(TASK_DEFAULT_POINTS) : '1',
+    }));
     const handleCreateGoal = () => {
     setShowGoalModal(true);
     setFormData({
@@ -206,7 +210,7 @@ const QuickActionsPanel: React.FC<QuickActionsProps> = ({ onAction }) => {
         entityData.effort = formData.size || 'M';
         entityData.estimateMin = 60; // Default estimate
         entityData.estimatedHours = 1;
-        entityData.points = parsePointsValue(formData.points) ?? 1;
+        entityData.points = parsePointsValue(formData.points) ?? TASK_DEFAULT_POINTS;
         entityData.alignedToGoal = !!formData.storyId;
         entityData.source = 'web';
         entityData.aiLinkConfidence = 0;
@@ -275,7 +279,7 @@ const QuickActionsPanel: React.FC<QuickActionsProps> = ({ onAction }) => {
         goalId: '',
         sprintId: '',
         size: '',
-        points: '1'
+        points: modalType === 'task' ? String(TASK_DEFAULT_POINTS) : '1'
       });
       
     } catch (error) {

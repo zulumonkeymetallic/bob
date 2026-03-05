@@ -18,7 +18,7 @@ import { cascadeTaskPersona } from '../utils/personaCascade';
 import { formatTaskTagLabel } from '../utils/tagDisplay';
 import { normalizeTaskTags } from '../utils/taskTagging';
 import { findSprintForDate } from '../utils/taskSprintHelpers';
-import { parsePointsValue } from '../utils/points';
+import { parsePointsValue, TASK_DEFAULT_POINTS } from '../utils/points';
 
 interface EditTaskModalProps {
   show: boolean;
@@ -83,7 +83,7 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
     status: 0 as number | string,
     priority: 2 as number | string,
     sprintId: '' as string,
-    points: '1' as string | number,
+    points: TASK_DEFAULT_POINTS as string | number,
     dueDate: '' as string,
     storyId: '' as string,
     goalId: '' as string,
@@ -165,7 +165,7 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
         status: 0,
         priority: 2,
         sprintId: '',
-        points: '1',
+        points: TASK_DEFAULT_POINTS,
         dueDate: '',
         storyId: '',
         goalId: '',
@@ -197,7 +197,7 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
       status: normalizeTaskStatus((task as any).status),
       priority: normalizePriorityValue((task as any).priority),
       sprintId: (task as any).sprintId || '',
-      points: parsePointsValue((task as any).points) ?? 1,
+      points: parsePointsValue((task as any).points) ?? TASK_DEFAULT_POINTS,
       dueDate: resolveDue((task as any).dueDate || (task as any).dueDateMs || (task as any).targetDate),
       storyId: linkedStoryId,
       goalId: (task as any).goalId || linkedStory?.goalId || '',
@@ -280,7 +280,7 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
         url: form.url.trim() || null,
         status: typeof form.status === 'string' ? Number(form.status) || form.status : form.status,
         priority: typeof form.priority === 'string' ? Number(form.priority) || form.priority : form.priority,
-        points: parsePointsValue(form.points) ?? 1,
+        points: parsePointsValue(form.points) ?? TASK_DEFAULT_POINTS,
         sprintId: nextSprintId,
         dueDate: dueDateMs,
         storyId: form.storyId || null,
@@ -638,7 +638,8 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
                       <Form.Label>Points</Form.Label>
                       <Form.Control
                         type="number"
-                        step="any"
+                        min={0}
+                        step="0.25"
                         inputMode="decimal"
                         value={form.points ?? ''}
                         onChange={(e) => setForm({

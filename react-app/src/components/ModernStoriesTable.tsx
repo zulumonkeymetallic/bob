@@ -43,6 +43,7 @@ import { useSprint } from '../contexts/SprintContext';
 import { themeVars, rgbaCard } from '../utils/themeVars';
 import { storyStatusText } from '../utils/storyCardFormatting';
 import { parsePointsValue } from '../utils/points';
+import { MISSING_INFO_CELL_BG, MISSING_INFO_CELL_BG_HOVER, hasLinkedId, isBlankText, isMissingPoints } from '../utils/dataQuality';
 
 interface StoryTableRow extends Story {
   goalTitle?: string;
@@ -99,14 +100,6 @@ const defaultColumns: Column[] = [
     visible: false, 
     editable: true, 
     type: 'text' 
-  },
-  {
-    key: 'url',
-    label: 'URL',
-    width: '20%',
-    visible: true,
-    editable: true,
-    type: 'text'
   },
   { 
     key: 'goalTitle', 
@@ -202,6 +195,11 @@ const formatExternalUrlLabel = (value: unknown): string => {
   } catch {
     return raw.slice(0, 64);
   }
+};
+
+const storyHasGoalLink = (story: StoryTableRow, goals: Goal[]): boolean => {
+  const goalId = String((story as any).goalId || '').trim();
+  return hasLinkedId(goalId) && goals.some((goal) => goal.id === goalId);
 };
 
 const NewStoryRow: React.FC<NewStoryRowProps> = ({ 
@@ -570,6 +568,14 @@ const SortableRow: React.FC<SortableRowProps> = ({
     const value = story[column.key as keyof StoryTableRow];
     const isEditing = editingCell === column.key;
     const displayValue = formatValue(column.key, value);
+    const missingGoal = !storyHasGoalLink(story, goals);
+    const missingPoints = isMissingPoints((story as any).points);
+    const missingDescription = isBlankText((story as any).description);
+    const isMissingDataCell =
+      (column.key === 'goalTitle' && missingGoal)
+      || (column.key === 'points' && missingPoints)
+      || (column.key === 'description' && missingDescription);
+    const cellBaseBackground = isMissingDataCell ? MISSING_INFO_CELL_BG : 'transparent';
     const editValueForColumn = (() => {
       if (column.key === 'goalTitle') {
         return goals.find(g => g.id === story.goalId)?.title || '';
@@ -718,15 +724,16 @@ const SortableRow: React.FC<SortableRowProps> = ({
           borderRight: `1px solid ${themeVars.border}`,
           cursor: column.editable ? 'pointer' : 'default',
           transition: 'background-color 0.15s ease',
+          backgroundColor: cellBaseBackground,
         }}
         onMouseEnter={(e) => {
           if (column.editable) {
-            e.currentTarget.style.backgroundColor = rgbaCard(0.08);
+            e.currentTarget.style.backgroundColor = isMissingDataCell ? MISSING_INFO_CELL_BG_HOVER : rgbaCard(0.08);
           }
         }}
         onMouseLeave={(e) => {
           if (column.editable) {
-            e.currentTarget.style.backgroundColor = 'transparent';
+            e.currentTarget.style.backgroundColor = cellBaseBackground;
           }
         }}
         onClick={() => column.editable && handleCellEdit(column.key, editValueForColumn)}
@@ -1066,7 +1073,8 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
     theme: '',
     sprintId: '',
     points: '',
-    hasGoal: ''
+    hasGoal: '',
+    dataQuality: '',
   });
 
   // Inline tasks expansion state (declare before effects that depend on it)
@@ -1272,9 +1280,21 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
 
     // Has Goal filter
     if (filters.hasGoal) {
-      const hasGoal = story.goalId && story.goalId.trim() !== '';
+      const hasGoal = storyHasGoalLink(story, goals);
       if (filters.hasGoal === 'yes' && !hasGoal) return false;
       if (filters.hasGoal === 'no' && hasGoal) return false;
+    }
+
+    if (filters.dataQuality) {
+      const missingGoal = !storyHasGoalLink(story, goals);
+      const missingPoints = isMissingPoints((story as any).points);
+      const missingDescription = isBlankText((story as any).description);
+      const missingAny = missingGoal || missingPoints || missingDescription;
+
+      if (filters.dataQuality === 'missing_any' && !missingAny) return false;
+      if (filters.dataQuality === 'missing_goal' && !missingGoal) return false;
+      if (filters.dataQuality === 'missing_points' && !missingPoints) return false;
+      if (filters.dataQuality === 'missing_description' && !missingDescription) return false;
     }
 
     return true;
@@ -1320,7 +1340,8 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
       theme: '',
       sprintId: '',
       points: '',
-      hasGoal: ''
+      hasGoal: '',
+      dataQuality: '',
     });
   };
 
@@ -1585,6 +1606,36 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
             <option value="">All Stories</option>
             <option value="yes">Linked to Goal</option>
             <option value="no">Not Linked</option>
+          </select>
+        </div>
+
+        <div>
+          <label style={{
+            display: 'block',
+            fontSize: '12px',
+            fontWeight: '500',
+            color: 'var(--text)',
+            marginBottom: '4px'
+          }}>
+            Data Quality
+          </label>
+          <select
+            value={filters.dataQuality}
+            onChange={(e) => setFilters(prev => ({ ...prev, dataQuality: e.target.value }))}
+            style={{
+              width: '100%',
+              padding: '6px 10px',
+              fontSize: '14px',
+              border: '1px solid var(--line)',
+              borderRadius: '4px',
+              backgroundColor: 'var(--panel)'
+            }}
+          >
+            <option value="">All Stories</option>
+            <option value="missing_any">Missing Any Key Info</option>
+            <option value="missing_goal">Missing Goal Link</option>
+            <option value="missing_points">Missing Points (0/blank)</option>
+            <option value="missing_description">Missing Description</option>
           </select>
         </div>
 

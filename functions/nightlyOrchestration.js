@@ -424,7 +424,7 @@ const parseStatusNumber = (value) => {
 
 const isTaskDoneStatus = (status) => {
   const num = parseStatusNumber(status);
-  if (num != null) return num === 2;
+  if (num != null) return num === 2 || num >= 4;
   const normalized = normalizeStatusValue(status);
   return ['done', 'complete', 'completed', 'finished', 'closed'].includes(normalized);
 };
@@ -1986,8 +1986,7 @@ async function runPriorityScoringJob() {
     taskDocs.forEach((doc) => {
       const data = doc.data() || {};
       const statusRaw = data.status;
-      const statusStr = String(statusRaw || '').toLowerCase();
-      const isDone = statusStr === 'done' || statusStr === 'completed' || statusStr === 'complete' || Number(statusRaw) >= 2;
+      const isDone = isTaskDoneStatus(statusRaw);
       if (isDone || data.deleted) return;
       const isEntityActiveSprint = data.sprintId ? activeSprintIds.has(data.sprintId) : false;
       const isLinkedActiveSprint = data.storyId ? activeStoryIds.has(data.storyId) : false;
@@ -2036,8 +2035,7 @@ async function runPriorityScoringJob() {
     storiesSnap.docs.forEach((doc) => {
       const data = doc.data() || {};
       const statusRaw = data.status;
-      const statusStr = String(statusRaw || '').toLowerCase();
-      const isDone = statusStr === 'done' || statusStr === 'completed' || statusStr === 'complete' || Number(statusRaw) >= 4;
+      const isDone = isStoryDoneStatus(statusRaw);
       if (isDone) return;
       const goal = data.goalId ? goalMap.get(data.goalId) : null;
       const createdMs = toDateTime(data.createdAt || data.serverCreatedAt, { defaultValue: null })?.toMillis() || null;
@@ -2254,8 +2252,7 @@ async function runPriorityScoringJob() {
     for (const doc of taskDocs) {
       const data = doc.data() || {};
       const statusRaw = data.status;
-      const statusStr = String(statusRaw || '').toLowerCase();
-      const isDone = statusStr === 'done' || statusStr === 'completed' || statusStr === 'complete' || Number(statusRaw) >= 2;
+      const isDone = isTaskDoneStatus(statusRaw);
       if (isDone || data.deleted) {
         await clearPriorityFields(doc.ref, 'task');
         continue;
@@ -2280,8 +2277,7 @@ async function runPriorityScoringJob() {
     for (const doc of storiesSnap.docs) {
       const data = doc.data() || {};
       const statusRaw = data.status;
-      const statusStr = String(statusRaw || '').toLowerCase();
-      const isDone = statusStr === 'done' || statusStr === 'completed' || statusStr === 'complete' || Number(statusRaw) >= 4;
+      const isDone = isStoryDoneStatus(statusRaw);
       if (isDone) {
         await clearPriorityFields(doc.ref, 'story');
         continue;
@@ -3665,9 +3661,8 @@ exports.deltaPriorityRescore = onCall({
 
   // Check if entity should be scored at all
   const statusRaw = entity.status;
-  const statusStr = String(statusRaw || '').toLowerCase();
-  const isDoneTask = entityType === 'task' && (statusStr === 'done' || statusStr === 'completed' || statusStr === 'complete' || Number(statusRaw) >= 2);
-  const isDoneStory = entityType === 'story' && (statusStr === 'done' || statusStr === 'completed' || statusStr === 'complete' || Number(statusRaw) >= 4);
+  const isDoneTask = entityType === 'task' && isTaskDoneStatus(statusRaw);
+  const isDoneStory = entityType === 'story' && isStoryDoneStatus(statusRaw);
   const isDeleted = !!entity.deleted;
   const isChore = isRoutineChoreHabit(entity) || hasRecurrence(entity);
 

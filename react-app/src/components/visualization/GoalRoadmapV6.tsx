@@ -1440,8 +1440,9 @@ const GoalRoadmapV6: React.FC = () => {
                         const endMs = Math.max(task.end.getTime() + DAY_MS, startMs + DAY_MS);
                         const left = xFromMs(startMs);
                         const width = Math.max(task.isMilestone ? 120 : 72, xFromMs(endMs) - xFromMs(startMs));
-                        const top = ROADMAP_GROUP_HEADER_HEIGHT + (laneIndex * laneHeight) + 8;
-                        const height = laneHeight - 16;
+                        const previousHeight = laneHeight - 16;
+                        const height = Math.max(22, Math.round(previousHeight * 0.5));
+                        const top = ROADMAP_GROUP_HEADER_HEIGHT + (laneIndex * laneHeight) + Math.round((laneHeight - height) / 2);
                         const isDragging = activeDragGoalId === task.id;
 
                         return (

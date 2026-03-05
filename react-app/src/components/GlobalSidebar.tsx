@@ -24,7 +24,7 @@ import { useNavigate } from 'react-router-dom';
 import { isStatus, getPriorityBadge } from '../utils/statusHelpers';
 import { normalizePriorityValue } from '../utils/priorityUtils';
 import { resolveThemeFromValue } from '../utils/themeResolver';
-import { parsePointsValue } from '../utils/points';
+import { parsePointsValue, TASK_DEFAULT_POINTS } from '../utils/points';
 
 interface EntityLookupInputProps {
   type: 'goal' | 'story';
@@ -426,7 +426,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
       base.storyId = (selectedItem as any).storyId || (selectedItem as any).parentId || '';
       base.goalId = (selectedItem as any).goalId || '';
       base.description = (selectedItem as any).description || '';
-      base.points = (selectedItem as any).points ?? 1;
+      base.points = (selectedItem as any).points ?? TASK_DEFAULT_POINTS;
     } else if (selectedType === 'story') {
       base.sprintId = (selectedItem as any).sprintId || '';
       base.goalId = (selectedItem as any).goalId || '';
@@ -462,7 +462,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
         const prevGoal = (selectedItem as any).goalId || '';
         if ((newGoalId || '') !== (prevGoal || '')) { updates.goalId = newGoalId || null; before.goalId = prevGoal || null; }
         if (quickEdit.points !== undefined) {
-          const normalized = parsePointsValue(quickEdit.points) ?? 1;
+          const normalized = parsePointsValue(quickEdit.points) ?? TASK_DEFAULT_POINTS;
           const prevPoints = Number((selectedItem as any).points);
           if (!Number.isFinite(prevPoints) || prevPoints !== normalized) {
             updates.points = normalized;

@@ -8,7 +8,7 @@ import { usePersona } from '../contexts/PersonaContext';
 import { GLOBAL_THEMES } from '../constants/globalThemes';
 import { generateRef } from '../utils/referenceGenerator';
 import { emergencyCreateTask } from '../utils/emergencyTaskCreation';
-import { parsePointsValue } from '../utils/points';
+import { parsePointsValue, TASK_DEFAULT_POINTS } from '../utils/points';
 
 type BulkEntityType = 'story' | 'task' | 'goal';
 
@@ -50,7 +50,7 @@ const BulkCreateModal: React.FC<BulkCreateModalProps> = ({ show, onHide, onCompl
   const [selectedGoalId, setSelectedGoalId] = useState('');
   const [selectedTheme, setSelectedTheme] = useState('Growth');
   const [selectedPriority, setSelectedPriority] = useState<'low' | 'med' | 'high'>('med');
-  const [taskPoints, setTaskPoints] = useState<string | number>(1);
+  const [taskPoints, setTaskPoints] = useState<string | number>(TASK_DEFAULT_POINTS);
   const [isProcessing, setIsProcessing] = useState(false);
   const [results, setResults] = useState<BulkResult[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -102,7 +102,7 @@ const BulkCreateModal: React.FC<BulkCreateModalProps> = ({ show, onHide, onCompl
       setResults([]);
       setError(null);
       setItemsText('');
-      setTaskPoints('1');
+      setTaskPoints(String(TASK_DEFAULT_POINTS));
     }
   }, [show]);
 
@@ -333,7 +333,7 @@ const BulkCreateModal: React.FC<BulkCreateModalProps> = ({ show, onHide, onCompl
               priority: selectedPriority,
               estimateMin: 45,
               estimatedHours: 0.75,
-              points: parsePointsValue(taskPoints) ?? 1,
+              points: parsePointsValue(taskPoints) ?? TASK_DEFAULT_POINTS,
               status: 0,
               theme: selectedTheme,
               hasGoal: !!selectedGoalId,

@@ -16,7 +16,7 @@ import ModernTaskTable from './ModernTaskTable';
 import { usePersona } from '../contexts/PersonaContext';
 import { useSprint } from '../contexts/SprintContext';
 import { cascadeGoalPersona } from '../utils/personaCascade';
-import { parsePointsValue } from '../utils/points';
+import { parsePointsValue, TASK_DEFAULT_POINTS } from '../utils/points';
 import { normalizeGoalCostType } from '../utils/goalCost';
 import { Wand2 } from 'lucide-react';
 
@@ -358,7 +358,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
     const storyId = (newTask as any).storyId || null;
     const linkedStory = storyId ? linkedStories.find((story) => story.id === storyId) : null;
     const parsedTaskPoints = parsePointsValue((newTask as any).points);
-    const normalizedTaskPoints = parsedTaskPoints == null ? 1 : parsedTaskPoints;
+    const normalizedTaskPoints = parsedTaskPoints == null ? TASK_DEFAULT_POINTS : parsedTaskPoints;
     const payload: any = {
       title: newTask.title || '',
       description: newTask.description || '',

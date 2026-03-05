@@ -142,6 +142,7 @@ interface NextWorkRecommendedItem {
   label: string;
   path: string | null;
   deepLink: string | null;
+  taskKind?: string | null;
   score: number | null;
   source: string | null;
   reason: string | null;
@@ -188,6 +189,19 @@ const TODAY_PLAN_MIN_WIDTHS: TodayPlanColumnWidths = {
   calendar: 20,
   due: 18,
   chores: 14,
+};
+const LOW_HANGING_MAX_POINTS = 0.25;
+const LOW_HANGING_MIN_STALE_DAYS = 7;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+const isTaskDoneState = (status: any): boolean => {
+  if (typeof status === 'number') {
+    // Task statuses are normally 0=todo, 1=doing, 2=done, 3=blocked.
+    // Treat legacy/story-style values >=4 as complete as well.
+    return status === 2 || status >= 4;
+  }
+  const normalized = String(status ?? '').trim().toLowerCase();
+  return ['done', 'complete', 'completed', 'finished', 'closed'].includes(normalized);
 };
 
 const getNextWorkBadge = (status: string | null | undefined) => {
@@ -305,6 +319,7 @@ const Dashboard: React.FC = () => {
   const [todayBlocks, setTodayBlocks] = useState<any[]>([]);
   const [tasksDueToday, setTasksDueToday] = useState<number>(0);
   const [tasksDueTodayList, setTasksDueTodayList] = useState<Task[]>([]);
+  const [openTasksPool, setOpenTasksPool] = useState<Task[]>([]);
   const [tasksDueTodayLoading, setTasksDueTodayLoading] = useState(false);
   const [tasksDueTodaySortMode, setTasksDueTodaySortMode] = useState<'due' | 'ai' | 'top3'>('ai');
   const [top3Collapsed, setTop3Collapsed] = useState(false);
@@ -839,6 +854,30 @@ const Dashboard: React.FC = () => {
     if (tagKeys.includes('habit') || tagKeys.includes('habitual')) return 'habit';
     return null;
   }, []);
+
+  const getTaskQuickPoints = useCallback((task: Task): number | null => {
+    const direct = Number((task as any)?.points);
+    if (Number.isFinite(direct) && direct > 0) return direct;
+    const mins = Number((task as any)?.estimateMin);
+    if (Number.isFinite(mins) && mins > 0) return mins / 60;
+    const hours = Number((task as any)?.estimatedHours);
+    if (Number.isFinite(hours) && hours > 0) return hours;
+    return null;
+  }, []);
+
+  const getTaskStaleAnchorMs = useCallback((task: Task): number | null => {
+    const dueMs = getTaskDueMs(task);
+    if (dueMs && dueMs > 0 && dueMs <= Date.now()) return dueMs;
+    const updatedMs = decodeToDate((task as any)?.updatedAt)?.getTime();
+    if (updatedMs) return updatedMs;
+    const createdMs = decodeToDate((task as any)?.createdAt)?.getTime();
+    if (createdMs) return createdMs;
+    const serverUpdatedAt = Number((task as any)?.serverUpdatedAt);
+    if (Number.isFinite(serverUpdatedAt) && serverUpdatedAt > 0) return serverUpdatedAt;
+    const deviceUpdatedAt = Number((task as any)?.deviceUpdatedAt);
+    if (Number.isFinite(deviceUpdatedAt) && deviceUpdatedAt > 0) return deviceUpdatedAt;
+    return dueMs && dueMs > 0 ? dueMs : null;
+  }, [decodeToDate, getTaskDueMs]);
 
   const formatDueDetail = useCallback((dueMs: number) => {
     const dueDate = new Date(dueMs);
@@ -1422,11 +1461,11 @@ const Dashboard: React.FC = () => {
           dueDate: data.dueDate?.toDate ? data.dueDate.toDate() : data.dueDate,
         };
       }) as Task[];
-      const activeTaskList = allTasks.filter(task => !isStatus(task.status, 'done'));
+      const activeTaskList = allTasks.filter(task => !isTaskDoneState(task.status));
       setUpcomingTasks(activeTaskList.slice(0, 5));
-      const openTasks = allTasks.filter(task => !isStatus(task.status, 'done')).length;
+      const openTasks = allTasks.filter(task => !isTaskDoneState(task.status)).length;
       const todayCompleted = allTasks.filter(task => {
-        if (!isStatus(task.status, 'done') || !task.updatedAt) return false;
+        if (!isTaskDoneState(task.status) || !task.updatedAt) return false;
         const completedDate = decodeToDate(task.updatedAt);
         if (!completedDate) return false;
         const today = new Date();
@@ -1442,7 +1481,7 @@ const Dashboard: React.FC = () => {
       const sprintTasks = selectedSprintId
         ? allTasks.filter(task => task.sprintId === selectedSprintId)
         : allTasks.filter(task => task.sprintId);
-      const sprintDone = sprintTasks.filter(task => isStatus(task.status, 'done')).length;
+      const sprintDone = sprintTasks.filter(task => isTaskDoneState(task.status)).length;
       setStats(prev => ({
         ...prev,
         pendingTasks: openTasks,
@@ -1577,6 +1616,7 @@ const Dashboard: React.FC = () => {
   useEffect(() => {
     if (!currentUser || !currentPersona) {
       setTasksDueTodayList([]);
+      setOpenTasksPool([]);
       setTasksDueTodayLoading(false);
       return;
     }
@@ -1592,17 +1632,21 @@ const Dashboard: React.FC = () => {
         const todayDate = new Date();
         const todayStart = startOfDay(todayDate).getTime();
         const todayEnd = endOfDay(todayDate).getTime();
-        const rows = snap.docs
+        const openRows = snap.docs
           .map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) } as Task))
           .filter((task) => !task.deleted)
+          .filter((task) => !isTaskDoneState(task.status));
+
+        setOpenTasksPool(openRows);
+
+        const rows = openRows
           .filter((task) => {
             const due = getTaskDueMs(task);
             const isChore = !!getChoreKind(task);
             if (due) return due <= todayEnd;
             if (isChore) return isRecurringDueOnDate(task, todayDate, due);
             return false;
-          })
-          .filter((task) => (task.status ?? 0) !== 2);
+          });
 
         const filtered = rows.filter((task) => {
           if (!getChoreKind(task)) return true;
@@ -1626,6 +1670,7 @@ const Dashboard: React.FC = () => {
       (err) => {
         console.error('Failed to load tasks due today', err);
         setTasksDueTodayList([]);
+        setOpenTasksPool([]);
         setTasksDueTodayLoading(false);
       },
     );
@@ -1759,6 +1804,35 @@ const Dashboard: React.FC = () => {
     return rows;
   }, [tasksDueTodayList, getChoreKind, todayDate, todayStartMs]);
 
+  const lowHangingFruitTasks = useMemo(() => {
+    const now = Date.now();
+    const staleThresholdMs = LOW_HANGING_MIN_STALE_DAYS * MS_PER_DAY;
+    const rows = openTasksPool.filter((task) => {
+      const quickPoints = getTaskQuickPoints(task);
+      if (!Number.isFinite(quickPoints) || !quickPoints || quickPoints > LOW_HANGING_MAX_POINTS) {
+        return false;
+      }
+      const priority = Number((task as any).priority || 0);
+      if (Number.isFinite(priority) && priority >= 4) return false;
+      const anchorMs = getTaskStaleAnchorMs(task);
+      if (!anchorMs) return false;
+      return (now - anchorMs) >= staleThresholdMs;
+    });
+    rows.sort((a, b) => {
+      const aAnchor = getTaskStaleAnchorMs(a) ?? now;
+      const bAnchor = getTaskStaleAnchorMs(b) ?? now;
+      if (aAnchor !== bAnchor) return aAnchor - bAnchor;
+      const aPoints = getTaskQuickPoints(a) ?? LOW_HANGING_MAX_POINTS;
+      const bPoints = getTaskQuickPoints(b) ?? LOW_HANGING_MAX_POINTS;
+      if (aPoints !== bPoints) return aPoints - bPoints;
+      const aDue = getTaskDueMs(a) ?? Number.MAX_SAFE_INTEGER;
+      const bDue = getTaskDueMs(b) ?? Number.MAX_SAFE_INTEGER;
+      if (aDue !== bDue) return aDue - bDue;
+      return String(a.title || '').localeCompare(String(b.title || ''));
+    });
+    return rows.slice(0, 8);
+  }, [openTasksPool, getTaskQuickPoints, getTaskStaleAnchorMs, getTaskDueMs]);
+
   const nonChoreTasksDueToday = useMemo(() => {
     return tasksDueTodayList.filter((task) => !getChoreKind(task));
   }, [tasksDueTodayList, getChoreKind]);
@@ -1821,6 +1895,17 @@ const Dashboard: React.FC = () => {
     });
     return map;
   }, [recentStories, sprintStories, storyRefLabel]);
+
+  const nextWorkPath = useMemo(() => {
+    const item = nextWorkRecommendation?.recommendedItem;
+    if (!item) return null;
+    if (item.path) return item.path;
+    const kind = String(item.taskKind || '').toLowerCase();
+    if (item.type === 'task' && ['chore', 'routine', 'habit'].includes(kind)) {
+      return '/chores/checklist';
+    }
+    return null;
+  }, [nextWorkRecommendation?.recommendedItem]);
 
   const sortedTasksDueToday = useMemo(() => {
     const rows = [...tasksDueTodayList];
@@ -1974,7 +2059,7 @@ const Dashboard: React.FC = () => {
     ts.forEach((docSnap) => {
       const data = docSnap.data() as any;
       if (data?.deleted) return;
-      if ((data?.status ?? 0) === 2) return;
+      if (isTaskDoneState(data?.status)) return;
       if (!isPersonaMatch(data?.persona)) return;
       count += 1;
     });
@@ -2768,6 +2853,39 @@ const Dashboard: React.FC = () => {
                 </Card.Header>
                 <Card.Body className="py-2">
                   <Row className="g-2 mb-2 dashboard-inline-row dashboard-key-metrics">
+                    {/* Overall Progress Group */}
+                    <Col xs={12} sm={6} lg={6} xl={3}>
+                      <div
+                        className="d-flex align-items-center gap-2 px-2 py-1 rounded border h-100"
+                        style={{
+                          background: 'var(--bs-body-bg)',
+                          cursor: 'pointer',
+                          transition: 'all 0.2s ease'
+                        }}
+                        onClick={() => navigate('/metrics/progress')}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.backgroundColor = 'var(--bs-warning-bg-subtle)';
+                          e.currentTarget.style.borderColor = 'var(--bs-warning)';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = 'var(--bs-body-bg)';
+                          e.currentTarget.style.borderColor = 'var(--bs-border-color)';
+                        }}
+                      >
+                        <BookOpen size={16} className="text-warning" />
+                        <div className="flex-grow-1">
+                          <div className="text-muted small">Overall Progress</div>
+                          <div className="fw-semibold">
+                            {stats.storyPointsCompletion || 0}% pts · {stats.goalCompletion || 0}% goals · {savingsMetrics.savingsPct}% saved
+                          </div>
+                          <div className="text-muted small">
+                            Saved {formatPotBalance(savingsMetrics.totalSavedPence)} of {savingsMetrics.totalEstimated ? savingsMetrics.totalEstimated.toLocaleString('en-GB', { style: 'currency', currency: 'GBP' }) : '£0'}
+                          </div>
+                          <div className="text-muted small">AI {plannerSummary}</div>
+                        </div>
+                      </div>
+                    </Col>
+
                     {/* Finance Group */}
                     <Col xs={12} sm={6} lg={6} xl={3}>
                       <div 
@@ -2948,39 +3066,6 @@ const Dashboard: React.FC = () => {
                       </div>
                     </Col>
 
-                    {/* Overall Progress Group */}
-                    <Col xs={12} sm={6} lg={6} xl={3}>
-                      <div 
-                        className="d-flex align-items-center gap-2 px-2 py-1 rounded border h-100" 
-                        style={{ 
-                          background: 'var(--bs-body-bg)', 
-                          cursor: 'pointer',
-                          transition: 'all 0.2s ease'
-                        }}
-                        onClick={() => navigate('/metrics/progress')}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.backgroundColor = 'var(--bs-warning-bg-subtle)';
-                          e.currentTarget.style.borderColor = 'var(--bs-warning)';
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.backgroundColor = 'var(--bs-body-bg)';
-                          e.currentTarget.style.borderColor = 'var(--bs-border-color)';
-                        }}
-                      >
-                        <BookOpen size={16} className="text-warning" />
-                        <div className="flex-grow-1">
-                          <div className="text-muted small">Overall Progress</div>
-                          <div className="fw-semibold">
-                            {stats.storyPointsCompletion || 0}% pts · {stats.goalCompletion || 0}% goals · {savingsMetrics.savingsPct}% saved
-                          </div>
-                          <div className="text-muted small">
-                            Saved {formatPotBalance(savingsMetrics.totalSavedPence)} of {savingsMetrics.totalEstimated ? savingsMetrics.totalEstimated.toLocaleString('en-GB', { style: 'currency', currency: 'GBP' }) : '£0'}
-                          </div>
-                          <div className="text-muted small">AI {plannerSummary}</div>
-                        </div>
-                      </div>
-                    </Col>
-
                     {/* Journal Signals Group */}
                     <Col xs={12} sm={6} lg={6} xl={3}>
                       <JournalInsightsCard compact inlineMetric />
@@ -3128,8 +3213,8 @@ const Dashboard: React.FC = () => {
                         <Badge bg={getNextWorkBadge(nextWorkRecommendation.status).bg}>
                           {getNextWorkBadge(nextWorkRecommendation.status).label}
                         </Badge>
-                        {nextWorkRecommendation.recommendedItem.path ? (
-                          <Link to={nextWorkRecommendation.recommendedItem.path} className="text-decoration-none">
+                        {nextWorkPath ? (
+                          <Link to={nextWorkPath} className="text-decoration-none">
                             {nextWorkRecommendation.recommendedItem.label}
                           </Link>
                         ) : (
@@ -3190,6 +3275,91 @@ const Dashboard: React.FC = () => {
                       className="today-plan-col today-plan-col-summary"
                       style={todayPlanColumnStyle('summary')}
                     >
+                      <Card className="shadow-sm border-0 mb-3">
+                        <Card.Header className="d-flex align-items-center justify-content-between">
+                          <div className="fw-semibold d-flex align-items-center gap-2">
+                            <Sparkles size={16} /> Low hanging fruit
+                          </div>
+                          <div className="d-flex align-items-center gap-2">
+                            <Link to="/tasks" className="btn btn-sm btn-outline-secondary">
+                              Tasks
+                            </Link>
+                            <Link to="/chores/checklist" className="btn btn-sm btn-outline-secondary">
+                              Checklist
+                            </Link>
+                            <Badge bg={lowHangingFruitTasks.length > 0 ? 'warning' : 'secondary'} pill>
+                              {lowHangingFruitTasks.length}
+                            </Badge>
+                          </div>
+                        </Card.Header>
+                        <Card.Body className="p-3">
+                          {lowHangingFruitTasks.length === 0 ? (
+                            <div className="text-muted small">No quick, non-critical, stale tasks right now.</div>
+                          ) : (
+                            lowHangingFruitTasks.map((task) => {
+                              const kind = getChoreKind(task);
+                              const busy = kind ? !!choreCompletionBusy[task.id] : false;
+                              const points = getTaskQuickPoints(task);
+                              const pointsLabel = Number.isFinite(points)
+                                ? points.toFixed(2).replace(/\.?0+$/, '')
+                                : '0.25';
+                              const dueMs = getTaskDueMs(task) ?? resolveRecurringDueMs(task, todayDate, todayStartMs);
+                              const dueLabel = dueMs ? formatDueDetail(dueMs) : null;
+                              const staleAnchorMs = getTaskStaleAnchorMs(task);
+                              const staleDays = staleAnchorMs
+                                ? Math.max(1, Math.floor((Date.now() - staleAnchorMs) / MS_PER_DAY))
+                                : LOW_HANGING_MIN_STALE_DAYS;
+                              const rawType = String((task as any)?.type || '').toLowerCase();
+                              const kindLabel = kind
+                                ? (kind === 'routine' ? 'Routine' : kind === 'habit' ? 'Habit' : 'Chore')
+                                : (rawType ? `${rawType.charAt(0).toUpperCase()}${rawType.slice(1)}` : 'Task');
+                              const kindBadge = kind === 'routine'
+                                ? 'success'
+                                : kind === 'habit'
+                                  ? 'secondary'
+                                  : kind === 'chore'
+                                    ? 'primary'
+                                    : 'dark';
+                              const taskPath = kind
+                                ? `/chores/checklist?taskId=${encodeURIComponent(task.id)}`
+                                : ((task as any).deepLink || `/tasks?taskId=${encodeURIComponent(task.id)}`);
+                              return (
+                                <div key={task.id} className="border rounded p-2 mb-2 d-flex align-items-start gap-2">
+                                  <Form.Check
+                                    type="checkbox"
+                                    checked={busy}
+                                    disabled={busy}
+                                    onChange={() => {
+                                      if (kind) {
+                                        void handleCompleteChoreTask(task);
+                                      } else {
+                                        void handleTaskStatusChange(task, 2);
+                                      }
+                                    }}
+                                    aria-label={`Complete ${task.title}`}
+                                  />
+                                  <div className="flex-grow-1">
+                                    <Link
+                                      to={taskPath}
+                                      className="text-decoration-none fw-semibold"
+                                    >
+                                      {task.title}
+                                    </Link>
+                                    <div className="text-muted small">
+                                      {dueLabel ? `Due ${dueLabel} · ` : ''}
+                                      {staleDays}d stale
+                                    </div>
+                                  </div>
+                                  <div className="d-flex flex-column align-items-end gap-1">
+                                    <Badge bg="warning" text="dark">{pointsLabel} pts</Badge>
+                                    <Badge bg={kindBadge}>{kindLabel}</Badge>
+                                  </div>
+                                </div>
+                              );
+                            })
+                          )}
+                        </Card.Body>
+                      </Card>
                       {(dailySummaryLines.length > 0 || aiFocusItems.length > 0) && (
                         <Card className="shadow-sm border-0 mb-3">
                           <Card.Header className="d-flex align-items-center justify-content-between">

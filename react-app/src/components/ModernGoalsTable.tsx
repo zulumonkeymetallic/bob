@@ -49,6 +49,7 @@ import { getStatusName, getThemeName } from '../utils/statusHelpers';
 import ModernStoriesTable from './ModernStoriesTable';
 import { themeVars, rgbaCard } from '../utils/themeVars';
 import { getGoalLinkedPotId, normalizeGoalCostType } from '../utils/goalCost';
+import { MISSING_INFO_CELL_BG, MISSING_INFO_CELL_BG_HOVER } from '../utils/dataQuality';
 
 interface GoalTableRow extends Goal {
   storiesCount?: number;
@@ -293,6 +294,22 @@ const COST_TYPE_VALUE_TO_LABEL: Record<string, string> = {
   none: 'None',
   one_off: 'One-off',
   recurring: 'Recurring',
+};
+
+const hasEstimatedCostValue = (value: unknown): boolean => {
+  if (value == null) return false;
+  if (typeof value === 'string') {
+    if (!value.trim()) return false;
+    return Number.isFinite(Number(value));
+  }
+  return Number.isFinite(Number(value));
+};
+
+const isGoalMissingCostType = (goal: Goal): boolean => !normalizeGoalCostType((goal as any).costType);
+const isGoalMissingEstimatedCost = (goal: Goal): boolean => {
+  const normalizedCostType = normalizeGoalCostType((goal as any).costType);
+  if (normalizedCostType === 'none') return false;
+  return !hasEstimatedCostValue((goal as any).estimatedCost);
 };
 
 const SortableRow: React.FC<SortableRowProps> = ({
@@ -586,7 +603,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
     }
     if (key === 'estimatedCost') {
       const cost = Number(value);
-      if (!Number.isFinite(cost) || cost <= 0) return '';
+      if (!Number.isFinite(cost)) return '';
       return `£${cost.toLocaleString('en-GB', { maximumFractionDigits: 2 })}`;
     }
     if (key === 'linkedPotId') {
@@ -605,6 +622,10 @@ const SortableRow: React.FC<SortableRowProps> = ({
   const renderCell = (column: Column) => {
     const value = goal[column.key as keyof GoalTableRow];
     const isEditing = editingCell === column.key;
+    const isMissingDataCell =
+      (column.key === 'costType' && isGoalMissingCostType(goal))
+      || (column.key === 'estimatedCost' && isGoalMissingEstimatedCost(goal));
+    const cellBaseBackground = isMissingDataCell ? MISSING_INFO_CELL_BG : 'transparent';
 
     if (isEditing && column.editable) {
       // Special handling for theme: use searchable input tied to global themes
@@ -806,15 +827,16 @@ const SortableRow: React.FC<SortableRowProps> = ({
           borderRight: `1px solid ${themeVars.border}`,
           cursor: column.editable ? 'pointer' : 'default',
           transition: 'background-color 0.15s ease',
+          backgroundColor: cellBaseBackground,
         }}
         onMouseEnter={(e) => {
           if (column.editable) {
-            e.currentTarget.style.backgroundColor = rgbaCard(0.08);
+            e.currentTarget.style.backgroundColor = isMissingDataCell ? MISSING_INFO_CELL_BG_HOVER : rgbaCard(0.08);
           }
         }}
         onMouseLeave={(e) => {
           if (column.editable) {
-            e.currentTarget.style.backgroundColor = 'transparent';
+            e.currentTarget.style.backgroundColor = cellBaseBackground;
           }
         }}
         onClick={() => {
@@ -1172,6 +1194,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
   const [sprintStoryCounts, setSprintStoryCounts] = useState<Record<string, number>>({});
   const [storyPointsData, setStoryPointsData] = useState<Record<string, { total: number; completed: number; progress: number }>>({});
   const [habitAdherenceData, setHabitAdherenceData] = useState<Record<string, { planned: number; completed: number; progress: number }>>({});
+  const [costDataFilter, setCostDataFilter] = useState<'all' | 'missing_any' | 'missing_cost_type' | 'missing_estimated_cost'>('all');
   const { selectedSprintId } = useSprint();
   const [sortConfig, setSortConfig] = useState<{ key: 'orderIndex' | 'startDate' | 'endDate' | 'targetYear'; direction: 'asc' | 'desc' }>({
     key: 'startDate',
@@ -1518,6 +1541,19 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
     sortOrder: goal.orderIndex ?? index,
   }));
 
+  const qualityFilteredRows = tableRows.filter((goal) => {
+    if (costDataFilter === 'missing_any') {
+      return isGoalMissingCostType(goal) || isGoalMissingEstimatedCost(goal);
+    }
+    if (costDataFilter === 'missing_cost_type') {
+      return isGoalMissingCostType(goal);
+    }
+    if (costDataFilter === 'missing_estimated_cost') {
+      return isGoalMissingEstimatedCost(goal);
+    }
+    return true;
+  });
+
   const handleSort = (key: 'orderIndex' | 'startDate' | 'endDate' | 'targetYear') => {
     setSortConfig(prev => ({
       key,
@@ -1554,7 +1590,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
 
   const sortedRows = useMemo(() => {
     const { key, direction } = sortConfig;
-    const list = [...tableRows];
+    const list = [...qualityFilteredRows];
     const directionFactor = direction === 'asc' ? 1 : -1;
     list.sort((a, b) => {
       const valA = key === 'orderIndex' ? (a as any).sortOrder ?? 0 : (a as any)[key] ?? null;
@@ -1568,7 +1604,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
       return numA > numB ? directionFactor : -directionFactor;
     });
     return list;
-  }, [sortConfig, tableRows]);
+  }, [qualityFilteredRows, sortConfig]);
 
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
@@ -1636,7 +1672,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
             color: themeVars.muted as string,
             margin: 0
           }}>
-            {goals.length} goals • {visibleColumnsCount} columns visible
+            {sortedRows.length} of {goals.length} goals • {visibleColumnsCount} columns visible
           </p>
         </div>
         <button
@@ -1669,6 +1705,43 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
           <Settings size={16} />
           {showConfig ? 'Hide Configuration' : 'Configure Table'}
         </button>
+      </div>
+
+      <div style={{
+        padding: '12px 16px',
+        borderBottom: `1px solid ${themeVars.border}`,
+        backgroundColor: themeVars.card as string,
+        display: 'flex',
+        alignItems: 'center',
+        gap: '8px',
+        flexWrap: 'wrap',
+      }}>
+        <label style={{
+          fontSize: '12px',
+          color: themeVars.muted as string,
+          display: 'flex',
+          alignItems: 'center',
+          gap: '6px',
+        }}>
+          Cost Completeness
+          <select
+            value={costDataFilter}
+            onChange={(e) => setCostDataFilter(e.target.value as 'all' | 'missing_any' | 'missing_cost_type' | 'missing_estimated_cost')}
+            style={{
+              padding: '4px 8px',
+              borderRadius: '6px',
+              border: `1px solid ${themeVars.border}`,
+              backgroundColor: themeVars.panel as string,
+              color: themeVars.text as string,
+              fontSize: '12px',
+            }}
+          >
+            <option value="all">All Goals</option>
+            <option value="missing_any">Missing Cost Type or Est Cost</option>
+            <option value="missing_cost_type">Missing Cost Type</option>
+            <option value="missing_estimated_cost">Missing Est Cost</option>
+          </select>
+        </label>
       </div>
 
       <div style={{ display: 'flex' }}>
