@@ -1188,6 +1188,28 @@ const renderDashboardAlerts = (alerts = []) => {
     return '<p style="color:#6b7280;">No banner alerts today.</p>';
   }
 
+  const toPercentInt = (value, fallback = null) => {
+    const num = Number(value);
+    if (!Number.isFinite(num)) return fallback;
+    return Math.max(0, Math.round(num));
+  };
+
+  const renderAlertMessage = (alert) => {
+    if (alert?.type !== 'budget_guardrail') {
+      return escape(alert?.message || '');
+    }
+
+    const discretionarySharePct = toPercentInt(alert?.discretionarySharePct);
+    const monthElapsedPct = toPercentInt(alert?.monthElapsedPct);
+
+    if (discretionarySharePct == null || monthElapsedPct == null) {
+      return 'Discretionary spend is ahead of month progress.';
+    }
+
+    // Budget guardrail wording is intentionally scoped to month-progress context only.
+    return `Discretionary spend is ${discretionarySharePct}% with ${monthElapsedPct}% of the month elapsed.`;
+  };
+
   const toColor = (severity) => {
     if (severity === 'critical') return { bg: '#fef2f2', border: '#ef4444', text: '#991b1b' };
     if (severity === 'warning') return { bg: '#fffbeb', border: '#f59e0b', text: '#92400e' };
@@ -1205,7 +1227,7 @@ const renderDashboardAlerts = (alerts = []) => {
       return `
         <div style="margin-bottom:10px;padding:12px;border-radius:10px;border-left:4px solid ${colors.border};background:${colors.bg};">
           <div style="font-size:13px;font-weight:700;color:${colors.text};">${escape(alert?.title || 'Alert')}</div>
-          <div style="font-size:13px;color:#334155;margin-top:4px;">${escape(alert?.message || '')}</div>
+          <div style="font-size:13px;color:#334155;margin-top:4px;">${renderAlertMessage(alert)}</div>
           ${action}
         </div>
       `;

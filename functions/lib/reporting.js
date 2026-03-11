@@ -1308,6 +1308,8 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
       severity: 'warning',
       title: 'Budget guardrail: discretionary spend is ahead of month progress',
       message: `Discretionary spend is ${discretionarySharePct}% with ${monthElapsedPct}% of the month elapsed.`,
+      discretionarySharePct,
+      monthElapsedPct,
       ctaPath: buildAbsoluteUrl('/finance'),
     });
   }
