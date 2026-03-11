@@ -40,6 +40,7 @@ After build completes, check `/Users/jim/GitHub/bob/build-logs/manifest.json` fo
 ```
 
 **See Also:** `BUILD_ORCHESTRATION_GUIDE.md` for detailed commands and troubleshooting.
+**Execution Runbook:** `AGENT_EXECUTION_RUNBOOK.md` for build/test/validate/commit workflows across web, iOS, and mac-sync repos.
 
 ---
 - Make it fast for agents and testers to validate Firestore access, sprint loading, and performance locally and in prod.
