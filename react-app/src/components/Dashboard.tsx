@@ -4633,80 +4633,82 @@ const Dashboard: React.FC = () => {
               </Col>
             </Row>
 
-            <Row className="g-3 mb-1">
-              <Col xl={12}>
-                <Card className="shadow-sm border-0">
-                  <Card.Header className="d-flex justify-content-between align-items-center flex-wrap gap-2 py-2">
-                    <div className="fw-semibold">Savings Runway</div>
-                    <div className="d-flex align-items-center gap-2 flex-wrap">
-                      <Form.Select
-                        size="sm"
-                        value={runwaySortMode}
-                        onChange={(e) => setRunwaySortMode(e.target.value as 'soonest' | 'shortfall' | 'theme')}
-                        style={{ width: 160 }}
-                      >
-                        <option value="soonest">Sort: Soonest funded</option>
-                        <option value="shortfall">Sort: Highest shortfall</option>
-                        <option value="theme">Sort: Theme</option>
-                      </Form.Select>
-                      <Form.Select
-                        size="sm"
-                        value={runwayThemeFilter}
-                        onChange={(e) => setRunwayThemeFilter(e.target.value)}
-                        style={{ width: 180 }}
-                      >
-                        <option value="all">Theme: All</option>
-                        {savingsRunwayThemes.map((theme) => (
-                          <option key={theme} value={theme}>{theme}</option>
-                        ))}
-                      </Form.Select>
-                    </div>
-                  </Card.Header>
-                  <Card.Body className="py-2">
-                    <div className="text-muted small mb-2">{financeSyncSummary}</div>
-                    {savingsRunwayRows.length === 0 ? (
-                      <div className="text-muted small">No linked savings-pot runway data available yet.</div>
-                    ) : (
-                      <div className="table-responsive">
-                        <Table size="sm" hover className="mb-0 align-middle">
-                          <thead>
-                            <tr>
-                              <th>Goal</th>
-                              <th style={{ textAlign: 'right' }}>Target</th>
-                              <th style={{ textAlign: 'right' }}>Pot Balance</th>
-                              <th style={{ textAlign: 'right' }}>Avg Monthly Allocation</th>
-                              <th style={{ textAlign: 'right' }}>Remaining</th>
-                              <th style={{ textAlign: 'right' }}>Estimated Months</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {savingsRunwayRows.slice(0, 12).map((row) => (
-                              <tr key={row.goalId || row.goalTitle}>
-                                <td>
-                                  <div className="fw-semibold">{row.goalTitle}</div>
-                                  <div className="text-muted" style={{ fontSize: 12 }}>{row.themeName}</div>
-                                </td>
-                                <td style={{ textAlign: 'right' }}>{formatPotBalance(row.targetAmount * 100, 'GBP')}</td>
-                                <td style={{ textAlign: 'right' }}>{formatPotBalance(row.linkedPotBalance * 100, 'GBP')}</td>
-                                <td style={{ textAlign: 'right' }}>
-                                  {row.avgMonthlyAllocation && row.avgMonthlyAllocation > 0
-                                    ? formatPotBalance(row.avgMonthlyAllocation * 100, 'GBP')
-                                    : 'Insufficient history'}
-                                </td>
-                                <td style={{ textAlign: 'right' }}>{formatPotBalance(row.remainingAmount * 100, 'GBP')}</td>
-                                <td style={{ textAlign: 'right' }}>
-                                  {row.monthsToTarget == null ? 'TBD' : (row.monthsToTarget <= 0 ? 'Funded' : `${Math.ceil(row.monthsToTarget)} mo`)}
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </Table>
+            {false && (
+              <Row className="g-3 mb-1">
+                <Col xl={12}>
+                  <Card className="shadow-sm border-0">
+                    <Card.Header className="d-flex justify-content-between align-items-center flex-wrap gap-2 py-2">
+                      <div className="fw-semibold">Savings Runway</div>
+                      <div className="d-flex align-items-center gap-2 flex-wrap">
+                        <Form.Select
+                          size="sm"
+                          value={runwaySortMode}
+                          onChange={(e) => setRunwaySortMode(e.target.value as 'soonest' | 'shortfall' | 'theme')}
+                          style={{ width: 160 }}
+                        >
+                          <option value="soonest">Sort: Soonest funded</option>
+                          <option value="shortfall">Sort: Highest shortfall</option>
+                          <option value="theme">Sort: Theme</option>
+                        </Form.Select>
+                        <Form.Select
+                          size="sm"
+                          value={runwayThemeFilter}
+                          onChange={(e) => setRunwayThemeFilter(e.target.value)}
+                          style={{ width: 180 }}
+                        >
+                          <option value="all">Theme: All</option>
+                          {savingsRunwayThemes.map((theme) => (
+                            <option key={theme} value={theme}>{theme}</option>
+                          ))}
+                        </Form.Select>
                       </div>
-                    )}
-                  </Card.Body>
-                </Card>
-              </Col>
-            </Row>
+                    </Card.Header>
+                    <Card.Body className="py-2">
+                      <div className="text-muted small mb-2">{financeSyncSummary}</div>
+                      {savingsRunwayRows.length === 0 ? (
+                        <div className="text-muted small">No linked savings-pot runway data available yet.</div>
+                      ) : (
+                        <div className="table-responsive">
+                          <Table size="sm" hover className="mb-0 align-middle">
+                            <thead>
+                              <tr>
+                                <th>Goal</th>
+                                <th style={{ textAlign: 'right' }}>Target</th>
+                                <th style={{ textAlign: 'right' }}>Pot Balance</th>
+                                <th style={{ textAlign: 'right' }}>Avg Monthly Allocation</th>
+                                <th style={{ textAlign: 'right' }}>Remaining</th>
+                                <th style={{ textAlign: 'right' }}>Estimated Months</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {savingsRunwayRows.slice(0, 12).map((row) => (
+                                <tr key={row.goalId || row.goalTitle}>
+                                  <td>
+                                    <div className="fw-semibold">{row.goalTitle}</div>
+                                    <div className="text-muted" style={{ fontSize: 12 }}>{row.themeName}</div>
+                                  </td>
+                                  <td style={{ textAlign: 'right' }}>{formatPotBalance(row.targetAmount * 100, 'GBP')}</td>
+                                  <td style={{ textAlign: 'right' }}>{formatPotBalance(row.linkedPotBalance * 100, 'GBP')}</td>
+                                  <td style={{ textAlign: 'right' }}>
+                                    {row.avgMonthlyAllocation && row.avgMonthlyAllocation > 0
+                                      ? formatPotBalance(row.avgMonthlyAllocation * 100, 'GBP')
+                                      : 'Insufficient history'}
+                                  </td>
+                                  <td style={{ textAlign: 'right' }}>{formatPotBalance(row.remainingAmount * 100, 'GBP')}</td>
+                                  <td style={{ textAlign: 'right' }}>
+                                    {row.monthsToTarget == null ? 'TBD' : (row.monthsToTarget <= 0 ? 'Funded' : `${Math.ceil(row.monthsToTarget)} mo`)}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </Table>
+                        </div>
+                      )}
+                    </Card.Body>
+                  </Card>
+                </Col>
+              </Row>
+            )}
 
             <Row className="g-3 mb-1">
               <Col xl={12}>

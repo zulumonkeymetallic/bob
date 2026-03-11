@@ -49,6 +49,7 @@ const toMs = (value: any): number => {
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 type PotInfo = { name: string; balance: number; currency: string };
+type PotTransferInfo = { transferredInPence: number; transferredOutPence: number; currency: string };
 
 interface ThemeGoalRow {
   id: string;
@@ -58,6 +59,7 @@ interface ThemeGoalRow {
   statusBg: string;
   storiesDone: number;
   storiesTotal: number;
+  storiesProgressPct: number;
   tasksDone: number;
   tasksTotal: number;
   pointsDone: number;
@@ -66,9 +68,12 @@ interface ThemeGoalRow {
   progressPct: number;
   dueThisSprint: boolean;
   dueDateMs: number | null;
-  savingsSavedPence: number;
-  savingsTarget: number;
-  savingsCurrency: string;
+  potTransferredInPence: number;
+  potTransferredOutPence: number;
+  potNetTransferredPence: number;
+  potTarget: number;
+  potCurrency: string;
+  isFocusGoal: boolean;
 }
 
 interface ThemeRow {
@@ -81,6 +86,7 @@ interface ThemeRow {
   goalsTotal: number;
   storiesDone: number;
   storiesTotal: number;
+  storiesProgressPct: number;
   tasksDone: number;
   tasksTotal: number;
   pointsDone: number;
@@ -89,9 +95,11 @@ interface ThemeRow {
   totalItems: number;
   progressPct: number;
   goalRows: ThemeGoalRow[];
-  savingsSavedPence: number;
-  savingsTarget: number;
-  savingsCurrency: string;
+  potTransferredInPence: number;
+  potTransferredOutPence: number;
+  potNetTransferredPence: number;
+  potTarget: number;
+  potCurrency: string;
 }
 
 // ── Mini widget component ──────────────────────────────────────────────────────
@@ -102,7 +110,7 @@ interface ThemeProgressWidgetProps {
   lowProgressAlert?: ThemeGoalRow[];
   expanded: Record<string, boolean>;
   onToggle: (key: string) => void;
-  formatSavings: (pence: number, currency: string) => string;
+  formatCurrency: (pence: number, currency: string) => string;
   emptyMessage: string;
   overallPct: number | null;
   overallBreakdown: string;
@@ -114,7 +122,7 @@ const ThemeProgressWidget: React.FC<ThemeProgressWidgetProps> = ({
   lowProgressAlert,
   expanded,
   onToggle,
-  formatSavings,
+  formatCurrency,
   emptyMessage,
   overallPct,
   overallBreakdown,
@@ -167,8 +175,8 @@ const ThemeProgressWidget: React.FC<ThemeProgressWidgetProps> = ({
           const pointsPct = row.pointsTotal > 0
             ? Math.round((row.pointsDone / row.pointsTotal) * 100)
             : 0;
-          const savingsPct = row.savingsTarget > 0
-            ? Math.round(((row.savingsSavedPence / 100) / row.savingsTarget) * 100)
+          const transferPct = row.potTarget > 0
+            ? Math.max(0, Math.min(100, Math.round(((row.potNetTransferredPence / 100) / row.potTarget) * 100)))
             : 0;
           return (
             <div key={row.themeKey} className="border rounded p-2 mb-2">
@@ -215,14 +223,15 @@ const ThemeProgressWidget: React.FC<ThemeProgressWidgetProps> = ({
 
               <div className="d-flex align-items-center gap-2 flex-wrap mt-2">
                 <Badge bg="secondary">{row.goalsDone}/{row.goalsTotal} goals</Badge>
-                <Badge bg="secondary">{row.storiesDone}/{row.storiesTotal} stories</Badge>
+                <Badge bg="secondary">{row.storiesDone}/{row.storiesTotal} stories ({row.storiesProgressPct}%)</Badge>
                 <Badge bg="secondary">{row.tasksDone}/{row.tasksTotal} tasks</Badge>
                 {row.pointsTotal > 0 && (
                   <Badge bg="primary">{row.pointsDone}/{row.pointsTotal} pts ({pointsPct}%)</Badge>
                 )}
-                {row.savingsTarget > 0 && (
+                {row.potTarget > 0 && (
                   <Badge bg="success">
-                    Savings {formatSavings(row.savingsSavedPence, row.savingsCurrency)} / {row.savingsTarget.toLocaleString('en-GB', { style: 'currency', currency: row.savingsCurrency })} ({savingsPct}%)
+                    Pot net {formatCurrency(row.potNetTransferredPence, row.potCurrency)} ({transferPct}%)
+                    {' '}· In {formatCurrency(row.potTransferredInPence, row.potCurrency)} · Out {formatCurrency(row.potTransferredOutPence, row.potCurrency)}
                   </Badge>
                 )}
               </div>
@@ -235,12 +244,17 @@ const ThemeProgressWidget: React.FC<ThemeProgressWidgetProps> = ({
                     row.goalRows.map((goalRow) => (
                       <div key={goalRow.id} className="border rounded p-2 mb-2">
                         <div className="d-flex align-items-start justify-content-between gap-2">
-                          <div className="fw-semibold small flex-grow-1">{goalRow.title}</div>
+                          <div className="fw-semibold small flex-grow-1 d-flex align-items-center gap-2 flex-wrap">
+                            <span>{goalRow.title}</span>
+                            {goalRow.isFocusGoal && (
+                              <Badge bg="warning" text="dark">Focus</Badge>
+                            )}
+                          </div>
                           <Badge bg={goalRow.statusBg}>{goalRow.statusLabel}</Badge>
                         </div>
                         <div className="d-flex align-items-center gap-2 flex-wrap mt-1">
                           <span className="text-muted" style={{ fontSize: 11 }}>
-                            Stories {goalRow.storiesDone}/{goalRow.storiesTotal}
+                            Stories {goalRow.storiesDone}/{goalRow.storiesTotal} ({goalRow.storiesProgressPct}%)
                           </span>
                           <span className="text-muted" style={{ fontSize: 11 }}>
                             Tasks {goalRow.tasksDone}/{goalRow.tasksTotal}
@@ -303,6 +317,7 @@ const ThemeProgressDashboard: React.FC = () => {
   const [allStories, setAllStories] = useState<Story[]>([]);
   const [sprintTasks, setSprintTasks] = useState<Task[]>([]);
   const [pots, setPots] = useState<Record<string, PotInfo>>({});
+  const [potTransfers, setPotTransfers] = useState<Record<string, PotTransferInfo>>({});
   const [goalKpiMetrics, setGoalKpiMetrics] = useState<Record<string, { resolvedKpis?: any[]; updatedAt?: any }>>({});
   const [focusGoals, setFocusGoals] = useState<FocusGoal[]>([]);
   const [focusGoalsLoading, setFocusGoalsLoading] = useState(true);
@@ -410,6 +425,67 @@ const ThemeProgressDashboard: React.FC = () => {
     return () => unsub();
   }, [currentUser]);
 
+  // Pot transfer subscription (monzo transactions)
+  useEffect(() => {
+    if (!currentUser) {
+      setPotTransfers({});
+      return;
+    }
+    const unsub = onSnapshot(
+      query(collection(db, 'monzo_transactions'), where('ownerUid', '==', currentUser.uid)),
+      (snap) => {
+        const map: Record<string, PotTransferInfo> = {};
+        const registerTransfer = (id: string | null | undefined, direction: 'in' | 'out', amountPence: number, currency: string) => {
+          if (!id || amountPence <= 0) return;
+          const existing = map[id] || { transferredInPence: 0, transferredOutPence: 0, currency };
+          if (direction === 'in') existing.transferredInPence += amountPence;
+          if (direction === 'out') existing.transferredOutPence += amountPence;
+          existing.currency = existing.currency || currency;
+          map[id] = existing;
+        };
+        const registerAliases = (baseId: string | null | undefined, direction: 'in' | 'out', amountPence: number, currency: string) => {
+          if (!baseId) return;
+          registerTransfer(baseId, direction, amountPence, currency);
+          if (currentUser?.uid) {
+            if (baseId.startsWith(`${currentUser.uid}_`)) {
+              registerTransfer(baseId.replace(`${currentUser.uid}_`, ''), direction, amountPence, currency);
+            } else {
+              registerTransfer(`${currentUser.uid}_${baseId}`, direction, amountPence, currency);
+            }
+          }
+        };
+
+        snap.docs.forEach((docSnap) => {
+          const data = docSnap.data() as any;
+          const metadata = (data.metadata || {}) as any;
+          const amountPence = Math.abs(Number(data.amount || 0));
+          if (!amountPence) return;
+          const currency = String(data.currency || 'GBP');
+
+          const destinationPotId = metadata.destination_pot_id ? String(metadata.destination_pot_id) : null;
+          const sourcePotId = metadata.source_pot_id ? String(metadata.source_pot_id) : null;
+          const fallbackPotId = metadata.pot_id ? String(metadata.pot_id) : null;
+
+          if (destinationPotId) {
+            registerAliases(destinationPotId, 'in', amountPence, currency);
+          }
+          if (sourcePotId) {
+            registerAliases(sourcePotId, 'out', amountPence, currency);
+          }
+
+          if (!destinationPotId && !sourcePotId && fallbackPotId) {
+            const direction: 'in' | 'out' = Number(data.amount || 0) < 0 ? 'in' : 'out';
+            registerAliases(fallbackPotId, direction, amountPence, currency);
+          }
+        });
+
+        setPotTransfers(map);
+      },
+      () => setPotTransfers({}),
+    );
+    return () => unsub();
+  }, [currentUser]);
+
   // Goal KPI metrics subscription
   useEffect(() => {
     if (!currentUser) { setGoalKpiMetrics({}); setKpiLoading(false); return; }
@@ -467,20 +543,50 @@ const ThemeProgressDashboard: React.FC = () => {
     return typeof match?.id === 'number' ? match.id : 0;
   }, [themeFor]);
 
-  const resolveGoalSavings = useCallback((goal: Goal) => {
+  const activeFocusGoalIds = useMemo(() => {
+    const ids = new Set<string>();
+    focusGoals
+      .filter((entry) => Boolean((entry as any)?.isActive))
+      .forEach((entry) => {
+        (entry.goalIds || []).forEach((goalId) => {
+          if (goalId) ids.add(String(goalId));
+        });
+      });
+    return ids;
+  }, [focusGoals]);
+
+  const resolveGoalPotTransfers = useCallback((goal: Goal) => {
     const target = Number((goal as any).estimatedCost || 0);
     const rawPotId = (goal as any).linkedPotId || (goal as any).potId || null;
-    if (!rawPotId) return { savingsSavedPence: 0, savingsTarget: Number.isFinite(target) ? target : 0, savingsCurrency: 'GBP' };
+    if (!rawPotId) {
+      return {
+        potTransferredInPence: 0,
+        potTransferredOutPence: 0,
+        potNetTransferredPence: 0,
+        potTarget: Number.isFinite(target) ? target : 0,
+        potCurrency: 'GBP',
+      };
+    }
     const base = String(rawPotId);
     const candidates = [base];
     if (currentUser?.uid && base.startsWith(`${currentUser.uid}_`)) candidates.push(base.replace(`${currentUser.uid}_`, ''));
     else if (currentUser?.uid) candidates.push(`${currentUser.uid}_${base}`);
-    const potId = candidates.find((id) => pots[id]);
-    const pot = potId ? pots[potId] : null;
-    return { savingsSavedPence: Number(pot?.balance || 0), savingsTarget: Number.isFinite(target) ? target : 0, savingsCurrency: pot?.currency || 'GBP' };
-  }, [currentUser?.uid, pots]);
+    const transferKey = candidates.find((id) => potTransfers[id]);
+    const transfer = transferKey ? potTransfers[transferKey] : null;
+    const potKey = candidates.find((id) => pots[id]);
+    const pot = potKey ? pots[potKey] : null;
+    const transferredInPence = Number(transfer?.transferredInPence || 0);
+    const transferredOutPence = Number(transfer?.transferredOutPence || 0);
+    return {
+      potTransferredInPence: transferredInPence,
+      potTransferredOutPence: transferredOutPence,
+      potNetTransferredPence: transferredInPence - transferredOutPence,
+      potTarget: Number.isFinite(target) ? target : 0,
+      potCurrency: transfer?.currency || pot?.currency || 'GBP',
+    };
+  }, [currentUser?.uid, potTransfers, pots]);
 
-  const formatSavings = useCallback((pence: number, currency = 'GBP') => {
+  const formatCurrency = useCallback((pence: number, currency = 'GBP') => {
     return (pence / 100).toLocaleString('en-GB', { style: 'currency', currency });
   }, []);
 
@@ -583,6 +689,7 @@ const ThemeProgressDashboard: React.FC = () => {
         const goalStories = storiesByGoal.get(goal.id) || [];
         const goalTasks = tasksByGoal.get(goal.id) || [];
         const storiesDone = goalStories.filter((s) => isStoryDone((s as any).status)).length;
+        const storiesProgressPct = goalStories.length > 0 ? Math.round((storiesDone / goalStories.length) * 100) : 0;
         const tasksDone = goalTasks.filter((t) => isTaskDone((t as any).status)).length;
         const pointsTotal = goalStories.reduce((sum, s) => sum + (Number((s as any).points || 0) || 0), 0);
         const pointsDone = goalStories.filter((s) => isStoryDone((s as any).status)).reduce((sum, s) => sum + (Number((s as any).points || 0) || 0), 0);
@@ -592,8 +699,8 @@ const ThemeProgressDashboard: React.FC = () => {
         const dueDateMs = resolveGoalDueMs(goal);
         const dueThisSprint = !!(dueDateMs && sprintStartMs && sprintEndMs && dueDateMs >= sprintStartMs && dueDateMs <= sprintEndMs);
         const { statusLabel, statusBg } = resolveGoalStatus(goal);
-        const savings = resolveGoalSavings(goal);
-        return { id: goal.id, title: goal.title || goal.id, status: (goal as any).status, statusLabel, statusBg, storiesDone, storiesTotal: goalStories.length, tasksDone, tasksTotal: goalTasks.length, pointsDone, pointsTotal, pointsProgressPct, progressPct, dueDateMs, dueThisSprint, ...savings };
+        const transfer = resolveGoalPotTransfers(goal);
+        return { id: goal.id, title: goal.title || goal.id, status: (goal as any).status, statusLabel, statusBg, storiesDone, storiesTotal: goalStories.length, storiesProgressPct, tasksDone, tasksTotal: goalTasks.length, pointsDone, pointsTotal, pointsProgressPct, progressPct, dueDateMs, dueThisSprint, isFocusGoal: activeFocusGoalIds.has(goal.id), ...transfer };
       }).sort((a, b) => {
         if (a.dueThisSprint !== b.dueThisSprint) return a.dueThisSprint ? -1 : 1;
         if (a.pointsProgressPct !== b.pointsProgressPct) return a.pointsProgressPct - b.pointsProgressPct;
@@ -602,20 +709,23 @@ const ThemeProgressDashboard: React.FC = () => {
 
       const goalsDone = themeGoals.filter((g) => isGoalDone((g as any).status)).length;
       const storiesDone = themeStories.filter((s) => isStoryDone((s as any).status)).length;
+      const storiesProgressPct = themeStories.length > 0 ? Math.round((storiesDone / themeStories.length) * 100) : 0;
       const tasksDone = themeTasks.filter((t) => isTaskDone((t as any).status)).length;
       const pointsTotal = themeStories.reduce((sum, s) => sum + (Number((s as any).points || 0) || 0), 0);
       const pointsDone = themeStories.filter((s) => isStoryDone((s as any).status)).reduce((sum, s) => sum + (Number((s as any).points || 0) || 0), 0);
       const completedItems = goalsDone + storiesDone + tasksDone;
       const progressPct = totalItems > 0 ? Math.round((completedItems / totalItems) * 100) : 0;
-      const savingsSavedPence = goalRows.reduce((sum, r) => sum + r.savingsSavedPence, 0);
-      const savingsTarget = goalRows.reduce((sum, r) => sum + r.savingsTarget, 0);
-      const savingsCurrency = goalRows.find((r) => r.savingsCurrency)?.savingsCurrency || 'GBP';
+      const potTransferredInPence = goalRows.reduce((sum, r) => sum + r.potTransferredInPence, 0);
+      const potTransferredOutPence = goalRows.reduce((sum, r) => sum + r.potTransferredOutPence, 0);
+      const potNetTransferredPence = goalRows.reduce((sum, r) => sum + r.potNetTransferredPence, 0);
+      const potTarget = goalRows.reduce((sum, r) => sum + r.potTarget, 0);
+      const potCurrency = goalRows.find((r) => r.potCurrency)?.potCurrency || 'GBP';
 
-      rows.push({ themeKey: String(theme.id), themeId, themeLabel: theme.label || theme.name || `Theme ${theme.id}`, color: theme.color || '#6c757d', textColor: theme.textColor || '#ffffff', goalsDone, goalsTotal: themeGoals.length, storiesDone, storiesTotal: themeStories.length, tasksDone, tasksTotal: themeTasks.length, pointsDone, pointsTotal, completedItems, totalItems, progressPct, goalRows, savingsSavedPence, savingsTarget, savingsCurrency });
+      rows.push({ themeKey: String(theme.id), themeId, themeLabel: theme.label || theme.name || `Theme ${theme.id}`, color: theme.color || '#6c757d', textColor: theme.textColor || '#ffffff', goalsDone, goalsTotal: themeGoals.length, storiesDone, storiesTotal: themeStories.length, storiesProgressPct, tasksDone, tasksTotal: themeTasks.length, pointsDone, pointsTotal, completedItems, totalItems, progressPct, goalRows, potTransferredInPence, potTransferredOutPence, potNetTransferredPence, potTarget, potCurrency });
     });
 
     return rows.sort((a, b) => b.pointsTotal !== a.pointsTotal ? b.pointsTotal - a.pointsTotal : b.totalItems - a.totalItems);
-  }, [goals, sprintStories, sprintTasks, selectedSprint, themePalette, resolveThemeId, resolveGoalSavings]);
+  }, [goals, sprintStories, sprintTasks, selectedSprint, themePalette, resolveThemeId, resolveGoalPotTransfers, activeFocusGoalIds]);
 
   // ── Low progress goals due this sprint (for sprint widget alert) ───────────
 
@@ -661,30 +771,34 @@ const ThemeProgressDashboard: React.FC = () => {
       const goalRows: ThemeGoalRow[] = themeGoals.map((goal) => {
         const goalStories = storiesByGoal.get(goal.id) || [];
         const storiesDone = goalStories.filter((s) => isStoryDone((s as any).status)).length;
+        const storiesProgressPct = goalStories.length > 0 ? Math.round((storiesDone / goalStories.length) * 100) : 0;
         const pointsTotal = goalStories.reduce((sum, s) => sum + (Number((s as any).points || 0) || 0), 0);
         const pointsDone = goalStories.filter((s) => isStoryDone((s as any).status)).reduce((sum, s) => sum + (Number((s as any).points || 0) || 0), 0);
         const pointsProgressPct = pointsTotal > 0 ? Math.round((pointsDone / pointsTotal) * 100) : (isGoalDone((goal as any).status) ? 100 : 0);
         const progressPct = pointsTotal > 0 ? pointsProgressPct : goalStories.length > 0 ? Math.round((storiesDone / goalStories.length) * 100) : (isGoalDone((goal as any).status) ? 100 : 0);
         const { statusLabel, statusBg } = resolveGoalStatus(goal);
-        const savings = resolveGoalSavings(goal);
-        return { id: goal.id, title: goal.title || goal.id, status: (goal as any).status, statusLabel, statusBg, storiesDone, storiesTotal: goalStories.length, tasksDone: 0, tasksTotal: 0, pointsDone, pointsTotal, pointsProgressPct, progressPct, dueDateMs: null, dueThisSprint: false, ...savings };
+        const transfer = resolveGoalPotTransfers(goal);
+        return { id: goal.id, title: goal.title || goal.id, status: (goal as any).status, statusLabel, statusBg, storiesDone, storiesTotal: goalStories.length, storiesProgressPct, tasksDone: 0, tasksTotal: 0, pointsDone, pointsTotal, pointsProgressPct, progressPct, dueDateMs: null, dueThisSprint: false, isFocusGoal: activeFocusGoalIds.has(goal.id), ...transfer };
       }).sort((a, b) => a.progressPct - b.progressPct || a.title.localeCompare(b.title));
 
       const goalsDone = themeGoals.filter((g) => isGoalDone((g as any).status)).length;
       const storiesDone = themeStories.filter((s) => isStoryDone((s as any).status)).length;
+      const storiesProgressPct = themeStories.length > 0 ? Math.round((storiesDone / themeStories.length) * 100) : 0;
       const pointsTotal = themeStories.reduce((sum, s) => sum + (Number((s as any).points || 0) || 0), 0);
       const pointsDone = themeStories.filter((s) => isStoryDone((s as any).status)).reduce((sum, s) => sum + (Number((s as any).points || 0) || 0), 0);
       const completedItems = goalsDone + storiesDone;
       const progressPct = totalItems > 0 ? Math.round((completedItems / totalItems) * 100) : 0;
-      const savingsSavedPence = goalRows.reduce((sum, r) => sum + r.savingsSavedPence, 0);
-      const savingsTarget = goalRows.reduce((sum, r) => sum + r.savingsTarget, 0);
-      const savingsCurrency = goalRows.find((r) => r.savingsCurrency)?.savingsCurrency || 'GBP';
+      const potTransferredInPence = goalRows.reduce((sum, r) => sum + r.potTransferredInPence, 0);
+      const potTransferredOutPence = goalRows.reduce((sum, r) => sum + r.potTransferredOutPence, 0);
+      const potNetTransferredPence = goalRows.reduce((sum, r) => sum + r.potNetTransferredPence, 0);
+      const potTarget = goalRows.reduce((sum, r) => sum + r.potTarget, 0);
+      const potCurrency = goalRows.find((r) => r.potCurrency)?.potCurrency || 'GBP';
 
-      rows.push({ themeKey: String(theme.id), themeId, themeLabel: theme.label || theme.name || `Theme ${theme.id}`, color: theme.color || '#6c757d', textColor: theme.textColor || '#ffffff', goalsDone, goalsTotal: themeGoals.length, storiesDone, storiesTotal: themeStories.length, tasksDone: 0, tasksTotal: 0, pointsDone, pointsTotal, completedItems, totalItems, progressPct, goalRows, savingsSavedPence, savingsTarget, savingsCurrency });
+      rows.push({ themeKey: String(theme.id), themeId, themeLabel: theme.label || theme.name || `Theme ${theme.id}`, color: theme.color || '#6c757d', textColor: theme.textColor || '#ffffff', goalsDone, goalsTotal: themeGoals.length, storiesDone, storiesTotal: themeStories.length, storiesProgressPct, tasksDone: 0, tasksTotal: 0, pointsDone, pointsTotal, completedItems, totalItems, progressPct, goalRows, potTransferredInPence, potTransferredOutPence, potNetTransferredPence, potTarget, potCurrency });
     });
 
     return rows.sort((a, b) => b.pointsTotal !== a.pointsTotal ? b.pointsTotal - a.pointsTotal : b.totalItems - a.totalItems);
-  }, [goals, allStories, themePalette, resolveThemeId, resolveGoalSavings]);
+  }, [goals, allStories, themePalette, resolveThemeId, resolveGoalPotTransfers, activeFocusGoalIds]);
 
   // ── Goal KPI rows (bottom section) ────────────────────────────────────────
 
@@ -753,12 +867,12 @@ const ThemeProgressDashboard: React.FC = () => {
       const storyProgressPct = goalStories.length
         ? (totalPoints > 0 ? Math.round((donePoints / totalPoints) * 100) : Math.round((doneCount / goalStories.length) * 100))
         : null;
-      const estimated = Number((goal as any).estimatedCost || 0) || 0;
-      const rawPotId = (goal as any).linkedPotId || (goal as any).potId || null;
-      const pot = rawPotId ? (pots[String(rawPotId)] || null) : null;
-      const saved = pot?.balance ? pot.balance / 100 : 0;
-      const savingsPct = estimated > 0 ? Math.min(100, Math.round((saved / estimated) * 100)) : null;
-      const fallbackParts = [storyProgressPct, savingsPct].filter((v): v is number => v != null);
+      const transfer = resolveGoalPotTransfers(goal);
+      const netTransferMajor = transfer.potNetTransferredPence / 100;
+      const transferPct = transfer.potTarget > 0
+        ? Math.max(0, Math.min(100, Math.round((netTransferMajor / transfer.potTarget) * 100)))
+        : null;
+      const fallbackParts = [storyProgressPct, transferPct].filter((v): v is number => v != null);
       const fallbackProgressPct = fallbackParts.length ? Math.round(fallbackParts.reduce((sum, v) => sum + v, 0) / fallbackParts.length) : null;
       const startMs = toMs((goal as any).startDate || goal.createdAt || null);
       const endMs = toMs((goal as any).endDate || (goal as any).targetDate || null);
@@ -774,18 +888,18 @@ const ThemeProgressDashboard: React.FC = () => {
       if (byStatus !== 0) return byStatus;
       return (a.progressPct ?? -1) - (b.progressPct ?? -1);
     });
-  }, [kpiScopedStories, kpiScopedGoals, goalKpiMetrics, kpiScope, kpiExpectedProgress, kpiScopeLabel, pots]);
+  }, [kpiScopedStories, kpiScopedGoals, goalKpiMetrics, kpiScope, kpiExpectedProgress, kpiScopeLabel, resolveGoalPotTransfers]);
 
   const loading = goalsLoading || storiesLoading || tasksLoading || kpiLoading;
 
   const sprintOverallPct = useMemo(() => {
     const totalPts = sprintThemeRows.reduce((s, r) => s + r.pointsTotal, 0);
     const donePts = sprintThemeRows.reduce((s, r) => s + r.pointsDone, 0);
-    const totalSavings = sprintThemeRows.reduce((s, r) => s + r.savingsTarget, 0);
-    const doneSavings = sprintThemeRows.reduce((s, r) => s + r.savingsSavedPence / 100, 0);
+    const totalTransfers = sprintThemeRows.reduce((s, r) => s + r.potTarget, 0);
+    const doneTransfers = sprintThemeRows.reduce((s, r) => s + r.potNetTransferredPence / 100, 0);
     const parts: number[] = [];
     if (totalPts > 0) parts.push(Math.round((donePts / totalPts) * 100));
-    if (totalSavings > 0) parts.push(Math.min(100, Math.round((doneSavings / totalSavings) * 100)));
+    if (totalTransfers > 0) parts.push(Math.max(0, Math.min(100, Math.round((doneTransfers / totalTransfers) * 100))));
     return parts.length ? Math.round(parts.reduce((a, b) => a + b, 0) / parts.length) : null;
   }, [sprintThemeRows]);
 
@@ -793,21 +907,21 @@ const ThemeProgressDashboard: React.FC = () => {
     const parts: string[] = [];
     const totalPts = sprintThemeRows.reduce((s, r) => s + r.pointsTotal, 0);
     const donePts = sprintThemeRows.reduce((s, r) => s + r.pointsDone, 0);
-    const totalSavings = sprintThemeRows.reduce((s, r) => s + r.savingsTarget, 0);
-    const doneSavings = sprintThemeRows.reduce((s, r) => s + r.savingsSavedPence / 100, 0);
+    const totalTransfers = sprintThemeRows.reduce((s, r) => s + r.potTarget, 0);
+    const doneTransfers = sprintThemeRows.reduce((s, r) => s + r.potNetTransferredPence / 100, 0);
     if (totalPts > 0) parts.push(`Story points ${Math.round((donePts / totalPts) * 100)}%`);
-    if (totalSavings > 0) parts.push(`Savings ${Math.min(100, Math.round((doneSavings / totalSavings) * 100))}%`);
+    if (totalTransfers > 0) parts.push(`Net transfers ${Math.max(0, Math.min(100, Math.round((doneTransfers / totalTransfers) * 100)))}%`);
     return parts.join(' • ');
   }, [sprintThemeRows]);
 
   const overallOverallPct = useMemo(() => {
     const totalPts = overallThemeRows.reduce((s, r) => s + r.pointsTotal, 0);
     const donePts = overallThemeRows.reduce((s, r) => s + r.pointsDone, 0);
-    const totalSavings = overallThemeRows.reduce((s, r) => s + r.savingsTarget, 0);
-    const doneSavings = overallThemeRows.reduce((s, r) => s + r.savingsSavedPence / 100, 0);
+    const totalTransfers = overallThemeRows.reduce((s, r) => s + r.potTarget, 0);
+    const doneTransfers = overallThemeRows.reduce((s, r) => s + r.potNetTransferredPence / 100, 0);
     const parts: number[] = [];
     if (totalPts > 0) parts.push(Math.round((donePts / totalPts) * 100));
-    if (totalSavings > 0) parts.push(Math.min(100, Math.round((doneSavings / totalSavings) * 100)));
+    if (totalTransfers > 0) parts.push(Math.max(0, Math.min(100, Math.round((doneTransfers / totalTransfers) * 100))));
     return parts.length ? Math.round(parts.reduce((a, b) => a + b, 0) / parts.length) : null;
   }, [overallThemeRows]);
 
@@ -815,10 +929,10 @@ const ThemeProgressDashboard: React.FC = () => {
     const parts: string[] = [];
     const totalPts = overallThemeRows.reduce((s, r) => s + r.pointsTotal, 0);
     const donePts = overallThemeRows.reduce((s, r) => s + r.pointsDone, 0);
-    const totalSavings = overallThemeRows.reduce((s, r) => s + r.savingsTarget, 0);
-    const doneSavings = overallThemeRows.reduce((s, r) => s + r.savingsSavedPence / 100, 0);
+    const totalTransfers = overallThemeRows.reduce((s, r) => s + r.potTarget, 0);
+    const doneTransfers = overallThemeRows.reduce((s, r) => s + r.potNetTransferredPence / 100, 0);
     if (totalPts > 0) parts.push(`Story points ${Math.round((donePts / totalPts) * 100)}%`);
-    if (totalSavings > 0) parts.push(`Savings ${Math.min(100, Math.round((doneSavings / totalSavings) * 100))}%`);
+    if (totalTransfers > 0) parts.push(`Net transfers ${Math.max(0, Math.min(100, Math.round((doneTransfers / totalTransfers) * 100)))}%`);
     return parts.join(' • ');
   }, [overallThemeRows]);
 
@@ -868,7 +982,7 @@ const ThemeProgressDashboard: React.FC = () => {
               lowProgressAlert={lowProgressGoals}
               expanded={sprintExpanded}
               onToggle={(key) => setSprintExpanded((prev) => ({ ...prev, [key]: !prev[key] }))}
-              formatSavings={formatSavings}
+              formatCurrency={formatCurrency}
               emptyMessage={selectedSprintId ? 'No sprint-linked goals, stories, or tasks are mapped to themes for the selected sprint.' : 'Select a sprint to see sprint progress.'}
               overallPct={sprintOverallPct}
               overallBreakdown={sprintOverallBreakdown}
@@ -880,7 +994,7 @@ const ThemeProgressDashboard: React.FC = () => {
               rows={overallThemeRows}
               expanded={overallExpanded}
               onToggle={(key) => setOverallExpanded((prev) => ({ ...prev, [key]: !prev[key] }))}
-              formatSavings={formatSavings}
+              formatCurrency={formatCurrency}
               emptyMessage="No goals or stories found."
               overallPct={overallOverallPct}
               overallBreakdown={overallOverallBreakdown}

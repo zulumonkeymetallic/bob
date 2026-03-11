@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { draggable } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
 import { Button, Modal, Spinner } from 'react-bootstrap';
-import { GripVertical, Activity, Wand2, Edit3, Trash2, Target, BookOpen, Shuffle, CalendarClock } from 'lucide-react';
+import { GripVertical, Activity, Wand2, Edit3, Trash2, Target, BookOpen, Shuffle, CalendarClock, Plus } from 'lucide-react';
 import { httpsCallable } from 'firebase/functions';
 import { functions, db } from '../firebase';
 import { Story, Task, Goal } from '../types';
@@ -39,6 +39,8 @@ interface KanbanCardV2Props {
         end: number;
         title?: string;
         sourceNote?: string;
+        matchConfidence?: number;
+        matchConfidenceTier?: string;
     };
     steamMeta?: {
         appId?: string | number;
@@ -76,6 +78,7 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
     const [showPriorityReplanPrompt, setShowPriorityReplanPrompt] = useState(false);
     const [priorityReplanLoading, setPriorityReplanLoading] = useState(false);
     const [showDeferModal, setShowDeferModal] = useState(false);
+    const [creatingCalendarEvent, setCreatingCalendarEvent] = useState(false);
 
     useEffect(() => {
         const el = ref.current;
@@ -306,6 +309,69 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
         return `${prefix} ${dayLabel} ${timeLabel}`;
     })();
     const scheduledBlockSourceNote = scheduledBlock?.sourceNote || null;
+    const scheduledBlockConfidence = Number(scheduledBlock?.matchConfidence || 0) || null;
+    const scheduledBlockConfidenceTier = String(scheduledBlock?.matchConfidenceTier || '').trim();
+
+    const createManualCalendarEvent = async (event: React.MouseEvent<HTMLButtonElement>) => {
+        event.stopPropagation();
+        if (!currentUser?.uid) {
+            setActionMessage('Sign in required to schedule');
+            setTimeout(() => setActionMessage(null), 2200);
+            return;
+        }
+        if (scheduledBlock?.id) {
+            setActionMessage('Already scheduled on calendar');
+            setTimeout(() => setActionMessage(null), 2200);
+            return;
+        }
+
+        setCreatingCalendarEvent(true);
+        try {
+            const now = new Date();
+            now.setMinutes(0, 0, 0);
+            now.setHours(now.getHours() + 1);
+
+            const effortDuration = Number((item as any).estimateMin || 0)
+                || (Number((item as any).points || 0) * 60)
+                || (Number((item as any).effort || 0) * 30)
+                || 60;
+            const durationMin = Math.max(15, Math.min(240, Math.round(effortDuration)));
+            const end = new Date(now.getTime() + durationMin * 60 * 1000);
+
+            await addDoc(collection(db, 'calendar_blocks'), {
+                ownerUid: currentUser.uid,
+                title: String(item.title || `Scheduled ${type}`).trim(),
+                start: now.getTime(),
+                end: end.getTime(),
+                storyId: type === 'story' ? item.id : (parentStory?.id || null),
+                taskId: type === 'task' ? item.id : null,
+                goalId: goal?.id || (parentStory as any)?.goalId || null,
+                source: 'manual',
+                entryMethod: 'manual_kanban_icon',
+                isAiGenerated: false,
+                createdBy: 'user',
+                status: 'proposed',
+                flexibility: 'soft',
+                visibility: 'default',
+                version: 1,
+                persona: (item as any).persona || (parentStory as any)?.persona || 'personal',
+                theme: (goal as any)?.theme || (parentStory as any)?.theme || (item as any)?.theme || 'Growth',
+                category: (item as any)?.category || ((item as any).persona === 'work' ? 'Work (Main Gig)' : 'Fitness'),
+                syncToGoogle: true,
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp(),
+            });
+
+            setActionMessage('Manual calendar event created');
+            setTimeout(() => setActionMessage(null), 2200);
+        } catch (error) {
+            console.error('Failed to create manual calendar event', error);
+            setActionMessage('Calendar create failed');
+            setTimeout(() => setActionMessage(null), 2400);
+        } finally {
+            setCreatingCalendarEvent(false);
+        }
+    };
 
     const handleStyle: React.CSSProperties = {
         color: resolvedThemeColor,
@@ -539,6 +605,18 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                         {refLabel}
                     </span>
                     <div className="kanban-card__actions">
+                        <Button
+                            variant="link"
+                            size="sm"
+                            className="p-0"
+                            style={{ width: 24, height: 24, color: themeVars.muted, opacity: creatingCalendarEvent ? 0.6 : 1 }}
+                            title={scheduledBlock?.id ? 'Already has calendar event' : 'Create manual Google Calendar event'}
+                            onClick={createManualCalendarEvent}
+                            onPointerDown={(e) => e.stopPropagation()}
+                            disabled={creatingCalendarEvent || !!scheduledBlock?.id}
+                        >
+                            <Plus size={12} />
+                        </Button>
                         <Button
                             variant="link"
                             size="sm"
@@ -826,6 +904,11 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                 {scheduledBlockLabel && scheduledBlockSourceNote && (
                     <div className="kanban-card__meta-text">
                         {scheduledBlockSourceNote}
+                    </div>
+                )}
+                {scheduledBlockLabel && scheduledBlockConfidence != null && (
+                    <div className="kanban-card__meta-text">
+                        Match confidence {scheduledBlockConfidence}%{scheduledBlockConfidenceTier ? ` (${scheduledBlockConfidenceTier})` : ''}
                     </div>
                 )}
 

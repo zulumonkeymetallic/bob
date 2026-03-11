@@ -36,6 +36,8 @@ interface ScheduledBlockInfo {
     end: number;
     title?: string;
     sourceNote?: string;
+    matchConfidence?: number;
+    matchConfidenceTier?: string;
 }
 
 const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
@@ -235,6 +237,8 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
                         end: Number(block.end),
                         title: block.title,
                         sourceNote: sourceNote || undefined,
+                        matchConfidence: Number((block as any).calendarMatchConfidence || 0) || undefined,
+                        matchConfidenceTier: (block as any).calendarMatchConfidenceTier || undefined,
                     };
                 });
                 setScheduledBlocksByEntity(nextMap);

@@ -257,6 +257,12 @@ function scoreCalendarTitleMatch(title, entity) {
   return score;
 }
 
+function toCalendarMatchConfidence(score) {
+  const normalized = Math.max(0, Math.min(100, Math.round((Number(score || 0) / 2) * 100)));
+  const tier = normalized >= 75 ? 'high' : normalized >= 50 ? 'medium' : 'low';
+  return { normalized, tier };
+}
+
 async function matchExternalCalendarEventsToEntities({
   db,
   userId,
@@ -299,6 +305,7 @@ async function matchExternalCalendarEventsToEntities({
     if (!best || best.score < 0.72) continue;
 
     const matched = best.candidate;
+    const confidence = toCalendarMatchConfidence(best.score);
     const goalId = matched.goalId || null;
     const blockPatch = {
       storyId: matched.type === 'story' ? matched.id : null,
@@ -310,6 +317,8 @@ async function matchExternalCalendarEventsToEntities({
       calendarMatchSource: 'matched_user_created_calendar_event',
       calendarMatchNote: 'Matched user created calendar event',
       calendarMatchScore: Number(best.score.toFixed(3)),
+      calendarMatchConfidence: confidence.normalized,
+      calendarMatchConfidenceTier: confidence.tier,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     };
     await db.collection('calendar_blocks').doc(block.id).set(blockPatch, { merge: true });
@@ -319,6 +328,8 @@ async function matchExternalCalendarEventsToEntities({
       await db.collection('stories').doc(matched.id).set({
         calendarMatchSource: 'matched_user_created_calendar_event',
         calendarMatchNote: 'Matched user created calendar event',
+        calendarMatchConfidence: confidence.normalized,
+        calendarMatchConfidenceTier: confidence.tier,
         calendarMatchedStart: block.start || null,
         calendarMatchedEnd: block.end || null,
         plannedStartDate: block.start || null,
@@ -329,6 +340,8 @@ async function matchExternalCalendarEventsToEntities({
       await db.collection('tasks').doc(matched.id).set({
         calendarMatchSource: 'matched_user_created_calendar_event',
         calendarMatchNote: 'Matched user created calendar event',
+        calendarMatchConfidence: confidence.normalized,
+        calendarMatchConfidenceTier: confidence.tier,
         calendarMatchedStart: block.start || null,
         calendarMatchedEnd: block.end || null,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -345,6 +358,8 @@ async function matchExternalCalendarEventsToEntities({
         blockId: block.id,
         source: 'matched_user_created_calendar_event',
         score: Number(best.score.toFixed(3)),
+        confidence: confidence.normalized,
+        confidenceTier: confidence.tier,
       },
     }));
 
@@ -359,6 +374,8 @@ async function matchExternalCalendarEventsToEntities({
       inMemory.calendarMatchSource = 'matched_user_created_calendar_event';
       inMemory.calendarMatchNote = 'Matched user created calendar event';
       inMemory.calendarMatchScore = Number(best.score.toFixed(3));
+      inMemory.calendarMatchConfidence = confidence.normalized;
+      inMemory.calendarMatchConfidenceTier = confidence.tier;
     }
   }
 
