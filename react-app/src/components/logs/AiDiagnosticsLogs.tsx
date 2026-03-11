@@ -24,6 +24,7 @@ const AiDiagnosticsLogs: React.FC = () => {
   const [eventFilter, setEventFilter] = useState<string>('all');
   const [levelFilter, setLevelFilter] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [traceOnly, setTraceOnly] = useState<boolean>(false);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -63,6 +64,12 @@ const AiDiagnosticsLogs: React.FC = () => {
   const visibleLogs = useMemo(() => {
     return logs
       .filter((entry) => {
+        if (!traceOnly) return true;
+        const eventName = String(entry.event || '').toLowerCase();
+        const meta = (entry.metadata || {}) as Record<string, unknown>;
+        return eventName.endsWith('_trace') || Boolean(meta.traceId);
+      })
+      .filter((entry) => {
         if (eventFilter === 'all') return true;
         return String(entry.event || '').toLowerCase() === eventFilter;
       })
@@ -74,7 +81,7 @@ const AiDiagnosticsLogs: React.FC = () => {
         if (statusFilter === 'all') return true;
         return String(entry.status || '').toLowerCase() === statusFilter;
       });
-  }, [logs, eventFilter, levelFilter, statusFilter]);
+  }, [logs, traceOnly, eventFilter, levelFilter, statusFilter]);
 
   return (
     <div className="container py-4">
@@ -125,6 +132,13 @@ const AiDiagnosticsLogs: React.FC = () => {
               <option value="warning">Warning</option>
               <option value="error">Error</option>
             </Form.Select>
+            <Form.Check
+              type="switch"
+              id="ai-trace-only"
+              label="Trace events only"
+              checked={traceOnly}
+              onChange={(e) => setTraceOnly(e.target.checked)}
+            />
           </div>
 
           {visibleLogs.length === 0 ? (
@@ -135,6 +149,9 @@ const AiDiagnosticsLogs: React.FC = () => {
                 <tr>
                   <th>Time</th>
                   <th>Event</th>
+                  <th>Trace</th>
+                  <th>Parse</th>
+                  <th>Latency</th>
                   <th>Status</th>
                   <th>Level</th>
                   <th>Message</th>
@@ -149,16 +166,31 @@ const AiDiagnosticsLogs: React.FC = () => {
                     : entry.ts
                     ? new Date(entry.ts)
                     : null;
-                  const meta = entry.metadata;
+                  const meta = (entry.metadata || {}) as Record<string, unknown>;
+                  const traceId = typeof meta.traceId === 'string' ? meta.traceId : null;
+                  const templateId = typeof meta.promptTemplateId === 'string' ? meta.promptTemplateId : null;
+                  const parseStatus = typeof meta.parseStatus === 'string' ? meta.parseStatus : null;
+                  const latencyMs = Number(meta.latencyMs);
+                  const latencyLabel = Number.isFinite(latencyMs) ? `${Math.round(latencyMs)} ms` : '—';
                   return (
                     <tr key={entry.id}>
                       <td>{timestamp ? timestamp.toLocaleString() : '—'}</td>
                       <td><Badge bg="light" text="dark">{entry.event || '—'}</Badge></td>
+                      <td>
+                        {traceId ? (
+                          <div>
+                            <div style={{ fontFamily: 'monospace', fontSize: '0.75rem' }}>{traceId.slice(0, 12)}…</div>
+                            {templateId ? <small className="text-muted">{templateId}</small> : null}
+                          </div>
+                        ) : '—'}
+                      </td>
+                      <td>{parseStatus || '—'}</td>
+                      <td>{latencyLabel}</td>
                       <td>{entry.status || '—'}</td>
                       <td>{entry.level || 'info'}</td>
                       <td>
                         <div>{entry.message || '—'}</div>
-                        {meta ? (
+                        {Object.keys(meta).length ? (
                           <pre className="mt-1 mb-0 bg-light p-2" style={{ whiteSpace: 'pre-wrap' }}>
                             {JSON.stringify(meta, null, 2)}
                           </pre>
