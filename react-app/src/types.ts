@@ -388,6 +388,11 @@ export interface CalendarBlock {
   };
   aiScore?: number | null;
   aiReason?: string | null;
+  calendarMatchSource?: string;
+  calendarMatchNote?: string;
+  calendarMatchScore?: number;
+  calendarMatchConfidence?: number;
+  calendarMatchConfidenceTier?: 'high' | 'medium' | 'low' | string;
 }
 
 export interface PlanningPrefs {
