@@ -32,7 +32,8 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
   const navigate = useNavigate();
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
-  const { sprints } = useSprint();
+  // sprints context: only use if sprint selector is rendered; don't gate submit on sprint loading
+  const { sprints: _availableSprints } = useSprint();
   const { openComposer } = useProcessTextActivity();
   const [showMenu, setShowMenu] = useState(false);
   const [showQuickAdd, setShowQuickAdd] = useState(false);
@@ -182,6 +183,7 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
           timestamp: new Date().toISOString(),
           ref: goalRef
         });
+        setSubmitResult(`✅ Goal created successfully! (${goalRef})`);
       } else if (quickAddType === 'story') {
         // Get existing story references for unique ref generation
         const existingStoriesQuery = query(
@@ -223,6 +225,7 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
           timestamp: new Date().toISOString(),
           ref: storyRef
         });
+        setSubmitResult(`✅ Story created successfully! (${storyRef})`);
       } else if (quickAddType === 'task') {
         // Get existing task references for unique ref generation
         const existingTasksQuery = query(
@@ -310,10 +313,6 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
         } else {
           throw new Error(result.error || 'Emergency task creation failed');
         }
-      } else {
-        // For goals and stories, use standard success message after creation
-        const itemTypeCapitalized = quickAddType === 'goal' ? 'Goal' : 'Story';
-        setSubmitResult(`✅ ${itemTypeCapitalized} created successfully!`);
       }
 
       setQuickAddData({
@@ -345,8 +344,9 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
         timestamp: new Date().toISOString()
       });
       setSubmitResult(`❌ Failed to create ${quickAddType}: ${error.message}`);
+    } finally {
+      setIsSubmitting(false);
     }
-    setIsSubmitting(false);
   };
 
   return (
