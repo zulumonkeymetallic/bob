@@ -266,8 +266,9 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
         timestamp: new Date().toISOString()
       });
       setSubmitResult(`❌ Failed to create story: ${error.message}`);
+    } finally {
+      setIsSubmitting(false);
     }
-    setIsSubmitting(false);
   };
 
   return (
