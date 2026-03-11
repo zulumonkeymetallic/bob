@@ -37,6 +37,9 @@
     "backfill:task-refs:tk": "node scripts/backfill-task-refs-tk.js --project bob20250810",
     "cleanup:top3-state": "node scripts/cleanup-stale-top3-state.js --project bob20250810",
     "audit:title-dupes": "node scripts/audit-title-duplicates.js",
+    "validate:calendar-links": "node scripts/validate-calendar-links.js",
+    "validate:budget-guardrail-email": "node scripts/validate-budget-guardrail-email.js",
+    "validate:modal-link-surfaces": "node scripts/validate-modal-link-surfaces.js",
     "backfill:task-points": "node scripts/backfill-task-points.js --serviceAccount=/Users/jim/GitHub/secret/bob20250810-firebase-adminsdk-fbsvc-0f8ac23f94.json",
     "backfill:story-points": "node scripts/backfill-story-points.js --serviceAccount=/Users/jim/GitHub/secret/bob20250810-firebase-adminsdk-fbsvc-0f8ac23f94.json"
   }
