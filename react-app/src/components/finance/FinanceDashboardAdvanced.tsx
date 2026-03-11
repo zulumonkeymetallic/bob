@@ -34,7 +34,7 @@ import './FinanceDashboardAdvanced.css';
 
 type DateFilter = '7d' | '30d' | '60d' | '90d' | '6m' | 'year' | 'all' | 'custom';
 type ViewMode = 'category' | 'bucket' | 'merchant';
-type FinanceView = 'overview' | 'spend' | 'discretionary' | 'actions' | 'sources' | 'assets';
+type FinanceView = 'overview' | 'analyst' | 'spend' | 'discretionary' | 'actions' | 'sources' | 'assets';
 type ExternalSource = 'barclays' | 'paypal' | 'other' | 'monzo_csv';
 type AnalysisDimension = 'bucket' | 'category' | 'merchant';
 type AnalysisChartType = 'trend' | 'pie' | 'breakdown';
@@ -125,6 +125,7 @@ const parseFinanceView = (tab: string | null): FinanceView | null => {
     if (!tab) return null;
     if (tab === 'cashflow') return 'spend';
     if (tab === 'overview') return 'overview';
+    if (tab === 'analyst' || tab === 'budget-analyst') return 'analyst';
     if (tab === 'spend') return 'spend';
     if (tab === 'discretionary') return 'discretionary';
     if (tab === 'actions') return 'actions';
@@ -211,6 +212,8 @@ const FinanceDashboardAdvanced: React.FC = () => {
     // Chart drill-down filter state
     const [chartFilter, setChartFilter] = useState<{ type: 'category' | 'bucket' | 'merchant' | null; value: string | null }>({ type: null, value: null });
     const [cardFilter, setCardFilter] = useState<DashboardCardFilter>('all');
+    const [debtStrategy, setDebtStrategy] = useState<'snowball' | 'avalanche'>('avalanche');
+    const [debtAprByAccount, setDebtAprByAccount] = useState<Record<string, number>>({});
 
     const [editingManualAccountId, setEditingManualAccountId] = useState<string | null>(null);
     const [manualForm, setManualForm] = useState<{
@@ -1364,6 +1367,160 @@ const FinanceDashboardAdvanced: React.FC = () => {
     const uncategorizedCount = Math.max(0, Number(data?.uncategorizedCount || 0));
     const uncategorizedPct = classifiableCount > 0 ? Number(data?.uncategorizedPct || 0) : 0;
 
+    const analystModel = useMemo(() => {
+        const months = Math.max(1, cashflowSeries.length || 1);
+        const totals = cashflowSeries.reduce((acc: any, item: any) => {
+            acc.inflow += Number(item.inflowPence || 0);
+            acc.outflow += Number(item.outflowPence || 0);
+            acc.net += Number(item.netPence || 0);
+            return acc;
+        }, { inflow: 0, outflow: 0, net: 0 });
+
+        const avgInflowPence = Math.round(totals.inflow / months);
+        const avgOutflowPence = Math.round(totals.outflow / months);
+        const avgNetPence = Math.round(totals.net / months);
+        const goalLockedPence = goalForecasts.reduce((sum: number, goal: any) => sum + Number(goal.monthlyContributionPence || 0), 0);
+        const optimizationHeadroomPence = avgNetPence - goalLockedPence;
+
+        const debtAccountsBase = manualAccounts
+            .filter((account: any) => String(account.type || '').toLowerCase() === 'debt')
+            .map((account: any) => {
+                const balancePence = Math.abs(Number(account.balancePence || 0));
+                const configuredApr = Number(
+                    debtAprByAccount[account.accountId]
+                    ?? account.aprPct
+                    ?? account.interestRatePct
+                    ?? account.interestApr
+                    ?? 19.9
+                );
+                const aprPct = Number.isFinite(configuredApr) ? configuredApr : 19.9;
+                return {
+                    accountId: account.accountId,
+                    name: account.name || 'Debt account',
+                    institution: account.institution || null,
+                    balancePence,
+                    aprPct,
+                    monthlyInterestPence: Math.round(balancePence * (aprPct / 1200)),
+                };
+            })
+            .filter((account: any) => account.balancePence > 0);
+
+        const debtAccounts = [...debtAccountsBase].sort((a: any, b: any) => {
+            if (debtStrategy === 'snowball') {
+                if (a.balancePence !== b.balancePence) return a.balancePence - b.balancePence;
+                return a.aprPct - b.aprPct;
+            }
+            if (a.aprPct !== b.aprPct) return b.aprPct - a.aprPct;
+            return b.balancePence - a.balancePence;
+        });
+
+        const totalDebtPence = debtAccounts.reduce((sum: number, debt: any) => sum + debt.balancePence, 0);
+        const debtInterestPence = debtAccounts.reduce((sum: number, debt: any) => sum + debt.monthlyInterestPence, 0);
+        const debtAccelerationPence = Math.max(0, Math.round(optimizationHeadroomPence * (totalDebtPence > 0 ? 0.7 : 0)));
+        const savingsAccelerationPence = Math.max(0, Math.round(optimizationHeadroomPence - debtAccelerationPence));
+
+        const liquidReservePence = manualAccounts
+            .filter((account: any) => ['cash', 'savings'].includes(String(account.type || '').toLowerCase()))
+            .reduce((sum: number, account: any) => sum + Number(account.balancePence || 0), 0);
+
+        const runwayTargetPence = Math.round(avgOutflowPence * 3);
+        const runwayCoveredMonths = avgOutflowPence > 0 ? liquidReservePence / avgOutflowPence : 0;
+        const runwayGapPence = Math.max(0, runwayTargetPence - liquidReservePence);
+        const runwayEtaMonths = savingsAccelerationPence > 0 ? Math.ceil(runwayGapPence / savingsAccelerationPence) : null;
+
+        // Very small deterministic simulation for debt payoff horizon under chosen strategy.
+        let payoffMonths: number | null = null;
+        if (debtAccounts.length > 0 && debtAccelerationPence > 0) {
+            const balances = debtAccounts.map((debt: any) => ({
+                ...debt,
+                remainingPence: debt.balancePence,
+            }));
+            for (let month = 1; month <= 600; month += 1) {
+                let budget = debtAccelerationPence;
+
+                balances.forEach((debt: any) => {
+                    if (debt.remainingPence <= 0) return;
+                    debt.remainingPence += Math.round(debt.remainingPence * (debt.aprPct / 1200));
+                    const minimumPence = Math.min(debt.remainingPence, Math.max(500, Math.round(debt.remainingPence * 0.02)));
+                    const pay = Math.min(minimumPence, budget);
+                    debt.remainingPence -= pay;
+                    budget -= pay;
+                });
+
+                for (const debt of balances) {
+                    if (budget <= 0) break;
+                    if (debt.remainingPence <= 0) continue;
+                    const pay = Math.min(debt.remainingPence, budget);
+                    debt.remainingPence -= pay;
+                    budget -= pay;
+                }
+
+                const remainingTotal = balances.reduce((sum: number, debt: any) => sum + Math.max(0, debt.remainingPence), 0);
+                if (remainingTotal <= 0) {
+                    payoffMonths = month;
+                    break;
+                }
+            }
+        }
+
+        const goalActions = goalForecasts
+            .map((goal: any) => {
+                const remainingPence = Number(goal.remainingPence || 0);
+                const currentContributionPence = Number(goal.monthlyContributionPence || 0);
+                const requiredFor6MonthsPence = Math.ceil(remainingPence / 6);
+                const monthlyGapPence = Math.max(0, requiredFor6MonthsPence - currentContributionPence);
+                return {
+                    kind: 'goal_gap',
+                    label: goal.goalTitle || goal.goalId || 'Goal',
+                    detail: monthlyGapPence > 0
+                        ? `Increase monthly pot transfer by ${formatCurrency(toPounds(monthlyGapPence))} to hit ~6 month target.`
+                        : 'Current contribution trajectory is on track for target horizon.',
+                    urgency: monthlyGapPence > 0 ? 'high' : 'normal',
+                    etaDateISO: goal.etaDateISO || null,
+                    monthlyGapPence,
+                };
+            })
+            .sort((a: any, b: any) => b.monthlyGapPence - a.monthlyGapPence)
+            .slice(0, 5);
+
+        const proactiveActions = [
+            ...(optimizationHeadroomPence < 0 ? [{
+                kind: 'budget_shortfall',
+                label: 'Monthly plan is over-committed',
+                detail: `Goal-linked commitments exceed net cashflow by ${formatCurrency(toPounds(Math.abs(optimizationHeadroomPence)))}.` ,
+                urgency: 'critical',
+            }] : []),
+            ...(debtInterestPence > 0 ? [{
+                kind: 'debt_interest',
+                label: 'Debt interest drag',
+                detail: `${formatCurrency(toPounds(debtInterestPence))} estimated interest/month. ${debtStrategy === 'avalanche' ? 'Avalanche' : 'Snowball'} strategy selected.`,
+                urgency: debtInterestPence > 20000 ? 'high' : 'normal',
+            }] : []),
+            ...goalActions,
+        ];
+
+        return {
+            months,
+            avgInflowPence,
+            avgOutflowPence,
+            avgNetPence,
+            goalLockedPence,
+            optimizationHeadroomPence,
+            debtAccounts,
+            totalDebtPence,
+            debtInterestPence,
+            debtAccelerationPence,
+            savingsAccelerationPence,
+            payoffMonths,
+            liquidReservePence,
+            runwayTargetPence,
+            runwayCoveredMonths,
+            runwayGapPence,
+            runwayEtaMonths,
+            proactiveActions,
+        };
+    }, [cashflowSeries, goalForecasts, manualAccounts, debtStrategy, debtAprByAccount]);
+
     const renderOverview = () => (
         <>
             <Row className="g-4 mb-4">
@@ -2199,6 +2356,180 @@ const FinanceDashboardAdvanced: React.FC = () => {
         </>
     );
 
+    const renderBudgetAnalyst = () => (
+        <>
+            <Row className="g-4 mb-4">
+                <Col md={3}>
+                    <PremiumCard title="Net Monthly Capacity" icon={Wallet}>
+                        <h3 className="fw-bold mb-0" style={{ color: analystModel.avgNetPence >= 0 ? colors.success : colors.warning }}>
+                            {formatCurrency(toPounds(analystModel.avgNetPence))}
+                        </h3>
+                        <p className="text-muted mb-0 mt-2">Avg inflow minus outflow</p>
+                    </PremiumCard>
+                </Col>
+                <Col md={3}>
+                    <PremiumCard title="Goal-Locked Transfers" icon={Target}>
+                        <h3 className="fw-bold mb-0">{formatCurrency(toPounds(analystModel.goalLockedPence))}</h3>
+                        <p className="text-muted mb-0 mt-2">Hard monthly commitments to linked goal pots</p>
+                    </PremiumCard>
+                </Col>
+                <Col md={3}>
+                    <PremiumCard title="Debt Acceleration" icon={CreditCard}>
+                        <h3 className="fw-bold mb-0" style={{ color: colors.warning }}>{formatCurrency(toPounds(analystModel.debtAccelerationPence))}</h3>
+                        <p className="text-muted mb-0 mt-2">Recommended extra debt payment</p>
+                    </PremiumCard>
+                </Col>
+                <Col md={3}>
+                    <PremiumCard title="Runway Cover" icon={Landmark}>
+                        <h3 className="fw-bold mb-0">{analystModel.runwayCoveredMonths.toFixed(1)} mo</h3>
+                        <p className="text-muted mb-0 mt-2">Liquidity coverage based on avg outflow</p>
+                    </PremiumCard>
+                </Col>
+            </Row>
+
+            <Row className="g-4 mb-4">
+                <Col lg={7}>
+                    <PremiumCard title="Debt-Clearance Strategist" icon={Sparkles}>
+                        <div className="d-flex flex-wrap align-items-center gap-2 mb-3">
+                            <span className="small text-muted">Strategy:</span>
+                            <ButtonGroup>
+                                <Button
+                                    size="sm"
+                                    variant={debtStrategy === 'avalanche' ? 'primary' : 'outline-secondary'}
+                                    onClick={() => setDebtStrategy('avalanche')}
+                                >
+                                    Avalanche (highest APR first)
+                                </Button>
+                                <Button
+                                    size="sm"
+                                    variant={debtStrategy === 'snowball' ? 'primary' : 'outline-secondary'}
+                                    onClick={() => setDebtStrategy('snowball')}
+                                >
+                                    Snowball (lowest balance first)
+                                </Button>
+                            </ButtonGroup>
+                        </div>
+
+                        <div className="small text-muted mb-3">
+                            Order is deterministic and testable. Adjust APR assumptions to refine payoff simulation.
+                        </div>
+
+                        <div className="table-responsive">
+                            <table className="table table-hover align-middle mb-0">
+                                <thead>
+                                    <tr>
+                                        <th>#</th>
+                                        <th>Debt</th>
+                                        <th className="text-end">Balance</th>
+                                        <th className="text-end">APR %</th>
+                                        <th className="text-end">Est. interest/mo</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {analystModel.debtAccounts.length === 0 && (
+                                        <tr>
+                                            <td colSpan={5} className="text-center text-muted py-4">
+                                                No debt accounts found in Assets & Debts.
+                                            </td>
+                                        </tr>
+                                    )}
+                                    {analystModel.debtAccounts.map((debt: any, idx: number) => (
+                                        <tr key={debt.accountId}>
+                                            <td>{idx + 1}</td>
+                                            <td>
+                                                <div className="fw-semibold">{debt.name}</div>
+                                                <div className="small text-muted">{debt.institution || 'No institution'}</div>
+                                            </td>
+                                            <td className="text-end">{formatCurrency(toPounds(debt.balancePence))}</td>
+                                            <td className="text-end" style={{ minWidth: 110 }}>
+                                                <Form.Control
+                                                    size="sm"
+                                                    type="number"
+                                                    step="0.1"
+                                                    min={0}
+                                                    value={Number(debt.aprPct || 0)}
+                                                    onChange={(event) => {
+                                                        const next = Number(event.target.value || 0);
+                                                        setDebtAprByAccount((prev) => ({ ...prev, [debt.accountId]: next }));
+                                                    }}
+                                                />
+                                            </td>
+                                            <td className="text-end">{formatCurrency(toPounds(debt.monthlyInterestPence))}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </PremiumCard>
+                </Col>
+
+                <Col lg={5}>
+                    <PremiumCard title="Allocation Simulation" icon={PieIcon}>
+                        <div className="d-flex justify-content-between mb-2">
+                            <span className="text-muted">Goal-linked pot transfers (hard)</span>
+                            <strong>{formatCurrency(toPounds(analystModel.goalLockedPence))}</strong>
+                        </div>
+                        <div className="d-flex justify-content-between mb-2">
+                            <span className="text-muted">Debt acceleration</span>
+                            <strong>{formatCurrency(toPounds(analystModel.debtAccelerationPence))}</strong>
+                        </div>
+                        <div className="d-flex justify-content-between mb-2">
+                            <span className="text-muted">Runway build</span>
+                            <strong>{formatCurrency(toPounds(analystModel.savingsAccelerationPence))}</strong>
+                        </div>
+                        <div className="d-flex justify-content-between mb-2">
+                            <span className="text-muted">Debt payoff horizon</span>
+                            <strong>{analystModel.payoffMonths ? `${analystModel.payoffMonths} mo` : 'Insufficient surplus'}</strong>
+                        </div>
+                        <div className="d-flex justify-content-between">
+                            <span className="text-muted">Emergency runway ETA (3 mo target)</span>
+                            <strong>{analystModel.runwayEtaMonths ? `${analystModel.runwayEtaMonths} mo` : analystModel.runwayGapPence <= 0 ? 'Already funded' : 'No allocation yet'}</strong>
+                        </div>
+                    </PremiumCard>
+                </Col>
+            </Row>
+
+            <Row>
+                <Col>
+                    <PremiumCard title="Proactive Actions (Goals + Obligations)" icon={AlertTriangle}>
+                        <div className="small text-muted mb-3">
+                            Actions combine AI-assisted finance insights with deterministic constraints from debt obligations and linked goal forecasts.
+                        </div>
+                        <div className="table-responsive">
+                            <table className="table table-hover align-middle mb-0">
+                                <thead>
+                                    <tr>
+                                        <th>Signal</th>
+                                        <th>Recommendation</th>
+                                        <th>Urgency</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {analystModel.proactiveActions.length === 0 && (
+                                        <tr>
+                                            <td colSpan={3} className="text-center text-muted py-4">No proactive actions at this time.</td>
+                                        </tr>
+                                    )}
+                                    {analystModel.proactiveActions.map((action: any, idx: number) => (
+                                        <tr key={`${action.kind}-${idx}`}>
+                                            <td className="fw-semibold">{action.label}</td>
+                                            <td>{action.detail}</td>
+                                            <td>
+                                                <Badge bg={action.urgency === 'critical' ? 'danger' : action.urgency === 'high' ? 'warning' : 'secondary'}>
+                                                    {action.urgency}
+                                                </Badge>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </PremiumCard>
+                </Col>
+            </Row>
+        </>
+    );
+
     const renderDataSources = () => (
         <>
             <Row className="g-4 mb-4">
@@ -2512,6 +2843,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
 
     const viewButtons: Array<{ key: FinanceView; label: string }> = [
         { key: 'overview', label: 'Overview' },
+        { key: 'analyst', label: 'AI Budget Analyst' },
         { key: 'spend', label: 'Spend analysis + Forecast' },
         { key: 'discretionary', label: 'Discretionary spend' },
         { key: 'actions', label: 'Actions' },
@@ -2625,6 +2957,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
             )}
 
             {activeView === 'overview' && renderOverview()}
+            {activeView === 'analyst' && renderBudgetAnalyst()}
             {activeView === 'spend' && renderSpendAnalysis()}
             {activeView === 'discretionary' && renderOptionalSpend()}
             {activeView === 'actions' && renderActions()}
