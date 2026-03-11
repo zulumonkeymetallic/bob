@@ -18997,6 +18997,10 @@ function shouldTriggerWeeklyWindow(nowLocal, targetMinutes, alreadySentWeekIso) 
 
 async function buildFinanceCommentary({ summary, userId, windowLabel }) {
   if (!summary || !summary.transactionCount) return null;
+  const traceId = crypto.randomUUID ? crypto.randomUUID() : crypto.randomBytes(12).toString('hex');
+  const promptTemplateId = 'financeCommentary.v2';
+  const startedAtMs = Date.now();
+
   const buckets = Object.entries(summary.buckets || {})
     .filter(([bucket]) => bucket !== 'bank_transfer' && bucket !== 'unknown')
     .map(([bucket, amount]) => ({ bucket, amountPence: Math.abs(Number(amount || 0)) }))
@@ -19014,12 +19018,50 @@ async function buildFinanceCommentary({ summary, userId, windowLabel }) {
   const system = 'You are a budgeting assistant. Provide a short, friendly commentary with up to 3 bullet points. Highlight any anomalies and discretionary opportunities. Keep under 500 characters.';
   const user = `Summarize the spend data for ${windowLabel}. Data (pence): ${JSON.stringify(payload)}`;
 
+  const llmTraceBase = {
+    traceId,
+    promptTemplateId,
+    promptTemplateVersion: 2,
+    model: AI_PRIORITY_MODEL,
+    provider: process.env.AI_PROVIDER || 'gemini',
+    purpose: 'finance_commentary',
+    parseExpected: 'text',
+    temperature: 0.2,
+    promptText: user,
+    inputPayload: payload,
+  };
+
   try {
     const text = await callLLMJson({ system, user, purpose: 'finance_commentary', userId, expectJson: false, temperature: 0.2 });
-    if (!text) return null;
-    return String(text).trim().slice(0, 600);
+    if (!text) {
+      await recordAiLog(userId, 'finance_commentary_trace', 'warning', 'Finance commentary returned empty output', {
+        ...llmTraceBase,
+        parseStatus: 'ok_empty',
+        rawOutputText: '',
+        rawOutputLength: 0,
+        latencyMs: Date.now() - startedAtMs,
+      });
+      return null;
+    }
+
+    const normalised = String(text).trim().slice(0, 600);
+    await recordAiLog(userId, 'finance_commentary_trace', 'success', 'Finance commentary generated', {
+      ...llmTraceBase,
+      parseStatus: 'ok',
+      rawOutputText: String(text).slice(0, 12000),
+      rawOutputLength: String(text).length,
+      outputLength: normalised.length,
+      latencyMs: Date.now() - startedAtMs,
+    });
+    return normalised;
   } catch (err) {
     console.warn('[finance-commentary] failed', err?.message || err);
+    await recordAiLog(userId, 'finance_commentary_trace', 'error', 'Finance commentary generation failed', {
+      ...llmTraceBase,
+      parseStatus: 'runtime_error',
+      error: String(err?.message || err || 'unknown'),
+      latencyMs: Date.now() - startedAtMs,
+    });
     return null;
   }
 }
