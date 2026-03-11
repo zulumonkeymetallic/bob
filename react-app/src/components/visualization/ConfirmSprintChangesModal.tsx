@@ -12,6 +12,10 @@ interface Props {
       ref: string;
       title: string;
       plannedSprintId?: string;
+      plannedSprintName?: string;
+      recommendedSprintId?: string;
+      recommendedSprintName?: string;
+      impactedTaskCount?: number;
     }>;
   } | null;
   onConfirm: () => void;
@@ -76,6 +80,7 @@ const ConfirmSprintChangesModal: React.FC<Props> = ({
                   <tr>
                     <th className="px-3 py-2 text-left font-medium text-gray-700">Story</th>
                     <th className="px-3 py-2 text-left font-medium text-gray-700">Current Sprint</th>
+                    <th className="px-3 py-2 text-left font-medium text-gray-700">Recommended Sprint</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -85,10 +90,16 @@ const ConfirmSprintChangesModal: React.FC<Props> = ({
                         <div>
                           <div className="font-medium">{story.ref}</div>
                           <div className="text-gray-600 text-xs truncate">{story.title}</div>
+                          {typeof story.impactedTaskCount === 'number' && story.impactedTaskCount > 0 && (
+                            <div className="text-gray-500 text-xs">{story.impactedTaskCount} linked task{story.impactedTaskCount === 1 ? '' : 's'}</div>
+                          )}
                         </div>
                       </td>
                       <td className="px-3 py-2 text-gray-600">
-                        {story.plannedSprintId || 'Unassigned'}
+                        {story.plannedSprintName || story.plannedSprintId || 'Unassigned'}
+                      </td>
+                      <td className="px-3 py-2 text-gray-600">
+                        {story.recommendedSprintName || story.recommendedSprintId || 'Review manually'}
                       </td>
                     </tr>
                   ))}
@@ -99,8 +110,7 @@ const ConfirmSprintChangesModal: React.FC<Props> = ({
           
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
             <p className="text-sm text-blue-800">
-              <strong>Next Steps:</strong> After confirming, you can manually reassign stories to appropriate sprints 
-              based on the new timeline, or leave them in their current sprints if still suitable.
+              <strong>Next Steps:</strong> After confirming, review the recommended sprint mapping and reassign each affected story if needed.
             </p>
           </div>
         </div>
