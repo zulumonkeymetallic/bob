@@ -166,7 +166,7 @@ const defaultColumns: Column[] = [
     key: 'priority',
     label: 'Priority',
     width: '10%',
-    visible: false,
+    visible: true,
     editable: true,
     type: 'select',
     options: ['4', '1', '2', '3', '5']
@@ -252,6 +252,31 @@ const defaultColumns: Column[] = [
     width: '15%',
     visible: true,
     editable: false,
+    type: 'text'
+  },
+  {
+    key: 'repeatFrequency',
+    label: 'Frequency',
+    width: '12%',
+    visible: false,
+    editable: true,
+    type: 'select',
+    options: ['daily', 'weekly', 'monthly', 'yearly']
+  },
+  {
+    key: 'repeatInterval',
+    label: 'Interval',
+    width: '8%',
+    visible: false,
+    editable: true,
+    type: 'number'
+  },
+  {
+    key: 'daysOfWeek',
+    label: 'Days of Week',
+    width: '15%',
+    visible: false,
+    editable: true,
     type: 'text'
   },
 ];
@@ -446,6 +471,14 @@ const SortableRow: React.FC<SortableRowProps> = ({
         oldComparable = String(previousPoints);
         newComparable = String(normalizedPoints);
         updates = { points: normalizedPoints } as any;
+      } else if (key === 'repeatFrequency') {
+        updates = { repeatFrequency: valueToSave || null } as any;
+      } else if (key === 'repeatInterval') {
+        const n = parseInt(valueToSave, 10);
+        updates = { repeatInterval: Number.isFinite(n) ? Math.max(1, n) : 1 } as any;
+      } else if (key === 'daysOfWeek') {
+        const days = valueToSave.split(',').map((s: string) => s.trim().toLowerCase()).filter(Boolean);
+        updates = { daysOfWeek: days } as any;
       } else {
         updates = { [key]: valueToSave };
         oldComparable = oldValue == null ? '' : String(oldValue);
@@ -464,6 +497,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
       }
 
       if (updates && oldComparable !== newComparable) {
+        console.log(`💾 Persisting task update: ${key} = ${newComparable} (was: ${oldComparable})`);
         await onTaskUpdate(task.id, updates);
       } else {
         console.log(`🔄 No change detected for ${key}: ${oldComparable} === ${newComparable}`);
@@ -504,8 +538,9 @@ const SortableRow: React.FC<SortableRowProps> = ({
     if (key === 'status') {
       return taskStatusText(value);
     }
-    if (key === 'points' && typeof value === 'number') {
-      return String(value);
+    if (key === 'points') {
+      const pts = parsePointsValue(value);
+      return pts != null ? String(pts) : '';
     }
     if (key === 'aiCriticalityScore' && typeof value === 'number') {
       return String(Math.round(value));
@@ -525,6 +560,17 @@ const SortableRow: React.FC<SortableRowProps> = ({
     }
     if (key === 'linkedGoal') {
       return String(value || 'Unlinked goal');
+    }
+    if (key === 'daysOfWeek') {
+      if (Array.isArray(value)) return value.join(', ');
+      return String(value || '');
+    }
+    if (key === 'repeatFrequency') {
+      const s = String(value || '');
+      return s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
+    }
+    if (key === 'repeatInterval') {
+      return value != null ? String(value) : '';
     }
     return value || '';
   };
@@ -569,8 +615,12 @@ const SortableRow: React.FC<SortableRowProps> = ({
       if (column.key === 'type') {
         return normalizeTaskType(value || 'task');
       }
-      if (column.key === 'priority' || column.key === 'points') {
+      if (column.key === 'priority' || column.key === 'points' || column.key === 'repeatInterval') {
         return value == null ? '' : String(value);
+      }
+      if (column.key === 'daysOfWeek') {
+        if (Array.isArray(value)) return value.join(',');
+        return String(value || '');
       }
       if (column.type === 'select') {
         return value == null ? '' : String(value);
@@ -964,9 +1014,9 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
         sprints,
       });
 
-      if (!isDueDateWithinStorySprint(derivation.dueDateMs, derivation.story, sprints)) {
-        showToast('Task due date must stay within the linked story sprint window.');
-        return;
+      // Allow due date edits even if story sprint isn't defined - only warn if conflict exists
+      if ('dueDate' in updates && derivation.story?.sprintId && !isDueDateWithinStorySprint(derivation.dueDateMs, derivation.story, sprints)) {
+        console.warn(`⚠️ Due date ${new Date(derivation.dueDateMs || 0).toISOString().split('T')[0]} falls outside linked story sprint - auto-aligning to matching sprint`);
       }
 
       const payload: Partial<Task> = { ...updates };

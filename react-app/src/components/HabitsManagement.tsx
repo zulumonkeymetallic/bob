@@ -7,7 +7,7 @@ import { addDoc, collection, deleteDoc, doc, getDocs, onSnapshot, orderBy, query
 const HabitsManagement: React.FC = () => {
   const { currentUser } = useAuth();
   const [habits, setHabits] = useState<any[]>([]);
-  const [form, setForm] = useState<any>({ name: '', description: '', frequency: 'daily', targetValue: 1, unit: 'times', scheduleTime: '07:00', linkedGoalId: '', isActive: true, daysOfWeek: [] as number[], daysText: '' });
+  const [form, setForm] = useState<any>({ name: '', description: '', frequency: 'daily', targetValue: 1, unit: 'times', scheduleTime: '07:00', timeOfDay: 'auto', linkedGoalId: '', isActive: true, daysOfWeek: [] as number[], daysText: '' });
   const [goals, setGoals] = useState<any[]>([]);
   const [error, setError] = useState<string | null>(null);
   const dayKey = useMemo(() => {
@@ -50,6 +50,7 @@ const HabitsManagement: React.FC = () => {
       targetValue: Number(form.targetValue)||1,
       unit: form.unit||'times',
       scheduleTime: form.scheduleTime||'07:00',
+      timeOfDay: form.timeOfDay !== 'auto' ? form.timeOfDay : null,
       linkedGoalId: form.linkedGoalId || null,
       linkedGoalName: goals.find(g=>g.id===form.linkedGoalId)?.title || null,
       daysOfWeek: Array.isArray(form.daysOfWeek) && form.daysOfWeek.length ? form.daysOfWeek : parseDays(form.daysText || ''),
@@ -59,7 +60,7 @@ const HabitsManagement: React.FC = () => {
       ownerUid: currentUser.uid,
     };
     const ref = await addDoc(collection(db, 'habits'), payload);
-    setForm({ name:'', description:'', frequency:'daily', targetValue:1, unit:'times', scheduleTime:'07:00', linkedGoalId:'', isActive:true, daysOfWeek: [], daysText: '' });
+    setForm({ name:'', description:'', frequency:'daily', targetValue:1, unit:'times', scheduleTime:'07:00', timeOfDay: 'auto', linkedGoalId:'', isActive:true, daysOfWeek: [], daysText: '' });
   };
 
   const toggleCompleteToday = async (habit: any) => {
@@ -107,9 +108,18 @@ const HabitsManagement: React.FC = () => {
                   <option value="weekly">Weekly</option>
                 </Form.Select>
               </Col>
-              <Col md={4}>
+              <Col md={2}>
                 <Form.Label>Time</Form.Label>
                 <Form.Control type="time" value={form.scheduleTime} onChange={e=>setForm({ ...form, scheduleTime: e.target.value })} />
+              </Col>
+              <Col md={2}>
+                <Form.Label>Time slot</Form.Label>
+                <Form.Select value={form.timeOfDay} onChange={e=>setForm({ ...form, timeOfDay: e.target.value })}>
+                  <option value="auto">Auto (from time)</option>
+                  <option value="morning">Morning</option>
+                  <option value="afternoon">Afternoon</option>
+                  <option value="evening">Evening</option>
+                </Form.Select>
               </Col>
             </Row>
             <Row className="g-3 mt-1">
@@ -188,6 +198,7 @@ const HabitsManagement: React.FC = () => {
                 <th>Name</th>
                 <th>Frequency</th>
                 <th>Time</th>
+                <th>Slot</th>
                 <th>Goal</th>
                 <th>Active</th>
                 <th></th>
@@ -199,6 +210,7 @@ const HabitsManagement: React.FC = () => {
                   <td>{h.name}</td>
                   <td>{h.frequency}</td>
                   <td>{h.scheduleTime || '—'}</td>
+                  <td>{h.timeOfDay && h.timeOfDay !== 'auto' ? <Badge bg="info">{h.timeOfDay}</Badge> : <span className="text-muted small">auto</span>}</td>
                   <td>{h.linkedGoalId ? (goals.find(g=>g.id===h.linkedGoalId)?.title || h.linkedGoalId) : <Badge bg="warning">Missing</Badge>}</td>
                   <td>{h.isActive ? <Badge bg="success">On</Badge> : <Badge bg="secondary">Off</Badge>}</td>
                   <td className="text-end">

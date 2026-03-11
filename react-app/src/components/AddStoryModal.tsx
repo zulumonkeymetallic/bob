@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import { Modal, Button, Form, Alert, Dropdown, DropdownButton } from 'react-bootstrap';
+import { Modal, Button, Form, Alert, Dropdown, DropdownButton, Row, Col } from 'react-bootstrap';
 import { db } from '../firebase';
 import { collection, addDoc, getDocs, query, where, orderBy, serverTimestamp } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
@@ -25,7 +25,11 @@ interface Goal {
 const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
-  const { sprints } = useSprint();
+  const { sprints: allSprints } = useSprint();
+  const sprints = allSprints.filter((s) => {
+    const st = String(s.status || '').toLowerCase();
+    return !['closed', 'completed', 'done', 'cancelled', 'archived'].includes(st);
+  });
   const [goals, setGoals] = useState<Goal[]>([]);
   const [formData, setFormData] = useState({
     title: '',
@@ -34,6 +38,9 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
     sprintId: '',
     priority: 2,
     points: 3,
+    dueDate: '',
+    dueTime: '',
+    timeOfDay: '' as 'morning' | 'afternoon' | 'evening' | '',
     tags: [] as string[]
   });
   const [goalInput, setGoalInput] = useState('');
@@ -144,7 +151,7 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
       formData: formData,
       timestamp: new Date().toISOString()
     });
-    setFormData({ title: '', description: '', goalId: '', sprintId: '', priority: 2, points: 3, tags: [] });
+    setFormData({ title: '', description: '', goalId: '', sprintId: '', priority: 2, points: 3, dueDate: '', dueTime: '', timeOfDay: '', tags: [] });
     setSubmitResult(null);
     onClose();
   };
@@ -212,6 +219,9 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
         sprintId: formData.sprintId || null,
         priority: formData.priority,
         points: parsedPoints == null ? 1 : parsedPoints,
+        dueDate: formData.dueDate ? new Date(`${formData.dueDate}T00:00:00`).getTime() : null,
+        dueTime: formData.dueTime || null,
+        timeOfDay: formData.timeOfDay || null,
         status: 0,
         theme: linkedGoal?.theme ?? 1,
         persona: currentPersona || 'personal',
@@ -240,7 +250,7 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
       });
 
       setSubmitResult(`✅ Story created successfully! (${ref})`);
-      setFormData({ title: '', description: '', goalId: '', sprintId: '', priority: 2, points: 3, tags: [] });
+      setFormData({ title: '', description: '', goalId: '', sprintId: '', priority: 2, points: 3, dueDate: '', dueTime: '', timeOfDay: '', tags: [] });
 
       // Auto-close after success
       setTimeout(() => {
@@ -371,6 +381,43 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
               <option value={3}>Low</option>
             </Form.Select>
           </Form.Group>
+
+          <Row>
+            <Col md={4}>
+              <Form.Group className="mb-3">
+                <Form.Label>Due Date</Form.Label>
+                <Form.Control
+                  type="date"
+                  value={formData.dueDate}
+                  onChange={(e) => setFormData({ ...formData, dueDate: e.target.value })}
+                />
+              </Form.Group>
+            </Col>
+            <Col md={4}>
+              <Form.Group className="mb-3">
+                <Form.Label>Due Time</Form.Label>
+                <Form.Control
+                  type="time"
+                  value={formData.dueTime}
+                  onChange={(e) => setFormData({ ...formData, dueTime: e.target.value })}
+                />
+              </Form.Group>
+            </Col>
+            <Col md={4}>
+              <Form.Group className="mb-3">
+                <Form.Label>Time of Day</Form.Label>
+                <Form.Select
+                  value={formData.timeOfDay}
+                  onChange={(e) => setFormData({ ...formData, timeOfDay: e.target.value as any as any })}
+                >
+                  <option value="">Auto/None</option>
+                  <option value="morning">Morning</option>
+                  <option value="afternoon">Afternoon</option>
+                  <option value="evening">Evening</option>
+                </Form.Select>
+              </Form.Group>
+            </Col>
+          </Row>
 
           <Form.Group className="mb-3">
             <Form.Label>Story Points</Form.Label>

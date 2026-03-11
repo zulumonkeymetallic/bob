@@ -8,7 +8,7 @@ import { usePersona } from '../contexts/PersonaContext';
 import { Story, Task, Goal } from '../types';
 import KanbanBoardV2 from './KanbanBoardV2';
 import { useNavigate } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Maximize2, Minimize2, LayoutGrid, RefreshCw, Sparkles, Calendar as CalendarIcon } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Maximize2, Minimize2, RefreshCw, Sparkles, Calendar as CalendarIcon } from 'lucide-react';
 import { displayRefForEntity } from '../utils/referenceGenerator';
 import { useSprint } from '../contexts/SprintContext';
 import { isStatus } from '../utils/statusHelpers';
@@ -387,11 +387,18 @@ const SprintKanbanPageV2: React.FC = () => {
                             <Button
                                 variant="outline-secondary"
                                 size="sm"
-                                onClick={() => window.location.href = '/sprints/planning'}
-                                title="Planning Matrix"
-                                style={{ padding: '6px 12px' }}
+                                onClick={() => navigate('/dashboard')}
                             >
-                                <LayoutGrid size={16} />
+                                View overview
+                            </Button>
+
+                            <Button
+                                variant="outline-secondary"
+                                size="sm"
+                                onClick={() => navigate('/calendar')}
+                            >
+                                <CalendarIcon size={14} className="me-1" />
+                                View calendar
                             </Button>
 
                             <Form.Check

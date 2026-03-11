@@ -1,0 +1,48 @@
+/* PublicGoalView Styles */
+
+.public-goal-container {
+  min-height: 100vh;
+  background-color: #f8f9fa;
+  padding: 40px 20px;
+}
+
+.public-goal-header {
+  margin-bottom: 30px;
+}
+
+.public-goal-title {
+  font-size: 32px;
+  font-weight: bold;
+  line-height: 1.2;
+  margin-bottom: 12px;
+}
+
+.public-goal-kpi-card {
+  border: 1px solid #e9ecef;
+  margin-bottom: 16px;
+  border-radius: 6px;
+}
+
+.public-goal-kpi-name {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.public-goal-kpi-stats {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  color: #6c757d;
+  margin-top: 8px;
+}
+
+@media (max-width: 768px) {
+  .public-goal-title {
+    font-size: 24px;
+  }
+
+  .public-goal-container {
+    padding: 20px 16px;
+  }
+}

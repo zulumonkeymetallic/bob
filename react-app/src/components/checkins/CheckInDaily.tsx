@@ -1,14 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Badge, Button, Form, Spinner, Table } from 'react-bootstrap';
-import { Link } from 'react-router-dom';
+import { Alert, Badge, Button, Card, Col, Form, Row, Spinner } from 'react-bootstrap';
 import { collection, doc, getDoc, getDocs, limit, orderBy, query, setDoc, updateDoc, where } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
-import { format, startOfDay, endOfDay, formatDistanceToNow } from 'date-fns';
+import { format, startOfDay, endOfDay } from 'date-fns';
 import { db, functions } from '../../firebase';
 import { useAuth } from '../../contexts/AuthContext';
 import { usePersona } from '../../contexts/PersonaContext';
 import { schedulerCollections, type ScheduledInstanceModel } from '../../domain/scheduler/repository';
 import { ActivityStreamService } from '../../services/ActivityStreamService';
+import type { Goal, Story, Task } from '../../types';
+import EditTaskModal from '../EditTaskModal';
+import EditStoryModal from '../EditStoryModal';
 
 type CheckInItemType = 'block' | 'instance' | 'habit' | 'task' | 'chore' | 'routine';
 
@@ -36,6 +38,11 @@ interface DailyCheckInItem {
   lastDoneAt?: number | null;
   note?: string;
   noteAt?: number | null;
+  lastComment?: string;
+  lastCommentAt?: number | null;
+  progressPct?: number | null;
+  points?: number | null;
+  isOverdue?: boolean;
 }
 
 interface DailyCheckInDoc {
@@ -52,15 +59,114 @@ interface DailyCheckInDoc {
 
 const DAY_FORMAT = 'yyyyMMdd';
 
+interface HealthSnapshot {
+  // source flags
+  healthkitStatus?: string;
+  // steps
+  healthkitStepsToday?: number;
+  healthkitStepGoal?: number;
+  manualStepsToday?: number;
+  // sleep
+  healthkitSleepMinutes?: number;
+  manualSleepMinutes?: number;
+  // macros
+  healthkitCaloriesTodayKcal?: number;
+  healthkitProteinTodayG?: number;
+  healthkitFatTodayG?: number;
+  healthkitCarbsTodayG?: number;
+  manualCaloriesKcal?: number;
+  manualProteinG?: number;
+  manualFatG?: number;
+  manualCarbsG?: number;
+  // readiness
+  healthkitReadinessScore?: number;
+  healthkitReadinessLabel?: string;
+}
+
+/** Keywords that indicate a routine item tracks a specific health metric */
+const HEALTH_ROUTINE_KEYWORDS = {
+  sleep: ['sleep', 'retainer', 'bed routine', 'bedtime', 'wind down'],
+  steps: ['run', 'walk', 'step', '5k', 'parkrun', 'jog', 'cycling', 'cycle', 'swim'],
+  macros: ['protein', 'macro', 'nutrition', 'diet', 'calorie', 'eating'],
+};
+
+function matchesHealthKeyword(title: string, category: keyof typeof HEALTH_ROUTINE_KEYWORDS): boolean {
+  const lower = title.toLowerCase();
+  return HEALTH_ROUTINE_KEYWORDS[category].some((kw) => lower.includes(kw));
+}
+
+/** Return yesterday's Date */
+function getYesterday(): Date {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  return d;
+}
+
+/** Default to yesterday when it's before 8 pm, otherwise today */
+function getDefaultDate(): Date {
+  return new Date().getHours() < 20 ? getYesterday() : new Date();
+}
+
 const CheckInDaily: React.FC = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
-  const [date, setDate] = useState<Date>(new Date());
+  const [date, setDate] = useState<Date>(getDefaultDate);
+  const [yesterdayWarning, setYesterdayWarning] = useState<string | null>(null);
   const [items, setItems] = useState<DailyCheckInItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const initialItemsRef = useRef<Map<string, DailyCheckInItem>>(new Map());
+
+  // Health data state
+  const [health, setHealth] = useState<HealthSnapshot>({});
+  const [manualInputs, setManualInputs] = useState<Partial<{
+    sleepH: string; steps: string; calories: string; protein: string; fat: string; carbs: string;
+  }>>({});
+  const [healthSaving, setHealthSaving] = useState(false);
+  const [healthSaved, setHealthSaved] = useState(false);
+  const [viewMode, setViewMode] = useState<'card' | 'list'>('card');
+  const [quickEditTask, setQuickEditTask] = useState<Task | null>(null);
+  const [quickEditStory, setQuickEditStory] = useState<Story | null>(null);
+  const [goals, setGoals] = useState<Goal[]>([]);
+
+  const getEffectiveType = (item: DailyCheckInItem): string => String(item.taskType || item.sourceType || item.type || '').toLowerCase();
+
+  const supportsProgressForItem = (item: DailyCheckInItem): boolean => {
+    const effectiveType = getEffectiveType(item);
+    const isRecurringLike = ['chore', 'routine', 'habit'].includes(effectiveType);
+    return !!(item.storyId || (item.taskId && !isRecurringLike));
+  };
+
+  const supportsCommentsForItem = (item: DailyCheckInItem): boolean => supportsProgressForItem(item);
+
+  const hydrateLastComments = useCallback(async (sourceItems: DailyCheckInItem[]) => {
+    if (!currentUser?.uid || !Array.isArray(sourceItems) || sourceItems.length === 0) return sourceItems;
+
+    const entities = sourceItems
+      .filter((item) => supportsCommentsForItem(item))
+      .map((item) => ({
+        entityId: String(item.storyId || item.taskId || '').trim(),
+        entityType: item.storyId ? 'story' as const : 'task' as const,
+      }))
+      .filter((entry) => !!entry.entityId);
+
+    if (!entities.length) return sourceItems;
+
+    const latestMap = await ActivityStreamService.getLatestNotesForEntities(currentUser.uid, entities);
+
+    return sourceItems.map((item) => {
+      if (!supportsCommentsForItem(item)) return { ...item, lastComment: undefined, lastCommentAt: null };
+      const entityId = String(item.storyId || item.taskId || '').trim();
+      const latest = latestMap.get(entityId);
+      if (!latest) return item;
+      return {
+        ...item,
+        lastComment: latest.noteContent,
+        lastCommentAt: latest.timestampMs,
+      };
+    });
+  }, [currentUser]);
 
   const isIndexError = (err: any): boolean => {
     const msg = String(err?.message || err || '').toLowerCase();
@@ -94,6 +200,172 @@ const CheckInDaily: React.FC = () => {
   const dateKey = useMemo(() => format(date, DAY_FORMAT), [date]);
   const dayStart = useMemo(() => startOfDay(date), [date]);
   const dayEnd = useMemo(() => endOfDay(date), [date]);
+
+  useEffect(() => {
+    if (!currentUser?.uid) {
+      setGoals([]);
+      return;
+    }
+    const goalQuery = query(
+      collection(db, 'goals'),
+      where('ownerUid', '==', currentUser.uid),
+      ...(currentPersona ? [where('persona', '==', currentPersona)] : []),
+    );
+    getDocs(goalQuery)
+      .then((snap) => {
+        setGoals(snap.docs.map((goalDoc) => ({ id: goalDoc.id, ...(goalDoc.data() as any) })) as Goal[]);
+      })
+      .catch(() => {
+        setGoals([]);
+      });
+  }, [currentPersona, currentUser?.uid]);
+
+  const openTaskEdit = useCallback(async (item: DailyCheckInItem) => {
+    if (!item.taskId && !item.taskRef) return;
+
+    try {
+      if (item.taskId) {
+        const snap = await getDoc(doc(db, 'tasks', item.taskId));
+        if (snap.exists()) {
+          setQuickEditTask({ id: snap.id, ...(snap.data() as any) } as Task);
+          return;
+        }
+      }
+
+      if (!currentUser?.uid || !item.taskRef) return;
+      const byRef = await getDocs(query(
+        collection(db, 'tasks'),
+        where('ownerUid', '==', currentUser.uid),
+        where('ref', '==', item.taskRef),
+        limit(1),
+      ));
+      if (!byRef.empty) {
+        const found = byRef.docs[0];
+        setQuickEditTask({ id: found.id, ...(found.data() as any) } as Task);
+        return;
+      }
+
+      const byReference = await getDocs(query(
+        collection(db, 'tasks'),
+        where('ownerUid', '==', currentUser.uid),
+        where('reference', '==', item.taskRef),
+        limit(1),
+      ));
+      if (!byReference.empty) {
+        const found = byReference.docs[0];
+        setQuickEditTask({ id: found.id, ...(found.data() as any) } as Task);
+      }
+    } catch (error) {
+      console.warn('Failed to open task quick edit', error);
+    }
+  }, [currentUser?.uid]);
+
+  const openStoryEdit = useCallback(async (item: DailyCheckInItem) => {
+    if (!item.storyId && !item.storyRef) return;
+
+    try {
+      if (item.storyId) {
+        const snap = await getDoc(doc(db, 'stories', item.storyId));
+        if (snap.exists()) {
+          setQuickEditStory({ id: snap.id, ...(snap.data() as any) } as Story);
+          return;
+        }
+      }
+
+      if (!currentUser?.uid || !item.storyRef) return;
+      const byRef = await getDocs(query(
+        collection(db, 'stories'),
+        where('ownerUid', '==', currentUser.uid),
+        where('ref', '==', item.storyRef),
+        limit(1),
+      ));
+      if (!byRef.empty) {
+        const found = byRef.docs[0];
+        setQuickEditStory({ id: found.id, ...(found.data() as any) } as Story);
+      }
+    } catch (error) {
+      console.warn('Failed to open story quick edit', error);
+    }
+  }, [currentUser?.uid]);
+
+  // Check if yesterday's check-in was completed and show red banner if not
+  useEffect(() => {
+    if (!currentUser?.uid) return;
+    const yesterdayKey = format(getYesterday(), DAY_FORMAT);
+    const docId = `${currentUser.uid}_${yesterdayKey}`;
+    getDoc(doc(db, 'daily_checkins', docId)).then((snap) => {
+      if (!snap.exists() || (snap.data()?.completedCount ?? 0) === 0) {
+        setYesterdayWarning(
+          `Yesterday's check-in (${yesterdayKey.slice(0,4)}-${yesterdayKey.slice(4,6)}-${yesterdayKey.slice(6)}) wasn't completed. ` +
+          `You're currently viewing ${format(date, 'yyyy-MM-dd')}.`
+        );
+      } else {
+        setYesterdayWarning(null);
+      }
+    }).catch(() => { /* non-fatal */ });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser?.uid]);
+
+  const loadHealthData = useCallback(async () => {
+    if (!currentUser) return;
+    try {
+      const snap = await getDoc(doc(db, 'profiles', currentUser.uid));
+      if (snap.exists()) setHealth(snap.data() as HealthSnapshot);
+    } catch { /* non-fatal */ }
+  }, [currentUser]);
+
+  useEffect(() => { loadHealthData(); }, [loadHealthData]);
+
+  const effectiveSleepMinutes = health.healthkitSleepMinutes ?? health.manualSleepMinutes;
+  const effectiveSteps = health.healthkitStepsToday ?? health.manualStepsToday;
+  const effectiveCalories = health.healthkitCaloriesTodayKcal ?? health.manualCaloriesKcal;
+  const effectiveProtein = health.healthkitProteinTodayG ?? health.manualProteinG;
+  const effectiveFat = health.healthkitFatTodayG ?? health.manualFatG;
+  const effectiveCarbs = health.healthkitCarbsTodayG ?? health.manualCarbsG;
+
+  const saveHealthData = useCallback(async () => {
+    if (!currentUser) return;
+    setHealthSaving(true);
+    try {
+      const payload: Record<string, any> = { ownerUid: currentUser.uid, healthDataSource: 'manual', updatedAt: new Date() };
+      if (manualInputs.sleepH) payload.manualSleepMinutes = Math.round(parseFloat(manualInputs.sleepH) * 60);
+      if (manualInputs.steps) payload.manualStepsToday = parseInt(manualInputs.steps, 10);
+      if (manualInputs.calories) payload.manualCaloriesKcal = parseFloat(manualInputs.calories);
+      if (manualInputs.protein) payload.manualProteinG = parseFloat(manualInputs.protein);
+      if (manualInputs.fat) payload.manualFatG = parseFloat(manualInputs.fat);
+      if (manualInputs.carbs) payload.manualCarbsG = parseFloat(manualInputs.carbs);
+      await setDoc(doc(db, 'profiles', currentUser.uid), payload, { merge: true });
+      setHealth((prev) => ({ ...prev, ...payload }));
+      setHealthSaved(true);
+      setTimeout(() => setHealthSaved(false), 3000);
+    } catch { /* non-fatal */ }
+    finally { setHealthSaving(false); }
+  }, [currentUser, manualInputs]);
+
+  // Auto-mark routine/habit items as done when health data covers them
+  const autoMarkHealthRoutines = useCallback((snapshot: HealthSnapshot) => {
+    const sl = snapshot.healthkitSleepMinutes ?? snapshot.manualSleepMinutes;
+    const st = snapshot.healthkitStepsToday ?? snapshot.manualStepsToday;
+    const pr = snapshot.healthkitProteinTodayG ?? snapshot.manualProteinG;
+    setItems((prev) => prev.map((item) => {
+      if (item.completed) return item;
+      const title = item.title || '';
+      if (sl && sl >= 360 && matchesHealthKeyword(title, 'sleep')) {
+        return { ...item, completed: true, completedAt: Date.now(), completedBy: 'auto' };
+      }
+      if (st && st >= 5000 && matchesHealthKeyword(title, 'steps')) {
+        return { ...item, completed: true, completedAt: Date.now(), completedBy: 'auto' };
+      }
+      if (pr && pr >= 10 && matchesHealthKeyword(title, 'macros')) {
+        return { ...item, completed: true, completedAt: Date.now(), completedBy: 'auto' };
+      }
+      return item;
+    }));
+  }, []);
+
+  useEffect(() => {
+    if (Object.keys(health).length > 0) autoMarkHealthRoutines(health);
+  }, [health, autoMarkHealthRoutines]);
 
   const loadPlannedItems = useCallback(async () => {
     if (!currentUser) return;
@@ -268,8 +540,8 @@ const CheckInDaily: React.FC = () => {
 
       const taskRefs = new Map<string, string>();
       const storyRefs = new Map<string, string>();
-      const taskMeta = new Map<string, { status: any; completedAtMs: number | null; lastDoneAtMs: number | null; goalId: string | null; type: string | null; completedBy: 'mac_sync' | 'user' | 'auto' | null }>();
-      const storyMeta = new Map<string, { goalId: string | null }>();
+      const taskMeta = new Map<string, { status: any; completedAtMs: number | null; lastDoneAtMs: number | null; goalId: string | null; type: string | null; completedBy: 'mac_sync' | 'user' | 'auto' | null; points: number | null }>();
+      const storyMeta = new Map<string, { goalId: string | null; points: number | null }>();
 
       await Promise.all([
         ...Array.from(taskIds).map(async (id) => {
@@ -291,6 +563,7 @@ const CheckInDaily: React.FC = () => {
               goalId: data.goalId ? String(data.goalId) : null,
               type: data.type ? String(data.type) : null,
               completedBy,
+              points: data.points != null ? Number(data.points) || null : null,
             });
             if (data.goalId) goalIds.add(String(data.goalId));
           } catch (err) {
@@ -308,10 +581,11 @@ const CheckInDaily: React.FC = () => {
             const data = snap.data() as any;
             const ref = data.ref || data.reference || data.referenceNumber || data.code || id.slice(-6).toUpperCase();
             storyRefs.set(id, String(ref));
-            if (data.goalId) {
-              storyMeta.set(id, { goalId: String(data.goalId) });
-              goalIds.add(String(data.goalId));
-            }
+            storyMeta.set(id, {
+              goalId: data.goalId ? String(data.goalId) : null,
+              points: data.points != null ? Number(data.points) || null : null,
+            });
+            if (data.goalId) goalIds.add(String(data.goalId));
           } catch (err) {
             if (isPermissionDenied(err)) {
               console.warn('CheckInDaily: story read denied', id);
@@ -383,6 +657,7 @@ const CheckInDaily: React.FC = () => {
           completedBy,
           lastDoneAt: taskInfo?.lastDoneAtMs || taskInfo?.completedAtMs || null,
           note: '',
+          points: (taskId ? taskMeta.get(taskId)?.points : null) ?? (storyId ? storyMeta.get(storyId)?.points : null) ?? null,
         };
       });
 
@@ -603,13 +878,16 @@ const CheckInDaily: React.FC = () => {
             completedBy: prev.completedBy || (autoCompleted ? (item.completedBy || 'auto') : null),
             note: prev.note || '',
             noteAt: prev.noteAt || null,
+            progressPct: prev.progressPct ?? item.progressPct ?? null,
           };
         });
-        setItems(merged);
-        initialItemsRef.current = new Map(merged.map((item) => [item.key, item]));
+        const mergedWithComments = await hydrateLastComments(merged);
+        setItems(mergedWithComments);
+        initialItemsRef.current = new Map(mergedWithComments.map((item) => [item.key, item]));
       } else {
-        setItems(plannedItems);
-        initialItemsRef.current = new Map(plannedItems.map((item) => [item.key, item]));
+        const plannedWithComments = await hydrateLastComments(plannedItems);
+        setItems(plannedWithComments);
+        initialItemsRef.current = new Map(plannedWithComments.map((item) => [item.key, item]));
       }
     } catch (err) {
       console.error('Failed to load daily check-in data', err);
@@ -617,7 +895,7 @@ const CheckInDaily: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [currentUser, currentPersona, dateKey, dayEnd, dayStart]);
+  }, [currentUser, currentPersona, dateKey, dayEnd, dayStart, hydrateLastComments]);
 
   useEffect(() => {
     loadPlannedItems();
@@ -682,7 +960,27 @@ const CheckInDaily: React.FC = () => {
 
   const handleNoteChange = useCallback((key: string, note: string) => {
     setItems((prev) =>
-      prev.map((entry) => (entry.key === key ? { ...entry, note } : entry)),
+      prev.map((entry) => {
+        if (entry.key !== key) return entry;
+        const effectiveType = String(entry.taskType || entry.sourceType || entry.type || '').toLowerCase();
+        const isRecurringLike = ['chore', 'routine', 'habit'].includes(effectiveType);
+        const supportsComments = !!(entry.storyId || (entry.taskId && !isRecurringLike));
+        if (!supportsComments) return { ...entry, note: '' };
+        return { ...entry, note };
+      }),
+    );
+  }, []);
+
+  const handleProgressChange = useCallback((key: string, pct: number | null) => {
+    setItems((prev) =>
+      prev.map((entry) => {
+        if (entry.key !== key) return entry;
+        const effectiveType = String(entry.taskType || entry.sourceType || entry.type || '').toLowerCase();
+        const isRecurringLike = ['chore', 'routine', 'habit'].includes(effectiveType);
+        const supportsProgress = !!(entry.storyId || (entry.taskId && !isRecurringLike));
+        if (!supportsProgress) return { ...entry, progressPct: null };
+        return { ...entry, progressPct: pct };
+      }),
     );
   }, []);
 
@@ -695,6 +993,19 @@ const CheckInDaily: React.FC = () => {
       const itemsWithMeta = items.map((item) => {
         const prev = prevMap.get(item.key);
         const updated: DailyCheckInItem = { ...item };
+        const effectiveType = String(item.taskType || item.sourceType || item.type || '').toLowerCase();
+        const isRecurringLike = ['chore', 'routine', 'habit'].includes(effectiveType);
+        const supportsProgress = !!(item.storyId || (item.taskId && !isRecurringLike));
+        const supportsComments = supportsProgress;
+
+        if (!supportsComments) {
+          updated.note = '';
+          updated.noteAt = null;
+        }
+        if (!supportsProgress) {
+          updated.progressPct = null;
+        }
+
         if (item.note && item.note !== (prev?.note || '')) {
           updated.noteAt = nowMs;
         }
@@ -723,6 +1034,10 @@ const CheckInDaily: React.FC = () => {
 
       const noteWrites = itemsWithMeta.map(async (item) => {
         const prev = prevMap.get(item.key);
+        const effectiveType = String(item.taskType || item.sourceType || item.type || '').toLowerCase();
+        const isRecurringLike = ['chore', 'routine', 'habit'].includes(effectiveType);
+        const supportsComments = !!(item.storyId || (item.taskId && !isRecurringLike));
+        if (!supportsComments) return;
         const noteChanged = (item.note || '') !== (prev?.note || '');
         const completedChanged = item.completed && !prev?.completed;
         const entityId = item.taskId || item.storyId || item.goalId || null;
@@ -757,6 +1072,41 @@ const CheckInDaily: React.FC = () => {
       });
       await Promise.all(noteWrites);
 
+      // Persist progress % to source task/story documents
+      const progressWrites = itemsWithMeta
+        .filter((item) => {
+          const effectiveType = String(item.taskType || item.sourceType || item.type || '').toLowerCase();
+          const isRecurringLike = ['chore', 'routine', 'habit'].includes(effectiveType);
+          const supportsProgress = !!(item.storyId || (item.taskId && !isRecurringLike));
+          return supportsProgress && item.progressPct != null && (item.storyId || item.taskId);
+        })
+        .map(async (item) => {
+          const prev = prevMap.get(item.key);
+          if (item.progressPct === prev?.progressPct) return;
+          try {
+            const col = item.storyId ? 'stories' : 'tasks';
+            const id = item.storyId || item.taskId!;
+            const payload: Record<string, any> = {
+              progressPct: item.progressPct,
+              progressPctUpdatedAt: Date.now(),
+            };
+            if (item.storyId) {
+              const points = Number(item.points ?? 0);
+              const pct = Number(item.progressPct ?? 0);
+              const remaining = Number.isFinite(points) && points > 0
+                ? Math.max(0, Math.ceil((points * (1 - Math.min(100, Math.max(0, pct)) / 100)) * 10) / 10)
+                : 0;
+              payload.pointsRemaining = remaining;
+              payload.pointsRemainingAsOfDateKey = dateKey;
+              payload.pointsRemainingUpdatedAt = Date.now();
+            }
+            await updateDoc(doc(db, col, id), payload);
+          } catch (err) {
+            console.warn('Failed to write progressPct to source doc', err);
+          }
+        });
+      await Promise.all(progressWrites);
+
       setItems(itemsWithMeta);
       initialItemsRef.current = new Map(itemsWithMeta.map((item) => [item.key, item]));
     } catch (err) {
@@ -767,32 +1117,272 @@ const CheckInDaily: React.FC = () => {
     }
   }, [currentUser, currentPersona, dateKey, dayStart, items]);
 
+  const [hideCompleted, setHideCompleted] = useState(true);
+  const [refreshingComments, setRefreshingComments] = useState(false);
+
+  // Keys of items that have unsaved progress or note changes
+  const dirtyKeys = useMemo(() => {
+    const keys = new Set<string>();
+    items.forEach((item) => {
+      const prev = initialItemsRef.current.get(item.key);
+      if (!prev) return;
+      if ((item.note || '') !== (prev.note || '')) keys.add(item.key);
+      if ((item.progressPct ?? null) !== (prev.progressPct ?? null)) keys.add(item.key);
+    });
+    return keys;
+  }, [items]);
+
+  const refreshComments = useCallback(async () => {
+    setRefreshingComments(true);
+    try {
+      const updated = await hydrateLastComments(items);
+      setItems(updated);
+    } finally {
+      setRefreshingComments(false);
+    }
+  }, [hydrateLastComments, items]);
+
   const completedCount = items.filter((i) => i.completed).length;
+  const nowMs = Date.now();
   const formatTime = (value?: number | null) => {
     if (!value) return '—';
     return new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
-  const formatTimeRange = (item: DailyCheckInItem) => {
-    if (item.start && item.end) return `${formatTime(item.start)} – ${formatTime(item.end)}`;
-    if (item.start) return formatTime(item.start);
-    return '—';
+
+  const getBucketForItem = (item: DailyCheckInItem): 'morning' | 'afternoon' | 'evening' | 'anytime' => {
+    if (!item.start) return 'anytime';
+    const h = new Date(item.start).getHours();
+    if (h >= 5 && h < 12) return 'morning';
+    if (h >= 12 && h < 18) return 'afternoon';
+    if (h >= 18) return 'evening';
+    return 'anytime';
   };
-  const formatTypeLabel = (item: DailyCheckInItem) => {
-    if (item.type === 'task' && item.taskType) return item.taskType;
-    return item.type;
+
+  const getBadgeForItem = (item: DailyCheckInItem): { bg: string; label: string } => {
+    const type = String(item.taskType || item.sourceType || item.type || '').toLowerCase();
+    if (type === 'routine') return { bg: 'success', label: 'Routine' };
+    if (type === 'habit') return { bg: 'secondary', label: 'Habit' };
+    if (type === 'chore') return { bg: 'primary', label: 'Chore' };
+    if (item.storyId) return { bg: 'info', label: 'Story' };
+    if (item.taskId) return { bg: 'warning', label: 'Task' };
+    return { bg: 'light', label: item.type };
   };
-  const formatLastDone = (value?: number | null) => {
-    if (!value) return '—';
-    try {
-      return formatDistanceToNow(new Date(value), { addSuffix: true });
-    } catch {
-      return '—';
-    }
+
+  const isItemOverdue = (item: DailyCheckInItem): boolean => {
+    if (item.completed) return false;
+    if (!item.start) return false;
+    return item.start < nowMs;
   };
-  const doneVariantFor = (item: DailyCheckInItem) => {
-    if (!item.completed) return 'outline-secondary';
-    if (item.completedBy === 'mac_sync') return 'success';
-    return 'primary';
+
+  const visibleItems = hideCompleted ? items.filter((i) => !i.completed) : items;
+
+  const BUCKETS = [
+    { key: 'morning' as const, label: 'Morning', range: '5am – 12pm' },
+    { key: 'afternoon' as const, label: 'Afternoon', range: '12pm – 6pm' },
+    { key: 'evening' as const, label: 'Evening', range: '6pm – midnight' },
+    { key: 'anytime' as const, label: 'Anytime', range: '' },
+  ];
+
+  const itemsByBucket = BUCKETS.reduce((acc, b) => {
+    acc[b.key] = visibleItems.filter((i) => getBucketForItem(i) === b.key);
+    return acc;
+  }, {} as Record<string, DailyCheckInItem[]>);
+
+  const renderCheckInCard = (item: DailyCheckInItem) => {
+    const badge = getBadgeForItem(item);
+    const overdue = isItemOverdue(item);
+    const timeLabel = item.start && item.end
+      ? `${formatTime(item.start)} – ${formatTime(item.end)}`
+      : item.start ? formatTime(item.start) : null;
+    return (
+      <div
+        key={item.key}
+        className={`d-flex align-items-start gap-2 p-2 mb-2 rounded border${item.completed ? ' opacity-50' : ''}${overdue ? ' border-danger' : ''}`}
+        style={{ background: item.completed ? 'var(--bs-light-bg-subtle, #f8f9fa)' : undefined }}
+      >
+        <Form.Check
+          type="checkbox"
+          className="mt-1 flex-shrink-0"
+          checked={item.completed}
+          onChange={() => handleToggle(item)}
+          aria-label={`Toggle ${item.title}`}
+        />
+        <div className="flex-grow-1 min-w-0">
+          <div className="d-flex align-items-center gap-2 flex-wrap">
+            <span className={`fw-semibold${item.completed ? ' text-decoration-line-through text-muted' : ''}`}
+              style={{ wordBreak: 'break-word' }}>
+              {item.title}
+            </span>
+            <Badge bg={badge.bg} className="text-capitalize" style={{ fontSize: '0.7rem' }}>{badge.label}</Badge>
+            {overdue && <Badge bg="danger" style={{ fontSize: '0.7rem' }}>Overdue</Badge>}
+            {item.completed && item.completedBy === 'mac_sync' && <Badge bg="secondary" style={{ fontSize: '0.65rem' }}>Synced</Badge>}
+          </div>
+          <div className="d-flex align-items-center gap-3 mt-1 flex-wrap">
+            {dirtyKeys.has(item.key) && (
+              <span title="Unsaved changes" style={{ fontSize: '0.7rem', color: 'var(--bs-warning-text-emphasis, #664d03)' }}>● unsaved</span>
+            )}
+            {timeLabel && <span className="text-muted" style={{ fontSize: '0.78rem' }}>{timeLabel}</span>}
+            {item.points != null && <span className="text-muted" style={{ fontSize: '0.78rem' }}>{item.points} pts</span>}
+            {item.durationMin && !item.points && <span className="text-muted" style={{ fontSize: '0.78rem' }}>{item.durationMin}m</span>}
+            {item.goalTitle && <span className="text-muted" style={{ fontSize: '0.78rem' }}>Goal: {item.goalTitle}</span>}
+            {item.storyRef && (
+              <button
+                type="button"
+                className="btn btn-link p-0 text-decoration-none"
+                style={{ fontSize: '0.78rem' }}
+                onClick={() => { void openStoryEdit(item); }}
+              >
+                {item.storyRef}
+              </button>
+            )}
+            {item.taskRef && !item.storyRef && (
+              <button
+                type="button"
+                className="btn btn-link p-0 text-decoration-none"
+                style={{ fontSize: '0.78rem' }}
+                onClick={() => { void openTaskEdit(item); }}
+              >
+                {item.taskRef}
+              </button>
+            )}
+          </div>
+          {supportsProgressForItem(item) && (
+            <Form.Control
+              size="sm"
+              type="number"
+              min={0}
+              max={100}
+              className="mt-1"
+              style={{ maxWidth: 120 }}
+              placeholder="Progress %"
+              value={item.progressPct ?? ''}
+              onChange={(e) => {
+                const v = e.target.value === '' ? null : Math.min(100, Math.max(0, Number(e.target.value)));
+                handleProgressChange(item.key, v);
+              }}
+            />
+          )}
+          {supportsCommentsForItem(item) && (
+            <Form.Control
+              size="sm"
+              className="mt-1"
+              value={item.note || ''}
+              placeholder="Add comment…"
+              onChange={(e) => handleNoteChange(item.key, e.target.value)}
+            />
+          )}
+          {supportsCommentsForItem(item) && !!item.note && (
+            <div className="text-muted mt-1" style={{ fontSize: '0.75rem' }}>
+              Last comment: {item.note || item.lastComment}
+              {item.lastCommentAt ? ` (${formatTime(item.lastCommentAt)})` : ''}
+            </div>
+          )}
+          {supportsCommentsForItem(item) && !item.note && !!item.lastComment && (
+            <div className="text-muted mt-1" style={{ fontSize: '0.75rem' }}>
+              Last comment: {item.lastComment}
+              {item.lastCommentAt ? ` (${formatTime(item.lastCommentAt)})` : ''}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const renderCheckInListRow = (item: DailyCheckInItem) => {
+    const badge = getBadgeForItem(item);
+    const overdue = isItemOverdue(item);
+    const timeLabel = item.start && item.end
+      ? `${formatTime(item.start)} – ${formatTime(item.end)}`
+      : item.start ? formatTime(item.start) : null;
+
+    return (
+      <div
+        key={item.key}
+        className={`d-flex flex-column gap-2 p-2 mb-2 border rounded${item.completed ? ' opacity-50' : ''}${overdue ? ' border-danger' : ''}`}
+      >
+        <div className="d-flex align-items-center gap-2">
+          <Form.Check
+            type="checkbox"
+            className="mt-0"
+            checked={item.completed}
+            onChange={() => handleToggle(item)}
+            aria-label={`Toggle ${item.title}`}
+          />
+          <span className={`fw-semibold${item.completed ? ' text-decoration-line-through text-muted' : ''}`}>
+            {item.title}
+          </span>
+          <Badge bg={badge.bg} className="text-capitalize" style={{ fontSize: '0.7rem' }}>{badge.label}</Badge>
+          {overdue && <Badge bg="danger" style={{ fontSize: '0.7rem' }}>Overdue</Badge>}
+          <div className="ms-auto text-muted" style={{ fontSize: '0.78rem' }}>
+            {timeLabel || 'Anytime'}
+          </div>
+        </div>
+        <div className="d-flex align-items-center gap-2 flex-wrap">
+          {dirtyKeys.has(item.key) && (
+            <span title="Unsaved changes" style={{ fontSize: '0.7rem', color: 'var(--bs-warning-text-emphasis, #664d03)' }}>● unsaved</span>
+          )}
+          {item.points != null && <span className="text-muted" style={{ fontSize: '0.78rem' }}>{item.points} pts</span>}
+          {item.goalTitle && <span className="text-muted" style={{ fontSize: '0.78rem' }}>Goal: {item.goalTitle}</span>}
+          {item.storyRef && (
+            <button
+              type="button"
+              className="btn btn-link p-0 text-decoration-none"
+              style={{ fontSize: '0.78rem' }}
+              onClick={() => { void openStoryEdit(item); }}
+            >
+              {item.storyRef}
+            </button>
+          )}
+          {item.taskRef && !item.storyRef && (
+            <button
+              type="button"
+              className="btn btn-link p-0 text-decoration-none"
+              style={{ fontSize: '0.78rem' }}
+              onClick={() => { void openTaskEdit(item); }}
+            >
+              {item.taskRef}
+            </button>
+          )}
+        </div>
+        {supportsProgressForItem(item) && (
+          <Form.Control
+            size="sm"
+            type="number"
+            min={0}
+            max={100}
+            style={{ maxWidth: 160 }}
+            placeholder="Progress %"
+            value={item.progressPct ?? ''}
+            onChange={(e) => {
+              const v = e.target.value === '' ? null : Math.min(100, Math.max(0, Number(e.target.value)));
+              handleProgressChange(item.key, v);
+            }}
+          />
+        )}
+        {supportsCommentsForItem(item) && (
+          <>
+            <Form.Control
+              size="sm"
+              value={item.note || ''}
+              placeholder="Add comment…"
+              onChange={(e) => handleNoteChange(item.key, e.target.value)}
+            />
+            {!!item.note && (
+              <div className="text-muted" style={{ fontSize: '0.75rem' }}>
+                Last comment: {item.note || item.lastComment}
+                {item.lastCommentAt ? ` (${formatTime(item.lastCommentAt)})` : ''}
+              </div>
+            )}
+            {!item.note && !!item.lastComment && (
+              <div className="text-muted" style={{ fontSize: '0.75rem' }}>
+                Last comment: {item.lastComment}
+                {item.lastCommentAt ? ` (${formatTime(item.lastCommentAt)})` : ''}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    );
   };
 
   return (
@@ -808,12 +1398,175 @@ const CheckInDaily: React.FC = () => {
         <Badge bg={completedCount === items.length && items.length > 0 ? 'success' : 'secondary'}>
           {completedCount}/{items.length} done
         </Badge>
-        <Button variant="primary" onClick={handleSave} disabled={saving || loading}>
+        <Form.Check
+          type="switch"
+          id="hide-completed-switch"
+          label="Hide completed"
+          checked={hideCompleted}
+          onChange={() => setHideCompleted((p) => !p)}
+          className="ms-2"
+        />
+        <div className="btn-group ms-2" role="group" aria-label="Daily check-in view mode">
+          <Button
+            size="sm"
+            variant={viewMode === 'card' ? 'secondary' : 'outline-secondary'}
+            onClick={() => setViewMode('card')}
+          >
+            Card view
+          </Button>
+          <Button
+            size="sm"
+            variant={viewMode === 'list' ? 'secondary' : 'outline-secondary'}
+            onClick={() => setViewMode('list')}
+          >
+            List view
+          </Button>
+        </div>
+        <Button
+          size="sm"
+          variant="outline-secondary"
+          onClick={refreshComments}
+          disabled={refreshingComments || loading}
+          title="Reload latest comments from activity stream"
+        >
+          {refreshingComments ? <Spinner size="sm" animation="border" /> : '↺ Comments'}
+        </Button>
+        <Button variant="primary" onClick={handleSave} disabled={saving || loading} className="ms-auto">
           {saving ? 'Saving…' : 'Submit check-in'}
         </Button>
       </div>
 
+      {yesterdayWarning && (
+        <Alert variant="danger" dismissible onClose={() => setYesterdayWarning(null)} className="mb-2">
+          <strong>Incomplete check-in:</strong> {yesterdayWarning}
+          {format(date, DAY_FORMAT) !== format(getYesterday(), DAY_FORMAT) && (
+            <Button
+              size="sm"
+              variant="outline-danger"
+              className="ms-2"
+              onClick={() => setDate(getYesterday())}
+            >
+              Switch to yesterday
+            </Button>
+          )}
+        </Alert>
+      )}
       {error && <Alert variant="danger">{error}</Alert>}
+
+      {/* ── Health data panel ─────────────────────────────────────────── */}
+      <Card className="mb-3 border-0 shadow-sm">
+        <Card.Header className="py-2 d-flex justify-content-between align-items-center">
+          <span className="fw-semibold small">Today's Health Data</span>
+          <span className="text-muted small">
+            {health.healthkitStatus === 'synced' ? '● HealthKit synced' : 'Manual entry'}
+          </span>
+        </Card.Header>
+        <Card.Body className="py-2">
+          <Row className="g-2">
+            {/* Sleep */}
+            <Col xs={6} md={4} xl={2}>
+              <div className="text-muted small mb-1">Sleep</div>
+              {effectiveSleepMinutes != null ? (
+                <div className="fw-semibold">{(effectiveSleepMinutes / 60).toFixed(1)}h</div>
+              ) : (
+                <Form.Control
+                  size="sm"
+                  type="number"
+                  placeholder="hrs (e.g. 7.5)"
+                  value={manualInputs.sleepH ?? ''}
+                  onChange={(e) => setManualInputs((p) => ({ ...p, sleepH: e.target.value }))}
+                />
+              )}
+            </Col>
+            {/* Steps */}
+            <Col xs={6} md={4} xl={2}>
+              <div className="text-muted small mb-1">Steps</div>
+              {effectiveSteps != null ? (
+                <div className="fw-semibold">{Number(effectiveSteps).toLocaleString()}</div>
+              ) : (
+                <Form.Control
+                  size="sm"
+                  type="number"
+                  placeholder="e.g. 8000"
+                  value={manualInputs.steps ?? ''}
+                  onChange={(e) => setManualInputs((p) => ({ ...p, steps: e.target.value }))}
+                />
+              )}
+            </Col>
+            {/* Calories */}
+            <Col xs={6} md={4} xl={2}>
+              <div className="text-muted small mb-1">Calories</div>
+              {effectiveCalories != null ? (
+                <div className="fw-semibold">{Math.round(effectiveCalories)} kcal</div>
+              ) : (
+                <Form.Control
+                  size="sm"
+                  type="number"
+                  placeholder="kcal"
+                  value={manualInputs.calories ?? ''}
+                  onChange={(e) => setManualInputs((p) => ({ ...p, calories: e.target.value }))}
+                />
+              )}
+            </Col>
+            {/* Protein */}
+            <Col xs={6} md={4} xl={2}>
+              <div className="text-muted small mb-1">Protein</div>
+              {effectiveProtein != null ? (
+                <div className="fw-semibold">{Math.round(effectiveProtein)}g</div>
+              ) : (
+                <Form.Control
+                  size="sm"
+                  type="number"
+                  placeholder="g"
+                  value={manualInputs.protein ?? ''}
+                  onChange={(e) => setManualInputs((p) => ({ ...p, protein: e.target.value }))}
+                />
+              )}
+            </Col>
+            {/* Fat */}
+            <Col xs={6} md={4} xl={2}>
+              <div className="text-muted small mb-1">Fat</div>
+              {effectiveFat != null ? (
+                <div className="fw-semibold">{Math.round(effectiveFat)}g</div>
+              ) : (
+                <Form.Control
+                  size="sm"
+                  type="number"
+                  placeholder="g"
+                  value={manualInputs.fat ?? ''}
+                  onChange={(e) => setManualInputs((p) => ({ ...p, fat: e.target.value }))}
+                />
+              )}
+            </Col>
+            {/* Carbs */}
+            <Col xs={6} md={4} xl={2}>
+              <div className="text-muted small mb-1">Carbs</div>
+              {effectiveCarbs != null ? (
+                <div className="fw-semibold">{Math.round(effectiveCarbs)}g</div>
+              ) : (
+                <Form.Control
+                  size="sm"
+                  type="number"
+                  placeholder="g"
+                  value={manualInputs.carbs ?? ''}
+                  onChange={(e) => setManualInputs((p) => ({ ...p, carbs: e.target.value }))}
+                />
+              )}
+            </Col>
+          </Row>
+          {/* Save button — only show if any manual inputs are present */}
+          {Object.values(manualInputs).some((v) => v && v !== '') && (
+            <div className="d-flex align-items-center gap-2 mt-2">
+              <Button size="sm" variant="outline-primary" onClick={saveHealthData} disabled={healthSaving}>
+                {healthSaving ? <Spinner size="sm" animation="border" /> : 'Save health data'}
+              </Button>
+              {healthSaved && <span className="text-success small">Saved! Routines auto-marked where applicable.</span>}
+            </div>
+          )}
+        </Card.Body>
+      </Card>
+      {/* ─────────────────────────────────────────────────────────────── */}
+
       {loading ? (
         <div className="d-flex align-items-center gap-2 text-muted">
           <Spinner size="sm" animation="border" /> Loading planned items…
@@ -822,126 +1575,54 @@ const CheckInDaily: React.FC = () => {
         <div className="text-muted">No planned items for this day.</div>
       ) : (
         <>
-          <div className="d-md-none">
-            {items.map((item) => (
-              <div key={item.key} className="border rounded p-2 mb-2">
-                <div className="d-flex justify-content-between align-items-start">
-                  <div>
-                    <div className="fw-semibold">{item.title}</div>
-                    <div className="text-muted small">{formatTimeRange(item)}</div>
-                    <div className="text-muted small text-capitalize">{formatTypeLabel(item)}</div>
-                    <div className="text-muted small">Last done: {formatLastDone(item.lastDoneAt)}</div>
-                    {item.goalId ? (
-                      <div className="text-muted small">Goal: {item.goalTitle || String(item.goalId).slice(-6).toUpperCase()}</div>
-                    ) : null}
-                    {item.storyRef ? (
-                      <div className="small">
-                        Story:{' '}
-                        <Link to={`/stories/${item.storyRef}`} className="text-decoration-none">
-                          {item.storyRef}
-                        </Link>
-                      </div>
-                    ) : null}
-                    {item.taskRef ? (
-                      <div className="small">
-                        Task:{' '}
-                        <Link to={`/tasks/${item.taskRef}`} className="text-decoration-none">
-                          {item.taskRef}
-                        </Link>
-                      </div>
-                    ) : null}
-                  </div>
-                  <Button
-                    size="sm"
-                    variant={doneVariantFor(item)}
-                    onClick={() => handleToggle(item)}
-                  >
-                    {item.completed ? 'Done' : 'Mark done'}
-                  </Button>
-                </div>
-                <Form.Control
-                  size="sm"
-                  className="mt-2"
-                  value={item.note || ''}
-                  placeholder="Add note..."
-                  onChange={(e) => handleNoteChange(item.key, e.target.value)}
-                />
-              </div>
-            ))}
-          </div>
-          <div className="d-none d-md-block">
-            <Table responsive hover size="sm" className="align-middle">
-              <thead>
-                <tr>
-                  <th style={{ width: '120px' }}>Time</th>
-                  <th>Item</th>
-                  <th style={{ width: '180px' }}>Linked</th>
-                  <th style={{ width: '120px' }}>Type</th>
-                  <th style={{ width: '140px' }}>Last done</th>
-                  <th style={{ width: '90px' }}>Done</th>
-                  <th>Note</th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((item) => (
-                  <tr key={item.key}>
-                    <td className="text-muted">{formatTimeRange(item)}</td>
-                    <td>
-                      <div className="fw-semibold">{item.title}</div>
-                      <div className="text-muted small">
-                        {item.theme ? <span>{item.theme}</span> : null}
-                        {item.sourceType ? <span className="ms-2">{String(item.sourceType)}</span> : null}
-                      </div>
-                    </td>
-                    <td className="text-muted small">
-                      {item.goalId ? <div>Goal: {item.goalTitle || String(item.goalId).slice(-6).toUpperCase()}</div> : null}
-                      {item.storyRef ? (
-                        <div>
-                          Story:{' '}
-                          <Link to={`/stories/${item.storyRef}`} className="text-decoration-none">
-                            {item.storyRef}
-                          </Link>
-                        </div>
-                      ) : null}
-                      {item.taskRef ? (
-                        <div>
-                          Task:{' '}
-                          <Link to={`/tasks/${item.taskRef}`} className="text-decoration-none">
-                            {item.taskRef}
-                          </Link>
-                        </div>
-                      ) : null}
-                    </td>
-                    <td className="text-muted small text-capitalize">{formatTypeLabel(item)}</td>
-                    <td>
-                      <span title={item.lastDoneAt ? new Date(item.lastDoneAt).toLocaleString() : undefined}>
-                        {formatLastDone(item.lastDoneAt)}
-                      </span>
-                    </td>
-                    <td>
-                      <Button
-                        size="sm"
-                        variant={doneVariantFor(item)}
-                        onClick={() => handleToggle(item)}
-                      >
-                        {item.completed ? 'Done' : 'Mark done'}
-                      </Button>
-                    </td>
-                    <td>
-                      <Form.Control
-                        size="sm"
-                        value={item.note || ''}
-                        placeholder="Add note..."
-                        onChange={(e) => handleNoteChange(item.key, e.target.value)}
-                      />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </Table>
-          </div>
+          {hideCompleted && completedCount > 0 && (
+            <div className="text-muted small mb-3">{completedCount} completed item{completedCount !== 1 ? 's' : ''} hidden</div>
+          )}
+          {/* On md+ screens, show morning/afternoon/evening as 3 side-by-side columns; anytime always full-width */}
+          <Row className="g-3">
+            {BUCKETS.filter((b) => b.key !== 'anytime').map((bucket) => {
+              const bucketItems = itemsByBucket[bucket.key] || [];
+              if (bucketItems.length === 0) return null;
+              return (
+                <Col key={bucket.key} xs={12} md={4}>
+                  <Card className="h-100 border-0 shadow-sm">
+                    <Card.Header className="py-2 d-flex align-items-center justify-content-between">
+                      <span className="fw-bold small">{bucket.label}</span>
+                      {bucket.range && <span className="text-muted small">{bucket.range}</span>}
+                    </Card.Header>
+                    <Card.Body className="py-2">
+                      {bucketItems.map((item) => (viewMode === 'card' ? renderCheckInCard(item) : renderCheckInListRow(item)))}
+                    </Card.Body>
+                  </Card>
+                </Col>
+              );
+            })}
+          </Row>
+          {(itemsByBucket['anytime'] || []).length > 0 && (
+            <Card className="mt-3 border-0 shadow-sm">
+              <Card.Header className="py-2 d-flex align-items-center justify-content-between">
+                <span className="fw-bold small">Anytime</span>
+              </Card.Header>
+              <Card.Body className="py-2">
+                {(itemsByBucket['anytime'] || []).map((item) => (viewMode === 'card' ? renderCheckInCard(item) : renderCheckInListRow(item)))}
+              </Card.Body>
+            </Card>
+          )}
         </>
       )}
+
+      <EditTaskModal
+        show={!!quickEditTask}
+        task={quickEditTask}
+        onHide={() => setQuickEditTask(null)}
+      />
+
+      <EditStoryModal
+        show={!!quickEditStory}
+        story={quickEditStory}
+        goals={goals}
+        onHide={() => setQuickEditStory(null)}
+      />
     </div>
   );
 };

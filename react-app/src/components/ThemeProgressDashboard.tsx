@@ -1,20 +1,43 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
-import { Container } from 'react-bootstrap';
-import { ChevronDown, ChevronRight } from 'lucide-react';
+import { Container, Row, Col, Card, Badge, Button, Alert, Form } from 'react-bootstrap';
+import { TrendingUp } from 'lucide-react';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useSprint } from '../contexts/SprintContext';
-import { Goal, Story, Sprint } from '../types';
-import { getThemeById, migrateThemeValue } from '../constants/globalThemes';
+import { Goal, Story, Task, FocusGoal } from '../types';
+import { GLOBAL_THEMES, LEGACY_THEME_MAP, type GlobalTheme } from '../constants/globalThemes';
+import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { themeVars } from '../utils/themeVars';
-import { useSprintCapacity } from '../hooks/useSprintCapacity';
 import { computeWindowExpectedProgress, evaluateGoalTargetStatus } from '../utils/goalKpiStatus';
+import { triggerFocusGoalDataRefresh } from '../services/focusGoalsService';
+import FocusGoalsWidget from './FocusGoalsWidget';
 
-const SPRINT_WINDOW = 5;
+// ── Status helpers ─────────────────────────────────────────────────────────────
 
-const toMillis = (value: any): number => {
+const isTaskDone = (status: any): boolean => {
+  if (typeof status === 'number') return status === 2 || status >= 4;
+  return ['done', 'complete', 'completed', 'finished', 'closed'].includes(
+    String(status ?? '').trim().toLowerCase()
+  );
+};
+
+const isStoryDone = (status: any): boolean => {
+  if (typeof status === 'number') return status >= 4;
+  return ['done', 'complete', 'completed', 'finished', 'closed', 'archived'].includes(
+    String(status ?? '').trim().toLowerCase()
+  );
+};
+
+const isGoalDone = (status: any): boolean => {
+  if (typeof status === 'number') return status >= 2;
+  return ['done', 'complete', 'completed', 'closed', 'archived'].includes(
+    String(status ?? '').trim().toLowerCase()
+  );
+};
+
+const toMs = (value: any): number => {
   if (!value) return 0;
   if (typeof value === 'number') return value;
   if (value?.toMillis) return value.toMillis();
@@ -23,713 +46,850 @@ const toMillis = (value: any): number => {
   return Number.isNaN(parsed.getTime()) ? 0 : parsed.getTime();
 };
 
-const isStoryDone = (status: any): boolean => {
-  if (typeof status === 'number') return status >= 4;
-  const str = String(status || '').toLowerCase();
-  return ['done', 'complete', 'completed', 'closed', 'archived'].some((s) => str.includes(s));
-};
+// ── Types ──────────────────────────────────────────────────────────────────────
 
-const isGoalDone = (status: any): boolean => {
-  if (typeof status === 'number') return status >= 2;
-  const str = String(status || '').toLowerCase();
-  return ['done', 'complete', 'completed', 'closed', 'archived'].some((s) => str.includes(s));
-};
+type PotInfo = { name: string; balance: number; currency: string };
 
-const resolveThemeId = (value: any): number => {
-  return migrateThemeValue(value);
-};
+interface ThemeGoalRow {
+  id: string;
+  title: string;
+  status: any;
+  statusLabel: string;
+  statusBg: string;
+  storiesDone: number;
+  storiesTotal: number;
+  tasksDone: number;
+  tasksTotal: number;
+  pointsDone: number;
+  pointsTotal: number;
+  pointsProgressPct: number;
+  progressPct: number;
+  dueThisSprint: boolean;
+  dueDateMs: number | null;
+  savingsSavedPence: number;
+  savingsTarget: number;
+  savingsCurrency: string;
+}
 
-type PotInfo = {
-  name: string;
-  balance: number;
-  currency: string;
-};
+interface ThemeRow {
+  themeKey: string;
+  themeId: number;
+  themeLabel: string;
+  color: string;
+  textColor: string;
+  goalsDone: number;
+  goalsTotal: number;
+  storiesDone: number;
+  storiesTotal: number;
+  tasksDone: number;
+  tasksTotal: number;
+  pointsDone: number;
+  pointsTotal: number;
+  completedItems: number;
+  totalItems: number;
+  progressPct: number;
+  goalRows: ThemeGoalRow[];
+  savingsSavedPence: number;
+  savingsTarget: number;
+  savingsCurrency: string;
+}
+
+// ── Mini widget component ──────────────────────────────────────────────────────
+
+interface ThemeProgressWidgetProps {
+  title: string;
+  rows: ThemeRow[];
+  lowProgressAlert?: ThemeGoalRow[];
+  expanded: Record<string, boolean>;
+  onToggle: (key: string) => void;
+  formatSavings: (pence: number, currency: string) => string;
+  emptyMessage: string;
+  overallPct: number | null;
+  overallBreakdown: string;
+}
+
+const ThemeProgressWidget: React.FC<ThemeProgressWidgetProps> = ({
+  title,
+  rows,
+  lowProgressAlert,
+  expanded,
+  onToggle,
+  formatSavings,
+  emptyMessage,
+  overallPct,
+  overallBreakdown,
+}) => (
+  <Card className="shadow-sm border-0 h-100">
+    <Card.Header className="d-flex align-items-center justify-content-between gap-2 flex-wrap">
+      <div className="fw-semibold d-flex align-items-center gap-2">
+        <TrendingUp size={16} /> {title}
+      </div>
+      <div className="d-flex align-items-center gap-2">
+        {overallPct !== null && (
+          <span
+            title={overallBreakdown || undefined}
+            style={{ fontSize: 13, fontWeight: 700 }}
+          >
+            {overallPct}% complete
+          </span>
+        )}
+        <Badge bg={rows.length > 0 ? 'info' : 'secondary'} pill>
+          {rows.length}
+        </Badge>
+      </div>
+    </Card.Header>
+    <Card.Body className="p-3" style={{ overflowY: 'auto' }}>
+      {lowProgressAlert && lowProgressAlert.length > 0 && (
+        <Alert variant="warning" className="py-2 mb-3">
+          <div className="fw-semibold small mb-1">
+            Goals due this sprint with low progress (&lt;25% points complete)
+          </div>
+          <ul className="mb-0 small">
+            {lowProgressAlert.slice(0, 5).map((goalRow) => (
+              <li key={goalRow.id}>
+                {goalRow.title}
+                {' · '}
+                {goalRow.pointsDone}/{goalRow.pointsTotal} pts ({goalRow.pointsProgressPct}%)
+              </li>
+            ))}
+            {lowProgressAlert.length > 5 && (
+              <li className="text-muted">+{lowProgressAlert.length - 5} more</li>
+            )}
+          </ul>
+        </Alert>
+      )}
+
+      {rows.length === 0 ? (
+        <div className="text-muted small">{emptyMessage}</div>
+      ) : (
+        rows.map((row) => {
+          const isOpen = !!expanded[row.themeKey];
+          const pointsPct = row.pointsTotal > 0
+            ? Math.round((row.pointsDone / row.pointsTotal) * 100)
+            : 0;
+          const savingsPct = row.savingsTarget > 0
+            ? Math.round(((row.savingsSavedPence / 100) / row.savingsTarget) * 100)
+            : 0;
+          return (
+            <div key={row.themeKey} className="border rounded p-2 mb-2">
+              <div className="d-flex align-items-start justify-content-between gap-2">
+                <div className="d-flex align-items-center gap-2 flex-wrap">
+                  <span
+                    style={{
+                      width: 10,
+                      height: 10,
+                      borderRadius: 999,
+                      backgroundColor: row.color,
+                      border: '1px solid rgba(0,0,0,0.12)',
+                      display: 'inline-block',
+                    }}
+                  />
+                  <span className="fw-semibold small">{row.themeLabel}</span>
+                  <span className="text-muted" style={{ fontSize: 11 }}>
+                    {row.completedItems}/{row.totalItems} complete ({row.progressPct}%)
+                  </span>
+                </div>
+                <Button
+                  variant="link"
+                  size="sm"
+                  className="text-decoration-none p-0"
+                  onClick={() => onToggle(row.themeKey)}
+                >
+                  {isOpen ? 'Hide goals' : 'Show goals'}
+                </Button>
+              </div>
+
+              <div
+                style={{
+                  height: 6,
+                  background: 'rgba(0,0,0,0.08)',
+                  borderRadius: 999,
+                  overflow: 'hidden',
+                  marginTop: 8,
+                }}
+              >
+                <div
+                  style={{ width: `${row.progressPct}%`, height: '100%', background: row.color }}
+                />
+              </div>
+
+              <div className="d-flex align-items-center gap-2 flex-wrap mt-2">
+                <Badge bg="secondary">{row.goalsDone}/{row.goalsTotal} goals</Badge>
+                <Badge bg="secondary">{row.storiesDone}/{row.storiesTotal} stories</Badge>
+                <Badge bg="secondary">{row.tasksDone}/{row.tasksTotal} tasks</Badge>
+                {row.pointsTotal > 0 && (
+                  <Badge bg="primary">{row.pointsDone}/{row.pointsTotal} pts ({pointsPct}%)</Badge>
+                )}
+                {row.savingsTarget > 0 && (
+                  <Badge bg="success">
+                    Savings {formatSavings(row.savingsSavedPence, row.savingsCurrency)} / {row.savingsTarget.toLocaleString('en-GB', { style: 'currency', currency: row.savingsCurrency })} ({savingsPct}%)
+                  </Badge>
+                )}
+              </div>
+
+              {isOpen && (
+                <div className="mt-2">
+                  {row.goalRows.length === 0 ? (
+                    <div className="text-muted small">No goals in this theme for the selected scope.</div>
+                  ) : (
+                    row.goalRows.map((goalRow) => (
+                      <div key={goalRow.id} className="border rounded p-2 mb-2">
+                        <div className="d-flex align-items-start justify-content-between gap-2">
+                          <div className="fw-semibold small flex-grow-1">{goalRow.title}</div>
+                          <Badge bg={goalRow.statusBg}>{goalRow.statusLabel}</Badge>
+                        </div>
+                        <div className="d-flex align-items-center gap-2 flex-wrap mt-1">
+                          <span className="text-muted" style={{ fontSize: 11 }}>
+                            Stories {goalRow.storiesDone}/{goalRow.storiesTotal}
+                          </span>
+                          <span className="text-muted" style={{ fontSize: 11 }}>
+                            Tasks {goalRow.tasksDone}/{goalRow.tasksTotal}
+                          </span>
+                          {goalRow.pointsTotal > 0 && (
+                            <span className="text-muted" style={{ fontSize: 11 }}>
+                              Points {goalRow.pointsDone}/{goalRow.pointsTotal}
+                            </span>
+                          )}
+                          {goalRow.dueThisSprint && (
+                            <span className="text-warning-emphasis" style={{ fontSize: 11 }}>
+                              Due this sprint
+                            </span>
+                          )}
+                          <span className="text-muted" style={{ fontSize: 11 }}>
+                            Progress {goalRow.progressPct}%
+                          </span>
+                        </div>
+                        <div
+                          style={{
+                            height: 5,
+                            background: 'rgba(0,0,0,0.08)',
+                            borderRadius: 999,
+                            overflow: 'hidden',
+                            marginTop: 6,
+                          }}
+                        >
+                          <div
+                            style={{
+                              width: `${goalRow.progressPct}%`,
+                              height: '100%',
+                              background: row.color,
+                            }}
+                          />
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })
+      )}
+    </Card.Body>
+  </Card>
+);
+
+// ── Main component ─────────────────────────────────────────────────────────────
 
 const ThemeProgressDashboard: React.FC = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
-  const { sprints } = useSprint();
-  const [scope, setScope] = useState<'sprint' | 'year' | 'goal'>('sprint');
+  const { selectedSprintId, setSelectedSprintId, sprints, sprintsById } = useSprint();
+  const { themes: globalThemes } = useGlobalThemes();
+
+  const selectedSprint = selectedSprintId ? (sprintsById[selectedSprintId] ?? null) : (sprints[0] ?? null);
+
   const [goals, setGoals] = useState<Goal[]>([]);
-  const [stories, setStories] = useState<Story[]>([]);
+  const [allStories, setAllStories] = useState<Story[]>([]);
+  const [sprintTasks, setSprintTasks] = useState<Task[]>([]);
   const [pots, setPots] = useState<Record<string, PotInfo>>({});
   const [goalKpiMetrics, setGoalKpiMetrics] = useState<Record<string, { resolvedKpis?: any[]; updatedAt?: any }>>({});
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [focusGoals, setFocusGoals] = useState<FocusGoal[]>([]);
+  const [focusGoalsLoading, setFocusGoalsLoading] = useState(true);
+  const [focusGoalsRefreshing, setFocusGoalsRefreshing] = useState(false);
+
+  const [sprintExpanded, setSprintExpanded] = useState<Record<string, boolean>>({});
+  const [overallExpanded, setOverallExpanded] = useState<Record<string, boolean>>({});
+
+  // KPI section scope (kept at bottom)
+  const [kpiScope, setKpiScope] = useState<'sprint' | 'year' | 'goal'>('sprint');
+
   const [goalsLoading, setGoalsLoading] = useState(true);
   const [storiesLoading, setStoriesLoading] = useState(true);
-  const [potsLoading, setPotsLoading] = useState(true);
+  const [tasksLoading, setTasksLoading] = useState(true);
   const [kpiLoading, setKpiLoading] = useState(true);
 
+  // Goals + stories + focus goals subscriptions
   useEffect(() => {
     if (!currentUser) {
       setGoals([]);
-      setStories([]);
+      setAllStories([]);
+      setFocusGoals([]);
       setGoalsLoading(false);
       setStoriesLoading(false);
+      setFocusGoalsLoading(false);
       return;
     }
-
     setGoalsLoading(true);
     setStoriesLoading(true);
-
-    const goalsQuery = query(
-      collection(db, 'goals'),
-      where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona)
-    );
-    const storiesQuery = query(
-      collection(db, 'stories'),
-      where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona)
-    );
+    setFocusGoalsLoading(true);
 
     const goalsUnsub = onSnapshot(
-      goalsQuery,
-      (snap) => {
-        setGoals(snap.docs.map((doc) => ({ id: doc.id, ...(doc.data() as any) })) as Goal[]);
-        setGoalsLoading(false);
-      },
+      query(collection(db, 'goals'), where('ownerUid', '==', currentUser.uid), where('persona', '==', currentPersona)),
+      (snap) => { setGoals(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Goal[]); setGoalsLoading(false); },
       () => setGoalsLoading(false),
     );
-
     const storiesUnsub = onSnapshot(
-      storiesQuery,
-      (snap) => {
-        setStories(snap.docs.map((doc) => ({ id: doc.id, ...(doc.data() as any) })) as Story[]);
-        setStoriesLoading(false);
-      },
+      query(collection(db, 'stories'), where('ownerUid', '==', currentUser.uid), where('persona', '==', currentPersona)),
+      (snap) => { setAllStories(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Story[]); setStoriesLoading(false); },
       () => setStoriesLoading(false),
     );
-
-    return () => {
-      goalsUnsub();
-      storiesUnsub();
-    };
+    const focusGoalsUnsub = onSnapshot(
+      query(collection(db, 'focusGoals'), where('ownerUid', '==', currentUser.uid), where('persona', '==', currentPersona)),
+      (snap) => { setFocusGoals(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as FocusGoal[]); setFocusGoalsLoading(false); },
+      () => setFocusGoalsLoading(false),
+    );
+    return () => { goalsUnsub(); storiesUnsub(); focusGoalsUnsub(); };
   }, [currentUser, currentPersona]);
 
+  const handleManualFocusGoalsRefresh = useCallback(async () => {
+    if (!currentUser?.uid) return;
+    setFocusGoalsRefreshing(true);
+    try {
+      await triggerFocusGoalDataRefresh({ forceSnapshotRefresh: true });
+    } catch (error) {
+      console.error('Failed to manually refresh focus goals:', error);
+    } finally {
+      setFocusGoalsRefreshing(false);
+    }
+  }, [currentUser?.uid]);
+
+  // Tasks subscription (filtered by selected sprint)
   useEffect(() => {
-    if (!currentUser) {
-      setPots({});
-      setPotsLoading(false);
+    if (!currentUser || !selectedSprintId) {
+      setSprintTasks([]);
+      setTasksLoading(false);
       return;
     }
-
-    setPotsLoading(true);
-    const potsQuery = query(
-      collection(db, 'monzo_pots'),
-      where('ownerUid', '==', currentUser.uid)
-    );
+    setTasksLoading(true);
     const unsub = onSnapshot(
-      potsQuery,
+      query(
+        collection(db, 'tasks'),
+        where('ownerUid', '==', currentUser.uid),
+        where('sprintId', '==', selectedSprintId),
+      ),
+      (snap) => { setSprintTasks(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Task[]); setTasksLoading(false); },
+      () => setTasksLoading(false),
+    );
+    return () => unsub();
+  }, [currentUser, selectedSprintId]);
+
+  // Pots subscription
+  useEffect(() => {
+    if (!currentUser) { setPots({}); return; }
+    const unsub = onSnapshot(
+      query(collection(db, 'monzo_pots'), where('ownerUid', '==', currentUser.uid)),
       (snap) => {
         const map: Record<string, PotInfo> = {};
         snap.docs.forEach((doc) => {
           const data = doc.data() as any;
           const baseId = data.potId || doc.id;
           if (!baseId) return;
-          const info: PotInfo = {
-            name: data.name || baseId,
-            balance: Number(data.balance || 0) || 0,
-            currency: data.currency || 'GBP'
-          };
-          const register = (id: string) => {
-            if (!id) return;
-            map[id] = info;
-          };
+          const info: PotInfo = { name: data.name || baseId, balance: Number(data.balance || 0), currency: data.currency || 'GBP' };
+          const register = (id: string) => { if (id) map[id] = info; };
           register(baseId);
           if (currentUser?.uid) {
-            if (baseId.startsWith(`${currentUser.uid}_`)) {
-              register(baseId.replace(`${currentUser.uid}_`, ''));
-            } else {
-              register(`${currentUser.uid}_${baseId}`);
-            }
+            if (baseId.startsWith(`${currentUser.uid}_`)) register(baseId.replace(`${currentUser.uid}_`, ''));
+            else register(`${currentUser.uid}_${baseId}`);
           }
         });
         setPots(map);
-        setPotsLoading(false);
       },
-      () => setPotsLoading(false)
+      () => {},
     );
-
     return () => unsub();
   }, [currentUser]);
 
+  // Goal KPI metrics subscription
   useEffect(() => {
-    if (!currentUser) {
-      setGoalKpiMetrics({});
-      setKpiLoading(false);
-      return;
-    }
+    if (!currentUser) { setGoalKpiMetrics({}); setKpiLoading(false); return; }
     setKpiLoading(true);
-    const metricsQuery = query(
-      collection(db, 'goal_kpi_metrics'),
-      where('ownerUid', '==', currentUser.uid),
-    );
     const unsub = onSnapshot(
-      metricsQuery,
+      query(collection(db, 'goal_kpi_metrics'), where('ownerUid', '==', currentUser.uid)),
       (snap) => {
         const map: Record<string, { resolvedKpis?: any[]; updatedAt?: any }> = {};
-        snap.docs.forEach((docSnap) => {
-          const data = docSnap.data() as any;
+        snap.docs.forEach((d) => {
+          const data = d.data() as any;
           const goalId = String(data.goalId || '').trim();
           if (!goalId) return;
-          map[goalId] = {
-            resolvedKpis: Array.isArray(data.resolvedKpis) ? data.resolvedKpis : [],
-            updatedAt: data.updatedAt || null,
-          };
+          map[goalId] = { resolvedKpis: Array.isArray(data.resolvedKpis) ? data.resolvedKpis : [], updatedAt: data.updatedAt || null };
         });
         setGoalKpiMetrics(map);
         setKpiLoading(false);
       },
-      () => {
-        setGoalKpiMetrics({});
-        setKpiLoading(false);
-      },
+      () => { setGoalKpiMetrics({}); setKpiLoading(false); },
     );
     return () => unsub();
   }, [currentUser]);
 
-  const upcomingSprints = useMemo(() => {
-    const now = Date.now();
-    const filtered = (sprints || [])
-      .filter((s: Sprint) => {
-        const status = String((s as any).status || '').toLowerCase();
-        if (['done', 'complete', 'completed', 'closed', 'archived'].includes(status)) return false;
-        const startMs = toMillis((s as any).startDate || (s as any).start || (s as any).createdAt);
-        return !startMs || startMs >= now - 7 * 24 * 60 * 60 * 1000;
-      })
-      .sort((a: Sprint, b: Sprint) => {
-        const aStart = toMillis((a as any).startDate || (a as any).start || (a as any).createdAt);
-        const bStart = toMillis((b as any).startDate || (b as any).start || (b as any).createdAt);
-        return aStart - bStart;
-      });
-    return filtered.slice(0, SPRINT_WINDOW);
-  }, [sprints]);
+  // ── Theme palette & resolver ───────────────────────────────────────────────
 
-  const activeSprint = useMemo(() => {
-    const byStatus = upcomingSprints.find((sprint) => {
-      if ((sprint as any).status === 1) return true;
-      const status = String((sprint as any).status || '').toLowerCase();
-      return ['active', 'current', 'in-progress', 'inprogress'].includes(status);
-    });
-    return byStatus || upcomingSprints[0] || null;
-  }, [upcomingSprints]);
+  const themePalette = useMemo(
+    () => (globalThemes && globalThemes.length ? globalThemes : GLOBAL_THEMES),
+    [globalThemes],
+  );
 
-  const sprintIds = useMemo(() => new Set(upcomingSprints.map((s) => s.id)), [upcomingSprints]);
-  const primarySprintId = activeSprint?.id;
-  const { data: capacityData, loading: capacityLoading } = useSprintCapacity(primarySprintId);
-  const currentYear = new Date().getFullYear();
-  const yearStartMs = new Date(currentYear, 0, 1, 0, 0, 0, 0).getTime();
-  const yearEndMs = new Date(currentYear, 11, 31, 23, 59, 59, 999).getTime();
+  const themeFor = useCallback((value: any): GlobalTheme | undefined => {
+    if (value == null) return undefined;
+    const idNum = Number(value);
+    if (Number.isFinite(idNum)) {
+      const match = themePalette.find((t) => t.id === idNum);
+      if (match) return match;
+    }
+    const asString = String(value).trim();
+    const lower = asString.toLowerCase();
+    const direct = themePalette.find(
+      (t) => t.label === asString || t.name === asString || String(t.id) === asString || t.label.toLowerCase() === lower || t.name.toLowerCase() === lower,
+    );
+    if (direct) return direct;
+    const legacyEntry = Object.entries(LEGACY_THEME_MAP).find(([key]) => key.toLowerCase() === lower);
+    if (legacyEntry) {
+      const legacyId = Number(legacyEntry[1]);
+      return themePalette.find((t) => t.id === legacyId);
+    }
+    return undefined;
+  }, [themePalette]);
 
-  const capacitySummary = useMemo(() => {
-    if (!capacityData) return null;
-    const planned = capacityData.plannedCapacityHours ?? capacityData.totalCapacityHours ?? 0;
-    const scheduled = capacityData.scheduledHours ?? 0;
-    const free = capacityData.plannedFreeHours ?? Math.max(0, planned - scheduled);
-    return {
-      planned: Math.round(planned),
-      scheduled: Number(scheduled.toFixed(1)),
-      free: Number(free.toFixed(1)),
-      utilization: Math.min(100, Math.round((capacityData.plannedUtilization ?? 0) * 100)),
-      weeklyPlannerHours: Number((capacityData.weeklyPlannerHours ?? 0).toFixed(1)),
-      weeklyPlannerMinutes: capacityData.weeklyPlannerMinutes ?? 0,
-      sprintWeeks: capacityData.sprintWeeks ?? 0
-    };
-  }, [capacityData]);
+  // ── Helpers ────────────────────────────────────────────────────────────────
 
-  const sprintCapacity = useMemo(() => {
-    const map = new Map<string, number>();
-    upcomingSprints.forEach((s) => {
-      const cap = Number((s as any).capacityPoints || (s as any).capacity || 20) || 0;
-      map.set(s.id, cap);
-    });
-    return map;
-  }, [upcomingSprints]);
+  const resolveThemeId = useCallback((value: any): number => {
+    const match = themeFor(value);
+    return typeof match?.id === 'number' ? match.id : 0;
+  }, [themeFor]);
 
-  const sprintTotals = useMemo(() => {
-    const totals = new Map<string, number>();
-    stories.forEach((story) => {
-      const sprintId = (story as any).sprintId;
-      if (!sprintId) return;
-      const points = Number((story as any).points || 0) || 0;
-      if (isStoryDone((story as any).status)) return;
-      totals.set(sprintId, (totals.get(sprintId) || 0) + points);
-    });
-    return totals;
-  }, [stories]);
+  const resolveGoalSavings = useCallback((goal: Goal) => {
+    const target = Number((goal as any).estimatedCost || 0);
+    const rawPotId = (goal as any).linkedPotId || (goal as any).potId || null;
+    if (!rawPotId) return { savingsSavedPence: 0, savingsTarget: Number.isFinite(target) ? target : 0, savingsCurrency: 'GBP' };
+    const base = String(rawPotId);
+    const candidates = [base];
+    if (currentUser?.uid && base.startsWith(`${currentUser.uid}_`)) candidates.push(base.replace(`${currentUser.uid}_`, ''));
+    else if (currentUser?.uid) candidates.push(`${currentUser.uid}_${base}`);
+    const potId = candidates.find((id) => pots[id]);
+    const pot = potId ? pots[potId] : null;
+    return { savingsSavedPence: Number(pot?.balance || 0), savingsTarget: Number.isFinite(target) ? target : 0, savingsCurrency: pot?.currency || 'GBP' };
+  }, [currentUser?.uid, pots]);
 
-  const currency = useMemo(() => {
-    const first = Object.values(pots)[0];
-    return first?.currency || 'GBP';
-  }, [pots]);
+  const formatSavings = useCallback((pence: number, currency = 'GBP') => {
+    return (pence / 100).toLocaleString('en-GB', { style: 'currency', currency });
+  }, []);
 
-  const formatMoney = (value: number) => value.toLocaleString('en-GB', { style: 'currency', currency });
-
-  const getGoalPotInfo = (goal: Goal) => {
-    const potId = (goal as any).linkedPotId || goal.potId || null;
-    if (!potId) return null;
-    return pots[String(potId)] || null;
+  const resolveGoalStatus = (goal: Goal) => {
+    const statusNum = Number((goal as any).status);
+    const statusLabel = Number.isFinite(statusNum)
+      ? (statusNum === 2 ? 'Complete' : statusNum === 1 ? 'In Progress' : statusNum === 3 ? 'Blocked' : statusNum === 4 ? 'Deferred' : 'New')
+      : String((goal as any).status || 'New');
+    const statusBg = Number.isFinite(statusNum)
+      ? (statusNum === 2 ? 'success' : statusNum === 1 ? 'primary' : statusNum === 3 ? 'warning' : statusNum === 4 ? 'secondary' : 'dark')
+      : 'secondary';
+    return { statusLabel, statusBg };
   };
 
-  const scopedStories = useMemo(() => {
-    if (scope === 'goal') return stories;
-    if (scope === 'sprint') {
-      if (!primarySprintId) return [];
-      return stories.filter((story) => String((story as any).sprintId || '') === primarySprintId);
+  // ── Sprint stories (filtered from allStories) ──────────────────────────────
+
+  const sprintStories = useMemo(() => {
+    if (!selectedSprintId) return [];
+    return allStories.filter((s) => String((s as any).sprintId || '') === selectedSprintId);
+  }, [allStories, selectedSprintId]);
+
+  // ── Sprint theme rows (Dashboard-style: includes tasks) ───────────────────
+
+  const sprintThemeRows = useMemo<ThemeRow[]>(() => {
+    if (!selectedSprint) return [];
+
+    const sprintStartMs = toMs((selectedSprint as any).startDate || (selectedSprint as any).start || null);
+    const sprintEndMs = toMs((selectedSprint as any).endDate || (selectedSprint as any).end || null);
+
+    const resolveGoalDueMs = (goal: Goal): number | null => {
+      const candidate = (goal as any).dueDate ?? (goal as any).endDate ?? (goal as any).targetDate ?? null;
+      if (!candidate) return null;
+      const ms = toMs(candidate);
+      return Number.isFinite(ms) && ms > 0 ? ms : null;
+    };
+
+    const isGoalDueThisSprint = (goal: Goal): boolean => {
+      if (!Number.isFinite(sprintStartMs) || !Number.isFinite(sprintEndMs) || !sprintStartMs || !sprintEndMs) return false;
+      const dueMs = resolveGoalDueMs(goal);
+      if (!dueMs) return false;
+      return dueMs >= sprintStartMs && dueMs <= sprintEndMs;
+    };
+
+    const storyById = new Map<string, Story>();
+    sprintStories.forEach((s) => { if (s?.id) storyById.set(s.id, s); });
+
+    const storiesByGoal = new Map<string, Story[]>();
+    sprintStories.forEach((s) => {
+      const gId = String((s as any).goalId || '').trim();
+      if (!gId) return;
+      const list = storiesByGoal.get(gId) || [];
+      list.push(s);
+      storiesByGoal.set(gId, list);
+    });
+
+    const tasksByGoal = new Map<string, Task[]>();
+    sprintTasks.forEach((task) => {
+      let gId = String((task as any).goalId || '').trim();
+      if (!gId && task.storyId) gId = String(storyById.get(task.storyId)?.goalId || '').trim();
+      if (!gId) return;
+      const list = tasksByGoal.get(gId) || [];
+      list.push(task);
+      tasksByGoal.set(gId, list);
+    });
+
+    const sprintGoalIds = new Set<string>();
+    storiesByGoal.forEach((_, gId) => sprintGoalIds.add(gId));
+    tasksByGoal.forEach((_, gId) => sprintGoalIds.add(gId));
+
+    const isGoalInSprintContext = (goal: Goal): boolean =>
+      sprintGoalIds.has(goal.id) || isGoalDueThisSprint(goal);
+
+    const rows: ThemeRow[] = [];
+    themePalette.forEach((theme) => {
+      const themeId = Number(theme.id);
+      const themeGoals = goals.filter((g) => resolveThemeId((g as any).theme) === themeId && isGoalInSprintContext(g));
+      const themeGoalIds = new Set(themeGoals.map((g) => g.id));
+
+      const themeStories = sprintStories.filter((s) => {
+        if (resolveThemeId((s as any).theme) === themeId) return true;
+        return !!(s.goalId && themeGoalIds.has(s.goalId));
+      });
+      const themeStoryIds = new Set(themeStories.map((s) => s.id));
+
+      const themeTasks = sprintTasks.filter((t) => {
+        if (resolveThemeId((t as any).theme) === themeId) return true;
+        if ((t as any).goalId && themeGoalIds.has((t as any).goalId)) return true;
+        if (t.storyId && themeStoryIds.has(t.storyId)) return true;
+        if (t.storyId) {
+          const storyGoalId = String(storyById.get(t.storyId)?.goalId || '').trim();
+          if (storyGoalId && themeGoalIds.has(storyGoalId)) return true;
+        }
+        return false;
+      });
+
+      const totalItems = themeGoals.length + themeStories.length + themeTasks.length;
+      if (totalItems === 0) return;
+
+      const goalRows: ThemeGoalRow[] = themeGoals.map((goal) => {
+        const goalStories = storiesByGoal.get(goal.id) || [];
+        const goalTasks = tasksByGoal.get(goal.id) || [];
+        const storiesDone = goalStories.filter((s) => isStoryDone((s as any).status)).length;
+        const tasksDone = goalTasks.filter((t) => isTaskDone((t as any).status)).length;
+        const pointsTotal = goalStories.reduce((sum, s) => sum + (Number((s as any).points || 0) || 0), 0);
+        const pointsDone = goalStories.filter((s) => isStoryDone((s as any).status)).reduce((sum, s) => sum + (Number((s as any).points || 0) || 0), 0);
+        const pointsProgressPct = pointsTotal > 0 ? Math.round((pointsDone / pointsTotal) * 100) : (isGoalDone((goal as any).status) ? 100 : 0);
+        const totalChildItems = goalStories.length + goalTasks.length;
+        const progressPct = pointsTotal > 0 ? pointsProgressPct : totalChildItems > 0 ? Math.round(((storiesDone + tasksDone) / totalChildItems) * 100) : (isGoalDone((goal as any).status) ? 100 : 0);
+        const dueDateMs = resolveGoalDueMs(goal);
+        const dueThisSprint = !!(dueDateMs && sprintStartMs && sprintEndMs && dueDateMs >= sprintStartMs && dueDateMs <= sprintEndMs);
+        const { statusLabel, statusBg } = resolveGoalStatus(goal);
+        const savings = resolveGoalSavings(goal);
+        return { id: goal.id, title: goal.title || goal.id, status: (goal as any).status, statusLabel, statusBg, storiesDone, storiesTotal: goalStories.length, tasksDone, tasksTotal: goalTasks.length, pointsDone, pointsTotal, pointsProgressPct, progressPct, dueDateMs, dueThisSprint, ...savings };
+      }).sort((a, b) => {
+        if (a.dueThisSprint !== b.dueThisSprint) return a.dueThisSprint ? -1 : 1;
+        if (a.pointsProgressPct !== b.pointsProgressPct) return a.pointsProgressPct - b.pointsProgressPct;
+        return a.title.localeCompare(b.title);
+      });
+
+      const goalsDone = themeGoals.filter((g) => isGoalDone((g as any).status)).length;
+      const storiesDone = themeStories.filter((s) => isStoryDone((s as any).status)).length;
+      const tasksDone = themeTasks.filter((t) => isTaskDone((t as any).status)).length;
+      const pointsTotal = themeStories.reduce((sum, s) => sum + (Number((s as any).points || 0) || 0), 0);
+      const pointsDone = themeStories.filter((s) => isStoryDone((s as any).status)).reduce((sum, s) => sum + (Number((s as any).points || 0) || 0), 0);
+      const completedItems = goalsDone + storiesDone + tasksDone;
+      const progressPct = totalItems > 0 ? Math.round((completedItems / totalItems) * 100) : 0;
+      const savingsSavedPence = goalRows.reduce((sum, r) => sum + r.savingsSavedPence, 0);
+      const savingsTarget = goalRows.reduce((sum, r) => sum + r.savingsTarget, 0);
+      const savingsCurrency = goalRows.find((r) => r.savingsCurrency)?.savingsCurrency || 'GBP';
+
+      rows.push({ themeKey: String(theme.id), themeId, themeLabel: theme.label || theme.name || `Theme ${theme.id}`, color: theme.color || '#6c757d', textColor: theme.textColor || '#ffffff', goalsDone, goalsTotal: themeGoals.length, storiesDone, storiesTotal: themeStories.length, tasksDone, tasksTotal: themeTasks.length, pointsDone, pointsTotal, completedItems, totalItems, progressPct, goalRows, savingsSavedPence, savingsTarget, savingsCurrency });
+    });
+
+    return rows.sort((a, b) => b.pointsTotal !== a.pointsTotal ? b.pointsTotal - a.pointsTotal : b.totalItems - a.totalItems);
+  }, [goals, sprintStories, sprintTasks, selectedSprint, themePalette, resolveThemeId, resolveGoalSavings]);
+
+  // ── Low progress goals due this sprint (for sprint widget alert) ───────────
+
+  const lowProgressGoals = useMemo(() => {
+    const result: ThemeGoalRow[] = [];
+    sprintThemeRows.forEach((themeRow) => {
+      themeRow.goalRows.forEach((goalRow) => {
+        if (!goalRow.dueThisSprint) return;
+        if (goalRow.pointsProgressPct >= 25) return;
+        result.push(goalRow);
+      });
+    });
+    return result.sort((a, b) => {
+      if (a.pointsProgressPct !== b.pointsProgressPct) return a.pointsProgressPct - b.pointsProgressPct;
+      return a.title.localeCompare(b.title);
+    });
+  }, [sprintThemeRows]);
+
+  // ── Overall theme rows (all goals + stories, no sprint filter) ────────────
+
+  const overallThemeRows = useMemo<ThemeRow[]>(() => {
+    const storiesByGoal = new Map<string, Story[]>();
+    allStories.forEach((s) => {
+      const gId = String((s as any).goalId || '').trim();
+      if (!gId) return;
+      const list = storiesByGoal.get(gId) || [];
+      list.push(s);
+      storiesByGoal.set(gId, list);
+    });
+
+    const rows: ThemeRow[] = [];
+    themePalette.forEach((theme) => {
+      const themeId = Number(theme.id);
+      const themeGoals = goals.filter((g) => resolveThemeId((g as any).theme) === themeId);
+      const themeGoalIds = new Set(themeGoals.map((g) => g.id));
+      const themeStories = allStories.filter((s) => {
+        if (resolveThemeId((s as any).theme) === themeId) return true;
+        return !!(s.goalId && themeGoalIds.has(s.goalId));
+      });
+      const totalItems = themeGoals.length + themeStories.length;
+      if (totalItems === 0) return;
+
+      const goalRows: ThemeGoalRow[] = themeGoals.map((goal) => {
+        const goalStories = storiesByGoal.get(goal.id) || [];
+        const storiesDone = goalStories.filter((s) => isStoryDone((s as any).status)).length;
+        const pointsTotal = goalStories.reduce((sum, s) => sum + (Number((s as any).points || 0) || 0), 0);
+        const pointsDone = goalStories.filter((s) => isStoryDone((s as any).status)).reduce((sum, s) => sum + (Number((s as any).points || 0) || 0), 0);
+        const pointsProgressPct = pointsTotal > 0 ? Math.round((pointsDone / pointsTotal) * 100) : (isGoalDone((goal as any).status) ? 100 : 0);
+        const progressPct = pointsTotal > 0 ? pointsProgressPct : goalStories.length > 0 ? Math.round((storiesDone / goalStories.length) * 100) : (isGoalDone((goal as any).status) ? 100 : 0);
+        const { statusLabel, statusBg } = resolveGoalStatus(goal);
+        const savings = resolveGoalSavings(goal);
+        return { id: goal.id, title: goal.title || goal.id, status: (goal as any).status, statusLabel, statusBg, storiesDone, storiesTotal: goalStories.length, tasksDone: 0, tasksTotal: 0, pointsDone, pointsTotal, pointsProgressPct, progressPct, dueDateMs: null, dueThisSprint: false, ...savings };
+      }).sort((a, b) => a.progressPct - b.progressPct || a.title.localeCompare(b.title));
+
+      const goalsDone = themeGoals.filter((g) => isGoalDone((g as any).status)).length;
+      const storiesDone = themeStories.filter((s) => isStoryDone((s as any).status)).length;
+      const pointsTotal = themeStories.reduce((sum, s) => sum + (Number((s as any).points || 0) || 0), 0);
+      const pointsDone = themeStories.filter((s) => isStoryDone((s as any).status)).reduce((sum, s) => sum + (Number((s as any).points || 0) || 0), 0);
+      const completedItems = goalsDone + storiesDone;
+      const progressPct = totalItems > 0 ? Math.round((completedItems / totalItems) * 100) : 0;
+      const savingsSavedPence = goalRows.reduce((sum, r) => sum + r.savingsSavedPence, 0);
+      const savingsTarget = goalRows.reduce((sum, r) => sum + r.savingsTarget, 0);
+      const savingsCurrency = goalRows.find((r) => r.savingsCurrency)?.savingsCurrency || 'GBP';
+
+      rows.push({ themeKey: String(theme.id), themeId, themeLabel: theme.label || theme.name || `Theme ${theme.id}`, color: theme.color || '#6c757d', textColor: theme.textColor || '#ffffff', goalsDone, goalsTotal: themeGoals.length, storiesDone, storiesTotal: themeStories.length, tasksDone: 0, tasksTotal: 0, pointsDone, pointsTotal, completedItems, totalItems, progressPct, goalRows, savingsSavedPence, savingsTarget, savingsCurrency });
+    });
+
+    return rows.sort((a, b) => b.pointsTotal !== a.pointsTotal ? b.pointsTotal - a.pointsTotal : b.totalItems - a.totalItems);
+  }, [goals, allStories, themePalette, resolveThemeId, resolveGoalSavings]);
+
+  // ── Goal KPI rows (bottom section) ────────────────────────────────────────
+
+  const currentYear = new Date().getFullYear();
+  const yearStartMs = new Date(currentYear, 0, 1).getTime();
+  const yearEndMs = new Date(currentYear, 11, 31, 23, 59, 59, 999).getTime();
+
+  const kpiScopedStories = useMemo(() => {
+    if (kpiScope === 'sprint') {
+      return sprintStories;
     }
-    return stories.filter((story) => {
-      const candidates = [
-        (story as any).targetDate,
-        (story as any).dueDate,
-        (story as any).plannedStartDate,
-        (story as any).createdAt,
-        (story as any).updatedAt,
-      ].map((value) => toMillis(value));
-      return candidates.some((ms) => ms > 0 && ms >= yearStartMs && ms <= yearEndMs);
-    });
-  }, [stories, scope, primarySprintId, yearStartMs, yearEndMs]);
+    if (kpiScope === 'year') {
+      return allStories.filter((s) => {
+        const candidates = [(s as any).targetDate, (s as any).dueDate, (s as any).plannedStartDate, (s as any).createdAt, (s as any).updatedAt].map(toMs);
+        return candidates.some((ms) => ms > 0 && ms >= yearStartMs && ms <= yearEndMs);
+      });
+    }
+    return allStories;
+  }, [kpiScope, sprintStories, allStories, yearStartMs, yearEndMs]);
 
-  const scopedGoalIdsFromStories = useMemo(() => {
-    const ids = new Set<string>();
-    scopedStories.forEach((story) => {
-      if (story.goalId) ids.add(story.goalId);
-    });
-    return ids;
-  }, [scopedStories]);
+  const kpiScopedGoals = useMemo(() => {
+    const storiesGoalIds = new Set(kpiScopedStories.map((s) => s.goalId).filter(Boolean) as string[]);
+    if (kpiScope === 'sprint') return goals.filter((g) => storiesGoalIds.has(g.id));
+    if (kpiScope === 'year') {
+      return goals.filter((g) => {
+        if (storiesGoalIds.has(g.id)) return true;
+        if (Number((g as any).targetYear) === currentYear) return true;
+        const candidates = [(g as any).startDate, (g as any).targetDate, (g as any).endDate, (g as any).createdAt, (g as any).updatedAt].map(toMs);
+        return candidates.some((ms) => ms > 0 && ms >= yearStartMs && ms <= yearEndMs);
+      });
+    }
+    return goals;
+  }, [kpiScope, goals, kpiScopedStories, currentYear, yearStartMs, yearEndMs]);
 
-  const scopedGoals = useMemo(() => {
-    if (scope === 'goal') return goals;
-    if (scope === 'sprint') return goals.filter((goal) => scopedGoalIdsFromStories.has(goal.id));
-    return goals.filter((goal) => {
-      if (scopedGoalIdsFromStories.has(goal.id)) return true;
-      const targetYear = Number((goal as any).targetYear || 0);
-      if (targetYear === currentYear) return true;
-      const candidates = [
-        (goal as any).startDate,
-        (goal as any).targetDate,
-        (goal as any).endDate,
-        (goal as any).createdAt,
-        (goal as any).updatedAt,
-      ].map((value) => toMillis(value));
-      return candidates.some((ms) => ms > 0 && ms >= yearStartMs && ms <= yearEndMs);
-    });
-  }, [goals, scope, scopedGoalIdsFromStories, currentYear, yearStartMs, yearEndMs]);
-
-  const scopeLabel = useMemo(() => {
-    if (scope === 'sprint') return activeSprint?.name || 'active sprint';
-    if (scope === 'year') return String(currentYear);
+  const kpiScopeLabel = useMemo(() => {
+    if (kpiScope === 'sprint') return selectedSprint?.name || 'active sprint';
+    if (kpiScope === 'year') return String(currentYear);
     return 'goal timeline';
-  }, [scope, activeSprint, currentYear]);
+  }, [kpiScope, selectedSprint, currentYear]);
 
-  const scopeExpectedProgressPct = useMemo(() => {
-    if (scope === 'sprint') {
-      const startMs = toMillis((activeSprint as any)?.startDate || (activeSprint as any)?.start || null);
-      const endMs = toMillis((activeSprint as any)?.endDate || (activeSprint as any)?.end || null);
+  const kpiExpectedProgress = useMemo(() => {
+    if (kpiScope === 'sprint') {
+      const startMs = toMs((selectedSprint as any)?.startDate || (selectedSprint as any)?.start || null);
+      const endMs = toMs((selectedSprint as any)?.endDate || (selectedSprint as any)?.end || null);
       return computeWindowExpectedProgress(startMs > 0 ? startMs : null, endMs > 0 ? endMs : null);
     }
-    if (scope === 'year') {
-      return computeWindowExpectedProgress(yearStartMs, yearEndMs);
-    }
+    if (kpiScope === 'year') return computeWindowExpectedProgress(yearStartMs, yearEndMs);
     return null;
-  }, [scope, activeSprint, yearStartMs, yearEndMs]);
+  }, [kpiScope, selectedSprint, yearStartMs, yearEndMs]);
 
   const goalKpiRows = useMemo(() => {
     const storiesByGoal = new Map<string, Story[]>();
-    scopedStories.forEach((story) => {
-      const goalId = String(story.goalId || '').trim();
-      if (!goalId) return;
-      const list = storiesByGoal.get(goalId) || [];
-      list.push(story);
-      storiesByGoal.set(goalId, list);
+    kpiScopedStories.forEach((s) => {
+      const gId = String(s.goalId || '').trim();
+      if (!gId) return;
+      const list = storiesByGoal.get(gId) || [];
+      list.push(s);
+      storiesByGoal.set(gId, list);
     });
 
-    const rows = scopedGoals.map((goal) => {
+    return kpiScopedGoals.map((goal) => {
       const goalStories = storiesByGoal.get(goal.id) || [];
-      const totalStoryPoints = goalStories.reduce((sum, story) => sum + (Number((story as any).points || 0) || 0), 0);
-      const doneStoryPoints = goalStories
-        .filter((story) => isStoryDone((story as any).status))
-        .reduce((sum, story) => sum + (Number((story as any).points || 0) || 0), 0);
-      const doneStoryCount = goalStories.filter((story) => isStoryDone((story as any).status)).length;
+      const totalPoints = goalStories.reduce((sum, s) => sum + (Number((s as any).points || 0) || 0), 0);
+      const donePoints = goalStories.filter((s) => isStoryDone((s as any).status)).reduce((sum, s) => sum + (Number((s as any).points || 0) || 0), 0);
+      const doneCount = goalStories.filter((s) => isStoryDone((s as any).status)).length;
       const storyProgressPct = goalStories.length
-        ? (
-          totalStoryPoints > 0
-            ? Math.round((doneStoryPoints / totalStoryPoints) * 100)
-            : Math.round((doneStoryCount / goalStories.length) * 100)
-        )
+        ? (totalPoints > 0 ? Math.round((donePoints / totalPoints) * 100) : Math.round((doneCount / goalStories.length) * 100))
         : null;
       const estimated = Number((goal as any).estimatedCost || 0) || 0;
-      const potInfo = getGoalPotInfo(goal);
-      const saved = potInfo?.balance ? potInfo.balance / 100 : 0;
+      const rawPotId = (goal as any).linkedPotId || (goal as any).potId || null;
+      const pot = rawPotId ? (pots[String(rawPotId)] || null) : null;
+      const saved = pot?.balance ? pot.balance / 100 : 0;
       const savingsPct = estimated > 0 ? Math.min(100, Math.round((saved / estimated) * 100)) : null;
-      const fallbackParts = [storyProgressPct, savingsPct].filter((value): value is number => value != null);
-      const fallbackProgressPct = fallbackParts.length
-        ? Math.round(fallbackParts.reduce((sum, value) => sum + value, 0) / fallbackParts.length)
-        : null;
-      const startMs = toMillis((goal as any).startDate || goal.createdAt || null);
-      const endMs = toMillis((goal as any).endDate || (goal as any).targetDate || null);
-      const expectedProgressPct = scope === 'goal'
+      const fallbackParts = [storyProgressPct, savingsPct].filter((v): v is number => v != null);
+      const fallbackProgressPct = fallbackParts.length ? Math.round(fallbackParts.reduce((sum, v) => sum + v, 0) / fallbackParts.length) : null;
+      const startMs = toMs((goal as any).startDate || goal.createdAt || null);
+      const endMs = toMs((goal as any).endDate || (goal as any).targetDate || null);
+      const expectedProgressPct = kpiScope === 'goal'
         ? computeWindowExpectedProgress(startMs > 0 ? startMs : null, endMs > 0 ? endMs : null)
-        : scopeExpectedProgressPct;
-      const resolvedKpis = Array.isArray(goalKpiMetrics[goal.id]?.resolvedKpis)
-        ? goalKpiMetrics[goal.id]?.resolvedKpis || []
-        : [];
-      const status = evaluateGoalTargetStatus({
-        resolvedKpis,
-        fallbackProgressPct,
-        expectedProgressPct,
-        scopeLabel,
-      });
-      return {
-        goalId: goal.id,
-        goalTitle: goal.title || goal.id,
-        progressPct: status.progressPct,
-        expectedProgressPct,
-        statusLabel: status.label,
-        statusTone: status.tone,
-        reason: status.reason,
-        kpiSummary: status.kpiSummary,
-      };
-    });
-
-    const statusOrder: Record<string, number> = {
-      Behind: 0,
-      'On target': 1,
-      'No KPI': 2,
-    };
-
-    return rows.sort((a, b) => {
-      const byStatus = (statusOrder[a.statusLabel] ?? 9) - (statusOrder[b.statusLabel] ?? 9);
+        : kpiExpectedProgress;
+      const resolvedKpis = Array.isArray(goalKpiMetrics[goal.id]?.resolvedKpis) ? goalKpiMetrics[goal.id]?.resolvedKpis || [] : [];
+      const status = evaluateGoalTargetStatus({ resolvedKpis, fallbackProgressPct, expectedProgressPct, scopeLabel: kpiScopeLabel });
+      return { goalId: goal.id, goalTitle: goal.title || goal.id, progressPct: status.progressPct, expectedProgressPct, statusLabel: status.label, statusTone: status.tone, reason: status.reason, kpiSummary: status.kpiSummary };
+    }).sort((a, b) => {
+      const order: Record<string, number> = { Behind: 0, 'On target': 1, 'No KPI': 2 };
+      const byStatus = (order[a.statusLabel] ?? 9) - (order[b.statusLabel] ?? 9);
       if (byStatus !== 0) return byStatus;
-      const aProgress = a.progressPct ?? -1;
-      const bProgress = b.progressPct ?? -1;
-      if (aProgress !== bProgress) return aProgress - bProgress;
-      return a.goalTitle.localeCompare(b.goalTitle);
+      return (a.progressPct ?? -1) - (b.progressPct ?? -1);
     });
-  }, [scopedStories, scopedGoals, goalKpiMetrics, scope, scopeExpectedProgressPct, scopeLabel, pots]);
+  }, [kpiScopedStories, kpiScopedGoals, goalKpiMetrics, kpiScope, kpiExpectedProgress, kpiScopeLabel, pots]);
 
-  const themeRows = useMemo(() => {
-    const goalById = new Map(scopedGoals.map((g) => [g.id, g]));
-    const buckets = new Map<string, any>();
+  const loading = goalsLoading || storiesLoading || tasksLoading || kpiLoading;
 
-    const ensureBucket = (themeId: number) => {
-      const theme = getThemeById(themeId);
-      const key = theme.label || theme.name;
-      if (!buckets.has(key)) {
-        buckets.set(key, {
-          theme,
-          goalsTotal: 0,
-          goalsDone: 0,
-          storiesTotal: 0,
-          storiesDone: 0,
-          pointsTotal: 0,
-          pointsDone: 0,
-          pointsBySprint: {} as Record<string, number>,
-          savingsTotal: 0,
-          savingsSaved: 0
-        });
-      }
-      return buckets.get(key);
-    };
+  const sprintOverallPct = useMemo(() => {
+    const totalPts = sprintThemeRows.reduce((s, r) => s + r.pointsTotal, 0);
+    const donePts = sprintThemeRows.reduce((s, r) => s + r.pointsDone, 0);
+    const totalSavings = sprintThemeRows.reduce((s, r) => s + r.savingsTarget, 0);
+    const doneSavings = sprintThemeRows.reduce((s, r) => s + r.savingsSavedPence / 100, 0);
+    const parts: number[] = [];
+    if (totalPts > 0) parts.push(Math.round((donePts / totalPts) * 100));
+    if (totalSavings > 0) parts.push(Math.min(100, Math.round((doneSavings / totalSavings) * 100)));
+    return parts.length ? Math.round(parts.reduce((a, b) => a + b, 0) / parts.length) : null;
+  }, [sprintThemeRows]);
 
-    scopedGoals.forEach((goal) => {
-      const themeId = resolveThemeId((goal as any).theme);
-      const bucket = ensureBucket(themeId);
-      bucket.goalsTotal += 1;
-      if (isGoalDone((goal as any).status)) bucket.goalsDone += 1;
-      const estimated = Number((goal as any).estimatedCost || 0) || 0;
-      const potInfo = getGoalPotInfo(goal);
-      const saved = potInfo?.balance ? potInfo.balance / 100 : 0;
-      bucket.savingsTotal += estimated;
-      bucket.savingsSaved += saved;
-    });
-
-    scopedStories.forEach((story) => {
-      const goal = story.goalId ? goalById.get(story.goalId) : null;
-      const themeValue = (story as any).theme ?? (goal as any)?.theme ?? 0;
-      const themeId = resolveThemeId(themeValue);
-      const bucket = ensureBucket(themeId);
-      const points = Number((story as any).points || 0) || 0;
-      bucket.storiesTotal += 1;
-      bucket.pointsTotal += points;
-      if (isStoryDone((story as any).status)) {
-        bucket.storiesDone += 1;
-        bucket.pointsDone += points;
-      }
-      const sprintId = (story as any).sprintId;
-      if (sprintId && sprintIds.has(sprintId)) {
-        bucket.pointsBySprint[sprintId] = (bucket.pointsBySprint[sprintId] || 0) + points;
-      }
-    });
-
-    return Array.from(buckets.values()).sort((a, b) => b.pointsTotal - a.pointsTotal);
-  }, [scopedGoals, scopedStories, sprintIds, pots]);
-
-  const overallStats = useMemo(() => {
-    let totalPoints = 0;
-    let donePoints = 0;
-    let totalStories = 0;
-    let doneStories = 0;
-    let totalGoals = scopedGoals.length;
-    let doneGoals = 0;
-    let savingsTotal = 0;
-    let savingsSaved = 0;
-    scopedGoals.forEach((goal) => {
-      if (isGoalDone((goal as any).status)) doneGoals += 1;
-      const estimated = Number((goal as any).estimatedCost || 0) || 0;
-      const potInfo = getGoalPotInfo(goal);
-      const saved = potInfo?.balance ? potInfo.balance / 100 : 0;
-      savingsTotal += estimated;
-      savingsSaved += saved;
-    });
-    scopedStories.forEach((story) => {
-      totalStories += 1;
-      const points = Number((story as any).points || 0) || 0;
-      totalPoints += points;
-      if (isStoryDone((story as any).status)) {
-        doneStories += 1;
-        donePoints += points;
-      }
-    });
-    const pointsPct = totalPoints > 0 ? Math.round((donePoints / totalPoints) * 100) : 0;
-    const storyPct = totalStories > 0 ? Math.round((doneStories / totalStories) * 100) : 0;
-    const goalPct = totalGoals > 0 ? Math.round((doneGoals / totalGoals) * 100) : 0;
-    const savingsPct = savingsTotal > 0 ? Math.round((savingsSaved / savingsTotal) * 100) : 0;
-    const overallParts: number[] = [];
-    if (totalPoints > 0) overallParts.push(pointsPct);
-    if (totalGoals > 0) overallParts.push(goalPct);
-    if (savingsTotal > 0) overallParts.push(savingsPct);
-    const overallPct = overallParts.length
-      ? Math.round(overallParts.reduce((sum, value) => sum + value, 0) / overallParts.length)
-      : 0;
-    return {
-      totalPoints,
-      donePoints,
-      pointsPct,
-      totalStories,
-      doneStories,
-      storyPct,
-      totalGoals,
-      doneGoals,
-      goalPct,
-      savingsTotal,
-      savingsSaved,
-      savingsPct,
-      overallPct
-    };
-  }, [scopedGoals, scopedStories, pots]);
-
-  const toggleTheme = (key: string) => {
-    setExpanded((prev) => ({ ...prev, [key]: !prev[key] }));
-  };
-
-  const overallBreakdown = useMemo(() => {
-    const parts = [];
-    if (overallStats.savingsTotal > 0) parts.push(`Savings ${overallStats.savingsPct}%`);
-    if (overallStats.totalPoints > 0) parts.push(`Story points ${overallStats.pointsPct}%`);
-    if (overallStats.totalGoals > 0) parts.push(`Goals ${overallStats.goalPct}%`);
+  const sprintOverallBreakdown = useMemo(() => {
+    const parts: string[] = [];
+    const totalPts = sprintThemeRows.reduce((s, r) => s + r.pointsTotal, 0);
+    const donePts = sprintThemeRows.reduce((s, r) => s + r.pointsDone, 0);
+    const totalSavings = sprintThemeRows.reduce((s, r) => s + r.savingsTarget, 0);
+    const doneSavings = sprintThemeRows.reduce((s, r) => s + r.savingsSavedPence / 100, 0);
+    if (totalPts > 0) parts.push(`Story points ${Math.round((donePts / totalPts) * 100)}%`);
+    if (totalSavings > 0) parts.push(`Savings ${Math.min(100, Math.round((doneSavings / totalSavings) * 100))}%`);
     return parts.join(' • ');
-  }, [overallStats]);
+  }, [sprintThemeRows]);
 
-  const scrollToThemes = () => {
-    const target = document.getElementById('theme-progress-list');
-    if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  };
+  const overallOverallPct = useMemo(() => {
+    const totalPts = overallThemeRows.reduce((s, r) => s + r.pointsTotal, 0);
+    const donePts = overallThemeRows.reduce((s, r) => s + r.pointsDone, 0);
+    const totalSavings = overallThemeRows.reduce((s, r) => s + r.savingsTarget, 0);
+    const doneSavings = overallThemeRows.reduce((s, r) => s + r.savingsSavedPence / 100, 0);
+    const parts: number[] = [];
+    if (totalPts > 0) parts.push(Math.round((donePts / totalPts) * 100));
+    if (totalSavings > 0) parts.push(Math.min(100, Math.round((doneSavings / totalSavings) * 100)));
+    return parts.length ? Math.round(parts.reduce((a, b) => a + b, 0) / parts.length) : null;
+  }, [overallThemeRows]);
 
-  const loading = goalsLoading || storiesLoading || potsLoading || kpiLoading;
+  const overallOverallBreakdown = useMemo(() => {
+    const parts: string[] = [];
+    const totalPts = overallThemeRows.reduce((s, r) => s + r.pointsTotal, 0);
+    const donePts = overallThemeRows.reduce((s, r) => s + r.pointsDone, 0);
+    const totalSavings = overallThemeRows.reduce((s, r) => s + r.savingsTarget, 0);
+    const doneSavings = overallThemeRows.reduce((s, r) => s + r.savingsSavedPence / 100, 0);
+    if (totalPts > 0) parts.push(`Story points ${Math.round((donePts / totalPts) * 100)}%`);
+    if (totalSavings > 0) parts.push(`Savings ${Math.min(100, Math.round((doneSavings / totalSavings) * 100))}%`);
+    return parts.join(' • ');
+  }, [overallThemeRows]);
 
   return (
-    <Container fluid className="py-4" style={{ maxWidth: 1200 }}>
-      <div className="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+    <Container fluid className="py-4" style={{ maxWidth: 1400 }}>
+      {/* Header */}
+      <div className="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-4">
         <div>
-          <h3 className="mb-1">Theme Progress &amp; Capacity</h3>
+          <h3 className="mb-1">Theme &amp; Goal Progress</h3>
           <div className="text-muted small">
-            Story points are treated as hours. KPI and progress views are currently scoped to <strong>{scopeLabel}</strong>.
+            Sprint widget shows goals and themes active in the selected sprint. Overall widget shows all themes across all sprints.
           </div>
         </div>
-      <div className="d-flex flex-column align-items-end gap-2">
-        <div className="text-muted small">
-          Capacity window: next {upcomingSprints.length} sprint{upcomingSprints.length === 1 ? '' : 's'}
-        </div>
-        <div style={{ display: 'inline-flex', border: `1px solid ${themeVars.border}`, borderRadius: 999, overflow: 'hidden' }}>
-          {([
-            { key: 'sprint', label: 'Sprint' },
-            { key: 'year', label: 'Year' },
-            { key: 'goal', label: 'Goal' },
-          ] as const).map((option) => (
-            <button
-              key={option.key}
-              type="button"
-              onClick={() => setScope(option.key)}
-              style={{
-                border: 'none',
-                padding: '6px 12px',
-                background: scope === option.key ? (themeVars.card as string) : 'transparent',
-                color: scope === option.key ? (themeVars.text as string) : (themeVars.muted as string),
-                fontSize: 12,
-                fontWeight: scope === option.key ? 700 : 500,
-                cursor: 'pointer'
-              }}
-            >
-              {option.label}
-            </button>
-          ))}
+        <div className="d-flex align-items-center gap-2">
+          <span className="text-muted small">Sprint:</span>
+          <Form.Select
+            size="sm"
+            value={selectedSprintId || ''}
+            onChange={(e) => setSelectedSprintId(e.target.value)}
+            style={{ minWidth: 200 }}
+          >
+            {sprints.map((s) => (
+              <option key={s.id} value={s.id}>{s.name || s.id}</option>
+            ))}
+          </Form.Select>
         </div>
       </div>
-    </div>
 
-      {scope === 'sprint' && capacityLoading && primarySprintId && (
-        <div className="text-muted small mb-3">
-          Refreshing capacity for {activeSprint?.name || 'selected sprint'}…
-        </div>
-      )}
-      {scope === 'sprint' && capacitySummary && (
-        <div className="d-flex flex-wrap gap-3 mb-4">
-          <div
-            style={{
-              flex: '1 1 220px',
-              border: `1px solid ${themeVars.border}`,
-              borderRadius: 12,
-              padding: 16,
-              background: themeVars.card as string,
-              boxShadow: '0 2px 6px rgba(0,0,0,0.06)'
-            }}
-          >
-            <div className="text-muted small">Planned capacity</div>
-            <div style={{ fontWeight: 700, fontSize: 20 }}>{capacitySummary.planned} h</div>
-            <div className="text-muted small">Weekly planner: {capacitySummary.weeklyPlannerHours} h × {capacitySummary.sprintWeeks} wk</div>
-          </div>
-          <div
-            style={{
-              flex: '1 1 220px',
-              border: `1px solid ${themeVars.border}`,
-              borderRadius: 12,
-              padding: 16,
-              background: themeVars.card as string,
-              boxShadow: '0 2px 6px rgba(0,0,0,0.06)'
-            }}
-          >
-            <div className="text-muted small">Scheduled hours</div>
-            <div style={{ fontWeight: 700, fontSize: 20 }}>{capacitySummary.scheduled} h</div>
-            <div className="text-muted small">{capacitySummary.utilization}% utilization</div>
-          </div>
-          <div
-            style={{
-              flex: '1 1 220px',
-              border: `1px solid ${themeVars.border}`,
-              borderRadius: 12,
-              padding: 16,
-              background: themeVars.card as string,
-              boxShadow: '0 2px 6px rgba(0,0,0,0.06)'
-            }}
-          >
-            <div className="text-muted small">Free capacity</div>
-            <div style={{ fontWeight: 700, fontSize: 20 }}>{capacitySummary.free} h</div>
-            <div className="text-muted small">Weekly planner minutes: {capacitySummary.weeklyPlannerMinutes}</div>
-          </div>
-        </div>
-      )}
-      {scope !== 'sprint' && !loading && (
-        <div className="text-muted small mb-3">
-          Capacity cards are available in Sprint scope. Progress and KPI status are currently shown for {scopeLabel}.
-        </div>
+      {/* Focus Goals Widget */}
+      <FocusGoalsWidget
+        focusGoals={focusGoals}
+        goals={goals}
+        loading={focusGoalsLoading}
+        onManualRefresh={handleManualFocusGoalsRefresh}
+        refreshing={focusGoalsRefreshing}
+      />
+
+      {/* Two widgets side by side */}
+      {loading ? (
+        <div className="text-muted">Loading…</div>
+      ) : (
+        <Row className="g-3 mb-4">
+          <Col md={6}>
+            <ThemeProgressWidget
+              title={`Sprint: ${selectedSprint?.name || 'No sprint selected'}`}
+              rows={sprintThemeRows}
+              lowProgressAlert={lowProgressGoals}
+              expanded={sprintExpanded}
+              onToggle={(key) => setSprintExpanded((prev) => ({ ...prev, [key]: !prev[key] }))}
+              formatSavings={formatSavings}
+              emptyMessage={selectedSprintId ? 'No sprint-linked goals, stories, or tasks are mapped to themes for the selected sprint.' : 'Select a sprint to see sprint progress.'}
+              overallPct={sprintOverallPct}
+              overallBreakdown={sprintOverallBreakdown}
+            />
+          </Col>
+          <Col md={6}>
+            <ThemeProgressWidget
+              title="Overall progress"
+              rows={overallThemeRows}
+              expanded={overallExpanded}
+              onToggle={(key) => setOverallExpanded((prev) => ({ ...prev, [key]: !prev[key] }))}
+              formatSavings={formatSavings}
+              emptyMessage="No goals or stories found."
+              overallPct={overallOverallPct}
+              overallBreakdown={overallOverallBreakdown}
+            />
+          </Col>
+        </Row>
       )}
 
-      {!loading && (
-        <div className="d-flex flex-wrap gap-3 mb-4">
-          <div
-            role="button"
-            onClick={scrollToThemes}
-            title={overallBreakdown || 'No progress metrics yet'}
-            style={{
-              flex: '1 1 220px',
-              border: `1px solid ${themeVars.border}`,
-              borderRadius: 12,
-              padding: 16,
-              background: themeVars.card as string,
-              boxShadow: '0 2px 6px rgba(0,0,0,0.06)',
-              cursor: 'pointer'
-            }}
-          >
-            <div className="text-muted small">Overall progress</div>
-            <div style={{ fontWeight: 700, fontSize: 20 }}>
-              {overallStats.overallPct}%
-            </div>
-            <div className="text-muted small">{scopeLabel} breakdown</div>
-          </div>
-          <div
-            style={{
-              flex: '1 1 220px',
-              border: `1px solid ${themeVars.border}`,
-              borderRadius: 12,
-              padding: 16,
-              background: themeVars.card as string,
-              boxShadow: '0 2px 6px rgba(0,0,0,0.06)'
-            }}
-          >
-            <div className="text-muted small">Overall story points</div>
-            <div style={{ fontWeight: 700, fontSize: 20 }}>
-              {overallStats.donePoints}/{overallStats.totalPoints} pts
-            </div>
-            <div className="text-muted small">{overallStats.pointsPct}% complete</div>
-          </div>
-          <div
-            style={{
-              flex: '1 1 220px',
-              border: `1px solid ${themeVars.border}`,
-              borderRadius: 12,
-              padding: 16,
-              background: themeVars.card as string,
-              boxShadow: '0 2px 6px rgba(0,0,0,0.06)'
-            }}
-          >
-            <div className="text-muted small">Overall stories</div>
-            <div style={{ fontWeight: 700, fontSize: 20 }}>
-              {overallStats.doneStories}/{overallStats.totalStories}
-            </div>
-            <div className="text-muted small">{overallStats.storyPct}% complete</div>
-          </div>
-          <div
-            style={{
-              flex: '1 1 220px',
-              border: `1px solid ${themeVars.border}`,
-              borderRadius: 12,
-              padding: 16,
-              background: themeVars.card as string,
-              boxShadow: '0 2px 6px rgba(0,0,0,0.06)'
-            }}
-          >
-            <div className="text-muted small">Overall goals</div>
-            <div style={{ fontWeight: 700, fontSize: 20 }}>
-              {overallStats.doneGoals}/{overallStats.totalGoals}
-            </div>
-            <div className="text-muted small">{overallStats.goalPct}% complete</div>
-          </div>
-          <div
-            style={{
-              flex: '1 1 220px',
-              border: `1px solid ${themeVars.border}`,
-              borderRadius: 12,
-              padding: 16,
-              background: themeVars.card as string,
-              boxShadow: '0 2px 6px rgba(0,0,0,0.06)'
-            }}
-          >
-            <div className="text-muted small">Overall savings</div>
-            <div style={{ fontWeight: 700, fontSize: 20 }}>
-              {overallStats.savingsTotal > 0
-                ? `${formatMoney(overallStats.savingsSaved)} / ${formatMoney(overallStats.savingsTotal)}`
-                : 'No savings targets'}
-            </div>
-            <div className="text-muted small">
-              {overallStats.savingsTotal > 0
-                ? `${overallStats.savingsPct}% funded`
-                : 'Link goals to pots to track'}
-            </div>
-          </div>
-        </div>
-      )}
-
+      {/* Goal KPI Status (bottom) */}
       {!loading && (
         <div
           style={{
@@ -737,13 +897,35 @@ const ThemeProgressDashboard: React.FC = () => {
             borderRadius: 12,
             padding: 16,
             background: themeVars.card as string,
-            marginBottom: 16,
-            boxShadow: '0 2px 6px rgba(0,0,0,0.06)'
+            boxShadow: '0 2px 6px rgba(0,0,0,0.06)',
           }}
         >
           <div className="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
             <strong>Goal KPI Status</strong>
-            <span className="text-muted small">Scope: {scopeLabel}</span>
+            <div className="d-flex align-items-center gap-2">
+              <span className="text-muted small">Scope:</span>
+              <div style={{ display: 'inline-flex', border: `1px solid ${themeVars.border}`, borderRadius: 999, overflow: 'hidden' }}>
+                {([{ key: 'sprint', label: 'Sprint' }, { key: 'year', label: 'Year' }, { key: 'goal', label: 'Goal' }] as const).map((opt) => (
+                  <button
+                    key={opt.key}
+                    type="button"
+                    onClick={() => setKpiScope(opt.key)}
+                    style={{
+                      border: 'none',
+                      padding: '4px 10px',
+                      background: kpiScope === opt.key ? (themeVars.card as string) : 'transparent',
+                      color: kpiScope === opt.key ? (themeVars.text as string) : (themeVars.muted as string),
+                      fontSize: 12,
+                      fontWeight: kpiScope === opt.key ? 700 : 500,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+              <span className="text-muted small">{kpiScopeLabel}</span>
+            </div>
           </div>
           {goalKpiRows.length === 0 ? (
             <div className="text-muted small">No goals found for this scope.</div>
@@ -760,11 +942,7 @@ const ThemeProgressDashboard: React.FC = () => {
               </thead>
               <tbody>
                 {goalKpiRows.map((row) => {
-                  const statusColor = row.statusTone === 'success'
-                    ? '#059669'
-                    : row.statusTone === 'danger'
-                    ? '#dc2626'
-                    : '#6b7280';
+                  const statusColor = row.statusTone === 'success' ? '#059669' : row.statusTone === 'danger' ? '#dc2626' : '#6b7280';
                   const progressLabel = row.progressPct != null
                     ? `${Math.round(row.progressPct)}%${row.expectedProgressPct != null ? ` (exp ${Math.round(row.expectedProgressPct)}%)` : ''}`
                     : 'n/a';
@@ -781,135 +959,6 @@ const ThemeProgressDashboard: React.FC = () => {
               </tbody>
             </table>
           )}
-        </div>
-      )}
-
-      {loading && (
-        <div className="text-muted">Loading themes…</div>
-      )}
-
-      {!loading && themeRows.length === 0 && (
-        <div className="text-muted">No stories or goals found for this scope.</div>
-      )}
-
-      {!loading && (
-        <div id="theme-progress-list">
-          {themeRows.map((row) => {
-        const themeKey = row.theme.label || row.theme.name;
-        const pointsPct = row.pointsTotal > 0 ? Math.round((row.pointsDone / row.pointsTotal) * 100) : 0;
-        const storyPct = row.storiesTotal > 0 ? Math.round((row.storiesDone / row.storiesTotal) * 100) : 0;
-        const goalPct = row.goalsTotal > 0 ? Math.round((row.goalsDone / row.goalsTotal) * 100) : 0;
-        const savingsPct = row.savingsTotal > 0 ? Math.round((row.savingsSaved / row.savingsTotal) * 100) : 0;
-        const isOpen = !!expanded[themeKey];
-        return (
-          <div
-            key={themeKey}
-            style={{
-              border: `1px solid ${themeVars.border}`,
-              borderRadius: 12,
-              padding: 16,
-              background: themeVars.card as string,
-              marginBottom: 16,
-              boxShadow: '0 2px 6px rgba(0,0,0,0.06)'
-            }}
-          >
-            <div className="d-flex align-items-center justify-content-between">
-              <div className="d-flex align-items-center gap-2">
-                <span
-                  style={{
-                    width: 10,
-                    height: 10,
-                    borderRadius: 999,
-                    background: row.theme.color,
-                    display: 'inline-block'
-                  }}
-                />
-                <strong>{row.theme.label}</strong>
-              </div>
-              <button
-                type="button"
-                onClick={() => toggleTheme(themeKey)}
-                style={{
-                  border: 'none',
-                  background: 'transparent',
-                  color: themeVars.muted as string,
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  cursor: 'pointer'
-                }}
-              >
-                {isOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                <span style={{ fontSize: 12 }}>{isOpen ? 'Hide' : 'Details'}</span>
-              </button>
-            </div>
-
-            <div className="d-flex flex-wrap gap-3 mt-3">
-              <div>
-                <div className="text-muted small">Goals</div>
-                <div style={{ fontWeight: 600 }}>{row.goalsDone}/{row.goalsTotal} ({goalPct}%)</div>
-              </div>
-              <div>
-                <div className="text-muted small">Stories</div>
-                <div style={{ fontWeight: 600 }}>{row.storiesDone}/{row.storiesTotal} ({storyPct}%)</div>
-              </div>
-              <div>
-                <div className="text-muted small">Story points</div>
-                <div style={{ fontWeight: 600 }}>{row.pointsDone}/{row.pointsTotal} ({pointsPct}%)</div>
-              </div>
-              {(row.savingsTotal > 0 || row.savingsSaved > 0) && (
-                <div>
-                  <div className="text-muted small">Savings</div>
-                  <div style={{ fontWeight: 600 }}>
-                    {formatMoney(row.savingsSaved)} / {formatMoney(row.savingsTotal)} ({savingsPct}%)
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div style={{ height: 6, background: 'rgba(0,0,0,0.08)', borderRadius: 999, overflow: 'hidden', marginTop: 10 }}>
-              <div style={{ width: `${pointsPct}%`, height: '100%', background: row.theme.color }} />
-            </div>
-
-            {isOpen && (
-              <div style={{ marginTop: 16 }}>
-                {scope !== 'sprint' ? (
-                  <div className="text-muted small">Switch to Sprint scope to view sprint capacity details for this theme.</div>
-                ) : upcomingSprints.length === 0 ? (
-                  <div className="text-muted small">No upcoming sprints with capacity configured.</div>
-                ) : (
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                    <thead>
-                      <tr style={{ textAlign: 'left', color: themeVars.muted as string }}>
-                        <th style={{ padding: '6px 8px' }}>Sprint</th>
-                        <th style={{ padding: '6px 8px' }}>Theme points</th>
-                        <th style={{ padding: '6px 8px' }}>Sprint capacity</th>
-                        <th style={{ padding: '6px 8px' }}>Free capacity</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {upcomingSprints.map((sprint) => {
-                        const themePoints = row.pointsBySprint[sprint.id] || 0;
-                        const cap = sprintCapacity.get(sprint.id) || 0;
-                        const used = sprintTotals.get(sprint.id) || 0;
-                        const free = cap - used;
-                        return (
-                          <tr key={sprint.id} style={{ borderTop: `1px solid ${themeVars.border}` }}>
-                            <td style={{ padding: '6px 8px', fontWeight: 600 }}>{sprint.name || sprint.id}</td>
-                            <td style={{ padding: '6px 8px' }}>{themePoints} pts</td>
-                            <td style={{ padding: '6px 8px' }}>{cap} pts</td>
-                            <td style={{ padding: '6px 8px', color: free < 0 ? '#dc2626' : '#059669' }}>{free} pts</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                )}
-              </div>
-            )}
-          </div>
-        );
-          })}
         </div>
       )}
     </Container>

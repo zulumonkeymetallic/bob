@@ -13,6 +13,14 @@ interface ProfileData {
   googleCalendarEventCount?: number;
   defaultJournalDocUrl?: string;
   journalEditorPrompt?: string;
+  aiPersonality?: {
+    intelligence?: number;
+    humour?: number;
+    sarcasm?: number;
+    directness?: number;
+    warmth?: number;
+    verbosity?: number;
+  };
   monzoConnected?: boolean;
   monzoLastSyncAt?: any;
   stravaConnected?: boolean;
@@ -83,6 +91,10 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
   const [showCalendarManager, setShowCalendarManager] = useState(false);
   const [defaultJournalDocUrl, setDefaultJournalDocUrl] = useState('');
   const [journalEditorPrompt, setJournalEditorPrompt] = useState('');
+    const defaultPersonality = { intelligence: 5, humour: 5, sarcasm: 5, directness: 7, warmth: 5, verbosity: 5 };
+    const [aiPersonality, setAiPersonality] = useState({ ...defaultPersonality });
+    const [personalityMessage, setPersonalityMessage] = useState<string | null>(null);
+    const [personalitySaving, setPersonalitySaving] = useState(false);
   const [googleDocMessage, setGoogleDocMessage] = useState<string | null>(null);
   const [googleDocsStatus, setGoogleDocsStatus] = useState<any | null>(null);
   const [googleDocsTesting, setGoogleDocsTesting] = useState(false);
@@ -159,6 +171,9 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
       setProfile(data || null);
       setDefaultJournalDocUrl(data?.defaultJournalDocUrl || '');
       setJournalEditorPrompt(data?.journalEditorPrompt || '');
+            if (data?.aiPersonality) {
+              setAiPersonality({ ...defaultPersonality, ...data.aiPersonality });
+            }
       if (data?.steamId) setSteamIdInput(data.steamId);
       if (data?.traktUser) setTraktUserInput(data.traktUser);
       if ((data as any)?.hardcoverToken) setHardcoverTokenInput((data as any).hardcoverToken);
@@ -752,6 +767,79 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
           </Button>
         </div>
       </div>
+
+      <Card>
+        <Card.Header>
+          <h4 className="mb-0">AI Personality</h4>
+          <small className="text-muted">Personalise the tone and style of AI responses across transcripts, daily digest, and all AI features</small>
+        </Card.Header>
+        <Card.Body>
+          {personalityMessage && (
+            <Alert variant={personalityMessage.startsWith('Saved') ? 'success' : 'danger'} dismissible onClose={() => setPersonalityMessage(null)}>
+              {personalityMessage}
+            </Alert>
+          )}
+          <Row className="g-4">
+            {([
+              { key: 'intelligence', label: 'Intelligence', low: 'Plain language', high: 'Expert vocabulary' },
+              { key: 'humour', label: 'Humour', low: 'None', high: 'Witty' },
+              { key: 'sarcasm', label: 'Sarcasm', low: 'None', high: 'Dry & sarcastic' },
+              { key: 'directness', label: 'Directness', low: 'Explanatory', high: 'Blunt' },
+              { key: 'warmth', label: 'Warmth', low: 'Neutral', high: 'Warm & encouraging' },
+              { key: 'verbosity', label: 'Verbosity', low: 'Terse', high: 'Detailed' },
+            ] as const).map(({ key, label, low, high }) => (
+              <Col key={key} md={6}>
+                <Form.Label className="d-flex justify-content-between mb-1">
+                  <span>{label}</span>
+                  <Badge bg="secondary">{aiPersonality[key]}</Badge>
+                </Form.Label>
+                <Form.Range
+                  min={0}
+                  max={10}
+                  step={1}
+                  value={aiPersonality[key]}
+                  onChange={(e) => setAiPersonality((prev) => ({ ...prev, [key]: Number(e.target.value) }))}
+                />
+                <div className="d-flex justify-content-between">
+                  <small className="text-muted">{low}</small>
+                  <small className="text-muted">{high}</small>
+                </div>
+              </Col>
+            ))}
+          </Row>
+          <div className="d-flex gap-2 mt-4 align-items-center">
+            <Button
+              variant="outline-primary"
+              disabled={personalitySaving}
+              onClick={async () => {
+                try {
+                  setPersonalitySaving(true);
+                  setPersonalityMessage(null);
+                  await updateProfile({ aiPersonality });
+                  setPersonalityMessage('Saved. AI responses will reflect your style on the next generation.');
+                } catch (err: any) {
+                  setPersonalityMessage(err?.message || 'Failed to save personality settings.');
+                } finally {
+                  setPersonalitySaving(false);
+                }
+              }}
+            >
+              {personalitySaving ? <><Spinner size="sm" animation="border" className="me-1" />Saving…</> : 'Save Personality'}
+            </Button>
+            <Button
+              variant="link"
+              size="sm"
+              onClick={() => setAiPersonality({ ...defaultPersonality })}
+            >
+              Reset to defaults
+            </Button>
+          </div>
+          <Form.Text className="text-muted d-block mt-2">
+            These settings feed into every AI prompt — transcripts, daily digest, task enrichment, stories, and more. Values at 5 are neutral and produce no change.
+          </Form.Text>
+        </Card.Body>
+      </Card>
+
       {show('google') && (
       <Card>
         <Card.Header className="d-flex justify-content-between align-items-center">
@@ -783,7 +871,6 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
               </Button>
             </Col>
           </Row>
-
           {googleEvents.length > 0 && (
             <Table size="sm" responsive className="mb-3">
               <thead>

@@ -15,6 +15,7 @@ import { resolveThemeFromValue } from '../utils/themeResolver';
 import { useAuth } from '../contexts/AuthContext';
 import { addDoc, collection, serverTimestamp, updateDoc, doc, getDocs, query, where } from 'firebase/firestore';
 import { ActivityStreamService } from '../services/ActivityStreamService';
+import DeferItemModal from './DeferItemModal';
 
 interface KanbanCardV2Props {
     item: Story | Task;
@@ -37,6 +38,7 @@ interface KanbanCardV2Props {
         start: number;
         end: number;
         title?: string;
+        sourceNote?: string;
     };
     steamMeta?: {
         appId?: string | number;
@@ -73,6 +75,7 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
     const [flaggingPriority, setFlaggingPriority] = useState(false);
     const [showPriorityReplanPrompt, setShowPriorityReplanPrompt] = useState(false);
     const [priorityReplanLoading, setPriorityReplanLoading] = useState(false);
+    const [showDeferModal, setShowDeferModal] = useState(false);
 
     useEffect(() => {
         const el = ref.current;
@@ -292,14 +295,17 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
         const start = new Date(scheduledBlock.start);
         const end = new Date(scheduledBlock.end);
         if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return null;
+        const note = String(scheduledBlock?.sourceNote || '').toLowerCase();
+        const prefix = note.includes('matched user created') ? 'Matched' : 'Planned';
         const dayLabel = start.toLocaleDateString('en-GB', {
             weekday: 'short',
             day: 'numeric',
             month: 'short',
         });
         const timeLabel = `${start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}-${end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
-        return `Planned ${dayLabel} ${timeLabel}`;
+        return `${prefix} ${dayLabel} ${timeLabel}`;
     })();
+    const scheduledBlockSourceNote = scheduledBlock?.sourceNote || null;
 
     const handleStyle: React.CSSProperties = {
         color: resolvedThemeColor,
@@ -606,6 +612,20 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                                 <CalendarClock size={12} />
                             </Button>
                         )}
+                        <Button
+                            variant="link"
+                            size="sm"
+                            className="p-0"
+                            style={{ width: 24, height: 24, color: themeVars.muted }}
+                            title="Defer intelligently"
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                setShowDeferModal(true);
+                            }}
+                            onPointerDown={(e) => e.stopPropagation()}
+                        >
+                            <CalendarClock size={12} />
+                        </Button>
 
                         {onEdit && (
                             <Button
@@ -803,6 +823,11 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                         </span>
                     ) : null}
                 </div>
+                {scheduledBlockLabel && scheduledBlockSourceNote && (
+                    <div className="kanban-card__meta-text">
+                        {scheduledBlockSourceNote}
+                    </div>
+                )}
 
                 <div className="kanban-card__goal">
                     {type === 'story' ? (
@@ -863,6 +888,35 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                 </Button>
             </Modal.Footer>
         </Modal>
+        <DeferItemModal
+            show={showDeferModal}
+            onHide={() => setShowDeferModal(false)}
+            itemType={type}
+            itemId={item.id}
+            itemTitle={item.title || ''}
+            onApply={async ({ dateMs, rationale, source }) => {
+                if (type === 'story') {
+                    await applyQuickPatch({
+                        targetDate: dateMs,
+                        deferredUntil: dateMs,
+                        deferredReason: rationale,
+                        deferredBy: source,
+                    });
+                    setDueInputValue(toDateInputValue(dateMs));
+                } else {
+                    await applyQuickPatch({
+                        dueDate: dateMs,
+                        deferredUntil: dateMs,
+                        deferredReason: rationale,
+                        deferredBy: source,
+                    });
+                    setDueInputValue(toDateInputValue(dateMs));
+                }
+                setActionMessage('Deferred with capacity-aware date');
+                setTimeout(() => setActionMessage(null), 2500);
+                setShowDeferModal(false);
+            }}
+        />
         </>
     );
 };

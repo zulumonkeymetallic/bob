@@ -1,6 +1,47 @@
 BOB App — Agents Guide
 
-Purpose
+## Multi-Repo Build Orchestration
+
+**CRITICAL FOR AGENTS:** BOB is organized across THREE repos. Use the `build` command to coordinate deployment:
+
+```bash
+# From any repo, deploy everything
+./build all
+
+# Deploy only web UI
+./build web
+
+# Deploy only iOS app
+./build ios
+
+# Deploy only Mac sync service
+./build mac
+
+# Preview without deploying
+./build all --dry-run
+
+# Set custom version
+./build web --version 4.5.2
+```
+
+**Repository Mapping:**
+- `/Users/jim/GitHub/bob/` - Web UI (React), Cloud Functions, master orchestrator
+- `/Users/jim/GitHub/bob-ios/` - iOS app (SwiftUI for Mac Catalyst)
+- `/Users/jim/GitHub/bob-mac-sync/` - Mac sync service (Rust or Swift native)
+
+**Build Output:**
+After build completes, check `/Users/jim/GitHub/bob/build-logs/manifest.json` for:
+```json
+{
+  "versions": {"web": "4.5.0", "ios": "4.5.0", "mac": "4.5.0"},
+  "commits": {"web": "abc1234", "ios": "def5678", "mac": "ghi9012"},
+  "durations": {"web": "45s", "ios": "120s", "mac": "60s"}
+}
+```
+
+**See Also:** `BUILD_ORCHESTRATION_GUIDE.md` for detailed commands and troubleshooting.
+
+---
 - Make it fast for agents and testers to validate Firestore access, sprint loading, and performance locally and in prod.
 
 Environments

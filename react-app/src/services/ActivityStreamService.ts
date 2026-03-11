@@ -7,6 +7,7 @@ import {
   onSnapshot,
   serverTimestamp,
   Timestamp,
+  getDocs,
   limit as fslimit
 } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -27,7 +28,10 @@ export type ActivityType =
   | 'transcript_ingestion'
   | 'automation_event'
   | 'automation_alert'
-  | 'automation_activity';
+  | 'automation_activity'
+  | 'auto_linked'
+  | 'link_suggested'
+  | 'link_accepted';
 
 export interface ActivityEntry {
   id?: string;
@@ -78,6 +82,81 @@ export class ActivityStreamService {
       console.error('Error adding activity:', error);
       throw error;
     }
+  }
+
+  // Fetch latest note comments for a set of entities.
+  static async getLatestNotesForEntities(
+    userId: string,
+    entities: Array<{ entityId: string; entityType?: 'task' | 'story' | 'goal' }>
+  ): Promise<Map<string, { noteContent: string; timestampMs: number | null }>> {
+    const result = new Map<string, { noteContent: string; timestampMs: number | null }>();
+    if (!userId || !Array.isArray(entities) || entities.length === 0) return result;
+
+    const uniqueIds = Array.from(new Set(entities.map((e) => String(e?.entityId || '').trim()).filter(Boolean)));
+    if (uniqueIds.length === 0) return result;
+
+    const batches: string[][] = [];
+    for (let i = 0; i < uniqueIds.length; i += 10) {
+      batches.push(uniqueIds.slice(i, i + 10));
+    }
+
+    const toMillis = (ts: any): number | null => {
+      if (!ts) return null;
+      if (typeof ts?.toMillis === 'function') return ts.toMillis();
+      if (typeof ts === 'number' && Number.isFinite(ts)) return ts;
+      if (typeof ts?.toDate === 'function') {
+        const d = ts.toDate();
+        return d instanceof Date ? d.getTime() : null;
+      }
+      return null;
+    };
+
+    const upsertLatest = (docData: any) => {
+      const entityId = String(docData?.entityId || '').trim();
+      if (!entityId) return;
+      const noteContent = String(docData?.noteContent || '').trim();
+      if (!noteContent) return;
+      const timestampMs = toMillis(docData?.timestamp);
+      const prev = result.get(entityId);
+      if (!prev || (timestampMs || 0) > (prev.timestampMs || 0)) {
+        result.set(entityId, { noteContent, timestampMs });
+      }
+    };
+
+    for (const batch of batches) {
+      try {
+        const q = query(
+          collection(db, 'activity_stream'),
+          where('ownerUid', '==', userId),
+          where('activityType', '==', 'note_added'),
+          where('entityId', 'in', batch),
+          orderBy('timestamp', 'desc'),
+          fslimit(200)
+        );
+        const snap = await getDocs(q);
+        snap.docs.forEach((docSnap) => upsertLatest(docSnap.data() as any));
+      } catch (error) {
+        // Fallback path if composite index is unavailable: per-entity lookups.
+        for (const entityId of batch) {
+          try {
+            const qEntity = query(
+              collection(db, 'activity_stream'),
+              where('ownerUid', '==', userId),
+              where('activityType', '==', 'note_added'),
+              where('entityId', '==', entityId),
+              orderBy('timestamp', 'desc'),
+              fslimit(1)
+            );
+            const snapEntity = await getDocs(qEntity);
+            if (!snapEntity.empty) upsertLatest(snapEntity.docs[0].data() as any);
+          } catch {
+            // Ignore entity-level failures so the UI can still render.
+          }
+        }
+      }
+    }
+
+    return result;
   }
 
   // Log field changes with source tracking

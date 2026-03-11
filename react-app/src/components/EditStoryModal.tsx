@@ -48,6 +48,9 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
     points: '' as string | number,
     acceptanceCriteria: '',
     sprintId: '' as string | '',
+    dueDate: '' as string,
+    dueTime: '' as string,
+    timeOfDay: '' as 'morning' | 'afternoon' | 'evening' | '',
     blocked: false as boolean,
     tags: [] as string[],
     persona: (currentPersona || 'personal') as 'personal' | 'work',
@@ -127,6 +130,9 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
           ? story.acceptanceCriteria.join('\n')
           : story.acceptanceCriteria || '',
         sprintId: (story as any).sprintId || '',
+        dueDate: (story as any).dueDate ? new Date((story as any).dueDate).toISOString().slice(0, 10) : '',
+        dueTime: (story as any).dueTime || '',
+        timeOfDay: (story as any).timeOfDay || '',
         blocked: Boolean((story as any).blocked),
         tags: (story as any).tags || [],
         persona: ((story as any).persona || currentPersona || 'personal') as 'personal' | 'work',
@@ -224,6 +230,9 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
         blocked: !!editedStory.blocked,
         points: normalizedStoryPoints,
         sprintId: editedStory.sprintId || null,
+        dueDate: editedStory.dueDate ? new Date(`${editedStory.dueDate}T00:00:00`).getTime() : null,
+        dueTime: editedStory.dueTime || null,
+        timeOfDay: editedStory.timeOfDay || null,
         persona: editedStory.persona || currentPersona || 'personal',
         acceptanceCriteria: editedStory.acceptanceCriteria.trim()
           ? editedStory.acceptanceCriteria.split('\n').map(line => line.trim()).filter(line => line.length > 0)
@@ -282,10 +291,23 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
   };
 
   const handleInputChange = (field: string, value: any) => {
-    setEditedStory(prev => ({
-      ...prev,
-      [field]: value
-    }));
+    setEditedStory(prev => {
+      if (field === 'sprintId' && value) {
+        const sprint = sprints.find((s) => s.id === value);
+        const sprintStart = sprint?.startDate ?? (sprint as any)?.start ?? null;
+        if (sprintStart) {
+          const snapMs = typeof sprintStart === 'number' ? sprintStart
+            : typeof sprintStart === 'string' ? Date.parse(sprintStart)
+            : (sprintStart as any)?.seconds ? (sprintStart as any).seconds * 1000
+            : null;
+          if (snapMs) {
+            const snapDate = new Date(snapMs).toISOString().slice(0, 10);
+            return { ...prev, sprintId: value, dueDate: snapDate };
+          }
+        }
+      }
+      return { ...prev, [field]: value };
+    });
   };
 
   const handleGenerateTasks = async () => {
@@ -483,16 +505,57 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
                 {/* Theme removed: stories inherit from linked goal */}
               </Row>
 
-              <Form.Group className="mb-3">
-                <Form.Label>Description</Form.Label>
-                <Form.Control
-                  as="textarea"
-                  rows={3}
-                  value={editedStory.description}
-                  onChange={(e) => handleInputChange('description', e.target.value)}
-                  placeholder="Enter story description"
-                />
-              </Form.Group>
+              <Row>
+                <Col md={12}>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Description</Form.Label>
+                    <Form.Control
+                      as="textarea"
+                      rows={3}
+                      value={editedStory.description}
+                      onChange={(e) => handleInputChange('description', e.target.value)}
+                      placeholder="Enter story description"
+                    />
+                  </Form.Group>
+                </Col>
+              </Row>
+
+              <Row>
+                <Col md={4}>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Due Date</Form.Label>
+                    <Form.Control
+                      type="date"
+                      value={editedStory.dueDate}
+                      onChange={(e) => handleInputChange('dueDate', e.target.value)}
+                    />
+                  </Form.Group>
+                </Col>
+                <Col md={4}>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Due Time</Form.Label>
+                    <Form.Control
+                      type="time"
+                      value={editedStory.dueTime}
+                      onChange={(e) => handleInputChange('dueTime', e.target.value)}
+                    />
+                  </Form.Group>
+                </Col>
+                <Col md={4}>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Time of Day</Form.Label>
+                    <Form.Select
+                      value={editedStory.timeOfDay}
+                      onChange={(e) => handleInputChange('timeOfDay', e.target.value as any)}
+                    >
+                      <option value="">Auto/None</option>
+                      <option value="morning">Morning</option>
+                      <option value="afternoon">Afternoon</option>
+                      <option value="evening">Evening</option>
+                    </Form.Select>
+                  </Form.Group>
+                </Col>
+              </Row>
 
               <Form.Group className="mb-3">
                 <Form.Label>Source URL</Form.Label>

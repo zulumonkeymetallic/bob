@@ -21,8 +21,15 @@ service cloud.firestore {
         exists(/databases/$(database)/documents/goals/$(goalId)) &&
         get(/databases/$(database)/documents/goals/$(goalId)).data.ownerUid == request.auth.uid;
     }
+    function isPublishedGoal() {
+      return resource.data.isPublished == true && resource.data.shareCode != null;
+    }
 
-    match /goals/{id}     { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /goals/{id} {
+      allow create: if isOwnerForCreate();
+      allow read: if isOwner() || isPublishedGoal();
+      allow update, delete: if isOwner();
+    }
     match /okrs/{id}      { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     // Allow updates when either the existing or incoming doc asserts ownership
     match /tasks/{id} {
@@ -95,6 +102,7 @@ service cloud.firestore {
       );
     }
     match /digests/{id}   { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /focusGoals/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /metrics_hrv/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /metrics_workouts/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /metrics_nutrition/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }

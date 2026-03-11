@@ -5,6 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { Task, Story, Goal, IHabit, IHabitEntry } from '../types';
 import { Container, Card, Button, Badge, ProgressBar, Alert } from 'react-bootstrap';
 import { isStatus, isTheme, isPriority } from '../utils/statusHelpers';
+import DeferItemModal from './DeferItemModal';
 
 const MobileView: React.FC = () => {
     const { currentUser } = useAuth();
@@ -14,6 +15,7 @@ const MobileView: React.FC = () => {
     const [habits, setHabits] = useState<IHabit[]>([]);
     const [habitEntries, setHabitEntries] = useState<IHabitEntry[]>([]);
     const [loading, setLoading] = useState(true);
+    const [deferTask, setDeferTask] = useState<Task | null>(null);
 
     const themeColors = {
         'Health': '#22c55e',
@@ -118,20 +120,6 @@ const MobileView: React.FC = () => {
             });
         } catch (error) {
             console.error('Error completing task:', error);
-        }
-    };
-
-    const handleTaskDefer = async (taskId: string) => {
-        try {
-            const tomorrow = new Date();
-            tomorrow.setDate(tomorrow.getDate() + 1);
-            
-            await updateDoc(doc(db, 'tasks', taskId), {
-                dueDate: tomorrow.getTime(),
-                updatedAt: serverTimestamp()
-            });
-        } catch (error) {
-            console.error('Error deferring task:', error);
         }
     };
 
@@ -293,7 +281,7 @@ const MobileView: React.FC = () => {
                                         <Button 
                                             variant="outline-secondary" 
                                             size="sm"
-                                            onClick={() => handleTaskDefer(task.id)}
+                                            onClick={() => setDeferTask(task)}
                                         >
                                             Defer
                                         </Button>
@@ -332,6 +320,24 @@ const MobileView: React.FC = () => {
                     </div>
                 </Card.Body>
             </Card>
+            <DeferItemModal
+                show={Boolean(deferTask)}
+                onHide={() => setDeferTask(null)}
+                itemType="task"
+                itemId={deferTask?.id || ''}
+                itemTitle={deferTask?.title || ''}
+                onApply={async ({ dateMs, rationale, source }) => {
+                    if (!deferTask) return;
+                    await updateDoc(doc(db, 'tasks', deferTask.id), {
+                        dueDate: dateMs,
+                        deferredUntil: dateMs,
+                        deferredReason: rationale,
+                        deferredBy: source,
+                        updatedAt: serverTimestamp(),
+                    });
+                    setDeferTask(null);
+                }}
+            />
         </Container>
     );
 };

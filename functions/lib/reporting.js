@@ -414,6 +414,8 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
     goalsAllSnap,
     sprintsSnap,
     monzoTxSnap,
+    focusGoalsSnap,
+    capacityWarningSnap,
   ] = await Promise.all([
     db.collection('tasks').where('ownerUid', '==', userId).get(),
     db.collection('stories').where('ownerUid', '==', userId).get(),
@@ -438,6 +440,17 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
       .limit(400)
       .get()
       .catch(() => ({ docs: [] })),
+    db.collection('focusGoals')
+      .where('ownerUid', '==', userId)
+      .where('isActive', '==', true)
+      .get()
+      .catch(() => ({ docs: [] })),
+    db.collection('users')
+      .doc(userId)
+      .collection('planner_alerts')
+      .doc('capacity-warning')
+      .get()
+      .catch(() => ({ exists: false, data: () => null })),
   ]);
 
   const taskDocs = toList(tasksSnap);
@@ -452,6 +465,7 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
   const sprints = toList(sprintsSnap);
   const monzoTransactions = toList(monzoTxSnap);
   const financeDaily = monzoTransactions.length ? buildFinanceSummary(monzoTransactions) : null;
+  const activeFocusGoals = toList(focusGoalsSnap);
 
   const resolveActiveSprint = (sprintList) => {
     if (!Array.isArray(sprintList) || !sprintList.length) return null;
@@ -1262,6 +1276,168 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
 
   const budgetProgress = monzo?.totals && monzo?.budgetProgress ? monzo.budgetProgress : null;
 
+  let financeAlerts = [];
+  if (monzo?.budgetProgress) {
+    const overBudget = monzo.budgetProgress.filter(b => b.variance < 0).map(b => `${b.key}: Over by £${Math.abs(b.variance).toFixed(2)}`);
+    if (overBudget.length > 0) {
+      financeAlerts.push(...overBudget);
+    }
+  }
+  if (monzo?.goalAlignment?.themes) {
+    const themeShortfalls = monzo.goalAlignment.themes.filter(t => t.totalShortfall > 0).map(t => `${t.themeName}: Shortfall £${t.totalShortfall.toFixed(2)}`);
+    if (themeShortfalls.length > 0) {
+      financeAlerts.push(...themeShortfalls);
+    }
+  }
+
+  const nowLocal = DateTime.now().setZone(zone);
+  const monthElapsedPct = Math.round((nowLocal.day / nowLocal.daysInMonth) * 100);
+
+  const dashboardAlerts = [];
+
+  const discretionarySpend = Number(monzo?.totals?.optional || monzo?.totals?.discretionary || 0) || 0;
+  const mandatorySpend = Number(monzo?.totals?.mandatory || 0) || 0;
+  const totalTrackedSpend = discretionarySpend + mandatorySpend;
+  const discretionarySharePct = totalTrackedSpend > 0
+    ? Math.round((discretionarySpend / totalTrackedSpend) * 100)
+    : null;
+
+  if (discretionarySharePct != null && discretionarySharePct > 50 && monthElapsedPct < 50) {
+    dashboardAlerts.push({
+      type: 'budget_guardrail',
+      severity: 'warning',
+      title: 'Budget guardrail: discretionary spend is ahead of month progress',
+      message: `Discretionary spend is ${discretionarySharePct}% with ${monthElapsedPct}% of the month elapsed.`,
+      ctaPath: buildAbsoluteUrl('/finance'),
+    });
+  }
+
+  if (Array.isArray(financeAlerts) && financeAlerts.length) {
+    dashboardAlerts.push({
+      type: 'budget_overages',
+      severity: 'warning',
+      title: 'Budget overages detected',
+      message: financeAlerts.slice(0, 3).join(' | '),
+      ctaPath: buildAbsoluteUrl('/finance'),
+    });
+  }
+
+  const capacityWarning = capacityWarningSnap?.exists ? capacityWarningSnap.data() : null;
+  const todayIso = isoDate(nowLocal);
+  if (capacityWarning && String(capacityWarning.date || '') === todayIso) {
+    const utilizationPercent = Number(capacityWarning.utilizationPercent || 0) || 0;
+    const shortfall = Number(capacityWarning.shortfall || 0) || 0;
+    dashboardAlerts.push({
+      type: 'capacity',
+      severity: utilizationPercent > 100 ? 'critical' : 'warning',
+      title: utilizationPercent > 100 ? 'Capacity overbooked today' : 'Capacity warning today',
+      message: utilizationPercent > 100
+        ? `${shortfall.toFixed(1)} points over capacity (${utilizationPercent}% utilization).`
+        : `${utilizationPercent}% utilization for today.`,
+      ctaPath: buildAbsoluteUrl('/planner'),
+    });
+  }
+
+  activeFocusGoals.forEach((focusGoal) => {
+    const goalIds = Array.isArray(focusGoal.goalIds) ? focusGoal.goalIds : [];
+    const linkedGoals = goalIds
+      .map((goalId) => goalLookup.get(goalId))
+      .filter(Boolean);
+    const completedGoals = linkedGoals.filter((goal) => Number(goal.status) === 2).length;
+    const progressPct = linkedGoals.length ? Math.round((completedGoals / linkedGoals.length) * 100) : 0;
+
+    const endDt = toDateTime(focusGoal.endDate, { zone, defaultValue: null });
+    const daysRemaining = endDt
+      ? Math.max(0, Math.ceil(endDt.diff(nowLocal, 'days').days))
+      : Number(focusGoal.daysRemaining || 0);
+
+    const severity = daysRemaining <= 3 && progressPct < 60
+      ? 'critical'
+      : daysRemaining <= 7 && progressPct < 70
+        ? 'warning'
+        : 'info';
+
+    dashboardAlerts.push({
+      type: 'focus_goal',
+      severity,
+      title: `Focus goal countdown (${String(focusGoal.timeframe || 'active')})`,
+      message: `${daysRemaining} days left, ${completedGoals}/${linkedGoals.length || goalIds.length || 0} goals complete (${progressPct}%).`,
+      ctaPath: buildAbsoluteUrl('/focus-goals'),
+    });
+  });
+
+  const savingsRunway = (() => {
+    const alignmentGoals = Array.isArray(monzo?.goalAlignment?.goals)
+      ? monzo.goalAlignment.goals
+      : [];
+    const avgMonthlySavingsGlobal = Number(monzo?.goalAlignment?.goalFundingPlan?.avgMonthlySavings || 0) || 0;
+    const syncDate = monzoLastSyncDt;
+    const staleDays = syncDate ? Math.floor(nowLocal.diff(syncDate, 'days').days) : null;
+    const isStale = staleDays == null ? true : staleDays >= 7;
+
+    const rows = alignmentGoals
+      .map((goal) => {
+        const linkedPotId = goal?.potId || null;
+        const linkedPotName = goal?.potName || null;
+        if (!linkedPotId && !linkedPotName) return null;
+
+        const targetAmount = Number(goal?.estimatedCost || 0) || 0;
+        const linkedPotBalance = Number(goal?.potBalance || 0) || 0;
+        const remainingAmount = Math.max(targetAmount - linkedPotBalance, 0);
+
+        const avgMonthlyAllocation = Number(
+          goal?.avgMonthlyAllocation3mo
+          || goal?.avgMonthlyAllocation
+          || goal?.monthlyAllocation3mo
+          || 0,
+        ) || null;
+        const fallbackMonthly = avgMonthlyAllocation && avgMonthlyAllocation > 0
+          ? avgMonthlyAllocation
+          : (avgMonthlySavingsGlobal > 0 ? avgMonthlySavingsGlobal : null);
+
+        let monthsToTarget = null;
+        if (remainingAmount <= 0) {
+          monthsToTarget = 0;
+        } else if (fallbackMonthly && fallbackMonthly > 0) {
+          monthsToTarget = Math.ceil(remainingAmount / fallbackMonthly);
+        } else if (Number.isFinite(Number(goal?.monthsToSave))) {
+          monthsToTarget = Number(goal.monthsToSave);
+        }
+
+        return {
+          goalId: goal?.goalId || null,
+          goalTitle: goal?.title || 'Goal',
+          themeName: goal?.themeName || 'General',
+          targetAmount,
+          linkedPotBalance,
+          avgMonthlyAllocation: fallbackMonthly,
+          hasHistory: !!(avgMonthlyAllocation && avgMonthlyAllocation > 0),
+          remainingAmount,
+          monthsToTarget,
+          linkedPotName,
+          linkedPotId,
+          shortfall: Number(goal?.shortfall || remainingAmount || 0) || 0,
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => {
+        const aMonths = Number.isFinite(Number(a.monthsToTarget)) ? Number(a.monthsToTarget) : Number.MAX_SAFE_INTEGER;
+        const bMonths = Number.isFinite(Number(b.monthsToTarget)) ? Number(b.monthsToTarget) : Number.MAX_SAFE_INTEGER;
+        if (aMonths !== bMonths) return aMonths - bMonths;
+        return (Number(b.shortfall || 0) || 0) - (Number(a.shortfall || 0) || 0);
+      });
+
+    return {
+      currency: monzo?.currency || 'GBP',
+      updatedAt: monzoLastSyncAt || null,
+      updatedDisplay: monzoLastSyncDisplay || null,
+      isStale,
+      staleDays,
+      rows,
+      topRows: rows.slice(0, 5),
+    };
+  })();
+
   const budgetSummary = (() => {
     if (!budgetProgress || !budgetProgress.length) return null;
     const totalBudget = budgetProgress.reduce((sum, entry) => sum + (Number(entry.budget) || 0), 0);
@@ -1277,20 +1453,6 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
       currency: monzo?.currency || 'GBP',
     };
   })();
-
-  let financeAlerts = [];
-  if (monzo?.budgetProgress) {
-    const overBudget = monzo.budgetProgress.filter(b => b.variance < 0).map(b => `${b.key}: Over by £${Math.abs(b.variance).toFixed(2)}`);
-    if (overBudget.length > 0) {
-      financeAlerts.push(...overBudget);
-    }
-  }
-  if (monzo?.goalAlignment?.themes) {
-    const themeShortfalls = monzo.goalAlignment.themes.filter(t => t.totalShortfall > 0).map(t => `${t.themeName}: Shortfall £${t.totalShortfall.toFixed(2)}`);
-    if (themeShortfalls.length > 0) {
-      financeAlerts.push(...themeShortfalls);
-    }
-  }
 
   const manualRerunCallable = 'sendDailySummaryNow';
 
@@ -1343,6 +1505,7 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
     monzo,
     financeDaily,
     financeAlerts,
+    dashboardAlerts,
     profile,
     schedulerChanges,
     goalProgress,
@@ -1350,6 +1513,7 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
     goalKpiStatus,
     budgetProgress,
     budgetSummary,
+    savingsRunway,
     kpis,
   };
 };
@@ -1547,8 +1711,58 @@ const buildDataQualitySnapshot = async (db, userId, { windowEnd, windowHours = 2
     });
   });
 
+  // Auto-pointing and time-of-day activity from nightly job
+  const autoPointActivities = activityByType.get('auto_point') || [];
+  const autoTimeOfDayActivities = activityByType.get('auto_time_of_day') || [];
+
+  const autoPointingRecords = [];
+  for (const activity of autoPointActivities) {
+    if (!withinWindow(activity.createdAt)) continue;
+    const metadata = activity.raw?.metadata || {};
+    const entityId = activity.raw?.entityId || null;
+    const entityType = activity.raw?.entityType || 'task';
+    autoPointingRecords.push({
+      entityId,
+      entityType,
+      points: metadata.points || null,
+      timeOfDay: metadata.timeOfDay || null,
+      source: metadata.source || 'llm',
+      title: activity.raw?.description || null,
+      createdAt: toDateTime(activity.createdAt, { defaultValue: null })?.toISO() || null,
+    });
+  }
+
+  const autoTimeOfDayRecords = [];
+  for (const activity of autoTimeOfDayActivities) {
+    if (!withinWindow(activity.createdAt)) continue;
+    const metadata = activity.raw?.metadata || {};
+    const entityId = activity.raw?.entityId || null;
+    const entityType = activity.raw?.entityType || 'task';
+    autoTimeOfDayRecords.push({
+      entityId,
+      entityType,
+      timeOfDay: metadata.timeOfDay || null,
+      title: activity.raw?.description || null,
+      createdAt: toDateTime(activity.createdAt, { defaultValue: null })?.toISO() || null,
+    });
+  }
+
   const storiesSnap = await db.collection('stories').where('ownerUid', '==', userId).get();
   const stories = toList(storiesSnap);
+
+  // Missing points
+  const missingPoints = stories
+    .filter((story) => !STORY_DONE_STATUSES.has(story.status))
+    .filter((story) => {
+      const pts = Number(story.points);
+      return !Number.isFinite(pts) || pts <= 0;
+    })
+    .map((story) => ({
+      id: story.id,
+      ref: ensureStoryReference(story),
+      title: story.title || 'Story',
+      deepLink: makeDeepLink('story', ensureStoryReference(story)),
+    }));
 
   const missingAcceptance = stories
     .filter((story) => !STORY_DONE_STATUSES.has(story.status))
@@ -1583,6 +1797,9 @@ const buildDataQualitySnapshot = async (db, userId, { windowEnd, windowHours = 2
     dedupes: dedupes.length,
     missingAcceptance: missingAcceptance.length,
     missingGoalLink: missingGoalLink.length,
+    missingPoints: missingPoints.length,
+    autoPointed: autoPointingRecords.length,
+    autoTimeOfDay: autoTimeOfDayRecords.length,
     errors: errorEntries.length,
   };
 
@@ -1596,6 +1813,9 @@ const buildDataQualitySnapshot = async (db, userId, { windowEnd, windowHours = 2
     dedupes,
     missingAcceptance,
     missingGoalLink,
+    missingPoints,
+    autoPointing: autoPointingRecords,
+    autoTimeOfDay: autoTimeOfDayRecords,
     errors: errorEntries,
     summaryStats,
   };

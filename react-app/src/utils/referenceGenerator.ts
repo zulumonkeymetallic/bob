@@ -1,9 +1,10 @@
 /**
  * Reference ID generator utility for BOB entities
- * Updated to use auto-generated format like GR-26LGIP instead of GOAL-001
+ * Format: {PREFIX}-{5-digit-number}
+ * Examples: ST-12345, TK-67890, GR-54321, SP-98765
  */
 
-export const generateRef = (type: 'story' | 'task' | 'sprint' | 'goal', existingRefs: string[]): string => {
+export const generateRef = (type: 'story' | 'task' | 'sprint' | 'goal', existingRefs?: string[]): string => {
     const prefixes = {
         story: 'ST',
         task: 'TK', 
@@ -13,21 +14,30 @@ export const generateRef = (type: 'story' | 'task' | 'sprint' | 'goal', existing
 
     const prefix = prefixes[type];
     
-    // Generate auto ID using timestamp and random characters
-    const timestamp = Date.now().toString(36).toUpperCase().slice(-4); // Last 4 chars of timestamp
-    const randomChars = Math.random().toString(36).toUpperCase().slice(2, 4); // 2 random chars
+    // Generate 5-digit numeric ID using timestamp modulo and random component for uniqueness
+    // This ensures we always get exactly 5 digits without leading zeros
+    const timestamp = Date.now() % 100000; // Last 5 digits of timestamp
+    const random = Math.floor(Math.random() * 100); // 0-99 for uniqueness
+    let numericId = (timestamp + random) % 100000; // Ensure 5 digits max
     
-    let autoRef = `${prefix}-${timestamp}${randomChars}`;
+    // Pad to ensure 5 digits
+    let refNum = String(numericId).padStart(5, '0');
+    if (refNum.length > 5) {
+        refNum = refNum.slice(-5);
+    }
+    
+    let ref = `${prefix}-${refNum}`;
     
     // Ensure uniqueness by checking against existing refs
     let counter = 0;
-    while (existingRefs.includes(autoRef) && counter < 10) {
-        const extraChar = Math.random().toString(36).toUpperCase().slice(2, 3);
-        autoRef = `${prefix}-${timestamp}${randomChars}${extraChar}`;
+    while (existingRefs?.includes(ref) && counter < 10) {
+        numericId = Math.floor(Math.random() * 100000);
+        refNum = String(numericId).padStart(5, '0');
+        ref = `${prefix}-${refNum}`;
         counter++;
     }
 
-    return autoRef;
+    return ref;
 };
 
 export const validateRef = (ref: string, type: 'story' | 'task' | 'sprint' | 'goal'): boolean => {
@@ -38,14 +48,14 @@ export const validateRef = (ref: string, type: 'story' | 'task' | 'sprint' | 'go
         goal: 'GR'
     };
 
-    // Updated pattern for auto-generated format
-    const pattern = new RegExp(`^${prefixes[type]}-[A-Z0-9]{4,8}$`);
+    // Pattern for format like ST-12345
+    const pattern = new RegExp(`^${prefixes[type]}-\\d{5}$`);
     return pattern.test(ref);
 };
 
 /**
  * Returns a consistent display reference used across UI and activity stream,
- * derived from the entity id. Example: story -> ST-ABC123
+ * derived from the entity id. Example: story -> ST-{first-5-digits-of-id}
  */
 export const displayRefForEntity = (
   type: 'story' | 'task' | 'sprint' | 'goal',
@@ -58,6 +68,17 @@ export const displayRefForEntity = (
     goal: 'GR'
   };
   const prefix = prefixes[type] || 'ID';
-  const short = (id || '').substring(0, 6).toUpperCase();
-  return `${prefix}-${short}`;
+  
+  // Generate deterministic numeric ID from entity ID using hash-like behavior
+  let hash = 0;
+  for (let i = 0; i < Math.min(id.length, 10); i++) {
+    hash = ((hash << 5) - hash) + id.charCodeAt(i);
+    hash = hash & hash; // Convert to 32bit integer
+  }
+  
+  // Convert to 5-digit positive number
+  const numericId = Math.abs(hash % 100000);
+  const refNum = String(numericId).padStart(5, '0');
+  
+  return `${prefix}-${refNum}`;
 };

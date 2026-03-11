@@ -158,7 +158,7 @@ async function processDigestForUser({ db, userId, userProfile, today, todayStr, 
     let aiInsights;
     try {
       aiInsights = await aiWrapper(async () => {
-        return await generateAIInsights(userData);
+        return await generateAIInsights(userData, userProfile?.aiPersonality || null);
       }, {
         functionName: 'generateDailyDigest',
         userId: userId,
@@ -456,7 +456,26 @@ async function gatherUserData(db, userId, today, userProfile = {}) {
 /**
  * Generate AI insights using Google AI Studio (Gemini)
  */
-async function generateAIInsights(userData) {
+async function generateAIInsights(userData, personality = null) {
+  // Build a dynamic tone line from the user's personality settings (same logic as callLLMJson).
+  function buildToneLine(p) {
+    if (!p || typeof p !== 'object') return 'Tone: concise, directive, specific. No generic wellness tips.';
+    const { intelligence = 5, humour = 5, sarcasm = 5, directness = 7, warmth = 5, verbosity = 5 } = p;
+    const tones = ['specific'];
+    if (directness >= 8) tones.push('blunt');
+    else if (directness >= 6) tones.push('direct');
+    else tones.push('explanatory');
+    if (verbosity <= 3) tones.push('terse');
+    else if (verbosity >= 8) tones.push('detailed');
+    else tones.push('concise');
+    if (intelligence >= 8) tones.push('technically precise');
+    if (humour >= 7) tones.push('lightly witty');
+    if (sarcasm >= 7) tones.push('dry and sarcastic');
+    if (warmth >= 8) tones.push('warm and encouraging');
+    else if (warmth <= 2) tones.push('neutral and professional');
+    return `Tone: ${tones.join(', ')}. No generic wellness tips.`;
+  }
+  const toneLine = buildToneLine(personality);
   const prompt = `You are an executive productivity assistant for "blueprint.organize.build". Produce a sharp, specific daily briefing that names the exact tasks/stories and calendar blocks the user should act on today.
 
   CONTEXT DATA (structured):
@@ -498,7 +517,7 @@ async function generateAIInsights(userData) {
      Include due date and AI score when present.
   3) Schedule call-out: Mention how today’s calendar blocks support those priorities (or highlight a gap/conflict to resolve today).
   4) Heads up: one short risk/warning (overdue, crowded calendar, or missing blocks).
-  Tone: concise, directive, specific. No generic wellness tips.`;
+  ${toneLine}`;
 
   const apiKey = process.env.GOOGLEAISTUDIOAPIKEY;
   if (!apiKey) {
@@ -598,6 +617,78 @@ async function createDigestHTML(userData, aiInsights) {
     `;
   };
 
+  // NEW: Daily Plan table showing today's scheduled items
+  const renderDailyPlanTable = (tasks, stories, blocks) => {
+    if (!tasks?.length && !stories?.length && !blocks?.length) return '';
+    
+    const entries = [];
+    
+    // Add calendar blocks
+    if (blocks && blocks.length > 0) {
+      blocks.forEach(b => {
+        entries.push({
+          time: b.startTime || b.start || '—',
+          title: b.title,
+          type: 'block',
+          meta: 'Calendar',
+          link: null
+        });
+      });
+    }
+    
+    // Add tasks due today
+    if (tasks && tasks.length > 0) {
+      tasks.forEach(t => {
+        const hour = t.dueTime ? t.dueTime.split(':')[0] : '—';
+        entries.push({
+          time: hour !== '—' ? t.dueTime : 'Due today',
+          title: t.title || t.ref || t.id,
+          type: 'task',
+          meta: `AI ${t.aiCriticalityScore ?? 0} · P${t.priority ?? 0}`,
+          link: `https://bob.jc1.tech/tasks/${t.id}`
+        });
+      });
+    }
+    
+    // Add stories due today
+    if (stories && stories.length > 0) {
+      stories.forEach(s => {
+        entries.push({
+          time: '—',
+          title: s.title,
+          type: 'story',
+          meta: `AI ${s.aiCriticalityScore ?? 0} · Status ${s.status ?? 0}`,
+          link: `https://bob.jc1.tech/stories/${s.id}`
+        });
+      });
+    }
+    
+    // Sort by time (earliest first)
+    entries.sort((a, b) => {
+      const aTime = a.time === '—' ? '23:59' : a.time;
+      const bTime = b.time === '—' ? '23:59' : b.time;
+      return aTime.localeCompare(bTime);
+    });
+    
+    if (entries.length === 0) return '';
+    
+    return `
+      <div class="section-title">Daily Plan (Today's Schedule)</div>
+      <div style="border-collapse: collapse; width: 100%; font-size: 12px;">
+        ${entries.map((entry, idx) => `
+          <div style="display: flex; border-bottom: ${idx === entries.length - 1 ? 'none' : '1px solid #f3f4f6'}; padding: 10px 12px; align-items: flex-start;">
+            <div style="width: 60px; flex-shrink: 0; font-weight: 600; color: #374151; font-size: 11px;">${entry.time}</div>
+            <div style="flex: 1; min-width: 0;">
+              <div style="font-weight: 500; color: #111827; word-break: break-word;">${entry.title}</div>
+              <div style="font-size: 11px; color: #6b7280; margin-top: 2px;">${entry.type === 'task' ? '📋 ' : entry.type === 'story' ? '🚩 ' : '📅 '}${entry.meta}</div>
+              ${entry.link ? `<div style="font-size: 10px; margin-top: 4px;"><a href="${entry.link}" style="color: #2563eb; text-decoration: none;">View →</a></div>` : ''}
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    `;
+  };
+
   return `
 <!DOCTYPE html>
 <html>
@@ -654,6 +745,8 @@ async function createDigestHTML(userData, aiInsights) {
             ${renderTopList(userData.topTasksWork, 'Work · Tasks', 'task')}
             ${renderTopList(userData.topStoriesWork, 'Work · Stories', 'story')}
             ` : ''}
+
+            ${renderDailyPlanTable(userData.tasksDueToday, userData.stories, userData.calendarBlocks)}
 
             ${userData.stories.length > 0 ? `
             <div class="section-title">Active Stories</div>

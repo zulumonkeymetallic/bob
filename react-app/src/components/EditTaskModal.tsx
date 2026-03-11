@@ -4,6 +4,7 @@ import { Modal, Button, Form, Row, Col } from 'react-bootstrap';
 import { doc, updateDoc, serverTimestamp, collection, query, where, orderBy, limit, onSnapshot, addDoc, deleteDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { useNavigate } from 'react-router-dom';
+import { useSidebar } from '../contexts/SidebarContext';
 import { db, functions } from '../firebase';
 import { useSprint } from '../contexts/SprintContext';
 import { Task, Sprint, Story, Goal } from '../types';
@@ -30,6 +31,14 @@ interface EditTaskModalProps {
 
 const TASK_TYPE_OPTIONS = ['task', 'read', 'watch', 'chore', 'routine', 'habit'] as const;
 const RECURRING_TASK_TYPES = new Set(['chore', 'routine', 'habit']);
+const normalizeTaskType = (value: any): 'task' | 'chore' | 'routine' | 'habit' | 'read' | 'watch' => {
+  const raw = String(value || 'task').trim().toLowerCase();
+  const normalized = raw === 'habitual' ? 'habit' : raw;
+  if (TASK_TYPE_OPTIONS.includes(normalized as any)) {
+    return normalized as 'task' | 'chore' | 'routine' | 'habit' | 'read' | 'watch';
+  }
+  return 'task';
+};
 
 const normalizeTaskStatus = (status: any) => {
   if (typeof status === 'number') return status;
@@ -70,6 +79,7 @@ const formatSprintLabel = (sprint: Sprint, statusOverride?: string) => {
 
 const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpdated, container }) => {
   const navigate = useNavigate();
+  const { showSidebar } = useSidebar();
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const { sprints } = useSprint();
@@ -85,6 +95,8 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
     sprintId: '' as string,
     points: TASK_DEFAULT_POINTS as string | number,
     dueDate: '' as string,
+    dueTime: '' as string,
+    timeOfDay: '' as 'morning' | 'afternoon' | 'evening' | '',
     storyId: '' as string,
     goalId: '' as string,
     tags: [] as string[],
@@ -167,6 +179,8 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
         sprintId: '',
         points: TASK_DEFAULT_POINTS,
         dueDate: '',
+        dueTime: '',
+        timeOfDay: '',
         storyId: '',
         goalId: '',
         tags: [],
@@ -199,10 +213,12 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
       sprintId: (task as any).sprintId || '',
       points: parsePointsValue((task as any).points) ?? TASK_DEFAULT_POINTS,
       dueDate: resolveDue((task as any).dueDate || (task as any).dueDateMs || (task as any).targetDate),
+      dueTime: task.dueTime || '',
+      timeOfDay: task.timeOfDay || '',
       storyId: linkedStoryId,
       goalId: (task as any).goalId || linkedStory?.goalId || '',
       tags: Array.isArray((task as any).tags) ? (task as any).tags : [],
-      type: ((task as any).type || 'task') as 'task' | 'chore' | 'routine' | 'habit' | 'read' | 'watch',
+      type: normalizeTaskType((task as any).type),
       repeatFrequency: ((task as any).repeatFrequency || '') as '' | 'daily' | 'weekly' | 'monthly' | 'yearly',
       repeatInterval: Number((task as any).repeatInterval || 1) || 1,
       daysOfWeek: Array.isArray((task as any).daysOfWeek) ? (task as any).daysOfWeek : [],
@@ -257,7 +273,8 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
       return;
     }
     try {
-      const isRecurringType = RECURRING_TASK_TYPES.has(form.type);
+      const normalizedTaskType = normalizeTaskType(form.type);
+      const isRecurringType = RECURRING_TASK_TYPES.has(normalizedTaskType);
       const normalizedFrequency = isRecurringType ? (form.repeatFrequency || null) : null;
       const normalizedInterval = isRecurringType ? Math.max(1, Number(form.repeatInterval) || 1) : null;
       const normalizedDays = isRecurringType && form.repeatFrequency === 'weekly'
@@ -283,12 +300,14 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
         points: parsePointsValue(form.points) ?? TASK_DEFAULT_POINTS,
         sprintId: nextSprintId,
         dueDate: dueDateMs,
+        dueTime: form.dueTime || null,
+        timeOfDay: form.timeOfDay || null,
         storyId: form.storyId || null,
         parentType: form.storyId ? 'story' : null,
         parentId: form.storyId || null,
         goalId: form.goalId || null,
         tags: Array.isArray(form.tags) ? form.tags.map((tag) => tag.trim()).filter(Boolean) : [],
-        type: form.type || 'task',
+        type: normalizedTaskType,
         repeatFrequency: normalizedFrequency,
         repeatInterval: normalizedInterval,
         daysOfWeek: normalizedDays,
@@ -450,308 +469,349 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
       </Modal.Header>
       <Modal.Body>
         <Row className="g-3">
-            <Col lg={8}>
-              <Form>
-                <Form.Group className="mb-3">
-                  <Form.Label>Title</Form.Label>
-                  <Form.Control
-                    type="text"
-                    value={form.title}
-                    onChange={(e) => setForm({ ...form, title: e.target.value })}
-                  />
-                </Form.Group>
-                <Form.Group className="mb-3">
-                  <Form.Label>Description</Form.Label>
-                  <Form.Control
-                    as="textarea"
-                    rows={3}
-                    value={form.description}
-                    onChange={(e) => setForm({ ...form, description: e.target.value })}
-                  />
-                </Form.Group>
-                <Form.Group className="mb-3">
-                  <Form.Label>Source URL</Form.Label>
-                  <Form.Control
-                    type="url"
-                    value={form.url}
-                    onChange={(e) => setForm({ ...form, url: e.target.value })}
-                    placeholder="https://..."
-                  />
-                </Form.Group>
-                <Form.Group className="mb-3">
-                  <Form.Label>Tags</Form.Label>
-                  <TagInput
-                    value={form.tags}
-                    onChange={(tags) => setForm({ ...form, tags })}
-                    placeholder="Add tags..."
-                    formatTag={(tag) => formatTaskTagLabel(tag, goals, sprints)}
-                  />
-                </Form.Group>
-                <Form.Group className="mb-3">
-                  <Form.Label>Task type</Form.Label>
-                  <Form.Select
-                    value={form.type}
-                    onChange={(e) => setForm({ ...form, type: e.target.value as 'task' | 'chore' | 'routine' | 'habit' | 'read' | 'watch' })}
-                  >
-                    {TASK_TYPE_OPTIONS.map((option) => (
-                      <option key={option} value={option}>
-                        {option.charAt(0).toUpperCase() + option.slice(1)}
-                      </option>
-                    ))}
-                  </Form.Select>
-                </Form.Group>
-                {RECURRING_TASK_TYPES.has(form.type) && (
-                  <div className="mb-3">
-                    <Row className="g-3 align-items-end">
-                      <Col md={4}>
-                        <Form.Label>Frequency</Form.Label>
-                        <Form.Select
-                          value={form.repeatFrequency || ''}
-                          onChange={(e) => setForm({ ...form, repeatFrequency: e.target.value as any })}
-                        >
-                          <option value="">None</option>
-                          <option value="daily">Daily</option>
-                          <option value="weekly">Weekly</option>
-                          <option value="monthly">Monthly</option>
-                          <option value="yearly">Yearly</option>
-                        </Form.Select>
-                      </Col>
-                      <Col md={4}>
-                        <Form.Label>Interval</Form.Label>
-                        <Form.Control
-                          type="number"
-                          min={1}
-                          max={365}
-                          value={form.repeatInterval || 1}
-                          onChange={(e) => setForm({ ...form, repeatInterval: Number(e.target.value) || 1 })}
-                        />
-                      </Col>
-                    </Row>
-                    {form.repeatFrequency === 'weekly' && (
-                      <div className="mt-2">
-                        <Form.Label>Days of week</Form.Label>
-                        <div className="d-flex flex-wrap gap-3">
-                          {[
-                            { label: 'Mon', value: 'mon' },
-                            { label: 'Tue', value: 'tue' },
-                            { label: 'Wed', value: 'wed' },
-                            { label: 'Thu', value: 'thu' },
-                            { label: 'Fri', value: 'fri' },
-                            { label: 'Sat', value: 'sat' },
-                            { label: 'Sun', value: 'sun' },
-                          ].map((day) => (
-                            <Form.Check
-                              key={day.value}
-                              inline
-                              type="checkbox"
-                              id={`task-${day.value}`}
-                              label={day.label}
-                              checked={form.daysOfWeek.includes(day.value)}
-                              onChange={(e) => {
-                                const exists = form.daysOfWeek.includes(day.value);
-                                const next = exists
-                                  ? form.daysOfWeek.filter((d) => d !== day.value)
-                                  : [...form.daysOfWeek, day.value];
-                                setForm({ ...form, daysOfWeek: next });
-                              }}
-                            />
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-                <Form.Group className="mb-3">
-                  <Form.Label>Persona</Form.Label>
-                  <Form.Select
-                    value={form.persona}
-                    onChange={(e) => setForm({ ...form, persona: e.target.value as 'personal' | 'work' })}
-                  >
-                    <option value="personal">Personal</option>
-                    <option value="work">Work</option>
-                  </Form.Select>
-                </Form.Group>
-                <Row>
-                  <Col md={4}>
-                    <Form.Group className="mb-3">
-                      <Form.Label>Status</Form.Label>
+          <Col lg={8}>
+            <Form>
+              <Form.Group className="mb-3">
+                <Form.Label>Title</Form.Label>
+                <Form.Control
+                  type="text"
+                  value={form.title}
+                  onChange={(e) => setForm({ ...form, title: e.target.value })}
+                />
+              </Form.Group>
+              <Form.Group className="mb-3">
+                <Form.Label>Description</Form.Label>
+                <Form.Control
+                  as="textarea"
+                  rows={3}
+                  value={form.description}
+                  onChange={(e) => setForm({ ...form, description: e.target.value })}
+                />
+              </Form.Group>
+              <Form.Group className="mb-3">
+                <Form.Label>Source URL</Form.Label>
+                <Form.Control
+                  type="url"
+                  value={form.url}
+                  onChange={(e) => setForm({ ...form, url: e.target.value })}
+                  placeholder="https://..."
+                />
+              </Form.Group>
+              <Form.Group className="mb-3">
+                <Form.Label>Tags</Form.Label>
+                <TagInput
+                  value={form.tags}
+                  onChange={(tags) => setForm({ ...form, tags })}
+                  placeholder="Add tags..."
+                  formatTag={(tag) => formatTaskTagLabel(tag, goals, sprints)}
+                />
+              </Form.Group>
+              <Form.Group className="mb-3">
+                <Form.Label>Task type</Form.Label>
+                <Form.Select
+                  value={form.type}
+                  onChange={(e) => setForm({ ...form, type: normalizeTaskType(e.target.value) })}
+                >
+                  {TASK_TYPE_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      {option.charAt(0).toUpperCase() + option.slice(1)}
+                    </option>
+                  ))}
+                </Form.Select>
+              </Form.Group>
+              {RECURRING_TASK_TYPES.has(form.type) && (
+                <div className="mb-3">
+                  <Row className="g-3 align-items-end">
+                    <Col md={4}>
+                      <Form.Label>Frequency</Form.Label>
                       <Form.Select
-                        value={String(form.status)}
-                        onChange={(e) => setForm({ ...form, status: Number(e.target.value) })}
+                        value={form.repeatFrequency || ''}
+                        onChange={(e) => setForm({ ...form, repeatFrequency: e.target.value as any })}
                       >
-                        <option value={0}>Backlog</option>
-                        <option value={1}>In Progress</option>
-                        <option value={2}>Done</option>
-                        <option value={3}>Blocked</option>
+                        <option value="">None</option>
+                        <option value="daily">Daily</option>
+                        <option value="weekly">Weekly</option>
+                        <option value="monthly">Monthly</option>
+                        <option value="yearly">Yearly</option>
                       </Form.Select>
-                    </Form.Group>
-                  </Col>
-                  <Col md={4}>
-                    <Form.Group className="mb-3">
-                      <Form.Label>Priority</Form.Label>
-                      <Form.Select
-                        value={String(form.priority)}
-                        onChange={(e) => setForm({ ...form, priority: Number(e.target.value) })}
-                      >
-                        <option value={4}>Critical</option>
-                        <option value={3}>High</option>
-                        <option value={2}>Medium</option>
-                        <option value={1}>Low</option>
-                      </Form.Select>
-                    </Form.Group>
-                  </Col>
-                  <Col md={4}>
-                    <Form.Group className="mb-3">
-                      <Form.Label>Sprint</Form.Label>
-                      <Form.Select
-                        value={form.sprintId || ''}
-                        onChange={(e) => setForm({ ...form, sprintId: e.target.value })}
-                      >
-                        <option value="">Backlog (No Sprint)</option>
-                        {selectedSprint && isHiddenSprint(selectedSprint) && (
-                          <option key={selectedSprint.id} value={selectedSprint.id} disabled>
-                            {formatSprintLabel(selectedSprint, selectedSprintStatus || 'Inactive')}
-                          </option>
-                        )}
-                        {visibleSprints.map((sprint) => (
-                          <option key={sprint.id} value={sprint.id}>
-                            {formatSprintLabel(sprint)}
-                          </option>
-                        ))}
-                      </Form.Select>
-                    </Form.Group>
-                  </Col>
-                </Row>
-                <Row>
-                  <Col md={4}>
-                    <Form.Group className="mb-3">
-                      <Form.Label>Due date</Form.Label>
-                      <Form.Control
-                        type="date"
-                        value={form.dueDate}
-                        onChange={(e) => setForm({ ...form, dueDate: e.target.value })}
-                      />
-                    </Form.Group>
-                  </Col>
-                  <Col md={4}>
-                    <Form.Group className="mb-3">
-                      <Form.Label>Points</Form.Label>
+                    </Col>
+                    <Col md={4}>
+                      <Form.Label>Interval</Form.Label>
                       <Form.Control
                         type="number"
-                        min={0}
-                        step="0.25"
-                        inputMode="decimal"
-                        value={form.points ?? ''}
-                        onChange={(e) => setForm({
-                          ...form,
-                          points: e.target.value,
-                        })}
+                        min={1}
+                        max={365}
+                        value={form.repeatInterval || 1}
+                        onChange={(e) => setForm({ ...form, repeatInterval: Number(e.target.value) || 1 })}
                       />
-                    </Form.Group>
-                  </Col>
-                  <Col md={4}>
-                    <Form.Group className="mb-3">
-                      <Form.Label>Link to goal</Form.Label>
-                      <Form.Control
-                        list="task-goal-options"
-                        placeholder="Search goal by title..."
-                        value={goalInput}
-                        onChange={(e) => {
-                          setGoalInput(e.target.value);
-                        }}
-                        onBlur={(e) => resolveGoalSelection(e.target.value)}
-                      />
-                      <datalist id="task-goal-options">
-                        {goals.map((g) => (
-                          <option key={g.id} value={goalLabel(g)} />
+                    </Col>
+                  </Row>
+                  {form.repeatFrequency === 'weekly' && (
+                    <div className="mt-2">
+                      <Form.Label>Days of week</Form.Label>
+                      <div className="d-flex flex-wrap gap-3">
+                        {[
+                          { label: 'Mon', value: 'mon' },
+                          { label: 'Tue', value: 'tue' },
+                          { label: 'Wed', value: 'wed' },
+                          { label: 'Thu', value: 'thu' },
+                          { label: 'Fri', value: 'fri' },
+                          { label: 'Sat', value: 'sat' },
+                          { label: 'Sun', value: 'sun' },
+                        ].map((day) => (
+                          <Form.Check
+                            key={day.value}
+                            inline
+                            type="checkbox"
+                            id={`task-${day.value}`}
+                            label={day.label}
+                            checked={form.daysOfWeek.includes(day.value)}
+                            onChange={(e) => {
+                              const exists = form.daysOfWeek.includes(day.value);
+                              const next = exists
+                                ? form.daysOfWeek.filter((d) => d !== day.value)
+                                : [...form.daysOfWeek, day.value];
+                              setForm({ ...form, daysOfWeek: next });
+                            }}
+                          />
                         ))}
-                      </datalist>
-                      {linkedGoalId ? (
-                        <div className="form-text">
-                          <Button
-                            size="sm"
-                            variant="link"
-                            className="p-0"
-                            onClick={() => navigate(`/goals/${(linkedGoal as any)?.ref || linkedGoalId}`)}
-                          >
-                            View linked goal
-                          </Button>
-                        </div>
-                      ) : null}
-                      {RECURRING_TASK_TYPES.has(form.type) && (
-                        <div className="form-text">Linking a goal is recommended for better planner/theme placement.</div>
-                      )}
-                    </Form.Group>
-                  </Col>
-                </Row>
-                <Row>
-                  <Col md={12}>
-                    <Form.Group className="mb-3">
-                      <Form.Label>Link to story</Form.Label>
-                      <Form.Control
-                        list="task-story-options"
-                        placeholder="Search story by title..."
-                        value={storyInput}
-                        onChange={(e) => {
-                          setStoryInput(e.target.value);
-                        }}
-                        onBlur={(e) => resolveStorySelection(e.target.value)}
-                      />
-                      <datalist id="task-story-options">
-                        {stories.map((s) => (
-                          <option key={s.id} value={storyLabel(s)} />
-                        ))}
-                      </datalist>
-                      {linkedStory ? (
-                        <div className="form-text">
-                          <Button
-                            size="sm"
-                            variant="link"
-                            className="p-0"
-                            onClick={() => navigate(`/stories/${(linkedStory as any).ref || linkedStory.id}`)}
-                          >
-                            View linked story
-                          </Button>
-                        </div>
-                      ) : null}
-                      <div className="form-text">
-                        Selecting a story will also inherit its goal and sprint when available.
                       </div>
-                    </Form.Group>
-                  </Col>
-                </Row>
-                {task && (task as Task).aiCriticalityScore != null && (
-                  <div className="mb-3">
-                    <strong>AI Score:</strong>{' '}
-                    {Number.isFinite(Number((task as Task).aiCriticalityScore))
-                      ? Math.round(Number((task as Task).aiCriticalityScore))
-                      : (task as Task).aiCriticalityScore}
-                    {(() => {
-                      const t = task as Task;
-                      const top3Reason = (t as any).aiTop3ForDay ? (t as any).aiTop3Reason : null;
-                      const reason = top3Reason || (t as any).aiCriticalityReason || null;
-                      return reason ? <div className="small text-muted">{reason}</div> : null;
-                    })()}
-                  </div>
-                )}
-                {showMacSync && (
-                  <div className="mb-3">
-                    <strong>Last Mac sync:</strong>{' '}
-                    {macSyncedAtMs ? format(new Date(macSyncedAtMs), 'MMM d, yyyy • HH:mm') : '—'}
-                  </div>
-                )}
-              </Form>
+                    </div>
+                  )}
+                </div>
+              )}
+              <Form.Group className="mb-3">
+                <Form.Label>Persona</Form.Label>
+                <Form.Select
+                  value={form.persona}
+                  onChange={(e) => setForm({ ...form, persona: e.target.value as 'personal' | 'work' })}
+                >
+                  <option value="personal">Personal</option>
+                  <option value="work">Work</option>
+                </Form.Select>
+              </Form.Group>
+              <Row>
+                <Col md={4}>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Status</Form.Label>
+                    <Form.Select
+                      value={String(form.status)}
+                      onChange={(e) => setForm({ ...form, status: Number(e.target.value) })}
+                    >
+                      <option value={0}>Backlog</option>
+                      <option value={1}>In Progress</option>
+                      <option value={2}>Done</option>
+                      <option value={3}>Blocked</option>
+                    </Form.Select>
+                  </Form.Group>
+                </Col>
+                <Col md={4}>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Priority</Form.Label>
+                    <Form.Select
+                      value={String(form.priority)}
+                      onChange={(e) => setForm({ ...form, priority: Number(e.target.value) })}
+                    >
+                      <option value={4}>Critical</option>
+                      <option value={3}>High</option>
+                      <option value={2}>Medium</option>
+                      <option value={1}>Low</option>
+                    </Form.Select>
+                  </Form.Group>
+                </Col>
+                <Col md={4}>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Sprint</Form.Label>
+                    <Form.Select
+                      value={form.sprintId || ''}
+                      onChange={(e) => {
+                        const newSprintId = e.target.value;
+                        const sprint = sprints.find((s) => s.id === newSprintId);
+                        const sprintStart = sprint?.startDate ?? (sprint as any)?.start ?? null;
+                        let snapDate = form.dueDate;
+                        if (newSprintId && sprintStart) {
+                          const snapMs = typeof sprintStart === 'number' ? sprintStart
+                            : typeof sprintStart === 'string' ? Date.parse(sprintStart)
+                            : (sprintStart as any)?.seconds ? (sprintStart as any).seconds * 1000
+                            : null;
+                          if (snapMs) snapDate = new Date(snapMs).toISOString().slice(0, 10);
+                        }
+                        setForm({ ...form, sprintId: newSprintId, dueDate: snapDate });
+                      }}
+                    >
+                      <option value="">Backlog (No Sprint)</option>
+                      {selectedSprint && isHiddenSprint(selectedSprint) && (
+                        <option key={selectedSprint.id} value={selectedSprint.id} disabled>
+                          {formatSprintLabel(selectedSprint, selectedSprintStatus || 'Inactive')}
+                        </option>
+                      )}
+                      {visibleSprints.map((sprint) => (
+                        <option key={sprint.id} value={sprint.id}>
+                          {formatSprintLabel(sprint)}
+                        </option>
+                      ))}
+                    </Form.Select>
+                  </Form.Group>
+                </Col>
+              </Row>
+              <Row>
+                <Col md={3}>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Due date</Form.Label>
+                    <Form.Control
+                      type="date"
+                      value={form.dueDate}
+                      onChange={(e) => setForm({ ...form, dueDate: e.target.value })}
+                    />
+                  </Form.Group>
+                </Col>
+                <Col md={3}>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Due time</Form.Label>
+                    <Form.Control
+                      type="time"
+                      value={form.dueTime}
+                      onChange={(e) => setForm({ ...form, dueTime: e.target.value })}
+                    />
+                  </Form.Group>
+                </Col>
+                <Col md={3}>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Time of Day</Form.Label>
+                    <Form.Select
+                      value={form.timeOfDay}
+                      onChange={(e) => setForm({ ...form, timeOfDay: e.target.value as any as any })}
+                    >
+                      <option value="">Auto/None</option>
+                      <option value="morning">Morning</option>
+                      <option value="afternoon">Afternoon</option>
+                      <option value="evening">Evening</option>
+                    </Form.Select>
+                  </Form.Group>
+                </Col>
+                <Col md={3}>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Points</Form.Label>
+                    <Form.Control
+                      type="number"
+                      min={0}
+                      max={13}
+                      step="any"
+                      inputMode="decimal"
+                      placeholder="e.g. 0.5"
+                      value={form.points ?? ''}
+                      onChange={(e) => setForm({
+                        ...form,
+                        points: e.target.value,
+                      })}
+                    />
+                  </Form.Group>
+                </Col>
+              </Row>
+              <Row>
+                <Col md={12}>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Link to goal</Form.Label>
+                    <Form.Control
+                      list="task-goal-options"
+                      placeholder="Search goal by title..."
+                      value={goalInput}
+                      onChange={(e) => {
+                        setGoalInput(e.target.value);
+                      }}
+                      onBlur={(e) => resolveGoalSelection(e.target.value)}
+                    />
+                    <datalist id="task-goal-options">
+                      {goals.map((g) => (
+                        <option key={g.id} value={goalLabel(g)} />
+                      ))}
+                    </datalist>
+                    {linkedGoalId ? (
+                      <div className="form-text">
+                        <Button
+                          size="sm"
+                          variant="link"
+                          className="p-0"
+                          onClick={() => navigate(`/goals/${(linkedGoal as any)?.ref || linkedGoalId}`)}
+                        >
+                          View linked goal
+                        </Button>
+                      </div>
+                    ) : null}
+                    {RECURRING_TASK_TYPES.has(form.type) && (
+                      <div className="form-text">Linking a goal is recommended for better planner/theme placement.</div>
+                    )}
+                  </Form.Group>
+                </Col>
+              </Row>
+              <Row>
+                <Col md={12}>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Link to story</Form.Label>
+                    <Form.Control
+                      list="task-story-options"
+                      placeholder="Search story by title..."
+                      value={storyInput}
+                      onChange={(e) => {
+                        setStoryInput(e.target.value);
+                      }}
+                      onBlur={(e) => resolveStorySelection(e.target.value)}
+                    />
+                    <datalist id="task-story-options">
+                      {stories.map((s) => (
+                        <option key={s.id} value={storyLabel(s)} />
+                      ))}
+                    </datalist>
+                    {linkedStory ? (
+                      <div className="form-text">
+                        <Button
+                          size="sm"
+                          variant="link"
+                          className="p-0"
+                          onClick={() => { onHide(); showSidebar(linkedStory as any, 'story'); }}
+                        >
+                          View linked story
+                        </Button>
+                      </div>
+                    ) : null}
+                    <div className="form-text">
+                      Selecting a story will also inherit its goal and sprint when available.
+                    </div>
+                  </Form.Group>
+                </Col>
+              </Row>
+              {task && (task as Task).aiCriticalityScore != null && (
+                <div className="mb-3">
+                  <strong>AI Score:</strong>{' '}
+                  {Number.isFinite(Number((task as Task).aiCriticalityScore))
+                    ? Math.round(Number((task as Task).aiCriticalityScore))
+                    : (task as Task).aiCriticalityScore}
+                  {(() => {
+                    const t = task as Task;
+                    const top3Reason = (t as any).aiTop3ForDay ? (t as any).aiTop3Reason : null;
+                    const reason = top3Reason || (t as any).aiCriticalityReason || null;
+                    return reason ? <div className="small text-muted">{reason}</div> : null;
+                  })()}
+                </div>
+              )}
+              {showMacSync && (
+                <div className="mb-3">
+                  <strong>Last Mac sync:</strong>{' '}
+                  {macSyncedAtMs ? format(new Date(macSyncedAtMs), 'MMM d, yyyy • HH:mm') : '—'}
+                </div>
+              )}
+            </Form>
+          </Col>
+          {task && (
+            <Col lg={4}>
+              <ActivityStreamPanel
+                entityId={task?.id}
+                entityType="task"
+                referenceNumber={(task as any)?.ref || (task as any)?.reference || (task as any)?.referenceNumber}
+              />
             </Col>
-            {task && (
-              <Col lg={4}>
-                <ActivityStreamPanel
-                  entityId={task?.id}
-                  entityType="task"
-                  referenceNumber={(task as any)?.ref || (task as any)?.reference || (task as any)?.referenceNumber}
-                />
-              </Col>
-            )}
-          </Row>
+          )}
+        </Row>
       </Modal.Body>
       <Modal.Footer>
         <Button

@@ -35,6 +35,7 @@ interface ScheduledBlockInfo {
     start: number;
     end: number;
     title?: string;
+    sourceNote?: string;
 }
 
 const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
@@ -221,11 +222,19 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
                         : (block.storyId ? `story:${block.storyId}` : null);
                     if (!key) return;
                     if (nextMap[key]) return;
+                    const sourceRaw = String((block as any).calendarMatchSource || '').toLowerCase();
+                    const sourceNote = (block as any).calendarMatchNote
+                        || (sourceRaw === 'matched_user_created_calendar_event'
+                            ? 'Matched user created calendar event'
+                            : (sourceRaw === 'calendar_event_created_via_planner'
+                                ? 'Calendar event created via planner'
+                                : null));
                     nextMap[key] = {
                         id: block.id,
                         start: Number(block.start),
                         end: Number(block.end),
                         title: block.title,
+                        sourceNote: sourceNote || undefined,
                     };
                 });
                 setScheduledBlocksByEntity(nextMap);
