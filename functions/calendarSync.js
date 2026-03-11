@@ -753,11 +753,14 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
       const themeIdForBlock = block.theme_id ?? block.themeId ?? null;
       const activityName = block.title || block.category || 'BOB Block';
       const refPart = block.storyRef || block.taskRef || '';
-      const summaryParts = [];
-      summaryParts.push(activityName);
-      if (refPart) summaryParts.push(refPart);
-      summaryParts.push(`[${themeLabel}]`);
-      const summaryText = summaryParts.filter(Boolean).join(' - ');
+      
+      // Format: "Title [REF] [Theme]" for better readability on small screens
+      let summaryText = activityName;
+      if (refPart) {
+        summaryText += ` [${refPart}]`;
+      }
+      summaryText += ` [${themeLabel}]`;
+      
       const startMs = toMillis(block.start);
       const endMs = toMillis(block.end);
       let eventDeepLink = resolveBlockDeepLink(block);
@@ -810,7 +813,52 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
       let aiScoreVal = block.aiScore ?? block.aiCriticalityScore ?? null;
       const blockTopReason = block.aiTop3ForDay && block.aiTop3Reason ? block.aiTop3Reason : null;
       let aiReasonVal = block.aiReason || blockTopReason || block.aiCriticalityReason || block.dueDateReason || '';
-      try {
+      
+      // CONSOLIDATED BLOCK: Only use multi-item summary path for truly multi-item blocks.
+      // Single-item consolidated blocks fall through to the single-item path so they get
+      // full deep links, AI score, sprint/goal links, etc.
+      if (Array.isArray(block.items) && block.items.length > 1) {
+        const lines = [];
+        if (enrichedDesc) lines.push(enrichedDesc);
+
+        lines.push(`${block.title}`);
+        lines.push(`Items: ${block.itemCount}`);
+        lines.push(`Capacity: ${block.totalPoints?.toFixed(2) || 0} / ${block.blockCapacity?.toFixed(2) || 1} points (${block.utilizationPercent || 0}%)`);
+
+        if (block.capacityExceeded) {
+          lines.push('⚠️ OVER CAPACITY - Consider deferring lower-priority items');
+        }
+
+        lines.push('', 'Items in this block:');
+        for (const item of block.items) {
+          const points = item.points ? ` (${item.points} pts)` : '';
+          const immovable = item.immovable ? ' [IMMOVABLE]' : '';
+          lines.push(`- ${item.title}${points}${immovable}`);
+        }
+
+        if (block.itemsToDefer && block.itemsToDefer.length > 0) {
+          lines.push('', 'Items to defer (over capacity):');
+          for (const item of block.itemsToDefer) {
+            const points = item.points ? ` (${item.points} pts)` : '';
+            lines.push(`- ${item.title}${points}`);
+          }
+        }
+
+        const itemsWithLinks = block.items.filter((item) => item.deepLink);
+        if (itemsWithLinks.length) {
+          lines.push('', 'Item Links:');
+          for (const item of itemsWithLinks) {
+            lines.push(`- ${item.title}: ${item.deepLink}`);
+          }
+        }
+
+        lines.push('', `Calendar: ${buildAbsoluteUrl('/calendar')}`);
+        lines.push(`Overview: ${buildAbsoluteUrl('/dashboard')}`);
+
+        enrichedDesc = lines.join('\n');
+      } else {
+        // SINGLE ITEM: Existing logic for single task/story/routine
+        try {
         if (block.storyId) {
           const s = await admin.firestore().collection('stories').doc(String(block.storyId)).get();
           if (s.exists) {
@@ -832,11 +880,10 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
             const acArr = Array.isArray(sd.acceptanceCriteria)
               ? sd.acceptanceCriteria.filter(Boolean).map((x) => String(x)).slice(0, 3)
               : (Array.isArray(sd.acceptance_criteria) ? sd.acceptance_criteria.filter(Boolean).map((x) => String(x)).slice(0, 3) : []);
+            summaryText = `${sd.title || activityName} [${storyRef}] [${themeLabel}]`;
             const lines = [];
             if (enrichedDesc) lines.push(enrichedDesc);
-            lines.push(`Story: ${storyRef} – ${sd.title || 'Story'}`);
-
-            // NEW: Mandatory Deep Links
+            lines.push(`Story: ${sd.title || 'Story'} – ${storyRef}`);
             lines.push(`Story Link: ${link}`);
             if (sd.goalId) {
               let goalRef = sd.goalId;
@@ -892,9 +939,10 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
                 aiReasonVal = tdTopReason || td.aiCriticalityReason || '';
               }
             }
+            summaryText = `${td.title || activityName} [${taskRef}] [${themeLabel}]`;
             const lines = [];
             if (enrichedDesc) lines.push(enrichedDesc);
-            lines.push(`Task: ${taskRef} – ${td.title || 'Task'}`);
+            lines.push(`Task: ${td.title || 'Task'} – ${taskRef}`);
             lines.push(`Task Link: ${taskLink}`);
             const storyId = td.storyId || (td.parentType === 'story' ? td.parentId : null);
             if (storyId) {
@@ -948,9 +996,72 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
 
             enrichedDesc = lines.join('\n');
           }
+        } else if (block.routineId) {
+          const r = await admin.firestore().collection('routines').doc(String(block.routineId)).get();
+          if (r.exists) {
+            const rd = r.data() || {};
+            const routineRef = rd.ref || rd.reference || rd.displayId || r.id;
+            const routineLink = buildEntityUrl('routine', r.id, routineRef);
+            eventContext.routineRef = routineRef;
+            eventContext.routineTitle = rd.title || null;
+            eventDeepLink = routineLink;
+            const lines = [];
+            if (enrichedDesc) lines.push(enrichedDesc);
+            lines.push(`Routine: ${routineRef} – ${rd.title || 'Routine'}`);
+            lines.push(`Routine Link: ${routineLink}`);
+            // If routine is linked to a story via storyId, add story link
+            if (block.storyId) {
+              try {
+                const s = await admin.firestore().collection('stories').doc(String(block.storyId)).get();
+                if (s.exists) {
+                  const sd = s.data() || {};
+                  const storyRef = sd.ref || s.id;
+                  const storyLink = buildEntityUrl('story', s.id, storyRef);
+                  eventContext.storyRef = storyRef;
+                  eventContext.storyTitle = sd.title || null;
+                  lines.push(`Story Link: ${storyLink}`);
+                  if (sd.goalId) {
+                    let goalRef = sd.goalId;
+                    try {
+                      const g = await admin.firestore().collection('goals').doc(String(sd.goalId)).get();
+                      if (g.exists) {
+                        const gd = g.data() || {};
+                        goalRef = gd.ref || gd.reference || goalRef;
+                      }
+                    } catch { }
+                    eventContext.goalId = sd.goalId;
+                    eventContext.goalRef = goalRef;
+                    lines.push(`Goal Link: ${buildEntityUrl('goal', sd.goalId, goalRef)}`);
+                  }
+                }
+              } catch { }
+            }
+            // Direct goal link from routine
+            if (rd.goalId && !eventContext.goalId) {
+              let goalRef = rd.goalId;
+              try {
+                const g = await admin.firestore().collection('goals').doc(String(rd.goalId)).get();
+                if (g.exists) {
+                  const gd = g.data() || {};
+                  goalRef = gd.ref || gd.reference || goalRef;
+                }
+              } catch { }
+              eventContext.goalId = rd.goalId;
+              eventContext.goalRef = goalRef;
+              lines.push(`Goal Link: ${buildEntityUrl('goal', rd.goalId, goalRef)}`);
+            }
+            lines.push(`Calendar: ${buildAbsoluteUrl('/calendar')}`);
+            lines.push(`Overview: ${buildAbsoluteUrl('/dashboard')}`);
+            const aiLineParts = [];
+            if (aiScoreVal != null) aiLineParts.push(`AI score ${aiScoreVal}/100`);
+            if (aiReasonVal) aiLineParts.push(aiReasonVal);
+            if (aiLineParts.length) lines.push('', aiLineParts.join(' – '));
+            if (block.placementReason) lines.push(`Placement: ${block.placementReason}`);
+            enrichedDesc = lines.join('\n');
+          }
         }
       } catch { }
-      if (!block.storyId && !block.taskId) {
+      if (!block.storyId && !block.taskId && !block.routineId) {
         const isChecklistWindow = isChecklistWindowBlock(block);
         const dayMs = toMillis(block.start);
         const blockDurationMinutes = Math.max(1, Math.round((endMs - startMs) / 60000));
@@ -1035,6 +1146,7 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
           enrichedDesc = enrichedDesc ? `${enrichedDesc}\n\n${aiBlock}` : aiBlock;
         }
       }
+      } // close else (single-item path)
       const minimalEvent = {
         summary: summaryText,
         start: { dateTime: new Date(startMs).toISOString(), timeZone: 'UTC' },
@@ -1172,7 +1284,7 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
       summaryParts.push(activityName);
       if (refPart) summaryParts.push(refPart);
       summaryParts.push(`[${themeLabel}]`);
-      const summaryText = summaryParts.filter(Boolean).join(' - ');
+      let summaryText = summaryParts.filter(Boolean).join(' - ');
       const rawRationale2 = block.rationale || '';
       let enrichedDesc2 = (rawRationale2.includes('\n') || rawRationale2.includes('http')) ? '' : rawRationale2;
       let aiScoreVal2 = block.aiScore ?? block.aiCriticalityScore ?? null;
@@ -1210,11 +1322,10 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
             const acArr = Array.isArray(sd.acceptanceCriteria)
               ? sd.acceptanceCriteria.filter(Boolean).map((x) => String(x)).slice(0, 3)
               : (Array.isArray(sd.acceptance_criteria) ? sd.acceptance_criteria.filter(Boolean).map((x) => String(x)).slice(0, 3) : []);
+            summaryText = `${sd.title || activityName} [${storyRef}] [${themeLabel}]`;
             const lines = [];
             if (enrichedDesc2) lines.push(enrichedDesc2);
-            lines.push(`Story: ${storyRef} – ${sd.title || 'Story'}`);
-
-            // NEW: Mandatory Deep Links
+            lines.push(`Story: ${sd.title || 'Story'} – ${storyRef}`);
             lines.push(`Story Link: ${link}`);
             if (sd.goalId) {
               let goalRef = sd.goalId;
@@ -1270,9 +1381,10 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
                 aiReasonVal2 = tdTopReason || td.aiCriticalityReason || '';
               }
             }
+            summaryText = `${td.title || activityName} [${taskRef}] [${themeLabel}]`;
             const lines = [];
             if (enrichedDesc2) lines.push(enrichedDesc2);
-            lines.push(`Task: ${taskRef} – ${td.title || 'Task'}`);
+            lines.push(`Task: ${td.title || 'Task'} – ${taskRef}`);
             lines.push(`Task Link: ${taskLink}`);
             const storyId = td.storyId || (td.parentType === 'story' ? td.parentId : null);
             if (storyId) {
@@ -2135,4 +2247,113 @@ exports.scheduledCalendarSync = functions.pubsub.schedule('every 1 hours').onRun
   } catch (error) {
     console.error('Error in scheduled calendar sync:', error);
   }
+});
+
+/**
+ * gcalLinkUnlinkedEvents
+ *
+ * Scans calendar_blocks that have a googleEventId but no storyId/taskId and
+ * fuzzy-matches their title against the user's story titles. On a high-confidence
+ * match it writes `linkedStoryId`, `plannedForDate` back to the block and sets
+ * `gcalLinked: true` / increments `gcalEventCount` on the story.
+ *
+ * Supports dryRun: true to preview matches without writing.
+ */
+exports.gcalLinkUnlinkedEvents = functions.https.onCall(async (data, context) => {
+  const uid = context.auth?.uid;
+  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Authentication required');
+
+  const db = admin.firestore();
+  const dryRun = data?.dryRun === true;
+
+  const [blocksSnap, storiesSnap] = await Promise.all([
+    db.collection('calendar_blocks').where('ownerUid', '==', uid).get(),
+    db.collection('stories').where('ownerUid', '==', uid).get(),
+  ]);
+
+  const unlinkedBlocks = blocksSnap.docs.filter((d) => {
+    const b = d.data();
+    return b.googleEventId && !b.storyId && !b.taskId && !b.linkedStoryId;
+  });
+
+  if (unlinkedBlocks.length === 0) return { linked: 0, reviewed: 0, dryRun };
+
+  const stories = storiesSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  if (stories.length === 0) return { linked: 0, reviewed: unlinkedBlocks.length, dryRun };
+
+  function keywordScore(a, b) {
+    const aWords = String(a || '').toLowerCase().split(/\s+/).filter((w) => w.length > 3);
+    const bWords = String(b || '').toLowerCase().split(/\s+/).filter((w) => w.length > 3);
+    if (!aWords.length || !bWords.length) return 0;
+    const overlap = aWords.filter((w) => bWords.includes(w)).length;
+    return overlap / Math.max(aWords.length, bWords.length);
+  }
+
+  function toDateIso(start) {
+    if (!start) return null;
+    if (typeof start === 'number') return new Date(start).toISOString().slice(0, 10);
+    if (typeof start === 'string') return start.slice(0, 10);
+    if (typeof start.toDate === 'function') return start.toDate().toISOString().slice(0, 10);
+    if (start.seconds) return new Date(start.seconds * 1000).toISOString().slice(0, 10);
+    return null;
+  }
+
+  const LINK_THRESHOLD = 0.4;
+  const batch = db.batch();
+  let linked = 0;
+  const links = [];
+
+  for (const blockDoc of unlinkedBlocks) {
+    const block = blockDoc.data();
+    const blockTitle = String(block.title || block.summary || '').trim();
+    if (!blockTitle) continue;
+
+    let bestScore = 0;
+    let bestStory = null;
+    for (const story of stories) {
+      const score = keywordScore(blockTitle, story.title || '');
+      if (score > bestScore) {
+        bestScore = score;
+        bestStory = story;
+      }
+    }
+
+    if (bestScore >= LINK_THRESHOLD && bestStory) {
+      const plannedForDate = toDateIso(block.start);
+      links.push({
+        blockId: blockDoc.id,
+        blockTitle,
+        storyId: bestStory.id,
+        storyTitle: bestStory.title || '',
+        score: Math.round(bestScore * 100) / 100,
+        plannedForDate,
+      });
+
+      if (!dryRun) {
+        const blockUpdate = {
+          linkedStoryId: bestStory.id,
+          gcalLinkedAt: admin.firestore.FieldValue.serverTimestamp(),
+        };
+        if (plannedForDate) {
+          blockUpdate.plannedForDate = plannedForDate;
+        }
+        batch.update(blockDoc.ref, blockUpdate);
+
+        const storyRef = db.collection('stories').doc(bestStory.id);
+        batch.set(
+          storyRef,
+          { gcalLinked: true, gcalEventCount: admin.firestore.FieldValue.increment(1) },
+          { merge: true }
+        );
+      }
+      linked++;
+    }
+  }
+
+  if (!dryRun && linked > 0) {
+    await batch.commit();
+    console.log(`[gcalLink] linked ${linked} events for uid=${uid}`);
+  }
+
+  return { linked, reviewed: unlinkedBlocks.length, dryRun, links };
 });

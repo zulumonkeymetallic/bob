@@ -49,6 +49,8 @@ const GoalsManagement: React.FC = () => {
   const [editGoal, setEditGoal] = useState<Goal | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<{ id: string; title: string } | null>(null);
   const [activeSprintGoalIds, setActiveSprintGoalIds] = useState<Set<string>>(new Set());
+  const [activeFocusGoalIds, setActiveFocusGoalIds] = useState<Set<string>>(new Set());
+  const [applyFocusOnlyFilter, setApplyFocusOnlyFilter] = useState(false);
   const [applyActiveSprintFilter, setApplyActiveSprintFilter] = useState(true); // default on
   const [pots, setPots] = useState<Record<string, { name: string; balance: number }>>({});
   const [goalKpiMetrics, setGoalKpiMetrics] = useState<Record<string, { resolvedKpis?: any[]; updatedAt?: any }>>({});
@@ -173,6 +175,36 @@ const GoalsManagement: React.FC = () => {
     );
     return () => unsub();
   }, [currentUser, currentPersona]);
+
+  useEffect(() => {
+    if (!currentUser?.uid) {
+      setActiveFocusGoalIds(new Set());
+      return;
+    }
+    const focusQuery = query(
+      collection(db, 'focusGoals'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+      where('isActive', '==', true)
+    );
+    const unsub = onSnapshot(
+      focusQuery,
+      (snapshot) => {
+        const setIds = new Set<string>();
+        snapshot.docs.forEach((docSnap) => {
+          const data = docSnap.data() as any;
+          const ids = Array.isArray(data.goalIds) ? data.goalIds : [];
+          ids.forEach((id) => {
+            const normalized = String(id || '').trim();
+            if (normalized) setIds.add(normalized);
+          });
+        });
+        setActiveFocusGoalIds(setIds);
+      },
+      () => setActiveFocusGoalIds(new Set())
+    );
+    return () => unsub();
+  }, [currentUser?.uid, currentPersona]);
 
   const activeSprintId = useMemo(() => {
     const active = sprints.find((s) => s.status === 1);
@@ -421,6 +453,7 @@ const GoalsManagement: React.FC = () => {
       if (derivedYear && String(derivedYear) !== filterYear) return false;
     }
     if (searchTerm && !goal.title.toLowerCase().includes(searchTerm.toLowerCase())) return false;
+    if (applyFocusOnlyFilter && activeFocusGoalIds.size > 0 && !activeFocusGoalIds.has(goal.id)) return false;
     return true;
   });
 
@@ -874,6 +907,7 @@ const GoalsManagement: React.FC = () => {
                       setSearchTerm('');
                       setGoalKpiScope('sprint');
                       setShowNoPotOnly(false);
+                      setApplyFocusOnlyFilter(false);
                     }}
                     style={{ borderColor: 'var(--notion-border)', color: 'var(--notion-text)' }}
                   >
@@ -894,6 +928,15 @@ const GoalsManagement: React.FC = () => {
                     checked={showNoPotOnly}
                     onChange={(e) => setShowNoPotOnly(e.target.checked)}
                     className="text-muted"
+                  />
+                  <Form.Check
+                    type="switch"
+                    id="toggle-goals-focus-only"
+                    label={`Only active focus goals${activeFocusGoalIds.size ? ` (${activeFocusGoalIds.size})` : ''}`}
+                    checked={applyFocusOnlyFilter}
+                    onChange={(e) => setApplyFocusOnlyFilter(e.target.checked)}
+                    className="text-muted"
+                    disabled={activeFocusGoalIds.size === 0}
                   />
                 </div>
               </Col>

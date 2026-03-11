@@ -33,7 +33,7 @@ import {
 import './FinanceDashboardAdvanced.css';
 
 type DateFilter = '7d' | '30d' | '60d' | '90d' | '6m' | 'year' | 'all' | 'custom';
-type ViewMode = 'category' | 'bucket';
+type ViewMode = 'category' | 'bucket' | 'merchant';
 type FinanceView = 'overview' | 'spend' | 'discretionary' | 'actions' | 'sources' | 'assets';
 type ExternalSource = 'barclays' | 'paypal' | 'other' | 'monzo_csv';
 type AnalysisDimension = 'bucket' | 'category' | 'merchant';
@@ -209,7 +209,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
     const [analysisActionFilter, setAnalysisActionFilter] = useState<AnalysisActionFilter>('all');
 
     // Chart drill-down filter state
-    const [chartFilter, setChartFilter] = useState<{ type: 'category' | 'bucket' | null; value: string | null }>({ type: null, value: null });
+    const [chartFilter, setChartFilter] = useState<{ type: 'category' | 'bucket' | 'merchant' | null; value: string | null }>({ type: null, value: null });
     const [cardFilter, setCardFilter] = useState<DashboardCardFilter>('all');
 
     const [editingManualAccountId, setEditingManualAccountId] = useState<string | null>(null);
@@ -650,7 +650,11 @@ const FinanceDashboardAdvanced: React.FC = () => {
         .sort((a, b) => b.value - a.value);
     const topCategoryData = categoryData.slice(0, 10);
 
-    const timeSeriesSourceRaw = viewMode === 'bucket' ? data?.timeSeriesByBucket : data?.timeSeriesByCategory;
+    const timeSeriesSourceRaw = viewMode === 'bucket'
+        ? data?.timeSeriesByBucket
+        : viewMode === 'merchant'
+            ? null  // merchant has no backend time series; bar chart falls back to horizontal top-merchant view
+            : data?.timeSeriesByCategory;
     const timeSeriesSource = Object.fromEntries(Object.entries(timeSeriesSourceRaw || {}).filter(([key]) => key !== 'bank_transfer'));
 
     const allMonths = new Set<string>();
@@ -670,21 +674,51 @@ const FinanceDashboardAdvanced: React.FC = () => {
     const bankTransferAmount = data?.spendByBucket?.bank_transfer ?? 0;
     const filteredTotalSpend = Math.abs((data?.totalSpend || 0) - bankTransferAmount) / 100;
 
-    const trendOption = {
-        tooltip: { trigger: 'axis' },
-        legend: { data: activeKeys },
-        grid: { left: 50, right: 10, top: 30, bottom: 50 },
-        xAxis: { type: 'category', data: trendData.map((r: any) => r.month) },
-        yAxis: { type: 'value', axisLabel: { formatter: (v: number) => `£${v}` } },
-        series: activeKeys.map((key, idx) => ({
-            name: key,
-            type: 'bar',
-            stack: 'spend',
-            data: trendData.map((row: any) => Math.abs(row[key] || 0)),
-            color: THEME_COLORS[idx % THEME_COLORS.length],
-            emphasis: { focus: 'series' },
-        })),
-    };
+    // Merchant distribution from transactions (computed before trendOption)
+    const merchantTopDataEarly = ((data?.recentTransactions || []) as any[])
+        .filter((tx) => {
+            const cat = (tx.userCategoryKey || tx.aiCategoryKey || tx.categoryKey || tx.categoryType || '').toLowerCase();
+            return cat !== 'bank_transfer' && cat !== 'net_salary' && cat !== 'irregular_income';
+        })
+        .reduce((acc: Record<string, number>, tx: any) => {
+            const name = toText(tx.merchantName || tx.merchant?.name || tx.merchant, 'Unknown');
+            const amt = Math.abs(txAmountMinor(tx)) / 100;
+            acc[name] = (acc[name] || 0) + amt;
+            return acc;
+        }, {} as Record<string, number>);
+    const merchantDataEarly = Object.entries(merchantTopDataEarly)
+        .map(([name, value]) => ({ name, value: Number(value || 0) }))
+        .sort((a, b) => b.value - a.value)
+        .slice(0, 15);
+
+    const trendOption = viewMode === 'merchant'
+        ? {
+            tooltip: { trigger: 'axis', valueFormatter: (v: number) => `£${v.toFixed(2)}` },
+            grid: { left: 150, right: 20, top: 10, bottom: 30 },
+            xAxis: { type: 'value', axisLabel: { formatter: (v: number) => `£${v}` } },
+            yAxis: { type: 'category', data: merchantDataEarly.map((m) => m.name) },
+            series: [{
+                name: 'Spend',
+                type: 'bar',
+                data: merchantDataEarly.map((m, idx) => ({ value: m.value, itemStyle: { color: THEME_COLORS[idx % THEME_COLORS.length] } })),
+                label: { show: true, position: 'right', formatter: (p: any) => `£${Number(p.value).toFixed(0)}` },
+            }],
+        }
+        : {
+            tooltip: { trigger: 'axis' },
+            legend: { data: activeKeys },
+            grid: { left: 50, right: 10, top: 30, bottom: 50 },
+            xAxis: { type: 'category', data: trendData.map((r: any) => r.month) },
+            yAxis: { type: 'value', axisLabel: { formatter: (v: number) => `£${v}` } },
+            series: activeKeys.map((key, idx) => ({
+                name: key,
+                type: 'bar',
+                stack: 'spend',
+                data: trendData.map((row: any) => Math.abs(row[key] || 0)),
+                color: THEME_COLORS[idx % THEME_COLORS.length],
+                emphasis: { focus: 'series' },
+            })),
+        };
 
     const localDistribution = ((data?.recentTransactions || []) as any[])
         .filter((tx) => {
@@ -704,6 +738,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
         }, {} as Record<string, number>);
 
     const distributionSource = (() => {
+        if (viewMode === 'merchant') return merchantDataEarly.slice(0, 10);
         const local = Object.entries(localDistribution)
             .map(([name, value]) => ({ name, value: Number(value || 0) }))
             .sort((a, b) => Number(b.value) - Number(a.value))
@@ -735,8 +770,8 @@ const FinanceDashboardAdvanced: React.FC = () => {
     // Chart click handlers
     const handleTrendClick = (params: any) => {
         if (params.componentType === 'series') {
-            const selectedName = params.seriesName;
-            const filterType = viewMode === 'bucket' ? 'bucket' : 'category';
+            const selectedName = params.seriesName || params.name;
+            const filterType = viewMode === 'merchant' ? 'merchant' : viewMode === 'bucket' ? 'bucket' : 'category';
             setCardFilter('all');
             setChartFilter({ type: filterType, value: selectedName });
         }
@@ -745,7 +780,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
     const handlePieClick = (params: any) => {
         if (params.componentType === 'series') {
             const selectedName = params.name;
-            const filterType = viewMode === 'bucket' ? 'bucket' : 'category';
+            const filterType = viewMode === 'merchant' ? 'merchant' : viewMode === 'bucket' ? 'bucket' : 'category';
             setCardFilter('all');
             setChartFilter({ type: filterType, value: selectedName });
         }
@@ -782,6 +817,9 @@ const FinanceDashboardAdvanced: React.FC = () => {
                         !(normalizedBucket === 'mandatory' && normalizedFilter === 'mandatory')) {
                         return false;
                     }
+                } else if (chartFilter.type === 'merchant') {
+                    const merchantName = toText(tx.merchantName || tx.merchant?.name || tx.merchant, 'Unknown');
+                    if (merchantName !== chartFilter.value) return false;
                 }
             }
 
@@ -1504,6 +1542,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
                             <ButtonGroup size="sm">
                                 <Button variant={viewMode === 'category' ? 'primary' : 'outline-secondary'} onClick={() => setViewMode('category')}>Category</Button>
                                 <Button variant={viewMode === 'bucket' ? 'primary' : 'outline-secondary'} onClick={() => setViewMode('bucket')}>Bucket</Button>
+                                <Button variant={viewMode === 'merchant' ? 'primary' : 'outline-secondary'} onClick={() => setViewMode('merchant')}>Merchant</Button>
                             </ButtonGroup>
                         }
                     >
@@ -1523,6 +1562,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
                             <ButtonGroup size="sm">
                                 <Button variant={viewMode === 'category' ? 'primary' : 'outline-secondary'} onClick={() => setViewMode('category')}>Category</Button>
                                 <Button variant={viewMode === 'bucket' ? 'primary' : 'outline-secondary'} onClick={() => setViewMode('bucket')}>Bucket</Button>
+                                <Button variant={viewMode === 'merchant' ? 'primary' : 'outline-secondary'} onClick={() => setViewMode('merchant')}>Merchant</Button>
                             </ButtonGroup>
                         }
                     >

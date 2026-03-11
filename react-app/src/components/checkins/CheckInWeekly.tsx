@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Badge, Button, Card, Col, Form, Row, Spinner } from 'react-bootstrap';
+import { Alert, Badge, Button, Card, Col, Form, OverlayTrigger, Row, Spinner, Tooltip } from 'react-bootstrap';
 import { collection, doc, getDoc, getDocs, orderBy, query, setDoc, where } from 'firebase/firestore';
 import { addDays, endOfWeek, format, startOfWeek } from 'date-fns';
+import { useNavigate } from 'react-router-dom';
+import { BarChart2, ChevronLeft, ChevronRight, RefreshCw, Save } from 'lucide-react';
 import { db } from '../../firebase';
 import { useAuth } from '../../contexts/AuthContext';
 
@@ -36,6 +38,7 @@ const formatMoney = (val: number, currency = 'GBP') =>
 
 const CheckInWeekly: React.FC = () => {
   const { currentUser } = useAuth();
+  const navigate = useNavigate();
   const [weekStart, setWeekStart] = useState<Date>(() =>
     startOfWeek(addDays(new Date(), -7), { weekStartsOn: 1 }),
   );
@@ -48,7 +51,9 @@ const CheckInWeekly: React.FC = () => {
   });
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [capacityReviewed, setCapacityReviewed] = useState(false);
 
   const isIndexError = (err: any): boolean => {
     const msg = String(err?.message || err || '').toLowerCase();
@@ -232,8 +237,11 @@ const CheckInWeekly: React.FC = () => {
 
       const existing = await getDoc(doc(db, 'weekly_checkins', `${ownerUid}_${weekKey}`));
       if (existing.exists()) {
-        const data = existing.data() as WeeklyCheckInDoc;
+        const data = existing.data() as WeeklyCheckInDoc & { capacityReviewedAt?: any };
         setReflection(data.reflection || reflection);
+        setCapacityReviewed(!!data.capacityReviewedAt);
+      } else {
+        setCapacityReviewed(false);
       }
     } catch (err) {
       console.error('Failed to load weekly check-in', err);
@@ -265,6 +273,8 @@ const CheckInWeekly: React.FC = () => {
         updatedAt: new Date(),
         createdAt: new Date(),
       }, { merge: true });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
     } catch (err) {
       console.error('Failed to save weekly check-in', err);
       setError('Failed to save weekly check-in.');
@@ -275,21 +285,78 @@ const CheckInWeekly: React.FC = () => {
 
   return (
     <div className="p-3">
-      <h3 className="mb-3">Weekly Check-in</h3>
+      <div className="d-flex justify-content-between align-items-center mb-2">
+        <h3 className="mb-0">Weekly Check-in</h3>
+        {/* Compact icon toolbar */}
+        <div className="d-flex gap-1 align-items-center">
+          <OverlayTrigger placement="bottom" overlay={<Tooltip>Previous week</Tooltip>}>
+            <Button size="sm" variant="outline-secondary" onClick={() => setWeekStart((prev) => startOfWeek(addDays(prev, -7), { weekStartsOn: 1 }))}>
+              <ChevronLeft size={14} />
+            </Button>
+          </OverlayTrigger>
+          <OverlayTrigger placement="bottom" overlay={<Tooltip>Next week</Tooltip>}>
+            <Button size="sm" variant="outline-secondary" onClick={() => setWeekStart((prev) => startOfWeek(addDays(prev, 7), { weekStartsOn: 1 }))}>
+              <ChevronRight size={14} />
+            </Button>
+          </OverlayTrigger>
+          <OverlayTrigger placement="bottom" overlay={<Tooltip>Reload week data</Tooltip>}>
+            <Button size="sm" variant="outline-secondary" onClick={loadWeeklyData} disabled={loading}>
+              <RefreshCw size={14} />
+            </Button>
+          </OverlayTrigger>
+          <OverlayTrigger placement="bottom" overlay={<Tooltip>Review capacity plan for this week</Tooltip>}>
+            <Button size="sm" variant="outline-secondary" onClick={() => navigate('/capacity')}>
+              <BarChart2 size={14} />
+            </Button>
+          </OverlayTrigger>
+          <OverlayTrigger placement="bottom" overlay={<Tooltip>{saving ? 'Saving…' : saved ? 'Saved!' : 'Save weekly check-in'}</Tooltip>}>
+            <Button
+              size="sm"
+              variant={saved ? 'success' : 'primary'}
+              onClick={handleSave}
+              disabled={saving || loading || !metrics}
+            >
+              <Save size={14} />
+            </Button>
+          </OverlayTrigger>
+        </div>
+      </div>
+
+      {/* Week date range */}
       <div className="d-flex flex-wrap gap-2 align-items-center mb-3">
         <Form.Control
           type="date"
           value={format(weekStart, 'yyyy-MM-dd')}
           onChange={(e) => setWeekStart(startOfWeek(new Date(e.target.value), { weekStartsOn: 1 }))}
-          style={{ maxWidth: 200 }}
+          style={{ maxWidth: 180 }}
+          title="Jump to week containing this date"
         />
-        <Badge bg="secondary">
-          {format(weekStart, 'dd MMM')} – {format(weekEnd, 'dd MMM')}
+        <Badge bg="secondary" className="py-2 px-3">
+          {format(weekStart, 'dd MMM')} – {format(weekEnd, 'dd MMM yyyy')}
         </Badge>
-        <Button variant="primary" onClick={handleSave} disabled={saving || loading || !metrics}>
-          {saving ? 'Saving…' : 'Submit weekly check-in'}
-        </Button>
       </div>
+
+      {/* Capacity plan review reminder */}
+      {!capacityReviewed && !loading && (
+        <Alert variant="warning" className="d-flex justify-content-between align-items-center py-2 mb-3">
+          <span className="small">
+            <BarChart2 size={13} className="me-1" />
+            Weekly capacity plan has not been reviewed — check it before closing out your week.
+          </span>
+          <div className="d-flex gap-2 ms-3 flex-shrink-0">
+            <OverlayTrigger overlay={<Tooltip>Open capacity planner</Tooltip>}>
+              <Button size="sm" variant="outline-warning" onClick={() => navigate('/capacity')}>
+                Review
+              </Button>
+            </OverlayTrigger>
+            <OverlayTrigger overlay={<Tooltip>Mark as reviewed for this week</Tooltip>}>
+              <Button size="sm" variant="outline-secondary" onClick={() => setCapacityReviewed(true)}>
+                Dismiss
+              </Button>
+            </OverlayTrigger>
+          </div>
+        </Alert>
+      )}
 
       {error && <Alert variant="danger">{error}</Alert>}
       {loading || !metrics ? (

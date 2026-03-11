@@ -1,12 +1,14 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback, useRef } from 'react';
-import { onAuthStateChanged, User, GoogleAuthProvider, signInWithPopup, signOut as firebaseSignOut, signInAnonymously } from 'firebase/auth';
+import { onAuthStateChanged, User, GoogleAuthProvider, signInWithPopup, signOut as firebaseSignOut } from 'firebase/auth';
 import { auth } from '../firebase';
-// import { SideDoorAuth } from '../services/SideDoorAuth';
+import { sideDoorAuth } from '../services/SideDoorAuth';
 
 interface AuthContextType {
   currentUser: User | null;
   signInWithGoogle: () => Promise<void>;
+  signInLocally: (tokenOrEmail?: string) => Promise<void>;
   signOut: () => Promise<void>;
+  localLoginEnabled: boolean;
   isTestUser?: boolean;
 }
 
@@ -15,8 +17,19 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isTestUser, setIsTestUser] = useState(false);
+  const localLoginEnabled = sideDoorAuth.isLocalEnvironment();
+
+  const signInLocally = useCallback(async (tokenOrEmail?: string) => {
+    const localUser = await sideDoorAuth.signInWithTestUser(tokenOrEmail);
+    setCurrentUser(localUser as User);
+    setIsTestUser(true);
+  }, []);
 
   const signInWithGoogle = async () => {
+    if (sideDoorAuth.isTestModeEnabled()) {
+      sideDoorAuth.disableTestMode();
+      setIsTestUser(false);
+    }
     const provider = new GoogleAuthProvider();
 
     // Force account selection on every login
@@ -36,11 +49,11 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
   const signOut = useCallback(async () => {
     try {
-      // Clear test mode if active
-      // if (SideDoorAuth.isTestModeActive()) {
-      //   SideDoorAuth.disableTestMode();
-      //   setIsTestUser(false);
-      // }
+      if (sideDoorAuth.isCurrentUserTestUser(currentUser as any) || sideDoorAuth.isTestModeEnabled()) {
+        sideDoorAuth.disableTestMode();
+        setIsTestUser(false);
+        setCurrentUser(null);
+      }
 
       // Sign out from Firebase
       await firebaseSignOut(auth);
@@ -53,7 +66,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     } catch (error) {
       console.error("Error signing out", error);
     }
-  }, []);
+  }, [currentUser]);
 
   const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const AUTO_LOGOUT_MS = 30 * 60 * 1000; // 30 minutes
@@ -74,83 +87,18 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
     let unsubscribe: (() => void) | undefined;
 
-    // STEP 1: Check URL parameters immediately for test mode
-    const urlParams = new URLSearchParams(window.location.search);
-    const testLogin = urlParams.get('test-login');
-    const testMode = urlParams.get('test-mode');
-
-    console.log('🧪 URL Parameters:', { testLogin, testMode });
-
-    if (testLogin && testMode === 'true') {
-      console.log('🧪 ✅ Test parameters detected - enabling test authentication immediately');
-
-      // Initialize SideDoorAuth with URL parameters
-      // SideDoorAuth.initializeFromUrl();
-
-      // Create test user immediately
-      const testUser = {
-        uid: 'ai-test-user-12345abcdef',
-        email: 'ai-test-agent@bob.local',
-        displayName: 'AI Test Agent',
-        emailVerified: true,
-        isTestUser: true,
-        metadata: {
-          creationTime: new Date().toISOString(),
-          lastSignInTime: new Date().toISOString()
-        },
-        providerData: [{
-          uid: 'ai-test-user-12345abcdef',
-          email: 'ai-test-agent@bob.local',
-          displayName: 'AI Test Agent',
-          providerId: 'test'
-        }],
-        accessToken: 'mock-test-access-token',
-        refreshToken: 'mock-test-refresh-token',
-        getIdToken: async () => 'mock-test-id-token',
-      };
-
-      console.log('🧪 Setting test user immediately:', testUser.email);
-      setCurrentUser(testUser as unknown as User);
+    // STEP 1: Local login support for localhost/dev mode
+    const localUser = sideDoorAuth.autoSignIn();
+    if (localUser) {
+      console.log('🧪 Local test authentication active:', localUser.email);
+      setCurrentUser(localUser as User);
       setIsTestUser(true);
-
-      // When using emulator for tests, also sign in to Auth emulator anonymously
-      if (process.env.REACT_APP_USE_FIREBASE_EMULATOR === 'true') {
-        try {
-          console.log('🧪 Connecting to Auth emulator with anonymous sign-in...');
-          signInAnonymously(auth)
-            .then(() => console.log('🧪 Anonymous auth sign-in complete (emulator)'))
-            .catch(err => console.warn('⚠️ Anonymous sign-in failed (emulator):', err?.message));
-        } catch (err) {
-          console.warn('⚠️ Emulator auth init error:', (err as any)?.message);
-        }
-      }
-
-      // Clean URL after a delay
-      setTimeout(() => {
-        const cleanUrl = window.location.origin + window.location.pathname;
-        window.history.replaceState({}, document.title, cleanUrl);
-        console.log('🧪 URL cleaned, test authentication active');
-      }, 2000);
-
       return () => {
-        console.log('🧪 Test auth cleanup');
+        console.log('🧪 Local test auth cleanup');
       };
     }
 
-    // STEP 2: Check if test mode is already active from previous session
-    // if (SideDoorAuth.isTestModeActive()) {
-    //   const testUser = SideDoorAuth.mockAuthState();
-    //   if (testUser) {
-    //     console.log('🧪 Using existing test session:', testUser.email);
-    //     setCurrentUser(testUser as unknown as User);
-    //     setIsTestUser(true);
-    //     return () => {
-    //       console.log('🧪 Existing test auth cleanup');
-    //     };
-    //   }
-    // }
-
-    // STEP 3: Use regular Firebase auth for production
+    // STEP 2: Use regular Firebase auth
     console.log('🔐 Initializing Firebase authentication');
     unsubscribe = onAuthStateChanged(auth, user => {
       console.log('🔐 Auth state changed:', user ? user.email : 'null');
@@ -163,7 +111,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         unsubscribe();
       }
     };
-  }, []);
+  }, [localLoginEnabled]);
 
   useEffect(() => {
     if (!currentUser) {
@@ -200,7 +148,9 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const value = {
     currentUser,
     signInWithGoogle,
+    signInLocally,
     signOut,
+    localLoginEnabled,
     isTestUser,
   };
 

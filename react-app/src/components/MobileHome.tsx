@@ -13,9 +13,10 @@ import { getBadgeVariant, getPriorityBadge, getStatusName } from '../utils/statu
 import { taskStatusText } from '../utils/storyCardFormatting';
 import { extractWeatherSummary, extractWeatherTemp, formatWeatherLine } from '../utils/weatherFormat';
 import { isRecurringDueOnDate, resolveRecurringDueMs, resolveTaskDueMs } from '../utils/recurringTaskDue';
-import { Wand2, CalendarClock, RefreshCw, Sparkles } from 'lucide-react';
+import { Wand2, AlertCircle, RefreshCw, Sparkles, Clock3 } from 'lucide-react';
 import EditTaskModal from './EditTaskModal';
 import EditStoryModal from './EditStoryModal';
+import DeferItemModal from './DeferItemModal';
 
 type TabKey = 'overview' | 'tasks' | 'stories' | 'goals' | 'chores';
 type TaskViewFilter = 'top3' | 'due_today' | 'overdue' | 'all';
@@ -83,6 +84,7 @@ const MobileHome: React.FC = () => {
   const [priorityReplanPromptStory, setPriorityReplanPromptStory] = useState<Story | null>(null);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [editingStory, setEditingStory] = useState<Story | null>(null);
+  const [deferTarget, setDeferTarget] = useState<{ type: 'task' | 'story'; id: string; title: string } | null>(null);
   const todayIso = useMemo(() => new Date().toISOString().split('T')[0], []);
   const activePlanningSprints = useMemo(
     () => sprints.filter((s) => s.status === 0 || s.status === 1),
@@ -158,9 +160,10 @@ const MobileHome: React.FC = () => {
   }, []);
 
   const getChoreKind = useCallback((task: Task): 'chore' | 'routine' | 'habit' | null => {
-    const raw = String((task as any)?.type || (task as any)?.task_type || '').toLowerCase();
+    const raw = String((task as any)?.type || (task as any)?.task_type || '').trim().toLowerCase();
     const normalized = raw === 'habitual' ? 'habit' : raw;
-    if (['chore', 'routine', 'habit'].includes(normalized)) return normalized as any;
+    if (normalized === 'chore' || normalized === 'routine' || normalized === 'habit') return normalized;
+    if (normalized) return null;
     const tags = Array.isArray((task as any)?.tags) ? (task as any).tags : [];
     const tagKeys = tags.map((tag) => String(tag || '').toLowerCase().replace(/^#/, ''));
     if (tagKeys.includes('chore')) return 'chore';
@@ -572,6 +575,19 @@ const MobileHome: React.FC = () => {
     await handleReplan();
   };
 
+  const applyDeferredDate = useCallback(async ({ dateMs, rationale, source }: { dateMs: number; rationale: string; source: string }) => {
+    if (!deferTarget) return;
+    const collectionName = deferTarget.type === 'story' ? 'stories' : 'tasks';
+    await updateDoc(doc(db, collectionName, deferTarget.id), {
+      deferredUntil: dateMs,
+      deferredReason: rationale,
+      deferredBy: source,
+      deferredAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    } as any);
+    setDeferTarget(null);
+  }, [deferTarget]);
+
   const applyPriorityFlag = async (story: Story) => {
     setFlaggingStoryId(story.id);
     try {
@@ -818,54 +834,243 @@ const MobileHome: React.FC = () => {
     });
   }, [goals, goalsViewFilter, storiesByGoal, selectedSprintId, currentSprint]);
 
-  const renderChoresHabitsWidget = () => (
-    <Card className="mb-3" style={{ background: '#f0fdf4' }}>
-      <Card.Header className="py-2 d-flex align-items-center justify-content-between" style={{ background: 'transparent', border: 'none' }}>
-        <div>
-          <strong>Chores &amp; Habits</strong>
-          <Badge bg="secondary" pill className="ms-2">{choresDueToday.length}</Badge>
-        </div>
-      </Card.Header>
-      <Card.Body className="pt-0">
-        {choresLoading ? (
-          <div className="text-muted small">Loading chores…</div>
-        ) : choresDueToday.length === 0 ? (
-          <div className="text-muted small">No chores, habits, or routines due today.</div>
-        ) : (
-          <ListGroup variant="flush">
-            {choresDueToday.map((task) => {
-              const kind = getChoreKind(task) || 'chore';
-              const badgeVariant = kind === 'routine' ? 'success' : kind === 'habit' ? 'secondary' : 'primary';
-              const badgeLabel = kind === 'routine' ? 'Routine' : kind === 'habit' ? 'Habit' : 'Chore';
-              const dueMs = resolveRecurringDueMs(task, new Date(), todayStartMs);
-              const dueLabel = formatDueLabel(dueMs);
-              const isOverdue = !!dueMs && dueMs < todayStartMs;
-              const busy = !!choreCompletionBusy[task.id];
-              return (
-                <ListGroup.Item key={task.id} className="d-flex align-items-center gap-2" style={{ fontSize: 14 }}>
-                  <Form.Check
-                    type="checkbox"
-                    checked={busy}
-                    disabled={busy}
-                    onChange={() => handleCompleteChoreTask(task)}
-                    aria-label={`Complete ${task.title}`}
-                  />
-                  <div className="flex-grow-1">
-                    <div className="fw-semibold">{task.title}</div>
-                    <div className="text-muted small">{isOverdue ? `Overdue · ${dueLabel}` : `Due ${dueLabel}`}</div>
+  type MobileTimelineBucket = 'morning' | 'afternoon' | 'evening';
+  type MobileTimelineItem = {
+    id: string;
+    kind: 'task' | 'story' | 'chore' | 'event';
+    title: string;
+    timeLabel: string;
+    sortMs: number | null;
+    bucket: MobileTimelineBucket;
+    task?: Task;
+    story?: Story;
+  };
+
+  const bucketFromTime = (ms: number | null | undefined, timeOfDay?: string | null): MobileTimelineBucket => {
+    const tod = String(timeOfDay || '').toLowerCase().trim();
+    if (tod === 'morning' || tod === 'afternoon' || tod === 'evening') return tod as MobileTimelineBucket;
+    if (!ms || !Number.isFinite(ms)) return 'morning';
+    const d = new Date(ms);
+    const minute = d.getHours() * 60 + d.getMinutes();
+    if (minute >= 300 && minute <= 779) return 'morning';
+    if (minute >= 780 && minute <= 1139) return 'afternoon';
+    return 'evening';
+  };
+
+  const timelineTimeLabel = (startMs: number | null | undefined, endMs?: number | null): string => {
+    if (!startMs || !Number.isFinite(startMs)) return 'Anytime';
+    const start = new Date(startMs);
+    const startLabel = start.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+    if (endMs && Number.isFinite(endMs)) {
+      const end = new Date(endMs);
+      const endLabel = end.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+      return `${startLabel} - ${endLabel}`;
+    }
+    return startLabel;
+  };
+
+  const resolveMsFromAny = (value: any): number | null => {
+    if (value == null) return null;
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value === 'object' && typeof value.toDate === 'function') {
+      try { return value.toDate().getTime(); } catch { return null; }
+    }
+    const parsed = Date.parse(String(value));
+    return Number.isNaN(parsed) ? null : parsed;
+  };
+
+  const overviewCalendarEvents = useMemo(() => {
+    const candidates = [
+      summary?.calendar?.events,
+      summary?.eventsToday,
+      summary?.upcomingEvents,
+      summary?.calendarEvents,
+      summary?.dailyBrief?.calendar,
+    ];
+    for (const candidate of candidates) {
+      if (!Array.isArray(candidate) || candidate.length === 0) continue;
+      const mapped = candidate
+        .map((item: any, idx: number) => {
+          const title = String(item?.title || item?.summary || item?.name || '').trim();
+          if (!title) return null;
+          const startMs = resolveMsFromAny(item?.start ?? item?.startAt ?? item?.startDate ?? item?.when);
+          const endMs = resolveMsFromAny(item?.end ?? item?.endAt ?? item?.endDate);
+          return {
+            id: String(item?.id || item?.eventId || `${title}-${idx}`),
+            title,
+            startMs,
+            endMs,
+          };
+        })
+        .filter(Boolean) as Array<{ id: string; title: string; startMs: number | null; endMs: number | null }>;
+      if (mapped.length > 0) return mapped;
+    }
+    return [] as Array<{ id: string; title: string; startMs: number | null; endMs: number | null }>;
+  }, [summary]);
+
+  const unifiedTimelineItems = useMemo(() => {
+    const today = new Date();
+    const start = new Date(today);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(today);
+    end.setHours(23, 59, 59, 999);
+    const startMs = start.getTime();
+    const endMs = end.getTime();
+
+    const rows: MobileTimelineItem[] = [];
+    const seen = new Set<string>();
+    const add = (row: MobileTimelineItem) => {
+      const key = `${row.kind}:${row.title.toLowerCase()}:${row.timeLabel}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      rows.push(row);
+    };
+
+    tasksDueTodayForMobile.forEach((task) => {
+      const dueMs = resolveRecurringDueMs(task, today, startMs) ?? getTaskDueMs(task);
+      add({
+        id: `task-${task.id}`,
+        kind: 'task',
+        title: task.title,
+        timeLabel: timelineTimeLabel(dueMs),
+        sortMs: dueMs,
+        bucket: bucketFromTime(dueMs, (task as any).timeOfDay),
+        task,
+      });
+    });
+
+    choresDueToday.forEach((task) => {
+      const dueMs = resolveRecurringDueMs(task, today, startMs) ?? getTaskDueMs(task);
+      add({
+        id: `chore-${task.id}`,
+        kind: 'chore',
+        title: task.title,
+        timeLabel: timelineTimeLabel(dueMs),
+        sortMs: dueMs,
+        bucket: bucketFromTime(dueMs, (task as any).timeOfDay),
+        task,
+      });
+    });
+
+    sortedStories
+      .filter((story) => story.status !== 4)
+      .forEach((story) => {
+        const dueMs = resolveDateValue(story.targetDate || story.dueDate || (story as any).plannedStartDate);
+        if (dueMs && (dueMs < startMs || dueMs > endMs)) return;
+        add({
+          id: `story-${story.id}`,
+          kind: 'story',
+          title: story.title,
+          timeLabel: timelineTimeLabel(dueMs),
+          sortMs: dueMs,
+          bucket: bucketFromTime(dueMs, (story as any).timeOfDay),
+          story,
+        });
+      });
+
+    overviewCalendarEvents.forEach((event) => {
+      if (event.startMs && (event.startMs < startMs || event.startMs > endMs)) return;
+      add({
+        id: `event-${event.id}`,
+        kind: 'event',
+        title: event.title,
+        timeLabel: timelineTimeLabel(event.startMs, event.endMs),
+        sortMs: event.startMs,
+        bucket: bucketFromTime(event.startMs),
+      });
+    });
+
+    return rows.sort((a, b) => {
+      const aTime = a.sortMs ?? Number.MAX_SAFE_INTEGER;
+      const bTime = b.sortMs ?? Number.MAX_SAFE_INTEGER;
+      if (aTime !== bTime) return aTime - bTime;
+      return a.title.localeCompare(b.title);
+    });
+  }, [tasksDueTodayForMobile, choresDueToday, sortedStories, overviewCalendarEvents, getTaskDueMs]);
+
+  const renderChoresHabitsWidget = () => {
+    // Group by time-of-day bucket, respecting explicit timeOfDay field before falling back to schedule time.
+    const toChoreMs = (task: Task): number | null => resolveRecurringDueMs(task, new Date(), todayStartMs) ?? null;
+    const CHORE_BUCKETS = [
+      { key: 'morning' as const, label: 'Morning' },
+      { key: 'afternoon' as const, label: 'Afternoon' },
+      { key: 'evening' as const, label: 'Evening' },
+    ] as const;
+    const grouped = { morning: [] as Task[], afternoon: [] as Task[], evening: [] as Task[] };
+    choresDueToday.forEach((task) => {
+      const bucket = bucketFromTime(toChoreMs(task), (task as any).timeOfDay);
+      grouped[bucket].push(task);
+    });
+    const hasGroups = CHORE_BUCKETS.some((b) => grouped[b.key].length > 0);
+
+    const renderChoreItem = (task: Task) => {
+      const kind = getChoreKind(task) || 'chore';
+      const badgeVariant = kind === 'routine' ? 'success' : kind === 'habit' ? 'secondary' : 'primary';
+      const badgeLabel = kind === 'routine' ? 'Routine' : kind === 'habit' ? 'Habit' : 'Chore';
+      const dueMs = toChoreMs(task);
+      const dueLabel = formatDueLabel(dueMs);
+      const isOverdue = !!dueMs && dueMs < todayStartMs;
+      const busy = !!choreCompletionBusy[task.id];
+      return (
+        <ListGroup.Item key={task.id} className="d-flex align-items-center gap-2" style={{ fontSize: 14 }}>
+          <Form.Check
+            type="checkbox"
+            checked={busy}
+            disabled={busy}
+            onChange={() => handleCompleteChoreTask(task)}
+            aria-label={`Complete ${task.title}`}
+          />
+          <div className="flex-grow-1">
+            <div className="fw-semibold">{task.title}</div>
+            <div className="text-muted small">{isOverdue ? `Overdue · ${dueLabel}` : `Due ${dueLabel}`}</div>
+          </div>
+          <div className="d-flex flex-column align-items-end gap-1">
+            {isOverdue && <Badge bg="danger">Overdue</Badge>}
+            <Badge bg={badgeVariant}>{badgeLabel}</Badge>
+          </div>
+        </ListGroup.Item>
+      );
+    };
+
+    return (
+      <Card className="mb-3" style={{ background: '#f0fdf4' }}>
+        <Card.Header className="py-2 d-flex align-items-center justify-content-between" style={{ background: 'transparent', border: 'none' }}>
+          <div>
+            <strong>Chores &amp; Habits</strong>
+            <Badge bg="secondary" pill className="ms-2">{choresDueToday.length}</Badge>
+          </div>
+        </Card.Header>
+        <Card.Body className="pt-0">
+          {choresLoading ? (
+            <div className="text-muted small">Loading chores…</div>
+          ) : choresDueToday.length === 0 ? (
+            <div className="text-muted small">No chores, habits, or routines due today.</div>
+          ) : hasGroups ? (
+            <>
+              {CHORE_BUCKETS.map((b) => {
+                const items = grouped[b.key];
+                if (!items.length) return null;
+                return (
+                  <div key={b.key}>
+                    <div className="text-muted small fw-semibold px-1 pt-2 pb-1" style={{ textTransform: 'uppercase', fontSize: '0.68rem', letterSpacing: '0.05em' }}>
+                      {b.label}
+                    </div>
+                    <ListGroup variant="flush">
+                      {items.map(renderChoreItem)}
+                    </ListGroup>
                   </div>
-                  <div className="d-flex flex-column align-items-end gap-1">
-                    {isOverdue && <Badge bg="danger">Overdue</Badge>}
-                    <Badge bg={badgeVariant}>{badgeLabel}</Badge>
-                  </div>
-                </ListGroup.Item>
-              );
-            })}
-          </ListGroup>
-        )}
-      </Card.Body>
-    </Card>
-  );
+                );
+              })}
+            </>
+          ) : (
+            <ListGroup variant="flush">
+              {choresDueToday.map(renderChoreItem)}
+            </ListGroup>
+          )}
+        </Card.Body>
+      </Card>
+    );
+  };
 
   return (
     <Container fluid className="p-2" style={{ maxWidth: 480, width: '100%', overflowX: 'hidden' }}>
@@ -1319,6 +1524,92 @@ const MobileHome: React.FC = () => {
             </Card>
           )}
 
+              <Card className="mb-3" style={{ background: '#eef2ff' }}>
+              <Card.Header className="py-2 d-flex align-items-center justify-content-between" style={{ background: 'transparent', border: 'none' }}>
+                <div>
+                <strong>Daily Plan</strong>
+                <Badge bg="secondary" pill className="ms-2">{unifiedTimelineItems.length}</Badge>
+              </div>
+            </Card.Header>
+            <Card.Body className="pt-0">
+              <div className="text-muted small mb-2">Tip: Use the clock icon on task/story cards to defer with smart suggestions.</div>
+              {unifiedTimelineItems.length === 0 ? (
+                <div className="text-muted small">No tasks, stories, chores, or calendar events scheduled today.</div>
+              ) : (
+                (['morning', 'afternoon', 'evening'] as MobileTimelineBucket[]).map((bucket) => {
+                  const items = unifiedTimelineItems.filter((row) => row.bucket === bucket);
+                  if (items.length === 0) return null;
+                  const label = bucket === 'morning' ? 'Morning' : bucket === 'afternoon' ? 'Afternoon' : 'Evening';
+                  return (
+                    <div key={bucket} className="mb-2">
+                      <div className="text-uppercase text-muted small fw-semibold mb-1">{label}</div>
+                      <ListGroup variant="flush">
+                        {items.map((item) => {
+                          const isTask = item.kind === 'task' || item.kind === 'chore';
+                          const isDone = !!item.task && Number(item.task.status ?? 0) === 2;
+                          const badgeVariant =
+                            item.kind === 'story' ? 'info' :
+                            item.kind === 'chore' ? 'success' :
+                            item.kind === 'event' ? 'secondary' : 'primary';
+                          const badgeLabel =
+                            item.kind === 'story' ? 'Story' :
+                            item.kind === 'chore' ? 'Chore' :
+                            item.kind === 'event' ? 'Event' : 'Task';
+                          return (
+                            <ListGroup.Item key={item.id} className="d-flex align-items-center gap-2" style={{ fontSize: 14 }}>
+                              {isTask && item.task ? (
+                                <Form.Check
+                                  type="checkbox"
+                                  checked={isDone || !!choreCompletionBusy[item.task.id]}
+                                  disabled={isDone || !!choreCompletionBusy[item.task.id]}
+                                  onChange={() => {
+                                    if (item.kind === 'chore') {
+                                      void handleCompleteChoreTask(item.task!);
+                                    } else {
+                                      void updateTaskField(item.task!, { status: 2 });
+                                    }
+                                  }}
+                                  aria-label={`Complete ${item.title}`}
+                                />
+                              ) : (
+                                <span style={{ width: 14 }} />
+                              )}
+                              <div className="flex-grow-1">
+                                <div className="fw-semibold">
+                                  {item.task ? (
+                                    <button
+                                      type="button"
+                                      className="btn btn-link p-0 text-decoration-none text-start align-baseline"
+                                      onClick={() => setEditingTask(item.task!)}
+                                    >
+                                      {item.title}
+                                    </button>
+                                  ) : item.story ? (
+                                    <button
+                                      type="button"
+                                      className="btn btn-link p-0 text-decoration-none text-start align-baseline"
+                                      onClick={() => setEditingStory(item.story!)}
+                                    >
+                                      {item.title}
+                                    </button>
+                                  ) : (
+                                    item.title
+                                  )}
+                                </div>
+                                <div className="text-muted small">{item.timeLabel}</div>
+                              </div>
+                              <Badge bg={badgeVariant}>{badgeLabel}</Badge>
+                            </ListGroup.Item>
+                          );
+                        })}
+                      </ListGroup>
+                    </div>
+                  );
+                })
+              )}
+            </Card.Body>
+          </Card>
+
           {renderChoresHabitsWidget()}
 
           {(summary?.worldSummary || worldWeatherLine || worldNewsItems.length > 0) && (
@@ -1500,6 +1791,13 @@ const MobileHome: React.FC = () => {
                         <Button variant="outline-secondary" size="sm" onClick={() => openNoteModal('task', task.id)}>Note</Button>
                         <Button variant="outline-primary" size="sm" onClick={() => setEditingTask(task)}>Edit</Button>
                         <Button
+                          variant="outline-secondary"
+                          size="sm"
+                          onClick={() => setDeferTarget({ type: 'task', id: task.id, title: task.title })}
+                        >
+                          <Clock3 size={14} className="me-1" /> Defer
+                        </Button>
+                        <Button
                           variant="outline-info"
                           size="sm"
                           disabled={convertingTaskId === task.id}
@@ -1591,7 +1889,14 @@ const MobileHome: React.FC = () => {
                       onClick={() => handleFlagPriorityStory(story)}
                       title={(story as any).userPriorityFlag ? 'Remove #1 priority flag' : 'Flag as #1 priority for calendar'}
                     >
-                      <CalendarClock size={14} /> {(story as any).userPriorityFlag ? '#1' : 'Priority'}
+                      <AlertCircle size={14} /> {(story as any).userPriorityFlag ? '#1' : 'Priority'}
+                    </Button>
+                    <Button
+                      variant="outline-secondary"
+                      size="sm"
+                      onClick={() => setDeferTarget({ type: 'story', id: story.id, title: story.title })}
+                    >
+                      <Clock3 size={14} className="me-1" /> Defer
                     </Button>
                     <Button variant="outline-primary" size="sm" onClick={() => setEditingStory(story)}>Edit</Button>
                   </div>
@@ -1797,6 +2102,14 @@ const MobileHome: React.FC = () => {
         story={editingStory}
         goals={goals}
         onHide={() => setEditingStory(null)}
+      />
+      <DeferItemModal
+        show={!!deferTarget}
+        onHide={() => setDeferTarget(null)}
+        itemType={deferTarget?.type || 'task'}
+        itemId={deferTarget?.id || ''}
+        itemTitle={deferTarget?.title || ''}
+        onApply={applyDeferredDate}
       />
     </Container>
   );

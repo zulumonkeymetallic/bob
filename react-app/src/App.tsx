@@ -103,6 +103,7 @@ import SteamSettings from './components/settings/integrations/SteamSettings';
 import HardcoverSettings from './components/settings/integrations/HardcoverSettings';
 import TraktSettings from './components/settings/integrations/TraktSettings';
 import YoutubeSettings from './components/settings/integrations/YoutubeSettings';
+import PublicGoalView from './components/PublicGoalView';
 import { useEntityAudit } from './hooks/useEntityAudit';
 import DeepLinkStory from './components/routes/DeepLinkStory';
 import DeepLinkGoal from './components/routes/DeepLinkGoal';
@@ -111,9 +112,11 @@ import QueryDeepLinkGate from './components/routes/QueryDeepLinkGate';
 import AdvancedOverview from './components/AdvancedOverview';
 import FinanceDashboardAdvanced from './components/finance/FinanceDashboardAdvanced';
 import CapacityDashboard from './components/CapacityDashboard';
+import FocusGoalsPage from './components/FocusGoalsPage';
 import { collection, deleteDoc, doc, limit, onSnapshot, orderBy, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
 import { db } from './firebase';
 import type { Goal, Story, Task } from './types';
+import { setupRecaptchaOnStartup } from './utils/recaptchaHelper';
 
 
 // Lazy-loaded heavy routes
@@ -149,19 +152,27 @@ function AppContent() {
   const [showImportModal, setShowImportModal] = useState(false);
   const [showAssistant, setShowAssistant] = useState(false);
 
-  // Root path redirect: mobile -> /mobile, desktop -> alternate between overview and kanban
+  // Root path redirect: mobile -> /mobile, desktop -> rotate between overview, kanban, and calendar
   const RootRedirect: React.FC = () => {
     const dev = useDeviceInfo();
     if (dev?.isMobile) return <Navigate to="/mobile" replace />;
-    // Alternate landing page based on even/odd hour
     const hour = new Date().getHours();
-    const target = hour % 2 === 0 ? '/dashboard' : '/sprints/kanban';
+    // Before 7am: show calendar first so you can review today's schedule
+    if (hour < 7) return <Navigate to="/calendar" replace />;
+    // 7am onwards: 3-way rotation — dashboard / kanban / calendar
+    const targets = ['/dashboard', '/sprints/kanban', '/calendar'] as const;
+    const target = targets[hour % 3];
     return <Navigate to={target} replace />;
   };
 
   // Data for the global sidebar
   const [goals, setGoals] = useState<Goal[]>([]);
   const [stories, setStories] = useState<Story[]>([]);
+
+  // Initialize reCAPTCHA on app load
+  useEffect(() => {
+    setupRecaptchaOnStartup();
+  }, []);
 
   useEffect(() => {
     if (!currentUser?.uid || !currentPersona) {
@@ -338,6 +349,7 @@ function AppContent() {
             <Route path="/dashboard/habit-tracking" element={<HabitsChoresDashboard />} />
             <Route path="/dashboard/habits-chores" element={<Navigate to="/dashboard/habit-tracking" replace />} />
             <Route path="/metrics/progress" element={<ThemeProgressDashboard />} />
+            <Route path="/focus-goals" element={<FocusGoalsPage />} />
             <Route path="/metrics" element={<AdvancedOverview />} />
             <Route path="/overview/advanced" element={<Navigate to="/metrics" replace />} />
             <Route
@@ -477,6 +489,9 @@ function AppContent() {
             {/* Removed by request: Test Suite and Changelog routes */}
             <Route path="/test" element={<Navigate to="/dashboard" replace />} />
             <Route path="/changelog" element={<Navigate to="/dashboard" replace />} />
+            
+            {/* Public shared goals */}
+            <Route path="/share/:shareCode" element={<PublicGoalView />} />
           </Routes>
 
           {/* Assistant (floating, near FAB but separate) */}

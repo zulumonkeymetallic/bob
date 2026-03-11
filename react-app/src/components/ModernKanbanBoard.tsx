@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Card, Row, Col, Button, Form, Modal } from 'react-bootstrap';
+import { Card, Row, Col, Button, Form, Modal, Alert } from 'react-bootstrap';
 import {
   DndContext,
   closestCenter,
@@ -22,7 +22,7 @@ import {
 } from '@dnd-kit/sortable';
 import { pointerWithin } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
-import { Edit3, Trash2, Target, BookOpen, Activity, Plus, List, Grid, Maximize2, Minimize2, GripVertical, Wand2 } from 'lucide-react';
+import { Edit3, Trash2, Target, BookOpen, Activity, Plus, List, Grid, Maximize2, Minimize2, GripVertical, Wand2, Clock3 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { db, functions } from '../firebase';
 import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc, deleteDoc, orderBy, getDocs, limit } from 'firebase/firestore';
@@ -38,6 +38,7 @@ import { useActivityTracking } from '../hooks/useActivityTracking';
 import { generateRef, displayRefForEntity, validateRef } from '../utils/referenceGenerator';
 import EditStoryModal from './EditStoryModal';
 import AddStoryModal from './AddStoryModal';
+import DeferItemModal from './DeferItemModal';
 import TagInput from './common/TagInput';
 import { DnDMutationHandler } from '../utils/dndMutations';
 import { themeVars } from '../utils/themeVars';
@@ -140,6 +141,11 @@ interface ScheduledBlockInfo {
   start: number;
   end: number;
   title?: string;
+  source?: string;
+  isAiGenerated?: boolean;
+  googleEventId?: string;
+  linkedStoryId?: string;
+  entryMethod?: string;
 }
 
 // Droppable Area Component
@@ -180,9 +186,10 @@ const SortableTaskCard: React.FC<{
   scheduledBlock?: ScheduledBlockInfo;
   onEdit: (task: Task) => void;
   onItemClick: (task: Task) => void;
+  onDefer?: (task: Task) => void;
   showTags?: boolean;
   formatTag?: (tag: string) => string;
-}> = ({ task, story, themeColor, scheduledBlock, onEdit, onItemClick, showTags = false, formatTag }) => {
+}> = ({ task, story, themeColor, scheduledBlock, onEdit, onItemClick, onDefer, showTags = false, formatTag }) => {
   const { showSidebar } = useSidebar();
   const {
     attributes,
@@ -336,6 +343,22 @@ const SortableTaskCard: React.FC<{
               >
                 <Edit3 size={11} />
               </Button>
+              {onDefer && (
+                <Button
+                  variant="link"
+                  size="sm"
+                  className="p-0"
+                  style={{ width: 24, height: 24, color: themeVars.muted }}
+                  title="Defer intelligently"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onDefer(task);
+                  }}
+                  onPointerDown={(e) => e.stopPropagation()}
+                >
+                  <Clock3 size={11} />
+                </Button>
+              )}
             </div>
           </div>
 
@@ -497,6 +520,16 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
   const [showAddModal, setShowAddModal] = useState(false);
   const [showAddStoryModal, setShowAddStoryModal] = useState(false);
   const [addType, setAddType] = useState<'story' | 'task'>('story');
+  const [scheduleStory, setScheduleStory] = useState<Story | null>(null);
+  const [showScheduleModal, setShowScheduleModal] = useState(false);
+  const [scheduleForm, setScheduleForm] = useState<{ title: string; startLocal: string; durationMin: number }>({
+    title: '',
+    startLocal: '',
+    durationMin: 60,
+  });
+  const [scheduleSaving, setScheduleSaving] = useState(false);
+  const [autoLinkMessage, setAutoLinkMessage] = useState<string | null>(null);
+  const [deferTarget, setDeferTarget] = useState<{ type: 'task' | 'story'; id: string; title: string } | null>(null);
 
   // DnD state
   const [activeId, setActiveId] = useState<UniqueIdentifier | null>(null);
@@ -656,6 +689,11 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
               start: Number(block.start),
               end: Number(block.end),
               title: block.title,
+              source: String((block as any).source || ''),
+              isAiGenerated: Boolean((block as any).isAiGenerated),
+              googleEventId: (block as any).googleEventId ? String((block as any).googleEventId) : undefined,
+              linkedStoryId: (block as any).linkedStoryId ? String((block as any).linkedStoryId) : undefined,
+              entryMethod: (block as any).entryMethod ? String((block as any).entryMethod) : undefined,
             };
           });
         setScheduledBlocksByEntity(nextMap);
@@ -666,6 +704,105 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
       }
     );
   }, [currentUser?.uid, currentPersona]);
+
+  useEffect(() => {
+    if (!currentUser?.uid || typeof window === 'undefined') return;
+    const storageKey = `gcal_autolink_last_${currentUser.uid}`;
+    const now = Date.now();
+    const last = Number(window.localStorage.getItem(storageKey) || 0);
+    if (Number.isFinite(last) && (now - last) < 15 * 60 * 1000) return;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const callable = httpsCallable(functions, 'gcalLinkUnlinkedEvents');
+        const response: any = await callable({ dryRun: false });
+        const linked = Number(response?.data?.linked || 0);
+        const reviewed = Number(response?.data?.reviewed || 0);
+        if (!cancelled && linked > 0) {
+          setAutoLinkMessage(`Auto-linked ${linked} Google Calendar event${linked === 1 ? '' : 's'} (${reviewed} reviewed).`);
+        }
+      } catch (error) {
+        console.warn('[ModernKanbanBoard] gcalLinkUnlinkedEvents failed', (error as any)?.message || error);
+      } finally {
+        try {
+          window.localStorage.setItem(storageKey, String(now));
+        } catch {
+          // ignore storage failures
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser?.uid]);
+
+  const getStoryPointsRemaining = useCallback((story: Story): number => {
+    const explicitRemaining = Number((story as any).pointsRemaining);
+    if (Number.isFinite(explicitRemaining) && explicitRemaining >= 0) return explicitRemaining;
+    const totalPoints = Number((story as any).points || 0);
+    const progressPct = Number((story as any).progressPct || 0);
+    if (!Number.isFinite(totalPoints) || totalPoints <= 0) return 0;
+    return Math.max(0, Math.ceil((totalPoints * (1 - Math.min(100, Math.max(0, progressPct)) / 100)) * 10) / 10);
+  }, []);
+
+  const openScheduleModal = useCallback((story: Story) => {
+    const nextHour = new Date();
+    nextHour.setMinutes(0, 0, 0);
+    nextHour.setHours(nextHour.getHours() + 1);
+    const local = new Date(nextHour.getTime() - nextHour.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+    setScheduleStory(story);
+    setScheduleForm({
+      title: story.title || 'Focus block',
+      startLocal: local,
+      durationMin: 60,
+    });
+    setShowScheduleModal(true);
+  }, []);
+
+  const saveManualSchedule = useCallback(async () => {
+    if (!currentUser?.uid || !scheduleStory || !scheduleForm.startLocal) return;
+    setScheduleSaving(true);
+    try {
+      const start = new Date(scheduleForm.startLocal);
+      const durationMin = Math.max(15, Number(scheduleForm.durationMin || 60));
+      const end = new Date(start.getTime() + durationMin * 60 * 1000);
+      await addDoc(collection(db, 'calendar_blocks'), {
+        ownerUid: currentUser.uid,
+        title: String(scheduleForm.title || scheduleStory.title || 'Focus block').trim(),
+        start: start.getTime(),
+        end: end.getTime(),
+        storyId: scheduleStory.id,
+        source: 'manual',
+        entryMethod: 'manual_kanban',
+        isAiGenerated: false,
+        status: 'planned',
+        persona: currentPersona || 'personal',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      setShowScheduleModal(false);
+      setScheduleStory(null);
+    } catch (error) {
+      console.error('[ModernKanbanBoard] manual schedule failed', error);
+      alert((error as any)?.message || 'Failed to create calendar block.');
+    } finally {
+      setScheduleSaving(false);
+    }
+  }, [currentUser?.uid, currentPersona, scheduleForm, scheduleStory]);
+
+  const applyDeferredDate = useCallback(async ({ dateMs, rationale, source }: { dateMs: number; rationale: string; source: string }) => {
+    if (!deferTarget) return;
+    const collectionName = deferTarget.type === 'story' ? 'stories' : 'tasks';
+    await updateDoc(doc(db, collectionName, deferTarget.id), {
+      deferredUntil: dateMs,
+      deferredReason: rationale,
+      deferredBy: source,
+      deferredAt: serverTimestamp(),
+    } as any);
+    setDeferTarget(null);
+  }, [deferTarget]);
 
   // Wire sidebar inline editor to Firestore updates
   useEffect(() => {
@@ -1341,6 +1478,11 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
         </div>
       </div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', marginBottom: '16px' }}>
+        {autoLinkMessage && (
+          <Alert variant="info" className="py-1 px-2 mb-0 w-100" dismissible onClose={() => setAutoLinkMessage(null)}>
+            <small>{autoLinkMessage}</small>
+          </Alert>
+        )}
         <Form.Check
           inline
           type="switch"
@@ -1505,6 +1647,8 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
                                       onEdit={(story) => handleEdit(story, 'story')}
                                       onDelete={(story) => handleDelete(story, 'story')}
                                       onItemClick={(story) => handleItemClick(story, 'story')}
+                                      onManualSchedule={(story) => openScheduleModal(story)}
+                                      onDefer={(story) => setDeferTarget({ type: 'story', id: story.id, title: story.title || 'Untitled story' })}
                                       showTags={showTags}
                                     />
                                   );
@@ -1537,6 +1681,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
                                       themeColor={themeColor}
                                       onEdit={(task) => handleEdit(task, 'task')}
                                       onItemClick={(task) => handleItemClick(task, 'task')}
+                                      onDefer={(task) => setDeferTarget({ type: 'task', id: task.id, title: task.title || 'Untitled task' })}
                                       showTags={showTags}
                                       formatTag={formatTaskTag}
                                     />
@@ -1722,6 +1867,63 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
             </Button>
           </Modal.Footer>
         </Modal>
+
+        <Modal show={showScheduleModal} onHide={() => setShowScheduleModal(false)} centered>
+          <Modal.Header closeButton>
+            <Modal.Title>Schedule Story Block</Modal.Title>
+          </Modal.Header>
+          <Modal.Body>
+            <div className="mb-2"><strong>{scheduleStory?.title || 'Story'}</strong></div>
+            {scheduleStory && (
+              <div className="text-muted small mb-3">
+                Recommendation: create about {Math.max(1, Math.ceil(getStoryPointsRemaining(scheduleStory) / 2))} calendar block{Math.max(1, Math.ceil(getStoryPointsRemaining(scheduleStory) / 2)) === 1 ? '' : 's'} based on ~{getStoryPointsRemaining(scheduleStory)} points remaining.
+              </div>
+            )}
+            <Form.Group className="mb-3">
+              <Form.Label>Event title</Form.Label>
+              <Form.Control
+                type="text"
+                value={scheduleForm.title}
+                onChange={(e) => setScheduleForm((prev) => ({ ...prev, title: e.target.value }))}
+              />
+            </Form.Group>
+            <Form.Group className="mb-3">
+              <Form.Label>Start</Form.Label>
+              <Form.Control
+                type="datetime-local"
+                value={scheduleForm.startLocal}
+                onChange={(e) => setScheduleForm((prev) => ({ ...prev, startLocal: e.target.value }))}
+              />
+            </Form.Group>
+            <Form.Group>
+              <Form.Label>Duration (minutes)</Form.Label>
+              <Form.Control
+                type="number"
+                min={15}
+                step={15}
+                value={scheduleForm.durationMin}
+                onChange={(e) => setScheduleForm((prev) => ({ ...prev, durationMin: Number(e.target.value) || 60 }))}
+              />
+            </Form.Group>
+          </Modal.Body>
+          <Modal.Footer>
+            <Button variant="secondary" onClick={() => setShowScheduleModal(false)}>
+              Cancel
+            </Button>
+            <Button variant="primary" onClick={saveManualSchedule} disabled={scheduleSaving || !scheduleForm.startLocal}>
+              {scheduleSaving ? 'Scheduling…' : 'Create calendar event'}
+            </Button>
+          </Modal.Footer>
+        </Modal>
+
+        <DeferItemModal
+          show={Boolean(deferTarget)}
+          onHide={() => setDeferTarget(null)}
+          itemType={deferTarget?.type || 'task'}
+          itemId={deferTarget?.id || ''}
+          itemTitle={deferTarget?.title || ''}
+          onApply={applyDeferredDate}
+        />
 
       </div>
 

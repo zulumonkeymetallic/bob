@@ -73,6 +73,44 @@ function normaliseBlock(block) {
   };
 }
 
+const OUTDOOR_TITLE_KEYWORDS = ['car wash', 'lawn', 'mow', 'garden', 'outdoor', 'outside', 'yard', 'driveway', 'patio'];
+const MORNING_TITLE_KEYWORDS = ['morning', 'breakfast', 'wake'];
+const AFTERNOON_TITLE_KEYWORDS = ['afternoon', 'lunch', 'midday'];
+const EVENING_TITLE_KEYWORDS = ['evening', 'dinner', 'bedtime', 'night', 'tonight', 'pm'];
+
+function inferTimeOfDayFromTitle(title) {
+  const normalized = String(title || '').toLowerCase();
+  if (!normalized) return null;
+  if (MORNING_TITLE_KEYWORDS.some((kw) => normalized.includes(kw))) return 'morning';
+  if (AFTERNOON_TITLE_KEYWORDS.some((kw) => normalized.includes(kw))) return 'afternoon';
+  if (EVENING_TITLE_KEYWORDS.some((kw) => normalized.includes(kw))) return 'evening';
+  if (OUTDOOR_TITLE_KEYWORDS.some((kw) => normalized.includes(kw))) return 'morning';
+  return null;
+}
+
+function resolveOccurrenceTimeOfDay(occurrence) {
+  const explicit = String(occurrence?.timeOfDay || '').toLowerCase();
+  if (explicit === 'morning' || explicit === 'afternoon' || explicit === 'evening') return explicit;
+  return inferTimeOfDayFromTitle(occurrence?.title);
+}
+
+function isOutdoorOccurrence(occurrence) {
+  const normalized = String(occurrence?.title || '').toLowerCase();
+  if (!normalized) return false;
+  return OUTDOOR_TITLE_KEYWORDS.some((kw) => normalized.includes(kw));
+}
+
+function classifyTimeOfDayFromHour(hour) {
+  if (hour >= 5 && hour < 13) return 'morning';
+  if (hour >= 13 && hour < 19) return 'afternoon';
+  return 'evening';
+}
+
+function classifyTimeOfDayFromDateTime(dateTime) {
+  const hour = Number(dateTime?.hour || 0);
+  return classifyTimeOfDayFromHour(hour);
+}
+
 /**
  * Intelligent Chore Placement Heuristics
  * Evaluates whether a chore is suitable for a given block based on context
@@ -95,8 +133,7 @@ function isChoreEligibleForBlock(occurrence, block) {
 
   // ========== OUTDOOR TASK HEURISTICS ==========
   // Don't schedule outdoor tasks at night (before 7am or after 6pm)
-  const outdoorKeywords = ['car wash', 'lawn', 'mow', 'garden', 'outdoor', 'outside', 'yard', 'driveway', 'patio'];
-  const isOutdoorTask = outdoorKeywords.some(kw => title.includes(kw));
+  const isOutdoorTask = OUTDOOR_TITLE_KEYWORDS.some((kw) => title.includes(kw));
 
   if (isOutdoorTask) {
     if (startHour < 7 || endHour > 18) {
@@ -105,11 +142,8 @@ function isChoreEligibleForBlock(occurrence, block) {
   }
 
   // ========== MORNING/EVENING PREFERENCE HEURISTICS ==========
-  const morningKeywords = ['morning', 'breakfast', 'wake'];
-  const eveningKeywords = ['evening', 'dinner', 'bedtime', 'night'];
-
-  const isMorningTask = morningKeywords.some(kw => title.includes(kw));
-  const isEveningTask = eveningKeywords.some(kw => title.includes(kw));
+  const isMorningTask = MORNING_TITLE_KEYWORDS.some((kw) => title.includes(kw));
+  const isEveningTask = EVENING_TITLE_KEYWORDS.some((kw) => title.includes(kw));
 
   if (isMorningTask && startHour > 10) {
     return { eligible: false, reason: 'morning-task-too-late' };
@@ -167,15 +201,37 @@ function computeEligibleBlocks(blocks, occurrence) {
 
   // ========== APPLY INTELLIGENT CHORE HEURISTICS ==========
   const choreFiltered = tagFiltered.filter((b) => {
-    const { eligible, reason} = isChoreEligibleForBlock(occurrence, b);
+    const { eligible, reason } = isChoreEligibleForBlock(occurrence, b);
     if (!eligible && reason) {
       console.log(`[Scheduler] Filtered block "${b.name || b.id}" for chore "${occurrence.title}": ${reason}`);
     }
     return eligible;
   });
 
-  // Theme Filtering with Override Logic (applied AFTER chore filtering)
-  const themeFiltered = choreFiltered.filter(b => {
+  // ========== APPLY TIME OF DAY HEURISTICS ==========
+  const timeOfDayPreference = resolveOccurrenceTimeOfDay(occurrence);
+  const hasOutdoorConstraint = isOutdoorOccurrence(occurrence);
+  const timeFiltered = choreFiltered.filter((b) => {
+    if (!timeOfDayPreference && !hasOutdoorConstraint) return true;
+
+    const firstWindow = Array.isArray(b.windows) && b.windows.length > 0 ? b.windows[0] : null;
+    const startTime = firstWindow ? firstWindow.startTime : '00:00';
+    const endTime = firstWindow ? firstWindow.endTime : '23:59';
+    const [startHour] = startTime.split(':').map(Number);
+    const [endHour] = endTime.split(':').map(Number);
+
+    // Outdoor work is never planned in night windows.
+    if (hasOutdoorConstraint && (startHour < 7 || endHour > 18)) return false;
+
+    if (timeOfDayPreference === 'morning' && startHour >= 13) return false;
+    if (timeOfDayPreference === 'afternoon' && (startHour < 13 || startHour >= 19)) return false;
+    if (timeOfDayPreference === 'evening' && startHour < 19) return false;
+
+    return true;
+  });
+
+  // Theme Filtering with Override Logic (applied AFTER chore & time filtering)
+  const themeFiltered = timeFiltered.filter(b => {
     // If block has no theme, it accepts all items
     if (!b.theme) return true;
 
@@ -396,6 +452,7 @@ function computeChoreRoutineOccurrences(chores, routines, windowStart, windowEnd
     const dueDates = expandRecurrence(routine.recurrence, start, end);
     for (const dt of dueDates) {
       const dayKey = isoDate(dt);
+      const routineRef = routine.ref || routine.reference || routine.displayId || null;
       occurrences.push({
         sourceType: 'routine',
         sourceId: routine.id,
@@ -411,6 +468,10 @@ function computeChoreRoutineOccurrences(chores, routines, windowStart, windowEnd
         title: routine.title,
         theme: inferThemeFromItem(routine, 'routine'),
         goalId: routine.goalId || null,
+        storyId: routine.storyId || null,
+        sourceRef: routineRef,
+        persona: routine.persona || null,
+        timeOfDay: routine.timeOfDay || null,
       });
     }
   }
@@ -491,6 +552,8 @@ function computeTaskOccurrences(tasks, windowStart, windowEnd, userId) {
       storyId: task.storyId || null,
       sourceRef: taskRef,
       persona: task.persona || null,
+      timeOfDay: task.timeOfDay || null,
+      estimateMin: estimateMinutes || null,
     });
   }
 
@@ -585,6 +648,7 @@ async function computeStoryOccurrences(stories, windowStart, windowEnd, userId, 
       theme,
       goalId: story.goalId || null,
       storyRef,
+      timeOfDay: story.timeOfDay || null,
     });
   }
 
@@ -611,9 +675,11 @@ function sortOccurrences(a, b) {
   // Standard priority sorting
   if (a.priority !== b.priority) return a.priority - b.priority;
 
-  // Chores before other types (within same priority)
-  if (a.sourceType === 'chore' && b.sourceType !== 'chore') return -1;
-  if (a.sourceType !== 'chore' && b.sourceType === 'chore') return 1;
+  // Stories/tasks before chores/routines — chores fill remaining slots after planned work
+  const aIsChore = ['chore', 'routine', 'habit'].includes(a.sourceType);
+  const bIsChore = ['chore', 'routine', 'habit'].includes(b.sourceType);
+  if (!aIsChore && bIsChore) return -1; // a (story/task) before b (chore)
+  if (aIsChore && !bIsChore) return 1;  // b (story/task) before a (chore)
 
   // Alphabetical by source ID as final tie-breaker
   return a.sourceId.localeCompare(b.sourceId);
@@ -719,6 +785,7 @@ function planOccurrences({
         title: occurrence.title,
         dayKey: occurrence.dayKey,
         reason: 'no-eligible-block',
+        timeOfDayPreference: resolveOccurrenceTimeOfDay(occurrence),
         requiredBlockId: occurrence.requiredBlockId || null,
         candidateBlockIds: [],
         deepLink: deepLink || null,
@@ -778,6 +845,7 @@ function planOccurrences({
           dayKey: occurrence.dayKey, // Keep yyyy-MM-dd for backward compatibility
           blockId: block.id,
           priority: occurrence.priority,
+          timeOfDay: classifyTimeOfDayFromDateTime(start),
           plannedStart: isoDateTime(start),
           plannedEnd: isoDateTime(end),
           bufferBeforeMinutes: block.buffers.before,
@@ -832,6 +900,7 @@ function planOccurrences({
         title: occurrence.title,
         dayKey: occurrence.dayKey,
         reason: 'no-available-slot',
+        timeOfDayPreference: resolveOccurrenceTimeOfDay(occurrence),
         requiredBlockId: occurrence.requiredBlockId || null,
         candidateBlockIds: blockIds,
         deepLink: deepLink || null,

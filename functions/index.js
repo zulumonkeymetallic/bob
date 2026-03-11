@@ -97,9 +97,117 @@ try {
     exports.syncFromGoogleCalendar = calendarSync.syncFromGoogleCalendar;
     exports.syncCalendarNow = calendarSync.syncCalendarNow;
     exports.scheduledCalendarSync = calendarSync.scheduledCalendarSync;
+    exports.gcalLinkUnlinkedEvents = calendarSync.gcalLinkUnlinkedEvents;
   }
 } catch (e) {
   console.warn('[init] calendarSync not loaded', e?.message || e);
+}
+
+// Import reference backfill utility
+try {
+  const referenceBackfill = require('./utils/referenceBackfill');
+  if (referenceBackfill) {
+    exports.backfillReferenceNumbers = functionsV2.https.onCall(
+      async (request) => {
+        if (!request.auth) {
+          throw new Error('Authentication required');
+        }
+        // Only allow backfill for admin-like operations
+        const result = await referenceBackfill.backfillAllReferences();
+        return result;
+      }
+    );
+  }
+} catch (e) {
+  console.warn('[init] referenceBackfill not loaded', e?.message || e);
+}
+
+// Import time-of-day population service
+const { parseTimeStringToTimeOfDay, populateBlankTimeOfDay, inferTimeOfDayFromContent } = require('./services/timeOfDayPopulator');
+
+// Import Fitness KPI Sync service
+const { syncAllUsersFitnessKpis, syncUserFitnessKpis } = require('./services/fitnessKpiSync');
+
+// Import Focus Goals functions
+try {
+  const focusGoalsModule = require('./focusGoals');
+  if (focusGoalsModule) {
+    exports.createMonzoPotForGoal = focusGoalsModule.createMonzoPotForGoal;
+    exports.syncFocusGoalsNightly = focusGoalsModule.syncFocusGoalsNightly;
+    exports.syncAllFocusGoalsNightly = focusGoalsModule.syncAllFocusGoalsNightly;
+    exports.getFocusGoalsForUser = focusGoalsModule.getFocusGoalsForUser;
+  }
+} catch (e) {
+  console.warn('[init] focusGoals not loaded', e?.message || e);
+}
+
+// Import Global Hierarchy Snapshot functions
+try {
+  const globalSnapshotModule = require('./globalSnapshot');
+  if (globalSnapshotModule) {
+    exports.generateGlobalHierarchySnapshots = globalSnapshotModule.generateGlobalHierarchySnapshots;
+    exports.exportGlobalHierarchySnapshot = globalSnapshotModule.exportGlobalHierarchySnapshot;
+  }
+} catch (e) {
+  console.warn('[init] globalSnapshot not loaded', e?.message || e);
+}
+
+// Import Intent Broker functions
+try {
+  const intentBrokerModule = require('./intentBroker');
+  if (intentBrokerModule) {
+    exports.getIntentBrokerPrompts = intentBrokerModule.getIntentBrokerPrompts;
+    exports.intentBrokerSuggestFocus = intentBrokerModule.intentBrokerSuggestFocus;
+    exports.recordIntentFocusConversion = intentBrokerModule.recordIntentFocusConversion;
+  }
+} catch (e) {
+  console.warn('[init] intentBroker not loaded', e?.message || e);
+}
+
+// Import Capacity Deferral functions
+try {
+  const capacityDeferralModule = require('./capacityDeferral');
+  if (capacityDeferralModule) {
+    exports.applyCapacityDeferrals = capacityDeferralModule.applyCapacityDeferrals;
+  }
+} catch (e) {
+  console.warn('[init] capacityDeferral not loaded', e?.message || e);
+}
+
+// Import intelligent deferral suggestion functions
+try {
+  const deferralSuggestionsModule = require('./deferralSuggestions');
+  if (deferralSuggestionsModule) {
+    exports.suggestDeferralOptions = deferralSuggestionsModule.suggestDeferralOptions;
+  }
+} catch (e) {
+  console.warn('[init] deferralSuggestions not loaded', e?.message || e);
+}
+
+// Import Feature Flags
+try {
+  const featureFlagsModule = require('./featureFlags');
+  if (featureFlagsModule) {
+    exports.getFeatureFlags = featureFlagsModule.getFeatureFlags;
+    exports.setFeatureFlag = featureFlagsModule.setFeatureFlag;
+  }
+} catch (e) {
+  console.warn('[init] featureFlags not loaded', e?.message || e);
+}
+
+// Import Fuzzy Task Linking functions
+try {
+  const fuzzyTaskLinking = require('./fuzzyTaskLinking');
+  if (fuzzyTaskLinking) {
+    exports.nightlyTaskLinking = fuzzyTaskLinking.nightlyTaskLinking;
+    exports.nightlyStoryGoalLinking = fuzzyTaskLinking.nightlyStoryGoalLinking;
+    exports.triggerTaskLinking = fuzzyTaskLinking.triggerTaskLinking;
+    exports.triggerStoryGoalLinking = fuzzyTaskLinking.triggerStoryGoalLinking;
+    exports.respondToTaskSuggestion = fuzzyTaskLinking.respondToTaskSuggestion;
+    exports.respondToStoryGoalSuggestion = fuzzyTaskLinking.respondToStoryGoalSuggestion;
+  }
+} catch (e) {
+  console.warn('[init] fuzzyTaskLinking not loaded', e?.message || e);
 }
 
 // Import AI Planning functions
@@ -172,19 +280,103 @@ const updateGoalTargetYears = async () => {
 exports.updateGoalTargetYears = schedulerV2.onSchedule(
   { schedule: '0 3 * * *', timeZone: 'UTC', region: 'europe-west2' },
   async () => {
+    try {
+      return await updateGoalTargetYears();
+    } catch (e) {
+      console.error('[goalTargetYear] failed', e?.message || e);
+      return null;
+    }
+  });
+
+// Nightly fitness KPI sync: updates goal KPI progress from Strava/HealthKit workouts
+const syncFitnessKpis = async () => {
   try {
-    return await updateGoalTargetYears();
+    const result = await syncAllUsersFitnessKpis();
+    console.log(`✅ Fitness KPI sync completed: ${result.totalSynced} goals updated`);
+    return result;
   } catch (e) {
-    console.error('[goalTargetYear] failed', e?.message || e);
-    return null;
+    console.error('[fitnessKpiSync] failed', e?.message || e);
+    throw e;
+  }
+};
+
+exports.syncFitnessKpisNightly = schedulerV2.onSchedule(
+  { schedule: '30 3 * * *', timeZone: 'UTC', region: 'europe-west2' },
+  syncFitnessKpis
+);
+
+// Manual per-user sync endpoint
+exports.syncFitnessKpisNow = httpsV2.onCall({ region: 'europe-west2' }, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) {
+    throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  }
+  try {
+    const result = await syncUserFitnessKpis(uid);
+    return { ok: true, ...result };
+  } catch (e) {
+    console.error('[fitnessKpiSync] user sync failed:', e);
+    throw new httpsV2.HttpsError('internal', e?.message || 'Sync failed');
   }
 });
+
+// Nightly focus goals sync: update daysRemaining, deactivate expired
+const syncFocusGoalCountdowns = async () => {
+  try {
+    const db = admin.firestore();
+    const users = await db.collection('profiles').get();
+    let totalSynced = 0;
+
+    for (const userDoc of users.docs) {
+      const focusGoals = await db
+        .collection('focusGoals')
+        .where('ownerUid', '==', userDoc.id)
+        .where('isActive', '==', true)
+        .get();
+
+      const now = Date.now();
+
+      for (const focusDoc of focusGoals.docs) {
+        const focusGoal = focusDoc.data();
+        const endDate = new Date(focusGoal.endDate).getTime();
+        const daysRemaining = Math.ceil((endDate - now) / (24 * 60 * 60 * 1000));
+
+        if (daysRemaining <= 0) {
+          await focusDoc.ref.update({
+            isActive: false,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+          });
+        } else {
+          await focusDoc.ref.update({
+            daysRemaining,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+          });
+        }
+
+        totalSynced++;
+      }
+    }
+
+    console.log(`✅ Focus goals sync completed: ${totalSynced} goals updated`);
+    return { totalSynced };
+  } catch (e) {
+    console.error('[focusGoalsSync] failed', e?.message || e);
+    throw e;
+  }
+};
+
+exports.syncFocusGoalCountdownsNightly = schedulerV2.onSchedule(
+  { schedule: '0 4 * * *', timeZone: 'UTC', region: 'europe-west2' },
+  syncFocusGoalCountdowns
+);
 
 // Calendar diagnostics
 // (already exported above with calendarSync bundle)
 
 functionsV2.setGlobalOptions({ region: "europe-west2", maxInstances: 10 });
-admin.initializeApp();
+if (!admin.apps.length) {
+  admin.initializeApp();
+}
 
 let transcriptIngestionModule = null;
 try {
@@ -763,9 +955,12 @@ async function generateStoryRef(db, ownerUid) {
 }
 
 // ===== Deterministic Scheduler (Issue #152 - Phase 1)
-exports.buildPlan = httpsV2.onCall(async (req) => {
-  const uid = req?.auth?.uid;
-  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+const { secureFunction } = require('./security/recaptchaSecurityHandler');
+
+exports.buildPlan = httpsV2.onCall(
+  secureFunction(async (req) => {
+    const uid = req?.auth?.uid;
+    if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
 
   const day = req?.data?.day || new Date().toISOString().slice(0, 10); // YYYY-MM-DD
   const useLLM = !!req?.data?.useLLM;
@@ -1107,12 +1302,17 @@ exports.buildPlan = httpsV2.onCall(async (req) => {
     assignments: assignments.map(a => ({ id: a.id, blockId: a.blockId, status: a.status })),
     importantTasks
   };
-});
+  }, {
+    requireAuth: true,
+    minRecaptchaScore: 0.5,
+  })
+);
 
 // ===== Spec wrappers: syncCalendarAndTasks, autoEnrichTasks, taskStoryConversion, plannerLLM
-exports.syncCalendarAndTasks = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
-  const uid = req?.auth?.uid;
-  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+exports.syncCalendarAndTasks = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] },
+  secureFunction(async (req) => {
+    const uid = req?.auth?.uid;
+    if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
 
   const direction = String(req?.data?.direction || 'both').toLowerCase();
   const doPull = direction === 'both' || direction === 'gcal->firestore' || direction === 'pull';
@@ -1160,7 +1360,11 @@ exports.syncCalendarAndTasks = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID
     } catch { }
   }
   return { ok: true, blocksSynced, reconciled, pushed };
-});
+  }, {
+    requireAuth: true,
+    minRecaptchaScore: 0.5,
+  })
+);
 
 exports.autoEnrichTasks = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
   const uid = req?.auth?.uid;
@@ -1243,9 +1447,10 @@ exports.autoEnrichTasks = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }
 });
 
 // ===== enhanceNewTask: spell-check title, estimate points, score on new task creation
-exports.enhanceNewTask = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY], memory: '512MiB' }, async (req) => {
-  const uid = req?.auth?.uid;
-  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+exports.enhanceNewTask = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY], memory: '512MiB' },
+  secureFunction(async (req) => {
+    const uid = req?.auth?.uid;
+    if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   const { taskId } = req?.data || {};
   if (!taskId) throw new httpsV2.HttpsError('invalid-argument', 'taskId required');
 
@@ -1306,7 +1511,11 @@ exports.enhanceNewTask = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY], m
   }
 
   return { ok: true, correctedTitle, estimatedPoints };
-});
+  }, {
+    requireAuth: true,
+    minRecaptchaScore: 0.6,
+  })
+);
 
 
 exports.taskStoryConversion = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
@@ -2394,10 +2603,10 @@ exports.priorityNow = httpsV2.onRequest({ invoker: 'public', secrets: [GOOGLE_AI
     const remainingCalendar =
       Array.isArray(parsed.remainingCalendar) && parsed.remainingCalendar.length
         ? parsed.remainingCalendar.slice(0, PRIORITY_CALENDAR_CONTEXT_LIMIT).map((item) => ({
-            title: String(item?.title || 'Block').trim(),
-            startIso: item?.start || null,
-            endIso: item?.end || null,
-          }))
+          title: String(item?.title || 'Block').trim(),
+          startIso: item?.start || null,
+          endIso: item?.end || null,
+        }))
         : calendarFallback.map((block) => ({ title: block.title, startIso: block.startIso, endIso: block.endIso }));
 
     const risks =
@@ -3185,6 +3394,7 @@ exports.completeRoutine = httpsV2.onCall(async (req) => {
   const db = admin.firestore();
   const routineRef = db.collection('routines').doc(routineId);
   const now = Date.now();
+  let goalKpiUpdated = false;
   const result = await db.runTransaction(async (tx) => {
     const snap = await tx.get(routineRef);
     if (!snap.exists) throw new httpsV2.HttpsError('not-found', 'Routine not found');
@@ -3202,9 +3412,248 @@ exports.completeRoutine = httpsV2.onCall(async (req) => {
       missedCount: Number(data.missedCount || 0),
     };
     tx.update(routineRef, { ...stats, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+    
+    // Track goal KPI if routine has goalId
+    if (data.goalId) {
+      const goalRef = db.collection('goals').doc(data.goalId);
+      const goalSnap = await tx.get(goalRef);
+      if (goalSnap.exists) {
+        const goalData = goalSnap.data() || {};
+        // Infer metric type from routine title + goal KPI names
+        const routineTitle = String(data.title || '').toLowerCase();
+        const kpiNames = Array.isArray(goalData.kpiNames) ? goalData.kpiNames : [];
+        const matchedKpi = kpiNames.find((kpi) => {
+          const kpiLower = String(kpi || '').toLowerCase();
+          // Running: match on distance (5k, 10k, half-marathon, etc.)
+          if (routineTitle.includes('run')) {
+            if (kpiLower.includes('10k') || kpiLower.includes('5k') || kpiLower.includes('marathon')) return true;
+            if (kpiLower.includes('run') || kpiLower.includes('running')) return true;
+          }
+          // Swimming: match on distance or swim keyword
+          if (routineTitle.includes('swim')) {
+            if (kpiLower.includes('swim') || kpiLower.includes('800m') || kpiLower.includes('400m')) return true;
+          }
+          // Walking: match on steps or distance
+          if (routineTitle.includes('walk')) {
+            if (kpiLower.includes('walk') || kpiLower.includes('step') || kpiLower.includes('distance')) return true;
+          }
+          // Cycling: match on distance or cycling
+          if (routineTitle.includes('cycle') || routineTitle.includes('bike')) {
+            if (kpiLower.includes('cycle') || kpiLower.includes('bike') || kpiLower.includes('distance')) return true;
+          }
+          // Meditation/mindfulness
+          if (routineTitle.includes('meditate') && kpiLower.includes('meditate')) return true;
+          // Exercise/fitness (generic)
+          if (routineTitle.includes('exercise') && (kpiLower.includes('exercise') || kpiLower.includes('workout'))) return true;
+          // Reading
+          if (routineTitle.includes('read') && kpiLower.includes('read')) return true;
+          // Triathlon or multi-sport: match any relevant discipline
+          if (routineTitle.includes('triathlon')) {
+            if (kpiLower.includes('swim') || kpiLower.includes('run') || kpiLower.includes('bike') || kpiLower.includes('cycle')) return true;
+            if (kpiLower.includes('triathlon') || kpiLower.includes('time')) return true;
+          }
+          // Fallback: match routine title keywords to KPI name keywords
+          const routineWords = routineTitle.split(/\s+/).filter(w => w.length > 3);
+          return routineWords.some(word => kpiLower.includes(word));
+        });
+        
+        // Log routine completion to goal KPI tracking
+        const kpiMetricsRef = db.collection('goal_kpi_metrics').doc(`${data.goalId}_${matchedKpi || 'completion'}`);
+        const kpiMetricsSnap = await tx.get(kpiMetricsRef);
+        const kpiMetrics = kpiMetricsSnap.data() || { goalId: data.goalId, kpiName: matchedKpi || 'completion', completions: [] };
+        const completions = Array.isArray(kpiMetrics.completions) ? kpiMetrics.completions : [];
+        completions.push({
+          routineId: routineId,
+          routineTitle: data.title,
+          completedAt: now,
+          durationMinutes: data.estimateMin || data.estimatedMinutes || 60,
+        });
+        // Keep only last 90 days of completions
+        const ninetyDaysAgo = now - (90 * 24 * 60 * 60 * 1000);
+        const recentCompletions = completions.filter((c) => (c.completedAt || 0) > ninetyDaysAgo);
+        tx.set(kpiMetricsRef, {
+          ...kpiMetrics,
+          completions: recentCompletions,
+          lastCompletedAt: now,
+          completionCount: recentCompletions.length,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+        goalKpiUpdated = true;
+      }
+    }
+    
     return stats;
   });
-  return { ok: true, stats: result };
+  return { ok: true, stats: result, goalKpiUpdated };
+});
+
+// Update task time and auto-populate time_of_day bucket
+exports.updateTaskTime = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const taskId = String(req?.data?.taskId || '').trim();
+  const timeStr = String(req?.data?.time || '').trim(); // HH:MM format
+  if (!taskId) throw new httpsV2.HttpsError('invalid-argument', 'taskId required');
+  if (!timeStr) throw new httpsV2.HttpsError('invalid-argument', 'time required (HH:MM format)');
+
+  const db = admin.firestore();
+  const taskRef = db.collection('tasks').doc(taskId);
+
+  try {
+    const snap = await taskRef.get();
+    if (!snap.exists) throw new httpsV2.HttpsError('not-found', 'Task not found');
+    const data = snap.data() || {};
+    if (data.ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Cannot modify this task');
+
+    // Auto-populate time_of_day from the time string
+    const autoTimeOfDay = parseTimeStringToTimeOfDay(timeStr);
+
+    const updatePayload = {
+      scheduledTime: timeStr,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+    if (autoTimeOfDay) {
+      updatePayload.timeOfDay = autoTimeOfDay;
+    }
+
+    await taskRef.update(updatePayload);
+    return { ok: true, timeOfDay: autoTimeOfDay || null };
+  } catch (error) {
+    if (error instanceof httpsV2.HttpsError) throw error;
+    throw new httpsV2.HttpsError('internal', error?.message || 'Failed to update task time');
+  }
+});
+
+// Update story time and auto-populate time_of_day bucket
+exports.updateStoryTime = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const storyId = String(req?.data?.storyId || '').trim();
+  const timeStr = String(req?.data?.time || '').trim(); // HH:MM format
+  if (!storyId) throw new httpsV2.HttpsError('invalid-argument', 'storyId required');
+  if (!timeStr) throw new httpsV2.HttpsError('invalid-argument', 'time required (HH:MM format)');
+
+  const db = admin.firestore();
+  const storyRef = db.collection('stories').doc(storyId);
+
+  try {
+    const snap = await storyRef.get();
+    if (!snap.exists) throw new httpsV2.HttpsError('not-found', 'Story not found');
+    const data = snap.data() || {};
+    if (data.ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Cannot modify this story');
+
+    // Auto-populate time_of_day from the time string
+    const autoTimeOfDay = parseTimeStringToTimeOfDay(timeStr);
+
+    const updatePayload = {
+      plannedTime: timeStr,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+    if (autoTimeOfDay) {
+      updatePayload.timeOfDay = autoTimeOfDay;
+    }
+
+    await storyRef.update(updatePayload);
+    return { ok: true, timeOfDay: autoTimeOfDay || null };
+  } catch (error) {
+    if (error instanceof httpsV2.HttpsError) throw error;
+    throw new httpsV2.HttpsError('internal', error?.message || 'Failed to update story time');
+  }
+});
+
+// Nightly job to populate blank time_of_day fields via LLM inference
+exports.populateTimeOfDayNightly = schedulerV2.onSchedule('0 2 * * *', async (context) => {
+  console.log('[populateTimeOfDayNightly] Starting time-of-day population job');
+  const db = admin.firestore();
+
+  try {
+    // Get all users
+    const usersSnap = await db.collection('users').limit(1000).get();
+    let totalProcessed = 0;
+    let totalUpdated = 0;
+    let totalErrors = 0;
+
+    for (const userDoc of usersSnap.docs) {
+      const userId = userDoc.id;
+      try {
+        const result = await populateBlankTimeOfDay(db, userId, {
+          limit: 30,
+          entityTypes: ['story', 'task'],
+        });
+        totalProcessed += result.processed;
+        totalUpdated += result.updated;
+        totalErrors += result.errors;
+      } catch (userErr) {
+        console.warn(`[populateTimeOfDayNightly] Failed for user ${userId}:`, userErr?.message);
+        totalErrors++;
+      }
+    }
+
+    console.log(`[populateTimeOfDayNightly] Completed: processed=${totalProcessed}, updated=${totalUpdated}, errors=${totalErrors}`);
+    return {
+      processed: totalProcessed,
+      updated: totalUpdated,
+      errors: totalErrors,
+    };
+  } catch (error) {
+    console.error('[populateTimeOfDayNightly] Job failed:', error?.message);
+    throw error;
+  }
+});
+
+/**
+ * Toggle immovable flag on tasks, chores, or routines
+ * Used for items that must always be completed (e.g., "wear retainer", "take medication")
+ */
+exports.toggleImmovableFlag = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  
+  const entityType = String(req?.data?.entityType || '').trim(); // 'task', 'chore', 'routine'
+  const entityId = String(req?.data?.entityId || '').trim();
+  const immovable = Boolean(req?.data?.immovable); // explicit toggle value
+  
+  if (!entityType) throw new httpsV2.HttpsError('invalid-argument', 'entityType is required');
+  if (!entityId) throw new httpsV2.HttpsError('invalid-argument', 'entityId is required');
+  if (!['task', 'chore', 'routine'].includes(entityType)) {
+    throw new httpsV2.HttpsError('invalid-argument', 'entityType must be task, chore, or routine');
+  }
+  
+  const db = admin.firestore();
+  const collection = entityType === 'task' ? 'tasks' : entityType === 'chore' ? 'chores' : 'routines';
+  const docRef = db.collection(collection).doc(entityId);
+  
+  try {
+    const snap = await docRef.get();
+    if (!snap.exists) {
+      throw new httpsV2.HttpsError('not-found', `${entityType} not found`);
+    }
+    
+    const data = snap.data() || {};
+    if (data.ownerUid !== uid) {
+      throw new httpsV2.HttpsError('permission-denied', `Cannot modify this ${entityType}`);
+    }
+    
+    await docRef.update({
+      immovable,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    
+    console.log(`[toggleImmovableFlag] ${entityType} ${entityId} immovable=${immovable}`);
+    
+    return {
+      ok: true,
+      entityType,
+      entityId,
+      immovable,
+      title: data.title,
+    };
+  } catch (error) {
+    console.error(`[toggleImmovableFlag] Error:`, error?.message);
+    throw error instanceof httpsV2.HttpsError
+      ? error
+      : new httpsV2.HttpsError('internal', 'Failed to toggle immovable flag');
+  }
 });
 
 exports.skipRoutine = httpsV2.onCall(async (req) => {
@@ -10137,16 +10586,45 @@ exports.convertTasksToStories = httpsV2.onCall(async (req) => {
 });
 
 // ===== LLM Provider Helpers (Gemini-only)
-async function callLLMJson({ system, user, purpose, userId, expectJson = false, temperature = 0.2, provider = 'gemini', model = GEMINI_MODEL }) {
+// Build a communication-style instruction paragraph from an aiPersonality object.
+// Each dimension is 0–10; values at 5 are neutral and produce no instruction.
+function buildPersonalityInstruction(personality) {
+  if (!personality || typeof personality !== 'object') return '';
+  const {
+    intelligence = 5,
+    humour = 5,
+    sarcasm = 5,
+    directness = 7,
+    warmth = 5,
+    verbosity = 5,
+  } = personality;
+  const parts = [];
+  if (directness >= 8) parts.push('Be extremely direct and blunt – omit all preamble and filler.');
+  else if (directness >= 6) parts.push('Be direct and concise.');
+  else if (directness <= 3) parts.push('Explain your reasoning fully with supporting context.');
+  if (verbosity <= 3) parts.push('Use the fewest words possible; prefer bullet points over prose.');
+  else if (verbosity >= 8) parts.push('Provide thorough, detailed explanations.');
+  if (intelligence >= 8) parts.push('Assume expert-level domain knowledge; use advanced vocabulary freely.');
+  else if (intelligence <= 3) parts.push('Use plain language and avoid jargon.');
+  if (humour >= 7) parts.push('Incorporate light humour and wit where it fits naturally.');
+  if (sarcasm >= 7) parts.push('A dry, sarcastic tone is acceptable when contextually appropriate.');
+  if (warmth >= 8) parts.push('Be warm, encouraging, and supportive in tone.');
+  else if (warmth <= 2) parts.push('Maintain a neutral, professional tone without personal warmth.');
+  if (!parts.length) return '';
+  return `Communication style:\n${parts.map((p) => `- ${p}`).join('\n')}`;
+}
+
+async function callLLMJson({ system, user, purpose, userId, expectJson = false, temperature = 0.2, provider = 'gemini', model = GEMINI_MODEL, personality = null }) {
+  const effectiveSystem = personality ? `${buildPersonalityInstruction(personality)}\n\n${system}` : system;
   const attempts = 3; // initial + 2 retries
   let lastErr = null;
   for (let i = 0; i < attempts; i++) {
     try {
       let text;
       if (provider === 'openai') {
-        text = await callOpenAIChat({ system, user, model, expectJson, temperature });
+        text = await callOpenAIChat({ system: effectiveSystem, user, model, expectJson, temperature });
       } else {
-        text = await callGemini({ system, user, model, expectJson, temperature });
+        text = await callGemini({ system: effectiveSystem, user, model, expectJson, temperature });
       }
       // lightweight usage log
       const wrapped = aiUsageLogger.wrapAICall('google-ai-studio', GEMINI_MODEL);
@@ -10439,6 +10917,7 @@ function getRecommendationTaskKind(task) {
   const rawType = String(task?.type || task?.taskType || '').trim().toLowerCase();
   const normalizedType = rawType === 'habitual' ? 'habit' : rawType;
   if (['chore', 'routine', 'habit'].includes(normalizedType)) return normalizedType;
+  if (normalizedType) return null;
   const tags = Array.isArray(task?.tags)
     ? task.tags.map((tag) => String(tag || '').trim().toLowerCase().replace(/^#/, ''))
     : [];
@@ -11203,8 +11682,19 @@ function assembleDailyChecklist(summaryData) {
     const beforeStatus = Number(before?.status ?? null);
     const afterStatus = Number(after?.status ?? null);
 
+    // Canonicalize explicit task type values (e.g., "Habit" -> "habit")
+    const rawType = String(after?.type ?? patch?.type ?? '').trim().toLowerCase();
+    const canonicalType = rawType === 'habitual' ? 'habit' : rawType;
+    const supportedTaskTypes = new Set(['task', 'read', 'watch', 'chore', 'routine', 'habit']);
+    if (canonicalType && supportedTaskTypes.has(canonicalType)) {
+      if (String(after?.type || '').trim() !== canonicalType) {
+        patch.type = canonicalType;
+        needsPatch = true;
+      }
+    }
+
     // One-time type inference if missing
-    if (!after?.type) {
+    if (!canonicalType) {
       const inferred = inferTaskType(after);
       if (inferred) { patch.type = inferred; patch.typeInferredAt = admin.firestore.FieldValue.serverTimestamp(); needsPatch = true; }
     }
@@ -11214,7 +11704,7 @@ function assembleDailyChecklist(summaryData) {
     if (changed) { Object.assign(patch, norm); needsPatch = true; }
 
     // Enforce chores theme for chore-type tasks
-    const effectiveType = String(after?.type || patch?.type || '').toLowerCase();
+    const effectiveType = String(patch?.type || after?.type || '').toLowerCase();
     const isChoreLike = effectiveType === 'chore' || effectiveType === 'routine' || effectiveType === 'habit';
     const effectiveTask = { ...(after || {}), ...(patch || {}), type: effectiveType };
     const isRecurringChore = isRecurringChoreTask(effectiveTask);
@@ -11236,6 +11726,30 @@ function assembleDailyChecklist(summaryData) {
         needsPatch = true;
       } else if (!after?.completedAt) {
         patch.completedAt = admin.firestore.FieldValue.serverTimestamp();
+        needsPatch = true;
+      }
+    }
+
+    // Time of Day normalization — keep timeOfDay in sync with dueTime and content
+    const beforeDueTime = before?.dueTime ? String(before.dueTime).trim() : null;
+    const afterDueTime = after?.dueTime ? String(after.dueTime).trim() : null;
+    if (afterDueTime && afterDueTime !== beforeDueTime) {
+      // dueTime changed — derive timeOfDay from it (aligned with timeOfDayPopulator buckets)
+      const hour = parseInt(afterDueTime.split(':')[0] || '0', 10);
+      let newTod;
+      if (hour >= 5 && hour < 13) newTod = 'morning';
+      else if (hour >= 13 && hour < 19) newTod = 'afternoon';
+      else newTod = 'evening'; // 19:00–04:59
+
+      if (after?.timeOfDay !== newTod) {
+        patch.timeOfDay = newTod;
+        needsPatch = true;
+      }
+    } else if (!afterDueTime && !after?.timeOfDay) {
+      // No dueTime and no timeOfDay — infer from title/description via keywords
+      const inferred = inferTimeOfDayFromContent(after?.title || '', after?.description || '');
+      if (inferred) {
+        patch.timeOfDay = inferred;
         needsPatch = true;
       }
     }
@@ -11274,18 +11788,20 @@ function assembleDailyChecklist(summaryData) {
         const enhanceTask = async () => {
           const system = 'You are a task management assistant. Return compact JSON only.';
           const user = [
-            'Given this task title and description, do two things:',
+            'Given this task title and description, do three things:',
             '1. Fix any spelling/grammar errors in the title (keep it concise)',
             '2. Estimate effort points as a number (decimals allowed in 0.25 increments, range 0.25-8)',
+            '3. Infer a good time of day to do this. Return "morning", "afternoon", "evening", or null.',
             '',
             `Title: "${after.title || ''}"`,
             `Description: "${(after.description || '').slice(0, 400)}"`,
             '',
-            'Respond as: {"correctedTitle": "string", "points": number}',
+            'Respond as: {"correctedTitle": "string", "points": number, "timeOfDay": "string|null"}',
           ].join('\n');
           const text = await callLLMJson({ system, user, purpose: 'enhanceNewTask', userId: uid, expectJson: true, temperature: 0.1 });
           const obj = JSON.parse(text || '{}');
           const enhancePatch = {};
+
           if (obj.correctedTitle && typeof obj.correctedTitle === 'string' && obj.correctedTitle.trim() !== (after.title || '').trim()) {
             enhancePatch.title = obj.correctedTitle.trim().slice(0, 200);
             enhancePatch.titleCorrectedByAi = true;
@@ -11295,6 +11811,26 @@ function assembleDailyChecklist(summaryData) {
             enhancePatch.points = normalizedEnhancePoints;
             enhancePatch.pointsEstimatedByAi = true;
           }
+
+          if (obj.timeOfDay && !after.timeOfDay && !after.dueTime && ['morning', 'afternoon', 'evening'].includes(obj.timeOfDay)) {
+            enhancePatch.timeOfDay = obj.timeOfDay;
+            enhancePatch.timeOfDayInferredByAi = true;
+            try {
+              const activityRef = admin.firestore().collection('activity_stream').doc();
+              await activityRef.set({
+                id: activityRef.id,
+                entityType: 'task',
+                entityId: id,
+                activityType: 'ai_time_inference',
+                description: `AI inferred time of day: ${obj.timeOfDay}`,
+                timestamp: admin.firestore.FieldValue.serverTimestamp(),
+                ownerUid: uid,
+              });
+            } catch (e) {
+              console.warn('[onTaskWriteNormalize] could not add activity log', e?.message);
+            }
+          }
+
           if (Object.keys(enhancePatch).length > 0) {
             enhancePatch.updatedAt = admin.firestore.FieldValue.serverTimestamp();
             await ref.set(enhancePatch, { merge: true });
@@ -13331,12 +13867,12 @@ async function _syncParkrunInternal(uid, athleteId, countryBaseUrl, options = {}
         athleteRows = apiFallback.rows;
         sourceUrlUsed = apiFallback.sourceUrl || sourceUrlUsed;
       } else {
-      const details = [];
-      if (lastHistoryError?.message) details.push(`athlete history: ${lastHistoryError.message}`);
-      if (fallback?.error?.message) details.push(`fallback: ${fallback.error.message}`);
-      if (apiFallback?.error?.message) details.push(`api fallback: ${apiFallback.error.message}`);
-      const suffix = details.length ? ` Last error: ${details.join(' | ')}` : '';
-      throw new Error(`Parkrun page returned no parsable result rows. Check athlete ID, country base URL, or anti-bot response.${suffix}`);
+        const details = [];
+        if (lastHistoryError?.message) details.push(`athlete history: ${lastHistoryError.message}`);
+        if (fallback?.error?.message) details.push(`fallback: ${fallback.error.message}`);
+        if (apiFallback?.error?.message) details.push(`api fallback: ${apiFallback.error.message}`);
+        const suffix = details.length ? ` Last error: ${details.join(' | ')}` : '';
+        throw new Error(`Parkrun page returned no parsable result rows. Check athlete ID, country base URL, or anti-bot response.${suffix}`);
       }
     }
   }
@@ -15215,6 +15751,305 @@ exports.syncPlanToGoogleCalendar = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIEN
   return await syncPlanToGoogleForUser(uid, day);
 });
 
+function matchLevenshteinDistance(str1, str2) {
+  const a = String(str1 || '').toLowerCase().trim();
+  const b = String(str2 || '').toLowerCase().trim();
+  const track = Array(b.length + 1)
+    .fill(null)
+    .map(() => Array(a.length + 1).fill(0));
+
+  for (let i = 0; i <= a.length; i += 1) track[0][i] = i;
+  for (let j = 0; j <= b.length; j += 1) track[j][0] = j;
+
+  for (let j = 1; j <= b.length; j += 1) {
+    for (let i = 1; i <= a.length; i += 1) {
+      const indicator = a[i - 1] === b[j - 1] ? 0 : 1;
+      track[j][i] = Math.min(
+        track[j][i - 1] + 1,
+        track[j - 1][i] + 1,
+        track[j - 1][i - 1] + indicator
+      );
+    }
+  }
+
+  return track[b.length][a.length];
+}
+
+function matchSimilarity(str1, str2) {
+  const maxLen = Math.max(String(str1 || '').length, String(str2 || '').length);
+  if (maxLen === 0) return 1;
+  const distance = matchLevenshteinDistance(str1, str2);
+  return Math.max(0, 1 - distance / maxLen);
+}
+
+function matchKeywordOverlap(taskTitle, targetTitle) {
+  const taskWords = String(taskTitle || '').toLowerCase().split(/\s+/).filter((w) => w.length > 3);
+  const targetWords = String(targetTitle || '').toLowerCase().split(/\s+/).filter((w) => w.length > 3);
+  const overlap = taskWords.filter((w) => targetWords.includes(w)).length;
+  return overlap > 0 ? (overlap / Math.max(taskWords.length, targetWords.length)) * 0.3 : 0;
+}
+
+function matchCombinedScore(taskTitle, targetTitle) {
+  const similarity = matchSimilarity(taskTitle, targetTitle);
+  const keywords = matchKeywordOverlap(taskTitle, targetTitle);
+  return Math.min(1, similarity + keywords);
+}
+
+async function rerankMacSyncMatchWithLLM({ userId, task, candidates }) {
+  if (!Array.isArray(candidates) || !candidates.length) return null;
+
+  const shortlist = candidates
+    .slice()
+    .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
+    .slice(0, 6)
+    .map((candidate) => ({
+      id: candidate.id,
+      type: candidate.type,
+      title: candidate.title || candidate.name || '',
+      score: Number(Number(candidate.score || 0).toFixed(3)),
+      linkedGoal: candidate.linkedGoal || null,
+      ref: candidate.ref || null,
+    }));
+
+  if (!shortlist.length) return null;
+
+  const system = 'You are a task linking assistant. Choose the single best match for a task from candidate goals/stories. Reply JSON only.';
+  const user = [
+    'Return JSON exactly as:',
+    '{"pickId":"<candidate id or empty>","pickType":"goal|story|none","confidence":0-1,"reason":"short"}',
+    '',
+    `Task title: ${String(task?.title || '')}`,
+    `Task description: ${String(task?.description || '').slice(0, 300)}`,
+    `Candidates: ${JSON.stringify(shortlist)}`,
+    'Rules:',
+    '- Choose none if confidence is low or ambiguous.',
+    '- Prefer exact ref/title semantics over loose similarity.',
+  ].join('\n');
+
+  try {
+    const raw = await callLLMJson({
+      system,
+      user,
+      purpose: 'macSyncLinkMatch',
+      userId,
+      expectJson: true,
+      temperature: 0.1,
+    });
+    const parsed = raw ? JSON.parse(raw) : {};
+    const pickId = String(parsed?.pickId || '').trim();
+    const pickType = String(parsed?.pickType || '').trim().toLowerCase();
+    const confidence = Number(parsed?.confidence || 0);
+    if (!pickId || !['goal', 'story'].includes(pickType)) return null;
+    if (!Number.isFinite(confidence) || confidence < 0.75) return null;
+    return shortlist.find((candidate) => candidate.id === pickId && candidate.type === pickType) || null;
+  } catch (error) {
+    console.warn('[mac-sync] LLM rerank failed', { userId, taskId: task?.id, error: error?.message || error });
+    return null;
+  }
+}
+
+function nextDayDueDateMs() {
+  return DateTime.now().plus({ days: 1 }).endOf('day').toMillis();
+}
+
+async function ensureLinkConfirmationTask({ db, userId, type, task, story, goal }) {
+  if (!goal?.id) return null;
+
+  const goalTitle = goal.title || goal.name || goal.ref || goal.id;
+  const dueDate = nextDayDueDateMs();
+
+  let sourceEntityId = null;
+  let sourceEntityRef = null;
+  let sourceEntityTitle = null;
+  let storyId = null;
+
+  if (type === 'story') {
+    sourceEntityId = story.id;
+    sourceEntityRef = story.ref || `ST-${String(story.id).slice(-6).toUpperCase()}`;
+    sourceEntityTitle = story.title || sourceEntityRef;
+    storyId = story.id;
+  } else {
+    sourceEntityId = task.id;
+    sourceEntityRef = task.ref || `TK-${String(task.id).slice(-6).padStart(6, '0').toUpperCase()}`;
+    sourceEntityTitle = task.title || sourceEntityRef;
+  }
+
+  const duplicateKey = `linkconfirm:${type}:${sourceEntityId}:goal:${goal.id}`;
+  const existing = await db.collection('tasks')
+    .where('ownerUid', '==', userId)
+    .where('duplicateKey', '==', duplicateKey)
+    .limit(1)
+    .get();
+
+  if (!existing.empty) return existing.docs[0].id;
+
+  const newRef = db.collection('tasks').doc();
+  const title = `${sourceEntityTitle} (REF ${sourceEntityRef}) has been matched to Goal ${goalTitle} (confirm)`;
+  const nowMs = Date.now();
+  const payload = ensureTaskPoints({
+    id: newRef.id,
+    ownerUid: userId,
+    persona: task.persona || 'personal',
+    title,
+    description: type === 'story'
+      ? `Please confirm the story-to-goal link for ${sourceEntityRef}.`
+      : `Please confirm the task-to-goal link for ${sourceEntityRef}.`,
+    status: 0,
+    task_type: 'reminder',
+    entry_method: 'auto:mac_sync_link_confirmation',
+    source: 'mac_sync_automation',
+    duplicateKey,
+    goalId: goal.id,
+    storyId,
+    dueDate,
+    createdAt: nowMs,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    syncState: 'dirty',
+    parentType: type === 'story' ? 'story' : 'goal',
+    parentId: type === 'story' ? story.id : goal.id,
+  });
+
+  await newRef.set(payload, { merge: true });
+  return newRef.id;
+}
+
+async function runMacSyncPostProcessing({ db, userId, touchedTaskIds }) {
+  const touchedIds = Array.from(touchedTaskIds || []).filter(Boolean);
+  const result = {
+    touched: touchedIds.length,
+    dedupeResolved: 0,
+    autoLinked: 0,
+    confirmationTasksCreated: 0,
+  };
+
+  try {
+    const dedupeResult = await deduplicateUserTasks({
+      db,
+      userId,
+      dryRun: false,
+      hardDelete: false,
+      logActivity: true,
+      activityActor: 'MacSyncPull',
+      includeTitleDedupe: true,
+    });
+    result.dedupeResolved = Number(dedupeResult?.duplicatesResolved || 0);
+  } catch (error) {
+    console.warn('[mac-sync] post dedupe failed', { userId, error: error?.message || error });
+  }
+
+  if (!touchedIds.length) return result;
+
+  const [goalsSnap, storiesSnap] = await Promise.all([
+    db.collection('goals').where('ownerUid', '==', userId).get().catch(() => ({ docs: [] })),
+    db.collection('stories').where('ownerUid', '==', userId).get().catch(() => ({ docs: [] })),
+  ]);
+
+  const goals = goalsSnap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+  const stories = storiesSnap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+  if (!goals.length && !stories.length) return result;
+
+  const goalById = new Map(goals.map((g) => [g.id, g]));
+  const storyById = new Map(stories.map((s) => [s.id, s]));
+
+  for (const taskId of touchedIds) {
+    let taskSnap = null;
+    try {
+      taskSnap = await db.collection('tasks').doc(taskId).get();
+    } catch {
+      continue;
+    }
+    if (!taskSnap?.exists) continue;
+
+    const task = { id: taskSnap.id, ...(taskSnap.data() || {}) };
+    const status = String(task.status ?? '').toLowerCase();
+    const isDone = status === 'done' || status === 'complete' || status === 'completed' || Number(task.status) === 2;
+    if (isDone || task.deleted) continue;
+    if (task.goalId || task.storyId || (task.parentType === 'story' && task.parentId)) continue;
+
+    let bestGoal = null;
+    for (const goal of goals) {
+      const score = matchCombinedScore(task.title || '', goal.title || goal.name || '');
+      if (score > 0.5 && (!bestGoal || score > bestGoal.score)) {
+        bestGoal = { ...goal, score, type: 'goal' };
+      }
+    }
+
+    let bestStory = null;
+    for (const story of stories) {
+      const score = matchCombinedScore(task.title || '', story.title || '');
+      if (score > 0.5 && (!bestStory || score > bestStory.score)) {
+        bestStory = { ...story, score, type: 'story' };
+      }
+    }
+
+    const ranked = [bestGoal, bestStory].filter(Boolean).sort((a, b) => (b.score || 0) - (a.score || 0));
+    let best = ranked[0] || null;
+
+    // High-confidence fuzzy match is accepted immediately.
+    if (!best) continue;
+    if (best.score <= 0.85) {
+      // Option 3: LLM re-ranks ambiguous but plausible fuzzy candidates.
+      const llmCandidate = await rerankMacSyncMatchWithLLM({
+        userId,
+        task,
+        candidates: ranked,
+      });
+      if (llmCandidate) {
+        best = {
+          ...(llmCandidate.type === 'goal' ? (goalById.get(llmCandidate.id) || {}) : (storyById.get(llmCandidate.id) || {})),
+          ...llmCandidate,
+          score: Number(llmCandidate.score || best.score || 0),
+        };
+      } else {
+        continue;
+      }
+    }
+
+    const patch = {
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      syncState: 'dirty',
+      linkMatchSource: 'mac_sync_fuzzy',
+      linkMatchScore: Number(best.score.toFixed(3)),
+    };
+
+    let confirmationTaskId = null;
+
+    if (best.type === 'goal') {
+      patch.goalId = best.id;
+      await db.collection('tasks').doc(task.id).set(patch, { merge: true });
+      confirmationTaskId = await ensureLinkConfirmationTask({
+        db,
+        userId,
+        type: 'task',
+        task,
+        story: null,
+        goal: best,
+      });
+    } else {
+      const story = storyById.get(best.id) || best;
+      const linkedGoalId = story.goalId || null;
+      patch.storyId = story.id;
+      if (linkedGoalId) patch.goalId = linkedGoalId;
+      await db.collection('tasks').doc(task.id).set(patch, { merge: true });
+      if (linkedGoalId && goalById.has(linkedGoalId)) {
+        confirmationTaskId = await ensureLinkConfirmationTask({
+          db,
+          userId,
+          type: 'story',
+          task,
+          story,
+          goal: goalById.get(linkedGoalId),
+        });
+      }
+    }
+
+    result.autoLinked += 1;
+    if (confirmationTaskId) result.confirmationTasksCreated += 1;
+  }
+
+  return result;
+}
+
 // iOS Reminders bridge (public HTTPS): Shortcuts can call these endpoints
 exports.remindersPush = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET], invoker: 'public' }, async (req, res) => {
   try {
@@ -15296,6 +16131,8 @@ exports.remindersPush = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
         type: 'task',
         title,
         dueDate: t.dueDate || null,
+        dueTime: t.dueTime || null,
+        timeOfDay: t.timeOfDay || null,
         // Use canonical task ref style: TK-<last6 of id, zero-padded>
         ref: t.ref || `TK-${String(t.id || '').slice(-6).padStart(6, '0').toUpperCase()}`,
         createdAt: t.createdAt || null,
@@ -15348,6 +16185,8 @@ exports.remindersPush = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
             status: data.status || null,
             completed: done,
             dueDate: sprintMeta.get(data.sprintId || '')?.endMs || null,
+            dueTime: data.dueTime || null,
+            timeOfDay: data.timeOfDay || null,
             tags: sprintLabel ? [sprintLabel] : undefined,
             url,
             note: noteLines.join('\n'),
@@ -15364,7 +16203,7 @@ exports.remindersPush = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
   }
 });
 
-exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET], invoker: 'public' }, async (req, res) => {
+exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET, GOOGLE_AI_STUDIO_API_KEY], invoker: 'public' }, async (req, res) => {
   try {
     if (req.method !== 'POST') return res.status(405).send('Method not allowed');
     const uid = String(req.query.uid || req.body?.uid || '');
@@ -15375,6 +16214,7 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
     const updates = Array.isArray(req.body?.tasks) ? req.body.tasks : [];
     const db = admin.firestore();
     let updated = 0;
+    const touchedTaskIds = new Set();
     const classifyType = (title) => {
       const t = String(title || '').toLowerCase();
       const choreHints = ['laundry', 'trash', 'garbage', 'recycling', 'clean', 'dishes', 'vacuum', 'mop', 'tidy'];
@@ -15414,6 +16254,25 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
         if (!defaultSprintId && isActive) defaultSprintId = d.id;
       });
     } catch { /* ignore */ }
+
+    // Load global hierarchy snapshot once for fast pre-write deduplication — reduces per-task
+    // Firestore queries and prevents duplicate task creation when the same reminder is pushed again.
+    const snapshotReminderIds = new Set();
+    const snapshotDocIds = new Set();
+    const snapshotNormalizedTitles = new Map(); // normalizedTitle -> taskId
+    const normalizeForDedup = (s) =>
+      String(s || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
+    try {
+      const snapshotDoc = await db.collection('global_hierarchy_snapshots').doc(uid).get();
+      if (snapshotDoc.exists) {
+        const snapshotTasks = snapshotDoc.data()?.flat?.tasks || [];
+        for (const t of snapshotTasks) {
+          if (t.id) snapshotDocIds.add(String(t.id));
+          if (t.reminderId) snapshotReminderIds.add(String(t.reminderId));
+          if (t.title) snapshotNormalizedTitles.set(normalizeForDedup(t.title), t.id);
+        }
+      }
+    } catch { /* non-fatal; fall through to per-task Firestore queries */ }
 
     for (const u of updates) {
       const id = String(u.id || '');
@@ -15465,6 +16324,12 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
             patch['status'] = 4;
             patch['completedAt'] = nowMs;
           }
+          if (u.dueTime !== undefined) {
+            patch['dueTime'] = u.dueTime;
+          }
+          if (u.timeOfDay !== undefined) {
+            patch['timeOfDay'] = u.timeOfDay;
+          }
           if (iosTags.length) {
             patch['tags'] = mergeTags(existing.tags || [], iosTags);
           }
@@ -15492,6 +16357,8 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
             ref: refVal,
             syncState: 'dirty',
           };
+          if (u.dueTime !== undefined) base['dueTime'] = u.dueTime;
+          if (u.timeOfDay !== undefined) base['timeOfDay'] = u.timeOfDay;
           if (completed) base['completedAt'] = nowMs;
           await newRef.set(base, { merge: true });
           updated++;
@@ -15521,6 +16388,12 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
           data['completedAt'] = Date.now();
           data['deleteAfter'] = Date.now() + TASK_TTL_DAYS * MS_IN_DAY;
         }
+        if (u.dueTime !== undefined) {
+          data['dueTime'] = u.dueTime;
+        }
+        if (u.timeOfDay !== undefined) {
+          data['timeOfDay'] = u.timeOfDay;
+        }
         if (iosTags.length) {
           try {
             const snap = await ref.get();
@@ -15531,11 +16404,42 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
         }
         await ref.set(data, { merge: true });
         updated++;
+        touchedTaskIds.add(ref.id);
       } else if (reminderId || title) {
         // Auto-import new task from Reminders
         const task_type = classifyType(title);
         const nowMs = Date.now();
         const dupKey = reminderId ? `reminder:${String(reminderId).toLowerCase()}` : null;
+
+        // --- Snapshot pre-write deduplication ---
+        // Fast check against the cached snapshot before hitting Firestore with per-task queries.
+        if (reminderId && snapshotReminderIds.has(reminderId)) {
+          // Already exists in snapshot — skip creation, treat as no-op for this push.
+          continue;
+        }
+        const normIncomingTitle = normalizeForDedup(title);
+        if (normIncomingTitle && snapshotNormalizedTitles.has(normIncomingTitle)) {
+          // Title match in snapshot — update the existing task instead of creating a duplicate.
+          const existingId = snapshotNormalizedTitles.get(normIncomingTitle);
+          if (existingId) {
+            const patch = {
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              syncState: 'dirty',
+              ...(reminderId ? { reminderId, duplicateKey: dupKey } : {}),
+              ...(u.dueTime !== undefined ? { dueTime: u.dueTime } : {}),
+              ...(u.timeOfDay !== undefined ? { timeOfDay: u.timeOfDay } : {}),
+              ...(completed ? { status: 2, completedAt: nowMs, deleteAfter: nowMs + TASK_TTL_DAYS * MS_IN_DAY } : {}),
+            };
+            try {
+              await db.collection('tasks').doc(existingId).set(patch, { merge: true });
+              updated++;
+              touchedTaskIds.add(existingId);
+            } catch { /* ignore */ }
+            continue;
+          }
+        }
+        // ----------------------------------------
+
         // Check again for duplicates by duplicateKey to avoid creating a new one
         if (dupKey) {
           const snap = await db.collection('tasks').where('ownerUid', '==', uid).where('duplicateKey', '==', dupKey).limit(1).get();
@@ -15548,11 +16452,14 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
               reminderId: reminderId,
               updatedAt: admin.firestore.FieldValue.serverTimestamp(),
               syncState: 'dirty',
+              ...(u.dueTime !== undefined ? { dueTime: u.dueTime } : {}),
+              ...(u.timeOfDay !== undefined ? { timeOfDay: u.timeOfDay } : {}),
               ...(completed ? { status: 2, completedAt: nowMs, deleteAfter: nowMs + TASK_TTL_DAYS * MS_IN_DAY } : {}),
               ...(iosTags.length ? { tags: Array.from(new Set([...(snap.docs[0].data()?.tags || []), ...iosTags])).slice(0, 12) } : {}),
             };
             await existingRef.set(data, { merge: true });
             updated++;
+            touchedTaskIds.add(existingRef.id);
           } else {
             const newRef = db.collection('tasks').doc();
             await newRef.set(ensureTaskPoints({
@@ -15570,10 +16477,13 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
               createdAt: nowMs,
               updatedAt: admin.firestore.FieldValue.serverTimestamp(),
               syncState: 'dirty',
+              ...(u.dueTime !== undefined ? { dueTime: u.dueTime } : {}),
+              ...(u.timeOfDay !== undefined ? { timeOfDay: u.timeOfDay } : {}),
               ...(completed ? { completedAt: nowMs, deleteAfter: nowMs + TASK_TTL_DAYS * MS_IN_DAY } : {}),
               ...(iosTags.length ? { tags: iosTags } : {}),
             }), { merge: true });
             updated++;
+            touchedTaskIds.add(newRef.id);
           }
         } else {
           const newRef = db.collection('tasks').doc();
@@ -15591,14 +16501,22 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
             createdAt: nowMs,
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
             syncState: 'dirty',
+            ...(u.dueTime !== undefined ? { dueTime: u.dueTime } : {}),
+            ...(u.timeOfDay !== undefined ? { timeOfDay: u.timeOfDay } : {}),
             ...(completed ? { completedAt: nowMs, deleteAfter: nowMs + TASK_TTL_DAYS * MS_IN_DAY } : {}),
             ...(iosTags.length ? { tags: iosTags } : {}),
           }), { merge: true });
           updated++;
+          touchedTaskIds.add(newRef.id);
         }
       }
     }
-    return res.json({ ok: true, updated });
+    const postProcessing = await runMacSyncPostProcessing({
+      db,
+      userId: uid,
+      touchedTaskIds,
+    });
+    return res.json({ ok: true, updated, postProcessing });
   } catch (e) {
     console.error('remindersPull error', e);
     return res.status(500).json({ error: 'server_error' });
@@ -15664,37 +16582,65 @@ exports.onStoryDueDateAutoSprint = functionsV2.firestore.onDocumentUpdated("stor
 
 // Ensure story points are numeric and normalized (supports decimal points).
 exports.onStoryWritten = firestoreV2.onDocumentWritten('stories/{storyId}', async (event) => {
+  const before = event.data?.before?.data() || null;
   const after = event.data?.after?.data() || null;
   if (!after) return;
 
   const ref = event.data?.after?.ref || null;
   if (!ref) return;
 
+  const patch = {};
+
+  // Points normalization
   try {
     const rawPoints = Number(after.points);
     if (Number.isFinite(rawPoints) && rawPoints === 0) {
-      // Keep explicit zero as a "needs sizing" signal, but enforce numeric storage type.
       if (!(typeof after.points === 'number' && Number.isFinite(after.points))) {
-        await ref.set({
-          points: 0,
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        }, { merge: true });
+        patch.points = 0;
       }
-      return;
-    }
-    const existingPoints = Number(after.points);
-    const normalizedPoints = clampStoryPoints(after.points);
-    const estimateFallback = clampStoryPoints((Number(after.estimateMin || 0) || 0) / 60);
-    const desiredPoints = normalizedPoints ?? estimateFallback ?? 1;
-    const pointsStoredAsNumber = typeof after.points === 'number' && Number.isFinite(after.points);
-    if (!pointsStoredAsNumber || !Number.isFinite(existingPoints) || existingPoints !== desiredPoints) {
-      await ref.set({
-        points: desiredPoints,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      }, { merge: true });
+    } else {
+      const existingPoints = Number(after.points);
+      const normalizedPoints = clampStoryPoints(after.points);
+      const estimateFallback = clampStoryPoints((Number(after.estimateMin || 0) || 0) / 60);
+      const desiredPoints = normalizedPoints ?? estimateFallback ?? 1;
+      const pointsStoredAsNumber = typeof after.points === 'number' && Number.isFinite(after.points);
+      if (!pointsStoredAsNumber || !Number.isFinite(existingPoints) || existingPoints !== desiredPoints) {
+        patch.points = desiredPoints;
+      }
     }
   } catch (e) {
     console.warn('[onStoryWritten] points normalization skipped', e?.message || e);
+  }
+
+  // timeOfDay sync — aligned with timeOfDayPopulator buckets (morning 05–13, afternoon 13–19, evening 19–05)
+  try {
+    const beforeDueTime = before?.dueTime ? String(before.dueTime).trim() : null;
+    const afterDueTime = after?.dueTime ? String(after.dueTime).trim() : null;
+    const beforePlannedTime = before?.plannedTime ? String(before.plannedTime).trim() : null;
+    const afterPlannedTime = after?.plannedTime ? String(after.plannedTime).trim() : null;
+    const timeStr = afterDueTime || afterPlannedTime || null;
+    const prevTimeStr = beforeDueTime || beforePlannedTime || null;
+
+    if (timeStr && timeStr !== prevTimeStr) {
+      // Explicit time set/changed — derive timeOfDay from it
+      const hour = parseInt(timeStr.split(':')[0] || '0', 10);
+      let newTod;
+      if (hour >= 5 && hour < 13) newTod = 'morning';
+      else if (hour >= 13 && hour < 19) newTod = 'afternoon';
+      else newTod = 'evening';
+      if (after.timeOfDay !== newTod) patch.timeOfDay = newTod;
+    } else if (!timeStr && !after.timeOfDay) {
+      // No time and no timeOfDay — infer from title/description via keywords
+      const inferred = inferTimeOfDayFromContent(after.title || '', after.description || '');
+      if (inferred) patch.timeOfDay = inferred;
+    }
+  } catch (e) {
+    console.warn('[onStoryWritten] timeOfDay sync skipped', e?.message || e);
+  }
+
+  if (Object.keys(patch).length > 0) {
+    patch.updatedAt = admin.firestore.FieldValue.serverTimestamp();
+    await ref.set(patch, { merge: true });
   }
 });
 

@@ -5,9 +5,10 @@ import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'fire
 import { auth } from '../firebase';
 
 const LoginPage: React.FC = () => {
-  const { signInWithGoogle } = useAuth();
+  const { signInWithGoogle, signInLocally, localLoginEnabled } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [localToken, setLocalToken] = useState('');
   const [isSignUp, setIsSignUp] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -43,6 +44,19 @@ const LoginPage: React.FC = () => {
     }
   };
 
+  const handleLocalSignIn = async () => {
+    setError('');
+    setLoading(true);
+
+    try {
+      await signInLocally(localToken.trim() || undefined);
+    } catch (error: any) {
+      setError(error.message || 'Local login failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <Container fluid className="vh-100 d-flex align-items-center justify-content-center bg-light">
       <Row className="w-100 justify-content-center">
@@ -55,6 +69,35 @@ const LoginPage: React.FC = () => {
               </div>
 
               {error && <Alert variant="danger">{error}</Alert>}
+
+              {localLoginEnabled && (
+                <>
+                  <Alert variant="warning" className="py-2">
+                    Local development login is enabled.
+                  </Alert>
+                  <Form.Group className="mb-2">
+                    <Form.Label>Local Token or Email (optional)</Form.Label>
+                    <Form.Control
+                      type="text"
+                      value={localToken}
+                      onChange={(e) => setLocalToken(e.target.value)}
+                      placeholder="ai-agent-token or demo@jc1.tech"
+                    />
+                  </Form.Group>
+                  <Button
+                    variant="dark"
+                    size="lg"
+                    className="w-100 mb-3"
+                    onClick={handleLocalSignIn}
+                    disabled={loading}
+                  >
+                    Sign In Locally
+                  </Button>
+                  <div className="text-center my-3">
+                    <small className="text-muted">or</small>
+                  </div>
+                </>
+              )}
 
               {/* Google Sign In */}
               <Button

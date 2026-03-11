@@ -15,6 +15,8 @@ interface GlobalThemeSettings {
   lastUpdated: any;
 }
 
+const themeDefinitionsCacheKey = (uid: string) => `bob-global-theme-definitions:${uid}`;
+
 const ThemeColorManager: React.FC = () => {
   const { currentUser } = useAuth();
   const { theme, toggleTheme } = useTheme();
@@ -56,7 +58,13 @@ const ThemeColorManager: React.FC = () => {
         
         if (docSnap.exists()) {
           const data = docSnap.data() as GlobalThemeSettings;
-          setGlobalThemes(mergeThemes(data.themes));
+          const merged = mergeThemes(data.themes);
+          setGlobalThemes(merged);
+          try {
+            localStorage.setItem(themeDefinitionsCacheKey(currentUser.uid), JSON.stringify(merged));
+          } catch {
+            // Ignore local storage failures
+          }
         }
         
         // Check migration status
@@ -224,6 +232,11 @@ const ThemeColorManager: React.FC = () => {
       };
 
       await setDoc(doc(db, 'global_themes', currentUser.uid), globalThemeSettings);
+      try {
+        localStorage.setItem(themeDefinitionsCacheKey(currentUser.uid), JSON.stringify(globalThemes));
+      } catch {
+        // Ignore local storage failures
+      }
       // Apply colors to CSS variables immediately and persist locally for startup
       try {
         const root = document.documentElement;

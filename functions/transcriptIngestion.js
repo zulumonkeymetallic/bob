@@ -510,13 +510,13 @@ function createIngestionLogger({ lockRef, uid, fingerprint, source, channel, aut
   };
 
   return {
-    async event(stage, message, data = null, level = 'info') {
+    async event(stage, message, data = null, level = 'info', { raw = false } = {}) {
       const payload = {
         ...base,
         stage,
         level,
         message,
-        data: summarizeForLog(data),
+        data: raw ? data : summarizeForLog(data),
       };
       const printer = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log;
       printer('[transcriptIngestion]', JSON.stringify(payload));
@@ -1696,6 +1696,14 @@ async function callTranscriptModel({ transcript, persona, timezone, urlPreviews,
     transcript,
   ].filter(Boolean).join('\n\n');
 
+  if (logger) {
+    await logger.event('llm_prompt_sent', 'Sending prompt to Gemini', {
+      systemPrompt: system,
+      userPrompt: user,
+      promptCharCount: system.length + user.length,
+    }, 'info', { raw: true });
+  }
+
   const model = createGeminiJsonModel(apiKey, {
     schema: TRANSCRIPT_ANALYSIS_SCHEMA,
     maxOutputTokens: 8192,
@@ -1704,6 +1712,13 @@ async function callTranscriptModel({ transcript, persona, timezone, urlPreviews,
     topK: 40,
   });
   const text = await generateGeminiJsonText(model, `${system}\n\n${user}`, 'Gemini returned an empty response');
+
+  if (logger) {
+    await logger.event('llm_response_raw', 'Gemini response received', {
+      rawResponse: text,
+      responseCharCount: text?.length ?? 0,
+    }, 'info', { raw: true });
+  }
   try {
     return parseModelJson(text, 'Gemini transcript analysis response');
   } catch (parseError) {
@@ -2725,11 +2740,53 @@ async function appendJournalToGoogleDoc({ uid, docUrl, sections, includeDateHead
   try {
     const document = await docs.documents.get({ documentId: docId });
     const bodyContent = document?.data?.body?.content || [];
-    const insertAt = Math.max(1, Number(bodyContent[bodyContent.length - 1]?.endIndex || 1) - 1);
     const plan = buildDocAppendPlan(sections, { includeDateHeading });
 
+    // Helper: extract plain text from a body element
+    const getElementText = (el) => {
+      const elements = el?.paragraph?.elements || [];
+      return elements.map((r) => String(r?.textRun?.content || '')).join('').replace(/\n$/, '').trim();
+    };
+
+    // A "date heading" is an H1 whose text looks like a journal date (contains a year
+    // in the 2000s AND a month name).  "Rules for Life" and other static H1s won't match.
+    const looksLikeDateHeading = (text) =>
+      /\b20\d{2}\b/.test(text) &&
+      /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b/i.test(text);
+
+    const h1Elements = bodyContent.filter(
+      (el) => el?.paragraph?.paragraphStyle?.namedStyleType === 'HEADING_1',
+    );
+
+    // Insert BEFORE the first date-style H1 (i.e., prepend to the journal section,
+    // after any static H1 sections like "Rules for Life").
+    // Fall back to end-of-document if no date H1 exists yet.
+    const firstDateH1 = h1Elements.find((el) => looksLikeDateHeading(getElementText(el)));
+    let insertAt;
+    if (firstDateH1) {
+      insertAt = Math.max(1, Number(firstDateH1.startIndex));
+    } else {
+      // No journal entries yet — insert at the end of the document body
+      // (before the trailing sentinel newline that Google Docs always maintains).
+      const lastBodyEl = bodyContent[bodyContent.length - 1];
+      insertAt = Math.max(1, Number(lastBodyEl?.endIndex || 2) - 1);
+    }
+
+    // Build requests:
+    //  1. Insert the text block.
+    //  2. Reset the entire inserted range to NORMAL_TEXT so that no paragraph
+    //     inherits the H1 style of the surrounding context (the "all text becomes
+    //     header 1" bug).
+    //  3. Re-apply proper heading styles (H1/H2/H3) to each heading sub-range.
     const requests = [
       { insertText: { location: { index: insertAt }, text: plan.text } },
+      {
+        updateParagraphStyle: {
+          range: { startIndex: insertAt, endIndex: insertAt + plan.text.length },
+          paragraphStyle: { namedStyleType: 'NORMAL_TEXT' },
+          fields: 'namedStyleType',
+        },
+      },
     ];
     for (const headingRange of Array.isArray(plan.headingRanges) ? plan.headingRanges : []) {
       requests.push({
@@ -4802,3 +4859,173 @@ exports.ingestTranscriptHttp = httpsV2.onRequest({
 });
 
 exports.processAgentRequestInternal = processAgentRequest;
+
+// ────────────────────────────────────────────────────────────────────
+// Helper: remove a journal entry's appended content from a Google Doc
+// Finds the HEADING_1 whose text matches dateHeading, deletes from that
+// start index to the next HEADING_1 (or end of body).
+// ────────────────────────────────────────────────────────────────────
+async function removeJournalFromGoogleDoc({ uid, docUrl, dateHeading }) {
+  const docId = parseGoogleDocId(docUrl);
+  if (!docId) return { removed: false, reason: 'invalid_doc_url' };
+
+  const docs = await getGoogleDocsClient(uid);
+  const document = await docs.documents.get({ documentId: docId });
+  const bodyContent = document?.data?.body?.content || [];
+
+  let entryStartIndex = null;
+  let entryEndIndex = null;
+  const target = String(dateHeading || '').trim();
+
+  for (let i = 0; i < bodyContent.length; i++) {
+    const el = bodyContent[i];
+    if (el?.paragraph?.paragraphStyle?.namedStyleType !== 'HEADING_1') continue;
+
+    const paraText = (el.paragraph.elements || [])
+      .map((e) => String(e?.textRun?.content || ''))
+      .join('')
+      .trim();
+
+    if (paraText === target) {
+      entryStartIndex = Number(el.startIndex);
+      // Seek to the next HEADING_1 for the end boundary
+      for (let j = i + 1; j < bodyContent.length; j++) {
+        const next = bodyContent[j];
+        if (next?.paragraph?.paragraphStyle?.namedStyleType === 'HEADING_1') {
+          entryEndIndex = Number(next.startIndex);
+          break;
+        }
+      }
+      if (entryEndIndex === null) {
+        // Last entry in doc — use end of body minus 1 (preserve trailing newline)
+        const lastEl = bodyContent[bodyContent.length - 1];
+        entryEndIndex = Math.max(
+          entryStartIndex + 1,
+          Number(lastEl?.endIndex || entryStartIndex + 1) - 1,
+        );
+      }
+      break;
+    }
+  }
+
+  if (entryStartIndex === null) {
+    return { removed: false, reason: 'heading_not_found' };
+  }
+
+  await docs.documents.batchUpdate({
+    documentId: docId,
+    requestBody: {
+      requests: [
+        {
+          deleteContentRange: {
+            range: { startIndex: entryStartIndex, endIndex: entryEndIndex },
+          },
+        },
+      ],
+    },
+  });
+
+  return { removed: true, startIndex: entryStartIndex, endIndex: entryEndIndex };
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Callable: deleteJournalEntry
+// Deletes a journal entry from Firestore and removes it from its
+// linked Google Doc (if previously appended).
+// ────────────────────────────────────────────────────────────────────
+exports.deleteJournalEntry = httpsV2.onCall({
+  memory: '256MiB',
+  timeoutSeconds: 60,
+  secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET],
+}, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+
+  const journalId = String(req?.data?.journalId || '').trim();
+  if (!journalId) throw new httpsV2.HttpsError('invalid-argument', 'journalId is required');
+
+  const docRef = admin.firestore().collection('journals').doc(journalId);
+  const snap = await docRef.get();
+  if (!snap.exists) throw new httpsV2.HttpsError('not-found', 'Journal entry not found');
+
+  const data = snap.data();
+  if (data.ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Not authorized');
+
+  let docResult = null;
+  if (data.docUrl && data.googleDoc?.appended === true && data.dateHeading) {
+    try {
+      docResult = await removeJournalFromGoogleDoc({
+        uid,
+        docUrl: data.docUrl,
+        dateHeading: data.dateHeading,
+      });
+    } catch (err) {
+      console.warn('[deleteJournalEntry] Google Doc removal failed', err?.message);
+      docResult = { removed: false, reason: err?.message };
+    }
+  }
+
+  await docRef.delete();
+  return { success: true, docResult };
+});
+
+// ────────────────────────────────────────────────────────────────────
+// Callable: editJournalEntry
+// Updates editable fields in Firestore and re-syncs to Google Doc
+// (removes the old appended section then re-appends updated content).
+// ────────────────────────────────────────────────────────────────────
+exports.editJournalEntry = httpsV2.onCall({
+  memory: '256MiB',
+  timeoutSeconds: 60,
+  secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET],
+}, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+
+  const journalId = String(req?.data?.journalId || '').trim();
+  if (!journalId) throw new httpsV2.HttpsError('invalid-argument', 'journalId is required');
+
+  const docRef = admin.firestore().collection('journals').doc(journalId);
+  const snap = await docRef.get();
+  if (!snap.exists) throw new httpsV2.HttpsError('not-found', 'Journal entry not found');
+
+  const data = snap.data();
+  if (data.ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Not authorized');
+
+  const updates = { updatedAt: admin.firestore.FieldValue.serverTimestamp() };
+  for (const field of ['structuredEntry', 'oneLineSummary', 'advice']) {
+    if (req.data[field] !== undefined) {
+      updates[field] = String(req.data[field] || '');
+    }
+  }
+  await docRef.update(updates);
+
+  let docResult = null;
+  if (data.docUrl && data.googleDoc?.appended === true && data.dateHeading) {
+    try {
+      await removeJournalFromGoogleDoc({ uid, docUrl: data.docUrl, dateHeading: data.dateHeading });
+      const updatedSnap = await docRef.get();
+      const updated = updatedSnap.data();
+      await appendJournalToGoogleDoc({
+        uid,
+        docUrl: data.docUrl,
+        sections: {
+          dateHeading: updated.dateHeading,
+          oneLineSummary: updated.oneLineSummary,
+          aiSummaryBullets: updated.aiSummaryBullets,
+          structuredEntry: updated.structuredEntry,
+          mindsetAnalysis: updated.mindsetAnalysis,
+          advice: updated.advice,
+          entryMetadata: updated.entryMetadata,
+          originalTranscript: updated.originalTranscript,
+        },
+      });
+      docResult = { synced: true };
+    } catch (err) {
+      console.warn('[editJournalEntry] Google Doc sync failed', err?.message);
+      docResult = { synced: false, reason: err?.message };
+    }
+  }
+
+  return { success: true, docResult };
+});

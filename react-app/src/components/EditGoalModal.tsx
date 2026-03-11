@@ -4,6 +4,7 @@ import { db, functions } from '../firebase';
 import { doc, updateDoc, serverTimestamp, collection, query, where, getDocs, setDoc, getDoc, addDoc, deleteDoc } from 'firebase/firestore';
 import { Goal, Story, Task } from '../types';
 import { generateRef } from '../utils/referenceGenerator';
+import { generateShareCode, getShareUrl } from '../utils/shareCodeGenerator';
 import { httpsCallable } from 'firebase/functions';
 import { migrateThemeValue } from '../constants/globalThemes';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
@@ -85,6 +86,8 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
     tags: [] as string[],
     autoCreatePot: false,
     persona: (currentPersona || 'personal') as 'personal' | 'work',
+    isPublished: false,
+    shareCode: '',
   });
   const [durationDays, setDurationDays] = useState<number | ''>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -428,6 +431,8 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
           tags: (goal as any).tags || [],
           autoCreatePot: !!(goal as any).autoCreatePot,
           persona: ((goal as any).persona || currentPersona || 'personal') as 'personal' | 'work',
+          isPublished: !!(goal as any).isPublished,
+          shareCode: (goal as any).shareCode || '',
         });
         const current = canonicalThemeId;
         const themeObj = themes.find(t => String(t.id) === String(current));
@@ -461,6 +466,8 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
           tags: [],
           autoCreatePot: false,
           persona: (currentPersona || 'personal') as 'personal' | 'work',
+          isPublished: false,
+          shareCode: '',
         });
         setThemeInput('');
         setPotSearch('');
@@ -610,6 +617,9 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         persona: formData.persona || currentPersona || 'personal',
         costType: normalizedCostType || null,
         recurrence: normalizedRecurrence || null,
+        isPublished: formData.isPublished,
+        shareCode: formData.isPublished ? formData.shareCode : null,
+        publishedAt: formData.isPublished && !goal?.isPublished ? serverTimestamp() : (goal?.publishedAt || null),
       };
 
       const ty = (formData.targetYear || '').trim();
@@ -1240,6 +1250,58 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
                   Add measurable metrics to track progress toward this goal
                 </Form.Text>
               </Form.Group>
+
+              {/* Publish & Share Section */}
+              <div className="border-top pt-3 mt-4">
+                <Form.Group className="mb-3">
+                  <Form.Check
+                    type="checkbox"
+                    id="publish-goal"
+                    label="Publish this goal (share publicly via link)"
+                    checked={formData.isPublished}
+                    onChange={(e) => {
+                      setFormData(prev => {
+                        const isPublished = e.target.checked;
+                        return {
+                          ...prev,
+                          isPublished,
+                          shareCode: isPublished && !prev.shareCode ? generateShareCode() : prev.shareCode
+                        };
+                      });
+                    }}
+                  />
+                  <Form.Text className="text-muted d-block mt-2">
+                    {formData.isPublished
+                      ? '✓ This goal is publicly visible with only title and progress bars showing'
+                      : 'When enabled, others can view this goal via a unique share link without logging in'}
+                  </Form.Text>
+                </Form.Group>
+
+                {formData.isPublished && formData.shareCode && (
+                  <Form.Group className="mb-3">
+                    <Form.Label className="fw-bold">Share Link</Form.Label>
+                    <InputGroup>
+                      <Form.Control
+                        type="text"
+                        value={getShareUrl(formData.shareCode)}
+                        readOnly
+                      />
+                      <Button
+                        variant="outline-secondary"
+                        onClick={() => {
+                          navigator.clipboard.writeText(getShareUrl(formData.shareCode));
+                          setToastMsg('Link copied to clipboard!');
+                        }}
+                      >
+                        Copy Link
+                      </Button>
+                    </InputGroup>
+                    <Form.Text className="text-muted d-block mt-2" style={{ fontSize: '0.8rem' }}>
+                      Share Code: <code>{formData.shareCode}</code>
+                    </Form.Text>
+                  </Form.Group>
+                )}
+              </div>
             </Form>
 
             {submitResult && (

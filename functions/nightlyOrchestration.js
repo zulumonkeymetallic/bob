@@ -15,6 +15,16 @@ const {
   normalizeThemeAllocationPlan,
   resolveThemeAllocationsForDate,
 } = require('./lib/themeAllocations');
+const {
+  writeScheduledInstances,
+  writeLegacyCalendarBlocks,
+  writeConsolidatedCalendarBlocks,
+  calculateBlockCapacity,
+  getDayCapacityWarnings,
+  updatePlannerStats,
+  groupTasksByStory,
+  writeScheduledTimesToSources,
+} = require('./scheduler/syncToFirestore');
 
 // Secrets
 const GOOGLE_AI_STUDIO_API_KEY = defineSecret('GOOGLEAISTUDIOAPIKEY');
@@ -84,6 +94,25 @@ const buildPickSlots = (themeAllocationPlan) => {
 
   return { getUserSlots, pickSlots };
 };
+
+/**
+ * Narrow a set of slots to those matching a time-of-day preference.
+ * Falls back to all slots if none match (so nothing gets permanently unscheduled).
+ * @param {Array} slots - from pickSlots()
+ * @param {string|null} timeOfDay - 'morning' | 'afternoon' | 'evening' | null
+ * @returns {Array}
+ */
+function filterSlotsByTimeOfDay(slots, timeOfDay) {
+  if (!timeOfDay) return slots;
+  const filtered = slots.filter((slot) => {
+    const h = Number(slot.start);
+    if (timeOfDay === 'morning') return h >= 5 && h < 13;
+    if (timeOfDay === 'afternoon') return h >= 13 && h < 19;
+    if (timeOfDay === 'evening') return h >= 19 || h < 5;
+    return true;
+  });
+  return filtered.length ? filtered : slots; // fallback: never starve the scheduler
+}
 
 const seedPlannerWeekForUser = async ({
   db,
@@ -198,6 +227,144 @@ const hasOverlap = (candidate, existing) => {
   });
 };
 
+function normalizeCalendarMatchText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function scoreCalendarTitleMatch(title, entity) {
+  const eventTitle = normalizeCalendarMatchText(title);
+  const entityTitle = normalizeCalendarMatchText(entity?.title || entity?.name || '');
+  if (!eventTitle || !entityTitle) return 0;
+
+  const eventRef = normalizeCalendarMatchText(entity?.ref || '');
+  let score = 0;
+
+  if (eventRef && eventTitle.includes(eventRef)) score += 1.3;
+  if (eventTitle === entityTitle) score += 1.2;
+  if (eventTitle.includes(entityTitle) || entityTitle.includes(eventTitle)) score += 0.65;
+
+  const eventWords = eventTitle.split(' ').filter((w) => w.length > 2);
+  const entityWords = entityTitle.split(' ').filter((w) => w.length > 2);
+  if (eventWords.length && entityWords.length) {
+    const overlap = eventWords.filter((w) => entityWords.includes(w)).length;
+    score += (overlap / Math.max(eventWords.length, entityWords.length)) * 0.7;
+  }
+
+  return score;
+}
+
+async function matchExternalCalendarEventsToEntities({
+  db,
+  userId,
+  blocks,
+  openStories,
+  openTasks,
+}) {
+  const result = { matchedStories: 0, matchedTasks: 0 };
+  if (!Array.isArray(blocks) || !blocks.length) return result;
+
+  const candidates = [
+    ...openStories.map((story) => ({ type: 'story', ...story })),
+    ...openTasks.map((task) => ({ type: 'task', ...task })),
+  ];
+  if (!candidates.length) return result;
+
+  const nowMs = Date.now();
+  const horizonMs = nowMs + (45 * 24 * 60 * 60 * 1000);
+  const unmatchedExternalBlocks = blocks.filter((block) => {
+    const start = Number(block?.start || 0);
+    const source = String(block?.source || '').toLowerCase();
+    const hasLink = !!(block?.storyId || block?.taskId);
+    return source === 'gcal' && !hasLink && start >= nowMs && start <= horizonMs;
+  });
+
+  if (!unmatchedExternalBlocks.length) return result;
+
+  for (const block of unmatchedExternalBlocks) {
+    const title = String(block?.title || '').trim();
+    if (!title) continue;
+
+    const ranked = candidates
+      .map((candidate) => ({
+        candidate,
+        score: scoreCalendarTitleMatch(title, candidate),
+      }))
+      .sort((a, b) => b.score - a.score);
+
+    const best = ranked[0];
+    if (!best || best.score < 0.72) continue;
+
+    const matched = best.candidate;
+    const goalId = matched.goalId || null;
+    const blockPatch = {
+      storyId: matched.type === 'story' ? matched.id : null,
+      taskId: matched.type === 'task' ? matched.id : null,
+      goalId,
+      sprintId: matched.sprintId || null,
+      persona: matched.persona || null,
+      entityType: matched.type,
+      calendarMatchSource: 'matched_user_created_calendar_event',
+      calendarMatchNote: 'Matched user created calendar event',
+      calendarMatchScore: Number(best.score.toFixed(3)),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+    await db.collection('calendar_blocks').doc(block.id).set(blockPatch, { merge: true });
+
+    if (matched.type === 'story') {
+      result.matchedStories += 1;
+      await db.collection('stories').doc(matched.id).set({
+        calendarMatchSource: 'matched_user_created_calendar_event',
+        calendarMatchNote: 'Matched user created calendar event',
+        calendarMatchedStart: block.start || null,
+        calendarMatchedEnd: block.end || null,
+        plannedStartDate: block.start || null,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+    } else {
+      result.matchedTasks += 1;
+      await db.collection('tasks').doc(matched.id).set({
+        calendarMatchSource: 'matched_user_created_calendar_event',
+        calendarMatchNote: 'Matched user created calendar event',
+        calendarMatchedStart: block.start || null,
+        calendarMatchedEnd: block.end || null,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+    }
+
+    await db.collection('activity_stream').add(activityPayload({
+      ownerUid: userId,
+      entityId: matched.id,
+      entityType: matched.type,
+      activityType: 'calendar_event_matched',
+      description: `Matched user created calendar event "${title}"`,
+      metadata: {
+        blockId: block.id,
+        source: 'matched_user_created_calendar_event',
+        score: Number(best.score.toFixed(3)),
+      },
+    }));
+
+    const inMemory = blocks.find((entry) => entry.id === block.id);
+    if (inMemory) {
+      inMemory.storyId = matched.type === 'story' ? matched.id : null;
+      inMemory.taskId = matched.type === 'task' ? matched.id : null;
+      inMemory.goalId = goalId;
+      inMemory.sprintId = matched.sprintId || null;
+      inMemory.persona = matched.persona || null;
+      inMemory.entityType = matched.type;
+      inMemory.calendarMatchSource = 'matched_user_created_calendar_event';
+      inMemory.calendarMatchNote = 'Matched user created calendar event';
+      inMemory.calendarMatchScore = Number(best.score.toFixed(3));
+    }
+  }
+
+  return result;
+}
+
 // ===== Helpers
 const PRIORITY_TEXT_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
 
@@ -212,7 +379,7 @@ async function callLLMJsonSafe({ system, user, purpose, userId, model }) {
   }
 }
 
-function computeCriticalityScore({ dueDateMs, createdAtMs, goalDueMs, theme, points }) {
+function computeCriticalityScore({ dueDateMs, createdAtMs, goalDueMs, theme, points, taskType }) {
   let score = 0;
   const now = Date.now();
 
@@ -251,6 +418,12 @@ function computeCriticalityScore({ dueDateMs, createdAtMs, goalDueMs, theme, poi
   if (points != null) {
     if (points <= 2) score += 6;
     else if (points >= 8) score -= 4;
+  }
+
+  // NEW: Cap chores/habits/routines at 30 to prevent them from appearing in Top 3
+  const isExcludedType = ['chore', 'habit', 'routine'].includes(taskType);
+  if (isExcludedType) {
+    score = Math.min(30, score);
   }
 
   return Math.max(0, Math.min(100, Math.round(score)));
@@ -763,21 +936,48 @@ function getCreatedAtMs(value) {
   return Number.isNaN(parsed) ? null : parsed;
 }
 
-function estimateSchedulingMinutes(candidate, kind) {
-  const raw = kind === 'task'
-    ? (Number(candidate?.points) * 60) || Number(candidate?.estimateMin) || 60
-    : (Number(candidate?.points) * 60) || Number(candidate?.estimateMin) || 90;
-  const minMinutes = kind === 'task' ? 30 : 60;
-  const maxMinutes = kind === 'task' ? 180 : 240;
-  return Math.min(maxMinutes, Math.max(minMinutes, raw || minMinutes));
-}
-
+/**
+ * Total remaining minutes needed for a candidate, accounting for progress %.
+ * 10-point story at 50% → 300 minutes remaining.
+ * No max cap — the scheduler fills available slots up to this total.
+ */
 function estimateRequiredMinutes(candidate, kind) {
-  const raw = kind === 'task'
-    ? (Number(candidate?.points) * 60) || Number(candidate?.estimateMin) || 60
-    : (Number(candidate?.points) * 60) || Number(candidate?.estimateMin) || 90;
+  const points = Number(candidate?.points) || 0;
+  const rawProgress = candidate?.progressPct ?? candidate?.progress ?? candidate?.completionPct ?? 0;
+  const progressPct = Math.min(100, Math.max(0, Number(rawProgress || 0)));
+  const remainingFraction = progressPct > 0 ? (1 - progressPct / 100) : 1;
+  const rawFromPoints = points > 0 ? Math.round(points * 60 * remainingFraction) : 0;
+  const raw = rawFromPoints || Number(candidate?.estimateMin) || (kind === 'task' ? 60 : 90);
   const minMinutes = kind === 'task' ? 30 : 60;
   return Math.max(minMinutes, raw || minMinutes);
+}
+
+// Keep a capped version for backward-compatible single-block estimates elsewhere
+function estimateSchedulingMinutes(candidate, kind) {
+  return estimateRequiredMinutes(candidate, kind);
+}
+
+/**
+ * Find all free time gaps within [slotStartMs, slotEndMs] that are not covered
+ * by any interval in busyList and are at least minGapMs long.
+ */
+function findFreeGapsInSlot(slotStartMs, slotEndMs, busyList, minGapMs = 30 * 60000) {
+  const overlaps = busyList
+    .filter((b) => b.end > slotStartMs && b.start < slotEndMs)
+    .sort((a, b) => a.start - b.start);
+  const gaps = [];
+  let cursor = slotStartMs;
+  for (const o of overlaps) {
+    if (o.start > cursor && o.start - cursor >= minGapMs) {
+      gaps.push({ start: cursor, end: Math.min(o.start, slotEndMs) });
+    }
+    cursor = Math.max(cursor, o.end);
+    if (cursor >= slotEndMs) break;
+  }
+  if (slotEndMs - cursor >= minGapMs) {
+    gaps.push({ start: cursor, end: slotEndMs });
+  }
+  return gaps;
 }
 
 function sortPlannerCandidates(items, {
@@ -990,6 +1190,7 @@ async function materializePlannerThemeBlocks({
   windowEnd,
   themeAllocations,
   existingBlocks,
+  fitnessBlocksAutoCreate = true,
 }) {
   const results = { created: 0, skipped: 0, total: 0 };
   const isWorkShiftTheme = (value) => {
@@ -1111,8 +1312,10 @@ async function materializePlannerThemeBlocks({
       return themeName.includes('health') && subTheme;
     });
     const workShiftAllocations = dayAllocations.filter((alloc) => isWorkShiftTheme(alloc?.theme) || isWorkShiftTheme(alloc?.subTheme));
-    for (const alloc of healthAllocations) {
-      await processAllocation(alloc, 'health', day, dayKey);
+    if (fitnessBlocksAutoCreate) {
+      for (const alloc of healthAllocations) {
+        await processAllocation(alloc, 'health', day, dayKey);
+      }
     }
     for (const alloc of workShiftAllocations) {
       await processAllocation(alloc, 'work_shift', day, dayKey);
@@ -1554,16 +1757,11 @@ async function runAutoPointingJob() {
       .catch(() => ({ docs: [] }));
     const tasks = tasksSnap.docs.map((doc) => ({ id: doc.id, ref: doc.ref, data: doc.data() || {} }));
 
+    // All non-done tasks without points (expanded from active-sprint-only)
     const taskCandidates = tasks.filter(({ data }) => {
       if (data.deleted || isTaskDoneStatus(data.status)) return false;
       const hasPoints = Number.isFinite(Number(data.points)) && Number(data.points) > 0;
-      if (hasPoints) return false;
-      const type = String(data.type || data.task_type || '').toLowerCase();
-      const isRoutine = ['chore', 'routine', 'habit', 'habitual'].includes(type) || isRoutineChoreHabit(data);
-      if (isRoutine) return true;
-      if (data.sprintId && activeSprintIds.has(data.sprintId)) return true;
-      if (data.storyId && activeStoryIds.has(data.storyId)) return true;
-      return false;
+      return !hasPoints;
     });
 
     for (const task of taskCandidates) {
@@ -1572,35 +1770,71 @@ async function runAutoPointingJob() {
       const isRoutine = ['chore', 'routine', 'habit', 'habitual'].includes(type) || isRoutineChoreHabit(data);
 
       let pts = null;
+      let proposedTimeOfDay = null;
       if (isRoutine) {
         const estimateMinutes = Number(data.estimateMin || data.estimatedMinutes || data.estimateMinutes || data.durationMinutes || 0);
         const fallbackMinutes = Number.isFinite(estimateMinutes) && estimateMinutes > 0 ? estimateMinutes : 15;
         pts = clampTaskPoints(fallbackMinutes / 60) || 0.25;
       } else {
         const estimate = await callLLMJsonSafe({
-          system: 'Estimate agile story points as a number (decimals allowed in 0.25 increments, range 0.25-8). Return {"points":number}.',
+          system: 'Estimate agile story points (0.25–8, 0.25 increments) and suggest time of day for this task. Return {"points":number,"timeOfDay":"morning"|"afternoon"|"evening"|null}. Use morning for deep/creative work, afternoon for reviews/meetings, evening for light/admin tasks.',
           user: buildSizingPrompt(data, 'Task'),
           purpose: 'autoPoint_task',
           userId,
         });
         pts = clampTaskPoints(estimate?.points);
+        const tod = String(estimate?.timeOfDay || '').toLowerCase();
+        if (['morning', 'afternoon', 'evening'].includes(tod)) proposedTimeOfDay = tod;
       }
       if (!pts) continue;
 
-      await task.ref.set({ points: pts, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      const fieldUpdate = { points: pts, updatedAt: admin.firestore.FieldValue.serverTimestamp() };
+      if (proposedTimeOfDay && !data.timeOfDay) fieldUpdate.timeOfDay = proposedTimeOfDay;
+      await task.ref.set(fieldUpdate, { merge: true });
       await db.collection('activity_stream').add(activityPayload({
         ownerUid: userId,
         entityId: task.id,
         entityType: 'task',
         activityType: 'auto_point',
-        description: `Auto-pointed task at ${pts} points`,
-        metadata: { run: '01:00_auto_point', points: pts, source: isRoutine ? 'derived_minutes' : 'llm' },
+        description: `Auto-pointed task at ${pts} pts${proposedTimeOfDay ? `, suggested timeOfDay: ${proposedTimeOfDay}` : ''}`,
+        metadata: { run: '01:00_auto_point', points: pts, timeOfDay: proposedTimeOfDay, source: isRoutine ? 'derived_minutes' : 'llm' },
       }));
     }
 
+    // Tasks that already have points but no timeOfDay (non-routine)
+    const noTimeOfDayTasks = tasks.filter(({ data }) => {
+      if (data.deleted || isTaskDoneStatus(data.status)) return false;
+      if (data.timeOfDay) return false;
+      const hasPoints = Number.isFinite(Number(data.points)) && Number(data.points) > 0;
+      if (!hasPoints) return false; // will be handled above
+      const type = String(data.type || data.task_type || '').toLowerCase();
+      return !['chore', 'routine', 'habit', 'habitual'].includes(type) && !isRoutineChoreHabit(data);
+    });
+
+    for (const task of noTimeOfDayTasks) {
+      const data = task.data || {};
+      const estimate = await callLLMJsonSafe({
+        system: 'Suggest the best time of day for this task. Return {"timeOfDay":"morning"|"afternoon"|"evening"}. Use morning for deep/creative work, afternoon for reviews/meetings, evening for light/admin tasks.',
+        user: buildSizingPrompt(data, 'Task'),
+        purpose: 'autoTimeOfDay_task',
+        userId,
+      });
+      const tod = String(estimate?.timeOfDay || '').toLowerCase();
+      if (!['morning', 'afternoon', 'evening'].includes(tod)) continue;
+      await task.ref.set({ timeOfDay: tod, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      await db.collection('activity_stream').add(activityPayload({
+        ownerUid: userId,
+        entityId: task.id,
+        entityType: 'task',
+        activityType: 'auto_time_of_day',
+        description: `Proposed timeOfDay: ${tod}`,
+        metadata: { run: '01:00_auto_time_of_day', timeOfDay: tod },
+      }));
+    }
+
+    // All non-done stories without points
     const storyCandidates = stories.filter(({ data }) => {
       if (isStoryDoneStatus(data.status)) return false;
-      if (!data.sprintId || !activeSprintIds.has(data.sprintId)) return false;
       const hasPoints = Number.isFinite(Number(data.points)) && Number(data.points) > 0;
       return !hasPoints;
     });
@@ -1608,21 +1842,54 @@ async function runAutoPointingJob() {
     for (const story of storyCandidates) {
       const data = story.data || {};
       const estimate = await callLLMJsonSafe({
-        system: 'Estimate agile story points as a number (decimals allowed in 0.25 increments, range 0.25-8). Return {"points":number}.',
+        system: 'Estimate agile story points (0.25–8, 0.25 increments) and suggest time of day. Return {"points":number,"timeOfDay":"morning"|"afternoon"|"evening"|null}.',
         user: buildSizingPrompt(data, 'Story'),
         purpose: 'autoPoint_story',
         userId,
       });
       const pts = clampTaskPoints(estimate?.points);
       if (!pts) continue;
-      await story.ref.set({ points: pts, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      const tod = String(estimate?.timeOfDay || '').toLowerCase();
+      const proposedTimeOfDay = ['morning', 'afternoon', 'evening'].includes(tod) ? tod : null;
+      const fieldUpdate = { points: pts, updatedAt: admin.firestore.FieldValue.serverTimestamp() };
+      if (proposedTimeOfDay && !data.timeOfDay) fieldUpdate.timeOfDay = proposedTimeOfDay;
+      await story.ref.set(fieldUpdate, { merge: true });
       await db.collection('activity_stream').add(activityPayload({
         ownerUid: userId,
         entityId: story.id,
         entityType: 'story',
         activityType: 'auto_point',
-        description: `Auto-pointed story at ${pts} points`,
-        metadata: { run: '01:00_auto_point', points: pts },
+        description: `Auto-pointed story at ${pts} pts${proposedTimeOfDay ? `, suggested timeOfDay: ${proposedTimeOfDay}` : ''}`,
+        metadata: { run: '01:00_auto_point', points: pts, timeOfDay: proposedTimeOfDay },
+      }));
+    }
+
+    // Stories that have points but no timeOfDay
+    const noTimeOfDayStories = stories.filter(({ data }) => {
+      if (isStoryDoneStatus(data.status)) return false;
+      if (data.timeOfDay) return false;
+      const hasPoints = Number.isFinite(Number(data.points)) && Number(data.points) > 0;
+      return hasPoints;
+    });
+
+    for (const story of noTimeOfDayStories) {
+      const data = story.data || {};
+      const estimate = await callLLMJsonSafe({
+        system: 'Suggest the best time of day for this story. Return {"timeOfDay":"morning"|"afternoon"|"evening"}.',
+        user: buildSizingPrompt(data, 'Story'),
+        purpose: 'autoTimeOfDay_story',
+        userId,
+      });
+      const tod = String(estimate?.timeOfDay || '').toLowerCase();
+      if (!['morning', 'afternoon', 'evening'].includes(tod)) continue;
+      await story.ref.set({ timeOfDay: tod, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      await db.collection('activity_stream').add(activityPayload({
+        ownerUid: userId,
+        entityId: story.id,
+        entityType: 'story',
+        activityType: 'auto_time_of_day',
+        description: `Proposed timeOfDay: ${tod}`,
+        metadata: { run: '01:00_auto_time_of_day', timeOfDay: tod },
       }));
     }
   }
@@ -2012,6 +2279,7 @@ async function runPriorityScoringJob() {
         goalDueMs: goal?.dueDateMs || null,
         theme: effectiveTheme,
         points: data.points,
+        taskType: data.type,
       });
       const preScore = Math.min(100, baseScore + bonus);
       const persona = String(data.persona || 'personal').toLowerCase() === 'work' ? 'work' : 'personal';
@@ -2052,6 +2320,7 @@ async function runPriorityScoringJob() {
         goalDueMs: goal?.dueDateMs || null,
         theme,
         points: data.points,
+        taskType: 'story',
       });
       const preScore = Math.min(100, baseScore + bonus);
       const persona = String(data.persona || 'personal').toLowerCase() === 'work' ? 'work' : 'personal';
@@ -2131,6 +2400,7 @@ async function runPriorityScoringJob() {
         goalDueMs: goal?.dueDateMs || null,
         theme: effectiveTheme,
         points: entity.points,
+        taskType: entity.type || entityType,
       });
       const textSignal = textSignals.get(ref.id);
       const textScore = textSignal ? clampTextScore(textSignal.score) : 0;
@@ -2466,6 +2736,11 @@ async function runPriorityScoringJob() {
       }
     });
     await storyClearWriter.close();
+
+    // Compute Top 3 immediately after scoring so it's ready before calendar planning
+    await recomputeTop3ForUser(db, userId).catch((err) => {
+      console.warn(`[runPriorityScoringJob] recomputeTop3ForUser failed for ${userId}:`, err?.message);
+    });
   }
 }
 
@@ -2586,6 +2861,7 @@ async function runCalendarPlannerJob() {
     }
     const existingBlocks = dedupeResult.blocks;
 
+    const fitnessBlocksAutoCreate = profile?.fitnessBlocksAutoCreate !== false;
     const plannerBlockResult = await materializePlannerThemeBlocks({
       db,
       userId,
@@ -2593,6 +2869,7 @@ async function runCalendarPlannerJob() {
       windowEnd,
       themeAllocations,
       existingBlocks,
+      fitnessBlocksAutoCreate,
     });
     if (plannerBlockResult.created > 0) {
       console.log(`[calendar-planner] planner blocks created for ${userId}: ${plannerBlockResult.created}`);
@@ -2636,6 +2913,17 @@ async function runCalendarPlannerJob() {
         if (t.storyId && openStoryIds.has(t.storyId)) return true;
         return false;
       });
+
+    const matchResult = await matchExternalCalendarEventsToEntities({
+      db,
+      userId,
+      blocks: existingBlocks,
+      openStories,
+      openTasks,
+    });
+    if (matchResult.matchedStories > 0 || matchResult.matchedTasks > 0) {
+      console.log(`[calendar-planner] matched external events for ${userId}: stories=${matchResult.matchedStories}, tasks=${matchResult.matchedTasks}`);
+    }
 
     const todayIso = nowLocal.toISODate();
     const isTopTask = (t) => {
@@ -2740,6 +3028,7 @@ async function runCalendarPlannerJob() {
     let created = 0;
     let blocked = 0;
 
+    // Greedy multi-block scheduler: fills all available free time until total needed is covered
     const placeEntry = async (candidate, kind) => {
       const sprint = candidate.sprintId ? sprintMap.get(candidate.sprintId) : null;
       const sprintStart = sprint?.start ? toMillis(sprint.start) : null;
@@ -2747,169 +3036,130 @@ async function runCalendarPlannerJob() {
       const isWorkPersona = String(candidate?.persona || '').toLowerCase() === 'work';
       const busyList = isWorkPersona ? busyWork : busyPersonal;
 
-      const durationMinutes = estimateSchedulingMinutes(candidate, kind);
-      const durationMs = durationMinutes * 60000;
+      const totalNeededMs = estimateRequiredMinutes(candidate, kind) * 60000;
+      const entityKey = getEntityKey(kind, candidate.id);
+      const alreadyScheduledMs = (scheduledMinutesByEntity.get(entityKey) || 0) * 60000;
+      let stillNeededMs = totalNeededMs - alreadyScheduledMs;
+      if (stillNeededMs <= 0) return { created: 0, blocked: 0 };
+
+      const MIN_BLOCK_MS = 30 * 60000;
+      const title = candidate.title;
+      const basePayload = {
+        ownerUid: userId,
+        title,
+        entityType: kind,
+        taskId: kind === 'task' ? candidate.id : null,
+        storyId: kind === 'story' ? candidate.id : null,
+        sprintId: candidate.sprintId || null,
+        theme: candidate.theme || null,
+        goalId: candidate.goalId || null,
+        status: 'planned',
+        aiGenerated: true,
+        aiScore: candidate.aiScore || null,
+        aiReason: candidate.aiCriticalityReason || null,
+        placementReason: 'Nightly planner: greedy fill for remaining work',
+        calendarMatchSource: 'calendar_event_created_via_planner',
+        calendarMatchNote: 'Calendar event created via planner',
+        deepLink: buildEntityUrl(kind === 'story' ? 'story' : 'task', candidate.id, candidate.ref || null),
+        persona: candidate.persona || (isWorkPersona ? 'work' : 'personal'),
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+
+      let created = 0;
 
       if (isWorkPersona) {
         if (!mainGigBlocks.length) return { created: 0, blocked: 1 };
-        const sortedMainGig = mainGigBlocks
-          .filter((mg) => mg.start && mg.end)
-          .sort((a, b) => a.start - b.start);
-
+        const sortedMainGig = mainGigBlocks.filter((mg) => mg.start && mg.end).sort((a, b) => a.start - b.start);
         for (const mg of sortedMainGig) {
-          const slotStart = DateTime.fromMillis(mg.start, { zone: windowStart.zoneName });
-          const slotEnd = DateTime.fromMillis(mg.end, { zone: windowStart.zoneName });
-          if (slotEnd <= slotStart) continue;
-          if (sprintStart && slotEnd.toMillis() < sprintStart) continue;
-          if (sprintEnd && slotStart.toMillis() > sprintEnd) continue;
-          if (slotEnd.toMillis() - slotStart.toMillis() < durationMs) continue;
-
-          const overlaps = busyList
-            .filter((b) => b.end > slotStart.toMillis() && b.start < slotEnd.toMillis())
-            .sort((a, b) => a.start - b.start);
-          let cursor = slotStart.toMillis();
-          for (const o of overlaps) {
-            if (o.start - cursor >= durationMs) break;
-            cursor = Math.max(cursor, o.end);
-            if (cursor + durationMs > slotEnd.toMillis()) cursor = null;
+          if (stillNeededMs <= 0) break;
+          if (sprintStart && mg.end < sprintStart) continue;
+          if (sprintEnd && mg.start > sprintEnd) continue;
+          const gaps = findFreeGapsInSlot(mg.start, mg.end, busyList, MIN_BLOCK_MS);
+          for (const gap of gaps) {
+            if (stillNeededMs <= 0) break;
+            const blockMs = Math.min(gap.end - gap.start, stillNeededMs);
+            if (blockMs < MIN_BLOCK_MS) continue;
+            const blockRef = db.collection('calendar_blocks').doc();
+            const payload = { ...basePayload, start: gap.start, end: gap.start + blockMs };
+            await blockRef.set(payload);
+            busyPersonal.push({ start: payload.start, end: payload.end });
+            busyWork.push({ start: payload.start, end: payload.end });
+            const minutesAdded = Math.round(blockMs / 60000);
+            addScheduledMinutes(scheduledMinutesByEntity, kind, candidate.id, minutesAdded);
+            stillNeededMs -= blockMs;
+            created++;
+            const slotDt = DateTime.fromMillis(gap.start, { zone: windowStart.zoneName });
+            await db.collection('activity_stream').add(activityPayload({
+              ownerUid: userId,
+              entityId: candidate.id,
+              entityType: kind,
+              activityType: 'calendar_insertion',
+              description: `Calendar block created (${slotDt.toISODate()} ${slotDt.toFormat('HH:mm')}–${DateTime.fromMillis(gap.start + blockMs, { zone: windowStart.zoneName }).toFormat('HH:mm')})`,
+              metadata: { blockId: blockRef.id, reason: payload.placementReason, theme: payload.theme || null, goalId: payload.goalId || null },
+            }));
           }
-          if (cursor == null || cursor + durationMs > slotEnd.toMillis()) continue;
-
-          const blockRef = db.collection('calendar_blocks').doc();
-          const payload = {
-            ownerUid: userId,
-            start: cursor,
-            end: cursor + durationMs,
-            title: candidate.ref ? `${candidate.ref}: ${candidate.title}` : candidate.title,
-            entityType: kind,
-            taskId: kind === 'task' ? candidate.id : null,
-            storyId: kind === 'story' ? candidate.id : null,
-            sprintId: candidate.sprintId || null,
-            theme: candidate.theme || null,
-            goalId: candidate.goalId || null,
-            status: 'planned',
-            aiGenerated: true,
-            aiScore: candidate.aiScore || null,
-            aiReason: candidate.aiCriticalityReason || null,
-            placementReason: 'Nightly planner: top priority item',
-            deepLink: buildEntityUrl(kind === 'story' ? 'story' : 'task', candidate.id, candidate.ref || null),
-            persona: candidate.persona || 'work',
-            createdAt: admin.firestore.FieldValue.serverTimestamp(),
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          };
-          await blockRef.set(payload);
-          busyPersonal.push({ start: payload.start, end: payload.end });
-          busyWork.push({ start: payload.start, end: payload.end });
-          addScheduledMinutes(scheduledMinutesByEntity, kind, candidate.id, durationMinutes);
-          await db.collection('activity_stream').add(activityPayload({
-            ownerUid: userId,
-            entityId: candidate.id,
-            entityType: kind,
-            activityType: 'calendar_insertion',
-            description: `Calendar block created (${slotStart.toISODate()} ${slotStart.toFormat('HH:mm')}–${slotEnd.toFormat('HH:mm')})`,
-            metadata: { blockId: blockRef.id, reason: payload.placementReason, theme: payload.theme || null, goalId: payload.goalId || null },
-          }));
-          return { created: 1 };
         }
-        return { created: 0, blocked: 1 };
+        return { created, blocked: stillNeededMs > MIN_BLOCK_MS ? 1 : 0 };
       }
 
-      for (let offset = 0; offset < planningDays; offset++) {
+      for (let offset = 0; offset < planningDays && stillNeededMs > MIN_BLOCK_MS; offset++) {
         const day = windowStart.plus({ days: offset });
         const dayStartMs = day.toMillis();
         const dayEndMs = day.endOf('day').toMillis();
         if ((sprintStart && dayEndMs < sprintStart) || (sprintEnd && dayStartMs > sprintEnd)) continue;
 
-        const slots = pickSlots(candidate.theme || candidate.goal || null, day);
+        const allSlots = pickSlots(candidate.theme || candidate.goal || null, day);
+        const slots = filterSlotsByTimeOfDay(allSlots, candidate.timeOfDay || null);
         for (const slot of slots) {
-          // Skip main gig blocks for tasks/stories
-          const isMainGigSlot = isMainGigLabel(slot.label);
-          if (isMainGigSlot) continue;
-          
+          if (stillNeededMs <= 0) break;
+          if (isMainGigLabel(slot.label)) continue;
           const slotDays = slot.days || [1, 2, 3, 4, 5, 6, 7];
           if (!slotDays.includes(day.weekday)) continue;
           const slotStart = day.set({ hour: Math.floor(slot.start), minute: Math.round((slot.start % 1) * 60), second: 0, millisecond: 0 });
           const slotEnd = day.set({ hour: Math.floor(slot.end), minute: Math.round((slot.end % 1) * 60), second: 0, millisecond: 0 });
           if (sprintStart && slotEnd.toMillis() < sprintStart) continue;
           if (sprintEnd && slotStart.toMillis() > sprintEnd) continue;
-          if (slotEnd.toMillis() - slotStart.toMillis() < durationMs) continue;
 
-          const overlaps = busyList
-            .filter((b) => b.end > slotStart.toMillis() && b.start < slotEnd.toMillis())
-            .sort((a, b) => a.start - b.start);
-          let cursor = slotStart.toMillis();
-          for (const o of overlaps) {
-            if (o.start - cursor >= durationMs) break;
-            cursor = Math.max(cursor, o.end);
-            if (cursor + durationMs > slotEnd.toMillis()) cursor = null;
+          const gaps = findFreeGapsInSlot(slotStart.toMillis(), slotEnd.toMillis(), busyList, MIN_BLOCK_MS);
+          for (const gap of gaps) {
+            if (stillNeededMs <= 0) break;
+            if (mainGigBlocks.some((mg) => mg.end > gap.start && mg.start < gap.end)) continue;
+            const blockMs = Math.min(gap.end - gap.start, stillNeededMs);
+            if (blockMs < MIN_BLOCK_MS) continue;
+            const blockRef = db.collection('calendar_blocks').doc();
+            const payload = { ...basePayload, start: gap.start, end: gap.start + blockMs };
+            await blockRef.set(payload);
+            busyPersonal.push({ start: payload.start, end: payload.end });
+            busyWork.push({ start: payload.start, end: payload.end });
+            const minutesAdded = Math.round(blockMs / 60000);
+            addScheduledMinutes(scheduledMinutesByEntity, kind, candidate.id, minutesAdded);
+            stillNeededMs -= blockMs;
+            created++;
+            const slotDt = DateTime.fromMillis(gap.start, { zone: windowStart.zoneName });
+            await db.collection('activity_stream').add(activityPayload({
+              ownerUid: userId,
+              entityId: candidate.id,
+              entityType: kind,
+              activityType: 'calendar_insertion',
+              description: `Calendar block created (${slotDt.toISODate()} ${slotDt.toFormat('HH:mm')}–${DateTime.fromMillis(gap.start + blockMs, { zone: windowStart.zoneName }).toFormat('HH:mm')})`,
+              metadata: { blockId: blockRef.id, reason: payload.placementReason, theme: payload.theme || null, goalId: payload.goalId || null },
+            }));
           }
-          if (cursor == null || cursor + durationMs > slotEnd.toMillis()) continue;
-
-          // CRITICAL: Never place tasks/stories in main gig blocks, even high priority ones
-          const proposedStart = cursor;
-          const proposedEnd = cursor + durationMs;
-          const conflictsWithMainGig = mainGigBlocks.some((mgBlock) => 
-            mgBlock.end > proposedStart && mgBlock.start < proposedEnd
-          );
-          if (conflictsWithMainGig) {
-            console.log(`[calendar-planner] Skipping main gig block for ${kind} ${candidate.title}`);
-            continue; // Skip this slot, find another
-          }
-
-          const blockRef = db.collection('calendar_blocks').doc();
-          const payload = {
-            ownerUid: userId,
-            start: cursor,
-            end: cursor + durationMs,
-            title: candidate.ref ? `${candidate.ref}: ${candidate.title}` : candidate.title,
-            entityType: kind,
-            taskId: kind === 'task' ? candidate.id : null,
-            storyId: kind === 'story' ? candidate.id : null,
-            sprintId: candidate.sprintId || null,
-            theme: candidate.theme || null,
-            goalId: candidate.goalId || null,
-            status: 'planned',
-            aiGenerated: true,
-            aiScore: candidate.aiScore || null,
-            aiReason: candidate.aiCriticalityReason || null,
-            placementReason: 'Nightly planner: top priority item',
-            deepLink: buildEntityUrl(kind === 'story' ? 'story' : 'task', candidate.id, candidate.ref || null),
-            persona: candidate.persona || 'personal',
-            createdAt: admin.firestore.FieldValue.serverTimestamp(),
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          };
-          await blockRef.set(payload);
-          busyPersonal.push({ start: payload.start, end: payload.end });
-          busyWork.push({ start: payload.start, end: payload.end });
-          addScheduledMinutes(scheduledMinutesByEntity, kind, candidate.id, durationMinutes);
-          await db.collection('activity_stream').add(activityPayload({
-            ownerUid: userId,
-            entityId: candidate.id,
-            entityType: kind,
-            activityType: 'calendar_insertion',
-            description: `Calendar block created (${day.toISODate()} ${slotStart.toFormat('HH:mm')}–${slotEnd.toFormat('HH:mm')})`,
-            metadata: { blockId: blockRef.id, reason: payload.placementReason, theme: payload.theme || null, goalId: payload.goalId || null },
-          }));
-          return { created: 1 };
         }
       }
-      return { created: 0, blocked: 1 };
+      return { created, blocked: stillNeededMs > MIN_BLOCK_MS ? 1 : 0 };
     };
-
-    // Avoid duplicating if already covered
-    const covered = new Set();
-    scheduledMinutesByEntity.forEach((minutes, key) => {
-      if (minutes > 0) covered.add(key);
-    });
 
     for (const entry of placementQueue) {
       const { kind, candidate } = entry;
-      const key = getEntityKey(kind, candidate?.id);
-      if (covered.has(key)) continue;
+      const entityKey = getEntityKey(kind, candidate?.id);
+      const totalNeededMs = estimateRequiredMinutes(candidate, kind) * 60000;
+      const alreadyMs = (scheduledMinutesByEntity.get(entityKey) || 0) * 60000;
+      if (alreadyMs >= totalNeededMs) continue; // fully covered
       const res = await placeEntry(candidate, kind);
       created += res.created || 0;
       blocked += res.blocked || 0;
-      if (res.created) covered.add(key);
     }
 
     const coverage = buildPlannerCoverageSummary({
@@ -3010,6 +3260,107 @@ exports.materializeFitnessBlocksNow = onCall({
  * - Item still exists and is active (not completed)
  * - Chores still meet placement heuristics
  */
+/**
+ * Roll over missed chore / routine / habit instances.
+ *
+ * For each scheduled_instance that:
+ *  - belongs to a chore, routine, or habit source type
+ *  - was planned for a past date
+ *  - is still in 'planned' or 'unscheduled' status (i.e. not marked done)
+ *
+ * We:
+ *  1. Mark the instance as 'missed'
+ *  2. Flag the source document so routine-adherence views can surface the miss
+ *     and the next planning run naturally schedules the next recurrence ASAP.
+ *
+ * Tasks are intentionally excluded — they have their own overdue handling.
+ */
+async function applyRolloverForMissedChoresRoutines(db, userId, zone) {
+  if (!userId) return { rolled: 0 };
+  const todayKey = DateTime.now().setZone(coerceZone(zone)).toISODate().replace(/-/g, ''); // yyyyMMdd
+  const ROLLOVER_SOURCE_TYPES = new Set(['chore', 'routine', 'habit']);
+  const PENDING_STATUSES = new Set(['planned', 'unscheduled', 'pending', '']);
+
+  let instancesSnap;
+  try {
+    instancesSnap = await db.collection('scheduled_instances')
+      .where('ownerUid', '==', userId)
+      .where('occurrenceDate', '<', todayKey)
+      .get();
+  } catch (err) {
+    console.warn('[Rollover] Failed to query scheduled_instances:', err?.message || err);
+    return { rolled: 0 };
+  }
+
+  const toMark = []; // { ref, data }
+  for (const doc of instancesSnap.docs) {
+    const data = doc.data() || {};
+    if (!ROLLOVER_SOURCE_TYPES.has(data.sourceType)) continue;
+    const status = String(data.status || '').toLowerCase();
+    if (!PENDING_STATUSES.has(status) && status !== 'missed') continue; // already done/committed — skip
+    if (status === 'missed') continue; // already processed
+    toMark.push({ ref: doc.ref, data });
+  }
+
+  if (!toMark.length) return { rolled: 0 };
+
+  // Group by sourceId so we only write each source doc once
+  const sourceUpdates = new Map(); // sourceId → { collection, missedCount, lastMissedDayKey }
+  for (const { data } of toMark) {
+    const sid = data.sourceId;
+    if (!sid) continue;
+    const col = data.sourceType === 'chore' ? 'chores'
+      : data.sourceType === 'habit' ? 'habits'
+      : 'routines';
+    const existing = sourceUpdates.get(sid);
+    // Keep the most-recent missed day for display
+    const dayKey = data.dayKey || data.occurrenceDate || '';
+    if (!existing || dayKey > existing.lastMissedDayKey) {
+      sourceUpdates.set(sid, { collection: col, missedCount: (existing?.missedCount || 0) + 1, lastMissedDayKey: dayKey });
+    } else {
+      existing.missedCount += 1;
+    }
+  }
+
+  // Batch-update instance status
+  const instanceBatches = [];
+  for (let i = 0; i < toMark.length; i += 500) {
+    const batch = db.batch();
+    toMark.slice(i, i + 500).forEach(({ ref }) => {
+      batch.update(ref, {
+        status: 'missed',
+        missedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    });
+    instanceBatches.push(batch.commit());
+  }
+
+  // Batch-update source docs — flag for adherence display and priority boost
+  const sourceBatches = [];
+  const sourceEntries = Array.from(sourceUpdates.entries());
+  for (let i = 0; i < sourceEntries.length; i += 500) {
+    const batch = db.batch();
+    sourceEntries.slice(i, i + 500).forEach(([sourceId, info]) => {
+      const ref = db.collection(info.collection).doc(sourceId);
+      batch.update(ref, {
+        pendingRollover: true,
+        lastMissedAt: admin.firestore.FieldValue.serverTimestamp(),
+        missedCount: admin.firestore.FieldValue.increment(info.missedCount),
+        // Slightly elevate priority so the next occurrence gets scheduled sooner
+        schedulerPriority: admin.firestore.FieldValue.increment(-1),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    });
+    sourceBatches.push(batch.commit());
+  }
+
+  await Promise.allSettled([...instanceBatches, ...sourceBatches]);
+
+  console.log(`[Rollover] Marked ${toMark.length} missed chore/routine instances, updated ${sourceUpdates.size} source docs`);
+  return { rolled: toMark.length };
+}
+
 async function clearStaleCalendarInstances(db, userId, windowStart, windowEnd, currentOccurrences) {
   const dayKeyToOccurrenceDate = (dayKey) => dayKey.replace(/-/g, '');
 
@@ -3122,7 +3473,18 @@ exports.replanCalendarNow = onCall({
   const db = ensureFirestore();
   const profileSnap = await db.collection('profiles').doc(uid).get().catch(() => null);
   const profile = profileSnap && profileSnap.exists ? (profileSnap.data() || {}) : {};
+  const fitnessBlocksAutoCreate = req?.data?.fitnessBlocksAutoCreate !== false
+    && profile?.fitnessBlocksAutoCreate !== false;
   const zone = resolveTimezone(profile, 'Europe/London');
+  // planningMode: 'smart' (default) = only user GCal + work/fitness are hard-busy, everything else is fair game
+  //               'strict'          = all planned blocks + user calendar are hard constraints
+  const planningMode = (() => {
+    const fromReq = String(req?.data?.planningMode || '').toLowerCase();
+    const fromProfile = String(profile.plannerMode || '').toLowerCase();
+    const resolved = fromReq || fromProfile;
+    return resolved === 'strict' ? 'strict' : 'smart';
+  })();
+  const MAX_PLANNING_DAYS = 21;
   const days = Math.max(1, Math.min(Number(req?.data?.days || 7), 14));
   const requestedStart = String(req?.data?.startDate || '').trim();
   const requestedStartDt = requestedStart
@@ -3131,7 +3493,7 @@ exports.replanCalendarNow = onCall({
   const windowStart = requestedStartDt && requestedStartDt.isValid
     ? requestedStartDt
     : DateTime.now().setZone(coerceZone(zone)).startOf('day');
-  const windowEnd = windowStart.plus({ days }).endOf('day');
+  let windowEnd = windowStart.plus({ days }).endOf('day');
 
   let themeAllocations = [];
   try {
@@ -3141,6 +3503,11 @@ exports.replanCalendarNow = onCall({
 
   await recomputeTop3ForUser(db, uid).catch((err) => {
     console.warn('[replanCalendarNow] top3 refresh failed', uid, err?.message || err);
+  });
+
+  // Roll over any missed chore / routine / habit instances from past days
+  await applyRolloverForMissedChoresRoutines(db, uid, zone).catch((err) => {
+    console.warn('[replanCalendarNow] rollover failed', uid, err?.message || err);
   });
 
   // Load sprints for sprint window gating
@@ -3196,15 +3563,6 @@ exports.replanCalendarNow = onCall({
     .catch(() => ({ docs: [] }));
   const existingBlocks = blocksSnap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
 
-  await materializePlannerThemeBlocks({
-    db,
-    userId: uid,
-    windowStart,
-    windowEnd,
-    themeAllocations,
-    existingBlocks,
-  });
-
   let storiesSnap = { docs: [] };
   try {
     if (activeSprintIds.length > 0 && activeSprintIds.length <= 10) {
@@ -3241,7 +3599,15 @@ exports.replanCalendarNow = onCall({
   const openStories = storiesSnap.docs
     .map((d) => ({ id: d.id, ...(d.data() || {}) }))
     .filter((s) => !isStoryDoneStatus(s.status))
-    .filter((s) => activeSprintIds.length === 0 || (s.sprintId && activeSprintIds.includes(s.sprintId)));
+    .filter((s) => activeSprintIds.length === 0 || (s.sprintId && activeSprintIds.includes(s.sprintId)))
+    // NEW: Skip locked stories (prevent rescheduling manual placements)
+    .filter((s) => {
+      if (s.orchestrationLocked === true) {
+        console.log(`[Replan] Skipping locked story: ${s.id} (reason: ${s.orchestrationLockedReason})`);
+        return false;
+      }
+      return true;
+    });
   const openStoryIds = new Set(openStories.map((story) => story.id));
   const openTasks = tasksSnap.docs
     .map((d) => ({ id: d.id, ...(d.data() || {}) }))
@@ -3252,6 +3618,14 @@ exports.replanCalendarNow = onCall({
       if (t.sprintId && activeSprintIds.includes(t.sprintId)) return true;
       if (t.storyId && openStoryIds.has(t.storyId)) return true;
       return false;
+    })
+    // NEW: Skip locked tasks (prevent rescheduling manual placements)
+    .filter((t) => {
+      if (t.orchestrationLocked === true) {
+        console.log(`[Replan] Skipping locked task: ${t.id} (reason: ${t.orchestrationLockedReason})`);
+        return false;
+      }
+      return true;
     });
 
   const scoredStories = openStories.map((story) => ({
@@ -3300,11 +3674,27 @@ exports.replanCalendarNow = onCall({
     ...taskQueue.map((task) => getEntityKey('task', task.id)),
   ]);
 
+  // NEW: Check user setting for chore scheduling
+  const scheduleChoresEnabled = profile?.scheduleChoresEnabled !== false;
+
   // Fetch chores/routines to include in valid occurrences
   const choresRoutines = tasksSnap.docs
     .map((d) => ({ id: d.id, ...(d.data() || {}) }))
     .filter((t) => !isTaskDoneStatus(t.status))
-    .filter((t) => isRoutineChoreHabit(t));
+    .filter((t) => isRoutineChoreHabit(t))
+    // NEW: Skip if chore scheduling is disabled in user settings
+    .filter((t) => {
+      if (!scheduleChoresEnabled) {
+        console.log(`[Replan] Skipping chore scheduling (disabled): ${t.id}`);
+        return false;
+      }
+      // Also respect orchestration lock for chores
+      if (t.orchestrationLocked === true) {
+        console.log(`[Replan] Skipping locked chore: ${t.id}`);
+        return false;
+      }
+      return true;
+    });
 
   // Build list of current valid occurrences for calendar validation
   const currentOccurrences = [
@@ -3314,25 +3704,71 @@ exports.replanCalendarNow = onCall({
   ];
 
   // Clear stale calendar instances before scheduling new ones
-  console.log(`[Replan] Clearing stale calendar instances...`);
+  console.log(`[Replan] Clearing stale calendar instances... (scheduleChoresEnabled=${scheduleChoresEnabled})`);
   await clearStaleCalendarInstances(db, uid, windowStart, windowEnd, currentOccurrences);
 
-  // Build busy map and prune non-top AI entries
+  // Helpers for classifying blocks by mode
+  const isAiPlannerBlock = (block) =>
+    block.aiGenerated === true || block.createdBy === 'ai' ||
+    block.source === 'theme_allocation' ||
+    block.sourceType === 'health_allocation' ||
+    block.sourceType === 'work_shift_allocation';
+
+  const isUserGcalEvent = (block) => {
+    const src = String(block.source || block.sourceType || '').toLowerCase();
+    return src === 'gcal' || src === 'google_calendar' || block.createdBy === 'google';
+  };
+
+  const isFitnessBlock = (block) => {
+    const label = String(block.theme || block.category || block.title || '').toLowerCase();
+    return label.includes('health') || label.includes('fitness') || label.includes('gym') ||
+      label.includes('workout') || label.includes('exercise') || label.includes('run') ||
+      label.includes('swim') || label.includes('cycle') || label.includes('sport');
+  };
+
+  // A block that MUST be treated as busy regardless of mode
+  const isHardBusy = (block) =>
+    isUserGcalEvent(block) || isMainGigBlock(block) || isFitnessBlock(block);
+
+  // Build busy map and prune AI entries
   const remainingBlocks = [];
   let replaced = 0;
+
   for (const block of existingBlocks) {
-    const isAi = block.aiGenerated === true || block.createdBy === 'ai';
-    const isPlannerBlock = block.source === 'theme_allocation' ||
-      block.sourceType === 'health_allocation' ||
-      block.sourceType === 'work_shift_allocation';
+    const isAi = isAiPlannerBlock(block);
     const key = block.storyId ? getEntityKey('story', block.storyId) : block.taskId ? getEntityKey('task', block.taskId) : null;
-    if (isAi && !isPlannerBlock && key && !candidateIds.has(key)) {
-      await db.collection('calendar_blocks').doc(block.id).delete().catch(() => { });
-      replaced += 1;
+
+    if (planningMode === 'smart') {
+      // Smart mode: wipe ALL AI-created planner blocks — we replan everything fresh.
+      // Hard events (user GCal, work, fitness) are kept and treated as immovable.
+      if (isAi) {
+        await db.collection('calendar_blocks').doc(block.id).delete().catch(() => { });
+        replaced += 1;
+      } else {
+        remainingBlocks.push(block);
+      }
     } else {
-      remainingBlocks.push(block);
+      // Strict mode: only remove AI blocks whose linked entity is no longer a candidate
+      if (isAi && key && !candidateIds.has(key)) {
+        await db.collection('calendar_blocks').doc(block.id).delete().catch(() => { });
+        replaced += 1;
+      } else {
+        remainingBlocks.push(block);
+      }
     }
   }
+
+  // Materialize fitness/work theme blocks AFTER wiping stale AI blocks so they are always
+  // recreated fresh and never skipped by the key-dedup check.
+  await materializePlannerThemeBlocks({
+    db,
+    userId: uid,
+    windowStart,
+    windowEnd,
+    themeAllocations,
+    existingBlocks: remainingBlocks,
+    fitnessBlocksAutoCreate,
+  });
 
   const scheduledMinutesByEntity = collectScheduledMinutesByEntity(remainingBlocks);
 
@@ -3345,7 +3781,12 @@ exports.replanCalendarNow = onCall({
   const addBusyWork = (start, end) => {
     if (start && end) busyWork.push({ start, end });
   };
+
   remainingBlocks.forEach((b) => {
+    // In smart mode only hard-busy blocks (user GCal / work / fitness) block time.
+    // In strict mode every remaining block blocks time.
+    if (planningMode === 'smart' && !isHardBusy(b)) return;
+
     if (isMainGigBlock(b)) {
       mainGigBlocks.push({ start: b.start, end: b.end, theme: b.theme || b.category || '' });
       addBusyPersonal(b.start, b.end);
@@ -3357,6 +3798,11 @@ exports.replanCalendarNow = onCall({
 
   const { pickSlots } = buildPickSlots(themeAllocations);
 
+  /**
+   * Schedule a candidate greedily across multiple free slots/days until the
+   * total remaining time is covered.  Blocks fill all available free time in
+   * each slot (no hard per-block cap), split across as many days as needed.
+   */
   const placeEntry = async (candidate, kind) => {
     const sprint = candidate.sprintId ? sprintMap.get(candidate.sprintId) : null;
     const sprintStart = sprint?.start ? toMillis(sprint.start) : null;
@@ -3364,154 +3810,123 @@ exports.replanCalendarNow = onCall({
     const isWorkPersona = String(candidate?.persona || '').toLowerCase() === 'work';
     const busyList = isWorkPersona ? busyWork : busyPersonal;
 
-    const durationMinutes = estimateSchedulingMinutes(candidate, kind);
-    const durationMs = durationMinutes * 60000;
+    const totalNeededMs = estimateRequiredMinutes(candidate, kind) * 60000;
+    const entityKey = getEntityKey(kind, candidate.id);
+    const alreadyScheduledMs = (scheduledMinutesByEntity.get(entityKey) || 0) * 60000;
+    let stillNeededMs = totalNeededMs - alreadyScheduledMs;
+    if (stillNeededMs <= 0) return { created: 0, blocked: 0 };
+
+      // Skip low-scored items — only schedule if Top 3, critical priority, or score >= 40
+      const rawScore = Number(candidate?.aiCriticalityScore || 0);
+      const isCriticalPriority = Number(candidate?.priority || 0) >= 4;
+      const isTop = candidate?.aiTop3ForDay === true;
+      if (rawScore > 0 && rawScore < 40 && !isCriticalPriority && !isTop) {
+        return { created: 0, blocked: 0 };
+      }
+
+    const MIN_BLOCK_MS = 30 * 60000; // 30-minute minimum useful block
+    const title = candidate.title;
+    const basePayload = {
+      ownerUid: uid,
+      title,
+      entityType: kind,
+      taskId: kind === 'task' ? candidate.id : null,
+      storyId: kind === 'story' ? candidate.id : null,
+      sprintId: candidate.sprintId || null,
+      theme: candidate.theme || null,
+      goalId: candidate.goalId || null,
+      status: 'planned',
+      aiGenerated: true,
+      aiScore: candidate.aiScore || null,
+      aiReason: candidate.aiCriticalityReason || null,
+      placementReason: 'Replan: greedy fill for remaining work',
+      deepLink: buildEntityUrl(kind === 'story' ? 'story' : 'task', candidate.id, candidate.ref || null),
+      persona: candidate.persona || (isWorkPersona ? 'work' : 'personal'),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+
+    let created = 0;
 
     if (isWorkPersona) {
       if (!mainGigBlocks.length) return { created: 0, blocked: 1 };
-      const sortedMainGig = mainGigBlocks
-        .filter((mg) => mg.start && mg.end)
-        .sort((a, b) => a.start - b.start);
+      const sortedMainGig = mainGigBlocks.filter((mg) => mg.start && mg.end).sort((a, b) => a.start - b.start);
       for (const mg of sortedMainGig) {
-        const slotStart = DateTime.fromMillis(mg.start, { zone: windowStart.zoneName });
-        const slotEnd = DateTime.fromMillis(mg.end, { zone: windowStart.zoneName });
-        if (slotEnd <= slotStart) continue;
-        if (sprintStart && slotEnd.toMillis() < sprintStart) continue;
-        if (sprintEnd && slotStart.toMillis() > sprintEnd) continue;
-        if (slotEnd.toMillis() - slotStart.toMillis() < durationMs) continue;
-
-        const overlaps = busyList
-          .filter((b) => b.end > slotStart.toMillis() && b.start < slotEnd.toMillis())
-          .sort((a, b) => a.start - b.start);
-        let cursor = slotStart.toMillis();
-        for (const o of overlaps) {
-          if (o.start - cursor >= durationMs) break;
-          cursor = Math.max(cursor, o.end);
-          if (cursor + durationMs > slotEnd.toMillis()) cursor = null;
+        if (stillNeededMs <= 0) break;
+        if (sprintStart && mg.end < sprintStart) continue;
+        if (sprintEnd && mg.start > sprintEnd) continue;
+        const gaps = findFreeGapsInSlot(mg.start, mg.end, busyList, MIN_BLOCK_MS);
+        for (const gap of gaps) {
+          if (stillNeededMs <= 0) break;
+          const blockMs = Math.min(gap.end - gap.start, stillNeededMs);
+          if (blockMs < MIN_BLOCK_MS) continue;
+          const blockRef = db.collection('calendar_blocks').doc();
+          const payload = { ...basePayload, start: gap.start, end: gap.start + blockMs };
+          await blockRef.set(payload);
+          busyPersonal.push({ start: payload.start, end: payload.end });
+          busyWork.push({ start: payload.start, end: payload.end });
+          const minutesAdded = Math.round(blockMs / 60000);
+          addScheduledMinutes(scheduledMinutesByEntity, kind, candidate.id, minutesAdded);
+          stillNeededMs -= blockMs;
+          created++;
         }
-        if (cursor == null || cursor + durationMs > slotEnd.toMillis()) continue;
-
-        const blockRef = db.collection('calendar_blocks').doc();
-        const payload = {
-          ownerUid: uid,
-          start: cursor,
-          end: cursor + durationMs,
-          title: candidate.ref ? `${candidate.ref}: ${candidate.title}` : candidate.title,
-          entityType: kind,
-          taskId: kind === 'task' ? candidate.id : null,
-          storyId: kind === 'story' ? candidate.id : null,
-          sprintId: candidate.sprintId || null,
-          theme: candidate.theme || null,
-          goalId: candidate.goalId || null,
-          status: 'planned',
-          aiGenerated: true,
-          aiScore: candidate.aiScore || null,
-          aiReason: candidate.aiCriticalityReason || null,
-          placementReason: 'Replan: top priority item',
-          deepLink: buildEntityUrl(kind === 'story' ? 'story' : 'task', candidate.id, candidate.ref || null),
-          persona: candidate.persona || 'work',
-          createdAt: admin.firestore.FieldValue.serverTimestamp(),
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        };
-        await blockRef.set(payload);
-        busyPersonal.push({ start: payload.start, end: payload.end });
-        busyWork.push({ start: payload.start, end: payload.end });
-        addScheduledMinutes(scheduledMinutesByEntity, kind, candidate.id, durationMinutes);
-        return { created: 1, gcalLink: payload.gcalEventUrl || null };
       }
-      return { created: 0, blocked: 1 };
+      return { created, blocked: stillNeededMs > MIN_BLOCK_MS ? 1 : 0 };
     }
 
-    for (let offset = 0; offset < planningDays; offset++) {
+    for (let offset = 0; offset < planningDays && stillNeededMs > MIN_BLOCK_MS; offset++) {
       const day = windowStart.plus({ days: offset });
       const dayStartMs = day.toMillis();
       const dayEndMs = day.endOf('day').toMillis();
       if ((sprintStart && dayEndMs < sprintStart) || (sprintEnd && dayStartMs > sprintEnd)) continue;
 
-      const slots = pickSlots(candidate.theme || candidate.goal || null, day);
+      const allSlots = pickSlots(candidate.theme || candidate.goal || null, day);
+      const slots = filterSlotsByTimeOfDay(allSlots, candidate.timeOfDay || null);
       for (const slot of slots) {
-        // Skip main gig blocks for tasks/stories
-        const isMainGigSlot = isMainGigLabel(slot.label);
-        if (isMainGigSlot) continue;
-        
+        if (stillNeededMs <= 0) break;
+        if (isMainGigLabel(slot.label)) continue;
         const slotDays = slot.days || [1, 2, 3, 4, 5, 6, 7];
         if (!slotDays.includes(day.weekday)) continue;
         const slotStart = day.set({ hour: Math.floor(slot.start), minute: Math.round((slot.start % 1) * 60), second: 0, millisecond: 0 });
         const slotEnd = day.set({ hour: Math.floor(slot.end), minute: Math.round((slot.end % 1) * 60), second: 0, millisecond: 0 });
         if (sprintStart && slotEnd.toMillis() < sprintStart) continue;
         if (sprintEnd && slotStart.toMillis() > sprintEnd) continue;
-        if (slotEnd.toMillis() - slotStart.toMillis() < durationMs) continue;
 
-        const overlaps = busyList.filter((b) => b.end > slotStart.toMillis() && b.start < slotEnd.toMillis()).sort((a, b) => a.start - b.start);
-        let cursor = slotStart.toMillis();
-        for (const o of overlaps) {
-          if (o.start - cursor >= durationMs) break;
-          cursor = Math.max(cursor, o.end);
-          if (cursor + durationMs > slotEnd.toMillis()) cursor = null;
+        const gaps = findFreeGapsInSlot(slotStart.toMillis(), slotEnd.toMillis(), busyList, MIN_BLOCK_MS);
+        for (const gap of gaps) {
+          if (stillNeededMs <= 0) break;
+          // Never place in main gig overlap
+          if (mainGigBlocks.some((mg) => mg.end > gap.start && mg.start < gap.start + Math.min(gap.end - gap.start, stillNeededMs))) continue;
+          const blockMs = Math.min(gap.end - gap.start, stillNeededMs);
+          if (blockMs < MIN_BLOCK_MS) continue;
+          const blockRef = db.collection('calendar_blocks').doc();
+          const payload = { ...basePayload, start: gap.start, end: gap.start + blockMs };
+          await blockRef.set(payload);
+          busyPersonal.push({ start: payload.start, end: payload.end });
+          busyWork.push({ start: payload.start, end: payload.end });
+          const minutesAdded = Math.round(blockMs / 60000);
+          addScheduledMinutes(scheduledMinutesByEntity, kind, candidate.id, minutesAdded);
+          stillNeededMs -= blockMs;
+          created++;
         }
-        if (cursor == null || cursor + durationMs > slotEnd.toMillis()) continue;
-
-        // CRITICAL: Never place tasks/stories in main gig blocks, even high priority ones
-        const proposedStart = cursor;
-        const proposedEnd = cursor + durationMs;
-        const conflictsWithMainGig = mainGigBlocks.some((mgBlock) => 
-          mgBlock.end > proposedStart && mgBlock.start < proposedEnd
-        );
-        if (conflictsWithMainGig) {
-          console.log(`[replan-calendar] Skipping main gig block for ${kind} ${candidate.title}`);
-          continue; // Skip this slot, find another
-        }
-
-        const blockRef = db.collection('calendar_blocks').doc();
-        const payload = {
-          ownerUid: uid,
-          start: cursor,
-          end: cursor + durationMs,
-          title: candidate.ref ? `${candidate.ref}: ${candidate.title}` : candidate.title,
-          entityType: kind,
-          taskId: kind === 'task' ? candidate.id : null,
-          storyId: kind === 'story' ? candidate.id : null,
-          sprintId: candidate.sprintId || null,
-          theme: candidate.theme || null,
-          goalId: candidate.goalId || null,
-          status: 'planned',
-          aiGenerated: true,
-          aiScore: candidate.aiScore || null,
-          aiReason: candidate.aiCriticalityReason || null,
-          placementReason: 'Replan: top priority item',
-          deepLink: buildEntityUrl(kind === 'story' ? 'story' : 'task', candidate.id, candidate.ref || null),
-          persona: candidate.persona || 'personal',
-          createdAt: admin.firestore.FieldValue.serverTimestamp(),
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        };
-        await blockRef.set(payload);
-        busyPersonal.push({ start: payload.start, end: payload.end });
-        busyWork.push({ start: payload.start, end: payload.end });
-        addScheduledMinutes(scheduledMinutesByEntity, kind, candidate.id, durationMinutes);
-        return { created: 1, gcalLink: payload.gcalEventUrl || null };
       }
     }
-    return { created: 0, blocked: 1 };
+    return { created, blocked: stillNeededMs > MIN_BLOCK_MS ? 1 : 0 };
   };
 
   let created = 0;
   let blocked = 0;
   let gcalLinks = [];
 
-  const alreadyCovered = new Set();
-  scheduledMinutesByEntity.forEach((minutes, key) => {
-    if (minutes > 0) alreadyCovered.add(key);
-  });
-
   for (const entry of placementQueue) {
     const { kind, candidate } = entry;
-    const key = getEntityKey(kind, candidate?.id);
-    if (alreadyCovered.has(key)) continue;
+    const entityKey = getEntityKey(kind, candidate?.id);
+    const totalNeededMs = estimateRequiredMinutes(candidate, kind) * 60000;
+    const alreadyMs = (scheduledMinutesByEntity.get(entityKey) || 0) * 60000;
+    if (alreadyMs >= totalNeededMs) continue; // fully covered already
     const res = await placeEntry(candidate, kind);
     created += res.created || 0;
     blocked += res.blocked || 0;
-    if (res.gcalLink) gcalLinks.push(res.gcalLink);
-    if (res.created) alreadyCovered.add(key);
   }
 
   const coverage = buildPlannerCoverageSummary({
@@ -3539,13 +3954,78 @@ exports.replanCalendarNow = onCall({
     coverage,
   });
 
+  // PHASE 1: Wire scheduled_instances (NEW MODEL)
+  // In future, this will be populated by planSchedule() from scheduler/engine.js
+  // For now, we're demonstrating the bridge for calendar_blocks → scheduled_instances
+  try {
+    const tasksByStory = await groupTasksByStory(db, uid);
+    
+    // Convert calendar_blocks to scheduled_instances
+    const blocksSnap = await db.collection('calendar_blocks')
+      .where('ownerUid', '==', uid)
+      .where('start', '>=', windowStart.toMillis())
+      .where('start', '<=', windowEnd.toMillis())
+      .get()
+      .catch(() => ({ docs: [] }));
+
+    const scheduledInstances = blocksSnap.docs.map(doc => {
+      const block = doc.data();
+      return {
+        id: `scheduled-${doc.id}`,
+        ownerUid: uid,
+        sourceType: block.entityType || 'story',
+        sourceId: block.taskId || block.storyId,
+        title: block.title,
+        blockId: block.blockId,
+        theme: block.theme,
+        plannedStart: new Date(block.start).toISOString(),
+        plannedEnd: new Date(block.end).toISOString(),
+        status: 'planned',
+        deepLink: block.deepLink,
+      };
+    });
+
+    const syncResult = await writeScheduledInstances(db, uid, scheduledInstances, {
+      source: 'replan_calendar',
+      sprint: { id: null },
+    });
+
+    // Write back actual scheduled times to source docs (tasks, stories, chores)
+    const sourceTimesResult = await writeScheduledTimesToSources(db, uid, scheduledInstances);
+
+    // Check day capacity warnings for planner alerts
+    const planningDate = new Date();
+    const capacityWarning = await getDayCapacityWarnings(db, uid, planningDate);
+    
+    if (capacityWarning.hasWarning) {
+      console.log(`[replanCalendarNow] Capacity warning for ${uid} on ${capacityWarning.date}:`, capacityWarning);
+      // Store warning for UI to display
+      await db.collection('users').doc(uid).collection('planner_alerts').doc('capacity-warning').set({
+        type: 'capacity',
+        date: capacityWarning.date,
+        shortfall: capacityWarning.shortfall,
+        utilizationPercent: capacityWarning.utilizationPercent,
+        blocks: capacityWarning.overCapacityBlocks,
+        message: capacityWarning.recommendation,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+    }
+
+    // Update planner_stats
+    await updatePlannerStats(db, uid, result);
+
+    console.log(`[replanCalendarNow] Synced: ${syncResult.written} scheduled_instances, ${sourceTimesResult.updated} source times updated`);
+  } catch (error) {
+    console.warn('[replanCalendarNow] Sync to scheduled_instances failed:', error?.message);
+  }
+
   return {
     ok: true,
     ...result,
   };
 });
 
-// Manual trigger to run the nightly chain (pointing → conversions → priority → calendar)
+// Manual trigger to run the nightly chain (pointing → conversions → scoring+Top3 → calendar)
 exports.runNightlyChainNow = onCall({
   timeZone: 'Europe/London',
   memory: '1GiB',
@@ -3743,7 +4223,7 @@ exports.deltaPriorityRescore = onCall({
     bonusReasons.push('Hobbies downweighted');
   }
 
-  const baseScore = computeCriticalityScore({ dueDateMs: dueMs, createdAtMs: createdMs, goalDueMs, theme: effectiveTheme, points: entity.points });
+  const baseScore = computeCriticalityScore({ dueDateMs: dueMs, createdAtMs: createdMs, goalDueMs, theme: effectiveTheme, points: entity.points, taskType: entity.type || entityType });
   let score = Math.min(99, baseScore + bonus);
   if (isHobbyTheme) score = Math.min(score, 45);
 

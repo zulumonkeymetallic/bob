@@ -112,10 +112,10 @@ export const GLOBAL_THEMES: GlobalTheme[] = [
     id: 7,
     name: 'Travel & Adventure',
     label: 'Travel & Adventure',
-    color: getCssVarValue('--theme-growth-primary', '#0d6efd'),
-    darkColor: getCssVarValue('--theme-growth-dark', '#0b5ed7'),
-    lightColor: getCssVarValue('--theme-growth-light', '#cfe2ff'),
-    textColor: contrastText(getCssVarValue('--theme-growth-primary', '#0d6efd')),
+    color: getCssVarValue('--theme-travel-primary', '#fd7e14'),
+    darkColor: getCssVarValue('--theme-travel-dark', '#d96b0e'),
+    lightColor: getCssVarValue('--theme-travel-light', '#ffe8d0'),
+    textColor: contrastText(getCssVarValue('--theme-travel-primary', '#fd7e14')),
     description: 'Travel plans, adventures, exploration, and cultural experiences'
   },
   {

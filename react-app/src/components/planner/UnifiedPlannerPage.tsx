@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   addDays,
   addMinutes,
@@ -36,6 +36,7 @@ import {
   Link as LinkIcon,
   ListChecks,
   RefreshCw,
+  Settings,
   Smartphone,
   Sparkles,
 } from 'lucide-react';
@@ -71,6 +72,7 @@ import { getBadgeVariant, getPriorityBadge, getStatusName } from '../../utils/st
 import { isRecurringDueOnDate, resolveRecurringDueMs } from '../../utils/recurringTaskDue';
 import EditTaskModal from '../EditTaskModal';
 import EditStoryModal from '../EditStoryModal';
+import DayCapacityWarningBanner from './DayCapacityWarningBanner';
 import { useSidebar } from '../../contexts/SidebarContext';
 
 const locales = { 'en-GB': enGB } as const;
@@ -161,6 +163,23 @@ const DEFAULT_BLOCK_FORM: BlockFormState = {
 };
 
 type ViewType = 'day' | 'week' | 'month';
+
+type PlanningMode = 'strict' | 'smart';
+
+const PLANNING_MODE_CONFIG: { value: PlanningMode; label: string; description: string }[] = [
+  {
+    value: 'smart',
+    label: 'Smart (default)',
+    description:
+      'Top 3 priorities scheduled first. Only user calendar + work/fitness blocks are respected as hard constraints. Planned blocks act as theme hints — free time is used to create GCal events automatically.',
+  },
+  {
+    value: 'strict',
+    label: 'Strict',
+    description:
+      'Fully respects planned blocks AND user calendar. Events are only inserted into their designated planned block window.',
+  },
+];
 
 const getInitialRange = (): PlannerRange => {
   const start = startOfWeek(new Date(), { weekStartsOn: 1 });
@@ -297,7 +316,9 @@ const UnifiedPlannerPage: React.FC = () => {
   );
 
   const [range, setRange] = useState<PlannerRange>(() => getInitialRange());
-  const [view, setView] = useState<ViewType>(Views.WEEK as ViewType);
+  const [view, setView] = useState<ViewType>(Views.AGENDA as ViewType);
+  // Tracks the navigated date independently so agenda always opens on today
+  const [calendarDate, setCalendarDate] = useState<Date>(() => new Date());
   const [calendarScrollTime, setCalendarScrollTime] = useState<Date>(() => {
     const now = new Date();
     return new Date(1970, 0, 1, now.getHours(), now.getMinutes(), 0);
@@ -314,6 +335,12 @@ const UnifiedPlannerPage: React.FC = () => {
   const [replanLoading, setReplanLoading] = useState(false);
   const [rebalanceLoading, setRebalanceLoading] = useState(false);
   const [orchestrationLoading, setOrchestrationLoading] = useState(false);
+  const [planningMode, setPlanningMode] = useState<PlanningMode>('smart');
+  const [savingPlanningMode, setSavingPlanningMode] = useState(false);
+  const savingPlanningModeRef = useRef(false);
+  const [showPlanningSettings, setShowPlanningSettings] = useState(false);
+  const [fitnessBlocksAutoCreate, setFitnessBlocksAutoCreate] = useState(true);
+  const [savingFitnessToggle, setSavingFitnessToggle] = useState(false);
   const [lastActionPatch, setLastActionPatch] = useState<{ id: string; prevStart: Date; prevEnd: Date } | null>(null);
   const [tasksDueToday, setTasksDueToday] = useState<Task[]>([]);
   const [tasksLoading, setTasksLoading] = useState(false);
@@ -599,9 +626,10 @@ const UnifiedPlannerPage: React.FC = () => {
   }, []);
 
   const getChoreKind = useCallback((task: Task): 'chore' | 'routine' | 'habit' | null => {
-    const raw = String((task as any)?.type || (task as any)?.task_type || '').toLowerCase();
+    const raw = String((task as any)?.type || (task as any)?.task_type || '').trim().toLowerCase();
     const normalized = raw === 'habitual' ? 'habit' : raw;
-    if (['chore', 'routine', 'habit'].includes(normalized)) return normalized as any;
+    if (normalized === 'chore' || normalized === 'routine' || normalized === 'habit') return normalized;
+    if (normalized) return null;
     const tags = Array.isArray((task as any)?.tags) ? (task as any).tags : [];
     const tagKeys = tags.map((tag) => String(tag || '').toLowerCase().replace(/^#/, ''));
     if (tagKeys.includes('chore')) return 'chore';
@@ -1372,7 +1400,7 @@ const UnifiedPlannerPage: React.FC = () => {
     setReplanLoading(true);
     try {
       const callable = httpsCallable(functions, 'replanCalendarNow');
-      const response = await callable({ days: 7 });
+      const response = await callable({ days: 7, planningMode, fitnessBlocksAutoCreate });
       const payload = response.data as { rescheduled?: number; blocked?: number };
       const rescheduled = payload?.rescheduled || 0;
       const blocked = payload?.blocked || 0;
@@ -1394,7 +1422,7 @@ const UnifiedPlannerPage: React.FC = () => {
     } finally {
       setReplanLoading(false);
     }
-  }, [currentUser]);
+  }, [currentUser, planningMode]);
 
   const eventStyleGetter = useCallback((event: PlannerCalendarEvent) => {
     const overlaps = (a: PlannerCalendarEvent, b: PlannerCalendarEvent) => {
@@ -1592,7 +1620,7 @@ const UnifiedPlannerPage: React.FC = () => {
     setOrchestrationLoading(true);
     try {
       const callable = httpsCallable(functions, 'runNightlyChainNow');
-      const response = await callable({});
+      const response = await callable({ planningMode, fitnessBlocksAutoCreate });
       const payload = response.data as { results?: Array<{ step?: string; status?: string }> };
       const results = payload?.results || [];
       const successSteps = results.filter(r => r.status === 'ok').length;
@@ -1618,15 +1646,56 @@ const UnifiedPlannerPage: React.FC = () => {
     } finally {
       setOrchestrationLoading(false);
     }
+  }, [currentUser, planningMode]);
+
+  // Load and save planning mode from user profile
+  useEffect(() => {
+    if (!currentUser) return;
+    const unsub = onSnapshot(doc(db, 'profiles', currentUser.uid), (snap) => {
+      const data = snap.exists() ? (snap.data() as Record<string, unknown>) : null;
+      const stored = data?.plannerMode as string | undefined;
+      if (!savingPlanningModeRef.current && (stored === 'strict' || stored === 'smart')) setPlanningMode(stored);
+        if (typeof data?.fitnessBlocksAutoCreate === 'boolean') {
+          setFitnessBlocksAutoCreate(data.fitnessBlocksAutoCreate);
+        }
+    });
+    return () => unsub();
+  }, [currentUser]);
+
+  const savePlanningMode = useCallback(async (mode: PlanningMode) => {
+    if (!currentUser) return;
+    setPlanningMode(mode);
+    setSavingPlanningMode(true);
+    savingPlanningModeRef.current = true;
+    try {
+      await updateDoc(doc(db, 'profiles', currentUser.uid), { plannerMode: mode });
+    } catch {
+      // ignore
+    } finally {
+      savingPlanningModeRef.current = false;
+      setSavingPlanningMode(false);
+    }
+  }, [currentUser]);
+
+  const saveFitnessToggle = useCallback(async (value: boolean) => {
+    if (!currentUser) return;
+    setSavingFitnessToggle(true);
+    try {
+      await updateDoc(doc(db, 'profiles', currentUser.uid), { fitnessBlocksAutoCreate: value });
+      setFitnessBlocksAutoCreate(value);
+    } finally {
+      setSavingFitnessToggle(false);
+    }
   }, [currentUser]);
 
   return (
     <>
     <Container fluid className="py-4 unified-planner">
+      <DayCapacityWarningBanner />
       <Row className="g-4">
         <Col lg={7} xl={8}>
           <Card className="shadow-sm border-0 h-100">
-            <Card.Header className="d-flex flex-wrap align-items-center justify-content-between gap-3">
+            <Card.Header className="d-flex flex-wrap align-items-center justify-content-between gap-2">
               <div className="d-flex align-items-center gap-3">
                 <span className="planner-icon-circle">
                   <CalendarIcon size={18} />
@@ -1638,7 +1707,83 @@ const UnifiedPlannerPage: React.FC = () => {
                   </small>
                 </div>
               </div>
+              {/* Action buttons — moved out of calendar control bar */}
+              <div className="d-flex align-items-center gap-2 flex-wrap ms-auto">
+                <Button
+                  variant="outline-secondary"
+                  size="sm"
+                  onClick={() => planner.refreshExternalEvents()}
+                  disabled={planner.loading}
+                  title="Pull latest events from Google Calendar"
+                >
+                  <RefreshCw size={14} className="me-1" /> Sync Google
+                </Button>
+                <Button
+                  variant="outline-primary"
+                  size="sm"
+                  onClick={handleReplanCalendar}
+                  disabled={planner.loading || replanLoading}
+                  title="Delta replan: quickly rebalance existing calendar blocks using current priorities."
+                >
+                  {replanLoading ? <Spinner size="sm" animation="border" className="me-1" /> : <Clock size={14} className="me-1" />}
+                  Delta replan
+                </Button>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={handleRunNightlyOrchestration}
+                  disabled={planner.loading || orchestrationLoading}
+                  title="Full replan: runs full nightly orchestration (pointing, conversions, priority scoring, and calendar planning)."
+                >
+                  {orchestrationLoading ? <Spinner size="sm" animation="border" className="me-1" /> : <Sparkles size={14} className="me-1" />}
+                  Full replan
+                </Button>
+                <Button variant="outline-secondary" size="sm" onClick={() => navigate('/dashboard')} title="Open overview dashboard">
+                  <LayoutDashboard size={14} className="me-1" /> View overview
+                </Button>
+                <Button variant="outline-secondary" size="sm" onClick={() => navigate('/calendar/planner')} title="Open weekly theme planner">
+                  <CalendarIcon size={14} className="me-1" /> View planner
+                </Button>
+                <Button variant="outline-secondary" size="sm" onClick={() => navigate('/sprints/kanban')} title="Open sprint kanban board">
+                  <LayoutGrid size={14} className="me-1" /> View kanban
+                </Button>
+                <Button size="sm" variant="outline-primary" onClick={() => openComposerForSlot(new Date(), addMinutes(new Date(), 60))} title="Create a new calendar entry">
+                  + New Entry
+                </Button>
+                <Button
+                  size="sm"
+                  variant={showPlanningSettings ? 'secondary' : 'outline-secondary'}
+                  onClick={() => setShowPlanningSettings((v) => !v)}
+                  title="Configure planning aggressiveness mode"
+                >
+                  <Settings size={14} className="me-1" />
+                  {planningMode === 'smart' ? 'Smart' : 'Strict'}
+                </Button>
+              </div>
             </Card.Header>
+            {showPlanningSettings && (
+              <div className="border-bottom px-3 py-2" style={{ background: 'var(--bs-light, #f8f9fa)' }}>
+                <div className="d-flex align-items-start gap-3 flex-wrap">
+                  <small className="text-muted fw-semibold" style={{ paddingTop: '6px', whiteSpace: 'nowrap' }}>
+                    Planning mode:
+                  </small>
+                  {PLANNING_MODE_CONFIG.map((m) => (
+                    <Button
+                      key={m.value}
+                      size="sm"
+                      variant={planningMode === m.value ? 'primary' : 'outline-secondary'}
+                      onClick={() => savePlanningMode(m.value)}
+                      disabled={savingPlanningMode}
+                    >
+                      {m.label}
+                    </Button>
+                  ))}
+                  <small className="text-muted" style={{ flex: '1 1 240px', paddingTop: '4px' }}>
+                    {PLANNING_MODE_CONFIG.find((m) => m.value === planningMode)?.description}
+                  </small>
+                </div>
+              </div>
+            )}
             {feedback && (
               <Alert
                 variant={feedback.variant}
@@ -1657,101 +1802,13 @@ const UnifiedPlannerPage: React.FC = () => {
                 </div>
               ) : (
                 <div className="planner-calendar-wrapper">
-                  <div className="d-flex justify-content-between align-items-center px-3 py-2 border-bottom gap-2 flex-wrap">
-                    <div className="d-flex align-items-center gap-2">
-                      <ButtonGroup size="sm">
-                        <Button
-                          variant={view === Views.DAY ? 'primary' : 'outline-primary'}
-                          onClick={() => setView(Views.DAY as ViewType)}
-                        >
-                          Day
-                        </Button>
-                        <Button
-                          variant={view === Views.WEEK ? 'primary' : 'outline-primary'}
-                          onClick={() => setView(Views.WEEK as ViewType)}
-                        >
-                          Week
-                        </Button>
-                        <Button
-                          variant={view === Views.MONTH ? 'primary' : 'outline-primary'}
-                          onClick={() => setView(Views.MONTH as ViewType)}
-                        >
-                          Month
-                        </Button>
-                      </ButtonGroup>
-                    </div>
-                    <div className="d-flex align-items-center gap-2 flex-wrap ms-auto">
-                      <Button
-                        variant="outline-secondary"
-                        size="sm"
-                        onClick={() => planner.refreshExternalEvents()}
-                        disabled={planner.loading}
-                      >
-                        <RefreshCw size={16} className="me-1" /> Sync Google
-                      </Button>
-                      <Button
-                        variant="outline-primary"
-                        size="sm"
-                        onClick={handleReplanCalendar}
-                        disabled={planner.loading || replanLoading}
-                        title="Delta replan: quickly rebalance existing calendar blocks using current priorities."
-                      >
-                        {replanLoading ? (
-                          <Spinner size="sm" animation="border" className="me-2" />
-                        ) : (
-                          <Clock size={16} className="me-1" />
-                        )}
-                        Delta replan
-                      </Button>
-                      <Button
-                        variant="primary"
-                        size="sm"
-                        onClick={handleRunNightlyOrchestration}
-                        disabled={planner.loading || orchestrationLoading}
-                        title="Full replan: runs full nightly orchestration (pointing, conversions, priority scoring, and calendar planning)."
-                      >
-                        {orchestrationLoading ? (
-                          <Spinner size="sm" animation="border" className="me-2" />
-                        ) : (
-                          <Sparkles size={16} className="me-1" />
-                        )}
-                        Full replan
-                      </Button>
-                      <Button
-                        variant="outline-secondary"
-                        size="sm"
-                        onClick={() => navigate('/dashboard')}
-                        title="Open overview dashboard"
-                      >
-                        <LayoutDashboard size={16} className="me-1" /> View overview
-                      </Button>
-                      <Button
-                        variant="outline-secondary"
-                        size="sm"
-                        onClick={() => navigate('/calendar/planner')}
-                        title="Open weekly theme planner"
-                      >
-                        <CalendarIcon size={16} className="me-1" /> View planner
-                      </Button>
-                      <Button
-                        variant="outline-secondary"
-                        size="sm"
-                        onClick={() => navigate('/sprints/kanban')}
-                        title="Open sprint kanban board"
-                      >
-                        <LayoutGrid size={16} className="me-1" /> View kanban
-                      </Button>
-                      <Button size="sm" variant="outline-primary" onClick={() => openComposerForSlot(new Date(), addMinutes(new Date(), 60))}>
-                        + New Entry
-                      </Button>
-                    </div>
-                  </div>
                   <DragAndDropCalendar
                     localizer={localizer}
                     events={events}
                     view={view}
-                    defaultView={Views.WEEK}
-                    date={range.start}
+                    defaultView={Views.AGENDA}
+                    date={calendarDate}
+                    onNavigate={(date) => setCalendarDate(date)}
                     onView={(next) => setView(next as ViewType)}
                     onRangeChange={handleRangeChange}
                     selectable

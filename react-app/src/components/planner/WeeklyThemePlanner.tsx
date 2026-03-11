@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { httpsCallable } from 'firebase/functions';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 import { Button, Modal, Form, Container, Spinner, Alert } from 'react-bootstrap';
 import { Calendar as CalendarIcon, LayoutDashboard, RefreshCw, Save, Sparkles } from 'lucide-react';
 import { GLOBAL_THEMES, type GlobalTheme } from '../../constants/globalThemes';
@@ -123,6 +123,9 @@ const WeeklyThemePlanner: React.FC = () => {
     const [deltaReplanLoading, setDeltaReplanLoading] = useState(false);
     const [nightlyRunning, setNightlyRunning] = useState(false);
     const [seedLoading, setSeedLoading] = useState(false);
+    const [fitnessBlocksAutoCreate, setFitnessBlocksAutoCreate] = useState(true);
+    const [planningMode, setPlanningMode] = useState<'smart' | 'strict'>('smart');
+    const [savingSettings, setSavingSettings] = useState(false);
 
     const materializePlannerBlocks = httpsCallable(functions, 'materializeFitnessBlocksNow');
     const replanCalendarNowFn = httpsCallable(functions, 'replanCalendarNow');
@@ -178,18 +181,37 @@ const WeeklyThemePlanner: React.FC = () => {
         if (!currentUser) return;
         setLoading(true);
         try {
-            const docRef = doc(db, 'theme_allocations', currentUser.uid);
-            const docSnap = await getDoc(docRef);
+            const [docSnap, profileSnap] = await Promise.all([
+                getDoc(doc(db, 'theme_allocations', currentUser.uid)),
+                getDoc(doc(db, 'profiles', currentUser.uid)),
+            ]);
             const data = docSnap.exists() ? (docSnap.data() as ThemeAllocationPlanDoc) : null;
             const nextTemplateAllocations = Array.isArray(data?.allocations) ? cloneAllocations(data?.allocations || []) : [];
             const nextWeeklyOverrides = normalizeWeeklyOverrides(data?.weeklyOverrides);
             setTemplateAllocations(nextTemplateAllocations);
             setWeeklyOverrides(nextWeeklyOverrides);
             setAllocations(resolveAllocationsForWeek(nextTemplateAllocations, nextWeeklyOverrides, selectedWeekKey));
+            if (profileSnap.exists()) {
+                const pd = profileSnap.data() || {};
+                if (typeof pd.fitnessBlocksAutoCreate === 'boolean') setFitnessBlocksAutoCreate(pd.fitnessBlocksAutoCreate);
+                if (pd.plannerMode === 'strict') setPlanningMode('strict');
+            }
         } catch (e) {
             console.error(e);
         } finally {
             setLoading(false);
+        }
+    };
+
+    const saveProfileSettings = async (updates: Record<string, unknown>) => {
+        if (!currentUser) return;
+        setSavingSettings(true);
+        try {
+            await updateDoc(doc(db, 'profiles', currentUser.uid), updates);
+        } catch (e) {
+            console.error(e);
+        } finally {
+            setSavingSettings(false);
         }
     };
 
@@ -280,7 +302,7 @@ const WeeklyThemePlanner: React.FC = () => {
         setDeltaReplanLoading(true);
         setApplyFeedback(null);
         try {
-            const res = await replanCalendarNowFn({ days: 7, startDate: selectedWeekKey });
+            const res = await replanCalendarNowFn({ days: 7, startDate: selectedWeekKey, fitnessBlocksAutoCreate, planningMode });
             const data = res.data as { created?: number; rescheduled?: number; blocked?: number; shortfallMinutes?: number; unscheduledStories?: number; unscheduledTasks?: number };
             const parts: string[] = [];
             if (data?.created) parts.push(`${data.created} created`);
@@ -687,137 +709,169 @@ const WeeklyThemePlanner: React.FC = () => {
 
     return (
         <Container fluid className="p-4">
-            <div className="d-flex justify-content-between align-items-center mb-4">
-                <div>
-                    <h2>Weekly Plan</h2>
-                    <p className="text-muted">Define your ideal week by assigning themes to time blocks. The AI will prioritize these themes when scheduling.</p>
-                    <small className="text-muted d-block">Tip: click and drag across time slots to create. Use the top/bottom handles to resize and drag the label to move. Use Clear to remove only the selected range.</small>
-                    <div className="d-flex flex-column gap-2 mt-3">
-                        <div className="d-flex flex-wrap align-items-center gap-2">
-                            <span className="text-muted small">Planning week:</span>
-                            <strong>{selectedWeekLabel}</strong>
-                            <span
-                                style={{
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    padding: '2px 8px',
-                                    borderRadius: 999,
-                                    backgroundColor: hasWeekOverride ? 'rgba(37, 99, 235, 0.12)' : 'rgba(100, 116, 139, 0.12)',
-                                    color: hasWeekOverride ? '#2563eb' : 'var(--bs-secondary)',
-                                    fontSize: 12,
-                                    fontWeight: 600,
-                                }}
-                            >
-                                {hasWeekOverride ? 'Week override active' : 'Using default template'}
-                            </span>
-                        </div>
-                        <div
-                            style={{
-                                display: 'flex',
-                                gap: 8,
-                                overflowX: 'auto',
-                                paddingBottom: 4,
-                                maxWidth: '100%',
-                            }}
-                        >
-                            {weekOptions.map((option) => (
-                                <Button
-                                    key={option.key}
-                                    size="sm"
-                                    variant={option.key === selectedWeekKey ? 'primary' : 'outline-secondary'}
-                                    onClick={() => setSelectedWeekKey(option.key)}
-                                    disabled={saving || applying || deltaReplanLoading || nightlyRunning || seedLoading}
-                                    style={{ whiteSpace: 'nowrap' }}
-                                >
-                                    {option.label}
-                                </Button>
-                            ))}
-                        </div>
-                    </div>
-                </div>
-                <div className="d-flex flex-wrap gap-2">
-                    <Button onClick={saveAllocations} disabled={saving || applying || deltaReplanLoading || nightlyRunning || seedLoading}>
-                    {saving ? <Spinner size="sm" animation="border" className="me-2" /> : <Save size={18} className="me-2" />}
-                    Save Week Plan
+            <div className="mb-3">
+                <h2 className="mb-2">Weekly Plan</h2>
+                <div style={{ display: 'flex', flexWrap: 'nowrap', gap: 8, overflowX: 'auto', paddingBottom: 4, alignItems: 'center' }}>
+                    <Button
+                        variant={fitnessBlocksAutoCreate ? 'success' : 'outline-secondary'}
+                        size="sm"
+                        onClick={async () => {
+                            const next = !fitnessBlocksAutoCreate;
+                            setFitnessBlocksAutoCreate(next);
+                            await saveProfileSettings({ fitnessBlocksAutoCreate: next });
+                        }}
+                        disabled={savingSettings}
+                        title="Toggle whether the AI auto-creates fitness sub-blocks (e.g. Walk, Run) from your weekly plan. Off = manage them manually in GCal."
+                        style={{ whiteSpace: 'nowrap' }}
+                    >
+                        🏃 Fitness {fitnessBlocksAutoCreate ? 'On' : 'Off'}
                     </Button>
                     <Button
+                        variant={planningMode === 'smart' ? 'primary' : 'outline-primary'}
+                        size="sm"
+                        onClick={async () => {
+                            const next = planningMode === 'smart' ? 'strict' : 'smart';
+                            setPlanningMode(next);
+                            await saveProfileSettings({ plannerMode: next });
+                        }}
+                        disabled={savingSettings}
+                        title={planningMode === 'smart'
+                            ? 'Smart (active): Top 3 priorities scheduled first. Only user calendar + work/fitness blocks are hard constraints. Planned blocks act as theme hints — free time is used to create GCal events automatically.'
+                            : 'Strict (active): Fully respects planned blocks AND user calendar. Events are only inserted into their designated planned block window.'}
+                        style={{ whiteSpace: 'nowrap' }}
+                    >
+                        {planningMode === 'smart' ? 'Smart' : 'Strict'}
+                    </Button>
+                    <Button size="sm" onClick={saveAllocations} disabled={saving || applying || deltaReplanLoading || nightlyRunning || seedLoading} style={{ whiteSpace: 'nowrap' }}>
+                        {saving ? <Spinner size="sm" animation="border" className="me-2" /> : <Save size={14} className="me-1" />}
+                        Save Week Plan
+                    </Button>
+                    <Button
+                        size="sm"
                         variant="outline-secondary"
                         onClick={copyPreviousWeek}
                         disabled={saving || applying || deltaReplanLoading || nightlyRunning || seedLoading}
                         title="Copy the previous week's allocations into this week before making changes."
+                        style={{ whiteSpace: 'nowrap' }}
                     >
                         Copy Previous Week
                     </Button>
                     <Button
+                        size="sm"
                         variant="outline-secondary"
                         onClick={seedSelectedWeek}
                         disabled={saving || applying || deltaReplanLoading || nightlyRunning || seedLoading}
                         title="Seed the selected week from the previous week, falling back to the default template."
+                        style={{ whiteSpace: 'nowrap' }}
                     >
                         {seedLoading ? <Spinner size="sm" animation="border" className="me-2" /> : null}
                         Auto-seed Selected Week
                     </Button>
                     <Button
+                        size="sm"
                         variant="outline-secondary"
                         onClick={resetWeekToTemplate}
                         disabled={!hasWeekOverride || saving || applying || deltaReplanLoading || nightlyRunning || seedLoading}
                         title="Remove the override for this week and fall back to the default template."
+                        style={{ whiteSpace: 'nowrap' }}
                     >
                         Use Default Template
                     </Button>
                     <Button
+                        size="sm"
                         variant="outline-secondary"
                         onClick={saveAsDefaultTemplate}
                         disabled={saving || applying || deltaReplanLoading || nightlyRunning || seedLoading}
                         title="Persist the current layout as the reusable default weekly template."
+                        style={{ whiteSpace: 'nowrap' }}
                     >
                         Save as Default Template
                     </Button>
                     <Button
+                        size="sm"
                         variant="outline-primary"
                         onClick={applyPlannerBlocksNow}
                         disabled={saving || applying || deltaReplanLoading || nightlyRunning || seedLoading}
                         title="Apply Planner Blocks Now: materializes Fitness and Work (Main Gig) allocations into calendar blocks for the next 7 days."
+                        style={{ whiteSpace: 'nowrap' }}
                     >
-                        {applying ? <Spinner size="sm" animation="border" className="me-2" /> : null}
+                        {applying ? <Spinner size="sm" animation="border" className="me-1" /> : null}
                         Apply Planner Blocks Now
                     </Button>
                     <Button
+                        size="sm"
                         variant="outline-secondary"
                         onClick={replanAroundCalendar}
                         disabled={saving || applying || deltaReplanLoading || nightlyRunning || seedLoading}
                         title="Replan Around Calendar (Delta): rebalances existing calendar blocks around your latest priorities and planner changes."
+                        style={{ whiteSpace: 'nowrap' }}
                     >
-                        {deltaReplanLoading ? <Spinner size="sm" animation="border" className="me-2" /> : <RefreshCw size={16} className="me-2" />}
+                        {deltaReplanLoading ? <Spinner size="sm" animation="border" className="me-1" /> : <RefreshCw size={14} className="me-1" />}
                         Replan Around Calendar
                     </Button>
                     <Button
+                        size="sm"
                         variant="primary"
                         onClick={runNightlyChainNow}
                         disabled={saving || applying || deltaReplanLoading || nightlyRunning || seedLoading}
                         title="Full replan: runs the complete nightly orchestration (pointing, conversions, priority scoring, and calendar planning)."
+                        style={{ whiteSpace: 'nowrap' }}
                     >
-                        {nightlyRunning ? <Spinner size="sm" animation="border" className="me-2" /> : <Sparkles size={16} className="me-2" />}
+                        {nightlyRunning ? <Spinner size="sm" animation="border" className="me-1" /> : <Sparkles size={14} className="me-1" />}
                         Full replan
                     </Button>
                     <Button
+                        size="sm"
                         variant="outline-secondary"
                         onClick={() => navigate('/calendar')}
                         disabled={saving || applying || deltaReplanLoading || nightlyRunning || seedLoading}
                         title="Open calendar"
+                        style={{ whiteSpace: 'nowrap' }}
                     >
-                        <CalendarIcon size={16} className="me-2" />
+                        <CalendarIcon size={14} className="me-1" />
                         View calendar
                     </Button>
                     <Button
+                        size="sm"
                         variant="outline-secondary"
                         onClick={() => navigate('/dashboard')}
                         disabled={saving || applying || deltaReplanLoading || nightlyRunning || seedLoading}
                         title="Open overview dashboard"
+                        style={{ whiteSpace: 'nowrap' }}
                     >
-                        <LayoutDashboard size={16} className="me-2" />
+                        <LayoutDashboard size={14} className="me-1" />
                         View overview
                     </Button>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, overflowX: 'auto', paddingBottom: 4, marginTop: 8 }}>
+                    <span className="text-muted small" style={{ whiteSpace: 'nowrap' }}>Week:</span>
+                    {weekOptions.map((option) => (
+                        <Button
+                            key={option.key}
+                            size="sm"
+                            variant={option.key === selectedWeekKey ? 'primary' : 'outline-secondary'}
+                            onClick={() => setSelectedWeekKey(option.key)}
+                            disabled={saving || applying || deltaReplanLoading || nightlyRunning || seedLoading}
+                            style={{ whiteSpace: 'nowrap' }}
+                        >
+                            {option.label}
+                        </Button>
+                    ))}
+                    <span
+                        style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            padding: '2px 8px',
+                            borderRadius: 999,
+                            backgroundColor: hasWeekOverride ? 'rgba(37, 99, 235, 0.12)' : 'rgba(100, 116, 139, 0.12)',
+                            color: hasWeekOverride ? '#2563eb' : 'var(--bs-secondary)',
+                            fontSize: 12,
+                            fontWeight: 600,
+                            whiteSpace: 'nowrap',
+                        }}
+                    >
+                        {hasWeekOverride ? 'Week override active' : 'Using default template'}
+                    </span>
                 </div>
             </div>
 

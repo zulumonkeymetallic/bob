@@ -336,59 +336,54 @@ const JournalInsightsCard: React.FC<JournalInsightsCardProps> = ({ compact = fal
         }}
       >
         <BrainCircuit size={16} className="text-info" />
-        <div className="flex-grow-1">
-          <div className="text-muted small">Journal Signals</div>
+        <div
+          className="flex-grow-1"
+          title={
+            latestEntry?.entryMetadata
+              ? [
+                  metricSummaries.map((m) => `${m.label}: ${m.value}`).join(' · '),
+                  latestEntry.entryMetadata.sentiment ? `Sentiment: ${latestEntry.entryMetadata.sentiment}` : '',
+                  latestThemes.length ? `Themes: ${latestThemes.join(', ')}` : '',
+                ].filter(Boolean).join(' | ')
+              : 'No journal signals yet'
+          }
+        >
+          <div className="text-muted small">Journal</div>
           {loading ? (
-            <div className="fw-semibold">Loading journal insights…</div>
+            <div className="fw-semibold">Loading…</div>
           ) : error ? (
-            <>
-              <div className="fw-semibold">Signals unavailable</div>
-              <div className="text-muted small text-truncate">{error}</div>
-            </>
+            <div className="fw-semibold">Unavailable</div>
           ) : !analyticsJournals.length || !latestEntry?.entryMetadata ? (
-            <>
-              <div className="fw-semibold">No journal signals yet</div>
-              <div className="text-muted small">Process a journal entry to start tracking mood, energy, stress, and sentiment.</div>
-            </>
+            <div className="fw-semibold text-muted">No signals yet</div>
           ) : (
-            <>
-              <div className="d-flex flex-wrap gap-1 mb-1">
-                {metricSummaries.map((metric) => {
-                  const indicatorColor = metric.trend ? trendToneColor[metric.trend.tone] : '#64748b';
-                  return (
-                    <span
-                      key={metric.key}
-                      className="small d-inline-flex align-items-center gap-1 px-2 py-1 rounded-pill border"
-                      style={{
-                        borderColor: `${metric.accent}33`,
-                        background: `${metric.accent}14`,
-                        color: 'var(--bs-body-color)',
-                        fontWeight: 600,
-                        lineHeight: 1.2,
-                      }}
-                      title={metric.trend?.label || `${metric.label} has no comparison yet`}
-                    >
-                      <span>{metric.label} {metric.value}</span>
-                      {metric.trend?.direction === 'up' ? (
-                        <ArrowUpRight size={12} style={{ color: indicatorColor }} />
-                      ) : metric.trend?.direction === 'down' ? (
-                        <ArrowDownRight size={12} style={{ color: indicatorColor }} />
-                      ) : (
-                        <span style={{ color: indicatorColor }}>→</span>
-                      )}
-                    </span>
-                  );
-                })}
-              </div>
-              <div className="text-muted small d-flex align-items-center gap-2 flex-wrap" style={{ lineHeight: 1.35 }}>
-                {sentimentVariant && latestEntry.entryMetadata.sentiment ? (
-                  <Badge bg={sentimentVariant.bg} text={sentimentVariant.text}>
-                    {latestEntry.entryMetadata.sentiment}
-                  </Badge>
-                ) : null}
-                <span style={{ overflowWrap: 'anywhere' }}>{themeSummary}</span>
-              </div>
-            </>
+            <div className="d-flex flex-wrap gap-1">
+              {metricSummaries.map((metric) => {
+                const indicatorColor = metric.trend ? trendToneColor[metric.trend.tone] : '#64748b';
+                return (
+                  <span
+                    key={metric.key}
+                    className="small d-inline-flex align-items-center gap-1 px-1 py-0 rounded-pill border"
+                    style={{
+                      borderColor: `${metric.accent}33`,
+                      background: `${metric.accent}14`,
+                      color: 'var(--bs-body-color)',
+                      fontWeight: 600,
+                      lineHeight: 1.3,
+                    }}
+                    title={`${metric.label}: ${metric.value}${metric.trend?.label ? ` — ${metric.trend.label}` : ''}`}
+                  >
+                    <span>{metric.label[0]} {metric.value}</span>
+                    {metric.trend?.direction === 'up' ? (
+                      <ArrowUpRight size={11} style={{ color: indicatorColor }} />
+                    ) : metric.trend?.direction === 'down' ? (
+                      <ArrowDownRight size={11} style={{ color: indicatorColor }} />
+                    ) : (
+                      <span style={{ color: indicatorColor, fontSize: 10 }}>→</span>
+                    )}
+                  </span>
+                );
+              })}
+            </div>
           )}
         </div>
       </div>

@@ -9,6 +9,7 @@ import { usePersona } from '../contexts/PersonaContext';
 import { Goal, Task } from '../types';
 import { useNavigate, Link } from 'react-router-dom';
 import { isRecurringDueOnDate, resolveRecurringDueMs } from '../utils/recurringTaskDue';
+import EditTaskModal from './EditTaskModal';
 
 interface Occurrence {
   id: string;
@@ -93,6 +94,7 @@ const HabitsChoresDashboard: React.FC = () => {
   const [loadingBlocks, setLoadingBlocks] = useState(false);
   const [completing, setCompleting] = useState<Record<string, boolean>>({});
   const [sortMode, setSortMode] = useState<'type' | 'due' | 'streak'>('type');
+  const [editingTask, setEditingTask] = useState<Task | null>(null);
 
   const todayStartMs = useMemo(() => startOfDay(new Date()).getTime(), []);
   const todayEndMs = useMemo(() => endOfDay(new Date()).getTime(), []);
@@ -393,7 +395,13 @@ const HabitsChoresDashboard: React.FC = () => {
                               <div className="fw-semibold">{task.title}</div>
                               <div className="text-muted small d-flex align-items-center gap-2">
                                 <Badge bg={badgeVariant}>{badgeLabel}</Badge>
-                                <Link to={`/tasks/${encodeURIComponent(task.ref || task.id)}`} className="text-decoration-none">Open</Link>
+                                <button
+                                  type="button"
+                                  className="btn btn-link p-0 text-decoration-none"
+                                  onClick={() => setEditingTask(task)}
+                                >
+                                  Open
+                                </button>
                               </div>
                             </td>
                             <td>{dueLabel}</td>
@@ -478,6 +486,12 @@ const HabitsChoresDashboard: React.FC = () => {
           );
         })
       )}
+
+      <EditTaskModal
+        show={!!editingTask}
+        task={editingTask}
+        onHide={() => setEditingTask(null)}
+      />
     </div>
   );
 };

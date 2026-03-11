@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Modal, Button, Form, Alert } from 'react-bootstrap';
+import { useNavigate } from 'react-router-dom';
 import { db } from '../firebase';
 import { collection, addDoc, getDocs, query, where, orderBy, serverTimestamp } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
@@ -13,7 +14,9 @@ import '../styles/MaterialDesign.css';
 import BulkCreateModal from './BulkCreateModal';
 import GoalChatModal from './GoalChatModal';
 import AddStoryModal from './AddStoryModal';
+import IntentBrokerModal from './IntentBrokerModal';
 import { useProcessTextActivity } from '../contexts/ProcessTextActivityContext';
+import { saveFocusWizardPrefill } from '../services/focusGoalsService';
 
 interface FloatingActionButtonProps {
   onImportClick: () => void;
@@ -26,6 +29,7 @@ interface Goal {
 }
 
 const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportClick }) => {
+  const navigate = useNavigate();
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const { sprints } = useSprint();
@@ -51,6 +55,10 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
   const [submitResult, setSubmitResult] = useState<string | null>(null);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [showIntake, setShowIntake] = useState(false);
+  const [showIntentBroker, setShowIntentBroker] = useState(false);
+  const [showFocusIntake, setShowFocusIntake] = useState(false);
+  const [focusVision, setFocusVision] = useState('');
+  const [focusTimeframe, setFocusTimeframe] = useState<'sprint' | 'quarter' | 'year'>('quarter');
   const [intakeTitle, setIntakeTitle] = useState('');
   const [intakeTheme, setIntakeTheme] = useState('Growth');
   const [chatGoalId, setChatGoalId] = useState<string | null>(null);
@@ -349,10 +357,20 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
           <button
             className="md-fab-mini"
             onClick={() => {
-              setShowIntake(true);
+              setShowFocusIntake(true);
               setShowMenu(false);
             }}
-            title="AI Goal Intake (Chat)"
+            title="Focus Intake"
+          >
+            F
+          </button>
+          <button
+            className="md-fab-mini"
+            onClick={() => {
+              setShowIntentBroker(true);
+              setShowMenu(false);
+            }}
+            title="Intent Broker"
           >
             A
           </button>
@@ -483,6 +501,58 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
             }}
           >
             Continue to Chat
+          </Button>
+        </Modal.Footer>
+      </Modal>
+
+      {/* Focus Intake Modal */}
+      <Modal show={showFocusIntake} onHide={() => setShowFocusIntake(false)} centered>
+        <Modal.Header closeButton>
+          <Modal.Title>Focus Intake</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <Form.Group className="mb-3">
+            <Form.Label>What do you want to focus on?</Form.Label>
+            <Form.Control
+              as="textarea"
+              rows={4}
+              value={focusVision}
+              onChange={(e) => setFocusVision(e.target.value)}
+              placeholder="Describe the outcome you want over the next focus period..."
+              autoFocus
+            />
+          </Form.Group>
+          <Form.Group>
+            <Form.Label>Focus period</Form.Label>
+            <Form.Select
+              value={focusTimeframe}
+              onChange={(e) => setFocusTimeframe(e.target.value as 'sprint' | 'quarter' | 'year')}
+            >
+              <option value="sprint">Sprint (2 weeks)</option>
+              <option value="quarter">Quarter (13 weeks)</option>
+              <option value="year">Year (52 weeks)</option>
+            </Form.Select>
+          </Form.Group>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setShowFocusIntake(false)}>Cancel</Button>
+          <Button
+            variant="primary"
+            disabled={!focusVision.trim()}
+            onClick={() => {
+              const querySeed = focusVision.trim().split(/\s+/).slice(0, 6).join(' ');
+              saveFocusWizardPrefill({
+                source: 'fab',
+                visionText: focusVision.trim(),
+                timeframe: focusTimeframe,
+                searchTerm: querySeed,
+                autoRunMatch: true,
+              });
+              setShowFocusIntake(false);
+              navigate('/focus-goals');
+            }}
+          >
+            Open Focus Wizard
           </Button>
         </Modal.Footer>
       </Modal>
@@ -679,6 +749,13 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
       <BulkCreateModal
         show={showBulkCreate}
         onHide={() => setShowBulkCreate(false)}
+      />
+
+      <IntentBrokerModal
+        show={showIntentBroker}
+        onHide={() => setShowIntentBroker(false)}
+        ownerUid={currentUser?.uid}
+        persona={currentPersona}
       />
 
       {/* Inline Chat Modal for Intake */}

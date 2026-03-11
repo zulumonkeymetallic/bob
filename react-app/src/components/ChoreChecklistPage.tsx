@@ -40,9 +40,10 @@ const getLastDoneMs = (task: Task): number | null => {
 };
 
 const getChoreKind = (task: Task): 'chore' | 'routine' | 'habit' | null => {
-  const raw = String((task as any)?.type || (task as any)?.task_type || '').toLowerCase();
+  const raw = String((task as any)?.type || (task as any)?.task_type || '').trim().toLowerCase();
   const normalized = raw === 'habitual' ? 'habit' : raw;
-  if (['chore', 'routine', 'habit'].includes(normalized)) return normalized as any;
+  if (normalized === 'chore' || normalized === 'routine' || normalized === 'habit') return normalized;
+  if (normalized) return null;
   const tags = Array.isArray((task as any)?.tags) ? (task as any).tags : [];
   const tagKeys = tags.map((tag) => String(tag || '').toLowerCase().replace(/^#/, ''));
   if (tagKeys.includes('chore')) return 'chore';
@@ -210,8 +211,21 @@ const ChoreChecklistPage: React.FC = () => {
           ) : choresForDate.length === 0 ? (
             <div className="text-muted">No chores, routines, or habits due for this date.</div>
           ) : (
-            <ListGroup variant="flush">
-              {choresForDate.map((task) => {
+            (() => {
+              const morning: typeof choresForDate = [];
+              const afternoon: typeof choresForDate = [];
+              const evening: typeof choresForDate = [];
+              const other: typeof choresForDate = [];
+
+              choresForDate.forEach((task) => {
+                const tod = (task as any).timeOfDay;
+                if (tod === 'morning') morning.push(task);
+                else if (tod === 'afternoon') afternoon.push(task);
+                else if (tod === 'evening') evening.push(task);
+                else other.push(task);
+              });
+
+              const renderChoreItem = (task: any) => {
                 const kind = getChoreKind(task) || 'chore';
                 const badgeVariant = kind === 'routine' ? 'success' : kind === 'habit' ? 'secondary' : 'primary';
                 const badgeLabel = kind === 'routine' ? 'Routine' : kind === 'habit' ? 'Habit' : 'Chore';
@@ -220,11 +234,11 @@ const ChoreChecklistPage: React.FC = () => {
                 const isHighlight = taskHighlightId && taskHighlightId === task.id;
                 const busy = !!completing[task.id];
                 return (
-                  <ListGroup.Item key={task.id} className={isHighlight ? 'border border-primary rounded' : ''}>
+                  <ListGroup.Item key={task.id} className={isHighlight ? 'border border-primary rounded mb-1' : 'mb-1 rounded border'}>
                     <div className="d-flex align-items-center gap-2">
                       <Form.Check
                         type="checkbox"
-                        checked={false}
+                        checked={busy}
                         disabled={busy}
                         onChange={() => handleComplete(task)}
                         aria-label={`Complete ${task.title}`}
@@ -258,8 +272,39 @@ const ChoreChecklistPage: React.FC = () => {
                     </div>
                   </ListGroup.Item>
                 );
-              })}
-            </ListGroup>
+              };
+
+              return (
+                <ListGroup variant="flush">
+                  {morning.length > 0 && (
+                    <div className="mb-3">
+                      <h6 className="text-muted mb-2 border-bottom pb-1 fw-bold"><small>Morning</small></h6>
+                      {morning.map((task) => renderChoreItem(task))}
+                    </div>
+                  )}
+                  {afternoon.length > 0 && (
+                    <div className="mb-3">
+                      <h6 className="text-muted mb-2 border-bottom pb-1 fw-bold"><small>Afternoon</small></h6>
+                      {afternoon.map((task) => renderChoreItem(task))}
+                    </div>
+                  )}
+                  {evening.length > 0 && (
+                    <div className="mb-3">
+                      <h6 className="text-muted mb-2 border-bottom pb-1 fw-bold"><small>Evening</small></h6>
+                      {evening.map((task) => renderChoreItem(task))}
+                    </div>
+                  )}
+                  {other.length > 0 && (
+                    <div className="mb-0">
+                      {(morning.length > 0 || afternoon.length > 0 || evening.length > 0) && (
+                        <h6 className="text-muted mb-2 border-bottom pb-1 fw-bold"><small>Other / Anytime</small></h6>
+                      )}
+                      {other.map((task) => renderChoreItem(task))}
+                    </div>
+                  )}
+                </ListGroup>
+              );
+            })()
           )}
         </Card.Body>
       </Card>

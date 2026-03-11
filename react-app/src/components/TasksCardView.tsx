@@ -12,6 +12,7 @@ import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { GLOBAL_THEMES, migrateThemeValue, type GlobalTheme } from '../constants/globalThemes';
 import { ActivityStreamService } from '../services/ActivityStreamService';
 import { priorityLabel, taskStatusText } from '../utils/storyCardFormatting';
+import DeferItemModal from './DeferItemModal';
 
 interface TasksCardViewProps {
   tasks: Task[];
@@ -34,6 +35,7 @@ const TasksCardView: React.FC<TasksCardViewProps> = ({
   const { showSidebar } = useSidebar();
   const { themes: globalThemes } = useGlobalThemes();
   const [latestActivities, setLatestActivities] = useState<{ [taskId: string]: any }>({});
+  const [nextBlocks, setNextBlocks] = useState<{ [taskId: string]: { start: number; end: number } | null }>({});
   const [showDescriptions, setShowDescriptions] = useState<boolean>(() => {
     try {
       const stored = localStorage.getItem('bob_tasks_show_descriptions');
@@ -54,6 +56,7 @@ const TasksCardView: React.FC<TasksCardViewProps> = ({
   });
   const [rowSpans, setRowSpans] = useState<Record<string, number>>({});
   const gridRef = useRef<HTMLDivElement | null>(null);
+  const [deferTask, setDeferTask] = useState<Task | null>(null);
 
   useEffect(() => {
     try {
@@ -195,11 +198,33 @@ const TasksCardView: React.FC<TasksCardViewProps> = ({
     }
   }, [currentUser]);
 
+  const loadNextBlockForTask = useCallback(async (taskId: string) => {
+    if (!currentUser) return;
+    try {
+      const snap = await getDocs(
+        query(
+          collection(db, 'calendar_blocks'),
+          where('ownerUid', '==', currentUser.uid),
+          where('taskId', '==', taskId),
+        )
+      );
+      const nowMs = Date.now();
+      const upcoming = snap.docs
+        .map((d) => d.data() as { start: number; end: number })
+        .filter((b) => typeof b.start === 'number' && b.start >= nowMs)
+        .sort((a, b) => a.start - b.start);
+      setNextBlocks((prev) => ({ ...prev, [taskId]: upcoming[0] ?? null }));
+    } catch {
+      // ignore
+    }
+  }, [currentUser]);
+
   useEffect(() => {
     tasks.forEach(task => {
       loadLatestActivityForTask(task.id);
+      loadNextBlockForTask(task.id);
     });
-  }, [tasks, currentUser, loadLatestActivityForTask]);
+  }, [tasks, currentUser, loadLatestActivityForTask, loadNextBlockForTask]);
 
   useLayoutEffect(() => {
     const gridEl = gridRef.current;
@@ -319,6 +344,7 @@ const TasksCardView: React.FC<TasksCardViewProps> = ({
           const lastSyncedRaw = (task as any).macSyncedAt ?? (task as any).deviceUpdatedAt ?? (task as any).serverUpdatedAt ?? (task as any).updatedAt;
           const lastSyncedAt = toDate(lastSyncedRaw);
           const rowSpan = rowSpans[task.id];
+          const nextBlock = nextBlocks[task.id];
 
           return (
             <div
@@ -416,6 +442,9 @@ const TasksCardView: React.FC<TasksCardViewProps> = ({
                           <Dropdown.Item onClick={() => onTaskPriorityChange(task.id, 2)}>Medium (2)</Dropdown.Item>
                           <Dropdown.Item onClick={() => onTaskPriorityChange(task.id, 1)}>Low (1)</Dropdown.Item>
                           <Dropdown.Divider />
+                          <Dropdown.Item onClick={() => setDeferTask(task)}>
+                            Defer intelligently
+                          </Dropdown.Item>
                           <Dropdown.Item
                             className="text-danger"
                             onClick={() => {
@@ -449,10 +478,9 @@ const TasksCardView: React.FC<TasksCardViewProps> = ({
                             color: mutedTextColor,
                             fontSize: '13px',
                             lineHeight: '1.5',
-                            display: '-webkit-box',
-                            WebkitLineClamp: 3,
-                            WebkitBoxOrient: 'vertical',
-                            overflow: 'hidden'
+                            whiteSpace: 'normal',
+                            overflowWrap: 'anywhere',
+                            wordBreak: 'break-word'
                           }}
                         >
                           {task.description}
@@ -543,6 +571,32 @@ const TasksCardView: React.FC<TasksCardViewProps> = ({
                     </Badge>
                   </div>
 
+                  {nextBlock && (
+                    <div
+                      style={{
+                        padding: '8px 10px',
+                        backgroundColor: withAlpha(themeColor, 0.12),
+                        border: `1px solid ${withAlpha(themeColor, 0.3)}`,
+                        borderRadius: '10px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        fontSize: '12px',
+                        color: textColor,
+                      }}
+                    >
+                      <Clock size={12} style={{ color: themeColor, flexShrink: 0 }} />
+                      <span style={{ fontWeight: 600, color: themeColor }}>Next block:</span>
+                      <span>
+                        {new Date(nextBlock.start).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}
+                        {' '}
+                        {new Date(nextBlock.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        {' – '}
+                        {new Date(nextBlock.end).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    </div>
+                  )}
+
                   <div
                     style={{
                       display: 'flex',
@@ -584,6 +638,23 @@ const TasksCardView: React.FC<TasksCardViewProps> = ({
           );
         })}
       </div>
+      <DeferItemModal
+        show={Boolean(deferTask)}
+        onHide={() => setDeferTask(null)}
+        itemType="task"
+        itemId={deferTask?.id || ''}
+        itemTitle={deferTask?.title || ''}
+        onApply={async ({ dateMs, rationale, source }) => {
+          if (!deferTask) return;
+          onTaskUpdate(deferTask.id, {
+            dueDate: dateMs,
+            deferredUntil: dateMs,
+            deferredReason: rationale,
+            deferredBy: source,
+          });
+          setDeferTask(null);
+        }}
+      />
     </div>
   );
 };

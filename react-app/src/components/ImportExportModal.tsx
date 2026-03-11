@@ -4,6 +4,8 @@ import { db } from '../firebase';
 import { collection, addDoc, doc, setDoc } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
+import { functions } from '../firebase';
+import { httpsCallable } from 'firebase/functions';
 
 interface ImportExportModalProps {
   show: boolean;
@@ -190,7 +192,43 @@ const ImportExportModal: React.FC<ImportExportModalProps> = ({ show, onHide }) =
   const [activeTab, setActiveTab] = useState('templates');
   const [importData, setImportData] = useState('');
   const [isImporting, setIsImporting] = useState(false);
+  const [isExportingSnapshot, setIsExportingSnapshot] = useState(false);
   const [importResult, setImportResult] = useState<string | null>(null);
+
+  const downloadJson = (filename: string, payload: any) => {
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    link.click();
+    window.URL.revokeObjectURL(url);
+  };
+
+  const exportGlobalHierarchy = async () => {
+    if (!currentUser) {
+      setImportResult('❌ You must be signed in to export your hierarchy snapshot.');
+      return;
+    }
+
+    setIsExportingSnapshot(true);
+    try {
+      const callable = httpsCallable(functions, 'exportGlobalHierarchySnapshot');
+      const res = await callable({ forceRefresh: false });
+      const payload = (res?.data as any)?.snapshot;
+      if (!payload) {
+        throw new Error('No snapshot data returned');
+      }
+      const generatedAt = payload?.generatedAt ? new Date(payload.generatedAt) : new Date();
+      const stamp = generatedAt.toISOString().replace(/[:.]/g, '-');
+      downloadJson(`global_hierarchy_${stamp}.json`, payload);
+      setImportResult('✅ Exported Global Hierarchy snapshot JSON successfully.');
+    } catch (error: any) {
+      setImportResult(`❌ Snapshot export failed: ${error?.message || 'Unknown error'}`);
+    } finally {
+      setIsExportingSnapshot(false);
+    }
+  };
 
   const generateCSVTemplate = (type: 'goals' | 'stories' | 'tasks') => {
     switch (type) {
@@ -422,6 +460,19 @@ const ImportExportModal: React.FC<ImportExportModalProps> = ({ show, onHide }) =
                 <Button variant="outline-primary">Export Tasks</Button>
                 <Button variant="outline-success">Export All Data</Button>
               </div>
+
+              <hr className="my-4" />
+              <h6>System Snapshot Export</h6>
+              <p className="text-muted">
+                Download the latest global hierarchy JSON used for AI context (Goals &gt; Stories &gt; Tasks with KPIs, status, points, due dates, pot refs, and calendar links).
+              </p>
+              <Button
+                variant="primary"
+                onClick={exportGlobalHierarchy}
+                disabled={isExportingSnapshot}
+              >
+                {isExportingSnapshot ? 'Exporting Snapshot...' : 'Export Global Hierarchy JSON'}
+              </Button>
             </div>
           </Tab>
         </Tabs>

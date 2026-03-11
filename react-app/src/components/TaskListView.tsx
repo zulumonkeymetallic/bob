@@ -24,6 +24,7 @@ const TaskListView: React.FC = () => {
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [filterTheme, setFilterTheme] = useState<string>('all');
   const [filterType, setFilterType] = useState<string>('all');
+  const [filterDataQuality, setFilterDataQuality] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [dueFilter, setDueFilter] = useState<'all' | 'today'>('all');
   const [loading, setLoading] = useState(true);
@@ -226,6 +227,21 @@ const TaskListView: React.FC = () => {
     if (filterType !== 'all' && normalizedType !== filterType) return false;
     if (dueFilter === 'today' && !isDueToday(task)) return false;
     if (searchTerm && !task.title.toLowerCase().includes(searchTerm.toLowerCase())) return false;
+    if (filterDataQuality !== 'all') {
+      const storyId = String((task as any).storyId || (task as any).parentId || '').trim();
+      const hasStory = !!storyId && stories.some((s) => s.id === storyId);
+      const storyGoalId = hasStory ? String((stories.find((s) => s.id === storyId) as any)?.goalId || '').trim() : '';
+      const directGoalId = String((task as any).goalId || '').trim();
+      const goalId = storyGoalId || directGoalId;
+      const hasGoal = !!goalId && goals.some((g) => g.id === goalId);
+      const rawPoints = (task as any).points;
+      const missingPoints = rawPoints == null || rawPoints === '' || Number(rawPoints) <= 0;
+      const missingDesc = !String((task as any).description || '').trim();
+      if (filterDataQuality === 'missing_any' && !(!hasStory || !hasGoal || missingPoints || missingDesc)) return false;
+      if (filterDataQuality === 'missing_link' && !((!hasStory) || !hasGoal)) return false;
+      if (filterDataQuality === 'missing_points' && !missingPoints) return false;
+      if (filterDataQuality === 'missing_description' && !missingDesc) return false;
+    }
     return true;
   });
 
@@ -423,9 +439,28 @@ const TaskListView: React.FC = () => {
                   >
                     <option value="all">All Types</option>
                     <option value="task">Task</option>
+                    <option value="read">Read</option>
+                    <option value="watch">Watch</option>
                     <option value="chore">Chore</option>
                     <option value="habit">Habit</option>
                     <option value="routine">Routine</option>
+                  </Form.Select>
+                </Form.Group>
+              </Col>
+              <Col md={3}>
+                <Form.Group>
+                  <Form.Label style={{ fontWeight: '500', marginBottom: '2px', fontSize: '11px' }}>Data Quality</Form.Label>
+                  <Form.Select
+                    size="sm"
+                    value={filterDataQuality}
+                    onChange={(e) => setFilterDataQuality(e.target.value)}
+                    style={{ border: '1px solid var(--line)' }}
+                  >
+                    <option value="all">All</option>
+                    <option value="missing_any">Missing Any</option>
+                    <option value="missing_link">Missing Link</option>
+                    <option value="missing_points">Missing Points</option>
+                    <option value="missing_description">Missing Description</option>
                   </Form.Select>
                 </Form.Group>
               </Col>
@@ -443,14 +478,15 @@ const TaskListView: React.FC = () => {
             </Row>
             <Row style={{ marginTop: '6px' }}>
               <Col>
-                <Button 
+                <Button
                   size="sm"
-                  variant="outline-secondary" 
+                  variant="outline-secondary"
                   onClick={() => {
                     setFilterStatus('all');
                     setSelectedSprintId('');
                     setFilterTheme('all');
                     setFilterType('all');
+                    setFilterDataQuality('all');
                     setSearchTerm('');
                     setDueFilter('all');
                   }}

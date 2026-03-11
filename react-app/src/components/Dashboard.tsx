@@ -1,10 +1,13 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Container, Card, Row, Col, Badge, Button, Alert, Collapse, OverlayTrigger, Tooltip, Form, Spinner } from 'react-bootstrap';
+import { Container, Card, Row, Col, Badge, Button, Alert, Collapse, OverlayTrigger, Tooltip, Form, Spinner, Table } from 'react-bootstrap';
 import { useNavigate, Link } from 'react-router-dom';
-import { Target, BookOpen, TrendingUp, Wallet, Clock, ListChecks, Calendar as CalendarIcon, LayoutGrid, RefreshCw, Sparkles, Activity } from 'lucide-react';
+import { Target, BookOpen, TrendingUp, Wallet, Clock, ListChecks, Calendar as CalendarIcon, LayoutGrid, RefreshCw, Sparkles, Activity, GripVertical, Heart, CheckCircle } from 'lucide-react';
+import { DndContext, DragEndEvent, PointerSensor, useSensor, useSensors, closestCenter } from '@dnd-kit/core';
+import { SortableContext, useSortable, arrayMove, rectSortingStrategy } from '@dnd-kit/sortable';
+import { CSS as DndCSS } from '@dnd-kit/utilities';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
-import { collection, query, where, onSnapshot, orderBy, limit, getDocs, doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, orderBy, limit, getDocs, doc, getDoc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Story, Task, Sprint, Goal } from '../types';
 import { isStatus, getPriorityBadge } from '../utils/statusHelpers';
@@ -14,16 +17,13 @@ import { httpsCallable } from 'firebase/functions';
 import ThemeBreakdown from './ThemeBreakdown';
 import { addDays, addMinutes, endOfDay, endOfMonth, format, getDay, isSameDay, parse, startOfDay, startOfMonth, startOfWeek } from 'date-fns';
 import { enGB } from 'date-fns/locale';
-import { Calendar as RBC, Views, dateFnsLocalizer } from 'react-big-calendar';
-import withDragAndDrop from 'react-big-calendar/lib/addons/dragAndDrop';
-import 'react-big-calendar/lib/css/react-big-calendar.css';
-import 'react-big-calendar/lib/addons/dragAndDrop/styles.css';
 import type { ScheduledInstanceModel } from '../domain/scheduler/repository';
 import { nextDueAt } from '../utils/recurrence';
 import StatCard from './common/StatCard';
 import { colors } from '../utils/colors';
 import SprintMetricsPanel from './SprintMetricsPanel';
 import JournalInsightsCard from './JournalInsightsCard';
+import BirthdayMilestoneCard from './BirthdayMilestoneCard';
 import { GLOBAL_THEMES, LEGACY_THEME_MAP } from '../constants/globalThemes';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { useUnifiedPlannerData, type PlannerRange } from '../hooks/useUnifiedPlannerData';
@@ -33,17 +33,19 @@ import EditTaskModal from './EditTaskModal';
 import EditStoryModal from './EditStoryModal';
 import { useSidebar } from '../contexts/SidebarContext';
 import { goalNeedsLinkedPot } from '../utils/goalCost';
+import { ResponsiveContainer, LineChart, Line, CartesianGrid, XAxis, YAxis, Tooltip as RechartsTooltip, Legend } from 'recharts';
+import { Calendar as RBC, Views, dateFnsLocalizer } from 'react-big-calendar';
+import 'react-big-calendar/lib/css/react-big-calendar.css';
 
-const locales = { 'en-GB': enGB } as const;
-const localizer = dateFnsLocalizer({
+const _rbcLocales = { 'en-GB': enGB } as const;
+const _rbcLocalizer = dateFnsLocalizer({
   format,
   parse,
-  startOfWeek: (date) => startOfWeek(date, { weekStartsOn: 1 }),
+  startOfWeek: (date: Date) => startOfWeek(date, { weekStartsOn: 1 }),
   getDay,
-  locales,
+  locales: _rbcLocales,
 });
 
-const DragAndDropCalendar = withDragAndDrop(RBC as any);
 
 interface DashboardCalendarEvent {
   id: string;
@@ -174,10 +176,135 @@ const NEXT_WORK_REFRESH_MS = 60 * 60 * 1000;
 const FINANCE_INCOME_BUCKETS = new Set(['income', 'net_salary', 'irregular_income']);
 const FINANCE_UNCATEGORISED_BUCKETS = new Set(['unknown', 'uncategorized', 'uncategorised']);
 const TODAY_PLAN_COLUMN_STORAGE_KEY = 'bob_dashboard_today_plan_columns_v1';
+const PROFILE_OVERVIEW_LAYOUT_KEY = 'overviewWidgetLayout';
+const PROFILE_TODAY_PLAN_COLUMNS_KEY = 'todayPlanColumns';
+const DASHBOARD_WIDGET_VISIBILITY_STORAGE_PREFIX = 'bob_dashboard_widget_visibility_v1';
+const DASHBOARD_WIDGET_SIZE_STORAGE_PREFIX = 'bob_dashboard_widget_sizes_v2';
+const DASHBOARD_WIDGET_ORDER_STORAGE_PREFIX = 'bob_dashboard_widget_order_v1';
+// Col-span storage removed — widgetSizes now stores both width and height as pixels
 const TODAY_PLAN_DESKTOP_BREAKPOINT = 992;
 const TODAY_PLAN_COLUMN_KEYS = ['summary', 'calendar', 'due', 'chores'] as const;
 type TodayPlanColumnKey = (typeof TODAY_PLAN_COLUMN_KEYS)[number];
 type TodayPlanColumnWidths = Record<TodayPlanColumnKey, number>;
+type DashboardDeviceType = 'mobile' | 'tablet' | 'desktop';
+type DashboardWidgetKey =
+  | 'lowHangingFruit'
+  | 'dailySummary'
+  | 'top3'
+  | 'themeProgress'
+  | 'unifiedTimeline'
+  | 'tasksDueToday'
+  | 'choresHabits'
+  | 'calendar';
+type DashboardWidgetVisibility = Record<DashboardWidgetKey, boolean>;
+interface DashboardWidgetSize {
+  width: number;
+  height: number;
+}
+type DashboardWidgetSizes = Partial<Record<DashboardWidgetKey, DashboardWidgetSize>>;
+const SUMMARY_WIDGET_KEYS: DashboardWidgetKey[] = ['unifiedTimeline', 'top3', 'dailySummary', 'choresHabits', 'lowHangingFruit', 'themeProgress', 'tasksDueToday', 'calendar'];
+const dashboardWidgetOrderStorageKey = (deviceType: DashboardDeviceType) => `${DASHBOARD_WIDGET_ORDER_STORAGE_PREFIX}_${deviceType}`;
+const readDashboardWidgetOrder = (deviceType: DashboardDeviceType): DashboardWidgetKey[] => {
+  try {
+    const stored = window.localStorage.getItem(dashboardWidgetOrderStorageKey(deviceType));
+    if (stored) {
+      const parsed = JSON.parse(stored) as DashboardWidgetKey[];
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    }
+  } catch { /* ignore */ }
+  return [...SUMMARY_WIDGET_KEYS];
+};
+
+function SortableDashboardWidget({ id, widgetWidth, dragEnabled, children }: {
+  id: string;
+  widgetWidth?: number;
+  dragEnabled: boolean;
+  children: React.ReactNode;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+  const style: React.CSSProperties = {
+    transform: DndCSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.45 : 1,
+    position: 'relative',
+    ...(widgetWidth != null
+      ? { width: `${widgetWidth}px`, flexBasis: `${widgetWidth}px`, flexShrink: 0, flexGrow: 0, maxWidth: '100%' }
+      : {}),
+  };
+  return (
+    <div ref={setNodeRef} style={style} className="dashboard-sortable-item">
+      {dragEnabled && (
+        <div
+          className="dashboard-drag-handle"
+          {...attributes}
+          {...listeners}
+          role="button"
+          tabIndex={0}
+          aria-label="Drag to reorder widget"
+        />
+      )}
+      {children}
+    </div>
+  );
+}
+interface ThemeProgressGoalRow {
+  id: string;
+  title: string;
+  status: number | string;
+  statusLabel: string;
+  statusBg: string;
+  storiesDone: number;
+  storiesTotal: number;
+  tasksDone: number;
+  tasksTotal: number;
+  pointsDone: number;
+  pointsTotal: number;
+  pointsProgressPct: number;
+  progressPct: number;
+  dueDateMs: number | null;
+  dueThisSprint: boolean;
+  savingsSavedPence: number;
+  savingsTarget: number;
+  savingsCurrency: string;
+}
+interface ThemeProgressRow {
+  themeKey: string;
+  themeId: number;
+  themeLabel: string;
+  color: string;
+  textColor: string;
+  goalsDone: number;
+  goalsTotal: number;
+  storiesDone: number;
+  storiesTotal: number;
+  tasksDone: number;
+  tasksTotal: number;
+  pointsDone: number;
+  pointsTotal: number;
+  completedItems: number;
+  totalItems: number;
+  progressPct: number;
+  goalRows: ThemeProgressGoalRow[];
+  savingsSavedPence: number;
+  savingsTarget: number;
+  savingsCurrency: string;
+}
+interface DailyCompletionTrendPoint {
+  dayKey: string;
+  label: string;
+  totalDue: number;
+  totalCompleted: number;
+  totalPct: number;
+  storyDue: number;
+  storyCompleted: number;
+  storyPct: number;
+  taskDue: number;
+  taskCompleted: number;
+  taskPct: number;
+  choreDue: number;
+  choreCompleted: number;
+  chorePct: number;
+}
 const TODAY_PLAN_DEFAULT_WIDTHS: TodayPlanColumnWidths = {
   summary: 24,
   calendar: 31,
@@ -193,6 +320,32 @@ const TODAY_PLAN_MIN_WIDTHS: TodayPlanColumnWidths = {
 const LOW_HANGING_MAX_POINTS = 0.25;
 const LOW_HANGING_MIN_STALE_DAYS = 7;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
+type DayTimelineBucket = 'morning' | 'afternoon' | 'evening';
+const DAY_TIMELINE_BUCKETS: Array<{ key: DayTimelineBucket; label: string; range: string }> = [
+  { key: 'morning', label: 'Morning', range: '05:00 - 12:59' },
+  { key: 'afternoon', label: 'Afternoon', range: '13:00 - 18:59' },
+  { key: 'evening', label: 'Evening', range: '19:00 - 04:59' },
+];
+
+const normalizeTimelineText = (value: string | null | undefined) =>
+  String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+
+const bucketFromMinutes = (minutes: number): DayTimelineBucket => {
+  if (minutes >= 300 && minutes <= 779) return 'morning';
+  if (minutes >= 780 && minutes <= 1139) return 'afternoon';
+  return 'evening';
+};
+
+const bucketFromTimeOfDay = (value: string | null | undefined): DayTimelineBucket | null => {
+  const normalized = String(value || '').toLowerCase().trim();
+  if (normalized === 'morning') return 'morning';
+  if (normalized === 'afternoon') return 'afternoon';
+  if (normalized === 'evening') return 'evening';
+  return null;
+};
 
 const isTaskDoneState = (status: any): boolean => {
   if (typeof status === 'number') {
@@ -202,6 +355,18 @@ const isTaskDoneState = (status: any): boolean => {
   }
   const normalized = String(status ?? '').trim().toLowerCase();
   return ['done', 'complete', 'completed', 'finished', 'closed'].includes(normalized);
+};
+
+const isStoryDoneState = (status: any): boolean => {
+  if (typeof status === 'number') return status >= 4;
+  const normalized = String(status ?? '').trim().toLowerCase();
+  return ['done', 'complete', 'completed', 'finished', 'closed', 'archived'].includes(normalized);
+};
+
+const isGoalDoneState = (status: any): boolean => {
+  if (typeof status === 'number') return status >= 2;
+  const normalized = String(status ?? '').trim().toLowerCase();
+  return ['done', 'complete', 'completed', 'finished', 'closed', 'archived'].includes(normalized);
 };
 
 const getNextWorkBadge = (status: string | null | undefined) => {
@@ -264,6 +429,88 @@ const readTodayPlanWidthsFromStorage = (): TodayPlanColumnWidths => {
   }
 };
 
+const areTodayPlanWidthsEqual = (a: TodayPlanColumnWidths | null | undefined, b: TodayPlanColumnWidths | null | undefined): boolean => {
+  if (!a || !b) return false;
+  return TODAY_PLAN_COLUMN_KEYS.every((key) => Math.abs((a[key] ?? 0) - (b[key] ?? 0)) < 0.01);
+};
+
+const DASHBOARD_WIDGET_CONFIG: Array<{ key: DashboardWidgetKey; label: string }> = [
+  { key: 'lowHangingFruit', label: 'Low hanging fruit' },
+  { key: 'dailySummary', label: 'Daily summary' },
+  { key: 'top3', label: 'Top 3 priorities' },
+  { key: 'themeProgress', label: 'Theme progress' },
+  { key: 'unifiedTimeline', label: 'Daily Plan' },
+  { key: 'tasksDueToday', label: 'Tasks due today' },
+  { key: 'choresHabits', label: 'Chores & habits' },
+  { key: 'calendar', label: 'Calendar (mini)' },
+];
+
+const DASHBOARD_WIDGET_DEFAULT_VISIBILITY: DashboardWidgetVisibility = {
+  lowHangingFruit: false,
+  dailySummary: true,
+  top3: true,
+  themeProgress: false,
+  unifiedTimeline: true,
+  tasksDueToday: false,
+  choresHabits: true,
+  calendar: false,
+};
+
+const getDashboardDeviceType = (): DashboardDeviceType => {
+  if (typeof window === 'undefined') return 'desktop';
+  const width = window.innerWidth;
+  if (width < 768) return 'mobile';
+  if (width < TODAY_PLAN_DESKTOP_BREAKPOINT) return 'tablet';
+  return 'desktop';
+};
+
+const dashboardWidgetVisibilityStorageKey = (deviceType: DashboardDeviceType) =>
+  `${DASHBOARD_WIDGET_VISIBILITY_STORAGE_PREFIX}_${deviceType}`;
+const dashboardWidgetSizeStorageKey = (deviceType: DashboardDeviceType) =>
+  `${DASHBOARD_WIDGET_SIZE_STORAGE_PREFIX}_${deviceType}`;
+
+const readDashboardWidgetVisibility = (deviceType: DashboardDeviceType): DashboardWidgetVisibility => {
+  if (typeof window === 'undefined') return DASHBOARD_WIDGET_DEFAULT_VISIBILITY;
+  try {
+    const stored = window.localStorage.getItem(dashboardWidgetVisibilityStorageKey(deviceType));
+    if (!stored) return DASHBOARD_WIDGET_DEFAULT_VISIBILITY;
+    const parsed = JSON.parse(stored) as Record<string, unknown>;
+    const next = { ...DASHBOARD_WIDGET_DEFAULT_VISIBILITY };
+    DASHBOARD_WIDGET_CONFIG.forEach(({ key }) => {
+      if (typeof parsed[key] === 'boolean') {
+        next[key] = parsed[key] as boolean;
+      }
+    });
+    return next;
+  } catch {
+    return DASHBOARD_WIDGET_DEFAULT_VISIBILITY;
+  }
+};
+
+const readDashboardWidgetSizes = (deviceType: DashboardDeviceType): DashboardWidgetSizes => {
+  if (typeof window === 'undefined') return {};
+  try {
+    const stored = window.localStorage.getItem(dashboardWidgetSizeStorageKey(deviceType));
+    if (!stored) return {};
+    const parsed = JSON.parse(stored) as Record<string, unknown>;
+    const next: DashboardWidgetSizes = {};
+    DASHBOARD_WIDGET_CONFIG.forEach(({ key }) => {
+      const value = parsed[key] as Record<string, unknown> | undefined;
+      const width = Number(value?.width);
+      const height = Number(value?.height);
+      if (Number.isFinite(width) && width > 140 && Number.isFinite(height) && height > 140) {
+        next[key] = {
+          width: Math.round(width),
+          height: Math.round(height),
+        };
+      }
+    });
+    return next;
+  } catch {
+    return {};
+  }
+};
+
 const extractMonzoAmountPence = (tx: any): number => {
   if (Number.isFinite(tx?.amountMinor)) return Number(tx.amountMinor);
   const raw = Number(tx?.amount || 0);
@@ -320,6 +567,8 @@ const Dashboard: React.FC = () => {
   const [tasksDueToday, setTasksDueToday] = useState<number>(0);
   const [tasksDueTodayList, setTasksDueTodayList] = useState<Task[]>([]);
   const [openTasksPool, setOpenTasksPool] = useState<Task[]>([]);
+  const [personaTasksPool, setPersonaTasksPool] = useState<Task[]>([]);
+  const [personaStoriesPool, setPersonaStoriesPool] = useState<Story[]>([]);
   const [tasksDueTodayLoading, setTasksDueTodayLoading] = useState(false);
   const [tasksDueTodaySortMode, setTasksDueTodaySortMode] = useState<'due' | 'ai' | 'top3'>('ai');
   const [top3Collapsed, setTop3Collapsed] = useState(false);
@@ -341,7 +590,7 @@ const Dashboard: React.FC = () => {
     const now = new Date();
     return new Date(1970, 0, 1, now.getHours(), now.getMinutes(), 0);
   });
-  const [plannerStats, setPlannerStats] = useState<any | null>(null);
+  const [timelineNowMs, setTimelineNowMs] = useState<number>(() => Date.now());
   const [remindersDueToday, setRemindersDueToday] = useState<ReminderItem[]>([]);
   const [choresDueToday, setChoresDueToday] = useState<ChecklistSnapshotItem[]>([]);
   const [routinesDueToday, setRoutinesDueToday] = useState<ChecklistSnapshotItem[]>([]);
@@ -354,6 +603,8 @@ const Dashboard: React.FC = () => {
   const [runAnalysisSnapshot, setRunAnalysisSnapshot] = useState<any | null>(null);
   const [fitnessTrendSummary, setFitnessTrendSummary] = useState<FitnessTrendSummary | null>(null);
   const [financeTrendSummary, setFinanceTrendSummary] = useState<FinanceTrendSummary | null>(null);
+  const [runwaySortMode, setRunwaySortMode] = useState<'soonest' | 'shortfall' | 'theme'>('soonest');
+  const [runwayThemeFilter, setRunwayThemeFilter] = useState<string>('all');
   const [weeklySummary, setWeeklySummary] = useState<{ total: number; byType: Record<string, number> } | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
   const [sprintStories, setSprintStories] = useState<Story[]>([]);
@@ -366,11 +617,24 @@ const Dashboard: React.FC = () => {
   const [prioritySource, setPrioritySource] = useState<string | null>(null);
   const [aiFocusItems, setAiFocusItems] = useState<any[]>([]);
   const [metricsCollapsed, setMetricsCollapsed] = useState<boolean>(true);
+  const [dailyCompletionTrendExpanded, setDailyCompletionTrendExpanded] = useState<boolean>(false);
   const [capacityData, setCapacityData] = useState<any | null>(null);
   const [capacityLoading, setCapacityLoading] = useState(false);
   const [capacityError, setCapacityError] = useState<string | null>(null);
   const [profileSnapshot, setProfileSnapshot] = useState<any | null>(null);
   const [choreCompletionBusy, setChoreCompletionBusy] = useState<Record<string, boolean>>({});
+  const [showWidgetSettings, setShowWidgetSettings] = useState(false);
+  const [dashboardDeviceType, setDashboardDeviceType] = useState<DashboardDeviceType>(() => getDashboardDeviceType());
+  const [widgetVisibility, setWidgetVisibility] = useState<DashboardWidgetVisibility>(() =>
+    readDashboardWidgetVisibility(getDashboardDeviceType())
+  );
+  const [widgetSizes, setWidgetSizes] = useState<DashboardWidgetSizes>(() =>
+    readDashboardWidgetSizes(getDashboardDeviceType())
+  );
+  const [widgetOrder, setWidgetOrder] = useState<DashboardWidgetKey[]>(() =>
+    readDashboardWidgetOrder(getDashboardDeviceType())
+  );
+  const [themeProgressExpanded, setThemeProgressExpanded] = useState<Record<string, boolean>>({});
   const [todayPlanColumnWidths, setTodayPlanColumnWidths] = useState<TodayPlanColumnWidths>(() => readTodayPlanWidthsFromStorage());
   const [todayPlanDesktopMode, setTodayPlanDesktopMode] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
@@ -384,6 +648,26 @@ const Dashboard: React.FC = () => {
     containerWidth: number;
     startWidths: TodayPlanColumnWidths;
   } | null>(null);
+  const widgetGridRef = useRef<HTMLDivElement | null>(null);
+  const timelineScrollBodyRef = useRef<HTMLDivElement | null>(null);
+  const timelineNowMarkerRef = useRef<HTMLDivElement | null>(null);
+  const widgetResizeDragRef = useRef<{
+    key: DashboardWidgetKey;
+    startX: number;
+    startY: number;
+    startWidth: number;
+    startHeight: number;
+    maxWidth: number;
+    minWidth: number;
+    minHeight: number;
+    maxHeight: number;
+    fromLeft?: boolean;
+    fromRight?: boolean;
+    fromTop?: boolean;
+    fromBottom?: boolean;
+  } | null>(null);
+  const [widgetEditMode, setWidgetEditMode] = useState(false);
+  const dashboardDeviceTypeRef = useRef(dashboardDeviceType);
 
   const decodeToDate = useCallback((value: any): Date | null => {
     if (value == null) return null;
@@ -520,15 +804,137 @@ const Dashboard: React.FC = () => {
     [todayPlanColumnWidths, todayPlanDesktopMode],
   );
 
+  // No-op ref callback — kept for call-site compatibility; size is tracked via widgetSizes state
+  const setWidgetResizeContainer = useCallback(
+    (_key: DashboardWidgetKey) => (_node: HTMLDivElement | null) => { /* no-op */ },
+    [],
+  );
+
+  // Returns height style only; width is applied on the SortableDashboardWidget outer div
+  const getWidgetSizeStyle = useCallback(
+    (key: DashboardWidgetKey, minHeight: number): React.CSSProperties => {
+      const size = widgetSizes[key];
+      if (!size) return { minHeight: `${minHeight}px` };
+      return { height: `${size.height}px`, minHeight: `${minHeight}px`, overflowY: 'auto' };
+    },
+    [widgetSizes],
+  );
+
+  // Unified resize start — direction flags determine which axis/side moves
+  const beginResize = useCallback(
+    (
+      event: React.PointerEvent<HTMLButtonElement>,
+      key: DashboardWidgetKey,
+      dirs: { fromLeft?: boolean; fromRight?: boolean; fromTop?: boolean; fromBottom?: boolean },
+    ) => {
+      if (!widgetEditMode) return;
+      const gridEl = widgetGridRef.current ?? document.querySelector('.dashboard-widget-grid');
+      const gridRect = gridEl?.getBoundingClientRect();
+      const maxWidth = Math.max(280, Math.floor(gridRect?.width ?? (window.innerWidth - 60)));
+      const currentSize = widgetSizes[key];
+      const startWidth = currentSize?.width ?? Math.max(300, Math.floor(maxWidth / 2));
+      const startHeight = currentSize?.height ?? 400;
+      event.preventDefault();
+      event.stopPropagation();
+      try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* ignore */ }
+      widgetResizeDragRef.current = {
+        key,
+        startX: event.clientX,
+        startY: event.clientY,
+        startWidth,
+        startHeight,
+        maxWidth,
+        minWidth: 220,
+        minHeight: 100,
+        maxHeight: Math.floor(window.innerHeight * 0.95),
+        ...dirs,
+      };
+      document.body.classList.add('dashboard-widget-resizing');
+    },
+    [widgetEditMode, widgetSizes],
+  );
+
+  // Kept for call-site compatibility — now a no-op (corners covered by renderWidgetEdgeHandles)
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const renderWidgetResizeHandle = useCallback((_key: DashboardWidgetKey, _minH: number, _label: string) => null, []);
+
+  const renderWidgetEdgeHandles = useCallback(
+    (key: DashboardWidgetKey) => {
+      if (!widgetEditMode) return null;
+      return (
+        <>
+          {/* Edge handles */}
+          <button type="button" className="dashboard-widget-resize-left"
+            onPointerDown={(e) => beginResize(e, key, { fromLeft: true })} aria-label="Resize left" />
+          <button type="button" className="dashboard-widget-resize-right"
+            onPointerDown={(e) => beginResize(e, key, { fromRight: true })} aria-label="Resize right" />
+          <button type="button" className="dashboard-widget-resize-top"
+            onPointerDown={(e) => beginResize(e, key, { fromTop: true })} aria-label="Resize top" />
+          <button type="button" className="dashboard-widget-resize-bottom"
+            onPointerDown={(e) => beginResize(e, key, { fromBottom: true })} aria-label="Resize bottom" />
+          {/* Corner handles */}
+          <button type="button" className="dashboard-widget-resize-nw"
+            onPointerDown={(e) => beginResize(e, key, { fromTop: true, fromLeft: true })} aria-label="Resize top-left" />
+          <button type="button" className="dashboard-widget-resize-ne"
+            onPointerDown={(e) => beginResize(e, key, { fromTop: true, fromRight: true })} aria-label="Resize top-right" />
+          <button type="button" className="dashboard-widget-resize-sw"
+            onPointerDown={(e) => beginResize(e, key, { fromBottom: true, fromLeft: true })} aria-label="Resize bottom-left" />
+          <button type="button" className="dashboard-widget-resize-se"
+            onPointerDown={(e) => beginResize(e, key, { fromBottom: true, fromRight: true })} aria-label="Resize bottom-right" />
+        </>
+      );
+    },
+    [beginResize, widgetEditMode],
+  );
+
+  const widgetDndSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+  );
+
+  const handleWidgetDragEnd = useCallback((event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    setWidgetOrder((prev) => {
+      const oldIndex = prev.indexOf(active.id as DashboardWidgetKey);
+      const newIndex = prev.indexOf(over.id as DashboardWidgetKey);
+      if (oldIndex === -1 || newIndex === -1) return prev;
+      const next = arrayMove(prev, oldIndex, newIndex);
+      try { window.localStorage.setItem(dashboardWidgetOrderStorageKey(dashboardDeviceType), JSON.stringify(next)); } catch { /* ignore */ }
+      return next;
+    });
+  }, [dashboardDeviceType]);
+
+  const toggleWidgetVisibility = useCallback((key: DashboardWidgetKey) => {
+    setWidgetVisibility((prev) => ({ ...prev, [key]: !prev[key] }));
+  }, []);
+
+  const toggleThemeProgressExpanded = useCallback((key: string) => {
+    setThemeProgressExpanded((prev) => ({ ...prev, [key]: !prev[key] }));
+  }, []);
+
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
     const handleResize = () => {
       setTodayPlanDesktopMode(window.innerWidth >= TODAY_PLAN_DESKTOP_BREAKPOINT);
+      setDashboardDeviceType(getDashboardDeviceType());
     };
     handleResize();
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
+
+  useEffect(() => {
+    setWidgetVisibility(readDashboardWidgetVisibility(dashboardDeviceType));
+  }, [dashboardDeviceType]);
+
+  useEffect(() => {
+    setWidgetSizes(readDashboardWidgetSizes(dashboardDeviceType));
+  }, [dashboardDeviceType]);
+
+  useEffect(() => {
+    dashboardDeviceTypeRef.current = dashboardDeviceType;
+    setWidgetOrder(readDashboardWidgetOrder(dashboardDeviceType));
+  }, [dashboardDeviceType]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -538,6 +944,30 @@ const Dashboard: React.FC = () => {
       // Ignore storage quota and privacy-mode write failures.
     }
   }, [todayPlanColumnWidths]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(
+        dashboardWidgetVisibilityStorageKey(dashboardDeviceType),
+        JSON.stringify(widgetVisibility),
+      );
+    } catch {
+      // Ignore storage write failures.
+    }
+  }, [dashboardDeviceType, widgetVisibility]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(
+        dashboardWidgetSizeStorageKey(dashboardDeviceType),
+        JSON.stringify(widgetSizes),
+      );
+    } catch {
+      // Ignore storage write failures.
+    }
+  }, [dashboardDeviceType, widgetSizes]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
@@ -580,6 +1010,71 @@ const Dashboard: React.FC = () => {
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', stopDrag);
       document.body.classList.remove('today-plan-resizing');
+    };
+  }, []);
+
+  // Compute default pixel sizes on first mount if nothing is stored yet
+  useEffect(() => {
+    if (Object.keys(widgetSizes).length > 0) return;
+    const grid = widgetGridRef.current;
+    const gridWidth = grid ? grid.getBoundingClientRect().width : window.innerWidth - 80;
+    if (gridWidth < 300) return;
+    const gap = 4;
+    // Daily timeline takes 75% of the grid; Top 3 priorities fills the remaining 25%
+    const threeQuarter = Math.max(400, Math.floor((gridWidth - gap) * 0.75));
+    const quarter = Math.max(220, Math.floor((gridWidth - gap) * 0.25));
+    const third = Math.max(240, Math.floor((gridWidth - gap * 2) / 3));
+    setWidgetSizes({
+      unifiedTimeline: { width: threeQuarter, height: 600 },
+      top3: { width: quarter, height: 600 },
+      dailySummary: { width: third, height: 420 },
+      choresHabits: { width: third, height: 420 },
+      lowHangingFruit: { width: third, height: 400 },
+      themeProgress: { width: third, height: 400 },
+      tasksDueToday: { width: third, height: 400 },
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+
+    const handlePointerMove = (event: PointerEvent) => {
+      const d = widgetResizeDragRef.current;
+      if (!d) return;
+      event.preventDefault();
+      const dx = event.clientX - d.startX;
+      const dy = event.clientY - d.startY;
+      const newWidth = d.fromLeft ? d.startWidth - dx : d.fromRight ? d.startWidth + dx : d.startWidth;
+      const newHeight = d.fromTop ? d.startHeight - dy : d.fromBottom ? d.startHeight + dy : d.startHeight;
+      const resizingH = d.fromLeft || d.fromRight;
+      const resizingV = d.fromTop || d.fromBottom;
+      const clampedWidth = resizingH
+        ? Math.max(d.minWidth, Math.min(d.maxWidth, newWidth))
+        : d.startWidth;
+      const clampedHeight = resizingV
+        ? Math.max(d.minHeight, Math.min(d.maxHeight, newHeight))
+        : d.startHeight;
+      setWidgetSizes((prev) => ({
+        ...prev,
+        [d.key]: { width: Math.round(clampedWidth), height: Math.round(clampedHeight) },
+      }));
+    };
+
+    const stopPointerResize = () => {
+      if (!widgetResizeDragRef.current) return;
+      widgetResizeDragRef.current = null;
+      document.body.classList.remove('dashboard-widget-resizing');
+    };
+
+    window.addEventListener('pointermove', handlePointerMove, { passive: false });
+    window.addEventListener('pointerup', stopPointerResize);
+    window.addEventListener('pointercancel', stopPointerResize);
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', stopPointerResize);
+      window.removeEventListener('pointercancel', stopPointerResize);
+      document.body.classList.remove('dashboard-widget-resizing');
     };
   }, []);
 
@@ -726,6 +1221,43 @@ const Dashboard: React.FC = () => {
     return () => unsub();
   }, [currentUser]);
 
+  const profileTodayPlanWidths = useMemo(() => {
+    const layout = profileSnapshot?.[PROFILE_OVERVIEW_LAYOUT_KEY];
+    if (!layout || typeof layout !== 'object') return null;
+    return normalizeTodayPlanWidths((layout as any)[PROFILE_TODAY_PLAN_COLUMNS_KEY] as Record<string, unknown> | null | undefined);
+  }, [profileSnapshot]);
+
+  useEffect(() => {
+    if (!profileTodayPlanWidths) return;
+    setTodayPlanColumnWidths((current) => (
+      areTodayPlanWidthsEqual(current, profileTodayPlanWidths) ? current : profileTodayPlanWidths
+    ));
+  }, [profileTodayPlanWidths]);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    if (profileTodayPlanWidths && areTodayPlanWidthsEqual(todayPlanColumnWidths, profileTodayPlanWidths)) return;
+
+    const timeoutId = window.setTimeout(async () => {
+      try {
+        await setDoc(
+          doc(db, 'profiles', currentUser.uid),
+          {
+            [PROFILE_OVERVIEW_LAYOUT_KEY]: {
+              [PROFILE_TODAY_PLAN_COLUMNS_KEY]: todayPlanColumnWidths,
+              updatedAt: serverTimestamp(),
+            },
+          },
+          { merge: true },
+        );
+      } catch (error) {
+        console.warn('Failed to persist overview layout widths to profile', error);
+      }
+    }, 250);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [currentUser, profileTodayPlanWidths, todayPlanColumnWidths]);
+
   const youtubeTakeoutLastImportDate = useMemo(() => {
     if (!profileSnapshot) return null;
     return decodeToDate(profileSnapshot.youtubeTakeoutLastImportAt);
@@ -788,6 +1320,21 @@ const Dashboard: React.FC = () => {
     return () => window.clearInterval(id);
   }, [calendarDate, calendarView]);
 
+  useEffect(() => {
+    setTimelineNowMs(Date.now());
+    const id = window.setInterval(() => setTimelineNowMs(Date.now()), 60000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  // Auto-scroll the Daily Plan widget to the current-time marker on load and each minute tick.
+  useEffect(() => {
+    const body = timelineScrollBodyRef.current;
+    const marker = timelineNowMarkerRef.current;
+    if (!body || !marker) return;
+    const targetScroll = Math.max(0, marker.offsetTop - body.clientHeight * 0.3);
+    body.scrollTo({ top: targetScroll, behavior: 'smooth' });
+  }, [timelineNowMs]);
+
   const taskRefLabel = useCallback((task: Task) => {
     if (!task) return '';
     const ref = (task as any).ref
@@ -844,9 +1391,11 @@ const Dashboard: React.FC = () => {
   }, []);
 
   const getChoreKind = useCallback((task: Task): 'chore' | 'routine' | 'habit' | null => {
-    const raw = String((task as any)?.type || (task as any)?.task_type || '').toLowerCase();
+    const raw = String((task as any)?.type || (task as any)?.task_type || '').trim().toLowerCase();
     const normalized = raw === 'habitual' ? 'habit' : raw;
-    if (['chore', 'routine', 'habit'].includes(normalized)) return normalized as any;
+    if (normalized === 'chore' || normalized === 'routine' || normalized === 'habit') return normalized;
+    // If explicit type exists (task/read/watch/etc), do not infer chore-kind from tags.
+    if (normalized) return null;
     const tags = Array.isArray((task as any)?.tags) ? (task as any).tags : [];
     const tagKeys = tags.map((tag) => String(tag || '').toLowerCase().replace(/^#/, ''));
     if (tagKeys.includes('chore')) return 'chore';
@@ -1000,38 +1549,38 @@ const Dashboard: React.FC = () => {
         const metaDay = summary?.metadata?.dayIso;
         const modelName = summary?.aiFocus?.model || summary?.metadata?.model || 'Gemini';
         if (!metaDay || metaDay === todayStr) {
-            const briefSource = summary?.dailyBrief?.source;
-            const summarySource = `Daily summary (${modelName})`;
-            setDailySummarySource(briefSource ? `${summarySource} · ${briefSource}` : summarySource);
-            const focusSource = summary?.aiFocus?.mode === 'fallback'
-              ? 'Heuristic focus (AI unavailable)'
-              : `Model: ${modelName}`;
-            setPrioritySource(focusSource);
-            const briefing = summary?.dailyBriefing || null;
-            const dailyBrief = summary?.dailyBrief || null;
-            if (briefing?.headline) lines.push(briefing.headline);
-            if (briefing?.body) lines.push(briefing.body);
-            if (briefing?.checklist) lines.push(briefing.checklist);
-            if (lines.length === 0 && dailyBrief) {
-              if (Array.isArray(dailyBrief.lines)) {
-                lines.push(...dailyBrief.lines.filter(Boolean));
-              }
-              if (dailyBrief.weather?.summary) {
-                const temp = dailyBrief.weather?.temp ? ` (${dailyBrief.weather.temp})` : '';
-                lines.push(`Weather: ${dailyBrief.weather.summary}${temp}`);
-              }
-              if (Array.isArray(dailyBrief.news)) {
-                dailyBrief.news.filter(Boolean).slice(0, 3).forEach((item: string) => {
-                  lines.push(`News: ${item}`);
-                });
-              }
+          const briefSource = summary?.dailyBrief?.source;
+          const summarySource = `Daily summary (${modelName})`;
+          setDailySummarySource(briefSource ? `${summarySource} · ${briefSource}` : summarySource);
+          const focusSource = summary?.aiFocus?.mode === 'fallback'
+            ? 'Heuristic focus (AI unavailable)'
+            : `Model: ${modelName}`;
+          setPrioritySource(focusSource);
+          const briefing = summary?.dailyBriefing || null;
+          const dailyBrief = summary?.dailyBrief || null;
+          if (briefing?.headline) lines.push(briefing.headline);
+          if (briefing?.body) lines.push(briefing.body);
+          if (briefing?.checklist) lines.push(briefing.checklist);
+          if (lines.length === 0 && dailyBrief) {
+            if (Array.isArray(dailyBrief.lines)) {
+              lines.push(...dailyBrief.lines.filter(Boolean));
             }
-            const aiItems: any[] = Array.isArray(summary?.aiFocus?.items) ? summary.aiFocus.items : [];
-            setAiFocusItems(aiItems);
-            aiItems.slice(0, 3).forEach((item) => {
-              const label = [item.ref, item.title || item.summary].filter(Boolean).join(' — ') || (item.ref || '');
-              lines.push(`Focus: ${label} — ${item.rationale || item.summary || item.title || ''}`.trim());
-            });
+            if (dailyBrief.weather?.summary) {
+              const temp = dailyBrief.weather?.temp ? ` (${dailyBrief.weather.temp})` : '';
+              lines.push(`Weather: ${dailyBrief.weather.summary}${temp}`);
+            }
+            if (Array.isArray(dailyBrief.news)) {
+              dailyBrief.news.filter(Boolean).slice(0, 3).forEach((item: string) => {
+                lines.push(`News: ${item}`);
+              });
+            }
+          }
+          const aiItems: any[] = Array.isArray(summary?.aiFocus?.items) ? summary.aiFocus.items : [];
+          setAiFocusItems(aiItems);
+          aiItems.slice(0, 3).forEach((item) => {
+            const label = [item.ref, item.title || item.summary].filter(Boolean).join(' — ') || (item.ref || '');
+            lines.push(`Focus: ${label} — ${item.rationale || item.summary || item.title || ''}`.trim());
+          });
         }
       }
 
@@ -1166,10 +1715,10 @@ const Dashboard: React.FC = () => {
           : addMinutes(new Date(start), instance.durationMinutes || 30);
         const theme = themeFor(
           (instance as any).theme
-            ?? (instance as any).sourceTheme
-            ?? block?.theme_id
-            ?? block?.theme
-            ?? block?.category,
+          ?? (instance as any).sourceTheme
+          ?? block?.theme_id
+          ?? block?.theme
+          ?? block?.category,
         );
         const fallback = instance.sourceType === 'chore'
           ? '#f59e0b'
@@ -1341,6 +1890,7 @@ const Dashboard: React.FC = () => {
     console.log('🔍 Dashboard useEffect triggered:', { currentUser: !!currentUser, persona: currentPersona });
     if (!currentUser) {
       console.log('🔍 Dashboard: No currentUser, returning early');
+      setPersonaStoriesPool([]);
       return;
     }
 
@@ -1396,12 +1946,14 @@ const Dashboard: React.FC = () => {
     });
 
     const unsubscribeStorySummary = onSnapshot(storiesSummaryQuery, (snapshot) => {
+      const allStories = snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) } as Story));
+      setPersonaStoriesPool(allStories);
       let totalPoints = 0;
       let donePoints = 0;
       let totalStories = 0;
       let doneStories = 0;
-      snapshot.docs.forEach((docSnap) => {
-        const data = docSnap.data() as any;
+      allStories.forEach((story) => {
+        const data = story as any;
         const points = Number.isFinite(Number(data.points)) ? Number(data.points) : 0;
         totalPoints += points;
         totalStories += 1;
@@ -1617,6 +2169,7 @@ const Dashboard: React.FC = () => {
     if (!currentUser || !currentPersona) {
       setTasksDueTodayList([]);
       setOpenTasksPool([]);
+      setPersonaTasksPool([]);
       setTasksDueTodayLoading(false);
       return;
     }
@@ -1634,12 +2187,14 @@ const Dashboard: React.FC = () => {
         const todayEnd = endOfDay(todayDate).getTime();
         const openRows = snap.docs
           .map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) } as Task))
-          .filter((task) => !task.deleted)
+          .filter((task) => !task.deleted);
+        setPersonaTasksPool(openRows);
+        const openActiveRows = openRows
           .filter((task) => !isTaskDoneState(task.status));
 
-        setOpenTasksPool(openRows);
+        setOpenTasksPool(openActiveRows);
 
-        const rows = openRows
+        const rows = openActiveRows
           .filter((task) => {
             const due = getTaskDueMs(task);
             const isChore = !!getChoreKind(task);
@@ -1671,6 +2226,7 @@ const Dashboard: React.FC = () => {
         console.error('Failed to load tasks due today', err);
         setTasksDueTodayList([]);
         setOpenTasksPool([]);
+        setPersonaTasksPool([]);
         setTasksDueTodayLoading(false);
       },
     );
@@ -1874,6 +2430,167 @@ const Dashboard: React.FC = () => {
     return items;
   }, [nonChoreTasksDueToday, tasksDueTodaySortMode, getTaskDueMs]);
 
+  const unifiedTodayTimelineItems = useMemo(() => {
+    const rows: Array<any> = [];
+    const seenTaskIds = new Set<string>();
+    const seenStoryIds = new Set<string>();
+    const seenSignatures = new Set<string>();
+
+    const now = new Date();
+    const todayStart = startOfDay(now).getTime();
+    const todayEnd = endOfDay(now).getTime();
+
+    const taskById = new Map<string, Task>();
+    [...openTasksPool, ...tasksDueTodayList, ...upcomingTasks, ...sprintTasks].forEach((task) => {
+      if (!task?.id) return;
+      if (taskById.has(task.id)) return;
+      taskById.set(task.id, task);
+    });
+
+    const storyById = new Map<string, Story>();
+    [...recentStories, ...sprintStories].forEach((story) => {
+      if (!story?.id) return;
+      if (storyById.has(story.id)) return;
+      storyById.set(story.id, story);
+    });
+
+    const buildSignature = (title: string | null | undefined, startMs?: number | null) => {
+      const minuteOfDay = Number.isFinite(startMs as number)
+        ? (() => {
+            const date = new Date(startMs as number);
+            return date.getHours() * 60 + date.getMinutes();
+          })()
+        : -1;
+      return `${normalizeTimelineText(title)}|${minuteOfDay}`;
+    };
+
+    const pushRow = (item: any) => {
+      const signature = buildSignature(item.title, item.startMs);
+      if (seenSignatures.has(signature)) return;
+      seenSignatures.add(signature);
+      rows.push(item);
+    };
+
+    calendarEvents.forEach((event) => {
+      const startMs = event.start?.getTime?.() ?? null;
+      const endMs = event.end?.getTime?.() ?? startMs;
+      if (!Number.isFinite(startMs as number)) return;
+      if ((startMs as number) < todayStart || (startMs as number) > todayEnd) return;
+
+      const block: any = (event as any).block || {};
+      if (block?.taskId && taskById.has(block.taskId)) {
+        const task = taskById.get(block.taskId)!;
+        seenTaskIds.add(task.id);
+        pushRow({
+          id: `timeline-task-calendar-${task.id}-${event.id}`,
+          kind: 'task',
+          source: 'calendar',
+          title: task.title || event.title || 'Task',
+          startMs,
+          endMs,
+          task,
+        });
+        return;
+      }
+
+      if (block?.storyId && storyById.has(block.storyId)) {
+        const story = storyById.get(block.storyId)!;
+        seenStoryIds.add(story.id);
+        pushRow({
+          id: `timeline-story-calendar-${story.id}-${event.id}`,
+          kind: 'story',
+          source: 'calendar',
+          title: story.title || event.title || 'Story',
+          startMs,
+          endMs,
+          story,
+        });
+        return;
+      }
+
+      pushRow({
+        id: `timeline-calendar-${event.id}`,
+        kind: 'calendar',
+        source: 'calendar',
+        title: event.title || 'Calendar event',
+        startMs,
+        endMs,
+        event,
+      });
+    });
+
+    tasksDueTodayCombined.forEach((item) => {
+      if (item.kind !== 'task' || !item.task) return;
+      if (seenTaskIds.has(item.task.id)) return;
+      pushRow({
+        id: `timeline-task-due-${item.task.id}`,
+        kind: 'task',
+        source: 'due',
+        title: item.task.title || item.title || 'Task',
+        startMs: item.dueMs ?? getTaskDueMs(item.task),
+        endMs: null,
+        task: item.task,
+      });
+    });
+
+    choresDueTodayTasks.forEach((task) => {
+      const choreKind = getChoreKind(task) || 'chore';
+      pushRow({
+        id: `timeline-${choreKind}-${task.id}`,
+        kind: choreKind,
+        source: 'checklist',
+        title: task.title || 'Checklist item',
+        startMs: getTaskDueMs(task),
+        endMs: null,
+        task,
+      });
+    });
+
+    return rows.sort((a, b) => {
+      const aStart = Number.isFinite(a.startMs) ? a.startMs : Number.MAX_SAFE_INTEGER;
+      const bStart = Number.isFinite(b.startMs) ? b.startMs : Number.MAX_SAFE_INTEGER;
+      if (aStart !== bStart) return aStart - bStart;
+      return String(a.title || '').localeCompare(String(b.title || ''));
+    });
+  }, [
+    calendarEvents,
+    choresDueTodayTasks,
+    getChoreKind,
+    getTaskDueMs,
+    openTasksPool,
+    recentStories,
+    sprintStories,
+    sprintTasks,
+    tasksDueTodayCombined,
+    tasksDueTodayList,
+    upcomingTasks,
+  ]);
+
+  const unifiedTodayTimelineByBucket = useMemo(() => {
+    const grouped: Record<DayTimelineBucket, Array<any>> = {
+      morning: [],
+      afternoon: [],
+      evening: [],
+    };
+
+    unifiedTodayTimelineItems.forEach((item) => {
+      const todBucket = bucketFromTimeOfDay(item?.task?.timeOfDay);
+      if (todBucket) {
+        grouped[todBucket].push(item);
+        return;
+      }
+      if (Number.isFinite(item?.startMs)) {
+        const date = new Date(item.startMs);
+        const minute = date.getHours() * 60 + date.getMinutes();
+        grouped[bucketFromMinutes(minute)].push(item);
+        return;
+      }
+      grouped.morning.push(item);
+    });
+
+    return grouped;
+  }, [unifiedTodayTimelineItems]);
+
   const tasksByRef = useMemo(() => {
     const map = new Map<string, Task>();
     const sources = [...upcomingTasks, ...tasksDueTodayList, ...sprintTasks];
@@ -1987,6 +2704,380 @@ const Dashboard: React.FC = () => {
   const goalsMissingPotWithCostCount = useMemo(() => {
     return goalsList.filter((goal) => goalNeedsLinkedPot(goal)).length;
   }, [goalsList]);
+
+  const themeProgressRows = useMemo<ThemeProgressRow[]>(() => {
+    const resolveThemeId = (value: any): number => {
+      const match = themeFor(value);
+      return typeof match?.id === 'number' ? match.id : 0;
+    };
+
+    const resolveGoalSavings = (goal: Goal) => {
+      const target = Number((goal as any).estimatedCost || 0);
+      const rawPotId = (goal as any).linkedPotId || (goal as any).potId || null;
+      if (!rawPotId) {
+        return {
+          savingsSavedPence: 0,
+          savingsTarget: Number.isFinite(target) ? target : 0,
+          savingsCurrency: 'GBP',
+        };
+      }
+
+      const base = String(rawPotId);
+      const candidates = [base];
+      if (currentUser?.uid && base.startsWith(`${currentUser.uid}_`)) {
+        candidates.push(base.replace(`${currentUser.uid}_`, ''));
+      } else if (currentUser?.uid) {
+        candidates.push(`${currentUser.uid}_${base}`);
+      }
+      const potId = candidates.find((id) => potsById[id]);
+      const pot = potId ? potsById[potId] : null;
+      return {
+        savingsSavedPence: Number(pot?.balance || 0),
+        savingsTarget: Number.isFinite(target) ? target : 0,
+        savingsCurrency: pot?.currency || 'GBP',
+      };
+    };
+
+    const sprintStartMs = selectedSprint ? Number(selectedSprint.startDate || 0) : null;
+    const sprintEndMs = selectedSprint ? Number(selectedSprint.endDate || 0) : null;
+
+    const resolveGoalDueMs = (goal: Goal): number | null => {
+      const dueCandidate = (goal as any).dueDate ?? (goal as any).endDate ?? (goal as any).targetDate ?? null;
+      const decoded = decodeToDate(dueCandidate);
+      const dueMs = decoded?.getTime() ?? null;
+      if (!Number.isFinite(dueMs as number)) return null;
+      return dueMs as number;
+    };
+
+    const isGoalDueThisSprint = (goal: Goal): boolean => {
+      if (!Number.isFinite(sprintStartMs as number) || !Number.isFinite(sprintEndMs as number)) return false;
+      const dueMs = resolveGoalDueMs(goal);
+      if (!dueMs) return false;
+      return dueMs >= (sprintStartMs as number) && dueMs <= (sprintEndMs as number);
+    };
+
+    const storyById = new Map<string, Story>();
+    sprintStories.forEach((story) => {
+      if (!story?.id) return;
+      storyById.set(story.id, story);
+    });
+
+    const storiesByGoal = new Map<string, Story[]>();
+    sprintStories.forEach((story) => {
+      const goalId = String((story as any).goalId || '').trim();
+      if (!goalId) return;
+      const rows = storiesByGoal.get(goalId) || [];
+      rows.push(story);
+      storiesByGoal.set(goalId, rows);
+    });
+
+    const tasksByGoal = new Map<string, Task[]>();
+    sprintTasks.forEach((task) => {
+      let goalId = String((task as any).goalId || '').trim();
+      if (!goalId && task.storyId) {
+        goalId = String(storyById.get(task.storyId)?.goalId || '').trim();
+      }
+      if (!goalId) return;
+      const rows = tasksByGoal.get(goalId) || [];
+      rows.push(task);
+      tasksByGoal.set(goalId, rows);
+    });
+
+    const sprintGoalIds = new Set<string>();
+    storiesByGoal.forEach((_, goalId) => sprintGoalIds.add(goalId));
+    tasksByGoal.forEach((_, goalId) => sprintGoalIds.add(goalId));
+
+    const isGoalInSprintContext = (goal: Goal): boolean => {
+      if (sprintGoalIds.has(goal.id)) return true;
+      return isGoalDueThisSprint(goal);
+    };
+
+    const rows: ThemeProgressRow[] = [];
+    themePalette.forEach((theme) => {
+      const themeId = Number(theme.id);
+      const themeGoals = goalsList.filter((goal) => (
+        resolveThemeId((goal as any).theme) === themeId && isGoalInSprintContext(goal)
+      ));
+      const themeGoalIds = new Set(themeGoals.map((goal) => goal.id));
+
+      const themeStories = sprintStories.filter((story) => {
+        if (resolveThemeId((story as any).theme) === themeId) return true;
+        return !!story.goalId && themeGoalIds.has(story.goalId);
+      });
+      const themeStoryIds = new Set(themeStories.map((story) => story.id));
+
+      const themeTasks = sprintTasks.filter((task) => {
+        if (resolveThemeId((task as any).theme) === themeId) return true;
+        if (task.goalId && themeGoalIds.has(task.goalId)) return true;
+        if (task.storyId && themeStoryIds.has(task.storyId)) return true;
+        if (task.storyId) {
+          const storyGoalId = String(storyById.get(task.storyId)?.goalId || '').trim();
+          if (storyGoalId && themeGoalIds.has(storyGoalId)) return true;
+        }
+        return false;
+      });
+
+      const totalItems = themeGoals.length + themeStories.length + themeTasks.length;
+      if (totalItems === 0) return;
+
+      const goalRows: ThemeProgressGoalRow[] = themeGoals.map((goal) => {
+        const goalStories = storiesByGoal.get(goal.id) || [];
+        const goalTasks = tasksByGoal.get(goal.id) || [];
+        const storiesDone = goalStories.filter((story) => isStoryDoneState((story as any).status)).length;
+        const tasksDone = goalTasks.filter((task) => isTaskDoneState((task as any).status)).length;
+        const pointsTotal = goalStories.reduce((sum, story) => sum + (Number((story as any).points || 0) || 0), 0);
+        const pointsDone = goalStories
+          .filter((story) => isStoryDoneState((story as any).status))
+          .reduce((sum, story) => sum + (Number((story as any).points || 0) || 0), 0);
+        const pointsProgressPct = pointsTotal > 0
+          ? Math.round((pointsDone / pointsTotal) * 100)
+          : (isGoalDoneState((goal as any).status) ? 100 : 0);
+        const totalChildItems = goalStories.length + goalTasks.length;
+        const progressPct = pointsTotal > 0
+          ? pointsProgressPct
+          : totalChildItems > 0
+            ? Math.round(((storiesDone + tasksDone) / totalChildItems) * 100)
+            : (isGoalDoneState((goal as any).status) ? 100 : 0);
+        const dueDateMs = resolveGoalDueMs(goal);
+        const dueThisSprint = !!(
+          dueDateMs
+          && Number.isFinite(sprintStartMs as number)
+          && Number.isFinite(sprintEndMs as number)
+          && dueDateMs >= (sprintStartMs as number)
+          && dueDateMs <= (sprintEndMs as number)
+        );
+        const statusNum = Number((goal as any).status);
+        const statusLabel = Number.isFinite(statusNum)
+          ? (
+            statusNum === 2 ? 'Complete'
+              : statusNum === 1 ? 'In Progress'
+                : statusNum === 3 ? 'Blocked'
+                  : statusNum === 4 ? 'Deferred'
+                    : 'New'
+          )
+          : String((goal as any).status || 'New');
+        const statusBg = Number.isFinite(statusNum)
+          ? (
+            statusNum === 2 ? 'success'
+              : statusNum === 1 ? 'primary'
+                : statusNum === 3 ? 'warning'
+                  : statusNum === 4 ? 'secondary'
+                    : 'dark'
+          )
+          : 'secondary';
+        const savings = resolveGoalSavings(goal);
+        return {
+          id: goal.id,
+          title: goal.title || goal.id,
+          status: (goal as any).status,
+          statusLabel,
+          statusBg,
+          storiesDone,
+          storiesTotal: goalStories.length,
+          tasksDone,
+          tasksTotal: goalTasks.length,
+          pointsDone,
+          pointsTotal,
+          pointsProgressPct,
+          progressPct,
+          dueDateMs,
+          dueThisSprint,
+          savingsSavedPence: savings.savingsSavedPence,
+          savingsTarget: savings.savingsTarget,
+          savingsCurrency: savings.savingsCurrency,
+        };
+      }).sort((a, b) => {
+        if (a.dueThisSprint !== b.dueThisSprint) return a.dueThisSprint ? -1 : 1;
+        if (a.pointsProgressPct !== b.pointsProgressPct) return a.pointsProgressPct - b.pointsProgressPct;
+        if (a.progressPct !== b.progressPct) return a.progressPct - b.progressPct;
+        return a.title.localeCompare(b.title);
+      });
+
+      const goalsDone = themeGoals.filter((goal) => isGoalDoneState((goal as any).status)).length;
+      const storiesDone = themeStories.filter((story) => isStoryDoneState((story as any).status)).length;
+      const tasksDone = themeTasks.filter((task) => isTaskDoneState((task as any).status)).length;
+      const pointsTotal = themeStories.reduce((sum, story) => sum + (Number((story as any).points || 0) || 0), 0);
+      const pointsDone = themeStories
+        .filter((story) => isStoryDoneState((story as any).status))
+        .reduce((sum, story) => sum + (Number((story as any).points || 0) || 0), 0);
+      const completedItems = goalsDone + storiesDone + tasksDone;
+      const progressPct = totalItems > 0 ? Math.round((completedItems / totalItems) * 100) : 0;
+      const savingsSavedPence = goalRows.reduce((sum, goalRow) => sum + goalRow.savingsSavedPence, 0);
+      const savingsTarget = goalRows.reduce((sum, goalRow) => sum + goalRow.savingsTarget, 0);
+      const savingsCurrency = goalRows.find((goalRow) => goalRow.savingsCurrency)?.savingsCurrency || 'GBP';
+
+      rows.push({
+        themeKey: String(theme.id),
+        themeId,
+        themeLabel: theme.label || theme.name || `Theme ${theme.id}`,
+        color: theme.color || '#6c757d',
+        textColor: theme.textColor || '#ffffff',
+        goalsDone,
+        goalsTotal: themeGoals.length,
+        storiesDone,
+        storiesTotal: themeStories.length,
+        tasksDone,
+        tasksTotal: themeTasks.length,
+        pointsDone,
+        pointsTotal,
+        completedItems,
+        totalItems,
+        progressPct,
+        goalRows,
+        savingsSavedPence,
+        savingsTarget,
+        savingsCurrency,
+      });
+    });
+
+    return rows.sort((a, b) => {
+      if (a.pointsTotal !== b.pointsTotal) return b.pointsTotal - a.pointsTotal;
+      if (a.totalItems !== b.totalItems) return b.totalItems - a.totalItems;
+      return a.themeLabel.localeCompare(b.themeLabel);
+    });
+  }, [currentUser?.uid, decodeToDate, goalsList, potsById, selectedSprint, sprintStories, sprintTasks, themeFor, themePalette]);
+
+  const lowProgressGoalsDueThisSprint = useMemo(() => {
+    const rows: Array<ThemeProgressGoalRow & { themeLabel: string; themeColor: string }> = [];
+    themeProgressRows.forEach((themeRow) => {
+      themeRow.goalRows.forEach((goalRow) => {
+        if (!goalRow.dueThisSprint) return;
+        if (goalRow.pointsProgressPct >= 25) return;
+        if (isGoalDoneState(goalRow.status)) return;
+        rows.push({
+          ...goalRow,
+          themeLabel: themeRow.themeLabel,
+          themeColor: themeRow.color,
+        });
+      });
+    });
+    return rows.sort((a, b) => {
+      if (a.pointsProgressPct !== b.pointsProgressPct) return a.pointsProgressPct - b.pointsProgressPct;
+      const aDue = Number.isFinite(a.dueDateMs as number) ? (a.dueDateMs as number) : Number.MAX_SAFE_INTEGER;
+      const bDue = Number.isFinite(b.dueDateMs as number) ? (b.dueDateMs as number) : Number.MAX_SAFE_INTEGER;
+      if (aDue !== bDue) return aDue - bDue;
+      return a.title.localeCompare(b.title);
+    });
+  }, [themeProgressRows]);
+
+  const dailyCompletionTrend = useMemo<DailyCompletionTrendPoint[]>(() => {
+    const trendDays = 14;
+    const today = startOfDay(new Date());
+    const rows: DailyCompletionTrendPoint[] = [];
+    const storyDueMsFor = (story: Story): number | null => {
+      const raw = (story as any).dueDate ?? (story as any).targetDate ?? (story as any).sprintDueDate ?? null;
+      const dueDate = decodeToDate(raw);
+      return dueDate ? dueDate.getTime() : null;
+    };
+    const storyCompletedMsFor = (story: Story): number | null => {
+      const raw = (story as any).completedAt ?? (story as any).doneAt ?? (story as any).updatedAt ?? null;
+      const doneDate = decodeToDate(raw);
+      return doneDate ? doneDate.getTime() : null;
+    };
+    const taskCompletedMsFor = (task: Task): number | null => {
+      const raw = (task as any).completedAt ?? (task as any).doneAt ?? (task as any).updatedAt ?? null;
+      const doneDate = decodeToDate(raw);
+      return doneDate ? doneDate.getTime() : null;
+    };
+    const ratioToPct = (done: number, due: number) => (due > 0 ? Math.round((done / due) * 100) : 0);
+
+    for (let i = trendDays - 1; i >= 0; i -= 1) {
+      const day = startOfDay(addDays(today, -i));
+      const dayStartMs = day.getTime();
+      const dayEndMs = endOfDay(day).getTime();
+
+      let taskDue = 0;
+      let taskCompleted = 0;
+      let storyDue = 0;
+      let storyCompleted = 0;
+      let choreDue = 0;
+      let choreCompleted = 0;
+
+      personaTasksPool.forEach((task) => {
+        const dueMs = getTaskDueMs(task);
+        const choreKind = getChoreKind(task);
+        const dueOnDay = dueMs
+          ? dueMs >= dayStartMs && dueMs <= dayEndMs
+          : isRecurringDueOnDate(task, day, dueMs);
+        if (!dueOnDay) return;
+
+        if (choreKind) {
+          choreDue += 1;
+          const lastDoneMs = getTaskLastDoneMs(task);
+          const completedMs = taskCompletedMsFor(task);
+          const completedOnDay = !!(
+            (Number.isFinite(lastDoneMs as number) && (lastDoneMs as number) >= dayStartMs && (lastDoneMs as number) <= dayEndMs)
+            || (
+              isTaskDoneState(task.status)
+              && Number.isFinite(completedMs as number)
+              && (completedMs as number) >= dayStartMs
+              && (completedMs as number) <= dayEndMs
+            )
+          );
+          if (completedOnDay) choreCompleted += 1;
+          return;
+        }
+
+        taskDue += 1;
+        const completedMs = taskCompletedMsFor(task);
+        const completedOnDay = !!(
+          isTaskDoneState(task.status)
+          && Number.isFinite(completedMs as number)
+          && (completedMs as number) >= dayStartMs
+          && (completedMs as number) <= dayEndMs
+        );
+        if (completedOnDay) taskCompleted += 1;
+      });
+
+      personaStoriesPool.forEach((story) => {
+        const dueMs = storyDueMsFor(story);
+        if (!Number.isFinite(dueMs as number)) return;
+        if ((dueMs as number) < dayStartMs || (dueMs as number) > dayEndMs) return;
+        storyDue += 1;
+        const completedMs = storyCompletedMsFor(story);
+        const completedOnDay = !!(
+          isStoryDoneState((story as any).status)
+          && Number.isFinite(completedMs as number)
+          && (completedMs as number) >= dayStartMs
+          && (completedMs as number) <= dayEndMs
+        );
+        if (completedOnDay) storyCompleted += 1;
+      });
+
+      const totalDue = taskDue + storyDue + choreDue;
+      const totalCompleted = taskCompleted + storyCompleted + choreCompleted;
+      rows.push({
+        dayKey: format(day, 'yyyy-MM-dd'),
+        label: format(day, 'dd MMM'),
+        totalDue,
+        totalCompleted,
+        totalPct: ratioToPct(totalCompleted, totalDue),
+        storyDue,
+        storyCompleted,
+        storyPct: ratioToPct(storyCompleted, storyDue),
+        taskDue,
+        taskCompleted,
+        taskPct: ratioToPct(taskCompleted, taskDue),
+        choreDue,
+        choreCompleted,
+        chorePct: ratioToPct(choreCompleted, choreDue),
+      });
+    }
+    return rows;
+  }, [decodeToDate, getChoreKind, getTaskDueMs, getTaskLastDoneMs, personaStoriesPool, personaTasksPool]);
+
+  const todayCompletionSnapshot = useMemo(() => {
+    if (!dailyCompletionTrend.length) return null;
+    return dailyCompletionTrend[dailyCompletionTrend.length - 1];
+  }, [dailyCompletionTrend]);
+
+  const completionSevenDayPct = useMemo(() => {
+    const rows = dailyCompletionTrend.slice(-7);
+    if (!rows.length) return 0;
+    const due = rows.reduce((sum, row) => sum + row.totalDue, 0);
+    const done = rows.reduce((sum, row) => sum + row.totalCompleted, 0);
+    return due > 0 ? Math.round((done / due) * 100) : 0;
+  }, [dailyCompletionTrend]);
 
   const loadLLMPriority = async () => {
     if (!currentUser) return;
@@ -2475,10 +3566,6 @@ const Dashboard: React.FC = () => {
     }
   };
 
-  const handleNavigateToTasksToday = () => {
-    navigate('/tasks', { state: { preset: 'dueToday' } });
-  };
-
   const handleOpenChecklist = () => {
     navigate('/calendar', { state: { focus: 'checklist' } });
   };
@@ -2539,19 +3626,6 @@ const Dashboard: React.FC = () => {
     };
   }, [currentUser, currentPersona, selectedSprintId]);
 
-  // Planner stats snapshot
-  useEffect(() => {
-    if (!currentUser?.uid) {
-      setPlannerStats(null);
-      return;
-    }
-    const ref = doc(db, 'planner_stats', currentUser.uid);
-    const unsub = onSnapshot(ref, (snap) => {
-      setPlannerStats(snap.exists() ? snap.data() : null);
-    });
-    return () => unsub();
-  }, [currentUser?.uid]);
-
   useEffect(() => {
     if (!currentUser?.uid || !selectedSprintId) {
       setCapacityData(null);
@@ -2599,22 +3673,6 @@ const Dashboard: React.FC = () => {
     return format(due, 'MMM d');
   };
 
-  const automationSnapshot = [
-    { label: 'Tasks due/overdue', value: tasksDueToday },
-    { label: 'Reminders pending', value: remindersDueToday.length },
-    { label: 'Chores today', value: choresDueToday.length },
-    { label: 'Routines today', value: routinesDueToday.length },
-    { label: 'Unscheduled blocks', value: unscheduledToday.length },
-    { label: 'Fitness score', value: fitnessScoreSummary ?? '—' },
-    { label: 'Fitness level', value: fitnessLevelSummary || '—' },
-    { label: 'Predicted 5K', value: predicted5kDisplay || '—' },
-    { label: 'Predicted 10K', value: predicted10kDisplay || '—' },
-    { label: 'Predicted Half', value: predictedHalfMarathonDisplay || '—' },
-    { label: 'Run distance YTD', value: runDistanceYtdKm != null ? `${runDistanceYtdKm.toFixed(1)} km` : '—' },
-    { label: 'Swim distance YTD', value: swimDistanceYtdKm != null ? `${swimDistanceYtdKm.toFixed(1)} km` : '—' },
-    { label: 'Bike distance YTD', value: bikeDistanceYtdKm != null ? `${bikeDistanceYtdKm.toFixed(1)} km` : '—' },
-  ];
-
   const capacitySummary = capacityData ? {
     total: Number(capacityData.totalCapacityHours ?? 0),
     allocated: Number(capacityData.allocatedHours ?? 0),
@@ -2652,13 +3710,84 @@ const Dashboard: React.FC = () => {
     return `Last sync ${stamp}`;
   }, [decodeToDate, monzoLastSyncDate, monzoSummary]);
 
-  const plannerSummary = useMemo(() => {
-    if (!plannerStats) return 'Not yet run';
-    const when = plannerStats.lastRunAt
-      ? new Date(plannerStats.lastRunAt).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
-      : 'Unknown time';
-    return `${when} · +${plannerStats.created || 0} created · ${plannerStats.replaced || 0} replaced · ${plannerStats.blocked || 0} blocked`;
-  }, [plannerStats]);
+  const savingsRunwayRows = useMemo(() => {
+    const goals = Array.isArray(monzoSummary?.goalAlignment?.goals)
+      ? monzoSummary.goalAlignment.goals
+      : [];
+    const avgMonthlySavingsGlobal = Number(monzoSummary?.goalAlignment?.goalFundingPlan?.avgMonthlySavings || 0) || 0;
+
+    const rows = goals
+      .map((goal: any) => {
+        const linkedPotId = goal?.potId || null;
+        const linkedPotName = goal?.potName || null;
+        if (!linkedPotId && !linkedPotName) return null;
+
+        const targetAmount = Number(goal?.estimatedCost || 0) || 0;
+        const linkedPotBalance = Number(goal?.potBalance || 0) || 0;
+        const remainingAmount = Math.max(targetAmount - linkedPotBalance, 0);
+        const avgMonthlyAllocationRaw = Number(
+          goal?.avgMonthlyAllocation3mo
+          || goal?.avgMonthlyAllocation
+          || goal?.monthlyAllocation3mo
+          || 0,
+        ) || 0;
+        const avgMonthlyAllocation = avgMonthlyAllocationRaw > 0
+          ? avgMonthlyAllocationRaw
+          : (avgMonthlySavingsGlobal > 0 ? avgMonthlySavingsGlobal : null);
+        const monthsToTarget = remainingAmount <= 0
+          ? 0
+          : (avgMonthlyAllocation && avgMonthlyAllocation > 0
+            ? Math.ceil(remainingAmount / avgMonthlyAllocation)
+            : (Number.isFinite(Number(goal?.monthsToSave)) ? Number(goal.monthsToSave) : null));
+
+        return {
+          goalId: String(goal?.goalId || ''),
+          goalTitle: String(goal?.title || 'Goal'),
+          themeName: String(goal?.themeName || 'General'),
+          targetAmount,
+          linkedPotBalance,
+          avgMonthlyAllocation,
+          remainingAmount,
+          monthsToTarget,
+          shortfall: Number(goal?.shortfall || remainingAmount || 0) || 0,
+        };
+      })
+      .filter(Boolean) as Array<{
+        goalId: string;
+        goalTitle: string;
+        themeName: string;
+        targetAmount: number;
+        linkedPotBalance: number;
+        avgMonthlyAllocation: number | null;
+        remainingAmount: number;
+        monthsToTarget: number | null;
+        shortfall: number;
+      }>;
+
+    const filtered = runwayThemeFilter === 'all'
+      ? rows
+      : rows.filter((row) => row.themeName === runwayThemeFilter);
+
+    return filtered.sort((a, b) => {
+      if (runwaySortMode === 'shortfall') return b.shortfall - a.shortfall;
+      if (runwaySortMode === 'theme') {
+        const byTheme = a.themeName.localeCompare(b.themeName);
+        if (byTheme !== 0) return byTheme;
+      }
+      const aMonths = Number.isFinite(Number(a.monthsToTarget)) ? Number(a.monthsToTarget) : Number.MAX_SAFE_INTEGER;
+      const bMonths = Number.isFinite(Number(b.monthsToTarget)) ? Number(b.monthsToTarget) : Number.MAX_SAFE_INTEGER;
+      if (aMonths !== bMonths) return aMonths - bMonths;
+      return b.shortfall - a.shortfall;
+    });
+  }, [monzoSummary, runwaySortMode, runwayThemeFilter]);
+
+  const savingsRunwayThemes = useMemo(() => {
+    const themes = new Set<string>();
+    (Array.isArray(monzoSummary?.goalAlignment?.goals) ? monzoSummary.goalAlignment.goals : []).forEach((goal: any) => {
+      if (goal?.themeName) themes.add(String(goal.themeName));
+    });
+    return Array.from(themes).sort((a, b) => a.localeCompare(b));
+  }, [monzoSummary]);
 
   const sprintSummaryMetrics = useMemo(() => {
     if (!selectedSprint) return null;
@@ -2715,1306 +3844,1979 @@ const Dashboard: React.FC = () => {
     };
   }, [selectedSprint, sprintSummaryMetrics]);
 
+  const renderUnifiedTodayTimelineItem = useCallback((item: any) => {
+    const startLabel = Number.isFinite(item?.startMs) ? format(new Date(item.startMs), 'HH:mm') : 'Anytime';
+    const endLabel = Number.isFinite(item?.endMs) ? format(new Date(item.endMs), 'HH:mm') : null;
+    const timeLabel = endLabel ? `${startLabel} - ${endLabel}` : startLabel;
+    const activityButtonBaseStyle: React.CSSProperties = {
+      color: 'var(--bs-secondary-color)',
+      padding: 4,
+      borderRadius: 4,
+      border: 'none',
+      background: 'transparent',
+      cursor: 'pointer',
+      lineHeight: 0,
+      flexShrink: 0,
+      display: 'inline-flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+    };
+    const renderActivityButton = (
+      target: any,
+      targetType: 'task' | 'story' | null,
+      label: string
+    ) => {
+      const enabled = !!target && !!targetType;
+      return (
+        <button
+          type="button"
+          onClick={() => {
+            if (enabled && targetType) showSidebar(target, targetType);
+          }}
+          title={enabled ? `Open activity stream for ${label}` : 'No activity stream linked'}
+          aria-label={enabled ? `Open activity stream for ${label}` : 'No activity stream linked'}
+          disabled={!enabled}
+          style={{
+            ...activityButtonBaseStyle,
+            color: enabled ? 'var(--bs-secondary-color)' : 'var(--bs-tertiary-color)',
+            cursor: enabled ? 'pointer' : 'not-allowed',
+            opacity: enabled ? 1 : 0.7,
+          }}
+        >
+          <Activity size={14} />
+        </button>
+      );
+    };
+
+    if (item?.kind === 'task' && item?.task) {
+      const task: Task = item.task;
+      const dueMs = getTaskDueMs(task);
+      const aiScore = (task as any).aiCriticalityScore ?? (task as any).aiPriorityScore;
+      const refLabel = taskRefLabel(task);
+      const priorityBadge = getPriorityBadge((task as any).priority);
+
+      const taskDone = Number(task.status ?? 0) >= 2;
+      return (
+        <div key={item.id} className={`border rounded p-2 mb-2 dashboard-due-item${taskDone ? ' opacity-50' : ''}`}>
+          <div className="d-flex align-items-start justify-content-between gap-2">
+            <div className="d-flex align-items-start gap-2 flex-grow-1 min-w-0">
+              <input
+                type="checkbox"
+                checked={taskDone}
+                className="mt-1 flex-shrink-0"
+                style={{ cursor: 'pointer', width: 15, height: 15 }}
+                title={taskDone ? 'Mark not done' : 'Mark done'}
+                onChange={() => handleTaskStatusChange(task, taskDone ? 0 : 2)}
+              />
+              <div className="fw-semibold small">
+                <a href="#" className={`text-decoration-none${taskDone ? ' text-decoration-line-through text-muted' : ''}`} onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>
+                  {task.title}
+                </a>
+              </div>
+            </div>
+            <div className="d-flex align-items-center gap-1 flex-shrink-0">
+              <Badge bg={item.source === 'calendar' ? 'primary' : 'secondary'}>{item.source === 'calendar' ? 'Scheduled' : 'Due'}</Badge>
+              {renderActivityButton(task, 'task', task.title || 'task')}
+            </div>
+          </div>
+          <div className="text-muted" style={{ fontSize: 11 }}>
+            {refLabel ? `${refLabel} · ` : ''}{timeLabel}
+          </div>
+          <div className="d-flex align-items-center gap-2 mt-1 flex-wrap">
+            <span className="text-muted d-inline-flex align-items-center gap-1" style={{ fontSize: 11 }}>
+              <Clock size={11} />
+              <input
+                type="date"
+                className="dashboard-due-date-input"
+                value={dueMs ? format(new Date(dueMs), 'yyyy-MM-dd') : ''}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (!val) return;
+                  handleTaskDueDateChange(task, new Date(`${val}T12:00:00`).getTime());
+                }}
+              />
+            </span>
+            <span className="dashboard-chip-select-wrap">
+              <select
+                className="dashboard-chip-select"
+                value={Number((task as any).priority ?? 0)}
+                onChange={(e) => handleTaskPriorityChange(task, Number(e.target.value))}
+                style={{
+                  backgroundColor: `var(--bs-${priorityBadge.bg})`,
+                  color: priorityBadge.bg === 'warning' || priorityBadge.bg === 'orange' || priorityBadge.bg === 'light' ? '#000' : '#fff',
+                }}
+              >
+                <option value={0}>None</option>
+                <option value={1}>Low</option>
+                <option value={2}>Medium</option>
+                <option value={3}>High</option>
+                <option value={4}>Critical</option>
+              </select>
+            </span>
+            {(() => {
+              const statusVal = Number(task.status ?? 0);
+              const statusMap: Record<number, { bg: string; label: string }> = {
+                0: { bg: 'secondary', label: 'To do' },
+                1: { bg: 'primary', label: 'Doing' },
+                2: { bg: 'success', label: 'Done' },
+              };
+              const s = statusMap[statusVal] || statusMap[0];
+              return (
+                <span className="dashboard-chip-select-wrap">
+                  <select
+                    className="dashboard-chip-select"
+                    value={statusVal}
+                    onChange={(e) => handleTaskStatusChange(task, Number(e.target.value))}
+                    style={{ backgroundColor: `var(--bs-${s.bg})`, color: '#fff' }}
+                  >
+                    <option value={0}>To do</option>
+                    <option value={1}>Doing</option>
+                    <option value={2}>Done</option>
+                  </select>
+                </span>
+              );
+            })()}
+            <span className="text-muted" style={{ fontSize: 11 }}>
+              AI {aiScore != null ? Math.round(aiScore) : '—'}
+            </span>
+          </div>
+        </div>
+      );
+    }
+
+    if ((item?.kind === 'chore' || item?.kind === 'routine' || item?.kind === 'habit') && item?.task) {
+      const task: Task = item.task;
+      const kind = getChoreKind(task);
+      const busy = kind ? !!choreCompletionBusy[task.id] : false;
+      const badgeVariant = kind === 'routine' ? 'success' : kind === 'habit' ? 'secondary' : 'primary';
+      const badgeLabel = kind === 'routine' ? 'Routine' : kind === 'habit' ? 'Habit' : 'Chore';
+      return (
+        <div key={item.id} className="border rounded p-2 mb-2 d-flex align-items-start gap-2">
+          <Form.Check
+            type="checkbox"
+            checked={busy}
+            disabled={busy}
+            onChange={() => void handleCompleteChoreTask(task)}
+            aria-label={`Complete ${task.title}`}
+          />
+          <div className="flex-grow-1">
+            <a href="#" className="text-decoration-none fw-semibold small" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>
+              {task.title}
+            </a>
+            <div className="text-muted" style={{ fontSize: 11 }}>{timeLabel}</div>
+          </div>
+          <div className="d-flex align-items-center gap-1">
+            <Badge bg={badgeVariant}>{badgeLabel}</Badge>
+            {renderActivityButton(task, 'task', task.title || 'task')}
+          </div>
+        </div>
+      );
+    }
+
+    if (item?.kind === 'story') {
+      const story = item.story as Story | undefined;
+      const storyDone = Number(story?.status ?? 0) >= 4;
+      return (
+        <div key={item.id} className={`border rounded p-2 mb-2 dashboard-due-item${storyDone ? ' opacity-50' : ''}`}>
+          <div className="d-flex align-items-start justify-content-between gap-2">
+            <div className="d-flex align-items-start gap-2 flex-grow-1 min-w-0">
+              {story && (
+                <input
+                  type="checkbox"
+                  checked={storyDone}
+                  className="mt-1 flex-shrink-0"
+                  style={{ cursor: 'pointer', width: 15, height: 15 }}
+                  title={storyDone ? 'Mark not done' : 'Mark done'}
+                  onChange={() => handleStoryStatusChange(story, storyDone ? 2 : 4)}
+                />
+              )}
+              <div className="fw-semibold small">
+                <a
+                  href="#"
+                  className={`text-decoration-none${storyDone ? ' text-decoration-line-through text-muted' : ''}`}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    if (story) setInlineEditStory(story);
+                  }}
+                >
+                  {item.title}
+                </a>
+              </div>
+            </div>
+            <div className="d-flex align-items-center gap-1 flex-shrink-0">
+              <Badge bg="info">Story</Badge>
+              {renderActivityButton(story, 'story', item.title || 'story')}
+            </div>
+          </div>
+          <div className="text-muted" style={{ fontSize: 11 }}>{timeLabel}</div>
+        </div>
+      );
+    }
+
+    return (
+      <div key={item.id} className="border rounded p-2 mb-2 dashboard-due-item">
+        <div className="d-flex align-items-start justify-content-between gap-2">
+          <div className="fw-semibold small flex-grow-1">{item.title}</div>
+          <div className="d-flex align-items-center gap-1">
+            <Badge bg="secondary">Calendar</Badge>
+            {renderActivityButton(null, null, item.title || 'calendar event')}
+          </div>
+        </div>
+        <div className="text-muted" style={{ fontSize: 11 }}>{timeLabel}</div>
+      </div>
+    );
+  }, [
+    choreCompletionBusy,
+    getChoreKind,
+    getTaskDueMs,
+    handleCompleteChoreTask,
+    handleTaskDueDateChange,
+    handleTaskPriorityChange,
+    handleTaskStatusChange,
+    showSidebar,
+    setInlineEditStory,
+    setInlineEditTask,
+    taskRefLabel,
+  ]);
+
   if (!currentUser) {
     return <div>Please sign in to view your dashboard.</div>;
   }
 
   return (
     <>
-    <Container fluid className="p-2 dashboard-compact">
-      <Row>
-        <Col>
-          {stats.tasksUnlinked > 0 && (
-            <div className="mb-2">
-              <Badge bg="warning" text="dark" pill>
-                {stats.tasksUnlinked} unlinked tasks
-              </Badge>
-            </div>
-          )}
+      <Container fluid className="p-2 dashboard-compact">
+        <Row>
+          <Col>
+            <BirthdayMilestoneCard 
+              targetDate={new Date('2027-09-22')} 
+              age={45} 
+              linkedGoalsCount={goalsList.length} 
+            />
 
-          {showMonzoReconnectBanner && (
-            <Alert variant="warning" className="d-flex align-items-center justify-content-between flex-wrap gap-2">
-              <div>
-                <div className="fw-semibold">Monzo sync is stale</div>
-                <div className="text-muted small">
-                  Last sync {monzoSyncAgeDays} days ago
-                  {monzoLastSyncDate ? ` (${monzoLastSyncDate.toLocaleString()})` : ''}.
-                </div>
-                {monzoReconnectMsg && <div className="text-muted small mt-1">{monzoReconnectMsg}</div>}
+            {stats.tasksUnlinked > 0 && (
+              <div className="mb-2">
+                <Badge bg="warning" text="dark" pill>
+                  {stats.tasksUnlinked} unlinked tasks
+                </Badge>
               </div>
-              <Button
-                variant="outline-dark"
-                size="sm"
-                onClick={handleMonzoReconnect}
-                disabled={monzoReconnectBusy}
-              >
-                {monzoReconnectBusy ? <Spinner size="sm" animation="border" className="me-2" /> : null}
-                Reconnect Monzo
-              </Button>
-            </Alert>
-          )}
+            )}
 
-          {showStravaReconnectBanner && (
-            <Alert variant="warning" className="d-flex align-items-center justify-content-between flex-wrap gap-2">
-              <div>
-                <div className="fw-semibold">Strava sync is stale</div>
-                <div className="text-muted small">
-                  Last sync {stravaSyncAgeDays} days ago
-                  {stravaLastSyncDate ? ` (${stravaLastSyncDate.toLocaleString()})` : ''}.
+            {showMonzoReconnectBanner && (
+              <Alert variant="warning" className="d-flex align-items-center justify-content-between flex-wrap gap-2">
+                <div>
+                  <div className="fw-semibold">Monzo sync is stale</div>
+                  <div className="text-muted small">
+                    Last sync {monzoSyncAgeDays} days ago
+                    {monzoLastSyncDate ? ` (${monzoLastSyncDate.toLocaleString()})` : ''}.
+                  </div>
+                  {monzoReconnectMsg && <div className="text-muted small mt-1">{monzoReconnectMsg}</div>}
                 </div>
-                {profileSnapshot?.stravaLastErrorMessage && (
-                  <div className="text-muted small mt-1">{String(profileSnapshot.stravaLastErrorMessage)}</div>
-                )}
-              </div>
-              <div className="d-flex align-items-center gap-2">
                 <Button
                   variant="outline-dark"
                   size="sm"
-                  onClick={() => navigate('/settings/integrations/strava')}
+                  onClick={handleMonzoReconnect}
+                  disabled={monzoReconnectBusy}
                 >
-                  Reconnect Strava
+                  {monzoReconnectBusy ? <Spinner size="sm" animation="border" className="me-2" /> : null}
+                  Reconnect Monzo
                 </Button>
-              </div>
-            </Alert>
-          )}
+              </Alert>
+            )}
 
-          {showTraktReconnectBanner && (
-            <Alert variant="warning" className="d-flex align-items-center justify-content-between flex-wrap gap-2">
-              <div>
-                <div className="fw-semibold">Trakt sync is stale</div>
-                <div className="text-muted small">
-                  Last sync {traktSyncAgeDays} days ago
-                  {traktLastSyncDate ? ` (${traktLastSyncDate.toLocaleString()})` : ''}.
+            {showStravaReconnectBanner && (
+              <Alert variant="warning" className="d-flex align-items-center justify-content-between flex-wrap gap-2">
+                <div>
+                  <div className="fw-semibold">Strava sync is stale</div>
+                  <div className="text-muted small">
+                    Last sync {stravaSyncAgeDays} days ago
+                    {stravaLastSyncDate ? ` (${stravaLastSyncDate.toLocaleString()})` : ''}.
+                  </div>
+                  {profileSnapshot?.stravaLastErrorMessage && (
+                    <div className="text-muted small mt-1">{String(profileSnapshot.stravaLastErrorMessage)}</div>
+                  )}
                 </div>
-              </div>
-              <Button
-                variant="outline-dark"
-                size="sm"
-                onClick={() => navigate('/settings/integrations/trakt')}
-              >
-                Open Trakt settings
-              </Button>
-            </Alert>
-          )}
-
-          {showHardcoverReconnectBanner && (
-            <Alert variant="warning" className="d-flex align-items-center justify-content-between flex-wrap gap-2">
-              <div>
-                <div className="fw-semibold">Hardcover sync is stale</div>
-                <div className="text-muted small">
-                  Last sync {hardcoverSyncAgeDays} days ago
-                  {hardcoverLastSyncDate ? ` (${hardcoverLastSyncDate.toLocaleString()})` : ''}.
-                </div>
-              </div>
-              <Button
-                variant="outline-dark"
-                size="sm"
-                onClick={() => navigate('/settings/integrations/hardcover')}
-              >
-                Open Hardcover settings
-              </Button>
-            </Alert>
-          )}
-
-          {showYouTubeTakeoutBanner && (
-            <Alert variant="warning" className="d-flex align-items-center justify-content-between flex-wrap gap-2">
-              <div>
-                <div className="fw-semibold">YouTube watch history import is due</div>
-                <div className="text-muted small">
-                  {youtubeTakeoutLastImportDate
-                    ? `Last import ${youtubeTakeoutAgeDays ?? 0} days ago (${youtubeTakeoutLastImportDate.toLocaleString()}).`
-                    : 'No Google Takeout import detected yet.'}
-                  {' '}Upload <code>watch-history.json</code> every 60 days to keep your 7-day YouTube metric accurate.
-                </div>
-              </div>
-              <Button
-                variant="outline-dark"
-                size="sm"
-                onClick={() => navigate('/settings/integrations/youtube')}
-              >
-                Import YouTube data
-              </Button>
-            </Alert>
-          )}
-
-          <Row className="g-2 mb-1">
-            <Col xl={12}>
-              <Card className="shadow-sm border-0">
-                <Card.Header className="d-flex justify-content-between align-items-center">
-                  <div className="fw-semibold">Key Metrics</div>
+                <div className="d-flex align-items-center gap-2">
                   <Button
+                    variant="outline-dark"
                     size="sm"
-                    variant="link"
-                    className="text-decoration-none"
-                    onClick={() => setMetricsCollapsed((prev) => !prev)}
+                    onClick={() => navigate('/settings/integrations/strava')}
                   >
-                    {metricsCollapsed ? 'Expand' : 'Collapse'}
+                    Reconnect Strava
                   </Button>
-                </Card.Header>
-                <Card.Body className="py-2">
-                  <Row className="g-2 mb-2 dashboard-inline-row dashboard-key-metrics">
-                    {/* Overall Progress Group */}
-                    <Col xs={12} sm={6} lg={6} xl={3}>
-                      <div
-                        className="d-flex align-items-center gap-2 px-2 py-1 rounded border h-100"
-                        style={{
-                          background: 'var(--bs-body-bg)',
-                          cursor: 'pointer',
-                          transition: 'all 0.2s ease'
-                        }}
-                        onClick={() => navigate('/metrics/progress')}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.backgroundColor = 'var(--bs-warning-bg-subtle)';
-                          e.currentTarget.style.borderColor = 'var(--bs-warning)';
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.backgroundColor = 'var(--bs-body-bg)';
-                          e.currentTarget.style.borderColor = 'var(--bs-border-color)';
-                        }}
-                      >
-                        <BookOpen size={16} className="text-warning" />
-                        <div className="flex-grow-1">
-                          <div className="text-muted small">Overall Progress</div>
-                          <div className="fw-semibold">
-                            {stats.storyPointsCompletion || 0}% pts · {stats.goalCompletion || 0}% goals · {savingsMetrics.savingsPct}% saved
-                          </div>
-                          <div className="text-muted small">
-                            Saved {formatPotBalance(savingsMetrics.totalSavedPence)} of {savingsMetrics.totalEstimated ? savingsMetrics.totalEstimated.toLocaleString('en-GB', { style: 'currency', currency: 'GBP' }) : '£0'}
-                          </div>
-                          <div className="text-muted small">AI {plannerSummary}</div>
-                        </div>
-                      </div>
-                    </Col>
+                </div>
+              </Alert>
+            )}
 
-                    {/* Finance Group */}
-                    <Col xs={12} sm={6} lg={6} xl={3}>
-                      <div 
-                        className="d-flex align-items-center gap-2 px-2 py-1 rounded border h-100" 
-                        style={{ 
-                          background: 'var(--bs-body-bg)', 
-                          cursor: 'pointer',
-                          transition: 'all 0.2s ease'
-                        }}
-                        onClick={() => navigate('/finance/dashboard')}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.backgroundColor = 'var(--bs-primary-bg-subtle)';
-                          e.currentTarget.style.borderColor = 'var(--bs-primary)';
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.backgroundColor = 'var(--bs-body-bg)';
-                          e.currentTarget.style.borderColor = 'var(--bs-border-color)';
-                        }}
-                      >
-                        <Wallet size={16} className="text-info" />
-                        <div className="flex-grow-1">
-                          <div className="text-muted small">Finance</div>
-                          <div className="fw-semibold">
-                            {financeSummary}
-                          </div>
-                          <div className="text-muted small">
-                            D90 {financeDiscretionary90 != null ? formatPenceCompact(financeDiscretionary90, 'GBP') : '—'}
-                            {lowerBetterTrendArrow(financeDiscretionaryDelta)}
-                            {' '}· U90 {financeUncategorised90 != null ? formatPenceCompact(financeUncategorised90, 'GBP') : '—'}
-                            {lowerBetterTrendArrow(financeUncategorisedDelta)}
-                          </div>
-                          <div className="text-muted small">{financeSyncSummary}</div>
-                        </div>
-                      </div>
-                    </Col>
+            {showTraktReconnectBanner && (
+              <Alert variant="warning" className="d-flex align-items-center justify-content-between flex-wrap gap-2">
+                <div>
+                  <div className="fw-semibold">Trakt sync is stale</div>
+                  <div className="text-muted small">
+                    Last sync {traktSyncAgeDays} days ago
+                    {traktLastSyncDate ? ` (${traktLastSyncDate.toLocaleString()})` : ''}.
+                  </div>
+                </div>
+                <Button
+                  variant="outline-dark"
+                  size="sm"
+                  onClick={() => navigate('/settings/integrations/trakt')}
+                >
+                  Open Trakt settings
+                </Button>
+              </Alert>
+            )}
 
-                    {/* Goals Missing Pot Group */}
-                    <Col xs={12} sm={6} lg={6} xl={3}>
-                      <div
-                        className="d-flex align-items-center gap-2 px-2 py-1 rounded border h-100"
-                        style={{
-                          background: 'var(--bs-body-bg)',
-                          cursor: 'pointer',
-                          transition: 'all 0.2s ease'
-                        }}
-                        onClick={() => navigate('/goals?filter=cost_without_pot')}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.backgroundColor = 'var(--bs-warning-bg-subtle)';
-                          e.currentTarget.style.borderColor = 'var(--bs-warning)';
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.backgroundColor = 'var(--bs-body-bg)';
-                          e.currentTarget.style.borderColor = 'var(--bs-border-color)';
-                        }}
-                      >
-                        <Target size={16} className="text-warning" />
-                        <div className="flex-grow-1">
-                          <div className="text-muted small">Goals Missing Pot</div>
-                          <div className="fw-semibold">
-                            {goalsMissingPotWithCostCount} goals
-                          </div>
-                          <div className="text-muted small">
-                            Cost-linked goals without a linked pot
+            {showHardcoverReconnectBanner && (
+              <Alert variant="warning" className="d-flex align-items-center justify-content-between flex-wrap gap-2">
+                <div>
+                  <div className="fw-semibold">Hardcover sync is stale</div>
+                  <div className="text-muted small">
+                    Last sync {hardcoverSyncAgeDays} days ago
+                    {hardcoverLastSyncDate ? ` (${hardcoverLastSyncDate.toLocaleString()})` : ''}.
+                  </div>
+                </div>
+                <Button
+                  variant="outline-dark"
+                  size="sm"
+                  onClick={() => navigate('/settings/integrations/hardcover')}
+                >
+                  Open Hardcover settings
+                </Button>
+              </Alert>
+            )}
+
+            {showYouTubeTakeoutBanner && (
+              <Alert variant="warning" className="d-flex align-items-center justify-content-between flex-wrap gap-2">
+                <div>
+                  <div className="fw-semibold">YouTube watch history import is due</div>
+                  <div className="text-muted small">
+                    {youtubeTakeoutLastImportDate
+                      ? `Last import ${youtubeTakeoutAgeDays ?? 0} days ago (${youtubeTakeoutLastImportDate.toLocaleString()}).`
+                      : 'No Google Takeout import detected yet.'}
+                    {' '}Upload <code>watch-history.json</code> every 60 days to keep your 7-day YouTube metric accurate.
+                  </div>
+                </div>
+                <Button
+                  variant="outline-dark"
+                  size="sm"
+                  onClick={() => navigate('/settings/integrations/youtube')}
+                >
+                  Import YouTube data
+                </Button>
+              </Alert>
+            )}
+
+            <Row className="g-2 mb-1">
+              <Col xl={12}>
+                <Card className="shadow-sm border-0">
+                  <Card.Header className="d-flex justify-content-between align-items-center">
+                    <div className="fw-semibold">Key Metrics</div>
+                    <Button
+                      size="sm"
+                      variant="link"
+                      className="text-decoration-none"
+                      onClick={() => setMetricsCollapsed((prev) => !prev)}
+                    >
+                      {metricsCollapsed ? 'Expand' : 'Collapse'}
+                    </Button>
+                  </Card.Header>
+                  <Card.Body className="py-2">
+                    <Row className="g-2 mb-2 dashboard-inline-row dashboard-key-metrics">
+                      {/* Overall Progress Group */}
+                      <Col xs={12} sm={6} lg={6} xl={3}>
+                        <div
+                          className="d-flex align-items-center gap-2 px-2 py-1 rounded border h-100"
+                          style={{
+                            background: 'var(--bs-body-bg)',
+                            cursor: 'pointer',
+                            transition: 'all 0.2s ease'
+                          }}
+                          onClick={() => navigate('/metrics/progress')}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.backgroundColor = 'var(--bs-warning-bg-subtle)';
+                            e.currentTarget.style.borderColor = 'var(--bs-warning)';
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.backgroundColor = 'var(--bs-body-bg)';
+                            e.currentTarget.style.borderColor = 'var(--bs-border-color)';
+                          }}
+                        >
+                          <BookOpen size={16} className="text-warning" />
+                          <div className="flex-grow-1" title={`Points: ${stats.storyPointsCompletion || 0}% · Goals: ${stats.goalCompletion || 0}% · Savings: ${savingsMetrics.savingsPct}% · Saved ${formatPotBalance(savingsMetrics.totalSavedPence)} of ${savingsMetrics.totalEstimated ? savingsMetrics.totalEstimated.toLocaleString('en-GB', { style: 'currency', currency: 'GBP' }) : '£0'}`}>
+                            <div className="text-muted small">Progress</div>
+                            <div className="fw-semibold">{stats.storyPointsCompletion || 0}%pts · {stats.goalCompletion || 0}%g · {savingsMetrics.savingsPct}%sav</div>
                           </div>
                         </div>
-                      </div>
-                    </Col>
+                      </Col>
 
-                    {/* Capacity Group */}
-                    <Col xs={12} sm={6} lg={6} xl={3}>
-                      <div 
-                        className="d-flex align-items-center gap-2 px-2 py-1 rounded border h-100" 
-                        style={{ 
-                          background: 'var(--bs-body-bg)', 
-                          cursor: hasSelectedSprint ? 'pointer' : 'default',
-                          transition: 'all 0.2s ease',
-                          opacity: hasSelectedSprint ? 1 : 0.6
-                        }}
-                        onClick={hasSelectedSprint ? () => navigate('/capacity') : undefined}
-                        onMouseEnter={(e) => {
-                          if (hasSelectedSprint) {
+                      {/* Daily Completion Group */}
+                      <Col xs={12} sm={6} lg={6} xl={3}>
+                        <div
+                          className="d-flex align-items-center gap-2 px-2 py-1 rounded border h-100"
+                          style={{
+                            background: 'var(--bs-body-bg)',
+                            cursor: 'pointer',
+                            transition: 'all 0.2s ease',
+                          }}
+                          onClick={() => setDailyCompletionTrendExpanded((prev) => !prev)}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.backgroundColor = 'var(--bs-info-bg-subtle)';
+                            e.currentTarget.style.borderColor = 'var(--bs-info)';
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.backgroundColor = 'var(--bs-body-bg)';
+                            e.currentTarget.style.borderColor = 'var(--bs-border-color)';
+                          }}
+                        >
+                          <TrendingUp size={16} className="text-info" />
+                          <div className="flex-grow-1" title={`Today: Str ${todayCompletionSnapshot?.storyCompleted ?? 0}/${todayCompletionSnapshot?.storyDue ?? 0} · Tsk ${todayCompletionSnapshot?.taskCompleted ?? 0}/${todayCompletionSnapshot?.taskDue ?? 0} · Ch ${todayCompletionSnapshot?.choreCompleted ?? 0}/${todayCompletionSnapshot?.choreDue ?? 0} | 7d: ${completionSevenDayPct}%`}>
+                            <div className="text-muted small">Completion</div>
+                            <div className="fw-semibold">
+                              {todayCompletionSnapshot
+                                ? `${todayCompletionSnapshot.totalPct}% (${todayCompletionSnapshot.totalCompleted}/${todayCompletionSnapshot.totalDue})`
+                                : 'No due items'}
+                              {' '}· 7d {completionSevenDayPct}%
+                            </div>
+                          </div>
+                        </div>
+                      </Col>
+
+                      {/* Finance Group */}
+                      <Col xs={12} sm={6} lg={6} xl={3}>
+                        <div
+                          className="d-flex align-items-center gap-2 px-2 py-1 rounded border h-100"
+                          style={{
+                            background: 'var(--bs-body-bg)',
+                            cursor: 'pointer',
+                            transition: 'all 0.2s ease'
+                          }}
+                          onClick={() => navigate('/finance/dashboard')}
+                          onMouseEnter={(e) => {
                             e.currentTarget.style.backgroundColor = 'var(--bs-primary-bg-subtle)';
                             e.currentTarget.style.borderColor = 'var(--bs-primary)';
-                          }
-                        }}
-                        onMouseLeave={(e) => {
-                          if (hasSelectedSprint) {
+                          }}
+                          onMouseLeave={(e) => {
                             e.currentTarget.style.backgroundColor = 'var(--bs-body-bg)';
                             e.currentTarget.style.borderColor = 'var(--bs-border-color)';
-                          }
-                        }}
-                      >
-                        <Target size={16} className="text-primary" />
-                        <div className="flex-grow-1">
-                          <div className="text-muted small">Capacity</div>
-                          <div className="fw-semibold">
-                            {hasSelectedSprint && capacitySummary ? `${capacitySummary.utilization}% · ${capacitySummary.free.toFixed(1)}h free` : 'Select sprint'}
+                          }}
+                        >
+                          <Wallet size={16} className="text-info" />
+                          <div className="flex-grow-1" title={`${financeSummary} | D90: ${financeDiscretionary90 != null ? formatPenceCompact(financeDiscretionary90, 'GBP') : '—'} U90: ${financeUncategorised90 != null ? formatPenceCompact(financeUncategorised90, 'GBP') : '—'} | ${financeSyncSummary}`}>
+                            <div className="text-muted small">Finance</div>
+                            <div className="fw-semibold">{financeSummary}</div>
+                            <div className="text-muted small">
+                              D90 {financeDiscretionary90 != null ? formatPenceCompact(financeDiscretionary90, 'GBP') : '—'}
+                              {lowerBetterTrendArrow(financeDiscretionaryDelta)}
+                              {' '}· U90 {financeUncategorised90 != null ? formatPenceCompact(financeUncategorised90, 'GBP') : '—'}
+                              {lowerBetterTrendArrow(financeUncategorisedDelta)}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    </Col>
+                      </Col>
 
-                    {/* Sprint Progress Group */}
-                    <Col xs={12} sm={6} lg={6} xl={3}>
-                      <div 
-                        className="d-flex align-items-center gap-2 px-2 py-1 rounded border h-100" 
-                        style={{ 
-                          background: 'var(--bs-body-bg)', 
-                          cursor: selectedSprint ? 'pointer' : 'default',
-                          transition: 'all 0.2s ease',
-                          opacity: selectedSprint ? 1 : 0.6
-                        }}
-                        onClick={selectedSprint ? () => navigate('/sprints/management') : undefined}
-                        onMouseEnter={(e) => {
-                          if (selectedSprint) {
+                      {/* Goals Missing Pot Group */}
+                      <Col xs={6} sm={4} lg={3} xl={2}>
+                        <div
+                          className="d-flex align-items-center gap-2 px-2 py-1 rounded border h-100"
+                          style={{
+                            background: 'var(--bs-body-bg)',
+                            cursor: 'pointer',
+                            transition: 'all 0.2s ease'
+                          }}
+                          onClick={() => navigate('/goals?filter=cost_without_pot')}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.backgroundColor = 'var(--bs-warning-bg-subtle)';
+                            e.currentTarget.style.borderColor = 'var(--bs-warning)';
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.backgroundColor = 'var(--bs-body-bg)';
+                            e.currentTarget.style.borderColor = 'var(--bs-border-color)';
+                          }}
+                        >
+                          <Target size={16} className="text-warning" />
+                          <div className="flex-grow-1" title="Cost-linked goals without a linked Monzo pot">
+                            <div className="text-muted small">NoPot</div>
+                            <div className="fw-semibold">{goalsMissingPotWithCostCount} goals</div>
+                          </div>
+                        </div>
+                      </Col>
+
+                      {/* Capacity Group */}
+                      <Col xs={6} sm={4} lg={3} xl={2}>
+                        <div
+                          className="d-flex align-items-center gap-2 px-2 py-1 rounded border h-100"
+                          style={{
+                            background: 'var(--bs-body-bg)',
+                            cursor: hasSelectedSprint ? 'pointer' : 'default',
+                            transition: 'all 0.2s ease',
+                            opacity: hasSelectedSprint ? 1 : 0.6
+                          }}
+                          onClick={hasSelectedSprint ? () => navigate('/capacity') : undefined}
+                          onMouseEnter={(e) => {
+                            if (hasSelectedSprint) {
+                              e.currentTarget.style.backgroundColor = 'var(--bs-primary-bg-subtle)';
+                              e.currentTarget.style.borderColor = 'var(--bs-primary)';
+                            }
+                          }}
+                          onMouseLeave={(e) => {
+                            if (hasSelectedSprint) {
+                              e.currentTarget.style.backgroundColor = 'var(--bs-body-bg)';
+                              e.currentTarget.style.borderColor = 'var(--bs-border-color)';
+                            }
+                          }}
+                        >
+                          <Target size={16} className="text-primary" />
+                          <div className="flex-grow-1" title={hasSelectedSprint && capacitySummary ? `Utilization: ${capacitySummary.utilization}% · Free: ${capacitySummary.free.toFixed(1)}h` : 'No sprint selected'}>
+                            <div className="text-muted small">Capacity</div>
+                            <div className="fw-semibold">
+                              {hasSelectedSprint && capacitySummary ? `${capacitySummary.utilization}% · ${capacitySummary.free.toFixed(1)}h free` : 'Select sprint'}
+                            </div>
+                          </div>
+                        </div>
+                      </Col>
+
+                      {/* Fitness Group */}
+                      <Col xs={12} sm={6} lg={6} xl={5}>
+                        <div
+                          className="d-flex align-items-center gap-2 px-2 py-1 rounded border h-100"
+                          style={{
+                            background: 'var(--bs-body-bg)',
+                            cursor: 'pointer',
+                            transition: 'all 0.2s ease'
+                          }}
+                          onClick={() => navigate('/fitness')}
+                          onMouseEnter={(e) => {
                             e.currentTarget.style.backgroundColor = 'var(--bs-success-bg-subtle)';
                             e.currentTarget.style.borderColor = 'var(--bs-success)';
-                          }
-                        }}
-                        onMouseLeave={(e) => {
-                          if (selectedSprint) {
+                          }}
+                          onMouseLeave={(e) => {
                             e.currentTarget.style.backgroundColor = 'var(--bs-body-bg)';
                             e.currentTarget.style.borderColor = 'var(--bs-border-color)';
-                          }
-                        }}
-                      >
-                        <TrendingUp size={16} className="text-success" />
-                        <div className="flex-grow-1">
-                          <div className="text-muted small">Sprint Progress</div>
-                          <div className="fw-semibold">
-                            {sprintSummary.label}
-                          </div>
-                          {sprintSummary.detail && <div className="text-muted small">{sprintSummary.detail}</div>}
-                        </div>
-                      </div>
-                    </Col>
-
-                    {/* Fitness Group */}
-                    <Col xs={12} sm={6} lg={6} xl={3}>
-                      <div
-                        className="d-flex align-items-center gap-2 px-2 py-1 rounded border h-100"
-                        style={{
-                          background: 'var(--bs-body-bg)',
-                          cursor: 'pointer',
-                          transition: 'all 0.2s ease'
-                        }}
-                        onClick={() => navigate('/fitness')}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.backgroundColor = 'var(--bs-success-bg-subtle)';
-                          e.currentTarget.style.borderColor = 'var(--bs-success)';
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.backgroundColor = 'var(--bs-body-bg)';
-                          e.currentTarget.style.borderColor = 'var(--bs-border-color)';
-                        }}
-                      >
-                        <Activity size={16} className="text-success" />
-                        <div className="flex-grow-1">
-                          <div className="text-muted small">Fitness</div>
-                          <div className="fw-semibold">
-                            Score {fitnessScoreSummary ?? '—'}{fitnessLevelSummary ? ` (${fitnessLevelSummary})` : ''}
-                          </div>
-                          <div className="text-muted small">
-                            RPE {avgRpe90 != null ? Number(avgRpe90).toFixed(1) : (avgRpe30Summary != null ? Number(avgRpe30Summary).toFixed(1) : '—')}
-                            {lowerBetterTrendArrow(avgRpe90Delta)}
-                            {' '}· 5K {formatSecondsDisplay(avg5k90Sec)}
-                            {lowerBetterTrendArrow(avg5k90Delta)}
-                            {' '}· 10K {formatSecondsDisplay(avg10k90Sec)}
-                            {lowerBetterTrendArrow(avg10k90Delta)}
-                            {' '}· YTD {runDistanceYtdKm != null ? `${runDistanceYtdKm.toFixed(1)} km` : '—'}
-                            {' '}· Swim {swimDistanceYtdKm != null ? `${swimDistanceYtdKm.toFixed(1)} km` : '—'}
-                            {' '}· Bike {bikeDistanceYtdKm != null ? `${bikeDistanceYtdKm.toFixed(1)} km` : '—'}
-                          </div>
-                          <div className="text-muted small">
-                            Predicted 5K {predicted5kDisplay || '—'} · 10K {predicted10kDisplay || '—'} · Half {predictedHalfMarathonDisplay || '—'} · Swim 800m {predictedSwim800Display || '—'} · Bike 50k {predictedBike50Display || '—'}
+                          }}
+                        >
+                          <Activity size={16} className="text-success" />
+                          <div className="flex-grow-1" title={`Score: ${fitnessScoreSummary ?? '—'}${fitnessLevelSummary ? ` (${fitnessLevelSummary})` : ''} | RPE ${avgRpe90 != null ? Number(avgRpe90).toFixed(1) : '—'} · 5K ${formatSecondsDisplay(avg5k90Sec)} · 10K ${formatSecondsDisplay(avg10k90Sec)} | YTD Run ${runDistanceYtdKm != null ? `${runDistanceYtdKm.toFixed(1)}km` : '—'} Swim ${swimDistanceYtdKm != null ? `${swimDistanceYtdKm.toFixed(1)}km` : '—'} Bike ${bikeDistanceYtdKm != null ? `${bikeDistanceYtdKm.toFixed(1)}km` : '—'} | Pred 5K ${predicted5kDisplay || '—'} 10K ${predicted10kDisplay || '—'} Half ${predictedHalfMarathonDisplay || '—'}`}>
+                            <div className="text-muted small">Fitness</div>
+                            <div className="fw-semibold">
+                              Sc:{fitnessScoreSummary ?? '—'} RPE:{avgRpe90 != null ? Number(avgRpe90).toFixed(1) : '—'} 5K:{formatSecondsDisplay(avg5k90Sec)} 10K:{formatSecondsDisplay(avg10k90Sec)}
+                            </div>
+                            <div className="text-muted small">
+                              Pr 5K:{predicted5kDisplay || '—'} · 10K:{predicted10kDisplay || '—'} · Half:{predictedHalfMarathonDisplay || '—'} · Sw800:{predictedSwim800Display || '—'} · Bk50:{predictedBike50Display || '—'}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    </Col>
-
-                    {/* Journal Signals Group */}
-                    <Col xs={12} sm={6} lg={6} xl={3}>
-                      <JournalInsightsCard compact inlineMetric />
-                    </Col>
-
-                  </Row>
-
-                  {!metricsCollapsed && hasSelectedSprint && capacitySummary && (
-                    <Row className="g-2 dashboard-inline-row dashboard-key-metrics">
-                      <Col xs={6} md={4} xl={2}>
-                        <Card className="h-100 border-0 shadow-sm">
-                          <Card.Body className="p-2">
-                            <OverlayTrigger
-                              placement="bottom"
-                              overlay={(
-                                <Tooltip id="capacity-total-tooltip">
-                                  16h/day (24h − 8h sleep) minus work blocks in the sprint. If no work block, defaults to 8h weekdays.
-                                </Tooltip>
-                              )}
-                            >
-                              <div className="text-muted small" style={{ cursor: 'help' }}>Total capacity</div>
-                            </OverlayTrigger>
-                            <div className="fw-semibold">{capacitySummary.total.toFixed(1)}h</div>
-                          </Card.Body>
-                        </Card>
                       </Col>
-                      <Col xs={6} md={4} xl={2}>
-                        <Card className="h-100 border-0 shadow-sm">
-                          <Card.Body className="p-2">
-                            <OverlayTrigger
-                              placement="bottom"
-                              overlay={(
-                                <Tooltip id="capacity-allocated-tooltip">
-                                  Story estimates/points allocated to this sprint.
-                                </Tooltip>
-                              )}
-                            >
-                              <div className="text-muted small" style={{ cursor: 'help' }}>Allocated</div>
-                            </OverlayTrigger>
-                            <div className="fw-semibold">{capacitySummary.allocated.toFixed(1)}h</div>
-                          </Card.Body>
-                        </Card>
+
+                      {/* Journal Signals Group */}
+                      <Col xs={12} sm={6} lg={6} xl={3}>
+                        <JournalInsightsCard compact inlineMetric />
                       </Col>
-                      <Col xs={6} md={4} xl={2}>
-                        <Card className="h-100 border-0 shadow-sm">
-                          <Card.Body className="p-2">
-                            <OverlayTrigger
-                              placement="bottom"
-                              overlay={(
-                                <Tooltip id="capacity-free-tooltip">
-                                  Remaining capacity after subtracting allocated story hours.
-                                </Tooltip>
-                              )}
-                            >
-                              <div className="text-muted small" style={{ cursor: 'help' }}>Free</div>
-                            </OverlayTrigger>
-                            <div className={`fw-semibold ${capacitySummary.free < 0 ? 'text-danger' : 'text-success'}`}>
-                              {capacitySummary.free.toFixed(1)}h
+
+                      {/* Health Metrics Group */}
+                      {profileSnapshot && (
+                        <Col xs={12} sm={6} lg={6} xl={4}>
+                          <div
+                            className="d-flex align-items-center gap-2 px-2 py-1 rounded border h-100"
+                            style={{ background: 'var(--bs-body-bg)', cursor: 'pointer', transition: 'all 0.2s ease' }}
+                            onClick={() => navigate('/dashboard/daily-checkin')}
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.backgroundColor = 'var(--bs-danger-bg-subtle)';
+                              e.currentTarget.style.borderColor = 'var(--bs-danger)';
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.backgroundColor = 'var(--bs-body-bg)';
+                              e.currentTarget.style.borderColor = 'var(--bs-border-color)';
+                            }}
+                          >
+                            <Heart size={16} className="text-danger flex-shrink-0" />
+                            <div className="flex-grow-1" title="Health data from HealthKit or manual check-in">
+                              <div className="text-muted small">Health</div>
+                              <div className="fw-semibold" style={{ fontSize: '0.8rem' }}>
+                                {(() => {
+                                  const sleep = profileSnapshot.healthkitSleepMinutes ?? profileSnapshot.manualSleepMinutes;
+                                  const steps = profileSnapshot.healthkitStepsToday ?? profileSnapshot.manualStepsToday;
+                                  const hrv = profileSnapshot.healthkitHrvMs;
+                                  const parts: string[] = [];
+                                  if (sleep != null) parts.push(`${(Number(sleep) / 60).toFixed(1)}h sleep`);
+                                  if (steps != null) parts.push(`${Number(steps).toLocaleString()} steps`);
+                                  if (hrv != null) parts.push(`${Math.round(Number(hrv))}ms HRV`);
+                                  return parts.length > 0 ? parts.join(' · ') : '—';
+                                })()}
+                              </div>
+                              <div className="text-muted small">
+                                {(() => {
+                                  const cal = profileSnapshot.healthkitCaloriesTodayKcal ?? profileSnapshot.manualCaloriesKcal;
+                                  const pro = profileSnapshot.healthkitProteinTodayG ?? profileSnapshot.manualProteinG;
+                                  const fat = profileSnapshot.healthkitFatTodayG ?? profileSnapshot.manualFatG;
+                                  const carbs = profileSnapshot.healthkitCarbsTodayG ?? profileSnapshot.manualCarbsG;
+                                  const parts: string[] = [];
+                                  if (cal != null) parts.push(`${Math.round(Number(cal))}kcal`);
+                                  if (pro != null) parts.push(`P:${Math.round(Number(pro))}g`);
+                                  if (fat != null) parts.push(`F:${Math.round(Number(fat))}g`);
+                                  if (carbs != null) parts.push(`C:${Math.round(Number(carbs))}g`);
+                                  return parts.length > 0 ? parts.join(' · ') : 'No macro data';
+                                })()}
+                              </div>
                             </div>
-                          </Card.Body>
-                        </Card>
-                      </Col>
-                      <Col xs={6} md={4} xl={2}>
-                        <Card className="h-100 border-0 shadow-sm">
-                          <Card.Body className="p-2">
-                            <OverlayTrigger
-                              placement="bottom"
-                              overlay={(
-                                <Tooltip id="capacity-utilization-tooltip">
-                                  Allocated hours ÷ total capacity.
-                                </Tooltip>
-                              )}
-                            >
-                              <div className="text-muted small" style={{ cursor: 'help' }}>Utilization</div>
-                            </OverlayTrigger>
-                            <div className={`fw-semibold text-${capacityUtilVariant(capacitySummary.utilization)}`}>
-                              {capacitySummary.utilization}%
-                            </div>
-                          </Card.Body>
-                        </Card>
-                      </Col>
-                      <Col xs={6} md={4} xl={2}>
-                        <Card className="h-100 border-0 shadow-sm">
-                          <Card.Body className="p-2">
-                            <OverlayTrigger
-                              placement="bottom"
-                              overlay={(
-                                <Tooltip id="capacity-scheduled-tooltip">
-                                  Calendar blocks linked to sprint stories/tasks (excludes chores/routines and external calendars).
-                                </Tooltip>
-                              )}
-                            >
-                              <div className="text-muted small" style={{ cursor: 'help' }}>Scheduled</div>
-                            </OverlayTrigger>
-                            <div className="fw-semibold">{capacitySummary.scheduled.toFixed(1)}h</div>
-                          </Card.Body>
-                        </Card>
-                      </Col>
+                          </div>
+                        </Col>
+                      )}
+
                     </Row>
-                  )}
-                </Card.Body>
-                <Collapse in={!metricsCollapsed}>
-                  <div>
-                    <div className="px-3 pb-3">
-                      {selectedSprint ? (
-                        <SprintMetricsPanel
-                          sprint={selectedSprint}
-                          stories={sprintStories}
-                          tasks={sprintTasks}
-                          goals={sprintGoals}
-                        />
-                      ) : (
-                        <div className="d-flex justify-content-between align-items-center">
-                          <div>
-                            <h6 className="mb-1">Select a sprint to see metrics</h6>
-                            <div className="text-muted">Use the sprint selector above to focus the dashboard.</div>
-                          </div>
-                          <Button variant="primary" onClick={() => navigate('/sprints/management')}>
-                            Manage sprints
-                          </Button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </Collapse>
-              </Card>
-            </Col>
-          </Row>
 
-          <Row className="g-3 mb-1">
-            <Col xl={12}>
-              <Card className="h-100 shadow-sm border-0">
-                <Card.Header className="d-flex justify-content-between align-items-start flex-wrap gap-2 py-2">
-                  <div className="d-flex flex-column gap-1">
-                    <span className="fw-semibold">Today’s Plan</span>
-                    {nextWorkLoading && !nextWorkRecommendation?.recommendedItem && (
-                      <div className="text-muted small d-flex align-items-center gap-2">
-                        <Spinner size="sm" animation="border" />
-                        <span>Calculating what to work on next…</span>
-                      </div>
-                    )}
-                    {!nextWorkLoading && nextWorkRecommendation?.recommendedItem && (
-                      <div className="text-muted small d-flex align-items-center gap-2 flex-wrap">
-                        <span className="fw-semibold text-body">What to work on next</span>
-                        <Badge bg={getNextWorkBadge(nextWorkRecommendation.status).bg}>
-                          {getNextWorkBadge(nextWorkRecommendation.status).label}
-                        </Badge>
-                        {nextWorkPath ? (
-                          <Link to={nextWorkPath} className="text-decoration-none">
-                            {nextWorkRecommendation.recommendedItem.label}
-                          </Link>
-                        ) : (
-                          <span className="text-body">{nextWorkRecommendation.recommendedItem.label}</span>
-                        )}
-                        {nextWorkRecommendation.recommendedItem.reason && (
-                          <span>· {nextWorkRecommendation.recommendedItem.reason}</span>
-                        )}
-                      </div>
-                    )}
-                    {!nextWorkLoading && !nextWorkRecommendation?.recommendedItem && nextWorkRecommendation?.spokenResponse && (
-                      <div className="text-muted small">
-                        <span className="fw-semibold text-body">What to work on next</span>
-                        {' · '}
-                        {nextWorkRecommendation.spokenResponse}
-                      </div>
-                    )}
-                    {nextWorkError && (
-                      <div className="text-danger small">{nextWorkError}</div>
-                    )}
-                  </div>
-                  <div className="d-flex align-items-center gap-2 flex-wrap">
-                    <Button variant="outline-secondary" size="sm" onClick={handleOpenChecklist}>
-                      <CalendarIcon size={14} className="me-1" /> View calendar
-                    </Button>
-                    <Button variant="outline-secondary" size="sm" onClick={() => navigate('/sprints/kanban')}>
-                      <LayoutGrid size={14} className="me-1" /> View kanban
-                    </Button>
-                    <Button
-                      variant="outline-primary"
-                      size="sm"
-                      disabled={replanLoading}
-                      onClick={handleReplan}
-                      title="Delta replan: quickly rebalance existing calendar blocks using current priorities."
-                    >
-                      {replanLoading ? <Spinner size="sm" animation="border" className="me-1" /> : <RefreshCw size={14} className="me-1" />}
-                      Delta replan
-                    </Button>
-                    <Button
-                      variant="primary"
-                      size="sm"
-                      disabled={fullReplanLoading}
-                      onClick={handleFullReplan}
-                      title="Full replan: runs full nightly orchestration (pointing, conversions, priority scoring, and calendar planning)."
-                    >
-                      {fullReplanLoading ? <Spinner size="sm" animation="border" className="me-1" /> : <Sparkles size={14} className="me-1" />}
-                      Full replan
-                    </Button>
-                  </div>
-                </Card.Header>
-                <Card.Body>
-                  {replanFeedback && (
-                    <div className="text-muted small mb-2">{replanFeedback}</div>
-                  )}
-                  <Row className="g-3 today-plan-layout" ref={todayPlanLayoutRef}>
-                    <Col
-                      md={12}
-                      className="today-plan-col today-plan-col-summary"
-                      style={todayPlanColumnStyle('summary')}
-                    >
-                      <Card className="shadow-sm border-0 mb-3">
-                        <Card.Header className="d-flex align-items-center justify-content-between">
-                          <div className="fw-semibold d-flex align-items-center gap-2">
-                            <Sparkles size={16} /> Low hanging fruit
-                          </div>
-                          <div className="d-flex align-items-center gap-2">
-                            <Link to="/tasks" className="btn btn-sm btn-outline-secondary">
-                              Tasks
-                            </Link>
-                            <Link to="/chores/checklist" className="btn btn-sm btn-outline-secondary">
-                              Checklist
-                            </Link>
-                            <Badge bg={lowHangingFruitTasks.length > 0 ? 'warning' : 'secondary'} pill>
-                              {lowHangingFruitTasks.length}
-                            </Badge>
-                          </div>
-                        </Card.Header>
-                        <Card.Body className="p-3">
-                          {lowHangingFruitTasks.length === 0 ? (
-                            <div className="text-muted small">No quick, non-critical, stale tasks right now.</div>
-                          ) : (
-                            lowHangingFruitTasks.map((task) => {
-                              const kind = getChoreKind(task);
-                              const busy = kind ? !!choreCompletionBusy[task.id] : false;
-                              const points = getTaskQuickPoints(task);
-                              const pointsLabel = Number.isFinite(points)
-                                ? points.toFixed(2).replace(/\.?0+$/, '')
-                                : '0.25';
-                              const dueMs = getTaskDueMs(task) ?? resolveRecurringDueMs(task, todayDate, todayStartMs);
-                              const dueLabel = dueMs ? formatDueDetail(dueMs) : null;
-                              const staleAnchorMs = getTaskStaleAnchorMs(task);
-                              const staleDays = staleAnchorMs
-                                ? Math.max(1, Math.floor((Date.now() - staleAnchorMs) / MS_PER_DAY))
-                                : LOW_HANGING_MIN_STALE_DAYS;
-                              const rawType = String((task as any)?.type || '').toLowerCase();
-                              const kindLabel = kind
-                                ? (kind === 'routine' ? 'Routine' : kind === 'habit' ? 'Habit' : 'Chore')
-                                : (rawType ? `${rawType.charAt(0).toUpperCase()}${rawType.slice(1)}` : 'Task');
-                              const kindBadge = kind === 'routine'
-                                ? 'success'
-                                : kind === 'habit'
-                                  ? 'secondary'
-                                  : kind === 'chore'
-                                    ? 'primary'
-                                    : 'dark';
-                              const taskPath = kind
-                                ? `/chores/checklist?taskId=${encodeURIComponent(task.id)}`
-                                : ((task as any).deepLink || `/tasks?taskId=${encodeURIComponent(task.id)}`);
-                              return (
-                                <div key={task.id} className="border rounded p-2 mb-2 d-flex align-items-start gap-2">
-                                  <Form.Check
-                                    type="checkbox"
-                                    checked={busy}
-                                    disabled={busy}
-                                    onChange={() => {
-                                      if (kind) {
-                                        void handleCompleteChoreTask(task);
-                                      } else {
-                                        void handleTaskStatusChange(task, 2);
-                                      }
-                                    }}
-                                    aria-label={`Complete ${task.title}`}
-                                  />
-                                  <div className="flex-grow-1">
-                                    <Link
-                                      to={taskPath}
-                                      className="text-decoration-none fw-semibold"
-                                    >
-                                      {task.title}
-                                    </Link>
-                                    <div className="text-muted small">
-                                      {dueLabel ? `Due ${dueLabel} · ` : ''}
-                                      {staleDays}d stale
-                                    </div>
-                                  </div>
-                                  <div className="d-flex flex-column align-items-end gap-1">
-                                    <Badge bg="warning" text="dark">{pointsLabel} pts</Badge>
-                                    <Badge bg={kindBadge}>{kindLabel}</Badge>
-                                  </div>
-                                </div>
-                              );
-                            })
-                          )}
-                        </Card.Body>
-                      </Card>
-                      {(dailySummaryLines.length > 0 || aiFocusItems.length > 0) && (
-                        <Card className="shadow-sm border-0 mb-3">
-                          <Card.Header className="d-flex align-items-center justify-content-between">
-                            <div className="fw-semibold">Daily Summary</div>
-                            <Badge bg="secondary" pill>Today</Badge>
-                          </Card.Header>
-                          <Card.Body className="p-3" style={{ maxHeight: 260, overflowY: 'auto' }}>
-                            {dailySummaryLines.length > 0 && (
-                              <div className="mb-3">
-                                {dailySummarySource && (
-                                  <div className="text-muted small mb-1">Source: {dailySummarySource}</div>
-                                )}
-                                <ul className="mb-0 small">
-                                  {dailySummaryLines.map((line, idx) => (
-                                    <li key={idx}>{line}</li>
-                                  ))}
-                                </ul>
+                    <Collapse in={dailyCompletionTrendExpanded}>
+                      <div className="mb-2">
+                        <Card className="border-0 shadow-sm">
+                          <Card.Body className="p-2">
+                            <div className="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+                              <div className="fw-semibold">Daily Completion Trend</div>
+                              <div className="text-muted small">
+                                Overall + Stories + Tasks + Chores/Habits
                               </div>
-                            )}
-                            {aiFocusItems.length > 0 && (
-                              <div>
-                                <div className="fw-semibold mb-1">AI focus</div>
-                                {prioritySource && <div className="text-muted small mb-1">Source: {prioritySource}</div>}
-                                <ul className="mb-0 small">
-                                  {aiFocusItems.slice(0, 3).map((it: any, idx: number) => {
-                                    const refKey = (it.ref || '').toUpperCase();
-                                    const matchedTask = refKey ? tasksByRef.get(refKey) : undefined;
-                                    const matchedStory = !matchedTask && refKey ? storiesByRef.get(refKey) : undefined;
-                                    const directType = String(it.type || it.entityType || '').toLowerCase();
-                                    const directId = it.id || it.entityId || null;
-                                    const href = directId && directType === 'task'
-                                      ? `/tasks/${directId}`
-                                      : directId && directType === 'story'
-                                        ? `/stories/${directId}`
-                                        : matchedTask
-                                          ? `/tasks/${matchedTask.id}`
-                                          : matchedStory
-                                            ? `/stories/${matchedStory.id}`
-                                            : undefined;
-                                    const label = [it.ref, it.title || it.summary].filter(Boolean).join(' — ') || 'Focus';
-                                    const rationale = it.rationale || it.nextStep ? ` — ${it.rationale || it.nextStep}` : '';
-                                    return (
-                                      <li key={idx}>
-                                        {href ? (
-                                          <>
-                                            <a href={href} className="text-decoration-none">{label}</a>{rationale}
-                                          </>
-                                        ) : (
-                                          <>
-                                            {label}{rationale}
-                                          </>
-                                        )}
-                                      </li>
-                                    );
-                                  })}
-                                </ul>
-                              </div>
-                            )}
-                          </Card.Body>
-                        </Card>
-                      )}
-                      <Card className="shadow-sm border-0 mb-3">
-                        <Card.Header className="d-flex align-items-center justify-content-between">
-                          <div className="fw-semibold d-flex align-items-center gap-2">
-                            <ListChecks size={16} /> Top 3 priorities
-                          </div>
-                          <div className="d-flex align-items-center gap-2">
-                            <Badge bg="secondary" pill>{currentPersona === 'work' ? 'Work' : 'Personal'}</Badge>
-                            <Button
-                              size="sm"
-                              variant="outline-secondary"
-                              onClick={() => setTop3Collapsed((prev) => !prev)}
-                            >
-                              {top3Collapsed ? 'Show' : 'Hide'}
-                            </Button>
-                          </div>
-                        </Card.Header>
-                        {!top3Collapsed && (
-                          <Card.Body className="p-3 d-flex flex-column gap-3">
-                            {top3Loading ? (
-                              <div className="d-flex align-items-center gap-2 text-muted">
-                                <Spinner size="sm" animation="border" /> Loading top 3…
-                              </div>
-                            ) : (top3Tasks.length === 0 && top3Stories.length === 0) ? (
-                              <div className="text-muted small">No Top 3 items flagged for this persona yet.</div>
+                            </div>
+                            {dailyCompletionTrend.length === 0 ? (
+                              <div className="text-muted small">No trend data yet.</div>
                             ) : (
                               <>
-                                <div>
-                                  <div className="text-uppercase text-muted small fw-semibold mb-1">Stories</div>
-                                  {top3Stories.length === 0 ? (
-                                    <div className="text-muted small">No stories flagged.</div>
-                                  ) : (
-                                    top3Stories.map((story, idx) => {
-                                      const label = storyLabel(story);
-                                      const aiScore = (story as any).aiCriticalityScore ?? (story as any).aiPriorityScore;
-                                      const href = `/stories/${(story as any).ref || story.id}`;
-                                      const storyPriorityBadge = getPriorityBadge((story as any).priority);
-                                      const storyDueMs = (() => {
-                                        const raw = (story as any).targetDate ?? (story as any).dueDate ?? null;
-                                        if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
-                                        if (raw?.toDate) return raw.toDate().getTime();
-                                        const parsed = raw ? Date.parse(String(raw)) : NaN;
-                                        return Number.isNaN(parsed) ? null : parsed;
-                                      })();
-                                      const storyStatusVal = Number(story.status ?? 0);
-                                      const storyStatusMap: Record<number, { bg: string; label: string }> = {
-                                        0: { bg: 'light', label: 'Backlog' },
-                                        1: { bg: 'info', label: 'Planned' },
-                                        2: { bg: 'primary', label: 'In Progress' },
-                                        3: { bg: 'warning', label: 'Testing' },
-                                        4: { bg: 'success', label: 'Done' },
-                                      };
-                                      const storyS = storyStatusMap[storyStatusVal] || storyStatusMap[0];
-                                      return (
-                                        <div key={story.id} className="border rounded p-2 mb-2 dashboard-due-item">
-                                          <div className="d-flex align-items-start justify-content-between gap-2">
-                                            <div className="fw-semibold small flex-grow-1">
-                                              <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditStory(story); }}>{label}</a>
-                                            </div>
-                                            <button
-                                              type="button"
-                                              className="d-none d-md-inline-flex align-items-center justify-content-center"
-                                              onClick={() => showSidebar(story as any, 'story')}
-                                              title="Activity stream"
-                                              style={{
-                                                color: 'var(--bs-secondary-color)',
-                                                padding: 4,
-                                                borderRadius: 4,
-                                                border: 'none',
-                                                background: 'transparent',
-                                                cursor: 'pointer',
-                                                lineHeight: 0,
-                                                flexShrink: 0,
-                                              }}
-                                            >
-                                              <Activity size={14} />
-                                            </button>
-                                          </div>
-                                          <div className="d-flex align-items-center gap-2 mt-1 flex-wrap">
-                                            <span className="text-muted d-inline-flex align-items-center gap-1" style={{ fontSize: 11 }}>
-                                              <Clock size={11} />
-                                              <input
-                                                type="date"
-                                                className="dashboard-due-date-input"
-                                                value={storyDueMs ? format(new Date(storyDueMs), 'yyyy-MM-dd') : ''}
-                                                onChange={(e) => {
-                                                  const val = e.target.value;
-                                                  if (!val) return;
-                                                  const newDue = new Date(val + 'T12:00:00').getTime();
-                                                  handleStoryDueDateChange(story, newDue);
-                                                }}
-                                              />
-                                            </span>
-                                            <span className="dashboard-chip-select-wrap">
-                                              <select
-                                                className="dashboard-chip-select"
-                                                value={Number((story as any).priority ?? 0)}
-                                                onChange={(e) => handleStoryPriorityChange(story, Number(e.target.value))}
-                                                style={{
-                                                  backgroundColor: `var(--bs-${storyPriorityBadge.bg})`,
-                                                  color: storyPriorityBadge.bg === 'warning' || storyPriorityBadge.bg === 'light' ? '#000' : '#fff',
-                                                }}
-                                              >
-                                                <option value={0}>None</option>
-                                                <option value={1}>Low</option>
-                                                <option value={2}>Medium</option>
-                                                <option value={3}>High</option>
-                                                <option value={4}>Critical</option>
-                                              </select>
-                                            </span>
-                                            <span className="dashboard-chip-select-wrap">
-                                              <select
-                                                className="dashboard-chip-select"
-                                                value={storyStatusVal}
-                                                onChange={(e) => handleStoryStatusChange(story, Number(e.target.value))}
-                                                style={{
-                                                  backgroundColor: `var(--bs-${storyS.bg})`,
-                                                  color: storyS.bg === 'light' || storyS.bg === 'warning' ? '#000' : '#fff',
-                                                }}
-                                              >
-                                                <option value={0}>Backlog</option>
-                                                <option value={1}>Planned</option>
-                                                <option value={2}>In Progress</option>
-                                                <option value={3}>Testing</option>
-                                                <option value={4}>Done</option>
-                                              </select>
-                                            </span>
-                                            <span className="text-muted" style={{ fontSize: 11 }}>
-                                              AI {aiScore != null ? Math.round(aiScore) : '—'}
-                                            </span>
-                                          </div>
-                                        </div>
-                                      );
-                                    })
-                                  )}
+                                <div style={{ width: '100%', height: 220 }}>
+                                  <ResponsiveContainer width="100%" height="100%">
+                                    <LineChart data={dailyCompletionTrend} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
+                                      <CartesianGrid strokeDasharray="3 3" />
+                                      <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+                                      <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} />
+                                      <RechartsTooltip
+                                        formatter={(value: number, name: string) => [`${Math.round(Number(value || 0))}%`, name]}
+                                        labelFormatter={(label) => `Day ${label}`}
+                                      />
+                                      <Legend />
+                                      <Line type="monotone" dataKey="totalPct" stroke="#0d6efd" strokeWidth={2.4} dot={false} name="Overall %" />
+                                      <Line type="monotone" dataKey="storyPct" stroke="#20c997" strokeWidth={1.8} dot={false} name="Stories %" />
+                                      <Line type="monotone" dataKey="taskPct" stroke="#fd7e14" strokeWidth={1.8} dot={false} name="Tasks %" />
+                                      <Line type="monotone" dataKey="chorePct" stroke="#6f42c1" strokeWidth={1.8} dot={false} name="Chores/Habits %" />
+                                    </LineChart>
+                                  </ResponsiveContainer>
                                 </div>
-                                <div>
-                                  <div className="text-uppercase text-muted small fw-semibold mb-1">Tasks</div>
-                                  {top3Tasks.length === 0 ? (
-                                    <div className="text-muted small">No tasks flagged.</div>
-                                  ) : (
-                                    top3Tasks.map((task, idx) => {
-                                      const refLabel = taskRefLabel(task);
-                                      const aiScore = (task as any).aiCriticalityScore ?? (task as any).aiPriorityScore;
-                                      const priorityBadge = getPriorityBadge((task as any).priority);
-                                      const dueMs = getTaskDueMs(task);
-                                      return (
-                                        <div key={task.id} className="border rounded p-2 mb-2 dashboard-due-item">
-                                          <div className="d-flex align-items-start justify-content-between gap-2">
-                                            <div className="fw-semibold small flex-grow-1">
-                                              <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>{task.title}</a>
-                                            </div>
-                                            <button
-                                              type="button"
-                                              className="d-none d-md-inline-flex align-items-center justify-content-center"
-                                              onClick={() => showSidebar(task as any, 'task')}
-                                              title="Activity stream"
-                                              style={{
-                                                color: 'var(--bs-secondary-color)',
-                                                padding: 4,
-                                                borderRadius: 4,
-                                                border: 'none',
-                                                background: 'transparent',
-                                                cursor: 'pointer',
-                                                lineHeight: 0,
-                                                flexShrink: 0,
-                                              }}
-                                            >
-                                              <Activity size={14} />
-                                            </button>
-                                          </div>
-                                          {refLabel && (
-                                            <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>
-                                              <code className="text-primary" style={{ fontSize: 11 }}>{refLabel}</code>
-                                            </a>
-                                          )}
-                                          <div className="d-flex align-items-center gap-2 mt-1 flex-wrap">
-                                            <span className="text-muted d-inline-flex align-items-center gap-1" style={{ fontSize: 11 }}>
-                                              <Clock size={11} />
-                                              <input
-                                                type="date"
-                                                className="dashboard-due-date-input"
-                                                value={dueMs ? format(new Date(dueMs), 'yyyy-MM-dd') : ''}
-                                                onChange={(e) => {
-                                                  const val = e.target.value;
-                                                  if (!val) return;
-                                                  const newDue = new Date(val + 'T12:00:00').getTime();
-                                                  handleTaskDueDateChange(task, newDue);
-                                                }}
-                                              />
-                                            </span>
-                                            <span className="dashboard-chip-select-wrap">
-                                              <select
-                                                className="dashboard-chip-select"
-                                                value={Number((task as any).priority ?? 0)}
-                                                onChange={(e) => handleTaskPriorityChange(task, Number(e.target.value))}
-                                                style={{
-                                                  backgroundColor: `var(--bs-${priorityBadge.bg})`,
-                                                  color: priorityBadge.bg === 'warning' || priorityBadge.bg === 'orange' || priorityBadge.bg === 'light' ? '#000' : '#fff',
-                                                }}
-                                              >
-                                                <option value={0}>None</option>
-                                                <option value={1}>Low</option>
-                                                <option value={2}>Medium</option>
-                                                <option value={3}>High</option>
-                                                <option value={4}>Critical</option>
-                                              </select>
-                                            </span>
-                                            {(() => {
-                                              const statusVal = Number(task.status ?? 0);
-                                              const statusMap: Record<number, { bg: string; label: string }> = {
-                                                0: { bg: 'secondary', label: 'To do' },
-                                                1: { bg: 'primary', label: 'Doing' },
-                                                2: { bg: 'success', label: 'Done' },
-                                              };
-                                              const s = statusMap[statusVal] || statusMap[0];
-                                              return (
-                                                <span className="dashboard-chip-select-wrap">
-                                                  <select
-                                                    className="dashboard-chip-select"
-                                                    value={statusVal}
-                                                    onChange={(e) => handleTaskStatusChange(task, Number(e.target.value))}
-                                                    style={{
-                                                      backgroundColor: `var(--bs-${s.bg})`,
-                                                      color: '#fff',
-                                                    }}
-                                                  >
-                                                    <option value={0}>To do</option>
-                                                    <option value={1}>Doing</option>
-                                                    <option value={2}>Done</option>
-                                                  </select>
-                                                </span>
-                                              );
-                                            })()}
-                                            <span className="text-muted" style={{ fontSize: 11 }}>
-                                              AI {aiScore != null ? Math.round(aiScore) : '—'}
-                                            </span>
-                                          </div>
-                                        </div>
-                                      );
-                                    })
-                                  )}
+                                <div className="d-flex flex-wrap gap-2 mt-2">
+                                  {dailyCompletionTrend.slice(-7).map((row) => (
+                                    <Badge key={row.dayKey} bg="light" text="dark" pill>
+                                      {row.label}: {row.totalCompleted}/{row.totalDue} ({row.totalPct}%)
+                                    </Badge>
+                                  ))}
                                 </div>
                               </>
                             )}
                           </Card.Body>
-                        )}
-                      </Card>
-                      {todayPlanDesktopMode && (
-                        <button
-                          type="button"
-                          className="today-plan-col-resize-handle"
-                          onMouseDown={(event) => beginTodayPlanResize(event, 'summary', 'calendar')}
-                          aria-label="Resize summary and calendar columns"
-                        />
-                      )}
-                    </Col>
-                    <Col
-                      md={12}
-                      className="today-plan-col today-plan-col-calendar"
-                      style={todayPlanColumnStyle('calendar')}
-                    >
-                      <Card className="shadow-sm border-0 h-100 dashboard-calendar-card">
-                        <Card.Header className="fw-semibold">Calendar</Card.Header>
-                        <Card.Body className="p-2 d-flex flex-column">
-                          {unscheduledToday.length > 0 && (
-                            <Alert variant="warning" className="py-2 mb-2">
-                              <div className="fw-semibold mb-1">Scheduling issues</div>
-                              <ul className="mb-0 small">
-                                {unscheduledSummary.map((item) => (
-                                  <li key={item.id}>{item.title || item.sourceId}</li>
-                                ))}
-                                {unscheduledToday.length > unscheduledSummary.length && (
-                                  <li className="text-muted">+{unscheduledToday.length - unscheduledSummary.length} more</li>
+                        </Card>
+                      </div>
+                    </Collapse>
+
+                    {!metricsCollapsed && hasSelectedSprint && capacitySummary && (
+                      <Row className="g-2 dashboard-inline-row dashboard-key-metrics">
+                        <Col xs={6} md={4} xl={2}>
+                          <Card className="h-100 border-0 shadow-sm">
+                            <Card.Body className="p-2">
+                              <OverlayTrigger
+                                placement="bottom"
+                                overlay={(
+                                  <Tooltip id="capacity-total-tooltip">
+                                    16h/day (24h − 8h sleep) minus work blocks in the sprint. If no work block, defaults to 8h weekdays.
+                                  </Tooltip>
                                 )}
-                              </ul>
-                            </Alert>
+                              >
+                                <div className="text-muted small" style={{ cursor: 'help' }}>Total capacity</div>
+                              </OverlayTrigger>
+                              <div className="fw-semibold">{capacitySummary.total.toFixed(1)}h</div>
+                            </Card.Body>
+                          </Card>
+                        </Col>
+                        <Col xs={6} md={4} xl={2}>
+                          <Card className="h-100 border-0 shadow-sm">
+                            <Card.Body className="p-2">
+                              <OverlayTrigger
+                                placement="bottom"
+                                overlay={(
+                                  <Tooltip id="capacity-allocated-tooltip">
+                                    Story estimates/points allocated to this sprint.
+                                  </Tooltip>
+                                )}
+                              >
+                                <div className="text-muted small" style={{ cursor: 'help' }}>Allocated</div>
+                              </OverlayTrigger>
+                              <div className="fw-semibold">{capacitySummary.allocated.toFixed(1)}h</div>
+                            </Card.Body>
+                          </Card>
+                        </Col>
+                        <Col xs={6} md={4} xl={2}>
+                          <Card className="h-100 border-0 shadow-sm">
+                            <Card.Body className="p-2">
+                              <OverlayTrigger
+                                placement="bottom"
+                                overlay={(
+                                  <Tooltip id="capacity-free-tooltip">
+                                    Remaining capacity after subtracting allocated story hours.
+                                  </Tooltip>
+                                )}
+                              >
+                                <div className="text-muted small" style={{ cursor: 'help' }}>Free</div>
+                              </OverlayTrigger>
+                              <div className={`fw-semibold ${capacitySummary.free < 0 ? 'text-danger' : 'text-success'}`}>
+                                {capacitySummary.free.toFixed(1)}h
+                              </div>
+                            </Card.Body>
+                          </Card>
+                        </Col>
+                        <Col xs={6} md={4} xl={2}>
+                          <Card className="h-100 border-0 shadow-sm">
+                            <Card.Body className="p-2">
+                              <OverlayTrigger
+                                placement="bottom"
+                                overlay={(
+                                  <Tooltip id="capacity-utilization-tooltip">
+                                    Allocated hours ÷ total capacity.
+                                  </Tooltip>
+                                )}
+                              >
+                                <div className="text-muted small" style={{ cursor: 'help' }}>Utilization</div>
+                              </OverlayTrigger>
+                              <div className={`fw-semibold text-${capacityUtilVariant(capacitySummary.utilization)}`}>
+                                {capacitySummary.utilization}%
+                              </div>
+                            </Card.Body>
+                          </Card>
+                        </Col>
+                        <Col xs={6} md={4} xl={2}>
+                          <Card className="h-100 border-0 shadow-sm">
+                            <Card.Body className="p-2">
+                              <OverlayTrigger
+                                placement="bottom"
+                                overlay={(
+                                  <Tooltip id="capacity-scheduled-tooltip">
+                                    Calendar blocks linked to sprint stories/tasks (excludes chores/routines and external calendars).
+                                  </Tooltip>
+                                )}
+                              >
+                                <div className="text-muted small" style={{ cursor: 'help' }}>Scheduled</div>
+                              </OverlayTrigger>
+                              <div className="fw-semibold">{capacitySummary.scheduled.toFixed(1)}h</div>
+                            </Card.Body>
+                          </Card>
+                        </Col>
+                      </Row>
+                    )}
+                  </Card.Body>
+                  <Collapse in={!metricsCollapsed}>
+                    <div>
+                      <div className="px-3 pb-3">
+                        {selectedSprint ? (
+                          <SprintMetricsPanel
+                            sprint={selectedSprint}
+                            stories={sprintStories}
+                            tasks={sprintTasks}
+                            goals={sprintGoals}
+                          />
+                        ) : (
+                          <div className="d-flex justify-content-between align-items-center">
+                            <div>
+                              <h6 className="mb-1">Select a sprint to see metrics</h6>
+                              <div className="text-muted">Use the sprint selector above to focus the dashboard.</div>
+                            </div>
+                            <Button variant="primary" onClick={() => navigate('/sprints/management')}>
+                              Manage sprints
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </Collapse>
+                </Card>
+              </Col>
+            </Row>
+
+            <Row className="g-3 mb-1">
+              <Col xl={12}>
+                <Card className="shadow-sm border-0">
+                  <Card.Header className="d-flex justify-content-between align-items-center flex-wrap gap-2 py-2">
+                    <div className="fw-semibold">Savings Runway</div>
+                    <div className="d-flex align-items-center gap-2 flex-wrap">
+                      <Form.Select
+                        size="sm"
+                        value={runwaySortMode}
+                        onChange={(e) => setRunwaySortMode(e.target.value as 'soonest' | 'shortfall' | 'theme')}
+                        style={{ width: 160 }}
+                      >
+                        <option value="soonest">Sort: Soonest funded</option>
+                        <option value="shortfall">Sort: Highest shortfall</option>
+                        <option value="theme">Sort: Theme</option>
+                      </Form.Select>
+                      <Form.Select
+                        size="sm"
+                        value={runwayThemeFilter}
+                        onChange={(e) => setRunwayThemeFilter(e.target.value)}
+                        style={{ width: 180 }}
+                      >
+                        <option value="all">Theme: All</option>
+                        {savingsRunwayThemes.map((theme) => (
+                          <option key={theme} value={theme}>{theme}</option>
+                        ))}
+                      </Form.Select>
+                    </div>
+                  </Card.Header>
+                  <Card.Body className="py-2">
+                    <div className="text-muted small mb-2">{financeSyncSummary}</div>
+                    {savingsRunwayRows.length === 0 ? (
+                      <div className="text-muted small">No linked savings-pot runway data available yet.</div>
+                    ) : (
+                      <div className="table-responsive">
+                        <Table size="sm" hover className="mb-0 align-middle">
+                          <thead>
+                            <tr>
+                              <th>Goal</th>
+                              <th style={{ textAlign: 'right' }}>Target</th>
+                              <th style={{ textAlign: 'right' }}>Pot Balance</th>
+                              <th style={{ textAlign: 'right' }}>Avg Monthly Allocation</th>
+                              <th style={{ textAlign: 'right' }}>Remaining</th>
+                              <th style={{ textAlign: 'right' }}>Estimated Months</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {savingsRunwayRows.slice(0, 12).map((row) => (
+                              <tr key={row.goalId || row.goalTitle}>
+                                <td>
+                                  <div className="fw-semibold">{row.goalTitle}</div>
+                                  <div className="text-muted" style={{ fontSize: 12 }}>{row.themeName}</div>
+                                </td>
+                                <td style={{ textAlign: 'right' }}>{formatPotBalance(row.targetAmount * 100, 'GBP')}</td>
+                                <td style={{ textAlign: 'right' }}>{formatPotBalance(row.linkedPotBalance * 100, 'GBP')}</td>
+                                <td style={{ textAlign: 'right' }}>
+                                  {row.avgMonthlyAllocation && row.avgMonthlyAllocation > 0
+                                    ? formatPotBalance(row.avgMonthlyAllocation * 100, 'GBP')
+                                    : 'Insufficient history'}
+                                </td>
+                                <td style={{ textAlign: 'right' }}>{formatPotBalance(row.remainingAmount * 100, 'GBP')}</td>
+                                <td style={{ textAlign: 'right' }}>
+                                  {row.monthsToTarget == null ? 'TBD' : (row.monthsToTarget <= 0 ? 'Funded' : `${Math.ceil(row.monthsToTarget)} mo`)}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </Table>
+                      </div>
+                    )}
+                  </Card.Body>
+                </Card>
+              </Col>
+            </Row>
+
+            <Row className="g-3 mb-1">
+              <Col xl={12}>
+                <Card className="h-100 shadow-sm border-0">
+                  <Card.Header className="d-flex justify-content-between align-items-start flex-wrap gap-2 py-2">
+                    <div className="d-flex flex-column gap-1">
+                      <span className="fw-semibold">Today’s Plan</span>
+                      {nextWorkLoading && !nextWorkRecommendation?.recommendedItem && (
+                        <div className="text-muted small d-flex align-items-center gap-2">
+                          <Spinner size="sm" animation="border" />
+                          <span>Calculating what to work on next…</span>
+                        </div>
+                      )}
+                      {!nextWorkLoading && nextWorkRecommendation?.recommendedItem && (
+                        <div className="text-muted small d-flex align-items-center gap-2 flex-wrap">
+                          <span className="fw-semibold text-body">What to work on next</span>
+                          <Badge bg={getNextWorkBadge(nextWorkRecommendation.status).bg}>
+                            {getNextWorkBadge(nextWorkRecommendation.status).label}
+                          </Badge>
+                          {nextWorkPath ? (
+                            <Link to={nextWorkPath} className="text-decoration-none">
+                              {nextWorkRecommendation.recommendedItem.label}
+                            </Link>
+                          ) : (
+                            <span className="text-body">{nextWorkRecommendation.recommendedItem.label}</span>
                           )}
-                          <div className="calendar-dashboard-wrap flex-grow-1">
-                            <DragAndDropCalendar
-                              localizer={localizer}
-                              events={calendarEvents}
-                              startAccessor="start"
-                              endAccessor="end"
-                              views={['day', 'week', 'month']}
-                              view={calendarView}
-                              date={calendarDate}
-                              defaultView={Views.DAY}
-                              onView={(view) => setCalendarView(view as 'day' | 'week' | 'month')}
-                              onNavigate={(date) => setCalendarDate(date)}
-                              onEventDrop={handleCalendarEventMove}
-                              onEventResize={handleCalendarEventResize}
-                              resizable
-                              popup
-                              scrollToTime={calendarScrollTime}
-                              getNow={() => new Date()}
-                              style={{ height: '100%' }}
-                              eventPropGetter={calendarEventStyleGetter}
-                            />
+                          {nextWorkRecommendation.recommendedItem.reason && (
+                            <span>· {nextWorkRecommendation.recommendedItem.reason}</span>
+                          )}
+                        </div>
+                      )}
+                      {!nextWorkLoading && !nextWorkRecommendation?.recommendedItem && nextWorkRecommendation?.spokenResponse && (
+                        <div className="text-muted small">
+                          <span className="fw-semibold text-body">What to work on next</span>
+                          {' · '}
+                          {nextWorkRecommendation.spokenResponse}
+                        </div>
+                      )}
+                      {nextWorkError && (
+                        <div className="text-danger small">{nextWorkError}</div>
+                      )}
+                    </div>
+                    <div className="d-flex align-items-center gap-2 flex-wrap">
+                      <Button variant="outline-secondary" size="sm" onClick={handleOpenChecklist}>
+                        <CalendarIcon size={14} className="me-1" /> View calendar
+                      </Button>
+                      <Button variant="outline-secondary" size="sm" onClick={() => navigate('/sprints/kanban')}>
+                        <LayoutGrid size={14} className="me-1" /> View kanban
+                      </Button>
+                      <Button
+                        variant="outline-primary"
+                        size="sm"
+                        disabled={replanLoading}
+                        onClick={handleReplan}
+                        title="Delta replan: quickly rebalance existing calendar blocks using current priorities."
+                      >
+                        {replanLoading ? <Spinner size="sm" animation="border" className="me-1" /> : <RefreshCw size={14} className="me-1" />}
+                        Delta replan
+                      </Button>
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        disabled={fullReplanLoading}
+                        onClick={handleFullReplan}
+                        title="Full replan: runs full nightly orchestration (pointing, conversions, priority scoring, and calendar planning)."
+                      >
+                        {fullReplanLoading ? <Spinner size="sm" animation="border" className="me-1" /> : <Sparkles size={14} className="me-1" />}
+                        Full replan
+                      </Button>
+                      <Button
+                        variant={widgetEditMode ? 'success' : 'outline-secondary'}
+                        size="sm"
+                        onClick={() => setWidgetEditMode((prev) => !prev)}
+                        title={widgetEditMode ? 'Save layout and exit edit mode' : 'Edit widget layout: drag, resize, show/hide'}
+                      >
+                        {widgetEditMode ? <><CheckCircle size={14} className="me-1" /> Done</> : <><LayoutGrid size={14} className="me-1" /> Edit layout</>}
+                      </Button>
+                      <Button
+                        variant={showWidgetSettings ? 'secondary' : 'outline-secondary'}
+                        size="sm"
+                        onClick={() => setShowWidgetSettings((prev) => !prev)}
+                        title={`Customize visible widgets for ${dashboardDeviceType}`}
+                      >
+                        <LayoutGrid size={14} className="me-1" /> Widgets
+                      </Button>
+                    </div>
+                  </Card.Header>
+                  <Card.Body>
+                    {replanFeedback && (
+                      <div className="text-muted small mb-2">{replanFeedback}</div>
+                    )}
+                    {showWidgetSettings && (
+                      <Card className="mb-3 border-0" style={{ background: 'var(--bs-light-bg-subtle, #f8f9fa)' }}>
+                        <Card.Body className="py-2">
+                          <div className="d-flex justify-content-between align-items-center mb-2">
+                            <div className="fw-semibold small">Visible Widgets</div>
+                            <div className="d-flex align-items-center gap-2">
+                              <span className="text-muted small">Profile: {dashboardDeviceType}</span>
+                              <button
+                                type="button"
+                                className="btn btn-sm btn-outline-secondary"
+                                onClick={() => {
+                                  setWidgetOrder([...SUMMARY_WIDGET_KEYS]);
+                                  setWidgetSizes({});
+                                  setWidgetVisibility({ ...DASHBOARD_WIDGET_DEFAULT_VISIBILITY });
+                                  try {
+                                    window.localStorage.removeItem(dashboardWidgetOrderStorageKey(dashboardDeviceType));
+                                    window.localStorage.removeItem(dashboardWidgetSizeStorageKey(dashboardDeviceType));
+                                    window.localStorage.removeItem(dashboardWidgetVisibilityStorageKey(dashboardDeviceType));
+                                  } catch { /* ignore */ }
+                                  // Recompute default sizes from current grid width
+                                  requestAnimationFrame(() => {
+                                    const grid = widgetGridRef.current;
+                                    const gridWidth = grid ? grid.getBoundingClientRect().width : window.innerWidth - 80;
+                                    if (gridWidth < 300) return;
+                                    const gap = 4;
+                                    const half = Math.max(300, Math.floor((gridWidth - gap) / 2));
+                                    const third = Math.max(240, Math.floor((gridWidth - gap * 2) / 3));
+                                    setWidgetSizes({
+                                      unifiedTimeline: { width: half, height: 600 },
+                                      top3: { width: third, height: 420 },
+                                      dailySummary: { width: third, height: 420 },
+                                      choresHabits: { width: third, height: 420 },
+                                      lowHangingFruit: { width: third, height: 400 },
+                                      themeProgress: { width: third, height: 400 },
+                                      tasksDueToday: { width: third, height: 400 },
+                                    });
+                                  });
+                                }}
+                                title="Reset widget order, sizes and visibility to defaults"
+                              >
+                                Reset layout
+                              </button>
+                            </div>
+                          </div>
+                          <div className="d-flex flex-wrap gap-3">
+                            {DASHBOARD_WIDGET_CONFIG.map((widget) => (
+                              <Form.Check
+                                key={widget.key}
+                                type="switch"
+                                id={`dashboard-widget-${widget.key}`}
+                                label={widget.label}
+                                checked={widgetVisibility[widget.key]}
+                                onChange={() => toggleWidgetVisibility(widget.key)}
+                              />
+                            ))}
                           </div>
                         </Card.Body>
                       </Card>
-                      {todayPlanDesktopMode && (
-                        <button
-                          type="button"
-                          className="today-plan-col-resize-handle"
-                          onMouseDown={(event) => beginTodayPlanResize(event, 'calendar', 'due')}
-                          aria-label="Resize calendar and tasks-due columns"
-                        />
-                      )}
-                    </Col>
-                    <Col
-                      md={6}
-                      className="today-plan-col today-plan-col-due"
-                      style={todayPlanColumnStyle('due')}
-                    >
-                      <Card className="shadow-sm border-0 h-100 dashboard-due-card">
-                          <Card.Header className="d-flex align-items-center justify-content-between">
-                            <div className="fw-semibold d-flex align-items-center gap-2">
-                              <Clock size={16} /> Tasks due today
-                            </div>
-                            <div className="d-flex align-items-center gap-2">
-                              <Form.Select
-                                size="sm"
-                                value={tasksDueTodaySortMode}
-                                onChange={(e) => setTasksDueTodaySortMode(e.target.value as 'due' | 'ai' | 'top3')}
-                              >
-                                <option value="due">Sort: Due time</option>
-                                <option value="ai">Sort: AI score</option>
-                                <option value="top3">Top 3 (AI)</option>
-                              </Form.Select>
-                              <Badge bg={tasksDueTodayCombined.length > 0 ? 'info' : 'secondary'} pill>
-                                {tasksDueTodayCombined.length}
-                              </Badge>
-                            </div>
-                          </Card.Header>
-                          <Card.Body className="p-3">
-                            {tasksDueTodayLoading ? (
-                              <div className="d-flex align-items-center gap-2 text-muted">
-                                <Spinner size="sm" animation="border" /> Loading tasks…
-                              </div>
-                            ) : tasksDueTodayCombined.length === 0 ? (
-                              <div className="text-muted small">No tasks due today.</div>
-                            ) : (
-                              tasksDueTodayCombined.map((item) => {
-                                if (item.kind === 'task' && item.task) {
-                                  const task = item.task;
-                                  const dueMs = getTaskDueMs(task);
-                                  const aiScore = (task as any).aiCriticalityScore ?? (task as any).aiPriorityScore;
-                                  const refLabel = taskRefLabel(task);
-                                  const priorityBadge = getPriorityBadge((task as any).priority);
-                                  const dueLabel = dueMs ? formatDueDetail(dueMs) : null;
-                                  return (
-                                    <div key={item.id} className="border rounded p-2 mb-2 dashboard-due-item">
-                                      <div className="d-flex align-items-start justify-content-between gap-2">
-                                        <div className="fw-semibold small flex-grow-1">
-                                          <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>{task.title}</a>
-                                        </div>
-                                        <button
-                                          type="button"
-                                          className="d-none d-md-inline-flex align-items-center justify-content-center"
-                                          onClick={() => showSidebar(task as any, 'task')}
-                                          title="Activity stream"
-                                          style={{
-                                            color: 'var(--bs-secondary-color)',
-                                            padding: 4,
-                                            borderRadius: 4,
-                                            border: 'none',
-                                            background: 'transparent',
-                                            cursor: 'pointer',
-                                            lineHeight: 0,
-                                            flexShrink: 0,
+                    )}
+                    <div ref={todayPlanLayoutRef}>
+                        <DndContext sensors={widgetDndSensors} collisionDetection={closestCenter} onDragEnd={handleWidgetDragEnd}>
+                          <SortableContext items={widgetOrder.filter((k) => widgetVisibility[k])} strategy={rectSortingStrategy}>
+                            <div className="dashboard-widget-grid" ref={widgetGridRef}>
+                              {widgetOrder.filter((k) => widgetVisibility[k]).map((widgetKey) => {
+                                const wSize = widgetSizes[widgetKey];
+                                return (
+                                  <SortableDashboardWidget
+                                    key={widgetKey}
+                                    id={widgetKey}
+                                    widgetWidth={wSize?.width}
+                                    dragEnabled={widgetEditMode}
+                                  >
+                                    {widgetKey === 'lowHangingFruit' && widgetVisibility.lowHangingFruit && (
+                          <div
+                            ref={setWidgetResizeContainer('lowHangingFruit')}
+                            className="dashboard-widget-shell"
+                            style={getWidgetSizeStyle('lowHangingFruit', 220)}
+                          >
+                            <Card className="shadow-sm border-0 mb-3">
+                              <Card.Header className="d-flex align-items-center justify-content-between">
+                                <div className="fw-semibold d-flex align-items-center gap-2">
+                                  <Sparkles size={16} /> Low hanging fruit
+                                </div>
+                                <div className="d-flex align-items-center gap-2">
+                                  <Link to="/tasks" className="btn btn-sm btn-outline-secondary">
+                                    Tasks
+                                  </Link>
+                                  <Link to="/chores/checklist" className="btn btn-sm btn-outline-secondary">
+                                    Checklist
+                                  </Link>
+                                  <Badge bg={lowHangingFruitTasks.length > 0 ? 'warning' : 'secondary'} pill>
+                                    {lowHangingFruitTasks.length}
+                                  </Badge>
+                                </div>
+                              </Card.Header>
+                              <Card.Body className="p-3">
+                                {lowHangingFruitTasks.length === 0 ? (
+                                  <div className="text-muted small">No quick, non-critical, stale tasks right now.</div>
+                                ) : (
+                                  <div className="widget-items-grid">
+                                  {lowHangingFruitTasks.map((task) => {
+                                    const kind = getChoreKind(task);
+                                    const busy = kind ? !!choreCompletionBusy[task.id] : false;
+                                    const points = getTaskQuickPoints(task);
+                                    const pointsLabel = Number.isFinite(points)
+                                      ? points.toFixed(2).replace(/\.?0+$/, '')
+                                      : '0.25';
+                                    const dueMs = getTaskDueMs(task) ?? resolveRecurringDueMs(task, todayDate, todayStartMs);
+                                    const dueLabel = dueMs ? formatDueDetail(dueMs) : null;
+                                    const staleAnchorMs = getTaskStaleAnchorMs(task);
+                                    const staleDays = staleAnchorMs
+                                      ? Math.max(1, Math.floor((Date.now() - staleAnchorMs) / MS_PER_DAY))
+                                      : LOW_HANGING_MIN_STALE_DAYS;
+                                    const rawType = String((task as any)?.type || '').toLowerCase();
+                                    const kindLabel = kind
+                                      ? (kind === 'routine' ? 'Routine' : kind === 'habit' ? 'Habit' : 'Chore')
+                                      : (rawType ? `${rawType.charAt(0).toUpperCase()}${rawType.slice(1)}` : 'Task');
+                                    const kindBadge = kind === 'routine'
+                                      ? 'success'
+                                      : kind === 'habit'
+                                        ? 'secondary'
+                                        : kind === 'chore'
+                                          ? 'primary'
+                                          : 'dark';
+                                    const taskPath = kind
+                                      ? `/chores/checklist?taskId=${encodeURIComponent(task.id)}`
+                                      : ((task as any).deepLink || `/tasks?taskId=${encodeURIComponent(task.id)}`);
+                                    return (
+                                      <div key={task.id} className="border rounded p-2 mb-2 d-flex align-items-start gap-2">
+                                        <Form.Check
+                                          type="checkbox"
+                                          checked={busy}
+                                          disabled={busy}
+                                          onChange={() => {
+                                            if (kind) {
+                                              void handleCompleteChoreTask(task);
+                                            } else {
+                                              void handleTaskStatusChange(task, 2);
+                                            }
                                           }}
-                                        >
-                                          <Activity size={14} />
-                                        </button>
-                                      </div>
-                                      {refLabel && (
-                                        <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>
-                                          <code className="text-primary" style={{ fontSize: 11 }}>{refLabel}</code>
-                                        </a>
-                                      )}
-                                      <div className="d-flex align-items-center gap-2 mt-1 flex-wrap">
-                                        <span className="text-muted d-inline-flex align-items-center gap-1" style={{ fontSize: 11 }}>
-                                          <Clock size={11} />
-                                          <input
-                                            type="date"
-                                            className="dashboard-due-date-input"
-                                            value={dueMs ? format(new Date(dueMs), 'yyyy-MM-dd') : ''}
-                                            onChange={(e) => {
-                                              const val = e.target.value;
-                                              if (!val) return;
-                                              const newDue = new Date(val + 'T12:00:00').getTime();
-                                              handleTaskDueDateChange(task, newDue);
-                                            }}
-                                          />
-                                        </span>
-                                        <span className="dashboard-chip-select-wrap">
-                                          <select
-                                            className="dashboard-chip-select"
-                                            value={Number((task as any).priority ?? 0)}
-                                            onChange={(e) => handleTaskPriorityChange(task, Number(e.target.value))}
-                                            style={{
-                                              backgroundColor: `var(--bs-${priorityBadge.bg})`,
-                                              color: priorityBadge.bg === 'warning' || priorityBadge.bg === 'orange' || priorityBadge.bg === 'light' ? '#000' : '#fff',
-                                            }}
+                                          aria-label={`Complete ${task.title}`}
+                                        />
+                                        <div className="flex-grow-1">
+                                          <Link
+                                            to={taskPath}
+                                            className="text-decoration-none fw-semibold"
                                           >
-                                            <option value={0}>None</option>
-                                            <option value={1}>Low</option>
-                                            <option value={2}>Medium</option>
-                                            <option value={3}>High</option>
-                                            <option value={4}>Critical</option>
-                                          </select>
-                                        </span>
-                                        {(() => {
-                                          const statusVal = Number(task.status ?? 0);
-                                          const statusMap: Record<number, { bg: string; label: string }> = {
-                                            0: { bg: 'secondary', label: 'To do' },
-                                            1: { bg: 'primary', label: 'Doing' },
-                                            2: { bg: 'success', label: 'Done' },
-                                          };
-                                          const s = statusMap[statusVal] || statusMap[0];
-                                          return (
-                                            <span className="dashboard-chip-select-wrap">
-                                              <select
-                                                className="dashboard-chip-select"
-                                                value={statusVal}
-                                                onChange={(e) => handleTaskStatusChange(task, Number(e.target.value))}
+                                            {task.title}
+                                          </Link>
+                                          <div className="text-muted small">
+                                            {dueLabel ? `Due ${dueLabel} · ` : ''}
+                                            {staleDays}d stale
+                                          </div>
+                                        </div>
+                                        <div className="d-flex flex-column align-items-end gap-1">
+                                          <Badge bg="warning" text="dark">{pointsLabel} pts</Badge>
+                                          <Badge bg={kindBadge}>{kindLabel}</Badge>
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                  </div>
+                                )}
+                              </Card.Body>
+                            </Card>
+                            {renderWidgetEdgeHandles('lowHangingFruit')}
+                              {renderWidgetResizeHandle('lowHangingFruit', 220, 'Resize low hanging fruit widget')}
+                          </div>
+                        )}
+                                    {widgetKey === 'dailySummary' && widgetVisibility.dailySummary && (dailySummaryLines.length > 0 || aiFocusItems.length > 0) && (
+                          <div
+                            ref={setWidgetResizeContainer('dailySummary')}
+                            className="dashboard-widget-shell"
+                            style={getWidgetSizeStyle('dailySummary', 220)}
+                          >
+                            <Card className="shadow-sm border-0 mb-3">
+                              <Card.Header className="d-flex align-items-center justify-content-between">
+                                <div className="fw-semibold">Daily Summary</div>
+                                <Badge bg="secondary" pill>Today</Badge>
+                              </Card.Header>
+                              <Card.Body className="p-3" style={{ overflowY: 'auto' }}>
+                                {dailySummaryLines.length > 0 && (
+                                  <div className="mb-3">
+                                    {dailySummarySource && (
+                                      <div className="text-muted small mb-1">Source: {dailySummarySource}</div>
+                                    )}
+                                    <ul className="mb-0 small">
+                                      {dailySummaryLines.map((line, idx) => (
+                                        <li key={idx}>{line}</li>
+                                      ))}
+                                    </ul>
+                                  </div>
+                                )}
+                                {aiFocusItems.length > 0 && (
+                                  <div>
+                                    <div className="fw-semibold mb-1">AI focus</div>
+                                    {prioritySource && <div className="text-muted small mb-1">Source: {prioritySource}</div>}
+                                    <ul className="mb-0 small">
+                                      {aiFocusItems.slice(0, 3).map((it: any, idx: number) => {
+                                        const refKey = (it.ref || '').toUpperCase();
+                                        const matchedTask = refKey ? tasksByRef.get(refKey) : undefined;
+                                        const matchedStory = !matchedTask && refKey ? storiesByRef.get(refKey) : undefined;
+                                        const directType = String(it.type || it.entityType || '').toLowerCase();
+                                        const directId = it.id || it.entityId || null;
+                                        const href = directId && directType === 'task'
+                                          ? `/tasks/${directId}`
+                                          : directId && directType === 'story'
+                                            ? `/stories/${directId}`
+                                            : matchedTask
+                                              ? `/tasks/${matchedTask.id}`
+                                              : matchedStory
+                                                ? `/stories/${matchedStory.id}`
+                                                : undefined;
+                                        const label = [it.ref, it.title || it.summary].filter(Boolean).join(' — ') || 'Focus';
+                                        const rationale = it.rationale || it.nextStep ? ` — ${it.rationale || it.nextStep}` : '';
+                                        return (
+                                          <li key={idx}>
+                                            {href ? (
+                                              <>
+                                                <a href={href} className="text-decoration-none">{label}</a>{rationale}
+                                              </>
+                                            ) : (
+                                              <>
+                                                {label}{rationale}
+                                              </>
+                                            )}
+                                          </li>
+                                        );
+                                      })}
+                                    </ul>
+                                  </div>
+                                )}
+                              </Card.Body>
+                            </Card>
+                            {renderWidgetEdgeHandles('dailySummary')}
+                              {renderWidgetResizeHandle('dailySummary', 220, 'Resize daily summary widget')}
+                          </div>
+                        )}
+                                    {widgetKey === 'top3' && widgetVisibility.top3 && (
+                          <div
+                            ref={setWidgetResizeContainer('top3')}
+                            className="dashboard-widget-shell"
+                            style={getWidgetSizeStyle('top3', 260)}
+                          >
+                            <Card className="shadow-sm border-0 mb-3">
+                              <Card.Header className="d-flex align-items-center justify-content-between">
+                                <div className="fw-semibold d-flex align-items-center gap-2">
+                                  <ListChecks size={16} /> Top 3 priorities
+                                </div>
+                                <div className="d-flex align-items-center gap-2">
+                                  <Badge bg="secondary" pill>{currentPersona === 'work' ? 'Work' : 'Personal'}</Badge>
+                                  <Button
+                                    size="sm"
+                                    variant="outline-secondary"
+                                    onClick={() => setTop3Collapsed((prev) => !prev)}
+                                  >
+                                    {top3Collapsed ? 'Show' : 'Hide'}
+                                  </Button>
+                                </div>
+                              </Card.Header>
+                              {!top3Collapsed && (
+                                <Card.Body className="p-3 d-flex flex-column gap-3">
+                              {top3Loading ? (
+                                <div className="d-flex align-items-center gap-2 text-muted">
+                                  <Spinner size="sm" animation="border" /> Loading top 3…
+                                </div>
+                              ) : (top3Tasks.length === 0 && top3Stories.length === 0) ? (
+                                <div className="text-muted small">No Top 3 items flagged for this persona yet.</div>
+                              ) : (
+                                (() => {
+                                  const top3Wide = (widgetSizes.top3?.width ?? 0) >= 600;
+                                  return (
+                                  <div style={top3Wide ? { display: 'flex', gap: '16px', alignItems: 'flex-start' } : undefined}>
+                                  <div style={top3Wide ? { flex: '1 1 0', minWidth: 0 } : undefined}>
+                                    <div className="text-uppercase text-muted small fw-semibold mb-1">Stories</div>
+                                    {top3Stories.length === 0 ? (
+                                      <div className="text-muted small">No stories flagged.</div>
+                                    ) : (
+                                      <div className="widget-items-grid">
+                                      {top3Stories.map((story, idx) => {
+                                        const label = storyLabel(story);
+                                        const aiScore = (story as any).aiCriticalityScore ?? (story as any).aiPriorityScore;
+                                        const href = `/stories/${(story as any).ref || story.id}`;
+                                        const storyPriorityBadge = getPriorityBadge((story as any).priority);
+                                        const storyDueMs = (() => {
+                                          const raw = (story as any).targetDate ?? (story as any).dueDate ?? null;
+                                          if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+                                          if (raw?.toDate) return raw.toDate().getTime();
+                                          const parsed = raw ? Date.parse(String(raw)) : NaN;
+                                          return Number.isNaN(parsed) ? null : parsed;
+                                        })();
+                                        const storyStatusVal = Number(story.status ?? 0);
+                                        const storyStatusMap: Record<number, { bg: string; label: string }> = {
+                                          0: { bg: 'light', label: 'Backlog' },
+                                          1: { bg: 'info', label: 'Planned' },
+                                          2: { bg: 'primary', label: 'In Progress' },
+                                          3: { bg: 'warning', label: 'Testing' },
+                                          4: { bg: 'success', label: 'Done' },
+                                        };
+                                        const storyS = storyStatusMap[storyStatusVal] || storyStatusMap[0];
+                                        return (
+                                          <div key={story.id} className="border rounded p-2 mb-2 dashboard-due-item">
+                                            <div className="d-flex align-items-start justify-content-between gap-2">
+                                              <div className="fw-semibold small flex-grow-1">
+                                                <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditStory(story); }}>{label}</a>
+                                              </div>
+                                              <button
+                                                type="button"
+                                                className="d-none d-md-inline-flex align-items-center justify-content-center"
+                                                onClick={() => showSidebar(story as any, 'story')}
+                                                title="Activity stream"
                                                 style={{
-                                                  backgroundColor: `var(--bs-${s.bg})`,
-                                                  color: '#fff',
+                                                  color: 'var(--bs-secondary-color)',
+                                                  padding: 4,
+                                                  borderRadius: 4,
+                                                  border: 'none',
+                                                  background: 'transparent',
+                                                  cursor: 'pointer',
+                                                  lineHeight: 0,
+                                                  flexShrink: 0,
                                                 }}
                                               >
-                                                <option value={0}>To do</option>
-                                                <option value={1}>Doing</option>
-                                                <option value={2}>Done</option>
-                                              </select>
-                                            </span>
-                                          );
-                                        })()}
-                                        <span className="text-muted" style={{ fontSize: 11 }}>
-                                          AI {aiScore != null ? Math.round(aiScore) : '—'}
-                                        </span>
+                                                <Activity size={14} />
+                                              </button>
+                                            </div>
+                                            <div className="d-flex align-items-center gap-2 mt-1 flex-wrap">
+                                              <span className="text-muted d-inline-flex align-items-center gap-1" style={{ fontSize: 11 }}>
+                                                <Clock size={11} />
+                                                <input
+                                                  type="date"
+                                                  className="dashboard-due-date-input"
+                                                  value={storyDueMs ? format(new Date(storyDueMs), 'yyyy-MM-dd') : ''}
+                                                  onChange={(e) => {
+                                                    const val = e.target.value;
+                                                    if (!val) return;
+                                                    const newDue = new Date(val + 'T12:00:00').getTime();
+                                                    handleStoryDueDateChange(story, newDue);
+                                                  }}
+                                                />
+                                              </span>
+                                              <span className="dashboard-chip-select-wrap">
+                                                <select
+                                                  className="dashboard-chip-select"
+                                                  value={Number((story as any).priority ?? 0)}
+                                                  onChange={(e) => handleStoryPriorityChange(story, Number(e.target.value))}
+                                                  style={{
+                                                    backgroundColor: `var(--bs-${storyPriorityBadge.bg})`,
+                                                    color: storyPriorityBadge.bg === 'warning' || storyPriorityBadge.bg === 'light' ? '#000' : '#fff',
+                                                  }}
+                                                >
+                                                  <option value={0}>None</option>
+                                                  <option value={1}>Low</option>
+                                                  <option value={2}>Medium</option>
+                                                  <option value={3}>High</option>
+                                                  <option value={4}>Critical</option>
+                                                </select>
+                                              </span>
+                                              <span className="dashboard-chip-select-wrap">
+                                                <select
+                                                  className="dashboard-chip-select"
+                                                  value={storyStatusVal}
+                                                  onChange={(e) => handleStoryStatusChange(story, Number(e.target.value))}
+                                                  style={{
+                                                    backgroundColor: `var(--bs-${storyS.bg})`,
+                                                    color: storyS.bg === 'light' || storyS.bg === 'warning' ? '#000' : '#fff',
+                                                  }}
+                                                >
+                                                  <option value={0}>Backlog</option>
+                                                  <option value={1}>Planned</option>
+                                                  <option value={2}>In Progress</option>
+                                                  <option value={3}>Testing</option>
+                                                  <option value={4}>Done</option>
+                                                </select>
+                                              </span>
+                                              <span className="text-muted" style={{ fontSize: 11 }}>
+                                                AI {aiScore != null ? Math.round(aiScore) : '—'}
+                                              </span>
+                                            </div>
+                                          </div>
+                                        );
+                                      })}
                                       </div>
-                                    </div>
+                                    )}
+                                  </div>
+                                  <div style={top3Wide ? { flex: '1 1 0', minWidth: 0 } : undefined}>
+                                    <div className="text-uppercase text-muted small fw-semibold mb-1">Tasks</div>
+                                    {top3Tasks.length === 0 ? (
+                                      <div className="text-muted small">No tasks flagged.</div>
+                                    ) : (
+                                      <div className="widget-items-grid">
+                                      {top3Tasks.map((task, idx) => {
+                                        const refLabel = taskRefLabel(task);
+                                        const aiScore = (task as any).aiCriticalityScore ?? (task as any).aiPriorityScore;
+                                        const priorityBadge = getPriorityBadge((task as any).priority);
+                                        const dueMs = getTaskDueMs(task);
+                                        return (
+                                          <div key={task.id} className="border rounded p-2 mb-2 dashboard-due-item">
+                                            <div className="d-flex align-items-start justify-content-between gap-2">
+                                              <div className="fw-semibold small flex-grow-1">
+                                                <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>{task.title}</a>
+                                              </div>
+                                              <button
+                                                type="button"
+                                                className="d-none d-md-inline-flex align-items-center justify-content-center"
+                                                onClick={() => showSidebar(task as any, 'task')}
+                                                title="Activity stream"
+                                                style={{
+                                                  color: 'var(--bs-secondary-color)',
+                                                  padding: 4,
+                                                  borderRadius: 4,
+                                                  border: 'none',
+                                                  background: 'transparent',
+                                                  cursor: 'pointer',
+                                                  lineHeight: 0,
+                                                  flexShrink: 0,
+                                                }}
+                                              >
+                                                <Activity size={14} />
+                                              </button>
+                                            </div>
+                                            {refLabel && (
+                                              <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>
+                                                <code className="text-primary" style={{ fontSize: 11 }}>{refLabel}</code>
+                                              </a>
+                                            )}
+                                            <div className="d-flex align-items-center gap-2 mt-1 flex-wrap">
+                                              <span className="text-muted d-inline-flex align-items-center gap-1" style={{ fontSize: 11 }}>
+                                                <Clock size={11} />
+                                                <input
+                                                  type="date"
+                                                  className="dashboard-due-date-input"
+                                                  value={dueMs ? format(new Date(dueMs), 'yyyy-MM-dd') : ''}
+                                                  onChange={(e) => {
+                                                    const val = e.target.value;
+                                                    if (!val) return;
+                                                    const newDue = new Date(val + 'T12:00:00').getTime();
+                                                    handleTaskDueDateChange(task, newDue);
+                                                  }}
+                                                />
+                                              </span>
+                                              <span className="dashboard-chip-select-wrap">
+                                                <select
+                                                  className="dashboard-chip-select"
+                                                  value={Number((task as any).priority ?? 0)}
+                                                  onChange={(e) => handleTaskPriorityChange(task, Number(e.target.value))}
+                                                  style={{
+                                                    backgroundColor: `var(--bs-${priorityBadge.bg})`,
+                                                    color: priorityBadge.bg === 'warning' || priorityBadge.bg === 'orange' || priorityBadge.bg === 'light' ? '#000' : '#fff',
+                                                  }}
+                                                >
+                                                  <option value={0}>None</option>
+                                                  <option value={1}>Low</option>
+                                                  <option value={2}>Medium</option>
+                                                  <option value={3}>High</option>
+                                                  <option value={4}>Critical</option>
+                                                </select>
+                                              </span>
+                                              {(() => {
+                                                const statusVal = Number(task.status ?? 0);
+                                                const statusMap: Record<number, { bg: string; label: string }> = {
+                                                  0: { bg: 'secondary', label: 'To do' },
+                                                  1: { bg: 'primary', label: 'Doing' },
+                                                  2: { bg: 'success', label: 'Done' },
+                                                };
+                                                const s = statusMap[statusVal] || statusMap[0];
+                                                return (
+                                                  <span className="dashboard-chip-select-wrap">
+                                                    <select
+                                                      className="dashboard-chip-select"
+                                                      value={statusVal}
+                                                      onChange={(e) => handleTaskStatusChange(task, Number(e.target.value))}
+                                                      style={{
+                                                        backgroundColor: `var(--bs-${s.bg})`,
+                                                        color: '#fff',
+                                                      }}
+                                                    >
+                                                      <option value={0}>To do</option>
+                                                      <option value={1}>Doing</option>
+                                                      <option value={2}>Done</option>
+                                                    </select>
+                                                  </span>
+                                                );
+                                              })()}
+                                              <span className="text-muted" style={{ fontSize: 11 }}>
+                                                AI {aiScore != null ? Math.round(aiScore) : '—'}
+                                              </span>
+                                            </div>
+                                          </div>
+                                        );
+                                      })}
+                                      </div>
+                                    )}
+                                  </div>
+                                  </div>
                                   );
-                                }
-                                return null;
-                              })
-                            )}
-                          </Card.Body>
-                        </Card>
-                      {todayPlanDesktopMode && (
-                        <button
-                          type="button"
-                          className="today-plan-col-resize-handle"
-                          onMouseDown={(event) => beginTodayPlanResize(event, 'due', 'chores')}
-                          aria-label="Resize tasks-due and chores columns"
-                        />
-                      )}
-                    </Col>
-                    <Col
-                      md={6}
-                      className="today-plan-col today-plan-col-chores"
-                      style={todayPlanColumnStyle('chores')}
-                    >
-                      <Card className="shadow-sm border-0 h-100 dashboard-chores-card">
-                        <Card.Header className="d-flex align-items-center justify-content-between">
-                          <div className="fw-semibold d-flex align-items-center gap-2">
-                            <ListChecks size={16} /> Chores & Habits
+                                })()
+                              )}
+                                </Card.Body>
+                              )}
+                            </Card>
+                            {renderWidgetEdgeHandles('top3')}
+                              {renderWidgetResizeHandle('top3', 260, 'Resize top 3 priorities widget')}
                           </div>
-                          <div className="d-flex align-items-center gap-2">
-                            <Link to="/dashboard/habit-tracking" className="btn btn-sm btn-outline-secondary">
-                              Tracking
-                            </Link>
-                            <Link to="/chores/checklist" className="btn btn-sm btn-outline-secondary">
-                              Checklist
-                            </Link>
-                            <Badge bg={choresDueTodayTasks.length > 0 ? 'info' : 'secondary'} pill>
-                              {choresDueTodayTasks.length}
-                            </Badge>
-                          </div>
-                        </Card.Header>
-                          <Card.Body className="p-3">
-                          {tasksDueTodayLoading ? (
-                            <div className="d-flex align-items-center gap-2 text-muted">
-                              <Spinner size="sm" animation="border" /> Loading chores…
-                            </div>
-                          ) : choresDueTodayTasks.length === 0 ? (
-                            <div className="text-muted small">No chores, habits, or routines due today.</div>
-                          ) : (
-                            choresDueTodayTasks.map((task) => {
-                              const kind = getChoreKind(task) || 'chore';
-                              const dueMs = resolveRecurringDueMs(task, todayDate, todayStartMs);
-                              const dueLabel = dueMs ? formatDueDetail(dueMs) : 'today';
-                              const isOverdue = !!dueMs && dueMs < todayStartMs;
-                              const badgeVariant = kind === 'routine' ? 'success' : kind === 'habit' ? 'secondary' : 'primary';
-                              const badgeLabel = kind === 'routine' ? 'Routine' : kind === 'habit' ? 'Habit' : 'Chore';
-                              const busy = !!choreCompletionBusy[task.id];
-                              return (
-                                <div key={task.id} className="border rounded p-2 mb-2 d-flex align-items-start gap-2">
-                                  <Form.Check
-                                    type="checkbox"
-                                    checked={busy}
-                                    disabled={busy}
-                                    onChange={() => handleCompleteChoreTask(task)}
-                                    aria-label={`Complete ${task.title}`}
-                                  />
-                                  <div className="flex-grow-1">
-                                    <div className="fw-semibold">{task.title}</div>
-                                    <div className="text-muted small d-flex align-items-center gap-1">
-                                      <Clock size={12} /> {isOverdue ? `Overdue · ${dueLabel}` : `Due ${dueLabel}`}
-                                      {(task as any).ref && (
-                                        <>
-                                          <span className="mx-1">·</span>
-                                          <code className="text-primary" style={{ fontSize: 10 }}>{(task as any).ref}</code>
-                                        </>
+                        )}
+                                    {widgetKey === 'themeProgress' && widgetVisibility.themeProgress && (
+                          <div
+                            ref={setWidgetResizeContainer('themeProgress')}
+                            className="dashboard-widget-shell"
+                            style={getWidgetSizeStyle('themeProgress', 280)}
+                          >
+                            <Card className="shadow-sm border-0 mb-3">
+                              <Card.Header className="d-flex align-items-center justify-content-between">
+                                <div className="fw-semibold d-flex align-items-center gap-2">
+                                  <TrendingUp size={16} /> Theme & goal progress
+                                </div>
+                                <Badge bg={themeProgressRows.length > 0 ? 'info' : 'secondary'} pill>
+                                  {themeProgressRows.length}
+                                </Badge>
+                              </Card.Header>
+                              <Card.Body className="p-3">
+                              {lowProgressGoalsDueThisSprint.length > 0 && (
+                                <Alert variant="warning" className="py-2 mb-3">
+                                  <div className="fw-semibold small mb-1">
+                                    Goals due this sprint with low progress (&lt;25% points complete)
+                                  </div>
+                                  <ul className="mb-0 small">
+                                    {lowProgressGoalsDueThisSprint.slice(0, 5).map((goalRow) => (
+                                      <li key={goalRow.id}>
+                                        {goalRow.title}
+                                        {' · '}
+                                        {goalRow.pointsDone}/{goalRow.pointsTotal} pts ({goalRow.pointsProgressPct}%)
+                                        {' · '}
+                                        {goalRow.themeLabel}
+                                      </li>
+                                    ))}
+                                    {lowProgressGoalsDueThisSprint.length > 5 && (
+                                      <li className="text-muted">+{lowProgressGoalsDueThisSprint.length - 5} more</li>
+                                    )}
+                                  </ul>
+                                </Alert>
+                              )}
+                              {themeProgressRows.length === 0 ? (
+                                <div className="text-muted small">
+                                  No sprint-linked goals, stories, or tasks are mapped to themes for the selected sprint.
+                                </div>
+                              ) : (
+                                themeProgressRows.map((row) => {
+                                  const isOpen = !!themeProgressExpanded[row.themeKey];
+                                  const pointsPct = row.pointsTotal > 0
+                                    ? Math.round((row.pointsDone / row.pointsTotal) * 100)
+                                    : 0;
+                                  const savingsPct = row.savingsTarget > 0
+                                    ? Math.round(((row.savingsSavedPence / 100) / row.savingsTarget) * 100)
+                                    : 0;
+                                  return (
+                                    <div key={row.themeKey} className="border rounded p-2 mb-2">
+                                      <div className="d-flex align-items-start justify-content-between gap-2">
+                                        <div className="d-flex align-items-center gap-2 flex-wrap">
+                                          <span
+                                            style={{
+                                              width: 10,
+                                              height: 10,
+                                              borderRadius: 999,
+                                              backgroundColor: row.color,
+                                              border: '1px solid rgba(0,0,0,0.12)',
+                                              display: 'inline-block',
+                                            }}
+                                          />
+                                          <span className="fw-semibold small">{row.themeLabel}</span>
+                                          <span className="text-muted" style={{ fontSize: 11 }}>
+                                            {row.completedItems}/{row.totalItems} complete ({row.progressPct}%)
+                                          </span>
+                                        </div>
+                                        <Button
+                                          variant="link"
+                                          size="sm"
+                                          className="text-decoration-none p-0"
+                                          onClick={() => toggleThemeProgressExpanded(row.themeKey)}
+                                        >
+                                          {isOpen ? 'Hide goals' : 'Show goals'}
+                                        </Button>
+                                      </div>
+                                      <div
+                                        style={{
+                                          height: 6,
+                                          background: 'rgba(0,0,0,0.08)',
+                                          borderRadius: 999,
+                                          overflow: 'hidden',
+                                          marginTop: 8,
+                                        }}
+                                      >
+                                        <div
+                                          style={{
+                                            width: `${row.progressPct}%`,
+                                            height: '100%',
+                                            background: row.color,
+                                          }}
+                                        />
+                                      </div>
+                                      <div className="d-flex align-items-center gap-2 flex-wrap mt-2">
+                                        <Badge bg="secondary">{row.goalsDone}/{row.goalsTotal} goals</Badge>
+                                        <Badge bg="secondary">{row.storiesDone}/{row.storiesTotal} stories</Badge>
+                                        <Badge bg="secondary">{row.tasksDone}/{row.tasksTotal} tasks</Badge>
+                                        {row.pointsTotal > 0 && (
+                                          <Badge bg="primary">{row.pointsDone}/{row.pointsTotal} pts ({pointsPct}%)</Badge>
+                                        )}
+                                        {row.savingsTarget > 0 && (
+                                          <Badge bg="success">
+                                            Savings {formatPotBalance(row.savingsSavedPence, row.savingsCurrency)} / {row.savingsTarget.toLocaleString('en-GB', { style: 'currency', currency: row.savingsCurrency })}
+                                            {' '}({savingsPct}%)
+                                          </Badge>
+                                        )}
+                                      </div>
+                                      {isOpen && (
+                                        <div className="mt-2">
+                                          {row.goalRows.length === 0 ? (
+                                            <div className="text-muted small">
+                                              No goals in this theme for the selected scope.
+                                            </div>
+                                          ) : (
+                                            row.goalRows.map((goalRow) => (
+                                              <div key={goalRow.id} className="border rounded p-2 mb-2">
+                                                <div className="d-flex align-items-start justify-content-between gap-2">
+                                                  <div className="fw-semibold small flex-grow-1">{goalRow.title}</div>
+                                                  <Badge bg={goalRow.statusBg}>{goalRow.statusLabel}</Badge>
+                                                </div>
+                                                <div className="d-flex align-items-center gap-2 flex-wrap mt-1">
+                                                  <span className="text-muted" style={{ fontSize: 11 }}>
+                                                    Stories {goalRow.storiesDone}/{goalRow.storiesTotal}
+                                                  </span>
+                                                  <span className="text-muted" style={{ fontSize: 11 }}>
+                                                    Tasks {goalRow.tasksDone}/{goalRow.tasksTotal}
+                                                  </span>
+                                                  {goalRow.pointsTotal > 0 && (
+                                                    <span className="text-muted" style={{ fontSize: 11 }}>
+                                                      Points {goalRow.pointsDone}/{goalRow.pointsTotal}
+                                                    </span>
+                                                  )}
+                                                  {goalRow.dueThisSprint && (
+                                                    <span className="text-warning-emphasis" style={{ fontSize: 11 }}>
+                                                      Due this sprint
+                                                    </span>
+                                                  )}
+                                                  <span className="text-muted" style={{ fontSize: 11 }}>
+                                                    Progress {goalRow.progressPct}%
+                                                  </span>
+                                                </div>
+                                                <div
+                                                  style={{
+                                                    height: 5,
+                                                    background: 'rgba(0,0,0,0.08)',
+                                                    borderRadius: 999,
+                                                    overflow: 'hidden',
+                                                    marginTop: 6,
+                                                  }}
+                                                >
+                                                  <div
+                                                    style={{
+                                                      width: `${goalRow.progressPct}%`,
+                                                      height: '100%',
+                                                      background: row.color,
+                                                    }}
+                                                  />
+                                                </div>
+                                              </div>
+                                            ))
+                                          )}
+                                        </div>
                                       )}
                                     </div>
-                                  </div>
-                                  <div className="d-flex flex-column align-items-end gap-1">
-                                    <button
-                                      type="button"
-                                      className="d-none d-md-inline-flex align-items-center justify-content-center"
-                                      onClick={() => showSidebar(task as any, 'task')}
-                                      title="Activity stream"
-                                      style={{
-                                        color: 'var(--bs-secondary-color)',
-                                        padding: 4,
-                                        borderRadius: 4,
-                                        border: 'none',
-                                        background: 'transparent',
-                                        cursor: 'pointer',
-                                        lineHeight: 0,
-                                        flexShrink: 0,
-                                      }}
-                                    >
-                                      <Activity size={14} />
-                                    </button>
-                                    {isOverdue && <Badge bg="danger">Overdue</Badge>}
-                                    <Badge bg={badgeVariant}>{badgeLabel}</Badge>
-                                  </div>
+                                  );
+                                })
+                              )}
+                              </Card.Body>
+                            </Card>
+                            {renderWidgetEdgeHandles('themeProgress')}
+                              {renderWidgetResizeHandle('themeProgress', 280, 'Resize theme and goal progress widget')}
+                          </div>
+                        )}
+                        {widgetKey === 'unifiedTimeline' && widgetVisibility.unifiedTimeline && (
+                          <div
+                            ref={setWidgetResizeContainer('unifiedTimeline')}
+                            className="dashboard-widget-shell"
+                            style={getWidgetSizeStyle('unifiedTimeline', 360)}
+                          >
+                            <Card className="shadow-sm border-0 dashboard-calendar-card d-flex flex-column">
+                              <Card.Header className="d-flex align-items-center justify-content-between">
+                                <div className="fw-semibold d-flex align-items-center gap-2">
+                                  <CalendarIcon size={16} /> Daily Plan
                                 </div>
-                              );
-                            })
-                          )}
-                        </Card.Body>
-                      </Card>
-                    </Col>
-                  </Row>
-                </Card.Body>
-              </Card>
-            </Col>
-          </Row>
+                                <Badge bg={unifiedTodayTimelineItems.length > 0 ? 'info' : 'secondary'} pill>
+                                  {unifiedTodayTimelineItems.length}
+                                </Badge>
+                              </Card.Header>
+                              <Card.Body ref={timelineScrollBodyRef} className="p-3 d-flex flex-column flex-grow-1" style={{ minHeight: 0, overflowY: 'auto' }}>
+                                {unscheduledToday.length > 0 && (
+                                  <Alert variant="warning" className="py-2 mb-2">
+                                    <div className="fw-semibold mb-1">Scheduling issues</div>
+                                    <ul className="mb-0 small">
+                                      {unscheduledSummary.map((item) => (
+                                        <li key={item.id}>{item.title || item.sourceId}</li>
+                                      ))}
+                                      {unscheduledToday.length > unscheduledSummary.length && (
+                                        <li className="text-muted">+{unscheduledToday.length - unscheduledSummary.length} more</li>
+                                      )}
+                                    </ul>
+                                  </Alert>
+                                )}
+                                {unifiedTodayTimelineItems.length === 0 ? (
+                                  <div className="text-muted small">No tasks, checklist items, or calendar events for today.</div>
+                                ) : (() => {
+                                  const isWide = (widgetSizes.unifiedTimeline?.width ?? 0) >= 600;
+                                  const now = new Date(timelineNowMs);
+                                  const nowBucket = bucketFromMinutes((now.getHours() * 60) + now.getMinutes());
+                                  const bucketEls = DAY_TIMELINE_BUCKETS.map((bucket) => {
+                                    const bucketItems = unifiedTodayTimelineByBucket[bucket.key] || [];
+                                    if (bucketItems.length === 0 && bucket.key !== nowBucket) return null;
+                                    const markerIndex = bucket.key === nowBucket
+                                      ? (() => {
+                                        const idx = bucketItems.findIndex((item: any) => Number.isFinite(item?.startMs) && item.startMs > timelineNowMs);
+                                        return idx === -1 ? bucketItems.length : idx;
+                                      })()
+                                      : -1;
+                                    return (
+                                      <div key={bucket.key} className="mb-3" style={isWide ? { flex: '1 1 0', minWidth: 0 } : undefined}>
+                                        <h6 className="text-muted mb-2 border-bottom pb-1 fw-bold d-flex align-items-center justify-content-between">
+                                          <small>{bucket.label}</small>
+                                          <small>{bucket.range}</small>
+                                        </h6>
+                                        {bucketItems.map((item: any, index: number) => (
+                                          <React.Fragment key={`${bucket.key}-${item.id}`}>
+                                            {bucket.key === nowBucket && index === markerIndex && (
+                                              <div ref={timelineNowMarkerRef} className="d-flex align-items-center gap-2 mb-2">
+                                                <small style={{ color: '#dc3545', fontWeight: 700 }}>Now {format(new Date(timelineNowMs), 'HH:mm')}</small>
+                                                <div style={{ height: 1.5, background: '#dc3545', flex: 1, borderRadius: 999 }} />
+                                              </div>
+                                            )}
+                                            {renderUnifiedTodayTimelineItem(item)}
+                                          </React.Fragment>
+                                        ))}
+                                        {bucket.key === nowBucket && markerIndex === bucketItems.length && (
+                                          <div ref={timelineNowMarkerRef} className="d-flex align-items-center gap-2 mb-2">
+                                            <small style={{ color: '#dc3545', fontWeight: 700 }}>Now {format(new Date(timelineNowMs), 'HH:mm')}</small>
+                                            <div style={{ height: 1.5, background: '#dc3545', flex: 1, borderRadius: 999 }} />
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  });
+                                  return isWide
+                                    ? <div className="d-flex gap-3 align-items-start">{bucketEls}</div>
+                                    : <>{bucketEls}</>;
+                                })()}
+                              </Card.Body>
+                            </Card>
+                            {renderWidgetEdgeHandles('unifiedTimeline')}
+                            {renderWidgetResizeHandle('unifiedTimeline', 360, 'Resize Daily Plan widget')}
+                          </div>
+                        )}
+                        {widgetKey === 'tasksDueToday' && widgetVisibility.tasksDueToday && (
+                          <div
+                            ref={setWidgetResizeContainer('tasksDueToday')}
+                            className="dashboard-widget-shell"
+                            style={getWidgetSizeStyle('tasksDueToday', 320)}
+                          >
+                            <Card className="shadow-sm border-0 dashboard-due-card">
+                              <Card.Header className="d-flex align-items-center justify-content-between">
+                                <div className="fw-semibold d-flex align-items-center gap-2">
+                                  <Clock size={16} /> Tasks due today
+                                </div>
+                                <div className="d-flex align-items-center gap-2">
+                                  <Form.Select size="sm" value={tasksDueTodaySortMode} onChange={(e) => setTasksDueTodaySortMode(e.target.value as 'due' | 'ai' | 'top3')}>
+                                    <option value="due">Sort: Due time</option>
+                                    <option value="ai">Sort: AI score</option>
+                                    <option value="top3">Top 3 (AI)</option>
+                                  </Form.Select>
+                                  <Badge bg={tasksDueTodayCombined.length > 0 ? 'info' : 'secondary'} pill>{tasksDueTodayCombined.length}</Badge>
+                                </div>
+                              </Card.Header>
+                              <Card.Body className="p-3">
+                                {tasksDueTodayLoading ? (
+                                  <div className="d-flex align-items-center gap-2 text-muted"><Spinner size="sm" animation="border" /> Loading tasks…</div>
+                                ) : tasksDueTodayCombined.length === 0 ? (
+                                  <div className="text-muted small">No tasks due today.</div>
+                                ) : (
+                                  (() => {
+                                    const morning: typeof tasksDueTodayCombined = [];
+                                    const afternoon: typeof tasksDueTodayCombined = [];
+                                    const evening: typeof tasksDueTodayCombined = [];
+                                    const other: typeof tasksDueTodayCombined = [];
+                                    tasksDueTodayCombined.forEach((item) => {
+                                      const tod = item.task && (item.task as any).timeOfDay;
+                                      if (tod === 'morning') morning.push(item);
+                                      else if (tod === 'afternoon') afternoon.push(item);
+                                      else if (tod === 'evening') evening.push(item);
+                                      else other.push(item);
+                                    });
+                                    const sortByDueTime = (arr: typeof tasksDueTodayCombined) =>
+                                      [...arr].sort((a, b) => {
+                                        const aTime = (a.task as any)?.dueTime ?? '';
+                                        const bTime = (b.task as any)?.dueTime ?? '';
+                                        if (aTime && bTime) return aTime.localeCompare(bTime);
+                                        if (aTime) return -1;
+                                        if (bTime) return 1;
+                                        return (a.dueMs ?? 0) - (b.dueMs ?? 0);
+                                      });
+                                    const renderItem = (item: any) => {
+                                      if (item.kind === 'task' && item.task) {
+                                        const task = item.task;
+                                        const dueMs = getTaskDueMs(task);
+                                        const aiScore = (task as any).aiCriticalityScore ?? (task as any).aiPriorityScore;
+                                        const refLabel = taskRefLabel(task);
+                                        const priorityBadge = getPriorityBadge((task as any).priority);
+                                        const dueLabel = dueMs ? formatDueDetail(dueMs) : null;
+                                        return (
+                                          <div key={item.id} className="border rounded p-2 mb-2 dashboard-due-item">
+                                            <div className="d-flex align-items-start justify-content-between gap-2">
+                                              <div className="fw-semibold small flex-grow-1">
+                                                <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>{task.title}</a>
+                                              </div>
+                                              <button type="button" className="d-none d-md-inline-flex align-items-center justify-content-center" onClick={() => showSidebar(task as any, 'task')} title="Activity stream" style={{ color: 'var(--bs-secondary-color)', padding: 4, borderRadius: 4, border: 'none', background: 'transparent', cursor: 'pointer', lineHeight: 0, flexShrink: 0 }}>
+                                                <Activity size={14} />
+                                              </button>
+                                            </div>
+                                            {refLabel && (
+                                              <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>
+                                                <code className="text-primary" style={{ fontSize: 11 }}>{refLabel}</code>
+                                              </a>
+                                            )}
+                                            <div className="d-flex align-items-center gap-2 mt-1 flex-wrap">
+                                              <span className="text-muted d-inline-flex align-items-center gap-1" style={{ fontSize: 11 }}>
+                                                <Clock size={11} />
+                                                <input type="date" className="dashboard-due-date-input" value={dueMs ? format(new Date(dueMs), 'yyyy-MM-dd') : ''} onChange={(e) => { const val = e.target.value; if (!val) return; handleTaskDueDateChange(task, new Date(val + 'T12:00:00').getTime()); }} />
+                                              </span>
+                                              <span className="dashboard-chip-select-wrap">
+                                                <select className="dashboard-chip-select" value={Number((task as any).priority ?? 0)} onChange={(e) => handleTaskPriorityChange(task, Number(e.target.value))} style={{ backgroundColor: `var(--bs-${priorityBadge.bg})`, color: priorityBadge.bg === 'warning' || priorityBadge.bg === 'light' ? '#000' : '#fff' }}>
+                                                  <option value={0}>None</option>
+                                                  <option value={1}>Low</option>
+                                                  <option value={2}>Medium</option>
+                                                  <option value={3}>High</option>
+                                                  <option value={4}>Critical</option>
+                                                </select>
+                                              </span>
+                                              {(() => {
+                                                const statusVal = Number(task.status ?? 0);
+                                                const statusMap: Record<number, { bg: string; label: string }> = { 0: { bg: 'secondary', label: 'To do' }, 1: { bg: 'primary', label: 'Doing' }, 2: { bg: 'success', label: 'Done' } };
+                                                const s = statusMap[statusVal] || statusMap[0];
+                                                return (
+                                                  <span className="dashboard-chip-select-wrap">
+                                                    <select className="dashboard-chip-select" value={statusVal} onChange={(e) => handleTaskStatusChange(task, Number(e.target.value))} style={{ backgroundColor: `var(--bs-${s.bg})`, color: '#fff' }}>
+                                                      <option value={0}>To do</option>
+                                                      <option value={1}>Doing</option>
+                                                      <option value={2}>Done</option>
+                                                    </select>
+                                                  </span>
+                                                );
+                                              })()}
+                                              <span className="text-muted" style={{ fontSize: 11 }}>AI {aiScore != null ? Math.round(aiScore) : '—'}</span>
+                                            </div>
+                                          </div>
+                                        );
+                                      }
+                                      return null;
+                                    };
+                                    return (
+                                      <div className="widget-time-buckets">
+                                        {morning.length > 0 && (<div className="mb-3"><h6 className="text-muted mb-2 border-bottom pb-1 fw-bold"><small>Morning</small></h6>{sortByDueTime(morning).map(renderItem)}</div>)}
+                                        {afternoon.length > 0 && (<div className="mb-3"><h6 className="text-muted mb-2 border-bottom pb-1 fw-bold"><small>Afternoon</small></h6>{sortByDueTime(afternoon).map(renderItem)}</div>)}
+                                        {evening.length > 0 && (<div className="mb-3"><h6 className="text-muted mb-2 border-bottom pb-1 fw-bold"><small>Evening</small></h6>{sortByDueTime(evening).map(renderItem)}</div>)}
+                                        {other.length > 0 && (<div className="mb-0">{(morning.length > 0 || afternoon.length > 0 || evening.length > 0) && <h6 className="text-muted mb-2 border-bottom pb-1 fw-bold"><small>Other / Anytime</small></h6>}{sortByDueTime(other).map(renderItem)}</div>)}
+                                      </div>
+                                    );
+                                  })()
+                                )}
+                              </Card.Body>
+                            </Card>
+                            {renderWidgetEdgeHandles('tasksDueToday')}
+                            {renderWidgetResizeHandle('tasksDueToday', 320, 'Resize tasks due today widget')}
+                          </div>
+                        )}
+                        {widgetKey === 'choresHabits' && widgetVisibility.choresHabits && (
+                          <div
+                            ref={setWidgetResizeContainer('choresHabits')}
+                            className="dashboard-widget-shell"
+                            style={getWidgetSizeStyle('choresHabits', 320)}
+                          >
+                            <Card className="shadow-sm border-0 h-100 dashboard-chores-card">
+                              <Card.Header className="d-flex align-items-center justify-content-between">
+                                <div className="fw-semibold d-flex align-items-center gap-2">
+                                  <ListChecks size={16} /> Chores & Habits
+                                </div>
+                                <div className="d-flex align-items-center gap-2">
+                                  <Link to="/dashboard/habit-tracking" className="btn btn-sm btn-outline-secondary">Tracking</Link>
+                                  <Link to="/chores/checklist" className="btn btn-sm btn-outline-secondary">Checklist</Link>
+                                  <Badge bg={choresDueTodayTasks.length > 0 ? 'info' : 'secondary'} pill>{choresDueTodayTasks.length}</Badge>
+                                </div>
+                              </Card.Header>
+                              <Card.Body className="p-3">
+                                {tasksDueTodayLoading ? (
+                                  <div className="d-flex align-items-center gap-2 text-muted"><Spinner size="sm" animation="border" /> Loading chores…</div>
+                                ) : choresDueTodayTasks.length === 0 ? (
+                                  <div className="text-muted small">No chores, habits, or routines due today.</div>
+                                ) : (
+                                  (() => {
+                                    const morning: typeof choresDueTodayTasks = [];
+                                    const afternoon: typeof choresDueTodayTasks = [];
+                                    const evening: typeof choresDueTodayTasks = [];
+                                    const other: typeof choresDueTodayTasks = [];
+                                    choresDueTodayTasks.forEach((task) => {
+                                      const tod = (task as any).timeOfDay;
+                                      if (tod === 'morning') morning.push(task);
+                                      else if (tod === 'afternoon') afternoon.push(task);
+                                      else if (tod === 'evening') evening.push(task);
+                                      else other.push(task);
+                                    });
+                                    const renderChore = (task: any) => {
+                                      const kind = getChoreKind(task) || 'chore';
+                                      const dueMs = resolveRecurringDueMs(task, todayDate, todayStartMs);
+                                      const dueLabel = dueMs ? formatDueDetail(dueMs) : 'today';
+                                      const isOverdue = !!dueMs && dueMs < todayStartMs;
+                                      const badgeVariant = kind === 'routine' ? 'success' : kind === 'habit' ? 'secondary' : 'primary';
+                                      const badgeLabel = kind === 'routine' ? 'Routine' : kind === 'habit' ? 'Habit' : 'Chore';
+                                      const busy = !!choreCompletionBusy[task.id];
+                                      return (
+                                        <div key={task.id} className="border rounded p-2 mb-2 d-flex align-items-start gap-2">
+                                          <Form.Check type="checkbox" checked={busy} disabled={busy} onChange={() => handleCompleteChoreTask(task)} aria-label={`Complete ${task.title}`} />
+                                          <div className="flex-grow-1">
+                                            <Link to={`/chores/checklist?taskId=${encodeURIComponent(task.id)}`} className="text-decoration-none fw-semibold small">{task.title}</Link>
+                                            <div className="text-muted small">Due {dueLabel}</div>
+                                          </div>
+                                          <div className="d-flex flex-column align-items-end gap-1">
+                                            <button type="button" className="d-inline-flex align-items-center justify-content-center" onClick={() => showSidebar(task as any, 'task' as any)} title="Activity stream" style={{ color: 'var(--bs-secondary-color)', padding: 4, borderRadius: 4, border: 'none', background: 'transparent', cursor: 'pointer', lineHeight: 0 }}>
+                                              <Activity size={14} />
+                                            </button>
+                                            {isOverdue && <Badge bg="danger">Overdue</Badge>}
+                                            <Badge bg={badgeVariant}>{badgeLabel}</Badge>
+                                          </div>
+                                        </div>
+                                      );
+                                    };
+                                    return (
+                                      <div className="widget-time-buckets">
+                                        {morning.length > 0 && (<div className="mb-3"><h6 className="text-muted mb-2 border-bottom pb-1 fw-bold"><small>Morning</small></h6>{morning.map((t) => renderChore(t))}</div>)}
+                                        {afternoon.length > 0 && (<div className="mb-3"><h6 className="text-muted mb-2 border-bottom pb-1 fw-bold"><small>Afternoon</small></h6>{afternoon.map((t) => renderChore(t))}</div>)}
+                                        {evening.length > 0 && (<div className="mb-3"><h6 className="text-muted mb-2 border-bottom pb-1 fw-bold"><small>Evening</small></h6>{evening.map((t) => renderChore(t))}</div>)}
+                                        {other.length > 0 && (<div className="mb-0">{(morning.length > 0 || afternoon.length > 0 || evening.length > 0) && <h6 className="text-muted mb-2 border-bottom pb-1 fw-bold"><small>Other / Anytime</small></h6>}{other.map((t) => renderChore(t))}</div>)}
+                                      </div>
+                                    );
+                                  })()
+                                )}
+                              </Card.Body>
+                            </Card>
+                            {renderWidgetEdgeHandles('choresHabits')}
+                            {renderWidgetResizeHandle('choresHabits', 320, 'Resize chores and habits widget')}
+                          </div>
+                        )}
+                                    {widgetKey === 'calendar' && widgetVisibility.calendar && (
+                          <div
+                            ref={setWidgetResizeContainer('calendar')}
+                            className="dashboard-widget-shell"
+                            style={getWidgetSizeStyle('calendar', 420)}
+                          >
+                            <Card className="shadow-sm border-0 mb-3 d-flex flex-column">
+                              <Card.Header className="d-flex align-items-center justify-content-between">
+                                <div className="fw-semibold d-flex align-items-center gap-2">
+                                  <CalendarIcon size={16} /> Calendar
+                                </div>
+                                <Link to="/calendar" className="btn btn-sm btn-outline-secondary">Open full calendar</Link>
+                              </Card.Header>
+                              <Card.Body className="p-0 flex-grow-1" style={{ minHeight: 0, overflow: 'hidden' }}>
+                                <RBC
+                                  localizer={_rbcLocalizer}
+                                  events={calendarEvents}
+                                  defaultView={Views.AGENDA}
+                                  view={Views.AGENDA}
+                                  date={new Date()}
+                                  onView={() => {}}
+                                  onNavigate={() => {}}
+                                  style={{ height: '100%', minHeight: 360 }}
+                                  eventPropGetter={(event: any) => ({
+                                    style: { backgroundColor: event.color || '#3b82f6', color: event.textColor || '#fff', border: 'none' },
+                                  })}
+                                  formats={{
+                                    timeGutterFormat: (date: Date) => format(date, 'HH:mm'),
+                                    eventTimeRangeFormat: ({ start, end }: { start: Date; end: Date }) => `${format(start, 'HH:mm')} – ${format(end, 'HH:mm')}`,
+                                  }}
+                                />
+                              </Card.Body>
+                            </Card>
+                            {renderWidgetEdgeHandles('calendar')}
+                          </div>
+                        )}
+                                  </SortableDashboardWidget>
+                                );
+                              })}
+                            </div>
+                          </SortableContext>
+                        </DndContext>
+                    </div>
+                  </Card.Body>
+                </Card>
+              </Col>
+            </Row>
 
-          <Row className="g-3 mt-3">
-            <Col xl={12}>
-              <Card className="shadow-sm border-0">
-                <Card.Header className="d-flex justify-content-between align-items-center">
-                  <span className="fw-semibold">Automation Snapshot</span>
-                  <Button variant="link" size="sm" className="text-decoration-none p-0" onClick={handleNavigateToTasksToday}>
-                    Go to Tasks
-                  </Button>
-                </Card.Header>
-                <Card.Body>
-                  <ul className="list-unstyled mb-3">
-                    {automationSnapshot.map((item) => (
-                      <li key={item.label} className="d-flex justify-content-between align-items-center py-1">
-                        <span className="text-muted">{item.label}</span>
-                        <span className="fw-semibold">{item.value}</span>
-                      </li>
-                    ))}
-                  </ul>
-                  <div className="text-muted small">
-                    Weekly summary and priorities roll into this view after nightly runs.
-                  </div>
-                </Card.Body>
-              </Card>
-            </Col>
-          </Row>
-        </Col>
-      </Row>
-    </Container>
+          </Col>
+        </Row>
+      </Container>
 
-    <EditTaskModal
-      show={!!inlineEditTask}
-      task={inlineEditTask}
-      onHide={() => setInlineEditTask(null)}
-    />
-    <EditStoryModal
-      show={!!inlineEditStory}
-      story={inlineEditStory}
-      goals={goalsList}
-      onHide={() => setInlineEditStory(null)}
-    />
+      <EditTaskModal
+        show={!!inlineEditTask}
+        task={inlineEditTask}
+        onHide={() => setInlineEditTask(null)}
+      />
+      <EditStoryModal
+        show={!!inlineEditStory}
+        story={inlineEditStory}
+        goals={goalsList}
+        onHide={() => setInlineEditStory(null)}
+      />
     </>
   );
 };

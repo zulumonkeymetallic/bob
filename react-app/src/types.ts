@@ -1,3 +1,28 @@
+export interface FocusGoal {
+  id: string;
+  ownerUid: string;
+  persona: 'personal' | 'work';
+  goalIds: string[]; // IDs of goals selected for focus
+  timeframe: 'sprint' | 'quarter' | 'year'; // Duration of focus
+  startDate: any; // Firebase Timestamp
+  endDate: any; // Firebase Timestamp (calculated from timeframe)
+  daysRemaining?: number; // Calculated: days until endDate
+  title?: string; // Optional custom title for this focus set
+  description?: string;
+  createdAt: any; // Firebase Timestamp
+  updatedAt: any; // Firebase Timestamp
+  isActive: boolean; // Whether this focus goal set is currently active
+  storiesCreatedFor?: string[]; // Track which goal stories were auto-created
+  potIdsCreatedFor?: { [goalId: string]: string }; // Track which pots were auto-created per goal
+  visionText?: string;
+  intentBrokerIntakeId?: string;
+  intentMatches?: Array<{ goalId: string; title: string; score: number; tag?: string }>;
+  intentProposals?: Array<{ tag: string; title: string; rationale: string; confidence: number }>;
+  storyTableHandoff?: boolean;
+  autoCreatedSprintIds?: string[];
+  deferredNonFocusCount?: number;
+}
+
 export interface Goal {
   id: string;
   ref?: string;
@@ -27,6 +52,10 @@ export interface Goal {
   // Relationships
   parentGoalId?: string | null; // Optional parent goal relationship
   dependsOnGoalIds?: string[]; // Optional dependency links
+  // Publishing & sharing
+  isPublished?: boolean; // Whether goal is publicly shareable
+  shareCode?: string; // Unique code for sharing (e.g., abc123xyz)
+  publishedAt?: any; // Firebase Timestamp when goal was published
   // Legacy fields for backward compatibility
   dueDate?: number;
   category?: string;
@@ -57,6 +86,8 @@ export interface Story {
   updatedAt: any; // Firebase Timestamp
   url?: string | null;
   dueDate?: number; // Legacy compatibility
+  dueTime?: string; // HH:mm format
+  timeOfDay?: 'morning' | 'afternoon' | 'evening';
   targetDate?: number | string;
   plannedStartDate?: number | string;
   taskCount?: number;
@@ -72,6 +103,9 @@ export interface Story {
   // User-set #1 priority flag for gcal override
   userPriorityFlag?: boolean;
   userPriorityFlagAt?: string;
+  deferredUntil?: any;
+  deferredReason?: string;
+  deferredBy?: string;
   // Optional travel/location metadata
   countryCode?: string; // ISO alpha-2
   city?: string;
@@ -197,6 +231,8 @@ export interface Task {
   startDate?: number;
   dueDate?: number;
   dueDateMs?: number;
+  dueTime?: string; // HH:mm format
+  timeOfDay?: 'morning' | 'afternoon' | 'evening';
   dueDateLocked?: boolean;
   dueDateReason?: string;
   lockDueDate?: boolean;
@@ -266,6 +302,9 @@ export interface Task {
   completedAt?: number; // when status first moved to Done
   deleteAfter?: number; // scheduled deletion timestamp (TTL)
   duplicateFlag?: boolean; // normalized duplicate indicator
+  deferredUntil?: any;
+  deferredReason?: string;
+  deferredBy?: string;
 }
 
 export interface Column {

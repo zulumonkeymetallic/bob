@@ -744,9 +744,9 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
               kpiSummary: goalKpiStatus.kpiSummary,
             };
           const kpiStatusColor = effectiveGoalKpiStatus.tone === 'success'
-            ? '#059669'
+            ? 'var(--green)'
             : effectiveGoalKpiStatus.tone === 'danger'
-            ? '#dc2626'
+            ? 'var(--red)'
             : 'var(--muted)';
           const kpiProgressLabel = effectiveGoalKpiStatus.progressPct != null
             ? `${Math.round(effectiveGoalKpiStatus.progressPct)}%${effectiveGoalKpiStatus.expectedProgressPct != null ? ` (exp ${Math.round(effectiveGoalKpiStatus.expectedProgressPct)}%)` : ''}`
@@ -924,10 +924,9 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                           color: mutedTextColor,
                           fontSize: '14px',
                           lineHeight: '1.5',
-                          display: '-webkit-box',
-                          WebkitLineClamp: showDetailed ? 4 : 3,
-                          WebkitBoxOrient: 'vertical',
-                          overflow: 'hidden'
+                          whiteSpace: 'normal',
+                          overflowWrap: 'anywhere',
+                          wordBreak: 'break-word'
                         }}
                       >
                         {goal.description}

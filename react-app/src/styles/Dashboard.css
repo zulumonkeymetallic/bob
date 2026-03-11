@@ -3,6 +3,13 @@
   padding: 20px;
 }
 
+/* Equalise all overview widget card headers to the same height */
+.dashboard-widget-shell .card-header {
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+}
+
 .dashboard-compact {
   padding-top: 8px !important;
   padding-bottom: 8px !important;
@@ -100,6 +107,68 @@
   position: relative;
 }
 
+.dashboard-widget-shell {
+  position: relative;
+  width: 100%;
+  max-width: 100%;
+  margin-bottom: 1rem;
+}
+
+.dashboard-widget-shell > .card {
+  height: 100%;
+  margin-bottom: 0 !important;
+  display: flex;
+  flex-direction: column;
+}
+
+.dashboard-widget-shell > .card .card-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.dashboard-widget-resize-handle {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  width: 16px;
+  height: 16px;
+  border: 0;
+  background: transparent;
+  cursor: nwse-resize;
+  z-index: 8;
+  touch-action: none;
+}
+
+.dashboard-widget-resize-handle::before,
+.dashboard-widget-resize-handle::after {
+  content: '';
+  position: absolute;
+  right: 1px;
+  bottom: 1px;
+  border-right: 2px solid var(--bs-border-color);
+  border-bottom: 2px solid var(--bs-border-color);
+  opacity: 0.75;
+}
+
+.dashboard-widget-resize-handle::before {
+  width: 8px;
+  height: 8px;
+}
+
+.dashboard-widget-resize-handle::after {
+  width: 13px;
+  height: 13px;
+  opacity: 0.45;
+}
+
+.dashboard-widget-resize-handle:hover::before,
+.dashboard-widget-resize-handle:focus-visible::before,
+.dashboard-widget-resize-handle:hover::after,
+.dashboard-widget-resize-handle:focus-visible::after {
+  opacity: 0.95;
+}
+
 .today-plan-col-resize-handle {
   position: absolute;
   top: 0;
@@ -135,6 +204,12 @@
 body.today-plan-resizing,
 body.today-plan-resizing * {
   cursor: col-resize !important;
+  user-select: none !important;
+}
+
+body.dashboard-widget-resizing,
+body.dashboard-widget-resizing * {
+  cursor: nwse-resize !important;
   user-select: none !important;
 }
 
@@ -295,6 +370,12 @@ body.today-plan-resizing * {
   }
 }
 
+@media (max-width: 767.98px) {
+  .dashboard-widget-resize-handle {
+    display: none;
+  }
+}
+
 @media (min-width: 1400px) {
   /* Wider desktops: give calendar a bit more horizontal room */
   .today-plan-layout > .today-plan-col-summary {
@@ -383,5 +464,261 @@ body.today-plan-resizing * {
 @media (max-width: 768px) {
   .dashboard-charts {
     grid-template-columns: 1fr;
+  }
+}
+
+/* ─── Widget container queries (adaptive internal layouts) ─────────── */
+/*
+ * container-type goes on .card-body, NOT .dashboard-widget-shell.
+ * Putting it on the shell breaks absolute-positioned edge handles
+ * (container-type creates a new containing block + stacking context).
+ */
+.dashboard-widget-shell .card-body {
+  container-type: inline-size;
+  container-name: widget-body;
+}
+
+/* Time buckets: morning / afternoon / evening — stack by default, columns when wide */
+.widget-time-buckets {
+  display: flex;
+  flex-direction: column;
+}
+
+@container widget-body (min-width: 480px) {
+  .widget-time-buckets {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 1rem;
+    align-items: start;
+  }
+  .widget-time-buckets > div {
+    margin-bottom: 0 !important;
+  }
+}
+
+/* Item grids: task/story lists go multi-column when widget is wide */
+.widget-items-grid {
+  display: flex;
+  flex-direction: column;
+}
+
+@container widget-body (min-width: 480px) {
+  .widget-items-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 0.5rem;
+    align-items: start;
+  }
+  .widget-items-grid > .border {
+    margin-bottom: 0 !important;
+  }
+}
+
+/* ─── Key metrics bar: auto-size cards to fit content ───────────────── */
+.dashboard-key-metrics {
+  flex-wrap: wrap !important;
+}
+.dashboard-key-metrics > * {
+  flex: 1 1 auto !important;
+  min-width: 90px !important;
+  width: auto !important;
+  max-width: none !important;
+}
+
+/* ─── Draggable widget grid ─────────────────────────────────────────── */
+.dashboard-widget-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: flex-start;
+  padding: 2px;
+}
+
+.dashboard-sortable-item {
+  position: relative;
+  flex: 1 1 300px;
+  min-width: 220px;
+  box-sizing: border-box;
+}
+
+/* Drag handle — full-width header strip, leaves right ~130px free for action buttons */
+.dashboard-drag-handle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 130px;
+  height: 46px;
+  z-index: 10;
+  cursor: grab;
+  background: transparent;
+  border-radius: var(--bs-border-radius, 0.375rem) 0 0 0;
+}
+
+.dashboard-drag-handle:active {
+  cursor: grabbing;
+}
+
+/* Left / right edge resize handles */
+.dashboard-widget-resize-left,
+.dashboard-widget-resize-right {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 12px;
+  border: none;
+  background: transparent;
+  cursor: col-resize;
+  z-index: 9;
+  padding: 0;
+  touch-action: none;
+}
+
+.dashboard-widget-resize-left {
+  left: -4px;
+}
+
+.dashboard-widget-resize-right {
+  right: -4px;
+}
+
+.dashboard-widget-resize-left::before,
+.dashboard-widget-resize-right::before {
+  content: '';
+  position: absolute;
+  top: 15%;
+  bottom: 15%;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--bs-border-color);
+  opacity: 0;
+  transition: opacity 120ms ease-in-out;
+}
+
+.dashboard-widget-resize-left::before {
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.dashboard-widget-resize-right::before {
+  right: 50%;
+  transform: translateX(50%);
+}
+
+.dashboard-widget-resize-left:hover::before,
+.dashboard-widget-resize-left:focus-visible::before,
+.dashboard-widget-resize-right:hover::before,
+.dashboard-widget-resize-right:focus-visible::before {
+  opacity: 0.65;
+}
+
+/* Top / bottom edge resize handles */
+.dashboard-widget-resize-top,
+.dashboard-widget-resize-bottom {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 10px;
+  border: none;
+  background: transparent;
+  cursor: ns-resize;
+  z-index: 11;
+  padding: 0;
+  touch-action: none;
+}
+
+.dashboard-widget-resize-top {
+  top: -4px;
+}
+
+.dashboard-widget-resize-bottom {
+  bottom: -4px;
+}
+
+.dashboard-widget-resize-top::before,
+.dashboard-widget-resize-bottom::before {
+  content: '';
+  position: absolute;
+  left: 15%;
+  right: 15%;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--bs-border-color);
+  opacity: 0;
+  transition: opacity 120ms ease-in-out;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.dashboard-widget-resize-top:hover::before,
+.dashboard-widget-resize-top:focus-visible::before,
+.dashboard-widget-resize-bottom:hover::before,
+.dashboard-widget-resize-bottom:focus-visible::before {
+  opacity: 0.65;
+}
+
+/* Corner resize handles */
+.dashboard-widget-resize-nw,
+.dashboard-widget-resize-ne,
+.dashboard-widget-resize-sw,
+.dashboard-widget-resize-se {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  z-index: 12;
+  padding: 0;
+  border: none;
+  background: transparent;
+  touch-action: none;
+  opacity: 0;
+  transition: opacity 120ms ease-in-out;
+}
+
+.dashboard-sortable-item:hover .dashboard-widget-resize-nw,
+.dashboard-sortable-item:hover .dashboard-widget-resize-ne,
+.dashboard-sortable-item:hover .dashboard-widget-resize-sw,
+.dashboard-sortable-item:hover .dashboard-widget-resize-se {
+  opacity: 1;
+}
+
+.dashboard-widget-resize-nw { top: -4px; left: -4px; cursor: nw-resize; }
+.dashboard-widget-resize-ne { top: -4px; right: -4px; cursor: ne-resize; }
+.dashboard-widget-resize-sw { bottom: -4px; left: -4px; cursor: sw-resize; }
+.dashboard-widget-resize-se { bottom: -4px; right: -4px; cursor: se-resize; }
+
+.dashboard-widget-resize-nw::before,
+.dashboard-widget-resize-ne::before,
+.dashboard-widget-resize-sw::before,
+.dashboard-widget-resize-se::before {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  border-radius: 3px;
+  background: var(--bs-border-color);
+}
+
+/* Hide resize handles on mobile */
+@media (max-width: 767.98px) {
+  .dashboard-widget-grid {
+    flex-direction: column;
+  }
+
+  .dashboard-sortable-item {
+    flex: none;
+    width: 100% !important;
+  }
+
+  .dashboard-widget-resize-left,
+  .dashboard-widget-resize-right,
+  .dashboard-widget-resize-top,
+  .dashboard-widget-resize-bottom,
+  .dashboard-widget-resize-nw,
+  .dashboard-widget-resize-ne,
+  .dashboard-widget-resize-sw,
+  .dashboard-widget-resize-se {
+    display: none;
+  }
+
+  .dashboard-drag-handle {
+    display: none;
   }
 }

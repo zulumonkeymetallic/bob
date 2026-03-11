@@ -210,7 +210,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
   onEdit,
   onDelete
 }) => {
-  const { selectedItem, selectedType, isVisible, isCollapsed, hideSidebar, toggleCollapse, updateItem } = useSidebar();
+  const { selectedItem, selectedType, isVisible, isCollapsed, hideSidebar, showSidebar, toggleCollapse, updateItem } = useSidebar();
   const { isTestMode, testModeLabel } = useTestMode();
   const { currentUser } = useAuth();
   const { themes: globalThemes } = useGlobalThemes();
@@ -236,6 +236,10 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
     ? (quickEdit.goalId || (selectedItem as any)?.goalId || '')
     : '';
   const linkedGoal = linkedGoalId ? goals.find((g) => g.id === linkedGoalId) : null;
+  const linkedStoryId = selectedType === 'task'
+    ? (quickEdit.storyId || (selectedItem as any)?.storyId || (selectedItem as any)?.parentId || '')
+    : '';
+  const linkedStory = linkedStoryId ? stories.find((s) => s.id === linkedStoryId) : null;
   const formatTag = useCallback(
     (tag: string) => formatTaskTagLabel(tag, goals, sprints),
     [goals, sprints]
@@ -420,18 +424,23 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
   React.useEffect(() => {
     if (!selectedItem || !selectedType) return;
     const base: any = { status: (selectedItem as any).status };
+    base.priority = (selectedItem as any).priority ?? '';
     if (selectedType === 'task') {
       base.dueDate = toDateInput((selectedItem as any).dueDate || (selectedItem as any).dueDateMs || (selectedItem as any).targetDate || null);
+      base.dueTime = (selectedItem as any).dueTime || '';
       base.sprintId = (selectedItem as any).sprintId || '';
       base.storyId = (selectedItem as any).storyId || (selectedItem as any).parentId || '';
       base.goalId = (selectedItem as any).goalId || '';
       base.description = (selectedItem as any).description || '';
       base.points = (selectedItem as any).points ?? TASK_DEFAULT_POINTS;
     } else if (selectedType === 'story') {
+      base.dueDate = toDateInput((selectedItem as any).dueDate || null);
+      base.dueTime = (selectedItem as any).dueTime || '';
       base.sprintId = (selectedItem as any).sprintId || '';
       base.goalId = (selectedItem as any).goalId || '';
       base.description = (selectedItem as any).description || '';
     } else if (selectedType === 'goal') {
+      base.dueDate = toDateInput((selectedItem as any).targetDate || (selectedItem as any).dueDate || null);
       base.description = (selectedItem as any).description || '';
       base.parentGoalId = (selectedItem as any).parentGoalId || '';
     }
@@ -450,10 +459,17 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
       const before: any = {};
       if (quickEdit.status !== undefined && quickEdit.status !== (selectedItem as any).status) { updates.status = Number(quickEdit.status); before.status = (selectedItem as any).status; }
       if (quickEdit.description !== undefined && quickEdit.description !== (selectedItem as any).description) { updates.description = String(quickEdit.description || ''); before.description = (selectedItem as any).description || ''; }
+      if (quickEdit.priority !== undefined && quickEdit.priority !== '' && Number(quickEdit.priority) !== Number((selectedItem as any).priority)) {
+        updates.priority = Number(quickEdit.priority);
+        before.priority = (selectedItem as any).priority;
+      }
       if (selectedType === 'task') {
         const newDueMs = fromDateInput(quickEdit.dueDate);
         const prevDue = (selectedItem as any).dueDate || (selectedItem as any).dueDateMs || (selectedItem as any).targetDate || null;
         if ((newDueMs || null) !== (prevDue || null)) { updates.dueDate = newDueMs; before.dueDate = prevDue; }
+        const newDueTime = quickEdit.dueTime || null;
+        const prevDueTime = (selectedItem as any).dueTime || null;
+        if (newDueTime !== prevDueTime) { updates.dueTime = newDueTime; before.dueTime = prevDueTime; }
         if (quickEdit.sprintId !== (selectedItem as any).sprintId) { updates.sprintId = quickEdit.sprintId || null; before.sprintId = (selectedItem as any).sprintId || null; }
         const newStoryId = typeof quickEdit.storyId === 'string' ? quickEdit.storyId : quickEdit.storyId?.toString() || '';
         const prevStory = (selectedItem as any).storyId || (selectedItem as any).parentId || '';
@@ -470,11 +486,20 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
           }
         }
       } else if (selectedType === 'story') {
+        const newDueMsStory = fromDateInput(quickEdit.dueDate);
+        const prevDueStory = (selectedItem as any).dueDate || null;
+        if ((newDueMsStory || null) !== (prevDueStory || null)) { updates.dueDate = newDueMsStory; before.dueDate = prevDueStory; }
+        const newDueTimeStory = quickEdit.dueTime || null;
+        const prevDueTimeStory = (selectedItem as any).dueTime || null;
+        if (newDueTimeStory !== prevDueTimeStory) { updates.dueTime = newDueTimeStory; before.dueTime = prevDueTimeStory; }
         if (quickEdit.sprintId !== (selectedItem as any).sprintId) { updates.sprintId = quickEdit.sprintId || null; before.sprintId = (selectedItem as any).sprintId || null; }
         const newGoalId = typeof quickEdit.goalId === 'string' ? quickEdit.goalId : quickEdit.goalId?.toString() || '';
         const prevGoal = (selectedItem as any).goalId || '';
         if ((newGoalId || '') !== (prevGoal || '')) { updates.goalId = newGoalId || null; before.goalId = prevGoal || null; }
       } else if (selectedType === 'goal') {
+        const newDueMsGoal = fromDateInput(quickEdit.dueDate);
+        const prevDueGoal = (selectedItem as any).targetDate || (selectedItem as any).dueDate || null;
+        if ((newDueMsGoal || null) !== (prevDueGoal || null)) { updates.targetDate = quickEdit.dueDate || null; before.targetDate = prevDueGoal; }
         const newParentGoalId = typeof quickEdit.parentGoalId === 'string' ? quickEdit.parentGoalId : quickEdit.parentGoalId?.toString() || '';
         const prevParent = (selectedItem as any).parentGoalId || '';
         if ((newParentGoalId || '') !== (prevParent || '')) { updates.parentGoalId = newParentGoalId || null; before.parentGoalId = prevParent || null; }
@@ -1200,16 +1225,45 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                       </Form.Select>
                     </div>
                     <div>
+                      <label className="small" style={{ display: 'block', marginBottom: 4 }}>Priority</label>
+                      <Form.Select size="sm" value={quickEdit.priority ?? ''} onChange={(e) => setQuickEdit((q: any) => ({ ...q, priority: e.target.value }))}>
+                        <option value="">—</option>
+                        <option value="4">P1 Critical</option>
+                        <option value="3">P2 High</option>
+                        <option value="2">P3 Medium</option>
+                        <option value="1">P4 Low</option>
+                      </Form.Select>
+                    </div>
+                    <div>
                       <label className="small" style={{ display: 'block', marginBottom: 4 }}>Due</label>
                       <Form.Control size="sm" type="date" value={quickEdit.dueDate || ''} onChange={(e) => setQuickEdit((q: any) => ({ ...q, dueDate: e.target.value }))} />
                     </div>
+                    {(selectedType === 'task' || selectedType === 'story') && (
+                      <div>
+                        <label className="small" style={{ display: 'block', marginBottom: 4 }}>Due Time</label>
+                        <Form.Control size="sm" type="time" value={quickEdit.dueTime || ''} onChange={(e) => setQuickEdit((q: any) => ({ ...q, dueTime: e.target.value || null }))} />
+                      </div>
+                    )}
                     {(selectedType === 'task' || selectedType === 'story') && (
                       <div>
                         <label className="small" style={{ display: 'block', marginBottom: 4 }}>Sprint</label>
                         <Form.Select
                           size="sm"
                           value={quickEdit.sprintId || ''}
-                          onChange={(e) => setQuickEdit((q: any) => ({ ...q, sprintId: e.target.value || null }))}
+                          onChange={(e) => {
+                            const newSprintId = e.target.value || null;
+                            const sprint = newSprintId ? sprints.find((s) => s.id === newSprintId) : null;
+                            const sprintStart = sprint?.startDate ?? (sprint as any)?.start ?? null;
+                            let snapDate: string | undefined;
+                            if (newSprintId && sprintStart) {
+                              const snapMs = typeof sprintStart === 'number' ? sprintStart
+                                : typeof sprintStart === 'string' ? Date.parse(sprintStart)
+                                : (sprintStart as any)?.seconds ? (sprintStart as any).seconds * 1000
+                                : null;
+                              if (snapMs) snapDate = new Date(snapMs).toISOString().slice(0, 10);
+                            }
+                            setQuickEdit((q: any) => ({ ...q, sprintId: newSprintId, ...(snapDate ? { dueDate: snapDate } : {}) }));
+                          }}
                           style={{ minHeight: '31px' }}
                         >
                           <option value="">None</option>
@@ -1237,6 +1291,16 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                           placeholder="Search stories…"
                           initialOptions={stories.map((st) => ({ id: st.id, title: st.title, ref: st.ref }))}
                         />
+                        {linkedStoryId && (
+                          <Button
+                            variant="link"
+                            size="sm"
+                            className="p-0 mt-1"
+                            onClick={() => linkedStory && showSidebar(linkedStory as any, 'story')}
+                          >
+                            Open story{linkedStory ? `: ${linkedStory.title}` : ''}
+                          </Button>
+                        )}
                       </div>
                     )}
                     {(selectedType === 'task' || selectedType === 'story') && (

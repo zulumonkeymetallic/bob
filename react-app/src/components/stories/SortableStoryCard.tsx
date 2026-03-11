@@ -2,7 +2,7 @@ import React from 'react';
 import { Button } from 'react-bootstrap';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { GripVertical, Activity, Wand2, Edit3, Trash2, Target } from 'lucide-react';
+import { GripVertical, Activity, Wand2, Edit3, Trash2, Target, CalendarPlus, Clock3 } from 'lucide-react';
 import { httpsCallable } from 'firebase/functions';
 
 import { Story, Goal } from '../../types';
@@ -23,12 +23,19 @@ interface SortableStoryCardProps {
     start: number;
     end: number;
     title?: string;
+    source?: string;
+    isAiGenerated?: boolean;
+    googleEventId?: string;
+    linkedStoryId?: string;
+    entryMethod?: string;
   };
   themeColor?: string;
   themes?: GlobalTheme[];
   onEdit?: (story: Story) => void;
   onDelete?: (story: Story) => void;
   onItemClick?: (story: Story) => void;
+  onManualSchedule?: (story: Story) => void;
+  onDefer?: (story: Story) => void;
   showTags?: boolean;
 }
 
@@ -52,6 +59,8 @@ const SortableStoryCard: React.FC<SortableStoryCardProps> = ({
   onEdit,
   onDelete,
   onItemClick,
+  onManualSchedule,
+  onDefer,
   showTags,
 }) => {
   const { showSidebar } = useSidebar();
@@ -113,6 +122,17 @@ const SortableStoryCard: React.FC<SortableStoryCardProps> = ({
     const dayLabel = start.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
     const timeLabel = `${start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}-${end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
     return `Planned ${dayLabel} ${timeLabel}`;
+  })();
+
+  const scheduledBlockSourceLabel = (() => {
+    if (!scheduledBlockLabel) return null;
+    const source = String(scheduledBlock?.source || '').toLowerCase();
+    const entryMethod = String(scheduledBlock?.entryMethod || '').toLowerCase();
+    const fromGcal = source === 'gcal' || !!scheduledBlock?.googleEventId;
+    if (fromGcal && (scheduledBlock?.linkedStoryId || scheduledBlock?.googleEventId)) return 'Linked from Google Calendar';
+    if (scheduledBlock?.isAiGenerated) return 'Auto planned';
+    if (entryMethod.includes('manual') || source === 'manual' || source === 'bob') return 'Manually planned';
+    return 'Planned';
   })();
 
   const safeTaskCount = Number.isFinite(taskCount) ? Number(taskCount) : 0;
@@ -215,6 +235,38 @@ const SortableStoryCard: React.FC<SortableStoryCardProps> = ({
                   <Trash2 size={12} />
                 </Button>
               )}
+              {onManualSchedule && (
+                <Button
+                  variant="link"
+                  size="sm"
+                  className="p-0"
+                  style={{ width: 24, height: 24, color: themeVars.muted }}
+                  title="Schedule manually"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onManualSchedule(story);
+                  }}
+                  onPointerDown={(e) => e.stopPropagation()}
+                >
+                  <CalendarPlus size={12} />
+                </Button>
+              )}
+              {onDefer && (
+                <Button
+                  variant="link"
+                  size="sm"
+                  className="p-0"
+                  style={{ width: 24, height: 24, color: themeVars.muted }}
+                  title="Defer intelligently"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onDefer(story);
+                  }}
+                  onPointerDown={(e) => e.stopPropagation()}
+                >
+                  <Clock3 size={12} />
+                </Button>
+              )}
             </div>
           </div>
 
@@ -256,16 +308,23 @@ const SortableStoryCard: React.FC<SortableStoryCardProps> = ({
               {(story.points ?? 0)} pts
             </span>
             {scheduledBlockLabel && (
-              <span
-                className="kanban-card__meta-badge"
-                style={{
-                  borderColor: 'rgba(37, 99, 235, 0.45)',
-                  backgroundColor: 'rgba(37, 99, 235, 0.12)',
-                  color: '#2563eb',
-                }}
-                title={scheduledBlock?.title || 'Planned calendar block'}
-              >
-                {scheduledBlockLabel}
+              <span className="d-inline-flex flex-column" style={{ lineHeight: 1.2 }}>
+                <span
+                  className="kanban-card__meta-badge"
+                  style={{
+                    borderColor: 'rgba(37, 99, 235, 0.45)',
+                    backgroundColor: 'rgba(37, 99, 235, 0.12)',
+                    color: '#2563eb',
+                  }}
+                  title={scheduledBlock?.title || 'Planned calendar block'}
+                >
+                  {scheduledBlockLabel}
+                </span>
+                {scheduledBlockSourceLabel && (
+                  <span className="text-muted" style={{ fontSize: '0.65rem', marginTop: 2 }}>
+                    {scheduledBlockSourceLabel}
+                  </span>
+                )}
               </span>
             )}
             <span className="kanban-card__meta-text" title="Status">

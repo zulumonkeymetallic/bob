@@ -1,15 +1,18 @@
-import React, { useEffect, useState } from 'react';
-import { Alert, Badge, Button, Card, Col, Container, Form, ListGroup, Row, Spinner } from 'react-bootstrap';
+import React, { useCallback, useEffect, useState } from 'react';
+import { Alert, Badge, Button, Card, Col, Container, Form, ListGroup, Modal, Row, Spinner } from 'react-bootstrap';
 import { BookOpen } from 'lucide-react';
-import { collection, onSnapshot, query, where } from 'firebase/firestore';
-import { Link as RouterLink, useNavigate, useParams } from 'react-router-dom';
+import { collection, doc, getDoc, getDocs, limit, onSnapshot, query, where } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
+import { useNavigate, useParams } from 'react-router-dom';
 
-import { db } from '../firebase';
+import { db, functions } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
-import type { JournalEntry } from '../types';
+import type { Goal, JournalEntry, Story, Task } from '../types';
 import EmptyState from './common/EmptyState';
 import PageHeader from './common/PageHeader';
+import EditTaskModal from './EditTaskModal';
+import EditStoryModal from './EditStoryModal';
 
 type LinkedEntitySummary = {
   id: string;
@@ -174,10 +177,155 @@ const JournalsManagement: React.FC = () => {
   const [linkedStories, setLinkedStories] = useState<LinkedEntitySummary[]>([]);
   const [linkedTasks, setLinkedTasks] = useState<LinkedEntitySummary[]>([]);
   const [linkedError, setLinkedError] = useState<string | null>(null);
+  const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [editingStory, setEditingStory] = useState<Story | null>(null);
+  const [storyGoals, setStoryGoals] = useState<Goal[]>([]);
+
+  // Edit / delete state
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [editFields, setEditFields] = useState({ oneLineSummary: '', structuredEntry: '', advice: '' });
+  const [actionLoading, setActionLoading] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  const openEdit = () => {
+    if (!selectedJournal) return;
+    setEditFields({
+      oneLineSummary: String(selectedJournal.oneLineSummary || ''),
+      structuredEntry: String(selectedJournal.structuredEntry || ''),
+      advice: String(selectedJournal.advice || ''),
+    });
+    setActionError(null);
+    setShowEditModal(true);
+  };
+
+  const handleSaveEdit = async () => {
+    if (!selectedJournal) return;
+    setActionLoading(true);
+    setActionError(null);
+    try {
+      await httpsCallable(functions, 'editJournalEntry')({
+        journalId: selectedJournal.id,
+        ...editFields,
+      });
+      setShowEditModal(false);
+    } catch (err: any) {
+      setActionError(err?.message || 'Failed to save changes');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!selectedJournal) return;
+    setActionLoading(true);
+    setActionError(null);
+    try {
+      await httpsCallable(functions, 'deleteJournalEntry')({ journalId: selectedJournal.id });
+      setShowDeleteConfirm(false);
+      setSelectedJournalId(null);
+      navigate('/journals', { replace: true });
+    } catch (err: any) {
+      setActionError(err?.message || 'Failed to delete journal entry');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const openStoryEdit = useCallback(async (summary: LinkedEntitySummary) => {
+    try {
+      const storyId = String(summary.id || '').trim();
+      if (storyId) {
+        const snap = await getDoc(doc(db, 'stories', storyId));
+        if (snap.exists()) {
+          setEditingStory({ id: snap.id, ...(snap.data() as any) } as Story);
+          return;
+        }
+      }
+
+      const ref = String(summary.ref || '').trim();
+      if (currentUser?.uid && ref) {
+        const byRef = await getDocs(query(
+          collection(db, 'stories'),
+          where('ownerUid', '==', currentUser.uid),
+          where('ref', '==', ref),
+          limit(1),
+        ));
+        if (!byRef.empty) {
+          const found = byRef.docs[0];
+          setEditingStory({ id: found.id, ...(found.data() as any) } as Story);
+          return;
+        }
+      }
+
+      setEditingStory({
+        id: summary.id,
+        ref: summary.ref,
+        title: summary.title || summary.ref || summary.id,
+      } as Story);
+    } catch (error) {
+      console.warn('[JournalsManagement] failed to open story editor', error);
+    }
+  }, [currentUser?.uid]);
+
+  const openTaskEdit = useCallback(async (summary: LinkedEntitySummary) => {
+    try {
+      const taskId = String(summary.id || '').trim();
+      if (taskId) {
+        const snap = await getDoc(doc(db, 'tasks', taskId));
+        if (snap.exists()) {
+          setEditingTask({ id: snap.id, ...(snap.data() as any) } as Task);
+          return;
+        }
+      }
+
+      const ref = String(summary.ref || '').trim();
+      if (currentUser?.uid && ref) {
+        const byRef = await getDocs(query(
+          collection(db, 'tasks'),
+          where('ownerUid', '==', currentUser.uid),
+          where('ref', '==', ref),
+          limit(1),
+        ));
+        if (!byRef.empty) {
+          const found = byRef.docs[0];
+          setEditingTask({ id: found.id, ...(found.data() as any) } as Task);
+          return;
+        }
+      }
+
+      setEditingTask({
+        id: summary.id,
+        ref: summary.ref,
+        title: summary.title || summary.ref || summary.id,
+      } as Task);
+    } catch (error) {
+      console.warn('[JournalsManagement] failed to open task editor', error);
+    }
+  }, [currentUser?.uid]);
 
   useEffect(() => {
     setSelectedJournalId(routeJournalId || null);
   }, [routeJournalId]);
+
+  useEffect(() => {
+    if (!currentUser?.uid) {
+      setStoryGoals([]);
+      return;
+    }
+
+    const goalQuery = query(
+      collection(db, 'goals'),
+      where('ownerUid', '==', currentUser.uid),
+      ...(currentPersona ? [where('persona', '==', currentPersona)] : []),
+    );
+
+    const unsubscribe = onSnapshot(goalQuery, (snap) => {
+      setStoryGoals(snap.docs.map((goalDoc) => ({ id: goalDoc.id, ...(goalDoc.data() as any) } as Goal)));
+    });
+
+    return () => unsubscribe();
+  }, [currentPersona, currentUser?.uid]);
 
   useEffect(() => {
     if (!currentUser?.uid) {
@@ -452,6 +600,12 @@ const JournalsManagement: React.FC = () => {
                           Open Google Doc
                         </Button>
                       )}
+                      <Button variant="outline-secondary" size="sm" onClick={openEdit}>
+                        Edit
+                      </Button>
+                      <Button variant="outline-danger" size="sm" onClick={() => { setActionError(null); setShowDeleteConfirm(true); }}>
+                        Delete
+                      </Button>
                     </div>
                   </div>
 
@@ -576,9 +730,14 @@ const JournalsManagement: React.FC = () => {
                               {linkedStories.map((story) => (
                                 <ListGroup.Item key={story.id} className="d-flex justify-content-between align-items-center gap-3">
                                   <div>
-                                    <RouterLink to={`/stories/${encodeURIComponent(String(story.ref || story.id))}`} style={{ fontWeight: 700, textDecoration: 'none' }}>
+                                    <button
+                                      type="button"
+                                      className="btn btn-link p-0"
+                                      style={{ fontWeight: 700, textDecoration: 'none' }}
+                                      onClick={() => { void openStoryEdit(story); }}
+                                    >
                                       {String(story.ref || story.id)}
-                                    </RouterLink>
+                                    </button>
                                     <div>{story.title}</div>
                                     {story.inaccessible ? (
                                       <div className="text-muted small">Loaded from journal snapshot</div>
@@ -598,9 +757,14 @@ const JournalsManagement: React.FC = () => {
                               {linkedTasks.map((task) => (
                                 <ListGroup.Item key={task.id} className="d-flex justify-content-between align-items-center gap-3">
                                   <div>
-                                    <RouterLink to={`/tasks/${encodeURIComponent(String(task.ref || task.id))}`} style={{ fontWeight: 700, textDecoration: 'none' }}>
+                                    <button
+                                      type="button"
+                                      className="btn btn-link p-0"
+                                      style={{ fontWeight: 700, textDecoration: 'none' }}
+                                      onClick={() => { void openTaskEdit(task); }}
+                                    >
                                       {String(task.ref || task.id)}
-                                    </RouterLink>
+                                    </button>
                                     <div>{task.title}</div>
                                     {task.inaccessible ? (
                                       <div className="text-muted small">Loaded from journal snapshot</div>
@@ -637,6 +801,91 @@ const JournalsManagement: React.FC = () => {
           </Card>
         </Col>
       </Row>
+      {/* Edit Modal */}
+      <Modal show={showEditModal} onHide={() => setShowEditModal(false)} size="lg" centered>
+        <Modal.Header closeButton>
+          <Modal.Title>Edit Journal Entry</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          {actionError && <Alert variant="danger">{actionError}</Alert>}
+          <Form.Group className="mb-3">
+            <Form.Label>One-line Summary</Form.Label>
+            <Form.Control
+              type="text"
+              value={editFields.oneLineSummary}
+              onChange={(e) => setEditFields((p) => ({ ...p, oneLineSummary: e.target.value }))}
+            />
+          </Form.Group>
+          <Form.Group className="mb-3">
+            <Form.Label>Journal Entry</Form.Label>
+            <Form.Control
+              as="textarea"
+              rows={10}
+              value={editFields.structuredEntry}
+              onChange={(e) => setEditFields((p) => ({ ...p, structuredEntry: e.target.value }))}
+            />
+          </Form.Group>
+          <Form.Group className="mb-3">
+            <Form.Label>Advice</Form.Label>
+            <Form.Control
+              as="textarea"
+              rows={4}
+              value={editFields.advice}
+              onChange={(e) => setEditFields((p) => ({ ...p, advice: e.target.value }))}
+            />
+          </Form.Group>
+          {selectedJournal?.googleDoc?.appended && (
+            <Alert variant="info" className="mb-0">
+              Changes will be synced to the linked Google Doc.
+            </Alert>
+          )}
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setShowEditModal(false)} disabled={actionLoading}>
+            Cancel
+          </Button>
+          <Button variant="primary" onClick={handleSaveEdit} disabled={actionLoading}>
+            {actionLoading ? 'Saving…' : 'Save Changes'}
+          </Button>
+        </Modal.Footer>
+      </Modal>
+
+      {/* Delete Confirm Modal */}
+      <Modal show={showDeleteConfirm} onHide={() => setShowDeleteConfirm(false)} centered>
+        <Modal.Header closeButton>
+          <Modal.Title>Delete Journal Entry</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          {actionError && <Alert variant="danger">{actionError}</Alert>}
+          <p>Are you sure you want to delete this journal entry? This cannot be undone.</p>
+          {selectedJournal?.googleDoc?.appended && (
+            <Alert variant="warning">
+              This entry has been synced to Google Docs. It will also be removed from the linked document.
+            </Alert>
+          )}
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setShowDeleteConfirm(false)} disabled={actionLoading}>
+            Cancel
+          </Button>
+          <Button variant="danger" onClick={handleDelete} disabled={actionLoading}>
+            {actionLoading ? 'Deleting…' : 'Delete Entry'}
+          </Button>
+        </Modal.Footer>
+      </Modal>
+
+      <EditTaskModal
+        show={!!editingTask}
+        task={editingTask}
+        onHide={() => setEditingTask(null)}
+      />
+
+      <EditStoryModal
+        show={!!editingStory}
+        story={editingStory}
+        goals={storyGoals}
+        onHide={() => setEditingStory(null)}
+      />
     </Container>
   );
 };
