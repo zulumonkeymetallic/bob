@@ -78,6 +78,11 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         label: 'Dashboards',
         icon: 'chart-bar',
       items: [
+        { label: 'Daily Check-in', path: '/dashboard/daily-checkin', icon: 'clipboard-check' },
+        { label: 'AI Planner', path: '/dashboard/ai-planner', icon: 'brain' },
+        { label: 'Mobile Priorities', path: '/dashboard/mobile-priorities', icon: 'mobile-alt' },
+        { label: 'Theme Progress', path: '/dashboard/theme-progress', icon: 'chart-line' },
+        { label: 'Finance Dashboard', path: '/dashboard/finance', icon: 'wallet' },
         { label: 'Habit Tracking', path: '/dashboard/habit-tracking', icon: 'check-square' },
         { label: 'Fitness', path: '/fitness', icon: 'heartbeat' },
         { label: 'Kanban Board', path: '/sprints/kanban', icon: 'kanban' },

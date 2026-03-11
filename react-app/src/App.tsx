@@ -348,6 +348,11 @@ function AppContent() {
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/dashboard/habit-tracking" element={<HabitsChoresDashboard />} />
             <Route path="/dashboard/habits-chores" element={<Navigate to="/dashboard/habit-tracking" replace />} />
+            <Route path="/dashboard/daily-checkin" element={<Navigate to="/checkin/daily" replace />} />
+            <Route path="/dashboard/ai-planner" element={<Navigate to="/ai-planner" replace />} />
+            <Route path="/dashboard/mobile-priorities" element={<Navigate to="/mobile-priorities" replace />} />
+            <Route path="/dashboard/theme-progress" element={<Navigate to="/metrics/progress" replace />} />
+            <Route path="/dashboard/finance" element={<Navigate to="/finance/dashboard" replace />} />
             <Route path="/metrics/progress" element={<ThemeProgressDashboard />} />
             <Route path="/focus-goals" element={<FocusGoalsPage />} />
             <Route path="/metrics" element={<AdvancedOverview />} />
