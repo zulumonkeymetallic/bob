@@ -5,7 +5,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { usePersona } from '../../contexts/PersonaContext';
 import { useTheme } from '../../contexts/ThemeContext';
 import { db, functions } from '../../firebase';
-import { Goal, Story, Sprint } from '../../types';
+import { Goal, Story, Sprint, Task } from '../../types';
 import { useGlobalThemes } from '../../hooks/useGlobalThemes';
 import { migrateThemeValue } from '../../constants/globalThemes';
 import { isStatus } from '../../utils/statusHelpers';
@@ -13,8 +13,10 @@ import { useSprint } from '../../contexts/SprintContext';
 import { useSidebar } from '../../contexts/SidebarContext';
 import { httpsCallable } from 'firebase/functions';
 import EditGoalModal from '../EditGoalModal';
+import ConfirmSprintChangesModal from './ConfirmSprintChangesModal';
 import SprintSelector from '../SprintSelector';
 import './GoalRoadmapV6.css';
+import { buildGoalTimelineImpactPlan } from './goalTimelineImpact';
 
 interface GanttTask {
   id: string;
@@ -390,6 +392,7 @@ const GoalRoadmapV6: React.FC = () => {
     [goals]
   );
   const [stories, setStories] = useState<Story[]>([]);
+  const [taskDocs, setTaskDocs] = useState<Task[]>([]);
   const [storyPoints, setStoryPoints] = useState<Record<string, number>>({});
   const [storyDonePoints, setStoryDonePoints] = useState<Record<string, number>>({});
   const [potBalances, setPotBalances] = useState<Record<string, { balance: number; currency: string }>>({});
@@ -407,6 +410,21 @@ const GoalRoadmapV6: React.FC = () => {
   const [respectSprintScope, setRespectSprintScope] = useState(true);
   const [editGoal, setEditGoal] = useState<Goal | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [pendingSprintChanges, setPendingSprintChanges] = useState<{
+    goalId: string;
+    startDate: number;
+    endDate: number;
+    affectedStories: Array<{
+      id: string;
+      ref: string;
+      title: string;
+      plannedSprintId?: string;
+      plannedSprintName?: string;
+      recommendedSprintId?: string;
+      recommendedSprintName?: string;
+      impactedTaskCount?: number;
+    }>;
+  } | null>(null);
   const boardRef = useRef<HTMLDivElement | null>(null);
   const dragOperationRef = useRef<GoalDragOperation | null>(null);
   const dayWidthRef = useRef<number>(1);
@@ -500,6 +518,27 @@ const GoalRoadmapV6: React.FC = () => {
           return;
         }
         console.error('[RoadmapV6] stories error', err);
+      }
+    );
+    return () => unsub();
+  }, [currentUser?.uid]);
+
+  useEffect(() => {
+    if (!currentUser?.uid) return;
+    const q = query(collection(db, 'tasks'), where('ownerUid', '==', currentUser.uid));
+    const unsub = onSnapshot(
+      q,
+      snap => {
+        const data = snap.docs.map(d => ({ id: d.id, ...d.data() } as Task));
+        setTaskDocs(data);
+      },
+      err => {
+        if ((err as any)?.code === 'permission-denied') {
+          console.warn('[RoadmapV6] tasks blocked by rules; rendering empty', { uid: currentUser?.uid });
+          setTaskDocs([]);
+          return;
+        }
+        console.error('[RoadmapV6] tasks error', err);
       }
     );
     return () => unsub();
@@ -1057,6 +1096,16 @@ const GoalRoadmapV6: React.FC = () => {
     }
   }, []);
 
+  const confirmSprintChanges = useCallback(async () => {
+    if (!pendingSprintChanges) return;
+    await persistGoalDates(
+      pendingSprintChanges.goalId,
+      pendingSprintChanges.startDate,
+      pendingSprintChanges.endDate
+    );
+    setPendingSprintChanges(null);
+  }, [pendingSprintChanges, persistGoalDates]);
+
   useEffect(() => {
     pointerMoveHandlerRef.current = (event: PointerEvent) => {
       const operation = dragOperationRef.current;
@@ -1134,9 +1183,27 @@ const GoalRoadmapV6: React.FC = () => {
         return;
       }
 
+      const impactPlan = buildGoalTimelineImpactPlan({
+        goalId: operation.goalId,
+        newStartDate: new Date(override.startMs),
+        newEndDate: new Date(override.endMs),
+        stories,
+        tasks: taskDocs,
+        sprints,
+      });
+      if (impactPlan.affectedStories.length > 0) {
+        setPendingSprintChanges({
+          goalId: operation.goalId,
+          startDate: override.startMs,
+          endDate: override.endMs,
+          affectedStories: impactPlan.affectedStories,
+        });
+        return;
+      }
+
       void persistGoalDates(operation.goalId, override.startMs, override.endMs);
     };
-  }, [persistGoalDates]);
+  }, [persistGoalDates, sprints, stories, taskDocs]);
 
   useEffect(() => {
     const handlePointerMove = (event: PointerEvent) => pointerMoveHandlerRef.current(event);
@@ -1506,6 +1573,13 @@ const GoalRoadmapV6: React.FC = () => {
           allGoals={goals}
         />
       )}
+
+      <ConfirmSprintChangesModal
+        visible={!!pendingSprintChanges}
+        pendingChanges={pendingSprintChanges}
+        onCancel={() => setPendingSprintChanges(null)}
+        onConfirm={confirmSprintChanges}
+      />
     </div>
   );
 };
