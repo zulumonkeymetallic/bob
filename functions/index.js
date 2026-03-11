@@ -11338,6 +11338,10 @@ async function computeNextWorkRecommendation({
 }
 
 async function buildDailySummaryAiFocus({ summaryData, userId }) {
+  const traceId = crypto.randomUUID ? crypto.randomUUID() : crypto.randomBytes(12).toString('hex');
+  const promptTemplateId = 'dailySummaryFocus.v2';
+  const startedAtMs = Date.now();
+
   try {
     const zone = summaryData?.metadata?.timezone || 'UTC';
     const candidates = Array.isArray(summaryData?.activeWorkItems) ? summaryData.activeWorkItems : [];
@@ -11385,6 +11389,24 @@ async function buildDailySummaryAiFocus({ summaryData, userId }) {
       calendarContext.length ? `Today calendar: ${JSON.stringify(calendarContext)}` : 'Today calendar: []',
     ].join('\n');
 
+    const llmTraceBase = {
+      traceId,
+      promptTemplateId,
+      promptTemplateVersion: 2,
+      model: AI_PRIORITY_MODEL,
+      provider: process.env.AI_PROVIDER || 'gemini',
+      purpose: 'dailySummaryFocus',
+      parseExpected: 'json',
+      temperature: 0.2,
+      promptText: prompt,
+      inputPayload: {
+        dayIso: summaryData?.metadata?.dayIso || null,
+        timezone: zone,
+        activeWorkContext: context,
+        calendarContext,
+      },
+    };
+
     const raw = await callLLMJson({
       system,
       user: prompt,
@@ -11399,6 +11421,14 @@ async function buildDailySummaryAiFocus({ summaryData, userId }) {
       parsed = raw ? JSON.parse(raw) : {};
     } catch (error) {
       console.warn('[daily-summary-ai] JSON parse failed', error?.message || error);
+      await recordAiLog(userId, 'daily_summary_focus_trace', 'warning', 'Daily summary focus parse failure', {
+        ...llmTraceBase,
+        parseStatus: 'failed',
+        rawOutputText: String(raw || '').slice(0, 12000),
+        rawOutputLength: String(raw || '').length,
+        parseError: String(error?.message || error || 'unknown'),
+        latencyMs: Date.now() - startedAtMs,
+      });
       return buildHeuristicFocus(summaryData, 'AI response could not be parsed.');
     }
 
@@ -11460,13 +11490,20 @@ async function buildDailySummaryAiFocus({ summaryData, userId }) {
     const normalised = [...normalisedTasks, ...normalisedStories].slice(0, 6);
 
     if (!normalised.length) {
+      await recordAiLog(userId, 'daily_summary_focus_trace', 'warning', 'Daily summary focus returned no actionable items', {
+        ...llmTraceBase,
+        parseStatus: 'ok_empty',
+        rawOutputText: String(raw || '').slice(0, 12000),
+        rawOutputLength: String(raw || '').length,
+        latencyMs: Date.now() - startedAtMs,
+      });
       return buildHeuristicFocus(summaryData, 'AI produced no actionable items; fallback applied.');
     }
 
     const askText = parsed.ask || parsed.callToAction || (normalised.length ? 'Commit to finishing these active sprint items today.' : null);
     const summaryText = parsed.summary || parsed.note || null;
 
-    return {
+    const result = {
       mode: 'ai',
       model: AI_PRIORITY_MODEL,
       generatedAt: new Date().toISOString(),
@@ -11474,8 +11511,26 @@ async function buildDailySummaryAiFocus({ summaryData, userId }) {
       ask: askText,
       items: normalised,
     };
+
+    await recordAiLog(userId, 'daily_summary_focus_trace', 'success', 'Daily summary focus generated', {
+      ...llmTraceBase,
+      parseStatus: 'ok',
+      rawOutputText: String(raw || '').slice(0, 12000),
+      rawOutputLength: String(raw || '').length,
+      resultItemCount: result.items.length,
+      latencyMs: Date.now() - startedAtMs,
+    });
+
+    return result;
   } catch (error) {
     console.warn('[daily-summary-ai] focus generation failed', error?.message || error);
+    await recordAiLog(userId, 'daily_summary_focus_trace', 'error', 'Daily summary focus generation failed', {
+      traceId,
+      promptTemplateId,
+      parseStatus: 'runtime_error',
+      error: String(error?.message || error || 'unknown'),
+      latencyMs: Date.now() - startedAtMs,
+    });
     return buildHeuristicFocus(summaryData, 'AI focus generation failed; showing heuristic priorities.');
   }
 }
