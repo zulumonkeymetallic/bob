@@ -2577,6 +2577,21 @@ exports.priorityNow = httpsV2.onRequest({ invoker: 'public', secrets: [GOOGLE_AI
       'Priority selection should favor due/overdue work and items already scheduled soon.',
     ].join('\n');
 
+    const priorityTraceId = crypto.randomUUID ? crypto.randomUUID() : crypto.randomBytes(12).toString('hex');
+    const priorityTraceBase = {
+      traceId: priorityTraceId,
+      promptTemplateId: 'priorityNow.v2',
+      promptTemplateVersion: 2,
+      model: AI_PRIORITY_MODEL,
+      provider: process.env.AI_PROVIDER || 'gemini',
+      purpose: 'priority_now',
+      parseExpected: 'json',
+      temperature: 0.2,
+      promptText: userPrompt,
+      inputPayload: contextPayload,
+    };
+    const priorityStartedAtMs = Date.now();
+
     let llmText = '';
     let parsed = {};
     try {
@@ -2589,9 +2604,26 @@ exports.priorityNow = httpsV2.onRequest({ invoker: 'public', secrets: [GOOGLE_AI
         temperature: 0.2,
       });
       parsed = llmText ? JSON.parse(llmText) : {};
+
+      await recordAiLog(uid, 'priority_now_trace', 'success', 'Priority now response generated', {
+        ...priorityTraceBase,
+        parseStatus: llmText ? 'ok' : 'ok_empty',
+        rawOutputText: String(llmText || '').slice(0, 12000),
+        rawOutputLength: String(llmText || '').length,
+        latencyMs: Date.now() - priorityStartedAtMs,
+      });
     } catch (error) {
       console.warn('[priorityNow] LLM failed or returned invalid JSON', error?.message || error);
       parsed = {};
+
+      await recordAiLog(uid, 'priority_now_trace', 'warning', 'Priority now LLM parse/runtime failure', {
+        ...priorityTraceBase,
+        parseStatus: 'failed',
+        rawOutputText: String(llmText || '').slice(0, 12000),
+        rawOutputLength: String(llmText || '').length,
+        error: String(error?.message || error || 'unknown'),
+        latencyMs: Date.now() - priorityStartedAtMs,
+      });
     }
 
     let priorities = normalizePriorityItems(parsed.topPriorities);
