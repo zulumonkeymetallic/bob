@@ -7103,6 +7103,142 @@ async function findEarliestMonzoTransactionCreated(db, uid, accountId) {
   return earliestMs === null ? null : new Date(earliestMs).toISOString();
 }
 
+const MONZO_GOAL_REF_TIMEOUT_MS = 24 * 60 * 60 * 1000;
+
+function toMillisSafe(value) {
+  if (!value) return null;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (value?.toMillis) {
+    try { return value.toMillis(); } catch { }
+  }
+  if (value?._seconds != null) {
+    const seconds = Number(value._seconds);
+    const nanos = Number(value._nanoseconds || 0);
+    if (Number.isFinite(seconds)) return (seconds * 1000) + Math.floor(nanos / 1_000_000);
+  }
+  const parsed = Date.parse(String(value));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizeMonzoGoalRef(ref) {
+  return String(ref || '').trim().toLowerCase();
+}
+
+function matchPotForGoalRef(pots, goalRef) {
+  const normalizedRef = normalizeMonzoGoalRef(goalRef);
+  if (!normalizedRef) return null;
+  for (const pot of pots) {
+    const potId = String(pot?.potId || pot?.id || '').trim();
+    const potName = String(pot?.name || pot?.raw?.name || '').trim();
+    if (normalizeMonzoGoalRef(potId) === normalizedRef) return pot;
+    if (normalizeMonzoGoalRef(potName).includes(normalizedRef)) return pot;
+  }
+  return null;
+}
+
+async function linkMonzoGoalRefsForUser(uid, { source = 'sync' } = {}) {
+  const db = admin.firestore();
+  const [goalsSnap, potsSnap] = await Promise.all([
+    db.collection('goals').where('ownerUid', '==', uid).get(),
+    db.collection('monzo_pots').where('ownerUid', '==', uid).get(),
+  ]);
+
+  const pots = potsSnap.docs
+    .map((d) => d.data() || {})
+    .filter((pot) => !pot.deleted);
+
+  const pending = goalsSnap.docs.filter((docSnap) => {
+    const goal = docSnap.data() || {};
+    const hasRef = !!String(goal.monzoPotGoalRef || '').trim();
+    const alreadyLinked = !!String(goal.monzoPotId || goal.linkedPotId || goal.potId || '').trim();
+    return hasRef && !alreadyLinked;
+  });
+
+  if (!pending.length) {
+    return {
+      checked: 0,
+      linked: 0,
+      timedOut: 0,
+      pending: 0,
+    };
+  }
+
+  const nowMs = Date.now();
+  const batch = db.batch();
+  let linked = 0;
+  let timedOut = 0;
+  let stillPending = 0;
+
+  for (const goalSnap of pending) {
+    const goal = goalSnap.data() || {};
+    const goalRef = String(goal.monzoPotGoalRef || '').trim();
+    const matchedPot = matchPotForGoalRef(pots, goalRef);
+    const goalRefMs =
+      toMillisSafe(goal.monzoPotRefRequestedAt) ||
+      toMillisSafe(goal.updatedAt) ||
+      toMillisSafe(goal.createdAt) ||
+      toMillisSafe(goalSnap.updateTime) ||
+      toMillisSafe(goalSnap.createTime);
+
+    if (matchedPot) {
+      const linkedPotId = String(matchedPot.potId || matchedPot.id || '').trim();
+      if (!linkedPotId) {
+        stillPending += 1;
+        continue;
+      }
+      batch.set(goalSnap.ref, {
+        monzoPotId: linkedPotId,
+        linkedPotId,
+        potId: linkedPotId,
+        monzoPotLinkedAt: admin.firestore.FieldValue.serverTimestamp(),
+        monzoPotLinkStatus: 'linked',
+        monzoPotLinkError: admin.firestore.FieldValue.delete(),
+        monzoPotLinkTimedOutAt: admin.firestore.FieldValue.delete(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+      linked += 1;
+      continue;
+    }
+
+    if (goalRefMs && (nowMs - goalRefMs) >= MONZO_GOAL_REF_TIMEOUT_MS) {
+      batch.set(goalSnap.ref, {
+        monzoPotLinkStatus: 'timeout',
+        monzoPotLinkTimedOutAt: admin.firestore.FieldValue.serverTimestamp(),
+        monzoPotLinkError: 'No Monzo pot found with matching reference within 24 hours.',
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+      timedOut += 1;
+    } else {
+      stillPending += 1;
+    }
+  }
+
+  if (linked || timedOut) {
+    await batch.commit();
+  }
+
+  if (linked || timedOut) {
+    await db.collection('integration_logs').add({
+      integration: 'monzo',
+      type: 'goal_pot_ref_linker',
+      status: timedOut > 0 ? 'warning' : 'success',
+      userId: uid,
+      source,
+      linked,
+      timedOut,
+      pending: stillPending,
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  }
+
+  return {
+    checked: pending.length,
+    linked,
+    timedOut,
+    pending: stillPending,
+  };
+}
+
 async function syncMonzoDataForUser(uid, { since, fullRefresh } = {}) {
   const { accessToken } = await ensureMonzoAccessToken(uid);
   const db = admin.firestore();
@@ -7241,6 +7377,12 @@ async function syncMonzoDataForUser(uid, { since, fullRefresh } = {}) {
     summary.analytics = analytics.summarySnapshot || null;
   } catch (error) {
     console.error(`Failed to compute Monzo analytics for user ${uid}`, error);
+  }
+
+  try {
+    summary.goalPotLinking = await linkMonzoGoalRefsForUser(uid, { source: 'sync' });
+  } catch (error) {
+    console.error(`Failed to link Monzo goal refs for user ${uid}`, error);
   }
 
   return summary;
@@ -10548,6 +10690,54 @@ exports.suggestTaskStoryConversions = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDI
     suggestions,
     evaluatedCount: candidates.length,
     totalOpen: allTasks.length
+  };
+});
+
+exports.monzoGoalPotRefLinker = schedulerV2.onSchedule('every 30 minutes', async () => {
+  const db = admin.firestore();
+  const tokens = await db.collection('tokens').where('provider', '==', 'monzo').get();
+  let usersChecked = 0;
+  let totalLinked = 0;
+  let totalTimedOut = 0;
+  let totalPending = 0;
+
+  for (const tokenSnap of tokens.docs) {
+    const token = tokenSnap.data() || {};
+    const uid = token.ownerUid || String(tokenSnap.id).replace(/_monzo$/, '');
+    if (!uid) continue;
+    usersChecked += 1;
+    try {
+      const result = await linkMonzoGoalRefsForUser(uid, { source: 'scheduled_linker' });
+      totalLinked += Number(result?.linked || 0);
+      totalTimedOut += Number(result?.timedOut || 0);
+      totalPending += Number(result?.pending || 0);
+    } catch (error) {
+      console.warn('[monzoGoalPotRefLinker] failed', { uid, error: error?.message || error });
+      await db.collection('integration_logs').add({
+        integration: 'monzo',
+        type: 'goal_pot_ref_linker',
+        status: 'error',
+        userId: uid,
+        source: 'scheduled_linker',
+        error: error?.message || String(error),
+        timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    }
+  }
+
+  console.log('[monzoGoalPotRefLinker] summary', {
+    usersChecked,
+    totalLinked,
+    totalTimedOut,
+    totalPending,
+  });
+
+  return {
+    ok: true,
+    usersChecked,
+    totalLinked,
+    totalTimedOut,
+    totalPending,
   };
 });
 

@@ -1344,6 +1344,9 @@ adherence = [(0.857 + 0.867 + 0.892 + 0.96) / 4] * 100 = 89.4%
 - ✅ 12 Mar 2026: Calendar manual-scheduling suppression slice shipped.
   Scope completed: updated nightly planner scheduling so entities with existing user-created (non-AI) calendar blocks are skipped by auto-placement, preventing duplicate/competing AI-planned blocks when users intentionally schedule from kanban.
   Remaining in broader calendar confidence plan: CSA-specific matcher diagnostics surface, confidence rationale visibility on more calendar surfaces, and orphaned closed/deleted-entity cleanup policy for legacy blocks.
+- ✅ 12 Mar 2026: Monzo ref-link watcher slice shipped.
+  Scope completed: added backend Monzo goal-ref linker logic that resolves pending `monzoPotGoalRef` values to real pot ids from synced Monzo pots, writes `monzoPotId`/`linkedPotId`/`potId` + linked timestamp on match, marks unresolved refs as timeout after 24 hours, and records linker outcomes to integration logs.
+  Remaining in broader Monzo plan: user-facing timeout notification UX and optional manual retry controls in settings/focus surfaces.
 
 **Location**: plan.md
 
