@@ -17,7 +17,15 @@ interface FocusGoalWizardProps {
   onAutoCreateSavingsBuckets: (goals: Goal[]) => Promise<{ [goalId: string]: string }>;
 }
 
-type WizardStep = 'select' | 'timeframe' | 'vision' | 'review' | 'confirm';
+type WizardStep = 'vision' | 'select' | 'goalTypes' | 'timeframe' | 'review' | 'confirm';
+type GoalPlanningType = 'story' | 'calendar';
+
+interface SelectedGoalSummary {
+  title: string;
+  theme: number;
+  requiresStory: boolean;
+  estimatedCost?: number;
+}
 
 interface IntentPrompt {
   id: string;
@@ -51,10 +59,12 @@ interface IntentResult {
 
 /**
  * Multi-step wizard for creating focus goal sets
- * - Step 1: Select goals to focus on
- * - Step 2: Choose timeframe (sprint/quarter/year)
- * - Step 3: Review & auto-create stories + savings buckets
- * - Step 4: Confirm and save
+ * - Step 1: Define the vision
+ * - Step 2: Select goals to focus on
+ * - Step 3: Choose story vs calendar handling per goal
+ * - Step 4: Choose timeframe (sprint/quarter/year)
+ * - Step 5: Review planned changes
+ * - Step 6: Confirm and save
  */
 export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
   show,
@@ -66,8 +76,10 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
   onAutoCreateStories,
   onAutoCreateSavingsBuckets
 }) => {
-  const [step, setStep] = useState<WizardStep>('select');
+  const [step, setStep] = useState<WizardStep>('vision');
   const [selectedGoalIds, setSelectedGoalIds] = useState<Set<string>>(new Set());
+  const [goalTypeMap, setGoalTypeMap] = useState<Record<string, GoalPlanningType>>({});
+  const [selectedGoalsData, setSelectedGoalsData] = useState<Record<string, SelectedGoalSummary>>({});
   const [timeframe, setTimeframe] = useState<'sprint' | 'quarter' | 'year'>('sprint');
   const [loading, setLoading] = useState(false);
   const [loadingPrompts, setLoadingPrompts] = useState(false);
@@ -86,8 +98,10 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
   // Reset on modal open
   useEffect(() => {
     if (show) {
-      setStep('select');
+      setStep('vision');
       setSelectedGoalIds(new Set());
+      setGoalTypeMap({});
+      setSelectedGoalsData({});
       setTimeframe('sprint');
       setError('');
       setStoriesCreated([]);
@@ -160,10 +174,43 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
     [goals, selectedGoalIds]
   );
 
+  useEffect(() => {
+    const nextData: Record<string, SelectedGoalSummary> = {};
+    for (const goal of goals) {
+      if (!selectedGoalIds.has(goal.id)) continue;
+      nextData[goal.id] = {
+        title: goal.title,
+        theme: goal.theme,
+        requiresStory: goal.goalRequiresStory !== false,
+        estimatedCost: goal.estimatedCost,
+      };
+    }
+    setSelectedGoalsData(nextData);
+  }, [goals, selectedGoalIds]);
+
+  useEffect(() => {
+    setGoalTypeMap((prev) => {
+      const next: Record<string, GoalPlanningType> = {};
+      let changed = false;
+      for (const goal of selectedGoals) {
+        const existing = prev[goal.id];
+        next[goal.id] = existing || (goal.goalRequiresStory === false ? 'calendar' : 'story');
+        if (next[goal.id] !== existing) changed = true;
+      }
+      if (Object.keys(prev).length !== Object.keys(next).length) changed = true;
+      return changed ? next : prev;
+    });
+  }, [selectedGoals]);
+
   // Count goals needing stories
   const goalsNeedingStories = useMemo(
-    () => selectedGoals.filter(g => (g as any).storyCount === undefined || (g as any).storyCount === 0),
-    [selectedGoals]
+    () => selectedGoals.filter(g => goalTypeMap[g.id] === 'story' && ((g as any).storyCount === undefined || (g as any).storyCount === 0)),
+    [selectedGoals, goalTypeMap]
+  );
+
+  const calendarTimeGoals = useMemo(
+    () => selectedGoals.filter((goal) => goalTypeMap[goal.id] === 'calendar'),
+    [selectedGoals, goalTypeMap]
   );
 
   // Count goals with costs needing savings buckets
@@ -195,44 +242,50 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
       newSet.add(goalId);
     }
     setSelectedGoalIds(newSet);
+    setGoalTypeMap((prev) => {
+      if (!newSet.has(goalId)) {
+        const { [goalId]: _removed, ...rest } = prev;
+        return rest;
+      }
+      if (prev[goalId]) return prev;
+      const goal = goals.find((item) => item.id === goalId);
+      return {
+        ...prev,
+        [goalId]: goal?.goalRequiresStory === false ? 'calendar' : 'story',
+      };
+    });
+  };
+
+  const handleGoalTypeChange = (goalId: string, nextType: GoalPlanningType) => {
+    setGoalTypeMap((prev) => ({
+      ...prev,
+      [goalId]: nextType,
+    }));
   };
 
   const handleNext = async () => {
-    if (step === 'select') {
-      if (selectedGoalIds.size === 0) {
-        setError('Please select at least 1 goal');
-        return;
-      }
-      setStep('timeframe');
-    } else if (step === 'timeframe') {
-      setStep('vision');
-    } else if (step === 'vision') {
+    setError('');
+
+    if (step === 'vision') {
       if (!visionText.trim()) {
         setError('Please provide a short vision before continuing.');
         return;
       }
-      setStep('review');
-      // Auto-create stories and buckets
-      setLoading(true);
-      try {
-        const goalIds = Array.from(selectedGoalIds);
-
-        // Auto-create stories
-        if (goalsNeedingStories.length > 0) {
-          const created = await onAutoCreateStories(goalsNeedingStories.map(g => g.id));
-          setStoriesCreated(created);
-        }
-
-        // Auto-create savings buckets
-        if (goalsWithCosts.length > 0) {
-          const buckets = await onAutoCreateSavingsBuckets(goalsWithCosts);
-          setBucketsCreated(buckets);
-        }
-      } catch (e) {
-        setError(`Failed to create stories/buckets: ${(e as any)?.message || 'Unknown error'}`);
-      } finally {
-        setLoading(false);
+      setStep('select');
+    } else if (step === 'select') {
+      if (selectedGoalIds.size === 0) {
+        setError('Please select at least 1 goal');
+        return;
       }
+      setStep('goalTypes');
+    } else if (step === 'goalTypes') {
+      if (selectedGoals.some((goal) => !goalTypeMap[goal.id])) {
+        setError('Please choose a planning mode for each selected goal.');
+        return;
+      }
+      setStep('timeframe');
+    } else if (step === 'timeframe') {
+      setStep('review');
     } else if (step === 'review') {
       setStep('confirm');
     }
@@ -293,15 +346,30 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
   ]);
 
   const handleBack = () => {
-    if (step === 'timeframe') setStep('select');
-    else if (step === 'vision') setStep('timeframe');
-    else if (step === 'review') setStep('vision');
+    if (step === 'select') setStep('vision');
+    else if (step === 'goalTypes') setStep('select');
+    else if (step === 'timeframe') setStep('goalTypes');
+    else if (step === 'review') setStep('timeframe');
     else if (step === 'confirm') setStep('review');
   };
 
   const handleSave = async () => {
     setLoading(true);
+    setError('');
     try {
+      let createdStories: string[] = [];
+      let createdBuckets: { [key: string]: string } = {};
+
+      if (goalsNeedingStories.length > 0) {
+        createdStories = await onAutoCreateStories(goalsNeedingStories.map((goal) => goal.id));
+        setStoriesCreated(createdStories);
+      }
+
+      if (goalsWithCosts.length > 0) {
+        createdBuckets = await onAutoCreateSavingsBuckets(goalsWithCosts);
+        setBucketsCreated(createdBuckets);
+      }
+
       const focusGoal: FocusGoal = {
         id: `focus-${Date.now()}`,
         ownerUid: '', // Will be set by Firestore trigger
@@ -314,13 +382,18 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
         isActive: true,
         createdAt: new Date(),
         updatedAt: new Date(),
-        storiesCreatedFor: storiesCreated,
-        potIdsCreatedFor: bucketsCreated,
+        storiesCreatedFor: createdStories,
+        potIdsCreatedFor: createdBuckets,
         visionText: visionText.trim() || undefined,
         intentBrokerIntakeId: intentResult?.intakeId || undefined,
         intentMatches: intentResult?.matches || [],
         intentProposals: intentResult?.proposals || [],
         storyTableHandoff: useModernStoryTableHandoff,
+        monzoPotGoalRefs: Object.fromEntries(
+          selectedGoals
+            .filter((goal) => goal.monzoPotGoalRef)
+            .map((goal) => [goal.id, String(goal.monzoPotGoalRef)])
+        ),
       };
 
       await onSave(focusGoal);
@@ -336,10 +409,11 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
   };
 
   const progressPercent = {
-    select: 20,
-    timeframe: 40,
-    vision: 60,
-    review: 80,
+    vision: 16,
+    select: 32,
+    goalTypes: 48,
+    timeframe: 64,
+    review: 82,
     confirm: 100
   };
 
@@ -357,15 +431,17 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
         <div style={{ marginBottom: '20px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontSize: '12px' }}>
             <span style={{ fontWeight: '600' }}>
-              {step === 'select'
-                ? 'Step 1: Select Goals'
-                : step === 'timeframe'
-                  ? 'Step 2: Choose Timeframe'
-                  : step === 'vision'
-                    ? 'Step 3: Define Vision + Match'
-                  : step === 'review'
-                    ? 'Step 4: Review Checklist'
-                    : 'Step 5: Confirm'}
+              {step === 'vision'
+                ? 'Step 1: Define Vision + Match'
+                : step === 'select'
+                  ? 'Step 2: Select Goals'
+                  : step === 'goalTypes'
+                    ? 'Step 3: Goal Planning Types'
+                    : step === 'timeframe'
+                      ? 'Step 4: Choose Timeframe'
+                      : step === 'review'
+                        ? 'Step 5: Review Checklist'
+                        : 'Step 6: Confirm'}
             </span>
             <span style={{ color: '#666' }}>{progressPercent[step]}%</span>
           </div>
@@ -374,7 +450,85 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
 
         {error && <Alert variant="danger">{error}</Alert>}
 
-        {/* Step 1: Select Goals */}
+        {/* Step 1: Vision + Intent Broker */}
+        {step === 'vision' && (
+          <div>
+            <p style={{ color: '#666', marginBottom: '16px' }}>
+              Capture the outcome you want first, then optionally run AI matching against your current goal snapshot.
+            </p>
+
+            <Form.Group className="mb-3">
+              <Form.Label>Vision (free text)</Form.Label>
+              <Form.Control
+                as="textarea"
+                rows={4}
+                placeholder="Describe the result you want and why it matters now..."
+                value={visionText}
+                onChange={(e) => setVisionText(e.target.value)}
+              />
+            </Form.Group>
+
+            <div className="d-flex justify-content-between align-items-center mb-2">
+              <strong>Intent prompt</strong>
+              <Button size="sm" variant="outline-secondary" onClick={loadPrompts} disabled={loadingPrompts}>
+                {loadingPrompts ? 'Refreshing...' : 'Refresh prompts'}
+              </Button>
+            </div>
+
+            {loadingPrompts ? (
+              <div className="py-2"><Spinner animation="border" size="sm" /> Loading prompts...</div>
+            ) : (
+              <Form.Select
+                className="mb-3"
+                value={selectedPromptId}
+                onChange={(e) => setSelectedPromptId(e.target.value)}
+              >
+                {prompts.map((p) => (
+                  <option key={p.id} value={p.id}>{p.text}</option>
+                ))}
+              </Form.Select>
+            )}
+
+            <div className="d-flex justify-content-end mb-3">
+              <Button variant="primary" onClick={runIntentMatching} disabled={!visionText.trim() || matching}>
+                {matching ? 'Analyzing...' : 'Run AI Match'}
+              </Button>
+            </div>
+
+            {intentResult?.snapshotMeta && (
+              <Alert variant={intentResult.snapshotMeta.stale ? 'warning' : 'success'}>
+                Snapshot {intentResult.snapshotMeta.stale ? 'stale' : 'fresh'} • v{intentResult.snapshotMeta.snapshotVersion || 'n/a'} • goals scanned: {intentResult.snapshotMeta.goalsScanned || 0}
+              </Alert>
+            )}
+
+            {(intentResult?.matches || []).length > 0 && (
+              <Alert variant="info">
+                <strong>Existing goal matches</strong>
+                <div style={{ fontSize: 12, marginTop: 4, marginBottom: 6 }}>
+                  Matched goals are auto-selected in the next step.
+                </div>
+                <ul style={{ marginBottom: 0, marginTop: 8 }}>
+                  {(intentResult?.matches || []).slice(0, 5).map((m) => (
+                    <li key={m.goalId}>{m.title} (score {m.score})</li>
+                  ))}
+                </ul>
+              </Alert>
+            )}
+
+            {(intentResult?.proposals || []).length > 0 && (
+              <Alert variant="warning">
+                <strong>New-goal proposals</strong>
+                <ul style={{ marginBottom: 0, marginTop: 8 }}>
+                  {(intentResult?.proposals || []).slice(0, 3).map((p, idx) => (
+                    <li key={`${p.title}-${idx}`}>{p.title} ({Math.round((p.confidence || 0) * 100)}% confidence)</li>
+                  ))}
+                </ul>
+              </Alert>
+            )}
+          </div>
+        )}
+
+        {/* Step 2: Select Goals */}
         {step === 'select' && (
           <div>
             <p style={{ color: '#666', marginBottom: '16px' }}>
@@ -442,7 +596,51 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
           </div>
         )}
 
-        {/* Step 2: Choose Timeframe */}
+        {/* Step 3: Goal planning types */}
+        {step === 'goalTypes' && (
+          <div>
+            <p style={{ color: '#666', marginBottom: '16px' }}>
+              Decide which selected goals should create Sprint stories and which should stay calendar-time only.
+            </p>
+
+            <ListGroup>
+              {selectedGoals.map((goal) => (
+                <ListGroup.Item key={goal.id} style={{ padding: '16px' }}>
+                  <div className="d-flex justify-content-between align-items-start gap-3 flex-wrap">
+                    <div style={{ flex: 1, minWidth: 220 }}>
+                      <div style={{ fontWeight: 600 }}>{selectedGoalsData[goal.id]?.title || goal.title}</div>
+                      <div style={{ fontSize: 12, color: '#666', marginTop: 4 }}>
+                        Theme: {selectedGoalsData[goal.id]?.theme || goal.theme || 'Not set'}
+                        {selectedGoalsData[goal.id]?.estimatedCost ? ` • Cost: £${Number(selectedGoalsData[goal.id].estimatedCost).toLocaleString()}` : ''}
+                      </div>
+                    </div>
+                    <div style={{ minWidth: 280 }}>
+                      <Form.Check
+                        type="radio"
+                        id={`goal-type-story-${goal.id}`}
+                        name={`goal-type-${goal.id}`}
+                        label="Story-based (will create Sprint story)"
+                        checked={goalTypeMap[goal.id] === 'story'}
+                        onChange={() => handleGoalTypeChange(goal.id, 'story')}
+                        className="mb-2"
+                      />
+                      <Form.Check
+                        type="radio"
+                        id={`goal-type-calendar-${goal.id}`}
+                        name={`goal-type-${goal.id}`}
+                        label="Calendar-time (events and KPIs only)"
+                        checked={goalTypeMap[goal.id] === 'calendar'}
+                        onChange={() => handleGoalTypeChange(goal.id, 'calendar')}
+                      />
+                    </div>
+                  </div>
+                </ListGroup.Item>
+              ))}
+            </ListGroup>
+          </div>
+        )}
+
+        {/* Step 4: Choose Timeframe */}
         {step === 'timeframe' && (
           <div>
             <p style={{ color: '#666', marginBottom: '16px' }}>
@@ -480,85 +678,7 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
           </div>
         )}
 
-        {/* Step 3: Vision + Intent Broker */}
-        {step === 'vision' && (
-          <div>
-            <p style={{ color: '#666', marginBottom: '16px' }}>
-              Capture the outcome you want, then run AI matching against your current goal snapshot.
-            </p>
-
-            <Form.Group className="mb-3">
-              <Form.Label>Vision (free text)</Form.Label>
-              <Form.Control
-                as="textarea"
-                rows={4}
-                placeholder="Describe the result you want and why it matters now..."
-                value={visionText}
-                onChange={(e) => setVisionText(e.target.value)}
-              />
-            </Form.Group>
-
-            <div className="d-flex justify-content-between align-items-center mb-2">
-              <strong>Intent prompt</strong>
-              <Button size="sm" variant="outline-secondary" onClick={loadPrompts} disabled={loadingPrompts}>
-                {loadingPrompts ? 'Refreshing...' : 'Refresh prompts'}
-              </Button>
-            </div>
-
-            {loadingPrompts ? (
-              <div className="py-2"><Spinner animation="border" size="sm" /> Loading prompts...</div>
-            ) : (
-              <Form.Select
-                className="mb-3"
-                value={selectedPromptId}
-                onChange={(e) => setSelectedPromptId(e.target.value)}
-              >
-                {prompts.map((p) => (
-                  <option key={p.id} value={p.id}>{p.text}</option>
-                ))}
-              </Form.Select>
-            )}
-
-            <div className="d-flex justify-content-end mb-3">
-              <Button variant="primary" onClick={runIntentMatching} disabled={!visionText.trim() || matching}>
-                {matching ? 'Analyzing...' : 'Run AI Match'}
-              </Button>
-            </div>
-
-            {intentResult?.snapshotMeta && (
-              <Alert variant={intentResult.snapshotMeta.stale ? 'warning' : 'success'}>
-                Snapshot {intentResult.snapshotMeta.stale ? 'stale' : 'fresh'} • v{intentResult.snapshotMeta.snapshotVersion || 'n/a'} • goals scanned: {intentResult.snapshotMeta.goalsScanned || 0}
-              </Alert>
-            )}
-
-            {(intentResult?.matches || []).length > 0 && (
-              <Alert variant="info">
-                <strong>Existing goal matches</strong>
-                <div style={{ fontSize: 12, marginTop: 4, marginBottom: 6 }}>
-                  Matched goals are auto-selected in Step 1.
-                </div>
-                <ul style={{ marginBottom: 0, marginTop: 8 }}>
-                  {(intentResult?.matches || []).slice(0, 5).map((m) => (
-                    <li key={m.goalId}>{m.title} (score {m.score})</li>
-                  ))}
-                </ul>
-              </Alert>
-            )}
-
-            {(intentResult?.proposals || []).length > 0 && (
-              <Alert variant="warning">
-                <strong>New-goal proposals</strong>
-                <ul style={{ marginBottom: 0, marginTop: 8 }}>
-                  {(intentResult?.proposals || []).slice(0, 3).map((p, idx) => (
-                    <li key={`${p.title}-${idx}`}>{p.title} ({Math.round((p.confidence || 0) * 100)}% confidence)</li>
-                  ))}
-                </ul>
-              </Alert>
-            )}
-          </div>
-        )}
-
-        {/* Step 4: Review Changes */}
+        {/* Step 5: Review Changes */}
         {step === 'review' && (
           <div>
             <div style={{ marginBottom: '20px' }}>
@@ -570,6 +690,12 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
                 <ListGroup.Item style={{ padding: '8px 12px' }}>
                   <CheckCircle size={14} className="me-2" style={{ display: 'inline', color: '#28a745' }} />
                   Goals selected: <strong>{selectedGoals.length}</strong>
+                </ListGroup.Item>
+                <ListGroup.Item style={{ padding: '8px 12px' }}>
+                  <CheckCircle size={14} className="me-2" style={{ display: 'inline', color: '#28a745' }} />
+                  Story-based goals: <strong>{selectedGoals.filter((goal) => goalTypeMap[goal.id] === 'story').length}</strong>
+                  {' • '}
+                  Calendar-time goals: <strong>{calendarTimeGoals.length}</strong>
                 </ListGroup.Item>
                 <ListGroup.Item style={{ padding: '8px 12px' }}>
                   <CheckCircle size={14} className="me-2" style={{ display: 'inline', color: '#28a745' }} />
@@ -606,73 +732,58 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
               </ul>
             </div>
 
-            {loading ? (
-              <div style={{ textAlign: 'center', padding: '20px' }}>
-                <Spinner animation="border" className="me-2" />
-                Setting up your focus goals...
-              </div>
-            ) : (
-              <>
-                {/* Stories to Create */}
-                {goalsNeedingStories.length > 0 && (
-                  <Alert variant="warning" style={{ marginBottom: '12px' }}>
-                    <BookOpen size={16} className="me-2" style={{ display: 'inline' }} />
-                    <strong>{goalsNeedingStories.length} goals have no stories yet.</strong>
-                    <br />
-                    We'll auto-create a story for each to track progress.
-                    <ul style={{ marginTop: '8px', marginBottom: 0, fontSize: '12px' }}>
-                      {goalsNeedingStories.map(g => (
-                        <li key={g.id}>{g.title}</li>
-                      ))}
-                    </ul>
-                  </Alert>
-                )}
+            {/* Stories to Create */}
+            {goalsNeedingStories.length > 0 && (
+              <Alert variant="warning" style={{ marginBottom: '12px' }}>
+                <BookOpen size={16} className="me-2" style={{ display: 'inline' }} />
+                <strong>{goalsNeedingStories.length} story-based goals have no stories yet.</strong>
+                <br />
+                These stories will be created only after you confirm and save.
+                <ul style={{ marginTop: '8px', marginBottom: 0, fontSize: '12px' }}>
+                  {goalsNeedingStories.map(g => (
+                    <li key={g.id}>{g.title}</li>
+                  ))}
+                </ul>
+              </Alert>
+            )}
 
-                {/* Savings Buckets to Create */}
-                {goalsWithCosts.length > 0 && (
-                  <Alert variant="warning">
-                    <DollarSign size={16} className="me-2" style={{ display: 'inline' }} />
-                    <strong>{goalsWithCosts.length} goals have costs.</strong>
-                    <br />
-                    We'll auto-create Monzo savings buckets to track spending.
-                    <ul style={{ marginTop: '8px', marginBottom: 0, fontSize: '12px' }}>
-                      {goalsWithCosts.map(g => (
-                        <li key={g.id}>
-                          {g.title}: £
-                          {(g.estimatedCost || 0).toLocaleString()}
-                        </li>
-                      ))}
-                    </ul>
-                  </Alert>
-                )}
+            {calendarTimeGoals.length > 0 && (
+              <Alert variant="info" style={{ marginBottom: '12px' }}>
+                <Calendar size={16} className="me-2" style={{ display: 'inline' }} />
+                <strong>{calendarTimeGoals.length} goals are calendar-time only.</strong>
+                <br />
+                These goals will skip story auto-creation and rely on events and KPIs.
+              </Alert>
+            )}
 
-                {/* Already Created */}
-                {storiesCreated.length > 0 && (
-                  <Alert variant="success" style={{ marginBottom: '12px' }}>
-                    <CheckCircle size={16} className="me-2" style={{ display: 'inline' }} />
-                    ✓ Created <strong>{storiesCreated.length}</strong> stories
-                  </Alert>
-                )}
+            {/* Savings Buckets to Create */}
+            {goalsWithCosts.length > 0 && (
+              <Alert variant="warning">
+                <DollarSign size={16} className="me-2" style={{ display: 'inline' }} />
+                <strong>{goalsWithCosts.length} goals have costs.</strong>
+                <br />
+                Savings buckets will be created after you confirm this focus set.
+                <ul style={{ marginTop: '8px', marginBottom: 0, fontSize: '12px' }}>
+                  {goalsWithCosts.map(g => (
+                    <li key={g.id}>
+                      {g.title}: £
+                      {(g.estimatedCost || 0).toLocaleString()}
+                    </li>
+                  ))}
+                </ul>
+              </Alert>
+            )}
 
-                {Object.keys(bucketsCreated).length > 0 && (
-                  <Alert variant="success">
-                    <CheckCircle size={16} className="me-2" style={{ display: 'inline' }} />
-                    ✓ Created <strong>{Object.keys(bucketsCreated).length}</strong> savings buckets
-                  </Alert>
-                )}
-
-                {goalsNeedingStories.length === 0 && goalsWithCosts.length === 0 && (
-                  <Alert variant="info">
-                    <CheckCircle size={16} className="me-2" style={{ display: 'inline' }} />
-                    All goals already have stories and savings buckets set up!
-                  </Alert>
-                )}
-              </>
+            {goalsNeedingStories.length === 0 && calendarTimeGoals.length === 0 && goalsWithCosts.length === 0 && (
+              <Alert variant="info">
+                <CheckCircle size={16} className="me-2" style={{ display: 'inline' }} />
+                All selected goals already have the required story and savings setup.
+              </Alert>
             )}
           </div>
         )}
 
-        {/* Step 5: Confirm */}
+        {/* Step 6: Confirm */}
         {step === 'confirm' && (
           <div>
             <Alert variant="success">
@@ -692,9 +803,19 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
                 <br />
                 <strong>Intent Intake:</strong> {intentResult?.intakeId || 'Not run'}
                 <br />
+                <strong>Story-based goals:</strong> {selectedGoals.filter((goal) => goalTypeMap[goal.id] === 'story').length}
+                {' • '}
+                <strong>Calendar-time goals:</strong> {calendarTimeGoals.length}
+                <br />
                 <strong>Updates:</strong> Your KPIs will sync nightly, and progress will show in your daily email.
               </p>
             </Alert>
+
+            {(goalsNeedingStories.length > 0 || goalsWithCosts.length > 0) && (
+              <Alert variant="warning">
+                Saving this focus set will also create {goalsNeedingStories.length} story records and {goalsWithCosts.length} savings bucket links where needed.
+              </Alert>
+            )}
           </div>
         )}
       </Modal.Body>
@@ -704,7 +825,7 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
           Cancel
         </Button>
 
-        {step !== 'select' && (
+        {step !== 'vision' && (
           <Button variant="outline-secondary" onClick={handleBack} disabled={loading}>
             ← Back
           </Button>

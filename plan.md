@@ -1332,6 +1332,9 @@ adherence = [(0.857 + 0.867 + 0.892 + 0.96) / 4] * 100 = 89.4%
 - ✅ 12 Mar 2026: Focus Goals foundation slice shipped.
   Scope completed: hardened `autoCreateStoriesForGoals` against missing goal docs/ids, preserved goal ids when hydrating from Firestore, guarded savings-pot creation loops against invalid goal ids, and added shared Goal/FocusGoal fields for `goalRequiresStory`, `monzoPotGoalRef`, `monzoPotId`, and `monzoPotGoalRefs`.
   Remaining in the broader Focus Goals plan: wizard step rework, goal-type selection UI, Monzo manual-link prompts/watcher flow, KPI designer integration, and downstream verification coverage.
+- ✅ 12 Mar 2026: Focus Goals wizard flow slice shipped.
+  Scope completed: reordered the wizard to vision → select → goal types → timeframe → review → confirm, added per-goal story-vs-calendar planning mode, updated review/confirm summaries to reflect the chosen planning mode, and moved story/savings auto-creation to the final save path instead of the earlier review transition.
+  Remaining in the broader Focus Goals plan: Monzo manual creation prompt/link watcher flow, KPI designer handoff, explicit calendar-time event tooling, and end-to-end verification coverage.
 
 **Location**: plan.md
 
