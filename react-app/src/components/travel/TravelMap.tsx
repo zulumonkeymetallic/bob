@@ -126,6 +126,14 @@ const TravelMap: React.FC = () => {
   const [newCityForSelected, setNewCityForSelected] = useState('');
   const [manualGoalId, setManualGoalId] = useState('');
   const [travelGoalsOnly, setTravelGoalsOnly] = useState(true);
+  // Context menu for right-click interactions
+  const [contextMenu, setContextMenu] = useState<{
+    type: 'country' | 'city' | 'entry';
+    iso2?: string;
+    entryId?: string;
+    x: number;
+    y: number;
+  } | null>(null);
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const markersRef = useRef<maplibregl.Marker[]>([]);
@@ -134,6 +142,9 @@ const TravelMap: React.FC = () => {
   const selectedFeatureIdRef = useRef<string | number | null>(null);
   const handleCountryClickRef = useRef<(iso2: string) => void>(() => {});
   const countriesGeojsonRef = useRef<any>(null);
+  // Double-click tracking for status toggling
+  const lastClickRef = useRef<{ iso2?: string; entryId?: string; time: number } | null>(null);
+  const doubleClickTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [mapReady, setMapReady] = useState(false);
 
   const derivePlannedVisitAt = (goal?: Goal | null): number | null => {
@@ -537,6 +548,77 @@ const TravelMap: React.FC = () => {
     await updateDoc(doc(db, 'travel', entry.id), updates);
   };
 
+  // Toggle country/entry status on right-click or double-click
+  const togglePlaceStatus = async (iso2?: string, entryId?: string, targetStatus?: PlaceStatus) => {
+    if (!currentUser?.uid) return;
+    let entry: TravelEntry | undefined;
+
+    if (entryId) {
+      entry = entries.find(e => e.id === entryId);
+    } else if (iso2) {
+      entry = entries.find(e => getCountryCode(e) === iso2.toUpperCase() && !e.city);
+    }
+
+    if (!entry) {
+      // Create new entry if not found
+      if (!iso2) return;
+      const countryName = isoCountries.getName(iso2, 'en') || iso2;
+      const newStatus = targetStatus || 'COMPLETED';
+      await addDoc(collection(db, 'travel'), {
+        placeType: 'country',
+        name: countryName,
+        countryCode: iso2,
+        country_code: iso2,
+        visited: newStatus === 'COMPLETED',
+        status: newStatus,
+        continent: continentForIso2(iso2),
+        ownerUid: currentUser.uid,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      return;
+    }
+
+    // Determine current status
+    const currentStatus = normalizePlaceStatus(entry, stories.find(s => s.id === getEntryStoryId(entry)));
+    
+    // Cycle through statuses: UNVISITED → BUCKET_LIST → COMPLETED → UNVISITED
+    let nextStatus: PlaceStatus;
+    if (targetStatus) {
+      nextStatus = targetStatus;
+    } else {
+      nextStatus = currentStatus === 'UNVISITED' ? 'BUCKET_LIST'
+                 : currentStatus === 'BUCKET_LIST' ? 'COMPLETED'
+                 : currentStatus === 'STORY_CREATED' ? 'COMPLETED'
+                 : 'UNVISITED';
+    }
+
+    await updateEntryStatus(entry, nextStatus);
+    setContextMenu(null);
+  };
+
+  // Handle double-click for status toggling
+  const handlePlaceDoubleClick = (iso2?: string, entryId?: string) => {
+    const now = Date.now();
+    const key = iso2 || entryId;
+    if (!key) return;
+
+    if (lastClickRef.current?.iso2 === iso2 && lastClickRef.current?.entryId === entryId 
+        && now - lastClickRef.current.time < 350) {
+      // Double click detected
+      if (doubleClickTimeoutRef.current) clearTimeout(doubleClickTimeoutRef.current);
+      togglePlaceStatus(iso2, entryId);
+      lastClickRef.current = null;
+    } else {
+      // Single click - just track it
+      lastClickRef.current = { iso2, entryId, time: now };
+      if (doubleClickTimeoutRef.current) clearTimeout(doubleClickTimeoutRef.current);
+      doubleClickTimeoutRef.current = setTimeout(() => {
+        lastClickRef.current = null;
+      }, 350);
+    }
+  };
+
   const addPlace = async () => {
     if (!currentUser?.uid || !newCountry.trim()) return;
     try {
@@ -871,7 +953,26 @@ const TravelMap: React.FC = () => {
         const target = event.features?.[0] as any;
         const iso2 = target?.properties?.iso2;
         const isSupported = target?.properties?.isSupported;
-        if (iso2 && isSupported) handleCountryClickRef.current(iso2);
+        if (iso2 && isSupported) {
+          handleCountryClickRef.current(iso2);
+          handlePlaceDoubleClick(iso2.toUpperCase());
+        }
+      });
+
+      // Right-click context menu on countries
+      map.on('contextmenu', 'country-fill', (event) => {
+        event.originalEvent.preventDefault();
+        const target = event.features?.[0] as any;
+        const iso2 = target?.properties?.iso2;
+        const isSupported = target?.properties?.isSupported;
+        if (iso2 && isSupported) {
+          setContextMenu({
+            type: 'country',
+            iso2: iso2.toUpperCase(),
+            x: event.originalEvent.clientX,
+            y: event.originalEvent.clientY,
+          });
+        }
       });
 
       map.on('mousemove', 'country-fill', (event) => {
@@ -963,6 +1064,23 @@ const TravelMap: React.FC = () => {
             setSelectedIso2(iso2.toUpperCase());
           }
           setSelectedEntryId(entry.id);
+        });
+        // Double-click to toggle status
+        el.addEventListener('dblclick', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          handlePlaceDoubleClick(undefined, entry.id);
+        });
+        // Right-click context menu
+        el.addEventListener('contextmenu', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          setContextMenu({
+            type: 'entry',
+            entryId: entry.id,
+            x: (event as MouseEvent).clientX,
+            y: (event as MouseEvent).clientY,
+          });
         });
         const marker = new maplibregl.Marker({ element: el, anchor: 'bottom' })
           .setLngLat([Number(lng), Number(entry.lat)])
@@ -1221,7 +1339,91 @@ const TravelMap: React.FC = () => {
           }}
         >
           <div ref={mapContainerRef} style={{ width: '100%', height: '100%' }} />
+          {/* Context Menu */}
+          {contextMenu && (
+            <div
+              style={{
+                position: 'fixed',
+                left: contextMenu.x,
+                top: contextMenu.y,
+                background: 'white',
+                border: '1px solid #cbd5e1',
+                borderRadius: '6px',
+                boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                zIndex: 1000,
+                minWidth: '160px',
+              }}
+              onMouseLeave={() => setContextMenu(null)}
+            >
+              <button
+                onClick={() => togglePlaceStatus(contextMenu.iso2, contextMenu.entryId, 'COMPLETED')}
+                style={{
+                  display: 'block',
+                  width: '100%',
+                  padding: '8px 12px',
+                  border: 'none',
+                  background: 'none',
+                  textAlign: 'left',
+                  cursor: 'pointer',
+                  fontSize: '14px',
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = '#f8fafc')}
+                onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+              >
+                ✓ Mark Visited
+              </button>
+              <button
+                onClick={() => togglePlaceStatus(contextMenu.iso2, contextMenu.entryId, 'BUCKET_LIST')}
+                style={{
+                  display: 'block',
+                  width: '100%',
+                  padding: '8px 12px',
+                  border: 'none',
+                  background: 'none',
+                  textAlign: 'left',
+                  cursor: 'pointer',
+                  fontSize: '14px',
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = '#f8fafc')}
+                onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+              >
+                ★ Bucket List
+              </button>
+              <button
+                onClick={() => togglePlaceStatus(contextMenu.iso2, contextMenu.entryId, 'UNVISITED')}
+                style={{
+                  display: 'block',
+                  width: '100%',
+                  padding: '8px 12px',
+                  border: 'none',
+                  background: 'none',
+                  textAlign: 'left',
+                  cursor: 'pointer',
+                  fontSize: '14px',
+                  borderTop: '1px solid #e5e7eb',
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = '#f8fafc')}
+                onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+              >
+                ✕ Unmark
+              </button>
+            </div>
+          )}
         </div>
+        {/* Close context menu on escape */}
+        {contextMenu && (
+          <div
+            onClick={() => setContextMenu(null)}
+            style={{
+              position: 'fixed',
+              top: 0,
+              left: 0,
+              width: '100%',
+              height: '100%',
+              zIndex: 999,
+            }}
+          />
+        )}
         {/* Legend */}
         <div className="d-flex align-items-center gap-3 mb-3 small" aria-label="Map legend">
           <span className="d-inline-flex align-items-center gap-1">
