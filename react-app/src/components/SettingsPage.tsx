@@ -7,7 +7,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { useThemeAwareColors, getContrastTextColor } from '../hooks/useThemeAwareColors';
 import { GLOBAL_THEMES, GlobalTheme } from '../constants/globalThemes';
-import { Settings, Palette, Database, Wand2, KeyRound, Clipboard, FileCode, Plug } from 'lucide-react';
+import { Settings, Palette, Database, Wand2, KeyRound, Clipboard, FileCode, Plug, User, Bell, Shield, FlaskConical } from 'lucide-react';
 import AIStoryKPISettings from './AIStoryKPISettings';
 import { useThemeDebugger } from '../utils/themeDebugger';
 import IntegrationSettings from './IntegrationSettings';
@@ -15,13 +15,53 @@ import BudgetSettings from './finance/BudgetSettings';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useDiagnosticsLog } from '../hooks/useDiagnosticsLog';
 
-const SETTINGS_TABS = ['themes', 'database', 'integrations', 'reminders', 'ai', 'system', 'finance', 'diagnostics'] as const;
+const SETTINGS_TABS = [
+  'profile',
+  'ai',
+  'integrations',
+  'finance',
+  'notifications',
+  'privacy',
+  'developer',
+  // Legacy keys kept for backward-compatible URLs
+  'themes',
+  'database',
+  'reminders',
+  'system',
+  'diagnostics',
+] as const;
 type SettingsTab = typeof SETTINGS_TABS[number];
-const DEFAULT_TAB: SettingsTab = 'themes';
+const DEFAULT_TAB: SettingsTab = 'profile';
+
+type SettingsPaneKey = 'themes' | 'database' | 'integrations' | 'reminders' | 'ai' | 'system' | 'finance' | 'diagnostics';
+
+const TAB_TO_PANE: Record<SettingsTab, SettingsPaneKey> = {
+  profile: 'system',
+  ai: 'ai',
+  integrations: 'integrations',
+  finance: 'finance',
+  notifications: 'reminders',
+  privacy: 'diagnostics',
+  developer: 'database',
+  themes: 'themes',
+  database: 'database',
+  reminders: 'reminders',
+  system: 'system',
+  diagnostics: 'diagnostics',
+};
 
 const normalizeTab = (value: string | null): SettingsTab => {
-  if (value && SETTINGS_TABS.includes(value as SettingsTab)) {
-    return value as SettingsTab;
+  const normalized = String(value || '').trim().toLowerCase();
+  // Alias map for flattened IA routes
+  if (normalized === 'profile') return 'profile';
+  if (normalized === 'ai') return 'ai';
+  if (normalized === 'integrations') return 'integrations';
+  if (normalized === 'finance') return 'finance';
+  if (normalized === 'notifications') return 'notifications';
+  if (normalized === 'privacy' || normalized === 'privacy-security') return 'privacy';
+  if (normalized === 'developer' || normalized === 'experiments') return 'developer';
+  if (normalized && SETTINGS_TABS.includes(normalized as SettingsTab)) {
+    return normalized as SettingsTab;
   }
   return DEFAULT_TAB;
 };
@@ -493,46 +533,44 @@ const SettingsPage: React.FC = () => {
         <Col>
           <Card>
             <Card.Body>
-              <h5 className="mb-2">Quick Access</h5>
-              <p className="text-muted small mb-3">Jump to dedicated settings pages for email delivery, planner automations, and integrations.</p>
+              <h5 className="mb-2">Settings Sections</h5>
+              <p className="text-muted small mb-3">Flattened IA: Profile, AI, Integrations, Finance, Notifications, Privacy/Security, and Developer.</p>
               <div className="d-flex flex-wrap gap-2">
-                <Button variant="outline-primary" size="sm" onClick={() => navigate('/settings/email')}>Email Delivery</Button>
-                <Button variant="outline-primary" size="sm" onClick={() => navigate('/settings/planner')}>Planner & Automations</Button>
-                <Button variant="outline-primary" size="sm" onClick={() => navigate('/settings/integrations')}>Integrations Hub</Button>
-                <Button variant="outline-secondary" size="sm" onClick={() => navigate('/logs/integrations')}>View Integration Logs</Button>
-                <Button variant="outline-secondary" size="sm" onClick={() => navigate('/logs/ai')}>View AI Diagnostics</Button>
-                <Button variant="outline-secondary" size="sm" onClick={() => navigate('/logs/transcripts')}>View Transcript Logs</Button>
+                <Button variant="outline-primary" size="sm" onClick={() => navigate('/settings/profile')}>Profile</Button>
+                <Button variant="outline-primary" size="sm" onClick={() => navigate('/settings/ai')}>AI</Button>
+                <Button variant="outline-primary" size="sm" onClick={() => navigate('/settings/integrations')}>Integrations</Button>
+                <Button variant="outline-primary" size="sm" onClick={() => navigate('/settings/finance')}>Finance</Button>
+                <Button variant="outline-primary" size="sm" onClick={() => navigate('/settings/notifications')}>Notifications</Button>
+                <Button variant="outline-primary" size="sm" onClick={() => navigate('/settings/privacy-security')}>Privacy/Security</Button>
+                <Button variant="outline-primary" size="sm" onClick={() => navigate('/settings/developer')}>Developer</Button>
               </div>
             </Card.Body>
           </Card>
         </Col>
       </Row>
 
-      <Tab.Container activeKey={activeTab} onSelect={handleTabSelect}>
+      <Tab.Container activeKey={TAB_TO_PANE[activeTab]} onSelect={handleTabSelect}>
         <Row>
           <Col sm={3}>
             <Nav variant="pills" className="flex-column">
               <Nav.Item>
                 <Nav.Link 
-                  eventKey="themes" 
+                  eventKey="profile" 
                   style={{ color: colors.primary }}
                   onClick={createClickHandler()}
                 >
-                  <Palette size={20} className="me-2" />
-                  Themes & Colors
+                  <User size={20} className="me-2" />
+                  Profile
                 </Nav.Link>
               </Nav.Item>
               <Nav.Item>
                 <Nav.Link 
-                  eventKey="database" 
+                  eventKey="ai" 
                   style={{ color: colors.primary }}
                   onClick={createClickHandler()}
                 >
-                  <Database size={20} className="me-2" />
-                  Database Migration
-                  {migrationStats.needsMigration && (
-                    <Badge bg="warning" className="ms-2">Action Needed</Badge>
-                  )}
+                  <Wand2 size={20} className="me-2" />
+                  AI
                 </Nav.Link>
               </Nav.Item>
               <Nav.Item>
@@ -547,55 +585,45 @@ const SettingsPage: React.FC = () => {
               </Nav.Item>
               <Nav.Item>
                 <Nav.Link 
-                  eventKey="reminders" 
-                  style={{ color: colors.primary }}
-                  onClick={createClickHandler()}
-                >
-                  <KeyRound size={20} className="me-2" />
-                  Reminders (Shortcuts)
-                </Nav.Link>
-              </Nav.Item>
-              <Nav.Item>
-                <Nav.Link 
-                  eventKey="ai"
-                  style={{ color: colors.primary }}
-                  onClick={createClickHandler()}
-                >
-                  <Wand2 size={20} className="me-2" />
-                  AI: Story & KPI
-                </Nav.Link>
-              </Nav.Item>
-              <Nav.Item>
-                <Nav.Link 
-                  eventKey="system" 
-                  style={{ color: colors.primary }}
-                  onClick={createClickHandler()}
-                >
-                  <Settings size={20} className="me-2" />
-                  System Preferences
-                </Nav.Link>
-              </Nav.Item>
-              <Nav.Item>
-                <Nav.Link
-                  eventKey="diagnostics"
-                  style={{ color: colors.primary }}
-                  onClick={createClickHandler()}
-                >
-                  <FileCode size={20} className="me-2" />
-                  Diagnostics Log
-                  {diagnosticsEntries.length > 0 && (
-                    <Badge bg="info" className="ms-2">{diagnosticsEntries.length}</Badge>
-                  )}
-                </Nav.Link>
-              </Nav.Item>
-              <Nav.Item>
-                <Nav.Link 
                   eventKey="finance" 
                   style={{ color: colors.primary }}
                   onClick={createClickHandler()}
                 >
                   <Database size={20} className="me-2" />
-                  Finance (Monzo)
+                  Finance
+                </Nav.Link>
+              </Nav.Item>
+              <Nav.Item>
+                <Nav.Link 
+                  eventKey="notifications"
+                  style={{ color: colors.primary }}
+                  onClick={createClickHandler()}
+                >
+                  <Bell size={20} className="me-2" />
+                  Notifications
+                </Nav.Link>
+              </Nav.Item>
+              <Nav.Item>
+                <Nav.Link 
+                  eventKey="privacy" 
+                  style={{ color: colors.primary }}
+                  onClick={createClickHandler()}
+                >
+                  <Shield size={20} className="me-2" />
+                  Privacy/Security
+                </Nav.Link>
+              </Nav.Item>
+              <Nav.Item>
+                <Nav.Link
+                  eventKey="developer"
+                  style={{ color: colors.primary }}
+                  onClick={createClickHandler()}
+                >
+                  <FlaskConical size={20} className="me-2" />
+                  Developer
+                  {(diagnosticsEntries.length > 0 || migrationStats.needsMigration) && (
+                    <Badge bg="info" className="ms-2">{diagnosticsEntries.length + (migrationStats.needsMigration ? 1 : 0)}</Badge>
+                  )}
                 </Nav.Link>
               </Nav.Item>
             </Nav>
