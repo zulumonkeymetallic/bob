@@ -1,7 +1,8 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Card, Row, Col, Button, Form, Badge, ProgressBar } from 'react-bootstrap';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Card, Row, Col, Button, Form, Badge, ProgressBar, Modal } from 'react-bootstrap';
 import { collection, query, where, onSnapshot, addDoc, updateDoc, doc, serverTimestamp, getDocs, deleteDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
+import { DndContext, PointerSensor, useDroppable, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { db, functions } from '../../firebase';
 import { useAuth } from '../../contexts/AuthContext';
 import { Goal, Story } from '../../types';
@@ -14,6 +15,7 @@ import worldCountries from 'world-atlas/countries-50m.json';
 import isoCountries from 'i18n-iso-countries';
 import enLocale from 'i18n-iso-countries/langs/en.json';
 import ModernGoalsTable from '../ModernGoalsTable';
+import GoalListPanel from './GoalListPanel';
 import { feature as topojsonFeature } from 'topojson-client';
 isoCountries.registerLocale(enLocale as any);
 
@@ -126,6 +128,16 @@ const TravelMap: React.FC = () => {
   const [newCityForSelected, setNewCityForSelected] = useState('');
   const [manualGoalId, setManualGoalId] = useState('');
   const [travelGoalsOnly, setTravelGoalsOnly] = useState(true);
+  const [goalListExpanded, setGoalListExpanded] = useState(false);
+  const [isDraggingGoal, setIsDraggingGoal] = useState(false);
+  const [dragFeedbackMessage, setDragFeedbackMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [pendingDuplicateLink, setPendingDuplicateLink] = useState<{ entryId: string; goalId: string } | null>(null);
+  const [isLinkingDuplicate, setIsLinkingDuplicate] = useState(false);
+  const [showAccessibilityPicker, setShowAccessibilityPicker] = useState(false);
+  const [accessibilityGoalId, setAccessibilityGoalId] = useState('');
+  const [accessibilityLocationQuery, setAccessibilityLocationQuery] = useState('');
+  const [accessibilitySubmitting, setAccessibilitySubmitting] = useState(false);
+  const [accessibilityError, setAccessibilityError] = useState<string | null>(null);
   // Import/export functionality
   const [importing, setImporting] = useState(false);
   const [importStatus, setImportStatus] = useState<{ success: number; errors: string[] } | null>(null);
@@ -146,10 +158,19 @@ const TravelMap: React.FC = () => {
   const selectedFeatureIdRef = useRef<string | number | null>(null);
   const handleCountryClickRef = useRef<(iso2: string) => void>(() => {});
   const countriesGeojsonRef = useRef<any>(null);
+  const mapDropZoneRef = useRef<HTMLDivElement | null>(null);
+  const mouseCoordsDuringDragRef = useRef<{ x: number; y: number } | null>(null);
   // Double-click tracking for status toggling
   const lastClickRef = useRef<{ iso2?: string; entryId?: string; time: number } | null>(null);
   const doubleClickTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [mapReady, setMapReady] = useState(false);
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
+  const { setNodeRef: setDropZoneNodeRef, isOver: isDraggingOverMap } = useDroppable({ id: 'map-drop-zone' });
+
+  const setMapDropZoneNode = useCallback((node: HTMLDivElement | null) => {
+    mapDropZoneRef.current = node;
+    setDropZoneNodeRef(node);
+  }, [setDropZoneNodeRef]);
 
   const derivePlannedVisitAt = (goal?: Goal | null): number | null => {
     if (!goal) return null;
@@ -434,6 +455,14 @@ const TravelMap: React.FC = () => {
   const travelGoalsForTable = useMemo(() => {
     return travelGoalsOnly ? travelGoals : goals;
   }, [travelGoalsOnly, travelGoals, goals]);
+
+  const linkedEntriesByGoalId = useMemo(() => {
+    return entries.reduce<Record<string, number>>((acc, entry) => {
+      if (!entry.goalId) return acc;
+      acc[entry.goalId] = (acc[entry.goalId] || 0) + 1;
+      return acc;
+    }, {});
+  }, [entries]);
 
   const entriesWithStatus = useMemo(() => {
     return entries.map((entry) => {
@@ -1001,6 +1030,273 @@ const TravelMap: React.FC = () => {
     });
   };
 
+  const reverseGeocodeCoordinates = useCallback(async (coords: [number, number]): Promise<GeocodeResult | null> => {
+    const [lng, lat] = coords;
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 5000);
+
+    try {
+      const response = await fetch(
+        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=10&addressdetails=1`,
+        {
+          headers: { Accept: 'application/json' },
+          signal: controller.signal,
+        }
+      );
+      if (!response.ok) return null;
+      const data = await response.json();
+      const address = data?.address || {};
+      const cityLike = address.city || address.town || address.village || address.hamlet || undefined;
+      const countryCode = (address.country_code || '').toUpperCase() || undefined;
+      return {
+        lat,
+        lon: lng,
+        displayName: data?.display_name || cityLike || countryCode || 'Pinned location',
+        countryCode,
+        city: cityLike,
+      };
+    } catch (error) {
+      console.warn('TravelMap reverse geocode failed', error);
+      return null;
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
+  }, []);
+
+  const normalizePlaceToken = useCallback((value?: string | null) => {
+    return String(value || '').trim().toLowerCase();
+  }, []);
+
+  const createTravelEntryFromGoal = useCallback(async (goalId: string, coords: [number, number]) => {
+    if (!currentUser?.uid) return;
+
+    const goal = goals.find((item) => item.id === goalId);
+    if (!goal) {
+      setPendingDuplicateLink(null);
+      setDragFeedbackMessage({ type: 'error', text: 'Could not resolve dragged goal. Please retry.' });
+      return false;
+    }
+
+    const geocode = await reverseGeocodeCoordinates(coords);
+    if (!geocode?.countryCode && !geocode?.city) {
+      setPendingDuplicateLink(null);
+      setDragFeedbackMessage({ type: 'error', text: 'Could not identify that drop location. Drop on a mapped country or city area.' });
+      return false;
+    }
+
+    const countryCode = (geocode.countryCode || '').toUpperCase();
+    const city = geocode.city?.trim() || null;
+    const targetCityToken = normalizePlaceToken(city);
+    const duplicate = entries.find((entry) => {
+      if (entry.goalId !== goal.id) return false;
+      if (countryCode && getCountryCode(entry) !== countryCode) return false;
+      const entryCityToken = normalizePlaceToken(entry.city);
+      return entryCityToken === targetCityToken;
+    });
+
+    if (duplicate) {
+      setPendingDuplicateLink(null);
+      setSelectedIso2(countryCode || null);
+      setSelectedEntryId(duplicate.id);
+      setManualGoalId(goal.id);
+      setDragFeedbackMessage({ type: 'success', text: `Travel entry already exists for ${goal.title}.` });
+      return true;
+    }
+
+    const duplicateOtherGoal = entries.find((entry) => {
+      if (!entry.goalId || entry.goalId === goal.id) return false;
+      if (countryCode && getCountryCode(entry) !== countryCode) return false;
+      const entryCityToken = normalizePlaceToken(entry.city);
+      return entryCityToken === targetCityToken;
+    });
+
+    if (duplicateOtherGoal) {
+      const linkedGoalName = duplicateOtherGoal.goalTitleSnapshot || 'another goal';
+      setSelectedIso2(countryCode || null);
+      setSelectedEntryId(duplicateOtherGoal.id);
+      setPendingDuplicateLink({ entryId: duplicateOtherGoal.id, goalId: goal.id });
+      setDragFeedbackMessage({
+        type: 'error',
+        text: `That destination already exists under ${linkedGoalName}. Link this existing destination to ${goal.title} instead of creating a duplicate.`,
+      });
+      return false;
+    }
+
+    setPendingDuplicateLink(null);
+    const placeType: PlaceType = city ? 'city' : 'country';
+    const entryName = city || isoCountries.getName(countryCode, 'en') || geocode.displayName || goal.title;
+    const plannedVisitAt = derivePlannedVisitAt(goal);
+    const created = await addDoc(collection(db, 'travel'), {
+      placeType,
+      name: entryName,
+      countryCode: countryCode || null,
+      country_code: countryCode || null,
+      city,
+      status: 'BUCKET_LIST',
+      visited: false,
+      visitedAt: null,
+      linked_story_id: null,
+      storyId: null,
+      continent: countryCode ? continentForIso2(countryCode) : null,
+      ownerUid: currentUser.uid,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      plannedVisitAt: plannedVisitAt ?? null,
+      goalId: goal.id,
+      goalTitleSnapshot: goal.title,
+      lastMatchedAt: serverTimestamp(),
+      matchConfidence: 1,
+      matchMethod: 'manual',
+      bucketListFlaggedAt: serverTimestamp(),
+      storyCreatedAt: null,
+      completedAt: null,
+      lat: geocode.lat,
+      lon: geocode.lon,
+      lng: geocode.lon,
+      locationName: geocode.displayName,
+    });
+
+    if (countryCode) {
+      setSelectedIso2(countryCode);
+    }
+    setSelectedEntryId(created.id);
+    setManualGoalId(goal.id);
+    setDragFeedbackMessage({ type: 'success', text: `Created travel entry for ${goal.title} at ${entryName}.` });
+    return true;
+  }, [currentUser?.uid, derivePlannedVisitAt, entries, goals, normalizePlaceToken, reverseGeocodeCoordinates]);
+
+  const linkDuplicateEntryToGoal = useCallback(async () => {
+    if (!pendingDuplicateLink || isLinkingDuplicate) return;
+    const { entryId, goalId } = pendingDuplicateLink;
+    const goal = goals.find((item) => item.id === goalId);
+    if (!goal) {
+      setDragFeedbackMessage({ type: 'error', text: 'Goal not found anymore. Please retry.' });
+      setPendingDuplicateLink(null);
+      return;
+    }
+
+    setIsLinkingDuplicate(true);
+    try {
+      await updateDoc(doc(db, 'travel', entryId), {
+        goalId: goal.id,
+        goalTitleSnapshot: goal.title,
+        lastMatchedAt: serverTimestamp(),
+        matchConfidence: 1,
+        matchMethod: 'manual',
+        updatedAt: serverTimestamp(),
+      });
+      setManualGoalId(goal.id);
+      setSelectedEntryId(entryId);
+      setDragFeedbackMessage({ type: 'success', text: `Linked existing destination to ${goal.title}.` });
+    } catch (error) {
+      console.error('Failed to link duplicate destination to goal', error);
+      setDragFeedbackMessage({ type: 'error', text: 'Could not link existing destination. Please retry.' });
+    } finally {
+      setIsLinkingDuplicate(false);
+      setPendingDuplicateLink(null);
+    }
+  }, [goals, isLinkingDuplicate, pendingDuplicateLink]);
+
+  const openAccessibilityPicker = useCallback(() => {
+    setAccessibilityGoalId((current) => current || travelGoals[0]?.id || '');
+    setAccessibilityLocationQuery('');
+    setAccessibilityError(null);
+    setShowAccessibilityPicker(true);
+  }, [travelGoals]);
+
+  const handleAccessibilityPickerSubmit = useCallback(async () => {
+    if (!accessibilityGoalId || !accessibilityLocationQuery.trim()) {
+      setAccessibilityError('Select a goal and enter a destination.');
+      return;
+    }
+
+    setAccessibilitySubmitting(true);
+    setAccessibilityError(null);
+    try {
+      const geocode = await geocodePlace(accessibilityLocationQuery.trim());
+      if (!geocode) {
+        setAccessibilityError('Could not geocode that destination. Try a clearer city or country name.');
+        return;
+      }
+
+      const created = await createTravelEntryFromGoal(accessibilityGoalId, [geocode.lon, geocode.lat]);
+      if (created) {
+        setShowAccessibilityPicker(false);
+        setAccessibilityLocationQuery('');
+      }
+    } finally {
+      setAccessibilitySubmitting(false);
+    }
+  }, [accessibilityGoalId, accessibilityLocationQuery, createTravelEntryFromGoal]);
+
+  const handleDragEnd = useCallback(async (event: DragEndEvent) => {
+    const { active, over } = event;
+    setIsDraggingGoal(false);
+
+    if (!over || over.id !== 'map-drop-zone') {
+      mouseCoordsDuringDragRef.current = null;
+      return;
+    }
+    if (!active.data?.current?.goalId || !mapRef.current) {
+      mouseCoordsDuringDragRef.current = null;
+      return;
+    }
+
+    const goalId = active.data.current.goalId as string;
+    let dropCoords: [number, number];
+
+    if (mouseCoordsDuringDragRef.current) {
+      try {
+        const canvas = mapRef.current.getCanvas();
+        const rect = canvas.getBoundingClientRect();
+        const x = mouseCoordsDuringDragRef.current.x - rect.left;
+        const y = mouseCoordsDuringDragRef.current.y - rect.top;
+        if (x >= 0 && x < rect.width && y >= 0 && y < rect.height) {
+          const lngLat = mapRef.current.unproject([x, y]);
+          dropCoords = [lngLat.lng, lngLat.lat];
+        } else {
+          const center = mapRef.current.getCenter();
+          dropCoords = [center.lng, center.lat];
+        }
+      } catch (error) {
+        console.warn('TravelMap drop coordinate extraction failed, using map center', error);
+        const center = mapRef.current.getCenter();
+        dropCoords = [center.lng, center.lat];
+      }
+    } else {
+      const center = mapRef.current.getCenter();
+      dropCoords = [center.lng, center.lat];
+    }
+
+    mouseCoordsDuringDragRef.current = null;
+    await createTravelEntryFromGoal(goalId, dropCoords);
+  }, [createTravelEntryFromGoal]);
+
+  useEffect(() => {
+    if (!dragFeedbackMessage) return;
+    const timeoutId = window.setTimeout(() => {
+      setDragFeedbackMessage(null);
+      setPendingDuplicateLink(null);
+    }, 3000);
+    return () => window.clearTimeout(timeoutId);
+  }, [dragFeedbackMessage]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const tagName = target?.tagName?.toLowerCase();
+      const isEditable = tagName === 'input' || tagName === 'textarea' || tagName === 'select' || target?.isContentEditable;
+      if (isEditable) return;
+      if (event.altKey && event.key.toLowerCase() === 'd') {
+        event.preventDefault();
+        openAccessibilityPicker();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [openAccessibilityPicker]);
+
   const handleCountryClick = async (iso2: string) => {
     if (!currentUser?.uid) return;
     const isoUpper = iso2.toUpperCase();
@@ -1510,6 +1806,20 @@ const TravelMap: React.FC = () => {
   }, [currentUser?.uid, entries, storiesById, goals]);
 
   return (
+    <DndContext
+      sensors={sensors}
+      onDragStart={() => {
+        setIsDraggingGoal(true);
+        setDragFeedbackMessage(null);
+        setPendingDuplicateLink(null);
+      }}
+      onDragCancel={() => {
+        setIsDraggingGoal(false);
+        mouseCoordsDuringDragRef.current = null;
+        setPendingDuplicateLink(null);
+      }}
+      onDragEnd={(event) => { void handleDragEnd(event); }}
+    >
     <Card className="border-0 shadow-sm">
       <Card.Header className="bg-white d-flex align-items-center justify-content-between">
         <strong>Travel Map</strong>
@@ -1527,6 +1837,7 @@ const TravelMap: React.FC = () => {
           </Form.Select>
           <Button size="sm" onClick={addPlace} disabled={saving || !newCountry.trim()}>Add Place</Button>
           <Button size="sm" variant="outline-secondary" onClick={createTripGoal}>New Travel Goal</Button>
+          <Button size="sm" variant="outline-secondary" onClick={openAccessibilityPicker} title="Keyboard-friendly destination picker (Alt+D)">Keyboard Add</Button>
           <Button size="sm" variant="outline-primary" onClick={() => fileInputRef.current?.click()} disabled={importing}>
             {importing ? 'Importing...' : 'Import'}
           </Button>
@@ -1540,6 +1851,39 @@ const TravelMap: React.FC = () => {
         </div>
       </Card.Header>
       <Card.Body>
+        <GoalListPanel
+          goals={goals}
+          travelGoals={travelGoals}
+          expanded={goalListExpanded}
+          onToggleExpanded={setGoalListExpanded}
+          showTravelGoalsOnly={travelGoalsOnly}
+          onToggleTravelGoalsOnly={setTravelGoalsOnly}
+          linkedEntriesByGoalId={linkedEntriesByGoalId}
+        />
+
+        {dragFeedbackMessage && (
+          <div
+            className="mb-2 p-2 rounded small"
+            style={{
+              background: dragFeedbackMessage.type === 'success' ? '#f0fdf4' : '#fef2f2',
+              border: `1px solid ${dragFeedbackMessage.type === 'success' ? '#86efac' : '#fecaca'}`,
+              color: dragFeedbackMessage.type === 'success' ? '#166534' : '#991b1b',
+            }}
+          >
+            <div>{dragFeedbackMessage.text}</div>
+            {pendingDuplicateLink && (
+              <div className="mt-2 d-flex gap-2">
+                <Button size="sm" variant="outline-secondary" onClick={() => { void linkDuplicateEntryToGoal(); }} disabled={isLinkingDuplicate}>
+                  {isLinkingDuplicate ? 'Linking…' : 'Link to this goal'}
+                </Button>
+                <Button size="sm" variant="outline-secondary" onClick={() => setPendingDuplicateLink(null)} disabled={isLinkingDuplicate}>
+                  Dismiss
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Search + Geocode */}
         <div className="d-flex gap-2 mb-2 align-items-center flex-wrap">
           <Form.Control size="sm" placeholder="Search a place (e.g., Paris, France)" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
@@ -1576,16 +1920,42 @@ const TravelMap: React.FC = () => {
 
         {/* Map with country coloring and optional marker */}
         <div
+          ref={setMapDropZoneNode}
+          onMouseMove={(event) => {
+            if (!isDraggingGoal) return;
+            mouseCoordsDuringDragRef.current = { x: event.clientX, y: event.clientY };
+          }}
           style={{
             height: 420,
             marginBottom: 8,
             borderRadius: 8,
-            border: '1px solid #e5e7eb',
+            border: isDraggingOverMap ? '3px solid #10b981' : '1px solid #e5e7eb',
             background: '#fff',
             overflow: 'hidden',
+            transition: 'border 160ms ease-in-out',
+            position: 'relative',
           }}
         >
           <div ref={mapContainerRef} style={{ width: '100%', height: '100%' }} />
+          {isDraggingOverMap && (
+            <div
+              style={{
+                position: 'absolute',
+                inset: 0,
+                background: 'rgba(16, 185, 129, 0.08)',
+                border: '2px dashed #10b981',
+                borderRadius: 6,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#047857',
+                fontWeight: 700,
+                pointerEvents: 'none',
+              }}
+            >
+              Drop to create travel entry
+            </div>
+          )}
           {/* Context Menu */}
           {contextMenu && (
             <div
@@ -1995,6 +2365,52 @@ const TravelMap: React.FC = () => {
         </div>
       </Card.Body>
     </Card>
+
+    <Modal show={showAccessibilityPicker} onHide={() => setShowAccessibilityPicker(false)} centered>
+      <Modal.Header closeButton>
+        <Modal.Title>Keyboard Add Travel Entry</Modal.Title>
+      </Modal.Header>
+      <Modal.Body>
+        <div className="small text-muted mb-3">
+          Use this picker instead of drag and drop. Shortcut: Alt+D.
+        </div>
+        {accessibilityError && (
+          <div className="alert alert-danger py-2 small mb-3">{accessibilityError}</div>
+        )}
+        <Form.Group className="mb-3">
+          <Form.Label>Travel Goal</Form.Label>
+          <Form.Select value={accessibilityGoalId} onChange={(event) => setAccessibilityGoalId(event.target.value)}>
+            <option value="">Select a travel goal</option>
+            {travelGoals.map((goal) => (
+              <option key={goal.id} value={goal.id}>{goal.title}</option>
+            ))}
+          </Form.Select>
+        </Form.Group>
+        <Form.Group>
+          <Form.Label>Destination</Form.Label>
+          <Form.Control
+            value={accessibilityLocationQuery}
+            placeholder="Paris, France"
+            onChange={(event) => setAccessibilityLocationQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                void handleAccessibilityPickerSubmit();
+              }
+            }}
+          />
+        </Form.Group>
+      </Modal.Body>
+      <Modal.Footer>
+        <Button variant="secondary" onClick={() => setShowAccessibilityPicker(false)} disabled={accessibilitySubmitting}>
+          Cancel
+        </Button>
+        <Button variant="primary" onClick={() => { void handleAccessibilityPickerSubmit(); }} disabled={accessibilitySubmitting || !accessibilityGoalId || !accessibilityLocationQuery.trim()}>
+          {accessibilitySubmitting ? 'Creating…' : 'Create Travel Entry'}
+        </Button>
+      </Modal.Footer>
+    </Modal>
+    </DndContext>
   );
 };
 
