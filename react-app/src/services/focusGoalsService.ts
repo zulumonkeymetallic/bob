@@ -104,17 +104,22 @@ export async function autoCreateStoriesForGoals(goalIds: string[], userId: strin
     }
 
     const goalsRef = collection(db, 'goals');
-    const goals = await Promise.all(
+    const goals = (await Promise.all(
       safeGoalIds.map(async gId => {
         const snap = await getDocs(query(goalsRef, where('__name__', '==', gId)));
-        return snap.docs[0]?.data() as Goal;
+        const goalDoc = snap.docs[0];
+        if (!goalDoc) return null;
+        return {
+          id: goalDoc.id,
+          ...(goalDoc.data() as Goal),
+        } as Goal;
       })
-    );
+    )).filter((goal): goal is Goal => Boolean(goal));
 
     const createdStoryIds: string[] = [];
 
     for (const goal of goals) {
-      if (!goal) continue;
+      if (!goal?.id) continue;
 
       // Check if goal already has stories
       const storiesSnap = await getDocs(
@@ -171,7 +176,7 @@ export async function autoCreateSavinsPots(
 ): Promise<{ [goalId: string]: string }> {
   const potsCreated: { [goalId: string]: string } = {};
 
-  for (const goal of goals) {
+  for (const goal of goals || []) {
     if (!goal?.id) continue;
     if (!goal.estimatedCost || goal.estimatedCost === 0) continue;
     if (goal.costType === 'none') continue;

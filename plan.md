@@ -1329,6 +1329,9 @@ adherence = [(0.857 + 0.867 + 0.892 + 0.96) / 4] * 100 = 89.4%
 - ✅ 12 Mar 2026: Dashboard health UX sub-slice shipped.
   Scope completed: compact dismissible health progress card on Dashboard, direct Settings CTA for missing targets, editable weight/body-fat targets in Settings, richer Health key-metric drill-down routing to `/fitness`, expanded `/fitness` health snapshot and trend charts, and manual fallback fields for distance/workout/body-composition in daily check-in.
   Remaining in the broader HealthKit plan: ETA computation backend, canonical `health_metrics` contract writes, nutrition advisor, rollout flags, telemetry, and iOS HealthKit sync/backfill work.
+- ✅ 12 Mar 2026: Focus Goals foundation slice shipped.
+  Scope completed: hardened `autoCreateStoriesForGoals` against missing goal docs/ids, preserved goal ids when hydrating from Firestore, guarded savings-pot creation loops against invalid goal ids, and added shared Goal/FocusGoal fields for `goalRequiresStory`, `monzoPotGoalRef`, `monzoPotId`, and `monzoPotGoalRefs`.
+  Remaining in the broader Focus Goals plan: wizard step rework, goal-type selection UI, Monzo manual-link prompts/watcher flow, KPI designer integration, and downstream verification coverage.
 
 **Location**: plan.md
 

@@ -21,6 +21,7 @@ export interface FocusGoal {
   storyTableHandoff?: boolean;
   autoCreatedSprintIds?: string[];
   deferredNonFocusCount?: number;
+  monzoPotGoalRefs?: { [goalId: string]: string };
 }
 
 export interface Goal {
@@ -36,6 +37,9 @@ export interface Goal {
   costType?: 'none' | 'one_off' | 'recurring';
   recurrence?: 'monthly' | 'annual';
   targetYear?: number;
+  goalRequiresStory?: boolean;
+  monzoPotGoalRef?: string | null;
+  monzoPotId?: string | null;
   potId?: string | null; // Optional explicit Monzo pot mapping
   linkedPotId?: string | null; // Canonical Monzo pot mapping id
   targetDate?: string;
