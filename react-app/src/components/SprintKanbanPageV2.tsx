@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Card, Container, Row, Col, Button, Dropdown, Badge, Form, Spinner } from 'react-bootstrap';
 import { db, functions } from '../firebase';
-import { httpsCallable } from 'firebase/functions';
 import { collection, query, where, onSnapshot, orderBy, limit } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
@@ -18,6 +17,13 @@ import SprintSelector from './SprintSelector';
 import EditStoryModal from './EditStoryModal';
 import EditTaskModal from './EditTaskModal';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
+import {
+    callDeltaReplan,
+    callFullReplan,
+    formatDeltaReplanSummary,
+    formatFullReplanSummary,
+    normalizePlannerCallableError,
+} from '../utils/plannerOrchestration';
 
 const SprintKanbanPageV2: React.FC = () => {
     const navigate = useNavigate();
@@ -260,23 +266,12 @@ const SprintKanbanPageV2: React.FC = () => {
         setReplanFeedback(null);
         setReplanLoading(true);
         try {
-            const callable = httpsCallable(functions, 'replanCalendarNow');
-            const response = await callable({ days: 7 });
-            const payload = response.data as { created?: number; rescheduled?: number; blocked?: number; shortfallMinutes?: number; unscheduledStories?: number; unscheduledTasks?: number };
-            const parts: string[] = [];
-            if (payload?.created) parts.push(`${payload.created} created`);
-            if (payload?.rescheduled) parts.push(`${payload.rescheduled} moved`);
-            if (payload?.blocked) parts.push(`${payload.blocked} blocked`);
-            if (payload?.shortfallMinutes) {
-                const shortfallHours = Math.round((payload.shortfallMinutes / 60) * 10) / 10;
-                parts.push(`${shortfallHours}h short`);
-            }
-            if (payload?.unscheduledStories) parts.push(`${payload.unscheduledStories} stories unscheduled`);
-            if (payload?.unscheduledTasks) parts.push(`${payload.unscheduledTasks} tasks unscheduled`);
+            const payload = await callDeltaReplan(functions, { days: 7 });
+            const parts = formatDeltaReplanSummary(payload);
             setReplanFeedback(parts.length ? `Delta replan complete: ${parts.join(', ')}.` : 'Delta replan complete.');
         } catch (error) {
             console.error('Delta replan failed', error);
-            setReplanFeedback('Delta replan failed. Please retry.');
+            setReplanFeedback(normalizePlannerCallableError(error, 'Delta replan failed. Please retry.'));
         } finally {
             setReplanLoading(false);
         }
@@ -287,11 +282,8 @@ const SprintKanbanPageV2: React.FC = () => {
         setReplanFeedback(null);
         setFullReplanLoading(true);
         try {
-            const callable = httpsCallable(functions, 'runNightlyChainNow');
-            const response = await callable({});
-            const payload = response.data as { results?: Array<{ status?: string }> };
-            const total = payload?.results?.length || 0;
-            const ok = (payload?.results || []).filter((item) => item.status === 'ok').length;
+            const payload = await callFullReplan(functions, {});
+            const { total, ok } = formatFullReplanSummary(payload);
             if (total > 0 && ok === total) {
                 setReplanFeedback(`Full replan complete: ${ok}/${total} orchestration steps succeeded.`);
             } else if (total > 0 && ok > 0) {
@@ -301,7 +293,7 @@ const SprintKanbanPageV2: React.FC = () => {
             }
         } catch (error) {
             console.error('Full replan failed', error);
-            setReplanFeedback('Full replan failed. Please retry.');
+            setReplanFeedback(normalizePlannerCallableError(error, 'Full replan failed. Please retry.'));
         } finally {
             setFullReplanLoading(false);
         }

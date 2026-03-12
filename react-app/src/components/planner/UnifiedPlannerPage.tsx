@@ -171,7 +171,7 @@ const PLANNING_MODE_CONFIG: { value: PlanningMode; label: string; description: s
     value: 'smart',
     label: 'Smart (default)',
     description:
-      'Top 3 priorities scheduled first. Only user calendar + work/fitness blocks are respected as hard constraints. Planned blocks act as theme hints — free time is used to create GCal events automatically.',
+      'Top 3 priorities scheduled first. ALWAYS respects user calendar plus Fitness and Work (Main Gig) blocks as hard constraints. Planned blocks act as theme hints and free time is used for auto-scheduling.',
   },
   {
     value: 'strict',
@@ -180,6 +180,25 @@ const PLANNING_MODE_CONFIG: { value: PlanningMode; label: string; description: s
       'Fully respects planned blocks AND user calendar. Events are only inserted into their designated planned block window.',
   },
 ];
+
+const normalizeCallableError = (error: unknown, fallbackMessage: string) => {
+  const err = error as { code?: string; message?: string };
+  const rawCode = String(err?.code || '').toLowerCase();
+  const code = rawCode.includes('/') ? rawCode.split('/').pop() : rawCode;
+  if (code === 'deadline-exceeded') {
+    return 'The planner request timed out. Orchestration may still be busy. Retry shortly and verify planner stats.';
+  }
+  if (code === 'unavailable') {
+    return 'Planner service is temporarily unavailable. Please retry in a moment.';
+  }
+  if (code === 'permission-denied') {
+    return 'Permission denied while calling planner orchestration. Please sign out/in and retry.';
+  }
+  if (code === 'failed-precondition') {
+    return 'Planner preconditions are not met (often missing profile/integration state). Please verify settings and retry.';
+  }
+  return err?.message || fallbackMessage;
+};
 
 const getInitialRange = (): PlannerRange => {
   const start = startOfWeek(new Date(), { weekStartsOn: 1 });
@@ -1511,7 +1530,7 @@ const UnifiedPlannerPage: React.FC = () => {
     
     setReplanLoading(true);
     try {
-      const callable = httpsCallable(functions, 'replanCalendarNow');
+      const callable = httpsCallable(functions, 'replanCalendarNow', { timeout: 180000 });
       const response = await callable({ days: 7, planningMode, fitnessBlocksAutoCreate });
       const payload = response.data as { rescheduled?: number; blocked?: number };
       const rescheduled = payload?.rescheduled || 0;
@@ -1530,11 +1549,11 @@ const UnifiedPlannerPage: React.FC = () => {
         message: 'Failed to trigger calendar replan.',
         details: err instanceof Error ? err.message : String(err),
       });
-      setFeedback({ variant: 'danger', message: 'Replan failed. Please retry in a moment.' });
+      setFeedback({ variant: 'danger', message: normalizeCallableError(err, 'Replan failed. Please retry in a moment.') });
     } finally {
       setReplanLoading(false);
     }
-  }, [currentUser, planningMode]);
+  }, [currentUser, planningMode, fitnessBlocksAutoCreate]);
 
   const eventStyleGetter = useCallback((event: PlannerCalendarEvent) => {
     const overlaps = (a: PlannerCalendarEvent, b: PlannerCalendarEvent) => {
@@ -1731,7 +1750,7 @@ const UnifiedPlannerPage: React.FC = () => {
     
     setOrchestrationLoading(true);
     try {
-      const callable = httpsCallable(functions, 'runNightlyChainNow');
+      const callable = httpsCallable(functions, 'runNightlyChainNow', { timeout: 540000 });
       const response = await callable({ planningMode, fitnessBlocksAutoCreate });
       const payload = response.data as { results?: Array<{ step?: string; status?: string }> };
       const results = payload?.results || [];
@@ -1754,11 +1773,11 @@ const UnifiedPlannerPage: React.FC = () => {
         message: 'Failed to trigger nightly orchestration.',
         details: err instanceof Error ? err.message : String(err),
       });
-      setFeedback({ variant: 'danger', message: 'Full replan failed. Please retry in a moment.' });
+      setFeedback({ variant: 'danger', message: normalizeCallableError(err, 'Full replan failed. Please retry in a moment.') });
     } finally {
       setOrchestrationLoading(false);
     }
-  }, [currentUser, planningMode]);
+  }, [currentUser, planningMode, fitnessBlocksAutoCreate]);
 
   // Load and save planning mode from user profile
   useEffect(() => {

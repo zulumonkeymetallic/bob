@@ -1289,7 +1289,11 @@ async function materializePlannerThemeBlocks({
       results.skipped += 1;
       return;
     }
-    if (hasOverlap({ start, end }, existingBlocks)) {
+    const overlapsExisting = hasOverlap({ start, end }, existingBlocks);
+    // Work (Main Gig) allocations are hard constraints in smart mode.
+    // Do not skip creating them just because another event overlaps.
+    // If they are skipped here, personal scheduling has no work-window guardrail.
+    if (overlapsExisting && kind !== 'work_shift') {
       results.skipped += 1;
       return;
     }
@@ -1306,6 +1310,9 @@ async function materializePlannerThemeBlocks({
       entityType: kind === 'health' ? 'health' : 'work_shift',
       sourceType: kind === 'health' ? 'health_allocation' : 'work_shift_allocation',
       source: 'theme_allocation',
+      persona: kind === 'work_shift' ? 'work' : 'personal',
+      flexibility: kind === 'work_shift' ? 'hard' : 'soft',
+      conflictStatus: overlapsExisting ? 'overlap_with_existing' : null,
       status: 'planned',
       aiGenerated: true,
       rationale: `Weekly theme plan: ${themeLabel}`,

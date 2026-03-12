@@ -2,8 +2,8 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { Container, Row, Col, Card, Button, Badge, Modal, Form, Spinner } from 'react-bootstrap';
 import { db, functions } from '../firebase';
-import { collection, query, where, onSnapshot, updateDoc, deleteDoc, doc, addDoc, getDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
+import { collection, query, where, onSnapshot, updateDoc, deleteDoc, doc, addDoc, getDoc } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { CalendarBlock, Task, Story, Goal } from '../types';
@@ -14,6 +14,13 @@ import { DndContext, useDraggable, useDroppable, DragEndEvent } from '@dnd-kit/c
 import { CSS } from '@dnd-kit/utilities';
 import { ListChecks, Clock, ExternalLink } from 'lucide-react';
 import { isRecurringDueOnDate, resolveRecurringDueMs, resolveTaskDueMs } from '../utils/recurringTaskDue';
+import {
+  callDeltaReplan,
+  callFullReplan,
+  formatDeltaReplanSummary,
+  formatFullReplanSummary,
+  normalizePlannerCallableError,
+} from '../utils/plannerOrchestration';
 
 // Draggable Block Wrapper
 const DraggableBlock = ({ block, children }: { block: any, children: React.ReactNode }) => {
@@ -356,17 +363,12 @@ const Calendar: React.FC = () => {
     setReplanFeedback(null);
     setReplanLoading(true);
     try {
-      const callable = httpsCallable(functions, 'replanCalendarNow');
-      const response = await callable({ days: 7 });
-      const payload = response.data as { created?: number; rescheduled?: number; blocked?: number };
-      const parts: string[] = [];
-      if (payload?.created) parts.push(`${payload.created} created`);
-      if (payload?.rescheduled) parts.push(`${payload.rescheduled} moved`);
-      if (payload?.blocked) parts.push(`${payload.blocked} blocked`);
+      const payload = await callDeltaReplan(functions, { days: 7 });
+      const parts = formatDeltaReplanSummary(payload);
       setReplanFeedback(parts.length ? `Delta replan complete: ${parts.join(', ')}.` : 'Delta replan complete.');
     } catch (err) {
       console.error('Delta replan failed', err);
-      setReplanFeedback('Delta replan failed. Please retry.');
+      setReplanFeedback(normalizePlannerCallableError(err, 'Delta replan failed. Please retry.'));
     } finally {
       setReplanLoading(false);
     }
@@ -377,11 +379,8 @@ const Calendar: React.FC = () => {
     setReplanFeedback(null);
     setFullReplanLoading(true);
     try {
-      const callable = httpsCallable(functions, 'runNightlyChainNow');
-      const response = await callable({});
-      const payload = response.data as { results?: Array<{ status?: string }> };
-      const total = payload?.results?.length || 0;
-      const ok = (payload?.results || []).filter((item) => item.status === 'ok').length;
+      const payload = await callFullReplan(functions, {});
+      const { total, ok } = formatFullReplanSummary(payload);
       if (total > 0 && ok === total) {
         setReplanFeedback(`Full replan complete: ${ok}/${total} orchestration steps succeeded.`);
       } else if (total > 0 && ok > 0) {
@@ -391,7 +390,7 @@ const Calendar: React.FC = () => {
       }
     } catch (err) {
       console.error('Full replan failed', err);
-      setReplanFeedback('Full replan failed. Please retry.');
+      setReplanFeedback(normalizePlannerCallableError(err, 'Full replan failed. Please retry.'));
     } finally {
       setFullReplanLoading(false);
     }
