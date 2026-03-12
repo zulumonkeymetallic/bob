@@ -919,7 +919,19 @@ const TravelMap: React.FC = () => {
           source: 'countries',
           paint: {
             'fill-color': countryFillExpression as any,
-            'fill-opacity': 0.65,
+            'fill-opacity': [
+              'case',
+              ['boolean', ['get', 'isSupported'], false],
+              [
+                'match',
+                ['get', 'status'],
+                'COMPLETED', 1.0,
+                'STORY_CREATED', 0.75,
+                'BUCKET_LIST', 0.6,
+                0.2, // UNVISITED
+              ],
+              0.1, // Unsupported countries very faint
+            ] as any,
           },
         });
       }
@@ -1047,6 +1059,17 @@ const TravelMap: React.FC = () => {
       entriesWithStatus.forEach(({ entry, status }) => {
         const lng = entry.lng ?? entry.lon;
         if (entry.lat == null || lng == null) return;
+        
+        // Create container for marker + badge
+        const container = document.createElement('div');
+        container.style.position = 'relative';
+        container.style.width = '10px';
+        container.style.height = '10px';
+        container.style.display = 'flex';
+        container.style.alignItems = 'center';
+        container.style.justifyContent = 'center';
+        
+        // Create main marker button
         const el = document.createElement('button');
         el.type = 'button';
         el.style.width = '10px';
@@ -1082,7 +1105,57 @@ const TravelMap: React.FC = () => {
             y: (event as MouseEvent).clientY,
           });
         });
-        const marker = new maplibregl.Marker({ element: el, anchor: 'bottom' })
+        
+        // Create badge overlay
+        const badge = document.createElement('span');
+        badge.style.position = 'absolute';
+        badge.style.width = '6px';
+        badge.style.height = '6px';
+        badge.style.borderRadius = '50%';
+        badge.style.top = '-2px';
+        badge.style.right = '-2px';
+        badge.style.border = '1px solid white';
+        badge.style.boxShadow = '0 0 0 1px rgba(0,0,0,0.1)';
+        
+        // Badge color based on status
+        if (status === 'COMPLETED') {
+          badge.textContent = '✓';
+          badge.style.width = '8px';
+          badge.style.height = '8px';
+          badge.style.fontSize = '6px';
+          badge.style.background = '#10b981';
+          badge.style.color = 'white';
+          badge.style.display = 'flex';
+          badge.style.alignItems = 'center';
+          badge.style.justifyContent = 'center';
+          badge.style.fontWeight = 'bold';
+        } else if (status === 'BUCKET_LIST') {
+          badge.textContent = '★';
+          badge.style.width = '8px';
+          badge.style.height = '8px';
+          badge.style.fontSize = '6px';
+          badge.style.background = '#f59e0b';
+          badge.style.color = 'white';
+          badge.style.display = 'flex';
+          badge.style.alignItems = 'center';
+          badge.style.justifyContent = 'center';
+          badge.style.fontWeight = 'bold';
+        } else if (status === 'STORY_CREATED') {
+          badge.textContent = '📍';
+          badge.style.width = '8px';
+          badge.style.height = '8px';
+          badge.style.fontSize = '6px';
+          badge.style.background = '#3b82f6';
+          badge.style.color = 'white';
+          badge.style.display = 'flex';
+          badge.style.alignItems = 'center';
+          badge.style.justifyContent = 'center';
+        }
+        
+        container.appendChild(el);
+        container.appendChild(badge);
+        
+        const marker = new maplibregl.Marker({ element: container, anchor: 'bottom' })
           .setLngLat([Number(lng), Number(entry.lat)])
           .addTo(map);
         markersRef.current.push(marker);
