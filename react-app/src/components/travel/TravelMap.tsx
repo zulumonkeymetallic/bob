@@ -1557,12 +1557,81 @@ const TravelMap: React.FC = () => {
                     </Badge>
                     <span className="text-muted small">Type: {getPlaceType(detailEntry)}</span>
                   </div>
-                  {storyId && (
-                    <div className="small mb-1">
-                      Story {detailEntry.storyNumber || story?.referenceNumber || story?.ref || storyId}: {detailEntry.storyTitleSnapshot || story?.title || 'Untitled'}
+                  {storyId && story && (
+                    <div className="p-2 mb-2 rounded border" style={{ background: '#f9fafb', borderColor: '#e5e7eb' }}>
+                      <div className="d-flex justify-content-between align-items-start mb-2">
+                        <div>
+                          <div className="small font-weight-bold">
+                            Story {detailEntry.storyNumber || story?.referenceNumber || story?.ref || storyId}
+                          </div>
+                          <div className="small mb-1">{detailEntry.storyTitleSnapshot || story?.title || 'Untitled'}</div>
+                        </div>
+                        <Badge bg={story?.status === 0 ? 'secondary' : story?.status === 4 ? 'success' : 'primary'}>
+                          {story?.status === 0 ? 'Todo' : story?.status === 4 ? 'Done' : `In Progress (${story?.status})`}
+                        </Badge>
+                      </div>
+                      {story?.dueDate && (
+                        <div className="small mb-1 text-muted">
+                          Due: {typeof story.dueDate === 'number' ? new Date(story.dueDate).toLocaleDateString() : story.dueDate}
+                        </div>
+                      )}
+                      {story?.priority !== undefined && (
+                        <div className="small mb-1 text-muted">
+                          Priority: {story.priority === 0 ? 'Critical' : story.priority === 1 ? 'High' : story.priority === 2 ? 'Medium' : 'Low'}
+                        </div>
+                      )}
+                      <div className="d-flex gap-1 flex-wrap">
+                        <Button 
+                          size="sm" 
+                          variant="link" 
+                          style={{ padding: '0.25rem 0.5rem' }}
+                          onClick={() => window.open(`/sprints/kanban?highlightStory=${storyId}`, '_blank')}
+                        >
+                          Edit in Kanban →
+                        </Button>
+                      </div>
                     </div>
                   )}
-                  {detailEntry.goalTitleSnapshot && (
+                  {storyId && !story && (
+                    <div className="small mb-1">
+                      Story {detailEntry.storyNumber || storyId}: {detailEntry.storyTitleSnapshot || 'Untitled'}
+                    </div>
+                  )}
+                  {detailEntry.goalId && (() => {
+                    const linkedGoal = goals.find(g => g.id === detailEntry.goalId);
+                    return (
+                      <div className="p-2 mb-2 rounded border" style={{ background: '#f9fafb', borderColor: '#e5e7eb' }}>
+                        <div className="small font-weight-bold mb-1">Goal</div>
+                        <div className="small mb-1">{linkedGoal?.title || detailEntry.goalTitleSnapshot || 'Unknown goal'}</div>
+                        {linkedGoal?.theme !== undefined && (
+                          <div className="small text-muted mb-1">Theme: #{linkedGoal.theme}</div>
+                        )}
+                        {linkedGoal && (
+                          <Button 
+                            size="sm" 
+                            variant="link" 
+                            style={{ padding: '0.25rem 0.5rem' }}
+                            onClick={() => window.open(`/goals?highlightGoal=${linkedGoal.id}`, '_blank')}
+                          >
+                            View Goal →
+                          </Button>
+                        )}
+                        <div className="mt-1">
+                          <Button 
+                            size="sm" 
+                            variant="outline-secondary"
+                            onClick={() => {
+                              setManualGoalId(detailEntry.goalId || '');
+                              window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' });
+                            }}
+                          >
+                            Change Goal
+                          </Button>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                  {!detailEntry.goalId && detailEntry.goalTitleSnapshot && (
                     <div className="small mb-2">Goal: {detailEntry.goalTitleSnapshot}</div>
                   )}
                   <div className="d-flex flex-wrap gap-2 mb-3">
