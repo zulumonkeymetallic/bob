@@ -5,6 +5,7 @@ import { httpsCallable } from 'firebase/functions';
 import { functions } from '../firebase';
 import { Goal, FocusGoal } from '../types';
 import { FocusWizardPrefill } from '../services/focusGoalsService';
+import KPIDesigner from './KPIDesigner';
 
 interface FocusGoalWizardProps {
   show: boolean;
@@ -91,6 +92,7 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
   const [useModernStoryTableHandoff, setUseModernStoryTableHandoff] = useState(true);
   const [goalSearchTerm, setGoalSearchTerm] = useState('');
   const [prefillMatchTriggered, setPrefillMatchTriggered] = useState(false);
+  const [showKpiDesigner, setShowKpiDesigner] = useState(false);
 
   // Reset on modal open
   useEffect(() => {
@@ -109,6 +111,7 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
       setUseModernStoryTableHandoff(true);
       setGoalSearchTerm('');
       setPrefillMatchTriggered(false);
+      setShowKpiDesigner(false);
     }
   }, [show]);
 
@@ -731,6 +734,16 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
               </ul>
             </div>
 
+            <div style={{ marginBottom: '16px' }}>
+              <h6 style={{ fontWeight: 600 }}>KPI setup</h6>
+              <p style={{ marginBottom: 8, color: '#666', fontSize: 13 }}>
+                Add KPI definitions for selected goals before confirming your focus set.
+              </p>
+              <Button variant="outline-primary" size="sm" onClick={() => setShowKpiDesigner(true)}>
+                Add KPIs to track progress
+              </Button>
+            </div>
+
             {/* Stories to Create */}
             {goalsNeedingStories.length > 0 && (
               <Alert variant="warning" style={{ marginBottom: '12px' }}>
@@ -832,6 +845,13 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
           </div>
         )}
       </Modal.Body>
+
+      <KPIDesigner
+        show={showKpiDesigner}
+        onHide={() => setShowKpiDesigner(false)}
+        goals={selectedGoals}
+        ownerUid={currentUserId || ''}
+      />
 
       <Modal.Footer>
         <Button variant="secondary" onClick={onHide} disabled={loading}>

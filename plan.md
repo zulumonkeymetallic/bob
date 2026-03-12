@@ -1338,6 +1338,9 @@ adherence = [(0.857 + 0.867 + 0.892 + 0.96) / 4] * 100 = 89.4%
 - ✅ 12 Mar 2026: Monzo manual pot-link slice shipped.
   Scope completed: removed automatic Monzo pot creation from the focus setup path, added deterministic manual goal refs (`GOAL-{goalId}`) in wizard review with copy UX, persisted ref mappings to goal docs via `monzoPotGoalRef`, and stored `goalTypeMap` + Monzo ref map on created focus goals.
   Remaining in the broader Monzo plan: backend watcher/cron linking unresolved refs to real Monzo pot ids and timeout/notification handling.
+- ✅ 12 Mar 2026: KPI Designer handoff slice shipped.
+  Scope completed: added a reusable KPI Designer modal for selected goals, enabled KPI creation in wizard review before confirm, and persisted KPI entries onto goal docs through the existing goal `kpis` array contract.
+  Remaining in broader KPI plan: richer KPI schema (`kpisV2`), baseline/trend history model, and dedicated KPI charting on focus countdown surfaces.
 
 **Location**: plan.md
 
