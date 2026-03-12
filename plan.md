@@ -1341,6 +1341,9 @@ adherence = [(0.857 + 0.867 + 0.892 + 0.96) / 4] * 100 = 89.4%
 - ✅ 12 Mar 2026: KPI Designer handoff slice shipped.
   Scope completed: added a reusable KPI Designer modal for selected goals, enabled KPI creation in wizard review before confirm, and persisted KPI entries onto goal docs through the existing goal `kpis` array contract.
   Remaining in broader KPI plan: richer KPI schema (`kpisV2`), baseline/trend history model, and dedicated KPI charting on focus countdown surfaces.
+- ✅ 12 Mar 2026: Calendar manual-scheduling suppression slice shipped.
+  Scope completed: updated nightly planner scheduling so entities with existing user-created (non-AI) calendar blocks are skipped by auto-placement, preventing duplicate/competing AI-planned blocks when users intentionally schedule from kanban.
+  Remaining in broader calendar confidence plan: CSA-specific matcher diagnostics surface, confidence rationale visibility on more calendar surfaces, and orphaned closed/deleted-entity cleanup policy for legacy blocks.
 
 **Location**: plan.md
 

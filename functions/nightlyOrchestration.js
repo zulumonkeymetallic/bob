@@ -3026,6 +3026,14 @@ async function runCalendarPlannerJob() {
     }
 
     const scheduledMinutesByEntity = collectScheduledMinutesByEntity(remainingBlocks);
+    const manuallyScheduledEntityKeys = new Set(
+      remainingBlocks
+        .filter((block) => {
+          const isAi = block.aiGenerated === true || block.isAiGenerated === true || block.createdBy === 'ai';
+          return !isAi && (block.storyId || block.taskId);
+        })
+        .map((block) => (block.storyId ? getEntityKey('story', block.storyId) : getEntityKey('task', block.taskId)))
+    );
 
     const mainGigBlocks = []; // Track main gig planner blocks separately
     remainingBlocks.forEach((b) => {
@@ -3178,6 +3186,9 @@ async function runCalendarPlannerJob() {
     for (const entry of placementQueue) {
       const { kind, candidate } = entry;
       const entityKey = getEntityKey(kind, candidate?.id);
+      if (manuallyScheduledEntityKeys.has(entityKey)) {
+        continue;
+      }
       const totalNeededMs = estimateRequiredMinutes(candidate, kind) * 60000;
       const alreadyMs = (scheduledMinutesByEntity.get(entityKey) || 0) * 60000;
       if (alreadyMs >= totalNeededMs) continue; // fully covered
