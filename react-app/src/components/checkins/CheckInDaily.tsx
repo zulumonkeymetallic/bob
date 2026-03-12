@@ -66,6 +66,11 @@ interface HealthSnapshot {
   healthkitStepsToday?: number;
   healthkitStepGoal?: number;
   manualStepsToday?: number;
+  // distance and workout time
+  healthkitDistanceKmToday?: number;
+  manualDistanceKmToday?: number;
+  healthkitWorkoutMinutesToday?: number;
+  manualWorkoutMinutesToday?: number;
   // sleep
   healthkitSleepMinutes?: number;
   manualSleepMinutes?: number;
@@ -78,6 +83,11 @@ interface HealthSnapshot {
   manualProteinG?: number;
   manualFatG?: number;
   manualCarbsG?: number;
+  // body composition
+  healthkitWeightKg?: number;
+  manualWeightKg?: number;
+  healthkitBodyFatPct?: number;
+  manualBodyFatPct?: number;
   // readiness
   healthkitReadinessScore?: number;
   healthkitReadinessLabel?: string;
@@ -121,7 +131,16 @@ const CheckInDaily: React.FC = () => {
   // Health data state
   const [health, setHealth] = useState<HealthSnapshot>({});
   const [manualInputs, setManualInputs] = useState<Partial<{
-    sleepH: string; steps: string; calories: string; protein: string; fat: string; carbs: string;
+    sleepH: string;
+    steps: string;
+    distanceKm: string;
+    workoutMin: string;
+    calories: string;
+    protein: string;
+    fat: string;
+    carbs: string;
+    weightKg: string;
+    bodyFatPct: string;
   }>>({});
   const [healthSaving, setHealthSaving] = useState(false);
   const [healthSaved, setHealthSaved] = useState(false);
@@ -318,10 +337,14 @@ const CheckInDaily: React.FC = () => {
 
   const effectiveSleepMinutes = health.healthkitSleepMinutes ?? health.manualSleepMinutes;
   const effectiveSteps = health.healthkitStepsToday ?? health.manualStepsToday;
+  const effectiveDistanceKm = health.healthkitDistanceKmToday ?? health.manualDistanceKmToday;
+  const effectiveWorkoutMinutes = health.healthkitWorkoutMinutesToday ?? health.manualWorkoutMinutesToday;
   const effectiveCalories = health.healthkitCaloriesTodayKcal ?? health.manualCaloriesKcal;
   const effectiveProtein = health.healthkitProteinTodayG ?? health.manualProteinG;
   const effectiveFat = health.healthkitFatTodayG ?? health.manualFatG;
   const effectiveCarbs = health.healthkitCarbsTodayG ?? health.manualCarbsG;
+  const effectiveWeightKg = health.healthkitWeightKg ?? health.manualWeightKg;
+  const effectiveBodyFatPct = health.healthkitBodyFatPct ?? health.manualBodyFatPct;
 
   const saveHealthData = useCallback(async () => {
     if (!currentUser) return;
@@ -330,10 +353,14 @@ const CheckInDaily: React.FC = () => {
       const payload: Record<string, any> = { ownerUid: currentUser.uid, healthDataSource: 'manual', updatedAt: new Date() };
       if (manualInputs.sleepH) payload.manualSleepMinutes = Math.round(parseFloat(manualInputs.sleepH) * 60);
       if (manualInputs.steps) payload.manualStepsToday = parseInt(manualInputs.steps, 10);
+      if (manualInputs.distanceKm) payload.manualDistanceKmToday = parseFloat(manualInputs.distanceKm);
+      if (manualInputs.workoutMin) payload.manualWorkoutMinutesToday = Math.round(parseFloat(manualInputs.workoutMin));
       if (manualInputs.calories) payload.manualCaloriesKcal = parseFloat(manualInputs.calories);
       if (manualInputs.protein) payload.manualProteinG = parseFloat(manualInputs.protein);
       if (manualInputs.fat) payload.manualFatG = parseFloat(manualInputs.fat);
       if (manualInputs.carbs) payload.manualCarbsG = parseFloat(manualInputs.carbs);
+      if (manualInputs.weightKg) payload.manualWeightKg = parseFloat(manualInputs.weightKg);
+      if (manualInputs.bodyFatPct) payload.manualBodyFatPct = parseFloat(manualInputs.bodyFatPct);
       await setDoc(doc(db, 'profiles', currentUser.uid), payload, { merge: true });
       setHealth((prev) => ({ ...prev, ...payload }));
       setHealthSaved(true);
@@ -1493,6 +1520,36 @@ const CheckInDaily: React.FC = () => {
                 />
               )}
             </Col>
+            {/* Distance */}
+            <Col xs={6} md={4} xl={2}>
+              <div className="text-muted small mb-1">Distance</div>
+              {effectiveDistanceKm != null ? (
+                <div className="fw-semibold">{Number(effectiveDistanceKm).toFixed(2)} km</div>
+              ) : (
+                <Form.Control
+                  size="sm"
+                  type="number"
+                  placeholder="km"
+                  value={manualInputs.distanceKm ?? ''}
+                  onChange={(e) => setManualInputs((p) => ({ ...p, distanceKm: e.target.value }))}
+                />
+              )}
+            </Col>
+            {/* Workout minutes */}
+            <Col xs={6} md={4} xl={2}>
+              <div className="text-muted small mb-1">Workout</div>
+              {effectiveWorkoutMinutes != null ? (
+                <div className="fw-semibold">{Math.round(Number(effectiveWorkoutMinutes))} min</div>
+              ) : (
+                <Form.Control
+                  size="sm"
+                  type="number"
+                  placeholder="minutes"
+                  value={manualInputs.workoutMin ?? ''}
+                  onChange={(e) => setManualInputs((p) => ({ ...p, workoutMin: e.target.value }))}
+                />
+              )}
+            </Col>
             {/* Calories */}
             <Col xs={6} md={4} xl={2}>
               <div className="text-muted small mb-1">Calories</div>
@@ -1550,6 +1607,36 @@ const CheckInDaily: React.FC = () => {
                   placeholder="g"
                   value={manualInputs.carbs ?? ''}
                   onChange={(e) => setManualInputs((p) => ({ ...p, carbs: e.target.value }))}
+                />
+              )}
+            </Col>
+            {/* Weight */}
+            <Col xs={6} md={4} xl={2}>
+              <div className="text-muted small mb-1">Weight</div>
+              {effectiveWeightKg != null ? (
+                <div className="fw-semibold">{Number(effectiveWeightKg).toFixed(1)} kg</div>
+              ) : (
+                <Form.Control
+                  size="sm"
+                  type="number"
+                  placeholder="kg"
+                  value={manualInputs.weightKg ?? ''}
+                  onChange={(e) => setManualInputs((p) => ({ ...p, weightKg: e.target.value }))}
+                />
+              )}
+            </Col>
+            {/* Body fat */}
+            <Col xs={6} md={4} xl={2}>
+              <div className="text-muted small mb-1">Body Fat</div>
+              {effectiveBodyFatPct != null ? (
+                <div className="fw-semibold">{Number(effectiveBodyFatPct).toFixed(1)}%</div>
+              ) : (
+                <Form.Control
+                  size="sm"
+                  type="number"
+                  placeholder="%"
+                  value={manualInputs.bodyFatPct ?? ''}
+                  onChange={(e) => setManualInputs((p) => ({ ...p, bodyFatPct: e.target.value }))}
                 />
               )}
             </Col>

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Container, Card, Row, Col, Badge, Button, Alert, Collapse, OverlayTrigger, Tooltip, Form, Spinner, Table } from 'react-bootstrap';
+import { Container, Card, Row, Col, Badge, Button, Alert, Collapse, OverlayTrigger, Tooltip, Form, Spinner, Table, ProgressBar } from 'react-bootstrap';
 import { useNavigate, Link } from 'react-router-dom';
-import { Target, BookOpen, TrendingUp, Wallet, Clock, ListChecks, Calendar as CalendarIcon, LayoutGrid, RefreshCw, Sparkles, Activity, GripVertical, Heart, CheckCircle } from 'lucide-react';
+import { Target, BookOpen, TrendingUp, Wallet, Clock, ListChecks, Calendar as CalendarIcon, LayoutGrid, RefreshCw, Sparkles, Activity, GripVertical, Heart, CheckCircle, X } from 'lucide-react';
 import { DndContext, DragEndEvent, PointerSensor, useSensor, useSensors, closestCenter } from '@dnd-kit/core';
 import { SortableContext, useSortable, arrayMove, rectSortingStrategy } from '@dnd-kit/sortable';
 import { CSS as DndCSS } from '@dnd-kit/utilities';
@@ -185,6 +185,8 @@ const FINANCE_UNCATEGORISED_BUCKETS = new Set(['unknown', 'uncategorized', 'unca
 const TODAY_PLAN_COLUMN_STORAGE_KEY = 'bob_dashboard_today_plan_columns_v1';
 const PROFILE_OVERVIEW_LAYOUT_KEY = 'overviewWidgetLayout';
 const PROFILE_TODAY_PLAN_COLUMNS_KEY = 'todayPlanColumns';
+const HEALTH_BANNER_DISMISS_KEY = 'dashboard-health-banner-dismissed-date';
+const HEALTH_BANNER_SHOW_EVERY_DAYS = 3;
 const DASHBOARD_WIDGET_VISIBILITY_STORAGE_PREFIX = 'bob_dashboard_widget_visibility_v1';
 const DASHBOARD_WIDGET_SIZE_STORAGE_PREFIX = 'bob_dashboard_widget_sizes_v2';
 const DASHBOARD_WIDGET_ORDER_STORAGE_PREFIX = 'bob_dashboard_widget_order_v1';
@@ -629,6 +631,7 @@ const Dashboard: React.FC = () => {
   const [capacityLoading, setCapacityLoading] = useState(false);
   const [capacityError, setCapacityError] = useState<string | null>(null);
   const [profileSnapshot, setProfileSnapshot] = useState<any | null>(null);
+  const [showHealthBanner, setShowHealthBanner] = useState(true);
   const [choreCompletionBusy, setChoreCompletionBusy] = useState<Record<string, boolean>>({});
   const [showWidgetSettings, setShowWidgetSettings] = useState(false);
   const [dashboardDeviceType, setDashboardDeviceType] = useState<DashboardDeviceType>(() => getDashboardDeviceType());
@@ -1168,6 +1171,125 @@ const Dashboard: React.FC = () => {
     if (!hardcoverConfigured || hardcoverSyncAgeDays == null) return false;
     return hardcoverSyncAgeDays >= INTEGRATION_STALE_DAYS;
   }, [hardcoverConfigured, hardcoverSyncAgeDays]);
+
+  const healthBannerData = useMemo(() => {
+    if (!profileSnapshot) return null;
+
+    const readNumber = (...values: any[]): number | null => {
+      for (const value of values) {
+        const parsed = Number(value);
+        if (Number.isFinite(parsed)) return parsed;
+      }
+      return null;
+    };
+
+    const stepsToday = readNumber(profileSnapshot.healthkitStepsToday, profileSnapshot.manualStepsToday);
+    const distanceKmToday = readNumber(profileSnapshot.healthkitDistanceKmToday, profileSnapshot.manualDistanceKmToday);
+    const workoutMinutesToday = readNumber(profileSnapshot.healthkitWorkoutMinutesToday, profileSnapshot.manualWorkoutMinutesToday);
+    const proteinTodayG = readNumber(profileSnapshot.healthkitProteinTodayG, profileSnapshot.manualProteinTodayG);
+    const fatTodayG = readNumber(profileSnapshot.healthkitFatTodayG, profileSnapshot.manualFatTodayG);
+    const carbsTodayG = readNumber(profileSnapshot.healthkitCarbsTodayG, profileSnapshot.manualCarbsTodayG);
+    const caloriesTodayKcal = readNumber(profileSnapshot.healthkitCaloriesTodayKcal, profileSnapshot.manualCaloriesTodayKcal);
+    const weightKg = readNumber(profileSnapshot.healthkitWeightKg, profileSnapshot.manualWeightKg);
+    const bodyFatPct = readNumber(profileSnapshot.healthkitBodyFatPct, profileSnapshot.manualBodyFatPct);
+    const targetWeightKg = readNumber(profileSnapshot.targetWeightKg, profileSnapshot.healthTargetWeightKg);
+    const targetBodyFatPct = readNumber(profileSnapshot.targetBodyFatPct, profileSnapshot.healthTargetBodyFatPct, profileSnapshot.bodyFatTarget);
+    const targetProteinG = readNumber(profileSnapshot.targetProteinG, profileSnapshot.dailyProteinTargetG, profileSnapshot.healthTargetProteinG);
+    const targetFatG = readNumber(profileSnapshot.targetFatG, profileSnapshot.dailyFatTargetG, profileSnapshot.healthTargetFatG);
+    const targetCarbsG = readNumber(profileSnapshot.targetCarbsG, profileSnapshot.dailyCarbsTargetG, profileSnapshot.healthTargetCarbsG);
+    const targetCaloriesKcal = readNumber(profileSnapshot.targetCaloriesKcal, profileSnapshot.dailyCaloriesTargetKcal, profileSnapshot.healthTargetCaloriesKcal);
+    const weeksToTargetWeight = readNumber(profileSnapshot.weeksToTargetWeight);
+    const weeksToTargetBodyFat = readNumber(profileSnapshot.weeksToTargetBodyFat);
+
+    const clampPct = (value: number): number => Math.max(0, Math.min(100, Math.round(value)));
+    const adherencePct = (actual: number | null, target: number | null): number | null => {
+      if (actual == null || target == null || target <= 0) return null;
+      return clampPct((actual / target) * 100);
+    };
+    const isWeekend = [0, 6].includes(new Date().getDay());
+    const workoutTargetMinutes = Math.round((isWeekend ? 16 * 60 : 8 * 60) * 0.2);
+    const bodyFatGoalPct = targetBodyFatPct ?? 15;
+    const stepHabitTarget = 10000;
+    const proteinPct = adherencePct(proteinTodayG, targetProteinG);
+    const fatPct = adherencePct(fatTodayG, targetFatG);
+    const carbsPct = adherencePct(carbsTodayG, targetCarbsG);
+    const caloriesPct = adherencePct(caloriesTodayKcal, targetCaloriesKcal);
+    const macroComponents = [proteinPct, fatPct, carbsPct, caloriesPct].filter((value): value is number => value != null);
+    const macroAdherencePct = macroComponents.length
+      ? Math.round(macroComponents.reduce((sum, value) => sum + value, 0) / macroComponents.length)
+      : null;
+
+    const macroTone = macroAdherencePct == null ? 'secondary' : macroAdherencePct >= 80 ? 'success' : macroAdherencePct >= 60 ? 'warning' : 'danger';
+    const bodyFatGoalProgressPct = bodyFatPct == null
+      ? null
+      : (bodyFatPct <= bodyFatGoalPct ? 100 : clampPct((bodyFatGoalPct / bodyFatPct) * 100));
+    const primaryProgressPct = bodyFatGoalProgressPct ?? macroAdherencePct ?? null;
+    const primaryProgressLabel = bodyFatGoalProgressPct != null
+      ? `Body fat target ${bodyFatGoalPct}%`
+      : (macroAdherencePct != null ? 'Macro adherence' : 'Health progress');
+    const missingTargets = targetWeightKg == null || targetBodyFatPct == null;
+
+    return {
+      sourceLabel: ['authorized', 'synced'].includes(String(profileSnapshot.healthkitStatus || '').toLowerCase()) ? 'HealthKit' : 'Manual',
+      stepsToday,
+      distanceKmToday,
+      workoutMinutesToday,
+      proteinTodayG,
+      fatTodayG,
+      carbsTodayG,
+      caloriesTodayKcal,
+      weightKg,
+      bodyFatPct,
+      targetWeightKg,
+      targetBodyFatPct,
+      targetProteinG,
+      targetFatG,
+      targetCarbsG,
+      targetCaloriesKcal,
+      weeksToTargetWeight,
+      weeksToTargetBodyFat,
+      stepPct: stepsToday == null ? null : clampPct((stepsToday / 12000) * 100),
+      stepHabitTarget,
+      stepHabitPct: stepsToday == null ? null : clampPct((stepsToday / stepHabitTarget) * 100),
+      distancePct: distanceKmToday == null ? null : clampPct((distanceKmToday / 5) * 100),
+      workoutPct: workoutMinutesToday == null ? null : clampPct((workoutMinutesToday / workoutTargetMinutes) * 100),
+      macroAdherencePct,
+      macroTone,
+      bodyFatGoalPct,
+      bodyFatGoalProgressPct,
+      primaryProgressPct,
+      primaryProgressLabel,
+      missingTargets,
+      workoutTargetMinutes,
+    };
+  }, [profileSnapshot]);
+
+  useEffect(() => {
+    try {
+      const dismissedDate = window.localStorage.getItem(HEALTH_BANNER_DISMISS_KEY);
+      if (dismissedDate) {
+        const lastDismissed = new Date(dismissedDate);
+        const now = new Date();
+        const daysSinceDismiss = Math.floor((now.getTime() - lastDismissed.getTime()) / (1000 * 60 * 60 * 24));
+        if (daysSinceDismiss < HEALTH_BANNER_SHOW_EVERY_DAYS) {
+          setShowHealthBanner(false);
+          return;
+        }
+      }
+    } catch {
+      // Ignore localStorage issues and keep the card visible.
+    }
+    setShowHealthBanner(true);
+  }, []);
+
+  const handleDismissHealthBanner = useCallback(() => {
+    try {
+      window.localStorage.setItem(HEALTH_BANNER_DISMISS_KEY, new Date().toISOString());
+    } catch {
+      // Ignore localStorage failures.
+    }
+    setShowHealthBanner(false);
+  }, []);
 
   const rawFitnessScoreSummary = fitnessOverviewSnapshot?.fitnessScore
     ?? runAnalysisSnapshot?.fitnessScore
@@ -4095,6 +4217,118 @@ const Dashboard: React.FC = () => {
               </div>
             )}
 
+            {healthBannerData && showHealthBanner && (
+              <Card
+                className="mb-3"
+                style={{
+                  background: healthBannerData.macroTone === 'success'
+                    ? 'linear-gradient(135deg, #198754 0%, #0f5132 100%)'
+                    : healthBannerData.macroTone === 'warning'
+                      ? 'linear-gradient(135deg, #fd7e14 0%, #b35c00 100%)'
+                      : 'linear-gradient(135deg, #0d6efd 0%, #0b5ed7 100%)',
+                  border: 'none',
+                  color: '#fff',
+                  boxShadow: '0 8px 24px rgba(13, 110, 253, 0.22)'
+                }}
+              >
+                <Card.Body style={{ padding: '12px 16px' }}>
+                  <div className="d-flex align-items-center gap-3 flex-wrap">
+                    <div
+                      style={{
+                        width: 40,
+                        height: 40,
+                        borderRadius: 8,
+                        backgroundColor: 'rgba(255, 255, 255, 0.18)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        backdropFilter: 'blur(10px)',
+                        flexShrink: 0,
+                      }}
+                    >
+                      <Heart size={20} />
+                    </div>
+                    <div style={{ flex: 1, minWidth: 220 }}>
+                      <div style={{ margin: 0, fontSize: 14, fontWeight: 700 }}>
+                        Daily Health Progress
+                      </div>
+                      <div style={{ marginTop: 2, fontSize: 11, opacity: 0.9 }}>
+                        {healthBannerData.weightKg != null ? `${healthBannerData.weightKg.toFixed(1)} kg` : 'weight missing'}
+                        {' • '}
+                        {healthBannerData.bodyFatPct != null ? `${healthBannerData.bodyFatPct.toFixed(1)}% body fat` : 'body fat missing'}
+                        {' • '}
+                        {healthBannerData.targetWeightKg != null ? `target ${healthBannerData.targetWeightKg.toFixed(1)} kg` : 'set weight target'}
+                        {' / '}
+                        {healthBannerData.targetBodyFatPct != null ? `${healthBannerData.targetBodyFatPct.toFixed(1)}%` : 'set body-fat target'}
+                        {' • '}
+                        {healthBannerData.weeksToTargetBodyFat != null ? `${Math.round(healthBannerData.weeksToTargetBodyFat)}w ETA` : 'ETA n/a'}
+                      </div>
+                    </div>
+                    <div style={{ textAlign: 'right', minWidth: 72 }}>
+                      <div style={{ fontSize: 20, fontWeight: 800, lineHeight: 1 }}>
+                        {healthBannerData.primaryProgressPct != null ? `${healthBannerData.primaryProgressPct}%` : '—'}
+                      </div>
+                      <div style={{ fontSize: 11, opacity: 0.85 }}>
+                        {healthBannerData.primaryProgressLabel}
+                      </div>
+                    </div>
+                    <button
+                      onClick={handleDismissHealthBanner}
+                      style={{
+                        background: 'rgba(255, 255, 255, 0.2)',
+                        border: 'none',
+                        color: '#fff',
+                        cursor: 'pointer',
+                        padding: 4,
+                        borderRadius: 4,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        flexShrink: 0,
+                      }}
+                      title="Dismiss for 3 days"
+                    >
+                      <X size={16} />
+                    </button>
+                  </div>
+
+                  <div style={{ marginTop: 8 }}>
+                    <ProgressBar
+                      now={healthBannerData.primaryProgressPct ?? 0}
+                      style={{
+                        height: 4,
+                        backgroundColor: 'rgba(255, 255, 255, 0.22)',
+                        borderRadius: 2,
+                      }}
+                      className="bg-light"
+                    />
+                  </div>
+
+                  <div className="d-flex align-items-center justify-content-between gap-2 flex-wrap" style={{ marginTop: 8, fontSize: 11, opacity: 0.9 }}>
+                    <div>
+                      Source {healthBannerData.sourceLabel}
+                      {' • '}
+                      {healthBannerData.stepsToday != null ? `${Math.round(healthBannerData.stepsToday).toLocaleString()} steps` : 'steps missing'}
+                      {' • '}
+                      {healthBannerData.workoutMinutesToday != null ? `${Math.round(healthBannerData.workoutMinutesToday)} min workout` : 'workout missing'}
+                      {' • '}
+                      {healthBannerData.macroAdherencePct != null ? `${healthBannerData.macroAdherencePct}% macros` : 'macro targets missing'}
+                    </div>
+                    <div className="d-flex align-items-center gap-2">
+                      {healthBannerData.missingTargets && (
+                        <Button variant="light" size="sm" onClick={() => navigate('/settings?tab=profile')}>
+                          Set targets
+                        </Button>
+                      )}
+                      <Button variant="outline-light" size="sm" onClick={() => navigate('/fitness')}>
+                        View health
+                      </Button>
+                    </div>
+                  </div>
+                </Card.Body>
+              </Card>
+            )}
+
             {showMonzoReconnectBanner && (
               <Alert variant="warning" className="d-flex align-items-center justify-content-between flex-wrap gap-2">
                 <div>
@@ -4407,12 +4641,12 @@ const Dashboard: React.FC = () => {
                       </Col>
 
                       {/* Health Metrics Group */}
-                      {profileSnapshot && (
+                      {healthBannerData && (
                         <Col xs={12} sm={6} lg={6} xl={4}>
                           <div
                             className="d-flex align-items-center gap-2 px-2 py-1 rounded border h-100"
                             style={{ background: 'var(--bs-body-bg)', cursor: 'pointer', transition: 'all 0.2s ease' }}
-                            onClick={() => navigate('/dashboard/daily-checkin')}
+                            onClick={() => navigate('/fitness')}
                             onMouseEnter={(e) => {
                               e.currentTarget.style.backgroundColor = 'var(--bs-danger-bg-subtle)';
                               e.currentTarget.style.borderColor = 'var(--bs-danger)';
@@ -4423,33 +4657,25 @@ const Dashboard: React.FC = () => {
                             }}
                           >
                             <Heart size={16} className="text-danger flex-shrink-0" />
-                            <div className="flex-grow-1" title="Health data from HealthKit or manual check-in">
+                            <div
+                              className="flex-grow-1"
+                              title={`Health data from ${healthBannerData.sourceLabel}. Weight ${healthBannerData.weightKg != null ? `${healthBannerData.weightKg.toFixed(1)}kg` : '—'} · Body fat ${healthBannerData.bodyFatPct != null ? `${healthBannerData.bodyFatPct.toFixed(1)}%` : '—'} · Steps ${healthBannerData.stepsToday != null ? Math.round(healthBannerData.stepsToday).toLocaleString() : '—'} · Workout ${healthBannerData.workoutMinutesToday != null ? `${Math.round(healthBannerData.workoutMinutesToday)}m` : '—'} · Macros ${healthBannerData.macroAdherencePct != null ? `${healthBannerData.macroAdherencePct}%` : '—'}`}
+                            >
                               <div className="text-muted small">Health</div>
                               <div className="fw-semibold" style={{ fontSize: '0.8rem' }}>
-                                {(() => {
-                                  const sleep = profileSnapshot.healthkitSleepMinutes ?? profileSnapshot.manualSleepMinutes;
-                                  const steps = profileSnapshot.healthkitStepsToday ?? profileSnapshot.manualStepsToday;
-                                  const hrv = profileSnapshot.healthkitHrvMs;
-                                  const parts: string[] = [];
-                                  if (sleep != null) parts.push(`${(Number(sleep) / 60).toFixed(1)}h sleep`);
-                                  if (steps != null) parts.push(`${Number(steps).toLocaleString()} steps`);
-                                  if (hrv != null) parts.push(`${Math.round(Number(hrv))}ms HRV`);
-                                  return parts.length > 0 ? parts.join(' · ') : '—';
-                                })()}
+                                {[
+                                  healthBannerData.weightKg != null ? `${healthBannerData.weightKg.toFixed(1)}kg` : null,
+                                  healthBannerData.bodyFatPct != null ? `${healthBannerData.bodyFatPct.toFixed(1)}% bf` : null,
+                                  healthBannerData.stepsToday != null ? `${Math.round(healthBannerData.stepsToday).toLocaleString()} steps` : null,
+                                ].filter(Boolean).join(' · ') || 'No health snapshot'}
                               </div>
                               <div className="text-muted small">
-                                {(() => {
-                                  const cal = profileSnapshot.healthkitCaloriesTodayKcal ?? profileSnapshot.manualCaloriesKcal;
-                                  const pro = profileSnapshot.healthkitProteinTodayG ?? profileSnapshot.manualProteinG;
-                                  const fat = profileSnapshot.healthkitFatTodayG ?? profileSnapshot.manualFatG;
-                                  const carbs = profileSnapshot.healthkitCarbsTodayG ?? profileSnapshot.manualCarbsG;
-                                  const parts: string[] = [];
-                                  if (cal != null) parts.push(`${Math.round(Number(cal))}kcal`);
-                                  if (pro != null) parts.push(`P:${Math.round(Number(pro))}g`);
-                                  if (fat != null) parts.push(`F:${Math.round(Number(fat))}g`);
-                                  if (carbs != null) parts.push(`C:${Math.round(Number(carbs))}g`);
-                                  return parts.length > 0 ? parts.join(' · ') : 'No macro data';
-                                })()}
+                                {[
+                                  healthBannerData.workoutMinutesToday != null ? `${Math.round(healthBannerData.workoutMinutesToday)}m workout` : null,
+                                  healthBannerData.distanceKmToday != null ? `${healthBannerData.distanceKmToday.toFixed(1)}km` : null,
+                                  healthBannerData.macroAdherencePct != null ? `${healthBannerData.macroAdherencePct}% macros` : null,
+                                  `Source ${healthBannerData.sourceLabel}`,
+                                ].filter(Boolean).join(' · ')}
                               </div>
                             </div>
                           </div>

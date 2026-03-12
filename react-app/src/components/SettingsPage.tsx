@@ -112,6 +112,8 @@ const SettingsPage: React.FC = () => {
   const [autoEnrichStravaHR, setAutoEnrichStravaHR] = useState(false);
   const [autoComputeFitnessMetrics, setAutoComputeFitnessMetrics] = useState(false);
   const [excludeWithDadFromMetrics, setExcludeWithDadFromMetrics] = useState(true);
+  const [targetWeightKg, setTargetWeightKg] = useState('');
+  const [targetBodyFatPct, setTargetBodyFatPct] = useState('');
   const [locationName, setLocationName] = useState('');
   const [locationLat, setLocationLat] = useState<string>('');
   const [locationLon, setLocationLon] = useState<string>('');
@@ -315,6 +317,8 @@ const SettingsPage: React.FC = () => {
           setAutoEnrichStravaHR(p.autoEnrichStravaHR !== false);
         setAutoComputeFitnessMetrics(p.autoComputeFitnessMetrics !== false);
         setExcludeWithDadFromMetrics(p.excludeWithDadFromMetrics !== false);
+          setTargetWeightKg(p.targetWeightKg != null ? String(p.targetWeightKg) : (p.healthTargetWeightKg != null ? String(p.healthTargetWeightKg) : ''));
+          setTargetBodyFatPct(p.targetBodyFatPct != null ? String(p.targetBodyFatPct) : (p.healthTargetBodyFatPct != null ? String(p.healthTargetBodyFatPct) : ''));
         setMonzoConnected(!!p.monzoConnected);
         setLocationName(p.locationName || '');
         setLocationLat(p.locationLat != null ? String(p.locationLat) : '');
@@ -1153,6 +1157,8 @@ firebase deploy --only functions:remindersPush,functions:remindersPull --project
                                 setSavingProfile(true);
                                 setSaveProfileError('');
                                 try {
+                                  const parsedTargetWeightKg = targetWeightKg.trim() !== '' ? Number(targetWeightKg) : null;
+                                  const parsedTargetBodyFatPct = targetBodyFatPct.trim() !== '' ? Number(targetBodyFatPct) : null;
                                   await setDoc(doc(db, 'profiles', currentUser.uid), {
                                     ownerUid: currentUser.uid,
                                     parkrunAthleteId,
@@ -1163,7 +1169,11 @@ firebase deploy --only functions:remindersPush,functions:remindersPull --project
                                     parkrunAutoComputePercentiles,
                                     autoEnrichStravaHR,
                                     autoComputeFitnessMetrics,
-                                    excludeWithDadFromMetrics
+                                    excludeWithDadFromMetrics,
+                                    targetWeightKg: parsedTargetWeightKg,
+                                    healthTargetWeightKg: parsedTargetWeightKg,
+                                    targetBodyFatPct: parsedTargetBodyFatPct,
+                                    healthTargetBodyFatPct: parsedTargetBodyFatPct,
                                   }, { merge: true });
                                   setSaveProfileMsg('Saved');
                                   setTimeout(() => setSaveProfileMsg(''), 2500);
@@ -1180,6 +1190,37 @@ firebase deploy --only functions:remindersPush,functions:remindersPull --project
                           <Col md={3}>
                             {saveProfileMsg && <span className="text-success">{saveProfileMsg}</span>}
                             {saveProfileError && <span className="text-danger">{saveProfileError}</span>}
+                          </Col>
+                        </Row>
+                        <Row className="g-3 mt-1">
+                          <Col md={3}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Weight Target (kg)</Form.Label>
+                              <Form.Control
+                                type="number"
+                                step="0.1"
+                                placeholder="e.g., 82.5"
+                                value={targetWeightKg}
+                                onChange={(e) => setTargetWeightKg(e.target.value)}
+                              />
+                            </Form.Group>
+                          </Col>
+                          <Col md={3}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Body Fat Target (%)</Form.Label>
+                              <Form.Control
+                                type="number"
+                                step="0.1"
+                                placeholder="e.g., 15"
+                                value={targetBodyFatPct}
+                                onChange={(e) => setTargetBodyFatPct(e.target.value)}
+                              />
+                            </Form.Group>
+                          </Col>
+                          <Col md={6} className="d-flex align-items-end">
+                            <Form.Text className="text-muted">
+                              These targets feed the dashboard health progress card and the health trends shown on the fitness dashboard.
+                            </Form.Text>
                           </Col>
                         </Row>
                         <hr />
