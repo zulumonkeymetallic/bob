@@ -7,7 +7,6 @@ import GoalsManagement from './components/GoalsManagement';
 import GoalsYearPlanner from './components/GoalsYearPlanner';
 import KanbanPage from './components/KanbanPage';
 import ModernKanbanPage from './components/ModernKanbanPage';
-import PlanningDashboard from './components/PlanningDashboard';
 import UnifiedPlannerPage from './components/planner/UnifiedPlannerPage';
 import WeeklyThemePlanner from './components/planner/WeeklyThemePlanner';
 import PlanningApprovalPage from './components/planner/PlanningApprovalPage';
@@ -349,7 +348,7 @@ function AppContent() {
             <Route path="/dashboard/habit-tracking" element={<HabitsChoresDashboard />} />
             <Route path="/dashboard/habits-chores" element={<Navigate to="/dashboard/habit-tracking" replace />} />
             <Route path="/dashboard/daily-checkin" element={<Navigate to="/checkin/daily" replace />} />
-            <Route path="/dashboard/ai-planner" element={<Navigate to="/ai-planner" replace />} />
+            <Route path="/dashboard/ai-planner" element={<Navigate to="/calendar" replace />} />
             <Route path="/dashboard/mobile-priorities" element={<Navigate to="/mobile-priorities" replace />} />
             <Route path="/dashboard/theme-progress" element={<Navigate to="/metrics/progress" replace />} />
             <Route path="/dashboard/finance" element={<Navigate to="/finance/dashboard" replace />} />
@@ -407,9 +406,9 @@ function AppContent() {
             <Route path="/mobile-checklist" element={<MobileChecklistView />} />
             <Route path="/habits" element={<Navigate to="/dashboard/habit-tracking" replace />} />
             <Route path="/routines" element={<Navigate to="/chores" replace />} />
-            <Route path="/ai-planner" element={<PlanningDashboard />} />
+            <Route path="/ai-planner" element={<Navigate to="/calendar" replace />} />
             <Route path="/ai-usage" element={<AIUsageDashboard />} />
-            <Route path="/planning" element={<PlanningDashboard />} />
+            <Route path="/planning" element={<Navigate to="/calendar" replace />} />
             <Route path="/planning/approvals" element={<ApprovalsCenter />} />
             <Route path="/planning/approval" element={<PlanningApprovalPage />} />
             <Route
