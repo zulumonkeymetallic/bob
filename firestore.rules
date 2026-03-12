@@ -496,6 +496,22 @@ service cloud.firestore {
       }
     }
 
+    // ── Per-user planner alerts subcollection ──────────────────────────────
+    // DayCapacityWarningBanner reads users/{uid}/planner_alerts/capacity-warning
+    match /users/{uid} {
+      match /planner_alerts/{alertId} {
+        allow read, write: if isSignedIn() && request.auth.uid == uid;
+      }
+    }
+
+    // ── Per-user daily AI quota tracking ──────────────────────────────────
+    // Documents keyed as {uid}_{YYYY-MM-DD}. Only the owning user can read
+    // their own quota. Functions write via Admin SDK (no rule needed).
+    match /user_quotas/{docId} {
+      allow read: if isSignedIn() && docId.matches('^' + request.auth.uid + '_.*');
+      allow write: if false; // server-only writes via Admin SDK
+    }
+
     // No client access to tokens by default (server-only)
   }
 }

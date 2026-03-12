@@ -956,6 +956,8 @@ async function generateStoryRef(db, ownerUid) {
 
 // ===== Deterministic Scheduler (Issue #152 - Phase 1)
 const { secureFunction } = require('./security/recaptchaSecurityHandler');
+const { checkAndIncrementQuota } = require('./utils/perUserQuota');
+const { verifyAppCheckToken, checkOnCallAppCheck } = require('./utils/appCheckVerifier');
 
 exports.buildPlan = httpsV2.onCall(
   secureFunction(async (req) => {
@@ -1366,9 +1368,15 @@ exports.syncCalendarAndTasks = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID
   })
 );
 
-exports.autoEnrichTasks = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
+exports.autoEnrichTasks = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY], maxInstances: 5 }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+
+  const appCheckResult = checkOnCallAppCheck(req, 'autoEnrichTasks');
+  if (!appCheckResult.valid) throw new httpsV2.HttpsError('unauthenticated', appCheckResult.reason || 'App Check required');
+
+  const quotaCheck = await checkAndIncrementQuota(uid, 'auto_enrich_tasks');
+  if (!quotaCheck.allowed) throw new httpsV2.HttpsError('resource-exhausted', quotaCheck.message || 'Daily AI quota exceeded');
 
   const estimateMissing = req?.data?.estimateMissing !== false;
   const linkSuggestions = !!req?.data?.linkSuggestions;
@@ -1518,9 +1526,16 @@ exports.enhanceNewTask = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY], m
 );
 
 
-exports.taskStoryConversion = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
+exports.taskStoryConversion = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY], maxInstances: 5 }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+
+  const appCheckResult = checkOnCallAppCheck(req, 'taskStoryConversion');
+  if (!appCheckResult.valid) throw new httpsV2.HttpsError('unauthenticated', appCheckResult.reason || 'App Check required');
+
+  const quotaCheck = await checkAndIncrementQuota(uid, 'task_story_conversion');
+  if (!quotaCheck.allowed) throw new httpsV2.HttpsError('resource-exhausted', quotaCheck.message || 'Daily AI quota exceeded');
+
   const autoApply = !!req?.data?.autoApply;
   const taskIds = Array.isArray(req?.data?.taskIds) ? req.data.taskIds.map(String) : [];
 
@@ -1569,9 +1584,16 @@ exports.taskStoryConversion = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KE
   return { suggestions, converted };
 });
 
-exports.plannerLLM = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
+exports.plannerLLM = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY], maxInstances: 3 }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+
+  const appCheckResult = checkOnCallAppCheck(req, 'plannerLLM');
+  if (!appCheckResult.valid) throw new httpsV2.HttpsError('unauthenticated', appCheckResult.reason || 'App Check required');
+
+  const quotaCheck = await checkAndIncrementQuota(uid, 'planner_llm');
+  if (!quotaCheck.allowed) throw new httpsV2.HttpsError('resource-exhausted', quotaCheck.message || 'Daily AI quota exceeded');
+
   const day = req?.data?.day || new Date().toISOString().slice(0, 10);
   const persona = String(req?.data?.persona || 'personal');
   const horizonDays = Math.max(1, Math.min(Number(req?.data?.horizonDays || 1), 14));
@@ -2183,9 +2205,20 @@ const PRIORITY_KEY_PREFIX = 'bobPriority';
 const TASK_DONE_STATUS_VALUES = new Set(['done', 'completed', 'complete', 'archived', '2', '3']);
 const STORY_DONE_STATUS_VALUES = new Set(['done', 'complete', 'archived', '3']);
 
-function applyPriorityCors(res) {
-  res.set('Access-Control-Allow-Origin', '*');
-  res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+const PRIORITY_ALLOWED_ORIGINS = new Set([
+  'https://bob.jc1.tech',
+  'https://bob20250810.web.app',
+  'https://bob20250810.firebaseapp.com',
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
+]);
+function applyPriorityCors(res, req) {
+  const origin = req ? String(req.get('origin') || '') : '';
+  if (PRIORITY_ALLOWED_ORIGINS.has(origin)) {
+    res.set('Access-Control-Allow-Origin', origin);
+    res.set('Vary', 'Origin');
+  }
+  res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Firebase-AppCheck');
   res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.set('Access-Control-Allow-Credentials', 'true');
 }
@@ -2475,8 +2508,8 @@ async function logPriorityActivity(db, { ownerUid, correlationId, priorities, me
   }
 }
 
-exports.priorityNow = httpsV2.onRequest({ invoker: 'public', secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req, res) => {
-  applyPriorityCors(res);
+exports.priorityNow = httpsV2.onRequest({ invoker: 'public', secrets: [GOOGLE_AI_STUDIO_API_KEY], maxInstances: 5 }, async (req, res) => {
+  applyPriorityCors(res, req);
   if (req.method === 'OPTIONS') {
     res.status(204).send('');
     return;
@@ -2493,6 +2526,20 @@ exports.priorityNow = httpsV2.onRequest({ invoker: 'public', secrets: [GOOGLE_AI
     const message = error?.message || 'Authentication failed';
     console.warn('[priorityNow] auth failed', message);
     res.status(401).json({ error: message });
+    return;
+  }
+
+  // App Check verification (enforced when ENFORCE_APP_CHECK=true)
+  const priorityAppCheck = await verifyAppCheckToken(req, 'priorityNow');
+  if (!priorityAppCheck.valid) {
+    res.status(401).json({ error: priorityAppCheck.reason || 'App Check required' });
+    return;
+  }
+
+  // Per-user daily AI quota
+  const priorityQuota = await checkAndIncrementQuota(uid, 'priority_now');
+  if (!priorityQuota.allowed) {
+    res.status(429).json({ error: priorityQuota.message || 'Daily AI quota exceeded' });
     return;
   }
 
@@ -3007,8 +3054,8 @@ async function fetchLatestPriorityRun(db, uid) {
   }
 }
 
-exports.replanDay = httpsV2.onRequest({ invoker: 'public', secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req, res) => {
-  applyPriorityCors(res);
+exports.replanDay = httpsV2.onRequest({ invoker: 'public', secrets: [GOOGLE_AI_STUDIO_API_KEY], maxInstances: 3 }, async (req, res) => {
+  applyPriorityCors(res, req);
   if (req.method === 'OPTIONS') {
     res.status(204).send('');
     return;
@@ -3025,6 +3072,20 @@ exports.replanDay = httpsV2.onRequest({ invoker: 'public', secrets: [GOOGLE_AI_S
     const message = error?.message || 'Authentication failed';
     console.warn('[replanDay] auth failed', message);
     res.status(401).json({ error: message });
+    return;
+  }
+
+  // App Check verification (enforced when ENFORCE_APP_CHECK=true)
+  const replanAppCheck = await verifyAppCheckToken(req, 'replanDay');
+  if (!replanAppCheck.valid) {
+    res.status(401).json({ error: replanAppCheck.reason || 'App Check required' });
+    return;
+  }
+
+  // Per-user daily AI quota
+  const replanQuota = await checkAndIncrementQuota(uid, 'replan_day');
+  if (!replanQuota.allowed) {
+    res.status(429).json({ error: replanQuota.message || 'Daily AI quota exceeded' });
     return;
   }
 
