@@ -1350,6 +1350,9 @@ adherence = [(0.857 + 0.867 + 0.892 + 0.96) / 4] * 100 = 89.4%
 - ✅ 12 Mar 2026: Monzo timeout/retry UX slice shipped.
   Scope completed: added Focus Goals UI status for pending/timed-out Monzo pot links, exposed per-goal and retry-all actions for timed-out refs, and implemented a retry helper that resets link state and triggers immediate Monzo sync to re-attempt linkage.
   Remaining in broader Monzo plan: optional settings-surface parity for retry controls and notification-level messaging outside Focus Goals.
+- ✅ 12 Mar 2026: Focus unaligned-story banner slice shipped.
+  Scope completed: added Focus Goals warning banner for active-sprint stories not mapped to active focus goals, plus quick actions to align a story to the active focus set or remove it from the sprint.
+  Remaining in broader alignment plan: sprint-table-level unaligned filter toggle and dashboard alignment status widget parity.
 
 **Location**: plan.md
 

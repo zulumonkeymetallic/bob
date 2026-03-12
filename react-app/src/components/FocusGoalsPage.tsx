@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Container, Row, Col, Button, Card, Alert, Spinner, Tabs, Tab } from 'react-bootstrap';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
-import { collection, query, where, onSnapshot, getDocs, getDoc, doc } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, getDocs, getDoc, doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { FocusGoal, Goal, Story } from '../types';
 import { useFocusGoals } from '../hooks/useFocusGoals';
@@ -35,12 +35,15 @@ export const FocusGoalsPage: React.FC = () => {
   const { focusGoals, activeFocusGoals, loading } = useFocusGoals(currentUser?.uid);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [stories, setStories] = useState<Story[]>([]);
+  const [activeSprintIds, setActiveSprintIds] = useState<string[]>([]);
   const [showWizard, setShowWizard] = useState(false);
   const [wizardPrefill, setWizardPrefill] = useState<FocusWizardPrefill | null>(null);
   const [wizardLoading, setWizardLoading] = useState(false);
   const [refreshingFocusData, setRefreshingFocusData] = useState(false);
   const [retryingMonzoGoalIds, setRetryingMonzoGoalIds] = useState<Set<string>>(new Set());
+  const [updatingStoryIds, setUpdatingStoryIds] = useState<Set<string>>(new Set());
   const [monzoRetryMessage, setMonzoRetryMessage] = useState<string>('');
+  const [focusAlignmentMessage, setFocusAlignmentMessage] = useState<string>('');
   const [monzoBudgetSummary, setMonzoBudgetSummary] = useState<any>(null);
   const [monzoGoalAlignment, setMonzoGoalAlignment] = useState<any>(null);
 
@@ -74,6 +77,16 @@ export const FocusGoalsPage: React.FC = () => {
       }),
     [activeFocusGoalsWithMonzoRefs]
   );
+
+  const unalignedStoriesInActiveSprint = React.useMemo(() => {
+    if (!activeFocusGoalIdSet.size || activeSprintIds.length === 0) return [];
+    const sprintSet = new Set(activeSprintIds);
+    return stories.filter((story) => {
+      const inActiveSprint = !!story.sprintId && sprintSet.has(String(story.sprintId));
+      const hasAlignedGoal = !!story.goalId && activeFocusGoalIdSet.has(String(story.goalId));
+      return inActiveSprint && !hasAlignedGoal;
+    });
+  }, [stories, activeFocusGoalIdSet, activeSprintIds]);
 
   // Load Monzo budget summary and goal alignment (best-effort)
   useEffect(() => {
@@ -127,6 +140,29 @@ export const FocusGoalsPage: React.FC = () => {
     return () => {
       unsubGoals();
       unsubStories();
+    };
+  }, [currentUser?.uid, currentPersona]);
+
+  useEffect(() => {
+    if (!currentUser?.uid || !currentPersona) {
+      setActiveSprintIds([]);
+      return;
+    }
+
+    const sprintsQuery = query(
+      collection(db, 'sprints'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+      where('status', '==', 1)
+    );
+
+    const unsubSprints = onSnapshot(sprintsQuery, (snap) => {
+      const ids = snap.docs.map((docSnap) => docSnap.id);
+      setActiveSprintIds(ids);
+    });
+
+    return () => {
+      unsubSprints();
     };
   }, [currentUser?.uid, currentPersona]);
 
@@ -258,6 +294,50 @@ export const FocusGoalsPage: React.FC = () => {
     }
   };
 
+  const withUpdatingStory = async (storyId: string, action: () => Promise<void>) => {
+    setFocusAlignmentMessage('');
+    setUpdatingStoryIds((prev) => {
+      const next = new Set(prev);
+      next.add(storyId);
+      return next;
+    });
+    try {
+      await action();
+    } finally {
+      setUpdatingStoryIds((prev) => {
+        const next = new Set(prev);
+        next.delete(storyId);
+        return next;
+      });
+    }
+  };
+
+  const handleAlignStoryToFocus = async (storyId: string) => {
+    const targetGoalId = Array.from(activeFocusGoalIdSet)[0];
+    if (!targetGoalId) {
+      setFocusAlignmentMessage('No active focus goals available to align this story.');
+      return;
+    }
+
+    await withUpdatingStory(storyId, async () => {
+      await updateDoc(doc(db, 'stories', storyId), {
+        goalId: targetGoalId,
+        updatedAt: serverTimestamp(),
+      });
+      setFocusAlignmentMessage('Story aligned to current focus goals.');
+    });
+  };
+
+  const handleRemoveStoryFromSprint = async (storyId: string) => {
+    await withUpdatingStory(storyId, async () => {
+      await updateDoc(doc(db, 'stories', storyId), {
+        sprintId: null,
+        updatedAt: serverTimestamp(),
+      });
+      setFocusAlignmentMessage('Story removed from active sprint.');
+    });
+  };
+
   if (loading) {
     return (
       <Container style={{ padding: '20px', textAlign: 'center' }}>
@@ -363,6 +443,51 @@ export const FocusGoalsPage: React.FC = () => {
 
               {monzoRetryMessage && (
                 <div style={{ marginTop: '10px', fontSize: '13px' }}>{monzoRetryMessage}</div>
+              )}
+            </Alert>
+          )}
+
+          {unalignedStoriesInActiveSprint.length > 0 && (
+            <Alert variant="warning" style={{ marginTop: '12px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                <div>
+                  <strong>Unaligned stories in active sprint</strong>
+                  <div style={{ fontSize: '13px' }}>
+                    {unalignedStoriesInActiveSprint.length} stor{unalignedStoriesInActiveSprint.length === 1 ? 'y is' : 'ies are'} in your active sprint but not mapped to active focus goals.
+                  </div>
+                </div>
+              </div>
+
+              <ListGroup variant="flush" style={{ marginTop: '10px' }}>
+                {unalignedStoriesInActiveSprint.slice(0, 10).map((story) => {
+                  const busy = updatingStoryIds.has(story.id);
+                  return (
+                    <ListGroup.Item key={story.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                      <div>
+                        <div style={{ fontWeight: 600 }}>{story.ref || story.referenceNumber || story.id}</div>
+                        <small style={{ color: '#666' }}>{story.title}</small>
+                      </div>
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                        <Button size="sm" variant="warning" disabled={busy} onClick={() => handleAlignStoryToFocus(story.id)}>
+                          {busy ? 'Updating...' : 'Align to focus'}
+                        </Button>
+                        <Button size="sm" variant="outline-secondary" disabled={busy} onClick={() => handleRemoveStoryFromSprint(story.id)}>
+                          Remove from sprint
+                        </Button>
+                      </div>
+                    </ListGroup.Item>
+                  );
+                })}
+              </ListGroup>
+
+              {unalignedStoriesInActiveSprint.length > 10 && (
+                <div style={{ marginTop: '8px', fontSize: '12px', color: '#666' }}>
+                  Showing first 10 unaligned stories.
+                </div>
+              )}
+
+              {focusAlignmentMessage && (
+                <div style={{ marginTop: '10px', fontSize: '13px' }}>{focusAlignmentMessage}</div>
               )}
             </Alert>
           )}
