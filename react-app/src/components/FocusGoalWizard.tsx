@@ -12,9 +12,8 @@ interface FocusGoalWizardProps {
   goals: Goal[];
   existingFocusGoals: FocusGoal[];
   initialPrefill?: FocusWizardPrefill;
+  currentUserId?: string;
   onSave: (focusGoal: FocusGoal) => Promise<void>;
-  onAutoCreateStories: (goalIds: string[]) => Promise<string[]>;
-  onAutoCreateSavingsBuckets: (goals: Goal[]) => Promise<{ [goalId: string]: string }>;
 }
 
 type WizardStep = 'vision' | 'select' | 'goalTypes' | 'timeframe' | 'review' | 'confirm';
@@ -72,9 +71,8 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
   goals,
   existingFocusGoals,
   initialPrefill,
+  currentUserId,
   onSave,
-  onAutoCreateStories,
-  onAutoCreateSavingsBuckets
 }) => {
   const [step, setStep] = useState<WizardStep>('vision');
   const [selectedGoalIds, setSelectedGoalIds] = useState<Set<string>>(new Set());
@@ -85,8 +83,7 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
   const [loadingPrompts, setLoadingPrompts] = useState(false);
   const [matching, setMatching] = useState(false);
   const [error, setError] = useState('');
-  const [storiesCreated, setStoriesCreated] = useState<string[]>([]);
-  const [bucketsCreated, setBucketsCreated] = useState<{ [key: string]: string }>({});
+  const [copiedGoalRef, setCopiedGoalRef] = useState<string | null>(null);
   const [visionText, setVisionText] = useState('');
   const [prompts, setPrompts] = useState<IntentPrompt[]>([]);
   const [selectedPromptId, setSelectedPromptId] = useState('');
@@ -104,8 +101,7 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
       setSelectedGoalsData({});
       setTimeframe('sprint');
       setError('');
-      setStoriesCreated([]);
-      setBucketsCreated({});
+      setCopiedGoalRef(null);
       setVisionText('');
       setPrompts([]);
       setSelectedPromptId('');
@@ -223,6 +219,14 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
     [selectedGoals]
   );
 
+  const monzoGoalRefs = useMemo(() => {
+    return goalsWithCosts.reduce<Record<string, string>>((acc, goal) => {
+      const persistedRef = String(goal.monzoPotGoalRef || '').trim();
+      acc[goal.id] = persistedRef || `GOAL-${goal.id}`;
+      return acc;
+    }, {});
+  }, [goalsWithCosts]);
+
   const gapAnalysis = useMemo(() => {
     const missingKpis = selectedGoals.filter((g) => !Array.isArray(g.kpis) || g.kpis.length === 0);
     const missingStories = goalsNeedingStories;
@@ -326,6 +330,17 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
     }
   };
 
+  const copyGoalRef = async (goalRef: string) => {
+    if (!goalRef) return;
+    try {
+      await navigator.clipboard.writeText(goalRef);
+      setCopiedGoalRef(goalRef);
+      window.setTimeout(() => setCopiedGoalRef(null), 1800);
+    } catch {
+      setError('Failed to copy goal ref.');
+    }
+  };
+
   useEffect(() => {
     if (!show) return;
     if (!initialPrefill?.autoRunMatch) return;
@@ -357,24 +372,12 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
     setLoading(true);
     setError('');
     try {
-      let createdStories: string[] = [];
-      let createdBuckets: { [key: string]: string } = {};
-
-      if (goalsNeedingStories.length > 0) {
-        createdStories = await onAutoCreateStories(goalsNeedingStories.map((goal) => goal.id));
-        setStoriesCreated(createdStories);
-      }
-
-      if (goalsWithCosts.length > 0) {
-        createdBuckets = await onAutoCreateSavingsBuckets(goalsWithCosts);
-        setBucketsCreated(createdBuckets);
-      }
-
       const focusGoal: FocusGoal = {
         id: `focus-${Date.now()}`,
-        ownerUid: '', // Will be set by Firestore trigger
+        ownerUid: currentUserId || '',
         persona: 'personal',
         goalIds: Array.from(selectedGoalIds),
+        goalTypeMap,
         timeframe: timeframe,
         startDate: timeframeInfo.startDate,
         endDate: timeframeInfo.endDate,
@@ -382,18 +385,14 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
         isActive: true,
         createdAt: new Date(),
         updatedAt: new Date(),
-        storiesCreatedFor: createdStories,
-        potIdsCreatedFor: createdBuckets,
+        storiesCreatedFor: [],
+        potIdsCreatedFor: {},
         visionText: visionText.trim() || undefined,
         intentBrokerIntakeId: intentResult?.intakeId || undefined,
         intentMatches: intentResult?.matches || [],
         intentProposals: intentResult?.proposals || [],
         storyTableHandoff: useModernStoryTableHandoff,
-        monzoPotGoalRefs: Object.fromEntries(
-          selectedGoals
-            .filter((goal) => goal.monzoPotGoalRef)
-            .map((goal) => [goal.id, String(goal.monzoPotGoalRef)])
-        ),
+        monzoPotGoalRefs: monzoGoalRefs,
       };
 
       await onSave(focusGoal);
@@ -762,15 +761,29 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
                 <DollarSign size={16} className="me-2" style={{ display: 'inline' }} />
                 <strong>{goalsWithCosts.length} goals have costs.</strong>
                 <br />
-                Savings buckets will be created after you confirm this focus set.
+                Create Monzo pots manually using the refs below. BOB will persist and auto-link against these refs on sync.
                 <ul style={{ marginTop: '8px', marginBottom: 0, fontSize: '12px' }}>
                   {goalsWithCosts.map(g => (
-                    <li key={g.id}>
-                      {g.title}: £
+                    <li key={g.id} style={{ marginBottom: 6 }}>
+                      <span style={{ fontWeight: 600 }}>{g.title}</span>
+                      {': £'}
                       {(g.estimatedCost || 0).toLocaleString()}
+                      {' • ref '}
+                      <code>{monzoGoalRefs[g.id]}</code>
+                      <Button
+                        size="sm"
+                        variant="outline-secondary"
+                        style={{ marginLeft: 8, padding: '1px 6px', fontSize: 11 }}
+                        onClick={() => copyGoalRef(monzoGoalRefs[g.id])}
+                      >
+                        {copiedGoalRef === monzoGoalRefs[g.id] ? 'Copied' : 'Copy'}
+                      </Button>
                     </li>
                   ))}
                 </ul>
+                <div style={{ marginTop: 8 }}>
+                  <a href="https://monzo.com/" target="_blank" rel="noreferrer">Open Monzo</a>
+                </div>
               </Alert>
             )}
 
@@ -813,7 +826,7 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
 
             {(goalsNeedingStories.length > 0 || goalsWithCosts.length > 0) && (
               <Alert variant="warning">
-                Saving this focus set will also create {goalsNeedingStories.length} story records and {goalsWithCosts.length} savings bucket links where needed.
+                Saving will create {goalsNeedingStories.length} story records and store {goalsWithCosts.length} Monzo goal refs for manual pot linking.
               </Alert>
             )}
           </div>

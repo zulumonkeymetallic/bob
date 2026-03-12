@@ -3,6 +3,7 @@ export interface FocusGoal {
   ownerUid: string;
   persona: 'personal' | 'work';
   goalIds: string[]; // IDs of goals selected for focus
+  goalTypeMap?: { [goalId: string]: 'story' | 'calendar' };
   timeframe: 'sprint' | 'quarter' | 'year'; // Duration of focus
   startDate: any; // Firebase Timestamp
   endDate: any; // Firebase Timestamp (calculated from timeframe)

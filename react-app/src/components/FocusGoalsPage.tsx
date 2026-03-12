@@ -10,13 +10,13 @@ import FocusGoalCountdownBanner from './FocusGoalCountdownBanner';
 import FocusGoalWizard from './FocusGoalWizard';
 import {
   autoCreateStoriesForGoals,
-  autoCreateSavinsPots,
   autoCreateSprintsForFocusPeriod,
   consumeFocusWizardPrefill,
   createFocusGoal,
   deferNonFocusGoalsForPeriod,
   deactivateExistingFocusGoals,
   FocusWizardPrefill,
+  persistMonzoGoalRefs,
   triggerFocusGoalDataRefresh,
 } from '../services/focusGoalsService';
 import { Plus, Edit2, Trash2, Zap } from 'lucide-react';
@@ -106,8 +106,9 @@ export const FocusGoalsPage: React.FC = () => {
 
       // Auto-create stories if needed
       const selectedGoals = goals.filter(g => focusGoal.goalIds.includes(g.id));
+      const selectedGoalTypeMap = focusGoal.goalTypeMap || {};
       const goalsNeedingStories = selectedGoals.filter(
-        g => (g as any).storyCount === undefined || (g as any).storyCount === 0
+        g => selectedGoalTypeMap[g.id] !== 'calendar' && ((g as any).storyCount === undefined || (g as any).storyCount === 0)
       );
 
       let storiesCreated: string[] = [];
@@ -115,15 +116,15 @@ export const FocusGoalsPage: React.FC = () => {
         storiesCreated = await autoCreateStoriesForGoals(goalsNeedingStories.map(g => g.id), currentUser.uid);
       }
 
-      // Auto-create savings buckets if needed
-      const goalsWithCosts = selectedGoals.filter(
-        g => g.estimatedCost && g.estimatedCost > 0 && (g.costType === 'one_off' || g.costType === 'recurring')
-      );
+      const monzoGoalRefs = focusGoal.monzoPotGoalRefs || {};
+      if (currentUser?.uid && Object.keys(monzoGoalRefs).length > 0) {
+        await persistMonzoGoalRefs({
+          userId: currentUser.uid,
+          goalRefMap: monzoGoalRefs,
+        });
+      }
 
       let bucketsCreated: { [key: string]: string } = {};
-      if (goalsWithCosts.length > 0 && currentUser?.uid) {
-        bucketsCreated = await autoCreateSavinsPots(goalsWithCosts, currentUser.uid);
-      }
 
       // Create focus goal
       let createdSprintIds: string[] = [];
@@ -134,7 +135,9 @@ export const FocusGoalsPage: React.FC = () => {
           focusGoal.timeframe,
           currentUser.uid,
           storiesCreated,
-          bucketsCreated
+          bucketsCreated,
+          selectedGoalTypeMap,
+          monzoGoalRefs,
         );
 
         createdSprintIds = await autoCreateSprintsForFocusPeriod({
@@ -290,9 +293,8 @@ export const FocusGoalsPage: React.FC = () => {
         goals={goals}
         existingFocusGoals={activeFocusGoals}
         initialPrefill={wizardPrefill || undefined}
+        currentUserId={currentUser?.uid}
         onSave={handleWizardSave}
-        onAutoCreateStories={(goalIds) => autoCreateStoriesForGoals(goalIds, currentUser?.uid || '')}
-        onAutoCreateSavingsBuckets={(goalsToProcess) => autoCreateSavinsPots(goalsToProcess, currentUser?.uid || '')}
       />
     </Container>
   );

@@ -211,7 +211,9 @@ export async function createFocusGoal(
   timeframe: 'sprint' | 'quarter' | 'year',
   userId: string,
   storiesCreatedFor?: string[],
-  potIdsCreatedFor?: { [goalId: string]: string }
+  potIdsCreatedFor?: { [goalId: string]: string },
+  goalTypeMap?: { [goalId: string]: 'story' | 'calendar' },
+  monzoPotGoalRefs?: { [goalId: string]: string }
 ) {
   try {
     const now = new Date();
@@ -228,6 +230,7 @@ export async function createFocusGoal(
       ownerUid: userId,
       persona: 'personal',
       goalIds,
+      goalTypeMap: goalTypeMap || {},
       timeframe,
       startDate: serverTimestamp(),
       endDate,
@@ -235,6 +238,7 @@ export async function createFocusGoal(
       isActive: true,
       storiesCreatedFor: storiesCreatedFor || [],
       potIdsCreatedFor: potIdsCreatedFor || {},
+      monzoPotGoalRefs: monzoPotGoalRefs || {},
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp()
     });
@@ -244,6 +248,28 @@ export async function createFocusGoal(
     console.error('Failed to create focus goal:', error);
     throw error;
   }
+}
+
+export async function persistMonzoGoalRefs(options: {
+  userId: string;
+  goalRefMap: { [goalId: string]: string };
+}) {
+  const { userId, goalRefMap } = options;
+  const refEntries = Object.entries(goalRefMap || {}).filter(([goalId, ref]) => {
+    return Boolean(String(goalId || '').trim() && String(ref || '').trim());
+  });
+  if (!userId || refEntries.length === 0) return;
+
+  const batch = writeBatch(db);
+  for (const [goalId, goalRef] of refEntries) {
+    const goalDocRef = doc(db, 'goals', goalId);
+    batch.update(goalDocRef, {
+      monzoPotGoalRef: String(goalRef).trim(),
+      monzoPotId: null,
+      updatedAt: serverTimestamp(),
+    });
+  }
+  await batch.commit();
 }
 
 /**

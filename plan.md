@@ -1335,6 +1335,9 @@ adherence = [(0.857 + 0.867 + 0.892 + 0.96) / 4] * 100 = 89.4%
 - ✅ 12 Mar 2026: Focus Goals wizard flow slice shipped.
   Scope completed: reordered the wizard to vision → select → goal types → timeframe → review → confirm, added per-goal story-vs-calendar planning mode, updated review/confirm summaries to reflect the chosen planning mode, and moved story/savings auto-creation to the final save path instead of the earlier review transition.
   Remaining in the broader Focus Goals plan: Monzo manual creation prompt/link watcher flow, KPI designer handoff, explicit calendar-time event tooling, and end-to-end verification coverage.
+- ✅ 12 Mar 2026: Monzo manual pot-link slice shipped.
+  Scope completed: removed automatic Monzo pot creation from the focus setup path, added deterministic manual goal refs (`GOAL-{goalId}`) in wizard review with copy UX, persisted ref mappings to goal docs via `monzoPotGoalRef`, and stored `goalTypeMap` + Monzo ref map on created focus goals.
+  Remaining in the broader Monzo plan: backend watcher/cron linking unresolved refs to real Monzo pot ids and timeout/notification handling.
 
 **Location**: plan.md
 
