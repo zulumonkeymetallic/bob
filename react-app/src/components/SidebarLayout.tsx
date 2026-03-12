@@ -191,16 +191,13 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       label: 'Settings',
       icon: 'cog',
       items: [
-        { label: 'Overview', path: '/settings', icon: 'sliders-h' },
-        { label: 'Email & Notifications', path: '/settings/email', icon: 'envelope' },
-        { label: 'Planner & Automations', path: '/settings/planner', icon: 'cogs' },
-        { label: 'Google Calendar', path: '/settings/integrations/google', icon: 'google' },
-        { label: 'YouTube', path: '/settings/integrations/youtube', icon: 'video' },
-        { label: 'Monzo', path: '/settings/integrations/monzo', icon: 'credit-card' },
-        { label: 'Strava', path: '/settings/integrations/strava', icon: 'bicycle' },
-        { label: 'Steam', path: '/settings/integrations/steam', icon: 'gamepad' },
-        { label: 'Hardcover', path: '/settings/integrations/hardcover', icon: 'book' },
-        { label: 'Trakt', path: '/settings/integrations/trakt', icon: 'film' }
+        { label: 'Profile', path: '/settings/profile', icon: 'user' },
+        { label: 'AI', path: '/settings/ai', icon: 'robot' },
+        { label: 'Integrations', path: '/settings/integrations', icon: 'plug' },
+        { label: 'Finance', path: '/settings/finance', icon: 'wallet' },
+        { label: 'Notifications', path: '/settings/notifications', icon: 'envelope' },
+        { label: 'Privacy & Security', path: '/settings/privacy-security', icon: 'shield-alt' },
+        { label: 'Developer', path: '/settings/developer', icon: 'flask' }
       ]
     },
     {

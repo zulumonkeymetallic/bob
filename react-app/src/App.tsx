@@ -479,6 +479,12 @@ function AppContent() {
             <Route path="/finance/pots" element={<PotsBoard />} />
             <Route path="/finance/advanced" element={<Navigate to="/finance/dashboard" replace />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/settings/profile" element={<Navigate to="/settings?tab=profile" replace />} />
+            <Route path="/settings/ai" element={<Navigate to="/settings?tab=ai" replace />} />
+            <Route path="/settings/finance" element={<Navigate to="/settings?tab=finance" replace />} />
+            <Route path="/settings/notifications" element={<Navigate to="/settings?tab=notifications" replace />} />
+            <Route path="/settings/privacy-security" element={<Navigate to="/settings?tab=privacy" replace />} />
+            <Route path="/settings/developer" element={<Navigate to="/settings?tab=developer" replace />} />
             <Route path="/settings/email" element={<SettingsEmailPage />} />
             <Route path="/settings/planner" element={<SettingsPlannerPage />} />
             <Route path="/settings/integrations" element={<IntegrationSettings />} />
