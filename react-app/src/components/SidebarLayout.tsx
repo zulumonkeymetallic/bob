@@ -467,16 +467,26 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       )}
 
       {/* Mobile Header */}
-      <div className="d-lg-none fixed-top bg-dark">
-        <Navbar variant="dark" className="px-3">
+      <div className="d-lg-none fixed-top" style={{
+        background: currentPersona === 'work' ? '#d3d3d3' : 'white',
+        color: currentPersona === 'work' ? '#000' : '#000',
+        zIndex: 1050
+      }}>
+        <Navbar className="px-3" style={{
+          background: 'transparent'
+        }}>
           <Button
-            variant="outline-light"
+            variant={currentPersona === 'work' ? 'outline-dark' : 'outline-dark'}
             size="sm"
             onClick={() => setShowSidebar(true)}
+            style={{
+              color: '#000',
+              borderColor: '#000'
+            }}
           >
             Menu
           </Button>
-          <Navbar.Brand className="mx-auto d-flex align-items-center gap-2" style={{ fontSize: '1rem' }}>
+          <Navbar.Brand className="mx-auto d-flex align-items-center gap-2" style={{ fontSize: '1rem', color: '#000' }}>
             <img src="/logo192.png" alt="Logo" style={{ width: '24px', height: '24px', objectFit: 'contain' }} />
             blueprint.organize.build
           </Navbar.Brand>
@@ -653,12 +663,29 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         {/* Desktop top toolbar with global Sprint selector */}
         <div className="d-none d-lg-block" style={{
           borderBottom: '1px solid var(--notion-border)',
-          background: 'var(--notion-bg)',
+          background: currentPersona === 'work' ? '#d3d3d3' : 'white',
           position: 'relative',
           zIndex: 1000
         }}>
           <div className="container-fluid" style={{ padding: '8px 16px' }}>
             <div className="d-flex justify-content-end align-items-center gap-3">
+              {/* Persona indicator dot */}
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                fontSize: '12px',
+                fontWeight: '600',
+                color: '#000'
+              }}>
+                <span style={{
+                  width: '8px',
+                  height: '8px',
+                  borderRadius: '50%',
+                  backgroundColor: currentPersona === 'work' ? '#666' : '#4CAF50'
+                }}></span>
+                {currentPersona === 'work' ? 'Work' : 'Personal'}
+              </div>
               {/* Pending approvals badge */}
               {/* Lightweight import to avoid heavy planner deps here */}
               {(() => {

@@ -1368,7 +1368,7 @@ exports.syncCalendarAndTasks = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID
   })
 );
 
-exports.autoEnrichTasks = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY], maxInstances: 5 }, async (req) => {
+exports.autoEnrichTasks = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY], maxInstances: 5, enforceAppCheck: true }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
 
@@ -1526,7 +1526,7 @@ exports.enhanceNewTask = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY], m
 );
 
 
-exports.taskStoryConversion = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY], maxInstances: 5 }, async (req) => {
+exports.taskStoryConversion = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY], maxInstances: 5, enforceAppCheck: true }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
 
@@ -1584,7 +1584,7 @@ exports.taskStoryConversion = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KE
   return { suggestions, converted };
 });
 
-exports.plannerLLM = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY], maxInstances: 3 }, async (req) => {
+exports.plannerLLM = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY], maxInstances: 3, enforceAppCheck: true }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
 

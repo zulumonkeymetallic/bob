@@ -276,6 +276,11 @@ class SideDoorAuthService {
 
   autoSignIn(): any {
     if (!this.isLocalEnvironment()) return null;
+
+    // Only allow implicit local auto-login when test mode is explicitly enabled.
+    // This prevents stale persisted mock users from hijacking normal auth sessions.
+    if (!this.isTestModeEnabled()) return null;
+
     const fromUrl = this.initializeFromUrl();
     if (fromUrl) return this.toMockUser(fromUrl);
     const persisted = this.getPersistedTestUser();

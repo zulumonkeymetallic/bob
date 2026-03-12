@@ -384,7 +384,7 @@ const EnhancedKanbanPage: React.FC = () => {
           borderBottom: `1px solid ${themeVars.border}`
         }}>
           <span style={{ fontSize: '12px', color: themeVars.muted as string }}>
-            📋 {taskCount} tasks • ⭐ {story.points} points
+            📋 {taskCount} tasks • {story.points} points
           </span>
           {isSelected && (
             <span style={{
