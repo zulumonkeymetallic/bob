@@ -1,5 +1,5 @@
 import { db } from '../firebase';
-import { collection, addDoc, serverTimestamp, query, where, getDocs, updateDoc, doc, writeBatch } from 'firebase/firestore';
+import { collection, addDoc, serverTimestamp, query, where, getDocs, updateDoc, doc, writeBatch, deleteField } from 'firebase/firestore';
 import { Goal } from '../types';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from '../firebase';
@@ -270,6 +270,38 @@ export async function persistMonzoGoalRefs(options: {
     });
   }
   await batch.commit();
+}
+
+export async function retryMonzoPotLinkForGoal(options: {
+  userId: string;
+  goalId: string;
+  triggerMonzoSync?: boolean;
+}) {
+  const { userId, goalId, triggerMonzoSync = true } = options;
+  if (!userId || !goalId) {
+    throw new Error('userId and goalId are required');
+  }
+
+  const goalDocRef = doc(db, 'goals', goalId);
+  await updateDoc(goalDocRef, {
+    monzoPotId: null,
+    linkedPotId: null,
+    potId: null,
+    monzoPotLinkStatus: 'pending',
+    monzoPotLinkError: deleteField(),
+    monzoPotLinkTimedOutAt: deleteField(),
+    monzoPotRefRequestedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  } as any);
+
+  if (triggerMonzoSync) {
+    try {
+      const syncMonzoNow = httpsCallable(functions, 'syncMonzoNow');
+      await syncMonzoNow({});
+    } catch (error) {
+      console.warn('[retryMonzoPotLinkForGoal] syncMonzoNow failed:', error);
+    }
+  }
 }
 
 /**

@@ -1347,6 +1347,9 @@ adherence = [(0.857 + 0.867 + 0.892 + 0.96) / 4] * 100 = 89.4%
 - ✅ 12 Mar 2026: Monzo ref-link watcher slice shipped.
   Scope completed: added backend Monzo goal-ref linker logic that resolves pending `monzoPotGoalRef` values to real pot ids from synced Monzo pots, writes `monzoPotId`/`linkedPotId`/`potId` + linked timestamp on match, marks unresolved refs as timeout after 24 hours, and records linker outcomes to integration logs.
   Remaining in broader Monzo plan: user-facing timeout notification UX and optional manual retry controls in settings/focus surfaces.
+- ✅ 12 Mar 2026: Monzo timeout/retry UX slice shipped.
+  Scope completed: added Focus Goals UI status for pending/timed-out Monzo pot links, exposed per-goal and retry-all actions for timed-out refs, and implemented a retry helper that resets link state and triggers immediate Monzo sync to re-attempt linkage.
+  Remaining in broader Monzo plan: optional settings-surface parity for retry controls and notification-level messaging outside Focus Goals.
 
 **Location**: plan.md
 

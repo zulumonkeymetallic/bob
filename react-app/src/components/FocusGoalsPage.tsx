@@ -17,6 +17,7 @@ import {
   deactivateExistingFocusGoals,
   FocusWizardPrefill,
   persistMonzoGoalRefs,
+  retryMonzoPotLinkForGoal,
   triggerFocusGoalDataRefresh,
 } from '../services/focusGoalsService';
 import { Plus, Edit2, Trash2, Zap } from 'lucide-react';
@@ -38,8 +39,41 @@ export const FocusGoalsPage: React.FC = () => {
   const [wizardPrefill, setWizardPrefill] = useState<FocusWizardPrefill | null>(null);
   const [wizardLoading, setWizardLoading] = useState(false);
   const [refreshingFocusData, setRefreshingFocusData] = useState(false);
+  const [retryingMonzoGoalIds, setRetryingMonzoGoalIds] = useState<Set<string>>(new Set());
+  const [monzoRetryMessage, setMonzoRetryMessage] = useState<string>('');
   const [monzoBudgetSummary, setMonzoBudgetSummary] = useState<any>(null);
   const [monzoGoalAlignment, setMonzoGoalAlignment] = useState<any>(null);
+
+  const activeFocusGoalIdSet = React.useMemo(() => {
+    const ids = new Set<string>();
+    activeFocusGoals.forEach((fg) => fg.goalIds.forEach((goalId) => ids.add(goalId)));
+    return ids;
+  }, [activeFocusGoals]);
+
+  const activeFocusGoalsWithMonzoRefs = React.useMemo(
+    () => goals.filter((goal) => activeFocusGoalIdSet.has(goal.id) && !!String(goal.monzoPotGoalRef || '').trim()),
+    [goals, activeFocusGoalIdSet]
+  );
+
+  const monzoLinkTimeoutGoals = React.useMemo(
+    () =>
+      activeFocusGoalsWithMonzoRefs.filter((goal) => {
+        const status = String(goal.monzoPotLinkStatus || '').toLowerCase();
+        const linked = !!String(goal.monzoPotId || goal.linkedPotId || goal.potId || '').trim();
+        return !linked && status === 'timeout';
+      }),
+    [activeFocusGoalsWithMonzoRefs]
+  );
+
+  const monzoLinkPendingGoals = React.useMemo(
+    () =>
+      activeFocusGoalsWithMonzoRefs.filter((goal) => {
+        const status = String(goal.monzoPotLinkStatus || '').toLowerCase();
+        const linked = !!String(goal.monzoPotId || goal.linkedPotId || goal.potId || '').trim();
+        return !linked && status !== 'timeout';
+      }),
+    [activeFocusGoalsWithMonzoRefs]
+  );
 
   // Load Monzo budget summary and goal alignment (best-effort)
   useEffect(() => {
@@ -186,6 +220,44 @@ export const FocusGoalsPage: React.FC = () => {
     }
   };
 
+  const handleRetryMonzoLink = async (goalId: string) => {
+    if (!currentUser?.uid || !goalId) return;
+    setMonzoRetryMessage('');
+    setRetryingMonzoGoalIds((prev) => {
+      const next = new Set(prev);
+      next.add(goalId);
+      return next;
+    });
+
+    try {
+      await retryMonzoPotLinkForGoal({
+        userId: currentUser.uid,
+        goalId,
+        triggerMonzoSync: true,
+      });
+      setMonzoRetryMessage('Monzo link retry triggered. Refreshing focus data...');
+      await handleManualRefresh();
+    } catch (error) {
+      console.error('Failed to retry Monzo pot link:', error);
+      setMonzoRetryMessage(`Retry failed: ${(error as any)?.message || 'Unknown error'}`);
+    } finally {
+      setRetryingMonzoGoalIds((prev) => {
+        const next = new Set(prev);
+        next.delete(goalId);
+        return next;
+      });
+    }
+  };
+
+  const handleRetryAllMonzoLinks = async () => {
+    if (!currentUser?.uid || monzoLinkTimeoutGoals.length === 0) return;
+    for (const goal of monzoLinkTimeoutGoals) {
+      // Sequential retries avoid spiking callable usage and keep status messaging deterministic.
+      // eslint-disable-next-line no-await-in-loop
+      await handleRetryMonzoLink(goal.id);
+    }
+  };
+
   if (loading) {
     return (
       <Container style={{ padding: '20px', textAlign: 'center' }}>
@@ -238,6 +310,62 @@ export const FocusGoalsPage: React.FC = () => {
               />
             </div>
           ))}
+
+          {(monzoLinkTimeoutGoals.length > 0 || monzoLinkPendingGoals.length > 0) && (
+            <Alert variant={monzoLinkTimeoutGoals.length > 0 ? 'warning' : 'info'} style={{ marginTop: '12px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                <div>
+                  <strong>Monzo pot link status</strong>
+                  <div style={{ fontSize: '13px' }}>
+                    {monzoLinkTimeoutGoals.length > 0
+                      ? `${monzoLinkTimeoutGoals.length} goal pot link${monzoLinkTimeoutGoals.length === 1 ? '' : 's'} timed out and can be retried.`
+                      : `${monzoLinkPendingGoals.length} goal pot link${monzoLinkPendingGoals.length === 1 ? '' : 's'} pending sync.`}
+                  </div>
+                </div>
+                {monzoLinkTimeoutGoals.length > 1 && (
+                  <Button
+                    size="sm"
+                    variant="outline-warning"
+                    disabled={retryingMonzoGoalIds.size > 0}
+                    onClick={handleRetryAllMonzoLinks}
+                  >
+                    Retry all timed-out links
+                  </Button>
+                )}
+              </div>
+
+              {monzoLinkTimeoutGoals.length > 0 && (
+                <ListGroup variant="flush" style={{ marginTop: '10px' }}>
+                  {monzoLinkTimeoutGoals.map((goal) => {
+                    const isRetrying = retryingMonzoGoalIds.has(goal.id);
+                    return (
+                      <ListGroup.Item key={goal.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
+                        <div>
+                          <div style={{ fontWeight: 600 }}>{goal.title}</div>
+                          <small style={{ color: '#666' }}>
+                            Ref: {goal.monzoPotGoalRef || 'n/a'}
+                            {goal.monzoPotLinkError ? ` • ${goal.monzoPotLinkError}` : ''}
+                          </small>
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="warning"
+                          disabled={isRetrying}
+                          onClick={() => handleRetryMonzoLink(goal.id)}
+                        >
+                          {isRetrying ? 'Retrying...' : 'Retry link now'}
+                        </Button>
+                      </ListGroup.Item>
+                    );
+                  })}
+                </ListGroup>
+              )}
+
+              {monzoRetryMessage && (
+                <div style={{ marginTop: '10px', fontSize: '13px' }}>{monzoRetryMessage}</div>
+              )}
+            </Alert>
+          )}
         </div>
       ) : (
         <Alert variant="info" style={{ marginBottom: '32px' }}>

@@ -41,6 +41,11 @@ export interface Goal {
   goalRequiresStory?: boolean;
   monzoPotGoalRef?: string | null;
   monzoPotId?: string | null;
+  monzoPotLinkedAt?: any;
+  monzoPotRefRequestedAt?: any;
+  monzoPotLinkTimedOutAt?: any;
+  monzoPotLinkStatus?: 'pending' | 'linked' | 'timeout' | string | null;
+  monzoPotLinkError?: string | null;
   potId?: string | null; // Optional explicit Monzo pot mapping
   linkedPotId?: string | null; // Canonical Monzo pot mapping id
   targetDate?: string;
