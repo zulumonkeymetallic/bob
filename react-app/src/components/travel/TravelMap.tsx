@@ -126,6 +126,10 @@ const TravelMap: React.FC = () => {
   const [newCityForSelected, setNewCityForSelected] = useState('');
   const [manualGoalId, setManualGoalId] = useState('');
   const [travelGoalsOnly, setTravelGoalsOnly] = useState(true);
+  // Import/export functionality
+  const [importing, setImporting] = useState(false);
+  const [importStatus, setImportStatus] = useState<{ success: number; errors: string[] } | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   // Context menu for right-click interactions
   const [contextMenu, setContextMenu] = useState<{
     type: 'country' | 'city' | 'entry';
@@ -673,6 +677,149 @@ const TravelMap: React.FC = () => {
       setSaving(false);
     }
   };
+
+  // Parse CSV content to travel entries
+  const parseCSV = (content: string): Array<{ country: string; city?: string; status?: string; date?: string }> => {
+    const lines = content.trim().split('\n');
+    const entries: Array<{ country: string; city?: string; status?: string; date?: string }> = [];
+    
+    // Simple CSV parsing: assume first line is header
+    if (lines.length < 2) return entries;
+    
+    const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
+    const countryIdx = headers.indexOf('country');
+    const cityIdx = headers.indexOf('city');
+    const statusIdx = headers.indexOf('status');
+    const dateIdx = headers.indexOf('date');
+    
+    if (countryIdx === -1) return entries;
+    
+    for (let i = 1; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+      
+      const parts = line.split(',').map(p => p.trim());
+      const country = parts[countryIdx];
+      const city = cityIdx >= 0 ? parts[cityIdx] : undefined;
+      const status = statusIdx >= 0 ? parts[statusIdx] : undefined;
+      const date = dateIdx >= 0 ? parts[dateIdx] : undefined;
+      
+      if (country) {
+        entries.push({ country, city, status, date });
+      }
+    }
+    
+    return entries;
+  };
+
+  // Parse JSON content to travel entries
+  const parseJSON = (content: string): Array<{ country: string; city?: string; status?: string; date?: string }> => {
+    try {
+      const data = JSON.parse(content);
+      if (Array.isArray(data)) {
+        return data.map(item => ({
+          country: item.country || item.iso2 || '',
+          city: item.city,
+          status: item.status,
+          date: item.date,
+        })).filter(item => item.country);
+      }
+      return [];
+    } catch (err) {
+      console.error('JSON parse error:', err);
+      return [];
+    }
+  };
+
+  // Batch import travel entries from file
+  const importTravelEntries = async (file: File) => {
+    if (!currentUser?.uid) return;
+    
+    try {
+      setImporting(true);
+      setImportStatus(null);
+      
+      const content = await file.text();
+      const ext = file.name.toLowerCase();
+      
+      let parsedEntries: Array<{ country: string; city?: string; status?: string; date?: string }> = [];
+      if (ext.endsWith('.json')) {
+        parsedEntries = parseJSON(content);
+      } else if (ext.endsWith('.csv')) {
+        parsedEntries = parseCSV(content);
+      } else {
+        // Try JSON first, then CSV
+        try {
+          parsedEntries = parseJSON(content);
+        } catch {
+          parsedEntries = parseCSV(content);
+        }
+      }
+      
+      let successCount = 0;
+      const errors: string[] = [];
+      
+      for (const item of parsedEntries) {
+        try {
+          const iso2 = item.country.toUpperCase();
+          const countryName = isoCountries.getName(iso2, 'en') || iso2;
+          const status = parsePlaceStatus(item.status) || 'UNVISITED';
+          const detected = continentForIso2(iso2);
+          
+          // Check if entry already exists
+          const existing = entries.find(
+            e => getCountryCode(e) === iso2 && (!item.city || e.city === item.city)
+          );
+          
+          if (existing) {
+            // Update existing entry status if provided
+            if (item.status) {
+              await updateEntryStatus(existing, status);
+            }
+          } else {
+            // Create new entry
+            await addDoc(collection(db, 'travel'), {
+              placeType: item.city ? 'city' : 'country',
+              name: item.city || countryName,
+              countryCode: iso2,
+              country_code: iso2,
+              city: item.city || null,
+              status,
+              visited: status === 'COMPLETED',
+              visitedAt: status === 'COMPLETED' ? serverTimestamp() : null,
+              continent: detected !== 'Unknown' ? detected : 'Other',
+              ownerUid: currentUser.uid,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            });
+          }
+          
+          successCount++;
+        } catch (err) {
+          errors.push(`${item.country}${item.city ? ' - ' + item.city : ''}: ${err instanceof Error ? err.message : 'Unknown error'}`);
+        }
+      }
+      
+      setImportStatus({ success: successCount, errors });
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    } catch (err) {
+      console.error('Import error:', err);
+      setImportStatus({ 
+        success: 0, 
+        errors: [err instanceof Error ? err.message : 'Failed to import file'] 
+      });
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      importTravelEntries(file);
+    }
+  };
+
 
   // Create a Story for this location and link back
   const createStoryForEntry = async (entry: TravelEntry) => {
@@ -1380,6 +1527,16 @@ const TravelMap: React.FC = () => {
           </Form.Select>
           <Button size="sm" onClick={addPlace} disabled={saving || !newCountry.trim()}>Add Place</Button>
           <Button size="sm" variant="outline-secondary" onClick={createTripGoal}>New Travel Goal</Button>
+          <Button size="sm" variant="outline-primary" onClick={() => fileInputRef.current?.click()} disabled={importing}>
+            {importing ? 'Importing...' : 'Import'}
+          </Button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".json,.csv"
+            style={{ display: 'none' }}
+            onChange={handleFileSelect}
+          />
         </div>
       </Card.Header>
       <Card.Body>
@@ -1399,6 +1556,23 @@ const TravelMap: React.FC = () => {
             />
           </div>
         </div>
+
+        {/* Import status */}
+        {importStatus && (
+          <div className="mb-2 p-2 rounded" style={{ background: importStatus.errors.length > 0 ? '#fef2f2' : '#f0fdf4', border: `1px solid ${importStatus.errors.length > 0 ? '#fecaca' : '#86efac'}` }}>
+            <div className="small" style={{ color: importStatus.errors.length > 0 ? '#991b1b' : '#166534' }}>
+              ✓ Imported {importStatus.success} entries
+              {importStatus.errors.length > 0 && ` • ${importStatus.errors.length} error${importStatus.errors.length !== 1 ? 's' : ''}`}
+            </div>
+            {importStatus.errors.length > 0 && (
+              <div className="small mt-1" style={{ color: '#7c2d12', maxHeight: '100px', overflowY: 'auto' }}>
+                {importStatus.errors.map((err, i) => (
+                  <div key={i}>• {err}</div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Map with country coloring and optional marker */}
         <div
