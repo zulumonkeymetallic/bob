@@ -953,6 +953,342 @@ function getCreatedAtMs(value) {
   return Number.isNaN(parsed) ? null : parsed;
 }
 
+const AUTO_DEFER_SCORE_THRESHOLD = 40;
+const AUTO_DEFER_LOOKAHEAD_DAYS = 2;
+const EVENING_PULL_FORWARD_HOUR = 19;
+
+function normalizeWeekdayValue(day) {
+  const asNum = Number(day);
+  if (!Number.isFinite(asNum)) return null;
+  const normalized = ((asNum % 7) + 7) % 7;
+  return normalized;
+}
+
+function isResearchTitle(value) {
+  const title = String(value || '').toLowerCase();
+  if (!title) return false;
+  return /(^|\b)(research|r&d)(\b|\s|:|-)/i.test(title);
+}
+
+function nextOccurrenceForRecurring(entity, nowLocal) {
+  const base = (nowLocal || DateTime.now()).startOf('day');
+  const days = Array.isArray(entity?.daysOfWeek)
+    ? entity.daysOfWeek.map(normalizeWeekdayValue).filter((v) => v != null)
+    : [];
+  if (days.length) {
+    for (let offset = 1; offset <= 21; offset += 1) {
+      const candidate = base.plus({ days: offset });
+      if (days.includes(candidate.weekday % 7)) {
+        return candidate.endOf('day').toMillis();
+      }
+    }
+  }
+  const freq = String(entity?.repeatFrequency || entity?.repeatInterval || entity?.recurrence?.frequency || '').toLowerCase();
+  if (freq.includes('week')) return base.plus({ weeks: 1 }).endOf('day').toMillis();
+  if (freq.includes('month')) return base.plus({ months: 1 }).endOf('day').toMillis();
+  return base.plus({ days: 1 }).endOf('day').toMillis();
+}
+
+function nextWeekendDateByCapacity(nowLocal, dayLoadHours = new Map(), maxHours = 6) {
+  const base = (nowLocal || DateTime.now()).startOf('day');
+  let fallback = null;
+  for (let offset = 1; offset <= 56; offset += 1) {
+    const candidate = base.plus({ days: offset });
+    if (![6, 7].includes(candidate.weekday)) continue;
+    if (!fallback) fallback = candidate;
+    const key = candidate.toISODate();
+    const load = Number(dayLoadHours.get(key) || 0);
+    if (load < maxHours) {
+      return candidate.endOf('day').toMillis();
+    }
+  }
+  return (fallback || base.plus({ days: 6 })).endOf('day').toMillis();
+}
+
+async function buildDayLoadHoursMap(db, userId, startMs, endMs) {
+  const map = new Map();
+  const snap = await db.collection('calendar_blocks')
+    .where('ownerUid', '==', userId)
+    .where('start', '>=', startMs)
+    .where('start', '<=', endMs)
+    .get()
+    .catch(() => ({ docs: [] }));
+  for (const doc of (snap.docs || [])) {
+    const data = doc.data() || {};
+    const start = Number(data.start || 0);
+    const end = Number(data.end || 0);
+    if (!(start > 0) || !(end > start)) continue;
+    const key = DateTime.fromMillis(start).toISODate();
+    const hours = Math.max(0.25, (end - start) / (60 * 60 * 1000));
+    map.set(key, (map.get(key) || 0) + hours);
+  }
+  return map;
+}
+
+function entityIsCritical({
+  entity,
+  entityType,
+  parentStory,
+  isTop,
+  focusGoalIds,
+}) {
+  if (!entity) return false;
+  if (isTop) return true;
+  if (entity.userPriorityFlag === true) return true;
+  const level = normalizeUserPriority(entity.userPriority || entity.priority || entity.priorityLabel);
+  if (level === 'critical') return true;
+  const score = Number(entity.aiCriticalityScore || 0);
+  if (score >= 70) return true;
+  const goalId = String(entity.goalId || '').trim();
+  if (goalId && focusGoalIds?.has(goalId)) return true;
+  if (entityType === 'task' && parentStory) {
+    if (parentStory.userPriorityFlag === true) return true;
+    const parentLevel = normalizeUserPriority(parentStory.userPriority || parentStory.priority || parentStory.priorityLabel);
+    if (parentLevel === 'critical') return true;
+    const parentScore = Number(parentStory.aiCriticalityScore || 0);
+    if (parentScore >= 70) return true;
+    const parentGoalId = String(parentStory.goalId || '').trim();
+    if (parentGoalId && focusGoalIds?.has(parentGoalId)) return true;
+  }
+  return false;
+}
+
+async function applyAggressiveDueDateReplanForUser({
+  db,
+  userId,
+  personaFilter = null,
+  trigger = 'nightly',
+}) {
+  if (!db || !userId) return { moved: 0, routineRolled: 0, researchShifted: 0, backlogDeferred: 0, suggestions: 0 };
+
+  const profileSnap = await db.collection('profiles').doc(userId).get().catch(() => null);
+  const profile = profileSnap && profileSnap.exists ? (profileSnap.data() || {}) : {};
+  const zone = coerceZone(resolveTimezone(profile, 'Europe/London'));
+  const nowLocal = DateTime.now().setZone(zone);
+  const todayIso = nowLocal.toISODate();
+  const todayEnd = nowLocal.endOf('day').toMillis();
+  const tomorrowEnd = nowLocal.plus({ days: 1 }).endOf('day').toMillis();
+
+  const [tasksSnap, storiesSnap, focusSnap, dayLoadHours] = await Promise.all([
+    db.collection('tasks').where('ownerUid', '==', userId).get().catch(() => ({ docs: [] })),
+    db.collection('stories').where('ownerUid', '==', userId).get().catch(() => ({ docs: [] })),
+    db.collection('focusGoals')
+      .where('ownerUid', '==', userId)
+      .where('isActive', '==', true)
+      .get()
+      .catch(() => ({ docs: [] })),
+    buildDayLoadHoursMap(db, userId, nowLocal.startOf('day').toMillis(), nowLocal.plus({ days: 56 }).endOf('day').toMillis()),
+  ]);
+
+  const focusGoalIdsByPersona = { personal: new Set(), work: new Set() };
+  for (const doc of (focusSnap.docs || [])) {
+    const row = doc.data() || {};
+    const persona = resolvePersona(row.persona);
+    const ids = Array.isArray(row.goalIds) ? row.goalIds : [];
+    ids.forEach((goalId) => {
+      const normalized = String(goalId || '').trim();
+      if (normalized) focusGoalIdsByPersona[persona].add(normalized);
+    });
+  }
+
+  const storyById = new Map();
+  for (const doc of (storiesSnap.docs || [])) {
+    storyById.set(doc.id, doc.data() || {});
+  }
+
+  const lowPriorityPools = { personal: [], work: [] };
+  const top3Progress = {
+    personal: { total: 0, done: 0 },
+    work: { total: 0, done: 0 },
+  };
+  const counters = {
+    moved: 0,
+    routineRolled: 0,
+    researchShifted: 0,
+    backlogDeferred: 0,
+  };
+
+  const updateItem = async (docRef, patch, reason) => {
+    await docRef.set(patch, { merge: true });
+    counters.moved += 1;
+    if (String(reason || '').includes('rollover')) counters.routineRolled += 1;
+    else if (String(reason || '').includes('Research')) counters.researchShifted += 1;
+    else counters.backlogDeferred += 1;
+  };
+
+  for (const doc of (tasksSnap.docs || [])) {
+    const data = doc.data() || {};
+    const persona = resolvePersona(data.persona);
+    if (personaFilter && persona !== personaFilter) continue;
+    const isTop = data.aiTop3ForDay === true && (!data.aiTop3Date || String(data.aiTop3Date).slice(0, 10) === todayIso);
+    if (isTop) {
+      top3Progress[persona].total += 1;
+      if (isTaskDoneStatus(data.status)) top3Progress[persona].done += 1;
+    }
+    if (isTaskDoneStatus(data.status) || data.deleted) continue;
+    if (isTop) continue;
+
+    const parentStory = data.storyId ? storyById.get(data.storyId) : null;
+    const focusGoalIds = focusGoalIdsByPersona[persona] || new Set();
+    const critical = entityIsCritical({
+      entity: data,
+      entityType: 'task',
+      parentStory,
+      isTop,
+      focusGoalIds,
+    });
+    if (critical) continue;
+
+    const score = Number(data.aiCriticalityScore || 0);
+    const dueMs = getDueDateMs(data);
+    const locked = isTaskLocked(data);
+    const recurring = isRoutineChoreHabit(data) || hasRecurrence(data);
+    const research = isResearchTitle(data.title || data.name || '');
+
+    lowPriorityPools[persona].push({
+      type: 'task',
+      id: doc.id,
+      title: data.title || 'Task',
+      ref: data.ref || data.reference || null,
+      score,
+      reason: research ? 'Research item' : `Backlog score ${Math.round(score)}`,
+      persona,
+    });
+
+    if (locked) continue;
+    let nextDueMs = null;
+    let reason = null;
+    if (recurring && dueMs && dueMs <= todayEnd) {
+      nextDueMs = nextOccurrenceForRecurring(data, nowLocal);
+      reason = 'Auto-rollover recurring chore/habit to next occurrence';
+    } else if (research) {
+      nextDueMs = nextWeekendDateByCapacity(nowLocal, dayLoadHours);
+      reason = 'Research work moved to weekend capacity window';
+    } else {
+      const shouldDefer = dueMs == null || dueMs <= tomorrowEnd || score < AUTO_DEFER_SCORE_THRESHOLD;
+      if (shouldDefer) {
+        nextDueMs = nowLocal.plus({ days: AUTO_DEFER_LOOKAHEAD_DAYS }).endOf('day').toMillis();
+        reason = 'Auto-deferred low priority non-critical work';
+      }
+    }
+    if (!nextDueMs) continue;
+    if (dueMs && nextDueMs <= dueMs) continue;
+
+    const patch = {
+      dueDate: nextDueMs,
+      targetDate: nextDueMs,
+      aiBacklogDeferredAt: admin.firestore.FieldValue.serverTimestamp(),
+      aiBacklogDeferredReason: reason,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      syncState: 'dirty',
+    };
+    if (research) patch.aiWorkType = 'research';
+    await updateItem(doc.ref, patch, reason);
+  }
+
+  for (const doc of (storiesSnap.docs || [])) {
+    const data = doc.data() || {};
+    const persona = resolvePersona(data.persona);
+    if (personaFilter && persona !== personaFilter) continue;
+    const isTop = data.aiTop3ForDay === true && (!data.aiTop3Date || String(data.aiTop3Date).slice(0, 10) === todayIso);
+    if (isTop) {
+      top3Progress[persona].total += 1;
+      if (isStoryDoneStatus(data.status)) top3Progress[persona].done += 1;
+    }
+    if (isStoryDoneStatus(data.status)) continue;
+    if (isTop) continue;
+    if (isStoryLocked(data)) continue;
+
+    const focusGoalIds = focusGoalIdsByPersona[persona] || new Set();
+    const critical = entityIsCritical({
+      entity: data,
+      entityType: 'story',
+      parentStory: null,
+      isTop,
+      focusGoalIds,
+    });
+    if (critical) continue;
+
+    const score = Number(data.aiCriticalityScore || 0);
+    const dueMs = getDueDateMs(data);
+    const research = isResearchTitle(data.title || data.name || '');
+
+    lowPriorityPools[persona].push({
+      type: 'story',
+      id: doc.id,
+      title: data.title || 'Story',
+      ref: data.ref || null,
+      score,
+      reason: research ? 'Research story' : `Backlog score ${Math.round(score)}`,
+      persona,
+    });
+
+    let nextDueMs = null;
+    let reason = null;
+    if (research) {
+      nextDueMs = nextWeekendDateByCapacity(nowLocal, dayLoadHours);
+      reason = 'Research story moved to weekend capacity window';
+    } else {
+      const shouldDefer = dueMs == null || dueMs <= tomorrowEnd || score < AUTO_DEFER_SCORE_THRESHOLD;
+      if (shouldDefer) {
+        nextDueMs = nowLocal.plus({ days: AUTO_DEFER_LOOKAHEAD_DAYS }).endOf('day').toMillis();
+        reason = 'Auto-deferred low priority non-critical story';
+      }
+    }
+    if (!nextDueMs) continue;
+    if (dueMs && nextDueMs <= dueMs) continue;
+
+    const patch = {
+      dueDate: nextDueMs,
+      targetDate: nextDueMs,
+      aiBacklogDeferredAt: admin.firestore.FieldValue.serverTimestamp(),
+      aiBacklogDeferredReason: reason,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      syncState: 'dirty',
+    };
+    if (research) patch.aiWorkType = 'research';
+    await updateItem(doc.ref, patch, reason);
+  }
+
+  const shouldGenerateEveningSuggestions = nowLocal.hour >= EVENING_PULL_FORWARD_HOUR;
+  const personas = personaFilter ? [personaFilter] : ['personal', 'work'];
+  const suggestions = [];
+  if (shouldGenerateEveningSuggestions) {
+    personas.forEach((persona) => {
+      const top = top3Progress[persona];
+      const topComplete = top.total > 0 && top.done >= top.total;
+      if (!topComplete) return;
+      const picks = (lowPriorityPools[persona] || [])
+        .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
+        .slice(0, 2)
+        .map((item, idx) => ({
+          rank: idx + 1,
+          ...item,
+          label: [item.ref, item.title].filter(Boolean).join(' - ') || item.title,
+        }));
+      suggestions.push(...picks);
+    });
+  }
+
+  const alertRef = db.collection('users').doc(userId).collection('planner_alerts').doc('evening-pull-forward');
+  await alertRef.set({
+    type: 'evening_pull_forward',
+    active: suggestions.length > 0,
+    trigger,
+    date: todayIso,
+    generatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    message: suggestions.length
+      ? 'Top 3 complete. Want to pull 1-2 backlog items forward tonight?'
+      : 'No evening pull-forward suggestions right now.',
+    suggestions,
+  }, { merge: true });
+
+  return {
+    ...counters,
+    suggestions: suggestions.length,
+  };
+}
+
 /**
  * Total remaining minutes needed for a candidate, accounting for progress %.
  * 10-point story at 50% → 300 minutes remaining.
@@ -2765,6 +3101,14 @@ async function runPriorityScoringJob() {
     await recomputeTop3ForUser(db, userId).catch((err) => {
       console.warn(`[runPriorityScoringJob] recomputeTop3ForUser failed for ${userId}:`, err?.message);
     });
+
+    await applyAggressiveDueDateReplanForUser({
+      db,
+      userId,
+      trigger: 'nightly_priority',
+    }).catch((err) => {
+      console.warn(`[runPriorityScoringJob] aggressive due-date replan failed for ${userId}:`, err?.message || err);
+    });
   }
 }
 
@@ -3540,6 +3884,14 @@ exports.replanCalendarNow = onCall({
     console.warn('[replanCalendarNow] top3 refresh failed', uid, err?.message || err);
   });
 
+  await applyAggressiveDueDateReplanForUser({
+    db,
+    userId: uid,
+    trigger: 'delta_replan',
+  }).catch((err) => {
+    console.warn('[replanCalendarNow] aggressive due-date replan failed', uid, err?.message || err);
+  });
+
   // Roll over any missed chore / routine / habit instances from past days
   await applyRolloverForMissedChoresRoutines(db, uid, zone).catch((err) => {
     console.warn('[replanCalendarNow] rollover failed', uid, err?.message || err);
@@ -4152,6 +4504,50 @@ exports.seedNextWeekPlannerOverridesNow = onCall({
   return { ok: true, ...result };
 });
 
+exports.applyEveningPullForward = onCall({
+  memory: '256MiB',
+  region: 'europe-west2',
+}, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new https.HttpsError('unauthenticated', 'Login required');
+  const entityType = String(req?.data?.entityType || '').toLowerCase();
+  const entityId = String(req?.data?.entityId || '').trim();
+  if (!entityId || !['task', 'story'].includes(entityType)) {
+    throw new https.HttpsError('invalid-argument', 'entityType (task|story) and entityId are required');
+  }
+
+  const db = ensureFirestore();
+  const collectionName = entityType === 'task' ? 'tasks' : 'stories';
+  const entityRef = db.collection(collectionName).doc(entityId);
+  const entitySnap = await entityRef.get();
+  if (!entitySnap.exists) throw new https.HttpsError('not-found', 'Entity not found');
+  const entity = entitySnap.data() || {};
+  if (String(entity.ownerUid || '') !== uid) {
+    throw new https.HttpsError('permission-denied', 'Not your entity');
+  }
+  if ((entityType === 'task' && isTaskDoneStatus(entity.status)) || (entityType === 'story' && isStoryDoneStatus(entity.status))) {
+    return { ok: true, skipped: 'already_done' };
+  }
+
+  const nowLocal = DateTime.now();
+  const todayEnd = nowLocal.endOf('day').toMillis();
+  const reason = 'User accepted evening pull-forward suggestion';
+
+  await entityRef.set({
+    dueDate: todayEnd,
+    targetDate: todayEnd,
+    aiEveningPullForwardAt: admin.firestore.FieldValue.serverTimestamp(),
+    aiEveningPullForwardReason: reason,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    syncState: 'dirty',
+  }, { merge: true });
+
+  const persona = resolvePersona(entity.persona);
+  await _deltaTop3ForPersona(db, uid, persona);
+
+  return { ok: true, entityType, entityId, dueDate: todayEnd };
+});
+
 // ===== Delta re-prioritization callable =====
 // Lightweight function to rescore a single entity and rerun top3 selection
 // Called from the frontend when user changes due date, priority, sprint, or status
@@ -4420,6 +4816,15 @@ async function _deltaTop3ForPersona(db, userId, persona) {
     demoteStoryWriter.set(doc.ref, patch, { merge: true });
   });
   await demoteStoryWriter.close();
+
+  await applyAggressiveDueDateReplanForUser({
+    db,
+    userId,
+    personaFilter: persona,
+    trigger: 'delta_priority_rescore',
+  }).catch((err) => {
+    console.warn(`[_deltaTop3ForPersona] aggressive due-date replan failed for ${userId}/${persona}:`, err?.message || err);
+  });
 }
 
 // Internal job exports to enable manual orchestration/testing without scheduler

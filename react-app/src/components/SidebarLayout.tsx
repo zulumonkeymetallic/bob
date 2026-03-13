@@ -127,6 +127,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       icon: 'book',
       items: [
         { label: 'Stories List', path: '/stories', icon: 'list' },
+        { label: 'Sprint Planner', path: '/sprints/planning', icon: 'th' },
         { label: 'Kanban Board', path: '/sprints/kanban', icon: 'kanban' },
         { label: 'Calendar', path: '/calendar', icon: 'calendar' }
       ]

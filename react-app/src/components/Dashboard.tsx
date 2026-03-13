@@ -177,6 +177,23 @@ interface NextWorkRecommendation {
   recommendedItem: NextWorkRecommendedItem | null;
 }
 
+interface EveningPullForwardItem {
+  type: 'task' | 'story';
+  id: string;
+  title: string;
+  label?: string;
+  ref?: string | null;
+  score?: number | null;
+  reason?: string | null;
+  persona?: 'personal' | 'work' | string;
+}
+
+interface EveningPullForwardSuggestion {
+  active: boolean;
+  message?: string | null;
+  suggestions: EveningPullForwardItem[];
+}
+
 const FINANCE_WINDOW_DAYS = 5;
 const INTEGRATION_STALE_DAYS = 7;
 const NEXT_WORK_REFRESH_MS = 60 * 60 * 1000;
@@ -593,6 +610,8 @@ const Dashboard: React.FC = () => {
   const [nextWorkRecommendation, setNextWorkRecommendation] = useState<NextWorkRecommendation | null>(null);
   const [nextWorkLoading, setNextWorkLoading] = useState(false);
   const [nextWorkError, setNextWorkError] = useState<string | null>(null);
+  const [eveningPullForward, setEveningPullForward] = useState<EveningPullForwardSuggestion | null>(null);
+  const [eveningPullForwardBusyId, setEveningPullForwardBusyId] = useState<string | null>(null);
   const [calendarView, setCalendarView] = useState<'day' | 'week' | 'month'>('day');
   const [calendarDate, setCalendarDate] = useState<Date>(startOfDay(new Date()));
   const [calendarScrollTime, setCalendarScrollTime] = useState<Date>(() => {
@@ -619,6 +638,7 @@ const Dashboard: React.FC = () => {
   const [sprintStories, setSprintStories] = useState<Story[]>([]);
   const [sprintTasks, setSprintTasks] = useState<Task[]>([]);
   const [sprintGoals, setSprintGoals] = useState<Goal[]>([]);
+  const [activeFocusGoalIds, setActiveFocusGoalIds] = useState<Set<string>>(new Set());
   const [goalsList, setGoalsList] = useState<Goal[]>([]);
   const [potsById, setPotsById] = useState<Record<string, { name: string; balance: number; currency: string }>>({});
   const [dailySummaryLines, setDailySummaryLines] = useState<string[]>([]);
@@ -678,6 +698,7 @@ const Dashboard: React.FC = () => {
   } | null>(null);
   const [widgetEditMode, setWidgetEditMode] = useState(false);
   const dashboardDeviceTypeRef = useRef(dashboardDeviceType);
+  const showPersistentDashboardBanners = dashboardDeviceType !== 'mobile';
 
   const decodeToDate = useCallback((value: any): Date | null => {
     if (value == null) return null;
@@ -2014,6 +2035,59 @@ const Dashboard: React.FC = () => {
       if (!silent) setNextWorkLoading(false);
     }
   }, [currentUser, currentPersona, selectedSprintId]);
+
+  const handleApplyEveningPullForward = useCallback(async (item: EveningPullForwardItem) => {
+    if (!currentUser || !item?.id || !item?.type) return;
+    setEveningPullForwardBusyId(item.id);
+    try {
+      const call = httpsCallable(functions, 'applyEveningPullForward');
+      await call({ entityType: item.type, entityId: item.id });
+      setReplanFeedback(`Brought forward: ${item.label || item.title || item.id}`);
+      loadDashboardData();
+      fetchNextWorkRecommendation({ silent: true });
+    } catch (error) {
+      console.warn('Failed to apply evening pull-forward suggestion', error);
+      setReplanFeedback('Could not bring that suggestion forward.');
+    } finally {
+      setEveningPullForwardBusyId(null);
+    }
+  }, [currentUser, fetchNextWorkRecommendation, loadDashboardData]);
+
+  useEffect(() => {
+    if (!currentUser) {
+      setEveningPullForward(null);
+      return;
+    }
+
+    const alertRef = doc(db, 'users', currentUser.uid, 'planner_alerts', 'evening-pull-forward');
+    const unsubscribe = onSnapshot(alertRef, (snap) => {
+      if (!snap.exists()) {
+        setEveningPullForward(null);
+        return;
+      }
+      const data = snap.data() as any;
+      const rawSuggestions = Array.isArray(data?.suggestions) ? data.suggestions : [];
+      const scopedSuggestions = rawSuggestions.filter((entry: any) => {
+        const persona = String(entry?.persona || '').toLowerCase();
+        if (!persona) return true;
+        return persona === String(currentPersona || 'personal').toLowerCase();
+      });
+      const isActive = data?.active === true;
+      if (!isActive || !scopedSuggestions.length) {
+        setEveningPullForward(null);
+        return;
+      }
+      setEveningPullForward({
+        active: true,
+        message: String(data?.message || ''),
+        suggestions: scopedSuggestions,
+      });
+    }, () => {
+      setEveningPullForward(null);
+    });
+
+    return () => unsubscribe();
+  }, [currentUser, currentPersona]);
 
   useEffect(() => {
     console.log('🔍 Dashboard useEffect triggered:', { currentUser: !!currentUser, persona: currentPersona });
@@ -3769,6 +3843,38 @@ const Dashboard: React.FC = () => {
     return () => { active = false; };
   }, [currentUser?.uid, selectedSprintId]);
 
+  useEffect(() => {
+    if (!currentUser || !currentPersona) {
+      setActiveFocusGoalIds(new Set());
+      return;
+    }
+
+    const activeFocusQuery = query(
+      collection(db, 'focusGoals'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+      where('isActive', '==', true)
+    );
+
+    const unsubscribe = onSnapshot(activeFocusQuery, (snap) => {
+      const ids = new Set<string>();
+      snap.docs.forEach((docSnap) => {
+        const row = docSnap.data() as any;
+        const goalIds = Array.isArray(row?.goalIds) ? row.goalIds : [];
+        goalIds.forEach((goalId: any) => {
+          const normalized = String(goalId || '').trim();
+          if (normalized) ids.add(normalized);
+        });
+      });
+      setActiveFocusGoalIds(ids);
+    }, (err) => {
+      console.warn('Failed to load active focus goals for dashboard alignment', err);
+      setActiveFocusGoalIds(new Set());
+    });
+
+    return () => unsubscribe();
+  }, [currentUser, currentPersona]);
+
   const sprintProgress = stats.sprintTasksTotal > 0
     ? Math.min(100, Math.round((stats.sprintTasksDone / stats.sprintTasksTotal) * 100))
     : 0;
@@ -3958,6 +4064,49 @@ const Dashboard: React.FC = () => {
       detail: `${sprintSummaryMetrics.completedStories}/${sprintSummaryMetrics.totalStories} stories · ${sprintSummaryMetrics.completedPoints}/${sprintSummaryMetrics.totalPoints} pts`
     };
   }, [selectedSprint, sprintSummaryMetrics]);
+
+  const focusAlignmentSummary = useMemo(() => {
+    const hasSelectedSprint = Boolean(selectedSprintId);
+    const hasActiveFocus = hasSelectedSprint && activeFocusGoalIds.size > 0;
+
+    if (!hasActiveFocus) {
+      return {
+        hasActiveFocus: false,
+        totalSprintStories: sprintStories.length,
+        unalignedStories: 0,
+        focusedStories: 0,
+        focusedStoriesDone: 0,
+        focusedCompletionPct: 0,
+        alignmentPct: 100,
+      };
+    }
+
+    const unalignedStories = sprintStories.filter((story) => {
+      const goalId = String((story as any).goalId || '').trim();
+      return !goalId || !activeFocusGoalIds.has(goalId);
+    });
+    const focusedStories = sprintStories.filter((story) => {
+      const goalId = String((story as any).goalId || '').trim();
+      return !!goalId && activeFocusGoalIds.has(goalId);
+    });
+    const focusedStoriesDone = focusedStories.filter((story) => isStoryDoneState((story as any).status)).length;
+    const focusedCompletionPct = focusedStories.length > 0
+      ? Math.round((focusedStoriesDone / focusedStories.length) * 100)
+      : 0;
+    const alignmentPct = sprintStories.length > 0
+      ? Math.max(0, Math.round(((sprintStories.length - unalignedStories.length) / sprintStories.length) * 100))
+      : 100;
+
+    return {
+      hasActiveFocus: true,
+      totalSprintStories: sprintStories.length,
+      unalignedStories: unalignedStories.length,
+      focusedStories: focusedStories.length,
+      focusedStoriesDone,
+      focusedCompletionPct,
+      alignmentPct,
+    };
+  }, [activeFocusGoalIds, selectedSprintId, sprintStories]);
 
   const renderUnifiedTodayTimelineItem = useCallback((item: any) => {
     const startLabel = Number.isFinite(item?.startMs) ? format(new Date(item.startMs), 'HH:mm') : 'Anytime';
@@ -4217,7 +4366,7 @@ const Dashboard: React.FC = () => {
               </div>
             )}
 
-            {healthBannerData && showHealthBanner && (
+            {showPersistentDashboardBanners && healthBannerData && showHealthBanner && (
               <Card
                 className="mb-3"
                 style={{
@@ -4329,7 +4478,7 @@ const Dashboard: React.FC = () => {
               </Card>
             )}
 
-            {showMonzoReconnectBanner && (
+            {showPersistentDashboardBanners && showMonzoReconnectBanner && (
               <Alert variant="warning" className="d-flex align-items-center justify-content-between flex-wrap gap-2">
                 <div>
                   <div className="fw-semibold">Monzo sync is stale</div>
@@ -4351,7 +4500,7 @@ const Dashboard: React.FC = () => {
               </Alert>
             )}
 
-            {showStravaReconnectBanner && (
+            {showPersistentDashboardBanners && showStravaReconnectBanner && (
               <Alert variant="warning" className="d-flex align-items-center justify-content-between flex-wrap gap-2">
                 <div>
                   <div className="fw-semibold">Strava sync is stale</div>
@@ -4375,7 +4524,7 @@ const Dashboard: React.FC = () => {
               </Alert>
             )}
 
-            {showTraktReconnectBanner && (
+            {showPersistentDashboardBanners && showTraktReconnectBanner && (
               <Alert variant="warning" className="d-flex align-items-center justify-content-between flex-wrap gap-2">
                 <div>
                   <div className="fw-semibold">Trakt sync is stale</div>
@@ -4394,7 +4543,7 @@ const Dashboard: React.FC = () => {
               </Alert>
             )}
 
-            {showHardcoverReconnectBanner && (
+            {showPersistentDashboardBanners && showHardcoverReconnectBanner && (
               <Alert variant="warning" className="d-flex align-items-center justify-content-between flex-wrap gap-2">
                 <div>
                   <div className="fw-semibold">Hardcover sync is stale</div>
@@ -4413,7 +4562,7 @@ const Dashboard: React.FC = () => {
               </Alert>
             )}
 
-            {showYouTubeTakeoutBanner && (
+            {showPersistentDashboardBanners && showYouTubeTakeoutBanner && (
               <Alert variant="warning" className="d-flex align-items-center justify-content-between flex-wrap gap-2">
                 <div>
                   <div className="fw-semibold">YouTube watch history import is due</div>
@@ -4598,6 +4747,47 @@ const Dashboard: React.FC = () => {
                             <div className="text-muted small">Capacity</div>
                             <div className="fw-semibold">
                               {hasSelectedSprint && capacitySummary ? `${capacitySummary.utilization}% · ${capacitySummary.free.toFixed(1)}h free` : 'Select sprint'}
+                            </div>
+                          </div>
+                        </div>
+                      </Col>
+
+                      {/* Focus Alignment Group */}
+                      <Col xs={12} sm={6} lg={6} xl={3}>
+                        <div
+                          className="d-flex align-items-center gap-2 px-2 py-1 rounded border h-100"
+                          style={{
+                            background: 'var(--bs-body-bg)',
+                            cursor: 'pointer',
+                            transition: 'all 0.2s ease'
+                          }}
+                          onClick={() => navigate('/focus-goals')}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.backgroundColor = 'var(--bs-warning-bg-subtle)';
+                            e.currentTarget.style.borderColor = 'var(--bs-warning)';
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.backgroundColor = 'var(--bs-body-bg)';
+                            e.currentTarget.style.borderColor = 'var(--bs-border-color)';
+                          }}
+                        >
+                          <Target size={16} className={focusAlignmentSummary.unalignedStories > 0 ? 'text-warning' : 'text-success'} />
+                          <div
+                            className="flex-grow-1"
+                            title={focusAlignmentSummary.hasActiveFocus
+                              ? `${focusAlignmentSummary.unalignedStories} unaligned stories in current sprint. Focus stories: ${focusAlignmentSummary.focusedStoriesDone}/${focusAlignmentSummary.focusedStories} complete. Alignment ${focusAlignmentSummary.alignmentPct}%.`
+                              : 'No active focus period for this sprint/persona. Open Focus page for details.'}
+                          >
+                            <div className="text-muted small">Focus Alignment Status</div>
+                            <div className="fw-semibold" style={{ fontSize: '0.85rem' }}>
+                              {focusAlignmentSummary.hasActiveFocus
+                                ? `${focusAlignmentSummary.unalignedStories} unaligned · ${focusAlignmentSummary.alignmentPct}% aligned`
+                                : 'No active focus'}
+                            </div>
+                            <div className="text-muted small">
+                              {focusAlignmentSummary.hasActiveFocus
+                                ? `${focusAlignmentSummary.focusedStoriesDone}/${focusAlignmentSummary.focusedStories} focus stories done (${focusAlignmentSummary.focusedCompletionPct}%) · View details on Focus page`
+                                : 'View details on Focus page'}
                             </div>
                           </div>
                         </div>
@@ -4968,6 +5158,31 @@ const Dashboard: React.FC = () => {
                       )}
                       {nextWorkError && (
                         <div className="text-danger small">{nextWorkError}</div>
+                      )}
+                      {eveningPullForward?.active && eveningPullForward.suggestions.length > 0 && (
+                        <div className="small mt-1">
+                          <div className="text-body fw-semibold">Evening opportunity</div>
+                          {eveningPullForward.message && (
+                            <div className="text-muted">{eveningPullForward.message}</div>
+                          )}
+                          <div className="d-flex align-items-center gap-2 flex-wrap mt-1">
+                            {eveningPullForward.suggestions.slice(0, 2).map((item) => (
+                              <Button
+                                key={`${item.type}-${item.id}`}
+                                variant="outline-success"
+                                size="sm"
+                                disabled={eveningPullForwardBusyId === item.id}
+                                onClick={() => handleApplyEveningPullForward(item)}
+                                title={item.reason || 'Bring this item forward to today'}
+                              >
+                                {eveningPullForwardBusyId === item.id ? (
+                                  <Spinner size="sm" animation="border" className="me-1" />
+                                ) : null}
+                                Bring forward: {item.label || item.title}
+                              </Button>
+                            ))}
+                          </div>
+                        </div>
                       )}
                     </div>
                     <div className="d-flex align-items-center gap-2 flex-wrap">

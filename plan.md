@@ -1,6 +1,12 @@
 Comprehensive multi-phase rework spanning web, iOS/iPad, and health platforms:
 
-JD Updated 12tyh March at 21:38
+JD Updated 13 March at 09:49
+
+Latest execution log (13 March 09:49)
+- Added Sprint Planner route visibility in web Stories navigation and placed a Sprint Planner button immediately left of View Overview in Sprint Kanban actions.
+- Applied dashboard persistent-banner policy on web: health/reconnect/import banners now render for desktop/tablet profiles and stay hidden on mobile profiles.
+- Confirmed aggressive backlog defer ordering remains additive to existing top-3 + rollover flow (top-3 refresh -> aggressive defer/research shift -> recurring rollover in replan path).
+- Implemented iPad/Mac banner parity in bob-ios (`/Users/jim/GitHub/bob-ios`): persistent overview banners now render only on large-screen surfaces, and a compact health progress banner is shown at top when HealthKit metrics are available.
 
 **Web (Phases 1-6):** Focus Goals vision-first wizard, time-based goals, Firestore fixes, Monzo manual creation, unaligned banner, KPI design  
 **iOS/iPad (Phases A-F):** Star removal (iPad), ownership bug fix, widget resize reliability, daily plan extraction, KPI visibility  
@@ -1101,15 +1107,17 @@ adherence = [(0.857 + 0.867 + 0.892 + 0.96) / 4] * 100 = 89.4%
 
 ## Web (Phases 1-6) Verification Steps
 
-- [ ] **Phase 1A**: No Firestore undefined errors in story/pot auto-creation
-- [ ] **Phase 1B/1C**: Goal type added to Firestore with backward-compat defaults
-- [ ] **Phase 2**: Wizard renders in correct order (vision → select → goalTypes → timeframe → review → confirm)
-- [ ] **Phase 2**: Calendar-time goals created without Sprint stories
+- [x] **Phase 1A**: No Firestore undefined errors in story/pot auto-creation
+- [x] **Phase 1B/1C**: Goal type added to Firestore with backward-compat defaults
+- [x] **Phase 2**: Wizard renders in correct order (vision → select → goalTypes → timeframe → review → confirm)
+- [x] **Phase 2**: Calendar-time goals created without Sprint stories
+- [x] **Phase 6A**: Firestore undefined guards covered by focused unit tests for story/pot creation helpers
+- [x] **Phase 6B**: Wizard integration flow covered for vision/select/goal-type/timeframe/review/confirm with goalTypeMap assertions
 - [ ] **Phase 3**: Monzo ref prompt shown; backend watcher finds and links pots >5min
-- [ ] **Phase 4A**: Unaligned banner shows on FocusGoalsPage when active focus exists
-- [ ] **Phase 4B**: Sprint Table filter displays unaligned stories only
-- [ ] **Phase 4C**: Dashboard widget shows unaligned count + focus % accurately
-- [ ] **Phase 5A**: KPI Designer opens from wizard review step
+- [x] **Phase 4A**: Unaligned banner shows on FocusGoalsPage when active focus exists
+- [x] **Phase 4B**: Sprint Table filter displays unaligned stories only
+- [x] **Phase 4C**: Dashboard widget shows unaligned count + focus % accurately
+- [x] **Phase 5A**: KPI Designer opens from wizard review step
 - [ ] **Phase 5C**: KPI charts display on FocusGoalCountdownBanner with correct trends
 - [ ] **Phase 5D**: HealthKit data syncs nightly to goal_kpi_metrics
 
@@ -1326,6 +1334,28 @@ adherence = [(0.857 + 0.867 + 0.892 + 0.96) / 4] * 100 = 89.4%
 - ✅ All file anchors and line numbers documented
 
 **Completed Slice Log**:
+- ✅ 13 Mar 2026: Sprint Planner navigation parity slice shipped.
+  Scope completed: added `Sprint Planner` under the Stories section in `react-app/src/components/SidebarLayout.tsx` and moved/renamed the planning action button in `react-app/src/components/SprintKanbanPageV2.tsx` so `Sprint planner` appears immediately to the left of `View overview`.
+  Remaining in the broader web plan: continue Phase 6C manual cross-surface verification and Phase 5C KPI countdown chart work.
+- ✅ 13 Mar 2026: iPad/Mac overview banner parity slice shipped (bob-ios).
+  Scope completed: wired persistent overview banners to large-screen Apple surfaces only (iPad + Mac Catalyst) and added a compact health progress top banner in `BOB/Sources/Views/Overview/OverviewCards2.swift`, with large-screen gating in `BOB/Sources/Views/Overview/OverviewView.swift`.
+  Remaining in the broader Apple lane: complete explicit iPhone-vs-iPad manual verification matrix for all banner states and add parity for evening pull-forward recommendation actions when that surface is defined in iOS UI requirements.
+- ✅ 13 Mar 2026: Aggressive backlog auto-replan + evening pull-forward slice shipped.
+  Scope completed: added nightly/delta orchestration logic that auto-defers non-critical non-Top3 non-focus-linked work, rolls incomplete chores/habits to next recurrence, classifies title-based research work and shifts it to weekend capacity windows, and emits 7pm+ evening pull-forward suggestions when Top3 is complete.
+  UX integration: Dashboard now surfaces evening opportunity suggestions and lets users bring one forward to today via callable action.
+  Remaining in this lane: tune defer thresholds (score/time horizon) and add deeper verification coverage for weekend-capacity selection edge cases.
+- ✅ 13 Mar 2026: Focus wizard integration verification slice shipped.
+  Scope completed: added end-to-end wizard-flow coverage in `react-app/src/components/FocusGoalWizard.test.tsx` that runs vision-first flow through select, goal-type assignment (story/calendar mix), timeframe selection, review, and final save assertion for persisted `goalTypeMap`.
+  Validation completed: targeted wizard integration test passes (`1 passed`) and confirms expected focus payload shape (`goalIds`, `timeframe`, `goalTypeMap`).
+  Remaining in the broader web verification plan: manual cross-surface alignment checks (Phase 6C) and KPI countdown chart work (Phase 5C).
+- ✅ 13 Mar 2026: Dashboard Focus Alignment Status slice shipped.
+  Scope completed: added live active-focus subscription to Dashboard, computed sprint alignment metrics (unaligned stories, aligned %, focus-story completion), and rendered a new Key Metrics card labeled "Focus Alignment Status" with direct drill-down to Focus Goals.
+  Validation completed: web build compiles successfully and existing focus-goal service tests remain green.
+  Remaining in the broader web verification plan: wizard integration test coverage (Phase 6B), manual cross-surface alignment checks (Phase 6C), and KPI countdown chart work (Phase 5C).
+- ✅ 13 Mar 2026: Verification and sprint-alignment slice shipped.
+  Scope completed: added focused unit coverage for Firestore undefined guards in `focusGoalsService` (goal list undefined handling and savings-pot id guard), implemented active-focus unaligned-story filtering/highlighting in `ModernKanbanPage` with "Show unaligned stories only" toggle, and fixed missing `ListGroup` import in `FocusGoalsPage` discovered during compile validation.
+  Validation completed: targeted tests for `focusGoalsService` pass (2/2), and web build compiles successfully (existing repository-wide lint warnings remain outside this slice).
+  Remaining in the broader alignment plan: Dashboard Focus Alignment Status card (Phase 4C), wizard integration test (Phase 6B), and manual verification pass for cross-surface alignment interactions.
 - ✅ 12 Mar 2026: Dashboard health UX sub-slice shipped.
   Scope completed: compact dismissible health progress card on Dashboard, direct Settings CTA for missing targets, editable weight/body-fat targets in Settings, richer Health key-metric drill-down routing to `/fitness`, expanded `/fitness` health snapshot and trend charts, and manual fallback fields for distance/workout/body-composition in daily check-in.
   Remaining in the broader HealthKit plan: ETA computation backend, canonical `health_metrics` contract writes, nutrition advisor, rollout flags, telemetry, and iOS HealthKit sync/backfill work.
@@ -1353,6 +1383,11 @@ adherence = [(0.857 + 0.867 + 0.892 + 0.96) / 4] * 100 = 89.4%
 - ✅ 12 Mar 2026: Focus unaligned-story banner slice shipped.
   Scope completed: added Focus Goals warning banner for active-sprint stories not mapped to active focus goals, plus quick actions to align a story to the active focus set or remove it from the sprint.
   Remaining in broader alignment plan: sprint-table-level unaligned filter toggle and dashboard alignment status widget parity.
+
+**Prompt Parity Audit (13 Mar 2026)**:
+- Baseline compared: latest user prompt used as canonical source for `plan.md` scope and ordering.
+- In sync with prompt: Web Phases 1/2 foundations, Monzo manual ref setup + watcher path, KPI Designer handoff, FocusGoalsPage unaligned banner (4A), and sprint-table unaligned filter (4B).
+- Divergence to resolve explicitly: Step 18 currently documented in this file as Theme Progress transfer view language; latest prompt baseline references savings runway on Dashboard + email. Keep this as an open decision item before implementing Step 18 code to avoid scope drift.
 
 **Location**: plan.md
 

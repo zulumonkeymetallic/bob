@@ -477,6 +477,13 @@ const SprintKanbanPageV2: React.FC = () => {
                                 <Button
                                     variant="outline-secondary"
                                     size="sm"
+                                    onClick={() => navigate('/sprints/planning')}
+                                >
+                                    Sprint planner
+                                </Button>
+                                <Button
+                                    variant="outline-secondary"
+                                    size="sm"
                                     onClick={() => navigate('/dashboard')}
                                 >
                                     View overview
@@ -488,13 +495,6 @@ const SprintKanbanPageV2: React.FC = () => {
                                 >
                                     <CalendarIcon size={14} className="me-1" />
                                     View calendar
-                                </Button>
-                                <Button
-                                    variant="outline-secondary"
-                                    size="sm"
-                                    onClick={() => navigate('/sprints/planning')}
-                                >
-                                    View planner
                                 </Button>
                                 <Button
                                     variant="outline-primary"

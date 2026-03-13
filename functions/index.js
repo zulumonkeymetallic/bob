@@ -252,6 +252,9 @@ try {
     if (nightlyOrchestration.deltaPriorityRescore) {
       exports.deltaPriorityRescore = nightlyOrchestration.deltaPriorityRescore;
     }
+    if (nightlyOrchestration.applyEveningPullForward) {
+      exports.applyEveningPullForward = nightlyOrchestration.applyEveningPullForward;
+    }
   }
 } catch (e) {
   console.warn('[init] nightlyOrchestration not loaded', e?.message || e);
