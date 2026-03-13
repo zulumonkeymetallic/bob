@@ -258,6 +258,19 @@ function AppContent() {
     logger.debug('nav', 'Location change', { path: location.pathname, key: location.key });
   }, [location.pathname, location.key]);
 
+  // First-run daily guard: route users to Daily Plan until morning review is acknowledged.
+  useEffect(() => {
+    if (!currentUser?.uid) return;
+    const path = location.pathname || '/';
+    if (path === '/daily-plan' || path === '/mobile/daily-plan') return;
+    const today = new Date().toISOString().slice(0, 10);
+    const key = `dailyPlanMorningReview:${currentUser.uid}:${today}`;
+    const reviewed = window.localStorage.getItem(key) === '1';
+    if (!reviewed) {
+      navigate('/daily-plan', { replace: true });
+    }
+  }, [currentUser?.uid, location.pathname, navigate]);
+
 
 
   // Auto-route to mobile Home on mobile devices when landing on dashboard/home
