@@ -274,6 +274,26 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
         : 0;
     const notePreview = latestNote ? latestNote.replace(/\s+/g, ' ').trim() : '';
     const trimmedNote = notePreview.length > 140 ? `${notePreview.slice(0, 140)}...` : notePreview;
+    const storyProgressPct = type === 'story'
+        ? (() => {
+            const raw = (item as any).progressPct ?? (item as any).progress ?? null;
+            const value = Number(raw);
+            if (!Number.isFinite(value)) return null;
+            return Math.max(0, Math.min(100, Math.round(value)));
+        })()
+        : null;
+    const storyLastComment = type === 'story'
+        ? (() => {
+            const raw = (item as any).lastComment
+                ?? (item as any).latestComment
+                ?? (item as any).lastNote
+                ?? trimmedNote
+                ?? '';
+            const text = String(raw || '').replace(/\s+/g, ' ').trim();
+            if (!text) return null;
+            return text.length > 140 ? `${text.slice(0, 140)}...` : text;
+        })()
+        : null;
     const toDate = (value: any): Date | null => {
         if (!value) return null;
         if (typeof value?.toDate === 'function') return value.toDate();
@@ -849,6 +869,12 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                         {trimmedNote}
                     </div>
                 )}
+                {type === 'story' && storyLastComment && (
+                    <div className="kanban-card__note">
+                        <span className="kanban-card__note-label">Last comment:</span>{' '}
+                        {storyLastComment}
+                    </div>
+                )}
                 {showSteamInfo && (
                     <div className="kanban-card__steam">
                         <span className="kanban-card__steam-label">Steam</span>
@@ -913,6 +939,11 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                     {type === 'story' && (
                         <span className="kanban-card__meta-badge" title="Story points">
                             {((item as Story).points ?? 0)} pts
+                        </span>
+                    )}
+                    {type === 'story' && storyProgressPct != null && (
+                        <span className="kanban-card__meta-badge" title="Story progress percentage">
+                            Progress {storyProgressPct}%
                         </span>
                     )}
                     {type === 'task' && (item as Task).effort && (

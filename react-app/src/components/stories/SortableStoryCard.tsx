@@ -145,6 +145,21 @@ const SortableStoryCard: React.FC<SortableStoryCardProps> = ({
   const deferredLabel = isDeferred
     ? `Deferred to ${new Date(deferredUntilMs as number).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`
     : null;
+  const storyProgressPct = (() => {
+    const raw = (story as any).progressPct ?? (story as any).progress ?? null;
+    const value = Number(raw);
+    if (!Number.isFinite(value)) return null;
+    return Math.max(0, Math.min(100, Math.round(value)));
+  })();
+  const storyLastComment = (() => {
+    const raw = (story as any).lastComment
+      ?? (story as any).latestComment
+      ?? (story as any).lastNote
+      ?? '';
+    const text = String(raw || '').replace(/\s+/g, ' ').trim();
+    if (!text) return null;
+    return text.length > 140 ? `${text.slice(0, 140)}...` : text;
+  })();
 
   const safeTaskCount = Number.isFinite(taskCount) ? Number(taskCount) : 0;
 
@@ -290,6 +305,12 @@ const SortableStoryCard: React.FC<SortableStoryCardProps> = ({
               {story.description}
             </div>
           )}
+          {storyLastComment && (
+            <div className="kanban-card__note">
+              <span className="kanban-card__note-label">Last comment:</span>{' '}
+              {storyLastComment}
+            </div>
+          )}
 
           {resolvedShowTags && visibleTags.length > 0 && (
             <div className="kanban-card__tags">
@@ -331,6 +352,11 @@ const SortableStoryCard: React.FC<SortableStoryCardProps> = ({
             <span className="kanban-card__meta-badge" title="Story points">
               {(story.points ?? 0)} pts
             </span>
+            {storyProgressPct != null && (
+              <span className="kanban-card__meta-badge" title="Story progress percentage">
+                Progress {storyProgressPct}%
+              </span>
+            )}
             {scheduledBlockLabel && (
               <span className="d-inline-flex flex-column" style={{ lineHeight: 1.2 }}>
                 <span
