@@ -1,8 +1,9 @@
 Comprehensive multi-phase rework spanning web, iOS/iPad, and health platforms:
 
-JD Updated 13 March at 09:49
+JD Updated 13 March at 09:55
 
-Latest execution log (13 March 09:49)
+Latest execution log (13 March 09:55)
+- Implemented Phase 5C KPI charting in Focus Goal countdown cards: banner now loads `goal_kpi_metrics` per active focus goal and renders compact KPI trend mini-charts (fallback series when sparse data) alongside current/target values.
 - Added Sprint Planner route visibility in web Stories navigation and placed a Sprint Planner button immediately left of View Overview in Sprint Kanban actions.
 - Applied dashboard persistent-banner policy on web: health/reconnect/import banners now render for desktop/tablet profiles and stay hidden on mobile profiles.
 - Confirmed aggressive backlog defer ordering remains additive to existing top-3 + rollover flow (top-3 refresh -> aggressive defer/research shift -> recurring rollover in replan path).
@@ -1118,7 +1119,7 @@ adherence = [(0.857 + 0.867 + 0.892 + 0.96) / 4] * 100 = 89.4%
 - [x] **Phase 4B**: Sprint Table filter displays unaligned stories only
 - [x] **Phase 4C**: Dashboard widget shows unaligned count + focus % accurately
 - [x] **Phase 5A**: KPI Designer opens from wizard review step
-- [ ] **Phase 5C**: KPI charts display on FocusGoalCountdownBanner with correct trends
+- [x] **Phase 5C**: KPI charts display on FocusGoalCountdownBanner with correct trends
 - [ ] **Phase 5D**: HealthKit data syncs nightly to goal_kpi_metrics
 
 ## iOS/iPad (Phases A-F) Verification Steps
@@ -1334,9 +1335,12 @@ adherence = [(0.857 + 0.867 + 0.892 + 0.96) / 4] * 100 = 89.4%
 - ✅ All file anchors and line numbers documented
 
 **Completed Slice Log**:
+- ✅ 13 Mar 2026: Focus countdown KPI mini-chart slice shipped.
+  Scope completed: extended `react-app/src/components/FocusGoalCountdownBanner.tsx` to subscribe to `goal_kpi_metrics` for active focus goals and render compact KPI trend mini-charts with current/target readouts directly in each selected goal card.
+  Remaining in the broader web plan: Phase 6C manual cross-surface verification and any KPI trend tuning after real-data visual QA.
 - ✅ 13 Mar 2026: Sprint Planner navigation parity slice shipped.
   Scope completed: added `Sprint Planner` under the Stories section in `react-app/src/components/SidebarLayout.tsx` and moved/renamed the planning action button in `react-app/src/components/SprintKanbanPageV2.tsx` so `Sprint planner` appears immediately to the left of `View overview`.
-  Remaining in the broader web plan: continue Phase 6C manual cross-surface verification and Phase 5C KPI countdown chart work.
+  Remaining in the broader web plan: continue Phase 6C manual cross-surface verification.
 - ✅ 13 Mar 2026: iPad/Mac overview banner parity slice shipped (bob-ios).
   Scope completed: wired persistent overview banners to large-screen Apple surfaces only (iPad + Mac Catalyst) and added a compact health progress top banner in `BOB/Sources/Views/Overview/OverviewCards2.swift`, with large-screen gating in `BOB/Sources/Views/Overview/OverviewView.swift`.
   Remaining in the broader Apple lane: complete explicit iPhone-vs-iPad manual verification matrix for all banner states and add parity for evening pull-forward recommendation actions when that surface is defined in iOS UI requirements.

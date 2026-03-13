@@ -1,8 +1,10 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Card, Badge, ProgressBar, Row, Col, Button } from 'react-bootstrap';
 import { AlertCircle, Zap, Calendar, Target, TrendingUp } from 'lucide-react';
 import { FocusGoal, Goal, Story } from '../types';
 import { FitnessKPIQuickStatus } from './FitnessKPIDisplay';
+import { collection, onSnapshot, query, where } from 'firebase/firestore';
+import { db } from '../firebase';
 
 interface MonzoGoalSummary {
   goalId: string;
@@ -23,6 +25,11 @@ interface FocusGoalCountdownBannerProps {
   compact?: boolean;
   monzoBudgetSummary?: any;
   monzoGoalAlignment?: { goals: MonzoGoalSummary[] } | null;
+}
+
+interface GoalKpiMetricRow {
+  resolvedKpis?: any[];
+  updatedAt?: any;
 }
 
 const getUrgency = (daysRemaining: number): 'critical' | 'high' | 'normal' | 'low' => {
@@ -76,6 +83,83 @@ export const FocusGoalCountdownBanner: React.FC<FocusGoalCountdownBannerProps> =
   refreshing = false,
   compact = false
 }) => {
+  const [goalKpiMetrics, setGoalKpiMetrics] = useState<Record<string, GoalKpiMetricRow>>({});
+
+  const ownerUid = useMemo(
+    () => String((focusGoal as any)?.ownerUid || goals.find((g) => !!(g as any)?.ownerUid)?.ownerUid || '').trim(),
+    [focusGoal, goals]
+  );
+
+  useEffect(() => {
+    if (!ownerUid) {
+      setGoalKpiMetrics({});
+      return;
+    }
+    const metricsQuery = query(collection(db, 'goal_kpi_metrics'), where('ownerUid', '==', ownerUid));
+    const unsubscribe = onSnapshot(metricsQuery, (snap) => {
+      const map: Record<string, GoalKpiMetricRow> = {};
+      snap.docs.forEach((docSnap) => {
+        const data = docSnap.data() as any;
+        const goalId = String(data?.goalId || '').trim();
+        if (!goalId || !(focusGoal.goalIds || []).includes(goalId)) return;
+        map[goalId] = {
+          resolvedKpis: Array.isArray(data?.resolvedKpis) ? data.resolvedKpis : [],
+          updatedAt: data?.updatedAt || null,
+        };
+      });
+      setGoalKpiMetrics(map);
+    }, () => {
+      setGoalKpiMetrics({});
+    });
+    return () => unsubscribe();
+  }, [ownerUid, focusGoal.goalIds]);
+
+  const buildKpiSeries = (kpi: any): number[] => {
+    const series = Array.isArray(kpi?.weeklyValues)
+      ? kpi.weeklyValues
+          .map((entry: any) => Number(entry?.value))
+          .filter((value: number) => Number.isFinite(value))
+      : [];
+    if (series.length >= 2) return series.slice(-8);
+    const current = Number(kpi?.currentValue);
+    const target = Number(kpi?.targetNormalized ?? kpi?.target);
+    if (Number.isFinite(current) && Number.isFinite(target) && target > 0) {
+      const baseline = Math.max(0, Math.min(target, current * 0.75));
+      return [baseline, current, target];
+    }
+    if (Number.isFinite(current)) return [Math.max(0, current * 0.75), current];
+    return [];
+  };
+
+  const renderMiniSparkline = (values: number[]) => {
+    if (!values || values.length < 2) return null;
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const range = Math.max(1, max - min);
+    const width = 72;
+    const height = 22;
+    const points = values
+      .map((value, idx) => {
+        const x = values.length === 1 ? 0 : (idx / (values.length - 1)) * width;
+        const y = height - ((value - min) / range) * (height - 2) - 1;
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+      })
+      .join(' ');
+
+    return (
+      <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} role="img" aria-label="KPI trend">
+        <polyline
+          points={points}
+          fill="none"
+          stroke="#667eea"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    );
+  };
+
   // Get selected goals
   const selectedGoals = useMemo(
     () => goals.filter(g => focusGoal.goalIds.includes(g.id)),
@@ -322,6 +406,9 @@ export const FocusGoalCountdownBanner: React.FC<FocusGoalCountdownBannerProps> =
               const storyDone = goalStories.filter(s => s.status === 4).length;
               const storyProgress = goalStories.length > 0 ? Math.round((storyDone / goalStories.length) * 100) : 0;
               const monzoPot = monzoPotByGoalId[goal.id] ?? null;
+              const resolvedKpis = Array.isArray(goalKpiMetrics[goal.id]?.resolvedKpis)
+                ? goalKpiMetrics[goal.id]?.resolvedKpis || []
+                : [];
 
               return (
                 <Card key={goal.id} style={{ borderLeft: `4px solid #667eea` }}>
@@ -355,10 +442,42 @@ export const FocusGoalCountdownBanner: React.FC<FocusGoalCountdownBannerProps> =
                       </div>
                     )}
 
-                    {/* Fitness KPIs if present */}
+                    {/* Fitness KPIs if present (legacy goal.kpis quick status) */}
                     {goal.kpis && goal.kpis.length > 0 && (
                       <div style={{ marginTop: '8px', fontSize: '11px' }}>
                         <FitnessKPIQuickStatus kpis={goal.kpis} />
+                      </div>
+                    )}
+
+                    {/* KPI mini charts from goal_kpi_metrics */}
+                    {resolvedKpis.length > 0 && (
+                      <div style={{ marginTop: '8px', fontSize: '11px' }}>
+                        <div style={{ color: '#495057', fontWeight: 600, marginBottom: '4px' }}>
+                          KPI trends
+                        </div>
+                        {resolvedKpis.slice(0, 2).map((kpi: any, idx: number) => {
+                          const current = Number(kpi?.currentValue);
+                          const target = Number(kpi?.targetNormalized ?? kpi?.target);
+                          const currentDisplay = kpi?.currentDisplay || (Number.isFinite(current) ? String(Math.round(current * 100) / 100) : '—');
+                          const targetDisplay = Number.isFinite(target) ? String(Math.round(target * 100) / 100) : '—';
+                          const series = buildKpiSeries(kpi);
+
+                          return (
+                            <div key={`${goal.id}-kpi-${idx}`} style={{ marginBottom: idx < 1 ? '6px' : 0 }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+                                <div style={{ minWidth: 0, flex: 1 }}>
+                                  <div style={{ color: '#6c757d', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                    {String(kpi?.name || 'KPI')}
+                                  </div>
+                                  <div style={{ color: '#212529', fontWeight: 600 }}>
+                                    {currentDisplay} / {targetDisplay}
+                                  </div>
+                                </div>
+                                {renderMiniSparkline(series)}
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
 
