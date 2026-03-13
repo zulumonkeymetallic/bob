@@ -10,6 +10,13 @@ import { useSprint } from '../contexts/SprintContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { parsePointsValue } from '../utils/points';
 
+const isSprintActiveStatus = (status: any): boolean => {
+  const numeric = Number(status);
+  if (Number.isFinite(numeric)) return numeric === 1;
+  const normalized = String(status || '').trim().toLowerCase();
+  return normalized === 'active';
+};
+
 const ModernKanbanPage: React.FC = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
@@ -22,6 +29,7 @@ const ModernKanbanPage: React.FC = () => {
   const [showEditStory, setShowEditStory] = useState(false);
   const [showAddTask, setShowAddTask] = useState(false);
   const [activeFocusGoalIds, setActiveFocusGoalIds] = useState<Set<string>>(new Set());
+  const [activeSprintIds, setActiveSprintIds] = useState<Set<string>>(new Set());
   const [showUnalignedOnly, setShowUnalignedOnly] = useState(false);
   
   // Configurable swim lanes (canonical numeric buckets)
@@ -191,7 +199,37 @@ const ModernKanbanPage: React.FC = () => {
     return unsubscribe;
   }, [currentUser, currentPersona]);
 
-  const hasActiveFocusContext = !!selectedSprintId && activeFocusGoalIds.size > 0;
+  useEffect(() => {
+    if (!currentUser || !currentPersona) {
+      setActiveSprintIds(new Set());
+      return;
+    }
+
+    const sprintsQuery = query(
+      collection(db, 'sprints'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+    );
+
+    const unsubscribe = onSnapshot(sprintsQuery, (snapshot) => {
+      const ids = new Set<string>();
+      snapshot.docs.forEach((docSnap) => {
+        const row = docSnap.data() as any;
+        if (isSprintActiveStatus(row?.status)) {
+          ids.add(docSnap.id);
+        }
+      });
+      setActiveSprintIds(ids);
+    }, (error) => {
+      console.warn('[ModernKanbanPage] active sprint subscribe error', error?.message || error);
+      setActiveSprintIds(new Set());
+    });
+
+    return unsubscribe;
+  }, [currentUser, currentPersona]);
+
+  const selectedSprintIsActive = !!selectedSprintId && activeSprintIds.has(String(selectedSprintId));
+  const hasActiveFocusContext = selectedSprintIsActive && activeFocusGoalIds.size > 0;
   const isUnalignedStory = (story: Story) => {
     if (!hasActiveFocusContext) return false;
     const storySprintId = String((story as any).sprintId || '').trim();

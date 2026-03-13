@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Container, Card, Button, Badge, ListGroup, Form, Modal, Spinner } from 'react-bootstrap';
+import { useNavigate } from 'react-router-dom';
 import { httpsCallable } from 'firebase/functions';
 import { collection, query, where, onSnapshot, orderBy, limit, updateDoc, doc, serverTimestamp } from 'firebase/firestore';
 import { db, functions } from '../firebase';
@@ -58,6 +59,7 @@ const formatShortDate = (value?: number) => {
 };
 
 const MobileHome: React.FC = () => {
+  const navigate = useNavigate();
   const { currentUser } = useAuth();
   const { selectedSprintId, setSelectedSprintId, sprints } = useSprint();
   const { currentPersona, setPersona } = usePersona();
@@ -1523,6 +1525,9 @@ const MobileHome: React.FC = () => {
                 <strong>Daily Plan</strong>
                 <Badge bg="secondary" pill className="ms-2">{unifiedTimelineItems.length}</Badge>
               </div>
+              <Button variant="outline-secondary" size="sm" onClick={() => navigate('/daily-plan')}>
+                Full view
+              </Button>
             </Card.Header>
             <Card.Body className="pt-0">
               <div className="text-muted small mb-2">Tip: Use the clock icon on task/story cards to defer with smart suggestions.</div>

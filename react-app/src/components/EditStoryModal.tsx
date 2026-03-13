@@ -17,6 +17,7 @@ import { cascadeStoryPersona } from '../utils/personaCascade';
 import { useNavigate } from 'react-router-dom';
 import { Wand2 } from 'lucide-react';
 import { planningSprints } from '../utils/sprintFilter';
+import { evaluateStorySprintAlignment } from '../utils/sprintAlignment';
 
 interface EditStoryModalProps {
   show: boolean;
@@ -82,6 +83,10 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
   const linkedGoal = useMemo(
     () => (editedStory.goalId ? goals.find((g) => g.id === editedStory.goalId) : null),
     [editedStory.goalId, goals],
+  );
+  const sprintAlignment = useMemo(
+    () => evaluateStorySprintAlignment(selectedSprint as any, editedStory.goalId || ''),
+    [selectedSprint, editedStory.goalId],
   );
 
   const reloadLinkedTasks = useCallback(async (sourceStory: Story | null) => {
@@ -216,6 +221,17 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
 
     try {
       console.log('💾 EditStoryModal: Saving story updates:', editedStory);
+
+      if (editedStory.sprintId && sprintAlignment.hasRule && !sprintAlignment.aligned) {
+        if (sprintAlignment.blocking) {
+          setError(sprintAlignment.message);
+          return;
+        }
+        const proceed = window.confirm(`${sprintAlignment.message} Continue anyway?`);
+        if (!proceed) {
+          return;
+        }
+      }
 
       const selectedGoal = goals.find(g => g.id === editedStory.goalId);
       const normalizedPriority = normalizePriorityValue(editedStory.priority);
@@ -460,6 +476,14 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
                     ) : null}
                   </Form.Group>
                 </Col>
+
+                {editedStory.sprintId && sprintAlignment.hasRule && !sprintAlignment.aligned && (
+                  <Col md={12}>
+                    <Alert variant={sprintAlignment.blocking ? 'danger' : 'warning'} className="mb-3">
+                      {sprintAlignment.message}
+                    </Alert>
+                  </Col>
+                )}
 
                 <Col md={2}>
                   <Form.Group className="mb-3">

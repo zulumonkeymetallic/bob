@@ -66,6 +66,7 @@ import CurrentSprintKanban from './components/CurrentSprintKanban';
 import MobileView from './components/MobileView';
 import MobileChecklistView from './components/MobileChecklistView';
 import MobileHome from './components/MobileHome';
+import DailyPlanPage from './components/DailyPlanPage';
 import ChoresTasksPage from './components/ChoresTasksPage';
 import ChoreChecklistPage from './components/ChoreChecklistPage';
 import HabitsChoresDashboard from './components/HabitsChoresDashboard';
@@ -151,17 +152,9 @@ function AppContent() {
   const [showImportModal, setShowImportModal] = useState(false);
   const [showAssistant, setShowAssistant] = useState(false);
 
-  // Root path redirect: mobile -> /mobile, desktop -> rotate between overview, kanban, and calendar
+  // Root path redirect: always start with Daily Plan for morning check-in flow.
   const RootRedirect: React.FC = () => {
-    const dev = useDeviceInfo();
-    if (dev?.isMobile) return <Navigate to="/mobile" replace />;
-    const hour = new Date().getHours();
-    // Before 7am: show calendar first so you can review today's schedule
-    if (hour < 7) return <Navigate to="/calendar" replace />;
-    // 7am onwards: 3-way rotation — dashboard / kanban / calendar
-    const targets = ['/dashboard', '/sprints/kanban', '/calendar'] as const;
-    const target = targets[hour % 3];
-    return <Navigate to={target} replace />;
+    return <Navigate to="/daily-plan" replace />;
   };
 
   // Data for the global sidebar
@@ -402,6 +395,8 @@ function AppContent() {
             <Route path="/chores" element={<ChoresTasksPage />} />
             <Route path="/chores/checklist" element={<ChoreChecklistPage />} />
             <Route path="/mobile" element={<MobileHome />} />
+            <Route path="/daily-plan" element={<DailyPlanPage />} />
+            <Route path="/mobile/daily-plan" element={<DailyPlanPage />} />
             <Route path="/mobile-view" element={<MobileView />} />
             <Route path="/mobile-checklist" element={<MobileChecklistView />} />
             <Route path="/habits" element={<Navigate to="/dashboard/habit-tracking" replace />} />

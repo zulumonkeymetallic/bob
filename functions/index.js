@@ -94,6 +94,7 @@ try {
   if (calendarSync) {
     exports.syncCalendarBlock = calendarSync.syncCalendarBlock;
     exports.onCalendarBlockWrite = calendarSync.onCalendarBlockWrite;
+    exports.onStoryCalendarAutoLink = calendarSync.onStoryCalendarAutoLink;
     exports.syncFromGoogleCalendar = calendarSync.syncFromGoogleCalendar;
     exports.syncCalendarNow = calendarSync.syncCalendarNow;
     exports.scheduledCalendarSync = calendarSync.scheduledCalendarSync;
@@ -2678,6 +2679,7 @@ exports.priorityNow = httpsV2.onRequest({ invoker: 'public', secrets: [GOOGLE_AI
       await recordAiLog(uid, 'priority_now_trace', 'success', 'Priority now response generated', {
         ...priorityTraceBase,
         parseStatus: llmText ? 'ok' : 'ok_empty',
+        rawOutput: String(llmText || '').slice(0, 12000),
         rawOutputText: String(llmText || '').slice(0, 12000),
         rawOutputLength: String(llmText || '').length,
         latencyMs: Date.now() - priorityStartedAtMs,
@@ -2689,6 +2691,7 @@ exports.priorityNow = httpsV2.onRequest({ invoker: 'public', secrets: [GOOGLE_AI
       await recordAiLog(uid, 'priority_now_trace', 'warning', 'Priority now LLM parse/runtime failure', {
         ...priorityTraceBase,
         parseStatus: 'failed',
+        rawOutput: String(llmText || '').slice(0, 12000),
         rawOutputText: String(llmText || '').slice(0, 12000),
         rawOutputLength: String(llmText || '').length,
         error: String(error?.message || error || 'unknown'),
@@ -10764,6 +10767,134 @@ exports.monzoGoalPotRefLinker = schedulerV2.onSchedule('every 12 hours', async (
   };
 });
 
+function normalizeSprintFocusGoalIds(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((goalId) => String(goalId || '').trim())
+    .filter((goalId) => !!goalId);
+}
+
+function normalizeAlignmentMode(value) {
+  const normalized = String(value || 'warn').trim().toLowerCase();
+  return normalized === 'strict' ? 'strict' : 'warn';
+}
+
+exports.enforceSprintFocusAlignment = firestoreV2.onDocumentWritten('stories/{storyId}', async (event) => {
+  const afterSnap = event.data?.after;
+  if (!afterSnap?.exists) return;
+
+  const storyId = String(event.params?.storyId || '').trim();
+  const story = afterSnap.data() || {};
+  const sprintId = String(story.sprintId || '').trim();
+  if (!sprintId) return;
+
+  const ownerUid = String(story.ownerUid || '').trim();
+  if (!ownerUid) return;
+
+  const db = admin.firestore();
+  const sprintSnap = await db.collection('sprints').doc(sprintId).get();
+  if (!sprintSnap.exists) return;
+
+  const sprint = sprintSnap.data() || {};
+  const mode = normalizeAlignmentMode(sprint.alignmentMode);
+  if (mode !== 'strict') return;
+
+  const focusGoalIds = normalizeSprintFocusGoalIds(sprint.focusGoalIds);
+  if (!focusGoalIds.length) return;
+
+  const goalId = String(story.goalId || '').trim();
+  const aligned = !!goalId && focusGoalIds.includes(goalId);
+  if (aligned) return;
+
+  await afterSnap.ref.set({
+    sprintId: null,
+    sprintAlignmentViolation: {
+      sprintId,
+      alignmentMode: 'strict',
+      reason: 'goal_not_in_sprint_focus_goals',
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    },
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  await db.collection('integration_logs').add({
+    integration: 'sprint_alignment',
+    type: 'strict_enforcement',
+    status: 'blocked',
+    userId: ownerUid,
+    storyId,
+    sprintId,
+    goalId: goalId || null,
+    reason: 'goal_not_in_sprint_focus_goals',
+    timestamp: admin.firestore.FieldValue.serverTimestamp(),
+  });
+});
+
+exports.sprintAlignmentAuditNightly = schedulerV2.onSchedule('every day 03:10', async () => {
+  const db = admin.firestore();
+  const activeSprintSnap = await db.collection('sprints').where('status', '==', 1).get();
+  let sprintsChecked = 0;
+  let sprintsWithRules = 0;
+  let totalUnaligned = 0;
+
+  for (const sprintDoc of activeSprintSnap.docs) {
+    const sprint = sprintDoc.data() || {};
+    const focusGoalIds = normalizeSprintFocusGoalIds(sprint.focusGoalIds);
+    if (!focusGoalIds.length) continue;
+
+    sprintsChecked += 1;
+    sprintsWithRules += 1;
+    const focusGoalSet = new Set(focusGoalIds);
+    const ownerUid = String(sprint.ownerUid || '').trim();
+    const persona = String(sprint.persona || 'personal');
+
+    if (!ownerUid) continue;
+
+    const storiesSnap = await db.collection('stories')
+      .where('ownerUid', '==', ownerUid)
+      .where('persona', '==', persona)
+      .where('sprintId', '==', sprintDoc.id)
+      .get();
+
+    const totalStories = storiesSnap.size;
+    const unalignedStories = storiesSnap.docs.filter((docSnap) => {
+      const row = docSnap.data() || {};
+      const goalId = String(row.goalId || '').trim();
+      return !goalId || !focusGoalSet.has(goalId);
+    }).length;
+    totalUnaligned += unalignedStories;
+
+    await db.collection('sprint_alignment_audit').doc(`${ownerUid}_${sprintDoc.id}`).set({
+      ownerUid,
+      sprintId: sprintDoc.id,
+      sprintName: sprint.name || sprint.ref || sprintDoc.id,
+      persona,
+      alignmentMode: normalizeAlignmentMode(sprint.alignmentMode),
+      focusGoalIds,
+      totalStories,
+      unalignedStories,
+      alignedStories: Math.max(totalStories - unalignedStories, 0),
+      alignmentPct: totalStories > 0
+        ? Math.max(0, Math.round(((totalStories - unalignedStories) / totalStories) * 100))
+        : 100,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+  }
+
+  console.log('[sprintAlignmentAuditNightly] complete', {
+    sprintsChecked,
+    sprintsWithRules,
+    totalUnaligned,
+  });
+
+  return {
+    ok: true,
+    sprintsChecked,
+    sprintsWithRules,
+    totalUnaligned,
+  };
+});
+
 exports.convertTasksToStories = httpsV2.onCall(async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
@@ -11710,6 +11841,20 @@ async function buildDailySummaryAiFocus({ summaryData, userId }) {
         timezone: zone,
         activeWorkContext: context,
         calendarContext,
+        healthContext: {
+          source: ['authorized', 'synced'].includes(String(summaryData?.profile?.healthkitStatus || '').toLowerCase()) ? 'healthkit' : 'manual',
+          stepsToday: Number(summaryData?.profile?.healthkitStepsToday ?? summaryData?.profile?.manualStepsToday ?? 0) || null,
+          workoutMinutesToday: Number(summaryData?.profile?.healthkitWorkoutMinutesToday ?? summaryData?.profile?.manualWorkoutMinutesToday ?? 0) || null,
+          bodyFatPct: Number(summaryData?.profile?.healthkitBodyFatPct ?? summaryData?.profile?.manualBodyFatPct ?? 0) || null,
+          macroTargetsPresent: !!(
+            summaryData?.profile?.targetProteinG
+            || summaryData?.profile?.dailyProteinTargetG
+            || summaryData?.profile?.healthTargetProteinG
+            || summaryData?.profile?.targetCaloriesKcal
+            || summaryData?.profile?.dailyCaloriesTargetKcal
+            || summaryData?.profile?.healthTargetCaloriesKcal
+          ),
+        },
       },
     };
 
@@ -11730,6 +11875,7 @@ async function buildDailySummaryAiFocus({ summaryData, userId }) {
       await recordAiLog(userId, 'daily_summary_focus_trace', 'warning', 'Daily summary focus parse failure', {
         ...llmTraceBase,
         parseStatus: 'failed',
+        rawOutput: String(raw || '').slice(0, 12000),
         rawOutputText: String(raw || '').slice(0, 12000),
         rawOutputLength: String(raw || '').length,
         parseError: String(error?.message || error || 'unknown'),
@@ -11799,6 +11945,7 @@ async function buildDailySummaryAiFocus({ summaryData, userId }) {
       await recordAiLog(userId, 'daily_summary_focus_trace', 'warning', 'Daily summary focus returned no actionable items', {
         ...llmTraceBase,
         parseStatus: 'ok_empty',
+        rawOutput: String(raw || '').slice(0, 12000),
         rawOutputText: String(raw || '').slice(0, 12000),
         rawOutputLength: String(raw || '').length,
         latencyMs: Date.now() - startedAtMs,
@@ -11821,6 +11968,7 @@ async function buildDailySummaryAiFocus({ summaryData, userId }) {
     await recordAiLog(userId, 'daily_summary_focus_trace', 'success', 'Daily summary focus generated', {
       ...llmTraceBase,
       parseStatus: 'ok',
+      rawOutput: String(raw || '').slice(0, 12000),
       rawOutputText: String(raw || '').slice(0, 12000),
       rawOutputLength: String(raw || '').length,
       resultItemCount: result.items.length,
@@ -17701,10 +17849,30 @@ async function recordAiLog(uid, event, status, message, metadata = {}) {
     const level = status === 'error' ? 'error' : (status === 'warning' ? 'warning' : 'info');
     const expiresAt = createExpiryTimestamp();
     const now = admin.firestore.FieldValue.serverTimestamp();
+    const randomSuffix = Math.random().toString(36).slice(2, 8);
+    const traceIdRaw = metadata.traceId || metadata.trace_id || metadata.correlationId || metadata.correlation_id;
+    const traceId = String(traceIdRaw || `${String(event || 'ai_event')}_${Date.now()}_${randomSuffix}`).trim();
+    const promptTemplateId = String(metadata.promptTemplateId || metadata.templateId || metadata.template || '').trim() || null;
+    const parseStatus = String(metadata.parseStatus || (status === 'error' ? 'runtime_error' : 'ok')).trim().toLowerCase() || null;
+    const latencyRaw = Number(metadata.latencyMs ?? metadata.durationMs ?? metadata.latency ?? NaN);
+    const latencyMs = Number.isFinite(latencyRaw) && latencyRaw >= 0 ? Math.round(latencyRaw) : null;
+    const tokenRaw = Number(metadata.tokenCount ?? metadata.tokens ?? metadata.totalTokens ?? NaN);
+    const tokenCount = Number.isFinite(tokenRaw) && tokenRaw >= 0 ? Math.round(tokenRaw) : null;
+    const promptText = metadata.promptText || metadata.prompt || null;
+    const inputPayload = metadata.inputPayload || metadata.input || null;
+    const rawOutput = metadata.rawOutput || metadata.output || null;
     await ref.set({
       id: ref.id,
       ownerUid: uid,
       event,
+      traceId,
+      promptTemplateId,
+      parseStatus,
+      latencyMs,
+      tokenCount,
+      prompt: promptText,
+      input: inputPayload,
+      output: rawOutput,
       status,
       level,
       message,
@@ -19343,6 +19511,7 @@ async function buildFinanceCommentary({ summary, userId, windowLabel }) {
       await recordAiLog(userId, 'finance_commentary_trace', 'warning', 'Finance commentary returned empty output', {
         ...llmTraceBase,
         parseStatus: 'ok_empty',
+        rawOutput: '',
         rawOutputText: '',
         rawOutputLength: 0,
         latencyMs: Date.now() - startedAtMs,
@@ -19354,6 +19523,7 @@ async function buildFinanceCommentary({ summary, userId, windowLabel }) {
     await recordAiLog(userId, 'finance_commentary_trace', 'success', 'Finance commentary generated', {
       ...llmTraceBase,
       parseStatus: 'ok',
+      rawOutput: String(text).slice(0, 12000),
       rawOutputText: String(text).slice(0, 12000),
       rawOutputLength: String(text).length,
       outputLength: normalised.length,

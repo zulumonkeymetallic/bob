@@ -201,6 +201,9 @@ export interface Sprint {
   notes?: string;
   persona?: 'personal' | 'work';
   status: number; // 0=Planning, 1=Active, 2=Complete, 3=Cancelled
+  focusGoalIds?: string[];
+  alignmentMode?: 'warn' | 'strict';
+  alignmentLockedAt?: any;
   startDate: number;
   endDate: number;
   planningDate: number;

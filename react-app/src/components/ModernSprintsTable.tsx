@@ -30,7 +30,7 @@ import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { useSprint } from '../contexts/SprintContext';
 import { usePersona } from '../contexts/PersonaContext';
-import { Sprint, Story, Task } from '../types';
+import { Sprint, Story, Task, Goal } from '../types';
 import { generateRef } from '../utils/referenceGenerator';
 import { isStatus, getStatusName } from '../utils/statusHelpers';
 
@@ -71,6 +71,7 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
   const { sprints, loading } = useSprint();
   const [stories, setStories] = useState<Story[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [goals, setGoals] = useState<Goal[]>([]);
   const [showModal, setShowModal] = useState(false);
   const [editingSprint, setEditingSprint] = useState<Sprint | null>(null);
   const [message, setMessage] = useState('');
@@ -80,7 +81,9 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
     objective: '',
     startDate: '',
     endDate: '',
-    status: '0'
+    status: '0',
+    alignmentMode: 'warn' as 'warn' | 'strict',
+    focusGoalIds: [] as string[]
   });
   const [sortKey, setSortKey] = useState<'startDate' | 'endDate' | 'name'>('startDate');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
@@ -104,6 +107,30 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
 
     return () => unsubscribe();
   }, [currentUser]);
+
+  // Load goals for sprint focus-goal assignment
+  useEffect(() => {
+    if (!currentUser) return;
+
+    const q = query(
+      collection(db, 'goals'),
+      where('ownerUid', '==', currentUser.uid),
+      orderBy('updatedAt', 'desc')
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const selectedPersona = currentPersona || 'personal';
+      const goalData = snapshot.docs
+        .map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) })) as Goal[];
+      const filtered = goalData.filter((goal: any) => {
+        if (selectedPersona === 'work') return goal.persona === 'work';
+        return goal.persona == null || goal.persona === 'personal';
+      });
+      setGoals(filtered);
+    });
+
+    return () => unsubscribe();
+  }, [currentUser, currentPersona]);
 
   // Load tasks for metrics
   useEffect(() => {
@@ -141,6 +168,9 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
         endDate: endDateMs,
         persona: currentPersona || 'personal',
         status: Number.isFinite(statusNumber) ? statusNumber : 0,
+        alignmentMode: formData.alignmentMode,
+        focusGoalIds: formData.focusGoalIds,
+        alignmentLockedAt: statusNumber === 1 ? serverTimestamp() : null,
         ref: generateRef('sprint', existingRefs),
         ownerUid: currentUser.uid,
         createdAt: serverTimestamp(),
@@ -172,6 +202,9 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
         startDate: startDateMs,
         endDate: endDateMs,
         status: Number.isFinite(statusNumber) ? statusNumber : editingSprint.status,
+        alignmentMode: formData.alignmentMode,
+        focusGoalIds: formData.focusGoalIds,
+        alignmentLockedAt: statusNumber === 1 ? serverTimestamp() : null,
         updatedAt: serverTimestamp(),
         updatedBy: currentUser.email
       });
@@ -199,12 +232,24 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
     }
   };
 
-  const handleStatusChange = async (sprintId: string, newStatus: number) => {
+  const handleStatusChange = async (sprint: Sprint, newStatus: number) => {
     if (!currentUser) return;
 
+    const focusGoalIds = Array.isArray((sprint as any).focusGoalIds)
+      ? (sprint as any).focusGoalIds.map((id: any) => String(id || '').trim()).filter((id: string) => !!id)
+      : [];
+
+    if (newStatus === 1 && focusGoalIds.length === 0) {
+      setMessage('Select at least one focus goal before activating this sprint.');
+      setMessageType('error');
+      setTimeout(() => setMessage(''), 4000);
+      return;
+    }
+
     try {
-      await updateDoc(doc(db, 'sprints', sprintId), {
+      await updateDoc(doc(db, 'sprints', sprint.id), {
         status: newStatus,
+        alignmentLockedAt: newStatus === 1 ? serverTimestamp() : null,
         updatedAt: serverTimestamp(),
         updatedBy: currentUser.email
       });
@@ -219,7 +264,9 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
       objective: '',
       startDate: '',
       endDate: '',
-      status: '0'
+      status: '0',
+      alignmentMode: 'warn',
+      focusGoalIds: []
     });
   };
 
@@ -230,7 +277,11 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
       objective: sprint.objective || '',
       startDate: new Date(sprint.startDate).toISOString().split('T')[0],
       endDate: new Date(sprint.endDate).toISOString().split('T')[0],
-      status: (sprint.status !== undefined ? sprint.status : 0).toString()
+      status: (sprint.status !== undefined ? sprint.status : 0).toString(),
+      alignmentMode: String((sprint as any).alignmentMode || 'warn').toLowerCase() === 'strict' ? 'strict' : 'warn',
+      focusGoalIds: Array.isArray((sprint as any).focusGoalIds)
+        ? (sprint as any).focusGoalIds.map((id: any) => String(id || '').trim()).filter((id: string) => !!id)
+        : []
     });
     setShowModal(true);
   };
@@ -267,6 +318,17 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
       completedPoints,
       goalCount,
       progress: sprintStories.length > 0 ? Math.round((completedStories / sprintStories.length) * 100) : 0
+    };
+  };
+
+  const getSprintAlignmentMeta = (sprint: Sprint) => {
+    const focusGoalIds = Array.isArray((sprint as any).focusGoalIds)
+      ? (sprint as any).focusGoalIds.map((id: any) => String(id || '').trim()).filter((id: string) => !!id)
+      : [];
+    const mode = String((sprint as any).alignmentMode || 'warn').toLowerCase() === 'strict' ? 'strict' : 'warn';
+    return {
+      focusGoalCount: focusGoalIds.length,
+      mode,
     };
   };
 
@@ -368,6 +430,7 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
                 <tr>
                   <th>{renderSortLabel('Sprint', 'name')}</th>
                   <th>Status</th>
+                  <th>Alignment</th>
                   <th>{renderSortLabel('Start', 'startDate')}</th>
                   <th>{renderSortLabel('End', 'endDate')}</th>
                   <th>Progress</th>
@@ -382,6 +445,7 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
                 {sortedSprints.map((sprint) => {
                   const metrics = getSprintMetrics(sprint);
                   const daysInfo = getDaysInfo(sprint);
+                  const alignmentMeta = getSprintAlignmentMeta(sprint);
                   const isSelected = selectedSprintId === sprint.id;
 
                   return (
@@ -415,24 +479,34 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
                             {getSprintStatusLabel(sprint.status)}
                           </Dropdown.Toggle>
                           <Dropdown.Menu>
-                            <Dropdown.Item onClick={() => handleStatusChange(sprint.id, 0)}>
+                            <Dropdown.Item onClick={() => handleStatusChange(sprint, 0)}>
                               <Calendar size={14} className="me-2" />
                               Planning
                             </Dropdown.Item>
-                            <Dropdown.Item onClick={() => handleStatusChange(sprint.id, 1)}>
+                            <Dropdown.Item onClick={() => handleStatusChange(sprint, 1)}>
                               <Play size={14} className="me-2" />
                               Active
                             </Dropdown.Item>
-                            <Dropdown.Item onClick={() => handleStatusChange(sprint.id, 2)}>
+                            <Dropdown.Item onClick={() => handleStatusChange(sprint, 2)}>
                               <CheckCircle size={14} className="me-2" />
                               Complete
                             </Dropdown.Item>
-                            <Dropdown.Item onClick={() => handleStatusChange(sprint.id, 3)}>
+                            <Dropdown.Item onClick={() => handleStatusChange(sprint, 3)}>
                               <AlertTriangle size={14} className="me-2" />
                               Cancelled
                             </Dropdown.Item>
                           </Dropdown.Menu>
                         </Dropdown>
+                      </td>
+                      <td>
+                        <div>
+                          <Badge bg={alignmentMeta.mode === 'strict' ? 'danger' : 'warning'} className="d-block mb-1">
+                            {alignmentMeta.mode === 'strict' ? 'Strict' : 'Warn'}
+                          </Badge>
+                          <small className="text-muted">
+                            {alignmentMeta.focusGoalCount} focus goal{alignmentMeta.focusGoalCount === 1 ? '' : 's'}
+                          </small>
+                        </div>
                       </td>
                       <td>
                         <div>
@@ -604,6 +678,49 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
                 <option value="3">Cancelled</option>
               </Form.Select>
             </Form.Group>
+
+            <Form.Group className="mb-3">
+              <Form.Label>Sprint Focus Alignment Mode</Form.Label>
+              <Form.Select
+                value={formData.alignmentMode}
+                onChange={(e) => setFormData({ ...formData, alignmentMode: e.target.value as 'warn' | 'strict' })}
+              >
+                <option value="warn">Warn only (allow unaligned stories with prompt)</option>
+                <option value="strict">Strict (block unaligned stories from sprint)</option>
+              </Form.Select>
+            </Form.Group>
+
+            <Form.Group className="mb-3">
+              <Form.Label>Focus Goals For This Sprint</Form.Label>
+              {goals.length === 0 ? (
+                <Form.Text className="text-muted d-block">No goals available for this persona yet.</Form.Text>
+              ) : (
+                <div style={{ maxHeight: 180, overflowY: 'auto', border: '1px solid var(--bs-border-color)', borderRadius: 6, padding: 10 }}>
+                  {goals.map((goal) => {
+                    const checked = formData.focusGoalIds.includes(goal.id);
+                    return (
+                      <Form.Check
+                        key={goal.id}
+                        type="checkbox"
+                        id={`sprint-focus-goal-${goal.id}`}
+                        label={goal.title}
+                        checked={checked}
+                        onChange={(e) => {
+                          const nextIds = e.target.checked
+                            ? [...formData.focusGoalIds, goal.id]
+                            : formData.focusGoalIds.filter((id) => id !== goal.id);
+                          setFormData({ ...formData, focusGoalIds: nextIds });
+                        }}
+                        className="mb-1"
+                      />
+                    );
+                  })}
+                </div>
+              )}
+              <Form.Text className="text-muted">
+                If status is Active, at least one sprint focus goal is required.
+              </Form.Text>
+            </Form.Group>
           </Form>
         </Modal.Body>
         <Modal.Footer>
@@ -613,7 +730,12 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
           <Button 
             variant="primary" 
             onClick={editingSprint ? handleUpdateSprint : handleCreateSprint}
-            disabled={!formData.name || !formData.startDate || !formData.endDate}
+            disabled={
+              !formData.name
+              || !formData.startDate
+              || !formData.endDate
+              || (formData.status === '1' && formData.focusGoalIds.length === 0)
+            }
           >
             {editingSprint ? 'Update Sprint' : 'Create Sprint'}
           </Button>

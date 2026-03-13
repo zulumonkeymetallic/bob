@@ -53,6 +53,12 @@ const _rbcLocalizer = dateFnsLocalizer({
   locales: _rbcLocales,
 });
 
+const isSprintActiveStatus = (status: any): boolean => {
+  const numeric = Number(status);
+  if (Number.isFinite(numeric)) return numeric === 1;
+  return String(status || '').trim().toLowerCase() === 'active';
+};
+
 
 interface DashboardCalendarEvent {
   id: string;
@@ -136,12 +142,41 @@ interface FinanceTrendSummary {
   uncategorisedPence: LowerBetterTrendMetric;
 }
 
+interface DailyActiveSignal {
+  type: string;
+  severity: 'info' | 'warning' | 'critical';
+  title: string;
+  message: string;
+  ctaPath: string | null;
+}
+
 interface ChecklistSnapshotItem {
   id: string;
   title: string;
   dueAt: Date | null;
   type: 'chore' | 'routine';
 }
+
+const normalizeDailyActiveSignals = (rawSignals: any): DailyActiveSignal[] => {
+  if (!Array.isArray(rawSignals)) return [];
+  return rawSignals
+    .map((signal: any) => {
+      const severityRaw = String(signal?.severity || 'info').trim().toLowerCase();
+      const severity = severityRaw === 'critical' || severityRaw === 'warning' ? severityRaw : 'info';
+      const title = String(signal?.title || '').trim();
+      const message = String(signal?.message || '').trim();
+      const ctaRaw = String(signal?.ctaPath || '').trim();
+      if (!title && !message) return null;
+      return {
+        type: String(signal?.type || 'signal').trim() || 'signal',
+        severity,
+        title: title || 'Signal',
+        message,
+        ctaPath: ctaRaw || null,
+      } as DailyActiveSignal;
+    })
+    .filter(Boolean) as DailyActiveSignal[];
+};
 
 interface NextWorkRecommendedItem {
   type: 'task' | 'story';
@@ -639,10 +674,17 @@ const Dashboard: React.FC = () => {
   const [sprintTasks, setSprintTasks] = useState<Task[]>([]);
   const [sprintGoals, setSprintGoals] = useState<Goal[]>([]);
   const [activeFocusGoalIds, setActiveFocusGoalIds] = useState<Set<string>>(new Set());
+  const [strictAlignmentViolations, setStrictAlignmentViolations] = useState<{ last24h: number; last7d: number; lastViolationAt: number | null }>({
+    last24h: 0,
+    last7d: 0,
+    lastViolationAt: null,
+  });
+  const [selectedSprintAuditSnapshot, setSelectedSprintAuditSnapshot] = useState<{ unalignedStories: number; alignmentPct: number; updatedAtMs: number | null } | null>(null);
   const [goalsList, setGoalsList] = useState<Goal[]>([]);
   const [potsById, setPotsById] = useState<Record<string, { name: string; balance: number; currency: string }>>({});
   const [dailySummaryLines, setDailySummaryLines] = useState<string[]>([]);
   const [dailySummarySource, setDailySummarySource] = useState<string | null>(null);
+  const [dailyActiveSignals, setDailyActiveSignals] = useState<DailyActiveSignal[]>([]);
   const [prioritySource, setPrioritySource] = useState<string | null>(null);
   const [aiFocusItems, setAiFocusItems] = useState<any[]>([]);
   const [metricsCollapsed, setMetricsCollapsed] = useState<boolean>(true);
@@ -1684,6 +1726,7 @@ const Dashboard: React.FC = () => {
     setDailySummarySource(null);
     setPrioritySource(null);
     setAiFocusItems([]);
+    setDailyActiveSignals([]);
     try {
       // Prefer daily_summaries (structured); fallback to daily_digests AI text
       const summarySnap = await getDocs(query(
@@ -1726,7 +1769,9 @@ const Dashboard: React.FC = () => {
             }
           }
           const aiItems: any[] = Array.isArray(summary?.aiFocus?.items) ? summary.aiFocus.items : [];
+          const signalItems = normalizeDailyActiveSignals(summary?.dashboardAlerts);
           setAiFocusItems(aiItems);
+          setDailyActiveSignals(signalItems.slice(0, 6));
           aiItems.slice(0, 3).forEach((item) => {
             const label = [item.ref, item.title || item.summary].filter(Boolean).join(' — ') || (item.ref || '');
             lines.push(`Focus: ${label} — ${item.rationale || item.summary || item.title || ''}`.trim());
@@ -1746,6 +1791,7 @@ const Dashboard: React.FC = () => {
           if (!docData.date || docData.date === todayStr) {
             setDailySummarySource('AI digest fallback');
             setPrioritySource('Heuristic focus (digest fallback)');
+            setDailyActiveSignals([]);
             const raw = docData.aiInsights || docData.content || '';
             lines = String(raw)
               .replace(/<[^>]+>/g, '')
@@ -1760,6 +1806,7 @@ const Dashboard: React.FC = () => {
       setDailySummaryLines(lines);
     } catch (e) {
       setDailySummaryLines([]);
+      setDailyActiveSignals([]);
     }
   }, [currentUser]);
 
@@ -2667,6 +2714,22 @@ const Dashboard: React.FC = () => {
       return `${normalizeTimelineText(title)}|${minuteOfDay}`;
     };
 
+    const resolveBlockSourceLabel = (block: any): 'auto-planned' | 'linked from gcal' | 'manual' => {
+      const source = String(block?.source || '').toLowerCase();
+      const entryMethod = String(block?.entry_method || '').toLowerCase();
+      if (source === 'gcal' || entryMethod === 'google_calendar') return 'linked from gcal';
+      if (
+        entryMethod.includes('auto')
+        || source.includes('auto')
+        || source.includes('ai')
+        || source === 'planner'
+        || source === 'bob_auto'
+      ) {
+        return 'auto-planned';
+      }
+      return 'manual';
+    };
+
     const pushRow = (item: any) => {
       const signature = buildSignature(item.title, item.startMs);
       if (seenSignatures.has(signature)) return;
@@ -2688,6 +2751,7 @@ const Dashboard: React.FC = () => {
           id: `timeline-task-calendar-${task.id}-${event.id}`,
           kind: 'task',
           source: 'calendar',
+          sourceLabel: resolveBlockSourceLabel(block),
           title: task.title || event.title || 'Task',
           startMs,
           endMs,
@@ -2703,6 +2767,7 @@ const Dashboard: React.FC = () => {
           id: `timeline-story-calendar-${story.id}-${event.id}`,
           kind: 'story',
           source: 'calendar',
+          sourceLabel: resolveBlockSourceLabel(block),
           title: story.title || event.title || 'Story',
           startMs,
           endMs,
@@ -2715,6 +2780,7 @@ const Dashboard: React.FC = () => {
         id: `timeline-calendar-${event.id}`,
         kind: 'calendar',
         source: 'calendar',
+        sourceLabel: event.type === 'external' ? 'linked from gcal' : resolveBlockSourceLabel(block),
         title: event.title || 'Calendar event',
         startMs,
         endMs,
@@ -2729,6 +2795,7 @@ const Dashboard: React.FC = () => {
         id: `timeline-task-due-${item.task.id}`,
         kind: 'task',
         source: 'due',
+        sourceLabel: 'manual',
         title: item.task.title || item.title || 'Task',
         startMs: item.dueMs ?? getTaskDueMs(item.task),
         endMs: null,
@@ -2742,6 +2809,7 @@ const Dashboard: React.FC = () => {
         id: `timeline-${choreKind}-${task.id}`,
         kind: choreKind,
         source: 'checklist',
+        sourceLabel: 'manual',
         title: task.title || 'Checklist item',
         startMs: getTaskDueMs(task),
         endMs: null,
@@ -3875,6 +3943,79 @@ const Dashboard: React.FC = () => {
     return () => unsubscribe();
   }, [currentUser, currentPersona]);
 
+  useEffect(() => {
+    if (!currentUser?.uid || !selectedSprintId) {
+      setSelectedSprintAuditSnapshot(null);
+      return;
+    }
+
+    const auditDocId = `${currentUser.uid}_${selectedSprintId}`;
+    const unsubscribe = onSnapshot(doc(db, 'sprint_alignment_audit', auditDocId), (snap) => {
+      if (!snap.exists()) {
+        setSelectedSprintAuditSnapshot(null);
+        return;
+      }
+      const row = snap.data() as any;
+      const updatedAtRaw = row?.updatedAt;
+      const updatedAtMs = typeof updatedAtRaw?.toMillis === 'function'
+        ? updatedAtRaw.toMillis()
+        : (Number.isFinite(Number(updatedAtRaw)) ? Number(updatedAtRaw) : null);
+      setSelectedSprintAuditSnapshot({
+        unalignedStories: Number(row?.unalignedStories || 0),
+        alignmentPct: Number(row?.alignmentPct || 100),
+        updatedAtMs,
+      });
+    }, () => {
+      setSelectedSprintAuditSnapshot(null);
+    });
+
+    return () => unsubscribe();
+  }, [currentUser?.uid, selectedSprintId]);
+
+  useEffect(() => {
+    if (!currentUser?.uid || !selectedSprintId) {
+      setStrictAlignmentViolations({ last24h: 0, last7d: 0, lastViolationAt: null });
+      return;
+    }
+
+    const logsQuery = query(
+      collection(db, 'integration_logs'),
+      where('userId', '==', currentUser.uid),
+      where('integration', '==', 'sprint_alignment'),
+      where('type', '==', 'strict_enforcement'),
+      where('status', '==', 'blocked'),
+      limit(200),
+    );
+
+    const unsubscribe = onSnapshot(logsQuery, (snap) => {
+      const nowMs = Date.now();
+      const cutoff24h = nowMs - (24 * 60 * 60 * 1000);
+      const cutoff7d = nowMs - (7 * 24 * 60 * 60 * 1000);
+      let last24h = 0;
+      let last7d = 0;
+      let lastViolationAt: number | null = null;
+
+      snap.docs.forEach((docSnap) => {
+        const row = docSnap.data() as any;
+        if (String(row?.sprintId || '') !== String(selectedSprintId)) return;
+        const timestampRaw = row?.timestamp;
+        const ts = typeof timestampRaw?.toMillis === 'function'
+          ? timestampRaw.toMillis()
+          : (Number.isFinite(Number(timestampRaw)) ? Number(timestampRaw) : null);
+        if (!ts) return;
+        if (ts >= cutoff7d) last7d += 1;
+        if (ts >= cutoff24h) last24h += 1;
+        if (!lastViolationAt || ts > lastViolationAt) lastViolationAt = ts;
+      });
+
+      setStrictAlignmentViolations({ last24h, last7d, lastViolationAt });
+    }, () => {
+      setStrictAlignmentViolations({ last24h: 0, last7d: 0, lastViolationAt: null });
+    });
+
+    return () => unsubscribe();
+  }, [currentUser?.uid, selectedSprintId]);
+
   const sprintProgress = stats.sprintTasksTotal > 0
     ? Math.min(100, Math.round((stats.sprintTasksDone / stats.sprintTasksTotal) * 100))
     : 0;
@@ -4067,7 +4208,8 @@ const Dashboard: React.FC = () => {
 
   const focusAlignmentSummary = useMemo(() => {
     const hasSelectedSprint = Boolean(selectedSprintId);
-    const hasActiveFocus = hasSelectedSprint && activeFocusGoalIds.size > 0;
+    const selectedSprintIsActive = hasSelectedSprint && isSprintActiveStatus((selectedSprint as any)?.status);
+    const hasActiveFocus = selectedSprintIsActive && activeFocusGoalIds.size > 0;
 
     if (!hasActiveFocus) {
       return {
@@ -4106,12 +4248,39 @@ const Dashboard: React.FC = () => {
       focusedCompletionPct,
       alignmentPct,
     };
-  }, [activeFocusGoalIds, selectedSprintId, sprintStories]);
+  }, [activeFocusGoalIds, selectedSprint, selectedSprintId, sprintStories]);
+
+  const selectedSprintAlignmentSummary = useMemo(() => {
+    if (!selectedSprint) {
+      return {
+        hasSprint: false,
+        mode: 'warn' as 'warn' | 'strict',
+        focusGoalCount: 0,
+      };
+    }
+
+    const focusGoalIds = Array.isArray((selectedSprint as any)?.focusGoalIds)
+      ? (selectedSprint as any).focusGoalIds.map((goalId: any) => String(goalId || '').trim()).filter((goalId: string) => !!goalId)
+      : [];
+    const mode = String((selectedSprint as any)?.alignmentMode || 'warn').toLowerCase() === 'strict' ? 'strict' : 'warn';
+
+    return {
+      hasSprint: true,
+      mode,
+      focusGoalCount: focusGoalIds.length,
+    };
+  }, [selectedSprint]);
 
   const renderUnifiedTodayTimelineItem = useCallback((item: any) => {
     const startLabel = Number.isFinite(item?.startMs) ? format(new Date(item.startMs), 'HH:mm') : 'Anytime';
     const endLabel = Number.isFinite(item?.endMs) ? format(new Date(item.endMs), 'HH:mm') : null;
     const timeLabel = endLabel ? `${startLabel} - ${endLabel}` : startLabel;
+    const sourceLabel = String(item?.sourceLabel || '').trim().toLowerCase();
+    const sourceBadge = sourceLabel === 'auto-planned'
+      ? { bg: 'success', text: 'auto-planned' }
+      : sourceLabel === 'linked from gcal'
+        ? { bg: 'info', text: 'linked from gcal' }
+        : { bg: 'secondary', text: 'manual' };
     const activityButtonBaseStyle: React.CSSProperties = {
       color: 'var(--bs-secondary-color)',
       padding: 4,
@@ -4180,6 +4349,7 @@ const Dashboard: React.FC = () => {
             </div>
             <div className="d-flex align-items-center gap-1 flex-shrink-0">
               <Badge bg={item.source === 'calendar' ? 'primary' : 'secondary'}>{item.source === 'calendar' ? 'Scheduled' : 'Due'}</Badge>
+              <Badge bg={sourceBadge.bg}>{sourceBadge.text}</Badge>
               {renderActivityButton(task, 'task', task.title || 'task')}
             </div>
           </div>
@@ -4271,6 +4441,7 @@ const Dashboard: React.FC = () => {
           </div>
           <div className="d-flex align-items-center gap-1">
             <Badge bg={badgeVariant}>{badgeLabel}</Badge>
+            <Badge bg={sourceBadge.bg}>{sourceBadge.text}</Badge>
             {renderActivityButton(task, 'task', task.title || 'task')}
           </div>
         </div>
@@ -4309,6 +4480,7 @@ const Dashboard: React.FC = () => {
             </div>
             <div className="d-flex align-items-center gap-1 flex-shrink-0">
               <Badge bg="info">Story</Badge>
+              <Badge bg={sourceBadge.bg}>{sourceBadge.text}</Badge>
               {renderActivityButton(story, 'story', item.title || 'story')}
             </div>
           </div>
@@ -4323,6 +4495,7 @@ const Dashboard: React.FC = () => {
           <div className="fw-semibold small flex-grow-1">{item.title}</div>
           <div className="d-flex align-items-center gap-1">
             <Badge bg="secondary">Calendar</Badge>
+            <Badge bg={sourceBadge.bg}>{sourceBadge.text}</Badge>
             {renderActivityButton(null, null, item.title || 'calendar event')}
           </div>
         </div>
@@ -4784,6 +4957,24 @@ const Dashboard: React.FC = () => {
                                 ? `${focusAlignmentSummary.unalignedStories} unaligned · ${focusAlignmentSummary.alignmentPct}% aligned`
                                 : 'No active focus'}
                             </div>
+                            <div className="text-muted small">
+                              {selectedSprintAlignmentSummary.hasSprint
+                                ? `Mode ${selectedSprintAlignmentSummary.mode === 'strict' ? 'Strict' : 'Warn'} · ${selectedSprintAlignmentSummary.focusGoalCount} sprint focus goals`
+                                : 'Select a sprint to view alignment mode'}
+                            </div>
+                            <div className="text-muted small">
+                              {selectedSprintAlignmentSummary.mode === 'strict'
+                                ? `Strict blocks: ${strictAlignmentViolations.last24h} (24h) · ${strictAlignmentViolations.last7d} (7d)`
+                                : 'Strict-mode enforcement inactive for this sprint'}
+                              {selectedSprintAlignmentSummary.mode === 'strict' && strictAlignmentViolations.lastViolationAt
+                                ? ` · Last ${new Date(strictAlignmentViolations.lastViolationAt).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}`
+                                : ''}
+                            </div>
+                            {selectedSprintAuditSnapshot && (
+                              <div className="text-muted small">
+                                Audit: {selectedSprintAuditSnapshot.unalignedStories} unaligned · {selectedSprintAuditSnapshot.alignmentPct}% aligned
+                              </div>
+                            )}
                             <div className="text-muted small">
                               {focusAlignmentSummary.hasActiveFocus
                                 ? `${focusAlignmentSummary.focusedStoriesDone}/${focusAlignmentSummary.focusedStories} focus stories done (${focusAlignmentSummary.focusedCompletionPct}%) · View details on Focus page`
@@ -5403,7 +5594,7 @@ const Dashboard: React.FC = () => {
                               {renderWidgetResizeHandle('lowHangingFruit', 220, 'Resize low hanging fruit widget')}
                           </div>
                         )}
-                                    {widgetKey === 'dailySummary' && widgetVisibility.dailySummary && (dailySummaryLines.length > 0 || aiFocusItems.length > 0) && (
+                                    {widgetKey === 'dailySummary' && widgetVisibility.dailySummary && (dailySummaryLines.length > 0 || dailyActiveSignals.length > 0 || aiFocusItems.length > 0) && (
                           <div
                             ref={setWidgetResizeContainer('dailySummary')}
                             className="dashboard-widget-shell"
@@ -5424,6 +5615,29 @@ const Dashboard: React.FC = () => {
                                       {dailySummaryLines.map((line, idx) => (
                                         <li key={idx}>{line}</li>
                                       ))}
+                                    </ul>
+                                  </div>
+                                )}
+                                {dailyActiveSignals.length > 0 && (
+                                  <div className="mb-3">
+                                    <div className="fw-semibold mb-1">Active Signals</div>
+                                    <ul className="mb-0 small">
+                                      {dailyActiveSignals.slice(0, 5).map((signal: DailyActiveSignal, idx: number) => {
+                                        const badge = signal.severity === 'critical' ? 'danger' : signal.severity === 'warning' ? 'warning' : 'info';
+                                        const message = signal.message ? ` - ${signal.message}` : '';
+                                        return (
+                                          <li key={`signal-${idx}`}>
+                                            <Badge bg={badge} className="me-1">{signal.severity}</Badge>
+                                            {signal.title}{message}
+                                            {signal.ctaPath && (
+                                              <>
+                                                {' '}
+                                                <a href={signal.ctaPath} className="text-decoration-none" target="_blank" rel="noreferrer">Open</a>
+                                              </>
+                                            )}
+                                          </li>
+                                        );
+                                      })}
                                     </ul>
                                   </div>
                                 )}
@@ -5924,9 +6138,12 @@ const Dashboard: React.FC = () => {
                                 <div className="fw-semibold d-flex align-items-center gap-2">
                                   <CalendarIcon size={16} /> Daily Plan
                                 </div>
-                                <Badge bg={unifiedTodayTimelineItems.length > 0 ? 'info' : 'secondary'} pill>
-                                  {unifiedTodayTimelineItems.length}
-                                </Badge>
+                                <div className="d-flex align-items-center gap-2">
+                                  <Link to="/daily-plan" className="small">Full view</Link>
+                                  <Badge bg={unifiedTodayTimelineItems.length > 0 ? 'info' : 'secondary'} pill>
+                                    {unifiedTodayTimelineItems.length}
+                                  </Badge>
+                                </div>
                               </Card.Header>
                               <Card.Body ref={timelineScrollBodyRef} className="p-3 d-flex flex-column flex-grow-1" style={{ minHeight: 0, overflowY: 'auto' }}>
                                 {unscheduledToday.length > 0 && (

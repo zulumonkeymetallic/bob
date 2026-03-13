@@ -9,6 +9,7 @@ import { generateRef } from '../utils/referenceGenerator';
 import { parsePointsValue } from '../utils/points';
 import TagInput from './common/TagInput';
 import { planningSprints, pickDefaultPlanningSprintId } from '../utils/sprintFilter';
+import { evaluateStorySprintAlignment } from '../utils/sprintAlignment';
 
 interface AddStoryModalProps {
   onClose: () => void;
@@ -21,6 +22,13 @@ interface Goal {
   title: string;
   theme: number;
   persona?: 'personal' | 'work';
+}
+
+interface SprintLike {
+  id: string;
+  name?: string;
+  alignmentMode?: 'warn' | 'strict';
+  focusGoalIds?: string[];
 }
 
 const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) => {
@@ -47,6 +55,10 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
   const [goalInput, setGoalInput] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState<string | null>(null);
+  const selectedSprint = formData.sprintId
+    ? (allSprints.find((sprint) => sprint.id === formData.sprintId) as SprintLike | undefined)
+    : null;
+  const sprintAlignment = evaluateStorySprintAlignment(selectedSprint as any, formData.goalId || '');
 
   // Update goalId when prop changes
   useEffect(() => {
@@ -239,6 +251,17 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
       }
     }
 
+    if (formData.sprintId && sprintAlignment.hasRule && !sprintAlignment.aligned) {
+      if (sprintAlignment.blocking) {
+        setSubmitResult(`❌ ${sprintAlignment.message}`);
+        return;
+      }
+      const proceed = window.confirm(`${sprintAlignment.message} Continue anyway?`);
+      if (!proceed) {
+        return;
+      }
+    }
+
     setIsSubmitting(true);
     setSubmitResult(null);
 
@@ -422,6 +445,12 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
           {activeFocusGoalIds.size > 0 && formData.goalId && !activeFocusGoalIds.has(String(formData.goalId)) && (
             <Alert variant="warning" className="mb-3">
               This goal is outside your active focus set. If you continue, this work will be deferred until after the current focus period.
+            </Alert>
+          )}
+
+          {formData.sprintId && sprintAlignment.hasRule && !sprintAlignment.aligned && (
+            <Alert variant={sprintAlignment.blocking ? 'danger' : 'warning'} className="mb-3">
+              {sprintAlignment.message}
             </Alert>
           )}
 

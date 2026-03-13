@@ -1,8 +1,30 @@
 Comprehensive multi-phase rework spanning web, iOS/iPad, and health platforms:
 
-JD Updated 13 March at 11:54
+JD Updated 13 March at 13:33
 
-Latest execution log (13 March 11:54)
+Latest execution log (13 March 13:33)
+- Implemented morning-first planning flow: root login redirect now lands on `/daily-plan` for both mobile and desktop, and Daily Plan now shows a first-run daily check-in summary with explicit "review/defer" prompt and acknowledgement state (per-user/per-day local storage key).
+- Added inline Daily Plan actions for execution hygiene: task/story rows now expose `Schedule now` (calendar icon) and `Defer intelligently` (snooze icon) controls; defer opens existing smart deferral modal and persists `deferredUntil/deferredReason/deferredBy/deferredAt`.
+- Fixed trigger clarity in Kanban card actions: #1 priority toggle now uses explicit numeric marker (`1`) and defer uses clock icon, removing prior icon collision where calendar-style icon represented both actions.
+- Removed obsolete Swift placeholders from this repo (`ios-app/BOBReminderSync/BOBReminderSync/Views/AddTaskView.swift`, `ios-app/BOBReminderSync/BOBReminderSync/Views/TasksListView.swift`) because native iOS/mac app source now lives in `/Users/jim/GitHub/bob-ios`.
+- Completed Step 15C card icon differentiation in web card surfaces: cards now show explicit `1 Priority` badge (no star), calendar icon markers for scheduled blocks, and snooze-style defer badges when `deferredUntil` is active in `react-app/src/components/KanbanCardV2.tsx` and `react-app/src/components/stories/SortableStoryCard.tsx`.
+- Completed standalone Daily Plan surfacing in web: added dedicated route/page (`/daily-plan`, `/mobile/daily-plan`) and entry links from Dashboard and Mobile Home widgets.
+- Progressed Step 15A auto-link reliability: `functions/calendarSync.js` now writes canonical linkage fields (`storyId` + `linkedStoryId`) during `gcalLinkUnlinkedEvents` matching and adds new `onStoryCalendarAutoLink` trigger to auto-link newly created/renamed stories against unlinked Google-synced blocks without requiring manual callable invocation.
+- Progressed Step 15B label consistency: story scheduling cards now use canonical source label text (`auto-planned`, `linked from gcal`, `manual`) in `react-app/src/components/stories/SortableStoryCard.tsx`.
+- Extended Step 15 source-label parity into planner surfaces: Unified Planner event details now shows source badges (`auto-planned`, `linked from gcal`, `manual`) using block/instance/external metadata, matching the new Dashboard timeline source-badge behavior.
+- Progressed Step 15 card UX source labels: Dashboard Unified Timeline cards now surface source badges (`auto-planned`, `linked from gcal`, `manual`) derived from block/event metadata, reducing ambiguity between AI/planner/GCal/manual scheduling origins.
+- Completed Step 14 diagnostics range-filter follow-up: Integration & AI Logs now supports time window filtering (`24h`, `7d`, `30d`, `all`, and custom date range) in addition to trace/template/parse filters.
+- Completed Step 14A explicit call-site metadata enrichment for high-traffic LLM traces: `priority_now_trace`, `daily_summary_focus_trace`, and `finance_commentary_trace` now emit standardized `rawOutput` fields, and daily-summary focus traces now include health-context payload details.
+- Completed Step 14A foundational logging upgrade: centralized `recordAiLog(...)` now writes standardized observability fields (`traceId`, `promptTemplateId`, `parseStatus`, `latencyMs`, `tokenCount`, plus normalized prompt/input/output payload fields) so existing AI log paths emit structured trace metadata by default.
+- Completed Step 14 diagnostics-view slice (web): upgraded Integration Logs screen to support AI trace inspection with `trace-only` toggle, template + parse-status filters, trace/template/parse/latency columns, expandable prompt/input/output metadata, and merged ownerUid/userId log streams for more complete observability coverage.
+- Completed Step 13 dashboard signal actionability follow-up: Daily Summary Active Signals now use a typed signal contract in web Dashboard and render per-signal CTA links (`ctaPath`) so structured summary alerts are directly actionable from the widget.
+- Completed Step 13 signal parity slice: daily summary `dashboardAlerts` now includes a health signal (`type: health`) built from profile health snapshots, and Dashboard Daily Summary widget now renders structured `dashboardAlerts` as an Active Signals section (same alert contract as summary email rendering).
+- Added dashboard strict-enforcement visibility: Focus Alignment card now shows selected-sprint strict-block counts (24h/7d) sourced from `integration_logs` plus latest selected sprint audit snapshot from `sprint_alignment_audit`.
+- Completed sprint-alignment visibility follow-up: added alignment mode + sprint focus-goal count visibility to Sprint Management table rows and Dashboard Focus Alignment card so strict/warn policy is visible without entering edit flows.
+- Completed Phase 6D KPI Designer verification/fix: validated wizard review handoff to KPI Designer and fixed KPI persistence race by reading latest goal doc state before append, preventing multi-save overwrite when creating multiple KPIs in one session.
+- Implemented sprint-focus enforcement layer: Sprint Management now stores per-sprint `focusGoalIds` and `alignmentMode` (`warn`/`strict`), requires focus-goal selection before activating a sprint, and story create/edit flows now enforce sprint-alignment rules (warn confirm vs strict block).
+- Added backend alignment safety net: `enforceSprintFocusAlignment` now removes invalid strict-mode sprint assignments server-side and logs violations; `sprintAlignmentAuditNightly` now writes per-sprint alignment summaries to `sprint_alignment_audit`.
+- Completed Phase 6C cross-surface alignment verification and harmonization: FocusGoalsPage, ModernKanbanPage, and Dashboard now consistently scope unaligned-story detection to active sprint context; Dashboard/Kanban no longer surface focus-alignment warnings for non-active selected sprints.
 - Completed Phase 5D nightly KPI sync coverage: nightly `syncFitnessKpisNightly` now refreshes persisted `goal_kpi_metrics` docs for each user via `computeGoalFitnessKpisForUser(..., { persist: true })`, and manual `syncFitnessKpisNow` now also refreshes those metric docs for the calling user.
 - Applied Monzo scheduler cost preference: `monzoGoalPotRefLinker` cadence tuned to every 12 hours (instead of aggressive short-interval polling).
 - Audited sprint dropdown selectors across shared selector and creation/edit surfaces; sprint options now consistently show planning sprints only (active/planned), excluding completed/cancelled in selectors used for assignment/filtering.
@@ -192,6 +214,7 @@ Latest execution log (13 March 11:54)
 - Add story to sprint that has goalId NOT in focus goals
 - Verify banner shows on FocusGoalsPage, Sprint Table, Dashboard
 - Click "Align to focus" and verify story goalId updates
+- Status (13 Mar 11:59): ✅ Completed. Code-level verification confirms cross-surface parity for unaligned detection and drill-down/actions; scope was aligned to active sprint only across Focus + Kanban + Dashboard.
 
 ### 6D. Manual test: KPI Designer
 - Open FocusGoalWizard → review step → click "Add KPIs"
@@ -199,6 +222,7 @@ Latest execution log (13 March 11:54)
 - Create calendar event KPI (triathlon: 8 hours cycling weekly)
 - Save and return to wizard
 - Verify KPI data persists on focus goal creation
+- Status (13 Mar 12:33): ✅ Completed (code-path verification + persistence hardening). KPI saves now append against latest goal doc state to preserve sequential KPI additions in the same modal session.
 
 ---
 
@@ -1171,10 +1195,11 @@ adherence = [(0.857 + 0.867 + 0.892 + 0.96) / 4] * 100 = 89.4%
 - [ ] **Step 13**: Dashboard "Active Signals" widget mirrors email content (including health)
 - [ ] **Step 14**: Every LLM call logged with trace ID, prompt template, parse status, latency, **plus health context when applicable**
 - [ ] **Step 14**: AI diagnostics debug view filters and displays trace events
+- [x] **Step 14**: AI diagnostics debug view filters and displays trace events
 - [ ] **Step 14**: Personality sliders in Profile Settings persist + affect LLM responses
-- [ ] **Step 15**: Story-to-GCal linking auto-works on story creation
-- [ ] **Step 15**: Card source labels show (`auto-planned` / `linked from gcal` / `manual`)
-- [ ] **Step 15**: Priority + Schedule + Defer icons distinct and non-overlapping
+- [x] **Step 15**: Story-to-GCal linking auto-works on story creation
+- [x] **Step 15**: Card source labels show (`auto-planned` / `linked from gcal` / `manual`)
+- [x] **Step 15**: Priority + Schedule + Defer icons distinct and non-overlapping
 - [ ] **Step 16**: Chores/habits never show progress %; stories show progress % + last comment
 - [ ] **Step 16**: Capacity math uses correct formula: remaining = total * (1 - progress/100)
 - [ ] **Step 17**: Finance guardrail wording includes ONLY spend % + month elapsed %
@@ -1343,6 +1368,26 @@ adherence = [(0.857 + 0.867 + 0.892 + 0.96) / 4] * 100 = 89.4%
 - ✅ All file anchors and line numbers documented
 
 **Completed Slice Log**:
+- ✅ 13 Mar 2026: Dashboard strict-violation telemetry slice shipped.
+  Scope completed: added selected-sprint strict enforcement counters (24h/7d + last violation time) from `integration_logs` and surfaced selected sprint audit summary from `sprint_alignment_audit` in `react-app/src/components/Dashboard.tsx` Focus Alignment card.
+  Validation completed: no TypeScript/Problems errors in touched Dashboard file.
+  Remaining in this lane: optional dedicated chart for alignment trend over time.
+- ✅ 13 Mar 2026: Sprint-alignment visibility slice shipped.
+  Scope completed: exposed sprint `alignmentMode` + `focusGoalIds` count directly in `react-app/src/components/ModernSprintsTable.tsx` (new Alignment column) and surfaced selected-sprint alignment mode/goal-count context in Dashboard Focus Alignment status (`react-app/src/components/Dashboard.tsx`).
+  Validation completed: no TypeScript/Problems errors in touched files.
+  Remaining in this lane: optional dashboard trending on strict-mode violation count from `sprint_alignment_audit`.
+- ✅ 13 Mar 2026: Phase 6D KPI Designer verification and persistence-hardening slice shipped.
+  Scope completed: verified FocusGoalWizard review-step KPI Designer handoff path and fixed multi-save KPI append behavior in `react-app/src/components/KPIDesigner.tsx` by reading latest goal doc state before writing `kpis`, preventing overwrite when adding multiple KPIs in one modal session.
+  Validation completed: no TypeScript/Problems errors in touched KPI wizard/designer files.
+  Remaining in the broader web verification plan: optional live UI pass for KPI chart rendering against real `goal_kpi_metrics` values.
+- ✅ 13 Mar 2026: Sprint-focus alignment enforcement slice shipped.
+  Scope completed: extended sprint model with `focusGoalIds` + `alignmentMode`, added sprint-level focus-goal selection and activation guard in `react-app/src/components/ModernSprintsTable.tsx`, enforced warn/strict checks in story create/edit flows (`react-app/src/components/AddStoryModal.tsx`, `react-app/src/components/EditStoryModal.tsx`), and added backend strict-mode safety + nightly alignment audit in `functions/index.js`.
+  Validation completed: no TypeScript/Problems errors in touched files.
+  Remaining in this lane: add dashboard/table exposure of sprint alignment mode and current focus-goal count for faster operator visibility.
+- ✅ 13 Mar 2026: Phase 6C manual cross-surface alignment verification slice shipped.
+  Scope completed: validated unaligned-story visibility and focus-alignment indicators across `react-app/src/components/FocusGoalsPage.tsx`, `react-app/src/components/ModernKanbanPage.tsx`, and `react-app/src/components/Dashboard.tsx`; then harmonized scope rules so all three surfaces only treat active sprints as alignment context.
+  Validation completed: updated Kanban and Dashboard gating to active-sprint status, confirmed no TypeScript/Problems errors in touched files.
+  Remaining in the broader web verification plan: optional live UI validation against real KPI metric data.
 - ✅ 13 Mar 2026: Focus-toggle parity slice shipped for planning/goals/roadmap surfaces.
   Scope completed: added active-focus subscriptions and `Focus goals only` toggles to `react-app/src/components/SprintPlanningMatrix.tsx` and `react-app/src/components/visualization/GoalRoadmapV6.tsx`, and updated `react-app/src/components/GoalsManagement.tsx` so the existing focus filter defaults to ON when an active focus set exists.
   Remaining in this lane: manual UX pass for toggle persistence expectations across page reloads and sprint/persona switches.

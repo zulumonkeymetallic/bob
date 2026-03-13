@@ -2387,7 +2387,10 @@ exports.gcalLinkUnlinkedEvents = functions.https.onCall(async (data, context) =>
 
       if (!dryRun) {
         const blockUpdate = {
+          storyId: bestStory.id,
           linkedStoryId: bestStory.id,
+          storyRef: bestStory.ref || null,
+          goalId: bestStory.goalId || admin.firestore.FieldValue.delete(),
           calendarMatchSource: 'matched_user_created_calendar_event',
           calendarMatchNote: 'Matched user created calendar event',
           calendarMatchScore: Math.round(bestScore * 1000) / 1000,
@@ -2417,6 +2420,101 @@ exports.gcalLinkUnlinkedEvents = functions.https.onCall(async (data, context) =>
   }
 
   return { linked, reviewed: unlinkedBlocks.length, dryRun, links };
+});
+
+/**
+ * onStoryCalendarAutoLink
+ *
+ * Automatically links newly created/renamed stories to existing Google-synced
+ * calendar blocks that are still unlinked for the same user.
+ */
+exports.onStoryCalendarAutoLink = functions.firestore.document('stories/{storyId}').onWrite(async (change, context) => {
+  const before = change.before.exists ? (change.before.data() || {}) : null;
+  const after = change.after.exists ? (change.after.data() || {}) : null;
+  if (!after) return;
+
+  const storyId = context.params.storyId;
+  const uid = String(after.ownerUid || '').trim();
+  if (!uid) return;
+
+  const beforeTitle = String(before?.title || '').trim().toLowerCase();
+  const afterTitle = String(after.title || '').trim();
+  if (!afterTitle) return;
+
+  // Only run on create or title changes to avoid repeated scans on unrelated updates.
+  if (before && beforeTitle === afterTitle.toLowerCase()) return;
+
+  const db = admin.firestore();
+  const blocksSnap = await db.collection('calendar_blocks')
+    .where('ownerUid', '==', uid)
+    .limit(500)
+    .get();
+
+  const candidateBlocks = blocksSnap.docs.filter((docSnap) => {
+    const block = docSnap.data() || {};
+    return !!block.googleEventId && !block.storyId && !block.taskId && !block.linkedStoryId;
+  });
+
+  if (!candidateBlocks.length) return;
+
+  const keywordScore = (a, b) => {
+    const aWords = String(a || '').toLowerCase().split(/\s+/).filter((w) => w.length > 3);
+    const bWords = String(b || '').toLowerCase().split(/\s+/).filter((w) => w.length > 3);
+    if (!aWords.length || !bWords.length) return 0;
+    const overlap = aWords.filter((w) => bWords.includes(w)).length;
+    return overlap / Math.max(aWords.length, bWords.length);
+  };
+
+  const toDateIso = (start) => {
+    if (!start) return null;
+    if (typeof start === 'number') return new Date(start).toISOString().slice(0, 10);
+    if (typeof start === 'string') return start.slice(0, 10);
+    if (typeof start.toDate === 'function') return start.toDate().toISOString().slice(0, 10);
+    if (start.seconds) return new Date(start.seconds * 1000).toISOString().slice(0, 10);
+    return null;
+  };
+
+  const LINK_THRESHOLD = 0.55;
+  const updates = [];
+  for (const blockDoc of candidateBlocks) {
+    const block = blockDoc.data() || {};
+    const blockTitle = String(block.title || block.summary || '').trim();
+    if (!blockTitle) continue;
+    const score = keywordScore(blockTitle, afterTitle);
+    if (score < LINK_THRESHOLD) continue;
+
+    const plannedForDate = toDateIso(block.start);
+    const confidence = Math.max(0, Math.min(100, Math.round(score * 100)));
+    updates.push({
+      ref: blockDoc.ref,
+      patch: {
+        storyId,
+        linkedStoryId: storyId,
+        storyRef: after.ref || null,
+        goalId: after.goalId || admin.firestore.FieldValue.delete(),
+        calendarMatchSource: 'matched_story_created_event',
+        calendarMatchNote: 'Auto-linked from story create/update',
+        calendarMatchScore: Math.round(score * 1000) / 1000,
+        calendarMatchConfidence: confidence,
+        calendarMatchConfidenceTier: confidence >= 75 ? 'high' : confidence >= 50 ? 'medium' : 'low',
+        gcalLinkedAt: admin.firestore.FieldValue.serverTimestamp(),
+        ...(plannedForDate ? { plannedForDate } : {}),
+      },
+    });
+  }
+
+  if (!updates.length) return;
+
+  const batch = db.batch();
+  updates.slice(0, 8).forEach((entry) => {
+    batch.set(entry.ref, entry.patch, { merge: true });
+  });
+  batch.set(
+    db.collection('stories').doc(storyId),
+    { gcalLinked: true, gcalEventCount: admin.firestore.FieldValue.increment(Math.min(updates.length, 8)) },
+    { merge: true },
+  );
+  await batch.commit();
 });
 
 /**

@@ -2,7 +2,7 @@ import React from 'react';
 import { Button } from 'react-bootstrap';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { GripVertical, Activity, Wand2, Edit3, Trash2, Target, CalendarPlus, Clock3 } from 'lucide-react';
+import { GripVertical, Activity, Wand2, Edit3, Trash2, Target, CalendarPlus, CalendarClock, Clock3 } from 'lucide-react';
 import { httpsCallable } from 'firebase/functions';
 
 import { Story, Goal } from '../../types';
@@ -129,11 +129,22 @@ const SortableStoryCard: React.FC<SortableStoryCardProps> = ({
     const source = String(scheduledBlock?.source || '').toLowerCase();
     const entryMethod = String(scheduledBlock?.entryMethod || '').toLowerCase();
     const fromGcal = source === 'gcal' || !!scheduledBlock?.googleEventId;
-    if (fromGcal && (scheduledBlock?.linkedStoryId || scheduledBlock?.googleEventId)) return 'Linked from Google Calendar';
-    if (scheduledBlock?.isAiGenerated) return 'Auto planned';
-    if (entryMethod.includes('manual') || source === 'manual' || source === 'bob') return 'Manually planned';
-    return 'Planned';
+    if (fromGcal && (scheduledBlock?.linkedStoryId || scheduledBlock?.googleEventId)) return 'linked from gcal';
+    if (scheduledBlock?.isAiGenerated) return 'auto-planned';
+    if (entryMethod.includes('manual') || source === 'manual' || source === 'bob') return 'manual';
+    return 'manual';
   })();
+  const deferredUntilMs = (() => {
+    const raw = (story as any).deferredUntil ?? null;
+    if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+    if (raw?.toDate) return raw.toDate().getTime();
+    const parsed = raw ? Date.parse(String(raw)) : NaN;
+    return Number.isNaN(parsed) ? null : parsed;
+  })();
+  const isDeferred = Number.isFinite(deferredUntilMs as number) && (deferredUntilMs as number) > Date.now();
+  const deferredLabel = isDeferred
+    ? `Deferred to ${new Date(deferredUntilMs as number).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`
+    : null;
 
   const safeTaskCount = Number.isFinite(taskCount) ? Number(taskCount) : 0;
 
@@ -299,6 +310,19 @@ const SortableStoryCard: React.FC<SortableStoryCardProps> = ({
             <span className={priorityClass} title={`Priority: ${priorityLabel}`}>
               {priorityLabel}
             </span>
+            {(story as any).userPriorityFlag && (
+              <span
+                className="kanban-card__meta-badge"
+                style={{
+                  borderColor: 'rgba(220, 53, 69, 0.45)',
+                  backgroundColor: 'rgba(220, 53, 69, 0.12)',
+                  color: 'var(--bs-danger)',
+                }}
+                title="User #1 priority flag"
+              >
+                <span style={{ fontWeight: 800 }}>1</span>&nbsp;Priority
+              </span>
+            )}
             {isTop3 && (
               <span className="kanban-card__meta-badge kanban-card__meta-badge--top3" title="Top 3 priority">
                 Top 3
@@ -318,6 +342,7 @@ const SortableStoryCard: React.FC<SortableStoryCardProps> = ({
                   }}
                   title={scheduledBlock?.title || 'Planned calendar block'}
                 >
+                  <CalendarClock size={11} style={{ marginRight: 4, marginTop: -1 }} />
                   {scheduledBlockLabel}
                 </span>
                 {scheduledBlockSourceLabel && (
@@ -325,6 +350,20 @@ const SortableStoryCard: React.FC<SortableStoryCardProps> = ({
                     {scheduledBlockSourceLabel}
                   </span>
                 )}
+              </span>
+            )}
+            {deferredLabel && (
+              <span
+                className="kanban-card__meta-badge"
+                style={{
+                  borderColor: 'rgba(245, 158, 11, 0.45)',
+                  backgroundColor: 'rgba(245, 158, 11, 0.12)',
+                  color: '#b45309',
+                }}
+                title={deferredLabel}
+              >
+                <Clock3 size={11} style={{ marginRight: 4, marginTop: -1 }} />
+                Deferred
               </span>
             )}
             <span className="kanban-card__meta-text" title="Status">

@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { Alert, Button, Col, Form, Modal, Row } from 'react-bootstrap';
-import { doc, serverTimestamp, updateDoc } from 'firebase/firestore';
+import { doc, getDoc, serverTimestamp, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Goal } from '../types';
 
@@ -102,7 +102,10 @@ const KPIDesigner: React.FC<KPIDesignerProps> = ({
 
     setSaving(true);
     try {
-      const existingKpis = Array.isArray(selectedGoal.kpis) ? selectedGoal.kpis : [];
+      const goalRef = doc(db, 'goals', goalId);
+      const latestGoalSnap = await getDoc(goalRef);
+      const latestGoal = latestGoalSnap.exists() ? latestGoalSnap.data() : null;
+      const existingKpis = Array.isArray((latestGoal as any)?.kpis) ? (latestGoal as any).kpis : [];
       await updateDoc(doc(db, 'goals', goalId), {
         kpis: [...existingKpis, nextKpi],
         updatedAt: serverTimestamp(),

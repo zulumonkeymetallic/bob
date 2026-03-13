@@ -599,6 +599,29 @@ const UnifiedPlannerPage: React.FC = () => {
     return ref ? String(ref) : '';
   }, []);
 
+  const getPlannerEventSourceLabel = useCallback((event: PlannerCalendarEvent): 'auto-planned' | 'linked from gcal' | 'manual' => {
+    if (event.type === 'external') return 'linked from gcal';
+
+    const block: any = event.block || null;
+    const source = String(block?.source || '').toLowerCase();
+    const entryMethod = String(block?.entry_method || '').toLowerCase();
+    const hasGcalLink = !!(event.instance?.external?.gcalEventId || block?.googleEventId);
+
+    if (hasGcalLink || source === 'gcal' || entryMethod === 'google_calendar') {
+      return 'linked from gcal';
+    }
+    if (
+      entryMethod.includes('auto')
+      || source.includes('auto')
+      || source.includes('ai')
+      || source === 'planner'
+      || source === 'bob_auto'
+    ) {
+      return 'auto-planned';
+    }
+    return 'manual';
+  }, []);
+
   const unscheduledItems = useMemo(
     () => planner.instances.filter((instance) => instance.status === 'unscheduled'),
     [planner.instances],
@@ -2580,6 +2603,14 @@ const UnifiedPlannerPage: React.FC = () => {
                 )}
                 {activeEvent.type === 'instance' && activeEvent.instance && (
                   <>
+                    <div className="text-muted small">
+                      Source{' '}
+                      {(() => {
+                        const sourceLabel = getPlannerEventSourceLabel(activeEvent);
+                        const variant = sourceLabel === 'auto-planned' ? 'success' : sourceLabel === 'linked from gcal' ? 'info' : 'secondary';
+                        return <Badge bg={variant}>{sourceLabel}</Badge>;
+                      })()}
+                    </div>
                     {['chore', 'routine', 'habit'].includes(
                       (activeEvent.instance.sourceType || '').toLowerCase(),
                     ) && (
@@ -2664,6 +2695,14 @@ const UnifiedPlannerPage: React.FC = () => {
                 )}
                 {activeEvent.type === 'block' && activeEvent.block && (
                   <>
+                    <div className="text-muted small">
+                      Source{' '}
+                      {(() => {
+                        const sourceLabel = getPlannerEventSourceLabel(activeEvent);
+                        const variant = sourceLabel === 'auto-planned' ? 'success' : sourceLabel === 'linked from gcal' ? 'info' : 'secondary';
+                        return <Badge bg={variant}>{sourceLabel}</Badge>;
+                      })()}
+                    </div>
                     <div className="text-muted small">
                       Theme{' '}
                       <Badge bg="light" text="dark">

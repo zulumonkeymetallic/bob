@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { draggable } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
 import { Button, Modal, Spinner } from 'react-bootstrap';
-import { GripVertical, Activity, Wand2, Edit3, Trash2, Target, BookOpen, Shuffle, CalendarClock, Plus } from 'lucide-react';
+import { GripVertical, Activity, Wand2, Edit3, Trash2, Target, BookOpen, Shuffle, CalendarClock, Clock3, CalendarPlus } from 'lucide-react';
 import { httpsCallable } from 'firebase/functions';
 import { functions, db } from '../firebase';
 import { Story, Task, Goal } from '../types';
@@ -165,6 +165,17 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
         const parsed = raw ? Date.parse(String(raw)) : NaN;
         return Number.isNaN(parsed) ? null : parsed;
     })();
+    const deferredUntilMs = (() => {
+        const raw = (item as any).deferredUntil ?? null;
+        if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+        if (raw?.toDate) return raw.toDate().getTime();
+        const parsed = raw ? Date.parse(String(raw)) : NaN;
+        return Number.isNaN(parsed) ? null : parsed;
+    })();
+    const isDeferred = Number.isFinite(deferredUntilMs as number) && (deferredUntilMs as number) > Date.now();
+    const deferredLabel = isDeferred
+        ? `Deferred to ${new Date(deferredUntilMs as number).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`
+        : null;
     const [priorityValue, setPriorityValue] = useState<number>(Number((item as any).priority ?? 0));
     const [statusValue, setStatusValue] = useState<number>(normalizeStatusValue((item as any).status, type));
     const [dueInputValue, setDueInputValue] = useState<string>(toDateInputValue(dueDateMs));
@@ -615,7 +626,7 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                             onPointerDown={(e) => e.stopPropagation()}
                             disabled={creatingCalendarEvent || !!scheduledBlock?.id}
                         >
-                            <Plus size={12} />
+                            <CalendarPlus size={12} />
                         </Button>
                         <Button
                             variant="link"
@@ -687,7 +698,7 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                                 onPointerDown={(e) => e.stopPropagation()}
                                 disabled={flaggingPriority}
                             >
-                                <CalendarClock size={12} />
+                                <span style={{ fontSize: 11, fontWeight: 800, lineHeight: 1 }}>1</span>
                             </Button>
                         )}
                         <Button
@@ -702,7 +713,7 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                             }}
                             onPointerDown={(e) => e.stopPropagation()}
                         >
-                            <CalendarClock size={12} />
+                            <Clock3 size={12} />
                         </Button>
 
                         {onEdit && (
@@ -858,7 +869,7 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                             }}
                             title="User #1 priority flag"
                         >
-                            #1 Priority
+                            <span style={{ fontWeight: 800 }}>1</span>&nbsp;Priority
                         </span>
                     )}
                     {isTop3 && (
@@ -881,7 +892,22 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                             }}
                             title={scheduledBlock?.title || 'Planned calendar block'}
                         >
+                            <CalendarClock size={11} style={{ marginRight: 4, marginTop: -1 }} />
                             {scheduledBlockLabel}
+                        </span>
+                    )}
+                    {deferredLabel && (
+                        <span
+                            className="kanban-card__meta-badge"
+                            style={{
+                                borderColor: 'rgba(245, 158, 11, 0.45)',
+                                backgroundColor: 'rgba(245, 158, 11, 0.12)',
+                                color: '#b45309',
+                            }}
+                            title={deferredLabel}
+                        >
+                            <Clock3 size={11} style={{ marginRight: 4, marginTop: -1 }} />
+                            Deferred
                         </span>
                     )}
                     {type === 'story' && (

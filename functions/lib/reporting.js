@@ -134,6 +134,86 @@ const resolveTimezone = (profile, fallback) => {
   );
 };
 
+const readFiniteNumber = (...values) => {
+  for (const value of values) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+};
+
+const clampPercent = (value) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  return Math.max(0, Math.min(100, Math.round(parsed)));
+};
+
+const buildHealthDashboardAlert = (profile = {}) => {
+  const stepsToday = readFiniteNumber(profile.healthkitStepsToday, profile.manualStepsToday);
+  const workoutMinutesToday = readFiniteNumber(profile.healthkitWorkoutMinutesToday, profile.manualWorkoutMinutesToday);
+  const proteinTodayG = readFiniteNumber(profile.healthkitProteinTodayG, profile.manualProteinTodayG);
+  const fatTodayG = readFiniteNumber(profile.healthkitFatTodayG, profile.manualFatTodayG);
+  const carbsTodayG = readFiniteNumber(profile.healthkitCarbsTodayG, profile.manualCarbsTodayG);
+  const caloriesTodayKcal = readFiniteNumber(profile.healthkitCaloriesTodayKcal, profile.manualCaloriesTodayKcal);
+  const bodyFatPct = readFiniteNumber(profile.healthkitBodyFatPct, profile.manualBodyFatPct);
+  const targetBodyFatPct = readFiniteNumber(profile.targetBodyFatPct, profile.healthTargetBodyFatPct, profile.bodyFatTarget);
+  const targetProteinG = readFiniteNumber(profile.targetProteinG, profile.dailyProteinTargetG, profile.healthTargetProteinG);
+  const targetFatG = readFiniteNumber(profile.targetFatG, profile.dailyFatTargetG, profile.healthTargetFatG);
+  const targetCarbsG = readFiniteNumber(profile.targetCarbsG, profile.dailyCarbsTargetG, profile.healthTargetCarbsG);
+  const targetCaloriesKcal = readFiniteNumber(profile.targetCaloriesKcal, profile.dailyCaloriesTargetKcal, profile.healthTargetCaloriesKcal);
+
+  const hasAnySignal = [stepsToday, workoutMinutesToday, proteinTodayG, fatTodayG, carbsTodayG, caloriesTodayKcal, bodyFatPct]
+    .some((value) => value != null);
+  if (!hasAnySignal) return null;
+
+  const adherencePct = (actual, target) => {
+    if (actual == null || target == null || target <= 0) return null;
+    return clampPercent((actual / target) * 100);
+  };
+
+  const macroComponents = [
+    adherencePct(proteinTodayG, targetProteinG),
+    adherencePct(fatTodayG, targetFatG),
+    adherencePct(carbsTodayG, targetCarbsG),
+    adherencePct(caloriesTodayKcal, targetCaloriesKcal),
+  ].filter((value) => value != null);
+
+  const macroAdherencePct = macroComponents.length
+    ? Math.round(macroComponents.reduce((sum, value) => sum + value, 0) / macroComponents.length)
+    : null;
+
+  const bodyFatDelta = (bodyFatPct != null && targetBodyFatPct != null)
+    ? Number((bodyFatPct - targetBodyFatPct).toFixed(1))
+    : null;
+
+  let severity = 'info';
+  if ((macroAdherencePct != null && macroAdherencePct < 60) || (bodyFatDelta != null && bodyFatDelta >= 3)) {
+    severity = 'critical';
+  } else if ((macroAdherencePct != null && macroAdherencePct < 80) || (bodyFatDelta != null && bodyFatDelta > 0) || (stepsToday != null && stepsToday < 6000)) {
+    severity = 'warning';
+  }
+
+  const summaryBits = [];
+  if (bodyFatPct != null) {
+    summaryBits.push(
+      targetBodyFatPct != null
+        ? `Body fat ${bodyFatPct.toFixed(1)}% (target ${targetBodyFatPct.toFixed(1)}%)`
+        : `Body fat ${bodyFatPct.toFixed(1)}%`
+    );
+  }
+  if (stepsToday != null) summaryBits.push(`${Math.round(stepsToday).toLocaleString('en-GB')} steps`);
+  if (workoutMinutesToday != null) summaryBits.push(`${Math.round(workoutMinutesToday)}m workout`);
+  if (macroAdherencePct != null) summaryBits.push(`${macroAdherencePct}% macro adherence`);
+
+  return {
+    type: 'health',
+    severity,
+    title: 'Health snapshot today',
+    message: summaryBits.join(' | ') || 'Health data updated for today.',
+    ctaPath: buildAbsoluteUrl('/fitness'),
+  };
+};
+
 const toList = (snap) => snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
 
 const computeNextOccurrenceInWindow = (recurrence, dtstart, windowStart, windowEnd) => {
@@ -1367,6 +1447,11 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
       ctaPath: buildAbsoluteUrl('/focus-goals'),
     });
   });
+
+  const healthAlert = buildHealthDashboardAlert(profile);
+  if (healthAlert) {
+    dashboardAlerts.push(healthAlert);
+  }
 
   const savingsRunway = (() => {
     const alignmentGoals = Array.isArray(monzo?.goalAlignment?.goals)
