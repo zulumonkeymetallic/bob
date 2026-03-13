@@ -1,8 +1,9 @@
 Comprehensive multi-phase rework spanning web, iOS/iPad, and health platforms:
 
-JD Updated 13 March at 09:55
+JD Updated 13 March at 09:59
 
-Latest execution log (13 March 09:55)
+Latest execution log (13 March 09:59)
+- Added focus-goal toggles across `/sprints/planning`, `/goals`, and `/goals/roadmap-v6` with default-on behavior whenever an active focus goal set exists from the wizard.
 - Implemented Phase 5C KPI charting in Focus Goal countdown cards: banner now loads `goal_kpi_metrics` per active focus goal and renders compact KPI trend mini-charts (fallback series when sparse data) alongside current/target values.
 - Added Sprint Planner route visibility in web Stories navigation and placed a Sprint Planner button immediately left of View Overview in Sprint Kanban actions.
 - Applied dashboard persistent-banner policy on web: health/reconnect/import banners now render for desktop/tablet profiles and stay hidden on mobile profiles.
@@ -1335,6 +1336,9 @@ adherence = [(0.857 + 0.867 + 0.892 + 0.96) / 4] * 100 = 89.4%
 - ✅ All file anchors and line numbers documented
 
 **Completed Slice Log**:
+- ✅ 13 Mar 2026: Focus-toggle parity slice shipped for planning/goals/roadmap surfaces.
+  Scope completed: added active-focus subscriptions and `Focus goals only` toggles to `react-app/src/components/SprintPlanningMatrix.tsx` and `react-app/src/components/visualization/GoalRoadmapV6.tsx`, and updated `react-app/src/components/GoalsManagement.tsx` so the existing focus filter defaults to ON when an active focus set exists.
+  Remaining in this lane: manual UX pass for toggle persistence expectations across page reloads and sprint/persona switches.
 - ✅ 13 Mar 2026: Focus countdown KPI mini-chart slice shipped.
   Scope completed: extended `react-app/src/components/FocusGoalCountdownBanner.tsx` to subscribe to `goal_kpi_metrics` for active focus goals and render compact KPI trend mini-charts with current/target readouts directly in each selected goal card.
   Remaining in the broader web plan: Phase 6C manual cross-surface verification and any KPI trend tuning after real-data visual QA.

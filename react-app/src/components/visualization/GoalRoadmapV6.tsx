@@ -407,6 +407,9 @@ const GoalRoadmapV6: React.FC = () => {
   const [zoomLevel, setZoomLevel] = useState<'year' | 'quarter' | 'month' | 'week'>('year');
   const [zoomPercent, setZoomPercent] = useState<number>(5); // 5..100 mapped to levels
   const [showStoryGoalsOnly, setShowStoryGoalsOnly] = useState(true);
+  const [showFocusGoalsOnly, setShowFocusGoalsOnly] = useState(false);
+  const [focusToggleTouched, setFocusToggleTouched] = useState(false);
+  const [activeFocusGoalIds, setActiveFocusGoalIds] = useState<Set<string>>(new Set());
   const [respectSprintScope, setRespectSprintScope] = useState(true);
   const [editGoal, setEditGoal] = useState<Goal | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -544,6 +547,51 @@ const GoalRoadmapV6: React.FC = () => {
     return () => unsub();
   }, [currentUser?.uid]);
 
+  useEffect(() => {
+    if (!currentUser?.uid || !currentPersona) {
+      setActiveFocusGoalIds(new Set());
+      setShowFocusGoalsOnly(false);
+      setFocusToggleTouched(false);
+      return;
+    }
+    const focusQuery = query(
+      collection(db, 'focusGoals'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+      where('isActive', '==', true)
+    );
+    const unsub = onSnapshot(
+      focusQuery,
+      (snapshot) => {
+        const ids = new Set<string>();
+        snapshot.docs.forEach((docSnap) => {
+          const data = docSnap.data() as any;
+          const goalIds = Array.isArray(data?.goalIds) ? data.goalIds : [];
+          goalIds.forEach((goalId: any) => {
+            const normalized = String(goalId || '').trim();
+            if (normalized) ids.add(normalized);
+          });
+        });
+        setActiveFocusGoalIds(ids);
+      },
+      () => {
+        setActiveFocusGoalIds(new Set());
+      }
+    );
+    return () => unsub();
+  }, [currentUser?.uid, currentPersona]);
+
+  useEffect(() => {
+    if (activeFocusGoalIds.size === 0) {
+      setShowFocusGoalsOnly(false);
+      setFocusToggleTouched(false);
+      return;
+    }
+    if (!focusToggleTouched) {
+      setShowFocusGoalsOnly(true);
+    }
+  }, [activeFocusGoalIds, focusToggleTouched]);
+
   // Calendar blocks for allocated hours
   useEffect(() => {
     if (!currentUser?.uid) return;
@@ -617,6 +665,7 @@ const GoalRoadmapV6: React.FC = () => {
       const themeId = migrateThemeValue((g as any).theme);
       if (themeFilter !== 'all' && themeId !== themeFilter) return false;
       if (showStoryGoalsOnly && !(storyPoints[g.id] > 0)) return false;
+      if (showFocusGoalsOnly && activeFocusGoalIds.size > 0 && !activeFocusGoalIds.has(g.id)) return false;
       if (respectSprintScope && selectedSprint) {
         const sprintStart = toMillis(selectedSprint.startDate);
         const sprintEnd = toMillis(selectedSprint.endDate);
@@ -632,7 +681,7 @@ const GoalRoadmapV6: React.FC = () => {
       if (!term) return true;
       return (g.title || '').toLowerCase().includes(term);
     });
-  }, [goals, search, themeFilter, showStoryGoalsOnly, storyPoints, respectSprintScope, selectedSprint, storySprintMap]);
+  }, [goals, search, themeFilter, showStoryGoalsOnly, showFocusGoalsOnly, activeFocusGoalIds, storyPoints, respectSprintScope, selectedSprint, storySprintMap]);
 
   const sortedGoals = useMemo(() => {
     const enriched = filteredGoals.map(goal => {
@@ -834,8 +883,10 @@ const GoalRoadmapV6: React.FC = () => {
     setSearch('');
     setThemeFilter('all');
     setShowStoryGoalsOnly(false);
+    setShowFocusGoalsOnly(activeFocusGoalIds.size > 0);
+    setFocusToggleTouched(false);
     setRespectSprintScope(false);
-  }, []);
+  }, [activeFocusGoalIds]);
 
   const handleFitAll = useCallback(() => {
     const z = computeFitZoom();
@@ -1350,6 +1401,18 @@ const GoalRoadmapV6: React.FC = () => {
             onChange={(e) => setRespectSprintScope(e.target.checked)}
           />{' '}
           Limit to selected sprint
+        </label>
+        <label className="grv6-filter-row">
+          <input
+            type="checkbox"
+            checked={showFocusGoalsOnly}
+            onChange={(e) => {
+              setShowFocusGoalsOnly(e.target.checked);
+              setFocusToggleTouched(true);
+            }}
+            disabled={activeFocusGoalIds.size === 0}
+          />{' '}
+          Focus goals only{activeFocusGoalIds.size ? ` (${activeFocusGoalIds.size})` : ''}
         </label>
         <SprintSelector className="grv6-sprint-selector" />
 

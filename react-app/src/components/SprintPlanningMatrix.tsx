@@ -237,6 +237,9 @@ const SprintPlanningMatrix: React.FC = () => {
   const [showCompletedItems, setShowCompletedItems] = useState(false);
   const [showTop3Only, setShowTop3Only] = useState(false);
   const [showAiScoredOnly, setShowAiScoredOnly] = useState(false);
+  const [activeFocusGoalIds, setActiveFocusGoalIds] = useState<Set<string>>(new Set());
+  const [applyFocusOnlyFilter, setApplyFocusOnlyFilter] = useState(false);
+  const [focusToggleTouched, setFocusToggleTouched] = useState(false);
   const [sortField, setSortField] = useState<MatrixSortField>('none');
   const [sortDirection, setSortDirection] = useState<MatrixSortDirection>('desc');
   const [goalSearch, setGoalSearch] = useState('');
@@ -324,10 +327,59 @@ const SprintPlanningMatrix: React.FC = () => {
     return setupSubscriptions();
   }, [currentUser, currentPersona]);
 
+  useEffect(() => {
+    if (!currentUser?.uid || !currentPersona) {
+      setActiveFocusGoalIds(new Set());
+      setApplyFocusOnlyFilter(false);
+      setFocusToggleTouched(false);
+      return;
+    }
+    const focusQuery = query(
+      collection(db, 'focusGoals'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+      where('isActive', '==', true)
+    );
+    const unsub = onSnapshot(
+      focusQuery,
+      (snapshot) => {
+        const ids = new Set<string>();
+        snapshot.docs.forEach((docSnap) => {
+          const data = docSnap.data() as any;
+          const goalIds = Array.isArray(data?.goalIds) ? data.goalIds : [];
+          goalIds.forEach((goalId: any) => {
+            const normalized = String(goalId || '').trim();
+            if (normalized) ids.add(normalized);
+          });
+        });
+        setActiveFocusGoalIds(ids);
+      },
+      () => {
+        setActiveFocusGoalIds(new Set());
+      }
+    );
+    return () => unsub();
+  }, [currentUser?.uid, currentPersona]);
+
+  useEffect(() => {
+    if (activeFocusGoalIds.size === 0) {
+      setApplyFocusOnlyFilter(false);
+      setFocusToggleTouched(false);
+      return;
+    }
+    if (!focusToggleTouched) {
+      setApplyFocusOnlyFilter(true);
+    }
+  }, [activeFocusGoalIds, focusToggleTouched]);
+
   // Filter stories
   const filteredStories = useMemo(() => {
     return stories.filter((story) => {
       if (!showCompletedItems && isStatus((story as any).status, 'done')) return false;
+      if (applyFocusOnlyFilter && activeFocusGoalIds.size > 0) {
+        const goalId = String(story.goalId || '').trim();
+        if (!goalId || !activeFocusGoalIds.has(goalId)) return false;
+      }
       if (filterGoal !== 'all' && story.goalId !== filterGoal) return false;
       if (showTop3Only && !isTop3Story(story)) return false;
       if (showAiScoredOnly && getStoryAiScore(story) == null) return false;
@@ -338,13 +390,16 @@ const SprintPlanningMatrix: React.FC = () => {
       }
       return true;
     });
-  }, [stories, goals, filterGoal, filterTheme, showCompletedItems, showTop3Only, showAiScoredOnly]);
+  }, [stories, goals, filterGoal, filterTheme, showCompletedItems, showTop3Only, showAiScoredOnly, applyFocusOnlyFilter, activeFocusGoalIds]);
 
   const filteredGoals = useMemo(() => {
-    if (!goalSearch.trim()) return goals;
+    const baseGoals = applyFocusOnlyFilter && activeFocusGoalIds.size > 0
+      ? goals.filter((goal) => activeFocusGoalIds.has(goal.id))
+      : goals;
+    if (!goalSearch.trim()) return baseGoals;
     const q = goalSearch.toLowerCase();
-    return goals.filter((g) => g.title.toLowerCase().includes(q));
-  }, [goals, goalSearch]);
+    return baseGoals.filter((g) => g.title.toLowerCase().includes(q));
+  }, [goals, goalSearch, applyFocusOnlyFilter, activeFocusGoalIds]);
 
   const sortedStories = useMemo(() => {
     const next = [...filteredStories];
@@ -704,6 +759,17 @@ const SprintPlanningMatrix: React.FC = () => {
                       checked={showAiScoredOnly}
                       onChange={(e) => setShowAiScoredOnly(e.target.checked)}
                     />
+                    <Form.Check
+                      type="switch"
+                      id="toggle-focus-goals-only"
+                      label={`Focus goals only${activeFocusGoalIds.size ? ` (${activeFocusGoalIds.size})` : ''}`}
+                      checked={applyFocusOnlyFilter}
+                      onChange={(e) => {
+                        setApplyFocusOnlyFilter(e.target.checked);
+                        setFocusToggleTouched(true);
+                      }}
+                      disabled={activeFocusGoalIds.size === 0}
+                    />
                   </Form.Group>
                 </Col>
                 <Col md={3}>
@@ -748,6 +814,8 @@ const SprintPlanningMatrix: React.FC = () => {
                         setShowCompletedItems(false);
                         setShowTop3Only(false);
                         setShowAiScoredOnly(false);
+                        setApplyFocusOnlyFilter(activeFocusGoalIds.size > 0);
+                        setFocusToggleTouched(false);
                         setShowDescriptions(false);
                         setSortField('none');
                         setSortDirection('desc');

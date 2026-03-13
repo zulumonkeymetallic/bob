@@ -51,6 +51,7 @@ const GoalsManagement: React.FC = () => {
   const [activeSprintGoalIds, setActiveSprintGoalIds] = useState<Set<string>>(new Set());
   const [activeFocusGoalIds, setActiveFocusGoalIds] = useState<Set<string>>(new Set());
   const [applyFocusOnlyFilter, setApplyFocusOnlyFilter] = useState(false);
+  const [focusToggleTouched, setFocusToggleTouched] = useState(false);
   const [applyActiveSprintFilter, setApplyActiveSprintFilter] = useState(true); // default on
   const [pots, setPots] = useState<Record<string, { name: string; balance: number }>>({});
   const [goalKpiMetrics, setGoalKpiMetrics] = useState<Record<string, { resolvedKpis?: any[]; updatedAt?: any }>>({});
@@ -205,6 +206,17 @@ const GoalsManagement: React.FC = () => {
     );
     return () => unsub();
   }, [currentUser?.uid, currentPersona]);
+
+  useEffect(() => {
+    if (activeFocusGoalIds.size === 0) {
+      setApplyFocusOnlyFilter(false);
+      setFocusToggleTouched(false);
+      return;
+    }
+    if (!focusToggleTouched) {
+      setApplyFocusOnlyFilter(true);
+    }
+  }, [activeFocusGoalIds, focusToggleTouched]);
 
   const activeSprintId = useMemo(() => {
     const active = sprints.find((s) => s.status === 1);
@@ -908,6 +920,7 @@ const GoalsManagement: React.FC = () => {
                       setGoalKpiScope('sprint');
                       setShowNoPotOnly(false);
                       setApplyFocusOnlyFilter(false);
+                      setFocusToggleTouched(false);
                     }}
                     style={{ borderColor: 'var(--notion-border)', color: 'var(--notion-text)' }}
                   >
@@ -934,7 +947,10 @@ const GoalsManagement: React.FC = () => {
                     id="toggle-goals-focus-only"
                     label={`Only active focus goals${activeFocusGoalIds.size ? ` (${activeFocusGoalIds.size})` : ''}`}
                     checked={applyFocusOnlyFilter}
-                    onChange={(e) => setApplyFocusOnlyFilter(e.target.checked)}
+                    onChange={(e) => {
+                      setApplyFocusOnlyFilter(e.target.checked);
+                      setFocusToggleTouched(true);
+                    }}
                     className="text-muted"
                     disabled={activeFocusGoalIds.size === 0}
                   />
