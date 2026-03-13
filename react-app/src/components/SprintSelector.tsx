@@ -3,6 +3,7 @@ import { Dropdown } from 'react-bootstrap';
 import logger from '../utils/logger';
 import { useSprint } from '../contexts/SprintContext';
 import type { Sprint } from '../types';
+import { planningSprints } from '../utils/sprintFilter';
 
 interface SprintSelectorProps {
   selectedSprintId?: string;
@@ -36,6 +37,7 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
   }, [sprints, effectiveSelectedId]);
 
   const now = Date.now();
+  const visibleSprints = useMemo(() => planningSprints(sprints), [sprints]);
   const isSprintComplete = (s: Sprint) => {
     // Only consider a sprint complete if its status is explicitly 2 (Complete)
     // Don't auto-complete based on end date - let user manually close via workflow
@@ -154,21 +156,12 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
           All Sprints
         </Dropdown.Item>
         <Dropdown.Divider />
-        {sprints.length === 0 ? (
+        {visibleSprints.length === 0 ? (
           <Dropdown.Item disabled>
             No sprints found. Create one in Sprint Dashboard.
           </Dropdown.Item>
         ) : (
-          sprints
-            .filter((sprint) => {
-              // Always show active sprints (status 1) even if end date has passed
-              if (sprint.status === 1) return true;
-              // Show planned sprints (status 0)
-              if (sprint.status === 0) return true;
-              // Show completed sprints only if currently selected
-              if (isSprintComplete(sprint) && sprint.id !== effectiveSelectedId) return false;
-              return true;
-            })
+          visibleSprints
             .map(sprint => (
               <Dropdown.Item
                 key={sprint.id}

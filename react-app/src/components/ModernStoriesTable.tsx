@@ -44,6 +44,7 @@ import { themeVars, rgbaCard } from '../utils/themeVars';
 import { storyStatusText } from '../utils/storyCardFormatting';
 import { parsePointsValue } from '../utils/points';
 import { MISSING_INFO_CELL_BG, MISSING_INFO_CELL_BG_HOVER, hasLinkedId, isBlankText, isMissingPoints } from '../utils/dataQuality';
+import { planningSprints } from '../utils/sprintFilter';
 
 interface StoryTableRow extends Story {
   goalTitle?: string;
@@ -1050,6 +1051,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
   const { currentPersona } = usePersona();
   const { isDark, colors, backgrounds } = useThemeAwareColors();
   const { selectedSprintId, sprints } = useSprint();
+  const planningSprintList = useMemo(() => planningSprints(sprints), [sprints]);
   const navigate = useNavigate();
   const [columns, setColumns] = useState<Column[]>(defaultColumns);
   const [showConfig, setShowConfig] = useState(false);
@@ -1121,12 +1123,12 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
         col.key === 'sprintId'
           ? {
               ...col,
-              options: ['', ...sprints.map(sprint => sprint.id)]
+              options: ['', ...planningSprintList.map(sprint => sprint.id)]
             }
           : col
       )
     );
-  }, [sprints]);
+  }, [planningSprintList]);
 
   // Handle adding new story row
   const handleAddNewStory = () => {
@@ -1572,9 +1574,9 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
           >
             <option value="">All Sprints</option>
             <option value="unassigned">Unassigned</option>
-            {sprints.map(sprint => (
+            {planningSprintList.map(sprint => (
               <option key={sprint.id} value={sprint.id}>
-                {sprint.name} ({sprint.status})
+                {sprint.name}
               </option>
             ))}
           </select>
@@ -1761,7 +1763,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
                   <NewStoryRow
                     columns={columns}
                     goals={goals}
-                    sprints={sprints}
+                      sprints={planningSprintList}
                     newStoryData={newStoryData}
                     onFieldChange={handleNewStoryFieldChange}
                     onSave={handleSaveNewStory}
@@ -1779,7 +1781,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
                         story={story}
                         columns={columns}
                         index={index}
-                        sprints={sprints}
+                          sprints={planningSprintList}
                         goals={goals}
                         onStoryUpdate={onStoryUpdate}
                         onStoryDelete={onStoryDelete}
@@ -1811,7 +1813,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
                                 tasks={allTasks.filter(t => (t as any).parentType === 'story' && (t as any).parentId === story.id)}
                                 stories={stories as any}
                                 goals={goals as any}
-                                sprints={sprints as any}
+                                  sprints={planningSprintList as any}
                                 onTaskCreate={async (newTask) => {
                                   const linkedGoal = goals.find(g => g.id === (story as any).goalId);
                                   await addDoc(collection(db, 'tasks'), {

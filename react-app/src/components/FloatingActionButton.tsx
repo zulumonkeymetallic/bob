@@ -17,6 +17,7 @@ import AddStoryModal from './AddStoryModal';
 import IntentBrokerModal from './IntentBrokerModal';
 import { useProcessTextActivity } from '../contexts/ProcessTextActivityContext';
 import { saveFocusWizardPrefill } from '../services/focusGoalsService';
+import { pickDefaultPlanningSprintId } from '../utils/sprintFilter';
 
 interface FloatingActionButtonProps {
   onImportClick: () => void;
@@ -66,6 +67,7 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
   const [intakeTheme, setIntakeTheme] = useState('Growth');
   const [chatGoalId, setChatGoalId] = useState<string | null>(null);
   const [showChat, setShowChat] = useState(false);
+  const [activeFocusGoalIds, setActiveFocusGoalIds] = useState<Set<string>>(new Set());
 
   const themes = GLOBAL_THEMES.map(theme => theme.name);
   const efforts = [
@@ -74,6 +76,38 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
     { value: 'L', label: '120 mins (2)', minutes: 120, points: 2 }
   ];
   const isRecurringQuickAdd = quickAddType === 'task' && ['chore', 'routine', 'habit'].includes(String(quickAddData.type || '').toLowerCase());
+  const defaultFabSprintId = pickDefaultPlanningSprintId(_availableSprints as any);
+
+  useEffect(() => {
+    const loadActiveFocusGoals = async () => {
+      if (!currentUser) {
+        setActiveFocusGoalIds(new Set());
+        return;
+      }
+      try {
+        const focusQuery = query(
+          collection(db, 'focusGoals'),
+          where('ownerUid', '==', currentUser.uid),
+          where('persona', '==', (currentPersona || 'personal')),
+          where('isActive', '==', true),
+        );
+        const focusSnapshot = await getDocs(focusQuery);
+        const ids = new Set<string>();
+        focusSnapshot.docs.forEach((docSnap) => {
+          const goalIds = (docSnap.data() as any)?.goalIds;
+          if (!Array.isArray(goalIds)) return;
+          goalIds.forEach((goalId: any) => {
+            const id = String(goalId || '').trim();
+            if (id) ids.add(id);
+          });
+        });
+        setActiveFocusGoalIds(ids);
+      } catch {
+        setActiveFocusGoalIds(new Set());
+      }
+    };
+    loadActiveFocusGoals();
+  }, [currentUser, currentPersona]);
 
   // Load goals and sprints when component mounts or when quickAddType changes to 'story'
   useEffect(() => {
@@ -151,6 +185,15 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
       });
 
       if (quickAddType === 'goal') {
+        if (activeFocusGoalIds.size > 0) {
+          const proceed = window.confirm(
+            'You have an active focus period. New goals added now will be deferred until after the focus period ends. Continue?'
+          );
+          if (!proceed) {
+            setIsSubmitting(false);
+            return;
+          }
+        }
         // Get existing goal references for unique ref generation
         const existingGoalsQuery = query(
           collection(db, 'goals'),
@@ -257,7 +300,9 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
           tags: [],
           type: taskType,
           persona: currentPersona,
-          sprint: null,
+          sprint: (quickAddData.sprintId || defaultFabSprintId)
+            ? (_availableSprints as any).find((s: any) => s.id === (quickAddData.sprintId || defaultFabSprintId)) || null
+            : null,
           themeValue,
           goalRef: null,
           storyRef: null,
@@ -268,6 +313,7 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
           ref: taskRef,
           parentType: 'story',
           parentId: '', // Will need to be linked later
+          sprintId: quickAddData.sprintId || defaultFabSprintId || null,
           effort: quickAddData.effort,
           priority: quickAddData.priority,
           estimateMin: estimateMinutes,

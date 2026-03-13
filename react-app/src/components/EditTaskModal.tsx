@@ -20,6 +20,7 @@ import { formatTaskTagLabel } from '../utils/tagDisplay';
 import { normalizeTaskTags } from '../utils/taskTagging';
 import { findSprintForDate } from '../utils/taskSprintHelpers';
 import { parsePointsValue, TASK_DEFAULT_POINTS } from '../utils/points';
+import { planningSprints } from '../utils/sprintFilter';
 
 interface EditTaskModalProps {
   show: boolean;
@@ -111,7 +112,7 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
   const [stories, setStories] = useState<Story[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [converting, setConverting] = useState(false);
-  const visibleSprints = sprints.filter((sprint) => !isHiddenSprint(sprint));
+  const visibleSprints = planningSprints(sprints);
   const selectedSprint = form.sprintId ? sprints.find((sprint) => sprint.id === form.sprintId) : null;
   const selectedSprintStatus = selectedSprint
     ? (isStatus(selectedSprint.status, 'closed') ? 'Completed' : (isStatus(selectedSprint.status, 'cancelled') ? 'Cancelled' : ''))

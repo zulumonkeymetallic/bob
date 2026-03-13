@@ -1,8 +1,13 @@
 Comprehensive multi-phase rework spanning web, iOS/iPad, and health platforms:
 
-JD Updated 13 March at 10:13
+JD Updated 13 March at 11:54
 
-Latest execution log (13 March 10:13)
+Latest execution log (13 March 11:54)
+- Completed Phase 5D nightly KPI sync coverage: nightly `syncFitnessKpisNightly` now refreshes persisted `goal_kpi_metrics` docs for each user via `computeGoalFitnessKpisForUser(..., { persist: true })`, and manual `syncFitnessKpisNow` now also refreshes those metric docs for the calling user.
+- Applied Monzo scheduler cost preference: `monzoGoalPotRefLinker` cadence tuned to every 12 hours (instead of aggressive short-interval polling).
+- Audited sprint dropdown selectors across shared selector and creation/edit surfaces; sprint options now consistently show planning sprints only (active/planned), excluding completed/cancelled in selectors used for assignment/filtering.
+- Updated FAB story flow to default sprint selection to active sprint (fallback planned) and removed raw numeric sprint status suffixes in option labels.
+- Added active focus-goal deferral prompts: selecting a non-focus goal in FAB story creation now warns/asks confirmation, and creating a new goal from FAB during an active focus period now prompts that it will be deferred until focus period end.
 - Updated FAB create flows: task quick-add now includes Persona and Source URL fields, effort labels now align to points (`30 mins (0.5)`, `60 mins (1)`, `120 mins (2)`), and task points are persisted from selected effort at create time.
 - Updated FAB story create flow (shared `AddStoryModal`) with Persona and Source URL fields, default persona prefilled from current persona, and story create payload now saves both selected persona and URL.
 - Added focus-goal toggles across `/sprints/planning`, `/goals`, and `/goals/roadmap-v6` with default-on behavior whenever an active focus goal set exists from the wizard.
@@ -1117,13 +1122,13 @@ adherence = [(0.857 + 0.867 + 0.892 + 0.96) / 4] * 100 = 89.4%
 - [x] **Phase 2**: Calendar-time goals created without Sprint stories
 - [x] **Phase 6A**: Firestore undefined guards covered by focused unit tests for story/pot creation helpers
 - [x] **Phase 6B**: Wizard integration flow covered for vision/select/goal-type/timeframe/review/confirm with goalTypeMap assertions
-- [ ] **Phase 3**: Monzo ref prompt shown; backend watcher finds and links pots >5min
+- [x] **Phase 3**: Monzo ref prompt shown; backend watcher links pots on scheduled cadence (cost-tuned)
 - [x] **Phase 4A**: Unaligned banner shows on FocusGoalsPage when active focus exists
 - [x] **Phase 4B**: Sprint Table filter displays unaligned stories only
 - [x] **Phase 4C**: Dashboard widget shows unaligned count + focus % accurately
 - [x] **Phase 5A**: KPI Designer opens from wizard review step
 - [x] **Phase 5C**: KPI charts display on FocusGoalCountdownBanner with correct trends
-- [ ] **Phase 5D**: HealthKit data syncs nightly to goal_kpi_metrics
+- [x] **Phase 5D**: HealthKit data syncs nightly to goal_kpi_metrics
 
 ## iOS/iPad (Phases A-F) Verification Steps
 

@@ -294,8 +294,25 @@ exports.updateGoalTargetYears = schedulerV2.onSchedule(
 // Nightly fitness KPI sync: updates goal KPI progress from Strava/HealthKit workouts
 const syncFitnessKpis = async () => {
   try {
-    const result = await syncAllUsersFitnessKpis();
-    console.log(`✅ Fitness KPI sync completed: ${result.totalSynced} goals updated`);
+    const [fitnessResult, usersSnap] = await Promise.all([
+      syncAllUsersFitnessKpis(),
+      admin.firestore().collection('profiles').get(),
+    ]);
+
+    let metricsDocsUpdated = 0;
+    for (const userDoc of usersSnap.docs) {
+      const uid = String(userDoc.id || '').trim();
+      if (!uid) continue;
+      const rows = await computeGoalFitnessKpisForUser(uid, { persist: true });
+      metricsDocsUpdated += Array.isArray(rows) ? rows.length : 0;
+    }
+
+    const result = {
+      ...fitnessResult,
+      metricsDocsUpdated,
+    };
+
+    console.log(`✅ Fitness KPI sync completed: ${result.totalSynced} goals updated, ${metricsDocsUpdated} goal_kpi_metrics docs refreshed`);
     return result;
   } catch (e) {
     console.error('[fitnessKpiSync] failed', e?.message || e);
@@ -315,8 +332,11 @@ exports.syncFitnessKpisNow = httpsV2.onCall({ region: 'europe-west2' }, async (r
     throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   }
   try {
-    const result = await syncUserFitnessKpis(uid);
-    return { ok: true, ...result };
+    const [result, metricsRows] = await Promise.all([
+      syncUserFitnessKpis(uid),
+      computeGoalFitnessKpisForUser(uid, { persist: true }),
+    ]);
+    return { ok: true, ...result, metricsDocsUpdated: Array.isArray(metricsRows) ? metricsRows.length : 0 };
   } catch (e) {
     console.error('[fitnessKpiSync] user sync failed:', e);
     throw new httpsV2.HttpsError('internal', e?.message || 'Sync failed');
@@ -10696,7 +10716,7 @@ exports.suggestTaskStoryConversions = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDI
   };
 });
 
-exports.monzoGoalPotRefLinker = schedulerV2.onSchedule('every 30 minutes', async () => {
+exports.monzoGoalPotRefLinker = schedulerV2.onSchedule('every 12 hours', async () => {
   const db = admin.firestore();
   const tokens = await db.collection('tokens').where('provider', '==', 'monzo').get();
   let usersChecked = 0;

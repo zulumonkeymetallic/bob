@@ -8,6 +8,7 @@ import { useSprint } from '../contexts/SprintContext';
 import { generateRef } from '../utils/referenceGenerator';
 import { parsePointsValue } from '../utils/points';
 import TagInput from './common/TagInput';
+import { planningSprints, pickDefaultPlanningSprintId } from '../utils/sprintFilter';
 
 interface AddStoryModalProps {
   onClose: () => void;
@@ -26,11 +27,9 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const { sprints: allSprints } = useSprint();
-  const sprints = allSprints.filter((s) => {
-    const st = String(s.status || '').toLowerCase();
-    return !['closed', 'completed', 'done', 'cancelled', 'archived'].includes(st);
-  });
+  const sprints = planningSprints(allSprints);
   const [goals, setGoals] = useState<Goal[]>([]);
+  const [activeFocusGoalIds, setActiveFocusGoalIds] = useState<Set<string>>(new Set());
   const [formData, setFormData] = useState({
     title: '',
     description: '',
@@ -83,12 +82,49 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
   // Keep persona prefilled from the currently selected app persona when opening.
   useEffect(() => {
     if (show) {
+      const defaultSprintId = pickDefaultPlanningSprintId(allSprints);
       setFormData(prev => ({
         ...prev,
         persona: (currentPersona || 'personal') as 'personal' | 'work',
+        sprintId: prev.sprintId || defaultSprintId,
       }));
     }
-  }, [show, currentPersona]);
+  }, [show, currentPersona, allSprints]);
+
+  useEffect(() => {
+    if (!show || !currentUser) {
+      setActiveFocusGoalIds(new Set());
+      return;
+    }
+    let mounted = true;
+    const loadFocusGoals = async () => {
+      try {
+        const focusQuery = query(
+          collection(db, 'focusGoals'),
+          where('ownerUid', '==', currentUser.uid),
+          where('persona', '==', (formData.persona || currentPersona || 'personal')),
+          where('isActive', '==', true),
+        );
+        const snapshot = await getDocs(focusQuery);
+        const ids = new Set<string>();
+        snapshot.docs.forEach((docSnap) => {
+          const goalIds = (docSnap.data() as any)?.goalIds;
+          if (!Array.isArray(goalIds)) return;
+          goalIds.forEach((goalId: any) => {
+            const id = String(goalId || '').trim();
+            if (id) ids.add(id);
+          });
+        });
+        if (mounted) setActiveFocusGoalIds(ids);
+      } catch {
+        if (mounted) setActiveFocusGoalIds(new Set());
+      }
+    };
+    loadFocusGoals();
+    return () => {
+      mounted = false;
+    };
+  }, [show, currentUser, currentPersona, formData.persona]);
 
   // Load goals and sprints when modal opens
   useEffect(() => {
@@ -188,6 +224,19 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
         timestamp: new Date().toISOString()
       });
       return;
+    }
+
+    if (
+      activeFocusGoalIds.size > 0
+      && formData.goalId
+      && !activeFocusGoalIds.has(String(formData.goalId))
+    ) {
+      const proceed = window.confirm(
+        'This goal is not in your active focus goals. Work linked here will be deferred until after the current focus period ends. Continue?'
+      );
+      if (!proceed) {
+        return;
+      }
     }
 
     setIsSubmitting(true);
@@ -370,6 +419,12 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
             </Form.Text>
           </Form.Group>
 
+          {activeFocusGoalIds.size > 0 && formData.goalId && !activeFocusGoalIds.has(String(formData.goalId)) && (
+            <Alert variant="warning" className="mb-3">
+              This goal is outside your active focus set. If you continue, this work will be deferred until after the current focus period.
+            </Alert>
+          )}
+
           <Form.Group className="mb-3">
             <Form.Label>Assign to Sprint</Form.Label>
             <Form.Select
@@ -399,7 +454,7 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
               <option value="">No sprint (backlog)</option>
               {sprints.map(sprint => (
                 <option key={sprint.id} value={sprint.id}>
-                  {sprint.name} ({sprint.status})
+                  {sprint.name}
                 </option>
               ))}
             </Form.Select>

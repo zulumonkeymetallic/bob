@@ -16,6 +16,7 @@ import ModernTaskTable from './ModernTaskTable';
 import { cascadeStoryPersona } from '../utils/personaCascade';
 import { useNavigate } from 'react-router-dom';
 import { Wand2 } from 'lucide-react';
+import { planningSprints } from '../utils/sprintFilter';
 
 interface EditStoryModalProps {
   show: boolean;
@@ -73,7 +74,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
       : (isStatus(sprint.status, 'active') ? ' (Active)' : '');
     return `${name}${statusLabel}`;
   };
-  const visibleSprints = sprints.filter((sprint) => !isHiddenSprint(sprint));
+  const visibleSprints = planningSprints(sprints);
   const selectedSprint = editedStory.sprintId ? sprints.find((sprint) => sprint.id === editedStory.sprintId) : null;
   const selectedSprintStatus = selectedSprint
     ? (isStatus(selectedSprint.status, 'closed') ? 'Completed' : (isStatus(selectedSprint.status, 'cancelled') ? 'Cancelled' : ''))
