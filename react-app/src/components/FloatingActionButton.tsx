@@ -42,9 +42,11 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
   const [quickAddData, setQuickAddData] = useState({
     title: '',
     description: '',
+    url: '',
     theme: 'General',
     effort: 'M',
     priority: 'med',
+    persona: (currentPersona || 'personal') as 'personal' | 'work',
     goalId: '',
     sprintId: '',
     type: 'task',
@@ -67,9 +69,9 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
 
   const themes = GLOBAL_THEMES.map(theme => theme.name);
   const efforts = [
-    { value: 'S', label: 'Small (15-30 min)', minutes: 20 },
-    { value: 'M', label: 'Medium (30-60 min)', minutes: 45 },
-    { value: 'L', label: 'Large (1-2 hours)', minutes: 90 }
+    { value: 'S', label: '30 mins (0.5)', minutes: 30, points: 0.5 },
+    { value: 'M', label: '60 mins (1)', minutes: 60, points: 1 },
+    { value: 'L', label: '120 mins (2)', minutes: 120, points: 2 }
   ];
   const isRecurringQuickAdd = quickAddType === 'task' && ['chore', 'routine', 'habit'].includes(String(quickAddData.type || '').toLowerCase());
 
@@ -135,7 +137,8 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
       const baseData = {
         title: quickAddData.title.trim(),
         description: quickAddData.description.trim(),
-        persona: currentPersona,
+        url: quickAddData.url.trim() || null,
+        persona: (quickAddData.persona || currentPersona || 'personal') as 'personal' | 'work',
         ownerUid: currentUser.uid,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
@@ -240,6 +243,7 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
         const taskRef = generateRef('task', existingRefs);
         const effortData = efforts.find(e => e.value === quickAddData.effort);
         const estimateMinutes = effortData?.minutes || 45;
+        const effortPoints = effortData?.points ?? 1;
         const estimatedHours = Math.round((estimateMinutes / 60) * 100) / 100;
         const taskType = (quickAddData.type || 'task') as string;
         const isRecurring = ['chore', 'routine', 'habit'].includes(taskType);
@@ -268,6 +272,7 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
           priority: quickAddData.priority,
           estimateMin: estimateMinutes,
           estimatedHours,
+          points: effortPoints,
           status: 0,
           theme: themeValue,
           type: taskType,
@@ -318,9 +323,11 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
       setQuickAddData({
         title: '',
         description: '',
+        url: '',
         theme: 'Growth',
         effort: 'M',
         priority: 'med',
+        persona: (currentPersona || 'personal') as 'personal' | 'work',
         goalId: '',
         sprintId: '',
         type: 'task',
@@ -395,6 +402,10 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
             className="md-fab-mini"
             onClick={() => {
               setQuickAddType('goal');
+              setQuickAddData((prev) => ({
+                ...prev,
+                persona: (currentPersona || 'personal') as 'personal' | 'work',
+              }));
               setShowQuickAdd(true);
               setShowMenu(false);
             }}
@@ -406,6 +417,10 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
             className="md-fab-mini"
             onClick={() => {
               setQuickAddType('story');
+              setQuickAddData((prev) => ({
+                ...prev,
+                persona: (currentPersona || 'personal') as 'personal' | 'work',
+              }));
               setShowQuickAdd(true);
               setShowMenu(false);
             }}
@@ -427,6 +442,10 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
             className="md-fab-mini"
             onClick={() => {
               setQuickAddType('task');
+              setQuickAddData((prev) => ({
+                ...prev,
+                persona: (currentPersona || 'personal') as 'personal' | 'work',
+              }));
               setShowQuickAdd(true);
               setShowMenu(false);
             }}
@@ -590,6 +609,31 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
                 placeholder={`Describe this ${quickAddType}...`}
               />
             </Form.Group>
+
+            {quickAddType === 'task' && (
+              <Form.Group className="mb-3">
+                <Form.Label>Source URL</Form.Label>
+                <Form.Control
+                  type="url"
+                  value={quickAddData.url}
+                  onChange={(e) => setQuickAddData({ ...quickAddData, url: e.target.value })}
+                  placeholder="https://..."
+                />
+              </Form.Group>
+            )}
+
+            {quickAddType === 'task' && (
+              <Form.Group className="mb-3">
+                <Form.Label>Persona</Form.Label>
+                <Form.Select
+                  value={quickAddData.persona}
+                  onChange={(e) => setQuickAddData({ ...quickAddData, persona: e.target.value as 'personal' | 'work' })}
+                >
+                  <option value="personal">Personal</option>
+                  <option value="work">Work</option>
+                </Form.Select>
+              </Form.Group>
+            )}
 
             {(quickAddType === 'goal' || quickAddType === 'task') && (
               <Form.Group className="mb-3">

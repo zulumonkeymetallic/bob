@@ -1,8 +1,10 @@
 Comprehensive multi-phase rework spanning web, iOS/iPad, and health platforms:
 
-JD Updated 13 March at 09:59
+JD Updated 13 March at 10:13
 
-Latest execution log (13 March 09:59)
+Latest execution log (13 March 10:13)
+- Updated FAB create flows: task quick-add now includes Persona and Source URL fields, effort labels now align to points (`30 mins (0.5)`, `60 mins (1)`, `120 mins (2)`), and task points are persisted from selected effort at create time.
+- Updated FAB story create flow (shared `AddStoryModal`) with Persona and Source URL fields, default persona prefilled from current persona, and story create payload now saves both selected persona and URL.
 - Added focus-goal toggles across `/sprints/planning`, `/goals`, and `/goals/roadmap-v6` with default-on behavior whenever an active focus goal set exists from the wizard.
 - Implemented Phase 5C KPI charting in Focus Goal countdown cards: banner now loads `goal_kpi_metrics` per active focus goal and renders compact KPI trend mini-charts (fallback series when sparse data) alongside current/target values.
 - Added Sprint Planner route visibility in web Stories navigation and placed a Sprint Planner button immediately left of View Overview in Sprint Kanban actions.

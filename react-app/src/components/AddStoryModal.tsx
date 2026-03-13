@@ -34,10 +34,12 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
   const [formData, setFormData] = useState({
     title: '',
     description: '',
+    url: '',
     goalId: goalId || '', // Pre-select goal if provided
     sprintId: '',
     priority: 2,
     points: 3,
+    persona: (currentPersona || 'personal') as 'personal' | 'work',
     dueDate: '',
     dueTime: '',
     timeOfDay: '' as 'morning' | 'afternoon' | 'evening' | '',
@@ -78,6 +80,16 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
     }
   }, [show, currentUser, currentPersona]);
 
+  // Keep persona prefilled from the currently selected app persona when opening.
+  useEffect(() => {
+    if (show) {
+      setFormData(prev => ({
+        ...prev,
+        persona: (currentPersona || 'personal') as 'personal' | 'work',
+      }));
+    }
+  }, [show, currentPersona]);
+
   // Load goals and sprints when modal opens
   useEffect(() => {
     if (show && currentUser) {
@@ -104,6 +116,7 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
           });
 
           const goalsSnapshot = await getDocs(goalsQuery);
+          const selectedPersona = (formData.persona || currentPersona || 'personal') as 'personal' | 'work';
           const goalsData = goalsSnapshot.docs
             .map(doc => ({
               id: doc.id,
@@ -112,7 +125,7 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
               persona: doc.data().persona as any
             }))
             .filter(goal => {
-              if (currentPersona === 'work') return goal.persona === 'work';
+              if (selectedPersona === 'work') return goal.persona === 'work';
               return goal.persona == null || goal.persona === 'personal';
             });
 
@@ -142,7 +155,7 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
       loadData();
       return () => { mounted = false; };
     }
-  }, [show, currentUser, currentPersona]);
+  }, [show, currentUser, currentPersona, formData.persona]);
 
   const handleClose = () => {
     console.log('🖱️ AddStoryModal: Cancel button clicked', {
@@ -151,7 +164,7 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
       formData: formData,
       timestamp: new Date().toISOString()
     });
-    setFormData({ title: '', description: '', goalId: '', sprintId: '', priority: 2, points: 3, dueDate: '', dueTime: '', timeOfDay: '', tags: [] });
+    setFormData({ title: '', description: '', url: '', goalId: '', sprintId: '', priority: 2, points: 3, persona: (currentPersona || 'personal') as 'personal' | 'work', dueDate: '', dueTime: '', timeOfDay: '', tags: [] });
     setSubmitResult(null);
     onClose();
   };
@@ -215,6 +228,7 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
         ref: ref, // Add reference number
         title: formData.title.trim(),
         description: formData.description.trim(),
+          url: formData.url.trim() || null,
         goalId: formData.goalId,
         sprintId: formData.sprintId || null,
         priority: formData.priority,
@@ -224,7 +238,7 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
         timeOfDay: formData.timeOfDay || null,
         status: 0,
         theme: linkedGoal?.theme ?? 1,
-        persona: currentPersona || 'personal',
+          persona: formData.persona || currentPersona || 'personal',
         ownerUid: currentUser.uid, // Ensure ownerUid is included
         orderIndex: Date.now(), // Simple ordering by creation time
         tags: formData.tags,
@@ -250,7 +264,7 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
       });
 
       setSubmitResult(`✅ Story created successfully! (${ref})`);
-      setFormData({ title: '', description: '', goalId: '', sprintId: '', priority: 2, points: 3, dueDate: '', dueTime: '', timeOfDay: '', tags: [] });
+      setFormData({ title: '', description: '', url: '', goalId: '', sprintId: '', priority: 2, points: 3, persona: (currentPersona || 'personal') as 'personal' | 'work', dueDate: '', dueTime: '', timeOfDay: '', tags: [] });
 
       // Auto-close after success
       setTimeout(() => {
@@ -298,6 +312,30 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
               onChange={(e) => setFormData({ ...formData, description: e.target.value })}
               placeholder="Describe this story..."
             />
+          </Form.Group>
+
+          <Form.Group className="mb-3">
+            <Form.Label>Source URL</Form.Label>
+            <Form.Control
+              type="url"
+              value={formData.url}
+              onChange={(e) => setFormData({ ...formData, url: e.target.value })}
+              placeholder="https://..."
+            />
+          </Form.Group>
+
+          <Form.Group className="mb-3">
+            <Form.Label>Persona</Form.Label>
+            <Form.Select
+              value={formData.persona}
+              onChange={(e) => {
+                setGoalInput('');
+                setFormData({ ...formData, persona: e.target.value as 'personal' | 'work', goalId: '', sprintId: '' });
+              }}
+            >
+              <option value="personal">Personal</option>
+              <option value="work">Work</option>
+            </Form.Select>
           </Form.Group>
 
           <Form.Group className="mb-3">
