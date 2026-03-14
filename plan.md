@@ -3,6 +3,11 @@ Comprehensive multi-phase rework spanning web, iOS/iPad, and health platforms:
 JD Updated 13 March at 15:55
 
 Latest execution log (14 March 2026)
+- 14 Mar 2026: Audited local and recent remote branches before merge-to-main preparation.
+  - `codex/focus-goal-kpi-roadmap-pr` fully subsumes the active local implementation line from `feature/focus-goals-enhancements-consolidated-local` and the stale local copies of `feature/dashboard-mobile-priority-replan-consistency` / `feature/finance-enhancements-continue`.
+  - The only local branch with an extra commit was `backup/pre-split-0f3950a0`, but that delta was not merged because it consists of older planner/dashboard state plus generated markdown/cache artifacts; the actual planner/travel code from that branch is already present on the PR branch in current files.
+  - Recent remote branches with unique commits outside this PR were reviewed at a high level and are older unrelated workstreams (finance reconciliation, planner notes, calendar sync, legacy fixes) rather than missing pieces of the current hierarchical focus-goal/KPI/check-in slice.
+  - Merge readiness decision: PR branch `codex/focus-goal-kpi-roadmap-pr` is the correct integration branch for the current roadmap/focus-goal/KPI work and does not need an additional wholesale branch merge before landing to `main`.
 - 14 Mar 2026: Upgraded roadmap V6 to be hierarchy-aware inside theme groups and reduced lane height.
   - `react-app/src/components/visualization/GoalRoadmapV6.tsx` now resolves goal theme context with parent-theme fallback when a leaf goal does not carry its own theme, so child goals stay inside the correct strategic theme lane.
   - The roadmap is no longer only a flat theme grouping: theme tracks are now subdivided into parent-goal sections, with child/leaf goals rendered inside their parent section rather than as an undifferentiated list.
