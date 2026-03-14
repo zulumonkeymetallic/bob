@@ -2,6 +2,34 @@ Comprehensive multi-phase rework spanning web, iOS/iPad, and health platforms:
 
 JD Updated 13 March at 15:55
 
+Current Status
+
+Completed Recently
+- Hierarchical focus goals, leaf-goal execution enforcement, structured KPI authoring, KPI dashboard surfacing, and atomic daily check-in are implemented in the live web app.
+- Weekly check-in now shows focus-goal progress and reads persisted weekly KPI snapshots, with server-side snapshot writing in place for forward coverage.
+- Focus-goal creation now supports milestone planning and sprint rollout mapping, and roadmap V6 now renders denser theme lanes with parent-goal sections and hierarchy-aware context.
+- Branch integration audit is complete: `codex/focus-goal-kpi-roadmap-pr` is the correct merge candidate for the current focus-goal / KPI / check-in slice.
+
+Still Open
+- Daily Plan remains the main unresolved UX cluster:
+  - bulk review table and remaining triage workflow
+  - full modal-first item editing flow completion
+  - filterable count chips and focus-aware deferral polish
+  - wider modal-only audit across adjacent surfaces called out later in this document
+- Repo-wide leaf-goal normalization is not fully complete yet; the primary flows are covered, but secondary legacy creation surfaces can still stamp raw parent `goalId` values directly.
+- Firebase App Check still needs console-side production verification for `bob.jc1.tech`; the current client cooldown is a mitigation, not the final fix.
+- Health / fitness roadmap items remain open later in this document, including broader health data foundation work, dashboard health surfacing, `/fitness`, and nutrition-advisor follow-through.
+- Historical KPI backfill remains optional/deferred; forward weekly snapshot coverage is in place, but exact older-week reconstruction is still limited.
+
+Next Up
+- Rebase this branch on `origin/main`, rebuild, and deploy web production.
+- Finish the Daily Plan defect cluster described later in this document under the DPO sections.
+- Verify Firebase Console App Check configuration after deploy.
+- Resume the broader health / fitness surfaces once Daily Plan and App Check are stable.
+
+Historical Log And Detailed Roadmap
+- The full execution log and the longer roadmap notes remain below unchanged for auditability and context.
+
 Latest execution log (14 March 2026)
 - 14 Mar 2026: Audited local and recent remote branches before merge-to-main preparation.
   - `codex/focus-goal-kpi-roadmap-pr` fully subsumes the active local implementation line from `feature/focus-goals-enhancements-consolidated-local` and the stale local copies of `feature/dashboard-mobile-priority-replan-consistency` / `feature/finance-enhancements-continue`.
