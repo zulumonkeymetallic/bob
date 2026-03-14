@@ -31,6 +31,11 @@ Historical Log And Detailed Roadmap
 - The full execution log and the longer roadmap notes remain below unchanged for auditability and context.
 
 Latest execution log (14 March 2026)
+- 14 Mar 2026: Rebasing + deploy preparation completed for `codex/focus-goal-kpi-roadmap-pr`.
+  - Rebasing this branch onto `origin/main` succeeded using conflict preference toward the current upstream side, which automatically dropped older commits whose patch content was already effectively present upstream.
+  - Post-rebase validation: `npm run -s build --prefix react-app` completed successfully again on the rebased branch. Remaining output is still the repo’s existing ESLint noise, bundle-size warnings, and `rrule` source-map warnings.
+  - Web production deploy was run via `./build web` from the rebased branch.
+  - Follow-up note: the generated `/Users/jim/GitHub/bob/build-logs/manifest.json` contains placeholder/garbled values for web version/commit metadata, so the manifest writer in the orchestrator still needs cleanup if you want that artifact to be a reliable release record.
 - 14 Mar 2026: Audited local and recent remote branches before merge-to-main preparation.
   - `codex/focus-goal-kpi-roadmap-pr` fully subsumes the active local implementation line from `feature/focus-goals-enhancements-consolidated-local` and the stale local copies of `feature/dashboard-mobile-priority-replan-consistency` / `feature/finance-enhancements-continue`.
   - The only local branch with an extra commit was `backup/pre-split-0f3950a0`, but that delta was not merged because it consists of older planner/dashboard state plus generated markdown/cache artifacts; the actual planner/travel code from that branch is already present on the PR branch in current files.
