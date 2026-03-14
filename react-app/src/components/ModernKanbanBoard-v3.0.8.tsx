@@ -157,7 +157,7 @@ const DroppableArea: React.FC<{
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
               <Badge 
-                bg={isPriority(story.priority, 'High') ? 'danger' : isPriority(story.priority, 'Medium') ? 'warning' : 'secondary'}
+                bg={isPriority(story.priority, 'High') ? 'orange' : isPriority(story.priority, 'Medium') ? 'warning' : 'secondary'}
                 style={{ fontSize: '10px' }}
               >
                 {story.priority}
@@ -277,7 +277,7 @@ const DroppableArea: React.FC<{
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
               <Badge 
-                bg={isPriority(task.priority, 'high') ? 'danger' : isPriority(task.priority, 'med') ? 'warning' : 'secondary'}
+                bg={isPriority(task.priority, 'high') ? 'orange' : isPriority(task.priority, 'med') ? 'warning' : 'secondary'}
                 style={{ fontSize: '9px' }}
               >
                 {task.priority}

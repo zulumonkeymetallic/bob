@@ -7,6 +7,7 @@ import {
   onSnapshot,
   serverTimestamp,
   Timestamp,
+  getDocs,
   limit as fslimit
 } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -24,14 +25,18 @@ export type ActivityType =
   | 'story_status_from_reminder'
   | 'scheduler_due_date_adjustment'
   | 'ai_due_date_adjustment'
+  | 'transcript_ingestion'
   | 'automation_event'
   | 'automation_alert'
-  | 'automation_activity';
+  | 'automation_activity'
+  | 'auto_linked'
+  | 'link_suggested'
+  | 'link_accepted';
 
 export interface ActivityEntry {
   id?: string;
   entityId: string;
-  entityType: 'goal' | 'story' | 'task' | 'calendar_block';
+  entityType: 'goal' | 'story' | 'task' | 'calendar_block' | 'journal' | 'transcript_ingestion';
   activityType: ActivityType;
   userId: string;
   userEmail?: string;
@@ -55,6 +60,7 @@ export interface ActivityEntry {
   // Source tracking (Human, Function, AI)
   source: ActivitySource;
   sourceDetails?: string;
+  metadata?: Record<string, any>;
 }
 
 export class ActivityStreamService {
@@ -76,6 +82,81 @@ export class ActivityStreamService {
       console.error('Error adding activity:', error);
       throw error;
     }
+  }
+
+  // Fetch latest note comments for a set of entities.
+  static async getLatestNotesForEntities(
+    userId: string,
+    entities: Array<{ entityId: string; entityType?: 'task' | 'story' | 'goal' }>
+  ): Promise<Map<string, { noteContent: string; timestampMs: number | null }>> {
+    const result = new Map<string, { noteContent: string; timestampMs: number | null }>();
+    if (!userId || !Array.isArray(entities) || entities.length === 0) return result;
+
+    const uniqueIds = Array.from(new Set(entities.map((e) => String(e?.entityId || '').trim()).filter(Boolean)));
+    if (uniqueIds.length === 0) return result;
+
+    const batches: string[][] = [];
+    for (let i = 0; i < uniqueIds.length; i += 10) {
+      batches.push(uniqueIds.slice(i, i + 10));
+    }
+
+    const toMillis = (ts: any): number | null => {
+      if (!ts) return null;
+      if (typeof ts?.toMillis === 'function') return ts.toMillis();
+      if (typeof ts === 'number' && Number.isFinite(ts)) return ts;
+      if (typeof ts?.toDate === 'function') {
+        const d = ts.toDate();
+        return d instanceof Date ? d.getTime() : null;
+      }
+      return null;
+    };
+
+    const upsertLatest = (docData: any) => {
+      const entityId = String(docData?.entityId || '').trim();
+      if (!entityId) return;
+      const noteContent = String(docData?.noteContent || '').trim();
+      if (!noteContent) return;
+      const timestampMs = toMillis(docData?.timestamp);
+      const prev = result.get(entityId);
+      if (!prev || (timestampMs || 0) > (prev.timestampMs || 0)) {
+        result.set(entityId, { noteContent, timestampMs });
+      }
+    };
+
+    for (const batch of batches) {
+      try {
+        const q = query(
+          collection(db, 'activity_stream'),
+          where('ownerUid', '==', userId),
+          where('activityType', '==', 'note_added'),
+          where('entityId', 'in', batch),
+          orderBy('timestamp', 'desc'),
+          fslimit(200)
+        );
+        const snap = await getDocs(q);
+        snap.docs.forEach((docSnap) => upsertLatest(docSnap.data() as any));
+      } catch (error) {
+        // Fallback path if composite index is unavailable: per-entity lookups.
+        for (const entityId of batch) {
+          try {
+            const qEntity = query(
+              collection(db, 'activity_stream'),
+              where('ownerUid', '==', userId),
+              where('activityType', '==', 'note_added'),
+              where('entityId', '==', entityId),
+              orderBy('timestamp', 'desc'),
+              fslimit(1)
+            );
+            const snapEntity = await getDocs(qEntity);
+            if (!snapEntity.empty) upsertLatest(snapEntity.docs[0].data() as any);
+          } catch {
+            // Ignore entity-level failures so the UI can still render.
+          }
+        }
+      }
+    }
+
+    return result;
   }
 
   // Log field changes with source tracking
@@ -271,7 +352,11 @@ export class ActivityStreamService {
           const desc = String(a.description || '').toLowerCase();
           if (t === 'note_added' && (desc.startsWith('viewed ') || desc.startsWith('opened activity'))) return false;
           return true;
-        }) as ActivityEntry[];
+        }).map((entry) => ({
+          ...entry,
+          sourceDetails: (entry as any).sourceDetails,
+          metadata: (entry as any).metadata || null,
+        })) as ActivityEntry[];
         // Safety: ensure newest first even if some timestamps resolve later
         const sorted = activities.sort((a, b) => {
           const ta = (a.timestamp as any)?.toMillis ? (a.timestamp as any).toMillis() : 0;
@@ -397,7 +482,9 @@ export class ActivityStreamService {
                 description,
                 persona: data.persona,
                 referenceNumber: data.referenceNumber,
-                source: (data.source as ActivitySource) || 'system'
+                source: (data.source as ActivitySource) || 'system',
+                sourceDetails: data.sourceDetails,
+                metadata: data.metadata || null,
               };
             });
             emit();

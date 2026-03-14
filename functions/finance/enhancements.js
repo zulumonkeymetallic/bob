@@ -126,6 +126,50 @@ function parseMoneyMinor(value) {
   return minor;
 }
 
+// Strip common PayPal sender prefixes ("PAYPAL *", "PP*", "Payment to") so the
+// real merchant name is what survives into tokenization and merchantKey.
+function extractPayPalMerchant(description) {
+  let text = String(description || '').trim();
+  text = text
+    .replace(/^paypal\s*\*+\s*/i, '')
+    .replace(/^pp\s*\*+\s*/i, '')
+    .replace(/^paypal[.\s]+/i, '')
+    .replace(/^payment\s+to\s+/i, '');
+  const segment = text.split(/[-*|,]/)[0].trim();
+  return segment || text || '';
+}
+
+// Detect same-merchant reversal pairs (auth+void, charge+refund) within 7 days
+// and tag both rows as 'reversed_pair' so they are excluded from Monzo matching.
+function collapsePayPalReversals(rows) {
+  const WINDOW_MS = 7 * DAY_MS;
+  const tagged = new Set();
+  for (let i = 0; i < rows.length; i++) {
+    if (tagged.has(i) || rows[i].lifecycleStatus) continue;
+    const a = rows[i];
+    for (let j = i + 1; j < rows.length; j++) {
+      if (tagged.has(j)) continue;
+      const b = rows[j];
+      if (b.postedDateMs - a.postedDateMs > WINDOW_MS) break;
+      const sameAmount = Math.abs(Math.abs(a.amountMinor) - Math.abs(b.amountMinor)) <= 5;
+      const oppositeSign = (a.amountMinor > 0) !== (b.amountMinor > 0);
+      const sameMerchant = a.merchantKey && b.merchantKey && (
+        a.merchantKey === b.merchantKey ||
+        a.merchantKey.includes(b.merchantKey) ||
+        b.merchantKey.includes(a.merchantKey)
+      );
+      if (sameAmount && oppositeSign && sameMerchant) {
+        rows[i].lifecycleStatus = 'reversed_pair';
+        rows[j].lifecycleStatus = 'reversed_pair';
+        tagged.add(i);
+        tagged.add(j);
+        break;
+      }
+    }
+  }
+  return rows;
+}
+
 function buildExternalRowsFromCsv(csvText, source) {
   const rows = parseCsvRows(csvText);
   if (!rows.length) return [];
@@ -147,6 +191,8 @@ function buildExternalRowsFromCsv(csvText, source) {
   const creditIdx = idx(['credit', 'deposit', 'in']);
   const amountIdx = idx(['amount', 'value'], 2);
   const idIdx = idx(['id', 'reference', 'txn', 'transaction id', 'unique']);
+  // PayPal CSVs include a Status column: only import Completed rows; tag Reversed rows explicitly
+  const statusIdx = source === 'paypal' ? idx(['status', 'state']) : -1;
 
   const result = [];
   dataRows.forEach((row, index) => {
@@ -154,6 +200,11 @@ function buildExternalRowsFromCsv(csvText, source) {
     const dateRaw = dateIdx >= 0 ? row[dateIdx] : row[0];
     const dateMs = parseDateMs(dateRaw);
     if (!dateMs) return;
+    if (source === 'paypal' && statusIdx >= 0) {
+      const rowStatus = String(row[statusIdx] || '').toLowerCase().trim();
+      // Skip rows that haven't cleared yet — they won't have a Monzo counterpart
+      if (rowStatus === 'pending' || rowStatus === 'held' || rowStatus === 'on hold') return;
+    }
 
     let amountMinor = null;
     const debitMinor = debitIdx >= 0 ? parseMoneyMinor(row[debitIdx]) : null;
@@ -171,11 +222,16 @@ function buildExternalRowsFromCsv(csvText, source) {
       if (!keepPositive) amountMinor = -Math.abs(amountMinor);
     }
 
-    const merchantName = description.split(/[-*|]/)[0].trim() || description || `${source}-${index + 1}`;
+    const merchantName = source === 'paypal'
+      ? (extractPayPalMerchant(description) || description.split(/[-*|]/)[0].trim() || `${source}-${index + 1}`)
+      : (description.split(/[-*|]/)[0].trim() || description || `${source}-${index + 1}`);
     const merchantKey = normaliseMerchantName(merchantName);
     const externalRef = idIdx >= 0 ? String(row[idIdx] || '').trim() : '';
     const fingerprint = `${source}|${externalRef || `${dateMs}|${amountMinor}|${description}|${index}`}`;
     const externalId = crypto.createHash('sha1').update(fingerprint).digest('hex').slice(0, 24);
+    // Tag rows that the PayPal CSV itself marks as reversed so the collapse pass can also catch them
+    const lifecycleStatus = source === 'paypal' && statusIdx >= 0
+      && String(row[statusIdx] || '').toLowerCase().trim() === 'reversed' ? 'reversed' : null;
     result.push({
       source,
       externalId,
@@ -188,9 +244,12 @@ function buildExternalRowsFromCsv(csvText, source) {
       description: description || merchantName,
       merchantName,
       merchantKey,
+      lifecycleStatus,
       rawRow: row,
     });
   });
+  // For PayPal, run a reversal-collapse pass before returning so paired rows are excluded from matching
+  if (source === 'paypal') return collapsePayPalReversals(result);
   return result;
 }
 
@@ -315,7 +374,11 @@ function tokenize(value) {
     .replace(/[^a-z0-9 ]+/g, ' ')
     .split(/\s+/)
     .map((v) => v.trim())
-    .filter((v) => v && !['the', 'and', 'ltd', 'limited', 'plc', 'payment', 'card'].includes(v));
+    .filter((v) => v && ![
+      'the', 'and', 'ltd', 'limited', 'plc', 'payment', 'card',
+      // PayPal-specific tokens that always appear on one side and never the other
+      'paypal', 'pp', 'online', 'services', 'transfer', 'via',
+    ].includes(v));
 }
 
 function jaccard(a, b) {
@@ -423,6 +486,7 @@ const importExternalFinanceTransactions = httpsV2.onCall({ region: FUNCTION_REGI
       description: row.description,
       merchantName: row.merchantName,
       merchantKey: row.merchantKey || normaliseMerchantName(row.merchantName || row.description || row.externalId),
+      lifecycleStatus: row.lifecycleStatus || null,
       rawRow: row.rawRow || null,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       importedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -569,7 +633,9 @@ const matchExternalToMonzoTransactions = httpsV2.onCall({ region: FUNCTION_REGIO
 
   const externalRows = externalSnap.docs
     .map((d) => ({ id: d.id, ref: d.ref, ...(d.data() || {}) }))
-    .filter((row) => !source || row.source === source);
+    .filter((row) => !source || row.source === source)
+    // Exclude lifecycle-excluded rows: pending (not settled) and reversed pairs (net zero)
+    .filter((row) => row.lifecycleStatus !== 'reversed_pair' && row.lifecycleStatus !== 'pending');
   if (!externalRows.length) {
     return { ok: true, matched: 0, unmatched: 0, source, message: 'No external rows available for matching.' };
   }
@@ -611,12 +677,15 @@ const matchExternalToMonzoTransactions = httpsV2.onCall({ region: FUNCTION_REGIO
     const extTokens = tokenize(`${ext.merchantName || ''} ${ext.description || ''}`);
     if (!extDateMs || !extAmountMinor) continue;
 
+    // PayPal records the order date; Monzo sees settlement 1–2 days later. Shift the
+    // external date forward by one day so the window is centred on the actual Monzo post date.
+    const extDateMsForComp = ext.source === 'paypal' ? extDateMs + DAY_MS : extDateMs;
     let best = null;
     for (const monzo of monzoRows) {
       if (usedMonzo.has(monzo.docId)) continue;
       const amountDiff = Math.abs(monzo.amountMinor - extAmountMinor);
       if (amountDiff > amountTolerancePence) continue;
-      const dateDiffDays = Math.abs(monzo.dateMs - extDateMs) / DAY_MS;
+      const dateDiffDays = Math.abs(monzo.dateMs - extDateMsForComp) / DAY_MS;
       if (dateDiffDays > windowDays) continue;
       const similarity = jaccard(extTokens, monzo.merchantTokens);
       const normalizedAmount = amountDiff / amountTolerancePence;

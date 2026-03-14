@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Container, Row, Col, Card, Button, Modal, Form, Alert, Table, Badge } from 'react-bootstrap';
 import { 
   Calendar as CalendarIcon, 
@@ -15,7 +15,7 @@ import {
 import { useAuth } from '../../contexts/AuthContext';
 import { usePersona } from '../../contexts/PersonaContext';
 import { httpsCallable } from 'firebase/functions';
-import { doc, getDoc, onSnapshot } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, limit, onSnapshot, query, where } from 'firebase/firestore';
 import { db, functions, firebaseConfig } from '../../firebase';
 import { ActivityStreamService, ActivityEntry } from '../../services/ActivityStreamService';
 
@@ -35,9 +35,35 @@ interface CalendarEvent {
   linkedGoalId?: string;
   linkedStoryId?: string;
   linkedTaskId?: string;
+  linkedBlockId?: string;
+  calendarMatchSource?: string;
+  calendarMatchNote?: string;
+  calendarMatchScore?: number;
+  calendarMatchConfidence?: number;
+  calendarMatchConfidenceTier?: 'high' | 'medium' | 'low';
   source: 'google' | 'outlook' | 'manual';
   recurringPattern?: string;
   reminderMinutes?: number;
+}
+
+interface EventLinkContext {
+  blockId: string;
+  storyId?: string;
+  taskId?: string;
+  goalId?: string;
+  calendarMatchSource?: string;
+  calendarMatchNote?: string;
+  calendarMatchScore?: number;
+  calendarMatchConfidence?: number;
+  calendarMatchConfidenceTier?: 'high' | 'medium' | 'low';
+}
+
+interface RelinkCandidate {
+  kind: 'story' | 'task';
+  id: string;
+  title: string;
+  score: number;
+  storyId?: string;
 }
 
 interface CalendarConfig {
@@ -84,6 +110,7 @@ const CalendarIntegrationView: React.FC = () => {
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
   const [showEventModal, setShowEventModal] = useState(false);
   const [showConfigModal, setShowConfigModal] = useState(false);
+  const [showOverrideModal, setShowOverrideModal] = useState(false);
   const [config, setConfig] = useState<CalendarConfig>({
     googleCalendarEnabled: false,
     outlookCalendarEnabled: false,
@@ -104,6 +131,12 @@ const CalendarIntegrationView: React.FC = () => {
   const [viewType, setViewType] = useState<'day' | 'week' | 'month'>('week');
   const [auditEntries, setAuditEntries] = useState<ActivityEntry[]>([]);
   const [auditFilter, setAuditFilter] = useState<'all' | 'created' | 'updated' | 'deleted' | 'calendar_sync'>('all');
+  const [eventLinkContext, setEventLinkContext] = useState<Record<string, EventLinkContext>>({});
+  const [overrideEvent, setOverrideEvent] = useState<CalendarEvent | null>(null);
+  const [overrideStoryId, setOverrideStoryId] = useState('');
+  const [overrideTaskId, setOverrideTaskId] = useState('');
+  const [overrideNote, setOverrideNote] = useState('');
+  const [overrideBusy, setOverrideBusy] = useState(false);
   // Event modal refs (simple approach without full controlled form)
   const titleRef = useRef<HTMLInputElement | null>(null);
   const descRef = useRef<HTMLTextAreaElement | null>(null);
@@ -362,6 +395,14 @@ const CalendarIntegrationView: React.FC = () => {
         calendarId: 'primary',
         isGoalRelated: !!(ev.extendedProperties?.private?.['bob-block-id'] || ev.extendedProperties?.private?.['bob-goal-id']),
         linkedGoalId: ev.extendedProperties?.private?.['bob-goal-id'] || undefined,
+        linkedStoryId: ev.extendedProperties?.private?.['bob-story-id'] || undefined,
+        linkedTaskId: ev.extendedProperties?.private?.['bob-task-id'] || undefined,
+        linkedBlockId: ev.extendedProperties?.private?.['bob-block-id'] || undefined,
+        calendarMatchSource: ev.extendedProperties?.private?.['bob-match-source'] || undefined,
+        calendarMatchNote: ev.extendedProperties?.private?.['bob-match-note'] || undefined,
+        calendarMatchScore: Number.isFinite(Number(ev.extendedProperties?.private?.['bob-match-score'])) ? Number(ev.extendedProperties?.private?.['bob-match-score']) : undefined,
+        calendarMatchConfidence: Number.isFinite(Number(ev.extendedProperties?.private?.['bob-match-confidence'])) ? Number(ev.extendedProperties?.private?.['bob-match-confidence']) : undefined,
+        calendarMatchConfidenceTier: ev.extendedProperties?.private?.['bob-match-tier'] || undefined,
         source: 'google',
         reminderMinutes: undefined,
       }));
@@ -379,6 +420,174 @@ const CalendarIntegrationView: React.FC = () => {
     loadUpcomingFromGoogle();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedDate, viewType]);
+
+  const loadEventLinkContext = async (eventList: CalendarEvent[]) => {
+    if (!currentUser || eventList.length === 0) {
+      setEventLinkContext({});
+      return;
+    }
+
+    const googleEvents = eventList.filter((event) => event.source === 'google' && event.id);
+    if (googleEvents.length === 0) {
+      setEventLinkContext({});
+      return;
+    }
+
+    const contextEntries = await Promise.all(
+      googleEvents.map(async (event) => {
+        try {
+          const q = query(
+            collection(db, 'calendar_blocks'),
+            where('ownerUid', '==', currentUser.uid),
+            where('googleEventId', '==', event.id),
+            limit(1)
+          );
+          const snap = await getDocs(q);
+          if (snap.empty) return null;
+          const docSnap = snap.docs[0];
+          const block: any = docSnap.data() || {};
+          const ctx: EventLinkContext = {
+            blockId: docSnap.id,
+            storyId: block.storyId || block.linkedStoryId || undefined,
+            taskId: block.taskId || undefined,
+            goalId: block.goalId || undefined,
+            calendarMatchSource: block.calendarMatchSource || undefined,
+            calendarMatchNote: block.calendarMatchNote || undefined,
+            calendarMatchScore: Number.isFinite(Number(block.calendarMatchScore)) ? Number(block.calendarMatchScore) : undefined,
+            calendarMatchConfidence: Number.isFinite(Number(block.calendarMatchConfidence)) ? Number(block.calendarMatchConfidence) : undefined,
+            calendarMatchConfidenceTier: block.calendarMatchConfidenceTier || undefined,
+          };
+          return [event.id, ctx] as const;
+        } catch (error) {
+          console.warn('Failed to load event link context', event.id, error);
+          return null;
+        }
+      })
+    );
+
+    const mapped = Object.fromEntries(contextEntries.filter((entry): entry is readonly [string, EventLinkContext] => Boolean(entry)));
+    setEventLinkContext(mapped);
+  };
+
+  const openOverrideModal = (event: CalendarEvent) => {
+    const context = eventLinkContext[event.id];
+    setOverrideEvent(event);
+    setOverrideStoryId(context?.storyId || event.linkedStoryId || '');
+    setOverrideTaskId(context?.taskId || event.linkedTaskId || '');
+    setOverrideNote(context?.calendarMatchNote || event.calendarMatchNote || '');
+    setShowOverrideModal(true);
+  };
+
+  const applyManualOverride = async () => {
+    if (!overrideEvent) return;
+    setOverrideBusy(true);
+    try {
+      const fn = httpsCallable(functions, 'gcalOverrideEventLink');
+      const payload: any = {
+        eventId: overrideEvent.id,
+        storyId: overrideStoryId || null,
+        taskId: overrideTaskId || null,
+        note: overrideNote || null,
+      };
+      const res: any = await fn(payload);
+      const data: any = res?.data || {};
+
+      setEvents((prev) => prev.map((event) => {
+        if (event.id !== overrideEvent.id) return event;
+        return {
+          ...event,
+          isGoalRelated: Boolean(data.storyId || data.taskId || event.linkedGoalId),
+          linkedStoryId: data.storyId || undefined,
+          linkedTaskId: data.taskId || undefined,
+          linkedGoalId: data.goalId || event.linkedGoalId,
+          linkedBlockId: data.blockId || event.linkedBlockId,
+          calendarMatchSource: data.calendarMatchSource || 'manual_override',
+          calendarMatchNote: data.calendarMatchNote || overrideNote || undefined,
+          calendarMatchConfidence: Number.isFinite(Number(data.calendarMatchConfidence)) ? Number(data.calendarMatchConfidence) : undefined,
+          calendarMatchConfidenceTier: data.calendarMatchConfidenceTier || undefined,
+        };
+      }));
+
+      setEventLinkContext((prev) => ({
+        ...prev,
+        [overrideEvent.id]: {
+          blockId: data.blockId || prev[overrideEvent.id]?.blockId || '',
+          storyId: data.storyId || undefined,
+          taskId: data.taskId || undefined,
+          goalId: data.goalId || undefined,
+          calendarMatchSource: data.calendarMatchSource || 'manual_override',
+          calendarMatchNote: data.calendarMatchNote || overrideNote || undefined,
+          calendarMatchConfidence: Number.isFinite(Number(data.calendarMatchConfidence)) ? Number(data.calendarMatchConfidence) : undefined,
+          calendarMatchConfidenceTier: data.calendarMatchConfidenceTier || undefined,
+        },
+      }));
+
+      setShowOverrideModal(false);
+      setOverrideEvent(null);
+    } catch (error) {
+      console.error('Manual override failed', error);
+      alert('Unable to update link. Please try again.');
+    } finally {
+      setOverrideBusy(false);
+    }
+  };
+
+  const applyRelinkCandidate = async (candidate: RelinkCandidate) => {
+    if (!overrideEvent) return;
+    setOverrideStoryId(candidate.kind === 'story' ? candidate.id : (candidate.storyId || ''));
+    setOverrideTaskId(candidate.kind === 'task' ? candidate.id : '');
+    setOverrideNote(`Quick relink from title match (${Math.round(candidate.score * 100)}%)`);
+    setOverrideBusy(true);
+    try {
+      const fn = httpsCallable(functions, 'gcalOverrideEventLink');
+      const payload: any = {
+        eventId: overrideEvent.id,
+        storyId: candidate.kind === 'story' ? candidate.id : (candidate.storyId || null),
+        taskId: candidate.kind === 'task' ? candidate.id : null,
+        note: `Quick relink from title match (${Math.round(candidate.score * 100)}%)`,
+      };
+      const res: any = await fn(payload);
+      const data: any = res?.data || {};
+
+      setEvents((prev) => prev.map((event) => {
+        if (event.id !== overrideEvent.id) return event;
+        return {
+          ...event,
+          isGoalRelated: Boolean(data.storyId || data.taskId || event.linkedGoalId),
+          linkedStoryId: data.storyId || undefined,
+          linkedTaskId: data.taskId || undefined,
+          linkedGoalId: data.goalId || event.linkedGoalId,
+          linkedBlockId: data.blockId || event.linkedBlockId,
+          calendarMatchSource: data.calendarMatchSource || 'manual_override',
+          calendarMatchNote: data.calendarMatchNote || `Quick relink from title match (${Math.round(candidate.score * 100)}%)`,
+          calendarMatchConfidence: Number.isFinite(Number(data.calendarMatchConfidence)) ? Number(data.calendarMatchConfidence) : undefined,
+          calendarMatchConfidenceTier: data.calendarMatchConfidenceTier || undefined,
+        };
+      }));
+
+      setEventLinkContext((prev) => ({
+        ...prev,
+        [overrideEvent.id]: {
+          blockId: data.blockId || prev[overrideEvent.id]?.blockId || '',
+          storyId: data.storyId || undefined,
+          taskId: data.taskId || undefined,
+          goalId: data.goalId || undefined,
+          calendarMatchSource: data.calendarMatchSource || 'manual_override',
+          calendarMatchNote: data.calendarMatchNote || `Quick relink from title match (${Math.round(candidate.score * 100)}%)`,
+          calendarMatchConfidence: Number.isFinite(Number(data.calendarMatchConfidence)) ? Number(data.calendarMatchConfidence) : undefined,
+          calendarMatchConfidenceTier: data.calendarMatchConfidenceTier || undefined,
+        },
+      }));
+
+      setShowOverrideModal(false);
+      setOverrideEvent(null);
+    } catch (error) {
+      console.error('Quick relink failed', error);
+      alert('Unable to quick relink. Please try again.');
+    } finally {
+      setOverrideBusy(false);
+    }
+  };
   
   // Event linking functions
   const linkEventToGoal = (eventId: string, goalId: string, storyId?: string, taskId?: string) => {
@@ -457,6 +666,57 @@ const CalendarIntegrationView: React.FC = () => {
   };
   
   const filteredEvents = getEventsForView();
+
+  useEffect(() => {
+    loadEventLinkContext(filteredEvents);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser?.uid, filteredEvents.map((event) => event.id).join('|')]);
+
+  const confidenceVariant = (tier?: string) => {
+    if (tier === 'high') return 'success';
+    if (tier === 'medium') return 'warning';
+    if (tier === 'low') return 'secondary';
+    return 'light';
+  };
+
+  const confidenceLabel = (event: CalendarEvent) => {
+    const ctx = eventLinkContext[event.id];
+    const value = ctx?.calendarMatchConfidence ?? event.calendarMatchConfidence;
+    const tier = ctx?.calendarMatchConfidenceTier ?? event.calendarMatchConfidenceTier;
+    if (!Number.isFinite(Number(value))) return null;
+    return { value: Number(value), tier: tier || 'low' };
+  };
+
+  const rationaleLabel = (event: CalendarEvent) => {
+    const ctx = eventLinkContext[event.id];
+    return ctx?.calendarMatchNote || event.calendarMatchNote || null;
+  };
+
+  const overrideCandidates = useMemo<RelinkCandidate[]>(() => {
+    if (!overrideEvent) return [];
+    const source = String(overrideEvent.title || '').toLowerCase().trim();
+    if (!source) return [];
+
+    const words = source.split(/\s+/).filter((w) => w.length > 2);
+    const score = (title: string) => {
+      const targetWords = String(title || '').toLowerCase().split(/\s+/).filter((w) => w.length > 2);
+      if (!targetWords.length || !words.length) return 0;
+      const overlap = words.filter((w) => targetWords.includes(w)).length;
+      return overlap / Math.max(words.length, targetWords.length);
+    };
+
+    const storyCandidates: RelinkCandidate[] = stories
+      .map((story) => ({ kind: 'story' as const, id: story.id, title: story.title, score: score(story.title) }))
+      .filter((item) => item.score > 0.2);
+
+    const taskCandidates: RelinkCandidate[] = tasks
+      .map((task) => ({ kind: 'task' as const, id: task.id, title: task.title, score: score(task.title), storyId: task.storyId || undefined }))
+      .filter((item) => item.score > 0.2);
+
+    return [...storyCandidates, ...taskCandidates]
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 4);
+  }, [overrideEvent, stories, tasks]);
   
   // Theme colors
   const themeColors = {
@@ -605,6 +865,8 @@ const CalendarIntegrationView: React.FC = () => {
                     {filteredEvents.map(event => {
                       const linkedGoal = goals.find(g => g.id === event.linkedGoalId);
                       const linkedStory = stories.find(s => s.id === event.linkedStoryId);
+                      const confidence = confidenceLabel(event);
+                      const rationale = rationaleLabel(event);
                       
                       return (
                         <tr key={event.id}>
@@ -654,15 +916,22 @@ const CalendarIntegrationView: React.FC = () => {
                                     Story: {linkedStory.title}
                                   </div>
                                 )}
+                                {confidence && (
+                                  <div className="mt-1">
+                                    <Badge bg={confidenceVariant(confidence.tier)}>
+                                      Match {confidence.value}% ({confidence.tier})
+                                    </Badge>
+                                  </div>
+                                )}
+                                {rationale && (
+                                  <div className="small text-muted mt-1">{rationale}</div>
+                                )}
                               </div>
                             ) : (
                               <Button 
                                 variant="outline-secondary" 
                                 size="sm"
-                                onClick={() => {
-                                  setSelectedEvent(event);
-                                  setShowEventModal(true);
-                                }}
+                                onClick={() => openOverrideModal(event)}
                               >
                                 Link to Goal
                               </Button>
@@ -689,6 +958,13 @@ const CalendarIntegrationView: React.FC = () => {
                                   Create Task
                                 </Button>
                               )}
+                              <Button
+                                variant="outline-primary"
+                                size="sm"
+                                onClick={() => openOverrideModal(event)}
+                              >
+                                Override Link
+                              </Button>
                             </div>
                           </td>
                         </tr>
@@ -956,6 +1232,89 @@ const CalendarIntegrationView: React.FC = () => {
           )}
           <Button variant="primary" onClick={createOrUpdateEvent}>
             {selectedEvent ? 'Update Event' : 'Create Event'}
+          </Button>
+        </Modal.Footer>
+      </Modal>
+
+      <Modal show={showOverrideModal} onHide={() => setShowOverrideModal(false)}>
+        <Modal.Header closeButton>
+          <Modal.Title>Override Event Link</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <div className="mb-3">
+            <div className="small text-muted">Event</div>
+            <strong>{overrideEvent?.title || 'Unknown event'}</strong>
+          </div>
+          {overrideCandidates.length > 0 && (
+            <div className="mb-3">
+              <div className="small text-muted mb-2">Quick relink suggestions</div>
+              <div className="d-flex flex-wrap gap-2">
+                {overrideCandidates.map((candidate) => (
+                  <Button
+                    key={`${candidate.kind}-${candidate.id}`}
+                    variant="outline-primary"
+                    size="sm"
+                    onClick={() => applyRelinkCandidate(candidate)}
+                    disabled={overrideBusy}
+                  >
+                    {candidate.kind === 'story' ? 'Story' : 'Task'}: {candidate.title} ({Math.round(candidate.score * 100)}%)
+                  </Button>
+                ))}
+              </div>
+            </div>
+          )}
+          <Form>
+            <Form.Group className="mb-3">
+              <Form.Label>Story</Form.Label>
+              <Form.Select
+                value={overrideStoryId}
+                onChange={(e) => {
+                  setOverrideStoryId(e.target.value);
+                  if (e.target.value) setOverrideTaskId('');
+                }}
+              >
+                <option value="">No story</option>
+                {stories.map((story) => (
+                  <option key={story.id} value={story.id}>{story.title}</option>
+                ))}
+              </Form.Select>
+            </Form.Group>
+
+            <Form.Group className="mb-3">
+              <Form.Label>Task</Form.Label>
+              <Form.Select
+                value={overrideTaskId}
+                onChange={(e) => {
+                  setOverrideTaskId(e.target.value);
+                  if (e.target.value) setOverrideStoryId('');
+                }}
+              >
+                <option value="">No task</option>
+                {tasks.map((task) => (
+                  <option key={task.id} value={task.id}>{task.title}</option>
+                ))}
+              </Form.Select>
+              <Form.Text className="text-muted">Choose a story or task. Leave both empty to clear the link.</Form.Text>
+            </Form.Group>
+
+            <Form.Group>
+              <Form.Label>Reason</Form.Label>
+              <Form.Control
+                as="textarea"
+                rows={3}
+                value={overrideNote}
+                onChange={(e) => setOverrideNote(e.target.value)}
+                placeholder="Why this override is needed"
+              />
+            </Form.Group>
+          </Form>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setShowOverrideModal(false)} disabled={overrideBusy}>
+            Cancel
+          </Button>
+          <Button variant="primary" onClick={applyManualOverride} disabled={overrideBusy}>
+            {overrideBusy ? 'Saving...' : 'Save Override'}
           </Button>
         </Modal.Footer>
       </Modal>

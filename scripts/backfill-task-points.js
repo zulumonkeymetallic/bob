@@ -55,9 +55,10 @@ async function backfillPoints(db, { batchSize, dryRun }) {
       const normalized = clampTaskPoints(data.points);
       const desired = (normalized != null ? normalized : deriveTaskPoints(data));
       const existing = Number(data.points);
+      const storedAsNumber = typeof data.points === 'number' && Number.isFinite(data.points);
 
       if (!Number.isFinite(desired)) continue;
-      if (Number.isFinite(existing) && existing === desired) continue;
+      if (storedAsNumber && Number.isFinite(existing) && existing === desired) continue;
 
       updated++;
       console.log(`- ${docSnap.id}: ${existing || '∅'} → ${desired}`);

@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { Modal, Button, Form, Spinner, Badge } from 'react-bootstrap';
+import { Alert, Button, Form, Modal, Spinner } from 'react-bootstrap';
 import { collection, onSnapshot, orderBy, query } from 'firebase/firestore';
-import { httpsCallable } from 'firebase/functions';
-import { db, functions } from '../firebase';
+import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
-import { useNavigate } from 'react-router-dom';
+import { useProcessTextActivity } from '../contexts/ProcessTextActivityContext';
+import AgentResponsePanel from './AgentResponsePanel';
+import { AgentResponse, buildRequestId, submitAssistantAgentRequest } from '../services/agentClient';
 
 interface AssistantChatModalProps {
   show: boolean;
@@ -15,13 +16,12 @@ interface AssistantChatModalProps {
 const AssistantChatModal: React.FC<AssistantChatModalProps> = ({ show, onHide }) => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
-  const navigate = useNavigate();
+  const { reportAgentResult } = useProcessTextActivity();
   const [messages, setMessages] = useState<Array<{ id?: string; role: 'user'|'assistant'; content: string }>>([]);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
-  const [actions, setActions] = useState<any[] | null>(null);
-  const [insights, setInsights] = useState<{ priorities?: string[]; warnings?: string[] } | null>(null);
-  const [working, setWorking] = useState<string | null>(null);
+  const [latestResult, setLatestResult] = useState<AgentResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!currentUser?.uid || !show) return;
@@ -36,87 +36,30 @@ const AssistantChatModal: React.FC<AssistantChatModalProps> = ({ show, onHide })
     const content = (text ?? draft).trim();
     if (!content) return;
     setSending(true);
+    setError(null);
+    const requestId = buildRequestId('assistant_ui');
     try {
-      const callable = httpsCallable(functions, 'sendAssistantMessage');
-      const res = await callable({ message: content, persona: currentPersona || 'personal', days: 2 });
-      const data = res.data as any;
-      if (data?.suggested_actions) setActions(data.suggested_actions);
-      if (data?.insights) setInsights(data.insights);
+      const data = await submitAssistantAgentRequest({
+        text: content,
+        persona: currentPersona || 'personal',
+        sourceProvidedId: requestId,
+      });
+      setLatestResult(data);
+      if (data?.mode === 'write') {
+        reportAgentResult({
+          requestId,
+          submittedText: content,
+          result: data,
+          source: 'assistant_ui',
+        });
+      }
       if (!text) setDraft('');
     } catch (e: any) {
-      alert(e?.message || 'Failed to send');
+      setError(e?.message || 'Failed to send');
     } finally {
       setSending(false);
     }
   };
-
-  const planToday = async () => {
-    setWorking('plan');
-    try {
-      const callable = httpsCallable(functions, 'runPlanner');
-      const startDate = new Date().toISOString().slice(0,10);
-      const result = await callable({ persona: currentPersona || 'personal', startDate, days: 1 });
-      const data:any = result.data || {};
-      const blocksCreated = data?.llm?.blocksCreated || 0;
-      const planned = Array.isArray(data?.schedule?.planned) ? data.schedule.planned.length : (data?.schedule?.plannedCount || 0);
-      alert(`Planner updated. AI blocks: ${blocksCreated}, scheduled instances: ${planned}`);
-      setActions(null);
-    } catch (e: any) {
-      alert(e?.message || 'Failed to plan');
-    } finally {
-      setWorking(null);
-    }
-  };
-
-  const createTask = async (title: string, estimateMin?: number) => {
-    if (!currentUser?.uid) return;
-    setWorking('task');
-    try {
-      const col = collection(db, 'tasks');
-      // Lazy import to avoid tree-shaking issues
-      const { doc, setDoc, serverTimestamp } = await import('firebase/firestore');
-      const ref = doc(col);
-      await setDoc(ref, {
-        id: ref.id,
-        ownerUid: currentUser.uid,
-        persona: currentPersona || 'personal',
-        title,
-        description: 'Created via Assistant',
-        status: 0,
-        priority: 2,
-        effort: 'S',
-        estimated_duration: typeof estimateMin === 'number' ? estimateMin : 30,
-        entry_method: 'assistant_chat',
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      }, { merge: true });
-      alert('Task created');
-      setActions(null);
-    } catch (e: any) {
-      alert(e?.message || 'Failed to create task');
-    } finally {
-      setWorking(null);
-    }
-  };
-
-  const handleAction = async (a: any) => {
-    const t = String(a?.type || '').toLowerCase();
-    if (t === 'plan_today') return planToday();
-    if (t === 'open_approvals') return navigate('/planning/approvals');
-    if (t === 'create_task') return createTask(String(a?.title || 'Next step'), Number(a?.estimateMin || 30));
-    if (t === 'open_goal' && a?.goalId) return navigate(`/goals/${a.goalId}`);
-  };
-
-  useEffect(() => {
-    if (show && messages.length === 0) {
-      // On first open, offer a Daily Summary generator
-      setInsights(null);
-      setActions([
-        { type: 'plan_today' },
-        { type: 'open_approvals' },
-      ]);
-    }
-  }, [show, messages.length]);
 
   return (
     <Modal show={show} onHide={onHide} size="lg" centered fullscreen="sm-down">
@@ -124,24 +67,16 @@ const AssistantChatModal: React.FC<AssistantChatModalProps> = ({ show, onHide })
         <Modal.Title>Assistant</Modal.Title>
       </Modal.Header>
       <Modal.Body style={{ maxHeight: '60vh', overflow: 'auto' }}>
-        {insights && (
+        <div className="d-flex flex-wrap gap-2 mb-3">
+          <Button variant="outline-secondary" size="sm" onClick={() => send('What are my top 3 priorities today?')} disabled={sending}>Top 3</Button>
+          <Button variant="outline-secondary" size="sm" onClick={() => send('What is next on my calendar?')} disabled={sending}>Next Calendar</Button>
+          <Button variant="outline-secondary" size="sm" onClick={() => send('Replan my day')} disabled={sending}>Replan Day</Button>
+          <Button variant="outline-secondary" size="sm" onClick={() => send('Replan my week')} disabled={sending}>Replan Week</Button>
+        </div>
+        {error && <Alert variant="danger" className="mb-3">{error}</Alert>}
+        {latestResult && (
           <div className="mb-3">
-            {insights.priorities && insights.priorities.length > 0 && (
-              <div className="mb-2">
-                <strong>Top Priorities</strong>
-                <ul className="mb-0">
-                  {insights.priorities.map((p, i) => <li key={i}>{p}</li>)}
-                </ul>
-              </div>
-            )}
-            {insights.warnings && insights.warnings.length > 0 && (
-              <div className="mb-2" style={{ color: '#92400e' }}>
-                <strong>Warnings</strong>
-                <ul className="mb-0">
-                  {insights.warnings.map((w, i) => <li key={i}>{w}</li>)}
-                </ul>
-              </div>
-            )}
+            <AgentResponsePanel result={latestResult} />
           </div>
         )}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -156,29 +91,12 @@ const AssistantChatModal: React.FC<AssistantChatModalProps> = ({ show, onHide })
               </div>
             </div>
           ))}
-          {messages.length === 0 && (
-            <div className="text-muted">Ask for a Daily Summary, priorities for today, or to plan the afternoon.</div>
-          )}
-          {actions && actions.length > 0 && (
-            <div style={{ borderTop: '1px solid var(--bs-border-color)', paddingTop: 12 }}>
-              <div className="mb-2" style={{ fontWeight: 600 }}>Suggested actions</div>
-              <div className="d-flex flex-wrap gap-2">
-                {actions.map((a, i) => {
-                  const t = String(a?.type || '').toLowerCase();
-                  const label = t === 'plan_today' ? 'Plan Today' : t === 'open_approvals' ? 'Open Approvals' : t === 'create_task' ? `Create Task: ${a?.title || 'Next step'}` : t === 'open_goal' ? 'Open Goal' : 'Action';
-                  return (
-                    <Button key={i} size="sm" variant={t === 'plan_today' ? 'primary' : 'outline-secondary'} onClick={() => handleAction(a)} disabled={!!working}>
-                      {working ? <Spinner animation="border" size="sm" /> : label}
-                    </Button>
-                  );
-                })}
-              </div>
-            </div>
+          {messages.length === 0 && !latestResult && (
+            <div className="text-muted">Ask what is next on your calendar, what your top priorities are, paste a transcript, or ask for a replan.</div>
           )}
         </div>
       </Modal.Body>
       <Modal.Footer>
-        <Button variant="outline-secondary" onClick={() => send('Daily summary for today')}>Daily Summary</Button>
         <Form.Control
           placeholder="Ask about calendar, sprint focus, or tasks..."
           value={draft}

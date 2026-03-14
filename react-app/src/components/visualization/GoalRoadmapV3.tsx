@@ -14,9 +14,11 @@ import { isStatus } from '../../utils/statusHelpers';
 import { ActivityStreamService } from '../../services/ActivityStreamService';
 import { Wand2, List as ListIcon, Edit3, ZoomIn, ZoomOut, Home, Maximize2, Minimize2, ChevronLeft, ChevronRight, Calendar as CalendarIcon, Star } from 'lucide-react';
 import EditGoalModal from '../../components/EditGoalModal';
+import ConfirmSprintChangesModal from './ConfirmSprintChangesModal';
 import './GoalRoadmapV3.css';
 import { useGlobalThemes } from '../../hooks/useGlobalThemes';
 import GLOBAL_THEMES, { migrateThemeValue, type GlobalTheme } from '../../constants/globalThemes';
+import { buildGoalTimelineImpactPlan, snapPlannerGoalMoveRange } from './goalTimelineImpact';
 
 type Zoom = 'weeks' | 'months' | 'quarters' | 'years';
 type AxisLabel = { label: string; subLabel?: string; x: number; width: number };
@@ -57,7 +59,7 @@ const GoalRoadmapV3: React.FC = () => {
   const navigate = useNavigate();
   const { themes: globalThemes } = useGlobalThemes();
 
-  const [zoom, setZoom] = useState<Zoom>('quarters');
+  const [zoom, setZoom] = useState<Zoom>('weeks');
   const [yearSpan, setYearSpan] = useState<1 | 3 | 5>(3);
   // Optional custom range (e.g., Fit All). When set, overrides preset ranges
   const [customRange, setCustomRange] = useState<{ start: Date; end: Date } | null>(null);
@@ -72,12 +74,33 @@ const GoalRoadmapV3: React.FC = () => {
   const [storyDoneCounts, setStoryDoneCounts] = useState<Record<string, number>>({});
   const [storyPoints, setStoryPoints] = useState<Record<string, number>>({});
   const [storyDonePoints, setStoryDonePoints] = useState<Record<string, number>>({});
+  const [stories, setStories] = useState<Story[]>([]);
   const [potBalances, setPotBalances] = useState<Record<string, { balance: number; currency: string }>>({});
   const [storySprintCounts, setStorySprintCounts] = useState<Record<string, number>>({});
   const [storyMeta, setStoryMeta] = useState<Record<string, { goalId?: string; sprintId?: string }>>({});
+  const [tasks, setTasks] = useState<Task[]>([]);
   const [taskCounts, setTaskCounts] = useState<Record<string, number>>({});
   const [taskSprintCounts, setTaskSprintCounts] = useState<Record<string, number>>({});
   const [editGoal, setEditGoal] = useState<Goal | null>(null);
+  const [showSprintImpactModal, setShowSprintImpactModal] = useState(false);
+  const [pendingSprintChanges, setPendingSprintChanges] = useState<{
+    goalId: string;
+    startDate: number;
+    endDate: number;
+    originalStart: number;
+    originalEnd: number;
+    themeId?: number | null;
+    affectedStories: Array<{
+      id: string;
+      ref: string;
+      title: string;
+      plannedSprintId?: string;
+      plannedSprintName?: string;
+      recommendedSprintId?: string;
+      recommendedSprintName?: string;
+      impactedTaskCount?: number;
+    }>;
+  } | null>(null);
   const [showSprints, setShowSprints] = useState(true);
   const [snapEnabled, setSnapEnabled] = useState(true);
   const [showEmptyThemes, setShowEmptyThemes] = useState(false);
@@ -344,6 +367,7 @@ const GoalRoadmapV3: React.FC = () => {
       const sprintCounts: Record<string, number> = {};
       const metaMap: Record<string, { goalId?: string; sprintId?: string }> = {};
       const inSprint = new Set<string>();
+      const storyList = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Story));
       for (const d of snap.docs) {
         const story = d.data() as Story;
         const gid = story.goalId as string | undefined;
@@ -363,6 +387,7 @@ const GoalRoadmapV3: React.FC = () => {
           inSprint.add(gid);
         }
       }
+      setStories(storyList);
       setStoryCounts(counts);
       setStoryDoneCounts(doneCounts);
       setStoryPoints(points);
@@ -385,8 +410,10 @@ const GoalRoadmapV3: React.FC = () => {
     const unsub = onSnapshot(q, snap => {
       const totals: Record<string, number> = {};
       const sprintTotals: Record<string, number> = {};
+      const indexedTasks: Task[] = [];
       snap.docs.forEach((docSnap) => {
         const task = docSnap.data() as any;
+        indexedTasks.push({ id: docSnap.id, ...task } as Task);
         const parentId = task.parentId || task.storyId;
         const meta = storyMeta[parentId];
         const goalId = meta?.goalId;
@@ -400,6 +427,7 @@ const GoalRoadmapV3: React.FC = () => {
           }
         }
       });
+      setTasks(indexedTasks);
       setTaskCounts(totals);
       setTaskSprintCounts(sprintTotals);
     });
@@ -545,6 +573,75 @@ const GoalRoadmapV3: React.FC = () => {
     }
   }, [wouldCreateCycle]);
 
+  const commitGoalTimelineChange = useCallback(async (args: {
+    goalId: string;
+    newStart: Date;
+    newEnd: Date;
+    originalStart: Date;
+    originalEnd: Date;
+    themeId?: number | null;
+    goal?: Goal | null;
+  }) => {
+    const { goalId, newStart, newEnd, originalStart, originalEnd, themeId, goal } = args;
+    await updateDoc(doc(db, 'goals', goalId), {
+      startDate: newStart.getTime(),
+      endDate: newEnd.getTime(),
+      updatedAt: serverTimestamp()
+    });
+    if (currentUser?.uid) {
+      await ActivityStreamService.logFieldChange(
+        goalId,
+        'goal',
+        currentUser.uid,
+        currentUser.email || '',
+        'date_range',
+        `${originalStart.toDateString()} – ${originalEnd.toDateString()}`,
+        `${newStart.toDateString()} – ${newEnd.toDateString()}`,
+        currentPersona || 'personal',
+        goalId,
+        'human'
+      );
+    }
+    if (themeId != null && goal) {
+      const originalThemeId = migrateThemeValue(goal.theme);
+      if (themeId !== originalThemeId) {
+        await updateDoc(doc(db, 'goals', goalId), { theme: themeId, updatedAt: serverTimestamp() });
+        if (currentUser?.uid) {
+          const fromTheme = getThemeDefinition(originalThemeId);
+          const toTheme = getThemeDefinition(themeId);
+          await ActivityStreamService.logFieldChange(
+            goalId,
+            'goal',
+            currentUser.uid,
+            currentUser.email || '',
+            'theme',
+            fromTheme?.name || String(originalThemeId),
+            toTheme?.name || String(themeId),
+            currentPersona || 'personal',
+            goalId,
+            'human'
+          );
+        }
+      }
+    }
+  }, [currentPersona, currentUser?.email, currentUser?.uid, getThemeDefinition]);
+
+  const confirmSprintChanges = useCallback(async () => {
+    if (!pendingSprintChanges) return;
+    const goal = goals.find((item) => item.id === pendingSprintChanges.goalId) || null;
+    await commitGoalTimelineChange({
+      goalId: pendingSprintChanges.goalId,
+      newStart: new Date(pendingSprintChanges.startDate),
+      newEnd: new Date(pendingSprintChanges.endDate),
+      originalStart: new Date(pendingSprintChanges.originalStart),
+      originalEnd: new Date(pendingSprintChanges.originalEnd),
+      themeId: pendingSprintChanges.themeId,
+      goal,
+    });
+    setShowSprintImpactModal(false);
+    setPendingSprintChanges(null);
+  }, [commitGoalTimelineChange, goals, pendingSprintChanges]);
+
   const pointerUp = useCallback(async (ev: PointerEvent) => {
     const s = dragState.current; if (!s.id || !s.type) return; ev.preventDefault();
     if (s.type === 'link') {
@@ -564,44 +661,48 @@ const GoalRoadmapV3: React.FC = () => {
     let newStart = dateFromX(left); let newEnd = dateFromX(left + width);
     // Optional snapping strategy on drop
     if (snapEnabled) {
-      const startOfWeek = (d: Date) => { const c = new Date(d); const day = (c.getDay() + 6) % 7; c.setDate(c.getDate() - day); c.setHours(0, 0, 0, 0); return c; };
-      const endOfWeek = (d: Date) => { const s = startOfWeek(d); const e = new Date(s); e.setDate(s.getDate() + 6); e.setHours(0, 0, 0, 0); return e; };
       const startOfMonth = (d: Date) => { const c = new Date(d.getFullYear(), d.getMonth(), 1); c.setHours(0, 0, 0, 0); return c; };
       const endOfMonth = (d: Date) => { const c = new Date(d.getFullYear(), d.getMonth() + 1, 0); c.setHours(0, 0, 0, 0); return c; };
-      const startOfQuarter = (d: Date) => { const q = Math.floor(d.getMonth() / 3) * 3; const c = new Date(d.getFullYear(), q, 1); c.setHours(0, 0, 0, 0); return c; };
-      const endOfQuarter = (d: Date) => { const q = Math.floor(d.getMonth() / 3) * 3 + 2; const c = new Date(d.getFullYear(), q + 1, 0); c.setHours(0, 0, 0, 0); return c; };
-      if (zoom === 'weeks') { newStart = startOfWeek(newStart); newEnd = endOfWeek(newEnd); }
-      else if (zoom === 'months') { newStart = startOfWeek(newStart); newEnd = endOfWeek(newEnd); }
-      else if (zoom === 'quarters') { newStart = startOfQuarter(newStart); newEnd = endOfQuarter(newEnd); }
-      else if (zoom === 'years') { newStart = startOfMonth(newStart); newEnd = endOfMonth(newEnd); }
+      if (s.type === 'move') {
+        const snapped = snapPlannerGoalMoveRange(newStart, newEnd, zoom);
+        newStart = snapped.start;
+        newEnd = snapped.end;
+      } else if (zoom === 'years') {
+        newStart = startOfMonth(newStart);
+        newEnd = endOfMonth(newEnd);
+      }
     }
     try {
-      await updateDoc(doc(db, 'goals', s.id), { startDate: newStart.getTime(), endDate: newEnd.getTime(), updatedAt: serverTimestamp() });
-      if (currentUser?.uid) {
-        await ActivityStreamService.logFieldChange(s.id, 'goal', currentUser.uid, currentUser.email || '', 'date_range', `${s.origStart.toDateString()} – ${s.origEnd.toDateString()}`, `${newStart.toDateString()} – ${newEnd.toDateString()}`, currentPersona || 'personal', s.id, 'human');
-      }
       const candidateTheme = themeDropCandidateRef.current;
-      if (candidateTheme != null && s.goal) {
-        const originalThemeId = migrateThemeValue(s.goal.theme);
-        if (candidateTheme !== originalThemeId) {
-          await updateDoc(doc(db, 'goals', s.id), { theme: candidateTheme, updatedAt: serverTimestamp() });
-          if (currentUser?.uid) {
-            const fromTheme = getThemeDefinition(originalThemeId);
-            const toTheme = getThemeDefinition(candidateTheme);
-            await ActivityStreamService.logFieldChange(
-              s.id,
-              'goal',
-              currentUser.uid,
-              currentUser.email || '',
-              'theme',
-              fromTheme?.name || String(originalThemeId),
-              toTheme?.name || String(candidateTheme),
-              currentPersona || 'personal',
-              s.id,
-              'human'
-            );
-          }
-        }
+      const impactPlan = buildGoalTimelineImpactPlan({
+        goalId: s.id,
+        newStartDate: newStart,
+        newEndDate: newEnd,
+        stories,
+        tasks,
+        sprints,
+      });
+      if (impactPlan.affectedStories.length > 0) {
+        setPendingSprintChanges({
+          goalId: s.id,
+          startDate: newStart.getTime(),
+          endDate: newEnd.getTime(),
+          originalStart: s.origStart.getTime(),
+          originalEnd: s.origEnd.getTime(),
+          themeId: candidateTheme,
+          affectedStories: impactPlan.affectedStories,
+        });
+        setShowSprintImpactModal(true);
+      } else {
+        await commitGoalTimelineChange({
+          goalId: s.id,
+          newStart,
+          newEnd,
+          originalStart: s.origStart,
+          originalEnd: s.origEnd,
+          themeId: candidateTheme,
+          goal: s.goal,
+        });
       }
     } catch (e) { console.error('Failed to update goal dates', e); }
     finally {
@@ -614,7 +715,7 @@ const GoalRoadmapV3: React.FC = () => {
       setLinkHoverGoalId(null);
       linkHoverGoalRef.current = null;
     }
-  }, [dateFromX, pointerMove, currentUser?.uid, snapEnabled, zoom, getThemeDefinition]);
+  }, [dateFromX, pointerMove, snapEnabled, zoom, stories, tasks, sprints, commitGoalTimelineChange]);
 
   const handleLinkPointerUp = useCallback(async (ev: PointerEvent) => {
     const state = dragState.current;
@@ -1333,7 +1434,7 @@ const GoalRoadmapV3: React.FC = () => {
           if (next.z === 'years' && next.y) setYearSpan(next.y);
         }} aria-label="Zoom Out"><ZoomOut size={14} /></Button>
         <ButtonGroup size="sm" className="ms-1">
-          <Button variant={zoom === 'weeks' && !customRange ? 'primary' : 'outline-secondary'} onClick={() => { setCustomRange(null); setZoom('weeks'); }}>Week</Button>
+          <Button variant={zoom === 'weeks' && !customRange ? 'primary' : 'outline-secondary'} onClick={() => { setCustomRange(null); setZoom('weeks'); }}>Near</Button>
           <Button variant={zoom === 'months' && !customRange ? 'primary' : 'outline-secondary'} onClick={() => { setCustomRange(null); setZoom('months'); }}>Month</Button>
           <Button variant={zoom === 'quarters' && !customRange ? 'primary' : 'outline-secondary'} onClick={() => { setCustomRange(null); setZoom('quarters'); }}>Quarter</Button>
           <Button variant={zoom === 'years' && yearSpan === 1 && !customRange ? 'primary' : 'outline-secondary'} onClick={() => { setCustomRange(null); setZoom('years'); setYearSpan(1); }}>1y</Button>
@@ -1568,6 +1669,16 @@ const GoalRoadmapV3: React.FC = () => {
       </Modal>
 
       {/* Global activity modal removed */}
+
+      <ConfirmSprintChangesModal
+        visible={showSprintImpactModal}
+        pendingChanges={pendingSprintChanges}
+        onCancel={() => {
+          setShowSprintImpactModal(false);
+          setPendingSprintChanges(null);
+        }}
+        onConfirm={confirmSprintChanges}
+      />
 
       {/* Edit Goal Modal */}
       {editGoal && (

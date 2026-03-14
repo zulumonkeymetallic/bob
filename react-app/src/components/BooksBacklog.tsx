@@ -9,6 +9,7 @@ import { useSprint } from '../contexts/SprintContext';
 import { Goal, Sprint } from '../types';
 import { findSprintForDate } from '../utils/taskSprintHelpers';
 import { generateRef } from '../utils/referenceGenerator';
+import { planningSprints } from '../utils/sprintFilter';
 
 interface BookItem {
   id: string;
@@ -39,6 +40,7 @@ const BooksBacklog: React.FC = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const { sprints } = useSprint();
+  const planningSprintList = useMemo(() => planningSprints(sprints), [sprints]);
   const [viewMode, setViewMode] = useState<'list' | 'card'>('list');
   const [books, setBooks] = useState<BookItem[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
@@ -147,7 +149,7 @@ const BooksBacklog: React.FC = () => {
     setSavingConversion(true);
     try {
       const dueDateMs = convertForm.targetDate ? new Date(convertForm.targetDate).getTime() : null;
-      const sprintId = convertForm.sprintId || (dueDateMs ? findSprintForDate(sprints, dueDateMs)?.id || null : null);
+      const sprintId = convertForm.sprintId || (dueDateMs ? findSprintForDate(planningSprintList, dueDateMs)?.id || null : null);
       const storyRef = generateRef('story', []);
       const storyPayload: any = {
         ref: storyRef,
@@ -235,7 +237,7 @@ const BooksBacklog: React.FC = () => {
               <td>{renderRatingStars(b)}</td>
               <td>
                 <div className="d-flex gap-2">
-                  <Button size="sm" variant="outline-primary" onClick={() => openConvert(b)} disabled={converted}>Generate Story</Button>
+                  {!converted && <Button size="sm" variant="outline-primary" onClick={() => openConvert(b)}>Generate Story</Button>}
                   {converted && <Button size="sm" variant="outline-secondary" href={`/stories/${b.lastConvertedStoryId}`}>View story</Button>}
                   {String(b.status || '').toLowerCase() !== 'read' && (
                     <Button size="sm" variant="outline-success" onClick={() => markRead(b)}>Mark Read</Button>
@@ -283,7 +285,11 @@ const BooksBacklog: React.FC = () => {
                   <div className="d-flex justify-content-between align-items-center">
                     <Badge bg={String(b.status || '').toLowerCase()==='read' ? 'success' : 'secondary'}>{b.status || '—'}</Badge>
                     <div className="d-flex gap-2">
-                      <Button size="sm" variant="outline-primary" onClick={() => openConvert(b)} disabled={converted}>Generate</Button>
+                      {converted ? (
+                        <Button size="sm" variant="outline-secondary" href={`/stories/${b.lastConvertedStoryId}`}>View story</Button>
+                      ) : (
+                        <Button size="sm" variant="outline-primary" onClick={() => openConvert(b)}>Generate</Button>
+                      )}
                       {String(b.status || '').toLowerCase() !== 'read' && (
                         <Button size="sm" variant="outline-success" onClick={() => markRead(b)}>Read</Button>
                       )}
@@ -353,7 +359,7 @@ const BooksBacklog: React.FC = () => {
               <Form.Label>Sprint (optional)</Form.Label>
               <Form.Select value={convertForm.sprintId || ''} onChange={(e) => setConvertForm(prev => ({ ...prev, sprintId: e.target.value || null }))}>
                 <option value="">No sprint</option>
-                {sprints.map((s: Sprint) => (<option key={s.id} value={s.id}>{s.name}</option>))}
+                {planningSprintList.map((s: Sprint) => (<option key={s.id} value={s.id}>{s.name}</option>))}
               </Form.Select>
             </Form.Group>
             <Form.Group className="mb-3">

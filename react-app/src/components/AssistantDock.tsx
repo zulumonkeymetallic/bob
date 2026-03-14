@@ -1,11 +1,12 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Button, Form, Spinner, Badge } from 'react-bootstrap';
+import React, { useEffect, useState } from 'react';
+import { Alert, Badge, Button, Form, Spinner } from 'react-bootstrap';
 import { collection, onSnapshot, orderBy, query } from 'firebase/firestore';
-import { httpsCallable } from 'firebase/functions';
-import { db, functions } from '../firebase';
+import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
-import { useSidebar } from '../contexts/SidebarContext';
 import { usePersona } from '../contexts/PersonaContext';
+import { useProcessTextActivity } from '../contexts/ProcessTextActivityContext';
+import AgentResponsePanel from './AgentResponsePanel';
+import { AgentResponse, buildRequestId, submitAssistantAgentRequest } from '../services/agentClient';
 
 interface AssistantDockProps {
   open: boolean;
@@ -15,13 +16,12 @@ interface AssistantDockProps {
 const AssistantDock: React.FC<AssistantDockProps> = ({ open, onClose }) => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
-  const { selectedItem, selectedType } = useSidebar();
+  const { reportAgentResult } = useProcessTextActivity();
   const [messages, setMessages] = useState<Array<{ id?: string; role: 'user'|'assistant'; content: string }>>([]);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
-  const [actions, setActions] = useState<any[] | null>(null);
-  const [insights, setInsights] = useState<{ priorities?: string[]; warnings?: string[] } | null>(null);
-  const [working, setWorking] = useState<string | null>(null);
+  const [latestResult, setLatestResult] = useState<AgentResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!currentUser?.uid) return;
@@ -36,73 +36,37 @@ const AssistantDock: React.FC<AssistantDockProps> = ({ open, onClose }) => {
     const content = (text ?? draft).trim();
     if (!content) return;
     setSending(true);
+    setError(null);
+    const requestId = buildRequestId('assistant_ui');
     try {
-      const callable = httpsCallable(functions, 'sendAssistantMessage');
-      const res = await callable({ message: content, persona: currentPersona || 'personal', days: 2 });
-      const data = res.data as any;
-      if (data?.suggested_actions) setActions(data.suggested_actions);
-      if (data?.insights) setInsights(data.insights);
+      const data = await submitAssistantAgentRequest({
+        text: content,
+        persona: currentPersona || 'personal',
+        sourceProvidedId: requestId,
+      });
+      setLatestResult(data);
+      if (data?.mode === 'write') {
+        reportAgentResult({
+          requestId,
+          submittedText: content,
+          result: data,
+          source: 'assistant_ui',
+        });
+      }
       if (!text) setDraft('');
     } catch (e: any) {
-      alert(e?.message || 'Failed to send');
+      setError(e?.message || 'Failed to send');
     } finally {
       setSending(false);
     }
   };
 
-  const planToday = async () => {
-    setWorking('plan');
-    try {
-      const callable = httpsCallable(functions, 'runPlanner');
-      const startDate = new Date().toISOString().slice(0,10);
-      const result = await callable({ persona: currentPersona || 'personal', startDate, days: 1 });
-      const data:any = result.data || {};
-      const blocksCreated = data?.llm?.blocksCreated || (Array.isArray(data?.llm?.blocks) ? data.llm.blocks.length : 0);
-      const planned = Array.isArray(data?.schedule?.planned) ? data.schedule.planned.length : (data?.schedule?.plannedCount || 0);
-      alert(`Planner updated. AI blocks: ${blocksCreated}, scheduled instances: ${planned}`);
-      setActions(null);
-    } catch (e: any) { alert(e?.message || 'Failed to plan'); }
-    finally { setWorking(null); }
-  };
-
-  const orchestrateSelected = async () => {
-    if (!selectedItem || selectedType !== 'goal') return;
-    setWorking('orchestrate');
-    try {
-      const callable = httpsCallable(functions, 'orchestrateGoalPlanning');
-      await callable({ goalId: (selectedItem as any).id });
-      alert('Orchestration complete.');
-    } catch (e: any) { alert(e?.message || 'Failed'); }
-    finally { setWorking(null); }
-  };
-
-  const generateStoriesSelected = async () => {
-    try {
-      setWorking('stories');
-      if (selectedType === 'story') {
-        const callable = httpsCallable(functions, 'orchestrateStoryPlanning');
-        await callable({ storyId: (selectedItem as any).id, research: false });
-        alert('Generated tasks and scheduled time.');
-      } else if (selectedType === 'goal') {
-        // use generate from research if available; otherwise orchestrate fast
-        const callable = httpsCallable(functions, 'orchestrateGoalPlanning');
-        await callable({ goalId: (selectedItem as any).id, researchOnly: false });
-        alert('Generated stories/tasks and scheduled time.');
-      } else {
-        alert('Select a goal or story to generate from.');
-      }
-    } catch (e: any) { alert(e?.message || 'Failed'); }
-    finally { setWorking(null); }
-  };
-
   const quickMenu = (
     <div className="d-flex flex-wrap gap-2 mb-2">
-      <Button size="sm" variant="primary" onClick={() => send('Start goal intake')}>New Goal (AI Intake)</Button>
-      <Button size="sm" variant="outline-secondary" onClick={planToday} disabled={working==='plan'}>
-        {working==='plan' ? <Spinner animation="border" size="sm" /> : 'Plan Today'}
-      </Button>
-      <Button size="sm" variant="outline-secondary" onClick={generateStoriesSelected} disabled={!!working}>Generate Stories</Button>
-      <Button size="sm" variant="outline-secondary" onClick={orchestrateSelected} disabled={!!working}>Orchestrate Goal</Button>
+      <Button size="sm" variant="primary" onClick={() => send('What are my top 3 priorities today?')} disabled={sending}>Top 3</Button>
+      <Button size="sm" variant="outline-secondary" onClick={() => send('What is next on my calendar?')} disabled={sending}>Next Calendar</Button>
+      <Button size="sm" variant="outline-secondary" onClick={() => send('Replan my day')} disabled={sending}>Replan Day</Button>
+      <Button size="sm" variant="outline-secondary" onClick={() => send('Replan my week')} disabled={sending}>Replan Week</Button>
     </div>
   );
 
@@ -113,32 +77,18 @@ const AssistantDock: React.FC<AssistantDockProps> = ({ open, onClose }) => {
       <div className="d-flex align-items-center justify-content-between p-2" style={{ borderBottom: '1px solid var(--bs-border-color)' }}>
         <div>
           <strong>Assistant</strong>
-          {insights && insights.priorities && insights.priorities.length > 0 && (
-            <Badge bg="info" className="ms-2">{insights.priorities.length} pri</Badge>
+          {!!latestResult?.topPriorities?.length && (
+            <Badge bg="info" className="ms-2">{latestResult.topPriorities.length} pri</Badge>
           )}
         </div>
         <Button size="sm" variant="outline-secondary" onClick={onClose}>Close</Button>
       </div>
       <div className="p-2" style={{ flex: 1, overflow: 'auto' }}>
         {quickMenu}
-        {insights && (
-          <div className="mb-2">
-            {insights.priorities && insights.priorities.length > 0 && (
-              <div className="mb-2">
-                <div className="fw-semibold">Top Priorities</div>
-                <ul className="mb-0">
-                  {insights.priorities.map((p, i) => <li key={i}>{p}</li>)}
-                </ul>
-              </div>
-            )}
-            {insights.warnings && insights.warnings.length > 0 && (
-              <div className="mb-2" style={{ color: '#92400e' }}>
-                <div className="fw-semibold">Warnings</div>
-                <ul className="mb-0">
-                  {insights.warnings.map((w, i) => <li key={i}>{w}</li>)}
-                </ul>
-              </div>
-            )}
+        {error && <Alert variant="danger" className="mb-3">{error}</Alert>}
+        {latestResult && (
+          <div className="mb-3" style={{ borderBottom: '1px solid var(--bs-border-color)', paddingBottom: 12 }}>
+            <AgentResponsePanel result={latestResult} />
           </div>
         )}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -153,18 +103,8 @@ const AssistantDock: React.FC<AssistantDockProps> = ({ open, onClose }) => {
               </div>
             </div>
           ))}
-          {messages.length === 0 && (
-            <div className="text-muted">Ask for a Daily Summary, plan your afternoon, or generate stories from the selected goal/story.</div>
-          )}
-          {actions && actions.length > 0 && (
-            <div style={{ borderTop: '1px solid var(--bs-border-color)', paddingTop: 12 }}>
-              <div className="mb-2" style={{ fontWeight: 600 }}>Suggested actions</div>
-              <div className="d-flex flex-wrap gap-2">
-                {actions.map((a, i) => (
-                  <Badge key={i} bg="secondary">{String(a?.type || 'action')}</Badge>
-                ))}
-              </div>
-            </div>
+          {messages.length === 0 && !latestResult && (
+            <div className="text-muted">Ask what is next on your calendar, what your top priorities are, paste a transcript, or ask for a replan.</div>
           )}
         </div>
       </div>

@@ -441,6 +441,60 @@ const renderKpiSummary = (kpis) => {
   return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;">${cards.join('')}</div>`;
 };
 
+const renderGoalKpiStatusTable = (goalKpiStatus) => {
+  const rows = Array.isArray(goalKpiStatus?.rows) ? goalKpiStatus.rows : [];
+  if (!rows.length) {
+    return '<p style="color:#6b7280;">No active sprint goals with KPI status available.</p>';
+  }
+  const sprintName = goalKpiStatus?.sprintName || 'Active sprint';
+  const expectedLabel = Number.isFinite(Number(goalKpiStatus?.expectedProgressPct))
+    ? `${Math.round(Number(goalKpiStatus.expectedProgressPct))}% expected`
+    : 'Expected progress n/a';
+  const maxRows = 25;
+  const body = rows.slice(0, maxRows).map((row) => {
+    const goalRef = row.goalRef ? `${escape(row.goalRef)} — ` : '';
+    const goalLabel = `${goalRef}${escape(row.goalTitle || row.goalId || 'Goal')}`;
+    const goalCell = row.goalDeepLink
+      ? `<a href="${escape(row.goalDeepLink)}" style="color:#2563eb;">${goalLabel}</a>`
+      : goalLabel;
+    const progress = Number.isFinite(Number(row.progressPct)) ? `${Math.round(Number(row.progressPct))}%` : 'n/a';
+    const status = String(row.status || 'No KPI');
+    const statusColor = status === 'Behind' ? '#b91c1c' : status === 'On target' ? '#059669' : '#6b7280';
+    return `
+      <tr>
+        <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${goalCell}</td>
+        <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${escape(row.kpiSummary || 'No KPI attached')}</td>
+        <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${escape(progress)}</td>
+        <td style="padding:8px;border-bottom:1px solid #e5e7eb;color:${statusColor};font-weight:700;">${escape(status)}</td>
+        <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${escape(row.reason || '')}</td>
+      </tr>
+    `;
+  }).join('\n');
+  const overflow = rows.length > maxRows
+    ? `<div style="margin-top:8px;color:#6b7280;font-size:12px;">Showing ${maxRows} of ${rows.length} goals.</div>`
+    : '';
+  return `
+    <div style="margin-bottom:10px;color:#374151;font-size:13px;">
+      <strong>${escape(sprintName)}</strong> • ${escape(expectedLabel)}
+    </div>
+    <table role="presentation" style="width:100%;border-collapse:collapse;font-size:13px;">
+      <thead>
+        <tr style="background:#f3f4f6;text-align:left;">
+          <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Goal</th>
+          <th style="padding:8px;border-bottom:1px solid #e5e7eb;">KPI attached</th>
+          <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Progress</th>
+          <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Status</th>
+          <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Why</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${body}
+      </tbody>
+    </table>
+    ${overflow}
+  `;
+};
+
 const renderPriorityNarrative = (narrative) => {
   if (!narrative) {
     return '<p style="color:#6b7280;">No prioritization narrative yet. Run the nightly chain to generate.</p>';
@@ -702,6 +756,58 @@ const renderFinanceSummary = (summary, currency = 'GBP') => {
       <h4 style="margin:12px 0 4px;font-size:14px;color:#111827;">Spend Anomalies</h4>
       ${anomalyHtml}
     </div>
+  `;
+};
+
+const renderSavingsRunway = (runway, currency = 'GBP') => {
+  if (!runway || !Array.isArray(runway.topRows) || runway.topRows.length === 0) {
+    return '<p style="color:#6b7280;">No linked savings pots with runway data yet.</p>';
+  }
+
+  const rows = runway.topRows.map((row) => {
+    const target = formatCurrency(row.targetAmount || 0, currency) || `${currency} 0.00`;
+    const balance = formatCurrency(row.linkedPotBalance || 0, currency) || `${currency} 0.00`;
+    const avgMonthly = row.avgMonthlyAllocation && row.avgMonthlyAllocation > 0
+      ? (formatCurrency(row.avgMonthlyAllocation, currency) || `${currency} 0.00`)
+      : 'Insufficient history';
+    const remaining = formatCurrency(row.remainingAmount || 0, currency) || `${currency} 0.00`;
+    const eta = row.monthsToTarget == null
+      ? 'TBD'
+      : (Number(row.monthsToTarget) <= 0 ? 'Funded' : `${Math.ceil(Number(row.monthsToTarget))} mo`);
+
+    return `
+      <tr>
+        <td style="padding:6px;border-bottom:1px solid #e5e7eb;">${escape(row.goalTitle || 'Goal')}</td>
+        <td style="padding:6px;border-bottom:1px solid #e5e7eb;text-align:right;">${escape(target)}</td>
+        <td style="padding:6px;border-bottom:1px solid #e5e7eb;text-align:right;">${escape(balance)}</td>
+        <td style="padding:6px;border-bottom:1px solid #e5e7eb;text-align:right;">${escape(avgMonthly)}</td>
+        <td style="padding:6px;border-bottom:1px solid #e5e7eb;text-align:right;">${escape(remaining)}</td>
+        <td style="padding:6px;border-bottom:1px solid #e5e7eb;text-align:right;">${escape(eta)}</td>
+      </tr>
+    `;
+  }).join('');
+
+  const freshness = runway.updatedDisplay
+    ? `Updated ${escape(runway.updatedDisplay)}${runway.isStale ? ' · stale' : ''}`
+    : 'Update timestamp unavailable';
+
+  return `
+    <p style="margin:0 0 6px;color:#6b7280;font-size:12px;">${freshness}</p>
+    <table role="presentation" style="width:100%;border-collapse:collapse;font-size:13px;">
+      <thead>
+        <tr style="background:#f3f4f6;text-align:left;">
+          <th style="padding:6px;border-bottom:1px solid #e5e7eb;">Goal</th>
+          <th style="padding:6px;border-bottom:1px solid #e5e7eb;text-align:right;">Target</th>
+          <th style="padding:6px;border-bottom:1px solid #e5e7eb;text-align:right;">Pot Balance</th>
+          <th style="padding:6px;border-bottom:1px solid #e5e7eb;text-align:right;">Avg / mo</th>
+          <th style="padding:6px;border-bottom:1px solid #e5e7eb;text-align:right;">Remaining</th>
+          <th style="padding:6px;border-bottom:1px solid #e5e7eb;text-align:right;">ETA</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows}
+      </tbody>
+    </table>
   `;
 };
 
@@ -1017,6 +1123,11 @@ const renderDailySummaryEmail = (data) => {
       </section>
 
       <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
+        <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Dashboard Alerts</h2>
+        ${renderDashboardAlerts(data.dashboardAlerts || [])}
+      </section>
+
+      <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
         <h2 style="margin-top:0;font-size:18px;color:#1f2937;">AI Prioritization</h2>
         ${renderPriorityNarrative(data.priorityNarrative || data.aiFocus)}
         ${renderAIPriorityDetails(data.activeWorkItems || [])}
@@ -1031,9 +1142,21 @@ const renderDailySummaryEmail = (data) => {
       </section>
       ` : ''}
 
+      ${data.savingsRunway ? `
+      <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
+        <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Savings Runway</h2>
+        ${renderSavingsRunway(data.savingsRunway, data.monzo?.currency || 'GBP')}
+      </section>
+      ` : ''}
+
       <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
         <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Key Metrics</h2>
         ${renderKpiSummary(data.kpis)}
+      </section>
+
+      <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
+        <h2 style="margin-top:0;font-size:18px;color:#1f2937;">Goal KPI Status (Active Sprint)</h2>
+        ${renderGoalKpiStatusTable(data.goalKpiStatus)}
       </section>
 
       <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
@@ -1058,6 +1181,58 @@ const renderDailySummaryEmail = (data) => {
   </body>
 </html>
   `;
+};
+
+const renderDashboardAlerts = (alerts = []) => {
+  if (!Array.isArray(alerts) || alerts.length === 0) {
+    return '<p style="color:#6b7280;">No banner alerts today.</p>';
+  }
+
+  const toPercentInt = (value, fallback = null) => {
+    const num = Number(value);
+    if (!Number.isFinite(num)) return fallback;
+    return Math.max(0, Math.round(num));
+  };
+
+  const renderAlertMessage = (alert) => {
+    if (alert?.type !== 'budget_guardrail') {
+      return escape(alert?.message || '');
+    }
+
+    const discretionarySharePct = toPercentInt(alert?.discretionarySharePct);
+    const monthElapsedPct = toPercentInt(alert?.monthElapsedPct);
+
+    if (discretionarySharePct == null || monthElapsedPct == null) {
+      return 'Discretionary spend is ahead of month progress.';
+    }
+
+    // Budget guardrail wording is intentionally scoped to month-progress context only.
+    return `Discretionary spend is ${discretionarySharePct}% with ${monthElapsedPct}% of the month elapsed.`;
+  };
+
+  const toColor = (severity) => {
+    if (severity === 'critical') return { bg: '#fef2f2', border: '#ef4444', text: '#991b1b' };
+    if (severity === 'warning') return { bg: '#fffbeb', border: '#f59e0b', text: '#92400e' };
+    return { bg: '#eff6ff', border: '#2563eb', text: '#1e3a8a' };
+  };
+
+  return alerts
+    .slice(0, 6)
+    .map((alert) => {
+      const colors = toColor(alert?.severity);
+      const actionHref = alert?.ctaPath ? escape(alert.ctaPath) : null;
+      const action = actionHref
+        ? `<div style="margin-top:8px;"><a href="${actionHref}" style="font-size:12px;color:#2563eb;font-weight:600;">Open ${escape(alert.ctaPath)}</a></div>`
+        : '';
+      return `
+        <div style="margin-bottom:10px;padding:12px;border-radius:10px;border-left:4px solid ${colors.border};background:${colors.bg};">
+          <div style="font-size:13px;font-weight:700;color:${colors.text};">${escape(alert?.title || 'Alert')}</div>
+          <div style="font-size:13px;color:#334155;margin-top:4px;">${renderAlertMessage(alert)}</div>
+          ${action}
+        </div>
+      `;
+    })
+    .join('');
 };
 
 const renderWeeklyFinanceSummaryEmail = (data) => {
@@ -1183,6 +1358,9 @@ const renderDataQualityEmail = ({ profile, snapshot }) => {
         <ul>
           <li><strong>${summary.conversions || 0}</strong> task → story conversions</li>
           <li><strong>${summary.dedupes || 0}</strong> duplicates resolved</li>
+          <li><strong>${summary.autoPointed || 0}</strong> items auto-pointed by AI</li>
+          <li><strong>${summary.autoTimeOfDay || 0}</strong> items given AI time-of-day suggestion</li>
+          <li><strong>${summary.missingPoints || 0}</strong> stories still missing points</li>
           <li><strong>${summary.missingAcceptance || 0}</strong> stories missing acceptance criteria</li>
           <li><strong>${summary.missingGoalLink || 0}</strong> stories missing goal linkage</li>
           <li><strong>${summary.errors || 0}</strong> errors flagged</li>
@@ -1194,6 +1372,18 @@ const renderDataQualityEmail = ({ profile, snapshot }) => {
         ${conversionsHtml}
         <h3 style="margin-top:24px;color:#f8fafc;">Duplicates</h3>
         ${duplicatesHtml}
+        ${(snapshot.autoPointing && snapshot.autoPointing.length) ? `
+          <h3 style="margin-top:24px;color:#f8fafc;">AI Auto-pointed (${snapshot.autoPointing.length})</h3>
+          <ul>${snapshot.autoPointing.map((r) => `<li><strong>${escape(r.entityType || 'item')}</strong>: ${escape(r.points != null ? `${r.points} pts` : '')}${r.timeOfDay ? ` · ${escape(r.timeOfDay)}` : ''} — ${escape(r.title || r.entityId || '')}</li>`).join('\n')}</ul>
+        ` : ''}
+        ${(snapshot.autoTimeOfDay && snapshot.autoTimeOfDay.length) ? `
+          <h3 style="margin-top:24px;color:#f8fafc;">AI Time-of-day suggestions (${snapshot.autoTimeOfDay.length})</h3>
+          <ul>${snapshot.autoTimeOfDay.map((r) => `<li><strong>${escape(r.entityType || 'item')}</strong>: ${escape(r.timeOfDay || '')} — ${escape(r.title || r.entityId || '')}</li>`).join('\n')}</ul>
+        ` : ''}
+        ${(snapshot.missingPoints && snapshot.missingPoints.length) ? `
+          <h3 style="margin-top:24px;color:#f8fafc;">Stories still missing points</h3>
+          <ul>${renderList(snapshot.missingPoints, 'All active stories have points')}</ul>
+        ` : ''}
         <h3 style="margin-top:24px;color:#f8fafc;">Missing acceptance criteria</h3>
         <ul>${renderList(snapshot.missingAcceptance, 'All stories have acceptance criteria')}</ul>
         <h3 style="margin-top:24px;color:#f8fafc;">Stories without goal linkage</h3>

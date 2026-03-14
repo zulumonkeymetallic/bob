@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Button, Card, Collapse, Form, ListGroup, Spinner } from 'react-bootstrap';
+import { Badge, Button, Card, Collapse, Form, ListGroup, Spinner } from 'react-bootstrap';
 import { ActivityEntry, ActivityStreamService } from '../../services/ActivityStreamService';
 import { useAuth } from '../../contexts/AuthContext';
 import { usePersona } from '../../contexts/PersonaContext';
@@ -111,6 +111,18 @@ const ActivityStreamPanel: React.FC<ActivityStreamPanelProps> = ({
     setActivityLimit((prev) => prev + 50);
   };
 
+  const formatSourceLabel = (activity: ActivityEntry) => {
+    const source = String(activity.source || '').trim().toLowerCase();
+    const sourceDetails = String(activity.sourceDetails || '').trim().replace(/[_-]+/g, ' ');
+    const sourceLabel = source ? source.charAt(0).toUpperCase() + source.slice(1) : 'System';
+    if (!sourceDetails) return sourceLabel;
+    const detailLabel = sourceDetails
+      .split(' ')
+      .map((part) => part ? part.charAt(0).toUpperCase() + part.slice(1) : part)
+      .join(' ');
+    return `${sourceLabel} · ${detailLabel}`;
+  };
+
   return (
     <Card className={`h-100 ${className}`}>
       <Card.Header className="d-flex justify-content-between align-items-center py-2">
@@ -196,6 +208,26 @@ const ActivityStreamPanel: React.FC<ActivityStreamPanelProps> = ({
                     {activities.map((activity, index) => (
                       <ListGroup.Item key={activity.id || index} className="py-2">
                         <div className="small">{activity.description}</div>
+                        <div className="d-flex align-items-center gap-2 flex-wrap mt-1">
+                          <Badge bg={activity.source === 'ai' ? 'primary' : (activity.source === 'human' ? 'secondary' : 'dark')}>
+                            {formatSourceLabel(activity)}
+                          </Badge>
+                          {activity.referenceNumber ? (
+                            <span className="text-muted" style={{ fontSize: 11 }}>
+                              {activity.referenceNumber}
+                            </span>
+                          ) : null}
+                          {activity.metadata?.url ? (
+                            <a
+                              href={String(activity.metadata.url)}
+                              target="_blank"
+                              rel="noreferrer"
+                              style={{ fontSize: 11 }}
+                            >
+                              Source URL
+                            </a>
+                          ) : null}
+                        </div>
                         <div className="text-muted" style={{ fontSize: 11 }}>
                           {ActivityStreamService.formatTimestamp(activity.timestamp)}
                           {activity.userEmail && ` • ${activity.userEmail.split('@')[0]}`}

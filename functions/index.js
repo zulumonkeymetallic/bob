@@ -70,12 +70,20 @@ try {
 }
 const { sendEmail } = require('./lib/email');
 const { coerceZone, toDateTime, computeDayWindow } = require('./lib/time');
+const { resolveThemeAllocationsForDate } = require('./lib/themeAllocations');
 const crypto = require('crypto');
 const { KeyManagementServiceClient } = require('@google-cloud/kms');
 const MS_IN_DAY = 24 * 60 * 60 * 1000;
 const MS_IN_WEEK = 7 * MS_IN_DAY;
 const TASK_TTL_DAYS = Number(process.env.TASK_TTL_DAYS || 7);
 const SPRINT_NONE = '__none__';
+const DEFAULT_TASK_POINTS = 0.25;
+
+function clampStoryPoints(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) return null;
+  return numeric;
+}
 
 // Import the daily digest generator
 const { generateDailyDigest } = require("./dailyDigestGenerator");
@@ -86,13 +94,121 @@ try {
   if (calendarSync) {
     exports.syncCalendarBlock = calendarSync.syncCalendarBlock;
     exports.onCalendarBlockWrite = calendarSync.onCalendarBlockWrite;
+    exports.onStoryCalendarAutoLink = calendarSync.onStoryCalendarAutoLink;
     exports.syncFromGoogleCalendar = calendarSync.syncFromGoogleCalendar;
     exports.syncCalendarNow = calendarSync.syncCalendarNow;
     exports.scheduledCalendarSync = calendarSync.scheduledCalendarSync;
-    exports.syncCalendarTestInsert = calendarSync.syncCalendarTestInsert;
+    exports.gcalLinkUnlinkedEvents = calendarSync.gcalLinkUnlinkedEvents;
   }
 } catch (e) {
   console.warn('[init] calendarSync not loaded', e?.message || e);
+}
+
+// Import reference backfill utility
+try {
+  const referenceBackfill = require('./utils/referenceBackfill');
+  if (referenceBackfill) {
+    exports.backfillReferenceNumbers = functionsV2.https.onCall(
+      async (request) => {
+        if (!request.auth) {
+          throw new Error('Authentication required');
+        }
+        // Only allow backfill for admin-like operations
+        const result = await referenceBackfill.backfillAllReferences();
+        return result;
+      }
+    );
+  }
+} catch (e) {
+  console.warn('[init] referenceBackfill not loaded', e?.message || e);
+}
+
+// Import time-of-day population service
+const { parseTimeStringToTimeOfDay, populateBlankTimeOfDay, inferTimeOfDayFromContent } = require('./services/timeOfDayPopulator');
+
+// Import Fitness KPI Sync service
+const { syncAllUsersFitnessKpis, syncUserFitnessKpis } = require('./services/fitnessKpiSync');
+
+// Import Focus Goals functions
+try {
+  const focusGoalsModule = require('./focusGoals');
+  if (focusGoalsModule) {
+    exports.createMonzoPotForGoal = focusGoalsModule.createMonzoPotForGoal;
+    exports.syncFocusGoalsNightly = focusGoalsModule.syncFocusGoalsNightly;
+    exports.syncAllFocusGoalsNightly = focusGoalsModule.syncAllFocusGoalsNightly;
+    exports.getFocusGoalsForUser = focusGoalsModule.getFocusGoalsForUser;
+  }
+} catch (e) {
+  console.warn('[init] focusGoals not loaded', e?.message || e);
+}
+
+// Import Global Hierarchy Snapshot functions
+try {
+  const globalSnapshotModule = require('./globalSnapshot');
+  if (globalSnapshotModule) {
+    exports.generateGlobalHierarchySnapshots = globalSnapshotModule.generateGlobalHierarchySnapshots;
+    exports.exportGlobalHierarchySnapshot = globalSnapshotModule.exportGlobalHierarchySnapshot;
+  }
+} catch (e) {
+  console.warn('[init] globalSnapshot not loaded', e?.message || e);
+}
+
+// Import Intent Broker functions
+try {
+  const intentBrokerModule = require('./intentBroker');
+  if (intentBrokerModule) {
+    exports.getIntentBrokerPrompts = intentBrokerModule.getIntentBrokerPrompts;
+    exports.intentBrokerSuggestFocus = intentBrokerModule.intentBrokerSuggestFocus;
+    exports.recordIntentFocusConversion = intentBrokerModule.recordIntentFocusConversion;
+  }
+} catch (e) {
+  console.warn('[init] intentBroker not loaded', e?.message || e);
+}
+
+// Import Capacity Deferral functions
+try {
+  const capacityDeferralModule = require('./capacityDeferral');
+  if (capacityDeferralModule) {
+    exports.applyCapacityDeferrals = capacityDeferralModule.applyCapacityDeferrals;
+  }
+} catch (e) {
+  console.warn('[init] capacityDeferral not loaded', e?.message || e);
+}
+
+// Import intelligent deferral suggestion functions
+try {
+  const deferralSuggestionsModule = require('./deferralSuggestions');
+  if (deferralSuggestionsModule) {
+    exports.suggestDeferralOptions = deferralSuggestionsModule.suggestDeferralOptions;
+  }
+} catch (e) {
+  console.warn('[init] deferralSuggestions not loaded', e?.message || e);
+}
+
+// Import Feature Flags
+try {
+  const featureFlagsModule = require('./featureFlags');
+  if (featureFlagsModule) {
+    exports.getFeatureFlags = featureFlagsModule.getFeatureFlags;
+    exports.setFeatureFlag = featureFlagsModule.setFeatureFlag;
+  }
+} catch (e) {
+  console.warn('[init] featureFlags not loaded', e?.message || e);
+}
+
+// Import Fuzzy Task Linking functions
+try {
+  const fuzzyTaskLinking = require('./fuzzyTaskLinking');
+  if (fuzzyTaskLinking) {
+    exports.nightlyTaskLinking = fuzzyTaskLinking.nightlyTaskLinking;
+    exports.nightlyStoryGoalLinking = fuzzyTaskLinking.nightlyStoryGoalLinking;
+    exports.triggerTaskLinking = fuzzyTaskLinking.triggerTaskLinking;
+    exports.triggerStoryGoalLinking = fuzzyTaskLinking.triggerStoryGoalLinking;
+    exports.respondToTaskSuggestion = fuzzyTaskLinking.respondToTaskSuggestion;
+    exports.respondToStoryGoalSuggestion = fuzzyTaskLinking.respondToStoryGoalSuggestion;
+  }
+} catch (e) {
+  console.warn('[init] fuzzyTaskLinking not loaded', e?.message || e);
 }
 
 // Import AI Planning functions
@@ -125,8 +241,20 @@ try {
     exports.materializeFitnessBlocksNow = nightlyOrchestration.materializeFitnessBlocksNow;
     exports.replanCalendarNow = nightlyOrchestration.replanCalendarNow;
     exports.runNightlyChainNow = nightlyOrchestration.runNightlyChainNow;
+    if (nightlyOrchestration.seedNextWeekPlannerOverridesWeekly) {
+      exports.seedNextWeekPlannerOverridesWeekly = nightlyOrchestration.seedNextWeekPlannerOverridesWeekly;
+    }
+    if (nightlyOrchestration.seedNextWeekPlannerOverridesNow) {
+      exports.seedNextWeekPlannerOverridesNow = nightlyOrchestration.seedNextWeekPlannerOverridesNow;
+    }
     if (nightlyOrchestration.runNightlyChainNowHttp) {
       exports.runNightlyChainNowHttp = nightlyOrchestration.runNightlyChainNowHttp;
+    }
+    if (nightlyOrchestration.deltaPriorityRescore) {
+      exports.deltaPriorityRescore = nightlyOrchestration.deltaPriorityRescore;
+    }
+    if (nightlyOrchestration.applyEveningPullForward) {
+      exports.applyEveningPullForward = nightlyOrchestration.applyEveningPullForward;
     }
   }
 } catch (e) {
@@ -156,19 +284,350 @@ const updateGoalTargetYears = async () => {
 exports.updateGoalTargetYears = schedulerV2.onSchedule(
   { schedule: '0 3 * * *', timeZone: 'UTC', region: 'europe-west2' },
   async () => {
+    try {
+      return await updateGoalTargetYears();
+    } catch (e) {
+      console.error('[goalTargetYear] failed', e?.message || e);
+      return null;
+    }
+  });
+
+// Nightly fitness KPI sync: updates goal KPI progress from Strava/HealthKit workouts
+const buildWeeklySnapshotKey = (dt) => {
+  const resolved = DateTime.isDateTime(dt) ? dt : DateTime.fromJSDate(new Date(dt || Date.now()));
+  return `${resolved.weekYear}-W${String(resolved.weekNumber).padStart(2, '0')}`;
+};
+
+const parseWeeklySnapshotKey = (weekKey, zone = DEFAULT_TIMEZONE) => {
+  const match = /^(\d{4})-W(\d{2})$/.exec(String(weekKey || '').trim());
+  if (!match) return null;
+  const weekYear = Number(match[1]);
+  const weekNumber = Number(match[2]);
+  if (!Number.isFinite(weekYear) || !Number.isFinite(weekNumber)) return null;
+  const dt = DateTime.fromObject({ weekYear, weekNumber, weekday: 1 }, { zone });
+  return dt.isValid ? dt.startOf('day') : null;
+};
+
+const buildBackfilledResolvedKpis = (leafSummary = {}) => {
+  const topKpis = Array.isArray(leafSummary?.topKpis) ? leafSummary.topKpis : [];
+  return topKpis.map((kpi, index) => {
+    const progressPct = Number(kpi?.progressPct);
+    const healthy = kpi?.healthy === true;
+    return {
+      index,
+      id: String(kpi?.id || `${leafSummary.goalId || 'goal'}_${index}`),
+      name: String(kpi?.name || `KPI ${index + 1}`),
+      currentDisplay: kpi?.currentDisplay ?? null,
+      progressPct: Number.isFinite(progressPct) ? progressPct : null,
+      healthy,
+      stale: !healthy,
+      backfilled: true,
+      source: 'weekly_checkin_focus_summary',
+      snapshotQuality: 'summary_only',
+    };
+  });
+};
+
+const snapshotGoalKpiMetricsForUser = async (uid, { reason = 'manual', now = null } = {}) => {
+  const db = admin.firestore();
+  const profile = await loadProfile(db, uid).catch(() => ({ id: uid }));
+  const zone = resolveTimezone(profile, DEFAULT_TIMEZONE);
+  const snapshotDt = (DateTime.isDateTime(now)
+    ? now
+    : now
+      ? DateTime.fromJSDate(new Date(now))
+      : DateTime.now()).setZone(zone);
+  const weekKey = buildWeeklySnapshotKey(snapshotDt);
+  const metricsSnap = await db.collection('goal_kpi_metrics').where('ownerUid', '==', uid).get();
+  if (metricsSnap.empty) {
+    return { uid, zone, weekKey, snapshotCount: 0 };
+  }
+
+  let batch = db.batch();
+  let pendingWrites = 0;
+  let snapshotCount = 0;
+  const commitBatch = async () => {
+    if (pendingWrites === 0) return;
+    await batch.commit();
+    batch = db.batch();
+    pendingWrites = 0;
+  };
+
+  for (const docSnap of metricsSnap.docs) {
+    const data = docSnap.data() || {};
+    const goalId = String(data.goalId || '').trim();
+    if (!goalId) continue;
+    const snapshotRef = db.collection('weekly_goal_kpi_snapshots').doc(`${uid}_${weekKey}_${goalId}`);
+    batch.set(snapshotRef, {
+      ownerUid: uid,
+      goalId,
+      goalRef: data.goalRef || null,
+      goalTitle: data.goalTitle || null,
+      resolvedKpis: Array.isArray(data.resolvedKpis) ? data.resolvedKpis : [],
+      weekKey,
+      snapshotType: 'weekly',
+      snapshotReason: reason,
+      snapshotTimeZone: zone,
+      sourceUpdatedAt: data.updatedAt || null,
+      snapshotAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+    pendingWrites += 1;
+    snapshotCount += 1;
+    if (pendingWrites >= 400) {
+      await commitBatch();
+    }
+  }
+
+  await commitBatch();
+  return { uid, zone, weekKey, snapshotCount };
+};
+
+const backfillWeeklyGoalKpiSnapshotsForUser = async (uid, { maxWeeks = 26, overwrite = false } = {}) => {
+  const db = admin.firestore();
+  const profile = await loadProfile(db, uid).catch(() => ({ id: uid }));
+  const zone = resolveTimezone(profile, DEFAULT_TIMEZONE);
+  const boundedMaxWeeks = Math.max(1, Math.min(Number(maxWeeks) || 26, 104));
+
+  const [weeklyCheckinsSnap, existingSnapshotsSnap] = await Promise.all([
+    db.collection('weekly_checkins').where('ownerUid', '==', uid).get(),
+    db.collection('weekly_goal_kpi_snapshots').where('ownerUid', '==', uid).get(),
+  ]);
+
+  const existingSnapshotIds = new Set(existingSnapshotsSnap.docs.map((docSnap) => docSnap.id));
+  const candidateWeeks = weeklyCheckinsSnap.docs
+    .map((docSnap) => {
+      const data = docSnap.data() || {};
+      const weekKey = String(data.weekKey || '').trim();
+      const weekDt = parseWeeklySnapshotKey(weekKey, zone);
+      const focusSummary = data?.metrics?.focusSummary || null;
+      const leafGoals = Array.isArray(focusSummary?.leafGoals) ? focusSummary.leafGoals : [];
+      return {
+        id: docSnap.id,
+        weekKey,
+        weekDt,
+        updatedAt: data.updatedAt || data.createdAt || null,
+        leafGoals,
+      };
+    })
+    .filter((entry) => entry.weekDt && entry.leafGoals.length > 0)
+    .sort((a, b) => b.weekDt.toMillis() - a.weekDt.toMillis())
+    .slice(0, boundedMaxWeeks);
+
+  let batch = db.batch();
+  let pendingWrites = 0;
+  let snapshotsWritten = 0;
+  let snapshotsSkipped = 0;
+
+  const commitBatch = async () => {
+    if (pendingWrites === 0) return;
+    await batch.commit();
+    batch = db.batch();
+    pendingWrites = 0;
+  };
+
+  for (const weekly of candidateWeeks) {
+    for (const leafGoal of weekly.leafGoals) {
+      const goalId = String(leafGoal?.goalId || '').trim();
+      if (!goalId) continue;
+      const snapshotId = `${uid}_${weekly.weekKey}_${goalId}`;
+      if (!overwrite && existingSnapshotIds.has(snapshotId)) {
+        snapshotsSkipped += 1;
+        continue;
+      }
+      const snapshotRef = db.collection('weekly_goal_kpi_snapshots').doc(snapshotId);
+      batch.set(snapshotRef, {
+        ownerUid: uid,
+        goalId,
+        goalRef: null,
+        goalTitle: leafGoal?.title || null,
+        resolvedKpis: buildBackfilledResolvedKpis(leafGoal),
+        weekKey: weekly.weekKey,
+        snapshotType: 'weekly',
+        snapshotReason: 'backfillWeeklyGoalKpiSnapshots',
+        snapshotTimeZone: zone,
+        sourceUpdatedAt: weekly.updatedAt || null,
+        snapshotAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        backfilled: true,
+        snapshotQuality: 'summary_only',
+        backfilledFromWeeklyCheckinId: weekly.id,
+        totalKpis: Number(leafGoal?.totalKpis || 0) || 0,
+        healthyKpis: Number(leafGoal?.healthyKpis || 0) || 0,
+        staleKpis: Number(leafGoal?.staleKpis || 0) || 0,
+      }, { merge: true });
+      existingSnapshotIds.add(snapshotId);
+      snapshotsWritten += 1;
+      pendingWrites += 1;
+      if (pendingWrites >= 400) {
+        await commitBatch();
+      }
+    }
+  }
+
+  await commitBatch();
+  const currentWeekSnapshot = await snapshotGoalKpiMetricsForUser(uid, { reason: 'backfillWeeklyGoalKpiSnapshots_current' });
+
+  return {
+    uid,
+    zone,
+    weeksScanned: candidateWeeks.length,
+    snapshotsWritten,
+    snapshotsSkipped,
+    currentWeekSnapshotsWritten: Number(currentWeekSnapshot?.snapshotCount || 0),
+    currentWeekKey: currentWeekSnapshot?.weekKey || buildWeeklySnapshotKey(DateTime.now().setZone(zone)),
+  };
+};
+
+const syncFitnessKpis = async () => {
   try {
-    return await updateGoalTargetYears();
+    const [fitnessResult, usersSnap] = await Promise.all([
+      syncAllUsersFitnessKpis(),
+      admin.firestore().collection('profiles').get(),
+    ]);
+
+    let metricsDocsUpdated = 0;
+    let weeklySnapshotsUpdated = 0;
+    for (const userDoc of usersSnap.docs) {
+      const uid = String(userDoc.id || '').trim();
+      if (!uid) continue;
+      const rows = await computeGoalFitnessKpisForUser(uid, { persist: true });
+      metricsDocsUpdated += Array.isArray(rows) ? rows.length : 0;
+      const snapshotResult = await snapshotGoalKpiMetricsForUser(uid, { reason: 'syncFitnessKpisNightly' });
+      weeklySnapshotsUpdated += Number(snapshotResult?.snapshotCount || 0);
+    }
+
+    const result = {
+      ...fitnessResult,
+      metricsDocsUpdated,
+      weeklySnapshotsUpdated,
+    };
+
+    console.log(
+      `✅ Fitness KPI sync completed: ${result.totalSynced} goals updated, ` +
+      `${metricsDocsUpdated} goal_kpi_metrics docs refreshed, ` +
+      `${weeklySnapshotsUpdated} weekly KPI snapshots written`
+    );
+    return result;
   } catch (e) {
-    console.error('[goalTargetYear] failed', e?.message || e);
-    return null;
+    console.error('[fitnessKpiSync] failed', e?.message || e);
+    throw e;
+  }
+};
+
+exports.syncFitnessKpisNightly = schedulerV2.onSchedule(
+  { schedule: '30 3 * * *', timeZone: 'UTC', region: 'europe-west2' },
+  syncFitnessKpis
+);
+
+// Manual per-user sync endpoint
+exports.syncFitnessKpisNow = httpsV2.onCall({ region: 'europe-west2' }, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) {
+    throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  }
+  try {
+    const [result, metricsRows] = await Promise.all([
+      syncUserFitnessKpis(uid),
+      computeGoalFitnessKpisForUser(uid, { persist: true }),
+    ]);
+    const snapshotResult = await snapshotGoalKpiMetricsForUser(uid, { reason: 'syncFitnessKpisNow' });
+    return {
+      ok: true,
+      ...result,
+      metricsDocsUpdated: Array.isArray(metricsRows) ? metricsRows.length : 0,
+      weeklySnapshotsUpdated: Number(snapshotResult?.snapshotCount || 0),
+    };
+  } catch (e) {
+    console.error('[fitnessKpiSync] user sync failed:', e);
+    throw new httpsV2.HttpsError('internal', e?.message || 'Sync failed');
   }
 });
+
+exports.backfillWeeklyGoalKpiSnapshots = httpsV2.onCall({ region: 'europe-west2' }, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) {
+    throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  }
+  const maxWeeks = Math.max(1, Math.min(Number(req?.data?.maxWeeks) || 26, 104));
+  const overwrite = req?.data?.overwrite === true;
+  try {
+    const result = await backfillWeeklyGoalKpiSnapshotsForUser(uid, { maxWeeks, overwrite });
+    return { ok: true, ...result };
+  } catch (e) {
+    console.error('[weekly-kpi-backfill] failed', { uid, maxWeeks, overwrite, error: e });
+    throw new httpsV2.HttpsError('internal', e?.message || 'Weekly KPI snapshot backfill failed');
+  }
+});
+
+// Nightly focus goals sync: update daysRemaining, deactivate expired
+const syncFocusGoalCountdowns = async () => {
+  try {
+    const db = admin.firestore();
+    const users = await db.collection('profiles').get();
+    let totalSynced = 0;
+
+    for (const userDoc of users.docs) {
+      const focusGoals = await db
+        .collection('focusGoals')
+        .where('ownerUid', '==', userDoc.id)
+        .where('isActive', '==', true)
+        .get();
+
+      const now = Date.now();
+
+      for (const focusDoc of focusGoals.docs) {
+        const focusGoal = focusDoc.data();
+        const endDate = new Date(focusGoal.endDate).getTime();
+        const daysRemaining = Math.ceil((endDate - now) / (24 * 60 * 60 * 1000));
+
+        if (daysRemaining <= 0) {
+          await focusDoc.ref.update({
+            isActive: false,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+          });
+        } else {
+          await focusDoc.ref.update({
+            daysRemaining,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+          });
+        }
+
+        totalSynced++;
+      }
+    }
+
+    console.log(`✅ Focus goals sync completed: ${totalSynced} goals updated`);
+    return { totalSynced };
+  } catch (e) {
+    console.error('[focusGoalsSync] failed', e?.message || e);
+    throw e;
+  }
+};
+
+exports.syncFocusGoalCountdownsNightly = schedulerV2.onSchedule(
+  { schedule: '0 4 * * *', timeZone: 'UTC', region: 'europe-west2' },
+  syncFocusGoalCountdowns
+);
 
 // Calendar diagnostics
 // (already exported above with calendarSync bundle)
 
 functionsV2.setGlobalOptions({ region: "europe-west2", maxInstances: 10 });
-admin.initializeApp();
+if (!admin.apps.length) {
+  admin.initializeApp();
+}
+
+let transcriptIngestionModule = null;
+try {
+  transcriptIngestionModule = require('./transcriptIngestion');
+  if (transcriptIngestionModule) {
+    exports.ingestTranscript = transcriptIngestionModule.ingestTranscript;
+    exports.ingestTranscriptHttp = transcriptIngestionModule.ingestTranscriptHttp;
+  }
+} catch (e) {
+  console.warn('[init] transcriptIngestion not loaded', e?.message || e);
+}
 
 // Secrets
 // Google AI Studio (Gemini)
@@ -230,6 +689,10 @@ const CHORE_DUE_ROLLOVER_DAYS = 3;
 const CHORE_DUE_ROLLOVER_MS = CHORE_DUE_ROLLOVER_DAYS * 24 * 60 * 60 * 1000;
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
 const AI_PRIORITY_MODEL = GEMINI_MODEL;
+const PARKRUN_API_BASE = String(process.env.PARKRUN_API_BASE || 'https://api.parkrun.com').trim().replace(/\/+$/, '');
+const PARKRUN_API_CLIENT_ID = String(process.env.PARKRUN_API_CLIENT_ID || 'netdreams-iphone-s01').trim();
+const PARKRUN_API_CLIENT_SECRET = String(process.env.PARKRUN_API_CLIENT_SECRET || 'gfKbDD6NJkYoFmkisR(iVFopQCKWzbQeQgZAZZKK').trim();
+const PARKRUN_API_USER_AGENT = String(process.env.PARKRUN_API_USER_AGENT || 'parkrun/1.2.7 CFNetwork/1121.2.2 Darwin/19.3.0').trim();
 
 function toMillis(value) {
   if (!value && value !== 0) return null;
@@ -439,6 +902,36 @@ function applyTimeOfDay(day, timeMs) {
   return d.getTime();
 }
 
+const CHORE_TIMEZONE = 'Europe/London';
+
+function extractZoneHourMinute(ms, timeZone = CHORE_TIMEZONE) {
+  const d = new Date(ms);
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    timeZone,
+  }).formatToParts(d);
+  const hour = Number(parts.find((p) => p.type === 'hour')?.value || '0');
+  const minute = Number(parts.find((p) => p.type === 'minute')?.value || '0');
+  return { hour, minute };
+}
+
+function formatDueTime(ms) {
+  const { hour, minute } = extractZoneHourMinute(ms);
+  const hh = String(hour).padStart(2, '0');
+  const mm = String(minute).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
+function classifyTimeOfDay(ms) {
+  const { hour, minute } = extractZoneHourMinute(ms);
+  const minutes = hour * 60 + minute;
+  if (minutes >= (5 * 60) && minutes < (12 * 60)) return 'morning';
+  if (minutes >= (12 * 60) && minutes < (17 * 60)) return 'afternoon';
+  return 'evening';
+}
+
 function durationMinutesFromTask(task) {
   const points = Number(task?.points || 0);
   const estimateMin = Number(task?.estimateMin || 0);
@@ -446,7 +939,7 @@ function durationMinutesFromTask(task) {
   const isChoreLike = ['chore', 'routine', 'habit'].includes(type);
   const choreMin = 10;
   if (estimateMin > 0) return Math.min(180, Math.max(isChoreLike ? choreMin : 15, Math.round(estimateMin)));
-  if (points > 0) return Math.min(240, Math.max(isChoreLike ? choreMin : 30, Math.round(points * 60)));
+  if (points > 0) return Math.min(480, Math.max(isChoreLike ? choreMin : 30, Math.round(points * 60)));
   return isChoreLike ? choreMin : 30;
 }
 
@@ -502,7 +995,7 @@ async function findSlotForDay(db, ownerUid, dayStartMs, dayEndMs, durationMs) {
   return null;
 }
 
-async function upsertChoreBlocksForTask(db, task, lookaheadDays = 14) {
+async function upsertChoreBlocksForTask(db, task, lookaheadDays = 28) {
   if (!task?.ownerUid || !task?.id) return { created: 0, updated: 0 };
   const ownerUid = task.ownerUid;
   const today = startOfDay(new Date());
@@ -571,6 +1064,50 @@ async function upsertChoreBlocksForTask(db, task, lookaheadDays = 14) {
     }
     return null;
   };
+
+  const findSlotFromDay = async (startDay, existingDocId = null, preferredMs = null) => {
+    for (const candidateDay of iterateNextDays(startDay, lookaheadDays)) {
+      const candidateStartMs = startOfDay(candidateDay).getTime();
+      if (snoozedUntil && candidateStartMs < startOfDay(new Date(snoozedUntil)).getTime()) continue;
+      const candidateKey = toDayKey(candidateDay);
+      const candidateDayStartMs = candidateStartMs;
+      const candidateDayEndMs = candidateDayStartMs + (24 * 60 * 60 * 1000) - 1;
+      const candidateCtx = await loadDayCtx(candidateDayStartMs, candidateDayEndMs, candidateKey);
+      if (!candidateCtx.windows.length) continue;
+      const occupiedWithoutSelf = candidateCtx.occupied.filter((o) => o.id !== existingDocId);
+
+      if (preferredMs && startOfDay(new Date(preferredMs)).getTime() === candidateDayStartMs) {
+        const preferredEnd = preferredMs + durationMs;
+        if (
+          fitsInWindows(preferredMs, preferredEnd, candidateCtx.windows) &&
+          !overlapsAny(preferredMs, preferredEnd, occupiedWithoutSelf)
+        ) {
+          return {
+            startMs: preferredMs,
+            endMs: preferredEnd,
+            dayCtx: candidateCtx,
+            dayKey: candidateKey,
+            day: candidateDay,
+            occupiedWithoutSelf,
+          };
+        }
+      }
+
+      const slot = findSlotInWindows(candidateCtx.windows, occupiedWithoutSelf, durationMs);
+      if (slot != null) {
+        return {
+          startMs: slot,
+          endMs: slot + durationMs,
+          dayCtx: candidateCtx,
+          dayKey: candidateKey,
+          day: candidateDay,
+          occupiedWithoutSelf,
+        };
+      }
+    }
+    return null;
+  };
+
   for (const day of iterateNextDays(today, lookaheadDays)) {
     if (snoozedUntil && day.getTime() < startOfDay(new Date(snoozedUntil)).getTime()) continue;
     if (!shouldScheduleOnDay(task, day)) continue;
@@ -618,15 +1155,23 @@ async function upsertChoreBlocksForTask(db, task, lookaheadDays = 14) {
 
     if (startMs == null) {
       const slot = findSlotInWindows(dayCtx.windows, occupiedWithoutSelf, durationMs);
-      if (!slot) {
+      if (slot != null) {
+        startMs = slot;
+        endMs = slot + durationMs;
+      }
+    }
+
+    if (startMs == null) {
+      const fallback = await findSlotFromDay(day, docId, taskDueMs && dueHasTime ? applyTimeOfDay(day, taskDueMs) : null);
+      if (!fallback) {
         if (snap.exists) {
           await ref.delete();
           dayCtx.occupied = occupiedWithoutSelf;
         }
         continue;
       }
-      startMs = slot;
-      endMs = slot + durationMs;
+      startMs = fallback.startMs;
+      endMs = fallback.endMs;
     }
 
     if (startMs >= nowMs && (nextStartMs == null || startMs < nextStartMs)) {
@@ -673,16 +1218,23 @@ async function upsertChoreBlocksForTask(db, task, lookaheadDays = 14) {
 
   if (nextStartMs && isRecurringChoreTask(task) && !isTaskLocked(task)) {
     const dueMs = toMillis(task?.dueDate || task?.dueDateMs || task?.targetDate);
+    const nextDueTime = formatDueTime(nextStartMs);
+    const nextTimeOfDay = classifyTimeOfDay(nextStartMs);
+    const currentDueTime = String(task?.dueTime || '').trim();
+    const currentTimeOfDay = String(task?.timeOfDay || '').trim().toLowerCase();
     const isMissing = !dueMs;
     const isOverdueBeyondGrace = !!dueMs && dueMs < (nowMs - CHORE_DUE_ROLLOVER_MS);
     const isFutureMismatch = !!dueMs && dueMs >= nowMs && Math.abs(dueMs - nextStartMs) > (5 * MS_IN_MINUTE);
-    if (isMissing || isOverdueBeyondGrace || isFutureMismatch) {
+    const isTimeMismatch = currentDueTime !== nextDueTime || currentTimeOfDay !== nextTimeOfDay;
+    if (isMissing || isOverdueBeyondGrace || isFutureMismatch || isTimeMismatch) {
       const hasStory = !!(task?.storyId || (task?.parentType === 'story' && task?.parentId));
       const sprintId = hasStory
         ? (task?.sprintId || null)
         : await resolveSprintIdForDate(db, ownerUid, task?.persona || null, nextStartMs, sprintCache);
       await db.collection('tasks').doc(task.id).set({
         dueDate: nextStartMs,
+        dueTime: nextDueTime,
+        timeOfDay: nextTimeOfDay,
         sprintId: sprintId ?? null,
         dueDateReason: isOverdueBeyondGrace ? 'chore_rollover' : 'chore_block',
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -732,9 +1284,14 @@ async function generateStoryRef(db, ownerUid) {
 }
 
 // ===== Deterministic Scheduler (Issue #152 - Phase 1)
-exports.buildPlan = httpsV2.onCall(async (req) => {
-  const uid = req?.auth?.uid;
-  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+const { secureFunction } = require('./security/recaptchaSecurityHandler');
+const { checkAndIncrementQuota } = require('./utils/perUserQuota');
+const { verifyAppCheckToken, checkOnCallAppCheck } = require('./utils/appCheckVerifier');
+
+exports.buildPlan = httpsV2.onCall(
+  secureFunction(async (req) => {
+    const uid = req?.auth?.uid;
+    if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
 
   const day = req?.data?.day || new Date().toISOString().slice(0, 10); // YYYY-MM-DD
   const useLLM = !!req?.data?.useLLM;
@@ -1076,12 +1633,17 @@ exports.buildPlan = httpsV2.onCall(async (req) => {
     assignments: assignments.map(a => ({ id: a.id, blockId: a.blockId, status: a.status })),
     importantTasks
   };
-});
+  }, {
+    requireAuth: true,
+    minRecaptchaScore: 0.5,
+  })
+);
 
 // ===== Spec wrappers: syncCalendarAndTasks, autoEnrichTasks, taskStoryConversion, plannerLLM
-exports.syncCalendarAndTasks = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
-  const uid = req?.auth?.uid;
-  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+exports.syncCalendarAndTasks = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] },
+  secureFunction(async (req) => {
+    const uid = req?.auth?.uid;
+    if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
 
   const direction = String(req?.data?.direction || 'both').toLowerCase();
   const doPull = direction === 'both' || direction === 'gcal->firestore' || direction === 'pull';
@@ -1129,11 +1691,21 @@ exports.syncCalendarAndTasks = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID
     } catch { }
   }
   return { ok: true, blocksSynced, reconciled, pushed };
-});
+  }, {
+    requireAuth: true,
+    minRecaptchaScore: 0.5,
+  })
+);
 
-exports.autoEnrichTasks = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
+exports.autoEnrichTasks = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY], maxInstances: 5, enforceAppCheck: true }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+
+  const appCheckResult = checkOnCallAppCheck(req, 'autoEnrichTasks');
+  if (!appCheckResult.valid) throw new httpsV2.HttpsError('unauthenticated', appCheckResult.reason || 'App Check required');
+
+  const quotaCheck = await checkAndIncrementQuota(uid, 'auto_enrich_tasks');
+  if (!quotaCheck.allowed) throw new httpsV2.HttpsError('resource-exhausted', quotaCheck.message || 'Daily AI quota exceeded');
 
   const estimateMissing = req?.data?.estimateMissing !== false;
   const linkSuggestions = !!req?.data?.linkSuggestions;
@@ -1211,9 +1783,88 @@ exports.autoEnrichTasks = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }
   return { processed: candidates.length, updated, estimatesAdded, linksSuggested };
 });
 
-exports.taskStoryConversion = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
+// ===== enhanceNewTask: spell-check title, estimate points, score on new task creation
+exports.enhanceNewTask = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY], memory: '512MiB' },
+  secureFunction(async (req) => {
+    const uid = req?.auth?.uid;
+    if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const { taskId } = req?.data || {};
+  if (!taskId) throw new httpsV2.HttpsError('invalid-argument', 'taskId required');
+
+  const db = ensureFirestore();
+  const taskDoc = await db.collection('tasks').doc(taskId).get();
+  if (!taskDoc.exists) return { ok: false, reason: 'not_found' };
+  const task = taskDoc.data();
+  if (task.ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Not your task');
+
+  const patch = { updatedAt: admin.firestore.FieldValue.serverTimestamp() };
+  let correctedTitle = task.title || '';
+  let estimatedPoints = null;
+
+  try {
+    const system = 'You are a task management assistant. Return compact JSON only.';
+    const user = [
+      'Given this task title and description, do two things:',
+      '1. Fix any spelling/grammar errors in the title (keep it concise)',
+      '2. Estimate effort points as a number (decimals allowed in 0.25 increments, range 0.25-8)',
+      '',
+      `Title: "${task.title || ''}"`,
+      `Description: "${(task.description || '').slice(0, 400)}"`,
+      '',
+      'Respond as: {"correctedTitle": "string", "points": number, "reason": "string"}',
+    ].join('\n');
+    const text = await callLLMJson({ system, user, purpose: 'enhanceNewTask', userId: uid, expectJson: true, temperature: 0.1 });
+    const obj = JSON.parse(text || '{}');
+
+    if (obj.correctedTitle && typeof obj.correctedTitle === 'string' && obj.correctedTitle.trim() !== (task.title || '').trim()) {
+      correctedTitle = obj.correctedTitle.trim().slice(0, 200);
+      patch.title = correctedTitle;
+      patch.titleCorrectedByAi = true;
+    }
+    const normalizedEstimatePoints = clampTaskPoints(obj.points);
+    if (normalizedEstimatePoints != null && !(Number(task.points) > 0)) {
+      estimatedPoints = normalizedEstimatePoints;
+      patch.points = estimatedPoints;
+      patch.pointsEstimatedByAi = true;
+    }
+  } catch (e) {
+    console.warn('[enhanceNewTask] LLM call failed', e?.message || e);
+  }
+
+  const hasChanges = patch.title || patch.points;
+  if (hasChanges) {
+    await taskDoc.ref.set(patch, { merge: true });
+  }
+
+  // Run delta rescore to compute criticality and update top3
+  try {
+    const persona = String(task.persona || 'personal').toLowerCase() === 'work' ? 'work' : 'personal';
+    const { computeCriticalityScore, buildCriticalityReason, priorityBoostFor, normalizeUserPriority, normalizeTheme, _deltaTop3ForPersona } = require('./nightlyOrchestration');
+    if (typeof _deltaTop3ForPersona === 'function') {
+      await _deltaTop3ForPersona(db, uid, persona);
+    }
+  } catch (e) {
+    console.warn('[enhanceNewTask] delta rescore failed', e?.message || e);
+  }
+
+  return { ok: true, correctedTitle, estimatedPoints };
+  }, {
+    requireAuth: true,
+    minRecaptchaScore: 0.6,
+  })
+);
+
+
+exports.taskStoryConversion = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY], maxInstances: 5, enforceAppCheck: true }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+
+  const appCheckResult = checkOnCallAppCheck(req, 'taskStoryConversion');
+  if (!appCheckResult.valid) throw new httpsV2.HttpsError('unauthenticated', appCheckResult.reason || 'App Check required');
+
+  const quotaCheck = await checkAndIncrementQuota(uid, 'task_story_conversion');
+  if (!quotaCheck.allowed) throw new httpsV2.HttpsError('resource-exhausted', quotaCheck.message || 'Daily AI quota exceeded');
+
   const autoApply = !!req?.data?.autoApply;
   const taskIds = Array.isArray(req?.data?.taskIds) ? req.data.taskIds.map(String) : [];
 
@@ -1262,9 +1913,16 @@ exports.taskStoryConversion = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KE
   return { suggestions, converted };
 });
 
-exports.plannerLLM = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
+exports.plannerLLM = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY], maxInstances: 3, enforceAppCheck: true }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+
+  const appCheckResult = checkOnCallAppCheck(req, 'plannerLLM');
+  if (!appCheckResult.valid) throw new httpsV2.HttpsError('unauthenticated', appCheckResult.reason || 'App Check required');
+
+  const quotaCheck = await checkAndIncrementQuota(uid, 'planner_llm');
+  if (!quotaCheck.allowed) throw new httpsV2.HttpsError('resource-exhausted', quotaCheck.message || 'Daily AI quota exceeded');
+
   const day = req?.data?.day || new Date().toISOString().slice(0, 10);
   const persona = String(req?.data?.persona || 'personal');
   const horizonDays = Math.max(1, Math.min(Number(req?.data?.horizonDays || 1), 14));
@@ -1489,11 +2147,12 @@ exports.planBlocksV2 = httpsV2.onCall(async (req) => {
   }
 
   // Fetch Theme Allocations
-  let themeAllocations = [];
+  let themeAllocationPlan = [];
   try {
     const taDoc = await db.collection('theme_allocations').doc(uid).get();
-    if (taDoc.exists) themeAllocations = taDoc.data().allocations || [];
+    if (taDoc.exists) themeAllocationPlan = taDoc.data() || {};
   } catch (e) { console.warn('Failed to fetch theme allocations', e); }
+  const themeAllocations = resolveThemeAllocationsForDate(themeAllocationPlan, start, timezone);
 
   const plan = await planSchedule({
     db,
@@ -1875,9 +2534,20 @@ const PRIORITY_KEY_PREFIX = 'bobPriority';
 const TASK_DONE_STATUS_VALUES = new Set(['done', 'completed', 'complete', 'archived', '2', '3']);
 const STORY_DONE_STATUS_VALUES = new Set(['done', 'complete', 'archived', '3']);
 
-function applyPriorityCors(res) {
-  res.set('Access-Control-Allow-Origin', '*');
-  res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+const PRIORITY_ALLOWED_ORIGINS = new Set([
+  'https://bob.jc1.tech',
+  'https://bob20250810.web.app',
+  'https://bob20250810.firebaseapp.com',
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
+]);
+function applyPriorityCors(res, req) {
+  const origin = req ? String(req.get('origin') || '') : '';
+  if (PRIORITY_ALLOWED_ORIGINS.has(origin)) {
+    res.set('Access-Control-Allow-Origin', origin);
+    res.set('Vary', 'Origin');
+  }
+  res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Firebase-AppCheck');
   res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.set('Access-Control-Allow-Credentials', 'true');
 }
@@ -2167,8 +2837,8 @@ async function logPriorityActivity(db, { ownerUid, correlationId, priorities, me
   }
 }
 
-exports.priorityNow = httpsV2.onRequest({ invoker: 'public', secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req, res) => {
-  applyPriorityCors(res);
+exports.priorityNow = httpsV2.onRequest({ invoker: 'public', secrets: [GOOGLE_AI_STUDIO_API_KEY], maxInstances: 5 }, async (req, res) => {
+  applyPriorityCors(res, req);
   if (req.method === 'OPTIONS') {
     res.status(204).send('');
     return;
@@ -2185,6 +2855,20 @@ exports.priorityNow = httpsV2.onRequest({ invoker: 'public', secrets: [GOOGLE_AI
     const message = error?.message || 'Authentication failed';
     console.warn('[priorityNow] auth failed', message);
     res.status(401).json({ error: message });
+    return;
+  }
+
+  // App Check verification (enforced when ENFORCE_APP_CHECK=true)
+  const priorityAppCheck = await verifyAppCheckToken(req, 'priorityNow');
+  if (!priorityAppCheck.valid) {
+    res.status(401).json({ error: priorityAppCheck.reason || 'App Check required' });
+    return;
+  }
+
+  // Per-user daily AI quota
+  const priorityQuota = await checkAndIncrementQuota(uid, 'priority_now');
+  if (!priorityQuota.allowed) {
+    res.status(429).json({ error: priorityQuota.message || 'Daily AI quota exceeded' });
     return;
   }
 
@@ -2269,6 +2953,21 @@ exports.priorityNow = httpsV2.onRequest({ invoker: 'public', secrets: [GOOGLE_AI
       'Priority selection should favor due/overdue work and items already scheduled soon.',
     ].join('\n');
 
+    const priorityTraceId = crypto.randomUUID ? crypto.randomUUID() : crypto.randomBytes(12).toString('hex');
+    const priorityTraceBase = {
+      traceId: priorityTraceId,
+      promptTemplateId: 'priorityNow.v2',
+      promptTemplateVersion: 2,
+      model: AI_PRIORITY_MODEL,
+      provider: process.env.AI_PROVIDER || 'gemini',
+      purpose: 'priority_now',
+      parseExpected: 'json',
+      temperature: 0.2,
+      promptText: userPrompt,
+      inputPayload: contextPayload,
+    };
+    const priorityStartedAtMs = Date.now();
+
     let llmText = '';
     let parsed = {};
     try {
@@ -2281,9 +2980,28 @@ exports.priorityNow = httpsV2.onRequest({ invoker: 'public', secrets: [GOOGLE_AI
         temperature: 0.2,
       });
       parsed = llmText ? JSON.parse(llmText) : {};
+
+      await recordAiLog(uid, 'priority_now_trace', 'success', 'Priority now response generated', {
+        ...priorityTraceBase,
+        parseStatus: llmText ? 'ok' : 'ok_empty',
+        rawOutput: String(llmText || '').slice(0, 12000),
+        rawOutputText: String(llmText || '').slice(0, 12000),
+        rawOutputLength: String(llmText || '').length,
+        latencyMs: Date.now() - priorityStartedAtMs,
+      });
     } catch (error) {
       console.warn('[priorityNow] LLM failed or returned invalid JSON', error?.message || error);
       parsed = {};
+
+      await recordAiLog(uid, 'priority_now_trace', 'warning', 'Priority now LLM parse/runtime failure', {
+        ...priorityTraceBase,
+        parseStatus: 'failed',
+        rawOutput: String(llmText || '').slice(0, 12000),
+        rawOutputText: String(llmText || '').slice(0, 12000),
+        rawOutputLength: String(llmText || '').length,
+        error: String(error?.message || error || 'unknown'),
+        latencyMs: Date.now() - priorityStartedAtMs,
+      });
     }
 
     let priorities = normalizePriorityItems(parsed.topPriorities);
@@ -2295,10 +3013,10 @@ exports.priorityNow = httpsV2.onRequest({ invoker: 'public', secrets: [GOOGLE_AI
     const remainingCalendar =
       Array.isArray(parsed.remainingCalendar) && parsed.remainingCalendar.length
         ? parsed.remainingCalendar.slice(0, PRIORITY_CALENDAR_CONTEXT_LIMIT).map((item) => ({
-            title: String(item?.title || 'Block').trim(),
-            startIso: item?.start || null,
-            endIso: item?.end || null,
-          }))
+          title: String(item?.title || 'Block').trim(),
+          startIso: item?.start || null,
+          endIso: item?.end || null,
+        }))
         : calendarFallback.map((block) => ({ title: block.title, startIso: block.startIso, endIso: block.endIso }));
 
     const risks =
@@ -2667,8 +3385,8 @@ async function fetchLatestPriorityRun(db, uid) {
   }
 }
 
-exports.replanDay = httpsV2.onRequest({ invoker: 'public', secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req, res) => {
-  applyPriorityCors(res);
+exports.replanDay = httpsV2.onRequest({ invoker: 'public', secrets: [GOOGLE_AI_STUDIO_API_KEY], maxInstances: 3 }, async (req, res) => {
+  applyPriorityCors(res, req);
   if (req.method === 'OPTIONS') {
     res.status(204).send('');
     return;
@@ -2685,6 +3403,20 @@ exports.replanDay = httpsV2.onRequest({ invoker: 'public', secrets: [GOOGLE_AI_S
     const message = error?.message || 'Authentication failed';
     console.warn('[replanDay] auth failed', message);
     res.status(401).json({ error: message });
+    return;
+  }
+
+  // App Check verification (enforced when ENFORCE_APP_CHECK=true)
+  const replanAppCheck = await verifyAppCheckToken(req, 'replanDay');
+  if (!replanAppCheck.valid) {
+    res.status(401).json({ error: replanAppCheck.reason || 'App Check required' });
+    return;
+  }
+
+  // Per-user daily AI quota
+  const replanQuota = await checkAndIncrementQuota(uid, 'replan_day');
+  if (!replanQuota.allowed) {
+    res.status(429).json({ error: replanQuota.message || 'Daily AI quota exceeded' });
     return;
   }
 
@@ -3086,6 +3818,7 @@ exports.completeRoutine = httpsV2.onCall(async (req) => {
   const db = admin.firestore();
   const routineRef = db.collection('routines').doc(routineId);
   const now = Date.now();
+  let goalKpiUpdated = false;
   const result = await db.runTransaction(async (tx) => {
     const snap = await tx.get(routineRef);
     if (!snap.exists) throw new httpsV2.HttpsError('not-found', 'Routine not found');
@@ -3103,9 +3836,248 @@ exports.completeRoutine = httpsV2.onCall(async (req) => {
       missedCount: Number(data.missedCount || 0),
     };
     tx.update(routineRef, { ...stats, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+    
+    // Track goal KPI if routine has goalId
+    if (data.goalId) {
+      const goalRef = db.collection('goals').doc(data.goalId);
+      const goalSnap = await tx.get(goalRef);
+      if (goalSnap.exists) {
+        const goalData = goalSnap.data() || {};
+        // Infer metric type from routine title + goal KPI names
+        const routineTitle = String(data.title || '').toLowerCase();
+        const kpiNames = Array.isArray(goalData.kpiNames) ? goalData.kpiNames : [];
+        const matchedKpi = kpiNames.find((kpi) => {
+          const kpiLower = String(kpi || '').toLowerCase();
+          // Running: match on distance (5k, 10k, half-marathon, etc.)
+          if (routineTitle.includes('run')) {
+            if (kpiLower.includes('10k') || kpiLower.includes('5k') || kpiLower.includes('marathon')) return true;
+            if (kpiLower.includes('run') || kpiLower.includes('running')) return true;
+          }
+          // Swimming: match on distance or swim keyword
+          if (routineTitle.includes('swim')) {
+            if (kpiLower.includes('swim') || kpiLower.includes('800m') || kpiLower.includes('400m')) return true;
+          }
+          // Walking: match on steps or distance
+          if (routineTitle.includes('walk')) {
+            if (kpiLower.includes('walk') || kpiLower.includes('step') || kpiLower.includes('distance')) return true;
+          }
+          // Cycling: match on distance or cycling
+          if (routineTitle.includes('cycle') || routineTitle.includes('bike')) {
+            if (kpiLower.includes('cycle') || kpiLower.includes('bike') || kpiLower.includes('distance')) return true;
+          }
+          // Meditation/mindfulness
+          if (routineTitle.includes('meditate') && kpiLower.includes('meditate')) return true;
+          // Exercise/fitness (generic)
+          if (routineTitle.includes('exercise') && (kpiLower.includes('exercise') || kpiLower.includes('workout'))) return true;
+          // Reading
+          if (routineTitle.includes('read') && kpiLower.includes('read')) return true;
+          // Triathlon or multi-sport: match any relevant discipline
+          if (routineTitle.includes('triathlon')) {
+            if (kpiLower.includes('swim') || kpiLower.includes('run') || kpiLower.includes('bike') || kpiLower.includes('cycle')) return true;
+            if (kpiLower.includes('triathlon') || kpiLower.includes('time')) return true;
+          }
+          // Fallback: match routine title keywords to KPI name keywords
+          const routineWords = routineTitle.split(/\s+/).filter(w => w.length > 3);
+          return routineWords.some(word => kpiLower.includes(word));
+        });
+        
+        // Log routine completion to goal KPI tracking
+        const kpiMetricsRef = db.collection('goal_kpi_metrics').doc(`${data.goalId}_${matchedKpi || 'completion'}`);
+        const kpiMetricsSnap = await tx.get(kpiMetricsRef);
+        const kpiMetrics = kpiMetricsSnap.data() || { goalId: data.goalId, kpiName: matchedKpi || 'completion', completions: [] };
+        const completions = Array.isArray(kpiMetrics.completions) ? kpiMetrics.completions : [];
+        completions.push({
+          routineId: routineId,
+          routineTitle: data.title,
+          completedAt: now,
+          durationMinutes: data.estimateMin || data.estimatedMinutes || 60,
+        });
+        // Keep only last 90 days of completions
+        const ninetyDaysAgo = now - (90 * 24 * 60 * 60 * 1000);
+        const recentCompletions = completions.filter((c) => (c.completedAt || 0) > ninetyDaysAgo);
+        tx.set(kpiMetricsRef, {
+          ...kpiMetrics,
+          completions: recentCompletions,
+          lastCompletedAt: now,
+          completionCount: recentCompletions.length,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+        goalKpiUpdated = true;
+      }
+    }
+    
     return stats;
   });
-  return { ok: true, stats: result };
+  return { ok: true, stats: result, goalKpiUpdated };
+});
+
+// Update task time and auto-populate time_of_day bucket
+exports.updateTaskTime = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const taskId = String(req?.data?.taskId || '').trim();
+  const timeStr = String(req?.data?.time || '').trim(); // HH:MM format
+  if (!taskId) throw new httpsV2.HttpsError('invalid-argument', 'taskId required');
+  if (!timeStr) throw new httpsV2.HttpsError('invalid-argument', 'time required (HH:MM format)');
+
+  const db = admin.firestore();
+  const taskRef = db.collection('tasks').doc(taskId);
+
+  try {
+    const snap = await taskRef.get();
+    if (!snap.exists) throw new httpsV2.HttpsError('not-found', 'Task not found');
+    const data = snap.data() || {};
+    if (data.ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Cannot modify this task');
+
+    // Auto-populate time_of_day from the time string
+    const autoTimeOfDay = parseTimeStringToTimeOfDay(timeStr);
+
+    const updatePayload = {
+      scheduledTime: timeStr,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+    if (autoTimeOfDay) {
+      updatePayload.timeOfDay = autoTimeOfDay;
+    }
+
+    await taskRef.update(updatePayload);
+    return { ok: true, timeOfDay: autoTimeOfDay || null };
+  } catch (error) {
+    if (error instanceof httpsV2.HttpsError) throw error;
+    throw new httpsV2.HttpsError('internal', error?.message || 'Failed to update task time');
+  }
+});
+
+// Update story time and auto-populate time_of_day bucket
+exports.updateStoryTime = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const storyId = String(req?.data?.storyId || '').trim();
+  const timeStr = String(req?.data?.time || '').trim(); // HH:MM format
+  if (!storyId) throw new httpsV2.HttpsError('invalid-argument', 'storyId required');
+  if (!timeStr) throw new httpsV2.HttpsError('invalid-argument', 'time required (HH:MM format)');
+
+  const db = admin.firestore();
+  const storyRef = db.collection('stories').doc(storyId);
+
+  try {
+    const snap = await storyRef.get();
+    if (!snap.exists) throw new httpsV2.HttpsError('not-found', 'Story not found');
+    const data = snap.data() || {};
+    if (data.ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Cannot modify this story');
+
+    // Auto-populate time_of_day from the time string
+    const autoTimeOfDay = parseTimeStringToTimeOfDay(timeStr);
+
+    const updatePayload = {
+      plannedTime: timeStr,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+    if (autoTimeOfDay) {
+      updatePayload.timeOfDay = autoTimeOfDay;
+    }
+
+    await storyRef.update(updatePayload);
+    return { ok: true, timeOfDay: autoTimeOfDay || null };
+  } catch (error) {
+    if (error instanceof httpsV2.HttpsError) throw error;
+    throw new httpsV2.HttpsError('internal', error?.message || 'Failed to update story time');
+  }
+});
+
+// Nightly job to populate blank time_of_day fields via LLM inference
+exports.populateTimeOfDayNightly = schedulerV2.onSchedule('0 2 * * *', async (context) => {
+  console.log('[populateTimeOfDayNightly] Starting time-of-day population job');
+  const db = admin.firestore();
+
+  try {
+    // Get all users
+    const usersSnap = await db.collection('users').limit(1000).get();
+    let totalProcessed = 0;
+    let totalUpdated = 0;
+    let totalErrors = 0;
+
+    for (const userDoc of usersSnap.docs) {
+      const userId = userDoc.id;
+      try {
+        const result = await populateBlankTimeOfDay(db, userId, {
+          limit: 30,
+          entityTypes: ['story', 'task'],
+        });
+        totalProcessed += result.processed;
+        totalUpdated += result.updated;
+        totalErrors += result.errors;
+      } catch (userErr) {
+        console.warn(`[populateTimeOfDayNightly] Failed for user ${userId}:`, userErr?.message);
+        totalErrors++;
+      }
+    }
+
+    console.log(`[populateTimeOfDayNightly] Completed: processed=${totalProcessed}, updated=${totalUpdated}, errors=${totalErrors}`);
+    return {
+      processed: totalProcessed,
+      updated: totalUpdated,
+      errors: totalErrors,
+    };
+  } catch (error) {
+    console.error('[populateTimeOfDayNightly] Job failed:', error?.message);
+    throw error;
+  }
+});
+
+/**
+ * Toggle immovable flag on tasks, chores, or routines
+ * Used for items that must always be completed (e.g., "wear retainer", "take medication")
+ */
+exports.toggleImmovableFlag = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  
+  const entityType = String(req?.data?.entityType || '').trim(); // 'task', 'chore', 'routine'
+  const entityId = String(req?.data?.entityId || '').trim();
+  const immovable = Boolean(req?.data?.immovable); // explicit toggle value
+  
+  if (!entityType) throw new httpsV2.HttpsError('invalid-argument', 'entityType is required');
+  if (!entityId) throw new httpsV2.HttpsError('invalid-argument', 'entityId is required');
+  if (!['task', 'chore', 'routine'].includes(entityType)) {
+    throw new httpsV2.HttpsError('invalid-argument', 'entityType must be task, chore, or routine');
+  }
+  
+  const db = admin.firestore();
+  const collection = entityType === 'task' ? 'tasks' : entityType === 'chore' ? 'chores' : 'routines';
+  const docRef = db.collection(collection).doc(entityId);
+  
+  try {
+    const snap = await docRef.get();
+    if (!snap.exists) {
+      throw new httpsV2.HttpsError('not-found', `${entityType} not found`);
+    }
+    
+    const data = snap.data() || {};
+    if (data.ownerUid !== uid) {
+      throw new httpsV2.HttpsError('permission-denied', `Cannot modify this ${entityType}`);
+    }
+    
+    await docRef.update({
+      immovable,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    
+    console.log(`[toggleImmovableFlag] ${entityType} ${entityId} immovable=${immovable}`);
+    
+    return {
+      ok: true,
+      entityType,
+      entityId,
+      immovable,
+      title: data.title,
+    };
+  } catch (error) {
+    console.error(`[toggleImmovableFlag] Error:`, error?.message);
+    throw error instanceof httpsV2.HttpsError
+      ? error
+      : new httpsV2.HttpsError('internal', 'Failed to toggle immovable flag');
+  }
 });
 
 exports.skipRoutine = httpsV2.onCall(async (req) => {
@@ -3212,8 +4184,26 @@ exports.reconcilePlanFromGoogleCalendar = httpsV2.onCall({ secrets: [GOOGLE_OAUT
 // ===== Utilities
 async function fetchJson(url, opts = {}) {
   const res = await fetch(url, opts);
-  if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
-  return res.json();
+  const text = await res.text();
+  let parsed = null;
+  if (text) {
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = null;
+    }
+  }
+  if (!res.ok) {
+    const detail = parsed?.message || parsed?.error || text || `HTTP ${res.status}`;
+    const err = new Error(`HTTP ${res.status}: ${detail}`);
+    err.status = res.status;
+    err.body = text;
+    err.parsed = parsed;
+    throw err;
+  }
+  if (!text) return null;
+  if (parsed != null) return parsed;
+  return JSON.parse(text);
 }
 
 function stateEncode(obj) {
@@ -3221,6 +4211,12 @@ function stateEncode(obj) {
 }
 function stateDecode(s) {
   try { return JSON.parse(Buffer.from(String(s || ""), "base64url").toString("utf8")); } catch { return {}; }
+}
+
+function envTrim(name, fallback = '') {
+  const raw = process.env?.[name];
+  if (raw == null) return String(fallback || '').trim();
+  return String(raw).trim();
 }
 
 const MONZO_KMS_ENV_KEYS = ['MONZO_KMS_KEY', 'MONZO_TOKEN_KMS_KEY'];
@@ -3468,7 +4464,10 @@ exports.oauthStart = httpsV2.onRequest({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGL
     }
 
     const state = stateEncode({ uid, nonce });
-    const scope = encodeURIComponent("https://www.googleapis.com/auth/calendar");
+    const scope = encodeURIComponent([
+      'https://www.googleapis.com/auth/calendar',
+      'https://www.googleapis.com/auth/documents',
+    ].join(' '));
     const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&access_type=offline&include_granted_scopes=true&prompt=consent&scope=${scope}&state=${state}`;
     res.redirect(authUrl);
   } catch (e) {
@@ -3657,15 +4656,6 @@ exports.diagnosticsStatus = httpsV2.onCall({}, async (req) => {
 });
 
 // Diagnostics: test LLM (Gemini) round-trip
-exports.testLLM = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
-  const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
-  const raw = await callLLMJson({ system: 'Return JSON {"ok":true}', user: 'ping', purpose: 'diagnostics', userId: uid, expectJson: true, temperature: 0 });
-  return { ok: true, model: 'gemini', response: raw.slice(0, 200) };
-});
-
-const TRAVEL_GOAL_MATCH_PROMPT_VERSION = '2025-09-05-01';
-
-// LLM matcher: pick best travel goal for a place (or suggest a new goal title)
 exports.matchTravelGoal = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
@@ -3912,67 +4902,17 @@ exports.normalizeStatuses = httpsV2.onCall({}, async (req) => {
 });
 
 // Diagnostics: quick check that sprints are readable for the current user
-exports.debugSprintsNow = httpsV2.onCall(async (req) => {
-  const uid = req?.auth?.uid;
-  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
-  const db = ensureFirestore();
-  const snap = await db.collection('sprints').where('ownerUid', '==', uid).orderBy('startDate', 'desc').limit(10).get();
-  const items = snap.docs.map((d) => {
-    const data = d.data() || {};
-    return {
-      id: d.id,
-      name: data.name || null,
-      status: data.status || null,
-      startDate: data.startDate || null,
-      persona: data.persona || null,
-    };
-  });
-  return { ok: true, count: snap.size, items };
-});
-
-// Assistant Chat: aggregates calendar + backlog + goals to provide insights and suggested actions
-exports.sendAssistantMessage = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
+exports.sendAssistantMessage = httpsV2.onCall({
+  memory: '512MiB',
+  timeoutSeconds: 180,
+  secrets: [GOOGLE_AI_STUDIO_API_KEY, BREVO_API_KEY, GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET],
+}, async (req) => {
   const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   const message = String(req?.data?.message || '').trim();
   const persona = String(req?.data?.persona || 'personal');
   if (!message) throw new httpsV2.HttpsError('invalid-argument', 'message is required');
 
   const db = ensureFirestore();
-  const horizonDays = Number(req?.data?.days || 2);
-  const context = await assemblePlanningContext(uid, persona, horizonDays);
-  context.userId = uid;
-
-  // Load stories (active/backlog, top by priority/order)
-  let stories = [];
-  try {
-    const snap = await db.collection('stories')
-      .where('ownerUid', '==', uid)
-      .where('persona', '==', persona)
-      .limit(50)
-      .get();
-    stories = snap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }));
-  } catch { }
-
-  // Compute proposed approvals count
-  let approvals = 0;
-  try {
-    const ps = await db.collection('planning_jobs')
-      .where('ownerUid', '==', uid)
-      .where('status', '==', 'proposed')
-      .get();
-    approvals = ps.size;
-  } catch { }
-
-  // Build condensed context for LLM
-  const topTasks = (context.tasks || [])
-    .filter(t => ['todo', 'planned', 'in-progress', 0, 1].includes(t.status))
-    .slice(0, 20)
-    .map(t => ({ id: t.id, title: t.title, priority: t.priority, theme: t.theme || null, goalId: t.goalId || null, estimated: t.estimated_duration || null }));
-  const topGoals = (context.goals || []).slice(0, 10).map(g => ({ id: g.id, title: g.title, theme: g.theme, priority: g.priority }));
-  const todayEvents = (context.gcalEvents || []).slice(0, 20).map(e => ({ title: e.summary, start: e.start, end: e.end }));
-  const plannedBlocks = (context.existingBlocks || []).slice(0, 20);
-
-  // Persist user message
   const threadRef = db.collection('assistant_chats').doc(uid);
   if (isUnsafeMessage(message)) {
     await threadRef.collection('messages').add({ ownerUid: uid, role: 'assistant', content: 'Sorry — I can\'t assist with that request.', createdAt: admin.firestore.FieldValue.serverTimestamp() });
@@ -3980,49 +4920,46 @@ exports.sendAssistantMessage = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_K
   }
   await threadRef.collection('messages').add({ id: undefined, ownerUid: uid, role: 'user', content: message, createdAt: admin.firestore.FieldValue.serverTimestamp() });
 
-  const latestSummary = await getLatestSummary(threadRef);
-  const recent = await getRecentMessages(threadRef, 10);
-  const system = [
-    'You are BOB, a concise productivity assistant. Keep replies under 120 words.',
-    'Use the provided context to identify priorities for the next 1–2 days.',
-    'RETURN STRICT JSON ONLY with the shape:',
-    '{',
-    '  "reply": string,',
-    '  "insights": { "priorities": string[], "warnings": string[] },',
-    '  "suggested_actions": [',
-    '     { "type": "plan_today" | "open_approvals" | "create_task" | "open_goal",',
-    '       "title"?: string, "estimateMin"?: number, "goalId"?: string }',
-    '  ]',
-    '}',
-  ].join('\n');
-  const user = JSON.stringify({
-    approvals,
-    horizonDays,
-    goals: topGoals,
-    tasks: topTasks,
-    todayEvents: todayEvents.map(e => ({ title: e.title, start: e.start, end: e.end })),
-    plannedBlocks: plannedBlocks.map(b => ({ title: b.title, start: b.start, end: b.end, theme: b.theme || null })),
-    summary: latestSummary || null,
-    recent: recent.map(m => ({ role: m.role, content: m.content })),
-    note: message,
-  });
-
-  let parsed = { reply: 'OK', insights: { priorities: [], warnings: [] }, suggested_actions: [] };
-  try {
-    const raw = await callLLMJson({ system, user, purpose: 'assistantChat', userId: uid, expectJson: true, temperature: 0.2 });
-    parsed = JSON.parse(raw);
-  } catch (e) {
-    // fallback minimal response
+  if (!transcriptIngestionModule?.processAgentRequestInternal) {
+    throw new httpsV2.HttpsError('failed-precondition', 'Shared assistant agent is not available.');
   }
 
-  const reply = String(parsed?.reply || '').slice(0, 1200);
-  await threadRef.collection('messages').add({ ownerUid: uid, role: 'assistant', content: reply, createdAt: admin.firestore.FieldValue.serverTimestamp() });
+  const result = await transcriptIngestionModule.processAgentRequestInternal({
+    uid,
+    transcript: message,
+    persona,
+    source: 'assistant_ui',
+    sourceUrl: '',
+    sourceProvidedId: String(req?.data?.sourceProvidedId || ''),
+    channel: 'callable',
+    authMode: 'firebase',
+  });
+
+  const reply = String(result?.spokenResponse || result?.message || 'Done.').slice(0, 1200);
+  await threadRef.collection('messages').add({
+    ownerUid: uid,
+    role: 'assistant',
+    content: reply,
+    intent: result?.intent || null,
+    mode: result?.mode || null,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  try { await maybeSummarizeThread(threadRef, uid); } catch { }
+
+  const topPriorityTitles = Array.isArray(result?.topPriorities)
+    ? result.topPriorities.map((item) => String(item?.title || '').trim()).filter(Boolean).slice(0, 3)
+    : [];
 
   return {
     ok: true,
     reply,
-    insights: parsed?.insights || { priorities: [], warnings: [] },
-    suggested_actions: Array.isArray(parsed?.suggested_actions) ? parsed.suggested_actions.slice(0, 6) : [],
+    insights: {
+      priorities: topPriorityTitles,
+      warnings: [],
+    },
+    suggested_actions: [],
+    ...result,
   };
 });
 
@@ -4388,11 +5325,12 @@ exports.stravaOAuthStart = httpsV2.onRequest({ secrets: [STRAVA_CLIENT_ID], invo
     if (!uid || !nonce) return res.status(400).send("Missing uid/nonce");
     const projectId = process.env.GCLOUD_PROJECT;
     const region = "europe-west2";
-    const configuredHost = process.env.STRAVA_REDIRECT_HOST; // optional override, e.g., bob.jc1.tech
+    const configuredHost = envTrim('STRAVA_REDIRECT_HOST'); // optional override, e.g., bob.jc1.tech
     const host = String(req.get('host') || '');
     const baseHost = configuredHost || host || `${region}-${projectId}.cloudfunctions.net`;
     const redirectUri = `https://${baseHost}/stravaOAuthCallback`;
-    const clientId = process.env.STRAVA_CLIENT_ID;
+    const clientId = envTrim('STRAVA_CLIENT_ID');
+    if (!clientId) return res.status(500).send('Missing STRAVA_CLIENT_ID secret');
     const state = stateEncode({ uid, nonce });
     const scope = encodeURIComponent("read,activity:read");
     const authUrl = `https://www.strava.com/oauth/authorize?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${scope}&state=${state}`;
@@ -4412,18 +5350,22 @@ exports.stravaOAuthCallback = httpsV2.onRequest({ secrets: [STRAVA_CLIENT_ID, ST
 
     const projectId = process.env.GCLOUD_PROJECT;
     const region = "europe-west2";
-    const configuredHost = process.env.STRAVA_REDIRECT_HOST; // optional override, e.g., bob.jc1.tech
+    const configuredHost = envTrim('STRAVA_REDIRECT_HOST'); // optional override, e.g., bob.jc1.tech
     const host = String(req.get('host') || '');
     const baseHost = configuredHost || host || `${region}-${projectId}.cloudfunctions.net`;
     const redirectUri = `https://${baseHost}/stravaOAuthCallback`;
+
+    const clientId = envTrim('STRAVA_CLIENT_ID');
+    const clientSecret = envTrim('STRAVA_CLIENT_SECRET');
+    if (!clientId || !clientSecret) return res.status(500).send('Missing STRAVA_CLIENT_ID/STRAVA_CLIENT_SECRET secret');
 
     const tokenData = await fetchJson("https://www.strava.com/oauth/token", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
         code,
-        client_id: process.env.STRAVA_CLIENT_ID,
-        client_secret: process.env.STRAVA_CLIENT_SECRET,
+        client_id: clientId,
+        client_secret: clientSecret,
         redirect_uri: redirectUri,
         grant_type: "authorization_code",
       }).toString(),
@@ -4455,7 +5397,11 @@ exports.stravaOAuthCallback = httpsV2.onRequest({ secrets: [STRAVA_CLIENT_ID, ST
     await db.collection('profiles').doc(uid).set({
       stravaConnected: true,
       stravaAthleteId: athlete.id || null,
-      stravaLastSyncAt: null
+      stravaLastSyncAt: null,
+      stravaLastSyncStatus: 'connected',
+      stravaNeedsReconnect: false,
+      stravaLastErrorAt: admin.firestore.FieldValue.delete(),
+      stravaLastErrorMessage: admin.firestore.FieldValue.delete(),
     }, { merge: true });
 
     res.status(200).send("<script>window.close();</script>Strava connected. You can close this window.");
@@ -6488,6 +7434,142 @@ async function findEarliestMonzoTransactionCreated(db, uid, accountId) {
   return earliestMs === null ? null : new Date(earliestMs).toISOString();
 }
 
+const MONZO_GOAL_REF_TIMEOUT_MS = 24 * 60 * 60 * 1000;
+
+function toMillisSafe(value) {
+  if (!value) return null;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (value?.toMillis) {
+    try { return value.toMillis(); } catch { }
+  }
+  if (value?._seconds != null) {
+    const seconds = Number(value._seconds);
+    const nanos = Number(value._nanoseconds || 0);
+    if (Number.isFinite(seconds)) return (seconds * 1000) + Math.floor(nanos / 1_000_000);
+  }
+  const parsed = Date.parse(String(value));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizeMonzoGoalRef(ref) {
+  return String(ref || '').trim().toLowerCase();
+}
+
+function matchPotForGoalRef(pots, goalRef) {
+  const normalizedRef = normalizeMonzoGoalRef(goalRef);
+  if (!normalizedRef) return null;
+  for (const pot of pots) {
+    const potId = String(pot?.potId || pot?.id || '').trim();
+    const potName = String(pot?.name || pot?.raw?.name || '').trim();
+    if (normalizeMonzoGoalRef(potId) === normalizedRef) return pot;
+    if (normalizeMonzoGoalRef(potName).includes(normalizedRef)) return pot;
+  }
+  return null;
+}
+
+async function linkMonzoGoalRefsForUser(uid, { source = 'sync' } = {}) {
+  const db = admin.firestore();
+  const [goalsSnap, potsSnap] = await Promise.all([
+    db.collection('goals').where('ownerUid', '==', uid).get(),
+    db.collection('monzo_pots').where('ownerUid', '==', uid).get(),
+  ]);
+
+  const pots = potsSnap.docs
+    .map((d) => d.data() || {})
+    .filter((pot) => !pot.deleted);
+
+  const pending = goalsSnap.docs.filter((docSnap) => {
+    const goal = docSnap.data() || {};
+    const hasRef = !!String(goal.monzoPotGoalRef || '').trim();
+    const alreadyLinked = !!String(goal.monzoPotId || goal.linkedPotId || goal.potId || '').trim();
+    return hasRef && !alreadyLinked;
+  });
+
+  if (!pending.length) {
+    return {
+      checked: 0,
+      linked: 0,
+      timedOut: 0,
+      pending: 0,
+    };
+  }
+
+  const nowMs = Date.now();
+  const batch = db.batch();
+  let linked = 0;
+  let timedOut = 0;
+  let stillPending = 0;
+
+  for (const goalSnap of pending) {
+    const goal = goalSnap.data() || {};
+    const goalRef = String(goal.monzoPotGoalRef || '').trim();
+    const matchedPot = matchPotForGoalRef(pots, goalRef);
+    const goalRefMs =
+      toMillisSafe(goal.monzoPotRefRequestedAt) ||
+      toMillisSafe(goal.updatedAt) ||
+      toMillisSafe(goal.createdAt) ||
+      toMillisSafe(goalSnap.updateTime) ||
+      toMillisSafe(goalSnap.createTime);
+
+    if (matchedPot) {
+      const linkedPotId = String(matchedPot.potId || matchedPot.id || '').trim();
+      if (!linkedPotId) {
+        stillPending += 1;
+        continue;
+      }
+      batch.set(goalSnap.ref, {
+        monzoPotId: linkedPotId,
+        linkedPotId,
+        potId: linkedPotId,
+        monzoPotLinkedAt: admin.firestore.FieldValue.serverTimestamp(),
+        monzoPotLinkStatus: 'linked',
+        monzoPotLinkError: admin.firestore.FieldValue.delete(),
+        monzoPotLinkTimedOutAt: admin.firestore.FieldValue.delete(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+      linked += 1;
+      continue;
+    }
+
+    if (goalRefMs && (nowMs - goalRefMs) >= MONZO_GOAL_REF_TIMEOUT_MS) {
+      batch.set(goalSnap.ref, {
+        monzoPotLinkStatus: 'timeout',
+        monzoPotLinkTimedOutAt: admin.firestore.FieldValue.serverTimestamp(),
+        monzoPotLinkError: 'No Monzo pot found with matching reference within 24 hours.',
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+      timedOut += 1;
+    } else {
+      stillPending += 1;
+    }
+  }
+
+  if (linked || timedOut) {
+    await batch.commit();
+  }
+
+  if (linked || timedOut) {
+    await db.collection('integration_logs').add({
+      integration: 'monzo',
+      type: 'goal_pot_ref_linker',
+      status: timedOut > 0 ? 'warning' : 'success',
+      userId: uid,
+      source,
+      linked,
+      timedOut,
+      pending: stillPending,
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  }
+
+  return {
+    checked: pending.length,
+    linked,
+    timedOut,
+    pending: stillPending,
+  };
+}
+
 async function syncMonzoDataForUser(uid, { since, fullRefresh } = {}) {
   const { accessToken } = await ensureMonzoAccessToken(uid);
   const db = admin.firestore();
@@ -6626,6 +7708,12 @@ async function syncMonzoDataForUser(uid, { since, fullRefresh } = {}) {
     summary.analytics = analytics.summarySnapshot || null;
   } catch (error) {
     console.error(`Failed to compute Monzo analytics for user ${uid}`, error);
+  }
+
+  try {
+    summary.goalPotLinking = await linkMonzoGoalRefsForUser(uid, { source: 'sync' });
+  } catch (error) {
+    console.error(`Failed to link Monzo goal refs for user ${uid}`, error);
   }
 
   return summary;
@@ -8522,29 +9610,84 @@ exports.syncGoogleCalendarsHourly = schedulerV2.onSchedule({ schedule: 'every 60
 });
 
 // ===== Duplicate Detection for iOS Reminders (AC11 - Issue #124)
-exports.detectDuplicateReminders = httpsV2.onCall(async (request) => {
-  const uid = request.auth?.uid;
-  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
-  try {
-    const db = admin.firestore();
-    return await detectDuplicateRemindersForUser({ db, userId: uid });
-  } catch (e) {
-    console.error('detectDuplicateReminders error:', e);
-    throw new httpsV2.HttpsError('internal', e.message);
+exports.generateWeeklySummaries = schedulerV2.onSchedule({ schedule: 'every monday 08:00', timeZone: 'Europe/London' }, async (event) => {
+  const db = ensureFirestore();
+  try { await ensureBudgetDefault(db, 'generateWeeklySummaries', { reads: 3000, writes: 500 }); } catch (e) { console.warn('[weekly summaries] budget exceeded, skipping run'); return { ok: false, skipped: true }; }
+  const now = new Date();
+  const periodStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7).getTime();
+  const profiles = await db.collection('profiles').get().catch(() => ({ empty: true, docs: [] }));
+  for (const doc of profiles.docs) {
+    const uid = doc.id;
+    try {
+      const q = await db.collection('activity_stream')
+        .where('ownerUid', '==', uid)
+        .where('timestamp', '>=', admin.firestore.Timestamp.fromMillis(periodStart))
+        .get();
+      const counts = {};
+      let total = 0;
+      q.docs.forEach(d => {
+        const t = String(d.data()?.activityType || 'unknown');
+        counts[t] = (counts[t] || 0) + 1;
+        total += 1;
+      });
+      const weekKey = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (now.getDay() || 7)).toISOString().slice(0, 10);
+      const summaryRef = db.collection('weekly_summaries').doc(`${uid}_${weekKey}`);
+      await summaryRef.set({
+        id: summaryRef.id,
+        userId: uid,
+        week: weekKey,
+        total,
+        byType: counts,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+    } catch (e) {
+      console.warn('[weekly summaries] failed for user', uid, e?.message || e);
+    }
   }
+  return { ok: true, users: profiles.docs.length };
 });
 
-// Helpers for conservative title-based dedupe
-function normalizeTitle(s) {
-  if (!s) return '';
-  let str = String(s).toLowerCase();
-  str = str.replace(/https?:\/\/\S+/g, ' ');
-  str = str.replace(/www\.[^\s]+/g, ' ');
-  str = str.replace(/[\[\]{}()"'`“”‘’.,!?;:<>_~*^#%\\/\\|+-=]/g, ' ');
-  str = str.replace(/\s+/g, ' ').trim();
-  return str;
+async function detectDuplicateRemindersForUser({ db, userId }) {
+  const snap = await db.collection('tasks').where('ownerUid', '==', userId).get();
+  const tasks = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+  const reminderTasks = tasks.filter((t) => t.source === 'ios_reminder');
+  const norm = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  const hash = (s) => crypto.createHash('sha1').update(String(s || '')).digest('hex');
+  const groups = new Map();
+
+  for (const task of reminderTasks) {
+    const key1 = task.reminderId ? `rid:${task.reminderId}` : null;
+    const key2 = `title:${norm(task.title)}|src:${norm(task.sourceRef || '')}`;
+    const key3 = `title:${norm(task.title)}|hash:${hash((task.description || '') + '|' + JSON.stringify(task.checklist || []))}`;
+    for (const key of [key1, key2, key3].filter(Boolean)) {
+      if (!groups.has(key)) groups.set(key, new Set());
+      groups.get(key).add(task.id);
+    }
+  }
+
+  let created = 0;
+  for (const [key, idSet] of groups.entries()) {
+    const ids = Array.from(idSet);
+    if (ids.length < 2) continue;
+    const docId = `dup_${userId}_${hash(key)}`;
+    await db.collection('potential_duplicates').doc(docId).set({
+      id: docId,
+      ownerUid: userId,
+      key,
+      method: key.startsWith('rid:') ? 'reminderId' : (key.includes('|src:') ? 'title+sourceRef' : 'title+hash'),
+      taskIds: ids,
+      count: ids.length,
+      status: 'open',
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+    created += 1;
+  }
+
+  return { groupsCreated: created, reminderTasks: reminderTasks.length };
 }
-// Hardened title normalizer: Unicode NFKD, strip diacritics, remove zero-width/formatting chars
+
 function normalizeTitleHardened(s) {
   if (!s) return '';
   let str = String(s);
@@ -8554,7 +9697,7 @@ function normalizeTitleHardened(s) {
   str = str.toLowerCase();
   str = str.replace(/https?:\/\/\S+/g, ' ');
   str = str.replace(/www\.[^\s]+/g, ' ');
-  str = str.replace(/[\[\]{}()\"'`“”‘’.,!?;:<>_~*^#%\\/\\|+\-=]/g, ' ');
+  str = str.replace(/[\[\]{}()\"'`\u201C\u201D\u2018\u2019.,!?;:<>_~*^#%\\/\\|+\-=]/g, ' ');
   return str.replace(/\s+/g, ' ').trim();
 }
 
@@ -8562,20 +9705,6 @@ function textHasUrl(s) {
   if (!s) return false;
   const str = String(s);
   return /https?:\/\/\S+/.test(str) || /www\.[^\s]+/.test(str);
-}
-function resolveListKey(task) {
-  const id = task.reminderListId || task.listId || null;
-  const name = task.reminderListName || task.listName || null;
-  if (id) return `id:${String(id).toLowerCase()}`;
-  if (name) return `name:${String(name).toLowerCase()}`;
-  return 'none';
-}
-function dueMs(task) { return toMillis(task.dueDate || task.dueDateMs || task.targetDate); }
-const DUE_CLOSE_MS = 36 * 60 * 60 * 1000; // 36h
-function isDone(task) {
-  const status = String(task.status ?? '').toLowerCase();
-  const done = status === 'done' || status === 'complete' || Number(task.status) === 2;
-  return done || task.deleted === true;
 }
 
 async function deduplicateUserTasks({ db, userId, dryRun = false, hardDelete = false, logActivity = true, activityActor = 'AI_Agent', runId = null, includeTitleDedupe = true }) {
@@ -8983,7 +10112,7 @@ async function prioritizeTasksForUser({ db, userId, runId = null }) {
     bulk.set(docRef, {
       aiCriticalityScore: Number.isFinite(score) ? Math.max(0, Math.min(100, score)) : null,
       aiPriorityBucket: bucket,
-      aiPriorityRank: index + 1,
+      aiDailyRank: index + 1,
       aiPriorityUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
       aiPriorityRunId: runId || null,
       aiPriorityScore: admin.firestore.FieldValue.delete(),
@@ -9172,12 +10301,44 @@ async function detectDuplicateRemindersForUser({ db, userId }) {
   return { groupsCreated: created, reminderTasks: reminderTasks.length };
 }
 
-async function requestWorkEstimateFromLLM({ userId, entityType, title, description }) {
+function normalizeAcceptanceCriteriaForSizing(entity = {}) {
+  const raw = entity.acceptanceCriteria
+    ?? entity.acceptance_criteria
+    ?? entity.criteria
+    ?? entity.acceptance
+    ?? null;
+  let values = [];
+  if (Array.isArray(raw)) {
+    values = raw;
+  } else if (raw && typeof raw === 'object') {
+    values = Object.values(raw);
+  } else if (typeof raw === 'string') {
+    values = raw.split('\n').map((line) => line.replace(/^[-*]\s*/, ''));
+  }
+  return values
+    .map((value) => String(value || '').replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .slice(0, 8);
+}
+
+function isActiveSprintStatus(value) {
+  const status = String(value || '').toLowerCase();
+  return ['active', 'current', 'planning', 'in-progress', 'inprogress', '1', '0', 'true'].includes(status);
+}
+
+async function requestWorkEstimateFromLLM({ userId, entityType, title, description, acceptanceCriteria = [] }) {
   const cleanTitle = String(title || 'Work Item').slice(0, 200);
   const cleanDescription = String(description || '').slice(0, 800);
+  const criteria = Array.isArray(acceptanceCriteria)
+    ? acceptanceCriteria
+      .map((item) => String(item || '').replace(/\s+/g, ' ').trim())
+      .filter(Boolean)
+      .slice(0, 8)
+    : [];
   const systemPrompt = [
     'You are an expert agile estimator. Provide realistic sizing for the supplied item.',
     'Express effort where 1 point equals roughly one hour of focused work.',
+    'Use acceptance criteria as primary scope signals when available.',
     'Return ONLY JSON with shape {"hours": number, "points": number, "rationale": string}.',
     'Do not include markdown or prose outside the JSON.',
   ].join('\n');
@@ -9185,7 +10346,9 @@ async function requestWorkEstimateFromLLM({ userId, entityType, title, descripti
     `Type: ${entityType}`,
     `Title: ${cleanTitle}`,
     cleanDescription ? `Description: ${cleanDescription}` : null,
+    criteria.length ? `Acceptance Criteria:\n${criteria.map((item, index) => `${index + 1}. ${item}`).join('\n')}` : null,
     'Estimate the focused hours required. Use decimals if needed.',
+    'Use point values in 0.25 increments.',
     'Cap points at 8 even if hours exceed that; still include real hours.'
   ].filter(Boolean).join('\n');
 
@@ -9210,7 +10373,7 @@ async function requestWorkEstimateFromLLM({ userId, entityType, title, descripti
   const pointsRaw = Number(parsed?.points);
   const rationale = String(parsed?.rationale || parsed?.reason || '').slice(0, 280);
   if (!Number.isFinite(hours) || hours <= 0) return null;
-  const estimatedPoints = clampTaskPoints(pointsRaw) ?? clampTaskPoints(hours) ?? Math.max(1, Math.round(hours));
+  const estimatedPoints = clampTaskPoints(pointsRaw) ?? clampTaskPoints(hours) ?? 1;
   return {
     hours,
     points: estimatedPoints,
@@ -9218,12 +10381,26 @@ async function requestWorkEstimateFromLLM({ userId, entityType, title, descripti
   };
 }
 
-async function ensureLlmSizingForUser({ db, userId, runId, taskLimit = 4, storyLimit = 3 }) {
+async function ensureLlmSizingForUser({
+  db,
+  userId,
+  runId,
+  taskLimit = Number.POSITIVE_INFINITY,
+  storyLimit = Number.POSITIVE_INFINITY,
+}) {
   const serverNow = admin.firestore.FieldValue.serverTimestamp();
+  const sprintsSnap = await db.collection('sprints')
+    .where('ownerUid', '==', userId)
+    .get()
+    .catch(() => ({ docs: [] }));
+  const activeSprintIds = new Set(
+    sprintsSnap.docs
+      .filter((doc) => isActiveSprintStatus(doc.data()?.status))
+      .map((doc) => doc.id),
+  );
+
   const tasksSnap = await db.collection('tasks')
     .where('ownerUid', '==', userId)
-    .orderBy('updatedAt', 'desc')
-    .limit(75)
     .get()
     .catch(() => ({ empty: true, docs: [] }));
 
@@ -9231,12 +10408,11 @@ async function ensureLlmSizingForUser({ db, userId, runId, taskLimit = 4, storyL
     .filter((doc) => {
       const data = doc.data() || {};
       const done = Number(data.status) === 2 || String(data.status).toLowerCase() === 'done';
-      if (done) return false;
-      const hasEstimate = Number.isFinite(Number(data.estimateMin));
-      const hasPoints = Number.isFinite(Number(data.points));
-      return !hasEstimate || !hasPoints;
+      if (done || data.deleted) return false;
+      const hasPoints = Number.isFinite(Number(data.points)) && Number(data.points) > 0;
+      return !hasPoints;
     })
-    .slice(0, taskLimit);
+    .slice(0, Number.isFinite(taskLimit) ? taskLimit : undefined);
 
   const sizedTasks = [];
   for (const docSnap of taskCandidates) {
@@ -9246,6 +10422,7 @@ async function ensureLlmSizingForUser({ db, userId, runId, taskLimit = 4, storyL
       entityType: 'task',
       title: data.title || data.ref || 'Task',
       description: data.description || '',
+      acceptanceCriteria: normalizeAcceptanceCriteriaForSizing(data),
     });
     if (!estimate) continue;
     const estimateMinutes = Math.max(60, Math.round(estimate.hours * 60));
@@ -9266,8 +10443,6 @@ async function ensureLlmSizingForUser({ db, userId, runId, taskLimit = 4, storyL
 
   const storiesSnap = await db.collection('stories')
     .where('ownerUid', '==', userId)
-    .orderBy('updatedAt', 'desc')
-    .limit(60)
     .get()
     .catch(() => ({ empty: true, docs: [] }));
 
@@ -9275,10 +10450,12 @@ async function ensureLlmSizingForUser({ db, userId, runId, taskLimit = 4, storyL
     .filter((doc) => {
       const data = doc.data() || {};
       const done = Number(data.status) === 4 || String(data.status).toLowerCase() === 'done';
-      if (done) return false;
-      return !Number.isFinite(Number(data.points));
+      if (done || data.deleted) return false;
+      if (!data.sprintId || !activeSprintIds.has(data.sprintId)) return false;
+      const hasPoints = Number.isFinite(Number(data.points)) && Number(data.points) > 0;
+      return !hasPoints;
     })
-    .slice(0, storyLimit);
+    .slice(0, Number.isFinite(storyLimit) ? storyLimit : undefined);
 
   const sizedStories = [];
   for (const docSnap of storyCandidates) {
@@ -9288,6 +10465,7 @@ async function ensureLlmSizingForUser({ db, userId, runId, taskLimit = 4, storyL
       entityType: 'story',
       title: data.title || data.ref || 'Story',
       description: data.description || '',
+      acceptanceCriteria: normalizeAcceptanceCriteriaForSizing(data),
     });
     if (!estimate) continue;
     await docSnap.ref.set({
@@ -9601,7 +10779,6 @@ exports.generateWeeklySummaries = schedulerV2.onSchedule({ schedule: 'every mond
   }
   return { ok: true, users: profiles.docs.length };
 });
-
 async function runNightlyMaintenanceForUser({ db, userId, profile, nowUtc, runId }) {
   const duplicateReminders = await detectDuplicateRemindersForUser({ db, userId });
 
@@ -9835,7 +11012,7 @@ exports.suggestTaskStoryConversions = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDI
         rationale: item.rationale || '',
         goalId,
         goalTitle: goalId ? (goalTitleById[goalId] || summary?.goal?.title || '') : null,
-        points: Number.isFinite(points) ? Math.max(1, Math.min(8, Math.round(points))) : undefined,
+        points: Number.isFinite(points) ? (clampTaskPoints(points) ?? undefined) : undefined,
       };
     })
     .filter(s => s.taskId);
@@ -9844,6 +11021,182 @@ exports.suggestTaskStoryConversions = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDI
     suggestions,
     evaluatedCount: candidates.length,
     totalOpen: allTasks.length
+  };
+});
+
+exports.monzoGoalPotRefLinker = schedulerV2.onSchedule('every 12 hours', async () => {
+  const db = admin.firestore();
+  const tokens = await db.collection('tokens').where('provider', '==', 'monzo').get();
+  let usersChecked = 0;
+  let totalLinked = 0;
+  let totalTimedOut = 0;
+  let totalPending = 0;
+
+  for (const tokenSnap of tokens.docs) {
+    const token = tokenSnap.data() || {};
+    const uid = token.ownerUid || String(tokenSnap.id).replace(/_monzo$/, '');
+    if (!uid) continue;
+    usersChecked += 1;
+    try {
+      const result = await linkMonzoGoalRefsForUser(uid, { source: 'scheduled_linker' });
+      totalLinked += Number(result?.linked || 0);
+      totalTimedOut += Number(result?.timedOut || 0);
+      totalPending += Number(result?.pending || 0);
+    } catch (error) {
+      console.warn('[monzoGoalPotRefLinker] failed', { uid, error: error?.message || error });
+      await db.collection('integration_logs').add({
+        integration: 'monzo',
+        type: 'goal_pot_ref_linker',
+        status: 'error',
+        userId: uid,
+        source: 'scheduled_linker',
+        error: error?.message || String(error),
+        timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    }
+  }
+
+  console.log('[monzoGoalPotRefLinker] summary', {
+    usersChecked,
+    totalLinked,
+    totalTimedOut,
+    totalPending,
+  });
+
+  return {
+    ok: true,
+    usersChecked,
+    totalLinked,
+    totalTimedOut,
+    totalPending,
+  };
+});
+
+function normalizeSprintFocusGoalIds(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((goalId) => String(goalId || '').trim())
+    .filter((goalId) => !!goalId);
+}
+
+function normalizeAlignmentMode(value) {
+  const normalized = String(value || 'warn').trim().toLowerCase();
+  return normalized === 'strict' ? 'strict' : 'warn';
+}
+
+exports.enforceSprintFocusAlignment = firestoreV2.onDocumentWritten('stories/{storyId}', async (event) => {
+  const afterSnap = event.data?.after;
+  if (!afterSnap?.exists) return;
+
+  const storyId = String(event.params?.storyId || '').trim();
+  const story = afterSnap.data() || {};
+  const sprintId = String(story.sprintId || '').trim();
+  if (!sprintId) return;
+
+  const ownerUid = String(story.ownerUid || '').trim();
+  if (!ownerUid) return;
+
+  const db = admin.firestore();
+  const sprintSnap = await db.collection('sprints').doc(sprintId).get();
+  if (!sprintSnap.exists) return;
+
+  const sprint = sprintSnap.data() || {};
+  const mode = normalizeAlignmentMode(sprint.alignmentMode);
+  if (mode !== 'strict') return;
+
+  const focusGoalIds = normalizeSprintFocusGoalIds(sprint.focusGoalIds);
+  if (!focusGoalIds.length) return;
+
+  const goalId = String(story.goalId || '').trim();
+  const aligned = !!goalId && focusGoalIds.includes(goalId);
+  if (aligned) return;
+
+  await afterSnap.ref.set({
+    sprintId: null,
+    sprintAlignmentViolation: {
+      sprintId,
+      alignmentMode: 'strict',
+      reason: 'goal_not_in_sprint_focus_goals',
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    },
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  await db.collection('integration_logs').add({
+    integration: 'sprint_alignment',
+    type: 'strict_enforcement',
+    status: 'blocked',
+    userId: ownerUid,
+    storyId,
+    sprintId,
+    goalId: goalId || null,
+    reason: 'goal_not_in_sprint_focus_goals',
+    timestamp: admin.firestore.FieldValue.serverTimestamp(),
+  });
+});
+
+exports.sprintAlignmentAuditNightly = schedulerV2.onSchedule('every day 03:10', async () => {
+  const db = admin.firestore();
+  const activeSprintSnap = await db.collection('sprints').where('status', '==', 1).get();
+  let sprintsChecked = 0;
+  let sprintsWithRules = 0;
+  let totalUnaligned = 0;
+
+  for (const sprintDoc of activeSprintSnap.docs) {
+    const sprint = sprintDoc.data() || {};
+    const focusGoalIds = normalizeSprintFocusGoalIds(sprint.focusGoalIds);
+    if (!focusGoalIds.length) continue;
+
+    sprintsChecked += 1;
+    sprintsWithRules += 1;
+    const focusGoalSet = new Set(focusGoalIds);
+    const ownerUid = String(sprint.ownerUid || '').trim();
+    const persona = String(sprint.persona || 'personal');
+
+    if (!ownerUid) continue;
+
+    const storiesSnap = await db.collection('stories')
+      .where('ownerUid', '==', ownerUid)
+      .where('persona', '==', persona)
+      .where('sprintId', '==', sprintDoc.id)
+      .get();
+
+    const totalStories = storiesSnap.size;
+    const unalignedStories = storiesSnap.docs.filter((docSnap) => {
+      const row = docSnap.data() || {};
+      const goalId = String(row.goalId || '').trim();
+      return !goalId || !focusGoalSet.has(goalId);
+    }).length;
+    totalUnaligned += unalignedStories;
+
+    await db.collection('sprint_alignment_audit').doc(`${ownerUid}_${sprintDoc.id}`).set({
+      ownerUid,
+      sprintId: sprintDoc.id,
+      sprintName: sprint.name || sprint.ref || sprintDoc.id,
+      persona,
+      alignmentMode: normalizeAlignmentMode(sprint.alignmentMode),
+      focusGoalIds,
+      totalStories,
+      unalignedStories,
+      alignedStories: Math.max(totalStories - unalignedStories, 0),
+      alignmentPct: totalStories > 0
+        ? Math.max(0, Math.round(((totalStories - unalignedStories) / totalStories) * 100))
+        : 100,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+  }
+
+  console.log('[sprintAlignmentAuditNightly] complete', {
+    sprintsChecked,
+    sprintsWithRules,
+    totalUnaligned,
+  });
+
+  return {
+    ok: true,
+    sprintsChecked,
+    sprintsWithRules,
+    totalUnaligned,
   };
 });
 
@@ -9920,8 +11273,11 @@ exports.convertTasksToStories = httpsV2.onCall(async (req) => {
       description: storyDescription || taskData.description || '',
       goalId: goalId || null,
       sprintId: sprintId || null,
+      url: taskData.url || null,
       priority: conversion?.priority ? Number(conversion.priority) : 2,
-      points: conversion?.points ? Number(conversion.points) : Math.max(1, Math.min(8, Math.round((Number(taskData.estimateMin || 60) || 60) / 60))),
+      points: clampTaskPoints(conversion?.points)
+        ?? clampTaskPoints((Number(taskData.estimateMin || 60) || 60) / 60)
+        ?? 1,
       status: 0,
       theme: theme || taskData.theme || 1,
       persona,
@@ -9972,16 +11328,45 @@ exports.convertTasksToStories = httpsV2.onCall(async (req) => {
 });
 
 // ===== LLM Provider Helpers (Gemini-only)
-async function callLLMJson({ system, user, purpose, userId, expectJson = false, temperature = 0.2, provider = 'gemini', model = GEMINI_MODEL }) {
+// Build a communication-style instruction paragraph from an aiPersonality object.
+// Each dimension is 0–10; values at 5 are neutral and produce no instruction.
+function buildPersonalityInstruction(personality) {
+  if (!personality || typeof personality !== 'object') return '';
+  const {
+    intelligence = 5,
+    humour = 5,
+    sarcasm = 5,
+    directness = 7,
+    warmth = 5,
+    verbosity = 5,
+  } = personality;
+  const parts = [];
+  if (directness >= 8) parts.push('Be extremely direct and blunt – omit all preamble and filler.');
+  else if (directness >= 6) parts.push('Be direct and concise.');
+  else if (directness <= 3) parts.push('Explain your reasoning fully with supporting context.');
+  if (verbosity <= 3) parts.push('Use the fewest words possible; prefer bullet points over prose.');
+  else if (verbosity >= 8) parts.push('Provide thorough, detailed explanations.');
+  if (intelligence >= 8) parts.push('Assume expert-level domain knowledge; use advanced vocabulary freely.');
+  else if (intelligence <= 3) parts.push('Use plain language and avoid jargon.');
+  if (humour >= 7) parts.push('Incorporate light humour and wit where it fits naturally.');
+  if (sarcasm >= 7) parts.push('A dry, sarcastic tone is acceptable when contextually appropriate.');
+  if (warmth >= 8) parts.push('Be warm, encouraging, and supportive in tone.');
+  else if (warmth <= 2) parts.push('Maintain a neutral, professional tone without personal warmth.');
+  if (!parts.length) return '';
+  return `Communication style:\n${parts.map((p) => `- ${p}`).join('\n')}`;
+}
+
+async function callLLMJson({ system, user, purpose, userId, expectJson = false, temperature = 0.2, provider = 'gemini', model = GEMINI_MODEL, personality = null }) {
+  const effectiveSystem = personality ? `${buildPersonalityInstruction(personality)}\n\n${system}` : system;
   const attempts = 3; // initial + 2 retries
   let lastErr = null;
   for (let i = 0; i < attempts; i++) {
     try {
       let text;
       if (provider === 'openai') {
-        text = await callOpenAIChat({ system, user, model, expectJson, temperature });
+        text = await callOpenAIChat({ system: effectiveSystem, user, model, expectJson, temperature });
       } else {
-        text = await callGemini({ system, user, model, expectJson, temperature });
+        text = await callGemini({ system: effectiveSystem, user, model, expectJson, temperature });
       }
       // lightweight usage log
       const wrapped = aiUsageLogger.wrapAICall('google-ai-studio', GEMINI_MODEL);
@@ -10233,7 +11618,472 @@ function buildHeuristicFocus(summaryData, note) {
   };
 }
 
+function normalizeRecommendationPersona(value) {
+  return String(value || '').toLowerCase() === 'work' ? 'work' : 'personal';
+}
+
+function isRecommendationTaskDone(status) {
+  if (status == null) return false;
+  if (typeof status === 'number') return status >= 2;
+  const normalized = String(status).trim().toLowerCase();
+  return ['done', 'complete', 'completed', 'finished', 'closed', 'archived'].includes(normalized);
+}
+
+function isRecommendationStoryDone(status) {
+  if (status == null) return false;
+  if (typeof status === 'number') return status >= 4;
+  const normalized = String(status).trim().toLowerCase();
+  return ['done', 'complete', 'completed', 'finished', 'closed', 'archived'].includes(normalized);
+}
+
+function getRecommendationEntityScore(entity) {
+  const score = Number(entity?.aiCriticalityScore ?? entity?.aiPriorityScore ?? entity?.aiScore ?? 0);
+  return Number.isFinite(score) ? score : 0;
+}
+
+function getRecommendationTaskDueMs(task) {
+  return toMillis(task?.dueDate || task?.dueDateMs || task?.targetDate || task?.plannedStartDate || null);
+}
+
+function getRecommendationStoryDueMs(story) {
+  return toMillis(story?.sprintDueDate || story?.targetDate || story?.dueDate || story?.plannedStartDate || null);
+}
+
+function buildRecommendationLabel(title, ref) {
+  const safeTitle = String(title || '').trim() || 'Untitled item';
+  const safeRef = String(ref || '').trim();
+  return safeRef ? `${safeTitle} (${safeRef})` : safeTitle;
+}
+
+function getRecommendationTaskKind(task) {
+  const rawType = String(task?.type || task?.taskType || '').trim().toLowerCase();
+  const normalizedType = rawType === 'habitual' ? 'habit' : rawType;
+  if (['chore', 'routine', 'habit'].includes(normalizedType)) return normalizedType;
+  if (normalizedType) return null;
+  const tags = Array.isArray(task?.tags)
+    ? task.tags.map((tag) => String(tag || '').trim().toLowerCase().replace(/^#/, ''))
+    : [];
+  if (tags.includes('chore')) return 'chore';
+  if (tags.includes('routine')) return 'routine';
+  if (tags.includes('habit') || tags.includes('habitual')) return 'habit';
+  return null;
+}
+
+function buildRecommendationCandidate({
+  type,
+  id,
+  data,
+  source,
+  reason,
+  plannedStartMs = null,
+  plannedEndMs = null,
+  calendarTitle = null,
+  top3 = false,
+}) {
+  if (!type || !id || !data) return null;
+  const ref = String(data?.ref || data?.reference || '').trim() || null;
+  const title = String(data?.title || calendarTitle || (type === 'story' ? 'Story' : 'Task')).trim() || (type === 'story' ? 'Story' : 'Task');
+  const dueMs = type === 'story' ? getRecommendationStoryDueMs(data) : getRecommendationTaskDueMs(data);
+  const taskKind = type === 'task' ? getRecommendationTaskKind(data) : null;
+  const checklistPath = (type === 'task' && taskKind)
+    ? `/chores/checklist?taskId=${encodeURIComponent(String(id))}`
+    : null;
+  const path = checklistPath || buildEntityPath(type, id, ref || id);
+  const deepLink = path ? buildAbsoluteUrl(path) : null;
+  return {
+    type,
+    id,
+    ref,
+    title,
+    label: buildRecommendationLabel(title, ref),
+    path,
+    deepLink,
+    taskKind,
+    score: getRecommendationEntityScore(data),
+    sprintId: data?.sprintId || null,
+    dueMs,
+    plannedStartMs: Number.isFinite(plannedStartMs) ? plannedStartMs : null,
+    plannedEndMs: Number.isFinite(plannedEndMs) ? plannedEndMs : null,
+    source,
+    reason: reason || null,
+    calendarTitle: calendarTitle || null,
+    top3: Boolean(top3 || data?.aiTop3ForDay),
+  };
+}
+
+function scoreRecommendationCandidate(candidate, { selectedSprintId = null, endOfDayMs = null } = {}) {
+  if (!candidate) return -Infinity;
+  let score = Number(candidate.score || 0);
+  if (candidate.top3) score += 18;
+  if (selectedSprintId && candidate.sprintId === selectedSprintId) score += 14;
+  if (candidate.dueMs && Number.isFinite(candidate.dueMs) && endOfDayMs && candidate.dueMs <= endOfDayMs) score += 10;
+  if (candidate.source === 'due_open_task') score += 4;
+  if (candidate.source === 'current_block') score += 1000;
+  if (candidate.source === 'upcoming_block') score += 250;
+  return score;
+}
+
+function formatRecommendationCalendarTime(millis, zone) {
+  if (!Number.isFinite(millis)) return null;
+  const dt = DateTime.fromMillis(millis, { zone: coerceZone(zone) });
+  return dt.isValid ? dt.toFormat('HH:mm') : null;
+}
+
+async function computeNextWorkRecommendation({
+  db,
+  uid,
+  persona,
+  selectedSprintId = null,
+}) {
+  const profileSnap = await db.collection('profiles').doc(uid).get().catch(() => null);
+  const profile = profileSnap && profileSnap.exists ? (profileSnap.data() || {}) : {};
+  const zone = resolveTimezone(profile, DEFAULT_TIMEZONE);
+  const now = DateTime.now().setZone(coerceZone(zone));
+  const dayStartMs = now.startOf('day').toMillis();
+  const dayEndMs = now.endOf('day').toMillis();
+  const nowMs = now.toMillis();
+  const personaValue = normalizeRecommendationPersona(persona);
+  const sprintFilter = selectedSprintId && selectedSprintId !== SPRINT_NONE ? String(selectedSprintId) : null;
+
+  const blocksQuery = db.collection('calendar_blocks')
+    .where('ownerUid', '==', uid)
+    .where('start', '>=', dayStartMs)
+    .where('start', '<=', dayEndMs)
+    .get()
+    .catch(() => ({ docs: [] }));
+
+  const top3TasksQuery = db.collection('tasks')
+    .where('ownerUid', '==', uid)
+    .where('persona', '==', personaValue)
+    .where('aiTop3ForDay', '==', true)
+    .get()
+    .catch(() => ({ docs: [] }));
+
+  const top3StoriesQuery = db.collection('stories')
+    .where('ownerUid', '==', uid)
+    .where('persona', '==', personaValue)
+    .where('aiTop3ForDay', '==', true)
+    .get()
+    .catch(() => ({ docs: [] }));
+
+  const dueOpenTasksQuery = db.collection('sprint_task_index')
+    .where('ownerUid', '==', uid)
+    .where('persona', '==', personaValue)
+    .where('isOpen', '==', true)
+    .orderBy('dueDate', 'asc')
+    .limit(24)
+    .get()
+    .catch(() => ({ docs: [] }));
+
+  const recentStoriesQuery = db.collection('stories')
+    .where('ownerUid', '==', uid)
+    .where('persona', '==', personaValue)
+    .orderBy('updatedAt', 'desc')
+    .limit(18)
+    .get()
+    .catch(() => ({ docs: [] }));
+
+  const [blocksSnap, top3TasksSnap, top3StoriesSnap, dueOpenTasksSnap, recentStoriesSnap] = await Promise.all([
+    blocksQuery,
+    top3TasksQuery,
+    top3StoriesQuery,
+    dueOpenTasksQuery,
+    recentStoriesQuery,
+  ]);
+
+  const dayBlocks = blocksSnap.docs
+    .map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() || {}) }))
+    .filter((block) => Number.isFinite(Number(block?.start)) && Number.isFinite(Number(block?.end)))
+    .sort((a, b) => Number(a.start || 0) - Number(b.start || 0));
+
+  const relevantBlocks = dayBlocks.filter((block) => Number(block.end || 0) >= nowMs - (5 * MS_IN_MINUTE));
+  const taskIds = [...new Set(relevantBlocks.map((block) => String(block?.taskId || '').trim()).filter(Boolean))];
+  const storyIds = [...new Set(relevantBlocks.map((block) => String(block?.storyId || '').trim()).filter(Boolean))];
+
+  const [linkedTaskSnaps, linkedStorySnaps] = await Promise.all([
+    taskIds.length ? db.getAll(...taskIds.map((id) => db.collection('tasks').doc(id))).catch(() => []) : Promise.resolve([]),
+    storyIds.length ? db.getAll(...storyIds.map((id) => db.collection('stories').doc(id))).catch(() => []) : Promise.resolve([]),
+  ]);
+
+  const linkedTasks = new Map();
+  linkedTaskSnaps.forEach((snap) => {
+    if (!snap?.exists) return;
+    linkedTasks.set(snap.id, snap.data() || {});
+  });
+  const linkedStories = new Map();
+  linkedStorySnaps.forEach((snap) => {
+    if (!snap?.exists) return;
+    linkedStories.set(snap.id, snap.data() || {});
+  });
+
+  const blockCandidates = relevantBlocks.map((block) => {
+    const startMs = Number(block.start || 0);
+    const endMs = Number(block.end || 0);
+    if (block.taskId) {
+      const task = linkedTasks.get(String(block.taskId));
+      if (!task || task.ownerUid !== uid || normalizeRecommendationPersona(task.persona) !== personaValue || task.deleted || isRecommendationTaskDone(task.status)) {
+        return { block, candidate: null };
+      }
+      return {
+        block,
+        candidate: buildRecommendationCandidate({
+          type: 'task',
+          id: String(block.taskId),
+          data: task,
+          source: startMs <= nowMs && endMs >= nowMs ? 'current_block' : 'upcoming_block',
+          reason: startMs <= nowMs && endMs >= nowMs
+            ? `Planned now until ${formatRecommendationCalendarTime(endMs, zone)}`
+            : `Planned at ${formatRecommendationCalendarTime(startMs, zone)}`,
+          plannedStartMs: startMs,
+          plannedEndMs: endMs,
+          calendarTitle: block.title || null,
+        }),
+      };
+    }
+    if (block.storyId) {
+      const story = linkedStories.get(String(block.storyId));
+      if (!story || story.ownerUid !== uid || normalizeRecommendationPersona(story.persona) !== personaValue || isRecommendationStoryDone(story.status)) {
+        return { block, candidate: null };
+      }
+      return {
+        block,
+        candidate: buildRecommendationCandidate({
+          type: 'story',
+          id: String(block.storyId),
+          data: story,
+          source: startMs <= nowMs && endMs >= nowMs ? 'current_block' : 'upcoming_block',
+          reason: startMs <= nowMs && endMs >= nowMs
+            ? `Planned now until ${formatRecommendationCalendarTime(endMs, zone)}`
+            : `Planned at ${formatRecommendationCalendarTime(startMs, zone)}`,
+          plannedStartMs: startMs,
+          plannedEndMs: endMs,
+          calendarTitle: block.title || null,
+        }),
+      };
+    }
+    return { block, candidate: null };
+  });
+
+  const currentLinked = blockCandidates.find(({ block, candidate }) => candidate && Number(block.start || 0) <= nowMs && Number(block.end || 0) >= nowMs)?.candidate || null;
+  if (currentLinked) {
+    return {
+      ok: true,
+      computedAt: now.toISO(),
+      timezone: zone,
+      persona: personaValue,
+      selectedSprintId: sprintFilter,
+      status: 'current_block',
+      reasonCode: 'current_block',
+      currentCalendarBlock: {
+        title: currentLinked.calendarTitle || currentLinked.title,
+        start: currentLinked.plannedStartMs ? new Date(currentLinked.plannedStartMs).toISOString() : null,
+        end: currentLinked.plannedEndMs ? new Date(currentLinked.plannedEndMs).toISOString() : null,
+      },
+      recommendedItem: {
+        type: currentLinked.type,
+        id: currentLinked.id,
+        ref: currentLinked.ref,
+        title: currentLinked.title,
+        label: currentLinked.label,
+        path: currentLinked.path,
+        deepLink: currentLinked.deepLink,
+        taskKind: currentLinked.taskKind || null,
+        score: currentLinked.score,
+        source: currentLinked.source,
+        reason: currentLinked.reason,
+        plannedStart: currentLinked.plannedStartMs ? new Date(currentLinked.plannedStartMs).toISOString() : null,
+        plannedEnd: currentLinked.plannedEndMs ? new Date(currentLinked.plannedEndMs).toISOString() : null,
+        dueDate: currentLinked.dueMs ? new Date(currentLinked.dueMs).toISOString() : null,
+      },
+      spokenResponse: `Work on ${currentLinked.label} now.`,
+    };
+  }
+
+  const activeBusyBlock = dayBlocks.find((block) => Number(block.start || 0) <= nowMs && Number(block.end || 0) >= nowMs) || null;
+  const upcomingLinked = blockCandidates.find(({ block, candidate }) => candidate && Number(block.start || 0) > nowMs)?.candidate || null;
+
+  const top3Tasks = top3TasksSnap.docs
+    .map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() || {}) }))
+    .filter((task) => !task.deleted)
+    .filter((task) => !isRecommendationTaskDone(task.status))
+    .filter((task) => {
+      if (!task.aiTop3Date) return true;
+      return String(task.aiTop3Date).slice(0, 10) === now.toISODate();
+    })
+    .map((task) => buildRecommendationCandidate({
+      type: 'task',
+      id: task.id,
+      data: task,
+      source: 'top3',
+      reason: 'Top 3 priority for today',
+      top3: true,
+    }))
+    .filter(Boolean);
+
+  const top3Stories = top3StoriesSnap.docs
+    .map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() || {}) }))
+    .filter((story) => !isRecommendationStoryDone(story.status))
+    .filter((story) => {
+      if (!story.aiTop3Date) return true;
+      return String(story.aiTop3Date).slice(0, 10) === now.toISODate();
+    })
+    .map((story) => buildRecommendationCandidate({
+      type: 'story',
+      id: story.id,
+      data: story,
+      source: 'top3',
+      reason: 'Top 3 priority for today',
+      top3: true,
+    }))
+    .filter(Boolean);
+
+  const dueOpenTasks = dueOpenTasksSnap.docs
+    .map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() || {}) }))
+    .filter((task) => !isRecommendationTaskDone(task.status))
+    .map((task) => buildRecommendationCandidate({
+      type: 'task',
+      id: task.id,
+      data: task,
+      source: 'due_open_task',
+      reason: task.dueDate && Number(task.dueDate) <= dayEndMs ? 'Due today or overdue' : 'Open task',
+      top3: Boolean(task.aiTop3ForDay),
+    }))
+    .filter(Boolean);
+
+  const recentStories = recentStoriesSnap.docs
+    .map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() || {}) }))
+    .filter((story) => !isRecommendationStoryDone(story.status))
+    .map((story) => buildRecommendationCandidate({
+      type: 'story',
+      id: story.id,
+      data: story,
+      source: 'recent_story',
+      reason: 'Open story',
+      top3: Boolean(story.aiTop3ForDay),
+    }))
+    .filter(Boolean);
+
+  const fallbackPool = [];
+  const seenKeys = new Set();
+  [top3Tasks, top3Stories, dueOpenTasks, recentStories].forEach((collection) => {
+    collection.forEach((candidate) => {
+      const key = `${candidate.type}:${candidate.id}`;
+      if (seenKeys.has(key)) return;
+      seenKeys.add(key);
+      fallbackPool.push(candidate);
+    });
+  });
+
+  const sortedFallback = fallbackPool
+    .filter((candidate) => !sprintFilter || !candidate.sprintId || candidate.sprintId === sprintFilter || candidate.top3)
+    .sort((a, b) => {
+      const scoreDiff = scoreRecommendationCandidate(b, { selectedSprintId: sprintFilter, endOfDayMs: dayEndMs })
+        - scoreRecommendationCandidate(a, { selectedSprintId: sprintFilter, endOfDayMs: dayEndMs });
+      if (scoreDiff !== 0) return scoreDiff;
+      const aDue = a.dueMs ?? Number.MAX_SAFE_INTEGER;
+      const bDue = b.dueMs ?? Number.MAX_SAFE_INTEGER;
+      if (aDue !== bDue) return aDue - bDue;
+      return a.label.localeCompare(b.label);
+    });
+
+  let selected = null;
+  let status = 'fallback';
+  let reasonCode = 'fallback';
+  let spokenResponse = 'No clear next item found.';
+  let currentCalendarBlock = null;
+
+  if (activeBusyBlock) {
+    const busyTitle = String(activeBusyBlock.title || activeBusyBlock.summary || 'calendar event').trim();
+    const busyEndLabel = formatRecommendationCalendarTime(Number(activeBusyBlock.end || 0), zone);
+    currentCalendarBlock = {
+      title: busyTitle,
+      start: Number.isFinite(Number(activeBusyBlock.start)) ? new Date(Number(activeBusyBlock.start)).toISOString() : null,
+      end: Number.isFinite(Number(activeBusyBlock.end)) ? new Date(Number(activeBusyBlock.end)).toISOString() : null,
+    };
+    if (upcomingLinked) {
+      selected = {
+        ...upcomingLinked,
+        reason: busyEndLabel ? `After ${busyTitle} ends at ${busyEndLabel}` : `After ${busyTitle}`,
+      };
+      status = 'after_busy_event';
+      reasonCode = 'after_busy_event';
+      spokenResponse = `After ${busyTitle}, work on ${selected.label}.`;
+    } else if (sortedFallback[0]) {
+      selected = {
+        ...sortedFallback[0],
+        reason: busyEndLabel ? `After ${busyTitle} ends at ${busyEndLabel}` : `After ${busyTitle}`,
+      };
+      status = 'after_busy_event';
+      reasonCode = 'after_busy_event';
+      spokenResponse = `After ${busyTitle}, work on ${selected.label}.`;
+    }
+  }
+
+  if (!selected && upcomingLinked && Number(upcomingLinked.plannedStartMs || 0) <= nowMs + (2 * 60 * MS_IN_MINUTE)) {
+    selected = upcomingLinked;
+    status = 'upcoming_block';
+    reasonCode = 'upcoming_block';
+    spokenResponse = `Next up is ${selected.label} at ${formatRecommendationCalendarTime(Number(selected.plannedStartMs || 0), zone)}.`;
+  }
+
+  if (!selected && sortedFallback[0]) {
+    selected = sortedFallback[0];
+    status = selected.source === 'top3' ? 'top3' : 'ai_score';
+    reasonCode = status;
+    spokenResponse = `Next up is ${selected.label}.`;
+  }
+
+  if (!selected) {
+    return {
+      ok: true,
+      computedAt: now.toISO(),
+      timezone: zone,
+      persona: personaValue,
+      selectedSprintId: sprintFilter,
+      status: 'none',
+      reasonCode: 'none',
+      currentCalendarBlock,
+      recommendedItem: null,
+      spokenResponse: activeBusyBlock
+        ? `You are blocked by calendar until ${formatRecommendationCalendarTime(Number(activeBusyBlock.end || 0), zone) || 'later'}.`
+        : 'You have no open task or story to work on next.',
+    };
+  }
+
+  return {
+    ok: true,
+    computedAt: now.toISO(),
+    timezone: zone,
+    persona: personaValue,
+    selectedSprintId: sprintFilter,
+    status,
+    reasonCode,
+    currentCalendarBlock,
+    recommendedItem: {
+      type: selected.type,
+      id: selected.id,
+      ref: selected.ref,
+      title: selected.title,
+      label: selected.label,
+      path: selected.path,
+      deepLink: selected.deepLink,
+      taskKind: selected.taskKind || null,
+      score: selected.score,
+      source: selected.source,
+      reason: selected.reason,
+      plannedStart: selected.plannedStartMs ? new Date(selected.plannedStartMs).toISOString() : null,
+      plannedEnd: selected.plannedEndMs ? new Date(selected.plannedEndMs).toISOString() : null,
+      dueDate: selected.dueMs ? new Date(selected.dueMs).toISOString() : null,
+    },
+    spokenResponse,
+  };
+}
+
 async function buildDailySummaryAiFocus({ summaryData, userId }) {
+  const traceId = crypto.randomUUID ? crypto.randomUUID() : crypto.randomBytes(12).toString('hex');
+  const promptTemplateId = 'dailySummaryFocus.v2';
+  const startedAtMs = Date.now();
+
   try {
     const zone = summaryData?.metadata?.timezone || 'UTC';
     const candidates = Array.isArray(summaryData?.activeWorkItems) ? summaryData.activeWorkItems : [];
@@ -10281,6 +12131,38 @@ async function buildDailySummaryAiFocus({ summaryData, userId }) {
       calendarContext.length ? `Today calendar: ${JSON.stringify(calendarContext)}` : 'Today calendar: []',
     ].join('\n');
 
+    const llmTraceBase = {
+      traceId,
+      promptTemplateId,
+      promptTemplateVersion: 2,
+      model: AI_PRIORITY_MODEL,
+      provider: process.env.AI_PROVIDER || 'gemini',
+      purpose: 'dailySummaryFocus',
+      parseExpected: 'json',
+      temperature: 0.2,
+      promptText: prompt,
+      inputPayload: {
+        dayIso: summaryData?.metadata?.dayIso || null,
+        timezone: zone,
+        activeWorkContext: context,
+        calendarContext,
+        healthContext: {
+          source: ['authorized', 'synced'].includes(String(summaryData?.profile?.healthkitStatus || '').toLowerCase()) ? 'healthkit' : 'manual',
+          stepsToday: Number(summaryData?.profile?.healthkitStepsToday ?? summaryData?.profile?.manualStepsToday ?? 0) || null,
+          workoutMinutesToday: Number(summaryData?.profile?.healthkitWorkoutMinutesToday ?? summaryData?.profile?.manualWorkoutMinutesToday ?? 0) || null,
+          bodyFatPct: Number(summaryData?.profile?.healthkitBodyFatPct ?? summaryData?.profile?.manualBodyFatPct ?? 0) || null,
+          macroTargetsPresent: !!(
+            summaryData?.profile?.targetProteinG
+            || summaryData?.profile?.dailyProteinTargetG
+            || summaryData?.profile?.healthTargetProteinG
+            || summaryData?.profile?.targetCaloriesKcal
+            || summaryData?.profile?.dailyCaloriesTargetKcal
+            || summaryData?.profile?.healthTargetCaloriesKcal
+          ),
+        },
+      },
+    };
+
     const raw = await callLLMJson({
       system,
       user: prompt,
@@ -10295,6 +12177,15 @@ async function buildDailySummaryAiFocus({ summaryData, userId }) {
       parsed = raw ? JSON.parse(raw) : {};
     } catch (error) {
       console.warn('[daily-summary-ai] JSON parse failed', error?.message || error);
+      await recordAiLog(userId, 'daily_summary_focus_trace', 'warning', 'Daily summary focus parse failure', {
+        ...llmTraceBase,
+        parseStatus: 'failed',
+        rawOutput: String(raw || '').slice(0, 12000),
+        rawOutputText: String(raw || '').slice(0, 12000),
+        rawOutputLength: String(raw || '').length,
+        parseError: String(error?.message || error || 'unknown'),
+        latencyMs: Date.now() - startedAtMs,
+      });
       return buildHeuristicFocus(summaryData, 'AI response could not be parsed.');
     }
 
@@ -10356,13 +12247,21 @@ async function buildDailySummaryAiFocus({ summaryData, userId }) {
     const normalised = [...normalisedTasks, ...normalisedStories].slice(0, 6);
 
     if (!normalised.length) {
+      await recordAiLog(userId, 'daily_summary_focus_trace', 'warning', 'Daily summary focus returned no actionable items', {
+        ...llmTraceBase,
+        parseStatus: 'ok_empty',
+        rawOutput: String(raw || '').slice(0, 12000),
+        rawOutputText: String(raw || '').slice(0, 12000),
+        rawOutputLength: String(raw || '').length,
+        latencyMs: Date.now() - startedAtMs,
+      });
       return buildHeuristicFocus(summaryData, 'AI produced no actionable items; fallback applied.');
     }
 
     const askText = parsed.ask || parsed.callToAction || (normalised.length ? 'Commit to finishing these active sprint items today.' : null);
     const summaryText = parsed.summary || parsed.note || null;
 
-    return {
+    const result = {
       mode: 'ai',
       model: AI_PRIORITY_MODEL,
       generatedAt: new Date().toISOString(),
@@ -10370,8 +12269,27 @@ async function buildDailySummaryAiFocus({ summaryData, userId }) {
       ask: askText,
       items: normalised,
     };
+
+    await recordAiLog(userId, 'daily_summary_focus_trace', 'success', 'Daily summary focus generated', {
+      ...llmTraceBase,
+      parseStatus: 'ok',
+      rawOutput: String(raw || '').slice(0, 12000),
+      rawOutputText: String(raw || '').slice(0, 12000),
+      rawOutputLength: String(raw || '').length,
+      resultItemCount: result.items.length,
+      latencyMs: Date.now() - startedAtMs,
+    });
+
+    return result;
   } catch (error) {
     console.warn('[daily-summary-ai] focus generation failed', error?.message || error);
+    await recordAiLog(userId, 'daily_summary_focus_trace', 'error', 'Daily summary focus generation failed', {
+      traceId,
+      promptTemplateId,
+      parseStatus: 'runtime_error',
+      error: String(error?.message || error || 'unknown'),
+      latencyMs: Date.now() - startedAtMs,
+    });
     return buildHeuristicFocus(summaryData, 'AI focus generation failed; showing heuristic priorities.');
   }
 }
@@ -10578,8 +12496,19 @@ function assembleDailyChecklist(summaryData) {
     const beforeStatus = Number(before?.status ?? null);
     const afterStatus = Number(after?.status ?? null);
 
+    // Canonicalize explicit task type values (e.g., "Habit" -> "habit")
+    const rawType = String(after?.type ?? patch?.type ?? '').trim().toLowerCase();
+    const canonicalType = rawType === 'habitual' ? 'habit' : rawType;
+    const supportedTaskTypes = new Set(['task', 'read', 'watch', 'chore', 'routine', 'habit']);
+    if (canonicalType && supportedTaskTypes.has(canonicalType)) {
+      if (String(after?.type || '').trim() !== canonicalType) {
+        patch.type = canonicalType;
+        needsPatch = true;
+      }
+    }
+
     // One-time type inference if missing
-    if (!after?.type) {
+    if (!canonicalType) {
       const inferred = inferTaskType(after);
       if (inferred) { patch.type = inferred; patch.typeInferredAt = admin.firestore.FieldValue.serverTimestamp(); needsPatch = true; }
     }
@@ -10589,7 +12518,7 @@ function assembleDailyChecklist(summaryData) {
     if (changed) { Object.assign(patch, norm); needsPatch = true; }
 
     // Enforce chores theme for chore-type tasks
-    const effectiveType = String(after?.type || patch?.type || '').toLowerCase();
+    const effectiveType = String(patch?.type || after?.type || '').toLowerCase();
     const isChoreLike = effectiveType === 'chore' || effectiveType === 'routine' || effectiveType === 'habit';
     const effectiveTask = { ...(after || {}), ...(patch || {}), type: effectiveType };
     const isRecurringChore = isRecurringChoreTask(effectiveTask);
@@ -10615,18 +12544,42 @@ function assembleDailyChecklist(summaryData) {
       }
     }
 
+    // Time of Day normalization — keep timeOfDay in sync with dueTime and content
+    const beforeDueTime = before?.dueTime ? String(before.dueTime).trim() : null;
+    const afterDueTime = after?.dueTime ? String(after.dueTime).trim() : null;
+    if (afterDueTime && afterDueTime !== beforeDueTime) {
+      // dueTime changed — derive timeOfDay from it (aligned with timeOfDayPopulator buckets)
+      const hour = parseInt(afterDueTime.split(':')[0] || '0', 10);
+      let newTod;
+      if (hour >= 5 && hour < 13) newTod = 'morning';
+      else if (hour >= 13 && hour < 19) newTod = 'afternoon';
+      else newTod = 'evening'; // 19:00–04:59
+
+      if (after?.timeOfDay !== newTod) {
+        patch.timeOfDay = newTod;
+        needsPatch = true;
+      }
+    } else if (!afterDueTime && !after?.timeOfDay) {
+      // No dueTime and no timeOfDay — infer from title/description via keywords
+      const inferred = inferTimeOfDayFromContent(after?.title || '', after?.description || '');
+      if (inferred) {
+        patch.timeOfDay = inferred;
+        needsPatch = true;
+      }
+    }
+
     if (needsPatch) {
       // Avoid infinite loops: keep patch minimal and idempotent
       await ref.set(patch, { merge: true });
     }
 
-    // Materialize chore/routine calendar blocks for next 14 days (active only)
+    // Materialize chore/routine calendar blocks for next 28 days (active only)
     const type = effectiveType;
     const effectiveStatus = Number(patch?.status ?? afterStatus);
     const active = Number(effectiveStatus) !== 2;
     if (isChoreLike && active) {
       const task = { id, ...(after || {}), ...(patch || {}) };
-      await upsertChoreBlocksForTask(db, task, 14);
+      await upsertChoreBlocksForTask(db, task, 28);
     }
 
     // If just completed, mark nearest block done and update lastDoneAt
@@ -10640,6 +12593,68 @@ function assembleDailyChecklist(summaryData) {
         await blockRef.set({ status: 'done', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
       }
       await ref.set({ lastDoneAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    }
+
+    // Auto-enhance new tasks: spell-check title, estimate points, score
+    if (!before && after && !isChoreLike && after.ownerUid) {
+      try {
+        const uid = after.ownerUid;
+        const enhanceTask = async () => {
+          const system = 'You are a task management assistant. Return compact JSON only.';
+          const user = [
+            'Given this task title and description, do three things:',
+            '1. Fix any spelling/grammar errors in the title (keep it concise)',
+            '2. Estimate effort points as a number (decimals allowed in 0.25 increments, range 0.25-8)',
+            '3. Infer a good time of day to do this. Return "morning", "afternoon", "evening", or null.',
+            '',
+            `Title: "${after.title || ''}"`,
+            `Description: "${(after.description || '').slice(0, 400)}"`,
+            '',
+            'Respond as: {"correctedTitle": "string", "points": number, "timeOfDay": "string|null"}',
+          ].join('\n');
+          const text = await callLLMJson({ system, user, purpose: 'enhanceNewTask', userId: uid, expectJson: true, temperature: 0.1 });
+          const obj = JSON.parse(text || '{}');
+          const enhancePatch = {};
+
+          if (obj.correctedTitle && typeof obj.correctedTitle === 'string' && obj.correctedTitle.trim() !== (after.title || '').trim()) {
+            enhancePatch.title = obj.correctedTitle.trim().slice(0, 200);
+            enhancePatch.titleCorrectedByAi = true;
+          }
+          const normalizedEnhancePoints = clampTaskPoints(obj.points);
+          if (normalizedEnhancePoints != null && !(Number(after.points) > 0)) {
+            enhancePatch.points = normalizedEnhancePoints;
+            enhancePatch.pointsEstimatedByAi = true;
+          }
+
+          if (obj.timeOfDay && !after.timeOfDay && !after.dueTime && ['morning', 'afternoon', 'evening'].includes(obj.timeOfDay)) {
+            enhancePatch.timeOfDay = obj.timeOfDay;
+            enhancePatch.timeOfDayInferredByAi = true;
+            try {
+              const activityRef = admin.firestore().collection('activity_stream').doc();
+              await activityRef.set({
+                id: activityRef.id,
+                entityType: 'task',
+                entityId: id,
+                activityType: 'ai_time_inference',
+                description: `AI inferred time of day: ${obj.timeOfDay}`,
+                timestamp: admin.firestore.FieldValue.serverTimestamp(),
+                ownerUid: uid,
+              });
+            } catch (e) {
+              console.warn('[onTaskWriteNormalize] could not add activity log', e?.message);
+            }
+          }
+
+          if (Object.keys(enhancePatch).length > 0) {
+            enhancePatch.updatedAt = admin.firestore.FieldValue.serverTimestamp();
+            await ref.set(enhancePatch, { merge: true });
+          }
+        };
+        // Fire and don't await to avoid slowing down the trigger
+        enhanceTask().catch((e) => console.warn('[onTaskWriteNormalize] auto-enhance failed', e?.message || e));
+      } catch (e) {
+        console.warn('[onTaskWriteNormalize] auto-enhance setup failed', e?.message || e);
+      }
     }
   });
 
@@ -10692,7 +12707,7 @@ function assembleDailyChecklist(summaryData) {
       const snap = await db.collection('tasks').where('type', '==', t).where('status', '==', 0).get();
       for (const doc of snap.docs) {
         scanned++;
-        const res = await upsertChoreBlocksForTask(db, { id: doc.id, ...(doc.data() || {}) }, 14);
+        const res = await upsertChoreBlocksForTask(db, { id: doc.id, ...(doc.data() || {}) }, 28);
         created += res.created; updated += res.updated;
       }
     }
@@ -10867,39 +12882,131 @@ async function buildDailyChecklistBriefing({ summaryData, checklist, userId }) {
 }
 
 // ===== Strava Helpers
+const STRAVA_RETRYABLE_STATUS = new Set([408, 409, 425, 429, 500, 502, 503, 504]);
+const sleepMs = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function isStravaAuthError(error) {
+  const msg = String(error?.message || '').toLowerCase();
+  const body = String(error?.body || '').toLowerCase();
+  const status = Number(error?.status || 0);
+  if (status === 401 || status === 403) return true;
+  if (msg.includes('invalid_grant')) return true;
+  if (body.includes('invalid_grant')) return true;
+  if (msg.includes('authorization error')) return true;
+  if (msg.includes('unauthorized')) return true;
+  return false;
+}
+
+function toMillisSafe(value) {
+  if (!value) return null;
+  if (typeof value === 'number') return value > 1e12 ? value : value * 1000;
+  if (typeof value?.toMillis === 'function') return value.toMillis();
+  if (typeof value?.toDate === 'function') {
+    try { return value.toDate().getTime(); } catch { return null; }
+  }
+  const parsed = Date.parse(String(value));
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+async function updateStravaSyncState(uid, patch = {}) {
+  if (!uid) return;
+  const db = admin.firestore();
+  await db.collection('profiles').doc(uid).set({
+    ...patch,
+    stravaUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+}
+
+async function fetchStravaJson(url, opts = {}, {
+  retries = 2,
+  baseDelayMs = 550,
+} = {}) {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await fetchJson(url, opts);
+    } catch (error) {
+      const status = Number(error?.status || 0);
+      const msg = String(error?.message || '').toLowerCase();
+      const networkish = msg.includes('fetch failed') || msg.includes('network') || msg.includes('econn') || msg.includes('etimedout');
+      const retryable = STRAVA_RETRYABLE_STATUS.has(status) || networkish;
+      if (!retryable || attempt >= retries) throw error;
+      const jitter = Math.floor(Math.random() * 250);
+      const delay = Math.min(8000, Math.round(baseDelayMs * (2 ** attempt)) + jitter);
+      await sleepMs(delay);
+      attempt += 1;
+    }
+  }
+}
+
 async function getStravaTokenDoc(uid) {
   const db = admin.firestore();
   const snap = await db.collection('tokens').doc(`${uid}_strava`).get();
   return snap.exists ? { id: snap.id, ...snap.data() } : null;
 }
 
-async function getStravaAccessToken(uid) {
+async function refreshStravaAccessToken(uid, tokenDoc = null) {
   const db = admin.firestore();
-  const doc = await getStravaTokenDoc(uid);
+  const doc = tokenDoc || await getStravaTokenDoc(uid);
   if (!doc) throw new Error('Strava not connected for this user');
-  const nowSec = Math.floor(Date.now() / 1000);
-  if (doc.access_token && doc.expires_at && doc.expires_at > nowSec + 60) {
-    return doc.access_token;
+  if (!doc.refresh_token) {
+    await updateStravaSyncState(uid, {
+      stravaLastSyncStatus: 'error',
+      stravaNeedsReconnect: true,
+      stravaLastErrorAt: admin.firestore.FieldValue.serverTimestamp(),
+      stravaLastErrorMessage: 'Missing Strava refresh token. Reconnect Strava.',
+    });
+    throw new Error('Missing Strava refresh token. Reconnect Strava in Integrations.');
   }
   // Refresh token
-  const refreshed = await fetchJson("https://www.strava.com/oauth/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      client_id: process.env.STRAVA_CLIENT_ID,
-      client_secret: process.env.STRAVA_CLIENT_SECRET,
-      grant_type: "refresh_token",
-      refresh_token: doc.refresh_token,
-    }).toString(),
-  });
+  let refreshed;
+  try {
+    const clientId = envTrim('STRAVA_CLIENT_ID');
+    const clientSecret = envTrim('STRAVA_CLIENT_SECRET');
+    if (!clientId || !clientSecret) {
+      throw new Error('Missing STRAVA_CLIENT_ID/STRAVA_CLIENT_SECRET secret');
+    }
+    refreshed = await fetchStravaJson("https://www.strava.com/oauth/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: clientId,
+        client_secret: clientSecret,
+        grant_type: "refresh_token",
+        refresh_token: doc.refresh_token,
+      }).toString(),
+    }, { retries: 1 });
+  } catch (error) {
+    const authError = isStravaAuthError(error);
+    await updateStravaSyncState(uid, {
+      stravaLastSyncStatus: 'error',
+      stravaNeedsReconnect: authError || !!doc.refresh_token,
+      stravaLastErrorAt: admin.firestore.FieldValue.serverTimestamp(),
+      stravaLastErrorMessage: authError
+        ? 'Strava authorization expired. Reconnect Strava.'
+        : (error?.message || 'Failed to refresh Strava token'),
+    });
+    throw error;
+  }
   const tokenRef = db.collection('tokens').doc(`${uid}_strava`);
   await tokenRef.set({
     access_token: refreshed.access_token,
     refresh_token: refreshed.refresh_token || doc.refresh_token,
     expires_at: refreshed.expires_at,
+    scope: refreshed.scope || doc.scope || null,
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   }, { merge: true });
   return refreshed.access_token;
+}
+
+async function getStravaAccessToken(uid, { forceRefresh = false } = {}) {
+  const doc = await getStravaTokenDoc(uid);
+  if (!doc) throw new Error('Strava not connected for this user');
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (!forceRefresh && doc.access_token && doc.expires_at && doc.expires_at > nowSec + 60) {
+    return doc.access_token;
+  }
+  return refreshStravaAccessToken(uid, doc);
 }
 
 async function upsertWorkout(uid, activity) {
@@ -10907,24 +13014,39 @@ async function upsertWorkout(uid, activity) {
   const activityId = String(activity.id);
   const docId = `${uid}_${activityId}`;
   const ref = db.collection('metrics_workouts').doc(docId);
+  const startIsoRaw = activity.start_date || activity.start_date_local || null;
+  const startDateMs = startIsoRaw ? Date.parse(startIsoRaw) : Date.now();
+  const activityType = String(activity.type || activity.sport_type || '').trim();
+  const lowerType = activityType.toLowerCase();
+  const isRun = ['run', 'virtualrun', 'trailrun'].includes(lowerType)
+    || ['run', 'virtualrun', 'trailrun'].includes(String(activity.sport_type || '').toLowerCase());
+  const perceivedExertion = activity.perceived_exertion ?? activity.perceivedExertion ?? activity.rpe ?? null;
   const payload = {
     id: docId,
     ownerUid: uid,
     provider: 'strava',
     stravaActivityId: activityId,
     name: activity.name,
-    type: activity.type,
-    startDate: new Date(activity.start_date).getTime(),
-    utcStartDate: new Date(activity.start_date).toISOString(),
+    type: activity.type || null,
+    sportType: activity.sport_type || null,
+    run: isRun,
+    startDate: Number.isFinite(startDateMs) ? startDateMs : Date.now(),
+    utcStartDate: startIsoRaw ? new Date(startDateMs).toISOString() : null,
     distance_m: activity.distance || null,
     movingTime_s: activity.moving_time || null,
     elapsedTime_s: activity.elapsed_time || null,
     elevationGain_m: activity.total_elevation_gain || null,
     averageSpeed_mps: activity.average_speed || null,
     maxSpeed_mps: activity.max_speed || null,
+    averageCadence: activity.average_cadence || null,
+    averageWatts: activity.average_watts || null,
+    weightedAverageWatts: activity.weighted_average_watts || null,
+    kilojoules: activity.kilojoules || null,
     avgHeartrate: activity.average_heartrate || null,
     maxHeartrate: activity.max_heartrate || null,
     hasHeartrate: !!(activity.has_heartrate || activity.average_heartrate || activity.max_heartrate),
+    perceivedExertion: perceivedExertion != null ? Number(perceivedExertion) : null,
+    sufferScore: activity.suffer_score != null ? Number(activity.suffer_score) : null,
     calories: activity.calories || null,
     commute: activity.commute || false,
     gearId: activity.gear_id || null,
@@ -10940,30 +13062,144 @@ async function upsertWorkout(uid, activity) {
   return docId;
 }
 
-async function fetchStravaActivities(uid, { afterSec = null, perPage = 100, maxPages = 3 } = {}) {
-  const accessToken = await getStravaAccessToken(uid);
+function normalizeEpochSec(value) {
+  if (value == null || value === '') return null;
+  const raw = Number(value);
+  if (!Number.isFinite(raw) || raw <= 0) return null;
+  return raw > 1e12 ? Math.floor(raw / 1000) : Math.floor(raw);
+}
+
+async function fetchStravaActivities(uid, {
+  afterSec = null,
+  beforeSec = null,
+  perPage = 100,
+  maxPages = 3,
+} = {}) {
+  const db = admin.firestore();
+  const normalizedBeforeSec = normalizeEpochSec(beforeSec);
+  let resolvedAfterSec = normalizeEpochSec(afterSec);
+  if (!resolvedAfterSec && !normalizedBeforeSec) {
+    try {
+      const profileSnap = await db.collection('profiles').doc(uid).get();
+      const profile = profileSnap.exists ? (profileSnap.data() || {}) : {};
+      const lastSyncMs = toMillisSafe(profile.stravaLastSyncAt);
+      if (lastSyncMs) {
+        // Back off two days to avoid gaps caused by timezone conversions / delayed webhooks.
+        resolvedAfterSec = Math.floor((lastSyncMs - (2 * 24 * 60 * 60 * 1000)) / 1000);
+      }
+    } catch {
+      resolvedAfterSec = afterSec;
+    }
+  }
+
+  let accessToken = await getStravaAccessToken(uid);
   let page = 1;
   let total = 0;
+  let requests = 0;
   let lastDocId = null;
-  while (page <= maxPages) {
-    const params = new URLSearchParams({
-      per_page: String(perPage),
-      page: String(page),
-    });
-    if (afterSec) params.append('after', String(afterSec));
-    const url = `https://www.strava.com/api/v3/athlete/activities?${params.toString()}`;
-    const rows = await fetchJson(url, { headers: { Authorization: `Bearer ${accessToken}` } });
-    if (!Array.isArray(rows) || rows.length === 0) break;
-    for (const act of rows) {
-      lastDocId = await upsertWorkout(uid, act);
-      total += 1;
+  let oldestStartSec = null;
+  let newestStartSec = null;
+  let nextBeforeSec = normalizedBeforeSec;
+  let hasMore = false;
+  let refreshedAfterAuthFailure = false;
+  try {
+    while (requests < maxPages) {
+      const params = new URLSearchParams({ per_page: String(perPage) });
+      if (normalizedBeforeSec) {
+        params.append('page', '1');
+      } else {
+        params.append('page', String(page));
+      }
+      if (resolvedAfterSec) params.append('after', String(resolvedAfterSec));
+      if (nextBeforeSec) params.append('before', String(nextBeforeSec));
+      const url = `https://www.strava.com/api/v3/athlete/activities?${params.toString()}`;
+      let rows = null;
+      try {
+        rows = await fetchStravaJson(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+      } catch (error) {
+        if (isStravaAuthError(error) && !refreshedAfterAuthFailure) {
+          accessToken = await getStravaAccessToken(uid, { forceRefresh: true });
+          refreshedAfterAuthFailure = true;
+          continue;
+        }
+        throw error;
+      }
+      refreshedAfterAuthFailure = false;
+      if (!Array.isArray(rows) || rows.length === 0) break;
+      requests += 1;
+      let pageOldestSec = null;
+      let pageNewestSec = null;
+      for (const act of rows) {
+        lastDocId = await upsertWorkout(uid, act);
+        total += 1;
+        const startSec = normalizeEpochSec(act?.start_date ? Date.parse(act.start_date) : null);
+        if (startSec != null) {
+          if (pageOldestSec == null || startSec < pageOldestSec) pageOldestSec = startSec;
+          if (pageNewestSec == null || startSec > pageNewestSec) pageNewestSec = startSec;
+        }
+      }
+      if (pageOldestSec != null && (oldestStartSec == null || pageOldestSec < oldestStartSec)) oldestStartSec = pageOldestSec;
+      if (pageNewestSec != null && (newestStartSec == null || pageNewestSec > newestStartSec)) newestStartSec = pageNewestSec;
+      if (rows.length < perPage) {
+        hasMore = false;
+        break;
+      }
+      hasMore = true;
+      if (normalizedBeforeSec) {
+        if (pageOldestSec == null) {
+          hasMore = false;
+          break;
+        }
+        const candidateBefore = Math.max(1, pageOldestSec - 1);
+        if (nextBeforeSec != null && candidateBefore >= nextBeforeSec) {
+          hasMore = false;
+          break;
+        }
+        nextBeforeSec = candidateBefore;
+      } else {
+        page += 1;
+      }
     }
-    if (rows.length < perPage) break;
-    page += 1;
+  } catch (error) {
+    const authError = isStravaAuthError(error);
+    await updateStravaSyncState(uid, {
+      stravaLastSyncStatus: 'error',
+      stravaNeedsReconnect: authError,
+      stravaLastErrorAt: admin.firestore.FieldValue.serverTimestamp(),
+      stravaLastErrorMessage: authError
+        ? 'Strava authorization expired. Reconnect Strava.'
+        : (error?.message || 'Strava sync failed'),
+    });
+    throw error;
   }
-  const db = admin.firestore();
-  await db.collection('profiles').doc(uid).set({ stravaLastSyncAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-  return { ok: true, imported: total, lastDocId };
+
+  await updateStravaSyncState(uid, {
+    stravaLastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
+    stravaLastSyncStatus: 'success',
+    stravaNeedsReconnect: false,
+    stravaLastImportCount: total,
+    stravaLastAfterSec: resolvedAfterSec || null,
+    stravaLastBeforeSec: normalizedBeforeSec || null,
+    stravaLastOldestStartSec: oldestStartSec || null,
+    stravaLastNewestStartSec: newestStartSec || null,
+    stravaLastHasMore: hasMore,
+    stravaLastNextBeforeSec: hasMore ? nextBeforeSec : null,
+    stravaLastErrorAt: admin.firestore.FieldValue.delete(),
+    stravaLastErrorMessage: admin.firestore.FieldValue.delete(),
+  });
+
+  return {
+    ok: true,
+    imported: total,
+    lastDocId,
+    afterSec: resolvedAfterSec || null,
+    beforeSec: normalizedBeforeSec || null,
+    oldestStartSec: oldestStartSec || null,
+    newestStartSec: newestStartSec || null,
+    hasMore,
+    nextBeforeSec: hasMore ? nextBeforeSec : null,
+    requests,
+  };
 }
 
 // Callable to sync Strava activities
@@ -10971,22 +13207,104 @@ exports.syncStrava = httpsV2.onCall({ secrets: [STRAVA_CLIENT_ID, STRAVA_CLIENT_
   if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
   const uid = req.auth.uid;
   const after = req.data?.after || null; // ms or sec accepted
-  let afterSec = null;
-  if (after) {
-    afterSec = (String(after).length > 10) ? Math.floor(Number(after) / 1000) : Number(after);
+  const before = req.data?.before || null; // ms or sec accepted
+  const fullHistory = req.data?.fullHistory === true;
+  const perPage = Math.max(1, Math.min(Number(req.data?.perPage || (fullHistory ? 200 : 100)), 200));
+  const maxPages = Math.max(1, Math.min(Number(req.data?.maxPages || (fullHistory ? 12 : 5)), fullHistory ? 30 : 20));
+  let afterSec = normalizeEpochSec(after);
+  let beforeSec = normalizeEpochSec(before);
+
+  const profileRef = admin.firestore().collection('profiles').doc(uid);
+  const profileSnap = await profileRef.get().catch(() => null);
+  const profile = profileSnap?.exists ? (profileSnap.data() || {}) : {};
+  if (fullHistory) {
+    afterSec = null;
+    if (!beforeSec) {
+      const persisted = normalizeEpochSec(profile.stravaBackfillBeforeSec);
+      beforeSec = persisted || Math.floor(Date.now() / 1000);
+    }
   }
-  console.log('[syncStrava] uid', uid, 'after', after, 'afterSec', afterSec);
+
+  console.log('[syncStrava] uid', uid, 'after', after, 'afterSec', afterSec, 'before', before, 'beforeSec', beforeSec, 'fullHistory', fullHistory, 'perPage', perPage, 'maxPages', maxPages);
   try {
-    const result = await fetchStravaActivities(uid, { afterSec });
+    const result = await fetchStravaActivities(uid, { afterSec, beforeSec, perPage, maxPages });
+    const hasMoreHistory = fullHistory && !!result?.hasMore && !!result?.nextBeforeSec;
+    const backfillStatePatch = fullHistory
+      ? {
+        stravaBackfillActive: hasMoreHistory,
+        stravaBackfillCompleted: !hasMoreHistory,
+        stravaBackfillBeforeSec: hasMoreHistory ? result.nextBeforeSec : admin.firestore.FieldValue.delete(),
+        stravaBackfillCompletedAt: hasMoreHistory
+          ? admin.firestore.FieldValue.delete()
+          : admin.firestore.FieldValue.serverTimestamp(),
+        stravaBackfillLastImported: Number(result?.imported || 0),
+        stravaBackfillUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }
+      : null;
+    if (backfillStatePatch) {
+      await profileRef.set(backfillStatePatch, { merge: true });
+    }
+
+    let matchedParkruns = 0;
+    if (!fullHistory || !hasMoreHistory) {
+      try {
+        const matched = await reconcileParkrunToStrava(uid, { maxStrava: 600 });
+        matchedParkruns = Number(matched?.matched || 0);
+      } catch (error) {
+        console.warn('[syncStrava] Parkrun reconciliation failed (non-fatal):', error?.message || error);
+      }
+    }
+
+    if (!fullHistory || !hasMoreHistory) {
+      try {
+        if (profile.autoComputeFitnessMetrics !== false) {
+          const overview = await _getFitnessOverview(uid, 90);
+          await admin.firestore().collection('fitness_overview').doc(uid)
+            .set({ ...overview, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+          const analysis = await _getRunFitnessAnalysis(uid, 365);
+          await admin.firestore().collection('run_analysis').doc(uid)
+            .set({ ...analysis, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+          await computeGoalFitnessKpisForUser(uid, { persist: true });
+        }
+      } catch (error) {
+        console.warn('[syncStrava] Post-sync fitness aggregation failed (non-fatal):', error?.message || error);
+      }
+    }
     await recordIntegrationLog(uid, 'strava', 'success', 'Strava sync completed', {
       imported: result?.imported || 0,
       after: afterSec,
+      before: beforeSec,
+      fullHistory,
+      hasMoreHistory,
+      nextBeforeSec: result?.nextBeforeSec || null,
+      matchedParkruns,
     });
-    return result;
+    return {
+      ...result,
+      matchedParkruns,
+      fullHistory,
+      hasMoreHistory,
+      nextBeforeSec: result?.nextBeforeSec || null,
+      backfillComplete: fullHistory ? !hasMoreHistory : null,
+    };
   } catch (error) {
+    const authError = isStravaAuthError(error);
+    await updateStravaSyncState(uid, {
+      stravaLastSyncStatus: 'error',
+      stravaNeedsReconnect: authError,
+      stravaLastErrorAt: admin.firestore.FieldValue.serverTimestamp(),
+      stravaLastErrorMessage: authError
+        ? 'Strava authorization expired. Reconnect Strava.'
+        : (error?.message || 'Strava sync failed'),
+    });
     await recordIntegrationLog(uid, 'strava', 'error', error?.message || 'Strava sync failed', {
       after: afterSec,
+      before: beforeSec,
+      fullHistory,
     });
+    if (authError) {
+      throw new httpsV2.HttpsError('failed-precondition', 'Strava authorization expired. Reconnect Strava in Integrations.');
+    }
     if (error instanceof httpsV2.HttpsError) throw error;
     throw new httpsV2.HttpsError('internal', error?.message || 'Failed to sync Strava');
   }
@@ -11025,14 +13343,26 @@ async function enrichActivityHr(uid, activityId) {
   let streams;
   try {
     const url = `https://www.strava.com/api/v3/activities/${activityId}/streams?keys=time,heartrate&key_by_type=true`;
-    streams = await fetchJson(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+    streams = await fetchStravaJson(url, { headers: { Authorization: `Bearer ${accessToken}` } }, { retries: 1 });
   } catch (e) {
-    // If fails (permissions), skip quietly
+    // If stream fetch fails (permissions/private activity), mark once and skip future retries.
+    await ref.set({
+      hrZonesUnavailable: true,
+      hrZonesUnavailableReason: 'no_streams',
+      hrZonesUnavailableAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
     return { ok: false, reason: 'no_streams' };
   }
   const hr = Array.isArray(streams?.heartrate?.data) ? streams.heartrate.data : null;
   const tm = Array.isArray(streams?.time?.data) ? streams.time.data : null;
-  if (!hr || !tm || hr.length === 0) return { ok: false, reason: 'empty_stream' };
+  if (!hr || !tm || hr.length === 0) {
+    await ref.set({
+      hrZonesUnavailable: true,
+      hrZonesUnavailableReason: 'empty_stream',
+      hrZonesUnavailableAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+    return { ok: false, reason: 'empty_stream' };
+  }
 
   const maxHr = await getUserMaxHr(uid);
   const zones = hrZonesFromMax(maxHr);
@@ -11047,34 +13377,77 @@ async function enrichActivityHr(uid, activityId) {
     else if (zIdx === 3) totals.z4Time_s += dt;
     else totals.z5Time_s += dt;
   }
-  await ref.set({ hrZones: totals, maxHrUsed: maxHr }, { merge: true });
+  const patch = {
+    hrZones: totals,
+    maxHrUsed: maxHr,
+    hrZonesUnavailable: admin.firestore.FieldValue.delete(),
+    hrZonesUnavailableReason: admin.firestore.FieldValue.delete(),
+    hrZonesUnavailableAt: admin.firestore.FieldValue.delete(),
+  };
+  if (data.perceivedExertion == null || data.sufferScore == null) {
+    try {
+      const detail = await fetchStravaJson(`https://www.strava.com/api/v3/activities/${activityId}`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      }, { retries: 1 });
+      const perceived = detail?.perceived_exertion ?? detail?.perceivedExertion ?? null;
+      if (patch.perceivedExertion == null && perceived != null) patch.perceivedExertion = Number(perceived);
+      if (patch.sufferScore == null && detail?.suffer_score != null) patch.sufferScore = Number(detail.suffer_score);
+    } catch {
+      // Non-fatal: details endpoint can be unavailable for some activities.
+    }
+  }
+  await ref.set(patch, { merge: true });
   return { ok: true, hrZones: totals };
 }
 
-// Enrich recent Strava runs with HR zone breakdown
-exports.enrichStravaHR = httpsV2.onCall({ secrets: [STRAVA_CLIENT_ID, STRAVA_CLIENT_SECRET] }, async (req) => {
-  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
-  const uid = req.auth.uid;
-  const days = Math.min(Number(req.data?.days || 30), 365);
-  console.log('[enrichStravaHR] uid', uid, 'days', days);
-  const since = Date.now() - days * 24 * 60 * 60 * 1000;
+async function enrichRecentStravaHr(uid, days = 30, options = {}) {
+  const force = options?.force === true;
+  const maxActivities = Math.min(Math.max(Number(options?.maxActivities || 120), 1), 500);
+  const safeDays = Math.min(Number(days || 30), 3650);
+  console.log('[enrichStravaHR] uid', uid, 'days', safeDays, 'force', force, 'maxActivities', maxActivities);
+  const since = Date.now() - safeDays * 24 * 60 * 60 * 1000;
   const db = admin.firestore();
   const q = await db.collection('metrics_workouts')
     .where('ownerUid', '==', uid)
     .where('provider', '==', 'strava')
     .get();
-  let enriched = 0, scanned = 0;
-  for (const d of q.docs) {
+  const docs = q.docs.slice().sort((a, b) => {
+    const ad = Number(a.data()?.startDate || 0);
+    const bd = Number(b.data()?.startDate || 0);
+    return bd - ad;
+  });
+  let enriched = 0;
+  let scanned = 0;
+  let eligible = 0;
+  let skippedExisting = 0;
+  for (const d of docs) {
     const w = d.data();
     if ((w.startDate || 0) < since) continue;
     if (!w.hasHeartrate && !w.avgHeartrate) continue;
+    eligible++;
+    if (!force && (w.hrZones || w.hrZonesUnavailable === true)) {
+      skippedExisting++;
+      continue;
+    }
+    if (scanned >= maxActivities) break;
     scanned++;
     const actId = String(w.stravaActivityId || '').trim();
     if (!actId) continue;
     const r = await enrichActivityHr(uid, actId).catch(() => null);
     if (r?.ok) enriched++;
   }
-  return { ok: true, enriched, scanned };
+  const remaining = Math.max(0, eligible - skippedExisting - scanned);
+  return { ok: true, enriched, scanned, eligible, skippedExisting, remaining };
+}
+
+// Enrich recent Strava runs with HR zone breakdown
+exports.enrichStravaHR = httpsV2.onCall({ secrets: [STRAVA_CLIENT_ID, STRAVA_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const days = Math.min(Number(req.data?.days || 30), 3650);
+  const force = req.data?.force === true;
+  const maxActivities = Math.min(Math.max(Number(req.data?.maxActivities || 120), 1), 500);
+  return enrichRecentStravaHr(uid, days, { force, maxActivities });
 });
 
 // Strava Webhook endpoint (verification + events)
@@ -11085,7 +13458,7 @@ exports.stravaWebhook = httpsV2.onRequest({ secrets: [STRAVA_WEBHOOK_VERIFY_TOKE
       const token = req.query['hub.verify_token'];
       const challenge = req.query['hub.challenge'];
       if (mode !== 'subscribe') return res.status(400).send('Invalid mode');
-      if (String(token) !== String(process.env.STRAVA_WEBHOOK_VERIFY_TOKEN)) return res.status(403).send('Invalid verify token');
+      if (String(token) !== envTrim('STRAVA_WEBHOOK_VERIFY_TOKEN')) return res.status(403).send('Invalid verify token');
       return res.status(200).json({ 'hub.challenge': challenge });
     }
     if (req.method === 'POST') {
@@ -11102,7 +13475,7 @@ exports.stravaWebhook = httpsV2.onRequest({ secrets: [STRAVA_WEBHOOK_VERIFY_TOKE
             // Fetch single activity details
             try {
               const accessToken = await getStravaAccessToken(uid);
-              const act = await fetchJson(`https://www.strava.com/api/v3/activities/${body.object_id}`, { headers: { Authorization: `Bearer ${accessToken}` } });
+              const act = await fetchStravaJson(`https://www.strava.com/api/v3/activities/${body.object_id}`, { headers: { Authorization: `Bearer ${accessToken}` } }, { retries: 1 });
               await upsertWorkout(uid, act);
             } catch (e) {
               console.error('Failed to upsert Strava activity from webhook:', e);
@@ -11141,6 +13514,13 @@ async function getAccessToken(uid) {
     }).toString(),
   });
   return token.access_token;
+}
+
+function parseGoogleDocIdFromUrl(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const match = raw.match(/\/document\/d\/([a-zA-Z0-9_-]+)/);
+  return match ? match[1] : null;
 }
 
 async function getYouTubeTokenDoc(uid) {
@@ -11230,91 +13610,1167 @@ exports.disconnectGoogle = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GO
   return { ok: true };
 });
 
-async function _syncParkrunInternal(uid, athleteId, countryBaseUrl) {
-  const base = countryBaseUrl || 'https://www.parkrun.org.uk';
-  const url = `${base}/results/athleteeventresultshistory/?athleteNumber=${encodeURIComponent(athleteId)}&eventNumber=0`;
-  const html = await (await fetch(url)).text();
-  const cheerio = require('cheerio');
-  const $ = cheerio.load(html);
-  let rows = [];
-  $('table#results tbody tr').each((_, el) => rows.push(el));
-  if (rows.length === 0) {
-    $('table tbody tr').each((_, el) => rows.push(el));
-  }
-  const db = admin.firestore();
-  let imported = 0;
-  const slugify = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+function getParkrunTokenDocId(uid) {
+  return `${uid}_parkrun`;
+}
 
-  async function getParticipantsFromResultUrl(href) {
-    if (!href) return { participants: null, resultUrl: null, runSeq: null };
-    let full = href.startsWith('http') ? href : (href.startsWith('/') ? `https://www.parkrun.org.uk${href}` : `${base}/${href}`);
-    try {
-      const page = await (await fetch(full)).text();
-      const $p = cheerio.load(page);
-      const count = $p('table#results tbody tr').length;
-      const m = full.match(/\/results\/(\d+)/);
-      const runSeq = m ? Number(m[1]) : null;
-      return { participants: count || null, resultUrl: full, runSeq };
-    } catch { return { participants: null, resultUrl: null, runSeq: null }; }
+function formatFormBody(payload = {}) {
+  const params = new URLSearchParams();
+  Object.entries(payload || {}).forEach(([key, value]) => {
+    if (value == null) return;
+    const text = String(value).trim();
+    if (!text) return;
+    params.set(key, text);
+  });
+  return params.toString();
+}
+
+async function fetchParkrunApiJson(path, {
+  method = 'GET',
+  query = {},
+  form = null,
+  useBasicAuth = false,
+} = {}) {
+  const qs = new URLSearchParams();
+  Object.entries(query || {}).forEach(([key, value]) => {
+    if (value == null) return;
+    const text = String(value).trim();
+    if (!text) return;
+    qs.set(key, text);
+  });
+  const url = `${PARKRUN_API_BASE}${path}${qs.toString() ? `?${qs.toString()}` : ''}`;
+  const headers = {
+    'Accept': 'application/json',
+    'User-Agent': PARKRUN_API_USER_AGENT,
+  };
+  if (useBasicAuth) {
+    const basic = Buffer.from(`${PARKRUN_API_CLIENT_ID}:${PARKRUN_API_CLIENT_SECRET}`, 'utf8').toString('base64');
+    headers['Authorization'] = `Basic ${basic}`;
   }
-  for (const el of rows) {
-    const tds = $(el).find('td');
-    if (tds.length < 5) continue;
-    const dateText = $(tds[0]).text().trim();
-    const eventCell = $(tds[1]);
-    const eventText = eventCell.text().trim();
-    const eventHref = eventCell.find('a').attr('href') || '';
-    const timeText = $(tds[2]).text().trim();
-    const positionText = $(tds[3]).text().trim();
-    const ageGradeText = $(tds[4]).text().trim();
-    const ageCatText = tds.length >= 6 ? $(tds[5]).text().trim() : null;
-    if (!dateText || !eventText || !timeText) continue;
-    let dateMs = Date.parse(dateText);
-    if (isNaN(dateMs)) {
-      const m = dateText.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-      if (m) {
-        const d = new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
-        dateMs = d.getTime();
+  let body = undefined;
+  if (form) {
+    headers['Content-Type'] = 'application/x-www-form-urlencoded';
+    body = formatFormBody(form);
+  }
+
+  const res = await fetch(url, {
+    method,
+    headers,
+    body,
+    redirect: 'follow',
+  });
+  const raw = await res.text();
+  let parsed = null;
+  if (raw) {
+    try { parsed = JSON.parse(raw); } catch { parsed = null; }
+  }
+  if (!res.ok) {
+    const detail = parsed?.error?.human_message
+      || parsed?.error?.message
+      || parsed?.error_description
+      || parsed?.message
+      || raw
+      || `HTTP ${res.status}`;
+    const error = new Error(`Parkrun API ${path} failed (HTTP ${res.status}): ${detail}`);
+    error.status = res.status;
+    error.body = raw;
+    error.parsed = parsed;
+    throw error;
+  }
+  return parsed;
+}
+
+function parseParkrunTokenResponse(payload = {}) {
+  const accessToken = String(payload?.access_token || '').trim();
+  const refreshToken = String(payload?.refresh_token || '').trim();
+  const expiresIn = Number(payload?.expires_in || 0) || 0;
+  const scope = String(payload?.scope || 'app').trim() || 'app';
+  const tokenType = String(payload?.token_type || 'bearer').trim() || 'bearer';
+  if (!accessToken) throw new Error('Parkrun API auth missing access_token');
+  return {
+    accessToken,
+    refreshToken: refreshToken || null,
+    scope,
+    tokenType,
+    expiresAt: Math.floor(Date.now() / 1000) + Math.max(0, expiresIn),
+    expiresIn,
+  };
+}
+
+async function authenticateParkrunApiUser(username, password) {
+  const id = String(username || '').trim();
+  const secret = String(password || '');
+  if (!id || !secret) throw new Error('Parkrun username/password required');
+  const payload = await fetchParkrunApiJson('/user_auth.php', {
+    method: 'POST',
+    useBasicAuth: true,
+    form: {
+      username: id,
+      password: secret,
+      scope: 'app',
+      grant_type: 'password',
+    },
+  });
+  return parseParkrunTokenResponse(payload || {});
+}
+
+async function refreshParkrunApiToken(refreshToken) {
+  const token = String(refreshToken || '').trim();
+  if (!token) throw new Error('Parkrun refresh token missing');
+  const payload = await fetchParkrunApiJson('/auth/refresh', {
+    method: 'POST',
+    useBasicAuth: true,
+    form: {
+      refresh_token: token,
+      grant_type: 'refresh_token',
+    },
+  });
+  const parsed = parseParkrunTokenResponse(payload || {});
+  if (!parsed.refreshToken) parsed.refreshToken = token;
+  return parsed;
+}
+
+async function resolveParkrunAthleteIdFromApi(accessToken) {
+  if (!accessToken) return null;
+  try {
+    const me = await fetchParkrunApiJson('/v1/me', {
+      query: {
+        access_token: accessToken,
+        scope: 'app',
+        expandedDetails: true,
+      },
+    });
+    const athleteRaw = me?.data?.Athletes?.[0]?.AthleteID ?? me?.data?.AthleteID ?? null;
+    const athleteId = Number(athleteRaw || 0);
+    return Number.isFinite(athleteId) && athleteId > 0 ? athleteId : null;
+  } catch {
+    return null;
+  }
+}
+
+async function saveParkrunApiToken(uid, tokenData, extras = {}) {
+  if (!uid) return;
+  const patch = {
+    provider: 'parkrun_api',
+    ownerUid: uid,
+    access_token: tokenData?.accessToken || null,
+    refresh_token: tokenData?.refreshToken || null,
+    expires_at: tokenData?.expiresAt || null,
+    scope: tokenData?.scope || 'app',
+    token_type: tokenData?.tokenType || 'bearer',
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    ...extras,
+  };
+  await admin.firestore().collection('tokens').doc(getParkrunTokenDocId(uid)).set(patch, { merge: true });
+}
+
+async function connectParkrunApiForUser(uid, { username, password, athleteIdHint = null } = {}) {
+  if (!uid) throw new Error('uid required');
+  const tokenData = await authenticateParkrunApiUser(username, password);
+  let resolvedAthleteId = Number(athleteIdHint || 0) || null;
+  if (!resolvedAthleteId) {
+    resolvedAthleteId = await resolveParkrunAthleteIdFromApi(tokenData.accessToken);
+  }
+  await saveParkrunApiToken(uid, tokenData, { username: String(username || '').trim() || null });
+
+  const profilePatch = {
+    parkrunApiConnected: true,
+    parkrunApiUsername: String(username || '').trim() || null,
+    parkrunLastErrorAt: admin.firestore.FieldValue.delete(),
+    parkrunLastErrorMessage: admin.firestore.FieldValue.delete(),
+  };
+  if (resolvedAthleteId) profilePatch.parkrunAthleteId = String(resolvedAthleteId);
+  await admin.firestore().collection('profiles').doc(uid).set(profilePatch, { merge: true });
+
+  return { tokenData, athleteId: resolvedAthleteId };
+}
+
+async function getParkrunAccessToken(uid) {
+  const tokenRef = admin.firestore().collection('tokens').doc(getParkrunTokenDocId(uid));
+  const snap = await tokenRef.get();
+  if (!snap.exists) throw new Error('Parkrun API token not found. Connect Parkrun API first.');
+  const data = snap.data() || {};
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (data.access_token && data.expires_at && Number(data.expires_at) > nowSec + 60) {
+    return String(data.access_token);
+  }
+  const refresh = String(data.refresh_token || '').trim();
+  if (!refresh) throw new Error('Parkrun refresh token missing. Reconnect Parkrun API.');
+  const refreshed = await refreshParkrunApiToken(refresh);
+  await saveParkrunApiToken(uid, refreshed, { username: data.username || null });
+  return refreshed.accessToken;
+}
+
+async function fetchParkrunAthleteResultsFromApi(uid, athleteId, { limit = 100, maxPages = 20 } = {}) {
+  const athleteIdSafe = Number(athleteId || 0);
+  if (!Number.isFinite(athleteIdSafe) || athleteIdSafe <= 0) {
+    throw new Error('Valid Parkrun athleteId is required for API sync');
+  }
+
+  let accessToken = await getParkrunAccessToken(uid);
+  const results = [];
+  let offset = 0;
+  let page = 0;
+  let refreshedOnce = false;
+
+  while (page < maxPages) {
+    let payload = null;
+    try {
+      payload = await fetchParkrunApiJson('/v1/results', {
+        query: {
+          access_token: accessToken,
+          scope: 'app',
+          expandedDetails: true,
+          athleteId: String(athleteIdSafe),
+          limit: String(limit),
+          offset: String(offset),
+        },
+      });
+    } catch (error) {
+      const status = Number(error?.status || 0);
+      if (status === 401 && !refreshedOnce) {
+        accessToken = await getParkrunAccessToken(uid);
+        refreshedOnce = true;
+        continue;
+      }
+      throw error;
+    }
+
+    const rows = Array.isArray(payload?.data?.Results) ? payload.data.Results : [];
+    if (!rows.length) break;
+    results.push(...rows);
+
+    offset += rows.length;
+    page += 1;
+    if (rows.length < limit) break;
+  }
+
+  return results;
+}
+
+exports.connectParkrunApi = httpsV2.onCall(async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const username = String(req.data?.username || '').trim();
+  const password = String(req.data?.password || '');
+  const athleteIdHint = Number(req.data?.athleteId || 0) || null;
+  if (!username || !password) {
+    throw new httpsV2.HttpsError('invalid-argument', 'username and password are required');
+  }
+  try {
+    const connected = await connectParkrunApiForUser(uid, { username, password, athleteIdHint });
+    return {
+      ok: true,
+      athleteId: connected?.athleteId || null,
+      expiresAt: connected?.tokenData?.expiresAt || null,
+    };
+  } catch (error) {
+    if (error instanceof httpsV2.HttpsError) throw error;
+    throw new httpsV2.HttpsError('internal', error?.message || 'Failed to connect Parkrun API');
+  }
+});
+
+async function _syncParkrunInternal(uid, athleteId, countryBaseUrl, options = {}) {
+  const base = String(countryBaseUrl || 'https://www.parkrun.org.uk').replace(/\/$/, '');
+  const requestHeaderCandidates = [
+    {
+      // Browser-like profile first.
+      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      'Accept-Language': 'en-GB,en;q=0.9',
+      'Cache-Control': 'no-cache',
+      'Pragma': 'no-cache',
+      'Upgrade-Insecure-Requests': '1',
+    },
+    {
+      // App-like profile as fallback when browser UA gets blocked.
+      'User-Agent': PARKRUN_API_USER_AGENT,
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'en-GB,en;q=0.9',
+      'Cache-Control': 'no-cache',
+      'Pragma': 'no-cache',
+    },
+  ];
+  const cheerio = require('cheerio');
+  const db = admin.firestore();
+  const profileSnap = await db.collection('profiles').doc(uid).get().catch(() => null);
+  const profileData = profileSnap?.exists ? (profileSnap.data() || {}) : {};
+  let imported = 0;
+
+  const slugify = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  const normalizeText = (v) => String(v || '').replace(/\s+/g, ' ').trim();
+
+  const parseNumberLoose = (value) => {
+    const n = Number(String(value || '').replace(/[^0-9.-]/g, ''));
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const parseIntLoose = (value) => {
+    const n = parseNumberLoose(value);
+    if (n == null) return null;
+    const rounded = Math.round(n);
+    return rounded > 0 ? rounded : null;
+  };
+
+  const parseBoolLoose = (value) => {
+    if (typeof value === 'boolean') return value;
+    const text = normalizeText(value).toLowerCase();
+    if (!text) return false;
+    if (['1', 'true', 'yes', 'y', 'pb'].includes(text)) return true;
+    if (['0', 'false', 'no', 'n'].includes(text)) return false;
+    const num = Number(text);
+    if (Number.isFinite(num)) return num > 0;
+    return false;
+  };
+
+  const parseDurationSeconds = (value) => {
+    const text = normalizeText(value);
+    if (!/^\d{1,2}:\d{2}(?::\d{2})?$/.test(text)) return null;
+    const parts = text.split(':').map((x) => Number(x));
+    if (parts.some((x) => !Number.isFinite(x))) return null;
+    if (parts.length === 3) return (parts[0] * 3600) + (parts[1] * 60) + parts[2];
+    if (parts.length === 2) return (parts[0] * 60) + parts[1];
+    return null;
+  };
+
+  const parseDateMs = (value) => {
+    const text = normalizeText(value);
+    if (!text) return null;
+
+    let m = text.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{2,4})$/);
+    if (m) {
+      const day = Number(m[1]);
+      const month = Number(m[2]);
+      let year = Number(m[3]);
+      if (year < 100) year += 2000;
+      if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
+        return Date.UTC(year, month - 1, day);
       }
     }
-    if (!dateMs || isNaN(dateMs)) continue;
-    let secs = 0;
-    const parts = timeText.split(':').map(x => Number(x));
-    if (parts.length === 3) secs = parts[0] * 3600 + parts[1] * 60 + parts[2];
-    else if (parts.length === 2) secs = parts[0] * 60 + parts[1];
-    else continue;
-    const eventSlug = slugify(eventText);
-    const docId = `${uid}_parkrun_${new Date(dateMs).toISOString().slice(0, 10)}_${eventSlug}`;
-    // Try to derive participants from a direct result URL if the row links to it
-    let participantsCount = null; let eventResultUrl = null; let eventRunSeqNumber = null;
-    if (eventHref && /\/results\//.test(eventHref)) {
-      const info = await getParticipantsFromResultUrl(eventHref);
-      participantsCount = info.participants;
-      eventResultUrl = info.resultUrl;
-      eventRunSeqNumber = info.runSeq;
+
+    m = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    if (m) {
+      const year = Number(m[1]);
+      const month = Number(m[2]);
+      const day = Number(m[3]);
+      if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
+        return Date.UTC(year, month - 1, day);
+      }
     }
+
+    const parsed = Date.parse(text);
+    if (Number.isNaN(parsed)) return null;
+    const d = new Date(parsed);
+    return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+  };
+
+  const toDateKey = (ms) => (ms ? new Date(ms).toISOString().slice(0, 10) : null);
+
+  const normalizeParkrunUrl = (href, sourceUrl = base) => {
+    const raw = normalizeText(href);
+    if (!raw) return null;
+    try {
+      return new URL(raw, sourceUrl).toString();
+    } catch {
+      return null;
+    }
+  };
+
+  const parseRunSeqFromUrl = (value) => {
+    const raw = normalizeText(value);
+    if (!raw) return null;
+    let m = raw.match(/\/results\/(\d+)\/?$/i);
+    if (m) return Number(m[1]);
+    m = raw.match(/\/(\d+)\/?$/);
+    if (m) return Number(m[1]);
+    return null;
+  };
+
+  const extractEventSlugFromBaseUrl = (value) => {
+    const raw = normalizeText(value);
+    if (!raw) return null;
+    const m = raw.match(/^https?:\/\/[^/]+\/([^/]+)\/results\/?$/i);
+    return m?.[1] ? String(m[1]).toLowerCase() : null;
+  };
+
+  const toEventBaseUrl = (href, sourceUrl = base) => {
+    const full = normalizeParkrunUrl(href, sourceUrl);
+    if (!full) return null;
+    const m = full.match(/^(https?:\/\/[^/]+\/[^/]+\/results\/)(?:\d+\/?)?/i);
+    return m?.[1] || null;
+  };
+
+  const fetchHtml = async (url, label) => {
+    for (let i = 0; i < requestHeaderCandidates.length; i++) {
+      const headers = requestHeaderCandidates[i];
+      const res = await fetch(url, { headers, redirect: 'follow' });
+      if (res.ok) return await res.text();
+      const err = new Error(`${label || 'Parkrun page'} fetch failed (HTTP ${res.status}) for ${url}`);
+      err.status = res.status;
+      const retryableStatus = new Set([403, 405, 406, 429]);
+      if (i < requestHeaderCandidates.length - 1 && retryableStatus.has(Number(res.status || 0))) continue;
+      throw err;
+    }
+    throw new Error(`${label || 'Parkrun page'} fetch failed for ${url}`);
+  };
+
+  function parseTableRows($, tableEl, sourceUrl) {
+    const headers = $(tableEl).find('thead th').map((_, th) => normalizeText($(th).text()).toLowerCase()).get();
+    const rows = [];
+    const findIdx = (patterns) => headers.findIndex((h) => patterns.some((re) => re.test(h)));
+    const eventIdx = findIdx([/^event$/, /parkrun/]);
+    const dateIdx = findIdx([/^date$/, /run\s*date/]);
+    const runIdx = findIdx([/run\s*number/, /event\s*#/, /^#$/]);
+    const posIdx = findIdx([/^pos$/, /overall position/, /^position$/]);
+    const timeIdx = findIdx([/^time$/, /finish time/]);
+    const ageIdx = findIdx([/age\s*grade/, /agegrade/]);
+    const pbIdx = findIdx([/^pb\??$/, /pb\?/]);
+
+    $(tableEl).find('tbody tr').each((_, tr) => {
+      const tds = $(tr).find('td');
+      if (tds.length < 4) return;
+
+      const cellText = (idx) => (idx >= 0 && idx < tds.length ? normalizeText($(tds[idx]).text()) : '');
+      const cellHtml = (idx) => (idx >= 0 && idx < tds.length ? String($(tds[idx]).html() || '') : '');
+      const cellHref = (idx) => (idx >= 0 && idx < tds.length ? normalizeText($(tds[idx]).find('a').first().attr('href') || '') : '');
+
+      let dateText = cellText(dateIdx);
+      if (!dateText) {
+        tds.each((_, td) => {
+          const txt = normalizeText($(td).text());
+          if (!dateText && (/^\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4}$/.test(txt) || /^\d{4}-\d{2}-\d{2}$/.test(txt))) {
+            dateText = txt;
+          }
+        });
+      }
+
+      let timeText = cellText(timeIdx);
+      if (!timeText) {
+        tds.each((_, td) => {
+          const txt = normalizeText($(td).text());
+          if (!timeText && /^\d{1,2}:\d{2}(?::\d{2})?$/.test(txt)) timeText = txt;
+        });
+      }
+
+      const dateMs = parseDateMs(dateText);
+      const timeSec = parseDurationSeconds(timeText);
+      if (!dateMs || !timeSec) return;
+
+      const eventText = cellText(eventIdx >= 0 ? eventIdx : 0);
+      const eventHref = cellHref(eventIdx);
+      const dateHref = cellHref(dateIdx);
+      const runHref = cellHref(runIdx);
+      const runSeq = parseIntLoose(cellText(runIdx)) || parseRunSeqFromUrl(runHref) || parseRunSeqFromUrl(dateHref);
+      const eventBaseUrl = toEventBaseUrl(eventHref || runHref || dateHref, sourceUrl);
+      const runResultHref = dateHref || runHref;
+      const runResultFull = normalizeParkrunUrl(runResultHref, sourceUrl);
+      const eventResultUrl = runResultFull && /\/results\/\d+\/?$/i.test(runResultFull)
+        ? runResultFull
+        : (eventBaseUrl && runSeq ? `${eventBaseUrl.replace(/\/+$/, '')}/${runSeq}/` : null);
+
+      const position = parseIntLoose(cellText(posIdx));
+      const ageGradeText = cellText(ageIdx) || null;
+      const pbText = normalizeText(cellText(pbIdx));
+      const pbHtml = cellHtml(pbIdx).replace(/<[^>]+>/g, ' ');
+      const hasPbFlag = /\bPB\b/i.test(pbText) || /new\s*pb/i.test(pbText) || /\bPB\b/i.test(pbHtml);
+      const canonicalEventSlug = extractEventSlugFromBaseUrl(eventBaseUrl) || slugify(String(eventText || '').replace(/\bparkrun\b.*$/i, '').trim());
+      const docEventName = eventText && /parkrun/i.test(eventText) ? eventText : (eventText ? `${eventText} parkrun` : '');
+      const docSlug = slugify(docEventName || canonicalEventSlug);
+
+      rows.push({
+        eventText: normalizeText(eventText || canonicalEventSlug || 'parkrun'),
+        eventSlug: canonicalEventSlug || null,
+        docSlug: docSlug || null,
+        eventBaseUrl: eventBaseUrl || null,
+        eventResultUrl: eventResultUrl || null,
+        dateMs,
+        timeSec,
+        position,
+        ageGradeText,
+        runSeq: runSeq || null,
+        isPb: !!hasPbFlag,
+        pbText: pbText || null,
+      });
+    });
+
+    return rows;
+  }
+
+  function parseHeuristicRows($, sourceUrl) {
+    const parsed = [];
+    let rows = [];
+    $('table#results tbody tr').each((_, el) => rows.push(el));
+    if (!rows.length) $('table tbody tr').each((_, el) => rows.push(el));
+
+    for (const el of rows) {
+      const tds = $(el).find('td');
+      if (tds.length < 5) continue;
+      const cells = [];
+      tds.each((_, td) => cells.push(normalizeText($(td).text())));
+      const dateIdx = cells.findIndex((text) => (
+        /^\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4}$/.test(text)
+        || /^\d{1,2}\s+[A-Za-z]+\s+\d{4}$/.test(text)
+        || /^\d{4}-\d{2}-\d{2}$/.test(text)
+      ));
+      const timeIdx = cells.findIndex((text) => /^\d{1,2}:\d{2}(?::\d{2})?$/.test(text));
+      if (dateIdx < 0 || timeIdx < 0) continue;
+
+      let eventIdx = dateIdx === 0 ? 1 : dateIdx - 1;
+      if (eventIdx < 0 || !cells[eventIdx]) eventIdx = 0;
+
+      const eventText = cells[eventIdx];
+      const dateMs = parseDateMs(cells[dateIdx]);
+      const timeSec = parseDurationSeconds(cells[timeIdx]);
+      if (!eventText || !dateMs || !timeSec) continue;
+
+      const numericBeforeTime = cells
+        .slice(0, timeIdx)
+        .map((value) => parseIntLoose(value))
+        .filter((value) => Number.isFinite(value) && value > 0);
+
+      const position = numericBeforeTime.length ? numericBeforeTime[numericBeforeTime.length - 1] : null;
+      const ageGradeText = cells.find((text) => /%$/.test(text)) || null;
+      const eventHref = normalizeText($(tds[dateIdx]).find('a').attr('href') || $(tds[eventIdx]).find('a').attr('href') || '');
+      const eventBaseUrl = toEventBaseUrl(eventHref, sourceUrl);
+      const runSeq = parseRunSeqFromUrl(eventHref);
+      const eventResultUrl = runSeq && eventBaseUrl ? `${eventBaseUrl.replace(/\/+$/, '')}/${runSeq}/` : (normalizeParkrunUrl(eventHref, sourceUrl) || null);
+      const canonicalEventSlug = extractEventSlugFromBaseUrl(eventBaseUrl) || slugify(String(eventText).replace(/\bparkrun\b.*$/i, '').trim());
+      const docEventName = /parkrun/i.test(eventText) ? eventText : `${eventText} parkrun`;
+      const docSlug = slugify(docEventName || canonicalEventSlug);
+
+      parsed.push({
+        eventText,
+        eventSlug: canonicalEventSlug || null,
+        docSlug: docSlug || null,
+        eventBaseUrl: eventBaseUrl || null,
+        eventResultUrl,
+        dateMs,
+        timeSec,
+        position,
+        ageGradeText,
+        runSeq: runSeq || null,
+        isPb: false,
+        pbText: null,
+      });
+    }
+
+    return parsed;
+  }
+
+  function parseAthleteRowsFromHtml(html, sourceUrl) {
+    const $ = cheerio.load(html);
+    const candidates = [];
+    $('table').each((_, tableEl) => {
+      const rows = $(tableEl).find('tbody tr').length;
+      if (!rows) return;
+      const headers = $(tableEl).find('thead th').map((_, th) => normalizeText($(th).text()).toLowerCase()).get();
+      let score = 0;
+      if (headers.some((h) => /run\s*date|^date$/.test(h))) score += 5;
+      if (headers.some((h) => /run\s*number|event\s*#|^#$/.test(h))) score += 4;
+      if (headers.some((h) => /overall position|^pos$|^position$/.test(h))) score += 3;
+      if (headers.some((h) => /^time$|finish time/.test(h))) score += 3;
+      if (headers.some((h) => /^event$|parkrun/.test(h))) score += 3;
+      if (headers.some((h) => /^pb\??$|pb\?/.test(h))) score += 2;
+      candidates.push({ tableEl, rows, score });
+    });
+
+    candidates.sort((a, b) => (b.score - a.score) || (b.rows - a.rows));
+    const best = candidates[0];
+    if (best && best.score >= 6) {
+      const parsed = parseTableRows($, best.tableEl, sourceUrl);
+      if (parsed.length) return parsed;
+    }
+
+    return parseHeuristicRows($, sourceUrl);
+  }
+
+  const athleteIdSafe = String(athleteId || '').trim();
+  const optionEventSlug = slugify(String(options?.eventSlug || '').toLowerCase());
+  const optionStartRun = parseIntLoose(options?.startRun);
+  const optionMaxBack = parseIntLoose(options?.maxBack);
+  const athleteHistoryCandidates = [
+    `${base}/parkrunner/${encodeURIComponent(athleteIdSafe)}/all/`,
+    `${base}/parkrunner/${encodeURIComponent(athleteIdSafe)}/`,
+    `${base}/results/athleteeventresultshistory/?athleteNumber=${encodeURIComponent(athleteIdSafe)}&eventNumber=0`,
+  ];
+
+  let athleteRows = [];
+  let sourceUrlUsed = null;
+  let lastHistoryError = null;
+
+  for (const candidateUrl of athleteHistoryCandidates) {
+    try {
+      const html = await fetchHtml(candidateUrl, 'Parkrun athlete history');
+      const parsed = parseAthleteRowsFromHtml(html, candidateUrl);
+      if (parsed.length) {
+        athleteRows = parsed;
+        sourceUrlUsed = candidateUrl;
+        break;
+      }
+      lastHistoryError = new Error(`No parsable rows at ${candidateUrl}`);
+    } catch (error) {
+      lastHistoryError = error;
+      console.warn('[syncParkrun] athlete history candidate failed:', candidateUrl, error?.message || error);
+    }
+  }
+
+  const eventHistoryCache = new Map();
+  const eventResultCache = new Map();
+  const athleteLinkNeedle = `/parkrunner/${athleteIdSafe}/`;
+
+  async function getEventHistoryIndex(eventBaseUrl) {
+    if (!eventBaseUrl) return null;
+    const key = String(eventBaseUrl).toLowerCase();
+    if (eventHistoryCache.has(key)) return eventHistoryCache.get(key);
+
+    const empty = {
+      byDate: new Map(),
+      byRun: new Map(),
+      eventName: null,
+      eventSlug: extractEventSlugFromBaseUrl(eventBaseUrl),
+      eventHistoryUrl: `${eventBaseUrl.replace(/\/+$/, '')}/eventhistory/`,
+    };
+    try {
+      const eventHistoryUrl = `${eventBaseUrl.replace(/\/+$/, '')}/eventhistory/`;
+      const html = await fetchHtml(eventHistoryUrl, 'Parkrun event history');
+      const $ = cheerio.load(html);
+      const byDate = new Map();
+      const byRun = new Map();
+
+      $('tr.Results-table-row').each((_, tr) => {
+        const row = $(tr);
+        const dateMs = parseDateMs(row.attr('data-date') || row.find('.format-date').first().text());
+        const dateKey = toDateKey(dateMs);
+        const runSeq = parseIntLoose(row.attr('data-parkrun')) || parseRunSeqFromUrl(row.find('td a').first().attr('href'));
+        const participants = parseIntLoose(row.attr('data-finishers'));
+        const href = row.find('td a').first().attr('href') || '';
+        const resultUrl = normalizeParkrunUrl(href, eventHistoryUrl) || (runSeq ? `${eventBaseUrl.replace(/\/+$/, '')}/${runSeq}/` : null);
+        if (!dateKey && !runSeq) return;
+        const entry = {
+          dateMs,
+          dateKey,
+          runSeq: runSeq || null,
+          participants: participants || null,
+          resultUrl: resultUrl || null,
+        };
+        if (dateKey && !byDate.has(dateKey)) byDate.set(dateKey, entry);
+        if (runSeq && !byRun.has(runSeq)) byRun.set(runSeq, entry);
+      });
+
+      if (!byDate.size && !byRun.size) {
+        $('table').each((_, tableEl) => {
+          const table = $(tableEl);
+          const bodyRows = table.find('tbody tr');
+          if (!bodyRows.length) return;
+
+          const headers = table.find('thead th').map((__, th) => normalizeText($(th).text()).toLowerCase()).get();
+          const findIdx = (patterns) => headers.findIndex((h) => patterns.some((re) => re.test(h)));
+          const dateIdx = findIdx([/^date$/, /event\s*date/, /run\s*date/]);
+          const runIdx = findIdx([/run\s*number/, /event\s*#/, /^#$/]);
+          const finishersIdx = findIdx([/finishers/, /participants/, /runners/]);
+
+          bodyRows.each((__, tr) => {
+            const row = $(tr);
+            const tds = row.find('td');
+            if (!tds.length) return;
+            const cells = tds.map((___, td) => normalizeText($(td).text())).get();
+            const pick = (idx) => (idx >= 0 && idx < cells.length ? cells[idx] : '');
+
+            let dateMs = parseDateMs(pick(dateIdx));
+            if (!dateMs) {
+              for (const cellText of cells) {
+                const parsed = parseDateMs(cellText);
+                if (parsed) {
+                  dateMs = parsed;
+                  break;
+                }
+              }
+            }
+            const dateKey = toDateKey(dateMs);
+
+            let runSeq = parseIntLoose(pick(runIdx));
+            const href = row.find('a[href]').first().attr('href') || '';
+            if (!runSeq) runSeq = parseRunSeqFromUrl(href);
+
+            let participants = parseIntLoose(pick(finishersIdx));
+            if (!participants) {
+              const ints = cells
+                .map((value) => parseIntLoose(value))
+                .filter((value) => Number.isFinite(value) && value > 10);
+              participants = ints.length ? ints[ints.length - 1] : null;
+            }
+
+            if (!dateKey && !runSeq) return;
+            const resultUrl = normalizeParkrunUrl(href, eventHistoryUrl) || (runSeq ? `${eventBaseUrl.replace(/\/+$/, '')}/${runSeq}/` : null);
+            const entry = {
+              dateMs,
+              dateKey,
+              runSeq: runSeq || null,
+              participants: participants || null,
+              resultUrl: resultUrl || null,
+            };
+            if (dateKey && !byDate.has(dateKey)) byDate.set(dateKey, entry);
+            if (runSeq && !byRun.has(runSeq)) byRun.set(runSeq, entry);
+          });
+
+          if (byDate.size || byRun.size) return false;
+        });
+      }
+
+      const eventTitleRaw = normalizeText($('.Results-header h1').first().text() || $('h1').first().text());
+      const eventName = normalizeText(eventTitleRaw.replace(/\s*Event History\s*$/i, ''));
+      const indexed = {
+        byDate,
+        byRun,
+        eventName: eventName || null,
+        eventSlug: extractEventSlugFromBaseUrl(eventBaseUrl),
+        eventHistoryUrl,
+      };
+      eventHistoryCache.set(key, indexed);
+      return indexed;
+    } catch (error) {
+      console.warn('[syncParkrun] event history fetch failed:', eventBaseUrl, error?.message || error);
+      eventHistoryCache.set(key, empty);
+      return empty;
+    }
+  }
+
+  async function getEventResultMeta(eventResultUrl) {
+    if (!eventResultUrl) return null;
+    const key = String(eventResultUrl);
+    if (eventResultCache.has(key)) return eventResultCache.get(key);
+
+    const empty = {
+      fetchStatus: null,
+      participants: null,
+      runSeq: parseRunSeqFromUrl(eventResultUrl),
+      athleteFound: false,
+      athletePosition: null,
+      athleteTimeText: null,
+      athleteAgeGrade: null,
+      athleteAchievement: null,
+      eventDateMs: null,
+    };
+
+    try {
+      const html = await fetchHtml(eventResultUrl, 'Parkrun event result');
+      const $ = cheerio.load(html);
+      const rowsPrimary = $('table.Results-table tbody tr');
+      const rowsLegacy = $('table#results tbody tr');
+      const rows = rowsPrimary.length
+        ? rowsPrimary
+        : (rowsLegacy.length ? rowsLegacy : $('table tbody tr'));
+      const participants = rows.length || null;
+      const headerText = normalizeText($('.Results-header h3').first().text() || '');
+      const headerRunSeq = (() => {
+        const m = headerText.match(/#\s*(\d+)/);
+        return m ? Number(m[1]) : null;
+      })();
+      let eventDateMs = null;
+      const dateCandidates = [
+        normalizeText($('time').first().attr('datetime') || $('time').first().text()),
+        normalizeText($('.Results-header h3').first().text()),
+        normalizeText($('.Results-header').first().text()),
+        normalizeText($('h1').first().text()),
+      ].filter(Boolean);
+      for (const candidate of dateCandidates) {
+        const direct = parseDateMs(candidate);
+        if (direct) {
+          eventDateMs = direct;
+          break;
+        }
+        const m = candidate.match(/(\d{1,2}\s+[A-Za-z]+\s+\d{4})/);
+        if (m) {
+          const parsed = parseDateMs(m[1]);
+          if (parsed) {
+            eventDateMs = parsed;
+            break;
+          }
+        }
+      }
+
+      let athleteFound = false;
+      let athletePosition = null;
+      let athleteTimeText = null;
+      let athleteAgeGrade = null;
+      let athleteAchievement = null;
+
+      rows.each((_, tr) => {
+        const row = $(tr);
+        const links = row.find('a[href*="/parkrunner/"]').toArray();
+        const found = links.some((a) => {
+          const href = normalizeText($(a).attr('href'));
+          return href && (href.includes(athleteLinkNeedle) || href.endsWith(athleteLinkNeedle.slice(0, -1)));
+        });
+        if (!found) return;
+        athleteFound = true;
+
+        athletePosition = parseIntLoose(row.attr('data-position')) || parseIntLoose(row.find('td').first().text());
+        athleteTimeText = normalizeText(row.find('.Results-table-td--time .compact').first().text())
+          || normalizeText(row.find('td').last().text());
+        athleteAgeGrade = parseNumberLoose(row.attr('data-agegrade'));
+        athleteAchievement = normalizeText(row.attr('data-achievement') || row.find('.Results-table-td--time .detailed').first().text());
+        if (!athleteTimeText) {
+          const rowTimes = row.find('td').map((__, td) => normalizeText($(td).text())).get();
+          const detected = rowTimes.find((text) => /^\d{1,2}:\d{2}(?::\d{2})?$/.test(text));
+          if (detected) athleteTimeText = detected;
+        }
+        if (athleteAgeGrade == null) {
+          const rowVals = row.find('td').map((__, td) => normalizeText($(td).text())).get();
+          const ageCell = rowVals.find((value) => /%$/.test(value));
+          if (ageCell) athleteAgeGrade = parseNumberLoose(ageCell);
+        }
+        return false;
+      });
+
+      const meta = {
+        fetchStatus: 200,
+        participants: participants || null,
+        runSeq: headerRunSeq || parseRunSeqFromUrl(eventResultUrl),
+        athleteFound,
+        athletePosition: athletePosition || null,
+        athleteTimeText: athleteTimeText || null,
+        athleteAgeGrade: athleteAgeGrade != null ? Number(athleteAgeGrade) : null,
+        athleteAchievement: athleteAchievement || null,
+        eventDateMs: eventDateMs || null,
+      };
+      eventResultCache.set(key, meta);
+      return meta;
+    } catch (error) {
+      console.warn('[syncParkrun] event result fetch failed:', eventResultUrl, error?.message || error);
+      const failed = {
+        ...empty,
+        fetchStatus: Number(error?.status || 0) || null,
+      };
+      eventResultCache.set(key, failed);
+      return failed;
+    }
+  }
+
+  async function buildAthleteRowsFromEventFallback() {
+    const profileEventSlug = slugify(String(profileData?.parkrunDefaultEventSlug || '').toLowerCase());
+    const profileStartRun = parseIntLoose(profileData?.parkrunDefaultStartRun);
+    const profileMaxBack = parseIntLoose(profileData?.parkrunFallbackMaxBack);
+    const maxBack = Math.min(Math.max(optionMaxBack || profileMaxBack || 180, 20), 600);
+
+    const inferSlugFromText = (value) => {
+      const text = normalizeText(value || '');
+      if (!text) return null;
+      let m = text.match(/([A-Za-z][A-Za-z0-9' -]{2,}?)\s+parkrun\b/i);
+      if (m?.[1]) {
+        const candidate = slugify(m[1]);
+        if (candidate && !['pre', 'post', 'warmup', 'warm-up', 'cooldown', 'cool-down'].includes(candidate)) return candidate;
+      }
+      m = text.match(/\bparkrun\s+([A-Za-z][A-Za-z0-9' -]{2,})/i);
+      if (m?.[1]) {
+        const candidate = slugify(m[1]);
+        if (candidate && !['pre', 'post', 'warmup', 'warm-up', 'cooldown', 'cool-down'].includes(candidate)) return candidate;
+      }
+      return null;
+    };
+
+    let eventSlug = optionEventSlug || profileEventSlug;
+    if (!eventSlug) {
+      try {
+        const prSnap = await db.collection('metrics_workouts')
+          .where('ownerUid', '==', uid)
+          .where('provider', '==', 'parkrun')
+          .orderBy('startDate', 'desc')
+          .limit(30)
+          .get();
+        for (const docSnap of prSnap.docs) {
+          const data = docSnap.data() || {};
+          const inferred = slugify(String(data.eventSlug || '').toLowerCase()) || inferSlugFromText(data.event || data.name);
+          if (inferred) {
+            eventSlug = inferred;
+            break;
+          }
+        }
+      } catch { }
+    }
+    if (!eventSlug) {
+      try {
+        const stravaSnap = await db.collection('metrics_workouts')
+          .where('ownerUid', '==', uid)
+          .where('provider', '==', 'strava')
+          .orderBy('startDate', 'desc')
+          .limit(300)
+          .get();
+        for (const docSnap of stravaSnap.docs) {
+          const data = docSnap.data() || {};
+          const inferred = inferSlugFromText(data.name);
+          if (inferred) {
+            eventSlug = inferred;
+            break;
+          }
+        }
+      } catch { }
+    }
+
+    if (!eventSlug) {
+      return {
+        rows: [],
+        sourceUrl: null,
+        error: new Error('Fallback requires a Parkrun event slug. Set parkrunDefaultEventSlug or run a Strava activity named like "<event> parkrun".'),
+      };
+    }
+
+    const eventBaseUrl = `${base}/${eventSlug}/results/`;
+    const historyIndex = await getEventHistoryIndex(eventBaseUrl);
+    const maxRunFromHistory = (() => {
+      const nums = Array.from(historyIndex?.byRun?.keys?.() || [])
+        .map((value) => Number(value))
+        .filter((value) => Number.isFinite(value) && value > 0);
+      if (!nums.length) return null;
+      return Math.max(...nums);
+    })();
+    const startRun = optionStartRun || maxRunFromHistory || profileStartRun;
+    if (!startRun) {
+      return {
+        rows: [],
+        sourceUrl: historyIndex?.eventHistoryUrl || `${eventBaseUrl}eventhistory/`,
+        error: new Error('Fallback requires a start run number. Set parkrunDefaultStartRun or ensure event history is reachable.'),
+      };
+    }
+
+    const rows = [];
+    let lastError = null;
+    let consecutiveBlockedPages = 0;
+
+    for (let i = 0; i < maxBack; i++) {
+      const runSeq = startRun - i;
+      if (runSeq <= 0) break;
+      const historyRow = historyIndex?.byRun?.get(runSeq) || null;
+      const eventResultUrl = historyRow?.resultUrl || `${eventBaseUrl}${runSeq}/`;
+
+      let meta = null;
+      try {
+        meta = await getEventResultMeta(eventResultUrl);
+      } catch (error) {
+        lastError = error;
+        continue;
+      }
+      if (!meta?.athleteFound) {
+        const fetchStatus = Number(meta?.fetchStatus || 0);
+        if (fetchStatus >= 400) {
+          lastError = new Error(`Parkrun event result fetch failed (HTTP ${fetchStatus}) for ${eventResultUrl}`);
+        }
+        if (fetchStatus === 403 || fetchStatus === 405) {
+          consecutiveBlockedPages += 1;
+          if (consecutiveBlockedPages >= 8) break;
+        } else {
+          consecutiveBlockedPages = 0;
+        }
+        continue;
+      }
+      consecutiveBlockedPages = 0;
+
+      const dateMs = historyRow?.dateMs || meta?.eventDateMs || null;
+      const timeSec = parseDurationSeconds(meta?.athleteTimeText || '');
+      if (!dateMs || !timeSec) continue;
+
+      const eventNameRaw = normalizeText(historyIndex?.eventName || `${eventSlug} parkrun`);
+      const eventName = /parkrun/i.test(eventNameRaw) ? eventNameRaw : `${eventNameRaw} parkrun`;
+      const ageGradeText = meta?.athleteAgeGrade != null ? `${Number(meta.athleteAgeGrade).toFixed(2)}%` : null;
+      const achievement = normalizeText(meta?.athleteAchievement || '');
+      const pbFlag = /pb/i.test(achievement);
+      rows.push({
+        eventText: eventName,
+        eventSlug,
+        docSlug: slugify(eventName) || `${eventSlug}-parkrun`,
+        eventBaseUrl,
+        eventResultUrl,
+        dateMs,
+        timeSec,
+        position: meta?.athletePosition || null,
+        ageGradeText,
+        runSeq,
+        participantsCount: historyRow?.participants || meta?.participants || null,
+        isPb: pbFlag,
+        pbText: achievement || null,
+      });
+    }
+
+    if (rows.length && (!profileEventSlug || !profileStartRun)) {
+      await db.collection('profiles').doc(uid).set({
+        parkrunDefaultEventSlug: eventSlug,
+        parkrunDefaultStartRun: startRun,
+      }, { merge: true }).catch(() => { });
+    }
+
+    return {
+      rows,
+      sourceUrl: historyIndex?.eventHistoryUrl || `${eventBaseUrl}eventhistory/`,
+      error: lastError,
+    };
+  }
+
+  async function buildAthleteRowsFromApiFallback() {
+    try {
+      const apiRows = await fetchParkrunAthleteResultsFromApi(uid, athleteIdSafe, { limit: 100, maxPages: 25 });
+      if (!apiRows.length) {
+        return {
+          rows: [],
+          sourceUrl: 'parkrun_api:/v1/results',
+          error: new Error('Parkrun API returned no results'),
+        };
+      }
+
+      const rows = [];
+      for (const raw of apiRows) {
+        const eventNameRaw = normalizeText(raw?.EventLongName || raw?.EventName || raw?.EventShortName || raw?.HomeRunName || '');
+        const eventName = eventNameRaw ? (/parkrun/i.test(eventNameRaw) ? eventNameRaw : `${eventNameRaw} parkrun`) : 'parkrun';
+        const eventSlug = slugify(String(raw?.EventName || raw?.EventShortName || eventNameRaw).replace(/\bparkrun\b.*$/i, '').trim()) || null;
+        const dateMs = parseDateMs(raw?.EventDate || raw?.RunDate || raw?.Date || null);
+        const timeText = normalizeText(raw?.RunTime || raw?.FinishTime || raw?.Time || '');
+        const timeSec = parseDurationSeconds(timeText);
+        if (!dateMs || !timeSec) continue;
+
+        const runSeq = parseIntLoose(raw?.EventNumber || raw?.EventNo || raw?.EventID);
+        const position = parseIntLoose(raw?.FinishPosition || raw?.Position || raw?.Pos);
+        const participantsCount = parseIntLoose(raw?.TotalFinishers || raw?.Finishers || raw?.Participants || raw?.TotalRunners || raw?.FieldSize);
+        const ageGradeNum = parseNumberLoose(raw?.AgeGrading || raw?.AgeGrade || raw?.AgeGradePercent);
+        const ageGradeText = ageGradeNum != null ? `${Number(ageGradeNum).toFixed(2)}%` : null;
+        const isPb = parseBoolLoose(raw?.GenuinePB) || parseBoolLoose(raw?.WasPbRun) || parseBoolLoose(raw?.PB);
+        const pbText = isPb ? (parseBoolLoose(raw?.GenuinePB) ? 'Genuine PB' : 'PB') : null;
+        const eventBaseUrl = eventSlug ? `${base}/${eventSlug}/results/` : null;
+        const eventResultUrl = runSeq && eventBaseUrl ? `${eventBaseUrl}${runSeq}/` : null;
+        const docSlug = slugify(eventName || eventSlug || 'parkrun');
+
+        rows.push({
+          eventText: eventName,
+          eventSlug: eventSlug || null,
+          docSlug: docSlug || null,
+          eventBaseUrl,
+          eventResultUrl,
+          dateMs,
+          timeSec,
+          position: position || null,
+          ageGradeText,
+          runSeq: runSeq || null,
+          participantsCount: participantsCount || null,
+          isPb,
+          pbText,
+          skipHtmlEnrichment: true,
+        });
+      }
+
+      rows.sort((a, b) => (b.dateMs || 0) - (a.dateMs || 0));
+      return {
+        rows,
+        sourceUrl: 'parkrun_api:/v1/results',
+        error: null,
+      };
+    } catch (error) {
+      return {
+        rows: [],
+        sourceUrl: 'parkrun_api:/v1/results',
+        error,
+      };
+    }
+  }
+
+  if (!athleteRows.length) {
+    const fallback = await buildAthleteRowsFromEventFallback();
+    if (fallback?.rows?.length) {
+      athleteRows = fallback.rows;
+      sourceUrlUsed = fallback.sourceUrl || sourceUrlUsed;
+    } else {
+      const apiFallback = await buildAthleteRowsFromApiFallback();
+      if (apiFallback?.rows?.length) {
+        athleteRows = apiFallback.rows;
+        sourceUrlUsed = apiFallback.sourceUrl || sourceUrlUsed;
+      } else {
+        const details = [];
+        if (lastHistoryError?.message) details.push(`athlete history: ${lastHistoryError.message}`);
+        if (fallback?.error?.message) details.push(`fallback: ${fallback.error.message}`);
+        if (apiFallback?.error?.message) details.push(`api fallback: ${apiFallback.error.message}`);
+        const suffix = details.length ? ` Last error: ${details.join(' | ')}` : '';
+        throw new Error(`Parkrun page returned no parsable result rows. Check athlete ID, country base URL, or anti-bot response.${suffix}`);
+      }
+    }
+  }
+
+  for (const row of athleteRows) {
+    const dateMs = row.dateMs;
+    const timeSec = row.timeSec;
+    if (!dateMs || !timeSec) continue;
+
+    let eventName = normalizeText(row.eventText || '');
+    let canonicalEventSlug = row.eventSlug || null;
+    let docSlug = row.docSlug || null;
+    let eventRunSeqNumber = row.runSeq || null;
+    let eventResultUrl = row.eventResultUrl || null;
+    let participantsCount = row.participantsCount || null;
+    let position = row.position || null;
+    let ageGradeText = row.ageGradeText || null;
+    let pbFlag = !!row.isPb;
+    let pbText = row.pbText || null;
+
+    if (row.eventBaseUrl && !row.skipHtmlEnrichment) {
+      const historyIndex = await getEventHistoryIndex(row.eventBaseUrl);
+      const historyMatch = historyIndex?.byDate?.get(toDateKey(dateMs)) || null;
+      if (historyIndex?.eventName) eventName = historyIndex.eventName;
+      if (historyIndex?.eventSlug) canonicalEventSlug = historyIndex.eventSlug;
+      if (historyMatch) {
+        if (!eventRunSeqNumber && historyMatch.runSeq) eventRunSeqNumber = historyMatch.runSeq;
+        if (!participantsCount && historyMatch.participants) participantsCount = historyMatch.participants;
+        if (!eventResultUrl && historyMatch.resultUrl) eventResultUrl = historyMatch.resultUrl;
+      }
+      if (!eventResultUrl && eventRunSeqNumber) {
+        eventResultUrl = `${row.eventBaseUrl.replace(/\/+$/, '')}/${eventRunSeqNumber}/`;
+      }
+    }
+
+    if (eventResultUrl && !row.skipHtmlEnrichment) {
+      const meta = await getEventResultMeta(eventResultUrl);
+      if (!participantsCount && meta?.participants) participantsCount = meta.participants;
+      if (!eventRunSeqNumber && meta?.runSeq) eventRunSeqNumber = meta.runSeq;
+      if (!position && meta?.athletePosition) position = meta.athletePosition;
+      if (!ageGradeText && meta?.athleteAgeGrade != null) ageGradeText = `${Number(meta.athleteAgeGrade).toFixed(2)}%`;
+      if (!pbText && meta?.athleteAchievement) pbText = meta.athleteAchievement;
+      if (!pbFlag && /pb/i.test(String(meta?.athleteAchievement || ''))) pbFlag = true;
+    }
+
+    if (!eventName) eventName = canonicalEventSlug ? `${canonicalEventSlug} parkrun` : 'parkrun';
+    if (!docSlug) {
+      const withParkrun = /parkrun/i.test(eventName) ? eventName : `${eventName} parkrun`;
+      docSlug = slugify(withParkrun) || slugify(canonicalEventSlug || eventName) || 'unknown-parkrun';
+    }
+    if (!canonicalEventSlug) {
+      canonicalEventSlug = slugify(String(eventName).replace(/\bparkrun\b.*$/i, '').trim()) || slugify(docSlug.replace(/-parkrun.*$/, ''));
+    }
+
+    const dateKey = toDateKey(dateMs);
+    const docId = `${uid}_parkrun_${dateKey}_${docSlug}`;
+    const participantsInt = parseIntLoose(participantsCount);
+    const positionInt = parseIntLoose(position);
+    const percentileTop = (participantsInt && positionInt && participantsInt >= positionInt)
+      ? Number((((participantsInt - positionInt + 1) / participantsInt) * 100).toFixed(2))
+      : null;
 
     const payload = {
       id: docId,
       ownerUid: uid,
       provider: 'parkrun',
-      parkrunAthleteId: athleteId,
-      event: eventText,
-      eventSlug,
+      parkrunAthleteId: athleteIdSafe,
+      event: eventName,
+      eventSlug: canonicalEventSlug || null,
       eventResultUrl: eventResultUrl || null,
       eventRunSeqNumber: eventRunSeqNumber || null,
-      name: `parkrun ${eventText}`,
+      name: `parkrun ${eventName}`,
       type: 'Run',
       startDate: dateMs,
       utcStartDate: new Date(dateMs).toISOString(),
-      elapsedTime_s: secs,
-      movingTime_s: secs,
+      elapsedTime_s: row.timeSec || timeSec,
+      movingTime_s: row.timeSec || timeSec,
       distance_m: 5000,
-      position: positionText ? Number(positionText) || null : null,
+      position: positionInt || null,
       ageGrade: ageGradeText || null,
-      ageCategory: ageCatText || null,
-      participantsCount: participantsCount || null,
-      percentileTop: (participantsCount && positionText) ? Number((((participantsCount - (Number(positionText) || 0) + 1) / participantsCount) * 100).toFixed(2)) : null,
+      participantsCount: participantsInt || null,
+      percentileTop,
+      parkrunPb: pbFlag,
+      parkrunAchievement: pbText || null,
       source: 'parkrun',
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -11322,8 +14778,17 @@ async function _syncParkrunInternal(uid, athleteId, countryBaseUrl) {
     await db.collection('metrics_workouts').doc(docId).set(payload, { merge: true });
     imported += 1;
   }
-  await db.collection('profiles').doc(uid).set({ parkrunAthleteId: athleteId, parkrunLastSyncAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-  return { ok: true, imported };
+
+  await db.collection('profiles').doc(uid).set({
+    parkrunAthleteId: athleteIdSafe,
+    parkrunLastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
+    parkrunLastSyncStatus: 'success',
+    parkrunLastSyncImported: imported,
+    parkrunLastSyncSourceUrl: sourceUrlUsed || null,
+    parkrunLastErrorAt: admin.firestore.FieldValue.delete(),
+    parkrunLastErrorMessage: admin.firestore.FieldValue.delete(),
+  }, { merge: true });
+  return { ok: true, imported, sourceUrl: sourceUrlUsed || null };
 }
 
 // Match Parkrun entries to Strava runs to backfill HR and links
@@ -11353,6 +14818,8 @@ async function reconcileParkrunToStrava(uid, { maxStrava = 500 } = {}) {
     .filter((s) => (s.startDate || s.utcStartDate) && (s.distance_m || 0) > 1000);
 
   let matched = 0;
+  const maxTimeDiffMs = 18 * 60 * 60 * 1000; // same-day with timezone drift
+  const maxDistanceDiffM = 2000; // user requirement: allow +/-1-2km
 
   const toMs = (v) => {
     if (!v) return null;
@@ -11371,13 +14838,13 @@ async function reconcileParkrunToStrava(uid, { maxStrava = 500 } = {}) {
         const sd = toMs(s.startDate) || toMs(s.utcStartDate);
         if (!sd) return null;
         const timeDiff = Math.abs(sd - prDate); // ms
-        if (timeDiff > 1000 * 60 * 120) return null; // >2h away
+        if (timeDiff > maxTimeDiffMs) return null;
         const dist = Number(s.distance_m || 0);
-        if (dist && Math.abs(dist - 5000) > 600) return null; // keep near 5k
+        const distancePenalty = dist ? Math.abs(dist - 5000) : 1200;
+        if (dist && distancePenalty > maxDistanceDiffM) return null;
         const name = String(s.name || '').toLowerCase();
         const nameMatch = slug && name.includes(slug);
-        const distancePenalty = dist ? Math.abs(dist - 5000) : 500;
-        const score = timeDiff / (1000 * 60) + distancePenalty / 10 - (nameMatch ? 30 : 0);
+        const score = timeDiff / (1000 * 60) + distancePenalty / 25 - (nameMatch ? 45 : 0);
         return { s, score, timeDiff, distancePenalty, nameMatch };
       })
       .filter(Boolean)
@@ -11387,12 +14854,14 @@ async function reconcileParkrunToStrava(uid, { maxStrava = 500 } = {}) {
     if (!best) continue;
 
     // Apply match if reasonably close
-    if (best.timeDiff <= 1000 * 60 * 120 && best.distancePenalty <= 800) {
+    if (best.timeDiff <= maxTimeDiffMs && best.distancePenalty <= maxDistanceDiffM) {
       const ref = db.collection('metrics_workouts').doc(pr.id);
       await ref.set({
         stravaActivityId: best.s.stravaActivityId || String(best.s.stravaActivityId || '').replace(`${uid}_`, '') || null,
         avgHeartrate: best.s.avgHeartrate || pr.avgHeartrate || null,
         maxHeartrate: best.s.maxHeartrate || pr.maxHeartrate || null,
+        matchedDistanceDelta_m: Math.round(best.distancePenalty),
+        matchedTimeDiffMin: Math.round(best.timeDiff / (60 * 1000)),
         matchedVia: 'strava_matcher',
         matchedAt: admin.firestore.FieldValue.serverTimestamp(),
       }, { merge: true });
@@ -11407,11 +14876,30 @@ async function reconcileParkrunToStrava(uid, { maxStrava = 500 } = {}) {
 exports.syncParkrun = httpsV2.onCall(async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
   const uid = req.auth.uid;
-  let { athleteId, profileUrl, countryBaseUrl } = req.data || {};
+  let { athleteId, profileUrl, countryBaseUrl, eventSlug, startRun, maxBack, username, password } = req.data || {};
   console.log('[syncParkrun] uid', uid, 'athleteId', athleteId, 'profileUrl?', !!profileUrl, 'base?', countryBaseUrl);
   athleteId = (athleteId || '').toString().trim();
   profileUrl = (profileUrl || '').toString().trim();
   countryBaseUrl = (countryBaseUrl || '').toString().trim();
+  eventSlug = (eventSlug || '').toString().trim();
+  username = (username || '').toString().trim();
+  password = (password || '').toString();
+  startRun = Number(startRun || 0) || null;
+  maxBack = Number(maxBack || 0) || null;
+
+  if (username && password) {
+    try {
+      const connected = await connectParkrunApiForUser(uid, {
+        username,
+        password,
+        athleteIdHint: athleteId ? Number(athleteId) : null,
+      });
+      if (!athleteId && connected?.athleteId) athleteId = String(connected.athleteId);
+    } catch (error) {
+      throw new httpsV2.HttpsError('failed-precondition', `Parkrun API authentication failed: ${error?.message || error}`);
+    }
+  }
+
   if (!athleteId && profileUrl) {
     const match1 = profileUrl.match(/athleteNumber=(\d+)/i);
     const match2 = profileUrl.match(/parkrunner\/(\d+)/i);
@@ -11421,17 +14909,26 @@ exports.syncParkrun = httpsV2.onCall(async (req) => {
     throw new httpsV2.HttpsError('invalid-argument', 'Provide Parkrun athleteId or profileUrl containing athleteNumber.');
   }
   try {
-    const result = await _syncParkrunInternal(uid, athleteId, countryBaseUrl);
+    const result = await _syncParkrunInternal(uid, athleteId, countryBaseUrl, { eventSlug, startRun, maxBack });
     await recordIntegrationLog(uid, 'parkrun', 'success', 'Parkrun results synced', {
       imported: result?.imported || 0,
       athleteId,
       countryBaseUrl,
+      eventSlug: eventSlug || null,
+      startRun: startRun || null,
     });
     return result;
   } catch (error) {
+    await admin.firestore().collection('profiles').doc(uid).set({
+      parkrunLastSyncStatus: 'error',
+      parkrunLastErrorAt: admin.firestore.FieldValue.serverTimestamp(),
+      parkrunLastErrorMessage: error?.message || 'Parkrun sync failed',
+    }, { merge: true });
     await recordIntegrationLog(uid, 'parkrun', 'error', error?.message || 'Parkrun sync failed', {
       athleteId,
       countryBaseUrl,
+      eventSlug: eventSlug || null,
+      startRun: startRun || null,
     });
     if (error instanceof httpsV2.HttpsError) throw error;
     throw new httpsV2.HttpsError('internal', error?.message || 'Failed to sync Parkrun results');
@@ -11459,12 +14956,35 @@ exports.getFitnessOverview = httpsV2.onCall(async (req) => {
   return await _getFitnessOverview(uid, days);
 });
 
-async function _getFitnessOverview(uid, days) {
-  const sinceMs = Date.now() - days * 24 * 60 * 60 * 1000;
+function workoutHasDadMarker(workout) {
+  const text = `${String(workout?.title || '')} ${String(workout?.name || '')} ${String(workout?.event || '')}`.toLowerCase();
+  return /\bdad\b/i.test(text);
+}
+
+async function shouldExcludeDadTaggedWorkouts(uid) {
   const db = admin.firestore();
+  return db.collection('profiles').doc(uid).get()
+    .then((snap) => {
+      const data = snap.exists ? (snap.data() || {}) : {};
+      return data.excludeWithDadFromMetrics !== false;
+    })
+    .catch(() => true);
+}
+
+async function _getFitnessOverview(uid, days) {
+  const nowMs = Date.now();
+  const sinceMs = nowMs - days * 24 * 60 * 60 * 1000;
+  const db = admin.firestore();
+  const excludeWithDadFromMetrics = await shouldExcludeDadTaggedWorkouts(uid);
   const workoutsSnap = await db.collection('metrics_workouts').where('ownerUid', '==', uid).limit(1000).get();
-  const workouts = workoutsSnap.docs
+  const rawWorkouts = workoutsSnap.docs
     .map(d => ({ id: d.id, ...d.data() }))
+    .filter((w) => {
+      if (!(w.provider === 'strava' || w.provider === 'parkrun')) return false;
+      if (excludeWithDadFromMetrics && workoutHasDadMarker(w)) return false;
+      return true;
+    });
+  const workouts = rawWorkouts
     .filter(w => (w.startDate || 0) >= sinceMs && (w.provider === 'strava' || w.provider === 'parkrun'))
     .sort((a, b) => (a.startDate || 0) - (b.startDate || 0));
   const hrvSnap = await db.collection('metrics_hrv').where('ownerUid', '==', uid).limit(1000).get();
@@ -11479,6 +14999,65 @@ async function _getFitnessOverview(uid, days) {
     .sort((a, b) => a._ms - b._ms);
   const km = (m) => (typeof m === 'number' ? m / 1000 : 0);
   const sec = (s) => (typeof s === 'number' ? s : 0);
+  const avg = (arr) => arr.length ? (arr.reduce((a, b) => a + b, 0) / arr.length) : null;
+  const clamp01 = (value) => Math.max(0, Math.min(1, value));
+  const fmtSecs = (value) => {
+    if (!value || !Number.isFinite(value)) return null;
+    const total = Math.max(0, Math.round(value));
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    return `${m}:${String(s).padStart(2, '0')}`;
+  };
+  const readRpe = (workout) => {
+    const explicit = Number(workout.perceivedExertion ?? workout.rpe ?? workout.stravaRpe ?? null);
+    if (Number.isFinite(explicit) && explicit > 0) return Math.min(10, Math.max(1, explicit));
+    const suffer = Number(workout.sufferScore ?? null);
+    if (Number.isFinite(suffer) && suffer > 0) return Math.min(10, Math.max(1, suffer / 10));
+    return null;
+  };
+  const classifySport = (workout) => {
+    if (!workout) return 'other';
+    if (String(workout.provider || '').toLowerCase() === 'parkrun') return 'run';
+    if (workout.run === true) return 'run';
+    const type = String(workout.sportType || workout.type || '').toLowerCase();
+    if (type.includes('swim')) return 'swim';
+    if (type.includes('ride') || type.includes('bike') || type.includes('cycling')) return 'bike';
+    if (type.includes('run') || type.includes('walk') || type.includes('hike')) return 'run';
+    return 'other';
+  };
+  const buildNormalizedPredictions = (sport, targetKm, {
+    minKm = 0.2,
+    maxKm = 200,
+    exponent = 1.06,
+  } = {}) => {
+    return workouts
+      .map((w) => {
+        if (classifySport(w) !== sport) return null;
+        const distanceKm = km(w.distance_m);
+        const timeSec = sec(w.elapsedTime_s || w.movingTime_s);
+        if (!distanceKm || !timeSec) return null;
+        if (distanceKm < minKm || distanceKm > maxKm) return null;
+        const normalizedSec = timeSec * Math.pow(targetKm / distanceKm, exponent);
+        return {
+          id: w.id,
+          provider: w.provider || null,
+          startDate: Number(w.startDate || 0),
+          distanceKm,
+          timeSec,
+          normalizedSec,
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.startDate - b.startDate);
+  };
+  const bestNormalized = (items) => {
+    if (!Array.isArray(items) || !items.length) return null;
+    return items.reduce((winner, item) => (!winner || item.normalizedSec < winner.normalizedSec ? item : winner), null);
+  };
+  const yearStartMs = Date.UTC(new Date().getUTCFullYear(), 0, 1);
+
   const weekly = new Map();
   let totalKm = 0, totalSec = 0, sessions = 0;
   for (const w of workouts) {
@@ -11492,27 +15071,53 @@ async function _getFitnessOverview(uid, days) {
     agg.distanceKm += dist; agg.timeSec += time; agg.sessions += 1;
     weekly.set(key, agg); totalKm += dist; totalSec += time; sessions += 1;
   }
-  const since30 = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  const since30 = nowMs - 30 * 24 * 60 * 60 * 1000;
   const last30 = workouts.filter(w => (w.startDate || 0) >= since30);
   const dist30 = last30.reduce((s, w) => s + km(w.distance_m), 0);
   const time30 = last30.reduce((s, w) => s + sec(w.movingTime_s || w.elapsedTime_s), 0);
   const avgPaceMinPerKm = dist30 > 0 ? (time30 / 60) / dist30 : null;
+  const sportDistanceLast30 = { runKm: 0, swimKm: 0, bikeKm: 0 };
+  const sportDistanceRange = { runKm: 0, swimKm: 0, bikeKm: 0 };
+  const sportDistanceYtd = { runKm: 0, swimKm: 0, bikeKm: 0 };
+  for (const w of workouts) {
+    const sport = classifySport(w);
+    const distKmVal = km(w.distance_m);
+    if (sport === 'run') sportDistanceRange.runKm += distKmVal;
+    else if (sport === 'swim') sportDistanceRange.swimKm += distKmVal;
+    else if (sport === 'bike') sportDistanceRange.bikeKm += distKmVal;
+  }
+  for (const w of last30) {
+    const sport = classifySport(w);
+    const distKmVal = km(w.distance_m);
+    if (sport === 'run') sportDistanceLast30.runKm += distKmVal;
+    else if (sport === 'swim') sportDistanceLast30.swimKm += distKmVal;
+    else if (sport === 'bike') sportDistanceLast30.bikeKm += distKmVal;
+  }
+  for (const w of rawWorkouts) {
+    const startMs = Number(w.startDate || 0);
+    if (!startMs || startMs < yearStartMs) continue;
+    const sport = classifySport(w);
+    const distKmVal = km(w.distance_m);
+    if (sport === 'run') sportDistanceYtd.runKm += distKmVal;
+    else if (sport === 'swim') sportDistanceYtd.swimKm += distKmVal;
+    else if (sport === 'bike') sportDistanceYtd.bikeKm += distKmVal;
+  }
   const toVal = (x) => Number(x?.value ?? x?.rMSSD ?? x?.hrv ?? null) || null;
-  const last7Ms = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const last7Ms = nowMs - 7 * 24 * 60 * 60 * 1000;
   const last30Ms = since30;
   const hrvLast7 = hrv.filter(x => x._ms >= last7Ms).map(toVal).filter(Boolean);
   const hrvLast30 = hrv.filter(x => x._ms >= last30Ms).map(toVal).filter(Boolean);
-  const avg = (arr) => arr.length ? (arr.reduce((a, b) => a + b, 0) / arr.length) : null;
   const hrv7 = avg(hrvLast7);
   const hrv30 = avg(hrvLast30);
   const hrvTrendPct = (hrv7 && hrv30) ? ((hrv7 - hrv30) / hrv30) * 100 : null;
   const weeks = Array.from(weekly.values());
   const recentWeeks = weeks.slice(-4);
   const volKm = recentWeeks.reduce((s, x) => s + x.distanceKm, 0) / Math.max(recentWeeks.length, 1);
-  const volScore = Math.max(0, Math.min(1, volKm / 50));
-  const hrvScore = (hrvTrendPct == null) ? 0.5 : Math.max(0, Math.min(1, (hrvTrendPct + 10) / 20));
-  const fitnessScore = Math.round((volScore * 0.6 + hrvScore * 0.4) * 100);
+  const volScore = clamp01(volKm / 50);
+  const hrvScore = (hrvTrendPct == null) ? 0.5 : clamp01((hrvTrendPct + 10) / 20);
   const zoneTotals = { z1Time_s: 0, z2Time_s: 0, z3Time_s: 0, z4Time_s: 0, z5Time_s: 0 };
+  const zoneTotals30 = { z1Time_s: 0, z2Time_s: 0, z3Time_s: 0, z4Time_s: 0, z5Time_s: 0 };
+  const zoneWeights = { z1Time_s: 1, z2Time_s: 2, z3Time_s: 3, z4Time_s: 4, z5Time_s: 5 };
   for (const w of workouts) {
     if (w.hrZones) {
       zoneTotals.z1Time_s += Number(w.hrZones.z1Time_s || 0);
@@ -11520,16 +15125,161 @@ async function _getFitnessOverview(uid, days) {
       zoneTotals.z3Time_s += Number(w.hrZones.z3Time_s || 0);
       zoneTotals.z4Time_s += Number(w.hrZones.z4Time_s || 0);
       zoneTotals.z5Time_s += Number(w.hrZones.z5Time_s || 0);
+      if ((w.startDate || 0) >= since30) {
+        zoneTotals30.z1Time_s += Number(w.hrZones.z1Time_s || 0);
+        zoneTotals30.z2Time_s += Number(w.hrZones.z2Time_s || 0);
+        zoneTotals30.z3Time_s += Number(w.hrZones.z3Time_s || 0);
+        zoneTotals30.z4Time_s += Number(w.hrZones.z4Time_s || 0);
+        zoneTotals30.z5Time_s += Number(w.hrZones.z5Time_s || 0);
+      }
     }
   }
+
+  const zoneTotalMinutes30 = Object.values(zoneTotals30).reduce((sum, value) => sum + (Number(value || 0) / 60), 0);
+  const zoneWeightedMinutes30 = Object.entries(zoneWeights).reduce((sum, [key, weight]) => {
+    return sum + (Number(zoneTotals30[key] || 0) / 60) * weight;
+  }, 0);
+  const intensityIndex30 = zoneTotalMinutes30 > 0 ? zoneWeightedMinutes30 / zoneTotalMinutes30 : null;
+  const intensityScore = intensityIndex30 == null ? 0.5 : clamp01((intensityIndex30 - 1) / 4);
+
+  const rpeSamples = workouts
+    .map((w) => ({ startDate: Number(w.startDate || 0), rpe: readRpe(w), durationMin: sec(w.movingTime_s || w.elapsedTime_s) / 60 }))
+    .filter((item) => item.rpe != null);
+  const rpeLast7 = rpeSamples.filter((item) => item.startDate >= last7Ms).map((item) => Number(item.rpe));
+  const rpeLast30 = rpeSamples.filter((item) => item.startDate >= last30Ms).map((item) => Number(item.rpe));
+  const avgRpe7 = avg(rpeLast7);
+  const avgRpe30 = avg(rpeLast30);
+  const rpeLoad30 = rpeSamples
+    .filter((item) => item.startDate >= last30Ms)
+    .reduce((sum, item) => sum + (Number(item.durationMin || 0) * Number(item.rpe || 0)), 0);
+  const rpeScore = avgRpe30 == null ? 0.5 : clamp01((10 - Math.abs(avgRpe30 - 6)) / 10);
+
+  const normalizedFiveKRuns = buildNormalizedPredictions('run', 5, { minKm: 3, maxKm: 21.2, exponent: 1.06 });
+  const best5k = bestNormalized(normalizedFiveKRuns);
+  const predicted5kSec = best5k ? Number(best5k.normalizedSec) : null;
+  const predictionSource = best5k?.provider || null;
+  const predicted10kSec = predicted5kSec ? predicted5kSec * Math.pow(2, 1.06) : null;
+  const HALF_MARATHON_KM = 21.0975;
+  const normalizedHalfMarathon = buildNormalizedPredictions('run', HALF_MARATHON_KM, { minKm: 3, maxKm: 42.2, exponent: 1.06 });
+  const bestHalfMarathon = bestNormalized(normalizedHalfMarathon);
+  const predictedHalfMarathonSec = bestHalfMarathon ? Number(bestHalfMarathon.normalizedSec) : null;
+
+  const normalizedSwim800 = buildNormalizedPredictions('swim', 0.8, { minKm: 0.2, maxKm: 5, exponent: 1.04 });
+  const bestSwim800 = bestNormalized(normalizedSwim800);
+  const predictedSwim800mSec = bestSwim800 ? Number(bestSwim800.normalizedSec) : null;
+  const predictedSwimSource = bestSwim800?.provider || null;
+
+  const FIFTY_KM = 50;
+  const normalizedBike50k = buildNormalizedPredictions('bike', FIFTY_KM, { minKm: 10, maxKm: 250, exponent: 1.06 });
+  const bestBike50k = bestNormalized(normalizedBike50k);
+  const predictedBike50kSec = bestBike50k ? Number(bestBike50k.normalizedSec) : null;
+  const THIRTY_MILES_KM = 48.28032;
+  const normalizedBike30mi = buildNormalizedPredictions('bike', THIRTY_MILES_KM, { minKm: 10, maxKm: 250, exponent: 1.06 });
+  const bestBike30mi = bestNormalized(normalizedBike30mi);
+  const predictedBike30miSec = bestBike30mi ? Number(bestBike30mi.normalizedSec) : null;
+  const predictedBikeSource = (bestBike50k?.provider || bestBike30mi?.provider || null);
+
+  let trendDirection = 'flat';
+  let trendSec = null;
+  let trendPct = null;
+  if (normalizedFiveKRuns.length >= 4) {
+    const recent = normalizedFiveKRuns.slice(-3).map((item) => item.normalizedSec);
+    const baseline = normalizedFiveKRuns.slice(-6, -3).map((item) => item.normalizedSec);
+    const recentAvg = avg(recent);
+    const baselineAvg = avg(baseline.length ? baseline : normalizedFiveKRuns.slice(0, Math.max(1, normalizedFiveKRuns.length - 3)).map((item) => item.normalizedSec));
+    if (recentAvg != null && baselineAvg != null) {
+      trendSec = Number((recentAvg - baselineAvg).toFixed(1));
+      trendPct = baselineAvg > 0 ? Number((((baselineAvg - recentAvg) / baselineAvg) * 100).toFixed(1)) : null;
+      if (trendSec <= -20) trendDirection = 'up';
+      else if (trendSec >= 20) trendDirection = 'down';
+      else trendDirection = 'flat';
+    }
+  }
+
+  const fitnessScore = Math.round((volScore * 0.4 + hrvScore * 0.2 + intensityScore * 0.25 + rpeScore * 0.15) * 100);
+  const normalizedFitnessScore = Math.max(0, Math.min(100, Number.isFinite(fitnessScore) ? fitnessScore : 0));
+  const fitnessLevel = normalizedFitnessScore >= 85
+    ? 'Peak'
+    : normalizedFitnessScore >= 70
+      ? 'Sharp'
+      : normalizedFitnessScore >= 55
+        ? 'Building'
+        : normalizedFitnessScore >= 40
+          ? 'Base'
+          : 'Rebuild';
+
+  const latestWorkout = workouts.length ? workouts[workouts.length - 1] : null;
   return {
     rangeDays: days,
+    filters: {
+      excludeWithDadFromMetrics,
+    },
     totals: { distanceKm: Number(totalKm.toFixed(2)), timeHours: Number((totalSec / 3600).toFixed(2)), sessions },
     last30: { distanceKm: Number(dist30.toFixed(2)), avgPaceMinPerKm: avgPaceMinPerKm ? Number(avgPaceMinPerKm.toFixed(2)) : null, workouts: last30.length },
+    sportTotals: {
+      range: {
+        runKm: Number(sportDistanceRange.runKm.toFixed(2)),
+        swimKm: Number(sportDistanceRange.swimKm.toFixed(2)),
+        bikeKm: Number(sportDistanceRange.bikeKm.toFixed(2)),
+      },
+      last30: {
+        runKm: Number(sportDistanceLast30.runKm.toFixed(2)),
+        swimKm: Number(sportDistanceLast30.swimKm.toFixed(2)),
+        bikeKm: Number(sportDistanceLast30.bikeKm.toFixed(2)),
+      },
+      ytd: {
+        runKm: Number(sportDistanceYtd.runKm.toFixed(2)),
+        swimKm: Number(sportDistanceYtd.swimKm.toFixed(2)),
+        bikeKm: Number(sportDistanceYtd.bikeKm.toFixed(2)),
+      },
+    },
     hrv: { last7Avg: hrv7 ? Number(hrv7.toFixed(1)) : null, last30Avg: hrv30 ? Number(hrv30.toFixed(1)) : null, trendPct: hrvTrendPct != null ? Number(hrvTrendPct.toFixed(1)) : null },
     hrZones: zoneTotals,
+    hrLoad: {
+      weightedMinutes30: Number(zoneWeightedMinutes30.toFixed(1)),
+      intensityIndex30: intensityIndex30 != null ? Number(intensityIndex30.toFixed(2)) : null,
+    },
+    rpe: {
+      samples: rpeSamples.length,
+      avg7: avgRpe7 != null ? Number(avgRpe7.toFixed(2)) : null,
+      avg30: avgRpe30 != null ? Number(avgRpe30.toFixed(2)) : null,
+      load30: Number(rpeLoad30.toFixed(1)),
+    },
+    predictions: {
+      fiveKSec: predicted5kSec != null ? Math.round(predicted5kSec) : null,
+      tenKSec: predicted10kSec != null ? Math.round(predicted10kSec) : null,
+      halfMarathonSec: predictedHalfMarathonSec != null ? Math.round(predictedHalfMarathonSec) : null,
+      fiveKDisplay: fmtSecs(predicted5kSec),
+      tenKDisplay: fmtSecs(predicted10kSec),
+      halfMarathonDisplay: fmtSecs(predictedHalfMarathonSec),
+      swim800mSec: predictedSwim800mSec != null ? Math.round(predictedSwim800mSec) : null,
+      swim800mDisplay: fmtSecs(predictedSwim800mSec),
+      bike50kSec: predictedBike50kSec != null ? Math.round(predictedBike50kSec) : null,
+      bike50kDisplay: fmtSecs(predictedBike50kSec),
+      bike30miSec: predictedBike30miSec != null ? Math.round(predictedBike30miSec) : null,
+      bike30miDisplay: fmtSecs(predictedBike30miSec),
+      trendDirection,
+      trendSec,
+      trendPct,
+      source: predictionSource,
+      swimSource: predictedSwimSource,
+      bikeSource: predictedBikeSource,
+    },
+    lastWorkout: latestWorkout ? {
+      id: latestWorkout.id || null,
+      provider: latestWorkout.provider || null,
+      title: latestWorkout.title || latestWorkout.name || null,
+      type: latestWorkout.type || latestWorkout.sportType || null,
+      startDate: latestWorkout.startDate || null,
+      distance_m: latestWorkout.distance_m || null,
+      duration_s: latestWorkout.movingTime_s || latestWorkout.elapsedTime_s || null,
+      avgHeartrate: latestWorkout.avgHeartrate || null,
+      perceivedExertion: latestWorkout.perceivedExertion ?? latestWorkout.rpe ?? null,
+      sufferScore: latestWorkout.sufferScore ?? null,
+    } : null,
     weekly: Array.from(weekly.entries()).map(([weekStart, w]) => ({ weekStart, ...w, paceMinPerKm: w.distanceKm > 0 ? Number(((w.timeSec / 60) / w.distanceKm).toFixed(2)) : null })),
-    fitnessScore
+    fitnessScore: normalizedFitnessScore,
+    fitnessLevel,
   };
 }
 
@@ -11570,6 +15320,7 @@ exports.enableFitnessAutomationDefaults = httpsV2.onCall(async (req) => {
     parkrunAutoComputePercentiles: true,
     autoEnrichStravaHR: true,
     autoComputeFitnessMetrics: true,
+    excludeWithDadFromMetrics: true,
   };
   if (defaultSlug && defaultRunSeq) {
     payload['parkrunDefaultEventSlug'] = defaultSlug;
@@ -11588,17 +15339,21 @@ exports.generateGoalStoriesAndKPIs = httpsV2.onCall(async (req) => {
 async function _getRunFitnessAnalysis(uid, days) {
   const sinceMs = Date.now() - days * 24 * 60 * 60 * 1000;
   const db = admin.firestore();
+  const excludeWithDadFromMetrics = await shouldExcludeDadTaggedWorkouts(uid);
   const wSnap = await db.collection('metrics_workouts').where('ownerUid', '==', uid).get();
-  const all = wSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  const all = wSnap.docs
+    .map(d => ({ id: d.id, ...d.data() }))
+    .filter((workout) => !(excludeWithDadFromMetrics && workoutHasDadMarker(workout)));
   const parkruns = all.filter(x => x.provider === 'parkrun' && (x.startDate || 0) >= sinceMs);
   const runs = all.filter(x => x.provider === 'strava' && (x.startDate || 0) >= sinceMs && (x.type === 'Run' || x.run === true));
   const pairs = [];
   for (const p of parkruns) {
     const pStart = p.startDate || 0;
-    const rCandidates = runs.filter(r => Math.abs((r.startDate || 0) - pStart) <= 12 * 3600 * 1000);
+    const rCandidates = runs.filter(r => Math.abs((r.startDate || 0) - pStart) <= 18 * 3600 * 1000);
     let best = null, bestScore = 1e12;
     for (const r of rCandidates) {
       const dist = Number(r.distance_m || 0);
+      if (dist && Math.abs(dist - 5000) > 2000) continue;
       const dScore = Math.abs(dist - 5000) + Math.abs((r.startDate || 0) - pStart) / 1000;
       if (dScore < bestScore) { best = r; bestScore = dScore; }
     }
@@ -11629,6 +15384,27 @@ async function _getRunFitnessAnalysis(uid, days) {
     return den ? num / den : null;
   }
   const corr = pearson(xs, ys);
+  const toSec = (entry) => Number(entry?.elapsedTime_s || entry?.movingTime_s || 0) || 0;
+  const formatSec = (value) => {
+    if (!value || !Number.isFinite(value)) return null;
+    const total = Math.max(0, Math.round(value));
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    return `${m}:${String(s).padStart(2, '0')}`;
+  };
+  const parkrunTimes = parkruns.map(toSec).filter((v) => v > 0).sort((a, b) => a - b);
+  const pbSec = parkrunTimes.length ? parkrunTimes[0] : null;
+  const predicted5kSec = pbSec;
+  const predicted10kSec = predicted5kSec ? predicted5kSec * Math.pow(2, 1.06) : null;
+  const avgPairRpe = (() => {
+    const vals = pairs
+      .map((pair) => Number(pair?.strava?.perceivedExertion ?? pair?.strava?.rpe ?? null))
+      .filter((n) => Number.isFinite(n) && n > 0);
+    if (!vals.length) return null;
+    return Number((vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(2));
+  })();
   const byMonth = new Map();
   for (const p of parkruns) {
     const d = new Date(p.startDate || Date.now());
@@ -11642,16 +15418,299 @@ async function _getRunFitnessAnalysis(uid, days) {
     const med = sorted.length ? sorted[Math.floor(sorted.length / 2)] : null;
     return { month, parkrunMedianSec: med };
   }).sort((a, b) => a.month.localeCompare(b.month));
+
+  const trend = (() => {
+    if (monthly.length < 2) return { direction: 'flat', deltaSec: null, deltaPct: null };
+    const latest = monthly[monthly.length - 1]?.parkrunMedianSec || null;
+    const previous = monthly[monthly.length - 2]?.parkrunMedianSec || null;
+    if (!latest || !previous) return { direction: 'flat', deltaSec: null, deltaPct: null };
+    const deltaSec = Number((latest - previous).toFixed(1));
+    const deltaPct = previous > 0 ? Number((((previous - latest) / previous) * 100).toFixed(1)) : null;
+    const direction = deltaSec <= -10 ? 'up' : deltaSec >= 10 ? 'down' : 'flat';
+    return { direction, deltaSec, deltaPct };
+  })();
+
   return {
     pairs: pairs.map(p => ({
-      parkrun: { date: new Date(p.parkrun.startDate).toISOString(), timeSec: p.parkrun.elapsedTime_s || p.parkrun.movingTime_s, position: p.parkrun.position || null, participants: p.parkrun.participantsCount || null, percentileTop: p.parkrun.percentileTop || null, ageGrade: p.parkrun.ageGrade || null },
-      strava: { activityId: p.strava.stravaActivityId, avgHeartrate: p.strava.avgHeartrate || null, hrZones: p.strava.hrZones || null }
+      parkrun: {
+        date: new Date(p.parkrun.startDate).toISOString(),
+        timeSec: p.parkrun.elapsedTime_s || p.parkrun.movingTime_s,
+        position: p.parkrun.position || null,
+        participants: p.parkrun.participantsCount || null,
+        percentileTop: p.parkrun.percentileTop || null,
+        ageGrade: p.parkrun.ageGrade || null,
+        isPb: pbSec != null && Math.abs(toSec(p.parkrun) - pbSec) < 0.5,
+      },
+      strava: {
+        activityId: p.strava.stravaActivityId,
+        avgHeartrate: p.strava.avgHeartrate || null,
+        perceivedExertion: p.strava.perceivedExertion ?? p.strava.rpe ?? null,
+        sufferScore: p.strava.sufferScore ?? null,
+        hrZones: p.strava.hrZones || null,
+      }
     })),
     correlationTimeVsAvgHR: corr,
     hrZonesAggregate: zoneAgg,
-    monthly
+    monthly,
+    parkrunPbSec: pbSec,
+    parkrunPbDisplay: formatSec(pbSec),
+    predicted5kSec: predicted5kSec ? Math.round(predicted5kSec) : null,
+    predicted5kDisplay: formatSec(predicted5kSec),
+    predicted10kSec: predicted10kSec ? Math.round(predicted10kSec) : null,
+    predicted10kDisplay: formatSec(predicted10kSec),
+    trend,
+    averagePairRpe: avgPairRpe,
   };
 }
+
+function detectFitnessMetricFromKpi(name, unit) {
+  const text = `${String(name || '').toLowerCase()} ${String(unit || '').toLowerCase()}`;
+  if (!text.trim()) return null;
+  if ((text.includes('half marathon') || text.includes('half-marathon') || text.includes('21k') || text.includes('21.1')) && (text.includes('time') || text.includes('pace') || text.includes('min') || text.includes('sec') || text.includes('hour') || text.includes('hr'))) {
+    return { key: 'predictedHalfMarathonSec', lowerIsBetter: true, source: 'strava+parkrun' };
+  }
+  if (text.includes('10k') && (text.includes('time') || text.includes('pace') || text.includes('min') || text.includes('sec'))) {
+    return { key: 'predicted10kSec', lowerIsBetter: true, source: 'strava+parkrun' };
+  }
+  if (text.includes('5k') && (text.includes('time') || text.includes('pace') || text.includes('min') || text.includes('sec'))) {
+    return { key: 'predicted5kSec', lowerIsBetter: true, source: 'strava+parkrun' };
+  }
+  if ((text.includes('800m') || text.includes('0.8k')) && (text.includes('time') || text.includes('pace') || text.includes('min') || text.includes('sec'))) {
+    return { key: 'predictedSwim800mSec', lowerIsBetter: true, source: 'strava' };
+  }
+  if ((text.includes('bike') || text.includes('cycle') || text.includes('ride') || text.includes('cycling')) && (text.includes('50k') || text.includes('50km') || text.includes('50 km')) && (text.includes('time') || text.includes('pace') || text.includes('min') || text.includes('sec') || text.includes('hour') || text.includes('hr'))) {
+    return { key: 'predictedBike50kSec', lowerIsBetter: true, source: 'strava' };
+  }
+  if ((text.includes('30 mile') || text.includes('30mi') || text.includes('30-mile')) && (text.includes('time') || text.includes('pace') || text.includes('min') || text.includes('sec') || text.includes('hour') || text.includes('hr'))) {
+    return { key: 'predictedBike30miSec', lowerIsBetter: true, source: 'strava' };
+  }
+  if (text.includes('fitness')) return { key: 'fitnessScore', lowerIsBetter: false, source: 'strava' };
+  if (text.includes('rpe')) return { key: 'avgRpe30', lowerIsBetter: false, source: 'strava' };
+  if (text.includes('step')) return { key: 'estimatedSteps7d', lowerIsBetter: false, source: 'strava' };
+  if (text.includes('position') && text.includes('park')) return { key: 'latestParkrunPosition', lowerIsBetter: true, source: 'parkrun' };
+  if (text.includes('percentile') || text.includes('top %')) return { key: 'latestParkrunPercentile', lowerIsBetter: false, source: 'parkrun' };
+  if ((text.includes('zone') && text.includes('5')) || text.includes('z5')) return { key: 'zone5Minutes30', lowerIsBetter: false, source: 'strava' };
+  if ((text.includes('zone') && text.includes('4')) || text.includes('z4')) return { key: 'zone4Minutes30', lowerIsBetter: false, source: 'strava' };
+  if ((text.includes('swim') || text.includes('pool') || text.includes('open water')) && (text.includes('distance') || text.includes('km') || text.includes('meter') || text.includes('metre') || text.includes('m'))) {
+    return { key: 'swimDistanceKm30', lowerIsBetter: false, source: 'strava' };
+  }
+  if ((text.includes('bike') || text.includes('cycle') || text.includes('ride') || text.includes('cycling')) && (text.includes('distance') || text.includes('km') || text.includes('mile') || text.includes('mi'))) {
+    return { key: 'bikeDistanceKm30', lowerIsBetter: false, source: 'strava' };
+  }
+  if ((text.includes('run') || text.includes('jog') || text.includes('parkrun')) && (text.includes('distance') || text.includes('km') || text.includes('mile') || text.includes('mi'))) {
+    return { key: 'runDistanceKm30', lowerIsBetter: false, source: 'strava' };
+  }
+  if (text.includes('distance') || text.includes('km')) return { key: 'distanceKm30', lowerIsBetter: false, source: 'strava' };
+  return null;
+}
+
+function toGoalTargetNumber(target, unit, metricKey) {
+  const raw = Number(target);
+  if (!Number.isFinite(raw) || raw <= 0) return null;
+  const u = String(unit || '').toLowerCase();
+  if (metricKey === 'predicted10kSec' || metricKey === 'predicted5kSec' || metricKey === 'predictedHalfMarathonSec' || metricKey === 'predictedSwim800mSec' || metricKey === 'predictedBike30miSec' || metricKey === 'predictedBike50kSec') {
+    if (u.includes('hour') || u.includes('hr')) return raw * 3600;
+    if (u.includes('min')) return raw * 60;
+    if (u.includes('sec')) return raw;
+    // Default to minutes for run-time goals.
+    return raw * 60;
+  }
+  if (metricKey === 'distanceKm30' || metricKey === 'runDistanceKm30' || metricKey === 'swimDistanceKm30' || metricKey === 'bikeDistanceKm30') {
+    if (u.includes('mile') || u.includes('mi')) return raw * 1.60934;
+    if ((u.includes('meter') || u.includes('metre') || u === 'm') && !u.includes('km')) return raw / 1000;
+    return raw;
+  }
+  return raw;
+}
+
+function computeKpiProgressPct(metricKey, currentValue, targetValue, lowerIsBetter) {
+  if (!Number.isFinite(currentValue) || !Number.isFinite(targetValue) || targetValue <= 0) return null;
+  if (lowerIsBetter) {
+    return Number(Math.max(0, Math.min(200, (targetValue / currentValue) * 100)).toFixed(1));
+  }
+  return Number(Math.max(0, Math.min(200, (currentValue / targetValue) * 100)).toFixed(1));
+}
+
+function formatMetricValue(metricKey, value) {
+  if (!Number.isFinite(value)) return null;
+  if (metricKey === 'predicted10kSec' || metricKey === 'predicted5kSec' || metricKey === 'predictedHalfMarathonSec' || metricKey === 'predictedSwim800mSec' || metricKey === 'predictedBike30miSec' || metricKey === 'predictedBike50kSec') {
+    const secVal = Math.max(0, Math.round(value));
+    const h = Math.floor(secVal / 3600);
+    const m = Math.floor((secVal % 3600) / 60);
+    const s = secVal % 60;
+    if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    return `${m}:${String(s).padStart(2, '0')}`;
+  }
+  return String(Number(value.toFixed(2)));
+}
+
+async function computeGoalFitnessKpisForUser(uid, { goalId = null, persist = true } = {}) {
+  const db = admin.firestore();
+  const excludeWithDadFromMetrics = await shouldExcludeDadTaggedWorkouts(uid);
+  let goals = [];
+  if (goalId) {
+    const snap = await db.collection('goals').doc(goalId).get();
+    if (!snap.exists) return [];
+    const data = snap.data() || {};
+    if (data.ownerUid !== uid) return [];
+    goals = [{ id: snap.id, ...data }];
+  } else {
+    const snap = await db.collection('goals').where('ownerUid', '==', uid).limit(300).get();
+    goals = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  }
+
+  if (!goals.length) return [];
+
+  const [overview, analysis, workoutsSnap] = await Promise.all([
+    _getFitnessOverview(uid, 90).catch(() => null),
+    _getRunFitnessAnalysis(uid, 365).catch(() => null),
+    db.collection('metrics_workouts')
+      .where('ownerUid', '==', uid)
+      .where('provider', '==', 'strava')
+      .limit(120)
+      .get()
+      .catch(() => null),
+  ]);
+
+  const stravaRuns = workoutsSnap
+    ? workoutsSnap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }))
+    : [];
+  const filteredStravaRuns = stravaRuns.filter((workout) => !(excludeWithDadFromMetrics && workoutHasDadMarker(workout)));
+  filteredStravaRuns.sort((a, b) => Number(b.startDate || 0) - Number(a.startDate || 0));
+  const classifyStravaSport = (workout) => {
+    if (!workout) return 'other';
+    if (workout.run === true) return 'run';
+    const type = String(workout.sportType || workout.type || '').toLowerCase();
+    if (type.includes('swim')) return 'swim';
+    if (type.includes('ride') || type.includes('bike') || type.includes('cycling')) return 'bike';
+    if (type.includes('run') || type.includes('walk') || type.includes('hike')) return 'run';
+    return 'other';
+  };
+  const since7Ms = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const since30Ms = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  const estimatedSteps7d = filteredStravaRuns
+    .filter((w) => Number(w.startDate || 0) >= since7Ms)
+    .reduce((sum, w) => {
+      const type = classifyStravaSport(w);
+      if (type !== 'run') return sum;
+      const kmVal = Number(w.distance_m || 0) / 1000;
+      // Rough stride conversion; keeps KPI directional without requiring step streams.
+      return sum + Math.round(kmVal * 1312);
+    }, 0);
+  const stravaDistance30 = filteredStravaRuns
+    .filter((w) => Number(w.startDate || 0) >= since30Ms)
+    .reduce((sum, w) => {
+      const bucket = classifyStravaSport(w);
+      const kmVal = Number(w.distance_m || 0) / 1000;
+      if (!Number.isFinite(kmVal) || kmVal <= 0) return sum;
+      if (bucket === 'run') sum.runKm += kmVal;
+      else if (bucket === 'swim') sum.swimKm += kmVal;
+      else if (bucket === 'bike') sum.bikeKm += kmVal;
+      return sum;
+    }, { runKm: 0, swimKm: 0, bikeKm: 0 });
+  const runDistanceKm30 = Number(
+    overview?.sportTotals?.last30?.runKm
+    ?? stravaDistance30.runKm
+    ?? overview?.last30?.distanceKm
+    ?? 0
+  ) || 0;
+  const swimDistanceKm30 = Number(
+    overview?.sportTotals?.last30?.swimKm
+    ?? stravaDistance30.swimKm
+    ?? 0
+  ) || 0;
+  const bikeDistanceKm30 = Number(
+    overview?.sportTotals?.last30?.bikeKm
+    ?? stravaDistance30.bikeKm
+    ?? 0
+  ) || 0;
+
+  const latestParkrun = analysis?.pairs?.length
+    ? analysis.pairs[analysis.pairs.length - 1]?.parkrun
+    : null;
+
+  const derived = {
+    predicted5kSec: Number(analysis?.predicted5kSec || overview?.predictions?.fiveKSec || 0) || null,
+    predicted10kSec: Number(analysis?.predicted10kSec || overview?.predictions?.tenKSec || 0) || null,
+    predictedHalfMarathonSec: Number(overview?.predictions?.halfMarathonSec || 0) || null,
+    predictedSwim800mSec: Number(overview?.predictions?.swim800mSec || 0) || null,
+    predictedBike50kSec: Number(overview?.predictions?.bike50kSec || 0) || null,
+    predictedBike30miSec: Number(overview?.predictions?.bike30miSec || 0) || null,
+    fitnessScore: Number(overview?.fitnessScore || 0) || null,
+    avgRpe30: Number(overview?.rpe?.avg30 || 0) || null,
+    estimatedSteps7d: estimatedSteps7d || null,
+    latestParkrunPosition: Number(latestParkrun?.position || 0) || null,
+    latestParkrunPercentile: Number(latestParkrun?.percentileTop || 0) || null,
+    zone4Minutes30: Number(((overview?.hrZones?.z4Time_s || 0) / 60).toFixed(1)) || 0,
+    zone5Minutes30: Number(((overview?.hrZones?.z5Time_s || 0) / 60).toFixed(1)) || 0,
+    runDistanceKm30,
+    swimDistanceKm30,
+    bikeDistanceKm30,
+    distanceKm30: runDistanceKm30,
+  };
+
+  const results = goals.map((goal) => {
+    const sourceKpis = Array.isArray(goal.kpis) ? goal.kpis : [];
+    const resolved = sourceKpis.map((kpi, idx) => {
+      const metric = detectFitnessMetricFromKpi(kpi?.name, kpi?.unit);
+      if (!metric) return null;
+      const currentValue = Number(derived[metric.key]);
+      if (!Number.isFinite(currentValue) || currentValue <= 0) return null;
+      const targetValue = toGoalTargetNumber(kpi?.target, kpi?.unit, metric.key);
+      const progressPct = targetValue
+        ? computeKpiProgressPct(metric.key, currentValue, targetValue, metric.lowerIsBetter)
+        : null;
+      return {
+        index: idx,
+        name: kpi?.name || '',
+        unit: kpi?.unit || '',
+        source: metric.source,
+        metricKey: metric.key,
+        lowerIsBetter: metric.lowerIsBetter,
+        currentValue,
+        currentDisplay: formatMetricValue(metric.key, currentValue),
+        target: Number.isFinite(Number(kpi?.target)) ? Number(kpi.target) : null,
+        targetNormalized: targetValue,
+        progressPct,
+      };
+    }).filter(Boolean);
+    return {
+      goalId: goal.id,
+      goalRef: goal.ref || null,
+      goalTitle: goal.title || null,
+      updatedAt: new Date().toISOString(),
+      resolvedKpis: resolved,
+    };
+  });
+
+  if (persist) {
+    const batch = db.batch();
+    results.forEach((entry) => {
+      const ref = db.collection('goal_kpi_metrics').doc(`${uid}_${entry.goalId}`);
+      batch.set(ref, {
+        ownerUid: uid,
+        goalId: entry.goalId,
+        goalRef: entry.goalRef || null,
+        goalTitle: entry.goalTitle || null,
+        resolvedKpis: entry.resolvedKpis,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+    });
+    await batch.commit();
+  }
+
+  return results;
+}
+
+exports.resolveGoalFitnessKpis = httpsV2.onCall(async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const goalId = String(req.data?.goalId || '').trim() || null;
+  const persist = req.data?.persist !== false;
+  const rows = await computeGoalFitnessKpisForUser(uid, { goalId, persist });
+  if (goalId) return rows[0] || null;
+  return { goals: rows };
+});
 
 // Compute participants and percentile by scanning event results pages backwards
 exports.computeParkrunPercentiles = httpsV2.onCall(async (req) => {
@@ -11671,6 +15730,23 @@ exports.computeParkrunPercentiles = httpsV2.onCall(async (req) => {
 
 async function _computeParkrunPercentilesInternal(uid, { eventSlug, startRun, base = 'https://www.parkrun.org.uk', maxBack = 120, onlyMissing = false }) {
   const cheerio = require('cheerio');
+  const requestHeaderCandidates = [
+    {
+      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      'Accept-Language': 'en-GB,en;q=0.9',
+      'Cache-Control': 'no-cache',
+      'Pragma': 'no-cache',
+      'Upgrade-Insecure-Requests': '1',
+    },
+    {
+      'User-Agent': PARKRUN_API_USER_AGENT,
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'en-GB,en;q=0.9',
+      'Cache-Control': 'no-cache',
+      'Pragma': 'no-cache',
+    },
+  ];
   function dateOnly(ms) {
     const d = new Date(ms);
     return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
@@ -11679,7 +15755,19 @@ async function _computeParkrunPercentilesInternal(uid, { eventSlug, startRun, ba
 
   async function fetchRun(runNum) {
     const url = `${String(base).replace(/\/$/, '')}/${eventSlug}/results/${runNum}`;
-    const html = await (await fetch(url)).text();
+    let res = null;
+    for (let i = 0; i < requestHeaderCandidates.length; i++) {
+      const candidate = await fetch(url, { headers: requestHeaderCandidates[i], redirect: 'follow' });
+      if (candidate.ok) {
+        res = candidate;
+        break;
+      }
+      const retryableStatus = new Set([403, 405, 406, 429]);
+      if (i < requestHeaderCandidates.length - 1 && retryableStatus.has(Number(candidate.status || 0))) continue;
+      throw new Error(`HTTP ${candidate.status}`);
+    }
+    if (!res) throw new Error('HTTP 0');
+    const html = await res.text();
     const $ = cheerio.load(html);
     const contentText = $('#content').text() || $('body').text();
     let dateMs = null;
@@ -11690,7 +15778,7 @@ async function _computeParkrunPercentilesInternal(uid, { eventSlug, startRun, ba
       const parsed = Date.parse(t || '');
       if (!isNaN(parsed)) dateMs = parsed;
     }
-    const participants = $('table#results tbody tr').length || null;
+    const participants = $('table#results tbody tr').length || $('table tbody tr').length || null;
     return { runNum, url, dateMs, participants };
   }
 
@@ -11810,6 +15898,102 @@ exports.listUpcomingEvents = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, 
     headers: { "Authorization": "Bearer " + access },
   });
   return { ok: true, items: data.items || [] };
+});
+
+exports.checkGoogleDocsAccess = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
+  const uid = req.auth.uid;
+  const db = admin.firestore();
+  const profileSnap = await db.collection('profiles').doc(uid).get();
+  const profile = profileSnap.exists ? (profileSnap.data() || {}) : {};
+  const docUrl = String(req.data?.docUrl || profile.defaultJournalDocUrl || '').trim();
+
+  if (!docUrl) {
+    return {
+      ok: false,
+      code: 'missing_doc_url',
+      message: 'No default journal Google Doc URL is saved.',
+      steps: [
+        'Paste a Google Docs URL into Default Journal Google Doc URL in Settings.',
+        'Save the document URL.',
+      ],
+    };
+  }
+
+  const docId = parseGoogleDocIdFromUrl(docUrl);
+  if (!docId) {
+    return {
+      ok: false,
+      code: 'invalid_doc_url',
+      message: 'The saved Google Doc URL is not in the expected Google Docs format.',
+      docUrl,
+      steps: [
+        'Open the target Google Doc in your browser.',
+        'Copy the full https://docs.google.com/document/d/... URL.',
+        'Paste it into Default Journal Google Doc URL and save it again.',
+      ],
+    };
+  }
+
+  let access;
+  try {
+    access = await getAccessToken(uid);
+  } catch (error) {
+    return {
+      ok: false,
+      code: 'google_not_connected',
+      message: 'Google is not connected or no usable refresh token is stored.',
+      docUrl,
+      docId,
+      steps: [
+        'Open Settings -> Integrations -> Google Calendar & Docs.',
+        'Click Reconnect.',
+        'Complete the Google consent screen.',
+      ],
+      details: error?.message || String(error),
+    };
+  }
+
+  try {
+    const data = await fetchJson(`https://docs.googleapis.com/v1/documents/${encodeURIComponent(docId)}`, {
+      headers: { Authorization: `Bearer ${access}` },
+    });
+    return {
+      ok: true,
+      code: 'ok',
+      message: 'Google Docs access is working.',
+      docUrl,
+      docId,
+      title: data?.title || null,
+    };
+  } catch (error) {
+    const message = error?.message || String(error);
+    const statusMatch = String(message).match(/HTTP\s+(\d{3})/i);
+    const status = statusMatch ? Number(statusMatch[1]) : Number(error?.status || error?.code || 0);
+    const scopeOrAccess = status === 401 || status === 403 || status === 404;
+    return {
+      ok: false,
+      code: scopeOrAccess ? 'docs_scope_or_access' : 'docs_probe_failed',
+      message: scopeOrAccess
+        ? 'Google Docs access failed. The connected Google account either lacks the Docs scope or does not have access to this document.'
+        : `Google Docs probe failed: ${message}`,
+      docUrl,
+      docId,
+      status: Number.isFinite(status) && status > 0 ? status : null,
+      steps: scopeOrAccess
+        ? [
+          'Click Reconnect in Google Calendar & Docs.',
+          'Approve the Google consent screen again so the token includes Google Docs access.',
+          'Make sure the same Google account is the owner of the document or has edit access to it.',
+          'Run Test Doc Access again.',
+        ]
+        : [
+          'Retry the test.',
+          'If it still fails, inspect the function logs for checkGoogleDocsAccess.',
+        ],
+      details: message,
+    };
+  }
 });
 
 // Full two-way sync for calendar_blocks within a window (bidirectional)
@@ -12077,8 +16261,10 @@ exports.scheduleDueTasksToday = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_I
   };
 
   for (const t of tasks) {
-    const points = Number(t.points ?? t.estimateMin ? Math.round(Number(t.estimateMin) / 60) : 0);
-    const dur = Math.min(180, Math.max(30, points > 0 ? points * 60 : 30));
+    const points = (Number.isFinite(Number(t.points)) && Number(t.points) > 0)
+      ? Number(t.points)
+      : (Number.isFinite(Number(t.estimateMin)) && Number(t.estimateMin) > 0 ? Number(t.estimateMin) / 60 : 0);
+    const dur = Math.min(240, Math.max(30, points > 0 ? points * 60 : 30));
     const slotStart = findSlot(dur);
     if (!slotStart) continue;
     const slotEnd = slotStart + dur * 60000;
@@ -12379,6 +16565,305 @@ exports.syncPlanToGoogleCalendar = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIEN
   return await syncPlanToGoogleForUser(uid, day);
 });
 
+function matchLevenshteinDistance(str1, str2) {
+  const a = String(str1 || '').toLowerCase().trim();
+  const b = String(str2 || '').toLowerCase().trim();
+  const track = Array(b.length + 1)
+    .fill(null)
+    .map(() => Array(a.length + 1).fill(0));
+
+  for (let i = 0; i <= a.length; i += 1) track[0][i] = i;
+  for (let j = 0; j <= b.length; j += 1) track[j][0] = j;
+
+  for (let j = 1; j <= b.length; j += 1) {
+    for (let i = 1; i <= a.length; i += 1) {
+      const indicator = a[i - 1] === b[j - 1] ? 0 : 1;
+      track[j][i] = Math.min(
+        track[j][i - 1] + 1,
+        track[j - 1][i] + 1,
+        track[j - 1][i - 1] + indicator
+      );
+    }
+  }
+
+  return track[b.length][a.length];
+}
+
+function matchSimilarity(str1, str2) {
+  const maxLen = Math.max(String(str1 || '').length, String(str2 || '').length);
+  if (maxLen === 0) return 1;
+  const distance = matchLevenshteinDistance(str1, str2);
+  return Math.max(0, 1 - distance / maxLen);
+}
+
+function matchKeywordOverlap(taskTitle, targetTitle) {
+  const taskWords = String(taskTitle || '').toLowerCase().split(/\s+/).filter((w) => w.length > 3);
+  const targetWords = String(targetTitle || '').toLowerCase().split(/\s+/).filter((w) => w.length > 3);
+  const overlap = taskWords.filter((w) => targetWords.includes(w)).length;
+  return overlap > 0 ? (overlap / Math.max(taskWords.length, targetWords.length)) * 0.3 : 0;
+}
+
+function matchCombinedScore(taskTitle, targetTitle) {
+  const similarity = matchSimilarity(taskTitle, targetTitle);
+  const keywords = matchKeywordOverlap(taskTitle, targetTitle);
+  return Math.min(1, similarity + keywords);
+}
+
+async function rerankMacSyncMatchWithLLM({ userId, task, candidates }) {
+  if (!Array.isArray(candidates) || !candidates.length) return null;
+
+  const shortlist = candidates
+    .slice()
+    .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
+    .slice(0, 6)
+    .map((candidate) => ({
+      id: candidate.id,
+      type: candidate.type,
+      title: candidate.title || candidate.name || '',
+      score: Number(Number(candidate.score || 0).toFixed(3)),
+      linkedGoal: candidate.linkedGoal || null,
+      ref: candidate.ref || null,
+    }));
+
+  if (!shortlist.length) return null;
+
+  const system = 'You are a task linking assistant. Choose the single best match for a task from candidate goals/stories. Reply JSON only.';
+  const user = [
+    'Return JSON exactly as:',
+    '{"pickId":"<candidate id or empty>","pickType":"goal|story|none","confidence":0-1,"reason":"short"}',
+    '',
+    `Task title: ${String(task?.title || '')}`,
+    `Task description: ${String(task?.description || '').slice(0, 300)}`,
+    `Candidates: ${JSON.stringify(shortlist)}`,
+    'Rules:',
+    '- Choose none if confidence is low or ambiguous.',
+    '- Prefer exact ref/title semantics over loose similarity.',
+  ].join('\n');
+
+  try {
+    const raw = await callLLMJson({
+      system,
+      user,
+      purpose: 'macSyncLinkMatch',
+      userId,
+      expectJson: true,
+      temperature: 0.1,
+    });
+    const parsed = raw ? JSON.parse(raw) : {};
+    const pickId = String(parsed?.pickId || '').trim();
+    const pickType = String(parsed?.pickType || '').trim().toLowerCase();
+    const confidence = Number(parsed?.confidence || 0);
+    if (!pickId || !['goal', 'story'].includes(pickType)) return null;
+    if (!Number.isFinite(confidence) || confidence < 0.75) return null;
+    return shortlist.find((candidate) => candidate.id === pickId && candidate.type === pickType) || null;
+  } catch (error) {
+    console.warn('[mac-sync] LLM rerank failed', { userId, taskId: task?.id, error: error?.message || error });
+    return null;
+  }
+}
+
+function nextDayDueDateMs() {
+  return DateTime.now().plus({ days: 1 }).endOf('day').toMillis();
+}
+
+async function ensureLinkConfirmationTask({ db, userId, type, task, story, goal }) {
+  if (!goal?.id) return null;
+
+  const goalTitle = goal.title || goal.name || goal.ref || goal.id;
+  const dueDate = nextDayDueDateMs();
+
+  let sourceEntityId = null;
+  let sourceEntityRef = null;
+  let sourceEntityTitle = null;
+  let storyId = null;
+
+  if (type === 'story') {
+    sourceEntityId = story.id;
+    sourceEntityRef = story.ref || `ST-${String(story.id).slice(-6).toUpperCase()}`;
+    sourceEntityTitle = story.title || sourceEntityRef;
+    storyId = story.id;
+  } else {
+    sourceEntityId = task.id;
+    sourceEntityRef = task.ref || `TK-${String(task.id).slice(-6).padStart(6, '0').toUpperCase()}`;
+    sourceEntityTitle = task.title || sourceEntityRef;
+  }
+
+  const duplicateKey = `linkconfirm:${type}:${sourceEntityId}:goal:${goal.id}`;
+  const existing = await db.collection('tasks')
+    .where('ownerUid', '==', userId)
+    .where('duplicateKey', '==', duplicateKey)
+    .limit(1)
+    .get();
+
+  if (!existing.empty) return existing.docs[0].id;
+
+  const newRef = db.collection('tasks').doc();
+  const title = `${sourceEntityTitle} (REF ${sourceEntityRef}) has been matched to Goal ${goalTitle} (confirm)`;
+  const nowMs = Date.now();
+  const payload = ensureTaskPoints({
+    id: newRef.id,
+    ownerUid: userId,
+    persona: task.persona || 'personal',
+    title,
+    description: type === 'story'
+      ? `Please confirm the story-to-goal link for ${sourceEntityRef}.`
+      : `Please confirm the task-to-goal link for ${sourceEntityRef}.`,
+    status: 0,
+    task_type: 'reminder',
+    entry_method: 'auto:mac_sync_link_confirmation',
+    source: 'mac_sync_automation',
+    duplicateKey,
+    goalId: goal.id,
+    storyId,
+    dueDate,
+    createdAt: nowMs,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    syncState: 'dirty',
+    parentType: type === 'story' ? 'story' : 'goal',
+    parentId: type === 'story' ? story.id : goal.id,
+  });
+
+  await newRef.set(payload, { merge: true });
+  return newRef.id;
+}
+
+async function runMacSyncPostProcessing({ db, userId, touchedTaskIds }) {
+  const touchedIds = Array.from(touchedTaskIds || []).filter(Boolean);
+  const result = {
+    touched: touchedIds.length,
+    dedupeResolved: 0,
+    autoLinked: 0,
+    confirmationTasksCreated: 0,
+  };
+
+  try {
+    const dedupeResult = await deduplicateUserTasks({
+      db,
+      userId,
+      dryRun: false,
+      hardDelete: false,
+      logActivity: true,
+      activityActor: 'MacSyncPull',
+      includeTitleDedupe: true,
+    });
+    result.dedupeResolved = Number(dedupeResult?.duplicatesResolved || 0);
+  } catch (error) {
+    console.warn('[mac-sync] post dedupe failed', { userId, error: error?.message || error });
+  }
+
+  if (!touchedIds.length) return result;
+
+  const [goalsSnap, storiesSnap] = await Promise.all([
+    db.collection('goals').where('ownerUid', '==', userId).get().catch(() => ({ docs: [] })),
+    db.collection('stories').where('ownerUid', '==', userId).get().catch(() => ({ docs: [] })),
+  ]);
+
+  const goals = goalsSnap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+  const stories = storiesSnap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+  if (!goals.length && !stories.length) return result;
+
+  const goalById = new Map(goals.map((g) => [g.id, g]));
+  const storyById = new Map(stories.map((s) => [s.id, s]));
+
+  for (const taskId of touchedIds) {
+    let taskSnap = null;
+    try {
+      taskSnap = await db.collection('tasks').doc(taskId).get();
+    } catch {
+      continue;
+    }
+    if (!taskSnap?.exists) continue;
+
+    const task = { id: taskSnap.id, ...(taskSnap.data() || {}) };
+    const status = String(task.status ?? '').toLowerCase();
+    const isDone = status === 'done' || status === 'complete' || status === 'completed' || Number(task.status) === 2;
+    if (isDone || task.deleted) continue;
+    if (task.goalId || task.storyId || (task.parentType === 'story' && task.parentId)) continue;
+
+    let bestGoal = null;
+    for (const goal of goals) {
+      const score = matchCombinedScore(task.title || '', goal.title || goal.name || '');
+      if (score > 0.5 && (!bestGoal || score > bestGoal.score)) {
+        bestGoal = { ...goal, score, type: 'goal' };
+      }
+    }
+
+    let bestStory = null;
+    for (const story of stories) {
+      const score = matchCombinedScore(task.title || '', story.title || '');
+      if (score > 0.5 && (!bestStory || score > bestStory.score)) {
+        bestStory = { ...story, score, type: 'story' };
+      }
+    }
+
+    const ranked = [bestGoal, bestStory].filter(Boolean).sort((a, b) => (b.score || 0) - (a.score || 0));
+    let best = ranked[0] || null;
+
+    // High-confidence fuzzy match is accepted immediately.
+    if (!best) continue;
+    if (best.score <= 0.85) {
+      // Option 3: LLM re-ranks ambiguous but plausible fuzzy candidates.
+      const llmCandidate = await rerankMacSyncMatchWithLLM({
+        userId,
+        task,
+        candidates: ranked,
+      });
+      if (llmCandidate) {
+        best = {
+          ...(llmCandidate.type === 'goal' ? (goalById.get(llmCandidate.id) || {}) : (storyById.get(llmCandidate.id) || {})),
+          ...llmCandidate,
+          score: Number(llmCandidate.score || best.score || 0),
+        };
+      } else {
+        continue;
+      }
+    }
+
+    const patch = {
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      syncState: 'dirty',
+      linkMatchSource: 'mac_sync_fuzzy',
+      linkMatchScore: Number(best.score.toFixed(3)),
+    };
+
+    let confirmationTaskId = null;
+
+    if (best.type === 'goal') {
+      patch.goalId = best.id;
+      await db.collection('tasks').doc(task.id).set(patch, { merge: true });
+      confirmationTaskId = await ensureLinkConfirmationTask({
+        db,
+        userId,
+        type: 'task',
+        task,
+        story: null,
+        goal: best,
+      });
+    } else {
+      const story = storyById.get(best.id) || best;
+      const linkedGoalId = story.goalId || null;
+      patch.storyId = story.id;
+      if (linkedGoalId) patch.goalId = linkedGoalId;
+      await db.collection('tasks').doc(task.id).set(patch, { merge: true });
+      if (linkedGoalId && goalById.has(linkedGoalId)) {
+        confirmationTaskId = await ensureLinkConfirmationTask({
+          db,
+          userId,
+          type: 'story',
+          task,
+          story,
+          goal: goalById.get(linkedGoalId),
+        });
+      }
+    }
+
+    result.autoLinked += 1;
+    if (confirmationTaskId) result.confirmationTasksCreated += 1;
+  }
+
+  return result;
+}
+
 // iOS Reminders bridge (public HTTPS): Shortcuts can call these endpoints
 exports.remindersPush = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET], invoker: 'public' }, async (req, res) => {
   try {
@@ -12460,6 +16945,8 @@ exports.remindersPush = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
         type: 'task',
         title,
         dueDate: t.dueDate || null,
+        dueTime: t.dueTime || null,
+        timeOfDay: t.timeOfDay || null,
         // Use canonical task ref style: TK-<last6 of id, zero-padded>
         ref: t.ref || `TK-${String(t.id || '').slice(-6).padStart(6, '0').toUpperCase()}`,
         createdAt: t.createdAt || null,
@@ -12512,6 +16999,8 @@ exports.remindersPush = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
             status: data.status || null,
             completed: done,
             dueDate: sprintMeta.get(data.sprintId || '')?.endMs || null,
+            dueTime: data.dueTime || null,
+            timeOfDay: data.timeOfDay || null,
             tags: sprintLabel ? [sprintLabel] : undefined,
             url,
             note: noteLines.join('\n'),
@@ -12528,7 +17017,7 @@ exports.remindersPush = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
   }
 });
 
-exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET], invoker: 'public' }, async (req, res) => {
+exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET, GOOGLE_AI_STUDIO_API_KEY], invoker: 'public' }, async (req, res) => {
   try {
     if (req.method !== 'POST') return res.status(405).send('Method not allowed');
     const uid = String(req.query.uid || req.body?.uid || '');
@@ -12539,6 +17028,7 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
     const updates = Array.isArray(req.body?.tasks) ? req.body.tasks : [];
     const db = admin.firestore();
     let updated = 0;
+    const touchedTaskIds = new Set();
     const classifyType = (title) => {
       const t = String(title || '').toLowerCase();
       const choreHints = ['laundry', 'trash', 'garbage', 'recycling', 'clean', 'dishes', 'vacuum', 'mop', 'tidy'];
@@ -12578,6 +17068,25 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
         if (!defaultSprintId && isActive) defaultSprintId = d.id;
       });
     } catch { /* ignore */ }
+
+    // Load global hierarchy snapshot once for fast pre-write deduplication — reduces per-task
+    // Firestore queries and prevents duplicate task creation when the same reminder is pushed again.
+    const snapshotReminderIds = new Set();
+    const snapshotDocIds = new Set();
+    const snapshotNormalizedTitles = new Map(); // normalizedTitle -> taskId
+    const normalizeForDedup = (s) =>
+      String(s || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
+    try {
+      const snapshotDoc = await db.collection('global_hierarchy_snapshots').doc(uid).get();
+      if (snapshotDoc.exists) {
+        const snapshotTasks = snapshotDoc.data()?.flat?.tasks || [];
+        for (const t of snapshotTasks) {
+          if (t.id) snapshotDocIds.add(String(t.id));
+          if (t.reminderId) snapshotReminderIds.add(String(t.reminderId));
+          if (t.title) snapshotNormalizedTitles.set(normalizeForDedup(t.title), t.id);
+        }
+      }
+    } catch { /* non-fatal; fall through to per-task Firestore queries */ }
 
     for (const u of updates) {
       const id = String(u.id || '');
@@ -12629,6 +17138,12 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
             patch['status'] = 4;
             patch['completedAt'] = nowMs;
           }
+          if (u.dueTime !== undefined) {
+            patch['dueTime'] = u.dueTime;
+          }
+          if (u.timeOfDay !== undefined) {
+            patch['timeOfDay'] = u.timeOfDay;
+          }
           if (iosTags.length) {
             patch['tags'] = mergeTags(existing.tags || [], iosTags);
           }
@@ -12656,6 +17171,8 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
             ref: refVal,
             syncState: 'dirty',
           };
+          if (u.dueTime !== undefined) base['dueTime'] = u.dueTime;
+          if (u.timeOfDay !== undefined) base['timeOfDay'] = u.timeOfDay;
           if (completed) base['completedAt'] = nowMs;
           await newRef.set(base, { merge: true });
           updated++;
@@ -12685,6 +17202,12 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
           data['completedAt'] = Date.now();
           data['deleteAfter'] = Date.now() + TASK_TTL_DAYS * MS_IN_DAY;
         }
+        if (u.dueTime !== undefined) {
+          data['dueTime'] = u.dueTime;
+        }
+        if (u.timeOfDay !== undefined) {
+          data['timeOfDay'] = u.timeOfDay;
+        }
         if (iosTags.length) {
           try {
             const snap = await ref.get();
@@ -12695,11 +17218,42 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
         }
         await ref.set(data, { merge: true });
         updated++;
+        touchedTaskIds.add(ref.id);
       } else if (reminderId || title) {
         // Auto-import new task from Reminders
         const task_type = classifyType(title);
         const nowMs = Date.now();
         const dupKey = reminderId ? `reminder:${String(reminderId).toLowerCase()}` : null;
+
+        // --- Snapshot pre-write deduplication ---
+        // Fast check against the cached snapshot before hitting Firestore with per-task queries.
+        if (reminderId && snapshotReminderIds.has(reminderId)) {
+          // Already exists in snapshot — skip creation, treat as no-op for this push.
+          continue;
+        }
+        const normIncomingTitle = normalizeForDedup(title);
+        if (normIncomingTitle && snapshotNormalizedTitles.has(normIncomingTitle)) {
+          // Title match in snapshot — update the existing task instead of creating a duplicate.
+          const existingId = snapshotNormalizedTitles.get(normIncomingTitle);
+          if (existingId) {
+            const patch = {
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              syncState: 'dirty',
+              ...(reminderId ? { reminderId, duplicateKey: dupKey } : {}),
+              ...(u.dueTime !== undefined ? { dueTime: u.dueTime } : {}),
+              ...(u.timeOfDay !== undefined ? { timeOfDay: u.timeOfDay } : {}),
+              ...(completed ? { status: 2, completedAt: nowMs, deleteAfter: nowMs + TASK_TTL_DAYS * MS_IN_DAY } : {}),
+            };
+            try {
+              await db.collection('tasks').doc(existingId).set(patch, { merge: true });
+              updated++;
+              touchedTaskIds.add(existingId);
+            } catch { /* ignore */ }
+            continue;
+          }
+        }
+        // ----------------------------------------
+
         // Check again for duplicates by duplicateKey to avoid creating a new one
         if (dupKey) {
           const snap = await db.collection('tasks').where('ownerUid', '==', uid).where('duplicateKey', '==', dupKey).limit(1).get();
@@ -12712,11 +17266,14 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
               reminderId: reminderId,
               updatedAt: admin.firestore.FieldValue.serverTimestamp(),
               syncState: 'dirty',
+              ...(u.dueTime !== undefined ? { dueTime: u.dueTime } : {}),
+              ...(u.timeOfDay !== undefined ? { timeOfDay: u.timeOfDay } : {}),
               ...(completed ? { status: 2, completedAt: nowMs, deleteAfter: nowMs + TASK_TTL_DAYS * MS_IN_DAY } : {}),
               ...(iosTags.length ? { tags: Array.from(new Set([...(snap.docs[0].data()?.tags || []), ...iosTags])).slice(0, 12) } : {}),
             };
             await existingRef.set(data, { merge: true });
             updated++;
+            touchedTaskIds.add(existingRef.id);
           } else {
             const newRef = db.collection('tasks').doc();
             await newRef.set(ensureTaskPoints({
@@ -12734,10 +17291,13 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
               createdAt: nowMs,
               updatedAt: admin.firestore.FieldValue.serverTimestamp(),
               syncState: 'dirty',
+              ...(u.dueTime !== undefined ? { dueTime: u.dueTime } : {}),
+              ...(u.timeOfDay !== undefined ? { timeOfDay: u.timeOfDay } : {}),
               ...(completed ? { completedAt: nowMs, deleteAfter: nowMs + TASK_TTL_DAYS * MS_IN_DAY } : {}),
               ...(iosTags.length ? { tags: iosTags } : {}),
             }), { merge: true });
             updated++;
+            touchedTaskIds.add(newRef.id);
           }
         } else {
           const newRef = db.collection('tasks').doc();
@@ -12755,14 +17315,22 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
             createdAt: nowMs,
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
             syncState: 'dirty',
+            ...(u.dueTime !== undefined ? { dueTime: u.dueTime } : {}),
+            ...(u.timeOfDay !== undefined ? { timeOfDay: u.timeOfDay } : {}),
             ...(completed ? { completedAt: nowMs, deleteAfter: nowMs + TASK_TTL_DAYS * MS_IN_DAY } : {}),
             ...(iosTags.length ? { tags: iosTags } : {}),
           }), { merge: true });
           updated++;
+          touchedTaskIds.add(newRef.id);
         }
       }
     }
-    return res.json({ ok: true, updated });
+    const postProcessing = await runMacSyncPostProcessing({
+      db,
+      userId: uid,
+      touchedTaskIds,
+    });
+    return res.json({ ok: true, updated, postProcessing });
   } catch (e) {
     console.error('remindersPull error', e);
     return res.status(500).json({ error: 'server_error' });
@@ -12819,11 +17387,84 @@ exports.onStoryDueDateAutoSprint = functionsV2.firestore.onDocumentUpdated("stor
   if (!ownerUid) return;
   const persona = afterData.persona || beforeData.persona || null;
   const db = admin.firestore();
+  const profileSnap = await db.collection('profiles').doc(ownerUid).get().catch(() => null);
+  const profile = profileSnap && profileSnap.exists ? (profileSnap.data() || {}) : {};
+  // Safety guard: due-date based sprint mapping is opt-in only.
+  if (profile.autoMapStorySprintFromDueDate !== true) return;
+
+  // Never overwrite an existing sprint from due-date churn.
+  const currentSprintId = afterData.sprintId || null;
+  if (currentSprintId && afterDue) return;
+
   const sprintId = afterDue
     ? await resolveSprintIdForDate(db, ownerUid, persona, afterDue, new Map())
     : null;
   if ((afterData.sprintId || null) === (sprintId ?? null)) return;
   await db.collection('stories').doc(storyId).set({ sprintId: sprintId ?? null }, { merge: true });
+});
+
+// Ensure story points are numeric and normalized (supports decimal points).
+exports.onStoryWritten = firestoreV2.onDocumentWritten('stories/{storyId}', async (event) => {
+  const before = event.data?.before?.data() || null;
+  const after = event.data?.after?.data() || null;
+  if (!after) return;
+
+  const ref = event.data?.after?.ref || null;
+  if (!ref) return;
+
+  const patch = {};
+
+  // Points normalization
+  try {
+    const rawPoints = Number(after.points);
+    if (Number.isFinite(rawPoints) && rawPoints === 0) {
+      if (!(typeof after.points === 'number' && Number.isFinite(after.points))) {
+        patch.points = 0;
+      }
+    } else {
+      const existingPoints = Number(after.points);
+      const normalizedPoints = clampStoryPoints(after.points);
+      const estimateFallback = clampStoryPoints((Number(after.estimateMin || 0) || 0) / 60);
+      const desiredPoints = normalizedPoints ?? estimateFallback ?? 1;
+      const pointsStoredAsNumber = typeof after.points === 'number' && Number.isFinite(after.points);
+      if (!pointsStoredAsNumber || !Number.isFinite(existingPoints) || existingPoints !== desiredPoints) {
+        patch.points = desiredPoints;
+      }
+    }
+  } catch (e) {
+    console.warn('[onStoryWritten] points normalization skipped', e?.message || e);
+  }
+
+  // timeOfDay sync — aligned with timeOfDayPopulator buckets (morning 05–13, afternoon 13–19, evening 19–05)
+  try {
+    const beforeDueTime = before?.dueTime ? String(before.dueTime).trim() : null;
+    const afterDueTime = after?.dueTime ? String(after.dueTime).trim() : null;
+    const beforePlannedTime = before?.plannedTime ? String(before.plannedTime).trim() : null;
+    const afterPlannedTime = after?.plannedTime ? String(after.plannedTime).trim() : null;
+    const timeStr = afterDueTime || afterPlannedTime || null;
+    const prevTimeStr = beforeDueTime || beforePlannedTime || null;
+
+    if (timeStr && timeStr !== prevTimeStr) {
+      // Explicit time set/changed — derive timeOfDay from it
+      const hour = parseInt(timeStr.split(':')[0] || '0', 10);
+      let newTod;
+      if (hour >= 5 && hour < 13) newTod = 'morning';
+      else if (hour >= 13 && hour < 19) newTod = 'afternoon';
+      else newTod = 'evening';
+      if (after.timeOfDay !== newTod) patch.timeOfDay = newTod;
+    } else if (!timeStr && !after.timeOfDay) {
+      // No time and no timeOfDay — infer from title/description via keywords
+      const inferred = inferTimeOfDayFromContent(after.title || '', after.description || '');
+      if (inferred) patch.timeOfDay = inferred;
+    }
+  } catch (e) {
+    console.warn('[onStoryWritten] timeOfDay sync skipped', e?.message || e);
+  }
+
+  if (Object.keys(patch).length > 0) {
+    patch.updatedAt = admin.firestore.FieldValue.serverTimestamp();
+    await ref.set(patch, { merge: true });
+  }
 });
 
 // ===== Task lifecycle maintenance (completed/duplicates TTL and flags)
@@ -12917,12 +17558,23 @@ exports.onTaskWritten = firestoreV2.onDocumentWritten('tasks/{taskId}', async (e
 
   // Ensure points are always populated and clamped
   try {
-    const normalizedPoints = clampTaskPoints(after.points);
-    const desiredPoints = (normalizedPoints != null ? normalizedPoints : deriveTaskPoints(after));
-    if (typeof desiredPoints === 'number') {
-      const existingPoints = Number(after.points);
-      if (!Number.isFinite(existingPoints) || existingPoints !== desiredPoints) {
-        patch.points = desiredPoints;
+    const rawPoints = Number(after.points);
+    if (Number.isFinite(rawPoints) && rawPoints === 0) {
+      // Keep explicit zero as a "needs sizing" signal for nightly LLM passes.
+      if (!(typeof after.points === 'number' && Number.isFinite(after.points))) {
+        patch.points = 0;
+      }
+    } else {
+      const normalizedPoints = clampTaskPoints(after.points);
+      const desiredPoints = (normalizedPoints != null
+        ? normalizedPoints
+        : (!before ? DEFAULT_TASK_POINTS : deriveTaskPoints(after)));
+      if (typeof desiredPoints === 'number') {
+        const existingPoints = Number(after.points);
+        const pointsStoredAsNumber = typeof after.points === 'number' && Number.isFinite(after.points);
+        if (!pointsStoredAsNumber || !Number.isFinite(existingPoints) || existingPoints !== desiredPoints) {
+          patch.points = desiredPoints;
+        }
       }
     }
   } catch (e) {
@@ -12995,11 +17647,7 @@ exports.onTaskWritten = firestoreV2.onDocumentWritten('tasks/{taskId}', async (e
     after.autoConverted !== true &&
     after.autoConversionSkip !== true
   ) {
-    const estMinutes = Number(after.estimateMin || 0);
-    const estHours = Number(after.estimatedHours || 0);
-    const points = Number(after.points || 0);
-    const forceStory = after.forceStoryConversion === true;
-    if (forceStory || estMinutes >= 240 || estHours >= 4 || points > 4) {
+    if (shouldAutoConvertTaskData(after)) {
       try {
         const profileSnap = await db.collection('profiles').doc(ownerUidForAuto).get();
         const profileData = profileSnap.exists ? (profileSnap.data() || {}) : {};
@@ -13140,6 +17788,20 @@ exports.prioritizeBacklog = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY]
     console.error('Failed to parse AI response:', parseError);
   }
   return out;
+});
+
+exports.whatToWorkOnNext = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const db = ensureFirestore();
+  const persona = normalizeRecommendationPersona(req?.data?.persona);
+  const selectedSprintId = String(req?.data?.selectedSprintId || '').trim() || null;
+  return computeNextWorkRecommendation({
+    db,
+    uid,
+    persona,
+    selectedSprintId,
+  });
 });
 
 // ===== Import items (goals, okrs, tasks, resources, trips) – same schema as earlier
@@ -13501,10 +18163,30 @@ async function recordAiLog(uid, event, status, message, metadata = {}) {
     const level = status === 'error' ? 'error' : (status === 'warning' ? 'warning' : 'info');
     const expiresAt = createExpiryTimestamp();
     const now = admin.firestore.FieldValue.serverTimestamp();
+    const randomSuffix = Math.random().toString(36).slice(2, 8);
+    const traceIdRaw = metadata.traceId || metadata.trace_id || metadata.correlationId || metadata.correlation_id;
+    const traceId = String(traceIdRaw || `${String(event || 'ai_event')}_${Date.now()}_${randomSuffix}`).trim();
+    const promptTemplateId = String(metadata.promptTemplateId || metadata.templateId || metadata.template || '').trim() || null;
+    const parseStatus = String(metadata.parseStatus || (status === 'error' ? 'runtime_error' : 'ok')).trim().toLowerCase() || null;
+    const latencyRaw = Number(metadata.latencyMs ?? metadata.durationMs ?? metadata.latency ?? NaN);
+    const latencyMs = Number.isFinite(latencyRaw) && latencyRaw >= 0 ? Math.round(latencyRaw) : null;
+    const tokenRaw = Number(metadata.tokenCount ?? metadata.tokens ?? metadata.totalTokens ?? NaN);
+    const tokenCount = Number.isFinite(tokenRaw) && tokenRaw >= 0 ? Math.round(tokenRaw) : null;
+    const promptText = metadata.promptText || metadata.prompt || null;
+    const inputPayload = metadata.inputPayload || metadata.input || null;
+    const rawOutput = metadata.rawOutput || metadata.output || null;
     await ref.set({
       id: ref.id,
       ownerUid: uid,
       event,
+      traceId,
+      promptTemplateId,
+      parseStatus,
+      latencyMs,
+      tokenCount,
+      prompt: promptText,
+      input: inputPayload,
+      output: rawOutput,
       status,
       level,
       message,
@@ -13644,90 +18326,6 @@ exports.syncYouTubeWatchLater = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_I
   });
 
   return { ok: true, written, total: items.length, longform: longformCount };
-});
-
-exports.importYouTubeTakeout = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
-  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
-  const uid = req.auth.uid;
-  const items = Array.isArray(req?.data?.items) ? req.data.items : [];
-  if (!items.length) return { ok: true, written: 0, skipped: 0, total: 0 };
-
-  const startedAt = Date.now();
-  const db = admin.firestore();
-
-  let accessToken = null;
-  try {
-    accessToken = await getYouTubeAccessToken(uid);
-  } catch (e) {
-    console.warn('[youtube_takeout] no access token; skipping duration lookup');
-  }
-
-  const rawVideoIds = items.map((i) => i?.videoId).filter(Boolean);
-  const uniqueVideoIds = Array.from(new Set(rawVideoIds));
-  let durations = new Map();
-  if (accessToken && uniqueVideoIds.length) {
-    try {
-      durations = await fetchYouTubeDurations(accessToken, uniqueVideoIds);
-    } catch (e) {
-      console.warn('[youtube_takeout] duration fetch failed', e?.message || e);
-    }
-  }
-
-  let written = 0;
-  let skipped = 0;
-
-  for (let i = 0; i < items.length; i += 400) {
-    const batch = db.batch();
-    const slice = items.slice(i, i + 400);
-    for (const item of slice) {
-      const videoId = String(item?.videoId || '').trim();
-      const watchedAtMs = Number(item?.watchedAtMs || item?.watchedAt || 0);
-      if (!videoId || !Number.isFinite(watchedAtMs) || watchedAtMs <= 0) {
-        skipped += 1;
-        continue;
-      }
-      const title = String(item?.title || 'YouTube video');
-      const channelTitle = item?.channelTitle ? String(item.channelTitle) : null;
-      const titleUrl = item?.titleUrl ? String(item.titleUrl) : null;
-      const durationSec = durations.get(videoId) ?? null;
-      const docId = `${uid}_yt_hist_${videoId}_${watchedAtMs}`;
-      const ref = db.collection('youtube').doc(docId);
-      batch.set(ref, {
-        id: docId,
-        ownerUid: uid,
-        videoId,
-        title,
-        channelTitle,
-        titleUrl,
-        watchedAt: watchedAtMs,
-        durationSec,
-        durationMinutes: durationSec ? Math.round(durationSec / 60) : null,
-        watchTimeSec: null,
-        watchTimeMinutes: null,
-        watchLater: false,
-        list: 'history',
-        persona: 'personal',
-        source: 'youtube_takeout',
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      }, { merge: true });
-      written += 1;
-    }
-    await batch.commit();
-  }
-
-  await db.collection('profiles').doc(uid).set({
-    youtubeTakeoutLastImportAt: admin.firestore.FieldValue.serverTimestamp(),
-    youtubeWatchHistoryCount: written,
-    youtubeConnected: true,
-  }, { merge: true });
-
-  await recordIntegrationLog(uid, 'youtube_takeout', 'success', `Imported ${written} watch history rows`, {
-    total: items.length,
-    skipped,
-    durationMs: Date.now() - startedAt,
-  });
-
-  return { ok: true, written, skipped, total: items.length };
 });
 
 exports.traktDeviceCodeStart = httpsV2.onCall({ secrets: [TRAKT_CLIENT_ID] }, async (req) => {
@@ -14644,7 +19242,19 @@ exports.scheduleSteamGamesViaN8n = httpsV2.onCall({ secrets: [N8N_SCHEDULE_STEAM
 
 
 // ===== Scheduled Syncs
-exports.dailySync = schedulerV2.onSchedule("every day 03:00", async (event) => {
+exports.dailySync = schedulerV2.onSchedule({
+  schedule: '0 3 * * *',
+  timeZone: 'Europe/London',
+  secrets: [
+    TRAKT_CLIENT_ID,
+    TRAKT_CLIENT_SECRET,
+    STEAM_WEB_API_KEY,
+    STRAVA_CLIENT_ID,
+    STRAVA_CLIENT_SECRET,
+    MONZO_CLIENT_ID,
+    MONZO_CLIENT_SECRET,
+  ],
+}, async () => {
   const db = admin.firestore();
   const profiles = await db.collection('profiles').get();
 
@@ -14668,24 +19278,43 @@ exports.dailySync = schedulerV2.onSchedule("every day 03:00", async (event) => {
       }
     }
 
-    if (data.stravaConnected && data.stravaAutoSync) {
+    if (data.stravaConnected && data.stravaAutoSync !== false) {
       try {
         await fetchStravaActivities(uid, { maxPages: 2 });
       } catch (error) {
         console.error(`Failed to sync Strava for user ${uid}`, error);
       }
-    }
 
-    if (data.parkrunAthleteId && data.parkrunAutoSync) {
       try {
-        await _syncParkrunInternal(uid, data.parkrunAthleteId, data.parkrunBaseUrl || undefined);
+        const backfillCompleted = data.stravaBackfillCompleted === true;
+        if (data.stravaBackfillActive === true || !backfillCompleted) {
+          const beforeSec = normalizeEpochSec(data.stravaBackfillBeforeSec) || Math.floor(Date.now() / 1000);
+          const backfillResult = await fetchStravaActivities(uid, {
+            beforeSec,
+            perPage: 200,
+            maxPages: 8,
+          });
+          const hasMoreHistory = !!backfillResult?.hasMore && !!backfillResult?.nextBeforeSec;
+          await db.collection('profiles').doc(uid).set({
+            stravaBackfillActive: hasMoreHistory,
+            stravaBackfillCompleted: !hasMoreHistory,
+            stravaBackfillBeforeSec: hasMoreHistory
+              ? backfillResult.nextBeforeSec
+              : admin.firestore.FieldValue.delete(),
+            stravaBackfillCompletedAt: hasMoreHistory
+              ? admin.firestore.FieldValue.delete()
+              : admin.firestore.FieldValue.serverTimestamp(),
+            stravaBackfillLastImported: Number(backfillResult?.imported || 0),
+            stravaBackfillUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          }, { merge: true });
+        }
       } catch (error) {
-        console.error(`Failed to sync Parkrun for user ${uid}`, error);
+        console.error(`Failed to run Strava full-history backfill for user ${uid}`, error);
       }
     }
 
     // Attempt to link Parkrun results to Strava runs for HR/links
-    if (data.stravaConnected && data.stravaAutoSync) {
+    if (data.stravaConnected && data.stravaAutoSync !== false) {
       try {
         await reconcileParkrunToStrava(uid, { maxStrava: 400 });
       } catch (error) {
@@ -14693,7 +19322,84 @@ exports.dailySync = schedulerV2.onSchedule("every day 03:00", async (event) => {
       }
     }
 
-    if (data.parkrunAutoComputePercentiles && data.parkrunDefaultEventSlug && data.parkrunDefaultStartRun) {
+    if (data.autoEnrichStravaHR !== false) {
+      try {
+        // Always keep recent activities enriched for dashboard freshness.
+        await enrichRecentStravaHr(uid, 30, { maxActivities: 25 });
+
+        // Continue historical HR zone enrichment daily until all eligible activities are covered.
+        const hrBackfillCompleted = data.stravaHrBackfillCompleted === true;
+        if (data.stravaHrBackfillActive === true || !hrBackfillCompleted) {
+          // Keep batch intentionally small to stay within callable/scheduler memory and timeout limits.
+          const backfillResult = await enrichRecentStravaHr(uid, 3650, { maxActivities: 8 });
+          const remaining = Math.max(0, Number(backfillResult?.remaining || 0));
+          const hasRemaining = remaining > 0;
+          await db.collection('profiles').doc(uid).set({
+            stravaHrBackfillActive: hasRemaining,
+            stravaHrBackfillCompleted: !hasRemaining,
+            stravaHrBackfillRemaining: remaining,
+            stravaHrBackfillLastScanned: Number(backfillResult?.scanned || 0),
+            stravaHrBackfillLastEnriched: Number(backfillResult?.enriched || 0),
+            stravaHrBackfillLastEligible: Number(backfillResult?.eligible || 0),
+            stravaHrBackfillLastSkippedExisting: Number(backfillResult?.skippedExisting || 0),
+            stravaHrBackfillCompletedAt: hasRemaining
+              ? admin.firestore.FieldValue.delete()
+              : admin.firestore.FieldValue.serverTimestamp(),
+            stravaHrBackfillUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          }, { merge: true });
+        }
+      } catch (error) {
+        console.error(`Failed to enrich Strava HR for user ${uid}`, error);
+      }
+    }
+
+    if (data.autoComputeFitnessMetrics !== false) {
+      try {
+        const overview = await _getFitnessOverview(uid, 90);
+        await db.collection('fitness_overview').doc(uid).set({ ...overview, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        const analysis = await _getRunFitnessAnalysis(uid, 365);
+        await db.collection('run_analysis').doc(uid).set({ ...analysis, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        await computeGoalFitnessKpisForUser(uid, { persist: true });
+      } catch (error) {
+        console.error(`Failed to compute fitness metrics for user ${uid}`, error);
+      }
+    }
+
+    if (data.monzoConnected) {
+      try {
+        await syncMonzoDataForUser(uid);
+      } catch (error) {
+        console.error(`Failed to sync Monzo for user ${uid}`, error);
+      }
+    }
+  }
+});
+
+exports.weeklyParkrunSync = schedulerV2.onSchedule({
+  schedule: '0 14 * * 6',
+  timeZone: 'Europe/London',
+}, async () => {
+  const db = admin.firestore();
+  const profiles = await db.collection('profiles').get();
+
+  for (const profile of profiles.docs) {
+    const uid = profile.id;
+    const data = profile.data() || {};
+
+    if (data.parkrunAthleteId && data.parkrunAutoSync !== false) {
+      try {
+        await _syncParkrunInternal(uid, data.parkrunAthleteId, data.parkrunBaseUrl || undefined);
+      } catch (error) {
+        await db.collection('profiles').doc(uid).set({
+          parkrunLastSyncStatus: 'error',
+          parkrunLastErrorAt: admin.firestore.FieldValue.serverTimestamp(),
+          parkrunLastErrorMessage: error?.message || 'Parkrun sync failed',
+        }, { merge: true }).catch(() => { });
+        console.error(`Failed to sync Parkrun for user ${uid}`, error);
+      }
+    }
+
+    if (data.parkrunAutoComputePercentiles !== false && data.parkrunDefaultEventSlug && data.parkrunDefaultStartRun) {
       try {
         await _computeParkrunPercentilesInternal(uid, {
           eventSlug: String(data.parkrunDefaultEventSlug).toLowerCase(),
@@ -14707,33 +19413,25 @@ exports.dailySync = schedulerV2.onSchedule("every day 03:00", async (event) => {
       }
     }
 
-    if (data.autoEnrichStravaHR) {
+    if (data.stravaConnected && data.stravaAutoSync !== false) {
       try {
-        // Enrich last 30 days for HR if missing
-        // reuse callable's logic
-        await exports.enrichStravaHR.run({ auth: { uid }, data: { days: 30 } });
+        await reconcileParkrunToStrava(uid, { maxStrava: 400 });
       } catch (error) {
-        // Swallow, enrichStravaHR may not be directly invocable here; fall back to inline
-        try { await (async () => { /* optional future inline */ })(); } catch { }
+        console.error(`Failed to reconcile Parkrun↔Strava for user ${uid}`, error);
       }
     }
 
-    if (data.autoComputeFitnessMetrics) {
+    if (data.autoComputeFitnessMetrics !== false) {
       try {
         const overview = await _getFitnessOverview(uid, 90);
-        await db.collection('fitness_overview').doc(uid).set({ ...overview, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        await db.collection('fitness_overview').doc(uid)
+          .set({ ...overview, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
         const analysis = await _getRunFitnessAnalysis(uid, 365);
-        await db.collection('run_analysis').doc(uid).set({ ...analysis, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        await db.collection('run_analysis').doc(uid)
+          .set({ ...analysis, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        await computeGoalFitnessKpisForUser(uid, { persist: true });
       } catch (error) {
         console.error(`Failed to compute fitness metrics for user ${uid}`, error);
-      }
-    }
-
-    if (data.monzoConnected) {
-      try {
-        await syncMonzoDataForUser(uid);
-      } catch (error) {
-        console.error(`Failed to sync Monzo for user ${uid}`, error);
       }
     }
   }
@@ -14835,69 +19533,6 @@ exports.nightlyTaskMaintenance = schedulerV2.onSchedule({
 });
 
 // ===== Cleanup: delete completed/duplicate tasks past TTL
-exports.cleanupOldTasksNow = httpsV2.onCall(async (req) => {
-  const uid = req?.auth?.uid;
-  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
-  const limit = Number(req?.data?.limit || 200);
-  const db = ensureFirestore();
-  const now = Date.now();
-  let deleted = 0;
-  const writer = db.bulkWriter();
-  const cutoff = now - TASK_TTL_DAYS * MS_IN_DAY;
-  const doneStatuses = [2, 3, 4, 'done', 'completed', 'complete', 'closed', 'archived'];
-  const isDone = (status) => {
-    if (status === undefined || status === null) return false;
-    if (typeof status === 'number') return doneStatuses.includes(status);
-    const norm = String(status).toLowerCase();
-    return doneStatuses.includes(norm);
-  };
-  try {
-    // Primary: deleteAfter reached
-    const snap1 = await db.collection('tasks')
-      .where('ownerUid', '==', uid)
-      .where('deleteAfter', '<=', now)
-      .limit(limit)
-      .get();
-    for (const d of snap1.docs) {
-      writer.delete(d.ref); deleted++;
-    }
-    if (deleted < limit) {
-      const remain = limit - deleted;
-      // Backfill/delete completed tasks missing deleteAfter (covers string statuses)
-      const snap2 = await db.collection('tasks')
-        .where('ownerUid', '==', uid)
-        .where('status', 'in', doneStatuses)
-        .limit(Math.min(500, remain * 2 || 200))
-        .get();
-
-      for (const d of snap2.docs) {
-        const data = d.data() || {};
-        const deleteAfterMs = toMillis(data.deleteAfter);
-        const completedAtMs = toMillis(data.completedAt);
-        if (deleteAfterMs && deleteAfterMs <= now) {
-          writer.delete(d.ref); deleted++;
-          if (deleted >= limit) break;
-          continue;
-        }
-        if (!isDone(data.status)) continue;
-        if (!completedAtMs) continue;
-        const plannedDelete = completedAtMs + TASK_TTL_DAYS * MS_IN_DAY;
-        if (plannedDelete <= now) {
-          writer.delete(d.ref); deleted++;
-          if (deleted >= limit) break;
-        } else if (!deleteAfterMs) {
-          writer.update(d.ref, { deleteAfter: plannedDelete });
-        }
-      }
-    }
-    await writer.close();
-    return { ok: true, deleted };
-  } catch (e) {
-    try { await writer.close(); } catch { }
-    throw new httpsV2.HttpsError('internal', 'cleanup failed: ' + (e?.message || e));
-  }
-});
-
 exports.cleanupOldTasksNightly = schedulerV2.onSchedule({ schedule: '15 2 * * *', timeZone: 'UTC' }, async () => {
   const db = ensureFirestore();
   const now = Date.now();
@@ -14952,168 +19587,6 @@ exports.cleanupOldTasksNightly = schedulerV2.onSchedule({ schedule: '15 2 * * *'
 
 // ===== On-demand duplicate cleanup for the authenticated user
 // Groups by duplicateKey or reminderId; keeps the oldest, deletes others.
-exports.cleanupDuplicateTasksNow = httpsV2.onCall(async (req) => {
-  const uid = req?.auth?.uid;
-  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
-  const forceImmediate = !!req?.data?.forceImmediate; // delete vs. schedule via deleteAfter=now
-  const pageSize = Math.min(Number(req?.data?.pageSize || 5000), 20000);
-  const db = ensureFirestore();
-  let processed = 0;
-  let deleted = 0;
-  let scheduled = 0;
-  try {
-    // Read user's tasks in batches by updatedAt to avoid timeouts
-    let cursor = null;
-    const buckets = new Map(); // key -> array of {id, data}
-    const loadBatch = async () => {
-      let q = db.collection('tasks').where('ownerUid', '==', uid).orderBy('updatedAt', 'desc');
-      if (cursor) q = q.startAfter(cursor);
-      q = q.limit(pageSize);
-      const snap = await q.get();
-      if (snap.empty) return null;
-      snap.docs.forEach((d) => {
-        const data = d.data() || {};
-        const key = data.duplicateKey || (data.reminderId ? `reminder:${String(data.reminderId).toLowerCase()}` : null);
-        if (!key) return; // skip non-keyed
-        const arr = buckets.get(key) || [];
-        arr.push({ id: d.id, data });
-        buckets.set(key, arr);
-      });
-      cursor = snap.docs[snap.docs.length - 1];
-      return snap.size;
-    };
-
-    // Load at least one batch
-    while (true) {
-      const count = await loadBatch();
-      if (!count || count < pageSize) break;
-      // If buckets become very large, break to limit memory
-      if (buckets.size > 20000) break;
-    }
-
-    // Decide deletions (all but oldest per key)
-    const writer = db.bulkWriter();
-    const activityGroups = [];
-    for (const [key, arr] of buckets.entries()) {
-      if (!Array.isArray(arr) || arr.length < 2) continue;
-      // Oldest = min(createdAt/reminderCreatedAt/serverUpdatedAt)
-      const scored = arr.map(({ id, data }) => {
-        const ca = typeof data.createdAt === 'number' ? data.createdAt : 0;
-        const ra = typeof data.reminderCreatedAt === 'number' ? data.reminderCreatedAt : 0;
-        const su = typeof data.serverUpdatedAt === 'number' ? data.serverUpdatedAt : 0;
-        const age = Math.min(...[ca || Infinity, ra || Infinity, su || Infinity].filter(x => Number.isFinite(x)));
-        return { id, data, age: Number.isFinite(age) ? age : Date.now() };
-      });
-      scored.sort((a, b) => a.age - b.age);
-      const keep = scored[0];
-      const drop = scored.slice(1);
-      processed += arr.length;
-      if (drop.length) {
-        activityGroups.push({ kept: keep.id, removed: drop.map((x) => x.id), keys: [key] });
-      }
-      for (const d of drop) {
-        if (forceImmediate) {
-          writer.delete(db.collection('tasks').doc(d.id));
-          deleted++;
-        } else {
-          writer.set(db.collection('tasks').doc(d.id), { deleteAfter: Date.now() }, { merge: true });
-          scheduled++;
-        }
-      }
-    }
-    await writer.close();
-    // Activity log for Data Quality reporting
-    try {
-      if (activityGroups.length) {
-        const ref = db.collection('activity_stream').doc();
-        await ref.set({
-          id: ref.id,
-          entityId: `tasks_${uid}`,
-          entityType: 'task',
-          activityType: 'deduplicate_tasks',
-          userId: uid,
-          ownerUid: uid,
-          description: `Deduplicated ${activityGroups.reduce((acc, g) => acc + (Array.isArray(g.removed) ? g.removed.length : 0), 0)} tasks across ${activityGroups.length} groups`,
-          metadata: { groups: activityGroups, hardDelete: !!forceImmediate },
-          createdAt: admin.firestore.FieldValue.serverTimestamp(),
-          updatedAt: admin.firestore.FieldValue.serverTimestamp()
-        });
-      }
-    } catch (e) {
-      console.warn('[cleanupDuplicateTasksNow] failed to log activity', e?.message || e);
-    }
-    return { ok: true, processed, deleted, scheduled, keys: buckets.size };
-  } catch (e) {
-    throw new httpsV2.HttpsError('internal', 'duplicate cleanup failed: ' + (e?.message || e));
-  }
-});
-
-// Dry-run preview for duplicate cleanup (per-user; no writes)
-// Identifies duplicate groups by duplicateKey or reminderId, and reports which docs would be deleted.
-exports.previewDuplicateTasksCleanup = httpsV2.onCall(async (req) => {
-  const uid = req?.auth?.uid;
-  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
-  const db = ensureFirestore();
-
-  const pageSize = Math.min(Number(req?.data?.pageSize || 5000), 20000);
-  const maxGroups = Math.min(Number(req?.data?.maxGroups || 100), 1000);
-
-  let processed = 0;
-  const buckets = new Map(); // key -> array of {id, data}
-  let cursor = null;
-  const normKey = (t) => t.duplicateKey || (t.reminderId ? `reminder:${String(t.reminderId).toLowerCase()}` : null);
-  const toAge = (data) => {
-    const ca = Number(data.createdAt || 0);
-    const ra = Number(data.reminderCreatedAt || 0);
-    const su = Number(data.serverUpdatedAt || 0);
-    const vals = [ca, ra, su].filter((x) => Number.isFinite(x) && x > 0);
-    return vals.length ? Math.min(...vals) : Date.now();
-  };
-
-  while (true) {
-    let q = db.collection('tasks').where('ownerUid', '==', uid).orderBy('updatedAt', 'desc').limit(pageSize);
-    if (cursor) q = q.startAfter(cursor);
-    const snap = await q.get();
-    if (snap.empty) break;
-    for (const d of snap.docs) {
-      const data = d.data() || {};
-      processed++;
-      const key = normKey(data);
-      if (!key) continue;
-      const arr = buckets.get(key) || [];
-      arr.push({ id: d.id, data });
-      buckets.set(key, arr);
-    }
-    cursor = snap.docs[snap.docs.length - 1];
-    if (snap.size < pageSize) break;
-  }
-
-  let groups = 0;
-  let candidates = 0;
-  const preview = [];
-  for (const [key, arr] of buckets.entries()) {
-    if (!Array.isArray(arr) || arr.length < 2) continue;
-    groups++;
-    const scored = arr.map(({ id, data }) => ({ id, data, age: toAge(data) })).sort((a, b) => a.age - b.age);
-    const keep = scored[0];
-    const drop = scored.slice(1);
-    candidates += drop.length;
-    if (preview.length < maxGroups) {
-      preview.push({ key, count: arr.length, keepId: keep.id, deleteIds: drop.map((x) => x.id) });
-    }
-  }
-
-  return {
-    ok: true,
-    processed,
-    groups,
-    candidates, // number of docs that would be deleted
-    sample: preview,
-    note: 'dry-run only; no writes performed',
-  };
-});
-
-// ===== DUR-2: Auto-reschedule missed items (hourly)
 exports.autoRescheduleMissed = httpsV2.onCall(async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
@@ -15312,6 +19785,10 @@ function shouldTriggerWeeklyWindow(nowLocal, targetMinutes, alreadySentWeekIso) 
 
 async function buildFinanceCommentary({ summary, userId, windowLabel }) {
   if (!summary || !summary.transactionCount) return null;
+  const traceId = crypto.randomUUID ? crypto.randomUUID() : crypto.randomBytes(12).toString('hex');
+  const promptTemplateId = 'financeCommentary.v2';
+  const startedAtMs = Date.now();
+
   const buckets = Object.entries(summary.buckets || {})
     .filter(([bucket]) => bucket !== 'bank_transfer' && bucket !== 'unknown')
     .map(([bucket, amount]) => ({ bucket, amountPence: Math.abs(Number(amount || 0)) }))
@@ -15329,12 +19806,52 @@ async function buildFinanceCommentary({ summary, userId, windowLabel }) {
   const system = 'You are a budgeting assistant. Provide a short, friendly commentary with up to 3 bullet points. Highlight any anomalies and discretionary opportunities. Keep under 500 characters.';
   const user = `Summarize the spend data for ${windowLabel}. Data (pence): ${JSON.stringify(payload)}`;
 
+  const llmTraceBase = {
+    traceId,
+    promptTemplateId,
+    promptTemplateVersion: 2,
+    model: AI_PRIORITY_MODEL,
+    provider: process.env.AI_PROVIDER || 'gemini',
+    purpose: 'finance_commentary',
+    parseExpected: 'text',
+    temperature: 0.2,
+    promptText: user,
+    inputPayload: payload,
+  };
+
   try {
     const text = await callLLMJson({ system, user, purpose: 'finance_commentary', userId, expectJson: false, temperature: 0.2 });
-    if (!text) return null;
-    return String(text).trim().slice(0, 600);
+    if (!text) {
+      await recordAiLog(userId, 'finance_commentary_trace', 'warning', 'Finance commentary returned empty output', {
+        ...llmTraceBase,
+        parseStatus: 'ok_empty',
+        rawOutput: '',
+        rawOutputText: '',
+        rawOutputLength: 0,
+        latencyMs: Date.now() - startedAtMs,
+      });
+      return null;
+    }
+
+    const normalised = String(text).trim().slice(0, 600);
+    await recordAiLog(userId, 'finance_commentary_trace', 'success', 'Finance commentary generated', {
+      ...llmTraceBase,
+      parseStatus: 'ok',
+      rawOutput: String(text).slice(0, 12000),
+      rawOutputText: String(text).slice(0, 12000),
+      rawOutputLength: String(text).length,
+      outputLength: normalised.length,
+      latencyMs: Date.now() - startedAtMs,
+    });
+    return normalised;
   } catch (err) {
     console.warn('[finance-commentary] failed', err?.message || err);
+    await recordAiLog(userId, 'finance_commentary_trace', 'error', 'Finance commentary generation failed', {
+      ...llmTraceBase,
+      parseStatus: 'runtime_error',
+      error: String(err?.message || err || 'unknown'),
+      latencyMs: Date.now() - startedAtMs,
+    });
     return null;
   }
 }
@@ -15752,47 +20269,6 @@ exports.previewDataQualityReport = httpsV2.onCall(async (req) => {
   return { ok: true, snapshot, html };
 });
 
-exports.sendTestEmail = httpsV2.onCall({ secrets: [BREVO_API_KEY] }, async (req) => {
-  const uid = req?.auth?.uid;
-  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
-
-  const db = ensureFirestore();
-  const profileSnap = await db.collection('profiles').doc(uid).get();
-  const profile = profileSnap.exists ? profileSnap.data() || {} : {};
-  const email = req?.data?.email || profile.email;
-  if (!email) {
-    throw new httpsV2.HttpsError('failed-precondition', 'No email configured on profile.');
-  }
-
-  const html = `
-    <h1>BOB SMTP Test</h1>
-    <p>This is a test email sent at ${new Date().toISOString()} to confirm SMTP settings.</p>
-    <p>User: ${email}</p>
-  `;
-
-  try {
-    const result = await sendEmail({ to: email, subject: 'BOB SMTP Test Email', html, text: 'SMTP configuration test successful.' });
-    await db.collection('email_tests').add({
-      userId: uid,
-      email,
-      result: { messageId: result?.messageId || null, response: result?.response || null },
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-    await recordIntegrationLog(uid, 'email', 'success', 'SMTP test email sent', {
-      messageId: result?.messageId || null,
-      to: email,
-    });
-    return { ok: true, messageId: result?.messageId || null };
-  } catch (error) {
-    console.error('[email-test] failed', error);
-    await recordIntegrationLog(uid, 'email', 'error', error?.message || 'SMTP test email failed', {
-      to: email,
-    });
-    throw new httpsV2.HttpsError('internal', error?.message || 'Failed to send test email');
-  }
-});
-
-// Save SMTP email configuration (admin-only)
 exports.saveEmailSettings = httpsV2.onCall(async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
@@ -15871,199 +20347,6 @@ exports.cleanupUserLogs = schedulerV2.onSchedule({
 
 // Daily Digest Email Generation (uses Nylas)
 // Legacy simple digest (kept for reference); renamed to avoid clashing with LLM version
-exports.generateDailyDigestLegacy = schedulerV2.onSchedule({ schedule: "30 6 * * *", timeZone: 'UTC', secrets: [defineSecret('BREVO_API_KEY')] }, async () => {
-  try {
-    const usersSnapshot = await admin.firestore().collection('users').where('emailDigest', '==', true).get();
-    for (const userDoc of usersSnapshot.docs) {
-      const userId = userDoc.id;
-      const userData = userDoc.data();
-      await generateUserDigest(userId, userData);
-    }
-    console.log('Daily digest generation completed');
-  } catch (error) {
-    console.error('Error generating daily digest:', error);
-  }
-});
-
-async function generateUserDigest(userId, userData) {
-  try {
-    const today = new Date();
-    const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-    const endOfDay = new Date(startOfDay.getTime() + 24 * 60 * 60 * 1000);
-
-    // Get tasks due today
-    const tasksSnapshot = await admin.firestore().collection('tasks')
-      .where('ownerUid', '==', userId)
-      .where('dueDate', '>=', startOfDay.getTime())
-      .where('dueDate', '<', endOfDay.getTime())
-      .orderBy('priority')
-      .limit(10)
-      .get();
-
-    const tasksDue = tasksSnapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data()
-    }));
-
-    // Generate simple HTML digest
-    const html = `
-      <h1>BOB Daily Digest - ${today.toLocaleDateString()}</h1>
-      <h2>Tasks Due Today (${tasksDue.length})</h2>
-      ${tasksDue.map(task => `
-        <div style="border-left: 4px solid #3b82f6; padding: 10px; margin: 10px 0;">
-          <strong>${task.title}</strong><br>
-          Priority: ${task.priority} | Effort: ${task.effort}
-        </div>
-      `).join('')}
-      <p>Generated at ${new Date().toLocaleString()}</p>
-    `;
-
-    // Save digest to database
-    await admin.firestore().collection('digests').add({
-      ownerUid: userId,
-      date: admin.firestore.Timestamp.fromDate(today),
-      tasksDue,
-      html,
-      createdAt: admin.firestore.Timestamp.now()
-    });
-
-    // Send email if user has email (Nylas)
-    if (userData.email) {
-      await sendEmail({
-        to: userData.email,
-        subject: `BOB Daily Digest - ${today.toLocaleDateString()}`,
-        html,
-      });
-      console.log(`Daily digest sent to ${userData.email}`);
-    }
-
-  } catch (error) {
-    console.error(`Error generating digest for user ${userId}:`, error);
-  }
-}
-
-// Manual trigger for daily digest (per-user)
-exports.sendDailyDigestNowLegacy = httpsV2.onCall(async (req) => {
-  const uid = req?.auth?.uid;
-  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
-  const db = ensureFirestore();
-  // Try to load profile then fallback to users/{uid}
-  let email = null;
-  try {
-    const p = await db.collection('profiles').doc(uid).get();
-    if (p.exists) email = p.data()?.email || null;
-  } catch { }
-  if (!email) {
-    try {
-      const u = await db.collection('users').doc(uid).get();
-      if (u.exists) email = u.data()?.email || null;
-    } catch { }
-  }
-  await generateUserDigest(uid, { email });
-  return { ok: true };
-});
-
-// Test Authentication Functions
-exports.generateTestToken = httpsV2.onCall(async (request) => {
-  // Only allow in development/test environments
-  if (process.env.NODE_ENV === 'production') {
-    throw new Error('Test tokens not available in production');
-  }
-
-  const { uid, scope } = request.data;
-
-  if (!uid) {
-    throw new Error('UID is required');
-  }
-
-  try {
-    const { v4: uuidv4 } = require('uuid');
-    const token = uuidv4();
-    const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour from now
-
-    await admin.firestore().collection('test_login_tokens').add({
-      token,
-      uid,
-      expiresAt: admin.firestore.Timestamp.fromDate(expiresAt),
-      scope: scope || 'full',
-      createdAt: admin.firestore.Timestamp.now()
-    });
-
-    return { token, expiresAt: expiresAt.toISOString() };
-  } catch (error) {
-    console.error('Error generating test token:', error);
-    throw new Error('Failed to generate test token');
-  }
-});
-
-exports.testLogin = httpsV2.onRequest(async (req, res) => {
-  // Only allow in development/test environments
-  if (process.env.NODE_ENV === 'production') {
-    res.status(403).json({ error: 'Test login not available in production' });
-    return;
-  }
-
-  const { token } = req.query;
-
-  if (!token) {
-    res.status(400).json({ error: 'Token is required' });
-    return;
-  }
-
-  try {
-    // Find the token in the database
-    const tokensSnapshot = await admin.firestore().collection('test_login_tokens')
-      .where('token', '==', token)
-      .where('expiresAt', '>', admin.firestore.Timestamp.now())
-      .limit(1)
-      .get();
-
-    if (tokensSnapshot.empty) {
-      res.status(401).json({ error: 'Invalid or expired token' });
-      return;
-    }
-
-    const tokenDoc = tokensSnapshot.docs[0];
-    const tokenData = tokenDoc.data();
-
-    // Create a custom token for the user
-    const customToken = await admin.auth().createCustomToken(tokenData.uid);
-
-    // Clean up the test token (one-time use)
-    await tokenDoc.ref.delete();
-
-    res.json({
-      customToken,
-      uid: tokenData.uid,
-      scope: tokenData.scope
-    });
-
-  } catch (error) {
-    console.error('Error processing test login:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-// Cleanup expired test tokens
-exports.cleanupTestTokens = schedulerV2.onSchedule("every 6 hours", async (event) => {
-  try {
-    const expiredTokens = await admin.firestore().collection('test_login_tokens')
-      .where('expiresAt', '<', admin.firestore.Timestamp.now())
-      .get();
-
-    const batch = admin.firestore().batch();
-    expiredTokens.docs.forEach(doc => {
-      batch.delete(doc.ref);
-    });
-
-    await batch.commit();
-    console.log(`Cleaned up ${expiredTokens.size} expired test tokens`);
-  } catch (error) {
-    console.error('Error cleaning up test tokens:', error);
-  }
-});
-
-// Export the daily digest function
 exports.generateDailyDigest = generateDailyDigest;
 
 // ===== Task → Story Conversion Automation (Issue #206)
@@ -16117,6 +20400,30 @@ function deriveStorySize(task) {
   return 'large';
 }
 
+function shouldAutoConvertTaskData(taskData, profile = {}) {
+  const data = taskData || {};
+  if (data.autoConverted || data.convertedToStoryId) return false;
+  if (data.autoConversionSkip === true) return false;
+  const status = data.status;
+  if (status === 2 || status === 3 || status === 'done' || status === 'completed') return false;
+
+  const thresholdMinutes = Number(profile?.autoConversionThresholdMinutes || 240);
+  const pointsThreshold = Number.isFinite(profile?.autoConversionThresholdPoints)
+    ? Number(profile.autoConversionThresholdPoints)
+    : 4;
+
+  const estMinutes = Number(data.estimateMin || 0);
+  const estHours = Number(data.estimatedHours || 0);
+  const points = Number(data.points || 0);
+  const forceStory = data.forceStoryConversion === true;
+
+  if (forceStory) return true;
+  if (estMinutes >= thresholdMinutes) return true;
+  if (estHours >= 4) return true;
+  if (points > pointsThreshold) return true;
+  return false;
+}
+
 async function autoConvertTask({ db, taskDoc, profile, runId }) {
   const task = taskDoc.data() || {};
   const userId = task.ownerUid;
@@ -16141,6 +20448,7 @@ async function autoConvertTask({ db, taskDoc, profile, runId }) {
     description: task.description || '',
     goalId: task.goalId || null,
     sprintId: task.sprintId || null,
+    url: task.url || null,
     priority: task.priority || 2,
     points: computedPoints,
     status: 0,
@@ -16211,6 +20519,7 @@ async function autoConvertTask({ db, taskDoc, profile, runId }) {
       taskId: taskDoc.id,
       storyId: storyRef.id,
       runId,
+      url: task.url || null,
       acceptanceCriteria,
     },
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -16240,6 +20549,10 @@ async function autoConvertTask({ db, taskDoc, profile, runId }) {
 
   return { taskId: taskDoc.id, storyId: storyRef.id, storyRef: storyRefValue };
 }
+
+exports.shouldAutoConvertTaskInternal = shouldAutoConvertTaskData;
+exports.runTaskAutoConvertInternal = async ({ db, taskDoc, profile, runId }) =>
+  autoConvertTask({ db, taskDoc, profile, runId });
 
 // Run auto-conversion once per day to reduce churn
 exports.autoConvertOversizedTasks = schedulerV2.onSchedule({
@@ -16974,141 +21287,3 @@ Keep it professional, actionable, and encourage the team.`;
 });
 
 // ===== Theme Allocations =====
-exports.saveThemeAllocations = httpsV2.onCall({ region: 'europe-west2' }, async (req) => {
-  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
-  const uid = req.auth.uid;
-  const allocations = req.data.allocations || [];
-  const db = admin.firestore();
-  await db.collection('theme_allocations').doc(uid).set({
-    ownerUid: uid,
-    allocations,
-    updatedAt: admin.firestore.FieldValue.serverTimestamp()
-  });
-  return { ok: true };
-});
-
-exports.getThemeAllocations = httpsV2.onCall({ region: 'europe-west2' }, async (req) => {
-  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
-  const uid = req.auth.uid;
-  const db = admin.firestore();
-  const doc = await db.collection('theme_allocations').doc(uid).get();
-  return { allocations: doc.exists ? doc.data().allocations : [] };
-});
-
-// Legacy aliases retained to avoid deletions while clients migrate
-exports.getThemeAllocationsLegacy = exports.getThemeAllocations;
-exports.saveThemeAllocationsLegacy = exports.saveThemeAllocations;
-
-
-// ===== Monday.com Integration =====
-exports.pushGoalToMonday = httpsV2.onCall({ secrets: [MONDAY_API_TOKEN] }, async (req) => {
-  if (!req?.auth?.uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
-  const uid = req.auth.uid;
-  const goalId = req.data?.goalId;
-  if (!goalId) throw new httpsV2.HttpsError('invalid-argument', 'goalId required');
-  const db = admin.firestore();
-  const goalSnap = await db.collection('goals').doc(goalId).get();
-  if (!goalSnap.exists) throw new httpsV2.HttpsError('not-found', 'Goal not found');
-  const goal = goalSnap.data() || {};
-  if (goal.ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Not your goal');
-  const token = MONDAY_API_TOKEN.value();
-  const { boardId, groupId } = await ensureBoardForGoal({ token, goalDoc: goal, goalId });
-  return { boardId, groupId };
-});
-
-exports.onStoryWriteToMonday = firestoreV2.onDocumentWritten({
-  document: 'stories/{storyId}',
-  secrets: [MONDAY_API_TOKEN],
-}, async (event) => {
-  const after = event.data?.after?.data();
-  if (!after) return; // deletes ignored
-  // Avoid loops if Monday webhook sets this marker
-  if (after.mondaySyncSource === 'monday') return;
-  const storyId = event.params.storyId;
-  const goalId = after.goalId;
-  if (!goalId || !after.ownerUid) return;
-  const db = admin.firestore();
-  const goalSnap = await db.collection('goals').doc(goalId).get();
-  if (!goalSnap.exists) return;
-  const goal = goalSnap.data() || {};
-  if (!goal.mondayBoardId) return; // only sync if goal linked
-  const token = MONDAY_API_TOKEN.value();
-  try {
-    await ensureBoardForGoal({ token, goalDoc: goal, goalId });
-    await upsertMondayItemForStory({ token, storyDoc: after, storyId, goalDoc: goal, goalId });
-  } catch (e) {
-    console.warn('[monday-sync] upsert failed', e?.message || e);
-  }
-});
-
-// Basic Monday webhook to sync status back to Bob
-exports.mondayWebhook = httpsV2.onRequest({ secrets: [MONDAY_API_TOKEN] }, async (req, res) => {
-  // Monday tests the URL with GET; respond OK for validation
-  if (req.method === 'GET') {
-    return res.status(200).send('ok');
-  }
-  try {
-    const body = req.body || {};
-    const event = body.event || {};
-    const itemId = event.pulseId || event.itemId || event.item_id || event.pulse_id;
-    const boardId = event.boardId || event.board_id || event.boardIdValue;
-    const itemName = event.pulseName || event.itemName || event.item_name || event.pulse_name;
-    const newStatus = event.columnTitle || event.value?.label?.text || event.value?.label?.text_en || event.value?.label;
-    const assignees = extractAssignees(event);
-    if (!itemId) return res.status(400).send('missing itemId');
-    const db = admin.firestore();
-    const snap = await db.collection('stories').where('mondayItemId', '==', String(itemId)).limit(1).get();
-    if (snap.empty) {
-      // Create a Bob story from Monday item if we can resolve the goal via boardId
-      if (!boardId) return res.status(200).send('ok');
-      const goalSnap = await db.collection('goals').where('mondayBoardId', '==', String(boardId)).limit(1).get();
-      if (goalSnap.empty) return res.status(200).send('ok');
-      const goalDoc = goalSnap.docs[0];
-      const goal = goalDoc.data() || {};
-      // If Monday assignees include the mapped user, assign to that owner; otherwise leave unassigned (null) so it won't clutter your personal Kanban.
-      let ownerUid = null;
-      if ((assignees || []).some((id) => MONDAY_USER_MAP[id])) {
-        const mapped = assignees.map((id) => MONDAY_USER_MAP[id]).find(Boolean);
-        ownerUid = mapped || goal.ownerUid;
-      } else {
-        ownerUid = goal.ownerUid || null;
-      }
-      if (!ownerUid) return res.status(200).send('ok');
-      const newId = makeRef('story');
-      await db.collection('stories').doc(newId).set({
-        ref: newId,
-        title: itemName || newId,
-        goalId: goalDoc.id,
-        ownerUid,
-        persona: goal.persona || 'personal',
-        status: mapStatusToBob(newStatus),
-        mondayItemId: String(itemId),
-        mondayBoardId: String(boardId),
-        mondayGroupId: goal.mondayGroupId || null,
-        mondayUrl: boardId ? `https://view.monday.com/boards/${boardId}/pulses/${itemId}` : null,
-        mondaySyncSource: 'monday',
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      }, { merge: true });
-      return res.status(200).send('created');
-    } else {
-      const doc = snap.docs[0];
-      const status = mapStatusToBob(newStatus);
-      const updates = {
-        status,
-        title: itemName || doc.data().title,
-        mondaySyncSource: 'monday',
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      };
-      if ((assignees || []).some((id) => MONDAY_USER_MAP[id])) {
-        const mapped = assignees.map((id) => MONDAY_USER_MAP[id]).find(Boolean);
-        if (mapped) updates.ownerUid = mapped;
-      }
-      await doc.ref.set(updates, { merge: true });
-    }
-    return res.status(200).send('ok');
-  } catch (e) {
-    console.error('[monday-webhook] failed', e?.message || e);
-    return res.status(500).send('error');
-  }
-});

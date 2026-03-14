@@ -13,6 +13,7 @@ const {
 const { expandRecurrence } = require('../scheduler/engine');
 const { fetchWeather, fetchNews } = require('../services/newsWeather');
 const { buildAbsoluteUrl, buildEntityUrl } = require('../utils/urlHelpers');
+const { computeExpectedProgressPct, evaluateGoalKpiStatus } = require('./goalKpiStatus');
 
 const TASK_DONE_STATUSES = new Set(['done', 'completed', 'complete', 'archived', 2, 3]);
 const STORY_DONE_STATUSES = new Set(['done', 'complete', 'archived', 3]);
@@ -131,6 +132,86 @@ const resolveTimezone = (profile, fallback) => {
     fallback ||
     DEFAULT_TIMEZONE
   );
+};
+
+const readFiniteNumber = (...values) => {
+  for (const value of values) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+};
+
+const clampPercent = (value) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  return Math.max(0, Math.min(100, Math.round(parsed)));
+};
+
+const buildHealthDashboardAlert = (profile = {}) => {
+  const stepsToday = readFiniteNumber(profile.healthkitStepsToday, profile.manualStepsToday);
+  const workoutMinutesToday = readFiniteNumber(profile.healthkitWorkoutMinutesToday, profile.manualWorkoutMinutesToday);
+  const proteinTodayG = readFiniteNumber(profile.healthkitProteinTodayG, profile.manualProteinTodayG);
+  const fatTodayG = readFiniteNumber(profile.healthkitFatTodayG, profile.manualFatTodayG);
+  const carbsTodayG = readFiniteNumber(profile.healthkitCarbsTodayG, profile.manualCarbsTodayG);
+  const caloriesTodayKcal = readFiniteNumber(profile.healthkitCaloriesTodayKcal, profile.manualCaloriesTodayKcal);
+  const bodyFatPct = readFiniteNumber(profile.healthkitBodyFatPct, profile.manualBodyFatPct);
+  const targetBodyFatPct = readFiniteNumber(profile.targetBodyFatPct, profile.healthTargetBodyFatPct, profile.bodyFatTarget);
+  const targetProteinG = readFiniteNumber(profile.targetProteinG, profile.dailyProteinTargetG, profile.healthTargetProteinG);
+  const targetFatG = readFiniteNumber(profile.targetFatG, profile.dailyFatTargetG, profile.healthTargetFatG);
+  const targetCarbsG = readFiniteNumber(profile.targetCarbsG, profile.dailyCarbsTargetG, profile.healthTargetCarbsG);
+  const targetCaloriesKcal = readFiniteNumber(profile.targetCaloriesKcal, profile.dailyCaloriesTargetKcal, profile.healthTargetCaloriesKcal);
+
+  const hasAnySignal = [stepsToday, workoutMinutesToday, proteinTodayG, fatTodayG, carbsTodayG, caloriesTodayKcal, bodyFatPct]
+    .some((value) => value != null);
+  if (!hasAnySignal) return null;
+
+  const adherencePct = (actual, target) => {
+    if (actual == null || target == null || target <= 0) return null;
+    return clampPercent((actual / target) * 100);
+  };
+
+  const macroComponents = [
+    adherencePct(proteinTodayG, targetProteinG),
+    adherencePct(fatTodayG, targetFatG),
+    adherencePct(carbsTodayG, targetCarbsG),
+    adherencePct(caloriesTodayKcal, targetCaloriesKcal),
+  ].filter((value) => value != null);
+
+  const macroAdherencePct = macroComponents.length
+    ? Math.round(macroComponents.reduce((sum, value) => sum + value, 0) / macroComponents.length)
+    : null;
+
+  const bodyFatDelta = (bodyFatPct != null && targetBodyFatPct != null)
+    ? Number((bodyFatPct - targetBodyFatPct).toFixed(1))
+    : null;
+
+  let severity = 'info';
+  if ((macroAdherencePct != null && macroAdherencePct < 60) || (bodyFatDelta != null && bodyFatDelta >= 3)) {
+    severity = 'critical';
+  } else if ((macroAdherencePct != null && macroAdherencePct < 80) || (bodyFatDelta != null && bodyFatDelta > 0) || (stepsToday != null && stepsToday < 6000)) {
+    severity = 'warning';
+  }
+
+  const summaryBits = [];
+  if (bodyFatPct != null) {
+    summaryBits.push(
+      targetBodyFatPct != null
+        ? `Body fat ${bodyFatPct.toFixed(1)}% (target ${targetBodyFatPct.toFixed(1)}%)`
+        : `Body fat ${bodyFatPct.toFixed(1)}%`
+    );
+  }
+  if (stepsToday != null) summaryBits.push(`${Math.round(stepsToday).toLocaleString('en-GB')} steps`);
+  if (workoutMinutesToday != null) summaryBits.push(`${Math.round(workoutMinutesToday)}m workout`);
+  if (macroAdherencePct != null) summaryBits.push(`${macroAdherencePct}% macro adherence`);
+
+  return {
+    type: 'health',
+    severity,
+    title: 'Health snapshot today',
+    message: summaryBits.join(' | ') || 'Health data updated for today.',
+    ctaPath: buildAbsoluteUrl('/fitness'),
+  };
 };
 
 const toList = (snap) => snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
@@ -413,6 +494,8 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
     goalsAllSnap,
     sprintsSnap,
     monzoTxSnap,
+    focusGoalsSnap,
+    capacityWarningSnap,
   ] = await Promise.all([
     db.collection('tasks').where('ownerUid', '==', userId).get(),
     db.collection('stories').where('ownerUid', '==', userId).get(),
@@ -437,6 +520,17 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
       .limit(400)
       .get()
       .catch(() => ({ docs: [] })),
+    db.collection('focusGoals')
+      .where('ownerUid', '==', userId)
+      .where('isActive', '==', true)
+      .get()
+      .catch(() => ({ docs: [] })),
+    db.collection('users')
+      .doc(userId)
+      .collection('planner_alerts')
+      .doc('capacity-warning')
+      .get()
+      .catch(() => ({ exists: false, data: () => null })),
   ]);
 
   const taskDocs = toList(tasksSnap);
@@ -451,6 +545,7 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
   const sprints = toList(sprintsSnap);
   const monzoTransactions = toList(monzoTxSnap);
   const financeDaily = monzoTransactions.length ? buildFinanceSummary(monzoTransactions) : null;
+  const activeFocusGoals = toList(focusGoalsSnap);
 
   const resolveActiveSprint = (sprintList) => {
     if (!Array.isArray(sprintList) || !sprintList.length) return null;
@@ -1165,7 +1260,270 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
     };
   }
 
+  let goalKpiStatus = null;
+  if (activeSprint) {
+    try {
+      const sprintStoriesForGoals = storiesAll.filter((story) => story.sprintId === activeSprint.id);
+      const activeSprintGoalIds = Array.from(new Set(
+        sprintStoriesForGoals.map((story) => String(story.goalId || '').trim()).filter(Boolean),
+      ));
+      if (activeSprintGoalIds.length) {
+        const storyProgressByGoal = new Map();
+        sprintStoriesForGoals.forEach((story) => {
+          const goalId = String(story.goalId || '').trim();
+          if (!goalId) return;
+          const points = Number(story.points || 0) || 0;
+          const row = storyProgressByGoal.get(goalId) || {
+            totalPoints: 0,
+            donePoints: 0,
+            totalStories: 0,
+            doneStories: 0,
+          };
+          row.totalPoints += points;
+          row.totalStories += 1;
+          if (normaliseStoryStatus(story.status) === 'done') {
+            row.donePoints += points;
+            row.doneStories += 1;
+          }
+          storyProgressByGoal.set(goalId, row);
+        });
+
+        const metricsSnap = await db.collection('goal_kpi_metrics').where('ownerUid', '==', userId).get().catch(() => ({ docs: [] }));
+        const metricsByGoalId = new Map();
+        (metricsSnap.docs || []).forEach((docSnap) => {
+          const data = docSnap.data() || {};
+          const goalId = String(data.goalId || '').trim();
+          if (!goalId) return;
+          metricsByGoalId.set(goalId, data);
+        });
+
+        const sprintStartMs = toMillis(activeSprint.startDate || activeSprint.start || null);
+        const sprintEndMs = toMillis(activeSprint.endDate || activeSprint.end || null);
+        const expectedProgressPct = computeExpectedProgressPct(sprintStartMs, sprintEndMs);
+
+        const rows = activeSprintGoalIds.map((goalId) => {
+          const goal = goalLookup.get(goalId) || goalsById.get(goalId) || null;
+          const progress = storyProgressByGoal.get(goalId) || null;
+          const storyProgressPct = progress
+            ? (
+              progress.totalPoints > 0
+                ? Math.round((progress.donePoints / progress.totalPoints) * 100)
+                : (progress.totalStories > 0 ? Math.round((progress.doneStories / progress.totalStories) * 100) : null)
+            )
+            : null;
+          const metricData = metricsByGoalId.get(goalId) || {};
+          const resolvedKpis = Array.isArray(metricData.resolvedKpis) ? metricData.resolvedKpis : [];
+          const status = evaluateGoalKpiStatus({
+            resolvedKpis,
+            fallbackProgressPct: storyProgressPct,
+            expectedProgressPct,
+            scopeLabel: activeSprint.name || 'active sprint',
+          });
+          return {
+            goalId,
+            goalTitle: goal?.title || goalId,
+            goalRef: goal ? ensureGoalReference(goal) : null,
+            goalDeepLink: goal ? makeDeepLink('goal', ensureGoalReference(goal)) : null,
+            kpiSummary: status.kpiSummary || 'No KPI attached',
+            progressPct: status.progressPct,
+            expectedProgressPct,
+            status: status.label,
+            reason: status.reason,
+          };
+        });
+
+        const statusOrder = { Behind: 0, 'On target': 1, 'No KPI': 2 };
+        rows.sort((a, b) => {
+          const byStatus = (statusOrder[a.status] ?? 9) - (statusOrder[b.status] ?? 9);
+          if (byStatus !== 0) return byStatus;
+          const aProgress = a.progressPct == null ? -1 : Number(a.progressPct);
+          const bProgress = b.progressPct == null ? -1 : Number(b.progressPct);
+          if (aProgress !== bProgress) return aProgress - bProgress;
+          return String(a.goalTitle || '').localeCompare(String(b.goalTitle || ''));
+        });
+
+        goalKpiStatus = {
+          sprintId: activeSprint.id,
+          sprintName: activeSprint.name || activeSprint.ref || `Sprint ${activeSprint.id.slice(0, 4)}`,
+          expectedProgressPct,
+          rows,
+        };
+      }
+    } catch (error) {
+      console.warn('[reporting] goal KPI status lookup failed', error?.message || error);
+    }
+  }
+
   const budgetProgress = monzo?.totals && monzo?.budgetProgress ? monzo.budgetProgress : null;
+
+  let financeAlerts = [];
+  if (monzo?.budgetProgress) {
+    const overBudget = monzo.budgetProgress.filter(b => b.variance < 0).map(b => `${b.key}: Over by £${Math.abs(b.variance).toFixed(2)}`);
+    if (overBudget.length > 0) {
+      financeAlerts.push(...overBudget);
+    }
+  }
+  if (monzo?.goalAlignment?.themes) {
+    const themeShortfalls = monzo.goalAlignment.themes.filter(t => t.totalShortfall > 0).map(t => `${t.themeName}: Shortfall £${t.totalShortfall.toFixed(2)}`);
+    if (themeShortfalls.length > 0) {
+      financeAlerts.push(...themeShortfalls);
+    }
+  }
+
+  const nowLocal = DateTime.now().setZone(zone);
+  const monthElapsedPct = Math.round((nowLocal.day / nowLocal.daysInMonth) * 100);
+
+  const dashboardAlerts = [];
+
+  const discretionarySpend = Number(monzo?.totals?.optional || monzo?.totals?.discretionary || 0) || 0;
+  const mandatorySpend = Number(monzo?.totals?.mandatory || 0) || 0;
+  const totalTrackedSpend = discretionarySpend + mandatorySpend;
+  const discretionarySharePct = totalTrackedSpend > 0
+    ? Math.round((discretionarySpend / totalTrackedSpend) * 100)
+    : null;
+
+  if (discretionarySharePct != null && discretionarySharePct > 50 && monthElapsedPct < 50) {
+    dashboardAlerts.push({
+      type: 'budget_guardrail',
+      severity: 'warning',
+      title: 'Budget guardrail: discretionary spend is ahead of month progress',
+      message: `Discretionary spend is ${discretionarySharePct}% with ${monthElapsedPct}% of the month elapsed.`,
+      discretionarySharePct,
+      monthElapsedPct,
+      ctaPath: buildAbsoluteUrl('/finance'),
+    });
+  }
+
+  if (Array.isArray(financeAlerts) && financeAlerts.length) {
+    dashboardAlerts.push({
+      type: 'budget_overages',
+      severity: 'warning',
+      title: 'Budget overages detected',
+      message: financeAlerts.slice(0, 3).join(' | '),
+      ctaPath: buildAbsoluteUrl('/finance'),
+    });
+  }
+
+  const capacityWarning = capacityWarningSnap?.exists ? capacityWarningSnap.data() : null;
+  const todayIso = isoDate(nowLocal);
+  if (capacityWarning && String(capacityWarning.date || '') === todayIso) {
+    const utilizationPercent = Number(capacityWarning.utilizationPercent || 0) || 0;
+    const shortfall = Number(capacityWarning.shortfall || 0) || 0;
+    dashboardAlerts.push({
+      type: 'capacity',
+      severity: utilizationPercent > 100 ? 'critical' : 'warning',
+      title: utilizationPercent > 100 ? 'Capacity overbooked today' : 'Capacity warning today',
+      message: utilizationPercent > 100
+        ? `${shortfall.toFixed(1)} points over capacity (${utilizationPercent}% utilization).`
+        : `${utilizationPercent}% utilization for today.`,
+      ctaPath: buildAbsoluteUrl('/planner'),
+    });
+  }
+
+  activeFocusGoals.forEach((focusGoal) => {
+    const goalIds = Array.isArray(focusGoal.goalIds) ? focusGoal.goalIds : [];
+    const linkedGoals = goalIds
+      .map((goalId) => goalLookup.get(goalId))
+      .filter(Boolean);
+    const completedGoals = linkedGoals.filter((goal) => Number(goal.status) === 2).length;
+    const progressPct = linkedGoals.length ? Math.round((completedGoals / linkedGoals.length) * 100) : 0;
+
+    const endDt = toDateTime(focusGoal.endDate, { zone, defaultValue: null });
+    const daysRemaining = endDt
+      ? Math.max(0, Math.ceil(endDt.diff(nowLocal, 'days').days))
+      : Number(focusGoal.daysRemaining || 0);
+
+    const severity = daysRemaining <= 3 && progressPct < 60
+      ? 'critical'
+      : daysRemaining <= 7 && progressPct < 70
+        ? 'warning'
+        : 'info';
+
+    dashboardAlerts.push({
+      type: 'focus_goal',
+      severity,
+      title: `Focus goal countdown (${String(focusGoal.timeframe || 'active')})`,
+      message: `${daysRemaining} days left, ${completedGoals}/${linkedGoals.length || goalIds.length || 0} goals complete (${progressPct}%).`,
+      ctaPath: buildAbsoluteUrl('/focus-goals'),
+    });
+  });
+
+  const healthAlert = buildHealthDashboardAlert(profile);
+  if (healthAlert) {
+    dashboardAlerts.push(healthAlert);
+  }
+
+  const savingsRunway = (() => {
+    const alignmentGoals = Array.isArray(monzo?.goalAlignment?.goals)
+      ? monzo.goalAlignment.goals
+      : [];
+    const avgMonthlySavingsGlobal = Number(monzo?.goalAlignment?.goalFundingPlan?.avgMonthlySavings || 0) || 0;
+    const syncDate = monzoLastSyncDt;
+    const staleDays = syncDate ? Math.floor(nowLocal.diff(syncDate, 'days').days) : null;
+    const isStale = staleDays == null ? true : staleDays >= 7;
+
+    const rows = alignmentGoals
+      .map((goal) => {
+        const linkedPotId = goal?.potId || null;
+        const linkedPotName = goal?.potName || null;
+        if (!linkedPotId && !linkedPotName) return null;
+
+        const targetAmount = Number(goal?.estimatedCost || 0) || 0;
+        const linkedPotBalance = Number(goal?.potBalance || 0) || 0;
+        const remainingAmount = Math.max(targetAmount - linkedPotBalance, 0);
+
+        const avgMonthlyAllocation = Number(
+          goal?.avgMonthlyAllocation3mo
+          || goal?.avgMonthlyAllocation
+          || goal?.monthlyAllocation3mo
+          || 0,
+        ) || null;
+        const fallbackMonthly = avgMonthlyAllocation && avgMonthlyAllocation > 0
+          ? avgMonthlyAllocation
+          : (avgMonthlySavingsGlobal > 0 ? avgMonthlySavingsGlobal : null);
+
+        let monthsToTarget = null;
+        if (remainingAmount <= 0) {
+          monthsToTarget = 0;
+        } else if (fallbackMonthly && fallbackMonthly > 0) {
+          monthsToTarget = Math.ceil(remainingAmount / fallbackMonthly);
+        } else if (Number.isFinite(Number(goal?.monthsToSave))) {
+          monthsToTarget = Number(goal.monthsToSave);
+        }
+
+        return {
+          goalId: goal?.goalId || null,
+          goalTitle: goal?.title || 'Goal',
+          themeName: goal?.themeName || 'General',
+          targetAmount,
+          linkedPotBalance,
+          avgMonthlyAllocation: fallbackMonthly,
+          hasHistory: !!(avgMonthlyAllocation && avgMonthlyAllocation > 0),
+          remainingAmount,
+          monthsToTarget,
+          linkedPotName,
+          linkedPotId,
+          shortfall: Number(goal?.shortfall || remainingAmount || 0) || 0,
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => {
+        const aMonths = Number.isFinite(Number(a.monthsToTarget)) ? Number(a.monthsToTarget) : Number.MAX_SAFE_INTEGER;
+        const bMonths = Number.isFinite(Number(b.monthsToTarget)) ? Number(b.monthsToTarget) : Number.MAX_SAFE_INTEGER;
+        if (aMonths !== bMonths) return aMonths - bMonths;
+        return (Number(b.shortfall || 0) || 0) - (Number(a.shortfall || 0) || 0);
+      });
+
+    return {
+      currency: monzo?.currency || 'GBP',
+      updatedAt: monzoLastSyncAt || null,
+      updatedDisplay: monzoLastSyncDisplay || null,
+      isStale,
+      staleDays,
+      rows,
+      topRows: rows.slice(0, 5),
+    };
+  })();
 
   const budgetSummary = (() => {
     if (!budgetProgress || !budgetProgress.length) return null;
@@ -1182,20 +1540,6 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
       currency: monzo?.currency || 'GBP',
     };
   })();
-
-  let financeAlerts = [];
-  if (monzo?.budgetProgress) {
-    const overBudget = monzo.budgetProgress.filter(b => b.variance < 0).map(b => `${b.key}: Over by £${Math.abs(b.variance).toFixed(2)}`);
-    if (overBudget.length > 0) {
-      financeAlerts.push(...overBudget);
-    }
-  }
-  if (monzo?.goalAlignment?.themes) {
-    const themeShortfalls = monzo.goalAlignment.themes.filter(t => t.totalShortfall > 0).map(t => `${t.themeName}: Shortfall £${t.totalShortfall.toFixed(2)}`);
-    if (themeShortfalls.length > 0) {
-      financeAlerts.push(...themeShortfalls);
-    }
-  }
 
   const manualRerunCallable = 'sendDailySummaryNow';
 
@@ -1248,12 +1592,15 @@ const buildDailySummaryData = async (db, userId, { day, timezone, locale = 'en-G
     monzo,
     financeDaily,
     financeAlerts,
+    dashboardAlerts,
     profile,
     schedulerChanges,
     goalProgress,
     sprintProgress,
+    goalKpiStatus,
     budgetProgress,
     budgetSummary,
+    savingsRunway,
     kpis,
   };
 };
@@ -1451,8 +1798,58 @@ const buildDataQualitySnapshot = async (db, userId, { windowEnd, windowHours = 2
     });
   });
 
+  // Auto-pointing and time-of-day activity from nightly job
+  const autoPointActivities = activityByType.get('auto_point') || [];
+  const autoTimeOfDayActivities = activityByType.get('auto_time_of_day') || [];
+
+  const autoPointingRecords = [];
+  for (const activity of autoPointActivities) {
+    if (!withinWindow(activity.createdAt)) continue;
+    const metadata = activity.raw?.metadata || {};
+    const entityId = activity.raw?.entityId || null;
+    const entityType = activity.raw?.entityType || 'task';
+    autoPointingRecords.push({
+      entityId,
+      entityType,
+      points: metadata.points || null,
+      timeOfDay: metadata.timeOfDay || null,
+      source: metadata.source || 'llm',
+      title: activity.raw?.description || null,
+      createdAt: toDateTime(activity.createdAt, { defaultValue: null })?.toISO() || null,
+    });
+  }
+
+  const autoTimeOfDayRecords = [];
+  for (const activity of autoTimeOfDayActivities) {
+    if (!withinWindow(activity.createdAt)) continue;
+    const metadata = activity.raw?.metadata || {};
+    const entityId = activity.raw?.entityId || null;
+    const entityType = activity.raw?.entityType || 'task';
+    autoTimeOfDayRecords.push({
+      entityId,
+      entityType,
+      timeOfDay: metadata.timeOfDay || null,
+      title: activity.raw?.description || null,
+      createdAt: toDateTime(activity.createdAt, { defaultValue: null })?.toISO() || null,
+    });
+  }
+
   const storiesSnap = await db.collection('stories').where('ownerUid', '==', userId).get();
   const stories = toList(storiesSnap);
+
+  // Missing points
+  const missingPoints = stories
+    .filter((story) => !STORY_DONE_STATUSES.has(story.status))
+    .filter((story) => {
+      const pts = Number(story.points);
+      return !Number.isFinite(pts) || pts <= 0;
+    })
+    .map((story) => ({
+      id: story.id,
+      ref: ensureStoryReference(story),
+      title: story.title || 'Story',
+      deepLink: makeDeepLink('story', ensureStoryReference(story)),
+    }));
 
   const missingAcceptance = stories
     .filter((story) => !STORY_DONE_STATUSES.has(story.status))
@@ -1487,6 +1884,9 @@ const buildDataQualitySnapshot = async (db, userId, { windowEnd, windowHours = 2
     dedupes: dedupes.length,
     missingAcceptance: missingAcceptance.length,
     missingGoalLink: missingGoalLink.length,
+    missingPoints: missingPoints.length,
+    autoPointed: autoPointingRecords.length,
+    autoTimeOfDay: autoTimeOfDayRecords.length,
     errors: errorEntries.length,
   };
 
@@ -1500,6 +1900,9 @@ const buildDataQualitySnapshot = async (db, userId, { windowEnd, windowHours = 2
     dedupes,
     missingAcceptance,
     missingGoalLink,
+    missingPoints,
+    autoPointing: autoPointingRecords,
+    autoTimeOfDay: autoTimeOfDayRecords,
     errors: errorEntries,
     summaryStats,
   };

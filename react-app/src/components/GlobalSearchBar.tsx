@@ -1,10 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Form, InputGroup, ListGroup, Spinner, Badge } from 'react-bootstrap';
-import { useNavigate } from 'react-router-dom';
-import { collection, getDocs, limit, orderBy, query, where } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, limit, orderBy, query, where } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
+import { Goal, Story, Task } from '../types';
+import EditTaskModal from './EditTaskModal';
+import EditStoryModal from './EditStoryModal';
+import EditGoalModal from './EditGoalModal';
 
 type ResultType = 'task' | 'story' | 'goal';
 
@@ -13,18 +16,21 @@ interface SearchResult {
   ref?: string;
   title: string;
   type: ResultType;
-  path: string;
 }
 
 const GlobalSearchBar: React.FC = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
-  const navigate = useNavigate();
   const [queryText, setQueryText] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
   const [toast, setToast] = useState<{ message: string; variant?: 'warning' | 'danger' } | null>(null);
+  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [selectedStory, setSelectedStory] = useState<Story | null>(null);
+  const [selectedGoal, setSelectedGoal] = useState<Goal | null>(null);
+  const [supportingGoals, setSupportingGoals] = useState<Goal[]>([]);
+  const [activeModal, setActiveModal] = useState<ResultType | null>(null);
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
   const boxRef = useRef<HTMLDivElement | null>(null);
 
@@ -72,17 +78,11 @@ const GlobalSearchBar: React.FC = () => {
             })
             .map((row) => {
               const ref = row.ref || row.reference || row.referenceNumber || row.displayId || null;
-              const refOrId = ref || row.id;
-              let path = '';
-              if (type === 'task') path = `/tasks/${refOrId}`;
-              if (type === 'story') path = `/stories/${refOrId}`;
-              if (type === 'goal') path = `/goals/${refOrId}`;
               return {
                 id: row.id,
                 ref,
-                title: row.title || refOrId,
+                title: row.title || row.id,
                 type,
-                path,
               } as SearchResult;
             });
         };
@@ -114,11 +114,58 @@ const GlobalSearchBar: React.FC = () => {
     }, 250);
   }, [currentPersona, currentUser, normalizedQuery]);
 
-  const handleSelect = (path: string) => {
+  const closeModal = () => {
+    setActiveModal(null);
+    setSelectedTask(null);
+    setSelectedStory(null);
+    setSelectedGoal(null);
+  };
+
+  const loadGoalsForModal = async (): Promise<Goal[]> => {
+    if (!currentUser?.uid) return [];
+    const goalsSnap = await getDocs(query(
+      collection(db, 'goals'),
+      where('ownerUid', '==', currentUser.uid),
+      orderBy('updatedAt', 'desc'),
+      limit(300),
+    ));
+    const goals = goalsSnap.docs.map((item) => ({ id: item.id, ...(item.data() as any) })) as Goal[];
+    if (!currentPersona) return goals;
+    return goals.filter((goal) => !goal.persona || goal.persona === currentPersona);
+  };
+
+  const handleSelect = async (result: SearchResult) => {
     setOpen(false);
     setQueryText('');
     setResults([]);
-    navigate(path);
+    try {
+      const collectionName = result.type === 'task' ? 'tasks' : result.type === 'story' ? 'stories' : 'goals';
+      const selectedSnap = await getDoc(doc(db, collectionName, result.id));
+      if (!selectedSnap.exists()) {
+        setToast({ message: 'This item no longer exists.', variant: 'warning' });
+        return;
+      }
+      const selected = { id: selectedSnap.id, ...(selectedSnap.data() as any) } as any;
+
+      if (result.type === 'task') {
+        setSelectedTask(selected as Task);
+        setActiveModal('task');
+        return;
+      }
+
+      const goals = await loadGoalsForModal();
+      setSupportingGoals(goals);
+      if (result.type === 'story') {
+        setSelectedStory(selected as Story);
+        setActiveModal('story');
+        return;
+      }
+      setSelectedGoal(selected as Goal);
+      setActiveModal('goal');
+    } catch (err) {
+      console.warn('[global-search] select failed', err);
+      setToast({ message: 'Could not open the selected item.', variant: 'warning' });
+    }
   };
 
   return (
@@ -153,7 +200,7 @@ const GlobalSearchBar: React.FC = () => {
             <ListGroup.Item
               action
               key={`${r.type}-${r.id}`}
-              onClick={() => handleSelect(r.path)}
+              onClick={() => handleSelect(r)}
               className="d-flex justify-content-between align-items-start"
             >
               <div>
@@ -205,6 +252,26 @@ const GlobalSearchBar: React.FC = () => {
           {toast.message}
         </div>
       )}
+      <EditTaskModal
+        show={activeModal === 'task' && !!selectedTask}
+        task={selectedTask}
+        onHide={closeModal}
+        onUpdated={closeModal}
+      />
+      <EditStoryModal
+        show={activeModal === 'story' && !!selectedStory}
+        onHide={closeModal}
+        story={selectedStory}
+        goals={supportingGoals}
+        onStoryUpdated={closeModal}
+      />
+      <EditGoalModal
+        show={activeModal === 'goal' && !!selectedGoal}
+        onClose={closeModal}
+        goal={selectedGoal}
+        currentUserId={currentUser?.uid || ''}
+        allGoals={supportingGoals}
+      />
     </div>
   );
 };

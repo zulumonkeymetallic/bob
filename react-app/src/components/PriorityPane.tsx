@@ -166,7 +166,7 @@ const PriorityPane: React.FC<PriorityPaneProps> = ({ tasks }) => {
       due_today: { text: 'Due Today', variant: 'warning' },
       due_tomorrow: { text: 'Tomorrow', variant: 'info' },
       due_soon: { text: 'Due Soon', variant: 'secondary' },
-      high_priority: { text: 'High Priority', variant: 'danger' },
+      high_priority: { text: 'High Priority', variant: 'orange' },
       quick_win: { text: 'Quick Win', variant: 'success' },
       goal_linked: { text: 'Goal-Linked', variant: 'primary' },
       in_progress: { text: 'In Progress', variant: 'warning' }

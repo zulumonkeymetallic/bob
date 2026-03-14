@@ -15,6 +15,7 @@ import { themeVars } from '../utils/themeVars';
 import SprintSelector from './SprintSelector';
 import EditGoalModal from './EditGoalModal';
 import { useSidebar } from '../contexts/SidebarContext';
+import { goalNeedsLinkedPot } from '../utils/goalCost';
 import '../styles/KanbanCards.css';
 
 interface GoalYearColumnProps {
@@ -34,6 +35,54 @@ const parseDateInput = (value: string) => {
 };
 
 const formatDateInput = (date: Date) => date.toISOString().slice(0, 10);
+const DAY_MS = 86400000;
+
+const toMillis = (value: any): number | null => {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  const fromTs = value?.toDate?.()?.getTime?.();
+  if (typeof fromTs === 'number' && Number.isFinite(fromTs)) return fromTs;
+  return null;
+};
+
+const shiftDateToYear = (ms: number, targetYear: number): number => {
+  const original = new Date(ms);
+  const month = original.getMonth();
+  const day = original.getDate();
+  const shifted = new Date(ms);
+  shifted.setFullYear(targetYear, month, day);
+
+  // Clamp invalid dates (e.g., Feb 29 on non-leap years) to month-end in target year.
+  if (shifted.getMonth() !== month) {
+    const clampedDay = new Date(targetYear, month + 1, 0).getDate();
+    shifted.setFullYear(targetYear, month, clampedDay);
+  }
+
+  return shifted.getTime();
+};
+
+const previewGoalDatesForYear = (
+  goal: Goal,
+  targetYear: number | null,
+): { startMs: number | null; endMs: number | null } => {
+  const startMs = toMillis((goal as any).startDate);
+  const endMs = toMillis((goal as any).endDate);
+  if (!targetYear) {
+    return { startMs, endMs };
+  }
+
+  const shiftedStart = startMs != null ? shiftDateToYear(startMs, targetYear) : null;
+  let shiftedEnd = endMs != null ? shiftDateToYear(endMs, targetYear) : null;
+
+  if (shiftedStart != null && shiftedEnd != null && startMs != null && endMs != null) {
+    const originalDurationDays = Math.max(0, Math.round((endMs - startMs) / DAY_MS));
+    const shiftedDurationDays = Math.max(0, Math.round((shiftedEnd - shiftedStart) / DAY_MS));
+    if (shiftedDurationDays !== originalDurationDays) {
+      shiftedEnd = shiftedStart + (originalDurationDays * DAY_MS);
+    }
+  }
+
+  return { startMs: shiftedStart, endMs: shiftedEnd };
+};
 
 const calculateDurationDays = (start?: string, end?: string) => {
   const startDate = parseDateInput(start || '');
@@ -257,9 +306,10 @@ const YearDateAdjustModal: React.FC<{
   show: boolean;
   goal: Goal | null;
   targetYear: number | null;
+  sourceYear?: number | null;
   onClose: () => void;
   onSave: (payload: { startDate?: number | null; endDate?: number | null }) => Promise<void>;
-}> = ({ show, goal, targetYear, onClose, onSave }) => {
+}> = ({ show, goal, targetYear, sourceYear, onClose, onSave }) => {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [durationDays, setDurationDays] = useState<number | ''>('');
@@ -267,15 +317,12 @@ const YearDateAdjustModal: React.FC<{
 
   useEffect(() => {
     if (!show || !goal) return;
-    const startRaw = (goal as any).startDate;
-    const endRaw = (goal as any).endDate;
-    const startMs = typeof startRaw === 'number' ? startRaw : startRaw?.toDate?.()?.getTime?.();
-    const endMs = typeof endRaw === 'number' ? endRaw : endRaw?.toDate?.()?.getTime?.();
+    const { startMs, endMs } = previewGoalDatesForYear(goal, targetYear);
     const startStr = startMs ? new Date(startMs).toISOString().slice(0, 10) : '';
     const endStr = endMs ? new Date(endMs).toISOString().slice(0, 10) : '';
     setStartDate(startStr);
     setEndDate(endStr);
-  }, [show, goal]);
+  }, [show, goal, targetYear]);
 
   useEffect(() => {
     const derived = calculateDurationDays(startDate, endDate);
@@ -313,16 +360,31 @@ const YearDateAdjustModal: React.FC<{
   };
 
   const yearLabel = targetYear ? String(targetYear) : 'No Year';
+  const sourceYearLabel = sourceYear ? String(sourceYear) : 'No Year';
 
   return (
     <Modal show={show} onHide={onClose} centered>
       <Modal.Header closeButton>
-        <Modal.Title>Adjust Goal Dates</Modal.Title>
+        <Modal.Title>Adjust Goal Dates · {yearLabel}</Modal.Title>
       </Modal.Header>
       <Modal.Body>
         <p style={{ fontSize: 13, color: themeVars.muted as string }}>
-          This goal was moved to {yearLabel}. Update start/end dates to fit within that year.
+          This goal was moved from {sourceYearLabel} to {yearLabel}. Update start/end dates to fit within that year.
         </p>
+        <div className="row">
+          <div className="col-md-6">
+            <Form.Group className="mb-3">
+              <Form.Label>Current Year</Form.Label>
+              <Form.Control type="text" value={sourceYearLabel} readOnly />
+            </Form.Group>
+          </div>
+          <div className="col-md-6">
+            <Form.Group className="mb-3">
+              <Form.Label>Target Year</Form.Label>
+              <Form.Control type="text" value={yearLabel} readOnly />
+            </Form.Group>
+          </div>
+        </div>
         <div className="row">
           <div className="col-md-4">
             <Form.Group className="mb-3">
@@ -382,7 +444,7 @@ const GoalsYearPlanner: React.FC = () => {
   const [filterStatus, setFilterStatus] = useState('all');
   const [filterTheme, setFilterTheme] = useState('all');
   const currentYear = useMemo(() => new Date().getFullYear(), []);
-  const [allYears, setAllYears] = useState(false);
+  const [allYears, setAllYears] = useState(true);
   const [selectedYears, setSelectedYears] = useState<number[]>([currentYear]);
   const [showNoYear, setShowNoYear] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -391,7 +453,7 @@ const GoalsYearPlanner: React.FC = () => {
   const [activeSprintGoalIds, setActiveSprintGoalIds] = useState<Set<string>>(new Set());
   const [applyActiveSprintFilter, setApplyActiveSprintFilter] = useState(true);
   const [editGoal, setEditGoal] = useState<Goal | null>(null);
-  const [dateAdjustGoal, setDateAdjustGoal] = useState<{ goal: Goal; year: number | null } | null>(null);
+  const [dateAdjustGoal, setDateAdjustGoal] = useState<{ goal: Goal; year: number | null; sourceYear: number | null } | null>(null);
   const [pots, setPots] = useState<Record<string, { name: string; balance: number }>>({});
   const [moveError, setMoveError] = useState<string | null>(null);
 
@@ -516,8 +578,7 @@ const GoalsYearPlanner: React.FC = () => {
     if (filterStatus !== 'all' && !isStatus(goal.status, filterStatus)) return false;
     if (filterTheme !== 'all' && getThemeName(goal.theme) !== filterTheme) return false;
     if (showNoPotOnly) {
-      const potId = (goal as any).linkedPotId || (goal as any).potId;
-      if (potId) return false;
+      if (!goalNeedsLinkedPot(goal)) return false;
     }
     const derivedYear = resolveGoalYear(goal);
     if (allYears) {
@@ -617,8 +678,8 @@ const GoalsYearPlanner: React.FC = () => {
           const goal = source.data.item as Goal | undefined;
           if (!goal || !currentUser) return;
 
-          const currentYear = resolveGoalYear(goal);
-          if ((currentYear ?? null) === (targetYear ?? null)) return;
+          const sourceYear = resolveGoalYear(goal);
+          if ((sourceYear ?? null) === (targetYear ?? null)) return;
 
           setGoals(prev => prev.map(g => g.id === goal.id ? { ...g, targetYear: targetYear ?? null } as any : g));
           setMoveError(null);
@@ -637,7 +698,7 @@ const GoalsYearPlanner: React.FC = () => {
             const endYear = endMs ? new Date(endMs).getFullYear() : null;
             const outOfYear = (startYear && startYear !== targetYear) || (endYear && endYear !== targetYear);
             if (outOfYear) {
-              setDateAdjustGoal({ goal, year: targetYear });
+              setDateAdjustGoal({ goal, year: targetYear, sourceYear: sourceYear ?? null });
             }
           }
         } catch (error) {
@@ -935,7 +996,7 @@ const GoalsYearPlanner: React.FC = () => {
                 <Form.Check
                   type="switch"
                   id="toggle-goals-no-pots"
-                  label="Only goals without pots"
+                  label="Only goals with cost and no pot"
                   checked={showNoPotOnly}
                   onChange={(e) => setShowNoPotOnly(e.target.checked)}
                   className="text-muted"
@@ -973,11 +1034,13 @@ const GoalsYearPlanner: React.FC = () => {
         show={!!dateAdjustGoal}
         goal={dateAdjustGoal?.goal || null}
         targetYear={dateAdjustGoal?.year ?? null}
+        sourceYear={dateAdjustGoal?.sourceYear ?? null}
         onClose={() => setDateAdjustGoal(null)}
         onSave={async (payload) => {
           if (!dateAdjustGoal?.goal) return;
           await updateDoc(doc(db, 'goals', dateAdjustGoal.goal.id), {
             ...payload,
+            targetYear: dateAdjustGoal.year ?? null,
             updatedAt: serverTimestamp(),
           });
           setDateAdjustGoal(null);

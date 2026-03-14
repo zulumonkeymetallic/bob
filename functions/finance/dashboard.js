@@ -25,6 +25,40 @@ const CATEGORY_THEME_MAP = {
     travel: 'Leisure',
 };
 
+function parseTransactionDate(tx) {
+  const createdAt = tx?.createdAt;
+  if (createdAt?.toDate) {
+    const dt = createdAt.toDate();
+    if (dt instanceof Date && !Number.isNaN(dt.getTime())) return dt;
+  }
+  if (createdAt?._seconds) {
+    const dt = new Date(createdAt._seconds * 1000);
+    if (!Number.isNaN(dt.getTime())) return dt;
+  }
+  if (typeof createdAt === 'number' && Number.isFinite(createdAt)) {
+    const dt = new Date(createdAt);
+    if (!Number.isNaN(dt.getTime())) return dt;
+  }
+  if (typeof createdAt === 'string' && createdAt) {
+    const dt = new Date(createdAt);
+    if (!Number.isNaN(dt.getTime())) return dt;
+  }
+  if (typeof tx?.createdISO === 'string' && tx.createdISO) {
+    const dt = new Date(tx.createdISO);
+    if (!Number.isNaN(dt.getTime())) return dt;
+  }
+  return null;
+}
+
+function toAmountMinor(tx) {
+  if (Number.isFinite(tx?.amountMinor)) {
+    return Math.round(Number(tx.amountMinor));
+  }
+  const amount = Number(tx?.amount || 0);
+  if (!Number.isFinite(amount)) return 0;
+  return Math.round(amount * 100);
+}
+
 /**
  * Aggregate an array of transactions into the structures required by the dashboard.
  * Returns an object with:
@@ -56,7 +90,8 @@ function aggregateTransactions(transactions, startDate, endDate) {
   const endBoundary = end ? new Date(end.getTime() + 24 * 60 * 60 * 1000) : null; // inclusive of end date
 
   transactions.forEach((tx) => {
-    const txDate = tx.createdAt?.toDate ? tx.createdAt.toDate() : new Date(tx.createdAt);
+    const txDate = parseTransactionDate(tx);
+    if (!txDate) return;
     const metadata = tx.metadata || {};
     const potId = metadata.pot_id || metadata.destination_pot_id || metadata.source_pot_id || null;
 
@@ -95,7 +130,8 @@ function aggregateTransactions(transactions, startDate, endDate) {
         result.timeSeriesByBucket[bucketNormalized][month] = (result.timeSeriesByBucket[bucketNormalized][month] || 0) + amount;
 
         // Category aggregation
-        const catKey = tx.userCategoryKey || tx.aiCategoryKey || tx.category || 'uncategorized';
+        const catKeyRaw = tx.userCategoryKey || tx.userCategoryLabel || tx.aiCategoryKey || tx.aiCategoryLabel || tx.categoryKey || tx.category || 'uncategorized';
+        const catKey = String(catKeyRaw || 'uncategorized').trim() || 'uncategorized';
         result.spendByCategory[catKey] = (result.spendByCategory[catKey] || 0) + amount;
 
         if (!result.timeSeriesByCategory) result.timeSeriesByCategory = {};
@@ -151,6 +187,49 @@ function aggregateTransactions(transactions, startDate, endDate) {
 function buildDashboardData(transactions, goals, pots, budgetSettings, filter) {
     const { startDate, endDate } = filter || {};
     const aggregation = aggregateTransactions(transactions, startDate, endDate);
+    const start = startDate ? new Date(startDate) : null;
+    const end = endDate ? new Date(endDate) : null;
+    const endBoundary = end ? new Date(end.getTime() + 24 * 60 * 60 * 1000) : null;
+    const transactionsInRange = transactions.filter((tx) => {
+        const txDate = parseTransactionDate(tx);
+        if (!txDate) return false;
+        if (start && txDate < start) return false;
+        if (endBoundary && txDate >= endBoundary) return false;
+        return true;
+    });
+    const uncategorizedSummary = transactionsInRange.reduce((summary, tx) => {
+        const amountMinor = toAmountMinor(tx);
+        if (amountMinor >= 0) return summary;
+
+        const metadata = tx.metadata || {};
+        const potId = metadata.pot_id || metadata.destination_pot_id || metadata.source_pot_id || null;
+        const bucketRaw = potId ? 'bank_transfer' : (tx.userCategoryType || tx.aiBucket || tx.defaultCategoryType || '');
+        const bucket = String(bucketRaw || '').toLowerCase();
+        const bucketNormalized = bucket === 'optional' ? 'discretionary' : bucket;
+        if (bucketNormalized === 'bank_transfer') return summary;
+        if (['income', 'net_salary', 'irregular_income'].includes(bucketNormalized)) return summary;
+
+        summary.classifiableTransactionCount += 1;
+        const categoryKey = String(
+            tx.userCategoryKey ||
+            tx.userCategoryLabel ||
+            tx.aiCategoryKey ||
+            tx.aiCategoryLabel ||
+            tx.categoryKey ||
+            tx.category ||
+            ''
+        ).trim().toLowerCase();
+        if (!categoryKey || ['uncategorized', 'unknown', 'unassigned', 'none'].includes(categoryKey)) {
+            summary.uncategorizedCount += 1;
+        }
+        return summary;
+    }, {
+        classifiableTransactionCount: 0,
+        uncategorizedCount: 0,
+    });
+    const uncategorizedPct = uncategorizedSummary.classifiableTransactionCount > 0
+        ? Number(((uncategorizedSummary.uncategorizedCount / uncategorizedSummary.classifiableTransactionCount) * 100).toFixed(1))
+        : 0;
 
     // Map pots by ID
     const potsMap = {};
@@ -203,9 +282,12 @@ function buildDashboardData(transactions, goals, pots, budgetSettings, filter) {
 
     return {
         ...aggregation,
+        classifiableTransactionCount: uncategorizedSummary.classifiableTransactionCount,
+        uncategorizedCount: uncategorizedSummary.uncategorizedCount,
+        uncategorizedPct,
         goalProgress: goalProgress.filter(g => g.linkedPotName), // Only show linked goals
         burnDown,
-        anomalyTransactions: transactions
+        anomalyTransactions: transactionsInRange
             .filter((t) => t.aiAnomalyFlag)
             .sort((a, b) => {
                 const aAmt = Math.abs(Number(a.amountMinor ?? a.amount ?? 0));
@@ -214,7 +296,7 @@ function buildDashboardData(transactions, goals, pots, budgetSettings, filter) {
             })
             .slice(0, 25)
             .map((t) => ({
-                id: t.id,
+                id: t.id || t.transactionId || null,
                 merchantName: t.merchantName || t.description,
                 amountMinor: Number.isFinite(t.amountMinor)
                     ? Math.round(Number(t.amountMinor))
@@ -225,8 +307,12 @@ function buildDashboardData(transactions, goals, pots, budgetSettings, filter) {
                 createdAt: t.createdAt,
                 aiAnomalyReason: t.aiAnomalyReason || null,
             })),
-        recentTransactions: transactions
-            .sort((a, b) => (b.createdAt?.toMillis ? b.createdAt.toMillis() : 0) - (a.createdAt?.toMillis ? a.createdAt.toMillis() : 0))
+        recentTransactions: transactionsInRange
+            .sort((a, b) => {
+                const aMs = parseTransactionDate(a)?.getTime() || 0;
+                const bMs = parseTransactionDate(b)?.getTime() || 0;
+                return bMs - aMs;
+            })
             .slice(0, 100)
             .map(t => {
                 const metadata = t.metadata || {};
@@ -239,7 +325,7 @@ function buildDashboardData(transactions, goals, pots, budgetSettings, filter) {
                     : Math.round(Number(t.amount || 0) * 100);
                 const amount = amountMinor / 100;
                 return {
-                    id: t.id,
+                    id: t.id || t.transactionId || null,
                     merchantName: t.merchantName || t.description,
                     amount,
                     amountMinor,

@@ -59,10 +59,10 @@ const SprintMetricsPanel: React.FC<SprintMetricsPanelProps> = ({
     const completedTasks = sprintTasks.filter(task => task.status === 2).length; // Done
     
     // Points calculation
-    const totalPoints = sprintStories.reduce((sum, story) => sum + (story.points || 0), 0);
+    const totalPoints = sprintStories.reduce((sum, story) => sum + (Number.isFinite(Number(story.points)) ? Number(story.points) : 0), 0);
     const completedPoints = sprintStories
       .filter(story => story.status === 4)
-      .reduce((sum, story) => sum + (story.points || 0), 0);
+      .reduce((sum, story) => sum + (Number.isFinite(Number(story.points)) ? Number(story.points) : 0), 0);
     
     // Progress calculation
     const storyProgress = sprintStories.length > 0 ? (completedStories / sprintStories.length) * 100 : 0;

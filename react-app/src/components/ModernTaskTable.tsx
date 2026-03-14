@@ -47,6 +47,9 @@ import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { usePersona } from '../contexts/PersonaContext';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { normalizeTaskTags } from '../utils/taskTagging';
+import { parsePointsValue } from '../utils/points';
+import EditTaskModal from './EditTaskModal';
+import { MISSING_INFO_CELL_BG, MISSING_INFO_CELL_BG_HOVER, hasLinkedId, isBlankText, isMissingPoints } from '../utils/dataQuality';
 
 interface TaskTableRow extends Task {
   storyTitle?: string;
@@ -78,6 +81,34 @@ interface ModernTaskTableProps {
   onTaskCreate?: (newTask: Partial<Task>) => Promise<void>;
 }
 
+const TASK_TYPE_OPTIONS = ['task', 'read', 'watch', 'chore', 'routine', 'habit'] as const;
+const RECURRING_TASK_TYPES = new Set(['chore', 'routine', 'habit']);
+
+function normalizeTaskType(value: any): string {
+  const raw = String(value || 'task').toLowerCase();
+  return raw === 'habitual' ? 'habit' : raw;
+}
+
+function formatTaskTypeLabel(value: any): string {
+  const normalized = normalizeTaskType(value);
+  switch (normalized) {
+    case 'read':
+      return 'Read';
+    case 'watch':
+      return 'Watch';
+    case 'chore':
+      return 'Chore';
+    case 'routine':
+      return 'Routine';
+    case 'habit':
+      return 'Habit';
+    case 'task':
+      return 'Task';
+    default:
+      return normalized ? normalized.charAt(0).toUpperCase() + normalized.slice(1) : 'Task';
+  }
+}
+
 const defaultColumns: Column[] = [
   {
     key: 'ref',
@@ -104,6 +135,14 @@ const defaultColumns: Column[] = [
     type: 'text'
   },
   {
+    key: 'url',
+    label: 'URL',
+    width: '20%',
+    visible: true,
+    editable: true,
+    type: 'text'
+  },
+  {
     key: 'status',
     label: 'Status',
     width: '12%',
@@ -118,16 +157,16 @@ const defaultColumns: Column[] = [
     key: 'type',
     label: 'Type',
     width: '10%',
-    visible: false,
+    visible: true,
     editable: true,
     type: 'select',
-    options: ['task', 'chore', 'routine', 'habit']
+    options: [...TASK_TYPE_OPTIONS]
   },
   {
     key: 'priority',
     label: 'Priority',
     width: '10%',
-    visible: false,
+    visible: true,
     editable: true,
     type: 'select',
     options: ['4', '1', '2', '3', '5']
@@ -148,6 +187,14 @@ const defaultColumns: Column[] = [
     visible: true,
     editable: true,
     type: 'date'
+  },
+  {
+    key: 'createdAt',
+    label: 'Created',
+    width: '16%',
+    visible: false,
+    editable: false,
+    type: 'text'
   },
   {
     key: 'points',
@@ -207,11 +254,94 @@ const defaultColumns: Column[] = [
     editable: false,
     type: 'text'
   },
+  {
+    key: 'repeatFrequency',
+    label: 'Frequency',
+    width: '12%',
+    visible: false,
+    editable: true,
+    type: 'select',
+    options: ['daily', 'weekly', 'monthly', 'yearly']
+  },
+  {
+    key: 'repeatInterval',
+    label: 'Interval',
+    width: '8%',
+    visible: false,
+    editable: true,
+    type: 'number'
+  },
+  {
+    key: 'daysOfWeek',
+    label: 'Days of Week',
+    width: '15%',
+    visible: false,
+    editable: true,
+    type: 'text'
+  },
 ];
 
 const roundHours = (value: number): number => {
   if (!Number.isFinite(value)) return 0;
   return Math.round(value * 100) / 100;
+};
+
+const formatExternalUrlLabel = (value: unknown): string => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    const parsed = new URL(raw);
+    const host = parsed.hostname.replace(/^www\./i, '');
+    const path = parsed.pathname === '/' ? '' : parsed.pathname.replace(/\/+$/, '');
+    return `${host}${path}`.slice(0, 64);
+  } catch {
+    return raw.slice(0, 64);
+  }
+};
+
+const timestampToMillis = (value: unknown): number | null => {
+  if (value == null) return null;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof (value as any)?.toMillis === 'function') return (value as any).toMillis();
+  if (typeof (value as any)?.toDate === 'function') {
+    const date = (value as any).toDate();
+    return date instanceof Date && !Number.isNaN(date.getTime()) ? date.getTime() : null;
+  }
+  if (typeof (value as any)?.seconds === 'number') {
+    const nanos = typeof (value as any)?.nanoseconds === 'number' ? (value as any).nanoseconds : 0;
+    return ((value as any).seconds * 1000) + Math.round(nanos / 1e6);
+  }
+  const parsed = Date.parse(String(value));
+  return Number.isNaN(parsed) ? null : parsed;
+};
+
+const formatTimestampCell = (value: unknown): string => {
+  const millis = timestampToMillis(value);
+  if (millis == null) return '';
+  return new Date(millis).toLocaleString('en-GB', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+};
+
+const taskHasStoryLink = (task: Partial<Task>, stories: Story[]): boolean => {
+  const storyId = String((task as any).storyId || '').trim();
+  return hasLinkedId(storyId) && stories.some((story) => story.id === storyId);
+};
+
+const resolveTaskGoalId = (task: Partial<Task>, stories: Story[]): string => {
+  const storyId = String((task as any).storyId || '').trim();
+  const storyGoalId = storyId ? String((stories.find((story) => story.id === storyId) as any)?.goalId || '').trim() : '';
+  const directGoalId = String((task as any).goalId || '').trim();
+  return storyGoalId || directGoalId;
+};
+
+const taskHasGoalLink = (task: Partial<Task>, stories: Story[], goals: Goal[]): boolean => {
+  const goalId = resolveTaskGoalId(task, stories);
+  return hasLinkedId(goalId) && goals.some((goal) => goal.id === goalId);
 };
 
 interface SortableRowProps {
@@ -269,78 +399,108 @@ const SortableRow: React.FC<SortableRowProps> = ({
     setEditValue(value || '');
   };
 
-  const handleCellSave = async (key: string) => {
+  const handleCellSave = async (key: string, sourceValue?: string) => {
     try {
-      const oldValue = (task as any)[key]; // Store the original value
+      const oldValue = (task as any)[key];
+      const valueToSave = sourceValue ?? editValue;
+      let updates: Partial<Task> | null = null;
+      let oldComparable = oldValue == null ? '' : String(oldValue);
+      let newComparable = valueToSave == null ? '' : String(valueToSave);
 
-      // Only proceed if the value actually changed
-      if (oldValue !== editValue) {
-        let updates: Partial<Task>;
+      // Special handling for story selection
+      if (key === 'storyTitle') {
+        const selectedStory = stories.find(story => story.title === valueToSave);
+        const previousStoryId = String((task as any).storyId || '');
+        const nextStoryId = selectedStory ? selectedStory.id : '';
+        oldComparable = previousStoryId;
+        newComparable = nextStoryId;
 
-        // Special handling for story selection
-        if (key === 'storyTitle') {
-          // Find the story by title and update storyId instead
-          const selectedStory = stories.find(story => story.title === editValue);
-          if (selectedStory) {
-            updates = { storyId: selectedStory.id };
+        if (selectedStory) {
+          updates = { storyId: selectedStory.id };
 
-            // Track the field change with story title for display
-            trackFieldChange(
-              task.id,
-              'task',
-              'story',
-              task.storyTitle || 'No story',
-              editValue,
-              task.ref
-            );
-
-            console.log(`🎯 Task story changed: from "${task.storyTitle || 'No story'}" to "${editValue}" (ID: ${selectedStory.id}) for task ${task.id}`);
-          } else {
-            // Clear story assignment
-            updates = { storyId: '' };
-
-            trackFieldChange(
-              task.id,
-              'task',
-              'story',
-              task.storyTitle || 'No story',
-              'No story',
-              task.ref
-            );
-
-            console.log(`🎯 Task story cleared for task ${task.id}`);
-          }
-        } else if (key === 'dueDate') {
-          const normalizedValue = editValue ? new Date(editValue).getTime() : null;
-          updates = { dueDate: normalizedValue ?? null };
-        } else if (key === 'status') {
-          const next = Number(editValue);
-          const canonical = Number.isFinite(next)
-            ? (next >= 2 ? 2 : next <= 0 ? 0 : 1)
-            : editValue;
-          updates = { status: canonical } as any;
-          trackFieldChange(task.id, 'task', 'status', oldValue, canonical, task.ref);
-        } else if (key === 'priority') {
-          const next = Number(editValue);
-          updates = { priority: Number.isFinite(next) ? (next as any) : (editValue as any) } as any;
-        } else {
-          // Regular field update
-          updates = { [key]: editValue };
-
-          // Track the field change for activity stream
           trackFieldChange(
             task.id,
             'task',
-            key,
-            oldValue,
-            editValue,
+            'story',
+            task.storyTitle || 'No story',
+            valueToSave,
             task.ref
           );
 
-          console.log(`🎯 Task field changed: ${key} from "${oldValue}" to "${editValue}" for task ${task.id}`);
-        }
+          console.log(`🎯 Task story changed: from "${task.storyTitle || 'No story'}" to "${valueToSave}" (ID: ${selectedStory.id}) for task ${task.id}`);
+        } else {
+          updates = { storyId: '' };
 
+          trackFieldChange(
+            task.id,
+            'task',
+            'story',
+            task.storyTitle || 'No story',
+            'No story',
+            task.ref
+          );
+
+          console.log(`🎯 Task story cleared for task ${task.id}`);
+        }
+      } else if (key === 'dueDate') {
+        const dueDateMs = valueToSave ? new Date(valueToSave).getTime() : null;
+        const normalizedValue = Number.isFinite(dueDateMs as number) ? dueDateMs : null;
+        oldComparable = oldValue == null ? '' : String(oldValue);
+        newComparable = normalizedValue == null ? '' : String(normalizedValue);
+        updates = { dueDate: normalizedValue ?? null };
+      } else if (key === 'status') {
+        const next = Number(valueToSave);
+        const canonical = Number.isFinite(next)
+          ? (next >= 3 ? 3 : next >= 2 ? 2 : next <= 0 ? 0 : 1)
+          : valueToSave;
+        oldComparable = oldValue == null ? '' : String(oldValue);
+        newComparable = canonical == null ? '' : String(canonical);
+        updates = { status: canonical } as any;
+        trackFieldChange(task.id, 'task', 'status', oldValue, canonical, task.ref);
+      } else if (key === 'priority') {
+        const next = Number(valueToSave);
+        const canonical = Number.isFinite(next) ? (next as any) : (valueToSave as any);
+        oldComparable = oldValue == null ? '' : String(oldValue);
+        newComparable = canonical == null ? '' : String(canonical);
+        updates = { priority: canonical } as any;
+      } else if (key === 'points') {
+        const fallbackPoints = parsePointsValue((task as any).points) ?? 1;
+        const parsedPoints = parsePointsValue(valueToSave);
+        const normalizedPoints = parsedPoints == null ? fallbackPoints : parsedPoints;
+        const previousPoints = parsePointsValue(oldValue) ?? fallbackPoints;
+        oldComparable = String(previousPoints);
+        newComparable = String(normalizedPoints);
+        updates = { points: normalizedPoints } as any;
+      } else if (key === 'repeatFrequency') {
+        updates = { repeatFrequency: valueToSave || null } as any;
+      } else if (key === 'repeatInterval') {
+        const n = parseInt(valueToSave, 10);
+        updates = { repeatInterval: Number.isFinite(n) ? Math.max(1, n) : 1 } as any;
+      } else if (key === 'daysOfWeek') {
+        const days = valueToSave.split(',').map((s: string) => s.trim().toLowerCase()).filter(Boolean);
+        updates = { daysOfWeek: days } as any;
+      } else {
+        updates = { [key]: valueToSave };
+        oldComparable = oldValue == null ? '' : String(oldValue);
+        newComparable = valueToSave == null ? '' : String(valueToSave);
+
+        trackFieldChange(
+          task.id,
+          'task',
+          key,
+          oldValue,
+          valueToSave,
+          task.ref
+        );
+
+        console.log(`🎯 Task field changed: ${key} from "${oldValue}" to "${valueToSave}" for task ${task.id}`);
+      }
+
+      if (updates && oldComparable !== newComparable) {
+        console.log(`💾 Persisting task update: ${key} = ${newComparable} (was: ${oldComparable})`);
         await onTaskUpdate(task.id, updates);
+      } else {
+        console.log(`🔄 No change detected for ${key}: ${oldComparable} === ${newComparable}`);
       }
 
       setEditingCell(null);
@@ -372,27 +532,45 @@ const SortableRow: React.FC<SortableRowProps> = ({
       }
       return '';
     }
-  if (key === 'status') {
-    return taskStatusText(value);
-  }
-  if (key === 'points' && typeof value === 'number') {
-    return String(value);
-  }
-  if (key === 'aiCriticalityScore' && typeof value === 'number') {
-    return String(Math.round(value));
-  }
-  if (key === 'aiCriticalityReason') {
-    return String(value || '');
-  }
-  if (key === 'type') {
-    return String(value || 'task');
-  }
+    if (key === 'createdAt' || key === 'updatedAt') {
+      return formatTimestampCell(value);
+    }
+    if (key === 'status') {
+      return taskStatusText(value);
+    }
+    if (key === 'points') {
+      const pts = parsePointsValue(value);
+      return pts != null ? String(pts) : '';
+    }
+    if (key === 'aiCriticalityScore' && typeof value === 'number') {
+      return String(Math.round(value));
+    }
+    if (key === 'aiCriticalityReason') {
+      return String(value || '');
+    }
+    if (key === 'type') {
+      return formatTaskTypeLabel(value);
+    }
+    if (key === 'url') {
+      return formatExternalUrlLabel(value);
+    }
     if (key === 'theme' && typeof value === 'number') {
       const theme = GLOBAL_THEMES.find(t => t.id === value);
       return theme ? theme.name : '';
     }
     if (key === 'linkedGoal') {
       return String(value || 'Unlinked goal');
+    }
+    if (key === 'daysOfWeek') {
+      if (Array.isArray(value)) return value.join(', ');
+      return String(value || '');
+    }
+    if (key === 'repeatFrequency') {
+      const s = String(value || '');
+      return s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
+    }
+    if (key === 'repeatInterval') {
+      return value != null ? String(value) : '';
     }
     return value || '';
   };
@@ -406,6 +584,49 @@ const SortableRow: React.FC<SortableRowProps> = ({
     const value = task[column.key as keyof TaskTableRow];
     const formattedValue = formatValue(column.key, value);
     const isEditing = editingCell === column.key;
+    const missingStory = !taskHasStoryLink(task, stories);
+    const missingGoal = !String(task.linkedGoal || '').trim();
+    const missingPoints = isMissingPoints((task as any).points);
+    const missingDescription = isBlankText((task as any).description);
+    const isMissingDataCell =
+      (column.key === 'storyTitle' && missingStory)
+      || (column.key === 'linkedGoal' && missingGoal)
+      || (column.key === 'points' && missingPoints)
+      || (column.key === 'description' && missingDescription);
+    const cellBaseBackground = isMissingDataCell ? MISSING_INFO_CELL_BG : 'transparent';
+    const editValueForColumn = (() => {
+      if (column.key === 'url') {
+        return String(value || '');
+      }
+      if (column.key === 'dueDate') {
+        return formatValue(column.key, value);
+      }
+      if (column.key === 'status') {
+        const next = Number(value);
+        if (Number.isFinite(next)) {
+          return String(next >= 2 ? 2 : next <= 0 ? 0 : 1);
+        }
+        const statusLabel = String(value || '').toLowerCase();
+        if (['blocked', 'paused', 'on-hold', 'onhold', 'stalled', 'waiting'].includes(statusLabel)) return '3';
+        if (['done', 'complete', 'completed', 'closed', 'finished'].includes(statusLabel)) return '2';
+        if (['in-progress', 'in progress', 'active', 'doing'].includes(statusLabel)) return '1';
+        return '0';
+      }
+      if (column.key === 'type') {
+        return normalizeTaskType(value || 'task');
+      }
+      if (column.key === 'priority' || column.key === 'points' || column.key === 'repeatInterval') {
+        return value == null ? '' : String(value);
+      }
+      if (column.key === 'daysOfWeek') {
+        if (Array.isArray(value)) return value.join(',');
+        return String(value || '');
+      }
+      if (column.type === 'select') {
+        return value == null ? '' : String(value);
+      }
+      return formattedValue;
+    })();
 
     if (isEditing && column.editable) {
       if (column.type === 'select') {
@@ -415,7 +636,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
               <select
                 value={editValue}
                 onChange={(e) => setEditValue(e.target.value)}
-                onBlur={() => handleCellSave(column.key)}
+                onBlur={(e) => handleCellSave(column.key, e.currentTarget.value)}
                 style={{
                   width: '100%',
                   padding: '6px 8px',
@@ -459,11 +680,13 @@ const SortableRow: React.FC<SortableRowProps> = ({
         <td key={column.key} style={{ width: column.width }}>
           <div className="relative">
             <input
-              type={column.type === 'date' ? 'date' : 'text'}
+              type={column.type === 'date' ? 'date' : (column.type === 'number' ? 'number' : 'text')}
+              step={column.key === 'points' ? 'any' : undefined}
+              inputMode={column.key === 'points' ? 'decimal' : undefined}
               value={editValue}
               onChange={(e) => setEditValue(e.target.value)}
-              onBlur={() => handleCellSave(column.key)}
-              onKeyPress={(e) => e.key === 'Enter' && handleCellSave(column.key)}
+              onBlur={(e) => handleCellSave(column.key, e.currentTarget.value)}
+              onKeyPress={(e) => e.key === 'Enter' && handleCellSave(column.key, (e.currentTarget as HTMLInputElement).value)}
               style={{
                 width: '100%',
                 padding: '6px 8px',
@@ -491,18 +714,19 @@ const SortableRow: React.FC<SortableRowProps> = ({
           borderRight: `1px solid ${themeVars.border}`,
           cursor: column.editable ? 'pointer' : 'default',
           transition: 'background-color 0.15s ease',
+          backgroundColor: cellBaseBackground,
         }}
         onMouseEnter={(e) => {
           if (column.editable) {
-            e.currentTarget.style.backgroundColor = themeVars.card as string;
+            e.currentTarget.style.backgroundColor = isMissingDataCell ? MISSING_INFO_CELL_BG_HOVER : (themeVars.card as string);
           }
         }}
         onMouseLeave={(e) => {
           if (column.editable) {
-            e.currentTarget.style.backgroundColor = 'transparent';
+            e.currentTarget.style.backgroundColor = cellBaseBackground;
           }
         }}
-        onClick={() => column.editable && handleCellEdit(column.key, formattedValue)}
+        onClick={() => column.editable && handleCellEdit(column.key, editValueForColumn)}
       >
         <div style={{
           minHeight: '20px',
@@ -554,6 +778,16 @@ const SortableRow: React.FC<SortableRowProps> = ({
                 </button>
               );
             })()
+          ) : column.key === 'url' && value ? (
+            <a
+              href={String(value)}
+              target="_blank"
+              rel="noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              title={String(value)}
+            >
+              {formatExternalUrlLabel(value)}
+            </a>
           ) : (
             formattedValue
           )}
@@ -741,8 +975,10 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
   const [editingTask, setEditingTask] = useState<TaskTableRow | null>(null);
   const [editForm, setEditForm] = useState<Partial<TaskTableRow>>({});
   const [storySearch, setStorySearch] = useState('');
+  const [goalSearch, setGoalSearch] = useState('');
   const [sprintFilter, setSprintFilter] = useState<string>('all');
   const [typeFilter, setTypeFilter] = useState<string>('all');
+  const [dataQualityFilter, setDataQualityFilter] = useState<string>('all');
   const [convertLoadingId, setConvertLoadingId] = useState<string | null>(null);
   const [toastState, setToastState] = useState<{ show: boolean; message: string; variant: 'danger' | 'info' | 'success' }>({ show: false, message: '', variant: 'danger' });
 
@@ -778,12 +1014,22 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
         sprints,
       });
 
-      if (!isDueDateWithinStorySprint(derivation.dueDateMs, derivation.story, sprints)) {
-        showToast('Task due date must stay within the linked story sprint window.');
-        return;
+      // Allow due date edits even if story sprint isn't defined - only warn if conflict exists
+      if ('dueDate' in updates && derivation.story?.sprintId && !isDueDateWithinStorySprint(derivation.dueDateMs, derivation.story, sprints)) {
+        console.warn(`⚠️ Due date ${new Date(derivation.dueDateMs || 0).toISOString().split('T')[0]} falls outside linked story sprint - auto-aligning to matching sprint`);
       }
 
       const payload: Partial<Task> = { ...updates };
+      const existingOwnerUid = (existingTask as any)?.ownerUid;
+      const existingPersona = ((existingTask as any)?.persona || currentPersona || 'personal') as any;
+
+      if (existingOwnerUid) {
+        (payload as any).ownerUid = existingOwnerUid;
+      }
+      if (!(payload as any).persona && existingPersona) {
+        (payload as any).persona = existingPersona;
+      }
+      (payload as any).serverUpdatedAt = Date.now();
 
       if ('dueDate' in updates) {
         payload.dueDate = derivation.dueDateMs ?? null;
@@ -884,27 +1130,77 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
     })
   );
 
-  const editType = (editForm as any)?.type || 'task';
-  const isRecurringEditType = editType === 'chore' || editType === 'routine' || editType === 'habit';
+  const editType = normalizeTaskType((editForm as any)?.type || 'task');
+  const isRecurringEditType = RECURRING_TASK_TYPES.has(editType);
   const selectedStoryId = (editForm as any)?.storyId || null;
   const selectedStory = selectedStoryId ? stories.find((s) => s.id === selectedStoryId) : null;
   const selectedGoalId = (selectedStory as any)?.goalId || (editForm as any)?.goalId || '';
   const selectedGoal = selectedGoalId ? goals.find((g) => g.id === selectedGoalId) : null;
+  const resolveStoryCreateSelection = (value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      setEditForm((prev) => ({ ...prev, storyId: '', storyTitle: '' }));
+      setStorySearch('');
+      return;
+    }
+    const match = stories.find((s) => s.title === trimmed || s.id === trimmed);
+    if (!match) {
+      setEditForm((prev) => ({ ...prev, storyId: '', storyTitle: '' }));
+      return;
+    }
+    const linkedGoalId = (match as any).goalId || '';
+    const linkedGoal = linkedGoalId ? goals.find((g) => g.id === linkedGoalId) : null;
+    setEditForm((prev) => ({
+      ...prev,
+      storyId: match.id,
+      storyTitle: match.title,
+      goalId: linkedGoalId || prev.goalId || '',
+      priority: (prev.priority as any) || (match as any).priority || 2,
+    }));
+    setStorySearch(match.title || '');
+    if (linkedGoal) setGoalSearch(linkedGoal.title || '');
+  };
+  const resolveGoalCreateSelection = (value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      setEditForm((prev) => ({ ...prev, goalId: '' }));
+      setGoalSearch('');
+      return;
+    }
+    const match = goals.find((g) => g.title === trimmed || g.id === trimmed);
+    if (!match) {
+      setEditForm((prev) => ({ ...prev, goalId: '' }));
+      return;
+    }
+    setEditForm((prev) => ({ ...prev, goalId: match.id }));
+    setGoalSearch(match.title || '');
+  };
 
   const filteredTasks = tasks.filter((task) => {
     const derivedSprintId = effectiveSprintId(task, stories, sprints);
-    if (sprintFilter === 'none') return !derivedSprintId;
-    if (sprintFilter !== 'all') return derivedSprintId === sprintFilter;
-    const rawType = String((task as any)?.type || (task as any)?.task_type || 'task').toLowerCase();
-    const normalizedType = rawType === 'habitual' ? 'habit' : rawType;
+    const normalizedType = normalizeTaskType((task as any)?.type || (task as any)?.task_type || 'task');
+    if (sprintFilter === 'none' && derivedSprintId) return false;
+    if (sprintFilter !== 'all' && sprintFilter !== 'none' && derivedSprintId !== sprintFilter) return false;
     if (typeFilter !== 'all' && normalizedType !== typeFilter) return false;
+    if (dataQualityFilter !== 'all') {
+      const missingStory = !taskHasStoryLink(task, stories);
+      const missingGoal = !taskHasGoalLink(task, stories, goals);
+      const missingPoints = isMissingPoints((task as any).points);
+      const missingDescription = isBlankText((task as any).description);
+      const missingAny = missingStory || missingGoal || missingPoints || missingDescription;
+      if (dataQualityFilter === 'missing_any' && !missingAny) return false;
+      if (dataQualityFilter === 'missing_link' && !(missingStory || missingGoal)) return false;
+      if (dataQualityFilter === 'missing_points' && !missingPoints) return false;
+      if (dataQualityFilter === 'missing_description' && !missingDescription) return false;
+    }
     return true;
   });
 
   // Convert tasks to table rows with sort order and story titles
   const tableRows: TaskTableRow[] = filteredTasks.map((task, index) => {
     const story = stories.find(s => s.id === task.storyId);
-    const goal = story ? goals.find((g) => g.id === story.goalId) : undefined;
+    const resolvedGoalId = (story as any)?.goalId || String((task as any)?.goalId || '').trim();
+    const goal = resolvedGoalId ? goals.find((g) => g.id === resolvedGoalId) : undefined;
     const derivedSprintId = effectiveSprintId(task, stories, sprints);
     return {
       ...task,
@@ -941,6 +1237,14 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
     list.sort((a, b) => {
       const valA = (a as any)[sortConfig.key];
       const valB = (b as any)[sortConfig.key];
+      if (sortConfig.key === 'createdAt' || sortConfig.key === 'updatedAt') {
+        const timeA = timestampToMillis(valA);
+        const timeB = timestampToMillis(valB);
+        if (timeA != null && timeB != null) {
+          if (timeA === timeB) return 0;
+          return timeA > timeB ? dir : -dir;
+        }
+      }
       const numA = typeof valA === 'number' ? valA : (valA ? Number(valA) : null);
       const numB = typeof valB === 'number' ? valB : (valB ? Number(valB) : null);
       if (numA !== null && numB !== null && !Number.isNaN(numA) && !Number.isNaN(numB)) {
@@ -1155,9 +1459,32 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                 >
                   <option value="all">All Types</option>
                   <option value="task">Task</option>
+                  <option value="read">Read</option>
+                  <option value="watch">Watch</option>
                   <option value="chore">Chore</option>
                   <option value="habit">Habit</option>
                   <option value="routine">Routine</option>
+                </select>
+              </label>
+              <label style={{ fontSize: '12px', color: themeVars.muted as string, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                Data Quality
+                <select
+                  value={dataQualityFilter}
+                  onChange={(e) => setDataQualityFilter(e.target.value)}
+                  style={{
+                    padding: '4px 8px',
+                    borderRadius: 6,
+                    border: `1px solid ${themeVars.border}`,
+                    backgroundColor: themeVars.panel as string,
+                    color: themeVars.text as string,
+                    fontSize: '12px'
+                  }}
+                >
+                  <option value="all">All</option>
+                  <option value="missing_any">Missing Any</option>
+                  <option value="missing_link">Missing Link</option>
+                  <option value="missing_points">Missing Points</option>
+                  <option value="missing_description">Missing Description</option>
                 </select>
               </label>
             </div>
@@ -1285,11 +1612,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                         onTaskUpdate={handleValidatedUpdate}
                         onTaskDelete={onTaskDelete}
                         onEditRequest={(t) => {
-                          const story = t.storyId ? stories.find((s) => s.id === t.storyId) : null;
-                          const derivedGoalId = t.goalId || (story as any)?.goalId || '';
                           setEditingTask(t);
-                          setEditForm({ ...t, goalId: derivedGoalId });
-                          setStorySearch(t.storyTitle || '');
                           setShowEditModal(true);
                         }}
                         onSprintAssign={handleSprintAssign}
@@ -1315,6 +1638,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                             setEditForm({
                               title: '',
                               description: '',
+                              url: '',
                               priority: 2,
                               status: 0 as any,
                               tags: [],
@@ -1325,6 +1649,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                               daysOfWeek: [],
                             });
                             setStorySearch('');
+                            setGoalSearch('');
                             setShowEditModal(true);
                           }}
                           style={{
@@ -1595,13 +1920,20 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
         </div>
       </div>
 
-      {/* Edit/Create Modal (lightweight) */}
-      {showEditModal && (
+      {/* Edit Task Modal (consistent with sidebar) */}
+      <EditTaskModal
+        show={showEditModal && !!editingTask}
+        task={editingTask as Task | null}
+        onHide={() => { setShowEditModal(false); setEditingTask(null); }}
+      />
+
+      {/* Create Task Modal (lightweight, only used for inline add) */}
+      {showEditModal && !editingTask && (
         <div className="modal d-block" tabIndex={-1} role="dialog" style={{ background: 'var(--bs-backdrop-bg)' }}>
           <div className="modal-dialog modal-lg" role="document">
             <div className="modal-content">
               <div className="modal-header">
-                <h5 className="modal-title">{editingTask ? 'Edit Task' : 'Add Task'}</h5>
+                <h5 className="modal-title">Add Task</h5>
                 <button type="button" className="btn-close" onClick={() => setShowEditModal(false)} />
               </div>
               <div className="modal-body">
@@ -1612,6 +1944,10 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                 <div className="mb-3">
                   <label className="form-label">Description</label>
                   <textarea className="form-control" rows={3} value={editForm.description || ''} onChange={(e) => setEditForm({ ...editForm, description: e.target.value })} />
+                </div>
+                <div className="mb-3">
+                  <label className="form-label">Source URL</label>
+                  <input className="form-control" type="url" value={(editForm as any).url || ''} onChange={(e) => setEditForm({ ...editForm, url: e.target.value })} placeholder="https://..." />
                 </div>
                 <div className="mb-3">
                   <label className="form-label">Tags</label>
@@ -1630,6 +1966,8 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                     onChange={(e) => setEditForm({ ...editForm, type: e.target.value as any })}
                   >
                     <option value="task">Task</option>
+                    <option value="read">Read</option>
+                    <option value="watch">Watch</option>
                     <option value="chore">Chore</option>
                     <option value="routine">Routine</option>
                     <option value="habit">Habit</option>
@@ -1704,37 +2042,36 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                 <div className="row">
                   <div className="col-md-6 mb-3">
                     <label className="form-label">Link to Story</label>
-                    <input className="form-control" placeholder="Type to search..." value={storySearch} onChange={(e) => setStorySearch(e.target.value)} />
-                    <div className="list-group" style={{ maxHeight: 180, overflow: 'auto' }}>
-                      {stories.filter(s => s.title?.toLowerCase().includes((storySearch || '').toLowerCase())).slice(0, 10).map(s => (
-                        <button key={s.id} type="button" className="list-group-item list-group-item-action"
-                          onClick={() => {
-                            setEditForm({
-                              ...editForm,
-                              storyId: s.id,
-                              storyTitle: s.title,
-                              goalId: (s as any).goalId || '',
-                              priority: (editingTask ? editingTask.priority : (editForm.priority as any)) || (s as any).priority || 2,
-                            });
-                            setStorySearch(s.title || '');
-                          }}
-                        >{s.title}</button>
+                    <input
+                      className="form-control"
+                      list="modern-task-create-story-options"
+                      placeholder="Search story by title..."
+                      value={storySearch}
+                      onChange={(e) => setStorySearch(e.target.value)}
+                      onBlur={(e) => resolveStoryCreateSelection(e.target.value)}
+                    />
+                    <datalist id="modern-task-create-story-options">
+                      {stories.map((s) => (
+                        <option key={s.id} value={s.title || ''} />
                       ))}
-                    </div>
+                    </datalist>
                   </div>
                   <div className="col-md-6 mb-3">
                     <label className="form-label">Link to Goal</label>
-                    <select
-                      className="form-select"
-                      value={selectedGoalId}
-                      onChange={(e) => setEditForm({ ...editForm, goalId: e.target.value })}
+                    <input
+                      className="form-control"
+                      list="modern-task-create-goal-options"
+                      placeholder="Search goal by title..."
+                      value={selectedStoryId ? (selectedGoal?.title || '') : goalSearch}
+                      onChange={(e) => setGoalSearch(e.target.value)}
+                      onBlur={(e) => resolveGoalCreateSelection(e.target.value)}
                       disabled={!!selectedStoryId}
-                    >
-                      <option value="">No goal</option>
+                    />
+                    <datalist id="modern-task-create-goal-options">
                       {goals.map((goal) => (
-                        <option key={goal.id} value={goal.id}>{goal.title}</option>
+                        <option key={goal.id} value={goal.title || ''} />
                       ))}
-                    </select>
+                    </datalist>
                     {selectedStoryId && selectedGoal && (
                       <div className="form-text">Goal derived from linked story.</div>
                     )}
@@ -1759,7 +2096,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                 <button type="button" className="btn btn-secondary" onClick={() => setShowEditModal(false)}>Cancel</button>
                 <button type="button" className="btn btn-primary" onClick={async () => {
                   if (!editForm.title) return;
-                  const isRecurring = editType === 'chore' || editType === 'routine' || editType === 'habit';
+                  const isRecurring = RECURRING_TASK_TYPES.has(editType);
                   const normalizedFrequency = isRecurring ? ((editForm as any).repeatFrequency || null) : null;
                   const normalizedInterval = isRecurring ? Math.max(1, Number((editForm as any).repeatInterval || 1)) : null;
                   const normalizedDays = isRecurring && (editForm as any).repeatFrequency === 'weekly'
@@ -1798,6 +2135,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                       await handleValidatedUpdate(editingTask.id, {
                         title: editForm.title,
                         description: editForm.description,
+                        url: (editForm as any).url,
                         priority: editForm.priority as any,
                         dueDate: editForm.dueDate as any,
                         storyId: (editForm as any).storyId,
@@ -1812,6 +2150,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                       await onTaskCreate({
                         title: editForm.title,
                         description: editForm.description,
+                        url: (editForm as any).url,
                         priority: editForm.priority as any,
                         dueDate: editForm.dueDate as any,
                         storyId: (editForm as any).storyId,

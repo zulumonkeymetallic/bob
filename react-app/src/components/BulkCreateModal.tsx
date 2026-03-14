@@ -8,6 +8,7 @@ import { usePersona } from '../contexts/PersonaContext';
 import { GLOBAL_THEMES } from '../constants/globalThemes';
 import { generateRef } from '../utils/referenceGenerator';
 import { emergencyCreateTask } from '../utils/emergencyTaskCreation';
+import { parsePointsValue, TASK_DEFAULT_POINTS } from '../utils/points';
 
 type BulkEntityType = 'story' | 'task' | 'goal';
 
@@ -21,6 +22,12 @@ interface GoalOption {
   id: string;
   title: string;
   theme: string | number;
+}
+
+interface StoryOption {
+  id: string;
+  title: string;
+  goalId?: string;
 }
 
 interface BulkResult {
@@ -47,13 +54,17 @@ const BulkCreateModal: React.FC<BulkCreateModalProps> = ({ show, onHide, onCompl
   const [autoEnhanceTasks, setAutoEnhanceTasks] = useState(true);
   const [autoGenerateGoalStories, setAutoGenerateGoalStories] = useState(true);
   const [selectedGoalId, setSelectedGoalId] = useState('');
+  const [goalInput, setGoalInput] = useState('');
+  const [selectedStoryId, setSelectedStoryId] = useState('');
+  const [storyInput, setStoryInput] = useState('');
   const [selectedTheme, setSelectedTheme] = useState('Growth');
   const [selectedPriority, setSelectedPriority] = useState<'low' | 'med' | 'high'>('med');
-  const [taskPoints, setTaskPoints] = useState(1);
+  const [taskPoints, setTaskPoints] = useState<string | number>(TASK_DEFAULT_POINTS);
   const [isProcessing, setIsProcessing] = useState(false);
   const [results, setResults] = useState<BulkResult[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [goals, setGoals] = useState<GoalOption[]>([]);
+  const [stories, setStories] = useState<StoryOption[]>([]);
 
   const themes = useMemo(() => GLOBAL_THEMES.map(theme => theme.name), []);
 
@@ -97,11 +108,37 @@ const BulkCreateModal: React.FC<BulkCreateModalProps> = ({ show, onHide, onCompl
   }, [show, currentUser]);
 
   useEffect(() => {
+    if (!show || !currentUser || itemType !== 'task') return;
+    const loadStories = async () => {
+      try {
+        const q = query(collection(db, 'stories'), where('ownerUid', '==', currentUser.uid));
+        const snap = await getDocs(q);
+        setStories(snap.docs.map((d) => ({
+          id: d.id,
+          title: d.data().title || 'Untitled Story',
+          goalId: d.data().goalId || '',
+        })));
+      } catch (e) {
+        console.error('BulkCreateModal: failed to load stories', e);
+      }
+    };
+    loadStories();
+  }, [show, currentUser, itemType]);
+
+  // Reset link fields when item type changes
+  useEffect(() => {
+    setSelectedGoalId('');
+    setGoalInput('');
+    setSelectedStoryId('');
+    setStoryInput('');
+  }, [itemType]);
+
+  useEffect(() => {
     if (!show) {
       setResults([]);
       setError(null);
       setItemsText('');
-      setTaskPoints(1);
+      setTaskPoints(String(TASK_DEFAULT_POINTS));
     }
   }, [show]);
 
@@ -319,20 +356,25 @@ const BulkCreateModal: React.FC<BulkCreateModalProps> = ({ show, onHide, onCompl
               }
             }
 
+            const linkedStoryGoalId = selectedStoryId
+              ? (stories.find((s) => s.id === selectedStoryId)?.goalId || '')
+              : '';
+
             const taskData = {
               title: line,
               description: descriptionText,
               ref,
               persona: currentPersona,
               ownerUid: currentUser.uid,
-              goalId: selectedGoalId || '',
-              parentType: 'story',
-              parentId: '',
+              storyId: selectedStoryId || '',
+              goalId: linkedStoryGoalId || selectedGoalId || '',
+              parentType: selectedStoryId ? 'story' : '',
+              parentId: selectedStoryId || '',
               effort: 'M',
               priority: selectedPriority,
               estimateMin: 45,
               estimatedHours: 0.75,
-              points: Math.max(1, Math.min(8, Math.round(taskPoints))),
+              points: parsePointsValue(taskPoints) ?? TASK_DEFAULT_POINTS,
               status: 0,
               theme: selectedTheme,
               hasGoal: !!selectedGoalId,
@@ -418,12 +460,20 @@ const BulkCreateModal: React.FC<BulkCreateModalProps> = ({ show, onHide, onCompl
         <>
           <Form.Group className="mb-3">
             <Form.Label>Link to Goal (optional)</Form.Label>
-            <Form.Select value={selectedGoalId} onChange={(event) => setSelectedGoalId(event.target.value)}>
-              <option value="">No goal link</option>
-              {goals.map(goal => (
-                <option key={goal.id} value={goal.id}>{goal.title}</option>
-              ))}
-            </Form.Select>
+            <Form.Control
+              list="bulk-story-goal-options"
+              value={goalInput}
+              onChange={(e) => setGoalInput(e.target.value)}
+              onBlur={() => {
+                const match = goals.find((g) => g.title === goalInput.trim() || g.id === goalInput.trim());
+                setSelectedGoalId(match?.id || '');
+                setGoalInput(match?.title || '');
+              }}
+              placeholder="Search goals by title..."
+            />
+            <datalist id="bulk-story-goal-options">
+              {goals.map((g) => <option key={g.id} value={g.title} />)}
+            </datalist>
           </Form.Group>
           <Form.Group className="mb-3">
             <Form.Label>Priority</Form.Label>
@@ -445,8 +495,51 @@ const BulkCreateModal: React.FC<BulkCreateModalProps> = ({ show, onHide, onCompl
       );
     }
 
+    const linkedStoryGoalId = selectedStoryId ? (stories.find((s) => s.id === selectedStoryId)?.goalId || '') : '';
+
     return (
       <>
+        <Form.Group className="mb-3">
+          <Form.Label>Link to Story (optional)</Form.Label>
+          <Form.Control
+            list="bulk-task-story-options"
+            value={storyInput}
+            onChange={(e) => setStoryInput(e.target.value)}
+            onBlur={() => {
+              const match = stories.find((s) => s.title === storyInput.trim() || s.id === storyInput.trim());
+              setSelectedStoryId(match?.id || '');
+              setStoryInput(match?.title || '');
+              if (match?.goalId) {
+                const goal = goals.find((g) => g.id === match.goalId);
+                setSelectedGoalId(match.goalId);
+                setGoalInput(goal?.title || '');
+              }
+            }}
+            placeholder="Search stories by title..."
+          />
+          <datalist id="bulk-task-story-options">
+            {stories.map((s) => <option key={s.id} value={s.title} />)}
+          </datalist>
+        </Form.Group>
+        <Form.Group className="mb-3">
+          <Form.Label>Align to Goal (optional)</Form.Label>
+          <Form.Control
+            list="bulk-task-goal-options"
+            value={linkedStoryGoalId ? (goals.find((g) => g.id === linkedStoryGoalId)?.title || goalInput) : goalInput}
+            onChange={(e) => setGoalInput(e.target.value)}
+            onBlur={() => {
+              const match = goals.find((g) => g.title === goalInput.trim() || g.id === goalInput.trim());
+              setSelectedGoalId(match?.id || '');
+              setGoalInput(match?.title || '');
+            }}
+            placeholder="Search goals by title..."
+            disabled={!!linkedStoryGoalId}
+          />
+          <datalist id="bulk-task-goal-options">
+            {goals.map((g) => <option key={g.id} value={g.title} />)}
+          </datalist>
+          {linkedStoryGoalId && <Form.Text className="text-muted">Goal derived from linked story.</Form.Text>}
+        </Form.Group>
         <Form.Group className="mb-3">
           <Form.Label>Theme</Form.Label>
           <Form.Select value={selectedTheme} onChange={(event) => setSelectedTheme(event.target.value)}>
@@ -464,25 +557,14 @@ const BulkCreateModal: React.FC<BulkCreateModalProps> = ({ show, onHide, onCompl
           </Form.Select>
         </Form.Group>
         <Form.Group className="mb-3">
-          <Form.Label>Align to Goal (optional)</Form.Label>
-          <Form.Select value={selectedGoalId} onChange={(event) => setSelectedGoalId(event.target.value)}>
-            <option value="">No goal link</option>
-            {goals.map(goal => (
-              <option key={goal.id} value={goal.id}>{goal.title}</option>
-            ))}
-          </Form.Select>
-        </Form.Group>
-        <Form.Group className="mb-3">
-          <Form.Label>Default Points (1–8)</Form.Label>
+          <Form.Label>Default Points</Form.Label>
           <Form.Control
             type="number"
-            min={1}
-            max={8}
+            step="any"
+            inputMode="decimal"
             value={taskPoints}
             onChange={(event) => {
-              const value = Number(event.target.value);
-              const normalized = Math.max(1, Math.min(8, Number.isNaN(value) ? 1 : Math.round(value)));
-              setTaskPoints(normalized);
+              setTaskPoints(event.target.value);
             }}
           />
         </Form.Group>

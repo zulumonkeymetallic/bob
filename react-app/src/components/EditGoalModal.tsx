@@ -4,6 +4,7 @@ import { db, functions } from '../firebase';
 import { doc, updateDoc, serverTimestamp, collection, query, where, getDocs, setDoc, getDoc, addDoc, deleteDoc } from 'firebase/firestore';
 import { Goal, Story, Task } from '../types';
 import { generateRef } from '../utils/referenceGenerator';
+import { generateShareCode, getShareUrl } from '../utils/shareCodeGenerator';
 import { httpsCallable } from 'firebase/functions';
 import { migrateThemeValue } from '../constants/globalThemes';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
@@ -16,6 +17,10 @@ import ModernTaskTable from './ModernTaskTable';
 import { usePersona } from '../contexts/PersonaContext';
 import { useSprint } from '../contexts/SprintContext';
 import { cascadeGoalPersona } from '../utils/personaCascade';
+import { parsePointsValue, TASK_DEFAULT_POINTS } from '../utils/points';
+import { normalizeGoalCostType } from '../utils/goalCost';
+import { Wand2 } from 'lucide-react';
+import { resolveLeafGoalSelection } from '../utils/goalHierarchy';
 
 interface EditGoalModalProps {
   goal: Goal | null;
@@ -49,30 +54,45 @@ const addDaysToStart = (start: string, days: number) => {
   return formatDateInput(next);
 };
 
+const shiftDateInputToYear = (value: string, year: number) => {
+  const parsed = parseDateInput(value);
+  if (!parsed) return '';
+  const next = new Date(parsed);
+  next.setFullYear(year);
+  return formatDateInput(next);
+};
+
 const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, currentUserId, allGoals = [] }) => {
   const { currentPersona } = usePersona();
   const { sprints } = useSprint();
   const [formData, setFormData] = useState({
     title: '',
     description: '',
+    url: '',
     theme: 1, // Default to Health & Fitness theme ID
     size: 'M',
     timeToMasterHours: 40,
     confidence: 0.5,
     startDate: '',
     endDate: '',
+    targetYear: '',
     status: 'New',
     priority: 2,
     estimatedCost: '',
+    costType: '',
+    recurrence: '',
     kpis: [] as Array<{ name: string; target: number; unit: string }>,
     parentGoalId: '',
     linkedPotId: '',
     tags: [] as string[],
     autoCreatePot: false,
     persona: (currentPersona || 'personal') as 'personal' | 'work',
+    isPublished: false,
+    shareCode: '',
   });
   const [durationDays, setDurationDays] = useState<number | ''>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [submitResult, setSubmitResult] = useState<string | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const { themes } = useGlobalThemes();
@@ -106,12 +126,14 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
     return match?.label || match?.name || String(value);
   }, [themes]);
   const [parentSearch, setParentSearch] = useState('');
+  const [potSearch, setPotSearch] = useState('');
   const [monzoPots, setMonzoPots] = useState<Array<{ id: string; name: string }>>([]);
   const [monzoConnected, setMonzoConnected] = useState(false);
   const [linkedStories, setLinkedStories] = useState<Story[]>([]);
   const [linkedTasks, setLinkedTasks] = useState<Task[]>([]);
   const [storiesLoading, setStoriesLoading] = useState(false);
   const [tasksLoading, setTasksLoading] = useState(false);
+  const [isGeneratingStories, setIsGeneratingStories] = useState(false);
   const sizes = [
     { value: 'XS', label: 'XS - Quick (1-10 hours)', hours: 5 },
     { value: 'S', label: 'S - Small (10-40 hours)', hours: 25 },
@@ -147,6 +169,22 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
       const nextEnd = addDaysToStart(formData.startDate, Number(parsed));
       setFormData(prev => ({ ...prev, endDate: nextEnd }));
     }
+  };
+
+  const handleTargetYearChange = (value: string) => {
+    setFormData(prev => {
+      const trimmed = value.trim();
+      const parsedYear = Number(trimmed);
+      if (!trimmed || !Number.isFinite(parsedYear)) {
+        return { ...prev, targetYear: trimmed };
+      }
+      return {
+        ...prev,
+        targetYear: trimmed,
+        startDate: prev.startDate ? shiftDateInputToYear(prev.startDate, parsedYear) : prev.startDate,
+        endDate: prev.endDate ? shiftDateInputToYear(prev.endDate, parsedYear) : prev.endDate,
+      };
+    });
   };
 
   const goalIndex = useMemo(() => {
@@ -191,41 +229,46 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
 
   const activePersona = (formData.persona || (goal as any)?.persona || currentPersona || 'personal') as 'personal' | 'work';
 
-  useEffect(() => {
-    const loadLinkedStories = async () => {
-      if (!show || !goal || !currentUserId) {
-        setLinkedStories([]);
-        return;
-      }
-      setStoriesLoading(true);
+  const reloadLinkedStories = useCallback(async () => {
+    if (!goal || !currentUserId) {
+      setLinkedStories([]);
+      return;
+    }
+    setStoriesLoading(true);
+    try {
+      let list: Story[] = [];
       try {
-        let list: Story[] = [];
-        try {
-          const baseQuery = query(
-            collection(db, 'stories'),
-            where('ownerUid', '==', currentUserId),
-            where('goalId', '==', goal.id)
-          );
-          const snap = await getDocs(baseQuery);
-          list = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Story[];
-        } catch (err) {
-          const fallback = await getDocs(query(collection(db, 'stories'), where('ownerUid', '==', currentUserId)));
-          list = fallback.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Story[];
-          list = list.filter((story) => story.goalId === goal.id);
-        }
-        if (activePersona) {
-          list = list.filter((story) => !story.persona || story.persona === activePersona);
-        }
-        setLinkedStories(list);
+        const baseQuery = query(
+          collection(db, 'stories'),
+          where('ownerUid', '==', currentUserId),
+          where('goalId', '==', goal.id)
+        );
+        const snap = await getDocs(baseQuery);
+        list = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Story[];
       } catch (err) {
-        console.error('Failed to load linked stories', err);
-        setLinkedStories([]);
-      } finally {
-        setStoriesLoading(false);
+        const fallback = await getDocs(query(collection(db, 'stories'), where('ownerUid', '==', currentUserId)));
+        list = fallback.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Story[];
+        list = list.filter((story) => story.goalId === goal.id);
       }
-    };
-    loadLinkedStories();
-  }, [show, goal?.id, currentUserId, activePersona]);
+      if (activePersona) {
+        list = list.filter((story) => !story.persona || story.persona === activePersona);
+      }
+      setLinkedStories(list);
+    } catch (err) {
+      console.error('Failed to load linked stories', err);
+      setLinkedStories([]);
+    } finally {
+      setStoriesLoading(false);
+    }
+  }, [goal, currentUserId, activePersona]);
+
+  useEffect(() => {
+    if (!show) {
+      setLinkedStories([]);
+      return;
+    }
+    reloadLinkedStories();
+  }, [show, reloadLinkedStories]);
 
   useEffect(() => {
     const loadLinkedTasks = async () => {
@@ -276,9 +319,22 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
 
   const handleStoryAdd = async (storyData: Omit<Story, 'ref' | 'id' | 'updatedAt' | 'createdAt'>) => {
     if (!goal) return;
+    const resolvedGoalSelection = resolveLeafGoalSelection((storyData as any).goalId || goal.id, allGoals);
+    if (!resolvedGoalSelection.goalId) {
+      alert(
+        resolvedGoalSelection.reason === 'ambiguous_parent'
+          ? 'Stories must link to a specific leaf goal. Choose the child goal you want this story to execute against.'
+          : 'Please select a valid leaf goal before creating a story.'
+      );
+      return;
+    }
+    const parsedStoryPoints = parsePointsValue((storyData as any).points);
+    const normalizedStoryPoints = parsedStoryPoints == null ? 1 : parsedStoryPoints;
     const payload: any = {
       ...storyData,
-      goalId: storyData.goalId || goal.id,
+      url: (storyData as any).url || null,
+      points: normalizedStoryPoints,
+      goalId: resolvedGoalSelection.goalId,
       ownerUid: currentUserId,
       persona: activePersona || 'personal',
       createdAt: serverTimestamp(),
@@ -314,17 +370,29 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
     if (!goal) return;
     const storyId = (newTask as any).storyId || null;
     const linkedStory = storyId ? linkedStories.find((story) => story.id === storyId) : null;
+    const resolvedGoalSelection = resolveLeafGoalSelection(linkedStory?.goalId || goal.id, allGoals);
+    if (!resolvedGoalSelection.goalId) {
+      alert(
+        resolvedGoalSelection.reason === 'ambiguous_parent'
+          ? 'Tasks must link to a specific leaf goal. Use a child milestone goal instead of the parent goal.'
+          : 'Please select a valid leaf goal before creating a task.'
+      );
+      return;
+    }
+    const parsedTaskPoints = parsePointsValue((newTask as any).points);
+    const normalizedTaskPoints = parsedTaskPoints == null ? TASK_DEFAULT_POINTS : parsedTaskPoints;
     const payload: any = {
       title: newTask.title || '',
       description: newTask.description || '',
+      url: (newTask as any).url || null,
       status: (newTask as any).status ?? 0,
       priority: (newTask as any).priority ?? 2,
       effort: (newTask as any).effort ?? 'M',
       dueDate: (newTask as any).dueDate || null,
-      points: (newTask as any).points ?? 1,
+      points: normalizedTaskPoints,
       ownerUid: currentUserId,
       persona: activePersona || 'personal',
-      goalId: linkedStory?.goalId || goal.id,
+      goalId: resolvedGoalSelection.goalId,
       storyId: storyId || null,
       parentType: storyId ? 'story' : 'project',
       parentId: storyId || goal.id,
@@ -355,29 +423,42 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         const resolvedThemeValue = (goal as any).theme ?? (goal as any).themeId ?? (goal as any).theme_id;
         const fallbackThemeId = migrateThemeValue(resolvedThemeValue);
         const canonicalThemeId = resolveThemeId(String(resolvedThemeValue ?? ''), fallbackThemeId);
+        const explicitTargetYear = Number((goal as any).targetYear);
+        const derivedTargetYear = Number.isFinite(explicitTargetYear)
+          ? String(explicitTargetYear)
+          : (endDateStr ? endDateStr.slice(0, 4) : (startDateStr ? startDateStr.slice(0, 4) : ''));
 
         setFormData({
           title: goal.title || '',
           description: goal.description || '',
+          url: String((goal as any).url || ''),
           theme: canonicalThemeId ?? 1,
           size: sizeMap[goal.size as keyof typeof sizeMap] || 'M',
           timeToMasterHours: goal.timeToMasterHours || 40,
           confidence: goal.confidence || 0.5,
           startDate: startDateStr,
           endDate: endDateStr,
+          targetYear: derivedTargetYear,
           status: statusMap[goal.status as keyof typeof statusMap] || 'New',
           priority: goal.priority ?? 2,
           estimatedCost: goal.estimatedCost != null ? String(goal.estimatedCost) : '',
+          costType: normalizeGoalCostType((goal as any).costType) || '',
+          recurrence: String((goal as any).recurrence || ''),
           kpis: goal.kpis || [],
           parentGoalId: goal.parentGoalId || '',
           linkedPotId: (goal as any).linkedPotId || (goal as any).potId || '',
           tags: (goal as any).tags || [],
           autoCreatePot: !!(goal as any).autoCreatePot,
           persona: ((goal as any).persona || currentPersona || 'personal') as 'personal' | 'work',
+          isPublished: !!(goal as any).isPublished,
+          shareCode: (goal as any).shareCode || '',
         });
         const current = canonicalThemeId;
         const themeObj = themes.find(t => String(t.id) === String(current));
         setThemeInput(themeObj?.label || themeObj?.name || `${themeObj?.id ?? current ?? ''}`);
+        const linkedPot = (goal as any).linkedPotId || (goal as any).potId || '';
+        const linkedPotName = monzoPots.find((pot) => pot.id === linkedPot)?.name;
+        setPotSearch(linkedPotName || String(linkedPot || ''));
         setParentSearch('');
         setThemeTouched(false);
       } else {
@@ -385,28 +466,35 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         setFormData({
           title: '',
           description: '',
+          url: '',
           theme: 1,
           size: 'M',
           timeToMasterHours: 40,
           confidence: 0.5,
           startDate: '',
           endDate: '',
+          targetYear: '',
           status: 'New',
           priority: 2,
           estimatedCost: '',
+          costType: '',
+          recurrence: '',
           kpis: [],
           parentGoalId: '',
           linkedPotId: '',
           tags: [],
           autoCreatePot: false,
           persona: (currentPersona || 'personal') as 'personal' | 'work',
+          isPublished: false,
+          shareCode: '',
         });
         setThemeInput('');
+        setPotSearch('');
         setParentSearch('');
         setThemeTouched(false);
       }
     }
-  }, [goal, show, resolveThemeId]);
+  }, [goal, show, resolveThemeId, currentPersona, monzoPots]);
 
   useEffect(() => {
     if (!show) {
@@ -439,14 +527,30 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         const q = query(collection(db, 'monzo_pots'), where('ownerUid', '==', currentUserId));
         const snap = await getDocs(q);
         const list = snap.docs
-          .map(d => ({ id: (d.data() as any).potId || d.id, name: (d.data() as any).name || 'Pot', deleted: (d.data() as any).deleted, closed: (d.data() as any).closed }))
-          .filter(p => !p.deleted && !p.closed)
+          .map(d => ({
+            id: (d.data() as any).potId || d.id,
+            name: (d.data() as any).name || 'Pot',
+            deleted: (d.data() as any).deleted,
+            closed: (d.data() as any).closed,
+            archived: (d.data() as any).archived,
+            isArchived: (d.data() as any).isArchived
+          }))
+          .filter(p => !p.deleted && !p.closed && !p.archived && !p.isArchived)
           .map(p => ({ id: p.id, name: p.name }));
         setMonzoPots(list);
       } catch { }
     };
     if (show && currentUserId) loadPots();
   }, [show, currentUserId]);
+
+  useEffect(() => {
+    if (!show) return;
+    if (!formData.linkedPotId) return;
+    const linkedPotName = monzoPots.find((pot) => pot.id === formData.linkedPotId)?.name;
+    if (linkedPotName && linkedPotName !== potSearch) {
+      setPotSearch(linkedPotName);
+    }
+  }, [show, formData.linkedPotId, monzoPots, potSearch]);
 
   // Check Monzo connection status to decide if pot auto-create can run
   useEffect(() => {
@@ -499,10 +603,20 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
       const themeId = resolveThemeId(themeInput, formData.theme);
       const previousThemeRaw = goal ? ((goal as any).theme ?? (goal as any).themeId ?? (goal as any).theme_id) : null;
       const previousThemeId = goal ? resolveThemeId(String(previousThemeRaw ?? ''), formData.theme) : null;
+      const normalizedCostType = normalizeGoalCostType(formData.costType);
+      const normalizedRecurrence = normalizedCostType === 'recurring'
+        ? String(formData.recurrence || '').trim().toLowerCase()
+        : '';
+      const isNoCostGoal = normalizedCostType === 'none';
+      const normalizedPotId = isNoCostGoal ? '' : String(formData.linkedPotId || '').trim();
+      const normalizedEstimatedCost = isNoCostGoal
+        ? null
+        : (formData.estimatedCost.trim() === '' ? null : Number(formData.estimatedCost));
 
       const goalData: any = {
         title: formData.title.trim(),
         description: formData.description.trim(),
+        url: formData.url.trim() || null,
         theme: themeId,
         theme_id: themeId,
         themeId: themeId,
@@ -514,34 +628,31 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         status: statusMap[formData.status as keyof typeof statusMap] || 0,
         priority: formData.priority,
         kpis: formData.kpis,
-        estimatedCost: formData.estimatedCost.trim() === '' ? null : Number(formData.estimatedCost),
+        estimatedCost: normalizedEstimatedCost,
         parentGoalId: formData.parentGoalId ? formData.parentGoalId : null,
         updatedAt: serverTimestamp(),
         tags: formData.tags,
         autoCreatePot: formData.autoCreatePot,
         persona: formData.persona || currentPersona || 'personal',
+        costType: normalizedCostType || null,
+        recurrence: normalizedRecurrence || null,
+        isPublished: formData.isPublished,
+        shareCode: formData.isPublished ? formData.shareCode : null,
+        publishedAt: formData.isPublished && !goal?.isPublished ? serverTimestamp() : (goal?.publishedAt || null),
       };
 
-      // Read optional cost metadata and pot mapping from form elements
-      const ct = (document.getElementById('goal-cost-type') as HTMLSelectElement | null)?.value || '';
-      const rec = (document.getElementById('goal-recurrence') as HTMLSelectElement | null)?.value || '';
-      const ty = (document.getElementById('goal-target-year') as HTMLInputElement | null)?.value || '';
-      const potSel = (document.getElementById('goal-pot-id') as HTMLSelectElement | null)?.value || '';
-      if (ct) goalData.costType = ct;
-      else goalData.costType = null;
-      if (rec) goalData.recurrence = rec;
-      else goalData.recurrence = null;
+      const ty = (formData.targetYear || '').trim();
       goalData.targetYear = ty ? Number(ty) : null;
-      goalData.linkedPotId = formData.linkedPotId || null;
+      goalData.linkedPotId = normalizedPotId || null;
       // Backwards compatibility
-      goalData.potId = formData.linkedPotId || null;
-      const estimatedCostValue = formData.estimatedCost ? Number(formData.estimatedCost) : null;
+      goalData.potId = normalizedPotId || null;
+      const estimatedCostValue = normalizedEstimatedCost;
 
       const maybeCreateMonzoPot = async (goalId: string | null, goalRef?: string | null): Promise<string | null> => {
         if (!goalId) return null;
         if (!formData.autoCreatePot) return null;
         if (!estimatedCostValue || Number.isNaN(estimatedCostValue)) return null;
-        if (formData.linkedPotId) return null;
+        if (normalizedPotId) return null;
         if (!monzoConnected) {
           setToastMsg('Connect Monzo to auto-create a pot.');
           return null;
@@ -647,6 +758,48 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
     onClose();
   };
 
+  const handleDelete = async () => {
+    if (!goal || isDeleting) return;
+    const label = (goal as any).ref || goal.title || goal.id;
+    const confirmed = window.confirm(`Delete goal "${label}"? This cannot be undone.`);
+    if (!confirmed) return;
+
+    setIsDeleting(true);
+    setSubmitResult(null);
+    try {
+      await deleteDoc(doc(db, 'goals', goal.id));
+      setToastMsg('Goal deleted');
+      onClose();
+    } catch (error: any) {
+      console.error('❌ EditGoalModal: Delete failed', error);
+      setSubmitResult(`❌ Failed to delete goal: ${error?.message || 'Unknown error'}`);
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const handleGenerateStories = async () => {
+    if (!goal || isGeneratingStories) return;
+    setIsGeneratingStories(true);
+    setSubmitResult(null);
+    try {
+      const callable = httpsCallable(functions, 'generateStoriesForGoal');
+      const resp: any = await callable({ goalId: goal.id });
+      const created = Number(resp?.data?.created ?? 0);
+      setSubmitResult(
+        created > 0
+          ? `✅ Generated ${created} stories for "${goal.title}".`
+          : '✅ AI generation completed with no new stories.'
+      );
+      await reloadLinkedStories();
+    } catch (error: any) {
+      console.error('generateStoriesForGoal failed', error);
+      setSubmitResult(`❌ Failed to generate stories: ${error?.message || 'Unknown error'}`);
+    } finally {
+      setIsGeneratingStories(false);
+    }
+  };
+
   // if (!goal) return null; // Removed to allow create mode
 
   return (
@@ -657,7 +810,21 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         </Toast>
       </ToastContainer>
       <Modal.Header closeButton>
-        <Modal.Title>{goal ? `Edit Goal: ${goal.title}` : 'Create New Goal'}</Modal.Title>
+        <div className="d-flex w-100 align-items-center justify-content-between gap-2">
+          <Modal.Title>{goal ? `Edit Goal: ${goal.title}` : 'Create New Goal'}</Modal.Title>
+          {goal && (
+            <Button
+              variant="outline-primary"
+              size="sm"
+              onClick={handleGenerateStories}
+              disabled={isGeneratingStories || isSubmitting || isDeleting}
+              title="Auto-generate stories for this goal"
+            >
+              <Wand2 size={14} className="me-1" />
+              {isGeneratingStories ? 'Generating...' : 'AI Stories'}
+            </Button>
+          )}
+        </div>
       </Modal.Header>
       <Modal.Body>
         <div className="row g-3">
@@ -685,10 +852,13 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
                     value={formData.estimatedCost}
                     onChange={(e) => setFormData({ ...formData, estimatedCost: e.target.value })}
                     placeholder="e.g. 1250"
+                    disabled={formData.costType === 'none'}
                   />
                 </InputGroup>
                 <Form.Text className="text-muted">
-                  Used for finance projections and Monzo pot alignment.
+                  {formData.costType === 'none'
+                    ? 'Cost disabled for this goal.'
+                    : 'Used for finance projections and Monzo pot alignment.'}
                 </Form.Text>
               </Form.Group>
 
@@ -696,8 +866,25 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
                 <div className="col-md-4">
                   <Form.Group className="mb-3">
                     <Form.Label>Cost Type</Form.Label>
-                    <Form.Select id="goal-cost-type" defaultValue={(goal as any)?.costType || ''}>
+                    <Form.Select
+                      id="goal-cost-type"
+                      value={formData.costType}
+                      onChange={(e) => {
+                        const nextCostType = e.target.value;
+                        setFormData((prev) => ({
+                          ...prev,
+                          costType: nextCostType,
+                          estimatedCost: nextCostType === 'none' ? '' : prev.estimatedCost,
+                          linkedPotId: nextCostType === 'none' ? '' : prev.linkedPotId,
+                          autoCreatePot: nextCostType === 'none' ? false : prev.autoCreatePot,
+                        }));
+                        if (nextCostType === 'none') {
+                          setPotSearch('');
+                        }
+                      }}
+                    >
                       <option value="">Not set</option>
+                      <option value="none">None (no cost)</option>
                       <option value="one_off">One-off</option>
                       <option value="recurring">Recurring</option>
                     </Form.Select>
@@ -706,7 +893,12 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
                 <div className="col-md-4">
                   <Form.Group className="mb-3">
                     <Form.Label>Recurrence</Form.Label>
-                    <Form.Select id="goal-recurrence" defaultValue={(goal as any)?.recurrence || ''}>
+                    <Form.Select
+                      id="goal-recurrence"
+                      value={formData.recurrence}
+                      onChange={(e) => setFormData({ ...formData, recurrence: e.target.value })}
+                      disabled={formData.costType !== 'recurring'}
+                    >
                       <option value="">Not set</option>
                       <option value="monthly">Monthly</option>
                       <option value="annual">Annual</option>
@@ -716,29 +908,74 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
                 <div className="col-md-4">
                   <Form.Group className="mb-3">
                     <Form.Label>Target Year</Form.Label>
-                    <Form.Control id="goal-target-year" type="number" min="2024" step="1" defaultValue={(goal as any)?.targetYear || ''} placeholder="e.g., 2026" />
+                    <Form.Control
+                      id="goal-target-year"
+                      type="number"
+                      min="2024"
+                      step="1"
+                      value={formData.targetYear}
+                      onChange={(e) => handleTargetYearChange(e.target.value)}
+                      placeholder="e.g., 2026"
+                    />
+                    <Form.Text className="text-muted">
+                      Date years: Start {formData.startDate ? formData.startDate.slice(0, 4) : '—'} · End {formData.endDate ? formData.endDate.slice(0, 4) : '—'}
+                    </Form.Text>
                   </Form.Group>
                 </div>
               </div>
 
               <Form.Group className="mb-3">
                 <Form.Label>Link Monzo Pot (optional)</Form.Label>
-                <Form.Select
-                  value={formData.linkedPotId}
-                  onChange={(e) => setFormData({ ...formData, linkedPotId: e.target.value })}
-                >
-                  <option value="">No pot linked</option>
-                  {monzoPots.map(p => (
-                    <option key={p.id} value={p.id}>{p.name}</option>
+                <Form.Control
+                  list="goal-pot-options"
+                  value={potSearch}
+                  disabled={formData.costType === 'none'}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setPotSearch(value);
+                    const matched = monzoPots.find((pot) =>
+                      pot.id.toLowerCase() === value.trim().toLowerCase() ||
+                      pot.name.toLowerCase() === value.trim().toLowerCase()
+                    );
+                    setFormData((prev) => ({ ...prev, linkedPotId: matched?.id || '' }));
+                  }}
+                  onBlur={() => {
+                    const value = potSearch.trim();
+                    if (!value) {
+                      setFormData((prev) => ({ ...prev, linkedPotId: '' }));
+                      return;
+                    }
+                    const matched = monzoPots.find((pot) =>
+                      pot.id.toLowerCase() === value.toLowerCase() ||
+                      pot.name.toLowerCase() === value.toLowerCase()
+                    );
+                    if (matched) {
+                      setFormData((prev) => ({ ...prev, linkedPotId: matched.id }));
+                      setPotSearch(matched.name);
+                    }
+                  }}
+                  placeholder={formData.costType === 'none' ? 'Disabled for no-cost goals' : 'Search pots by name...'}
+                />
+                <datalist id="goal-pot-options">
+                  {monzoPots.map((pot) => (
+                    <option key={`pot-name-${pot.id}`} value={pot.name} label={pot.id} />
                   ))}
-                </Form.Select>
-                <Form.Text className="text-muted">If set, analytics will use this pot rather than name matching.</Form.Text>
+                  {monzoPots.map((pot) => (
+                    <option key={`pot-id-${pot.id}`} value={pot.id} />
+                  ))}
+                </datalist>
+                <Form.Text className="text-muted">
+                  {formData.costType === 'none'
+                    ? 'No-cost goals are excluded from pot tracking.'
+                    : 'Search and select a non-archived pot by name.'}
+                </Form.Text>
               </Form.Group>
               <Form.Check
                 className="mb-3"
                 type="checkbox"
                 label="Auto-create a Monzo pot for this goal (target = estimated cost)"
                 checked={formData.autoCreatePot}
+                disabled={formData.costType === 'none'}
                 onChange={(e) => setFormData({ ...formData, autoCreatePot: e.target.checked })}
               />
 
@@ -750,6 +987,16 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
                   value={formData.description}
                   onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                   placeholder="Describe this goal in detail..."
+                />
+              </Form.Group>
+
+              <Form.Group className="mb-3">
+                <Form.Label>Source URL</Form.Label>
+                <Form.Control
+                  type="url"
+                  value={formData.url}
+                  onChange={(e) => setFormData({ ...formData, url: e.target.value })}
+                  placeholder="https://..."
                 />
               </Form.Group>
 
@@ -1022,6 +1269,58 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
                   Add measurable metrics to track progress toward this goal
                 </Form.Text>
               </Form.Group>
+
+              {/* Publish & Share Section */}
+              <div className="border-top pt-3 mt-4">
+                <Form.Group className="mb-3">
+                  <Form.Check
+                    type="checkbox"
+                    id="publish-goal"
+                    label="Publish this goal (share publicly via link)"
+                    checked={formData.isPublished}
+                    onChange={(e) => {
+                      setFormData(prev => {
+                        const isPublished = e.target.checked;
+                        return {
+                          ...prev,
+                          isPublished,
+                          shareCode: isPublished && !prev.shareCode ? generateShareCode() : prev.shareCode
+                        };
+                      });
+                    }}
+                  />
+                  <Form.Text className="text-muted d-block mt-2">
+                    {formData.isPublished
+                      ? '✓ This goal is publicly visible with only title and progress bars showing'
+                      : 'When enabled, others can view this goal via a unique share link without logging in'}
+                  </Form.Text>
+                </Form.Group>
+
+                {formData.isPublished && formData.shareCode && (
+                  <Form.Group className="mb-3">
+                    <Form.Label className="fw-bold">Share Link</Form.Label>
+                    <InputGroup>
+                      <Form.Control
+                        type="text"
+                        value={getShareUrl(formData.shareCode)}
+                        readOnly
+                      />
+                      <Button
+                        variant="outline-secondary"
+                        onClick={() => {
+                          navigator.clipboard.writeText(getShareUrl(formData.shareCode));
+                          setToastMsg('Link copied to clipboard!');
+                        }}
+                      >
+                        Copy Link
+                      </Button>
+                    </InputGroup>
+                    <Form.Text className="text-muted d-block mt-2" style={{ fontSize: '0.8rem' }}>
+                      Share Code: <code>{formData.shareCode}</code>
+                    </Form.Text>
+                  </Form.Group>
+                )}
+              </div>
             </Form>
 
             {submitResult && (
@@ -1085,13 +1384,18 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         )}
       </Modal.Body>
       <Modal.Footer>
-        <Button variant="secondary" onClick={handleClose}>
+        {goal && (
+          <Button variant="danger" onClick={handleDelete} disabled={isSubmitting || isDeleting}>
+            {isDeleting ? 'Deleting...' : 'Delete Goal'}
+          </Button>
+        )}
+        <Button variant="secondary" onClick={handleClose} disabled={isSubmitting || isDeleting}>
           Cancel
         </Button>
         <Button
           variant="primary"
           onClick={handleSubmit}
-          disabled={isSubmitting || !formData.title.trim()}
+          disabled={isSubmitting || isDeleting || !formData.title.trim()}
         >
           {isSubmitting ? (goal ? 'Updating...' : 'Creating...') : (goal ? 'Update Goal' : 'Create Goal')}
         </Button>

@@ -13,6 +13,7 @@ import { Settings, Eye, EyeOff, Plus, Edit, Trash2, Move } from 'lucide-react';
 import { themeVars, rgbaCard } from '../utils/themeVars';
 import ModernTaskTable from './ModernTaskTable';
 import { useSprint } from '../contexts/SprintContext';
+import { parsePointsValue } from '../utils/points';
 
 const EnhancedKanbanPage: React.FC = () => {
   const { currentUser } = useAuth();
@@ -40,7 +41,7 @@ const EnhancedKanbanPage: React.FC = () => {
     description: '',
     goalId: '',
     priority: 2 as number,
-    points: 1
+    points: '1' as string | number
   });
   
   const [editStory, setEditStory] = useState({
@@ -48,7 +49,7 @@ const EnhancedKanbanPage: React.FC = () => {
     description: '',
     goalId: '',
     priority: 2 as number,
-    points: 1
+    points: '1' as string | number
   });
   
   // Swim lanes configuration
@@ -186,7 +187,7 @@ const EnhancedKanbanPage: React.FC = () => {
         goalId: newStory.goalId,
         status: 0,
         priority: newStory.priority,
-        points: newStory.points,
+        points: parsePointsValue(newStory.points) ?? 1,
         orderIndex: stories.length,
         ownerUid: currentUser.uid,
         persona: currentPersona,
@@ -199,7 +200,7 @@ const EnhancedKanbanPage: React.FC = () => {
         description: '',
         goalId: '',
         priority: 2,
-        points: 1
+        points: '1'
       });
       setShowAddStory(false);
     } catch (error) {
@@ -216,7 +217,7 @@ const EnhancedKanbanPage: React.FC = () => {
         description: editStory.description,
         goalId: editStory.goalId,
         priority: editStory.priority,
-        points: editStory.points,
+        points: parsePointsValue(editStory.points) ?? 1,
         updatedAt: serverTimestamp()
       });
 
@@ -383,7 +384,7 @@ const EnhancedKanbanPage: React.FC = () => {
           borderBottom: `1px solid ${themeVars.border}`
         }}>
           <span style={{ fontSize: '12px', color: themeVars.muted as string }}>
-            📋 {taskCount} tasks • ⭐ {story.points} points
+            📋 {taskCount} tasks • {story.points} points
           </span>
           {isSelected && (
             <span style={{
@@ -774,10 +775,13 @@ const EnhancedKanbanPage: React.FC = () => {
                   <Form.Label>Points</Form.Label>
                   <Form.Control
                     type="number"
-                    min="1"
-                    max="13"
-                    value={newStory.points}
-                    onChange={(e) => setNewStory(prev => ({ ...prev, points: parseInt(e.target.value) || 1 }))}
+                    step="any"
+                    inputMode="decimal"
+                    value={newStory.points ?? ''}
+                    onChange={(e) => setNewStory(prev => ({
+                      ...prev,
+                      points: e.target.value as any,
+                    }))}
                   />
                 </Form.Group>
               </Col>
@@ -864,10 +868,13 @@ const EnhancedKanbanPage: React.FC = () => {
                   <Form.Label>Points</Form.Label>
                   <Form.Control
                     type="number"
-                    min="1"
-                    max="13"
-                    value={editStory.points}
-                    onChange={(e) => setEditStory(prev => ({ ...prev, points: parseInt(e.target.value) || 1 }))}
+                    step="any"
+                    inputMode="decimal"
+                    value={editStory.points ?? ''}
+                    onChange={(e) => setEditStory(prev => ({
+                      ...prev,
+                      points: e.target.value as any,
+                    }))}
                   />
                 </Form.Group>
               </Col>

@@ -4,9 +4,11 @@ import { useSearchParams } from 'react-router-dom';
 import { collection, doc, getDoc, onSnapshot, query, where } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { endOfDay, format, startOfDay } from 'date-fns';
+import { Activity } from 'lucide-react';
 import { db, functions } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
+import { useSidebar } from '../contexts/SidebarContext';
 import { Task } from '../types';
 import { resolveRecurringDueMs, resolveTaskDueMs } from '../utils/recurringTaskDue';
 
@@ -38,9 +40,10 @@ const getLastDoneMs = (task: Task): number | null => {
 };
 
 const getChoreKind = (task: Task): 'chore' | 'routine' | 'habit' | null => {
-  const raw = String((task as any)?.type || (task as any)?.task_type || '').toLowerCase();
+  const raw = String((task as any)?.type || (task as any)?.task_type || '').trim().toLowerCase();
   const normalized = raw === 'habitual' ? 'habit' : raw;
-  if (['chore', 'routine', 'habit'].includes(normalized)) return normalized as any;
+  if (normalized === 'chore' || normalized === 'routine' || normalized === 'habit') return normalized;
+  if (normalized) return null;
   const tags = Array.isArray((task as any)?.tags) ? (task as any).tags : [];
   const tagKeys = tags.map((tag) => String(tag || '').toLowerCase().replace(/^#/, ''));
   if (tagKeys.includes('chore')) return 'chore';
@@ -59,6 +62,7 @@ const formatDueLabel = (dueMs?: number | null) => {
 const ChoreChecklistPage: React.FC = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
+  const { showSidebar } = useSidebar();
   const [searchParams, setSearchParams] = useSearchParams();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(false);
@@ -207,8 +211,21 @@ const ChoreChecklistPage: React.FC = () => {
           ) : choresForDate.length === 0 ? (
             <div className="text-muted">No chores, routines, or habits due for this date.</div>
           ) : (
-            <ListGroup variant="flush">
-              {choresForDate.map((task) => {
+            (() => {
+              const morning: typeof choresForDate = [];
+              const afternoon: typeof choresForDate = [];
+              const evening: typeof choresForDate = [];
+              const other: typeof choresForDate = [];
+
+              choresForDate.forEach((task) => {
+                const tod = (task as any).timeOfDay;
+                if (tod === 'morning') morning.push(task);
+                else if (tod === 'afternoon') afternoon.push(task);
+                else if (tod === 'evening') evening.push(task);
+                else other.push(task);
+              });
+
+              const renderChoreItem = (task: any) => {
                 const kind = getChoreKind(task) || 'chore';
                 const badgeVariant = kind === 'routine' ? 'success' : kind === 'habit' ? 'secondary' : 'primary';
                 const badgeLabel = kind === 'routine' ? 'Routine' : kind === 'habit' ? 'Habit' : 'Chore';
@@ -216,13 +233,12 @@ const ChoreChecklistPage: React.FC = () => {
                 const dueLabel = formatDueLabel(dueMs);
                 const isHighlight = taskHighlightId && taskHighlightId === task.id;
                 const busy = !!completing[task.id];
-                const taskRef = task.ref || task.id;
                 return (
-                  <ListGroup.Item key={task.id} className={isHighlight ? 'border border-primary rounded' : ''}>
+                  <ListGroup.Item key={task.id} className={isHighlight ? 'border border-primary rounded mb-1' : 'mb-1 rounded border'}>
                     <div className="d-flex align-items-center gap-2">
                       <Form.Check
                         type="checkbox"
-                        checked={false}
+                        checked={busy}
                         disabled={busy}
                         onChange={() => handleComplete(task)}
                         aria-label={`Complete ${task.title}`}
@@ -233,13 +249,62 @@ const ChoreChecklistPage: React.FC = () => {
                       </div>
                       <div className="d-flex flex-column align-items-end gap-1">
                         <Badge bg={badgeVariant}>{badgeLabel}</Badge>
-                        <Button size="sm" variant="outline-secondary" href={`/tasks/${encodeURIComponent(taskRef)}`}>Open</Button>
+                        <button
+                          type="button"
+                          className="d-inline-flex align-items-center justify-content-center"
+                          onClick={() => showSidebar(task as any, 'task')}
+                          title="Activity stream"
+                          aria-label={`Open activity stream for ${task.title}`}
+                          style={{
+                            color: 'var(--bs-secondary-color)',
+                            padding: 4,
+                            borderRadius: 4,
+                            border: 'none',
+                            background: 'transparent',
+                            cursor: 'pointer',
+                            lineHeight: 0,
+                            flexShrink: 0,
+                          }}
+                        >
+                          <Activity size={14} />
+                        </button>
                       </div>
                     </div>
                   </ListGroup.Item>
                 );
-              })}
-            </ListGroup>
+              };
+
+              return (
+                <ListGroup variant="flush">
+                  {morning.length > 0 && (
+                    <div className="mb-3">
+                      <h6 className="text-muted mb-2 border-bottom pb-1 fw-bold"><small>Morning</small></h6>
+                      {morning.map((task) => renderChoreItem(task))}
+                    </div>
+                  )}
+                  {afternoon.length > 0 && (
+                    <div className="mb-3">
+                      <h6 className="text-muted mb-2 border-bottom pb-1 fw-bold"><small>Afternoon</small></h6>
+                      {afternoon.map((task) => renderChoreItem(task))}
+                    </div>
+                  )}
+                  {evening.length > 0 && (
+                    <div className="mb-3">
+                      <h6 className="text-muted mb-2 border-bottom pb-1 fw-bold"><small>Evening</small></h6>
+                      {evening.map((task) => renderChoreItem(task))}
+                    </div>
+                  )}
+                  {other.length > 0 && (
+                    <div className="mb-0">
+                      {(morning.length > 0 || afternoon.length > 0 || evening.length > 0) && (
+                        <h6 className="text-muted mb-2 border-bottom pb-1 fw-bold"><small>Other / Anytime</small></h6>
+                      )}
+                      {other.map((task) => renderChoreItem(task))}
+                    </div>
+                  )}
+                </ListGroup>
+              );
+            })()
           )}
         </Card.Body>
       </Card>

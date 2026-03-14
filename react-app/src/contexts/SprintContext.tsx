@@ -107,6 +107,9 @@ interface SprintContextValue {
   sprintsById: Record<string, Sprint>;
   loading: boolean;
   error: FirestoreError | null;
+  /** True when the persona-scoped query was denied and we fell back to owner-only data.
+   *  Consumers should remain fully functional — this is informational only. */
+  permissionDenied: boolean;
 }
 
 const SprintContext = createContext<SprintContextValue | undefined>(undefined);
@@ -117,6 +120,7 @@ export const SprintProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [allSprints, setAllSprints] = useState<Sprint[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<FirestoreError | null>(null);
+  const [permissionDenied, setPermissionDenied] = useState<boolean>(false);
 
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
@@ -179,6 +183,7 @@ export const SprintProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       setSprints([]);
       setLoading(false);
       setError(null);
+      setPermissionDenied(false);
       return;
     }
 
@@ -318,6 +323,7 @@ export const SprintProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     };
 
     const fetchOwnerOnlySprints = async (originError: any) => {
+      setPermissionDenied(true);
       try {
         const ownerOnlyQuery = query(
           collection(db, 'sprints'),
@@ -331,14 +337,21 @@ export const SprintProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           ownerOnlyCount: data.length,
         });
         applySprintData(data, 'fallback');
-      } catch (fallbackError) {
-        logger.error('SprintContext', 'Owner-only sprint fallback failed', {
+      } catch (fallbackError: any) {
+        logger.error('SprintContext', 'Owner-only sprint fallback also failed; preserving cached data if available.', {
           code: fallbackError?.code,
           message: fallbackError?.message,
         });
-        setError(fallbackError);
-        setSprints([]);
-        setAllSprints([]);
+        // Do NOT surface the error to consumers — sprint degradation must not block FAB/modal flows.
+        // If we have cached sprints keep them; otherwise leave sprints as-is (empty) and stay usable.
+        const cached = currentUser?.uid && currentPersona
+          ? loadCachedSprints(currentUser.uid, currentPersona)
+          : null;
+        if (cached) {
+          setSprints(cached.sprints);
+          setAllSprints(cached.allSprints);
+        }
+        setError(null);
         setLoading(false);
       }
     };
@@ -405,9 +418,8 @@ export const SprintProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     sprintsById,
     loading,
     error,
-  }), [selectedSprintId, setSelectedSprintId, sprints, sprintsById, loading, error]);
-
-  console.log('[SprintProvider] RENDERING');
+    permissionDenied,
+  }), [selectedSprintId, setSelectedSprintId, sprints, sprintsById, loading, error, permissionDenied]);
 
   return (
     <SprintContext.Provider value={contextValue}>

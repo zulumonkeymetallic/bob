@@ -36,7 +36,9 @@
   padding-bottom: 16px;
 }
 
-[data-bs-theme="dark"] .unified-planner .planner-calendar-wrapper {
+[data-bs-theme="dark"] .unified-planner .planner-calendar-wrapper,
+[data-theme="dark"] .unified-planner .planner-calendar-wrapper,
+.dark .unified-planner .planner-calendar-wrapper {
   background: rgba(15, 23, 42, 0.96);
   color: var(--bs-body-color, #e2e8f0);
 }
@@ -57,7 +59,15 @@
 [data-bs-theme="dark"] .unified-planner .planner-calendar-wrapper .rbc-time-view,
 [data-bs-theme="dark"] .unified-planner .planner-calendar-wrapper .rbc-time-view .rbc-time-gutter,
 [data-bs-theme="dark"] .unified-planner .planner-calendar-wrapper .rbc-time-view .rbc-day-slot,
-[data-bs-theme="dark"] .unified-planner .planner-calendar-wrapper .rbc-time-content {
+[data-bs-theme="dark"] .unified-planner .planner-calendar-wrapper .rbc-time-content,
+[data-theme="dark"] .unified-planner .planner-calendar-wrapper .rbc-time-view,
+[data-theme="dark"] .unified-planner .planner-calendar-wrapper .rbc-time-view .rbc-time-gutter,
+[data-theme="dark"] .unified-planner .planner-calendar-wrapper .rbc-time-view .rbc-day-slot,
+[data-theme="dark"] .unified-planner .planner-calendar-wrapper .rbc-time-content,
+.dark .unified-planner .planner-calendar-wrapper .rbc-time-view,
+.dark .unified-planner .planner-calendar-wrapper .rbc-time-view .rbc-time-gutter,
+.dark .unified-planner .planner-calendar-wrapper .rbc-time-view .rbc-day-slot,
+.dark .unified-planner .planner-calendar-wrapper .rbc-time-content {
   background: rgba(15, 23, 42, 0.9);
 }
 
@@ -69,8 +79,25 @@
   background: transparent;
 }
 
-[data-bs-theme="dark"] .unified-planner .planner-calendar-wrapper .rbc-time-content .rbc-time-slot {
+[data-bs-theme="dark"] .unified-planner .planner-calendar-wrapper .rbc-time-content .rbc-time-slot,
+[data-theme="dark"] .unified-planner .planner-calendar-wrapper .rbc-time-content .rbc-time-slot,
+.dark .unified-planner .planner-calendar-wrapper .rbc-time-content .rbc-time-slot {
   background: rgba(15, 23, 42, 0.85);
+}
+
+[data-bs-theme="dark"] .unified-planner .planner-calendar-wrapper .rbc-time-content > .rbc-time-gutter,
+[data-bs-theme="dark"] .unified-planner .planner-calendar-wrapper .rbc-day-bg,
+[data-bs-theme="dark"] .unified-planner .planner-calendar-wrapper .rbc-time-view-resources .rbc-time-gutter,
+[data-bs-theme="dark"] .unified-planner .planner-calendar-wrapper .rbc-time-view-resources .rbc-time-header-gutter,
+[data-theme="dark"] .unified-planner .planner-calendar-wrapper .rbc-time-content > .rbc-time-gutter,
+[data-theme="dark"] .unified-planner .planner-calendar-wrapper .rbc-day-bg,
+[data-theme="dark"] .unified-planner .planner-calendar-wrapper .rbc-time-view-resources .rbc-time-gutter,
+[data-theme="dark"] .unified-planner .planner-calendar-wrapper .rbc-time-view-resources .rbc-time-header-gutter,
+.dark .unified-planner .planner-calendar-wrapper .rbc-time-content > .rbc-time-gutter,
+.dark .unified-planner .planner-calendar-wrapper .rbc-day-bg,
+.dark .unified-planner .planner-calendar-wrapper .rbc-time-view-resources .rbc-time-gutter,
+.dark .unified-planner .planner-calendar-wrapper .rbc-time-view-resources .rbc-time-header-gutter {
+  background: rgba(15, 23, 42, 0.92);
 }
 
 .unified-planner .planner-calendar-wrapper .rbc-time-content .rbc-slot-selectable:hover {
@@ -98,7 +125,9 @@
   color: #1e3a8a;
 }
 
-[data-bs-theme="dark"] .unified-planner .planner-calendar-wrapper .rbc-event.planner-event-external {
+[data-bs-theme="dark"] .unified-planner .planner-calendar-wrapper .rbc-event.planner-event-external,
+[data-theme="dark"] .unified-planner .planner-calendar-wrapper .rbc-event.planner-event-external,
+.dark .unified-planner .planner-calendar-wrapper .rbc-event.planner-event-external {
   background-color: rgba(59, 130, 246, 0.25);
   background-image: none;
   border-color: #93c5fd;
@@ -106,7 +135,11 @@
 }
 
 [data-bs-theme="dark"] .unified-planner .planner-calendar-wrapper .rbc-event.planner-event-external .rbc-event-label,
-[data-bs-theme="dark"] .unified-planner .planner-calendar-wrapper .rbc-event.planner-event-external .rbc-event-content {
+[data-bs-theme="dark"] .unified-planner .planner-calendar-wrapper .rbc-event.planner-event-external .rbc-event-content,
+[data-theme="dark"] .unified-planner .planner-calendar-wrapper .rbc-event.planner-event-external .rbc-event-label,
+[data-theme="dark"] .unified-planner .planner-calendar-wrapper .rbc-event.planner-event-external .rbc-event-content,
+.dark .unified-planner .planner-calendar-wrapper .rbc-event.planner-event-external .rbc-event-label,
+.dark .unified-planner .planner-calendar-wrapper .rbc-event.planner-event-external .rbc-event-content {
   color: #e2e8f0;
 }
 
@@ -142,7 +175,9 @@
   border-bottom: 1px solid rgba(148, 163, 184, 0.35);
 }
 
-[data-bs-theme="dark"] .unified-planner .planner-calendar-wrapper .rbc-time-header {
+[data-bs-theme="dark"] .unified-planner .planner-calendar-wrapper .rbc-time-header,
+[data-theme="dark"] .unified-planner .planner-calendar-wrapper .rbc-time-header,
+.dark .unified-planner .planner-calendar-wrapper .rbc-time-header {
   background: rgba(15, 23, 42, 0.9);
   color: var(--bs-body-color, #e2e8f0);
   border-bottom: 1px solid rgba(226, 232, 240, 0.15);

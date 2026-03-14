@@ -7,7 +7,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useSprint } from '../contexts/SprintContext';
 import { Story, Sprint, Goal } from '../types';
-import { Calendar, Filter, Plus, ArrowUpDown, ArrowRight, Target, Maximize2, Minimize2, LayoutGrid } from 'lucide-react';
+import { Calendar, Filter, Plus, ArrowUpDown, ArrowRight, Target, Maximize2, Minimize2, LayoutGrid, ArrowRightLeft } from 'lucide-react';
 import KanbanCardV2 from './KanbanCardV2';
 import GLOBAL_THEMES from '../constants/globalThemes';
 import type { GlobalTheme } from '../constants/globalThemes';
@@ -17,6 +17,8 @@ import { goalThemeColor } from '../utils/storyCardFormatting';
 import { useNavigate } from 'react-router-dom';
 import { formatTaskTagLabel } from '../utils/tagDisplay';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
+import { isStatus } from '../utils/statusHelpers';
+import { isGoalInHierarchySet } from '../utils/goalHierarchy';
 
 // Normalize sprint identifiers so we handle doc refs, strings, and legacy placeholders
 const normalizeSprintId = (value: any): string | null => {
@@ -32,6 +34,46 @@ const normalizeSprintId = (value: any): string | null => {
     if (typeof refId === 'string') return refId;
   }
   return String(value);
+};
+
+type MatrixSortField = 'none' | 'top3' | 'priority' | 'aiScore' | 'points' | 'dueDate';
+type MatrixSortDirection = 'asc' | 'desc';
+
+const storyDateToMs = (value: any): number | null => {
+  if (value == null) return null;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value?.toMillis === 'function') return value.toMillis();
+  if (typeof value?.seconds === 'number') return value.seconds * 1000;
+  const parsed = Date.parse(String(value));
+  return Number.isNaN(parsed) ? null : parsed;
+};
+
+const getStoryDueDateMs = (story: Story): number | null => {
+  const raw = (story as any)?.dueDate ?? (story as any)?.targetDate ?? (story as any)?.plannedStartDate;
+  return storyDateToMs(raw);
+};
+
+const getStoryAiScore = (story: Story): number | null => {
+  const value = Number((story as any)?.aiCriticalityScore);
+  return Number.isFinite(value) ? value : null;
+};
+
+const isTop3Story = (story: Story): boolean => {
+  if ((story as any)?.aiTop3ForDay) return true;
+  const rankFields = [
+    Number((story as any)?.aiFocusStoryRank),
+    Number((story as any)?.aiPriorityRank),
+  ];
+  return rankFields.some((rank) => Number.isFinite(rank) && rank > 0 && rank <= 3);
+};
+
+const compareNullableNumbers = (a: number | null, b: number | null, direction: MatrixSortDirection): number => {
+  const dir = direction === 'asc' ? 1 : -1;
+  if (a == null && b == null) return 0;
+  if (a == null) return 1;
+  if (b == null) return -1;
+  if (a === b) return 0;
+  return a > b ? dir : -dir;
 };
 
 // Droppable Sprint Column using pragmatic DnD
@@ -94,7 +136,7 @@ const SprintColumn: React.FC<{
   };
 
   const status = getSprintStatus();
-  const totalPoints = stories.reduce((sum, story) => sum + (story.points || 0), 0);
+  const totalPoints = stories.reduce((sum, story) => sum + (Number.isFinite(Number(story.points)) ? Number(story.points) : 0), 0);
   const dateRangeLabel = sprint && !isBacklog && sprint.startDate && sprint.endDate
     ? `${new Date(sprint.startDate).toLocaleDateString()} – ${new Date(sprint.endDate).toLocaleDateString()}`
     : null;
@@ -192,8 +234,18 @@ const SprintPlanningMatrix: React.FC = () => {
   // Filters
   const [filterGoal, setFilterGoal] = useState<string>('all');
   const [filterTheme, setFilterTheme] = useState<number | null>(null);
-  const [showCompleted, setShowCompleted] = useState(false);
+  const [showCompletedSprints, setShowCompletedSprints] = useState(false);
+  const [showCompletedItems, setShowCompletedItems] = useState(false);
+  const [showTop3Only, setShowTop3Only] = useState(false);
+  const [showAiScoredOnly, setShowAiScoredOnly] = useState(false);
+  const [activeFocusGoalIds, setActiveFocusGoalIds] = useState<Set<string>>(new Set());
+  const [applyFocusOnlyFilter, setApplyFocusOnlyFilter] = useState(false);
+  const [focusToggleTouched, setFocusToggleTouched] = useState(false);
+  const [sortField, setSortField] = useState<MatrixSortField>('none');
+  const [sortDirection, setSortDirection] = useState<MatrixSortDirection>('desc');
   const [goalSearch, setGoalSearch] = useState('');
+  const [bulkMoveLoading, setBulkMoveLoading] = useState(false);
+  const [moveNotice, setMoveNotice] = useState<string | null>(null);
 
   useEffect(() => {
     const handler = () => {
@@ -276,10 +328,62 @@ const SprintPlanningMatrix: React.FC = () => {
     return setupSubscriptions();
   }, [currentUser, currentPersona]);
 
+  useEffect(() => {
+    if (!currentUser?.uid || !currentPersona) {
+      setActiveFocusGoalIds(new Set());
+      setApplyFocusOnlyFilter(false);
+      setFocusToggleTouched(false);
+      return;
+    }
+    const focusQuery = query(
+      collection(db, 'focusGoals'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+      where('isActive', '==', true)
+    );
+    const unsub = onSnapshot(
+      focusQuery,
+      (snapshot) => {
+        const ids = new Set<string>();
+        snapshot.docs.forEach((docSnap) => {
+          const data = docSnap.data() as any;
+          const goalIds = Array.isArray(data?.goalIds) ? data.goalIds : [];
+          goalIds.forEach((goalId: any) => {
+            const normalized = String(goalId || '').trim();
+            if (normalized) ids.add(normalized);
+          });
+        });
+        setActiveFocusGoalIds(ids);
+      },
+      () => {
+        setActiveFocusGoalIds(new Set());
+      }
+    );
+    return () => unsub();
+  }, [currentUser?.uid, currentPersona]);
+
+  useEffect(() => {
+    if (activeFocusGoalIds.size === 0) {
+      setApplyFocusOnlyFilter(false);
+      setFocusToggleTouched(false);
+      return;
+    }
+    if (!focusToggleTouched) {
+      setApplyFocusOnlyFilter(true);
+    }
+  }, [activeFocusGoalIds, focusToggleTouched]);
+
   // Filter stories
   const filteredStories = useMemo(() => {
     return stories.filter((story) => {
+      if (!showCompletedItems && isStatus((story as any).status, 'done')) return false;
+      if (applyFocusOnlyFilter && activeFocusGoalIds.size > 0) {
+        const goalId = String(story.goalId || '').trim();
+        if (!goalId || !isGoalInHierarchySet(goalId, goals, activeFocusGoalIds)) return false;
+      }
       if (filterGoal !== 'all' && story.goalId !== filterGoal) return false;
+      if (showTop3Only && !isTop3Story(story)) return false;
+      if (showAiScoredOnly && getStoryAiScore(story) == null) return false;
       if (filterTheme) {
         const goal = goals.find((g) => g.id === story.goalId);
         const storyTheme = (story as any).theme ?? goal?.theme ?? null;
@@ -287,16 +391,43 @@ const SprintPlanningMatrix: React.FC = () => {
       }
       return true;
     });
-  }, [stories, goals, filterGoal, filterTheme]);
+  }, [stories, goals, filterGoal, filterTheme, showCompletedItems, showTop3Only, showAiScoredOnly, applyFocusOnlyFilter, activeFocusGoalIds]);
 
   const filteredGoals = useMemo(() => {
-    if (!goalSearch.trim()) return goals;
+    const baseGoals = applyFocusOnlyFilter && activeFocusGoalIds.size > 0
+      ? goals.filter((goal) => isGoalInHierarchySet(goal.id, goals, activeFocusGoalIds))
+      : goals;
+    if (!goalSearch.trim()) return baseGoals;
     const q = goalSearch.toLowerCase();
-    return goals.filter((g) => g.title.toLowerCase().includes(q));
-  }, [goals, goalSearch]);
+    return baseGoals.filter((g) => g.title.toLowerCase().includes(q));
+  }, [goals, goalSearch, applyFocusOnlyFilter, activeFocusGoalIds]);
+
+  const sortedStories = useMemo(() => {
+    const next = [...filteredStories];
+    next.sort((a, b) => {
+      let cmp = 0;
+      if (sortField === 'top3') {
+        cmp = compareNullableNumbers(isTop3Story(a) ? 1 : 0, isTop3Story(b) ? 1 : 0, sortDirection);
+      } else if (sortField === 'priority') {
+        cmp = compareNullableNumbers(Number((a as any)?.priority ?? 0), Number((b as any)?.priority ?? 0), sortDirection);
+      } else if (sortField === 'aiScore') {
+        cmp = compareNullableNumbers(getStoryAiScore(a), getStoryAiScore(b), sortDirection);
+      } else if (sortField === 'points') {
+        cmp = compareNullableNumbers(Number((a as any)?.points ?? 0), Number((b as any)?.points ?? 0), sortDirection);
+      } else if (sortField === 'dueDate') {
+        cmp = compareNullableNumbers(getStoryDueDateMs(a), getStoryDueDateMs(b), sortDirection);
+      }
+      if (cmp !== 0) return cmp;
+      const aOrder = Number((a as any)?.orderIndex ?? 0);
+      const bOrder = Number((b as any)?.orderIndex ?? 0);
+      if (aOrder !== bOrder) return aOrder - bOrder;
+      return String(a.title || '').localeCompare(String(b.title || ''));
+    });
+    return next;
+  }, [filteredStories, sortDirection, sortField]);
 
   // Story groups per sprint (including backlog)
-  const storiesBySprint = filteredStories.reduce((acc, story) => {
+  const storiesBySprint = sortedStories.reduce((acc, story) => {
     const sprintKey = normalizeSprintId((story as any).sprintId) ?? 'backlog';
     if (!acc[sprintKey]) acc[sprintKey] = [];
     acc[sprintKey].push(story);
@@ -308,14 +439,92 @@ const SprintPlanningMatrix: React.FC = () => {
   const visibleSprints = useMemo(() => {
     return [...sprints]
       .filter((s) => {
-        if (showCompleted) return true;
+        if (showCompletedSprints) return true;
         const statusValue = (s as any).status;
         if (typeof statusValue === 'number') return statusValue <= 1;
         const normalized = String(statusValue ?? '').toLowerCase();
         return normalized === '' || normalized.includes('plan') || normalized.includes('active');
       })
       .sort((a, b) => (a.startDate ?? 0) - (b.startDate ?? 0));
-  }, [sprints, showCompleted]);
+  }, [sprints, showCompletedSprints]);
+
+  const planningSprints = useMemo(() => {
+    return [...sprints]
+      .filter((s) => {
+        const statusValue = (s as any).status;
+        if (typeof statusValue === 'number') return statusValue <= 1;
+        const normalized = String(statusValue ?? '').toLowerCase();
+        return normalized === '' || normalized.includes('plan') || normalized.includes('active');
+      })
+      .sort((a, b) => (a.startDate ?? 0) - (b.startDate ?? 0));
+  }, [sprints]);
+
+  const currentPlanningSprint = useMemo(() => {
+    const active = planningSprints.find((s) => Number((s as any)?.status ?? 0) === 1);
+    return active || planningSprints[0] || null;
+  }, [planningSprints]);
+
+  const nextPlanningSprint = useMemo(() => {
+    if (!currentPlanningSprint) return null;
+    return planningSprints.find((s) => Number(s.startDate ?? 0) > Number(currentPlanningSprint.startDate ?? 0)) || null;
+  }, [currentPlanningSprint, planningSprints]);
+
+  const handleBulkMoveLowAiScore = async () => {
+    if (!currentUser || !currentPersona) return;
+    if (!currentPlanningSprint || !nextPlanningSprint) {
+      setMoveNotice(null);
+      setMoveError('No next sprint is available to move stories into.');
+      return;
+    }
+
+    const input = window.prompt('Move stories with AI score lower than what value?', '50');
+    if (input == null) return;
+    const threshold = Number(input);
+    if (!Number.isFinite(threshold)) {
+      setMoveNotice(null);
+      setMoveError('Please enter a valid numeric AI score threshold.');
+      return;
+    }
+
+    const candidates = stories.filter((story) => {
+      if (normalizeSprintId((story as any).sprintId) !== currentPlanningSprint.id) return false;
+      if (isStatus((story as any).status, 'done')) return false;
+      const score = getStoryAiScore(story);
+      return score != null && score < threshold;
+    });
+
+    if (!candidates.length) {
+      setMoveError(null);
+      setMoveNotice(`No stories in ${currentPlanningSprint.name} are below AI score ${threshold}.`);
+      return;
+    }
+
+    setBulkMoveLoading(true);
+    setMoveError(null);
+    setMoveNotice(null);
+
+    try {
+      await Promise.all(
+        candidates.map((story) =>
+          updateDoc(doc(db, 'stories', story.id), {
+            sprintId: nextPlanningSprint.id,
+            ownerUid: currentUser.uid,
+            persona: currentPersona,
+            updatedAt: serverTimestamp(),
+          })
+        )
+      );
+
+      setMoveNotice(
+        `Moved ${candidates.length} ${candidates.length === 1 ? 'story' : 'stories'} from ${currentPlanningSprint.name} to ${nextPlanningSprint.name} (AI score < ${threshold}).`
+      );
+    } catch (error) {
+      console.error('❌ Error bulk moving low AI score stories:', error);
+      setMoveError('Failed to move low AI score stories. Please try again.');
+    } finally {
+      setBulkMoveLoading(false);
+    }
+  };
 
   // Monitor drag/drop using pragmatic DnD
   useEffect(() => {
@@ -493,6 +702,78 @@ const SprintPlanningMatrix: React.FC = () => {
                   </Dropdown>
                 </Col>
                 <Col md={3}>
+                  <Form.Label style={{ fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>
+                    <ArrowUpDown size={14} style={{ marginRight: '6px' }} />
+                    Sort stories by
+                  </Form.Label>
+                  <Form.Select size="sm" value={sortField} onChange={(e) => setSortField(e.target.value as MatrixSortField)}>
+                    <option value="none">Manual order</option>
+                    <option value="top3">Top 3 flag</option>
+                    <option value="priority">Priority</option>
+                    <option value="aiScore">AI score</option>
+                    <option value="points">Points</option>
+                    <option value="dueDate">Due date</option>
+                  </Form.Select>
+                </Col>
+                <Col md={3}>
+                  <Form.Label style={{ fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>
+                    <ArrowUpDown size={14} style={{ marginRight: '6px' }} />
+                    Sort direction
+                  </Form.Label>
+                  <Form.Select size="sm" value={sortDirection} onChange={(e) => setSortDirection(e.target.value as MatrixSortDirection)}>
+                    <option value="desc">Descending</option>
+                    <option value="asc">Ascending</option>
+                  </Form.Select>
+                </Col>
+                <Col md={3}>
+                  <Form.Group>
+                    <Form.Label style={{ fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>
+                      <ArrowUpDown size={14} style={{ marginRight: '6px' }} />
+                      Item Visibility
+                    </Form.Label>
+                    <Form.Check
+                      type="switch"
+                      id="toggle-completed-items"
+                      label="Show completed items"
+                      checked={showCompletedItems}
+                      onChange={(e) => setShowCompletedItems(e.target.checked)}
+                    />
+                  </Form.Group>
+                </Col>
+                <Col md={3}>
+                  <Form.Group>
+                    <Form.Label style={{ fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>
+                      <ArrowUpDown size={14} style={{ marginRight: '6px' }} />
+                      AI / Top 3 filters
+                    </Form.Label>
+                    <Form.Check
+                      type="switch"
+                      id="toggle-top3-only"
+                      label="Show top 3 only"
+                      checked={showTop3Only}
+                      onChange={(e) => setShowTop3Only(e.target.checked)}
+                    />
+                    <Form.Check
+                      type="switch"
+                      id="toggle-ai-scored-only"
+                      label="Show AI-scored only"
+                      checked={showAiScoredOnly}
+                      onChange={(e) => setShowAiScoredOnly(e.target.checked)}
+                    />
+                    <Form.Check
+                      type="switch"
+                      id="toggle-focus-goals-only"
+                      label={`Focus goals only${activeFocusGoalIds.size ? ` (${activeFocusGoalIds.size})` : ''}`}
+                      checked={applyFocusOnlyFilter}
+                      onChange={(e) => {
+                        setApplyFocusOnlyFilter(e.target.checked);
+                        setFocusToggleTouched(true);
+                      }}
+                      disabled={activeFocusGoalIds.size === 0}
+                    />
+                  </Form.Group>
+                </Col>
+                <Col md={3}>
                   <Form.Group>
                     <Form.Label style={{ fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>
                       <ArrowUpDown size={14} style={{ marginRight: '6px' }} />
@@ -502,8 +783,8 @@ const SprintPlanningMatrix: React.FC = () => {
                       type="switch"
                       id="toggle-completed-sprints"
                       label="Show completed sprints"
-                      checked={showCompleted}
-                      onChange={(e) => setShowCompleted(e.target.checked)}
+                      checked={showCompletedSprints}
+                      onChange={(e) => setShowCompletedSprints(e.target.checked)}
                     />
                   </Form.Group>
                 </Col>
@@ -523,20 +804,41 @@ const SprintPlanningMatrix: React.FC = () => {
                   </Form.Group>
                 </Col>
                 <Col md={6}>
-                  <div style={{ paddingTop: '20px' }}>
+                  <div style={{ paddingTop: '20px', display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
                     <Button
                       variant="outline-secondary"
                       size="sm"
                       onClick={() => {
                         setFilterGoal('all');
                         setFilterTheme(null);
-                        setShowCompleted(false);
+                        setShowCompletedSprints(false);
+                        setShowCompletedItems(false);
+                        setShowTop3Only(false);
+                        setShowAiScoredOnly(false);
+                        setApplyFocusOnlyFilter(activeFocusGoalIds.size > 0);
+                        setFocusToggleTouched(false);
                         setShowDescriptions(false);
+                        setSortField('none');
+                        setSortDirection('desc');
                         setGoalSearch('');
                       }}
                     >
                       Clear Filters
                     </Button>
+                    <Button
+                      variant="outline-primary"
+                      size="sm"
+                      onClick={handleBulkMoveLowAiScore}
+                      disabled={bulkMoveLoading || !currentPlanningSprint || !nextPlanningSprint}
+                    >
+                      <ArrowRightLeft size={14} style={{ marginRight: 6 }} />
+                      {bulkMoveLoading ? 'Moving…' : 'Move low AI score'}
+                    </Button>
+                    <span className="text-muted" style={{ fontSize: '12px' }}>
+                      {currentPlanningSprint && nextPlanningSprint
+                        ? `Moves from ${currentPlanningSprint.name} to ${nextPlanningSprint.name}`
+                        : 'Create another sprint to enable bulk move'}
+                    </span>
                   </div>
                 </Col>
               </Row>
@@ -550,6 +852,15 @@ const SprintPlanningMatrix: React.FC = () => {
           <Col>
             <Alert variant="danger" dismissible onClose={() => setMoveError(null)}>
               {moveError}
+            </Alert>
+          </Col>
+        </Row>
+      )}
+      {moveNotice && (
+        <Row className="mt-3">
+          <Col>
+            <Alert variant="info" dismissible onClose={() => setMoveNotice(null)}>
+              {moveNotice}
             </Alert>
           </Col>
         </Row>
@@ -605,7 +916,7 @@ const SprintPlanningMatrix: React.FC = () => {
       </Row>
 
       {/* Empty State */}
-      {filteredStories.length === 0 && (
+      {sortedStories.length === 0 && (
         <Row className="mt-4">
           <Col>
             <Card style={{ border: 'none', textAlign: 'center', padding: '60px 20px' }}>
@@ -614,6 +925,7 @@ const SprintPlanningMatrix: React.FC = () => {
                 <h5 style={{ color: '#374151', marginBottom: '8px' }}>No stories found</h5>
                 <p style={{ color: '#6b7280', marginBottom: '24px' }}>
                   Create stories to start planning your sprints, or adjust your filters.
+                  {!showCompletedItems ? ' Completed items are currently hidden.' : ''}
                 </p>
                 <Button variant="primary" href="/stories">
                   Manage Stories

@@ -9,6 +9,7 @@ import { useSprint } from '../contexts/SprintContext';
 import { Goal, Sprint } from '../types';
 import { findSprintForDate } from '../utils/taskSprintHelpers';
 import { generateRef } from '../utils/referenceGenerator';
+import { planningSprints } from '../utils/sprintFilter';
 
 interface TraktIds {
   trakt?: number;
@@ -46,6 +47,7 @@ const ShowsBacklog: React.FC = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const { sprints } = useSprint();
+  const planningSprintList = useMemo(() => planningSprints(sprints), [sprints]);
 
   const [shows, setShows] = useState<TraktShowItem[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
@@ -122,7 +124,7 @@ const ShowsBacklog: React.FC = () => {
     setSavingConversion(true);
     try {
       const dueDateMs = convertForm.targetDate ? new Date(convertForm.targetDate).getTime() : null;
-      const sprintId = convertForm.sprintId || (dueDateMs ? findSprintForDate(sprints, dueDateMs)?.id || null : null);
+      const sprintId = convertForm.sprintId || (dueDateMs ? findSprintForDate(planningSprintList, dueDateMs)?.id || null : null);
       const storyRef = generateRef('story', []);
       const ids = selected.ids || {};
       const storyPayload: any = {
@@ -239,7 +241,7 @@ const ShowsBacklog: React.FC = () => {
               <td>{renderRatingStars(s)}</td>
               <td>
                 <div className="d-flex gap-2">
-                  <Button size="sm" variant="outline-primary" onClick={() => openConvert(s)} disabled={converted}>Generate Story</Button>
+                  {!converted && <Button size="sm" variant="outline-primary" onClick={() => openConvert(s)}>Generate Story</Button>}
                   {converted && <Button size="sm" variant="outline-secondary" href={`/stories/${s.lastConvertedStoryId}`}>View story</Button>}
                   <Button size="sm" variant="outline-success" onClick={() => markWatched(s)}>Mark watched</Button>
                 </div>
@@ -269,7 +271,11 @@ const ShowsBacklog: React.FC = () => {
                 <div className="d-flex justify-content-between align-items-center mt-auto">
                   {converted ? <Badge bg="success">Story Linked</Badge> : <Badge bg="secondary">Watchlist</Badge>}
                   <div className="d-flex gap-2">
-                    <Button size="sm" variant="outline-primary" onClick={() => openConvert(s)} disabled={converted}>Generate</Button>
+                    {converted ? (
+                      <Button size="sm" variant="outline-secondary" href={`/stories/${s.lastConvertedStoryId}`}>View story</Button>
+                    ) : (
+                      <Button size="sm" variant="outline-primary" onClick={() => openConvert(s)}>Generate</Button>
+                    )}
                     <Button size="sm" variant="outline-success" onClick={() => markWatched(s)}>Watched</Button>
                   </div>
                 </div>
@@ -326,7 +332,7 @@ const ShowsBacklog: React.FC = () => {
               <Form.Label>Sprint (optional)</Form.Label>
               <Form.Select value={convertForm.sprintId || ''} onChange={(e) => setConvertForm(prev => ({ ...prev, sprintId: e.target.value || null }))}>
                 <option value="">No sprint</option>
-                {sprints.map((s: Sprint) => (<option key={s.id} value={s.id}>{s.name}</option>))}
+                {planningSprintList.map((s: Sprint) => (<option key={s.id} value={s.id}>{s.name}</option>))}
               </Form.Select>
             </Form.Group>
             <Form.Group className="mb-3">

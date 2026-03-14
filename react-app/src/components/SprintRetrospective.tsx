@@ -118,10 +118,10 @@ const SprintRetrospective: React.FC = () => {
         const completedTasks = tasks.filter(t => isStatus((t as any).status, 'done')).length;
         const taskCompletionRate = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
 
-        const totalPoints = stories.reduce((sum, s) => sum + (s.points || 0), 0);
+        const totalPoints = stories.reduce((sum, s) => sum + (Number.isFinite(Number(s.points)) ? Number(s.points) : 0), 0);
         const completedPoints = stories
             .filter(s => isStatus((s as any).status, 'done'))
-            .reduce((sum, s) => sum + (s.points || 0), 0);
+            .reduce((sum, s) => sum + (Number.isFinite(Number(s.points)) ? Number(s.points) : 0), 0);
 
         // Get unique goal IDs from stories
         const goalIds = [...new Set(stories.map(s => s.goalId).filter(Boolean))];

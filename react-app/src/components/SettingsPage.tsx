@@ -7,7 +7,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { useThemeAwareColors, getContrastTextColor } from '../hooks/useThemeAwareColors';
 import { GLOBAL_THEMES, GlobalTheme } from '../constants/globalThemes';
-import { Settings, Palette, Database, Wand2, KeyRound, Clipboard, FileCode, Plug } from 'lucide-react';
+import { Settings, Palette, Database, Wand2, KeyRound, Clipboard, FileCode, Plug, User, Bell, Shield, FlaskConical } from 'lucide-react';
 import AIStoryKPISettings from './AIStoryKPISettings';
 import { useThemeDebugger } from '../utils/themeDebugger';
 import IntegrationSettings from './IntegrationSettings';
@@ -15,13 +15,53 @@ import BudgetSettings from './finance/BudgetSettings';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useDiagnosticsLog } from '../hooks/useDiagnosticsLog';
 
-const SETTINGS_TABS = ['themes', 'database', 'integrations', 'reminders', 'ai', 'system', 'finance', 'diagnostics'] as const;
+const SETTINGS_TABS = [
+  'profile',
+  'ai',
+  'integrations',
+  'finance',
+  'notifications',
+  'privacy',
+  'developer',
+  // Legacy keys kept for backward-compatible URLs
+  'themes',
+  'database',
+  'reminders',
+  'system',
+  'diagnostics',
+] as const;
 type SettingsTab = typeof SETTINGS_TABS[number];
-const DEFAULT_TAB: SettingsTab = 'themes';
+const DEFAULT_TAB: SettingsTab = 'profile';
+
+type SettingsPaneKey = 'themes' | 'database' | 'integrations' | 'reminders' | 'ai' | 'system' | 'finance' | 'diagnostics';
+
+const TAB_TO_PANE: Record<SettingsTab, SettingsPaneKey> = {
+  profile: 'system',
+  ai: 'ai',
+  integrations: 'integrations',
+  finance: 'finance',
+  notifications: 'reminders',
+  privacy: 'diagnostics',
+  developer: 'database',
+  themes: 'themes',
+  database: 'database',
+  reminders: 'reminders',
+  system: 'system',
+  diagnostics: 'diagnostics',
+};
 
 const normalizeTab = (value: string | null): SettingsTab => {
-  if (value && SETTINGS_TABS.includes(value as SettingsTab)) {
-    return value as SettingsTab;
+  const normalized = String(value || '').trim().toLowerCase();
+  // Alias map for flattened IA routes
+  if (normalized === 'profile') return 'profile';
+  if (normalized === 'ai') return 'ai';
+  if (normalized === 'integrations') return 'integrations';
+  if (normalized === 'finance') return 'finance';
+  if (normalized === 'notifications') return 'notifications';
+  if (normalized === 'privacy' || normalized === 'privacy-security') return 'privacy';
+  if (normalized === 'developer' || normalized === 'experiments') return 'developer';
+  if (normalized && SETTINGS_TABS.includes(normalized as SettingsTab)) {
+    return normalized as SettingsTab;
   }
   return DEFAULT_TAB;
 };
@@ -64,8 +104,16 @@ const SettingsPage: React.FC = () => {
   const [parkrunDefaultEventSlug, setParkrunDefaultEventSlug] = useState('');
   const [parkrunDefaultStartRun, setParkrunDefaultStartRun] = useState<string>('');
   const [parkrunAutoComputePercentiles, setParkrunAutoComputePercentiles] = useState(false);
+  const [parkrunApiUsername, setParkrunApiUsername] = useState('');
+  const [parkrunApiPassword, setParkrunApiPassword] = useState('');
+  const [parkrunApiConnecting, setParkrunApiConnecting] = useState(false);
+  const [parkrunApiMsg, setParkrunApiMsg] = useState('');
+  const [parkrunApiError, setParkrunApiError] = useState('');
   const [autoEnrichStravaHR, setAutoEnrichStravaHR] = useState(false);
   const [autoComputeFitnessMetrics, setAutoComputeFitnessMetrics] = useState(false);
+  const [excludeWithDadFromMetrics, setExcludeWithDadFromMetrics] = useState(true);
+  const [targetWeightKg, setTargetWeightKg] = useState('');
+  const [targetBodyFatPct, setTargetBodyFatPct] = useState('');
   const [locationName, setLocationName] = useState('');
   const [locationLat, setLocationLat] = useState<string>('');
   const [locationLon, setLocationLon] = useState<string>('');
@@ -260,13 +308,17 @@ const SettingsPage: React.FC = () => {
       if (profileSnap.exists()) {
         const p = profileSnap.data() as any;
           setParkrunAthleteId(p.parkrunAthleteId || '');
-          setParkrunAutoSync(!!p.parkrunAutoSync);
-          setStravaAutoSync(!!p.stravaAutoSync);
+          setParkrunAutoSync(p.parkrunAutoSync !== false);
+          setStravaAutoSync(p.stravaAutoSync !== false);
           setParkrunDefaultEventSlug(p.parkrunDefaultEventSlug || '');
           setParkrunDefaultStartRun(p.parkrunDefaultStartRun ? String(p.parkrunDefaultStartRun) : '');
-          setParkrunAutoComputePercentiles(!!p.parkrunAutoComputePercentiles);
-          setAutoEnrichStravaHR(!!p.autoEnrichStravaHR);
-        setAutoComputeFitnessMetrics(!!p.autoComputeFitnessMetrics);
+          setParkrunAutoComputePercentiles(p.parkrunAutoComputePercentiles !== false);
+          setParkrunApiUsername(p.parkrunApiUsername || '');
+          setAutoEnrichStravaHR(p.autoEnrichStravaHR !== false);
+        setAutoComputeFitnessMetrics(p.autoComputeFitnessMetrics !== false);
+        setExcludeWithDadFromMetrics(p.excludeWithDadFromMetrics !== false);
+          setTargetWeightKg(p.targetWeightKg != null ? String(p.targetWeightKg) : (p.healthTargetWeightKg != null ? String(p.healthTargetWeightKg) : ''));
+          setTargetBodyFatPct(p.targetBodyFatPct != null ? String(p.targetBodyFatPct) : (p.healthTargetBodyFatPct != null ? String(p.healthTargetBodyFatPct) : ''));
         setMonzoConnected(!!p.monzoConnected);
         setLocationName(p.locationName || '');
         setLocationLat(p.locationLat != null ? String(p.locationLat) : '');
@@ -388,6 +440,32 @@ const SettingsPage: React.FC = () => {
     } catch (e) { alert('Monzo sync failed: ' + ((e as any)?.message || 'unknown')); }
   };
 
+  const handleConnectParkrunApi = async () => {
+    if (!parkrunApiUsername || !parkrunApiPassword) {
+      setParkrunApiError('Enter Parkrun username and password first.');
+      return;
+    }
+    setParkrunApiConnecting(true);
+    setParkrunApiMsg('');
+    setParkrunApiError('');
+    try {
+      const fn = httpsCallable(functions, 'connectParkrunApi');
+      const res: any = await fn({
+        username: parkrunApiUsername.trim(),
+        password: parkrunApiPassword,
+        athleteId: parkrunAthleteId ? Number(parkrunAthleteId) : null,
+      });
+      const connectedAthlete = res?.data?.athleteId ? String(res.data.athleteId) : '';
+      if (!parkrunAthleteId && connectedAthlete) setParkrunAthleteId(connectedAthlete);
+      setParkrunApiPassword('');
+      setParkrunApiMsg(`Connected Parkrun API${connectedAthlete ? ` (athlete ${connectedAthlete})` : ''}.`);
+    } catch (e: any) {
+      setParkrunApiError(e?.message || 'Failed to connect Parkrun API');
+    } finally {
+      setParkrunApiConnecting(false);
+    }
+  };
+
   // Save global theme configuration
   const saveGlobalThemes = async () => {
     if (!currentUser) return;
@@ -459,45 +537,44 @@ const SettingsPage: React.FC = () => {
         <Col>
           <Card>
             <Card.Body>
-              <h5 className="mb-2">Quick Access</h5>
-              <p className="text-muted small mb-3">Jump to dedicated settings pages for email delivery, planner automations, and integrations.</p>
+              <h5 className="mb-2">Settings Sections</h5>
+              <p className="text-muted small mb-3">Flattened IA: Profile, AI, Integrations, Finance, Notifications, Privacy/Security, and Developer.</p>
               <div className="d-flex flex-wrap gap-2">
-                <Button variant="outline-primary" size="sm" onClick={() => navigate('/settings/email')}>Email Delivery</Button>
-                <Button variant="outline-primary" size="sm" onClick={() => navigate('/settings/planner')}>Planner & Automations</Button>
-                <Button variant="outline-primary" size="sm" onClick={() => navigate('/settings/integrations')}>Integrations Hub</Button>
-                <Button variant="outline-secondary" size="sm" onClick={() => navigate('/logs/integrations')}>View Integration Logs</Button>
-                <Button variant="outline-secondary" size="sm" onClick={() => navigate('/logs/ai')}>View AI Diagnostics</Button>
+                <Button variant="outline-primary" size="sm" onClick={() => navigate('/settings/profile')}>Profile</Button>
+                <Button variant="outline-primary" size="sm" onClick={() => navigate('/settings/ai')}>AI</Button>
+                <Button variant="outline-primary" size="sm" onClick={() => navigate('/settings/integrations')}>Integrations</Button>
+                <Button variant="outline-primary" size="sm" onClick={() => navigate('/settings/finance')}>Finance</Button>
+                <Button variant="outline-primary" size="sm" onClick={() => navigate('/settings/notifications')}>Notifications</Button>
+                <Button variant="outline-primary" size="sm" onClick={() => navigate('/settings/privacy-security')}>Privacy/Security</Button>
+                <Button variant="outline-primary" size="sm" onClick={() => navigate('/settings/developer')}>Developer</Button>
               </div>
             </Card.Body>
           </Card>
         </Col>
       </Row>
 
-      <Tab.Container activeKey={activeTab} onSelect={handleTabSelect}>
+      <Tab.Container activeKey={TAB_TO_PANE[activeTab]} onSelect={handleTabSelect}>
         <Row>
           <Col sm={3}>
             <Nav variant="pills" className="flex-column">
               <Nav.Item>
                 <Nav.Link 
-                  eventKey="themes" 
+                  eventKey="profile" 
                   style={{ color: colors.primary }}
                   onClick={createClickHandler()}
                 >
-                  <Palette size={20} className="me-2" />
-                  Themes & Colors
+                  <User size={20} className="me-2" />
+                  Profile
                 </Nav.Link>
               </Nav.Item>
               <Nav.Item>
                 <Nav.Link 
-                  eventKey="database" 
+                  eventKey="ai" 
                   style={{ color: colors.primary }}
                   onClick={createClickHandler()}
                 >
-                  <Database size={20} className="me-2" />
-                  Database Migration
-                  {migrationStats.needsMigration && (
-                    <Badge bg="warning" className="ms-2">Action Needed</Badge>
-                  )}
+                  <Wand2 size={20} className="me-2" />
+                  AI
                 </Nav.Link>
               </Nav.Item>
               <Nav.Item>
@@ -512,55 +589,45 @@ const SettingsPage: React.FC = () => {
               </Nav.Item>
               <Nav.Item>
                 <Nav.Link 
-                  eventKey="reminders" 
-                  style={{ color: colors.primary }}
-                  onClick={createClickHandler()}
-                >
-                  <KeyRound size={20} className="me-2" />
-                  Reminders (Shortcuts)
-                </Nav.Link>
-              </Nav.Item>
-              <Nav.Item>
-                <Nav.Link 
-                  eventKey="ai"
-                  style={{ color: colors.primary }}
-                  onClick={createClickHandler()}
-                >
-                  <Wand2 size={20} className="me-2" />
-                  AI: Story & KPI
-                </Nav.Link>
-              </Nav.Item>
-              <Nav.Item>
-                <Nav.Link 
-                  eventKey="system" 
-                  style={{ color: colors.primary }}
-                  onClick={createClickHandler()}
-                >
-                  <Settings size={20} className="me-2" />
-                  System Preferences
-                </Nav.Link>
-              </Nav.Item>
-              <Nav.Item>
-                <Nav.Link
-                  eventKey="diagnostics"
-                  style={{ color: colors.primary }}
-                  onClick={createClickHandler()}
-                >
-                  <FileCode size={20} className="me-2" />
-                  Diagnostics Log
-                  {diagnosticsEntries.length > 0 && (
-                    <Badge bg="info" className="ms-2">{diagnosticsEntries.length}</Badge>
-                  )}
-                </Nav.Link>
-              </Nav.Item>
-              <Nav.Item>
-                <Nav.Link 
                   eventKey="finance" 
                   style={{ color: colors.primary }}
                   onClick={createClickHandler()}
                 >
                   <Database size={20} className="me-2" />
-                  Finance (Monzo)
+                  Finance
+                </Nav.Link>
+              </Nav.Item>
+              <Nav.Item>
+                <Nav.Link 
+                  eventKey="notifications"
+                  style={{ color: colors.primary }}
+                  onClick={createClickHandler()}
+                >
+                  <Bell size={20} className="me-2" />
+                  Notifications
+                </Nav.Link>
+              </Nav.Item>
+              <Nav.Item>
+                <Nav.Link 
+                  eventKey="privacy" 
+                  style={{ color: colors.primary }}
+                  onClick={createClickHandler()}
+                >
+                  <Shield size={20} className="me-2" />
+                  Privacy/Security
+                </Nav.Link>
+              </Nav.Item>
+              <Nav.Item>
+                <Nav.Link
+                  eventKey="developer"
+                  style={{ color: colors.primary }}
+                  onClick={createClickHandler()}
+                >
+                  <FlaskConical size={20} className="me-2" />
+                  Developer
+                  {(diagnosticsEntries.length > 0 || migrationStats.needsMigration) && (
+                    <Badge bg="info" className="ms-2">{diagnosticsEntries.length + (migrationStats.needsMigration ? 1 : 0)}</Badge>
+                  )}
                 </Nav.Link>
               </Nav.Item>
             </Nav>
@@ -686,7 +753,7 @@ const SettingsPage: React.FC = () => {
                     <p className="text-muted mb-2">Manage budgets, categories, and merchant mappings in the Finance section.</p>
                     <div className="d-flex gap-2 flex-wrap">
                       <a className="btn btn-outline-secondary btn-sm" href="/finance/budgets">Open Budgets</a>
-                      <a className="btn btn-outline-secondary btn-sm" href="/finance/categories">Open Categories</a>
+                      <a className="btn btn-outline-secondary btn-sm" href="/finance/transactions">Open Transactions</a>
                       <a className="btn btn-outline-secondary btn-sm" href="/finance/merchants">Open Merchants</a>
                     </div>
                   </Card.Body>
@@ -1090,6 +1157,8 @@ firebase deploy --only functions:remindersPush,functions:remindersPull --project
                                 setSavingProfile(true);
                                 setSaveProfileError('');
                                 try {
+                                  const parsedTargetWeightKg = targetWeightKg.trim() !== '' ? Number(targetWeightKg) : null;
+                                  const parsedTargetBodyFatPct = targetBodyFatPct.trim() !== '' ? Number(targetBodyFatPct) : null;
                                   await setDoc(doc(db, 'profiles', currentUser.uid), {
                                     ownerUid: currentUser.uid,
                                     parkrunAthleteId,
@@ -1099,7 +1168,12 @@ firebase deploy --only functions:remindersPush,functions:remindersPull --project
                                     parkrunDefaultStartRun: parkrunDefaultStartRun ? Number(parkrunDefaultStartRun) : null,
                                     parkrunAutoComputePercentiles,
                                     autoEnrichStravaHR,
-                                    autoComputeFitnessMetrics
+                                    autoComputeFitnessMetrics,
+                                    excludeWithDadFromMetrics,
+                                    targetWeightKg: parsedTargetWeightKg,
+                                    healthTargetWeightKg: parsedTargetWeightKg,
+                                    targetBodyFatPct: parsedTargetBodyFatPct,
+                                    healthTargetBodyFatPct: parsedTargetBodyFatPct,
                                   }, { merge: true });
                                   setSaveProfileMsg('Saved');
                                   setTimeout(() => setSaveProfileMsg(''), 2500);
@@ -1118,6 +1192,76 @@ firebase deploy --only functions:remindersPush,functions:remindersPull --project
                             {saveProfileError && <span className="text-danger">{saveProfileError}</span>}
                           </Col>
                         </Row>
+                        <Row className="g-3 mt-1">
+                          <Col md={3}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Weight Target (kg)</Form.Label>
+                              <Form.Control
+                                type="number"
+                                step="0.1"
+                                placeholder="e.g., 82.5"
+                                value={targetWeightKg}
+                                onChange={(e) => setTargetWeightKg(e.target.value)}
+                              />
+                            </Form.Group>
+                          </Col>
+                          <Col md={3}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Body Fat Target (%)</Form.Label>
+                              <Form.Control
+                                type="number"
+                                step="0.1"
+                                placeholder="e.g., 15"
+                                value={targetBodyFatPct}
+                                onChange={(e) => setTargetBodyFatPct(e.target.value)}
+                              />
+                            </Form.Group>
+                          </Col>
+                          <Col md={6} className="d-flex align-items-end">
+                            <Form.Text className="text-muted">
+                              These targets feed the dashboard health progress card and the health trends shown on the fitness dashboard.
+                            </Form.Text>
+                          </Col>
+                        </Row>
+                        <hr />
+                        <Row className="g-3 align-items-end">
+                          <Col md={4}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Parkrun Account Username</Form.Label>
+                              <Form.Control
+                                type="text"
+                                placeholder="Parkrun username/email"
+                                value={parkrunApiUsername}
+                                onChange={(e) => setParkrunApiUsername(e.target.value)}
+                              />
+                            </Form.Group>
+                          </Col>
+                          <Col md={3}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Parkrun Password</Form.Label>
+                              <Form.Control
+                                type="password"
+                                placeholder="••••••••"
+                                value={parkrunApiPassword}
+                                onChange={(e) => setParkrunApiPassword(e.target.value)}
+                              />
+                            </Form.Group>
+                          </Col>
+                          <Col md={5} className="d-flex gap-2">
+                            <Button variant="outline-primary" disabled={parkrunApiConnecting} onClick={handleConnectParkrunApi}>
+                              {parkrunApiConnecting ? 'Connecting…' : 'Connect Parkrun API'}
+                            </Button>
+                          </Col>
+                        </Row>
+                        {(parkrunApiMsg || parkrunApiError) && (
+                          <div className="mt-2">
+                            {parkrunApiMsg && <div className="text-success small">{parkrunApiMsg}</div>}
+                            {parkrunApiError && <div className="text-danger small">{parkrunApiError}</div>}
+                          </div>
+                        )}
+                        <div className="text-muted small mt-2">
+                          Required once because Parkrun blocks direct HTML scraping from Cloud Run. Token refresh and scheduled sync are automatic after connection.
+                        </div>
                       </Card.Body>
                     </Card>
 
@@ -1126,10 +1270,10 @@ firebase deploy --only functions:remindersPush,functions:remindersPull --project
                         <h6 className="mb-2">Automation</h6>
                         <Row className="g-3">
                           <Col md={6}>
-                            <Form.Check type="checkbox" label="Auto-sync Parkrun (daily)" checked={parkrunAutoSync} onChange={(e)=>setParkrunAutoSync(e.target.checked)} />
+                            <Form.Check type="checkbox" label="Auto-sync Parkrun (weekly, Sat 14:00 UK)" checked={parkrunAutoSync} onChange={(e)=>setParkrunAutoSync(e.target.checked)} />
                           </Col>
                           <Col md={6}>
-                            <Form.Check type="checkbox" label="Auto-sync Strava (daily)" checked={stravaAutoSync} onChange={(e)=>setStravaAutoSync(e.target.checked)} />
+                            <Form.Check type="checkbox" label="Auto-sync Strava (daily, 03:00 UK)" checked={stravaAutoSync} onChange={(e)=>setStravaAutoSync(e.target.checked)} />
                           </Col>
                           <Col md={6}>
                             <Form.Check type="checkbox" label="Auto-compute Parkrun percentiles" checked={parkrunAutoComputePercentiles} onChange={(e)=>setParkrunAutoComputePercentiles(e.target.checked)} />
@@ -1139,6 +1283,9 @@ firebase deploy --only functions:remindersPush,functions:remindersPull --project
                           </Col>
                           <Col md={6}>
                             <Form.Check type="checkbox" label="Auto-compute Fitness Overview/Analysis" checked={autoComputeFitnessMetrics} onChange={(e)=>setAutoComputeFitnessMetrics(e.target.checked)} />
+                          </Col>
+                          <Col md={6}>
+                            <Form.Check type="checkbox" label="Exclude workouts with 'dad' in title/name/event from fitness metrics (default on)" checked={excludeWithDadFromMetrics} onChange={(e)=>setExcludeWithDadFromMetrics(e.target.checked)} />
                           </Col>
                         </Row>
                         <Row className="g-3 mt-2">

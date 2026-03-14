@@ -13,6 +13,7 @@ import AddGoalModal from './AddGoalModal';
 import { GLOBAL_THEMES } from '../constants/globalThemes';
 import { findSprintForDate } from '../utils/taskSprintHelpers';
 import { useSprint } from '../contexts/SprintContext';
+import { parsePointsValue, TASK_DEFAULT_POINTS } from '../utils/points';
 
 interface QuickActionsProps {
   onAction?: (type: string, data: any) => void;
@@ -42,7 +43,7 @@ const QuickActionsPanel: React.FC<QuickActionsProps> = ({ onAction }) => {
     goalId: '',
     sprintId: '',
     size: '',
-    points: 1
+    points: '1' as string | number
   });
   const [loading, setLoading] = useState(false);
   
@@ -134,6 +135,10 @@ const QuickActionsPanel: React.FC<QuickActionsProps> = ({ onAction }) => {
     
     // For other types, use the existing modal
     setModalType(type as 'story' | 'task');
+    setFormData((prev) => ({
+      ...prev,
+      points: type === 'task' ? String(TASK_DEFAULT_POINTS) : '1',
+    }));
     const handleCreateGoal = () => {
     setShowGoalModal(true);
     setFormData({
@@ -147,7 +152,7 @@ const QuickActionsPanel: React.FC<QuickActionsProps> = ({ onAction }) => {
       goalId: '',
       sprintId: '',
       size: '',
-      points: 1
+      points: '1'
     });
   };
     setShowModal(true);
@@ -178,7 +183,7 @@ const QuickActionsPanel: React.FC<QuickActionsProps> = ({ onAction }) => {
         entityData.storyTitle = formData.title;
         entityData.status = 0; // Backlog
         entityData.priority = parseInt(formData.priority.replace('P', ''));
-        entityData.points = formData.size ? parseInt(formData.size) : 1;
+        entityData.points = parsePointsValue(formData.points) ?? 1;
         entityData.wipLimit = 1;
         entityData.orderIndex = 0;
         
@@ -205,7 +210,7 @@ const QuickActionsPanel: React.FC<QuickActionsProps> = ({ onAction }) => {
         entityData.effort = formData.size || 'M';
         entityData.estimateMin = 60; // Default estimate
         entityData.estimatedHours = 1;
-        entityData.points = Math.max(1, Math.min(8, Math.round(Number(formData.points) || 1)));
+        entityData.points = parsePointsValue(formData.points) ?? TASK_DEFAULT_POINTS;
         entityData.alignedToGoal = !!formData.storyId;
         entityData.source = 'web';
         entityData.aiLinkConfidence = 0;
@@ -274,7 +279,7 @@ const QuickActionsPanel: React.FC<QuickActionsProps> = ({ onAction }) => {
         goalId: '',
         sprintId: '',
         size: '',
-        points: 1
+        points: modalType === 'task' ? String(TASK_DEFAULT_POINTS) : '1'
       });
       
     } catch (error) {
@@ -419,17 +424,16 @@ const QuickActionsPanel: React.FC<QuickActionsProps> = ({ onAction }) => {
                     </Form.Group>
 
                     <Form.Group className="mb-3">
-                      <Form.Label>Points (1–8)</Form.Label>
+                      <Form.Label>Points</Form.Label>
                       <Form.Control
                         type="number"
-                        min={1}
-                        max={8}
-                        value={formData.points ?? 1}
-                        onChange={(e) => {
-                          const value = Number(e.target.value);
-                          const normalized = Math.max(1, Math.min(8, Number.isNaN(value) ? 1 : Math.round(value)));
-                          setFormData({ ...formData, points: normalized });
-                        }}
+                        step="any"
+                        inputMode="decimal"
+                        value={formData.points ?? ''}
+                        onChange={(e) => setFormData({
+                          ...formData,
+                          points: e.target.value as any,
+                        })}
                       />
                     </Form.Group>
                   </>
@@ -469,16 +473,16 @@ const QuickActionsPanel: React.FC<QuickActionsProps> = ({ onAction }) => {
 
                     <Form.Group className="mb-3">
                       <Form.Label>Story Points</Form.Label>
-                      <Form.Select
-                        value={formData.size}
-                        onChange={(e) => setFormData({ ...formData, size: e.target.value })}
-                      >
-                        <option value="1">1 - Small</option>
-                        <option value="2">2 - Medium</option>
-                        <option value="3">3 - Large</option>
-                        <option value="5">5 - Extra Large</option>
-                        <option value="8">8 - Epic</option>
-                      </Form.Select>
+                      <Form.Control
+                        type="number"
+                        step="any"
+                        inputMode="decimal"
+                        value={formData.points ?? ''}
+                        onChange={(e) => setFormData({
+                          ...formData,
+                          points: e.target.value as any,
+                        })}
+                      />
                     </Form.Group>
                   </>
                 )}

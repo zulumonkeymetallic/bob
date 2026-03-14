@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useLayoutEffect, useRef } from 'react';
 import { Card, Badge, Button, Dropdown, Form } from 'react-bootstrap';
-import { Edit3, Trash2, ChevronDown, Target, Calendar, Activity } from 'lucide-react';
+import { Edit3, Trash2, ChevronDown, Target, Calendar, Activity, Clock } from 'lucide-react';
 import { collection, query, where, orderBy, limit, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
@@ -13,6 +13,7 @@ import { GLOBAL_THEMES, migrateThemeValue, type GlobalTheme } from '../constants
 import { displayRefForEntity, validateRef } from '../utils/referenceGenerator';
 import { ActivityStreamService } from '../services/ActivityStreamService';
 import { priorityLabel, storyStatusText } from '../utils/storyCardFormatting';
+import DeferItemModal from './DeferItemModal';
 
 interface StoriesCardViewProps {
   stories: Story[];
@@ -37,6 +38,7 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
   const { showSidebar } = useSidebar();
   const { themes: globalThemes } = useGlobalThemes();
   const [latestActivities, setLatestActivities] = useState<{ [storyId: string]: any }>({});
+  const [nextBlocks, setNextBlocks] = useState<{ [storyId: string]: { start: number; end: number } | null }>({});
   const [showDescriptions, setShowDescriptions] = useState<boolean>(() => {
     try {
       const stored = localStorage.getItem('bob_stories_show_descriptions');
@@ -57,6 +59,7 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
   });
   const [rowSpans, setRowSpans] = useState<Record<string, number>>({});
   const gridRef = useRef<HTMLDivElement | null>(null);
+  const [deferStory, setDeferStory] = useState<Story | null>(null);
 
   useEffect(() => {
     try {
@@ -189,11 +192,33 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
     }
   }, [currentUser]);
 
+  const loadNextBlockForStory = useCallback(async (storyId: string) => {
+    if (!currentUser) return;
+    try {
+      const snap = await getDocs(
+        query(
+          collection(db, 'calendar_blocks'),
+          where('ownerUid', '==', currentUser.uid),
+          where('storyId', '==', storyId),
+        )
+      );
+      const nowMs = Date.now();
+      const upcoming = snap.docs
+        .map((d) => d.data() as { start: number; end: number })
+        .filter((b) => typeof b.start === 'number' && b.start >= nowMs)
+        .sort((a, b) => a.start - b.start);
+      setNextBlocks((prev) => ({ ...prev, [storyId]: upcoming[0] ?? null }));
+    } catch {
+      // ignore
+    }
+  }, [currentUser]);
+
   useEffect(() => {
     stories.forEach(story => {
       loadLatestActivityForStory(story.id);
+      loadNextBlockForStory(story.id);
     });
-  }, [stories, currentUser, loadLatestActivityForStory]);
+  }, [stories, currentUser, loadLatestActivityForStory, loadNextBlockForStory]);
 
   useLayoutEffect(() => {
     const gridEl = gridRef.current;
@@ -320,6 +345,7 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
           const createdAt = toDate((story as any).createdAt);
           const updatedAt = toDate((story as any).updatedAt);
           const rowSpan = rowSpans[story.id];
+          const nextBlock = nextBlocks[story.id];
 
           const refLabel = (() => {
             const shortRef = (story as any).referenceNumber || story.ref;
@@ -428,6 +454,9 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
                           <Dropdown.Item onClick={() => handlePriorityChange(story.id, 2)}>Medium (2)</Dropdown.Item>
                           <Dropdown.Item onClick={() => handlePriorityChange(story.id, 1)}>Low (1)</Dropdown.Item>
                           <Dropdown.Divider />
+                          <Dropdown.Item onClick={() => setDeferStory(story)}>
+                            Defer intelligently
+                          </Dropdown.Item>
                           <Dropdown.Item
                             className="text-danger"
                             onClick={() => {
@@ -461,10 +490,9 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
                             color: mutedTextColor,
                             fontSize: '13px',
                             lineHeight: '1.5',
-                            display: '-webkit-box',
-                            WebkitLineClamp: 3,
-                            WebkitBoxOrient: 'vertical',
-                            overflow: 'hidden'
+                            whiteSpace: 'normal',
+                            overflowWrap: 'anywhere',
+                            wordBreak: 'break-word'
                           }}
                         >
                           {story.description}
@@ -564,6 +592,32 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
                     )}
                   </div>
 
+                  {nextBlock && (
+                    <div
+                      style={{
+                        padding: '8px 10px',
+                        backgroundColor: withAlpha(themeColor, 0.12),
+                        border: `1px solid ${withAlpha(themeColor, 0.3)}`,
+                        borderRadius: '10px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        fontSize: '12px',
+                        color: textColor,
+                      }}
+                    >
+                      <Clock size={12} style={{ color: themeColor, flexShrink: 0 }} />
+                      <span style={{ fontWeight: 600, color: themeColor }}>Next block:</span>
+                      <span>
+                        {new Date(nextBlock.start).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}
+                        {' '}
+                        {new Date(nextBlock.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        {' – '}
+                        {new Date(nextBlock.end).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    </div>
+                  )}
+
                   <div
                     style={{
                       display: 'flex',
@@ -599,6 +653,23 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
           );
         })}
       </div>
+      <DeferItemModal
+        show={Boolean(deferStory)}
+        onHide={() => setDeferStory(null)}
+        itemType="story"
+        itemId={deferStory?.id || ''}
+        itemTitle={deferStory?.title || ''}
+        onApply={async ({ dateMs, rationale, source }) => {
+          if (!deferStory) return;
+          onStoryUpdate(deferStory.id, {
+            targetDate: dateMs,
+            deferredUntil: dateMs,
+            deferredReason: rationale,
+            deferredBy: source,
+          });
+          setDeferStory(null);
+        }}
+      />
     </div>
   );
 };

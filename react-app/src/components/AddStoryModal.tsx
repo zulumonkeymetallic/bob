@@ -1,12 +1,17 @@
-import React, { useState, useCallback, useEffect } from 'react';
-import { Modal, Button, Form, Alert, Dropdown, DropdownButton } from 'react-bootstrap';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Modal, Button, Form, Alert, Row, Col } from 'react-bootstrap';
 import { db } from '../firebase';
 import { collection, addDoc, getDocs, query, where, orderBy, serverTimestamp } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useSprint } from '../contexts/SprintContext';
+import type { Goal } from '../types';
 import { generateRef } from '../utils/referenceGenerator';
+import { parsePointsValue } from '../utils/points';
 import TagInput from './common/TagInput';
+import { planningSprints, pickDefaultPlanningSprintId } from '../utils/sprintFilter';
+import { evaluateStorySprintAlignment } from '../utils/sprintAlignment';
+import { getGoalDisplayPath, getLeafGoalOptions, isGoalInHierarchySet, resolveLeafGoalSelection } from '../utils/goalHierarchy';
 
 interface AddStoryModalProps {
   onClose: () => void;
@@ -14,40 +19,58 @@ interface AddStoryModalProps {
   goalId?: string; // Optional goalId to pre-select the goal
 }
 
-interface Goal {
+interface SprintLike {
   id: string;
-  title: string;
-  theme: number;
-  persona?: 'personal' | 'work';
+  name?: string;
+  alignmentMode?: 'warn' | 'strict';
+  focusGoalIds?: string[];
 }
 
 const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
-  const { sprints } = useSprint();
+  const { sprints: allSprints } = useSprint();
+  const sprints = planningSprints(allSprints);
   const [goals, setGoals] = useState<Goal[]>([]);
+  const [activeFocusGoalIds, setActiveFocusGoalIds] = useState<Set<string>>(new Set());
   const [formData, setFormData] = useState({
     title: '',
     description: '',
+    url: '',
     goalId: goalId || '', // Pre-select goal if provided
     sprintId: '',
     priority: 2,
     points: 3,
+    persona: (currentPersona || 'personal') as 'personal' | 'work',
+    dueDate: '',
+    dueTime: '',
+    timeOfDay: '' as 'morning' | 'afternoon' | 'evening' | '',
     tags: [] as string[]
   });
   const [goalInput, setGoalInput] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState<string | null>(null);
+  const selectedSprint = formData.sprintId
+    ? (allSprints.find((sprint) => sprint.id === formData.sprintId) as SprintLike | undefined)
+    : null;
+  const sprintAlignment = evaluateStorySprintAlignment(selectedSprint as any, formData.goalId || '');
+  const leafGoalOptions = useMemo(() => getLeafGoalOptions(goals), [goals]);
+  const selectedGoalResolution = useMemo(
+    () => resolveLeafGoalSelection(formData.goalId || null, goals),
+    [formData.goalId, goals],
+  );
 
   // Update goalId when prop changes
   useEffect(() => {
     if (goalId) {
+      const resolved = resolveLeafGoalSelection(goalId, goals);
+      const nextGoalId = resolved.goalId || goalId;
       setFormData(prev => ({
         ...prev,
-        goalId: goalId
+        goalId: nextGoalId
       }));
-      const g = goals.find(gl => gl.id === goalId);
-      setGoalInput(g?.title || '');
+      const g = goals.find((gl) => gl.id === nextGoalId) || goals.find((gl) => gl.id === goalId);
+      setGoalInput(g ? getGoalDisplayPath(g.id, goals) : '');
     }
   }, [goalId, goals]);
 
@@ -69,6 +92,53 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
       });
     }
   }, [show, currentUser, currentPersona]);
+
+  // Keep persona prefilled from the currently selected app persona when opening.
+  useEffect(() => {
+    if (show) {
+      const defaultSprintId = pickDefaultPlanningSprintId(allSprints);
+      setFormData(prev => ({
+        ...prev,
+        persona: (currentPersona || 'personal') as 'personal' | 'work',
+        sprintId: prev.sprintId || defaultSprintId,
+      }));
+    }
+  }, [show, currentPersona, allSprints]);
+
+  useEffect(() => {
+    if (!show || !currentUser) {
+      setActiveFocusGoalIds(new Set());
+      return;
+    }
+    let mounted = true;
+    const loadFocusGoals = async () => {
+      try {
+        const focusQuery = query(
+          collection(db, 'focusGoals'),
+          where('ownerUid', '==', currentUser.uid),
+          where('persona', '==', (formData.persona || currentPersona || 'personal')),
+          where('isActive', '==', true),
+        );
+        const snapshot = await getDocs(focusQuery);
+        const ids = new Set<string>();
+        snapshot.docs.forEach((docSnap) => {
+          const goalIds = (docSnap.data() as any)?.goalIds;
+          if (!Array.isArray(goalIds)) return;
+          goalIds.forEach((goalId: any) => {
+            const id = String(goalId || '').trim();
+            if (id) ids.add(id);
+          });
+        });
+        if (mounted) setActiveFocusGoalIds(ids);
+      } catch {
+        if (mounted) setActiveFocusGoalIds(new Set());
+      }
+    };
+    loadFocusGoals();
+    return () => {
+      mounted = false;
+    };
+  }, [show, currentUser, currentPersona, formData.persona]);
 
   // Load goals and sprints when modal opens
   useEffect(() => {
@@ -96,17 +166,23 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
           });
 
           const goalsSnapshot = await getDocs(goalsQuery);
+          const selectedPersona = (formData.persona || currentPersona || 'personal') as 'personal' | 'work';
           const goalsData = goalsSnapshot.docs
             .map(doc => ({
               id: doc.id,
               title: doc.data().title,
               theme: doc.data().theme as number,
-              persona: doc.data().persona as any
+              persona: doc.data().persona as any,
+              parentGoalId: doc.data().parentGoalId || null,
+              goalKind: doc.data().goalKind,
+              timeHorizon: doc.data().timeHorizon,
+              rollupMode: doc.data().rollupMode,
+              ref: doc.data().ref || null,
             }))
             .filter(goal => {
-              if (currentPersona === 'work') return goal.persona === 'work';
+              if (selectedPersona === 'work') return goal.persona === 'work';
               return goal.persona == null || goal.persona === 'personal';
-            });
+            }) as Goal[];
 
           console.log('✅ AddStoryModal: Goals loaded successfully', {
             action: 'goals_loaded',
@@ -134,7 +210,7 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
       loadData();
       return () => { mounted = false; };
     }
-  }, [show, currentUser, currentPersona]);
+  }, [show, currentUser, currentPersona, formData.persona]);
 
   const handleClose = () => {
     console.log('🖱️ AddStoryModal: Cancel button clicked', {
@@ -143,7 +219,7 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
       formData: formData,
       timestamp: new Date().toISOString()
     });
-    setFormData({ title: '', description: '', goalId: '', sprintId: '', priority: 2, points: 3, tags: [] });
+    setFormData({ title: '', description: '', url: '', goalId: '', sprintId: '', priority: 2, points: 3, persona: (currentPersona || 'personal') as 'personal' | 'work', dueDate: '', dueTime: '', timeOfDay: '', tags: [] });
     setSubmitResult(null);
     onClose();
   };
@@ -166,6 +242,40 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
         formData: formData,
         timestamp: new Date().toISOString()
       });
+      return;
+    }
+
+    if (
+      activeFocusGoalIds.size > 0
+      && formData.goalId
+      && !isGoalInHierarchySet(String(formData.goalId), goals as any, activeFocusGoalIds)
+    ) {
+      const proceed = window.confirm(
+        'This goal is not in your active focus goals. Work linked here will be deferred until after the current focus period ends. Continue?'
+      );
+      if (!proceed) {
+        return;
+      }
+    }
+
+    if (formData.sprintId && sprintAlignment.hasRule && !sprintAlignment.aligned) {
+      if (sprintAlignment.blocking) {
+        setSubmitResult(`❌ ${sprintAlignment.message}`);
+        return;
+      }
+      const proceed = window.confirm(`${sprintAlignment.message} Continue anyway?`);
+      if (!proceed) {
+        return;
+      }
+    }
+
+    const resolvedGoalSelection = resolveLeafGoalSelection(formData.goalId || null, goals);
+    if (formData.goalId && !resolvedGoalSelection.goalId) {
+      if (resolvedGoalSelection.reason === 'ambiguous_parent') {
+        setSubmitResult('❌ Stories must link to a specific leaf goal. Select the child goal you want this story to execute against.');
+      } else {
+        setSubmitResult('❌ Please select a valid leaf goal before creating the story.');
+      }
       return;
     }
 
@@ -201,18 +311,24 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
         timestamp: new Date().toISOString()
       });
 
-      const linkedGoal = goals.find(g => g.id === formData.goalId);
+      const resolvedGoalId = resolvedGoalSelection.goalId || '';
+      const linkedGoal = goals.find((g) => g.id === resolvedGoalId) || goals.find((g) => g.id === formData.goalId);
+      const parsedPoints = parsePointsValue(formData.points);
       const storyData = {
         ref: ref, // Add reference number
         title: formData.title.trim(),
         description: formData.description.trim(),
-        goalId: formData.goalId,
+          url: formData.url.trim() || null,
+        goalId: resolvedGoalId || null,
         sprintId: formData.sprintId || null,
         priority: formData.priority,
-        points: parseInt(formData.points.toString()),
+        points: parsedPoints == null ? 1 : parsedPoints,
+        dueDate: formData.dueDate ? new Date(`${formData.dueDate}T00:00:00`).getTime() : null,
+        dueTime: formData.dueTime || null,
+        timeOfDay: formData.timeOfDay || null,
         status: 0,
         theme: linkedGoal?.theme ?? 1,
-        persona: currentPersona || 'personal',
+          persona: formData.persona || currentPersona || 'personal',
         ownerUid: currentUser.uid, // Ensure ownerUid is included
         orderIndex: Date.now(), // Simple ordering by creation time
         tags: formData.tags,
@@ -233,12 +349,12 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
         action: 'story_creation_success',
         ref: ref,
         storyId: 'pending_from_firestore',
-        goalId: formData.goalId || 'none',
+        goalId: resolvedGoalId || 'none',
         timestamp: new Date().toISOString()
       });
 
       setSubmitResult(`✅ Story created successfully! (${ref})`);
-      setFormData({ title: '', description: '', goalId: '', sprintId: '', priority: 2, points: 3, tags: [] });
+      setFormData({ title: '', description: '', url: '', goalId: '', sprintId: '', priority: 2, points: 3, persona: (currentPersona || 'personal') as 'personal' | 'work', dueDate: '', dueTime: '', timeOfDay: '', tags: [] });
 
       // Auto-close after success
       setTimeout(() => {
@@ -254,8 +370,9 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
         timestamp: new Date().toISOString()
       });
       setSubmitResult(`❌ Failed to create story: ${error.message}`);
+    } finally {
+      setIsSubmitting(false);
     }
-    setIsSubmitting(false);
   };
 
   return (
@@ -288,6 +405,30 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
           </Form.Group>
 
           <Form.Group className="mb-3">
+            <Form.Label>Source URL</Form.Label>
+            <Form.Control
+              type="url"
+              value={formData.url}
+              onChange={(e) => setFormData({ ...formData, url: e.target.value })}
+              placeholder="https://..."
+            />
+          </Form.Group>
+
+          <Form.Group className="mb-3">
+            <Form.Label>Persona</Form.Label>
+            <Form.Select
+              value={formData.persona}
+              onChange={(e) => {
+                setGoalInput('');
+                setFormData({ ...formData, persona: e.target.value as 'personal' | 'work', goalId: '', sprintId: '' });
+              }}
+            >
+              <option value="personal">Personal</option>
+              <option value="work">Work</option>
+            </Form.Select>
+          </Form.Group>
+
+          <Form.Group className="mb-3">
             <Form.Label>Tags</Form.Label>
             <TagInput
               value={formData.tags}
@@ -304,20 +445,48 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
               onChange={(e) => setGoalInput(e.target.value)}
               onBlur={() => {
                 const val = goalInput.trim();
-                const match = goals.find(g => g.title === val || g.id === val);
+                const match = leafGoalOptions.find((g) => {
+                  const displayPath = getGoalDisplayPath(g.id, goals);
+                  return displayPath === val || g.id === val || g.title === val;
+                });
+                setGoalInput(match ? getGoalDisplayPath(match.id, goals) : val);
                 setFormData({ ...formData, goalId: match ? match.id : '' });
               }}
-              placeholder="Search goals by title..."
+              placeholder="Search leaf goals by title..."
             />
             <datalist id="add-story-goal-options">
-              {goals.map(g => (
-                <option key={g.id} value={g.title} />
+              {leafGoalOptions.map(g => (
+                <option key={g.id} value={getGoalDisplayPath(g.id, goals)} />
               ))}
             </datalist>
             <Form.Text className="text-muted">
-              Stories linked to goals contribute to goal progress
+              Stories must link to a leaf goal so sprint work maps to an executable milestone.
             </Form.Text>
           </Form.Group>
+
+          {selectedGoalResolution.reason === 'auto_descendant' && selectedGoalResolution.leafGoal && (
+            <Alert variant="info" className="mb-3">
+              Parent goal selection auto-resolved to leaf goal <strong>{getGoalDisplayPath(selectedGoalResolution.leafGoal.id, goals)}</strong>.
+            </Alert>
+          )}
+
+          {selectedGoalResolution.reason === 'ambiguous_parent' && (
+            <Alert variant="warning" className="mb-3">
+              That parent goal has multiple leaf goals. Select the exact leaf goal you want this story to execute against.
+            </Alert>
+          )}
+
+          {activeFocusGoalIds.size > 0 && formData.goalId && !isGoalInHierarchySet(String(formData.goalId), goals as any, activeFocusGoalIds) && (
+            <Alert variant="warning" className="mb-3">
+              This goal is outside your active focus set. If you continue, this work will be deferred until after the current focus period.
+            </Alert>
+          )}
+
+          {formData.sprintId && sprintAlignment.hasRule && !sprintAlignment.aligned && (
+            <Alert variant={sprintAlignment.blocking ? 'danger' : 'warning'} className="mb-3">
+              {sprintAlignment.message}
+            </Alert>
+          )}
 
           <Form.Group className="mb-3">
             <Form.Label>Assign to Sprint</Form.Label>
@@ -348,7 +517,7 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
               <option value="">No sprint (backlog)</option>
               {sprints.map(sprint => (
                 <option key={sprint.id} value={sprint.id}>
-                  {sprint.name} ({sprint.status})
+                  {sprint.name}
                 </option>
               ))}
             </Form.Select>
@@ -370,18 +539,55 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
             </Form.Select>
           </Form.Group>
 
+          <Row>
+            <Col md={4}>
+              <Form.Group className="mb-3">
+                <Form.Label>Due Date</Form.Label>
+                <Form.Control
+                  type="date"
+                  value={formData.dueDate}
+                  onChange={(e) => setFormData({ ...formData, dueDate: e.target.value })}
+                />
+              </Form.Group>
+            </Col>
+            <Col md={4}>
+              <Form.Group className="mb-3">
+                <Form.Label>Due Time</Form.Label>
+                <Form.Control
+                  type="time"
+                  value={formData.dueTime}
+                  onChange={(e) => setFormData({ ...formData, dueTime: e.target.value })}
+                />
+              </Form.Group>
+            </Col>
+            <Col md={4}>
+              <Form.Group className="mb-3">
+                <Form.Label>Time of Day</Form.Label>
+                <Form.Select
+                  value={formData.timeOfDay}
+                  onChange={(e) => setFormData({ ...formData, timeOfDay: e.target.value as any as any })}
+                >
+                  <option value="">Auto/None</option>
+                  <option value="morning">Morning</option>
+                  <option value="afternoon">Afternoon</option>
+                  <option value="evening">Evening</option>
+                </Form.Select>
+              </Form.Group>
+            </Col>
+          </Row>
+
           <Form.Group className="mb-3">
             <Form.Label>Story Points</Form.Label>
-            <Form.Select
+            <Form.Control
+              type="number"
+              step="any"
+              inputMode="decimal"
               value={formData.points}
-              onChange={(e) => setFormData({ ...formData, points: parseInt(e.target.value) })}
-            >
-              <option value={1}>1 - Trivial</option>
-              <option value={2}>2 - Small</option>
-              <option value={3}>3 - Medium</option>
-              <option value={5}>5 - Large</option>
-              <option value={8}>8 - Very Large</option>
-            </Form.Select>
+              onChange={(e) => setFormData({
+                ...formData,
+                points: e.target.value as any,
+              })}
+            />
           </Form.Group>
         </Form>
 

@@ -7,7 +7,6 @@ import GoalsManagement from './components/GoalsManagement';
 import GoalsYearPlanner from './components/GoalsYearPlanner';
 import KanbanPage from './components/KanbanPage';
 import ModernKanbanPage from './components/ModernKanbanPage';
-import PlanningDashboard from './components/PlanningDashboard';
 import UnifiedPlannerPage from './components/planner/UnifiedPlannerPage';
 import WeeklyThemePlanner from './components/planner/WeeklyThemePlanner';
 import PlanningApprovalPage from './components/planner/PlanningApprovalPage';
@@ -16,6 +15,8 @@ import ThemeProgressDashboard from './components/ThemeProgressDashboard';
 import BacklogManager from './components/BacklogManager';
 import VisualCanvas from './components/VisualCanvas';
 import StoriesManagement from './components/StoriesManagement';
+import JournalsManagement from './components/JournalsManagement';
+import JournalInsightsPage from './components/JournalInsightsPage';
 import PersonalListsManagement from './components/PersonalListsManagement';
 import GamesBacklog from './components/GamesBacklog';
 import BooksBacklog from './components/BooksBacklog';
@@ -37,6 +38,7 @@ import { useAuth } from './contexts/AuthContext';
 import { PersonaProvider, usePersona } from './contexts/PersonaContext';
 import { SprintProvider, useSprint } from './contexts/SprintContext';
 import { SidebarProvider } from './contexts/SidebarContext';
+import { ProcessTextActivityProvider } from './contexts/ProcessTextActivityContext';
 
 // Import theme-aware styles
 import './styles/theme-aware.css';
@@ -82,7 +84,6 @@ import SprintPlanningMatrix from './components/SprintPlanningMatrix';
 import WorkoutsDashboard from './components/WorkoutsDashboard';
 import FinanceDashboardModern from './components/FinanceDashboardModern';
 import MerchantMappings from './components/finance/MerchantMappings';
-import CategoriesBuckets from './components/finance/CategoriesBuckets';
 import BudgetsPage from './components/finance/BudgetsPage';
 import GoalPotLinking from './components/finance/GoalPotLinking';
 import TransactionsList from './components/finance/TransactionsList';
@@ -93,6 +94,7 @@ import IntegrationLogs from './components/IntegrationLogs';
 import SettingsEmailPage from './components/settings/SettingsEmailPage';
 import SettingsPlannerPage from './components/settings/SettingsPlannerPage';
 import AiDiagnosticsLogs from './components/logs/AiDiagnosticsLogs';
+import TranscriptProcessingLogs from './components/logs/TranscriptProcessingLogs';
 import GoogleCalendarSettings from './components/settings/integrations/GoogleCalendarSettings';
 import MonzoSettings from './components/settings/integrations/MonzoSettings';
 import StravaSettings from './components/settings/integrations/StravaSettings';
@@ -100,6 +102,7 @@ import SteamSettings from './components/settings/integrations/SteamSettings';
 import HardcoverSettings from './components/settings/integrations/HardcoverSettings';
 import TraktSettings from './components/settings/integrations/TraktSettings';
 import YoutubeSettings from './components/settings/integrations/YoutubeSettings';
+import PublicGoalView from './components/PublicGoalView';
 import { useEntityAudit } from './hooks/useEntityAudit';
 import DeepLinkStory from './components/routes/DeepLinkStory';
 import DeepLinkGoal from './components/routes/DeepLinkGoal';
@@ -108,9 +111,11 @@ import QueryDeepLinkGate from './components/routes/QueryDeepLinkGate';
 import AdvancedOverview from './components/AdvancedOverview';
 import FinanceDashboardAdvanced from './components/finance/FinanceDashboardAdvanced';
 import CapacityDashboard from './components/CapacityDashboard';
-import { collection, limit, onSnapshot, orderBy, query, where } from 'firebase/firestore';
+import FocusGoalsPage from './components/FocusGoalsPage';
+import { collection, deleteDoc, doc, limit, onSnapshot, orderBy, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
 import { db } from './firebase';
-import type { Goal, Story } from './types';
+import type { Goal, Story, Task } from './types';
+import { setupRecaptchaOnStartup } from './utils/recaptchaHelper';
 
 
 // Lazy-loaded heavy routes
@@ -121,11 +126,13 @@ function App() {
     <TestModeProvider>
       <PersonaProvider>
         <SprintProvider>
-          <SidebarProvider>
-            <Router>
-              <AppContent />
-            </Router>
-          </SidebarProvider>
+          <ProcessTextActivityProvider>
+            <SidebarProvider>
+              <Router>
+                <AppContent />
+              </Router>
+            </SidebarProvider>
+          </ProcessTextActivityProvider>
         </SprintProvider>
       </PersonaProvider>
     </TestModeProvider>
@@ -144,15 +151,19 @@ function AppContent() {
   const [showImportModal, setShowImportModal] = useState(false);
   const [showAssistant, setShowAssistant] = useState(false);
 
-  // Root path redirect that is mobile-aware
+  // Root path redirect.
   const RootRedirect: React.FC = () => {
-    const dev = useDeviceInfo();
-    return <Navigate to={dev?.isMobile ? '/mobile' : '/sprints/kanban'} replace />;
+    return <Navigate to="/dashboard" replace />;
   };
 
   // Data for the global sidebar
   const [goals, setGoals] = useState<Goal[]>([]);
   const [stories, setStories] = useState<Story[]>([]);
+
+  // Initialize reCAPTCHA on app load
+  useEffect(() => {
+    setupRecaptchaOnStartup();
+  }, []);
 
   useEffect(() => {
     if (!currentUser?.uid || !currentPersona) {
@@ -195,6 +206,42 @@ function AppContent() {
     };
   }, [currentUser?.uid, currentPersona]);
 
+  const handleGlobalSidebarDelete = async (
+    item: Story | Task | Goal,
+    type: 'story' | 'task' | 'goal'
+  ) => {
+    const itemId = item?.id;
+    const uid = currentUser?.uid;
+    if (!itemId || !uid) return;
+
+    const claimOwnership = async (collectionName: 'tasks' | 'stories' | 'goals') => {
+      await updateDoc(doc(db, collectionName, itemId), {
+        ownerUid: uid,
+        updatedAt: serverTimestamp(),
+      });
+    };
+
+    try {
+      if (type === 'task') {
+        // Legacy guardrail: tasks without ownerUid can be claimed by current owner before delete.
+        await claimOwnership('tasks');
+        await deleteDoc(doc(db, 'tasks', itemId));
+        return;
+      }
+      if (type === 'story') {
+        // Legacy guardrail: stories without ownerUid can be claimed by current owner before delete.
+        await claimOwnership('stories');
+        await deleteDoc(doc(db, 'stories', itemId));
+        return;
+      }
+      // Keep goals as strict owner-only delete path.
+      await deleteDoc(doc(db, 'goals', itemId));
+    } catch (error) {
+      console.error('[global-sidebar] delete failed', { type, itemId, error });
+      alert(`Failed to delete ${type}. Please try again.`);
+    }
+  };
+
   // 🖱️ Initialize global click tracking service
   useEffect(() => {
     logger.info('global', 'Initializing click tracking');
@@ -209,6 +256,8 @@ function AppContent() {
   useEffect(() => {
     logger.debug('nav', 'Location change', { path: location.pathname, key: location.key });
   }, [location.pathname, location.key]);
+
+  // Daily Plan is temporarily disabled while sync and due-date issues are investigated.
 
 
 
@@ -292,7 +341,13 @@ function AppContent() {
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/dashboard/habit-tracking" element={<HabitsChoresDashboard />} />
             <Route path="/dashboard/habits-chores" element={<Navigate to="/dashboard/habit-tracking" replace />} />
+            <Route path="/dashboard/daily-checkin" element={<Navigate to="/checkin/daily" replace />} />
+            <Route path="/dashboard/ai-planner" element={<Navigate to="/calendar" replace />} />
+            <Route path="/dashboard/mobile-priorities" element={<Navigate to="/mobile-priorities" replace />} />
+            <Route path="/dashboard/theme-progress" element={<Navigate to="/metrics/progress" replace />} />
+            <Route path="/dashboard/finance" element={<Navigate to="/finance/dashboard" replace />} />
             <Route path="/metrics/progress" element={<ThemeProgressDashboard />} />
+            <Route path="/focus-goals" element={<FocusGoalsPage />} />
             <Route path="/metrics" element={<AdvancedOverview />} />
             <Route path="/overview/advanced" element={<Navigate to="/metrics" replace />} />
             <Route
@@ -341,13 +396,15 @@ function AppContent() {
             <Route path="/chores" element={<ChoresTasksPage />} />
             <Route path="/chores/checklist" element={<ChoreChecklistPage />} />
             <Route path="/mobile" element={<MobileHome />} />
+            <Route path="/daily-plan" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/mobile/daily-plan" element={<Navigate to="/mobile" replace />} />
             <Route path="/mobile-view" element={<MobileView />} />
             <Route path="/mobile-checklist" element={<MobileChecklistView />} />
-            <Route path="/habits" element={<HabitsManagement />} />
+            <Route path="/habits" element={<Navigate to="/dashboard/habit-tracking" replace />} />
             <Route path="/routines" element={<Navigate to="/chores" replace />} />
-            <Route path="/ai-planner" element={<PlanningDashboard />} />
+            <Route path="/ai-planner" element={<Navigate to="/calendar" replace />} />
             <Route path="/ai-usage" element={<AIUsageDashboard />} />
-            <Route path="/planning" element={<PlanningDashboard />} />
+            <Route path="/planning" element={<Navigate to="/calendar" replace />} />
             <Route path="/planning/approvals" element={<ApprovalsCenter />} />
             <Route path="/planning/approval" element={<PlanningApprovalPage />} />
             <Route
@@ -355,6 +412,12 @@ function AppContent() {
               element={<QueryDeepLinkGate paramKey="storyId" pathPrefix="/stories" fallback={<StoriesManagement />} />}
             />
             <Route path="/stories/:id" element={<DeepLinkStory />} />
+            <Route
+              path="/journals"
+              element={<QueryDeepLinkGate paramKey="journalId" pathPrefix="/journals" fallback={<JournalsManagement />} />}
+            />
+            <Route path="/journals/insights" element={<JournalInsightsPage />} />
+            <Route path="/journals/:id" element={<JournalsManagement />} />
             <Route path="/personal-lists" element={<BacklogManager />} />
             <Route path="/personal-lists-modern" element={<PersonalListsManagement />} />
             <Route path="/personal-backlogs" element={<BacklogManager />} />
@@ -381,6 +444,7 @@ function AppContent() {
             <Route path="/finance/integrations" element={<Navigate to="/settings/integrations" replace />} />
             <Route path="/logs/integrations" element={<IntegrationLogs />} />
             <Route path="/logs/ai" element={<AiDiagnosticsLogs />} />
+            <Route path="/logs/transcripts" element={<TranscriptProcessingLogs />} />
             <Route
               path="/travel"
               element={
@@ -395,11 +459,13 @@ function AppContent() {
             <Route path="/calendar" element={<UnifiedPlannerPage />} />
             <Route path="/calendar/planner" element={<WeeklyThemePlanner />} />
             <Route path="/calendar/themes" element={<Navigate to="/calendar/planner" replace />} />
-            <Route path="/running-results" element={<WorkoutsDashboard />} />
-            <Route path="/workouts" element={<Navigate to="/running-results" replace />} />
-            <Route path="/finance" element={<FinanceDashboardModern />} />
+            <Route path="/fitness" element={<WorkoutsDashboard />} />
+            <Route path="/running-results" element={<Navigate to="/fitness" replace />} />
+            <Route path="/parkrun-results" element={<WorkoutsDashboard />} />
+            <Route path="/workouts" element={<Navigate to="/fitness" replace />} />
+            <Route path="/finance" element={<Navigate to="/finance/dashboard" replace />} />
             <Route path="/finance/merchants" element={<MerchantMappings />} />
-            <Route path="/finance/categories" element={<CategoriesBuckets />} />
+            <Route path="/finance/categories" element={<Navigate to="/finance/merchants" replace />} />
             <Route path="/finance/budgets" element={<BudgetsPage />} />
             <Route path="/finance/goals" element={<GoalPotLinking />} />
             <Route path="/finance/transactions" element={<TransactionsList />} />
@@ -408,6 +474,12 @@ function AppContent() {
             <Route path="/finance/pots" element={<PotsBoard />} />
             <Route path="/finance/advanced" element={<Navigate to="/finance/dashboard" replace />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/settings/profile" element={<Navigate to="/settings?tab=profile" replace />} />
+            <Route path="/settings/ai" element={<Navigate to="/settings?tab=ai" replace />} />
+            <Route path="/settings/finance" element={<Navigate to="/settings?tab=finance" replace />} />
+            <Route path="/settings/notifications" element={<Navigate to="/settings?tab=notifications" replace />} />
+            <Route path="/settings/privacy-security" element={<Navigate to="/settings?tab=privacy" replace />} />
+            <Route path="/settings/developer" element={<Navigate to="/settings?tab=developer" replace />} />
             <Route path="/settings/email" element={<SettingsEmailPage />} />
             <Route path="/settings/planner" element={<SettingsPlannerPage />} />
             <Route path="/settings/integrations" element={<IntegrationSettings />} />
@@ -423,6 +495,9 @@ function AppContent() {
             {/* Removed by request: Test Suite and Changelog routes */}
             <Route path="/test" element={<Navigate to="/dashboard" replace />} />
             <Route path="/changelog" element={<Navigate to="/dashboard" replace />} />
+            
+            {/* Public shared goals */}
+            <Route path="/share/:shareCode" element={<PublicGoalView />} />
           </Routes>
 
           {/* Assistant (floating, near FAB but separate) */}
@@ -443,6 +518,7 @@ function AppContent() {
             goals={goals}
             stories={stories}
             sprints={sprints}
+            onDelete={handleGlobalSidebarDelete}
           />
         </SidebarLayout>
       </MigrationManager>

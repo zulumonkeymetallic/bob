@@ -32,7 +32,7 @@ import {
   ChevronRight,
   ChevronDown
 } from 'lucide-react';
-import { Activity, Pencil, Trash2, Wand2, ExternalLink } from 'lucide-react';
+import { Activity, Pencil, Trash2, Wand2, ExternalLink, CalendarClock } from 'lucide-react';
 import { Story, Goal, Sprint, Task } from '../types';
 import StoryTasksPanel from './StoryTasksPanel';
 import ModernTaskTable from './ModernTaskTable';
@@ -42,6 +42,9 @@ import { useNavigate } from 'react-router-dom';
 import { useSprint } from '../contexts/SprintContext';
 import { themeVars, rgbaCard } from '../utils/themeVars';
 import { storyStatusText } from '../utils/storyCardFormatting';
+import { parsePointsValue } from '../utils/points';
+import { MISSING_INFO_CELL_BG, MISSING_INFO_CELL_BG_HOVER, hasLinkedId, isBlankText, isMissingPoints } from '../utils/dataQuality';
+import { planningSprints } from '../utils/sprintFilter';
 
 interface StoryTableRow extends Story {
   goalTitle?: string;
@@ -67,6 +70,7 @@ interface ModernStoriesTableProps {
   onStoryAdd: (storyData: Omit<Story, 'ref' | 'id' | 'updatedAt' | 'createdAt'>) => Promise<void>;
   onStorySelect?: (story: Story) => void; // New prop for story selection
   onEditStory?: (story: Story) => void; // New prop for story editing
+  onPriorityFlag?: (story: Story) => void; // Flag story as #1 priority for gcal
   highlightStoryId?: string;
   goalId?: string; // Made optional for full stories table
   enableInlineTasks?: boolean; // Only show green caret + inline tasks when true
@@ -181,6 +185,24 @@ interface NewStoryRowProps {
   onCancel: () => void;
 }
 
+const formatExternalUrlLabel = (value: unknown): string => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    const parsed = new URL(raw);
+    const host = parsed.hostname.replace(/^www\./i, '');
+    const path = parsed.pathname === '/' ? '' : parsed.pathname.replace(/\/+$/, '');
+    return `${host}${path}`.slice(0, 64);
+  } catch {
+    return raw.slice(0, 64);
+  }
+};
+
+const storyHasGoalLink = (story: StoryTableRow, goals: Goal[]): boolean => {
+  const goalId = String((story as any).goalId || '').trim();
+  return hasLinkedId(goalId) && goals.some((goal) => goal.id === goalId);
+};
+
 const NewStoryRow: React.FC<NewStoryRowProps> = ({ 
   columns, 
   goals, 
@@ -274,8 +296,15 @@ const NewStoryRow: React.FC<NewStoryRowProps> = ({
       <td key={column.key} style={{ width: column.width, padding: '12px 8px', borderRight: `1px solid ${themeVars.border}` }}>
         <input
           type={column.type === 'number' ? 'number' : 'text'}
-          value={value || ''}
-          onChange={(e) => onFieldChange(column.key, column.type === 'number' ? parseInt(e.target.value) || 0 : e.target.value)}
+          step={column.key === 'points' ? 'any' : undefined}
+          inputMode={column.key === 'points' ? 'decimal' : undefined}
+          value={value ?? ''}
+          onChange={(e) => onFieldChange(
+            column.key,
+            column.key === 'points'
+              ? e.target.value
+              : (column.type === 'number' ? Number(e.target.value) || 0 : e.target.value),
+          )}
           placeholder={`Enter ${column.label.toLowerCase()}...`}
           style={{
             width: '100%',
@@ -360,21 +389,23 @@ interface SortableRowProps {
   onStoryDelete: (storyId: string) => Promise<void>;
   onStorySelect?: (story: Story) => void;
   onEditStory?: (story: Story) => void;
+  onPriorityFlag?: (story: Story) => void;
   onToggleExpand?: (storyId: string) => void;
   isExpanded?: boolean;
   isHighlighted?: boolean;
 }
 
-const SortableRow: React.FC<SortableRowProps> = ({ 
-  story, 
-  columns, 
-  index, 
+const SortableRow: React.FC<SortableRowProps> = ({
+  story,
+  columns,
+  index,
   sprints,
   goals,
-  onStoryUpdate, 
+  onStoryUpdate,
   onStoryDelete,
   onStorySelect,
   onEditStory,
+  onPriorityFlag,
   onToggleExpand,
   isExpanded,
   isHighlighted
@@ -423,20 +454,20 @@ const SortableRow: React.FC<SortableRowProps> = ({
     }
   };
 
-  const handleCellSave = async (key: string) => {
+  const handleCellSave = async (key: string, sourceValue?: string) => {
     try {
       // For goalTitle editing, we're actually editing goalId
       const actualKey = key === 'goalTitle' ? 'goalId' : key;
       const oldValue = (story as any)[actualKey]; // Store the original value
-      let valueToSave: any = editValue;
+      let valueToSave: any = sourceValue ?? editValue;
 
       // If saving goalId, map typed goal title/id to canonical goalId
       if (actualKey === 'goalId') {
-        const match = goals.find(g => g.id === editValue || g.title === editValue);
-        valueToSave = match ? match.id : editValue;
+        const match = goals.find(g => g.id === valueToSave || g.title === valueToSave);
+        valueToSave = match ? match.id : valueToSave;
       } else if (actualKey === 'status') {
         // Map human label/number to canonical numeric status (0,2,4)
-        const label = String(editValue).toLowerCase();
+        const label = String(valueToSave).toLowerCase();
         const map: Record<string, number> = {
           '0': 0,
           '1': 2,
@@ -451,7 +482,11 @@ const SortableRow: React.FC<SortableRowProps> = ({
           'done': 4,
           'complete': 4,
         };
-        valueToSave = map[label] ?? editValue;
+        valueToSave = map[label] ?? valueToSave;
+      } else if (actualKey === 'points') {
+        const parsedPoints = parsePointsValue(valueToSave);
+        const fallbackPoints = parsePointsValue((story as any).points) ?? 1;
+        valueToSave = parsedPoints == null ? fallbackPoints : parsedPoints;
       }
       
       // Only proceed if the value actually changed
@@ -524,12 +559,45 @@ const SortableRow: React.FC<SortableRowProps> = ({
     if (key === 'aiCriticalityReason') {
       return String(value || '');
     }
+    if (key === 'url') {
+      return formatExternalUrlLabel(value);
+    }
     return value || '';
   };
 
   const renderCell = (column: Column) => {
     const value = story[column.key as keyof StoryTableRow];
     const isEditing = editingCell === column.key;
+    const displayValue = formatValue(column.key, value);
+    const missingGoal = !storyHasGoalLink(story, goals);
+    const missingPoints = isMissingPoints((story as any).points);
+    const missingDescription = isBlankText((story as any).description);
+    const isMissingDataCell =
+      (column.key === 'goalTitle' && missingGoal)
+      || (column.key === 'points' && missingPoints)
+      || (column.key === 'description' && missingDescription);
+    const cellBaseBackground = isMissingDataCell ? MISSING_INFO_CELL_BG : 'transparent';
+    const editValueForColumn = (() => {
+      if (column.key === 'goalTitle') {
+        return goals.find(g => g.id === story.goalId)?.title || '';
+      }
+      if (column.key === 'status') {
+        return storyStatusText(value);
+      }
+      if (column.key === 'sprintId') {
+        return value == null ? '' : String(value);
+      }
+      if (column.key === 'points') {
+        return value == null ? '' : String(value);
+      }
+      if (column.key === 'url') {
+        return String(value || '');
+      }
+      if (column.type === 'select') {
+        return value == null ? '' : String(value);
+      }
+      return displayValue;
+    })();
 
     if (isEditing && column.editable) {
       // Searchable goal selector using datalist
@@ -542,15 +610,13 @@ const SortableRow: React.FC<SortableRowProps> = ({
                 list={datalistId}
                 value={editValue}
                 onChange={(e) => setEditValue(e.target.value)}
-                onBlur={() => {
-                  // Map typed goal title or id to goalId
-                  const match = goals.find(g => g.id === editValue || g.title === editValue);
-                  if (match) {
-                    setEditValue(match.id);
-                  }
-                  handleCellSave(column.key);
+                onBlur={(e) => {
+                  const rawValue = e.currentTarget.value;
+                  const match = goals.find(g => g.id === rawValue || g.title === rawValue);
+                  const resolvedGoalId = match ? match.id : rawValue;
+                  handleCellSave(column.key, resolvedGoalId);
                 }}
-                onKeyPress={(e) => e.key === 'Enter' && handleCellSave(column.key)}
+                onKeyPress={(e) => e.key === 'Enter' && handleCellSave(column.key, (e.currentTarget as HTMLInputElement).value)}
                 style={{
                   width: '100%',
                   padding: '6px 8px',
@@ -580,7 +646,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
               <select
                 value={editValue}
                 onChange={(e) => setEditValue(e.target.value)}
-                onBlur={() => handleCellSave(column.key)}
+                onBlur={(e) => handleCellSave(column.key, e.currentTarget.value)}
                 style={{
                   width: '100%',
                   padding: '6px 8px',
@@ -622,11 +688,13 @@ const SortableRow: React.FC<SortableRowProps> = ({
       <td key={column.key} style={{ width: column.width }}>
         <div className="relative">
           <input
-            type={column.type === 'date' ? 'date' : 'text'}
+            type={column.type === 'date' ? 'date' : (column.type === 'number' ? 'number' : 'text')}
+            step={column.key === 'points' ? 'any' : undefined}
+            inputMode={column.key === 'points' ? 'decimal' : undefined}
             value={editValue}
             onChange={(e) => setEditValue(e.target.value)}
-            onBlur={() => handleCellSave(column.key)}
-            onKeyPress={(e) => e.key === 'Enter' && handleCellSave(column.key)}
+            onBlur={(e) => handleCellSave(column.key, e.currentTarget.value)}
+            onKeyPress={(e) => e.key === 'Enter' && handleCellSave(column.key, (e.currentTarget as HTMLInputElement).value)}
             style={{
               width: '100%',
               padding: '6px 8px',
@@ -644,7 +712,6 @@ const SortableRow: React.FC<SortableRowProps> = ({
     );
     }
 
-    const displayValue = formatValue(column.key, value);
     const canLinkGoal = column.key === 'goalTitle' && !!story.goalId;
     const linkedGoal = canLinkGoal ? goals.find((goal) => goal.id === story.goalId) : undefined;
     const goalRefOrId = linkedGoal?.ref || story.goalId;
@@ -658,18 +725,19 @@ const SortableRow: React.FC<SortableRowProps> = ({
           borderRight: `1px solid ${themeVars.border}`,
           cursor: column.editable ? 'pointer' : 'default',
           transition: 'background-color 0.15s ease',
+          backgroundColor: cellBaseBackground,
         }}
         onMouseEnter={(e) => {
           if (column.editable) {
-            e.currentTarget.style.backgroundColor = rgbaCard(0.08);
+            e.currentTarget.style.backgroundColor = isMissingDataCell ? MISSING_INFO_CELL_BG_HOVER : rgbaCard(0.08);
           }
         }}
         onMouseLeave={(e) => {
           if (column.editable) {
-            e.currentTarget.style.backgroundColor = 'transparent';
+            e.currentTarget.style.backgroundColor = cellBaseBackground;
           }
         }}
-        onClick={() => column.editable && handleCellEdit(column.key, displayValue)}
+        onClick={() => column.editable && handleCellEdit(column.key, editValueForColumn)}
       >
         <div style={{
           minHeight: '20px',
@@ -724,6 +792,16 @@ const SortableRow: React.FC<SortableRowProps> = ({
                 <ExternalLink size={14} />
               </button>
             </>
+          ) : column.key === 'url' && value ? (
+            <a
+              href={String(value)}
+              target="_blank"
+              rel="noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              title={String(value)}
+            >
+              {formatExternalUrlLabel(value)}
+            </a>
           ) : (
             <span>{displayValue}</span>
           )}
@@ -883,6 +961,23 @@ const SortableRow: React.FC<SortableRowProps> = ({
           >
             <Wand2 size={14} />
           </button>
+          {onPriorityFlag && (
+            <button
+              onClick={() => onPriorityFlag(story)}
+              style={{
+                color: (story as any).userPriorityFlag ? 'var(--bs-danger)' : themeVars.brand as string,
+                padding: '4px',
+                borderRadius: '4px',
+                border: 'none',
+                backgroundColor: 'transparent',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease',
+              }}
+              title={(story as any).userPriorityFlag ? 'Remove #1 priority flag' : 'Flag as #1 priority for calendar'}
+            >
+              <CalendarClock size={14} />
+            </button>
+          )}
           <button
             onClick={() => onEditStory ? onEditStory(story) : handleCellEdit('title', story.title)}
             style={{
@@ -946,6 +1041,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
   onStoryAdd,
   onStorySelect,
   onEditStory,
+  onPriorityFlag,
   highlightStoryId,
   goalId,
   enableInlineTasks = false,
@@ -955,6 +1051,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
   const { currentPersona } = usePersona();
   const { isDark, colors, backgrounds } = useThemeAwareColors();
   const { selectedSprintId, sprints } = useSprint();
+  const planningSprintList = useMemo(() => planningSprints(sprints), [sprints]);
   const navigate = useNavigate();
   const [columns, setColumns] = useState<Column[]>(defaultColumns);
   const [showConfig, setShowConfig] = useState(false);
@@ -978,7 +1075,8 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
     theme: '',
     sprintId: '',
     points: '',
-    hasGoal: ''
+    hasGoal: '',
+    dataQuality: '',
   });
 
   // Inline tasks expansion state (declare before effects that depend on it)
@@ -1025,12 +1123,12 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
         col.key === 'sprintId'
           ? {
               ...col,
-              options: ['', ...sprints.map(sprint => sprint.id)]
+              options: ['', ...planningSprintList.map(sprint => sprint.id)]
             }
           : col
       )
     );
-  }, [sprints]);
+  }, [planningSprintList]);
 
   // Handle adding new story row
   const handleAddNewStory = () => {
@@ -1048,6 +1146,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
     setNewStoryData({
       title: '',
       description: '',
+      url: '',
       goalId: autoGoalId,
       status: 0, // Backlog
       priority: 3, // P3
@@ -1069,8 +1168,10 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
     try {
       console.log('🎯 ModernStoriesTable: Starting new story save...');
       const linkedGoal = goals.find(g => g.id === newStoryData.goalId);
+      const parsedPoints = parsePointsValue((newStoryData as any).points);
       const payload = {
         ...newStoryData,
+        points: parsedPoints == null ? 1 : parsedPoints,
         theme: (linkedGoal && (linkedGoal as any).theme !== undefined) ? (linkedGoal as any).theme : newStoryData.theme
       } as Omit<Story, 'ref' | 'id' | 'updatedAt' | 'createdAt'>;
       await onStoryAdd(payload);
@@ -1181,9 +1282,21 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
 
     // Has Goal filter
     if (filters.hasGoal) {
-      const hasGoal = story.goalId && story.goalId.trim() !== '';
+      const hasGoal = storyHasGoalLink(story, goals);
       if (filters.hasGoal === 'yes' && !hasGoal) return false;
       if (filters.hasGoal === 'no' && hasGoal) return false;
+    }
+
+    if (filters.dataQuality) {
+      const missingGoal = !storyHasGoalLink(story, goals);
+      const missingPoints = isMissingPoints((story as any).points);
+      const missingDescription = isBlankText((story as any).description);
+      const missingAny = missingGoal || missingPoints || missingDescription;
+
+      if (filters.dataQuality === 'missing_any' && !missingAny) return false;
+      if (filters.dataQuality === 'missing_goal' && !missingGoal) return false;
+      if (filters.dataQuality === 'missing_points' && !missingPoints) return false;
+      if (filters.dataQuality === 'missing_description' && !missingDescription) return false;
     }
 
     return true;
@@ -1229,7 +1342,8 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
       theme: '',
       sprintId: '',
       points: '',
-      hasGoal: ''
+      hasGoal: '',
+      dataQuality: '',
     });
   };
 
@@ -1460,9 +1574,9 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
           >
             <option value="">All Sprints</option>
             <option value="unassigned">Unassigned</option>
-            {sprints.map(sprint => (
+            {planningSprintList.map(sprint => (
               <option key={sprint.id} value={sprint.id}>
-                {sprint.name} ({sprint.status})
+                {sprint.name}
               </option>
             ))}
           </select>
@@ -1494,6 +1608,36 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
             <option value="">All Stories</option>
             <option value="yes">Linked to Goal</option>
             <option value="no">Not Linked</option>
+          </select>
+        </div>
+
+        <div>
+          <label style={{
+            display: 'block',
+            fontSize: '12px',
+            fontWeight: '500',
+            color: 'var(--text)',
+            marginBottom: '4px'
+          }}>
+            Data Quality
+          </label>
+          <select
+            value={filters.dataQuality}
+            onChange={(e) => setFilters(prev => ({ ...prev, dataQuality: e.target.value }))}
+            style={{
+              width: '100%',
+              padding: '6px 10px',
+              fontSize: '14px',
+              border: '1px solid var(--line)',
+              borderRadius: '4px',
+              backgroundColor: 'var(--panel)'
+            }}
+          >
+            <option value="">All Stories</option>
+            <option value="missing_any">Missing Any Key Info</option>
+            <option value="missing_goal">Missing Goal Link</option>
+            <option value="missing_points">Missing Points (0/blank)</option>
+            <option value="missing_description">Missing Description</option>
           </select>
         </div>
 
@@ -1619,7 +1763,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
                   <NewStoryRow
                     columns={columns}
                     goals={goals}
-                    sprints={sprints}
+                      sprints={planningSprintList}
                     newStoryData={newStoryData}
                     onFieldChange={handleNewStoryFieldChange}
                     onSave={handleSaveNewStory}
@@ -1637,12 +1781,13 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
                         story={story}
                         columns={columns}
                         index={index}
-                        sprints={sprints}
+                          sprints={planningSprintList}
                         goals={goals}
                         onStoryUpdate={onStoryUpdate}
                         onStoryDelete={onStoryDelete}
                         onStorySelect={onStorySelect}
                         onEditStory={onEditStory}
+                        onPriorityFlag={onPriorityFlag}
                         onToggleExpand={handleToggleExpand}
                         isExpanded={expandedStoryId === story.id}
                         isHighlighted={highlightStoryId === story.id}
@@ -1668,7 +1813,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
                                 tasks={allTasks.filter(t => (t as any).parentType === 'story' && (t as any).parentId === story.id)}
                                 stories={stories as any}
                                 goals={goals as any}
-                                sprints={sprints as any}
+                                  sprints={planningSprintList as any}
                                 onTaskCreate={async (newTask) => {
                                   const linkedGoal = goals.find(g => g.id === (story as any).goalId);
                                   await addDoc(collection(db, 'tasks'), {

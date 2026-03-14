@@ -13,6 +13,7 @@ import { isStatus, isTheme, isPriority, getThemeClass, getPriorityColor, getBadg
 import { deriveTaskSprint, effectiveSprintId, isDueDateWithinStorySprint } from '../utils/taskSprintHelpers';
 import { taskStatusText } from '../utils/storyCardFormatting';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
+import { parsePointsValue, TASK_DEFAULT_POINTS } from '../utils/points';
 
 interface TaskWithContext extends Task {
   referenceNumber?: string;
@@ -83,7 +84,7 @@ const TasksList: React.FC = () => {
     theme: 0, // Default to General for unlinked tasks
     status: 'planned' as 'planned' | 'in_progress' | 'done',
     estimatedHours: 1,
-    points: 1
+    points: String(TASK_DEFAULT_POINTS) as string | number
   });
 
   const [editingField, setEditingField] = useState<{taskId: string, field: string, value: any} | null>(null);
@@ -418,7 +419,7 @@ const TasksList: React.FC = () => {
 
       const statusMap: Record<string, number> = { planned: 0, in_progress: 1, done: 2 };
       const priorityMap: Record<string, number> = { high: 1, med: 2, low: 3 };
-      const normalizedPoints = Math.max(1, Math.min(8, Math.round(Number(newTask.points) || 1)));
+      const normalizedPoints = parsePointsValue(newTask.points) ?? TASK_DEFAULT_POINTS;
       const taskData: any = {
         ref: ref, // Add reference number
         title: newTask.title,
@@ -473,7 +474,7 @@ const TasksList: React.FC = () => {
         theme: 0, // Default to General for unlinked tasks
         status: 'planned',
         estimatedHours: 1,
-        points: 1
+        points: String(TASK_DEFAULT_POINTS)
       });
       setShowAddTask(false);
     } catch (error) {
@@ -538,12 +539,7 @@ const TasksList: React.FC = () => {
       }
 
       if (payload.points !== undefined) {
-        const rawPoints = Number(payload.points);
-        if (Number.isNaN(rawPoints)) {
-          delete payload.points;
-        } else {
-          payload.points = Math.max(1, Math.min(8, Math.round(rawPoints)));
-        }
+        payload.points = parsePointsValue(payload.points) ?? TASK_DEFAULT_POINTS;
       }
 
       if (derivation.story?.sprintId) {
@@ -699,7 +695,7 @@ const TasksList: React.FC = () => {
 
   const getPriorityColor = (priority: string) => {
     switch (priority) {
-      case 'high': return 'danger';
+      case 'high': return 'orange';
       case 'med': return 'warning';
       case 'low': return 'info';
       default: return 'secondary';
@@ -1145,16 +1141,15 @@ const TasksList: React.FC = () => {
                   <Form.Label>Points</Form.Label>
                   <Form.Control
                     type="number"
-                    min={1}
-                    max={8}
-                    value={newTask.points ?? 1}
-                    onChange={(e) => {
-                      const value = Number(e.target.value);
-                      const normalized = Math.max(1, Math.min(8, Number.isNaN(value) ? 1 : Math.round(value)));
-                      setNewTask({ ...newTask, points: normalized });
-                    }}
+                    step="any"
+                    inputMode="decimal"
+                    value={newTask.points ?? ''}
+                    onChange={(e) => setNewTask({
+                      ...newTask,
+                      points: e.target.value as any,
+                    })}
                   />
-                  <Form.Text className="text-muted">Scale 1–8 to align with sprint planning.</Form.Text>
+                  <Form.Text className="text-muted">Enter decimal or whole points.</Form.Text>
                 </Form.Group>
               </Col>
             </Row>
@@ -1331,21 +1326,20 @@ const TasksList: React.FC = () => {
 
               <Row>
                 <Col md={3}>
-                  <Form.Group className="mb-3">
-                    <Form.Label>Points</Form.Label>
-                    <Form.Control
-                      type="number"
-                      min={1}
-                      max={8}
-                      value={selectedTask.points ?? 1}
-                      onChange={(e) => {
-                        const value = Number(e.target.value);
-                        const normalized = Math.max(1, Math.min(8, Number.isNaN(value) ? 1 : Math.round(value)));
-                        setSelectedTask({ ...selectedTask, points: normalized });
-                      }}
-                    />
-                  </Form.Group>
-                </Col>
+                <Form.Group className="mb-3">
+                  <Form.Label>Points</Form.Label>
+                  <Form.Control
+                    type="number"
+                    step="any"
+                    inputMode="decimal"
+                    value={selectedTask.points ?? ''}
+                    onChange={(e) => setSelectedTask({
+                      ...selectedTask,
+                      points: e.target.value as any,
+                    })}
+                  />
+                </Form.Group>
+              </Col>
               </Row>
 
               <Row>

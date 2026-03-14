@@ -1,0 +1,24 @@
+{
+  "buildId": "1773162298033",
+  "timestamp": "2026-03-10T17:04:58Z",
+  "date": "2026-03-10 17:04:58",
+  "branch": "feature/dashboard-mobile-priority-replan-consistency",
+  "user": "jim",
+  "versions": {
+    "web": "",
+    "ios": "",
+    "mac": "[0;34m[INFO][0m"
+  },
+  "commits": {
+    "web": "",
+    "ios": "",
+    "mac": "Building"
+  },
+  "durations": {
+    "web": "",
+    "ios": "",
+    "mac": "Mac"
+  },
+  "dryRun": false,
+  "beta": false
+}

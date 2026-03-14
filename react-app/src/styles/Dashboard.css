@@ -3,6 +3,13 @@
   padding: 20px;
 }
 
+/* Equalise all overview widget card headers to the same height */
+.dashboard-widget-shell .card-header {
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+}
+
 .dashboard-compact {
   padding-top: 8px !important;
   padding-bottom: 8px !important;
@@ -97,6 +104,113 @@
 
 .today-plan-layout > .today-plan-col {
   width: 100%;
+  position: relative;
+}
+
+.dashboard-widget-shell {
+  position: relative;
+  width: 100%;
+  max-width: 100%;
+  margin-bottom: 1rem;
+}
+
+.dashboard-widget-shell > .card {
+  height: 100%;
+  margin-bottom: 0 !important;
+  display: flex;
+  flex-direction: column;
+}
+
+.dashboard-widget-shell > .card .card-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.dashboard-widget-resize-handle {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  width: 16px;
+  height: 16px;
+  border: 0;
+  background: transparent;
+  cursor: nwse-resize;
+  z-index: 8;
+  touch-action: none;
+}
+
+.dashboard-widget-resize-handle::before,
+.dashboard-widget-resize-handle::after {
+  content: '';
+  position: absolute;
+  right: 1px;
+  bottom: 1px;
+  border-right: 2px solid var(--bs-border-color);
+  border-bottom: 2px solid var(--bs-border-color);
+  opacity: 0.75;
+}
+
+.dashboard-widget-resize-handle::before {
+  width: 8px;
+  height: 8px;
+}
+
+.dashboard-widget-resize-handle::after {
+  width: 13px;
+  height: 13px;
+  opacity: 0.45;
+}
+
+.dashboard-widget-resize-handle:hover::before,
+.dashboard-widget-resize-handle:focus-visible::before,
+.dashboard-widget-resize-handle:hover::after,
+.dashboard-widget-resize-handle:focus-visible::after {
+  opacity: 0.95;
+}
+
+.today-plan-col-resize-handle {
+  position: absolute;
+  top: 0;
+  right: -8px;
+  width: 16px;
+  height: 100%;
+  border: none;
+  background: transparent;
+  cursor: col-resize;
+  z-index: 6;
+  touch-action: none;
+}
+
+.today-plan-col-resize-handle::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 10px;
+  bottom: 10px;
+  width: 2px;
+  transform: translateX(-50%);
+  border-radius: 2px;
+  background: var(--bs-border-color);
+  opacity: 0;
+  transition: opacity 120ms ease-in-out;
+}
+
+.today-plan-col-resize-handle:hover::before,
+.today-plan-col-resize-handle:focus-visible::before {
+  opacity: 0.65;
+}
+
+body.today-plan-resizing,
+body.today-plan-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+body.dashboard-widget-resizing,
+body.dashboard-widget-resizing * {
+  cursor: nwse-resize !important;
+  user-select: none !important;
 }
 
 .dashboard-calendar-card .card-body {
@@ -104,7 +218,29 @@
 }
 
 .dashboard-calendar-card .calendar-dashboard-wrap {
+  flex: 1 1 auto;
   min-height: 520px;
+  max-height: none;
+}
+
+/*
+ * Due-tasks and chores cards: use viewport-relative max-height so they
+ * scale with the screen (Mac Air ~65vh, iPad ~55vh) and only scroll
+ * when content actually exceeds available space.
+ */
+.dashboard-due-card,
+.dashboard-chores-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.dashboard-due-card > .card-body,
+.dashboard-chores-card > .card-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  overflow-y: auto;
 }
 
 .dashboard-task-status-select {
@@ -121,8 +257,73 @@
   font-size: 12px;
 }
 
+/* Due-item card: auto height to fit wrapped chips */
 .dashboard-due-item {
-  min-height: 116px;
+  min-height: 0;
+  overflow: visible;
+  height: auto !important;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+
+/* Force the chips row inside due-items to wrap properly in narrow columns */
+.dashboard-due-item .d-flex.align-items-center {
+  flex-wrap: wrap !important;
+  gap: 4px 6px !important;
+  row-gap: 4px !important;
+}
+
+/* Ensure the chip selects and badges never get hidden */
+.dashboard-due-item .dashboard-chip-select-wrap,
+.dashboard-due-item .badge,
+.dashboard-due-item .dashboard-due-date-input {
+  flex-shrink: 0;
+  overflow: visible;
+}
+
+/* Chip-style select for priority and status */
+.dashboard-chip-select-wrap {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.dashboard-chip-select {
+  appearance: none;
+  -webkit-appearance: none;
+  border: none;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 18px 2px 8px;
+  line-height: 1.4;
+  cursor: pointer;
+  white-space: nowrap;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='rgba(255,255,255,0.7)' stroke-width='1.5' fill='none'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 5px center;
+  background-size: 10px 6px;
+}
+
+.dashboard-chip-select:focus {
+  outline: 2px solid var(--bs-primary);
+  outline-offset: 1px;
+}
+
+/* Inline due-date input */
+.dashboard-due-date-input {
+  border: none;
+  background: transparent;
+  font-size: 11px;
+  color: inherit;
+  padding: 0 2px;
+  cursor: pointer;
+  width: 105px;
+}
+
+.dashboard-due-date-input:focus {
+  outline: 1px solid var(--bs-primary);
+  border-radius: 3px;
 }
 
 @media (min-width: 992px) {
@@ -142,6 +343,7 @@
 
   .dashboard-calendar-card .calendar-dashboard-wrap {
     min-height: 640px;
+    max-height: none;
   }
 
   .today-plan-layout > .today-plan-col-due {
@@ -150,6 +352,27 @@
 
   .today-plan-layout > .today-plan-col-chores {
     width: 20%;
+  }
+}
+
+@media (max-width: 991.98px) {
+  .today-plan-col-resize-handle {
+    display: none;
+  }
+
+  .dashboard-calendar-card .calendar-dashboard-wrap {
+    max-height: clamp(340px, 56vh, 700px);
+  }
+
+  .dashboard-due-card > .card-body,
+  .dashboard-chores-card > .card-body {
+    max-height: clamp(280px, 50vh, 560px);
+  }
+}
+
+@media (max-width: 767.98px) {
+  .dashboard-widget-resize-handle {
+    display: none;
   }
 }
 
@@ -165,6 +388,7 @@
 
   .dashboard-calendar-card .calendar-dashboard-wrap {
     min-height: 620px;
+    max-height: none;
   }
 
   .today-plan-layout > .today-plan-col-due {
@@ -186,8 +410,315 @@
   background-color: #dc3545;
 }
 
+[data-theme='dark'] .calendar-dashboard-wrap .rbc-calendar,
+[data-bs-theme='dark'] .calendar-dashboard-wrap .rbc-calendar,
+.dark .calendar-dashboard-wrap .rbc-calendar {
+  background: rgba(15, 23, 42, 0.92);
+  color: var(--bs-body-color, #e2e8f0);
+}
+
+[data-theme='dark'] .calendar-dashboard-wrap .rbc-time-view,
+[data-theme='dark'] .calendar-dashboard-wrap .rbc-time-header,
+[data-theme='dark'] .calendar-dashboard-wrap .rbc-time-header-content,
+[data-theme='dark'] .calendar-dashboard-wrap .rbc-time-content,
+[data-theme='dark'] .calendar-dashboard-wrap .rbc-time-content > .rbc-time-gutter,
+[data-theme='dark'] .calendar-dashboard-wrap .rbc-day-slot,
+[data-theme='dark'] .calendar-dashboard-wrap .rbc-timeslot-group,
+[data-theme='dark'] .calendar-dashboard-wrap .rbc-day-bg,
+[data-theme='dark'] .calendar-dashboard-wrap .rbc-header,
+[data-bs-theme='dark'] .calendar-dashboard-wrap .rbc-time-view,
+[data-bs-theme='dark'] .calendar-dashboard-wrap .rbc-time-header,
+[data-bs-theme='dark'] .calendar-dashboard-wrap .rbc-time-header-content,
+[data-bs-theme='dark'] .calendar-dashboard-wrap .rbc-time-content,
+[data-bs-theme='dark'] .calendar-dashboard-wrap .rbc-time-content > .rbc-time-gutter,
+[data-bs-theme='dark'] .calendar-dashboard-wrap .rbc-day-slot,
+[data-bs-theme='dark'] .calendar-dashboard-wrap .rbc-timeslot-group,
+[data-bs-theme='dark'] .calendar-dashboard-wrap .rbc-day-bg,
+[data-bs-theme='dark'] .calendar-dashboard-wrap .rbc-header,
+.dark .calendar-dashboard-wrap .rbc-time-view,
+.dark .calendar-dashboard-wrap .rbc-time-header,
+.dark .calendar-dashboard-wrap .rbc-time-header-content,
+.dark .calendar-dashboard-wrap .rbc-time-content,
+.dark .calendar-dashboard-wrap .rbc-time-content > .rbc-time-gutter,
+.dark .calendar-dashboard-wrap .rbc-day-slot,
+.dark .calendar-dashboard-wrap .rbc-timeslot-group,
+.dark .calendar-dashboard-wrap .rbc-day-bg,
+.dark .calendar-dashboard-wrap .rbc-header {
+  background: rgba(15, 23, 42, 0.88);
+  border-color: rgba(148, 163, 184, 0.28);
+  color: var(--bs-body-color, #e2e8f0);
+}
+
+[data-theme='dark'] .calendar-dashboard-wrap .rbc-day-slot .rbc-time-slot,
+[data-bs-theme='dark'] .calendar-dashboard-wrap .rbc-day-slot .rbc-time-slot,
+.dark .calendar-dashboard-wrap .rbc-day-slot .rbc-time-slot {
+  border-top-color: rgba(148, 163, 184, 0.18);
+}
+
+[data-theme='dark'] .calendar-dashboard-wrap .rbc-time-content > * + * > *,
+[data-bs-theme='dark'] .calendar-dashboard-wrap .rbc-time-content > * + * > *,
+.dark .calendar-dashboard-wrap .rbc-time-content > * + * > * {
+  border-left-color: rgba(148, 163, 184, 0.28);
+}
+
 @media (max-width: 768px) {
   .dashboard-charts {
     grid-template-columns: 1fr;
+  }
+}
+
+/* ─── Widget container queries (adaptive internal layouts) ─────────── */
+/*
+ * container-type goes on .card-body, NOT .dashboard-widget-shell.
+ * Putting it on the shell breaks absolute-positioned edge handles
+ * (container-type creates a new containing block + stacking context).
+ */
+.dashboard-widget-shell .card-body {
+  container-type: inline-size;
+  container-name: widget-body;
+}
+
+/* Time buckets: morning / afternoon / evening — stack by default, columns when wide */
+.widget-time-buckets {
+  display: flex;
+  flex-direction: column;
+}
+
+@container widget-body (min-width: 480px) {
+  .widget-time-buckets {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 1rem;
+    align-items: start;
+  }
+  .widget-time-buckets > div {
+    margin-bottom: 0 !important;
+  }
+}
+
+/* Item grids: task/story lists go multi-column when widget is wide */
+.widget-items-grid {
+  display: flex;
+  flex-direction: column;
+}
+
+@container widget-body (min-width: 480px) {
+  .widget-items-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 0.5rem;
+    align-items: start;
+  }
+  .widget-items-grid > .border {
+    margin-bottom: 0 !important;
+  }
+}
+
+/* ─── Key metrics bar: auto-size cards to fit content ───────────────── */
+.dashboard-key-metrics {
+  flex-wrap: wrap !important;
+}
+.dashboard-key-metrics > * {
+  flex: 1 1 auto !important;
+  min-width: 90px !important;
+  width: auto !important;
+  max-width: none !important;
+}
+
+/* ─── Draggable widget grid ─────────────────────────────────────────── */
+.dashboard-widget-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: flex-start;
+  padding: 2px;
+}
+
+.dashboard-sortable-item {
+  position: relative;
+  flex: 1 1 300px;
+  min-width: 220px;
+  box-sizing: border-box;
+}
+
+/* Drag handle — full-width header strip, leaves right ~130px free for action buttons */
+.dashboard-drag-handle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 130px;
+  height: 46px;
+  z-index: 10;
+  cursor: grab;
+  background: transparent;
+  border-radius: var(--bs-border-radius, 0.375rem) 0 0 0;
+}
+
+.dashboard-drag-handle:active {
+  cursor: grabbing;
+}
+
+/* Left / right edge resize handles */
+.dashboard-widget-resize-left,
+.dashboard-widget-resize-right {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 12px;
+  border: none;
+  background: transparent;
+  cursor: col-resize;
+  z-index: 9;
+  padding: 0;
+  touch-action: none;
+}
+
+.dashboard-widget-resize-left {
+  left: -4px;
+}
+
+.dashboard-widget-resize-right {
+  right: -4px;
+}
+
+.dashboard-widget-resize-left::before,
+.dashboard-widget-resize-right::before {
+  content: '';
+  position: absolute;
+  top: 15%;
+  bottom: 15%;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--bs-border-color);
+  opacity: 0;
+  transition: opacity 120ms ease-in-out;
+}
+
+.dashboard-widget-resize-left::before {
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.dashboard-widget-resize-right::before {
+  right: 50%;
+  transform: translateX(50%);
+}
+
+.dashboard-widget-resize-left:hover::before,
+.dashboard-widget-resize-left:focus-visible::before,
+.dashboard-widget-resize-right:hover::before,
+.dashboard-widget-resize-right:focus-visible::before {
+  opacity: 0.65;
+}
+
+/* Top / bottom edge resize handles */
+.dashboard-widget-resize-top,
+.dashboard-widget-resize-bottom {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 10px;
+  border: none;
+  background: transparent;
+  cursor: ns-resize;
+  z-index: 11;
+  padding: 0;
+  touch-action: none;
+}
+
+.dashboard-widget-resize-top {
+  top: -4px;
+}
+
+.dashboard-widget-resize-bottom {
+  bottom: -4px;
+}
+
+.dashboard-widget-resize-top::before,
+.dashboard-widget-resize-bottom::before {
+  content: '';
+  position: absolute;
+  left: 15%;
+  right: 15%;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--bs-border-color);
+  opacity: 0;
+  transition: opacity 120ms ease-in-out;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.dashboard-widget-resize-top:hover::before,
+.dashboard-widget-resize-top:focus-visible::before,
+.dashboard-widget-resize-bottom:hover::before,
+.dashboard-widget-resize-bottom:focus-visible::before {
+  opacity: 0.65;
+}
+
+/* Corner resize handles */
+.dashboard-widget-resize-nw,
+.dashboard-widget-resize-ne,
+.dashboard-widget-resize-sw,
+.dashboard-widget-resize-se {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  z-index: 12;
+  padding: 0;
+  border: none;
+  background: transparent;
+  touch-action: none;
+  opacity: 0;
+  transition: opacity 120ms ease-in-out;
+}
+
+.dashboard-sortable-item:hover .dashboard-widget-resize-nw,
+.dashboard-sortable-item:hover .dashboard-widget-resize-ne,
+.dashboard-sortable-item:hover .dashboard-widget-resize-sw,
+.dashboard-sortable-item:hover .dashboard-widget-resize-se {
+  opacity: 1;
+}
+
+.dashboard-widget-resize-nw { top: -4px; left: -4px; cursor: nw-resize; }
+.dashboard-widget-resize-ne { top: -4px; right: -4px; cursor: ne-resize; }
+.dashboard-widget-resize-sw { bottom: -4px; left: -4px; cursor: sw-resize; }
+.dashboard-widget-resize-se { bottom: -4px; right: -4px; cursor: se-resize; }
+
+.dashboard-widget-resize-nw::before,
+.dashboard-widget-resize-ne::before,
+.dashboard-widget-resize-sw::before,
+.dashboard-widget-resize-se::before {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  border-radius: 3px;
+  background: var(--bs-border-color);
+}
+
+/* Hide resize handles on mobile */
+@media (max-width: 767.98px) {
+  .dashboard-widget-grid {
+    flex-direction: column;
+  }
+
+  .dashboard-sortable-item {
+    flex: none;
+    width: 100% !important;
+  }
+
+  .dashboard-widget-resize-left,
+  .dashboard-widget-resize-right,
+  .dashboard-widget-resize-top,
+  .dashboard-widget-resize-bottom,
+  .dashboard-widget-resize-nw,
+  .dashboard-widget-resize-ne,
+  .dashboard-widget-resize-sw,
+  .dashboard-widget-resize-se {
+    display: none;
+  }
+
+  .dashboard-drag-handle {
+    display: none;
   }
 }

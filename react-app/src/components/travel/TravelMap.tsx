@@ -1,7 +1,8 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Card, Row, Col, Button, Form, Badge, ProgressBar } from 'react-bootstrap';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Card, Row, Col, Button, Form, Badge, ProgressBar, Modal } from 'react-bootstrap';
 import { collection, query, where, onSnapshot, addDoc, updateDoc, doc, serverTimestamp, getDocs, deleteDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
+import { DndContext, PointerSensor, useDroppable, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { db, functions } from '../../firebase';
 import { useAuth } from '../../contexts/AuthContext';
 import { Goal, Story } from '../../types';
@@ -14,6 +15,7 @@ import worldCountries from 'world-atlas/countries-50m.json';
 import isoCountries from 'i18n-iso-countries';
 import enLocale from 'i18n-iso-countries/langs/en.json';
 import ModernGoalsTable from '../ModernGoalsTable';
+import GoalListPanel from './GoalListPanel';
 import { feature as topojsonFeature } from 'topojson-client';
 isoCountries.registerLocale(enLocale as any);
 
@@ -126,6 +128,28 @@ const TravelMap: React.FC = () => {
   const [newCityForSelected, setNewCityForSelected] = useState('');
   const [manualGoalId, setManualGoalId] = useState('');
   const [travelGoalsOnly, setTravelGoalsOnly] = useState(true);
+  const [goalListExpanded, setGoalListExpanded] = useState(false);
+  const [isDraggingGoal, setIsDraggingGoal] = useState(false);
+  const [dragFeedbackMessage, setDragFeedbackMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [pendingDuplicateLink, setPendingDuplicateLink] = useState<{ entryId: string; goalId: string } | null>(null);
+  const [isLinkingDuplicate, setIsLinkingDuplicate] = useState(false);
+  const [showAccessibilityPicker, setShowAccessibilityPicker] = useState(false);
+  const [accessibilityGoalId, setAccessibilityGoalId] = useState('');
+  const [accessibilityLocationQuery, setAccessibilityLocationQuery] = useState('');
+  const [accessibilitySubmitting, setAccessibilitySubmitting] = useState(false);
+  const [accessibilityError, setAccessibilityError] = useState<string | null>(null);
+  // Import/export functionality
+  const [importing, setImporting] = useState(false);
+  const [importStatus, setImportStatus] = useState<{ success: number; errors: string[] } | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  // Context menu for right-click interactions
+  const [contextMenu, setContextMenu] = useState<{
+    type: 'country' | 'city' | 'entry';
+    iso2?: string;
+    entryId?: string;
+    x: number;
+    y: number;
+  } | null>(null);
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const markersRef = useRef<maplibregl.Marker[]>([]);
@@ -134,7 +158,19 @@ const TravelMap: React.FC = () => {
   const selectedFeatureIdRef = useRef<string | number | null>(null);
   const handleCountryClickRef = useRef<(iso2: string) => void>(() => {});
   const countriesGeojsonRef = useRef<any>(null);
+  const mapDropZoneRef = useRef<HTMLDivElement | null>(null);
+  const mouseCoordsDuringDragRef = useRef<{ x: number; y: number } | null>(null);
+  // Double-click tracking for status toggling
+  const lastClickRef = useRef<{ iso2?: string; entryId?: string; time: number } | null>(null);
+  const doubleClickTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [mapReady, setMapReady] = useState(false);
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
+  const { setNodeRef: setDropZoneNodeRef, isOver: isDraggingOverMap } = useDroppable({ id: 'map-drop-zone' });
+
+  const setMapDropZoneNode = useCallback((node: HTMLDivElement | null) => {
+    mapDropZoneRef.current = node;
+    setDropZoneNodeRef(node);
+  }, [setDropZoneNodeRef]);
 
   const derivePlannedVisitAt = (goal?: Goal | null): number | null => {
     if (!goal) return null;
@@ -420,6 +456,14 @@ const TravelMap: React.FC = () => {
     return travelGoalsOnly ? travelGoals : goals;
   }, [travelGoalsOnly, travelGoals, goals]);
 
+  const linkedEntriesByGoalId = useMemo(() => {
+    return entries.reduce<Record<string, number>>((acc, entry) => {
+      if (!entry.goalId) return acc;
+      acc[entry.goalId] = (acc[entry.goalId] || 0) + 1;
+      return acc;
+    }, {});
+  }, [entries]);
+
   const entriesWithStatus = useMemo(() => {
     return entries.map((entry) => {
       const storyId = getEntryStoryId(entry);
@@ -537,6 +581,77 @@ const TravelMap: React.FC = () => {
     await updateDoc(doc(db, 'travel', entry.id), updates);
   };
 
+  // Toggle country/entry status on right-click or double-click
+  const togglePlaceStatus = async (iso2?: string, entryId?: string, targetStatus?: PlaceStatus) => {
+    if (!currentUser?.uid) return;
+    let entry: TravelEntry | undefined;
+
+    if (entryId) {
+      entry = entries.find(e => e.id === entryId);
+    } else if (iso2) {
+      entry = entries.find(e => getCountryCode(e) === iso2.toUpperCase() && !e.city);
+    }
+
+    if (!entry) {
+      // Create new entry if not found
+      if (!iso2) return;
+      const countryName = isoCountries.getName(iso2, 'en') || iso2;
+      const newStatus = targetStatus || 'COMPLETED';
+      await addDoc(collection(db, 'travel'), {
+        placeType: 'country',
+        name: countryName,
+        countryCode: iso2,
+        country_code: iso2,
+        visited: newStatus === 'COMPLETED',
+        status: newStatus,
+        continent: continentForIso2(iso2),
+        ownerUid: currentUser.uid,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      return;
+    }
+
+    // Determine current status
+    const currentStatus = normalizePlaceStatus(entry, stories.find(s => s.id === getEntryStoryId(entry)));
+    
+    // Cycle through statuses: UNVISITED → BUCKET_LIST → COMPLETED → UNVISITED
+    let nextStatus: PlaceStatus;
+    if (targetStatus) {
+      nextStatus = targetStatus;
+    } else {
+      nextStatus = currentStatus === 'UNVISITED' ? 'BUCKET_LIST'
+                 : currentStatus === 'BUCKET_LIST' ? 'COMPLETED'
+                 : currentStatus === 'STORY_CREATED' ? 'COMPLETED'
+                 : 'UNVISITED';
+    }
+
+    await updateEntryStatus(entry, nextStatus);
+    setContextMenu(null);
+  };
+
+  // Handle double-click for status toggling
+  const handlePlaceDoubleClick = (iso2?: string, entryId?: string) => {
+    const now = Date.now();
+    const key = iso2 || entryId;
+    if (!key) return;
+
+    if (lastClickRef.current?.iso2 === iso2 && lastClickRef.current?.entryId === entryId 
+        && now - lastClickRef.current.time < 350) {
+      // Double click detected
+      if (doubleClickTimeoutRef.current) clearTimeout(doubleClickTimeoutRef.current);
+      togglePlaceStatus(iso2, entryId);
+      lastClickRef.current = null;
+    } else {
+      // Single click - just track it
+      lastClickRef.current = { iso2, entryId, time: now };
+      if (doubleClickTimeoutRef.current) clearTimeout(doubleClickTimeoutRef.current);
+      doubleClickTimeoutRef.current = setTimeout(() => {
+        lastClickRef.current = null;
+      }, 350);
+    }
+  };
+
   const addPlace = async () => {
     if (!currentUser?.uid || !newCountry.trim()) return;
     try {
@@ -591,6 +706,149 @@ const TravelMap: React.FC = () => {
       setSaving(false);
     }
   };
+
+  // Parse CSV content to travel entries
+  const parseCSV = (content: string): Array<{ country: string; city?: string; status?: string; date?: string }> => {
+    const lines = content.trim().split('\n');
+    const entries: Array<{ country: string; city?: string; status?: string; date?: string }> = [];
+    
+    // Simple CSV parsing: assume first line is header
+    if (lines.length < 2) return entries;
+    
+    const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
+    const countryIdx = headers.indexOf('country');
+    const cityIdx = headers.indexOf('city');
+    const statusIdx = headers.indexOf('status');
+    const dateIdx = headers.indexOf('date');
+    
+    if (countryIdx === -1) return entries;
+    
+    for (let i = 1; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+      
+      const parts = line.split(',').map(p => p.trim());
+      const country = parts[countryIdx];
+      const city = cityIdx >= 0 ? parts[cityIdx] : undefined;
+      const status = statusIdx >= 0 ? parts[statusIdx] : undefined;
+      const date = dateIdx >= 0 ? parts[dateIdx] : undefined;
+      
+      if (country) {
+        entries.push({ country, city, status, date });
+      }
+    }
+    
+    return entries;
+  };
+
+  // Parse JSON content to travel entries
+  const parseJSON = (content: string): Array<{ country: string; city?: string; status?: string; date?: string }> => {
+    try {
+      const data = JSON.parse(content);
+      if (Array.isArray(data)) {
+        return data.map(item => ({
+          country: item.country || item.iso2 || '',
+          city: item.city,
+          status: item.status,
+          date: item.date,
+        })).filter(item => item.country);
+      }
+      return [];
+    } catch (err) {
+      console.error('JSON parse error:', err);
+      return [];
+    }
+  };
+
+  // Batch import travel entries from file
+  const importTravelEntries = async (file: File) => {
+    if (!currentUser?.uid) return;
+    
+    try {
+      setImporting(true);
+      setImportStatus(null);
+      
+      const content = await file.text();
+      const ext = file.name.toLowerCase();
+      
+      let parsedEntries: Array<{ country: string; city?: string; status?: string; date?: string }> = [];
+      if (ext.endsWith('.json')) {
+        parsedEntries = parseJSON(content);
+      } else if (ext.endsWith('.csv')) {
+        parsedEntries = parseCSV(content);
+      } else {
+        // Try JSON first, then CSV
+        try {
+          parsedEntries = parseJSON(content);
+        } catch {
+          parsedEntries = parseCSV(content);
+        }
+      }
+      
+      let successCount = 0;
+      const errors: string[] = [];
+      
+      for (const item of parsedEntries) {
+        try {
+          const iso2 = item.country.toUpperCase();
+          const countryName = isoCountries.getName(iso2, 'en') || iso2;
+          const status = parsePlaceStatus(item.status) || 'UNVISITED';
+          const detected = continentForIso2(iso2);
+          
+          // Check if entry already exists
+          const existing = entries.find(
+            e => getCountryCode(e) === iso2 && (!item.city || e.city === item.city)
+          );
+          
+          if (existing) {
+            // Update existing entry status if provided
+            if (item.status) {
+              await updateEntryStatus(existing, status);
+            }
+          } else {
+            // Create new entry
+            await addDoc(collection(db, 'travel'), {
+              placeType: item.city ? 'city' : 'country',
+              name: item.city || countryName,
+              countryCode: iso2,
+              country_code: iso2,
+              city: item.city || null,
+              status,
+              visited: status === 'COMPLETED',
+              visitedAt: status === 'COMPLETED' ? serverTimestamp() : null,
+              continent: detected !== 'Unknown' ? detected : 'Other',
+              ownerUid: currentUser.uid,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            });
+          }
+          
+          successCount++;
+        } catch (err) {
+          errors.push(`${item.country}${item.city ? ' - ' + item.city : ''}: ${err instanceof Error ? err.message : 'Unknown error'}`);
+        }
+      }
+      
+      setImportStatus({ success: successCount, errors });
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    } catch (err) {
+      console.error('Import error:', err);
+      setImportStatus({ 
+        success: 0, 
+        errors: [err instanceof Error ? err.message : 'Failed to import file'] 
+      });
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      importTravelEntries(file);
+    }
+  };
+
 
   // Create a Story for this location and link back
   const createStoryForEntry = async (entry: TravelEntry) => {
@@ -772,6 +1030,273 @@ const TravelMap: React.FC = () => {
     });
   };
 
+  const reverseGeocodeCoordinates = useCallback(async (coords: [number, number]): Promise<GeocodeResult | null> => {
+    const [lng, lat] = coords;
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 5000);
+
+    try {
+      const response = await fetch(
+        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=10&addressdetails=1`,
+        {
+          headers: { Accept: 'application/json' },
+          signal: controller.signal,
+        }
+      );
+      if (!response.ok) return null;
+      const data = await response.json();
+      const address = data?.address || {};
+      const cityLike = address.city || address.town || address.village || address.hamlet || undefined;
+      const countryCode = (address.country_code || '').toUpperCase() || undefined;
+      return {
+        lat,
+        lon: lng,
+        displayName: data?.display_name || cityLike || countryCode || 'Pinned location',
+        countryCode,
+        city: cityLike,
+      };
+    } catch (error) {
+      console.warn('TravelMap reverse geocode failed', error);
+      return null;
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
+  }, []);
+
+  const normalizePlaceToken = useCallback((value?: string | null) => {
+    return String(value || '').trim().toLowerCase();
+  }, []);
+
+  const createTravelEntryFromGoal = useCallback(async (goalId: string, coords: [number, number]) => {
+    if (!currentUser?.uid) return;
+
+    const goal = goals.find((item) => item.id === goalId);
+    if (!goal) {
+      setPendingDuplicateLink(null);
+      setDragFeedbackMessage({ type: 'error', text: 'Could not resolve dragged goal. Please retry.' });
+      return false;
+    }
+
+    const geocode = await reverseGeocodeCoordinates(coords);
+    if (!geocode?.countryCode && !geocode?.city) {
+      setPendingDuplicateLink(null);
+      setDragFeedbackMessage({ type: 'error', text: 'Could not identify that drop location. Drop on a mapped country or city area.' });
+      return false;
+    }
+
+    const countryCode = (geocode.countryCode || '').toUpperCase();
+    const city = geocode.city?.trim() || null;
+    const targetCityToken = normalizePlaceToken(city);
+    const duplicate = entries.find((entry) => {
+      if (entry.goalId !== goal.id) return false;
+      if (countryCode && getCountryCode(entry) !== countryCode) return false;
+      const entryCityToken = normalizePlaceToken(entry.city);
+      return entryCityToken === targetCityToken;
+    });
+
+    if (duplicate) {
+      setPendingDuplicateLink(null);
+      setSelectedIso2(countryCode || null);
+      setSelectedEntryId(duplicate.id);
+      setManualGoalId(goal.id);
+      setDragFeedbackMessage({ type: 'success', text: `Travel entry already exists for ${goal.title}.` });
+      return true;
+    }
+
+    const duplicateOtherGoal = entries.find((entry) => {
+      if (!entry.goalId || entry.goalId === goal.id) return false;
+      if (countryCode && getCountryCode(entry) !== countryCode) return false;
+      const entryCityToken = normalizePlaceToken(entry.city);
+      return entryCityToken === targetCityToken;
+    });
+
+    if (duplicateOtherGoal) {
+      const linkedGoalName = duplicateOtherGoal.goalTitleSnapshot || 'another goal';
+      setSelectedIso2(countryCode || null);
+      setSelectedEntryId(duplicateOtherGoal.id);
+      setPendingDuplicateLink({ entryId: duplicateOtherGoal.id, goalId: goal.id });
+      setDragFeedbackMessage({
+        type: 'error',
+        text: `That destination already exists under ${linkedGoalName}. Link this existing destination to ${goal.title} instead of creating a duplicate.`,
+      });
+      return false;
+    }
+
+    setPendingDuplicateLink(null);
+    const placeType: PlaceType = city ? 'city' : 'country';
+    const entryName = city || isoCountries.getName(countryCode, 'en') || geocode.displayName || goal.title;
+    const plannedVisitAt = derivePlannedVisitAt(goal);
+    const created = await addDoc(collection(db, 'travel'), {
+      placeType,
+      name: entryName,
+      countryCode: countryCode || null,
+      country_code: countryCode || null,
+      city,
+      status: 'BUCKET_LIST',
+      visited: false,
+      visitedAt: null,
+      linked_story_id: null,
+      storyId: null,
+      continent: countryCode ? continentForIso2(countryCode) : null,
+      ownerUid: currentUser.uid,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      plannedVisitAt: plannedVisitAt ?? null,
+      goalId: goal.id,
+      goalTitleSnapshot: goal.title,
+      lastMatchedAt: serverTimestamp(),
+      matchConfidence: 1,
+      matchMethod: 'manual',
+      bucketListFlaggedAt: serverTimestamp(),
+      storyCreatedAt: null,
+      completedAt: null,
+      lat: geocode.lat,
+      lon: geocode.lon,
+      lng: geocode.lon,
+      locationName: geocode.displayName,
+    });
+
+    if (countryCode) {
+      setSelectedIso2(countryCode);
+    }
+    setSelectedEntryId(created.id);
+    setManualGoalId(goal.id);
+    setDragFeedbackMessage({ type: 'success', text: `Created travel entry for ${goal.title} at ${entryName}.` });
+    return true;
+  }, [currentUser?.uid, derivePlannedVisitAt, entries, goals, normalizePlaceToken, reverseGeocodeCoordinates]);
+
+  const linkDuplicateEntryToGoal = useCallback(async () => {
+    if (!pendingDuplicateLink || isLinkingDuplicate) return;
+    const { entryId, goalId } = pendingDuplicateLink;
+    const goal = goals.find((item) => item.id === goalId);
+    if (!goal) {
+      setDragFeedbackMessage({ type: 'error', text: 'Goal not found anymore. Please retry.' });
+      setPendingDuplicateLink(null);
+      return;
+    }
+
+    setIsLinkingDuplicate(true);
+    try {
+      await updateDoc(doc(db, 'travel', entryId), {
+        goalId: goal.id,
+        goalTitleSnapshot: goal.title,
+        lastMatchedAt: serverTimestamp(),
+        matchConfidence: 1,
+        matchMethod: 'manual',
+        updatedAt: serverTimestamp(),
+      });
+      setManualGoalId(goal.id);
+      setSelectedEntryId(entryId);
+      setDragFeedbackMessage({ type: 'success', text: `Linked existing destination to ${goal.title}.` });
+    } catch (error) {
+      console.error('Failed to link duplicate destination to goal', error);
+      setDragFeedbackMessage({ type: 'error', text: 'Could not link existing destination. Please retry.' });
+    } finally {
+      setIsLinkingDuplicate(false);
+      setPendingDuplicateLink(null);
+    }
+  }, [goals, isLinkingDuplicate, pendingDuplicateLink]);
+
+  const openAccessibilityPicker = useCallback(() => {
+    setAccessibilityGoalId((current) => current || travelGoals[0]?.id || '');
+    setAccessibilityLocationQuery('');
+    setAccessibilityError(null);
+    setShowAccessibilityPicker(true);
+  }, [travelGoals]);
+
+  const handleAccessibilityPickerSubmit = useCallback(async () => {
+    if (!accessibilityGoalId || !accessibilityLocationQuery.trim()) {
+      setAccessibilityError('Select a goal and enter a destination.');
+      return;
+    }
+
+    setAccessibilitySubmitting(true);
+    setAccessibilityError(null);
+    try {
+      const geocode = await geocodePlace(accessibilityLocationQuery.trim());
+      if (!geocode) {
+        setAccessibilityError('Could not geocode that destination. Try a clearer city or country name.');
+        return;
+      }
+
+      const created = await createTravelEntryFromGoal(accessibilityGoalId, [geocode.lon, geocode.lat]);
+      if (created) {
+        setShowAccessibilityPicker(false);
+        setAccessibilityLocationQuery('');
+      }
+    } finally {
+      setAccessibilitySubmitting(false);
+    }
+  }, [accessibilityGoalId, accessibilityLocationQuery, createTravelEntryFromGoal]);
+
+  const handleDragEnd = useCallback(async (event: DragEndEvent) => {
+    const { active, over } = event;
+    setIsDraggingGoal(false);
+
+    if (!over || over.id !== 'map-drop-zone') {
+      mouseCoordsDuringDragRef.current = null;
+      return;
+    }
+    if (!active.data?.current?.goalId || !mapRef.current) {
+      mouseCoordsDuringDragRef.current = null;
+      return;
+    }
+
+    const goalId = active.data.current.goalId as string;
+    let dropCoords: [number, number];
+
+    if (mouseCoordsDuringDragRef.current) {
+      try {
+        const canvas = mapRef.current.getCanvas();
+        const rect = canvas.getBoundingClientRect();
+        const x = mouseCoordsDuringDragRef.current.x - rect.left;
+        const y = mouseCoordsDuringDragRef.current.y - rect.top;
+        if (x >= 0 && x < rect.width && y >= 0 && y < rect.height) {
+          const lngLat = mapRef.current.unproject([x, y]);
+          dropCoords = [lngLat.lng, lngLat.lat];
+        } else {
+          const center = mapRef.current.getCenter();
+          dropCoords = [center.lng, center.lat];
+        }
+      } catch (error) {
+        console.warn('TravelMap drop coordinate extraction failed, using map center', error);
+        const center = mapRef.current.getCenter();
+        dropCoords = [center.lng, center.lat];
+      }
+    } else {
+      const center = mapRef.current.getCenter();
+      dropCoords = [center.lng, center.lat];
+    }
+
+    mouseCoordsDuringDragRef.current = null;
+    await createTravelEntryFromGoal(goalId, dropCoords);
+  }, [createTravelEntryFromGoal]);
+
+  useEffect(() => {
+    if (!dragFeedbackMessage) return;
+    const timeoutId = window.setTimeout(() => {
+      setDragFeedbackMessage(null);
+      setPendingDuplicateLink(null);
+    }, 3000);
+    return () => window.clearTimeout(timeoutId);
+  }, [dragFeedbackMessage]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const tagName = target?.tagName?.toLowerCase();
+      const isEditable = tagName === 'input' || tagName === 'textarea' || tagName === 'select' || target?.isContentEditable;
+      if (isEditable) return;
+      if (event.altKey && event.key.toLowerCase() === 'd') {
+        event.preventDefault();
+        openAccessibilityPicker();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [openAccessibilityPicker]);
+
   const handleCountryClick = async (iso2: string) => {
     if (!currentUser?.uid) return;
     const isoUpper = iso2.toUpperCase();
@@ -837,7 +1362,19 @@ const TravelMap: React.FC = () => {
           source: 'countries',
           paint: {
             'fill-color': countryFillExpression as any,
-            'fill-opacity': 0.65,
+            'fill-opacity': [
+              'case',
+              ['boolean', ['get', 'isSupported'], false],
+              [
+                'match',
+                ['get', 'status'],
+                'COMPLETED', 1.0,
+                'STORY_CREATED', 0.75,
+                'BUCKET_LIST', 0.6,
+                0.2, // UNVISITED
+              ],
+              0.1, // Unsupported countries very faint
+            ] as any,
           },
         });
       }
@@ -871,7 +1408,26 @@ const TravelMap: React.FC = () => {
         const target = event.features?.[0] as any;
         const iso2 = target?.properties?.iso2;
         const isSupported = target?.properties?.isSupported;
-        if (iso2 && isSupported) handleCountryClickRef.current(iso2);
+        if (iso2 && isSupported) {
+          handleCountryClickRef.current(iso2);
+          handlePlaceDoubleClick(iso2.toUpperCase());
+        }
+      });
+
+      // Right-click context menu on countries
+      map.on('contextmenu', 'country-fill', (event) => {
+        event.originalEvent.preventDefault();
+        const target = event.features?.[0] as any;
+        const iso2 = target?.properties?.iso2;
+        const isSupported = target?.properties?.isSupported;
+        if (iso2 && isSupported) {
+          setContextMenu({
+            type: 'country',
+            iso2: iso2.toUpperCase(),
+            x: event.originalEvent.clientX,
+            y: event.originalEvent.clientY,
+          });
+        }
       });
 
       map.on('mousemove', 'country-fill', (event) => {
@@ -946,6 +1502,17 @@ const TravelMap: React.FC = () => {
       entriesWithStatus.forEach(({ entry, status }) => {
         const lng = entry.lng ?? entry.lon;
         if (entry.lat == null || lng == null) return;
+        
+        // Create container for marker + badge
+        const container = document.createElement('div');
+        container.style.position = 'relative';
+        container.style.width = '10px';
+        container.style.height = '10px';
+        container.style.display = 'flex';
+        container.style.alignItems = 'center';
+        container.style.justifyContent = 'center';
+        
+        // Create main marker button
         const el = document.createElement('button');
         el.type = 'button';
         el.style.width = '10px';
@@ -964,7 +1531,74 @@ const TravelMap: React.FC = () => {
           }
           setSelectedEntryId(entry.id);
         });
-        const marker = new maplibregl.Marker({ element: el, anchor: 'bottom' })
+        // Double-click to toggle status
+        el.addEventListener('dblclick', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          handlePlaceDoubleClick(undefined, entry.id);
+        });
+        // Right-click context menu
+        el.addEventListener('contextmenu', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          setContextMenu({
+            type: 'entry',
+            entryId: entry.id,
+            x: (event as MouseEvent).clientX,
+            y: (event as MouseEvent).clientY,
+          });
+        });
+        
+        // Create badge overlay
+        const badge = document.createElement('span');
+        badge.style.position = 'absolute';
+        badge.style.width = '6px';
+        badge.style.height = '6px';
+        badge.style.borderRadius = '50%';
+        badge.style.top = '-2px';
+        badge.style.right = '-2px';
+        badge.style.border = '1px solid white';
+        badge.style.boxShadow = '0 0 0 1px rgba(0,0,0,0.1)';
+        
+        // Badge color based on status
+        if (status === 'COMPLETED') {
+          badge.textContent = '✓';
+          badge.style.width = '8px';
+          badge.style.height = '8px';
+          badge.style.fontSize = '6px';
+          badge.style.background = '#10b981';
+          badge.style.color = 'white';
+          badge.style.display = 'flex';
+          badge.style.alignItems = 'center';
+          badge.style.justifyContent = 'center';
+          badge.style.fontWeight = 'bold';
+        } else if (status === 'BUCKET_LIST') {
+          badge.textContent = '★';
+          badge.style.width = '8px';
+          badge.style.height = '8px';
+          badge.style.fontSize = '6px';
+          badge.style.background = '#f59e0b';
+          badge.style.color = 'white';
+          badge.style.display = 'flex';
+          badge.style.alignItems = 'center';
+          badge.style.justifyContent = 'center';
+          badge.style.fontWeight = 'bold';
+        } else if (status === 'STORY_CREATED') {
+          badge.textContent = '📍';
+          badge.style.width = '8px';
+          badge.style.height = '8px';
+          badge.style.fontSize = '6px';
+          badge.style.background = '#3b82f6';
+          badge.style.color = 'white';
+          badge.style.display = 'flex';
+          badge.style.alignItems = 'center';
+          badge.style.justifyContent = 'center';
+        }
+        
+        container.appendChild(el);
+        container.appendChild(badge);
+        
+        const marker = new maplibregl.Marker({ element: container, anchor: 'bottom' })
           .setLngLat([Number(lng), Number(entry.lat)])
           .addTo(map);
         markersRef.current.push(marker);
@@ -1172,6 +1806,20 @@ const TravelMap: React.FC = () => {
   }, [currentUser?.uid, entries, storiesById, goals]);
 
   return (
+    <DndContext
+      sensors={sensors}
+      onDragStart={() => {
+        setIsDraggingGoal(true);
+        setDragFeedbackMessage(null);
+        setPendingDuplicateLink(null);
+      }}
+      onDragCancel={() => {
+        setIsDraggingGoal(false);
+        mouseCoordsDuringDragRef.current = null;
+        setPendingDuplicateLink(null);
+      }}
+      onDragEnd={(event) => { void handleDragEnd(event); }}
+    >
     <Card className="border-0 shadow-sm">
       <Card.Header className="bg-white d-flex align-items-center justify-content-between">
         <strong>Travel Map</strong>
@@ -1189,9 +1837,53 @@ const TravelMap: React.FC = () => {
           </Form.Select>
           <Button size="sm" onClick={addPlace} disabled={saving || !newCountry.trim()}>Add Place</Button>
           <Button size="sm" variant="outline-secondary" onClick={createTripGoal}>New Travel Goal</Button>
+          <Button size="sm" variant="outline-secondary" onClick={openAccessibilityPicker} title="Keyboard-friendly destination picker (Alt+D)">Keyboard Add</Button>
+          <Button size="sm" variant="outline-primary" onClick={() => fileInputRef.current?.click()} disabled={importing}>
+            {importing ? 'Importing...' : 'Import'}
+          </Button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".json,.csv"
+            style={{ display: 'none' }}
+            onChange={handleFileSelect}
+          />
         </div>
       </Card.Header>
       <Card.Body>
+        <GoalListPanel
+          goals={goals}
+          travelGoals={travelGoals}
+          expanded={goalListExpanded}
+          onToggleExpanded={setGoalListExpanded}
+          showTravelGoalsOnly={travelGoalsOnly}
+          onToggleTravelGoalsOnly={setTravelGoalsOnly}
+          linkedEntriesByGoalId={linkedEntriesByGoalId}
+        />
+
+        {dragFeedbackMessage && (
+          <div
+            className="mb-2 p-2 rounded small"
+            style={{
+              background: dragFeedbackMessage.type === 'success' ? '#f0fdf4' : '#fef2f2',
+              border: `1px solid ${dragFeedbackMessage.type === 'success' ? '#86efac' : '#fecaca'}`,
+              color: dragFeedbackMessage.type === 'success' ? '#166534' : '#991b1b',
+            }}
+          >
+            <div>{dragFeedbackMessage.text}</div>
+            {pendingDuplicateLink && (
+              <div className="mt-2 d-flex gap-2">
+                <Button size="sm" variant="outline-secondary" onClick={() => { void linkDuplicateEntryToGoal(); }} disabled={isLinkingDuplicate}>
+                  {isLinkingDuplicate ? 'Linking…' : 'Link to this goal'}
+                </Button>
+                <Button size="sm" variant="outline-secondary" onClick={() => setPendingDuplicateLink(null)} disabled={isLinkingDuplicate}>
+                  Dismiss
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Search + Geocode */}
         <div className="d-flex gap-2 mb-2 align-items-center flex-wrap">
           <Form.Control size="sm" placeholder="Search a place (e.g., Paris, France)" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
@@ -1209,19 +1901,146 @@ const TravelMap: React.FC = () => {
           </div>
         </div>
 
+        {/* Import status */}
+        {importStatus && (
+          <div className="mb-2 p-2 rounded" style={{ background: importStatus.errors.length > 0 ? '#fef2f2' : '#f0fdf4', border: `1px solid ${importStatus.errors.length > 0 ? '#fecaca' : '#86efac'}` }}>
+            <div className="small" style={{ color: importStatus.errors.length > 0 ? '#991b1b' : '#166534' }}>
+              ✓ Imported {importStatus.success} entries
+              {importStatus.errors.length > 0 && ` • ${importStatus.errors.length} error${importStatus.errors.length !== 1 ? 's' : ''}`}
+            </div>
+            {importStatus.errors.length > 0 && (
+              <div className="small mt-1" style={{ color: '#7c2d12', maxHeight: '100px', overflowY: 'auto' }}>
+                {importStatus.errors.map((err, i) => (
+                  <div key={i}>• {err}</div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Map with country coloring and optional marker */}
         <div
+          ref={setMapDropZoneNode}
+          onMouseMove={(event) => {
+            if (!isDraggingGoal) return;
+            mouseCoordsDuringDragRef.current = { x: event.clientX, y: event.clientY };
+          }}
           style={{
             height: 420,
             marginBottom: 8,
             borderRadius: 8,
-            border: '1px solid #e5e7eb',
+            border: isDraggingOverMap ? '3px solid #10b981' : '1px solid #e5e7eb',
             background: '#fff',
             overflow: 'hidden',
+            transition: 'border 160ms ease-in-out',
+            position: 'relative',
           }}
         >
           <div ref={mapContainerRef} style={{ width: '100%', height: '100%' }} />
+          {isDraggingOverMap && (
+            <div
+              style={{
+                position: 'absolute',
+                inset: 0,
+                background: 'rgba(16, 185, 129, 0.08)',
+                border: '2px dashed #10b981',
+                borderRadius: 6,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#047857',
+                fontWeight: 700,
+                pointerEvents: 'none',
+              }}
+            >
+              Drop to create travel entry
+            </div>
+          )}
+          {/* Context Menu */}
+          {contextMenu && (
+            <div
+              style={{
+                position: 'fixed',
+                left: contextMenu.x,
+                top: contextMenu.y,
+                background: 'white',
+                border: '1px solid #cbd5e1',
+                borderRadius: '6px',
+                boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                zIndex: 1000,
+                minWidth: '160px',
+              }}
+              onMouseLeave={() => setContextMenu(null)}
+            >
+              <button
+                onClick={() => togglePlaceStatus(contextMenu.iso2, contextMenu.entryId, 'COMPLETED')}
+                style={{
+                  display: 'block',
+                  width: '100%',
+                  padding: '8px 12px',
+                  border: 'none',
+                  background: 'none',
+                  textAlign: 'left',
+                  cursor: 'pointer',
+                  fontSize: '14px',
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = '#f8fafc')}
+                onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+              >
+                ✓ Mark Visited
+              </button>
+              <button
+                onClick={() => togglePlaceStatus(contextMenu.iso2, contextMenu.entryId, 'BUCKET_LIST')}
+                style={{
+                  display: 'block',
+                  width: '100%',
+                  padding: '8px 12px',
+                  border: 'none',
+                  background: 'none',
+                  textAlign: 'left',
+                  cursor: 'pointer',
+                  fontSize: '14px',
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = '#f8fafc')}
+                onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+              >
+                ★ Bucket List
+              </button>
+              <button
+                onClick={() => togglePlaceStatus(contextMenu.iso2, contextMenu.entryId, 'UNVISITED')}
+                style={{
+                  display: 'block',
+                  width: '100%',
+                  padding: '8px 12px',
+                  border: 'none',
+                  background: 'none',
+                  textAlign: 'left',
+                  cursor: 'pointer',
+                  fontSize: '14px',
+                  borderTop: '1px solid #e5e7eb',
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = '#f8fafc')}
+                onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+              >
+                ✕ Unmark
+              </button>
+            </div>
+          )}
         </div>
+        {/* Close context menu on escape */}
+        {contextMenu && (
+          <div
+            onClick={() => setContextMenu(null)}
+            style={{
+              position: 'fixed',
+              top: 0,
+              left: 0,
+              width: '100%',
+              height: '100%',
+              zIndex: 999,
+            }}
+          />
+        )}
         {/* Legend */}
         <div className="d-flex align-items-center gap-3 mb-3 small" aria-label="Map legend">
           <span className="d-inline-flex align-items-center gap-1">
@@ -1282,12 +2101,81 @@ const TravelMap: React.FC = () => {
                     </Badge>
                     <span className="text-muted small">Type: {getPlaceType(detailEntry)}</span>
                   </div>
-                  {storyId && (
-                    <div className="small mb-1">
-                      Story {detailEntry.storyNumber || story?.referenceNumber || story?.ref || storyId}: {detailEntry.storyTitleSnapshot || story?.title || 'Untitled'}
+                  {storyId && story && (
+                    <div className="p-2 mb-2 rounded border" style={{ background: '#f9fafb', borderColor: '#e5e7eb' }}>
+                      <div className="d-flex justify-content-between align-items-start mb-2">
+                        <div>
+                          <div className="small font-weight-bold">
+                            Story {detailEntry.storyNumber || story?.referenceNumber || story?.ref || storyId}
+                          </div>
+                          <div className="small mb-1">{detailEntry.storyTitleSnapshot || story?.title || 'Untitled'}</div>
+                        </div>
+                        <Badge bg={story?.status === 0 ? 'secondary' : story?.status === 4 ? 'success' : 'primary'}>
+                          {story?.status === 0 ? 'Todo' : story?.status === 4 ? 'Done' : `In Progress (${story?.status})`}
+                        </Badge>
+                      </div>
+                      {story?.dueDate && (
+                        <div className="small mb-1 text-muted">
+                          Due: {typeof story.dueDate === 'number' ? new Date(story.dueDate).toLocaleDateString() : story.dueDate}
+                        </div>
+                      )}
+                      {story?.priority !== undefined && (
+                        <div className="small mb-1 text-muted">
+                          Priority: {story.priority === 0 ? 'Critical' : story.priority === 1 ? 'High' : story.priority === 2 ? 'Medium' : 'Low'}
+                        </div>
+                      )}
+                      <div className="d-flex gap-1 flex-wrap">
+                        <Button 
+                          size="sm" 
+                          variant="link" 
+                          style={{ padding: '0.25rem 0.5rem' }}
+                          onClick={() => window.open(`/sprints/kanban?highlightStory=${storyId}`, '_blank')}
+                        >
+                          Edit in Kanban →
+                        </Button>
+                      </div>
                     </div>
                   )}
-                  {detailEntry.goalTitleSnapshot && (
+                  {storyId && !story && (
+                    <div className="small mb-1">
+                      Story {detailEntry.storyNumber || storyId}: {detailEntry.storyTitleSnapshot || 'Untitled'}
+                    </div>
+                  )}
+                  {detailEntry.goalId && (() => {
+                    const linkedGoal = goals.find(g => g.id === detailEntry.goalId);
+                    return (
+                      <div className="p-2 mb-2 rounded border" style={{ background: '#f9fafb', borderColor: '#e5e7eb' }}>
+                        <div className="small font-weight-bold mb-1">Goal</div>
+                        <div className="small mb-1">{linkedGoal?.title || detailEntry.goalTitleSnapshot || 'Unknown goal'}</div>
+                        {linkedGoal?.theme !== undefined && (
+                          <div className="small text-muted mb-1">Theme: #{linkedGoal.theme}</div>
+                        )}
+                        {linkedGoal && (
+                          <Button 
+                            size="sm" 
+                            variant="link" 
+                            style={{ padding: '0.25rem 0.5rem' }}
+                            onClick={() => window.open(`/goals?highlightGoal=${linkedGoal.id}`, '_blank')}
+                          >
+                            View Goal →
+                          </Button>
+                        )}
+                        <div className="mt-1">
+                          <Button 
+                            size="sm" 
+                            variant="outline-secondary"
+                            onClick={() => {
+                              setManualGoalId(detailEntry.goalId || '');
+                              window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' });
+                            }}
+                          >
+                            Change Goal
+                          </Button>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                  {!detailEntry.goalId && detailEntry.goalTitleSnapshot && (
                     <div className="small mb-2">Goal: {detailEntry.goalTitleSnapshot}</div>
                   )}
                   <div className="d-flex flex-wrap gap-2 mb-3">
@@ -1477,6 +2365,52 @@ const TravelMap: React.FC = () => {
         </div>
       </Card.Body>
     </Card>
+
+    <Modal show={showAccessibilityPicker} onHide={() => setShowAccessibilityPicker(false)} centered>
+      <Modal.Header closeButton>
+        <Modal.Title>Keyboard Add Travel Entry</Modal.Title>
+      </Modal.Header>
+      <Modal.Body>
+        <div className="small text-muted mb-3">
+          Use this picker instead of drag and drop. Shortcut: Alt+D.
+        </div>
+        {accessibilityError && (
+          <div className="alert alert-danger py-2 small mb-3">{accessibilityError}</div>
+        )}
+        <Form.Group className="mb-3">
+          <Form.Label>Travel Goal</Form.Label>
+          <Form.Select value={accessibilityGoalId} onChange={(event) => setAccessibilityGoalId(event.target.value)}>
+            <option value="">Select a travel goal</option>
+            {travelGoals.map((goal) => (
+              <option key={goal.id} value={goal.id}>{goal.title}</option>
+            ))}
+          </Form.Select>
+        </Form.Group>
+        <Form.Group>
+          <Form.Label>Destination</Form.Label>
+          <Form.Control
+            value={accessibilityLocationQuery}
+            placeholder="Paris, France"
+            onChange={(event) => setAccessibilityLocationQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                void handleAccessibilityPickerSubmit();
+              }
+            }}
+          />
+        </Form.Group>
+      </Modal.Body>
+      <Modal.Footer>
+        <Button variant="secondary" onClick={() => setShowAccessibilityPicker(false)} disabled={accessibilitySubmitting}>
+          Cancel
+        </Button>
+        <Button variant="primary" onClick={() => { void handleAccessibilityPickerSubmit(); }} disabled={accessibilitySubmitting || !accessibilityGoalId || !accessibilityLocationQuery.trim()}>
+          {accessibilitySubmitting ? 'Creating…' : 'Create Travel Entry'}
+        </Button>
+      </Modal.Footer>
+    </Modal>
+    </DndContext>
   );
 };
 

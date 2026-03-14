@@ -13,6 +13,8 @@ import CompactSprintMetrics from './CompactSprintMetrics';
 import AssistantDock from './AssistantDock';
 import SprintClosureBanner from './sprints/SprintClosureBanner';
 import CheckInBanner from './checkins/CheckInBanner';
+import ProcessTextActivityHost from './ProcessTextActivityHost';
+import PlannerCapacityBanner from './planner/PlannerCapacityBanner';
 // Test mode UI removed per request
 
 interface SidebarLayoutProps {
@@ -62,6 +64,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   useEffect(() => {
     console.log('[SidebarLayout] Location changed:', { pathname: location.pathname, key: location.key });
   }, [location]);
+  const hidePlannerCapacityBanner = isSmallScreen && /^\/mobile(?:\/|$)/.test(location.pathname);
 
   const navigationGroups: NavigationGroup[] = [
     {
@@ -75,7 +78,12 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         label: 'Dashboards',
         icon: 'chart-bar',
       items: [
+        { label: 'Daily Check-in', path: '/dashboard/daily-checkin', icon: 'clipboard-check' },
+        { label: 'Mobile Priorities', path: '/dashboard/mobile-priorities', icon: 'mobile-alt' },
+        { label: 'Theme Progress', path: '/dashboard/theme-progress', icon: 'chart-line' },
+        { label: 'Finance Dashboard', path: '/dashboard/finance', icon: 'wallet' },
         { label: 'Habit Tracking', path: '/dashboard/habit-tracking', icon: 'check-square' },
+        { label: 'Fitness', path: '/fitness', icon: 'heartbeat' },
         { label: 'Kanban Board', path: '/sprints/kanban', icon: 'kanban' },
         { label: 'Calendar', path: '/calendar', icon: 'calendar' },
         { label: 'Metrics', path: '/metrics', icon: 'tachometer-alt' },
@@ -86,7 +94,8 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       label: 'Health',
       icon: 'heartbeat',
       items: [
-        { label: 'Running Results', path: '/running-results', icon: 'running' }
+        { label: 'Fitness Results', path: '/fitness', icon: 'running' },
+        { label: 'Parkrun Results', path: '/parkrun-results', icon: 'flag-checkered' }
       ]
     },
     {
@@ -96,6 +105,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         { label: 'Goals List', path: '/goals', icon: 'list' },
         { label: 'Goal Planner', path: '/goals/year-planner', icon: 'columns' },
         { label: 'Goals Roadmap', path: '/goals/roadmap-v6', icon: 'sparkles' },
+        { label: 'Theme Progress', path: '/metrics/progress', icon: 'chart-bar' },
         { label: 'Visual Canvas', path: '/canvas', icon: 'share-alt' }
       ]
     },
@@ -103,12 +113,11 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       label: 'Finance',
       icon: 'piggy-bank',
       items: [
-        { label: 'Finance Hub', path: '/finance', icon: 'piggy-bank' },
         { label: 'Dashboard', path: '/finance/dashboard', icon: 'chart-line' },
         { label: 'Budgets', path: '/finance/budgets', icon: 'wallet' },
-        { label: 'Categorization', path: '/finance/merchants', icon: 'tags' },
+        { label: 'Merchants', path: '/finance/merchants', icon: 'tags' },
         { label: 'Transactions', path: '/finance/transactions', icon: 'receipt' },
-        { label: 'Cash Flow', path: '/finance/flow', icon: 'project-diagram' },
+        { label: 'Spend Breakdown', path: '/finance/flow', icon: 'project-diagram' },
         { label: 'Pots', path: '/finance/pots', icon: 'database' },
         { label: 'Goal Linking', path: '/finance/goals', icon: 'link' }
       ]
@@ -118,8 +127,17 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       icon: 'book',
       items: [
         { label: 'Stories List', path: '/stories', icon: 'list' },
+        { label: 'Sprint Planner', path: '/sprints/planning', icon: 'th' },
         { label: 'Kanban Board', path: '/sprints/kanban', icon: 'kanban' },
         { label: 'Calendar', path: '/calendar', icon: 'calendar' }
+      ]
+    },
+    {
+      label: 'Journals',
+      icon: 'book-open',
+      items: [
+        { label: 'Journal Entries', path: '/journals', icon: 'book-open' },
+        { label: 'Journal Insights', path: '/journals/insights', icon: 'chart-line' }
       ]
     },
     {
@@ -173,16 +191,13 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       label: 'Settings',
       icon: 'cog',
       items: [
-        { label: 'Overview', path: '/settings', icon: 'sliders-h' },
-        { label: 'Email & Notifications', path: '/settings/email', icon: 'envelope' },
-        { label: 'Planner & Automations', path: '/settings/planner', icon: 'cogs' },
-        { label: 'Google Calendar', path: '/settings/integrations/google', icon: 'google' },
-        { label: 'YouTube', path: '/settings/integrations/youtube', icon: 'video' },
-        { label: 'Monzo', path: '/settings/integrations/monzo', icon: 'credit-card' },
-        { label: 'Strava', path: '/settings/integrations/strava', icon: 'bicycle' },
-        { label: 'Steam', path: '/settings/integrations/steam', icon: 'gamepad' },
-        { label: 'Hardcover', path: '/settings/integrations/hardcover', icon: 'book' },
-        { label: 'Trakt', path: '/settings/integrations/trakt', icon: 'film' }
+        { label: 'Profile', path: '/settings/profile', icon: 'user' },
+        { label: 'AI', path: '/settings/ai', icon: 'robot' },
+        { label: 'Integrations', path: '/settings/integrations', icon: 'plug' },
+        { label: 'Finance', path: '/settings/finance', icon: 'wallet' },
+        { label: 'Notifications', path: '/settings/notifications', icon: 'envelope' },
+        { label: 'Privacy & Security', path: '/settings/privacy-security', icon: 'shield-alt' },
+        { label: 'Developer', path: '/settings/developer', icon: 'flask' }
       ]
     },
     {
@@ -190,7 +205,8 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       icon: 'stream',
       items: [
         { label: 'Integration Logs', path: '/logs/integrations', icon: 'database' },
-        { label: 'AI Diagnostics', path: '/logs/ai', icon: 'robot' }
+        { label: 'AI Diagnostics', path: '/logs/ai', icon: 'robot' },
+        { label: 'Transcript Processing', path: '/logs/transcripts', icon: 'file-alt' }
       ]
     },
     // Removed duplicate Health group at bottom
@@ -452,16 +468,26 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       )}
 
       {/* Mobile Header */}
-      <div className="d-lg-none fixed-top bg-dark">
-        <Navbar variant="dark" className="px-3">
+      <div className="d-lg-none fixed-top" style={{
+        background: currentPersona === 'work' ? '#d3d3d3' : 'white',
+        color: currentPersona === 'work' ? '#000' : '#000',
+        zIndex: 1050
+      }}>
+        <Navbar className="px-3" style={{
+          background: 'transparent'
+        }}>
           <Button
-            variant="outline-light"
+            variant={currentPersona === 'work' ? 'outline-dark' : 'outline-dark'}
             size="sm"
             onClick={() => setShowSidebar(true)}
+            style={{
+              color: '#000',
+              borderColor: '#000'
+            }}
           >
             Menu
           </Button>
-          <Navbar.Brand className="mx-auto d-flex align-items-center gap-2" style={{ fontSize: '1rem' }}>
+          <Navbar.Brand className="mx-auto d-flex align-items-center gap-2" style={{ fontSize: '1rem', color: '#000' }}>
             <img src="/logo192.png" alt="Logo" style={{ width: '24px', height: '24px', objectFit: 'contain' }} />
             blueprint.organize.build
           </Navbar.Brand>
@@ -638,12 +664,29 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         {/* Desktop top toolbar with global Sprint selector */}
         <div className="d-none d-lg-block" style={{
           borderBottom: '1px solid var(--notion-border)',
-          background: 'var(--notion-bg)',
+          background: currentPersona === 'work' ? '#d3d3d3' : 'white',
           position: 'relative',
           zIndex: 1000
         }}>
           <div className="container-fluid" style={{ padding: '8px 16px' }}>
             <div className="d-flex justify-content-end align-items-center gap-3">
+              {/* Persona indicator dot */}
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                fontSize: '12px',
+                fontWeight: '600',
+                color: '#000'
+              }}>
+                <span style={{
+                  width: '8px',
+                  height: '8px',
+                  borderRadius: '50%',
+                  backgroundColor: currentPersona === 'work' ? '#666' : '#4CAF50'
+                }}></span>
+                {currentPersona === 'work' ? 'Work' : 'Personal'}
+              </div>
               {/* Pending approvals badge */}
               {/* Lightweight import to avoid heavy planner deps here */}
               {(() => {
@@ -668,7 +711,9 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         <main className="h-100">
           <div className="p-3">
             <CheckInBanner />
+            {!hidePlannerCapacityBanner && <PlannerCapacityBanner />}
             <SprintClosureBanner />
+            <ProcessTextActivityHost />
           </div>
           {children}
         </main>

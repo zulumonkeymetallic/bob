@@ -10,6 +10,7 @@ import CalendarSyncManager from './CalendarSyncManager';
 import { functions } from '../firebase';
 import { httpsCallable } from 'firebase/functions';
 import { Settings, Palette, Database, Calendar } from 'lucide-react';
+import { POINTS_MIN, POINTS_STEP, TASK_POINTS_MAX, normalizePointsValue } from '../utils/points';
 
 interface GlobalThemeSettings {
   themes: GlobalTheme[];
@@ -516,10 +517,10 @@ const SettingsPage: React.FC = () => {
 
                     <Row className="mb-3">
                       <Col md={4} className="mb-2">
-                        <Form.Label>Min LLM story points (1–8)</Form.Label>
-                        <Form.Control type="number" min={1} max={8} value={autoLLMConversionMinPoints}
+                        <Form.Label>Min LLM story points (0.25–8)</Form.Label>
+                        <Form.Control type="number" min={POINTS_MIN} max={TASK_POINTS_MAX} step={POINTS_STEP} value={autoLLMConversionMinPoints}
                           onChange={async (e) => {
-                            const v = Math.max(1, Math.min(8, Number(e.target.value) || 4));
+                            const v = normalizePointsValue(e.target.value, { max: TASK_POINTS_MAX, fallback: 4 });
                             setAutoLLMConversionMinPoints(v);
                             try { if (currentUser) await setDoc(doc(db, 'profiles', currentUser.uid), { autoLLMConversionMinPoints: v, updatedAt: serverTimestamp() }, { merge: true }); } catch (err) { console.error('save minPoints', err); }
                           }} />
@@ -535,9 +536,9 @@ const SettingsPage: React.FC = () => {
                       </Col>
                       <Col md={4} className="mb-2">
                         <Form.Label>Heuristic convert: points &gt;</Form.Label>
-                        <Form.Control type="number" min={0} max={8} value={autoConversionThresholdPoints}
+                        <Form.Control type="number" min={POINTS_MIN} max={TASK_POINTS_MAX} step={POINTS_STEP} value={autoConversionThresholdPoints}
                           onChange={async (e) => {
-                            const v = Math.max(0, Math.min(8, Number(e.target.value) || 2));
+                            const v = normalizePointsValue(e.target.value, { max: TASK_POINTS_MAX, fallback: 2 });
                             setAutoConversionThresholdPoints(v);
                             try { if (currentUser) await setDoc(doc(db, 'profiles', currentUser.uid), { autoConversionThresholdPoints: v, updatedAt: serverTimestamp() }, { merge: true }); } catch (err) { console.error('save threshold points', err); }
                           }} />

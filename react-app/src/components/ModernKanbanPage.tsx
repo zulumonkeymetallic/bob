@@ -8,6 +8,15 @@ import { useAuth } from '../contexts/AuthContext';
 import { Story, Goal, Task } from '../types';
 import { useSprint } from '../contexts/SprintContext';
 import { usePersona } from '../contexts/PersonaContext';
+import { parsePointsValue } from '../utils/points';
+import { isGoalInHierarchySet } from '../utils/goalHierarchy';
+
+const isSprintActiveStatus = (status: any): boolean => {
+  const numeric = Number(status);
+  if (Number.isFinite(numeric)) return numeric === 1;
+  const normalized = String(status || '').trim().toLowerCase();
+  return normalized === 'active';
+};
 
 const ModernKanbanPage: React.FC = () => {
   const { currentUser } = useAuth();
@@ -20,6 +29,9 @@ const ModernKanbanPage: React.FC = () => {
   const [showAddStory, setShowAddStory] = useState(false);
   const [showEditStory, setShowEditStory] = useState(false);
   const [showAddTask, setShowAddTask] = useState(false);
+  const [activeFocusGoalIds, setActiveFocusGoalIds] = useState<Set<string>>(new Set());
+  const [activeSprintIds, setActiveSprintIds] = useState<Set<string>>(new Set());
+  const [showUnalignedOnly, setShowUnalignedOnly] = useState(false);
   
   // Configurable swim lanes (canonical numeric buckets)
   const [swimLanes] = useState([
@@ -46,7 +58,7 @@ const ModernKanbanPage: React.FC = () => {
     description: '',
     goalId: '',
     priority: 2, // P2 = Medium
-    points: 1
+    points: '1' as string | number
   });
   
   const [newTask, setNewTask] = useState({
@@ -61,7 +73,7 @@ const ModernKanbanPage: React.FC = () => {
     description: '',
     goalId: '',
     priority: 2, // P2 = Medium
-    points: 1
+    points: '1' as string | number
   });
 
   useEffect(() => {
@@ -161,6 +173,72 @@ const ModernKanbanPage: React.FC = () => {
     return unsubscribe;
   }, [currentUser, selectedSprintId, currentPersona]);
 
+  useEffect(() => {
+    if (!currentUser) return;
+    const focusQuery = query(
+      collection(db, 'focusGoals'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+      where('isActive', '==', true)
+    );
+
+    const unsubscribe = onSnapshot(focusQuery, (snapshot) => {
+      const ids = new Set<string>();
+      snapshot.docs.forEach((docSnap) => {
+        const row = docSnap.data() as any;
+        const goalIds = Array.isArray(row.goalIds) ? row.goalIds : [];
+        goalIds.forEach((goalId: any) => {
+          const normalized = String(goalId || '').trim();
+          if (normalized) ids.add(normalized);
+        });
+      });
+      setActiveFocusGoalIds(ids);
+    }, (error) => {
+      console.warn('[ModernKanbanPage] active focus subscribe error', error?.message || error);
+    });
+
+    return unsubscribe;
+  }, [currentUser, currentPersona]);
+
+  useEffect(() => {
+    if (!currentUser || !currentPersona) {
+      setActiveSprintIds(new Set());
+      return;
+    }
+
+    const sprintsQuery = query(
+      collection(db, 'sprints'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+    );
+
+    const unsubscribe = onSnapshot(sprintsQuery, (snapshot) => {
+      const ids = new Set<string>();
+      snapshot.docs.forEach((docSnap) => {
+        const row = docSnap.data() as any;
+        if (isSprintActiveStatus(row?.status)) {
+          ids.add(docSnap.id);
+        }
+      });
+      setActiveSprintIds(ids);
+    }, (error) => {
+      console.warn('[ModernKanbanPage] active sprint subscribe error', error?.message || error);
+      setActiveSprintIds(new Set());
+    });
+
+    return unsubscribe;
+  }, [currentUser, currentPersona]);
+
+  const selectedSprintIsActive = !!selectedSprintId && activeSprintIds.has(String(selectedSprintId));
+  const hasActiveFocusContext = selectedSprintIsActive && activeFocusGoalIds.size > 0;
+  const isUnalignedStory = (story: Story) => {
+    if (!hasActiveFocusContext) return false;
+    const storySprintId = String((story as any).sprintId || '').trim();
+    const storyGoalId = String((story as any).goalId || '').trim();
+    if (!storySprintId || storySprintId !== selectedSprintId) return false;
+    return !storyGoalId || !isGoalInHierarchySet(storyGoalId, goals, activeFocusGoalIds);
+  };
+
   const handleAddStory = async () => {
     if (!currentUser || !newStory.title.trim()) return;
 
@@ -171,7 +249,7 @@ const ModernKanbanPage: React.FC = () => {
         goalId: newStory.goalId,
         status: 0, // 0 = Backlog
         priority: newStory.priority,
-        points: newStory.points,
+        points: parsePointsValue(newStory.points) ?? 1,
         orderIndex: stories.length,
         persona: currentPersona || 'personal',
         ownerUid: currentUser.uid,
@@ -184,7 +262,7 @@ const ModernKanbanPage: React.FC = () => {
         description: '',
         goalId: '',
         priority: 2, // P2 = Medium
-        points: 1
+        points: '1'
       });
       setShowAddStory(false);
     } catch (error) {
@@ -274,7 +352,7 @@ const ModernKanbanPage: React.FC = () => {
         description: editStory.description,
         goalId: editStory.goalId,
         priority: editStory.priority,
-        points: editStory.points,
+        points: parsePointsValue(editStory.points) ?? 1,
         updatedAt: serverTimestamp()
       });
       setShowEditStory(false);
@@ -358,6 +436,16 @@ const ModernKanbanPage: React.FC = () => {
           <div className="d-flex justify-content-between align-items-center mb-4">
             <h2>Stories Kanban Board</h2>
             <div>
+              {hasActiveFocusContext && (
+                <Form.Check
+                  type="switch"
+                  id="kanban-show-unaligned-only"
+                  className="d-inline-block me-3"
+                  label="Show unaligned stories only"
+                  checked={showUnalignedOnly}
+                  onChange={(e) => setShowUnalignedOnly(e.target.checked)}
+                />
+              )}
               <Button variant="outline-primary" className="me-2" onClick={() => setShowAddStory(true)}>
                 Add Story
               </Button>
@@ -390,21 +478,25 @@ const ModernKanbanPage: React.FC = () => {
                 <Card.Header className="bg-light">
                   <h5 className="mb-0">{lane.title}</h5>
                   <small className="text-muted">
-                    {stories.filter(s => storyBucket((s as any).status) === lane.status).length} stories
+                    {stories
+                      .filter(s => storyBucket((s as any).status) === lane.status)
+                      .filter(s => !showUnalignedOnly || isUnalignedStory(s)).length} stories
                   </small>
                 </Card.Header>
                 <Card.Body style={{ maxHeight: '60vh', overflowY: 'auto' }}>
                   {stories
                     .filter(story => storyBucket((story as any).status) === lane.status)
+                    .filter(story => !showUnalignedOnly || isUnalignedStory(story))
                     .map((story) => {
                       const goalTheme = getGoalTheme(story.goalId);
                       const taskCount = getTaskCount(story.id);
                       const isSelected = selectedStory?.id === story.id;
+                      const unaligned = isUnalignedStory(story);
                       
                       return (
                         <Card 
                           key={story.id}
-                          className={`mb-3 shadow-sm ${isSelected ? 'border-primary' : ''}`}
+                          className={`mb-3 shadow-sm ${isSelected ? 'border-primary' : ''} ${unaligned ? 'border-warning' : ''}`}
                           style={{ 
                             cursor: 'pointer',
                             boxShadow: (story as any).blocked ? '0 0 0 2px rgba(220, 38, 38, 0.35)' : undefined
@@ -419,6 +511,7 @@ const ModernKanbanPage: React.FC = () => {
                                   {goalTheme}
                                 </Badge>
                                 <Badge bg="secondary">{story.priority}</Badge>
+                                {unaligned && <Badge bg="warning" text="dark" className="ms-1">Unaligned</Badge>}
                               </div>
                             </div>
                             
@@ -494,7 +587,9 @@ const ModernKanbanPage: React.FC = () => {
                       );
                     })}
 
-                  {stories.filter(s => storyBucket((s as any).status) === lane.status).length === 0 && (
+                  {stories
+                    .filter(s => storyBucket((s as any).status) === lane.status)
+                    .filter(s => !showUnalignedOnly || isUnalignedStory(s)).length === 0 && (
                     <div className="text-center text-muted py-4">
                       <p>No stories in {lane.title.toLowerCase()}</p>
                     </div>
@@ -623,17 +718,16 @@ const ModernKanbanPage: React.FC = () => {
               <Col md={6}>
                 <Form.Group className="mb-3">
                   <Form.Label>Story Points</Form.Label>
-                  <Form.Select
-                    value={editStory.points}
-                    onChange={(e) => setEditStory({...editStory, points: parseInt(e.target.value)})}
-                  >
-                    <option value={1}>1</option>
-                    <option value={2}>2</option>
-                    <option value={3}>3</option>
-                    <option value={5}>5</option>
-                    <option value={8}>8</option>
-                    <option value={13}>13</option>
-                  </Form.Select>
+                  <Form.Control
+                    type="number"
+                    step="any"
+                    inputMode="decimal"
+                    value={editStory.points ?? ''}
+                    onChange={(e) => setEditStory({
+                      ...editStory,
+                      points: e.target.value as any,
+                    })}
+                  />
                 </Form.Group>
               </Col>
             </Row>

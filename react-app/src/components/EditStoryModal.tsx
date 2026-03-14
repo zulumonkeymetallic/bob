@@ -1,18 +1,24 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { Modal, Button, Form, Row, Col, Alert } from 'react-bootstrap';
 import { updateDoc, doc, serverTimestamp, collection, query, where, getDocs, addDoc, deleteDoc } from 'firebase/firestore';
-import { db } from '../firebase';
+import { db, functions } from '../firebase';
+import { httpsCallable } from 'firebase/functions';
 import { Story, Goal, Sprint, Task } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import { useSprint } from '../contexts/SprintContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { isStatus } from '../utils/statusHelpers';
 import { normalizePriorityValue } from '../utils/priorityUtils';
+import { parsePointsValue, TASK_DEFAULT_POINTS } from '../utils/points';
 import TagInput from './common/TagInput';
 import ActivityStreamPanel from './common/ActivityStreamPanel';
 import ModernTaskTable from './ModernTaskTable';
 import { cascadeStoryPersona } from '../utils/personaCascade';
 import { useNavigate } from 'react-router-dom';
+import { Wand2 } from 'lucide-react';
+import { planningSprints } from '../utils/sprintFilter';
+import { evaluateStorySprintAlignment } from '../utils/sprintAlignment';
+import { getGoalDisplayPath, getLeafGoalOptions, resolveLeafGoalSelection } from '../utils/goalHierarchy';
 
 interface EditStoryModalProps {
   show: boolean;
@@ -37,24 +43,31 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
   const [editedStory, setEditedStory] = useState({
     title: '',
     description: '',
+    url: '',
     goalId: '',
     priority: 2,
     status: 0,
     theme: 1,
-    points: 0,
+    points: '' as string | number,
     acceptanceCriteria: '',
     sprintId: '' as string | '',
+    dueDate: '' as string,
+    dueTime: '' as string,
+    timeOfDay: '' as 'morning' | 'afternoon' | 'evening' | '',
     blocked: false as boolean,
     tags: [] as string[],
     persona: (currentPersona || 'personal') as 'personal' | 'work',
   });
 
   const [loading, setLoading] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [aiResult, setAiResult] = useState<string | null>(null);
   const [goalInput, setGoalInput] = useState('');
   const { currentUser } = useAuth();
   const [linkedTasks, setLinkedTasks] = useState<Task[]>([]);
   const [tasksLoading, setTasksLoading] = useState(false);
+  const [isGeneratingTasks, setIsGeneratingTasks] = useState(false);
   const isHiddenSprint = (sprint: Sprint) => isStatus(sprint.status, 'closed') || isStatus(sprint.status, 'cancelled');
   const formatSprintLabel = (sprint: Sprint, statusOverride?: string) => {
     const name = sprint.name || sprint.ref || `Sprint ${sprint.id.slice(-4)}`;
@@ -63,7 +76,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
       : (isStatus(sprint.status, 'active') ? ' (Active)' : '');
     return `${name}${statusLabel}`;
   };
-  const visibleSprints = sprints.filter((sprint) => !isHiddenSprint(sprint));
+  const visibleSprints = planningSprints(sprints);
   const selectedSprint = editedStory.sprintId ? sprints.find((sprint) => sprint.id === editedStory.sprintId) : null;
   const selectedSprintStatus = selectedSprint
     ? (isStatus(selectedSprint.status, 'closed') ? 'Completed' : (isStatus(selectedSprint.status, 'cancelled') ? 'Cancelled' : ''))
@@ -72,63 +85,84 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
     () => (editedStory.goalId ? goals.find((g) => g.id === editedStory.goalId) : null),
     [editedStory.goalId, goals],
   );
+  const leafGoalOptions = useMemo(() => getLeafGoalOptions(goals), [goals]);
+  const selectedGoalResolution = useMemo(
+    () => resolveLeafGoalSelection(editedStory.goalId || null, goals),
+    [editedStory.goalId, goals],
+  );
+  const sprintAlignment = useMemo(
+    () => evaluateStorySprintAlignment(selectedSprint as any, editedStory.goalId || ''),
+    [selectedSprint, editedStory.goalId],
+  );
+
+  const reloadLinkedTasks = useCallback(async (sourceStory: Story | null) => {
+    if (!sourceStory || !currentUser) {
+      setLinkedTasks([]);
+      return;
+    }
+    setTasksLoading(true);
+    try {
+      const baseQuery = query(
+        collection(db, 'tasks'),
+        where('ownerUid', '==', currentUser.uid)
+      );
+      const snap = await getDocs(baseQuery);
+      const raw = snap.docs.map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) })) as Task[];
+      const persona = (sourceStory as any)?.persona || currentPersona;
+      const filtered = raw.filter((task) => {
+        if (persona && task.persona && task.persona !== persona) return false;
+        return task.parentId === sourceStory.id || task.storyId === sourceStory.id;
+      });
+      setLinkedTasks(filtered);
+    } catch (err) {
+      console.error('Failed to load linked tasks', err);
+      setLinkedTasks([]);
+    } finally {
+      setTasksLoading(false);
+    }
+  }, [currentUser, currentPersona]);
 
   // Initialize form when story changes
   useEffect(() => {
     if (story) {
       console.log('📝 EditStoryModal: Initializing with story:', story);
+      const parsedPoints = parsePointsValue((story as any).points);
+      const normalizedPoints = parsedPoints == null ? 1 : parsedPoints;
       const normalizedPriority = normalizePriorityValue((story as any).priority);
       setEditedStory({
         title: story.title || '',
         description: story.description || '',
+        url: String((story as any).url || ''),
         goalId: story.goalId || '',
         priority: normalizedPriority > 0 ? normalizedPriority : 2,
         status: (typeof story.status === 'number' ? (story.status >= 4 ? 4 : story.status >= 2 ? 2 : 0) : 0),
         theme: story.theme || 1,
-        points: story.points || 0,
+        points: normalizedPoints,
         acceptanceCriteria: Array.isArray(story.acceptanceCriteria)
           ? story.acceptanceCriteria.join('\n')
           : story.acceptanceCriteria || '',
         sprintId: (story as any).sprintId || '',
+        dueDate: (story as any).dueDate ? new Date((story as any).dueDate).toISOString().slice(0, 10) : '',
+        dueTime: (story as any).dueTime || '',
+        timeOfDay: (story as any).timeOfDay || '',
         blocked: Boolean((story as any).blocked),
         tags: (story as any).tags || [],
         persona: ((story as any).persona || currentPersona || 'personal') as 'personal' | 'work',
       });
       setError(null);
+      setAiResult(null);
       const currentGoal = goals.find(g => g.id === story.goalId);
-      setGoalInput(currentGoal?.title || '');
+      setGoalInput(currentGoal ? getGoalDisplayPath(currentGoal.id, goals) : '');
     }
   }, [story, goals]);
 
   useEffect(() => {
-    const loadTasks = async () => {
-      if (!show || !story || !currentUser) {
-        setLinkedTasks([]);
-        return;
-      }
-      setTasksLoading(true);
-      try {
-        const baseQuery = query(
-          collection(db, 'tasks'),
-          where('ownerUid', '==', currentUser.uid)
-        );
-        const snap = await getDocs(baseQuery);
-        const raw = snap.docs.map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) })) as Task[];
-        const persona = (story as any)?.persona || currentPersona;
-        const filtered = raw.filter((task) => {
-          if (persona && task.persona && task.persona !== persona) return false;
-          return task.parentId === story.id || task.storyId === story.id;
-        });
-        setLinkedTasks(filtered);
-      } catch (err) {
-        console.error('Failed to load linked tasks', err);
-        setLinkedTasks([]);
-      } finally {
-        setTasksLoading(false);
-      }
-    };
-    loadTasks();
-  }, [show, story?.id, currentUser?.uid, currentPersona]);
+    if (!show || !story) {
+      setLinkedTasks([]);
+      return;
+    }
+    reloadLinkedTasks(story);
+  }, [show, story, reloadLinkedTasks]);
 
   const handleTaskUpdate = async (taskId: string, updates: Partial<Task>) => {
     if (!currentUser) return;
@@ -158,14 +192,17 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
 
   const handleTaskCreate = async (newTask: Partial<Task>) => {
     if (!currentUser || !story) return;
+    const parsedTaskPoints = parsePointsValue((newTask as any).points);
+    const normalizedTaskPoints = parsedTaskPoints == null ? TASK_DEFAULT_POINTS : parsedTaskPoints;
     const payload: any = {
       title: newTask.title || '',
       description: newTask.description || '',
+      url: (newTask as any).url || null,
       status: (newTask as any).status ?? 0,
       priority: (newTask as any).priority ?? 2,
       effort: (newTask as any).effort ?? 'M',
       dueDate: (newTask as any).dueDate || null,
-      points: (newTask as any).points ?? 1,
+      points: normalizedTaskPoints,
       ownerUid: currentUser.uid,
       persona: (editedStory as any).persona || (story as any)?.persona || currentPersona || 'personal',
       storyId: story.id,
@@ -191,17 +228,44 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
     try {
       console.log('💾 EditStoryModal: Saving story updates:', editedStory);
 
-      const selectedGoal = goals.find(g => g.id === editedStory.goalId);
+      if (editedStory.sprintId && sprintAlignment.hasRule && !sprintAlignment.aligned) {
+        if (sprintAlignment.blocking) {
+          setError(sprintAlignment.message);
+          return;
+        }
+        const proceed = window.confirm(`${sprintAlignment.message} Continue anyway?`);
+        if (!proceed) {
+          return;
+        }
+      }
+
+      const resolvedGoalSelection = resolveLeafGoalSelection(editedStory.goalId || null, goals);
+      if (editedStory.goalId && !resolvedGoalSelection.goalId) {
+        setError(
+          resolvedGoalSelection.reason === 'ambiguous_parent'
+            ? 'Stories must link to a specific leaf goal. Select the child goal you want this story to execute against.'
+            : 'Please select a valid leaf goal before saving this story.'
+        );
+        return;
+      }
+
+      const selectedGoal = goals.find((g) => g.id === (resolvedGoalSelection.goalId || editedStory.goalId));
       const normalizedPriority = normalizePriorityValue(editedStory.priority);
+      const parsedStoryPoints = parsePointsValue(editedStory.points);
+      const normalizedStoryPoints = parsedStoryPoints == null ? 1 : parsedStoryPoints;
       const updates: any = {
         title: editedStory.title.trim(),
         description: editedStory.description.trim(),
-        goalId: editedStory.goalId || null,
+        url: editedStory.url.trim() || null,
+        goalId: resolvedGoalSelection.goalId || null,
         priority: normalizedPriority > 0 ? normalizedPriority : 2,
         status: editedStory.status,
         blocked: !!editedStory.blocked,
-        points: editedStory.points,
+        points: normalizedStoryPoints,
         sprintId: editedStory.sprintId || null,
+        dueDate: editedStory.dueDate ? new Date(`${editedStory.dueDate}T00:00:00`).getTime() : null,
+        dueTime: editedStory.dueTime || null,
+        timeOfDay: editedStory.timeOfDay || null,
         persona: editedStory.persona || currentPersona || 'personal',
         acceptanceCriteria: editedStory.acceptanceCriteria.trim()
           ? editedStory.acceptanceCriteria.split('\n').map(line => line.trim()).filter(line => line.length > 0)
@@ -226,6 +290,9 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
       }
 
       console.log('✅ EditStoryModal: Story updated successfully');
+      // Fire-and-forget delta rescore for priority/top3 recalculation
+      httpsCallable(functions, 'deltaPriorityRescore')({ entityId: story.id, entityType: 'story' })
+        .catch((err) => console.warn('Delta rescore failed (non-blocking)', err));
       onStoryUpdated?.();
       onHide();
     } catch (err) {
@@ -236,23 +303,107 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
     }
   };
 
+  const handleDelete = async () => {
+    if (!story) return;
+    const label = story.ref || story.title || story.id;
+    const confirmed = window.confirm(`Delete story "${label}"? This cannot be undone.`);
+    if (!confirmed) return;
+
+    setDeleting(true);
+    setError(null);
+    try {
+      await deleteDoc(doc(db, 'stories', story.id));
+      onStoryUpdated?.();
+      onHide();
+    } catch (err) {
+      console.error('❌ EditStoryModal: Error deleting story:', err);
+      setError('Failed to delete story. Please try again.');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const handleInputChange = (field: string, value: any) => {
-    setEditedStory(prev => ({
-      ...prev,
-      [field]: value
-    }));
+    setEditedStory(prev => {
+      if (field === 'sprintId' && value) {
+        const sprint = sprints.find((s) => s.id === value);
+        const sprintStart = sprint?.startDate ?? (sprint as any)?.start ?? null;
+        if (sprintStart) {
+          const snapMs = typeof sprintStart === 'number' ? sprintStart
+            : typeof sprintStart === 'string' ? Date.parse(sprintStart)
+            : (sprintStart as any)?.seconds ? (sprintStart as any).seconds * 1000
+            : null;
+          if (snapMs) {
+            const snapDate = new Date(snapMs).toISOString().slice(0, 10);
+            return { ...prev, sprintId: value, dueDate: snapDate };
+          }
+        }
+      }
+      return { ...prev, [field]: value };
+    });
+  };
+
+  const handleGenerateTasks = async () => {
+    if (!story || !currentUser || isGeneratingTasks) return;
+    setIsGeneratingTasks(true);
+    setError(null);
+    setAiResult(null);
+    try {
+      let created = 0;
+      let usedFallback = false;
+      try {
+        const fn = httpsCallable(functions, 'generateTasksForStory');
+        const res: any = await fn({ storyId: story.id });
+        created = Number(res?.data?.created ?? res?.data?.tasksCreated ?? 0);
+      } catch {
+        // Fallback to the callable currently deployed in this repo.
+        const alt = httpsCallable(functions, 'orchestrateStoryPlanning');
+        const res: any = await alt({ storyId: story.id, research: false });
+        created = Number(res?.data?.tasksCreated ?? res?.data?.created ?? 0);
+        usedFallback = true;
+      }
+      await reloadLinkedTasks(story);
+      const base = created > 0
+        ? `Generated ${created} tasks for this story.`
+        : 'AI generation completed with no new tasks.';
+      setAiResult(usedFallback ? `${base} (via orchestration)` : base);
+    } catch (err: any) {
+      console.error('AI task generation failed', err);
+      setError(err?.message || 'Failed to generate tasks for this story.');
+    } finally {
+      setIsGeneratingTasks(false);
+    }
   };
 
   return (
     <Modal show={show} onHide={onHide} size="xl" container={container || undefined} fullscreen="lg-down" scrollable>
       <Modal.Header closeButton>
-        <Modal.Title>Edit Story: {story?.ref}</Modal.Title>
+        <div className="d-flex w-100 align-items-center justify-content-between gap-2">
+          <Modal.Title>Edit Story: {story?.ref}</Modal.Title>
+          {story && (
+            <Button
+              variant="outline-primary"
+              size="sm"
+              onClick={handleGenerateTasks}
+              disabled={isGeneratingTasks || loading || deleting}
+              title="Auto-generate tasks for this story"
+            >
+              <Wand2 size={14} className="me-1" />
+              {isGeneratingTasks ? 'Generating...' : 'AI Tasks'}
+            </Button>
+          )}
+        </div>
       </Modal.Header>
 
       <Modal.Body>
         {error && (
           <Alert variant="danger" onClose={() => setError(null)} dismissible>
             {error}
+          </Alert>
+        )}
+        {aiResult && (
+          <Alert variant="success" onClose={() => setAiResult(null)} dismissible>
+            {aiResult}
           </Alert>
         )}
 
@@ -277,10 +428,10 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
                     <Form.Label>Story Points</Form.Label>
                     <Form.Control
                       type="number"
-                      min="0"
-                      max="21"
+                      step="any"
+                      inputMode="decimal"
                       value={editedStory.points}
-                      onChange={(e) => handleInputChange('points', parseInt(e.target.value) || 0)}
+                      onChange={(e) => handleInputChange('points', e.target.value)}
                     />
                   </Form.Group>
                 </Col>
@@ -317,16 +468,30 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
                       onChange={(e) => setGoalInput(e.target.value)}
                       onBlur={() => {
                         const val = goalInput.trim();
-                        const match = goals.find(g => g.title === val || g.id === val);
+                        const match = leafGoalOptions.find((g) => {
+                          const displayPath = getGoalDisplayPath(g.id, goals);
+                          return displayPath === val || g.id === val || g.title === val;
+                        });
+                        setGoalInput(match ? getGoalDisplayPath(match.id, goals) : val);
                         handleInputChange('goalId', match ? match.id : '');
                       }}
-                      placeholder="Search goals by title..."
+                      placeholder="Search leaf goals by title..."
                     />
                     <datalist id="edit-story-goal-options">
-                      {goals.map(g => (
-                        <option key={g.id} value={g.title} />
+                      {leafGoalOptions.map(g => (
+                        <option key={g.id} value={getGoalDisplayPath(g.id, goals)} />
                       ))}
                     </datalist>
+                    {selectedGoalResolution.reason === 'auto_descendant' && selectedGoalResolution.leafGoal && (
+                      <div className="form-text text-info">
+                        Parent goal selection auto-resolved to {getGoalDisplayPath(selectedGoalResolution.leafGoal.id, goals)}.
+                      </div>
+                    )}
+                    {selectedGoalResolution.reason === 'ambiguous_parent' && (
+                      <div className="form-text text-warning">
+                        This parent has multiple leaf goals. Choose the exact leaf goal this story should execute against.
+                      </div>
+                    )}
                     {editedStory.goalId ? (
                       <div className="form-text">
                         <Button
@@ -341,6 +506,14 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
                     ) : null}
                   </Form.Group>
                 </Col>
+
+                {editedStory.sprintId && sprintAlignment.hasRule && !sprintAlignment.aligned && (
+                  <Col md={12}>
+                    <Alert variant={sprintAlignment.blocking ? 'danger' : 'warning'} className="mb-3">
+                      {sprintAlignment.message}
+                    </Alert>
+                  </Col>
+                )}
 
                 <Col md={2}>
                   <Form.Group className="mb-3">
@@ -387,14 +560,65 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
                 {/* Theme removed: stories inherit from linked goal */}
               </Row>
 
+              <Row>
+                <Col md={12}>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Description</Form.Label>
+                    <Form.Control
+                      as="textarea"
+                      rows={3}
+                      value={editedStory.description}
+                      onChange={(e) => handleInputChange('description', e.target.value)}
+                      placeholder="Enter story description"
+                    />
+                  </Form.Group>
+                </Col>
+              </Row>
+
+              <Row>
+                <Col md={4}>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Due Date</Form.Label>
+                    <Form.Control
+                      type="date"
+                      value={editedStory.dueDate}
+                      onChange={(e) => handleInputChange('dueDate', e.target.value)}
+                    />
+                  </Form.Group>
+                </Col>
+                <Col md={4}>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Due Time</Form.Label>
+                    <Form.Control
+                      type="time"
+                      value={editedStory.dueTime}
+                      onChange={(e) => handleInputChange('dueTime', e.target.value)}
+                    />
+                  </Form.Group>
+                </Col>
+                <Col md={4}>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Time of Day</Form.Label>
+                    <Form.Select
+                      value={editedStory.timeOfDay}
+                      onChange={(e) => handleInputChange('timeOfDay', e.target.value as any)}
+                    >
+                      <option value="">Auto/None</option>
+                      <option value="morning">Morning</option>
+                      <option value="afternoon">Afternoon</option>
+                      <option value="evening">Evening</option>
+                    </Form.Select>
+                  </Form.Group>
+                </Col>
+              </Row>
+
               <Form.Group className="mb-3">
-                <Form.Label>Description</Form.Label>
+                <Form.Label>Source URL</Form.Label>
                 <Form.Control
-                  as="textarea"
-                  rows={3}
-                  value={editedStory.description}
-                  onChange={(e) => handleInputChange('description', e.target.value)}
-                  placeholder="Enter story description"
+                  type="url"
+                  value={editedStory.url}
+                  onChange={(e) => handleInputChange('url', e.target.value)}
+                  placeholder="https://..."
                 />
               </Form.Group>
 
@@ -464,10 +688,15 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
       </Modal.Body>
 
       <Modal.Footer>
-        <Button variant="secondary" onClick={onHide} disabled={loading}>
+        {story && (
+          <Button variant="outline-danger" onClick={handleDelete} disabled={loading || deleting}>
+            {deleting ? 'Deleting...' : 'Delete Story'}
+          </Button>
+        )}
+        <Button variant="secondary" onClick={onHide} disabled={loading || deleting}>
           Cancel
         </Button>
-        <Button variant="primary" onClick={handleSave} disabled={loading}>
+        <Button variant="primary" onClick={handleSave} disabled={loading || deleting}>
           {loading ? 'Saving...' : 'Save Changes'}
         </Button>
       </Modal.Footer>

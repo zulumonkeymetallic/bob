@@ -84,27 +84,45 @@ function normaliseRecurrence(data) {
 function shouldScheduleOnDay(task, date) {
   const freq = task?.repeatFrequency;
   const interval = Number(task?.repeatInterval || 1) || 1;
+  const anchorMs = toMillis(task?.recurrenceAnchor || task?.dueDate || task?.createdAt || task?.lastDoneAt) || Date.now();
+  const anchor = startOfDay(new Date(anchorMs));
+  const current = startOfDay(new Date(date));
+  const msDiff = current.getTime() - anchor.getTime();
   if (!freq) {
     const dueMs = toMillis(task?.dueDate || task?.dueDateMs || task?.targetDate);
     if (!dueMs) return false;
     return isSameDay(date, dueMs);
   }
   if (freq === 'daily') {
-    const base = toMillis(task?.lastDoneAt) || toMillis(task?.createdAt) || Date.now();
-    const daysDiff = Math.floor((startOfDay(date).getTime() - startOfDay(new Date(base)).getTime()) / (24*60*60*1000));
+    const base = toMillis(task?.lastDoneAt) || anchorMs;
+    const daysDiff = Math.floor((current.getTime() - startOfDay(new Date(base)).getTime()) / (24*60*60*1000));
+    if (daysDiff < 0) return false;
     return daysDiff % interval === 0;
   }
   if (freq === 'weekly') {
-    const allowed = Array.isArray(task?.daysOfWeek) ? task.daysOfWeek : [];
-    return allowed.includes(dayOfWeekKey(date));
+    const allowedRaw = Array.isArray(task?.daysOfWeek)
+      ? task.daysOfWeek
+      : (Array.isArray(task?.repeatDaysOfWeek) ? task.repeatDaysOfWeek : []);
+    const allowed = allowedRaw.map((d) => String(d || '').toLowerCase());
+    const dayMatch = allowed.length ? allowed.includes(dayOfWeekKey(date)) : dayOfWeekKey(date) === dayOfWeekKey(anchor);
+    if (!dayMatch) return false;
+    const weeksDiff = Math.floor(msDiff / (7 * 24 * 60 * 60 * 1000));
+    if (weeksDiff < 0) return false;
+    return weeksDiff % interval === 0;
   }
   if (freq === 'monthly') {
-    const base = new Date(toMillis(task?.createdAt) || Date.now());
-    return date.getDate() === base.getDate();
+    const base = new Date(anchorMs);
+    if (current.getDate() !== base.getDate()) return false;
+    const monthsDiff = (current.getFullYear() - base.getFullYear()) * 12 + (current.getMonth() - base.getMonth());
+    if (monthsDiff < 0) return false;
+    return monthsDiff % interval === 0;
   }
   if (freq === 'yearly') {
-    const base = new Date(toMillis(task?.createdAt) || Date.now());
-    return date.getMonth() === base.getMonth() && date.getDate() === base.getDate();
+    const base = new Date(anchorMs);
+    if (!(current.getMonth() === base.getMonth() && current.getDate() === base.getDate())) return false;
+    const yearsDiff = current.getFullYear() - base.getFullYear();
+    if (yearsDiff < 0) return false;
+    return yearsDiff % interval === 0;
   }
   return false;
 }
@@ -122,6 +140,36 @@ function applyTimeOfDay(day, timeMs) {
   return d.getTime();
 }
 
+const CHORE_TIMEZONE = 'Europe/London';
+
+function extractZoneHourMinute(ms, timeZone = CHORE_TIMEZONE) {
+  const d = new Date(ms);
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    timeZone,
+  }).formatToParts(d);
+  const hour = Number(parts.find((p) => p.type === 'hour')?.value || '0');
+  const minute = Number(parts.find((p) => p.type === 'minute')?.value || '0');
+  return { hour, minute };
+}
+
+function formatDueTime(ms) {
+  const { hour, minute } = extractZoneHourMinute(ms);
+  const hh = String(hour).padStart(2, '0');
+  const mm = String(minute).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
+function classifyTimeOfDay(ms) {
+  const { hour, minute } = extractZoneHourMinute(ms);
+  const minutes = hour * 60 + minute;
+  if (minutes >= (5 * 60) && minutes < (12 * 60)) return 'morning';
+  if (minutes >= (12 * 60) && minutes < (17 * 60)) return 'afternoon';
+  return 'evening';
+}
+
 function durationMinutesFromTask(task) {
   const points = Number(task?.points || 0);
   const estimateMin = Number(task?.estimateMin || 0);
@@ -131,46 +179,134 @@ function durationMinutesFromTask(task) {
   return choreMin;
 }
 
-async function findSlotForDay(db, ownerUid, dayStartMs, dayEndMs, durationMs) {
-  const busy = [];
-  const snap = await db.collection('calendar_blocks')
-    .where('ownerUid', '==', ownerUid)
-    .where('start', '>=', dayStartMs)
-    .where('start', '<=', dayEndMs)
-    .get()
-    .catch(() => ({ docs: [] }));
-  snap.docs.forEach((doc) => {
-    const data = doc.data() || {};
-    const start = toMillis(data.start);
-    const end = toMillis(data.end) || (start ? start + durationMs : null);
-    if (start && end) busy.push([start, end]);
-  });
-  busy.sort((a, b) => a[0] - b[0]);
-  let cursor = dayStartMs + (8 * 60 * 60 * 1000); // default to 08:00
-  const windowEnd = dayEndMs - durationMs;
-  for (let i = 0; i <= busy.length; i++) {
-    const nextBusyStart = i < busy.length ? busy[i][0] : dayEndMs;
-    if (cursor + durationMs <= nextBusyStart) {
-      if (cursor <= windowEnd) return cursor;
-      return null;
-    }
-    if (i < busy.length) {
-      cursor = Math.max(cursor, busy[i][1] || cursor);
-    }
+function themeLabelFromValue(value) {
+  if (typeof value === 'string') return value;
+  if (value && typeof value === 'object') {
+    return value.label || value.name || value.title || '';
   }
-  return null;
+  return '';
 }
 
-async function upsertChoreBlocksForTask(db, task, lookaheadDays = 14) {
+function isRecurringChoreTask(task) {
+  const type = String(task?.type || task?.task_type || '').toLowerCase();
+  if (!['chore', 'routine', 'habit', 'habitual'].includes(type)) return false;
+  if (task?.repeatFrequency) return true;
+  if (Number(task?.repeatInterval || 0) > 0) return true;
+  if (Array.isArray(task?.daysOfWeek) && task.daysOfWeek.length > 0) return true;
+  if (Array.isArray(task?.repeatDaysOfWeek) && task.repeatDaysOfWeek.length > 0) return true;
+  return false;
+}
+
+function isTaskLocked(task) {
+  if (!task) return false;
+  if (task.dueDateLocked === true) return true;
+  return String(task.dueDateReason || '').toLowerCase() === 'user';
+}
+
+function logPlacement(stage, payload) {
+  if (String(process.env.CHORE_PLACEMENT_DEBUG || '').toLowerCase() !== 'true') return;
+  try {
+    console.log('[chore-placement]', JSON.stringify({ stage, ...payload }));
+  } catch {
+    console.log('[chore-placement]', stage);
+  }
+}
+
+async function upsertChoreBlocksForTask(db, task, lookaheadDays = 28) {
   if (!task?.ownerUid || !task?.id) return { created: 0, updated: 0 };
   const ownerUid = task.ownerUid;
   const today = startOfDay(new Date());
   const snoozedUntil = toMillis(task?.snoozedUntil) || 0;
   let created = 0, updated = 0;
+  let nextStartMs = null;
+  const nowMs = Date.now();
   const durationMin = durationMinutesFromTask(task);
   const durationMs = durationMin * 60000;
   const taskDueMs = toMillis(task?.dueDate || task?.dueDateMs || task?.targetDate);
   const dueHasTime = hasTimeComponent(taskDueMs);
+  const dayCtxCache = new Map();
+
+  const loadDayCtx = async (dayStartMs, dayEndMs, dayKey) => {
+    if (dayCtxCache.has(dayKey)) return dayCtxCache.get(dayKey);
+    const snap = await db.collection('calendar_blocks')
+      .where('ownerUid', '==', ownerUid)
+      .where('start', '>=', dayStartMs)
+      .where('start', '<=', dayEndMs)
+      .get()
+      .catch(() => ({ docs: [] }));
+    const windows = [];
+    const occupied = [];
+    snap.docs.forEach((docSnap) => {
+      const data = docSnap.data() || {};
+      const start = toMillis(data.start);
+      const end = toMillis(data.end);
+      if (!start || !end || end <= start) return;
+      const source = String(data.source || data.entityType || data.entry_method || '').toLowerCase();
+      const entityType = String(data.entityType || '').toLowerCase();
+      const isChoreEvent = source === 'chore' || entityType === 'chore';
+      const themeLabel = themeLabelFromValue(data.theme ?? data.theme_id ?? data.themeId ?? data.category ?? data.title ?? '');
+      const isChoreTheme = String(themeLabel || '').toLowerCase().includes('chore');
+      if (isChoreEvent) {
+        occupied.push({ id: docSnap.id, start, end });
+      } else if (isChoreTheme) {
+        windows.push({ start, end });
+      }
+    });
+    windows.sort((a, b) => a.start - b.start);
+    occupied.sort((a, b) => a.start - b.start);
+    const ctx = { windows, occupied };
+    dayCtxCache.set(dayKey, ctx);
+    return ctx;
+  };
+
+  const fitsInWindows = (startMs, endMs, windows) =>
+    windows.some((w) => startMs >= w.start && endMs <= w.end);
+
+  const overlapsAny = (startMs, endMs, occupied) =>
+    occupied.some((o) => startMs < o.end && endMs > o.start);
+
+  const findSlotInWindows = (windows, occupied, duration) => {
+    for (const window of windows) {
+      let cursor = window.start;
+      for (const occ of occupied) {
+        if (occ.end <= window.start || occ.start >= window.end) continue;
+        if (cursor + duration <= occ.start) return cursor;
+        cursor = Math.max(cursor, occ.end);
+        if (cursor >= window.end) break;
+      }
+      if (cursor + duration <= window.end) return cursor;
+    }
+    return null;
+  };
+
+  const findSlotFromDay = async (startDay, existingDocId = null, preferredMs = null) => {
+    for (const candidateDay of iterateNextDays(startDay, lookaheadDays)) {
+      const candidateStartMs = startOfDay(candidateDay).getTime();
+      if (snoozedUntil && candidateStartMs < startOfDay(new Date(snoozedUntil)).getTime()) continue;
+      const candidateKey = toDayKey(candidateDay);
+      const candidateEndMs = candidateStartMs + (24 * 60 * 60 * 1000) - 1;
+      const candidateCtx = await loadDayCtx(candidateStartMs, candidateEndMs, candidateKey);
+      if (!candidateCtx.windows.length) continue;
+      const occupiedWithoutSelf = candidateCtx.occupied.filter((o) => o.id !== existingDocId);
+
+      if (preferredMs && startOfDay(new Date(preferredMs)).getTime() === candidateStartMs) {
+        const preferredEnd = preferredMs + durationMs;
+        if (
+          fitsInWindows(preferredMs, preferredEnd, candidateCtx.windows) &&
+          !overlapsAny(preferredMs, preferredEnd, occupiedWithoutSelf)
+        ) {
+          return { startMs: preferredMs, endMs: preferredEnd, dayCtx: candidateCtx, occupiedWithoutSelf, day: candidateDay };
+        }
+      }
+
+      const slot = findSlotInWindows(candidateCtx.windows, occupiedWithoutSelf, durationMs);
+      if (slot != null) {
+        return { startMs: slot, endMs: slot + durationMs, dayCtx: candidateCtx, occupiedWithoutSelf, day: candidateDay };
+      }
+    }
+    return null;
+  };
+
   for (const day of iterateNextDays(today, lookaheadDays)) {
     if (snoozedUntil && day.getTime() < startOfDay(new Date(snoozedUntil)).getTime()) continue;
     if (!shouldScheduleOnDay(task, day)) continue;
@@ -181,16 +317,76 @@ async function upsertChoreBlocksForTask(db, task, lookaheadDays = 14) {
     const snap = await ref.get();
     const dayStartMs = startOfDay(day).getTime();
     const dayEndMs = dayStartMs + (24 * 60 * 60 * 1000) - 1;
-    let startMs = dayStartMs;
-    if (taskDueMs && dueHasTime) {
-      startMs = applyTimeOfDay(day, taskDueMs);
-    } else {
-      const slot = await findSlotForDay(db, ownerUid, dayStartMs, dayEndMs, durationMs);
-      startMs = slot || (dayStartMs + (9 * 60 * 60 * 1000));
+    const dayCtx = await loadDayCtx(dayStartMs, dayEndMs, dayKey);
+    if (!dayCtx.windows.length) {
+      if (snap.exists) {
+        await ref.delete();
+        dayCtx.occupied = dayCtx.occupied.filter((o) => o.id !== docId);
+      }
+      logPlacement('no_windows', { taskId: task.id, dayKey, ownerUid });
+      continue;
     }
-    const endMs = startMs + durationMs;
-  const checklistLink = `/chores/checklist?date=${encodeURIComponent(iso)}&taskId=${encodeURIComponent(task.id)}`;
-  const base = {
+
+    const occupiedWithoutSelf = dayCtx.occupied.filter((o) => o.id !== docId);
+    let startMs = null;
+    let endMs = null;
+
+    if (snap.exists) {
+      const existing = snap.data() || {};
+      const existingStart = toMillis(existing.start);
+      const existingEnd = toMillis(existing.end);
+      if (existingStart && existingEnd &&
+        fitsInWindows(existingStart, existingEnd, dayCtx.windows) &&
+        !overlapsAny(existingStart, existingEnd, occupiedWithoutSelf)) {
+        startMs = existingStart;
+        endMs = existingEnd;
+      }
+    }
+
+    if (startMs == null && taskDueMs && dueHasTime) {
+      const preferred = applyTimeOfDay(day, taskDueMs);
+      const preferredEnd = preferred + durationMs;
+      if (fitsInWindows(preferred, preferredEnd, dayCtx.windows) &&
+        !overlapsAny(preferred, preferredEnd, occupiedWithoutSelf)) {
+        startMs = preferred;
+        endMs = preferredEnd;
+      }
+    }
+
+    if (startMs == null) {
+      const slot = findSlotInWindows(dayCtx.windows, occupiedWithoutSelf, durationMs);
+      if (slot != null) {
+        startMs = slot;
+        endMs = slot + durationMs;
+      }
+    }
+
+    if (startMs == null) {
+      const fallback = await findSlotFromDay(day, docId, taskDueMs && dueHasTime ? applyTimeOfDay(day, taskDueMs) : null);
+      if (!fallback) {
+        if (snap.exists) {
+          await ref.delete();
+          dayCtx.occupied = occupiedWithoutSelf;
+        }
+        logPlacement('unscheduled', { taskId: task.id, dayKey, ownerUid, reason: 'conflict_or_window' });
+        continue;
+      }
+      startMs = fallback.startMs;
+      endMs = fallback.endMs;
+      logPlacement('fallback', {
+        taskId: task.id,
+        sourceDay: dayKey,
+        targetDay: toDayKey(fallback.day),
+        ownerUid,
+      });
+    }
+
+    if (startMs >= nowMs && (nextStartMs == null || startMs < nextStartMs)) {
+      nextStartMs = startMs;
+    }
+
+    const checklistLink = `/chores/checklist?date=${encodeURIComponent(iso)}&taskId=${encodeURIComponent(task.id)}`;
+    const base = {
       ownerUid,
       entityType: 'chore',
       taskId: task.id,
@@ -205,7 +401,9 @@ async function upsertChoreBlocksForTask(db, task, lookaheadDays = 14) {
       metadata: {
         frequency: task.repeatFrequency || null,
         interval: Number(task.repeatInterval || 1) || 1,
-        daysOfWeek: Array.isArray(task.daysOfWeek) ? task.daysOfWeek : null,
+        daysOfWeek: Array.isArray(task.daysOfWeek)
+          ? task.daysOfWeek
+          : (Array.isArray(task.repeatDaysOfWeek) ? task.repeatDaysOfWeek : null),
       },
     };
     if (snap.exists) {
@@ -214,6 +412,7 @@ async function upsertChoreBlocksForTask(db, task, lookaheadDays = 14) {
         || existing.ownerUid !== ownerUid
         || existing.status === undefined
         || existing.start !== base.start
+        || existing.end !== base.end
         || existing.syncToGoogle !== base.syncToGoogle
         || existing.deepLink !== base.deepLink;
       if (needsUpdate) {
@@ -224,7 +423,38 @@ async function upsertChoreBlocksForTask(db, task, lookaheadDays = 14) {
       await ref.set({ ...base, createdAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
       created++;
     }
+    dayCtx.occupied = [...occupiedWithoutSelf, { id: docId, start: base.start, end: base.end }];
+    logPlacement('scheduled', {
+      taskId: task.id,
+      dayKey,
+      ownerUid,
+      afterCount: dayCtx.occupied.length,
+      slotStart: base.start,
+      slotEnd: base.end,
+    });
   }
+
+  if (nextStartMs && isRecurringChoreTask(task) && !isTaskLocked(task)) {
+    const dueMs = toMillis(task?.dueDate || task?.dueDateMs || task?.targetDate);
+    const nextDueTime = formatDueTime(nextStartMs);
+    const nextTimeOfDay = classifyTimeOfDay(nextStartMs);
+    const currentDueTime = String(task?.dueTime || '').trim();
+    const currentTimeOfDay = String(task?.timeOfDay || '').trim().toLowerCase();
+    const isMissing = !dueMs;
+    const isFutureMismatch = !!dueMs && dueMs >= nowMs && Math.abs(dueMs - nextStartMs) > (5 * 60 * 1000);
+    const isTimeMismatch = currentDueTime !== nextDueTime || currentTimeOfDay !== nextTimeOfDay;
+    if (isMissing || isFutureMismatch || isTimeMismatch) {
+      await db.collection('tasks').doc(task.id).set({
+        dueDate: nextStartMs,
+        dueTime: nextDueTime,
+        timeOfDay: nextTimeOfDay,
+        dueDateReason: 'chore_block',
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        syncState: 'dirty',
+      }, { merge: true });
+    }
+  }
+
   return { created, updated };
 }
 
@@ -261,7 +491,7 @@ exports.onTaskWriteNormalize = firestoreV2.onDocumentWritten('tasks/{id}', async
   const isChoreLike = type === 'chore' || type === 'routine' || type === 'habit';
   if (isChoreLike && active) {
     const task = { id, ...(after || {}), ...(patch || {}) };
-    await upsertChoreBlocksForTask(db, task, 14);
+    await upsertChoreBlocksForTask(db, task, 28);
   }
   if ((beforeStatus !== 2) && (afterStatus === 2) && isChoreLike) {
     const today = startOfDay(new Date());
@@ -301,7 +531,7 @@ exports.ensureChoreBlocksHourly = schedulerV2.onSchedule('every 1 hours', async 
   let scanned = 0, created = 0, updated = 0;
   for (const t of ['chore','routine','habit']) {
     const snap = await db.collection('tasks').where('type', '==', t).where('status', '==', 0).get();
-    for (const doc of snap.docs) { scanned++; const res = await upsertChoreBlocksForTask(db, { id: doc.id, ...(doc.data()||{}) }, 14); created += res.created; updated += res.updated; }
+    for (const doc of snap.docs) { scanned++; const res = await upsertChoreBlocksForTask(db, { id: doc.id, ...(doc.data()||{}) }, 28); created += res.created; updated += res.updated; }
   }
   try {
     const activityRef = db.collection('activity_stream').doc();

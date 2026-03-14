@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Modal, Button, Form, Alert } from 'react-bootstrap';
+import { useNavigate } from 'react-router-dom';
 import { db } from '../firebase';
 import { collection, addDoc, getDocs, query, where, orderBy, serverTimestamp } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
@@ -13,6 +14,10 @@ import '../styles/MaterialDesign.css';
 import BulkCreateModal from './BulkCreateModal';
 import GoalChatModal from './GoalChatModal';
 import AddStoryModal from './AddStoryModal';
+import IntentBrokerModal from './IntentBrokerModal';
+import { useProcessTextActivity } from '../contexts/ProcessTextActivityContext';
+import { saveFocusWizardPrefill } from '../services/focusGoalsService';
+import { pickDefaultPlanningSprintId } from '../utils/sprintFilter';
 
 interface FloatingActionButtonProps {
   onImportClick: () => void;
@@ -25,9 +30,12 @@ interface Goal {
 }
 
 const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportClick }) => {
+  const navigate = useNavigate();
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
-  const { sprints } = useSprint();
+  // sprints context: only use if sprint selector is rendered; don't gate submit on sprint loading
+  const { sprints: _availableSprints } = useSprint();
+  const { openComposer } = useProcessTextActivity();
   const [showMenu, setShowMenu] = useState(false);
   const [showQuickAdd, setShowQuickAdd] = useState(false);
   const [showBulkCreate, setShowBulkCreate] = useState(false);
@@ -35,9 +43,11 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
   const [quickAddData, setQuickAddData] = useState({
     title: '',
     description: '',
+    url: '',
     theme: 'General',
     effort: 'M',
     priority: 'med',
+    persona: (currentPersona || 'personal') as 'personal' | 'work',
     goalId: '',
     sprintId: '',
     type: 'task',
@@ -49,18 +59,55 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
   const [submitResult, setSubmitResult] = useState<string | null>(null);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [showIntake, setShowIntake] = useState(false);
+  const [showIntentBroker, setShowIntentBroker] = useState(false);
+  const [showFocusIntake, setShowFocusIntake] = useState(false);
+  const [focusVision, setFocusVision] = useState('');
+  const [focusTimeframe, setFocusTimeframe] = useState<'sprint' | 'quarter' | 'year'>('quarter');
   const [intakeTitle, setIntakeTitle] = useState('');
   const [intakeTheme, setIntakeTheme] = useState('Growth');
   const [chatGoalId, setChatGoalId] = useState<string | null>(null);
   const [showChat, setShowChat] = useState(false);
+  const [activeFocusGoalIds, setActiveFocusGoalIds] = useState<Set<string>>(new Set());
 
   const themes = GLOBAL_THEMES.map(theme => theme.name);
   const efforts = [
-    { value: 'S', label: 'Small (15-30 min)', minutes: 20 },
-    { value: 'M', label: 'Medium (30-60 min)', minutes: 45 },
-    { value: 'L', label: 'Large (1-2 hours)', minutes: 90 }
+    { value: 'S', label: '30 mins (0.5)', minutes: 30, points: 0.5 },
+    { value: 'M', label: '60 mins (1)', minutes: 60, points: 1 },
+    { value: 'L', label: '120 mins (2)', minutes: 120, points: 2 }
   ];
   const isRecurringQuickAdd = quickAddType === 'task' && ['chore', 'routine', 'habit'].includes(String(quickAddData.type || '').toLowerCase());
+  const defaultFabSprintId = pickDefaultPlanningSprintId(_availableSprints as any);
+
+  useEffect(() => {
+    const loadActiveFocusGoals = async () => {
+      if (!currentUser) {
+        setActiveFocusGoalIds(new Set());
+        return;
+      }
+      try {
+        const focusQuery = query(
+          collection(db, 'focusGoals'),
+          where('ownerUid', '==', currentUser.uid),
+          where('persona', '==', (currentPersona || 'personal')),
+          where('isActive', '==', true),
+        );
+        const focusSnapshot = await getDocs(focusQuery);
+        const ids = new Set<string>();
+        focusSnapshot.docs.forEach((docSnap) => {
+          const goalIds = (docSnap.data() as any)?.goalIds;
+          if (!Array.isArray(goalIds)) return;
+          goalIds.forEach((goalId: any) => {
+            const id = String(goalId || '').trim();
+            if (id) ids.add(id);
+          });
+        });
+        setActiveFocusGoalIds(ids);
+      } catch {
+        setActiveFocusGoalIds(new Set());
+      }
+    };
+    loadActiveFocusGoals();
+  }, [currentUser, currentPersona]);
 
   // Load goals and sprints when component mounts or when quickAddType changes to 'story'
   useEffect(() => {
@@ -124,7 +171,8 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
       const baseData = {
         title: quickAddData.title.trim(),
         description: quickAddData.description.trim(),
-        persona: currentPersona,
+        url: quickAddData.url.trim() || null,
+        persona: (quickAddData.persona || currentPersona || 'personal') as 'personal' | 'work',
         ownerUid: currentUser.uid,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
@@ -137,6 +185,15 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
       });
 
       if (quickAddType === 'goal') {
+        if (activeFocusGoalIds.size > 0) {
+          const proceed = window.confirm(
+            'You have an active focus period. New goals added now will be deferred until after the focus period ends. Continue?'
+          );
+          if (!proceed) {
+            setIsSubmitting(false);
+            return;
+          }
+        }
         // Get existing goal references for unique ref generation
         const existingGoalsQuery = query(
           collection(db, 'goals'),
@@ -172,6 +229,7 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
           timestamp: new Date().toISOString(),
           ref: goalRef
         });
+        setSubmitResult(`✅ Goal created successfully! (${goalRef})`);
       } else if (quickAddType === 'story') {
         // Get existing story references for unique ref generation
         const existingStoriesQuery = query(
@@ -213,6 +271,7 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
           timestamp: new Date().toISOString(),
           ref: storyRef
         });
+        setSubmitResult(`✅ Story created successfully! (${storyRef})`);
       } else if (quickAddType === 'task') {
         // Get existing task references for unique ref generation
         const existingTasksQuery = query(
@@ -227,6 +286,7 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
         const taskRef = generateRef('task', existingRefs);
         const effortData = efforts.find(e => e.value === quickAddData.effort);
         const estimateMinutes = effortData?.minutes || 45;
+        const effortPoints = effortData?.points ?? 1;
         const estimatedHours = Math.round((estimateMinutes / 60) * 100) / 100;
         const taskType = (quickAddData.type || 'task') as string;
         const isRecurring = ['chore', 'routine', 'habit'].includes(taskType);
@@ -240,7 +300,9 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
           tags: [],
           type: taskType,
           persona: currentPersona,
-          sprint: null,
+          sprint: (quickAddData.sprintId || defaultFabSprintId)
+            ? (_availableSprints as any).find((s: any) => s.id === (quickAddData.sprintId || defaultFabSprintId)) || null
+            : null,
           themeValue,
           goalRef: null,
           storyRef: null,
@@ -251,10 +313,12 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
           ref: taskRef,
           parentType: 'story',
           parentId: '', // Will need to be linked later
+          sprintId: quickAddData.sprintId || defaultFabSprintId || null,
           effort: quickAddData.effort,
           priority: quickAddData.priority,
           estimateMin: estimateMinutes,
           estimatedHours,
+          points: effortPoints,
           status: 0,
           theme: themeValue,
           type: taskType,
@@ -300,18 +364,16 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
         } else {
           throw new Error(result.error || 'Emergency task creation failed');
         }
-      } else {
-        // For goals and stories, use standard success message after creation
-        const itemTypeCapitalized = quickAddType === 'goal' ? 'Goal' : 'Story';
-        setSubmitResult(`✅ ${itemTypeCapitalized} created successfully!`);
       }
 
       setQuickAddData({
         title: '',
         description: '',
+        url: '',
         theme: 'Growth',
         effort: 'M',
         priority: 'med',
+        persona: (currentPersona || 'personal') as 'personal' | 'work',
         goalId: '',
         sprintId: '',
         type: 'task',
@@ -335,8 +397,9 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
         timestamp: new Date().toISOString()
       });
       setSubmitResult(`❌ Failed to create ${quickAddType}: ${error.message}`);
+    } finally {
+      setIsSubmitting(false);
     }
-    setIsSubmitting(false);
   };
 
   return (
@@ -347,10 +410,20 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
           <button
             className="md-fab-mini"
             onClick={() => {
-              setShowIntake(true);
+              setShowFocusIntake(true);
               setShowMenu(false);
             }}
-            title="AI Goal Intake (Chat)"
+            title="Focus Intake"
+          >
+            F
+          </button>
+          <button
+            className="md-fab-mini"
+            onClick={() => {
+              setShowIntentBroker(true);
+              setShowMenu(false);
+            }}
+            title="Intent Broker"
           >
             A
           </button>
@@ -375,6 +448,10 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
             className="md-fab-mini"
             onClick={() => {
               setQuickAddType('goal');
+              setQuickAddData((prev) => ({
+                ...prev,
+                persona: (currentPersona || 'personal') as 'personal' | 'work',
+              }));
               setShowQuickAdd(true);
               setShowMenu(false);
             }}
@@ -386,6 +463,10 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
             className="md-fab-mini"
             onClick={() => {
               setQuickAddType('story');
+              setQuickAddData((prev) => ({
+                ...prev,
+                persona: (currentPersona || 'personal') as 'personal' | 'work',
+              }));
               setShowQuickAdd(true);
               setShowMenu(false);
             }}
@@ -396,13 +477,27 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
           <button
             className="md-fab-mini"
             onClick={() => {
+              openComposer('', 'web_fab');
+              setShowMenu(false);
+            }}
+            title="Process Text"
+          >
+            T
+          </button>
+          <button
+            className="md-fab-mini"
+            onClick={() => {
               setQuickAddType('task');
+              setQuickAddData((prev) => ({
+                ...prev,
+                persona: (currentPersona || 'personal') as 'personal' | 'work',
+              }));
               setShowQuickAdd(true);
               setShowMenu(false);
             }}
-            title="Add Task"
+            title="Quick Task"
           >
-            T
+            Q
           </button>
         </div>
       )}
@@ -475,6 +570,58 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
         </Modal.Footer>
       </Modal>
 
+      {/* Focus Intake Modal */}
+      <Modal show={showFocusIntake} onHide={() => setShowFocusIntake(false)} centered>
+        <Modal.Header closeButton>
+          <Modal.Title>Focus Intake</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <Form.Group className="mb-3">
+            <Form.Label>What do you want to focus on?</Form.Label>
+            <Form.Control
+              as="textarea"
+              rows={4}
+              value={focusVision}
+              onChange={(e) => setFocusVision(e.target.value)}
+              placeholder="Describe the outcome you want over the next focus period..."
+              autoFocus
+            />
+          </Form.Group>
+          <Form.Group>
+            <Form.Label>Focus period</Form.Label>
+            <Form.Select
+              value={focusTimeframe}
+              onChange={(e) => setFocusTimeframe(e.target.value as 'sprint' | 'quarter' | 'year')}
+            >
+              <option value="sprint">Sprint (2 weeks)</option>
+              <option value="quarter">Quarter (13 weeks)</option>
+              <option value="year">Year (52 weeks)</option>
+            </Form.Select>
+          </Form.Group>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setShowFocusIntake(false)}>Cancel</Button>
+          <Button
+            variant="primary"
+            disabled={!focusVision.trim()}
+            onClick={() => {
+              const querySeed = focusVision.trim().split(/\s+/).slice(0, 6).join(' ');
+              saveFocusWizardPrefill({
+                source: 'fab',
+                visionText: focusVision.trim(),
+                timeframe: focusTimeframe,
+                searchTerm: querySeed,
+                autoRunMatch: true,
+              });
+              setShowFocusIntake(false);
+              navigate('/focus-goals');
+            }}
+          >
+            Open Focus Wizard
+          </Button>
+        </Modal.Footer>
+      </Modal>
+
       {/* Quick Add Modal: if adding a Story, reuse the shared AddStoryModal for consistency */}
       {quickAddType === 'story' ? (
         <AddStoryModal show={showQuickAdd} onClose={() => setShowQuickAdd(false)} goalId={quickAddData.goalId || undefined} />
@@ -508,6 +655,31 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
                 placeholder={`Describe this ${quickAddType}...`}
               />
             </Form.Group>
+
+            {quickAddType === 'task' && (
+              <Form.Group className="mb-3">
+                <Form.Label>Source URL</Form.Label>
+                <Form.Control
+                  type="url"
+                  value={quickAddData.url}
+                  onChange={(e) => setQuickAddData({ ...quickAddData, url: e.target.value })}
+                  placeholder="https://..."
+                />
+              </Form.Group>
+            )}
+
+            {quickAddType === 'task' && (
+              <Form.Group className="mb-3">
+                <Form.Label>Persona</Form.Label>
+                <Form.Select
+                  value={quickAddData.persona}
+                  onChange={(e) => setQuickAddData({ ...quickAddData, persona: e.target.value as 'personal' | 'work' })}
+                >
+                  <option value="personal">Personal</option>
+                  <option value="work">Work</option>
+                </Form.Select>
+              </Form.Group>
+            )}
 
             {(quickAddType === 'goal' || quickAddType === 'task') && (
               <Form.Group className="mb-3">
@@ -667,6 +839,13 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
       <BulkCreateModal
         show={showBulkCreate}
         onHide={() => setShowBulkCreate(false)}
+      />
+
+      <IntentBrokerModal
+        show={showIntentBroker}
+        onHide={() => setShowIntentBroker(false)}
+        ownerUid={currentUser?.uid}
+        persona={currentPersona}
       />
 
       {/* Inline Chat Modal for Intake */}

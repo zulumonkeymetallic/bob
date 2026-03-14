@@ -1,12 +1,20 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, Badge, Button, Card, Col, Form, Row, Spinner, OverlayTrigger, Tooltip } from 'react-bootstrap';
+import { Alert, Badge, Button, Card, Form, Spinner, OverlayTrigger, Tooltip, Dropdown } from 'react-bootstrap';
 import { FixedSizeList as List } from 'react-window';
 import useMeasure from 'react-use-measure';
 import { useAuth } from '../../contexts/AuthContext';
 import { db, functions } from '../../firebase';
 import { doc, onSnapshot, collection, query, where } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
-import { DEFAULT_CATEGORIES, FinanceCategory, BUCKET_LABELS, getCategoryByKey, mergeFinanceCategories } from '../../utils/financeCategories';
+import { FinanceCategory, BUCKET_LABELS, getCategoryByKey, mergeFinanceCategories } from '../../utils/financeCategories';
+import {
+  buildActionLookup,
+  buildCadenceByMerchant,
+  FinanceActionInsight,
+  getActionForMerchant,
+  isWithinLastYear,
+  resolveMerchantKey,
+} from './financeInsights';
 import './MerchantMappings.css';
 
 type MerchantRow = {
@@ -22,8 +30,24 @@ type MerchantRow = {
   isSubscription?: boolean;
 };
 
-type MerchantSortColumn = 'merchant' | 'spend' | 'transactionsTotal' | 'transactions12' | 'transactions6' | 'category' | 'bucket' | 'subscription' | 'lastTransaction';
+type MerchantSortColumn = 'merchant' | 'spend' | 'transactionsTotal' | 'transactions12' | 'transactions6' | 'frequency' | 'category' | 'bucket' | 'subscription' | 'recommendedAction' | 'lastTransaction';
 type MerchantSortDirection = 'asc' | 'desc';
+
+const MERCHANT_COLUMN_STORAGE_KEY = 'finance_merchant_columns_v1';
+const MERCHANT_COLUMN_OPTIONS = [
+  { key: 'merchant', label: 'Merchant', width: '1.35fr' },
+  { key: 'spend', label: 'Spend', width: '1fr' },
+  { key: 'transactionsTotal', label: 'Tx (Total)', width: '0.85fr' },
+  { key: 'transactions12', label: 'Tx (12mo)', width: '0.9fr' },
+  { key: 'transactions6', label: 'Tx (6mo)', width: '0.9fr' },
+  { key: 'frequency', label: 'Frequency', width: '0.95fr' },
+  { key: 'category', label: 'Category', width: '1.25fr' },
+  { key: 'bucket', label: 'Bucket', width: '0.9fr' },
+  { key: 'subscription', label: 'Subscription', width: '0.85fr' },
+  { key: 'recommendedAction', label: 'Recommended action', width: '1.25fr' },
+  { key: 'actions', label: 'Actions', width: '1.2fr' },
+] as const;
+const MERCHANT_DEFAULT_VISIBLE_COLUMNS = ['merchant', 'spend', 'transactions12', 'frequency', 'category', 'bucket', 'subscription', 'recommendedAction', 'actions'];
 
 const formatMoney = (v: number) => v.toLocaleString('en-GB', { style: 'currency', currency: 'GBP' });
 const toText = (value: any, fallback = ''): string => {
@@ -46,9 +70,11 @@ const MERCHANT_SORT_COLUMNS: MerchantSortColumn[] = [
   'transactionsTotal',
   'transactions12',
   'transactions6',
+  'frequency',
   'category',
   'bucket',
   'subscription',
+  'recommendedAction',
   'lastTransaction',
 ];
 const MERCHANT_SORT_LABELS: Record<MerchantSortColumn, string> = {
@@ -57,9 +83,11 @@ const MERCHANT_SORT_LABELS: Record<MerchantSortColumn, string> = {
   transactionsTotal: 'Tx (Total)',
   transactions12: 'Tx (12mo)',
   transactions6: 'Tx (6mo)',
+  frequency: 'Frequency',
   category: 'Category',
   bucket: 'Bucket',
   subscription: 'Subscription',
+  recommendedAction: 'Recommended action',
   lastTransaction: 'Last tx',
 };
 const MERCHANT_DEFAULT_SORT_DIRECTION: Record<MerchantSortColumn, MerchantSortDirection> = {
@@ -68,9 +96,11 @@ const MERCHANT_DEFAULT_SORT_DIRECTION: Record<MerchantSortColumn, MerchantSortDi
   transactionsTotal: 'desc',
   transactions12: 'desc',
   transactions6: 'desc',
+  frequency: 'asc',
   category: 'asc',
   bucket: 'asc',
   subscription: 'desc',
+  recommendedAction: 'asc',
   lastTransaction: 'desc',
 };
 
@@ -91,6 +121,16 @@ const MerchantMappings: React.FC = () => {
   const [tableRef, bounds] = useMeasure();
   const [pots, setPots] = useState<Record<string, { name: string }>>({});
   const [txSample, setTxSample] = useState<any[]>([]);
+  const [actionLookup, setActionLookup] = useState<Map<string, FinanceActionInsight>>(new Map());
+  const [convertingActionId, setConvertingActionId] = useState<string | null>(null);
+  const [visibleColumns, setVisibleColumns] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem(MERCHANT_COLUMN_STORAGE_KEY);
+      const parsed = raw ? JSON.parse(raw) : null;
+      if (Array.isArray(parsed) && parsed.length) return parsed;
+    } catch { }
+    return MERCHANT_DEFAULT_VISIBLE_COLUMNS;
+  });
 
   useEffect(() => {
     if (!currentUser) return;
@@ -121,23 +161,26 @@ const MerchantMappings: React.FC = () => {
         setStatus((err as any)?.message || 'Missing permission to load Monzo pots.');
       }
     );
-    // Lightweight fallback sample of transactions so UI isn't empty if summary hasn't been built yet
+    // Fallback dataset used for cadence inference and merchant stats when summary is unavailable.
     const txQ = query(collection(db, 'monzo_transactions'), where('ownerUid', '==', currentUser.uid));
     const unsubTx = onSnapshot(
       txQ,
       (snap) => {
         const rows: any[] = [];
-        snap.docs.slice(0, 500).forEach((d) => {
+        snap.docs.forEach((d) => {
           const data = d.data() as any;
           const merchantName = toText(data.merchantName || data.merchant || data.description, 'Unknown merchant');
           const merchantKey = toText(
             data.merchantKey || data.merchantId || data.merchant || data.merchant_normalized || merchantName,
             merchantName
           );
+          const createdAt = data.createdAt?.toDate ? data.createdAt.toDate() : null;
           rows.push({
             merchantKey,
             merchantName,
             amount: typeof data.amount === 'number' ? data.amount : Number(data.amount || 0),
+            createdISO: createdAt ? createdAt.toISOString() : (data.createdISO || null),
+            isSubscription: !!data.isSubscription,
           });
         });
         setTxSample(rows);
@@ -153,6 +196,31 @@ const MerchantMappings: React.FC = () => {
       unsubTx();
     };
   }, [currentUser]);
+
+  useEffect(() => {
+    if (!currentUser?.uid) {
+      setActionLookup(new Map());
+      return;
+    }
+    const ref = doc(db, 'finance_action_insights', currentUser.uid);
+    const unsub = onSnapshot(
+      ref,
+      (snap) => {
+        const actions = Array.isArray(snap.data()?.actions) ? snap.data()?.actions : [];
+        setActionLookup(buildActionLookup(actions));
+      },
+      (err) => {
+        console.error('Failed to load finance action insights', err);
+      }
+    );
+    return () => unsub();
+  }, [currentUser]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(MERCHANT_COLUMN_STORAGE_KEY, JSON.stringify(visibleColumns));
+    } catch { }
+  }, [visibleColumns]);
 
   useEffect(() => {
     if (!currentUser?.uid) {
@@ -200,21 +268,36 @@ const MerchantMappings: React.FC = () => {
     }
     if (list && list.length) return normalizeRows(list);
     if (txSample.length) {
-      const agg = new Map<string, { spend: number; count: number; name: string }>();
+      const agg = new Map<string, { spend: number; count: number; name: string; lastISO: string | null; months: Set<string>; isSubscription: boolean }>();
       txSample.forEach((t) => {
         const key = toText(t.merchantKey || t.merchantName, 'unknown');
         const name = toText(t.merchantName || t.merchantKey, key);
-        if (!agg.has(key)) agg.set(key, { spend: 0, count: 0, name: t.merchantName || key });
+        if (!agg.has(key)) {
+          agg.set(key, {
+            spend: 0,
+            count: 0,
+            name: t.merchantName || key,
+            lastISO: null,
+            months: new Set<string>(),
+            isSubscription: false,
+          });
+        }
         const entry = agg.get(key)!;
         entry.count += 1;
         entry.spend += Math.abs(t.amount || 0);
         entry.name = name;
+        if (t.createdISO && (!entry.lastISO || t.createdISO > entry.lastISO)) entry.lastISO = t.createdISO;
+        if (t.createdISO) entry.months.add(String(t.createdISO).slice(0, 7));
+        entry.isSubscription = entry.isSubscription || !!t.isSubscription;
       });
       return Array.from(agg.entries()).map(([merchantKey, val]) => ({
         merchantKey,
         merchantName: val.name,
         totalSpend: val.spend,
         transactions: val.count,
+        months: val.months.size,
+        lastTransactionISO: val.lastISO,
+        isSubscription: val.isSubscription,
         primaryCategoryType: '',
         primaryCategoryKey: '',
       }));
@@ -222,12 +305,10 @@ const MerchantMappings: React.FC = () => {
     return [];
   }, [summary, txSample]);
 
+  const cadenceByMerchant = useMemo(() => buildCadenceByMerchant(txSample), [txSample]);
+
   const filteredRows = useMemo(() => {
     let list = rows;
-    if (search.trim()) {
-      const q = search.toLowerCase();
-      list = list.filter((r) => toText(r.merchantName || r.merchantKey, '').toLowerCase().includes(q));
-    }
     if (missingOnly) {
       list = list.filter((r) => !r.primaryCategoryKey && !r.primaryCategoryType);
     }
@@ -237,10 +318,46 @@ const MerchantMappings: React.FC = () => {
       const txRate = months > 0 ? tx / months : tx;
       const tx12 = Math.round(txRate * 12);
       const tx6 = Math.round(txRate * 6);
-      return { ...r, transactions12: tx12 || tx, transactions6: tx6 || tx };
-    });
+      const cadence = cadenceByMerchant.get(resolveMerchantKey({ merchantKey: r.merchantKey, merchantName: r.merchantName }));
+      const fallbackFrequency = (() => {
+        if (cadence?.frequencyLabel) return cadence.frequencyLabel;
+        if (tx <= 1) return 'One-off';
+        if (months >= 10 && tx <= 2) return 'Yearly';
+        if (txRate >= 0.7 && txRate <= 1.4) return 'Monthly';
+        if (txRate >= 0.2 && txRate < 0.7) return 'Quarterly';
+        return 'Irregular';
+      })();
+      const recommendedAction = (r.lastTransactionISO && !isWithinLastYear(r.lastTransactionISO))
+        ? null
+        : getActionForMerchant(actionLookup, { merchantKey: r.merchantKey, merchantName: r.merchantName });
 
-    const sortableValue = (row: MerchantRow & { transactions12?: number; transactions6?: number }, column: MerchantSortColumn): number | string => {
+      return {
+        ...r,
+        transactions12: tx12 || tx,
+        transactions6: tx6 || tx,
+        inferredFrequency: fallbackFrequency,
+        recommendedAction,
+      };
+    });
+    const searched = search.trim()
+      ? decorated.filter((row) => {
+        const q = search.toLowerCase();
+        const hay = [
+          toText(row.merchantName || row.merchantKey, ''),
+          toText(row.primaryCategoryKey, ''),
+          toText(row.primaryCategoryType, ''),
+          toText(row.inferredFrequency, ''),
+          toText(row.recommendedAction?.title, ''),
+          toText(row.recommendedAction?.reason, ''),
+        ].join(' ').toLowerCase();
+        return hay.includes(q);
+      })
+      : decorated;
+
+    const sortableValue = (
+      row: MerchantRow & { transactions12?: number; transactions6?: number; inferredFrequency?: string; recommendedAction?: FinanceActionInsight | null },
+      column: MerchantSortColumn
+    ): number | string => {
       const selectedCategoryKey = edits[row.merchantKey]?.categoryKey || row.primaryCategoryKey || '';
       const selectedCategoryLabel = selectedCategoryKey
         ? getCategoryByKey(selectedCategoryKey, allCategories)?.label || selectedCategoryKey
@@ -253,14 +370,16 @@ const MerchantMappings: React.FC = () => {
       if (column === 'transactionsTotal') return row.transactions || 0;
       if (column === 'transactions12') return row.transactions12 || row.transactions || 0;
       if (column === 'transactions6') return row.transactions6 || row.transactions || 0;
+      if (column === 'frequency') return toText(row.inferredFrequency, '').toLowerCase();
       if (column === 'category') return selectedCategoryLabel.toLowerCase();
       if (column === 'bucket') return String(bucketValue || '').toLowerCase();
       if (column === 'subscription') return edits[row.merchantKey]?.isSubscription ?? row.isSubscription ? 1 : 0;
+      if (column === 'recommendedAction') return toText(row.recommendedAction?.title || row.recommendedAction?.reason, '').toLowerCase();
       if (column === 'lastTransaction') return row.lastTransactionISO ? new Date(row.lastTransactionISO).getTime() : 0;
       return 0;
     };
 
-    const sorted = [...decorated];
+    const sorted = [...searched];
     sorted.sort((a, b) => {
       const aVal = sortableValue(a, sortColumn);
       const bVal = sortableValue(b, sortColumn);
@@ -273,7 +392,7 @@ const MerchantMappings: React.FC = () => {
       return sortDirection === 'asc' ? comparison : -comparison;
     });
     return sorted;
-  }, [allCategories, edits, rows, search, missingOnly, sortColumn, sortDirection]);
+  }, [allCategories, edits, rows, search, missingOnly, sortColumn, sortDirection, cadenceByMerchant, actionLookup]);
 
   // Prevent an empty grid when filters hide everything
   useEffect(() => {
@@ -409,15 +528,76 @@ const MerchantMappings: React.FC = () => {
     </OverlayTrigger>
   );
 
-  const tableWidth = Math.max(Math.floor(bounds.width || 0), 980);
+  const convertActionToStory = async (action: FinanceActionInsight | null) => {
+    if (!action?.id) return;
+    setConvertingActionId(action.id);
+    setStatus('');
+    try {
+      const fn = httpsCallable(functions, 'convertFinanceActionToStory');
+      const res: any = await fn({ actionId: action.id, persona: 'personal' });
+      const storyId = res?.data?.storyId;
+      setStatus(storyId ? `Logged story ${storyId} for ${action.merchantName || action.merchantKey || 'merchant'}.` : 'Story logged.');
+    } catch (err: any) {
+      setStatus(err?.message || 'Failed to log story');
+    } finally {
+      setConvertingActionId(null);
+    }
+  };
+
+  const columnOptionsByKey = useMemo(() => {
+    const map = new Map<string, { key: string; label: string; width: string }>();
+    MERCHANT_COLUMN_OPTIONS.forEach((opt) => map.set(opt.key, opt));
+    return map;
+  }, []);
+
+  const effectiveVisibleColumns = useMemo(() => {
+    const safe = visibleColumns.filter((key) => columnOptionsByKey.has(key));
+    return safe.length ? safe : MERCHANT_DEFAULT_VISIBLE_COLUMNS;
+  }, [visibleColumns, columnOptionsByKey]);
+
+  const gridTemplateColumns = useMemo(() => {
+    const widths = effectiveVisibleColumns
+      .map((key) => columnOptionsByKey.get(key)?.width)
+      .filter(Boolean) as string[];
+    return widths.map((width) => `minmax(0, ${width})`).join(' ');
+  }, [effectiveVisibleColumns, columnOptionsByKey]);
+
+  const tableWidth = Math.max(Math.floor(bounds.width || 0), 1080);
+
+  const renderColumnsMenu = () => (
+    <Dropdown align="end">
+      <Dropdown.Toggle size="sm" variant="outline-secondary">View columns</Dropdown.Toggle>
+      <Dropdown.Menu style={{ minWidth: 240 }}>
+        {MERCHANT_COLUMN_OPTIONS.map((col) => (
+          <Dropdown.Item key={col.key} as="div" className="px-3">
+            <Form.Check
+              type="switch"
+              id={`merchant-col-${col.key}`}
+              label={col.label}
+              checked={effectiveVisibleColumns.includes(col.key)}
+              onChange={() =>
+                setVisibleColumns((prev) => {
+                  const base = prev.length ? prev : MERCHANT_DEFAULT_VISIBLE_COLUMNS;
+                  if (base.includes(col.key) && base.length === 1) return base;
+                  return base.includes(col.key)
+                    ? base.filter((k) => k !== col.key)
+                    : [...base, col.key];
+                })
+              }
+            />
+          </Dropdown.Item>
+        ))}
+      </Dropdown.Menu>
+    </Dropdown>
+  );
 
   return (
     <div className="container-fluid finance-merchant-container py-3" ref={tableRef}>
       <div className="d-flex justify-content-between align-items-center mb-2">
         <span className="small text-muted">Signed in as: <code>{currentUser?.uid || '—'}</code></span>
       </div>
-      <h3>Merchant Mappings</h3>
-      <p className="text-muted">Map merchants to your budget categories. New transactions will auto-categorise; you can bulk-apply to history.</p>
+      <h3>Merchants</h3>
+      <p className="text-muted">Unified merchant grid with spend, cadence frequency, subscription flags, category mapping, and AI recommended actions.</p>
 
       <Card className="mb-3">
         <Card.Body>
@@ -505,7 +685,7 @@ const MerchantMappings: React.FC = () => {
         <Card.Header className="d-flex justify-content-between align-items-center">
           <div>
             <strong>All Merchants</strong>
-            <div className="text-muted small">Excel-style grid: spend, transaction cadence, category, bucket, subscription.</div>
+            <div className="text-muted small">Consistent with transactions: selectable columns, frequency, subscription, and story logging from AI recommendations.</div>
           </div>
           <div className="d-flex align-items-center gap-2">
             <Form.Select
@@ -525,6 +705,7 @@ const MerchantMappings: React.FC = () => {
               <option value="asc">Ascending</option>
               <option value="desc">Descending</option>
             </Form.Select>
+            {renderColumnsMenu()}
           </div>
         </Card.Header>
         <Card.Body className="p-0">
@@ -541,16 +722,18 @@ const MerchantMappings: React.FC = () => {
             </Alert>
           ) : (
             <div className="merchant-table" style={{ height: 540 }}>
-              <div className="merchant-header" style={{ minWidth: tableWidth }}>
-                {renderSortableHeader('merchant', 'Merchant', 'Merchant name')}
-                {renderSortableHeader('spend', 'Spend', 'Total spend (ex VAT)')}
-                {renderSortableHeader('transactionsTotal', 'Tx (Total)', 'Total transactions')}
-                {renderSortableHeader('transactions12', 'Tx (12mo)', '12mo = projected from months/transactions or YTD if present')}
-                {renderSortableHeader('transactions6', 'Tx (6mo)', '6mo = projected from months/transactions')}
-                {renderSortableHeader('category', 'Category', 'Category label to apply')}
-                {renderSortableHeader('bucket', 'Bucket', 'Bucket derived from category')}
-                {renderSortableHeader('subscription', 'Subscription', 'Mark as subscription for override')}
-                <span className="text-end">Actions</span>
+              <div className="merchant-header" style={{ minWidth: tableWidth, gridTemplateColumns }}>
+                {effectiveVisibleColumns.includes('merchant') && renderSortableHeader('merchant', 'Merchant', 'Merchant name')}
+                {effectiveVisibleColumns.includes('spend') && renderSortableHeader('spend', 'Spend', 'Total spend')}
+                {effectiveVisibleColumns.includes('transactionsTotal') && renderSortableHeader('transactionsTotal', 'Tx (Total)', 'Total transactions')}
+                {effectiveVisibleColumns.includes('transactions12') && renderSortableHeader('transactions12', 'Tx (12mo)', '12mo projection from cadence')}
+                {effectiveVisibleColumns.includes('transactions6') && renderSortableHeader('transactions6', 'Tx (6mo)', '6mo projection from cadence')}
+                {effectiveVisibleColumns.includes('frequency') && renderSortableHeader('frequency', 'Frequency', 'AI-inferred cadence')}
+                {effectiveVisibleColumns.includes('category') && renderSortableHeader('category', 'Category', 'Category label to apply')}
+                {effectiveVisibleColumns.includes('bucket') && renderSortableHeader('bucket', 'Bucket', 'Bucket derived from category')}
+                {effectiveVisibleColumns.includes('subscription') && renderSortableHeader('subscription', 'Subscription', 'Subscription flag')}
+                {effectiveVisibleColumns.includes('recommendedAction') && renderSortableHeader('recommendedAction', 'Recommended action', 'AI recommendation and story logging')}
+                {effectiveVisibleColumns.includes('actions') && <span className="text-end">Actions</span>}
               </div>
               <List
                 height={480}
@@ -567,73 +750,128 @@ const MerchantMappings: React.FC = () => {
                   const tx12 = m.transactions12 || 0;
                   const tx6 = m.transactions6 || 0;
                   const totalTx = m.transactions || 0;
+                  const recommendedAction: FinanceActionInsight | null = m.recommendedAction || null;
                   return (
-                    <div style={style} className="merchant-row">
-                      <div className="merchant-cell">
-                        <div className="merchant-label text-truncate">{toText(m.merchantName, 'Unknown merchant')}</div>
-                        <div className="merchant-sub">{toText(m.merchantKey, 'unknown')}</div>
-                        <div className="merchant-sub">Last: {m.lastTransactionISO ? new Date(m.lastTransactionISO).toLocaleDateString() : '—'}</div>
-                      </div>
-                      <div className="merchant-cell">
-                        <div className="merchant-money">{formatMoney(m.totalSpend)}</div>
-                      </div>
-                      <div className="merchant-cell">
-                        <div className="merchant-label">{totalTx} tx</div>
-                        <div className="merchant-sub">lifetime</div>
-                      </div>
-                      <div className="merchant-cell">
-                        <div className="merchant-label">{tx12}</div>
-                        <div className="merchant-sub">12mo proj</div>
-                      </div>
-                      <div className="merchant-cell">
-                        <div className="merchant-label">{tx6}</div>
-                        <div className="merchant-sub">6mo proj</div>
-                      </div>
-                      <div className="merchant-cell">
-                        <Form.Select
-                          size="sm"
-                          value={edits[m.merchantKey]?.categoryKey || m.primaryCategoryKey || 'dining_out'}
-                          onChange={(e) => setEdit(m.merchantKey, { categoryKey: e.target.value })}
-                          className="merchant-input"
-                        >
-                          {Object.entries(categoriesByBucket).map(([bucket, cats]) => (
-                            <optgroup key={bucket} label={BUCKET_LABELS[bucket as keyof typeof BUCKET_LABELS]}>
-                              {cats.map(cat => <option key={cat.key} value={cat.key}>{cat.label}</option>)}
-                            </optgroup>
-                          ))}
-                        </Form.Select>
-                        <Form.Control
-                          size="sm"
-                          className="merchant-input mt-1"
-                          value={edits[m.merchantKey]?.label || toText(m.merchantName, toText(m.merchantKey, ''))}
-                          onChange={(e) => setEdit(m.merchantKey, { label: e.target.value })}
-                        />
-                      </div>
-                      <div className="merchant-cell">
-                        <div className="merchant-chip">{bucketLabel}</div>
-                      </div>
-                      <div className="merchant-cell text-center">
-                        <Form.Check
-                          type="checkbox"
-                          checked={edits[m.merchantKey]?.isSubscription ?? m.isSubscription ?? false}
-                          onChange={(e) => setEdit(m.merchantKey, { isSubscription: e.target.checked })}
-                        />
-                      </div>
-                      <div className="merchant-cell">
-                        <div className="d-flex gap-2 justify-content-end">
-                          <Button size="sm" variant="outline-secondary" disabled={busy} onClick={() => saveOne(m.merchantKey, false)}>
-                            Save
-                          </Button>
-                          <Button size="sm" variant="primary" disabled={busy} onClick={() => saveOne(m.merchantKey, true)}>
-                            {busy ? <Spinner size="sm" animation="border" className="me-2" /> : null}
-                            Save & Apply
-                          </Button>
+                    <div style={{ ...style, gridTemplateColumns }} className="merchant-row">
+                      {effectiveVisibleColumns.includes('merchant') && (
+                        <div className="merchant-cell">
+                          <div className="merchant-label text-truncate">{toText(m.merchantName, 'Unknown merchant')}</div>
+                          <div className="merchant-sub">{toText(m.merchantKey, 'unknown')}</div>
+                          <div className="merchant-sub">Last: {m.lastTransactionISO ? new Date(m.lastTransactionISO).toLocaleDateString() : '—'}</div>
                         </div>
-                        <div className="mt-1 d-flex gap-1 flex-wrap">
-                          {m.isRecurring ? <Badge bg="info">Recurring</Badge> : null}
-                          {m.months && m.months >= 3 ? <Badge bg="secondary">{m.months} mo</Badge> : null}
+                      )}
+                      {effectiveVisibleColumns.includes('spend') && (
+                        <div className="merchant-cell">
+                          <div className="merchant-money">{formatMoney(m.totalSpend)}</div>
                         </div>
-                      </div>
+                      )}
+                      {effectiveVisibleColumns.includes('transactionsTotal') && (
+                        <div className="merchant-cell">
+                          <div className="merchant-label">{totalTx} tx</div>
+                          <div className="merchant-sub">lifetime</div>
+                        </div>
+                      )}
+                      {effectiveVisibleColumns.includes('transactions12') && (
+                        <div className="merchant-cell">
+                          <div className="merchant-label">{tx12}</div>
+                          <div className="merchant-sub">12mo proj</div>
+                        </div>
+                      )}
+                      {effectiveVisibleColumns.includes('transactions6') && (
+                        <div className="merchant-cell">
+                          <div className="merchant-label">{tx6}</div>
+                          <div className="merchant-sub">6mo proj</div>
+                        </div>
+                      )}
+                      {effectiveVisibleColumns.includes('frequency') && (
+                        <div className="merchant-cell">
+                          <div className="merchant-label">{toText(m.inferredFrequency, 'Irregular')}</div>
+                          <div className="merchant-sub">AI cadence</div>
+                        </div>
+                      )}
+                      {effectiveVisibleColumns.includes('category') && (
+                        <div className="merchant-cell">
+                          <Form.Select
+                            size="sm"
+                            value={edits[m.merchantKey]?.categoryKey || m.primaryCategoryKey || 'dining_out'}
+                            onChange={(e) => setEdit(m.merchantKey, { categoryKey: e.target.value })}
+                            className="merchant-input"
+                          >
+                            {Object.entries(categoriesByBucket).map(([bucket, cats]) => (
+                              <optgroup key={bucket} label={BUCKET_LABELS[bucket as keyof typeof BUCKET_LABELS]}>
+                                {cats.map(cat => <option key={cat.key} value={cat.key}>{cat.label}</option>)}
+                              </optgroup>
+                            ))}
+                          </Form.Select>
+                          <Form.Control
+                            size="sm"
+                            className="merchant-input mt-1"
+                            value={edits[m.merchantKey]?.label || toText(m.merchantName, toText(m.merchantKey, ''))}
+                            onChange={(e) => setEdit(m.merchantKey, { label: e.target.value })}
+                          />
+                        </div>
+                      )}
+                      {effectiveVisibleColumns.includes('bucket') && (
+                        <div className="merchant-cell">
+                          <div className="merchant-chip">{bucketLabel}</div>
+                        </div>
+                      )}
+                      {effectiveVisibleColumns.includes('subscription') && (
+                        <div className="merchant-cell text-center">
+                          <Form.Check
+                            type="checkbox"
+                            checked={edits[m.merchantKey]?.isSubscription ?? m.isSubscription ?? false}
+                            onChange={(e) => setEdit(m.merchantKey, { isSubscription: e.target.checked })}
+                          />
+                        </div>
+                      )}
+                      {effectiveVisibleColumns.includes('recommendedAction') && (
+                        <div className="merchant-cell">
+                          {recommendedAction ? (
+                            <div className="d-flex flex-column gap-1">
+                              <div className="merchant-label text-truncate" title={toText(recommendedAction.title, 'Action')}>
+                                {toText(recommendedAction.title, 'Action')}
+                              </div>
+                              <div className="merchant-sub text-truncate" title={toText(recommendedAction.reason, '')}>
+                                {toText(recommendedAction.reason, '')}
+                              </div>
+                              {!recommendedAction.storyId ? (
+                                <Button
+                                  size="sm"
+                                  variant="outline-primary"
+                                  disabled={convertingActionId === recommendedAction.id}
+                                  onClick={() => convertActionToStory(recommendedAction)}
+                                >
+                                  {convertingActionId === recommendedAction.id ? 'Logging…' : 'Log story'}
+                                </Button>
+                              ) : (
+                                <a className="btn btn-sm btn-outline-secondary" href={`/stories/${recommendedAction.storyId}`}>
+                                  Open story
+                                </a>
+                              )}
+                            </div>
+                          ) : (
+                            <div className="merchant-sub">—</div>
+                          )}
+                        </div>
+                      )}
+                      {effectiveVisibleColumns.includes('actions') && (
+                        <div className="merchant-cell">
+                          <div className="d-flex gap-2 justify-content-end">
+                            <Button size="sm" variant="outline-secondary" disabled={busy} onClick={() => saveOne(m.merchantKey, false)}>
+                              Save
+                            </Button>
+                            <Button size="sm" variant="primary" disabled={busy} onClick={() => saveOne(m.merchantKey, true)}>
+                              {busy ? <Spinner size="sm" animation="border" className="me-2" /> : null}
+                              Save & Apply
+                            </Button>
+                          </div>
+                          <div className="mt-1 d-flex gap-1 flex-wrap">
+                            {m.isRecurring ? <Badge bg="info">Recurring</Badge> : null}
+                            {m.months && m.months >= 3 ? <Badge bg="secondary">{m.months} mo</Badge> : null}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   );
                 }}

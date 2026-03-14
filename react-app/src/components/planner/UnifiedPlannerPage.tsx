@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   addDays,
   addMinutes,
@@ -26,13 +26,17 @@ import {
   Spinner,
 } from 'react-bootstrap';
 import {
+  Activity,
   Calendar as CalendarIcon,
   CheckCircle,
   Clock,
   ExternalLink,
+  LayoutDashboard,
+  LayoutGrid,
   Link as LinkIcon,
   ListChecks,
   RefreshCw,
+  Settings,
   Smartphone,
   Sparkles,
 } from 'lucide-react';
@@ -55,17 +59,22 @@ import {
   updateDoc,
   where,
 } from 'firebase/firestore';
-import type { CalendarBlock, Story, Task } from '../../types';
+import type { CalendarBlock, Goal, Story, Task } from '../../types';
 import type { ScheduledInstanceModel } from '../../domain/scheduler/repository';
 import { humanizePolicyMode } from '../../utils/schedulerPolicy';
 import '../../styles/unified-planner.css';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate, Link } from 'react-router-dom';
 import { useGlobalThemes } from '../../hooks/useGlobalThemes';
 import { LEGACY_THEME_MAP } from '../../constants/globalThemes';
 import { pushDiagnosticLog } from '../../hooks/useDiagnosticsLog';
 import { usePersona } from '../../contexts/PersonaContext';
 import { getBadgeVariant, getPriorityBadge, getStatusName } from '../../utils/statusHelpers';
 import { isRecurringDueOnDate, resolveRecurringDueMs } from '../../utils/recurringTaskDue';
+import EditTaskModal from '../EditTaskModal';
+import EditStoryModal from '../EditStoryModal';
+import NewCalendarEventModal, { BlockFormState, DEFAULT_BLOCK_FORM, toInputValue } from './NewCalendarEventModal';
+import DayCapacityWarningBanner from './DayCapacityWarningBanner';
+import { useSidebar } from '../../contexts/SidebarContext';
 
 const locales = { 'en-GB': enGB } as const;
 const localizer = dateFnsLocalizer({
@@ -111,50 +120,43 @@ type ThemeOption = {
   textColor: string;
 };
 
-interface BlockFormState {
-  id?: string;
-  title: string;
-  theme?: CalendarBlock['theme'];
-  category?: CalendarBlock['category'];
-  flexibility?: CalendarBlock['flexibility'];
-  rationale: string;
-  start: string;
-  end: string;
-  syncToGoogle: boolean;
-  subTheme: string;
-  persona?: 'personal' | 'work' | null;
-  storyId?: string;
-  taskId?: string;
-  aiScore?: number | null;
-  aiReason?: string | null;
-  storyInput?: string;
-  recurrenceFreq: 'none' | 'daily' | 'weekly';
-  recurrenceDays: string[]; // BYDAY codes e.g. ['MO','WE']
-  recurrenceUntil: string; // date input string
-}
-
-const DEFAULT_BLOCK_FORM: BlockFormState = {
-  title: 'Calendar entry',
-  theme: 'General',
-  category: 'Wellbeing',
-  flexibility: 'soft',
-  rationale: '',
-  start: '',
-  end: '',
-  syncToGoogle: true,
-  subTheme: '',
-  persona: null,
-  storyId: undefined,
-  taskId: undefined,
-  aiScore: null,
-  aiReason: null,
-  storyInput: '',
-  recurrenceFreq: 'none',
-  recurrenceDays: [],
-  recurrenceUntil: '',
-};
-
 type ViewType = 'day' | 'week' | 'month';
+
+type PlanningMode = 'strict' | 'smart';
+
+const PLANNING_MODE_CONFIG: { value: PlanningMode; label: string; description: string }[] = [
+  {
+    value: 'smart',
+    label: 'Smart (default)',
+    description:
+      'Top 3 priorities scheduled first. ALWAYS respects user calendar plus Fitness and Work (Main Gig) blocks as hard constraints. Planned blocks act as theme hints and free time is used for auto-scheduling.',
+  },
+  {
+    value: 'strict',
+    label: 'Strict',
+    description:
+      'Fully respects planned blocks AND user calendar. Events are only inserted into their designated planned block window.',
+  },
+];
+
+const normalizeCallableError = (error: unknown, fallbackMessage: string) => {
+  const err = error as { code?: string; message?: string };
+  const rawCode = String(err?.code || '').toLowerCase();
+  const code = rawCode.includes('/') ? rawCode.split('/').pop() : rawCode;
+  if (code === 'deadline-exceeded') {
+    return 'The planner request timed out. Orchestration may still be busy. Retry shortly and verify planner stats.';
+  }
+  if (code === 'unavailable') {
+    return 'Planner service is temporarily unavailable. Please retry in a moment.';
+  }
+  if (code === 'permission-denied') {
+    return 'Permission denied while calling planner orchestration. Please sign out/in and retry.';
+  }
+  if (code === 'failed-precondition') {
+    return 'Planner preconditions are not met (often missing profile/integration state). Please verify settings and retry.';
+  }
+  return err?.message || fallbackMessage;
+};
 
 const getInitialRange = (): PlannerRange => {
   const start = startOfWeek(new Date(), { weekStartsOn: 1 });
@@ -162,7 +164,13 @@ const getInitialRange = (): PlannerRange => {
   return { start, end };
 };
 
-const toInputValue = (date: Date) => format(date, "yyyy-MM-dd'T'HH:mm");
+const isTaskDoneState = (status: any): boolean => {
+  if (typeof status === 'number') {
+    return status === 2 || status >= 4;
+  }
+  const normalized = String(status ?? '').trim().toLowerCase();
+  return ['done', 'complete', 'completed', 'finished', 'closed'].includes(normalized);
+};
 
 const hexToRgba = (hex: string, alpha: number) => {
   if (!hex) return `rgba(99, 102, 241, ${alpha})`;
@@ -182,6 +190,7 @@ const hexToRgba = (hex: string, alpha: number) => {
 
 const UnifiedPlannerPage: React.FC = () => {
   const { currentUser } = useAuth();
+  const { showSidebar } = useSidebar();
   const { themes: globalThemes } = useGlobalThemes();
   const [stories, setStories] = useState<any[]>([]);
 
@@ -282,7 +291,9 @@ const UnifiedPlannerPage: React.FC = () => {
   );
 
   const [range, setRange] = useState<PlannerRange>(() => getInitialRange());
-  const [view, setView] = useState<ViewType>(Views.WEEK as ViewType);
+  const [view, setView] = useState<ViewType>(Views.AGENDA as ViewType);
+  // Tracks the navigated date independently so agenda always opens on today
+  const [calendarDate, setCalendarDate] = useState<Date>(() => new Date());
   const [calendarScrollTime, setCalendarScrollTime] = useState<Date>(() => {
     const now = new Date();
     return new Date(1970, 0, 1, now.getHours(), now.getMinutes(), 0);
@@ -299,15 +310,23 @@ const UnifiedPlannerPage: React.FC = () => {
   const [replanLoading, setReplanLoading] = useState(false);
   const [rebalanceLoading, setRebalanceLoading] = useState(false);
   const [orchestrationLoading, setOrchestrationLoading] = useState(false);
+  const [planningMode, setPlanningMode] = useState<PlanningMode>('smart');
+  const [savingPlanningMode, setSavingPlanningMode] = useState(false);
+  const savingPlanningModeRef = useRef(false);
+  const [showPlanningSettings, setShowPlanningSettings] = useState(false);
+  const [fitnessBlocksAutoCreate, setFitnessBlocksAutoCreate] = useState(true);
+  const [savingFitnessToggle, setSavingFitnessToggle] = useState(false);
   const [lastActionPatch, setLastActionPatch] = useState<{ id: string; prevStart: Date; prevEnd: Date } | null>(null);
   const [tasksDueToday, setTasksDueToday] = useState<Task[]>([]);
   const [tasksLoading, setTasksLoading] = useState(false);
-  const [tasksSortMode, setTasksSortMode] = useState<'due' | 'ai'>('ai');
-  const [top3Collapsed, setTop3Collapsed] = useState(true);
+  const [tasksSortMode, setTasksSortMode] = useState<'due' | 'ai' | 'top3'>('ai');
+  const [top3Collapsed, setTop3Collapsed] = useState(false);
   const [top3Tasks, setTop3Tasks] = useState<Task[]>([]);
   const [top3Stories, setTop3Stories] = useState<Story[]>([]);
   const [top3Loading, setTop3Loading] = useState(false);
   const [choreCompletionBusy, setChoreCompletionBusy] = useState<Record<string, boolean>>({});
+  const [inlineEditTask, setInlineEditTask] = useState<Task | null>(null);
+  const [inlineEditStory, setInlineEditStory] = useState<Story | null>(null);
 
   useEffect(() => {
     setBlockForm((prev) => {
@@ -536,6 +555,29 @@ const UnifiedPlannerPage: React.FC = () => {
     return ref ? String(ref) : '';
   }, []);
 
+  const getPlannerEventSourceLabel = useCallback((event: PlannerCalendarEvent): 'auto-planned' | 'linked from gcal' | 'manual' => {
+    if (event.type === 'external') return 'linked from gcal';
+
+    const block: any = event.block || null;
+    const source = String(block?.source || '').toLowerCase();
+    const entryMethod = String(block?.entry_method || '').toLowerCase();
+    const hasGcalLink = !!(event.instance?.external?.gcalEventId || block?.googleEventId);
+
+    if (hasGcalLink || source === 'gcal' || entryMethod === 'google_calendar') {
+      return 'linked from gcal';
+    }
+    if (
+      entryMethod.includes('auto')
+      || source.includes('auto')
+      || source.includes('ai')
+      || source === 'planner'
+      || source === 'bob_auto'
+    ) {
+      return 'auto-planned';
+    }
+    return 'manual';
+  }, []);
+
   const unscheduledItems = useMemo(
     () => planner.instances.filter((instance) => instance.status === 'unscheduled'),
     [planner.instances],
@@ -582,9 +624,10 @@ const UnifiedPlannerPage: React.FC = () => {
   }, []);
 
   const getChoreKind = useCallback((task: Task): 'chore' | 'routine' | 'habit' | null => {
-    const raw = String((task as any)?.type || (task as any)?.task_type || '').toLowerCase();
+    const raw = String((task as any)?.type || (task as any)?.task_type || '').trim().toLowerCase();
     const normalized = raw === 'habitual' ? 'habit' : raw;
-    if (['chore', 'routine', 'habit'].includes(normalized)) return normalized as any;
+    if (normalized === 'chore' || normalized === 'routine' || normalized === 'habit') return normalized;
+    if (normalized) return null;
     const tags = Array.isArray((task as any)?.tags) ? (task as any).tags : [];
     const tagKeys = tags.map((tag) => String(tag || '').toLowerCase().replace(/^#/, ''));
     if (tagKeys.includes('chore')) return 'chore';
@@ -631,7 +674,7 @@ const UnifiedPlannerPage: React.FC = () => {
             const kind = getChoreKind(task);
             return !!kind && isRecurringDueOnDate(task, todayDate, due);
           })
-          .filter((task) => (task.status ?? 0) !== 2)
+          .filter((task) => !isTaskDoneState(task.status))
           .filter((task) => {
             if (!getChoreKind(task)) return true;
             const lastDone = getTaskLastDoneMs(task);
@@ -773,6 +816,118 @@ const UnifiedPlannerPage: React.FC = () => {
     };
   }, [currentUser, currentPersona]);
 
+  useEffect(() => {
+    if (!currentUser || !currentPersona) {
+      setTop3Tasks([]);
+      setTop3Stories([]);
+      setTop3Loading(false);
+      return;
+    }
+    setTop3Loading(true);
+    const todayIso = new Date().toISOString().slice(0, 10);
+    let tasksReady = false;
+    let storiesReady = false;
+    const markReady = () => {
+      if (tasksReady && storiesReady) setTop3Loading(false);
+    };
+
+    const isTaskDone = (status: any) => {
+      if (typeof status === 'number') return status >= 2;
+      const s = String(status || '').toLowerCase();
+      return ['done', 'complete', 'completed', 'finished', 'closed'].includes(s);
+    };
+    const isStoryDone = (status: any) => {
+      if (typeof status === 'number') return status >= 4;
+      const s = String(status || '').toLowerCase();
+      return ['done', 'complete', 'completed', 'finished', 'closed'].includes(s);
+    };
+
+    const taskQuery = query(
+      collection(db, 'tasks'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+      where('aiTop3ForDay', '==', true),
+    );
+    const storyQuery = query(
+      collection(db, 'stories'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+      where('aiTop3ForDay', '==', true),
+    );
+
+    const unsubTasks = onSnapshot(
+      taskQuery,
+      (snap) => {
+        const rows = snap.docs
+          .map((doc) => ({ id: doc.id, ...(doc.data() as any) } as Task))
+          .filter((task) => !task.deleted)
+          .filter((task) => !isTaskDone(task.status))
+          .filter((task) => {
+            const aiDate = (task as any).aiTop3Date;
+            if (!aiDate) return true;
+            return String(aiDate).slice(0, 10) === todayIso;
+          })
+          .sort((a, b) => {
+            const ar = Number((a as any).aiPriorityRank || 0) || 99;
+            const br = Number((b as any).aiPriorityRank || 0) || 99;
+            if (ar !== br) return ar - br;
+            const as = Number((a as any).aiCriticalityScore ?? -1);
+            const bs = Number((b as any).aiCriticalityScore ?? -1);
+            if (as !== bs) return bs - as;
+            return String(a.title || '').localeCompare(String(b.title || ''));
+          })
+          .slice(0, 3);
+        setTop3Tasks(rows);
+        tasksReady = true;
+        markReady();
+      },
+      (err) => {
+        console.warn('Failed to load top 3 tasks', err);
+        setTop3Tasks([]);
+        tasksReady = true;
+        markReady();
+      },
+    );
+
+    const unsubStories = onSnapshot(
+      storyQuery,
+      (snap) => {
+        const rows = snap.docs
+          .map((doc) => ({ id: doc.id, ...(doc.data() as any) } as Story))
+          .filter((story) => !isStoryDone(story.status))
+          .filter((story) => {
+            const aiDate = (story as any).aiTop3Date;
+            if (!aiDate) return true;
+            return String(aiDate).slice(0, 10) === todayIso;
+          })
+          .sort((a, b) => {
+            const ar = Number((a as any).aiFocusStoryRank || 0) || 99;
+            const br = Number((b as any).aiFocusStoryRank || 0) || 99;
+            if (ar !== br) return ar - br;
+            const as = Number((a as any).aiCriticalityScore ?? -1);
+            const bs = Number((b as any).aiCriticalityScore ?? -1);
+            if (as !== bs) return bs - as;
+            return String(a.title || '').localeCompare(String(b.title || ''));
+          })
+          .slice(0, 3);
+        setTop3Stories(rows);
+        storiesReady = true;
+        markReady();
+      },
+      (err) => {
+        console.warn('Failed to load top 3 stories', err);
+        setTop3Stories([]);
+        storiesReady = true;
+        markReady();
+      },
+    );
+
+    return () => {
+      unsubTasks();
+      unsubStories();
+    };
+  }, [currentUser, currentPersona]);
+
   const topChores = useMemo(() => planner.chores.slice(0, 5), [planner.chores]);
   const topRoutines = useMemo(() => planner.routines.slice(0, 5), [planner.routines]);
 
@@ -782,7 +937,6 @@ const UnifiedPlannerPage: React.FC = () => {
       theme: blockDefaultTheme as CalendarBlock['theme'],
     });
     setComposerOpen(false);
-    setComposerSaving(false);
   }, [blockDefaultTheme]);
 
   const handleRangeChange = useCallback(
@@ -1183,6 +1337,11 @@ const UnifiedPlannerPage: React.FC = () => {
     }
   }, []);
 
+  const triggerDeltaRescore = useCallback((entityId: string, entityType: 'task' | 'story') => {
+    httpsCallable(functions, 'deltaPriorityRescore')({ entityId, entityType })
+      .catch((err) => console.warn('Delta rescore failed (non-blocking)', err));
+  }, []);
+
   const handleTaskStatusChange = useCallback(async (task: Task, status: number) => {
     try {
       const ref = doc(db, 'tasks', task.id);
@@ -1191,11 +1350,62 @@ const UnifiedPlannerPage: React.FC = () => {
         completedAt: status === 2 ? serverTimestamp() : null,
         updatedAt: serverTimestamp(),
       });
+      triggerDeltaRescore(task.id, 'task');
     } catch (err) {
       console.error('Failed to update task status', err);
       setFeedback({ variant: 'danger', message: 'Could not update task status.' });
     }
-  }, []);
+  }, [triggerDeltaRescore]);
+
+  const handleTaskPriorityChange = useCallback(async (task: Task, priority: number) => {
+    try {
+      const ref = doc(db, 'tasks', task.id);
+      await updateDoc(ref, { priority, updatedAt: serverTimestamp() });
+      triggerDeltaRescore(task.id, 'task');
+    } catch (err) {
+      console.error('Failed to update task priority', err);
+    }
+  }, [triggerDeltaRescore]);
+
+  const handleTaskDueDateChange = useCallback(async (task: Task, dueDateMs: number) => {
+    try {
+      const ref = doc(db, 'tasks', task.id);
+      await updateDoc(ref, { dueDate: dueDateMs, dueDateMs, updatedAt: serverTimestamp() });
+      triggerDeltaRescore(task.id, 'task');
+    } catch (err) {
+      console.error('Failed to update task due date', err);
+    }
+  }, [triggerDeltaRescore]);
+
+  const handleStoryStatusChange = useCallback(async (story: Story, status: number) => {
+    try {
+      const ref = doc(db, 'stories', story.id);
+      await updateDoc(ref, { status, updatedAt: serverTimestamp() });
+      triggerDeltaRescore(story.id, 'story');
+    } catch (err) {
+      console.error('Failed to update story status', err);
+    }
+  }, [triggerDeltaRescore]);
+
+  const handleStoryPriorityChange = useCallback(async (story: Story, priority: number) => {
+    try {
+      const ref = doc(db, 'stories', story.id);
+      await updateDoc(ref, { priority, updatedAt: serverTimestamp() });
+      triggerDeltaRescore(story.id, 'story');
+    } catch (err) {
+      console.error('Failed to update story priority', err);
+    }
+  }, [triggerDeltaRescore]);
+
+  const handleStoryDueDateChange = useCallback(async (story: Story, dueDate: number) => {
+    try {
+      const ref = doc(db, 'stories', story.id);
+      await updateDoc(ref, { targetDate: dueDate, dueDate, updatedAt: serverTimestamp() });
+      triggerDeltaRescore(story.id, 'story');
+    } catch (err) {
+      console.error('Failed to update story due date', err);
+    }
+  }, [triggerDeltaRescore]);
 
   const handleCompleteChoreTask = useCallback(async (task: Task) => {
     if (!currentUser) return;
@@ -1225,7 +1435,7 @@ const UnifiedPlannerPage: React.FC = () => {
     todayDate.setHours(0, 0, 0, 0);
     const todayStart = todayDate.getTime();
     const rows = [...tasksDueToday];
-    if (tasksSortMode === 'ai') {
+    if (tasksSortMode === 'ai' || tasksSortMode === 'top3') {
       rows.sort((a, b) => {
         const aScore = Number((a as any).aiCriticalityScore ?? (a as any).aiPriorityScore ?? 0);
         const bScore = Number((b as any).aiCriticalityScore ?? (b as any).aiPriorityScore ?? 0);
@@ -1234,6 +1444,7 @@ const UnifiedPlannerPage: React.FC = () => {
         const bDue = resolveRecurringDueMs(b, todayDate, todayStart) || getTaskDueMs(b) || 0;
         return aDue - bDue;
       });
+      if (tasksSortMode === 'top3') return rows.slice(0, 3);
       return rows;
     }
     rows.sort((a, b) => {
@@ -1297,8 +1508,8 @@ const UnifiedPlannerPage: React.FC = () => {
     
     setReplanLoading(true);
     try {
-      const callable = httpsCallable(functions, 'replanCalendarNow');
-      const response = await callable({ days: 7 });
+      const callable = httpsCallable(functions, 'replanCalendarNow', { timeout: 180000 });
+      const response = await callable({ days: 7, planningMode, fitnessBlocksAutoCreate });
       const payload = response.data as { rescheduled?: number; blocked?: number };
       const rescheduled = payload?.rescheduled || 0;
       const blocked = payload?.blocked || 0;
@@ -1316,11 +1527,11 @@ const UnifiedPlannerPage: React.FC = () => {
         message: 'Failed to trigger calendar replan.',
         details: err instanceof Error ? err.message : String(err),
       });
-      setFeedback({ variant: 'danger', message: 'Replan failed. Please retry in a moment.' });
+      setFeedback({ variant: 'danger', message: normalizeCallableError(err, 'Replan failed. Please retry in a moment.') });
     } finally {
       setReplanLoading(false);
     }
-  }, [currentUser]);
+  }, [currentUser, planningMode, fitnessBlocksAutoCreate]);
 
   const eventStyleGetter = useCallback((event: PlannerCalendarEvent) => {
     const overlaps = (a: PlannerCalendarEvent, b: PlannerCalendarEvent) => {
@@ -1511,25 +1722,25 @@ const UnifiedPlannerPage: React.FC = () => {
 
   const handleRunNightlyOrchestration = useCallback(async () => {
     if (!currentUser) {
-      setFeedback({ variant: 'danger', message: 'Please sign in to run orchestration.' });
+      setFeedback({ variant: 'danger', message: 'Please sign in to run full replan.' });
       return;
     }
     
     setOrchestrationLoading(true);
     try {
-      const callable = httpsCallable(functions, 'runNightlyChainNow');
-      const response = await callable({});
+      const callable = httpsCallable(functions, 'runNightlyChainNow', { timeout: 540000 });
+      const response = await callable({ planningMode, fitnessBlocksAutoCreate });
       const payload = response.data as { results?: Array<{ step?: string; status?: string }> };
       const results = payload?.results || [];
       const successSteps = results.filter(r => r.status === 'ok').length;
       const totalSteps = results.length;
       
       if (successSteps === totalSteps) {
-        setFeedback({ variant: 'success', message: `Nightly orchestration complete: all ${totalSteps} steps succeeded.` });
+        setFeedback({ variant: 'success', message: `Full replan complete: all ${totalSteps} orchestration steps succeeded.` });
       } else if (successSteps > 0) {
-        setFeedback({ variant: 'info', message: `Orchestration partial: ${successSteps}/${totalSteps} steps completed.` });
+        setFeedback({ variant: 'info', message: `Full replan partial: ${successSteps}/${totalSteps} orchestration steps completed.` });
       } else {
-        setFeedback({ variant: 'danger', message: 'Nightly orchestration failed. Check logs and try again.' });
+        setFeedback({ variant: 'danger', message: 'Full replan failed. Check logs and try again.' });
       }
     } catch (err) {
       console.error('Nightly orchestration failed', err);
@@ -1540,18 +1751,60 @@ const UnifiedPlannerPage: React.FC = () => {
         message: 'Failed to trigger nightly orchestration.',
         details: err instanceof Error ? err.message : String(err),
       });
-      setFeedback({ variant: 'danger', message: 'Orchestration failed. Please retry in a moment.' });
+      setFeedback({ variant: 'danger', message: normalizeCallableError(err, 'Full replan failed. Please retry in a moment.') });
     } finally {
       setOrchestrationLoading(false);
+    }
+  }, [currentUser, planningMode, fitnessBlocksAutoCreate]);
+
+  // Load and save planning mode from user profile
+  useEffect(() => {
+    if (!currentUser) return;
+    const unsub = onSnapshot(doc(db, 'profiles', currentUser.uid), (snap) => {
+      const data = snap.exists() ? (snap.data() as Record<string, unknown>) : null;
+      const stored = data?.plannerMode as string | undefined;
+      if (!savingPlanningModeRef.current && (stored === 'strict' || stored === 'smart')) setPlanningMode(stored);
+        if (typeof data?.fitnessBlocksAutoCreate === 'boolean') {
+          setFitnessBlocksAutoCreate(data.fitnessBlocksAutoCreate);
+        }
+    });
+    return () => unsub();
+  }, [currentUser]);
+
+  const savePlanningMode = useCallback(async (mode: PlanningMode) => {
+    if (!currentUser) return;
+    setPlanningMode(mode);
+    setSavingPlanningMode(true);
+    savingPlanningModeRef.current = true;
+    try {
+      await updateDoc(doc(db, 'profiles', currentUser.uid), { plannerMode: mode });
+    } catch {
+      // ignore
+    } finally {
+      savingPlanningModeRef.current = false;
+      setSavingPlanningMode(false);
+    }
+  }, [currentUser]);
+
+  const saveFitnessToggle = useCallback(async (value: boolean) => {
+    if (!currentUser) return;
+    setSavingFitnessToggle(true);
+    try {
+      await updateDoc(doc(db, 'profiles', currentUser.uid), { fitnessBlocksAutoCreate: value });
+      setFitnessBlocksAutoCreate(value);
+    } finally {
+      setSavingFitnessToggle(false);
     }
   }, [currentUser]);
 
   return (
+    <>
     <Container fluid className="py-4 unified-planner">
+      <DayCapacityWarningBanner />
       <Row className="g-4">
         <Col lg={7} xl={8}>
           <Card className="shadow-sm border-0 h-100">
-            <Card.Header className="d-flex flex-wrap align-items-center justify-content-between gap-3">
+            <Card.Header className="d-flex flex-wrap align-items-center justify-content-between gap-2">
               <div className="d-flex align-items-center gap-3">
                 <span className="planner-icon-circle">
                   <CalendarIcon size={18} />
@@ -1563,43 +1816,83 @@ const UnifiedPlannerPage: React.FC = () => {
                   </small>
                 </div>
               </div>
-              <div className="d-flex flex-wrap gap-2">
+              {/* Action buttons — moved out of calendar control bar */}
+              <div className="d-flex align-items-center gap-2 flex-wrap ms-auto">
                 <Button
                   variant="outline-secondary"
                   size="sm"
                   onClick={() => planner.refreshExternalEvents()}
                   disabled={planner.loading}
+                  title="Pull latest events from Google Calendar"
                 >
-                  <RefreshCw size={16} className="me-1" /> Sync Google
+                  <RefreshCw size={14} className="me-1" /> Sync Google
                 </Button>
                 <Button
                   variant="outline-primary"
                   size="sm"
                   onClick={handleReplanCalendar}
                   disabled={planner.loading || replanLoading}
+                  title="Delta replan: quickly rebalance existing calendar blocks using current priorities."
                 >
-                  {replanLoading ? (
-                    <Spinner size="sm" animation="border" className="me-2" />
-                  ) : (
-                    <Clock size={16} className="me-1" />
-                  )}
-                  Replan around calendar
+                  {replanLoading ? <Spinner size="sm" animation="border" className="me-1" /> : <Clock size={14} className="me-1" />}
+                  Delta replan
                 </Button>
                 <Button
                   variant="primary"
                   size="sm"
                   onClick={handleRunNightlyOrchestration}
                   disabled={planner.loading || orchestrationLoading}
+                  title="Full replan: runs full nightly orchestration (pointing, conversions, priority scoring, and calendar planning)."
                 >
-                  {orchestrationLoading ? (
-                    <Spinner size="sm" animation="border" className="me-2" />
-                  ) : (
-                    <Sparkles size={16} className="me-1" />
-                  )}
-                  Run nightly orchestration
+                  {orchestrationLoading ? <Spinner size="sm" animation="border" className="me-1" /> : <Sparkles size={14} className="me-1" />}
+                  Full replan
+                </Button>
+                <Button variant="outline-secondary" size="sm" onClick={() => navigate('/dashboard')} title="Open overview dashboard">
+                  <LayoutDashboard size={14} className="me-1" /> View overview
+                </Button>
+                <Button variant="outline-secondary" size="sm" onClick={() => navigate('/calendar/planner')} title="Open weekly theme planner">
+                  <CalendarIcon size={14} className="me-1" /> View planner
+                </Button>
+                <Button variant="outline-secondary" size="sm" onClick={() => navigate('/sprints/kanban')} title="Open sprint kanban board">
+                  <LayoutGrid size={14} className="me-1" /> View kanban
+                </Button>
+                <Button size="sm" variant="outline-primary" onClick={() => openComposerForSlot(new Date(), addMinutes(new Date(), 60))} title="Create a new calendar entry">
+                  + New Entry
+                </Button>
+                <Button
+                  size="sm"
+                  variant={showPlanningSettings ? 'secondary' : 'outline-secondary'}
+                  onClick={() => setShowPlanningSettings((v) => !v)}
+                  title="Configure planning aggressiveness mode"
+                >
+                  <Settings size={14} className="me-1" />
+                  {planningMode === 'smart' ? 'Smart' : 'Strict'}
                 </Button>
               </div>
             </Card.Header>
+            {showPlanningSettings && (
+              <div className="border-bottom px-3 py-2" style={{ background: 'var(--bs-light, #f8f9fa)' }}>
+                <div className="d-flex align-items-start gap-3 flex-wrap">
+                  <small className="text-muted fw-semibold" style={{ paddingTop: '6px', whiteSpace: 'nowrap' }}>
+                    Planning mode:
+                  </small>
+                  {PLANNING_MODE_CONFIG.map((m) => (
+                    <Button
+                      key={m.value}
+                      size="sm"
+                      variant={planningMode === m.value ? 'primary' : 'outline-secondary'}
+                      onClick={() => savePlanningMode(m.value)}
+                      disabled={savingPlanningMode}
+                    >
+                      {m.label}
+                    </Button>
+                  ))}
+                  <small className="text-muted" style={{ flex: '1 1 240px', paddingTop: '4px' }}>
+                    {PLANNING_MODE_CONFIG.find((m) => m.value === planningMode)?.description}
+                  </small>
+                </div>
+              </div>
+            )}
             {feedback && (
               <Alert
                 variant={feedback.variant}
@@ -1618,39 +1911,13 @@ const UnifiedPlannerPage: React.FC = () => {
                 </div>
               ) : (
                 <div className="planner-calendar-wrapper">
-                  <div className="d-flex justify-content-between align-items-center px-3 py-2 border-bottom">
-                    <div className="d-flex align-items-center gap-2">
-                      <ButtonGroup size="sm">
-                        <Button
-                          variant={view === Views.DAY ? 'primary' : 'outline-primary'}
-                          onClick={() => setView(Views.DAY as ViewType)}
-                        >
-                          Day
-                        </Button>
-                        <Button
-                          variant={view === Views.WEEK ? 'primary' : 'outline-primary'}
-                          onClick={() => setView(Views.WEEK as ViewType)}
-                        >
-                          Week
-                        </Button>
-                        <Button
-                          variant={view === Views.MONTH ? 'primary' : 'outline-primary'}
-                          onClick={() => setView(Views.MONTH as ViewType)}
-                        >
-                          Month
-                        </Button>
-                      </ButtonGroup>
-                    </div>
-                    <Button size="sm" variant="outline-primary" onClick={() => openComposerForSlot(new Date(), addMinutes(new Date(), 60))}>
-                      + New Entry
-                    </Button>
-                  </div>
                   <DragAndDropCalendar
                     localizer={localizer}
                     events={events}
                     view={view}
-                    defaultView={Views.WEEK}
-                    date={range.start}
+                    defaultView={Views.AGENDA}
+                    date={calendarDate}
+                    onNavigate={(date) => setCalendarDate(date)}
                     onView={(next) => setView(next as ViewType)}
                     onRangeChange={handleRangeChange}
                     selectable
@@ -1674,12 +1941,12 @@ const UnifiedPlannerPage: React.FC = () => {
                   />
                   {/* Conflict resolution panel */}
                   {isConflicting(activeEvent) && (
-                    <div className="d-flex align-items-center gap-2 p-2 border-top" style={{ background: '#fffbe6' }}>
+                    <div className="d-flex align-items-center gap-2 p-2 border-top" style={{ background: 'var(--bs-warning-bg-subtle, var(--panel))' }}>
                       <span className="text-danger fw-semibold">Resolve conflict:</span>
                       <Button size="sm" variant="outline-primary" onClick={handleConflictMoveNext}>Move to next free slot</Button>
                       <Button size="sm" variant="outline-secondary" onClick={() => handleConflictShorten(15)}>Shorten by 15m</Button>
                       <Button size="sm" variant="outline-secondary" onClick={() => handleConflictShift(15)}>Shift +15m</Button>
-                      <Button size="sm" variant="outline-dark" disabled={!lastActionPatch} onClick={handleUndoLast}>Undo</Button>
+                      <Button size="sm" variant="outline-secondary" disabled={!lastActionPatch} onClick={handleUndoLast}>Undo</Button>
                     </div>
                   )}
                 </div>
@@ -1719,18 +1986,104 @@ const UnifiedPlannerPage: React.FC = () => {
                       {top3Stories.length === 0 ? (
                         <div className="text-muted small">No stories flagged.</div>
                       ) : (
-                        top3Stories.map((story, idx) => {
+                        top3Stories.map((story) => {
                           const label = storyLabel(story);
                           const aiScore = (story as any).aiCriticalityScore ?? (story as any).aiPriorityScore;
                           const href = `/stories/${(story as any).ref || story.id}`;
+                          const storyPriorityBadge = getPriorityBadge((story as any).priority);
+                          const storyDueMs = (() => {
+                            const raw = (story as any).targetDate ?? (story as any).dueDate ?? null;
+                            if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+                            if (raw?.toDate) return raw.toDate().getTime();
+                            const parsed = raw ? Date.parse(String(raw)) : NaN;
+                            return Number.isNaN(parsed) ? null : parsed;
+                          })();
+                          const storyStatusVal = Number(story.status ?? 0);
+                          const storyStatusMap: Record<number, { bg: string; label: string }> = {
+                            0: { bg: 'light', label: 'Backlog' },
+                            1: { bg: 'info', label: 'Planned' },
+                            2: { bg: 'primary', label: 'In Progress' },
+                            3: { bg: 'warning', label: 'Testing' },
+                            4: { bg: 'success', label: 'Done' },
+                          };
+                          const storyS = storyStatusMap[storyStatusVal] || storyStatusMap[0];
                           return (
-                            <div key={story.id} className="border rounded p-2 mb-2">
-                              <div className="fw-semibold">
-                                <a href={href} className="text-decoration-none">{label}</a>
+                            <div key={story.id} className="border rounded p-2 mb-2 dashboard-due-item">
+                              <div className="d-flex align-items-start justify-content-between gap-2">
+                                <div className="fw-semibold small flex-grow-1">
+                                  <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditStory(story); }}>{label}</a>
+                                </div>
+                                <button
+                                  type="button"
+                                  className="d-none d-md-inline-flex align-items-center justify-content-center"
+                                  onClick={() => showSidebar(story as any, 'story')}
+                                  title="Activity stream"
+                                  style={{
+                                    color: 'var(--bs-secondary-color)',
+                                    padding: 4,
+                                    borderRadius: 4,
+                                    border: 'none',
+                                    background: 'transparent',
+                                    cursor: 'pointer',
+                                    lineHeight: 0,
+                                    flexShrink: 0,
+                                  }}
+                                >
+                                  <Activity size={14} />
+                                </button>
                               </div>
-                              <div className="text-muted small d-flex justify-content-between">
-                                <span>Rank {idx + 1}</span>
-                                <span>AI {aiScore != null ? Math.round(aiScore) : '—'}</span>
+                              <div className="d-flex align-items-center gap-2 mt-1 flex-wrap">
+                                <span className="text-muted d-inline-flex align-items-center gap-1" style={{ fontSize: 11 }}>
+                                  <Clock size={11} />
+                                  <input
+                                    type="date"
+                                    className="dashboard-due-date-input"
+                                    value={storyDueMs ? format(new Date(storyDueMs), 'yyyy-MM-dd') : ''}
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      if (!val) return;
+                                      const newDue = new Date(val + 'T12:00:00').getTime();
+                                      handleStoryDueDateChange(story, newDue);
+                                    }}
+                                  />
+                                </span>
+                                <span className="dashboard-chip-select-wrap">
+                                  <select
+                                    className="dashboard-chip-select"
+                                    value={Number((story as any).priority ?? 0)}
+                                    onChange={(e) => handleStoryPriorityChange(story, Number(e.target.value))}
+                                    style={{
+                                      backgroundColor: `var(--bs-${storyPriorityBadge.bg})`,
+                                      color: storyPriorityBadge.bg === 'warning' || storyPriorityBadge.bg === 'light' ? '#000' : '#fff',
+                                    }}
+                                  >
+                                    <option value={0}>None</option>
+                                    <option value={1}>Low</option>
+                                    <option value={2}>Medium</option>
+                                    <option value={3}>High</option>
+                                    <option value={4}>Critical</option>
+                                  </select>
+                                </span>
+                                <span className="dashboard-chip-select-wrap">
+                                  <select
+                                    className="dashboard-chip-select"
+                                    value={storyStatusVal}
+                                    onChange={(e) => handleStoryStatusChange(story, Number(e.target.value))}
+                                    style={{
+                                      backgroundColor: `var(--bs-${storyS.bg})`,
+                                      color: storyS.bg === 'light' || storyS.bg === 'warning' ? '#000' : '#fff',
+                                    }}
+                                  >
+                                    <option value={0}>Backlog</option>
+                                    <option value={1}>Planned</option>
+                                    <option value={2}>In Progress</option>
+                                    <option value={3}>Testing</option>
+                                    <option value={4}>Done</option>
+                                  </select>
+                                </span>
+                                <span className="text-muted" style={{ fontSize: 11 }}>
+                                  AI {aiScore != null ? Math.round(aiScore) : '—'}
+                                </span>
                               </div>
                             </div>
                           );
@@ -1742,19 +2095,102 @@ const UnifiedPlannerPage: React.FC = () => {
                       {top3Tasks.length === 0 ? (
                         <div className="text-muted small">No tasks flagged.</div>
                       ) : (
-                        top3Tasks.map((task, idx) => {
+                        top3Tasks.map((task) => {
                           const refLabel = taskRefLabel(task);
-                          const label = refLabel ? `${refLabel} — ${task.title}` : task.title;
                           const aiScore = (task as any).aiCriticalityScore ?? (task as any).aiPriorityScore;
-                          const href = `/tasks/${(task as any).ref || task.id}`;
+                          const priorityBadge = getPriorityBadge((task as any).priority);
+                          const dueMs = getTaskDueMs(task);
                           return (
-                            <div key={task.id} className="border rounded p-2 mb-2">
-                              <div className="fw-semibold">
-                                <a href={href} className="text-decoration-none">{label}</a>
+                            <div key={task.id} className="border rounded p-2 mb-2 dashboard-due-item">
+                              <div className="d-flex align-items-start justify-content-between gap-2">
+                                <div className="fw-semibold small flex-grow-1">
+                                  <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>{task.title}</a>
+                                </div>
+                                <button
+                                  type="button"
+                                  className="d-none d-md-inline-flex align-items-center justify-content-center"
+                                  onClick={() => showSidebar(task as any, 'task')}
+                                  title="Activity stream"
+                                  style={{
+                                    color: 'var(--bs-secondary-color)',
+                                    padding: 4,
+                                    borderRadius: 4,
+                                    border: 'none',
+                                    background: 'transparent',
+                                    cursor: 'pointer',
+                                    lineHeight: 0,
+                                    flexShrink: 0,
+                                  }}
+                                >
+                                  <Activity size={14} />
+                                </button>
                               </div>
-                              <div className="text-muted small d-flex justify-content-between">
-                                <span>Rank {idx + 1}</span>
-                                <span>AI {aiScore != null ? Math.round(aiScore) : '—'}</span>
+                              {refLabel && (
+                                <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>
+                                  <code className="text-primary" style={{ fontSize: 11 }}>{refLabel}</code>
+                                </a>
+                              )}
+                              <div className="d-flex align-items-center gap-2 mt-1 flex-wrap">
+                                <span className="text-muted d-inline-flex align-items-center gap-1" style={{ fontSize: 11 }}>
+                                  <Clock size={11} />
+                                  <input
+                                    type="date"
+                                    className="dashboard-due-date-input"
+                                    value={dueMs ? format(new Date(dueMs), 'yyyy-MM-dd') : ''}
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      if (!val) return;
+                                      const newDue = new Date(val + 'T12:00:00').getTime();
+                                      handleTaskDueDateChange(task, newDue);
+                                    }}
+                                  />
+                                </span>
+                                <span className="dashboard-chip-select-wrap">
+                                  <select
+                                    className="dashboard-chip-select"
+                                    value={Number((task as any).priority ?? 0)}
+                                    onChange={(e) => handleTaskPriorityChange(task, Number(e.target.value))}
+                                    style={{
+                                      backgroundColor: `var(--bs-${priorityBadge.bg})`,
+                                      color: priorityBadge.bg === 'warning' || priorityBadge.bg === 'orange' || priorityBadge.bg === 'light' ? '#000' : '#fff',
+                                    }}
+                                  >
+                                    <option value={0}>None</option>
+                                    <option value={1}>Low</option>
+                                    <option value={2}>Medium</option>
+                                    <option value={3}>High</option>
+                                    <option value={4}>Critical</option>
+                                  </select>
+                                </span>
+                                {(() => {
+                                  const statusVal = Number(task.status ?? 0);
+                                  const statusMap: Record<number, { bg: string; label: string }> = {
+                                    0: { bg: 'secondary', label: 'To do' },
+                                    1: { bg: 'primary', label: 'Doing' },
+                                    2: { bg: 'success', label: 'Done' },
+                                  };
+                                  const s = statusMap[statusVal] || statusMap[0];
+                                  return (
+                                    <span className="dashboard-chip-select-wrap">
+                                      <select
+                                        className="dashboard-chip-select"
+                                        value={statusVal}
+                                        onChange={(e) => handleTaskStatusChange(task, Number(e.target.value))}
+                                        style={{
+                                          backgroundColor: `var(--bs-${s.bg})`,
+                                          color: '#fff',
+                                        }}
+                                      >
+                                        <option value={0}>To do</option>
+                                        <option value={1}>Doing</option>
+                                        <option value={2}>Done</option>
+                                      </select>
+                                    </span>
+                                  );
+                                })()}
+                                <span className="text-muted" style={{ fontSize: 11 }}>
+                                  AI {aiScore != null ? Math.round(aiScore) : '—'}
+                                </span>
                               </div>
                             </div>
                           );
@@ -1770,16 +2206,17 @@ const UnifiedPlannerPage: React.FC = () => {
           <Card className="shadow-sm border-0 mb-4">
                 <Card.Header className="d-flex align-items-center justify-content-between">
                   <div className="fw-semibold d-flex align-items-center gap-2">
-                    <Clock size={16} /> Tasks due today & overdue
+                    <Clock size={16} /> Tasks due today
                   </div>
                   <div className="d-flex align-items-center gap-2">
                     <Form.Select
                       size="sm"
                       value={tasksSortMode}
-                      onChange={(e) => setTasksSortMode(e.target.value as 'due' | 'ai')}
+                      onChange={(e) => setTasksSortMode(e.target.value as 'due' | 'ai' | 'top3')}
                     >
                       <option value="due">Sort: Due time</option>
                       <option value="ai">Sort: AI score</option>
+                      <option value="top3">Top 3 (AI)</option>
                     </Form.Select>
                     <Badge bg={sortedTaskItemsDueToday.length > 0 ? 'info' : 'secondary'} pill>
                       {sortedTaskItemsDueToday.length}
@@ -1792,49 +2229,100 @@ const UnifiedPlannerPage: React.FC = () => {
                       <Spinner size="sm" animation="border" /> Loading tasks…
                     </div>
                   ) : sortedTaskItemsDueToday.length === 0 ? (
-                    <div className="text-muted small">No tasks due today or overdue.</div>
+                    <div className="text-muted small">No tasks due today.</div>
                   ) : (
                     sortedTaskItemsDueToday.map((task) => {
                       const dueMs = getTaskDueMs(task);
                       const aiScore = (task as any).aiCriticalityScore ?? (task as any).aiPriorityScore;
                       const refLabel = taskRefLabel(task);
                       const priorityBadge = getPriorityBadge((task as any).priority);
-                      const dueLabel = dueMs ? formatDueLabel(dueMs) : null;
+                      const statusVal = Number(task.status ?? 0);
+                      const statusMap: Record<number, { bg: string; label: string }> = {
+                        0: { bg: 'secondary', label: 'To do' },
+                        1: { bg: 'primary', label: 'Doing' },
+                        2: { bg: 'success', label: 'Done' },
+                      };
+                      const s = statusMap[statusVal] || statusMap[0];
                       return (
-                        <div key={task.id} className="border rounded p-2">
-                          <div className="d-flex justify-content-between align-items-start gap-2">
-                            <div className="flex-grow-1">
-                              <div className="fw-semibold">{task.title}</div>
-                              {refLabel && (
-                                <div className="text-muted small">
-                                  <a href={`/tasks/${task.id}`} className="text-decoration-none">
-                                    <code className="text-primary">{refLabel}</code>
-                                  </a>
-                                </div>
-                              )}
-                              <div className="text-muted small d-flex align-items-center gap-1">
-                                <Clock size={12} /> Due {dueLabel ?? '—'}
-                              </div>
+                        <div key={task.id} className="border rounded p-2 dashboard-due-item">
+                          <div className="d-flex align-items-start justify-content-between gap-2">
+                            <div className="fw-semibold small flex-grow-1">
+                              <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>{task.title}</a>
                             </div>
-                          </div>
-                          <div className="d-flex align-items-center justify-content-between mt-2 gap-2 flex-wrap">
-                            <div className="d-flex align-items-center gap-2 flex-wrap">
-                              <Badge bg={priorityBadge.bg}>{priorityBadge.text}</Badge>
-                              <span className="text-muted small">
-                                AI {aiScore != null ? Math.round(aiScore) : '—'}
-                              </span>
-                            </div>
-                            <Form.Select
-                              size="sm"
-                              value={Number(task.status ?? 0)}
-                              onChange={(e) => handleTaskStatusChange(task, Number(e.target.value))}
-                              aria-label="Update task status"
-                              style={{ width: 106, fontSize: '0.75rem' }}
+                            <button
+                              type="button"
+                              className="d-none d-md-inline-flex align-items-center justify-content-center"
+                              onClick={() => showSidebar(task as any, 'task')}
+                              title="Activity stream"
+                              style={{
+                                color: 'var(--bs-secondary-color)',
+                                padding: 4,
+                                borderRadius: 4,
+                                border: 'none',
+                                background: 'transparent',
+                                cursor: 'pointer',
+                                lineHeight: 0,
+                                flexShrink: 0,
+                              }}
                             >
-                              <option value={0}>To do</option>
-                              <option value={1}>Doing</option>
-                              <option value={2}>Done</option>
-                            </Form.Select>
+                              <Activity size={14} />
+                            </button>
+                          </div>
+                          {refLabel && (
+                            <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>
+                              <code className="text-primary" style={{ fontSize: 11 }}>{refLabel}</code>
+                            </a>
+                          )}
+                          <div className="d-flex align-items-center gap-2 mt-1 flex-wrap">
+                            <span className="text-muted d-inline-flex align-items-center gap-1" style={{ fontSize: 11 }}>
+                              <Clock size={11} />
+                              <input
+                                type="date"
+                                className="dashboard-due-date-input"
+                                value={dueMs ? format(new Date(dueMs), 'yyyy-MM-dd') : ''}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  if (!val) return;
+                                  const newDue = new Date(val + 'T12:00:00').getTime();
+                                  handleTaskDueDateChange(task, newDue);
+                                }}
+                              />
+                            </span>
+                            <span className="dashboard-chip-select-wrap">
+                              <select
+                                className="dashboard-chip-select"
+                                value={Number((task as any).priority ?? 0)}
+                                onChange={(e) => handleTaskPriorityChange(task, Number(e.target.value))}
+                                style={{
+                                  backgroundColor: `var(--bs-${priorityBadge.bg})`,
+                                  color: priorityBadge.bg === 'warning' || priorityBadge.bg === 'orange' || priorityBadge.bg === 'light' ? '#000' : '#fff',
+                                }}
+                              >
+                                <option value={0}>None</option>
+                                <option value={1}>Low</option>
+                                <option value={2}>Medium</option>
+                                <option value={3}>High</option>
+                                <option value={4}>Critical</option>
+                              </select>
+                            </span>
+                            <span className="dashboard-chip-select-wrap">
+                              <select
+                                className="dashboard-chip-select"
+                                value={statusVal}
+                                onChange={(e) => handleTaskStatusChange(task, Number(e.target.value))}
+                                style={{
+                                  backgroundColor: `var(--bs-${s.bg})`,
+                                  color: '#fff',
+                                }}
+                              >
+                                <option value={0}>To do</option>
+                                <option value={1}>Doing</option>
+                                <option value={2}>Done</option>
+                              </select>
+                            </span>
+                            {aiScore != null && (
+                              <span className="text-muted" style={{ fontSize: 10 }}>AI {Math.round(aiScore)}</span>
+                            )}
                           </div>
                         </div>
                       );
@@ -2070,6 +2558,14 @@ const UnifiedPlannerPage: React.FC = () => {
                 )}
                 {activeEvent.type === 'instance' && activeEvent.instance && (
                   <>
+                    <div className="text-muted small">
+                      Source{' '}
+                      {(() => {
+                        const sourceLabel = getPlannerEventSourceLabel(activeEvent);
+                        const variant = sourceLabel === 'auto-planned' ? 'success' : sourceLabel === 'linked from gcal' ? 'info' : 'secondary';
+                        return <Badge bg={variant}>{sourceLabel}</Badge>;
+                      })()}
+                    </div>
                     {['chore', 'routine', 'habit'].includes(
                       (activeEvent.instance.sourceType || '').toLowerCase(),
                     ) && (
@@ -2155,6 +2651,14 @@ const UnifiedPlannerPage: React.FC = () => {
                 {activeEvent.type === 'block' && activeEvent.block && (
                   <>
                     <div className="text-muted small">
+                      Source{' '}
+                      {(() => {
+                        const sourceLabel = getPlannerEventSourceLabel(activeEvent);
+                        const variant = sourceLabel === 'auto-planned' ? 'success' : sourceLabel === 'linked from gcal' ? 'info' : 'secondary';
+                        return <Badge bg={variant}>{sourceLabel}</Badge>;
+                      })()}
+                    </div>
+                    <div className="text-muted small">
                       Theme{' '}
                       <Badge bg="light" text="dark">
                         {activeEvent.themeLabel || activeEvent.block.theme}
@@ -2207,37 +2711,36 @@ const UnifiedPlannerPage: React.FC = () => {
               <Form.Label>Link to story (optional)</Form.Label>
               <Form.Control
                 list="planner-story-options"
-                placeholder="Search story by ref or title..."
+                placeholder="Search story by title..."
                 value={blockForm.storyInput || ''}
                 onChange={(event) => {
                   const value = event.target.value;
-                  const match = stories.find((s) => {
-                    const label = storyLabel(s);
-                    return s.id === value || s.title === value || label === value || (s.ref && s.ref === value);
-                  });
                   setBlockForm((prev) => ({
                     ...prev,
-                    storyId: match ? match.id : undefined,
                     storyInput: value,
-                    title: match ? `${storyLabel(match)}` : prev.title,
-                    theme: match?.theme || prev.theme || blockDefaultTheme,
-                    aiScore: (match as any)?.aiCriticalityScore ?? (match as any)?.aiScore ?? prev.aiScore ?? null,
-                    aiReason: (match as any)?.aiCriticalityReason ?? prev.aiReason ?? null,
                   }));
                 }}
                 onBlur={(event) => {
-                  const value = event.target.value;
-                  const match = stories.find((s) => storyLabel(s) === value || s.title === value || s.id === value);
+                  const value = event.target.value.trim();
+                  const match = stories.find((s) => s.title === value || s.id === value);
                   setBlockForm((prev) => ({
                     ...prev,
                     storyId: match ? match.id : undefined,
-                    storyInput: match ? storyLabel(match) : value,
+                    storyInput: match ? (match.title || '') : value,
+                    title: match ? `${match.title || ''}` : prev.title,
+                    theme: match?.theme || prev.theme || blockDefaultTheme,
+                    aiScore: match
+                      ? ((match as any)?.aiCriticalityScore ?? (match as any)?.aiScore ?? prev.aiScore ?? null)
+                      : prev.aiScore,
+                    aiReason: match
+                      ? ((match as any)?.aiCriticalityReason ?? prev.aiReason ?? null)
+                      : prev.aiReason,
                   }));
                 }}
               />
               <datalist id="planner-story-options">
                 {stories.map((s) => (
-                  <option key={s.id} value={storyLabel(s)} />
+                  <option key={s.id} value={s.title || ''} />
                 ))}
               </datalist>
             </Form.Group>
@@ -2338,6 +2841,19 @@ const UnifiedPlannerPage: React.FC = () => {
         </Modal.Footer>
       </Modal>
     </Container>
+
+    <EditTaskModal
+      show={!!inlineEditTask}
+      task={inlineEditTask}
+      onHide={() => setInlineEditTask(null)}
+    />
+    <EditStoryModal
+      show={!!inlineEditStory}
+      story={inlineEditStory}
+      goals={[] as Goal[]}
+      onHide={() => setInlineEditStory(null)}
+    />
+    </>
   );
 };
 

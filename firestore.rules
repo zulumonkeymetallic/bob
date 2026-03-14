@@ -21,8 +21,15 @@ service cloud.firestore {
         exists(/databases/$(database)/documents/goals/$(goalId)) &&
         get(/databases/$(database)/documents/goals/$(goalId)).data.ownerUid == request.auth.uid;
     }
+    function isPublishedGoal() {
+      return resource.data.isPublished == true && resource.data.shareCode != null;
+    }
 
-    match /goals/{id}     { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /goals/{id} {
+      allow create: if isOwnerForCreate();
+      allow read: if isOwner() || isPublishedGoal();
+      allow update, delete: if isOwner();
+    }
     match /okrs/{id}      { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     // Allow updates when either the existing or incoming doc asserts ownership
     match /tasks/{id} {
@@ -40,6 +47,24 @@ service cloud.firestore {
         (resource.data.ownerUid == request.auth.uid) ||
         (request.resource.data.ownerUid == request.auth.uid)
       );
+    }
+    match /journals/{id} {
+      allow create: if isOwnerForCreate();
+      allow read, delete: if isOwner();
+      allow update: if isSignedIn() && (
+        (resource.data.ownerUid == request.auth.uid) ||
+        (request.resource.data.ownerUid == request.auth.uid)
+      );
+    }
+    // Server-managed ingestion lock/log documents; expose read-only access to the owner.
+    match /transcript_ingestions/{id} {
+      allow read: if isOwner();
+      allow create, update, delete: if false;
+    }
+    match /transcript_ingestions/{id}/events/{eventId} {
+      allow read: if isSignedIn() &&
+        get(/databases/$(database)/documents/transcript_ingestions/$(id)).data.ownerUid == request.auth.uid;
+      allow create, update, delete: if false;
     }
     match /resources/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /trips/{id}     { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
@@ -77,6 +102,7 @@ service cloud.firestore {
       );
     }
     match /digests/{id}   { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /focusGoals/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /metrics_hrv/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /metrics_workouts/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
     match /metrics_nutrition/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
@@ -436,8 +462,10 @@ service cloud.firestore {
 
       // Habit Entries as a subcollection
       match /habitEntries/{entryId} {
-        allow create: if isOwner(); // Owner of the parent habit can create entries
-        allow read, update, delete: if isOwner(); // Owner of the parent habit can manage entries
+        // FIX: For create, check request.resource since resource doesn't exist yet
+        allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+        // For read/update/delete, check existing resource
+        allow read, update, delete: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
       }
     }
 
@@ -455,6 +483,10 @@ service cloud.firestore {
     match /theme_settings/{uid} {
       allow read, write: if isSignedIn() && request.auth.uid == uid;
     }
+    // Per-user weekly theme allocations
+    match /theme_allocations/{uid} {
+      allow read, write: if isSignedIn() && request.auth.uid == uid;
+    }
 
     match /goal_chats/{goalId} {
       match /messages/{messageId} {
@@ -462,6 +494,22 @@ service cloud.firestore {
         allow create: if isGoalOwner(goalId) && request.resource.data.ownerUid == request.auth.uid;
         allow update, delete: if false;
       }
+    }
+
+    // ── Per-user planner alerts subcollection ──────────────────────────────
+    // DayCapacityWarningBanner reads users/{uid}/planner_alerts/capacity-warning
+    match /users/{uid} {
+      match /planner_alerts/{alertId} {
+        allow read, write: if isSignedIn() && request.auth.uid == uid;
+      }
+    }
+
+    // ── Per-user daily AI quota tracking ──────────────────────────────────
+    // Documents keyed as {uid}_{YYYY-MM-DD}. Only the owning user can read
+    // their own quota. Functions write via Admin SDK (no rule needed).
+    match /user_quotas/{docId} {
+      allow read: if isSignedIn() && docId.matches('^' + request.auth.uid + '_.*');
+      allow write: if false; // server-only writes via Admin SDK
     }
 
     // No client access to tokens by default (server-only)

@@ -5,6 +5,7 @@ const { defineSecret } = require('firebase-functions/params');
 const { planSchedule } = require('./scheduler/engine');
 const { generateDailyDigest } = require('./dailyDigestGenerator');
 const aiUsageLogger = require('./utils/aiUsageLogger');
+const { clampTaskPoints } = require('./utils/taskPoints');
 
 const GOOGLE_AI_STUDIO_API_KEY = defineSecret('GOOGLEAISTUDIOAPIKEY');
 
@@ -278,14 +279,14 @@ async function enrichStory(ref, story) {
   1. A set of clear, testable Acceptance Criteria (AC).
   2. A list of sub-tasks required to complete the story.
   3. A theme classification (General, Health & Fitness, Career & Professional, Finance & Wealth, Learning & Education, Family & Relationships, Hobbies & Interests, Travel & Adventure, Home & Living, Spiritual & Personal Growth, Chores, Rest & Recovery, Work (Main Gig), Side Gig, Sleep, Random).
-  4. An estimation of complexity points (1, 2, 3, 5, 8).
+  4. An estimation of complexity points as a number (decimals allowed in 0.25 increments, range 0.25-8).
   
   Return ONLY valid JSON in this format:
   {
     "acceptanceCriteria": ["AC1", "AC2"],
     "tasks": [{"title": "Task 1", "estimateMin": 30}, ...],
     "theme": "Work (Main Gig)",
-    "points": 3
+    "points": 1.25
   }`;
 
     const userPrompt = `Story Title: ${story.title}\nDescription: ${story.description || 'No description'}`;
@@ -299,7 +300,7 @@ async function enrichStory(ref, story) {
         await ref.update({
             acceptanceCriteria: data.acceptanceCriteria,
             theme: data.theme || story.theme,
-            points: Number(data.points) || story.points || 1, // Ensure numeric
+            points: clampTaskPoints(data.points) ?? clampTaskPoints(story.points) ?? 1,
             aiEnriched: true,
             aiMetadata: {
                 generatedAt: new Date().toISOString(),

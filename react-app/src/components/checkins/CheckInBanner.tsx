@@ -9,6 +9,22 @@ import { useNavigate } from 'react-router-dom';
 
 const DAILY_DISMISS_KEY = (dateKey: string) => `checkin-daily-dismissed-${dateKey}`;
 const WEEKLY_DISMISS_KEY = (weekKey: string) => `checkin-weekly-dismissed-${weekKey}`;
+const DAILY_CUTOFF_HOUR = 13;
+
+const getDailyTargetDate = (now: Date): Date => {
+  const target = new Date(now);
+  if (now.getHours() < DAILY_CUTOFF_HOUR) {
+    target.setDate(now.getDate() - 1);
+  }
+  return target;
+};
+
+const getEndOfTuesdayForWeek = (weekStart: Date): Date => {
+  const cutoff = new Date(weekStart);
+  cutoff.setDate(weekStart.getDate() + 1);
+  cutoff.setHours(23, 59, 59, 999);
+  return cutoff;
+};
 
 const CheckInBanner: React.FC = () => {
   const { currentUser } = useAuth();
@@ -19,15 +35,16 @@ const CheckInBanner: React.FC = () => {
   const [dailyKey, setDailyKey] = useState('');
   const [refreshTick, setRefreshTick] = useState(0);
 
-  const today = useMemo(() => new Date(), []);
+  const now = useMemo(() => new Date(), [refreshTick]);
+  const today = useMemo(() => now, [now]);
   const weekStart = useMemo(() => startOfWeek(addDays(today, -7), { weekStartsOn: 1 }), [today]);
   const weekKey = useMemo(() => format(weekStart, "yyyy-'W'II"), [weekStart]);
 
   useEffect(() => {
     const now = new Date();
     const next = new Date(now);
-    if (now.getHours() < 18) {
-      next.setHours(18, 0, 0, 0);
+    if (now.getHours() < DAILY_CUTOFF_HOUR) {
+      next.setHours(DAILY_CUTOFF_HOUR, 0, 0, 0);
     } else {
       next.setDate(now.getDate() + 1);
       next.setHours(0, 0, 0, 0);
@@ -41,12 +58,12 @@ const CheckInBanner: React.FC = () => {
     const run = async () => {
       if (!currentUser) return;
       const now = new Date();
-      const isAfterSix = now.getHours() >= 18;
-      const targetDate = isAfterSix ? now : addDays(now, -1);
+      const beforeCutoff = now.getHours() < DAILY_CUTOFF_HOUR;
+      const targetDate = getDailyTargetDate(now);
       const targetKey = format(targetDate, 'yyyyMMdd');
-      const message = isAfterSix
-        ? 'Review today’s planned items and mark what you completed.'
-        : 'Review yesterday’s planned items.';
+      const message = beforeCutoff
+        ? 'Review yesterday’s planned items.'
+        : 'Daily check-in closes at 1pm, so it is now hidden until tomorrow.';
       setDailyKey(targetKey);
       setDailyMessage(message);
 
@@ -54,14 +71,14 @@ const CheckInBanner: React.FC = () => {
       const weeklyDismissed = localStorage.getItem(WEEKLY_DISMISS_KEY(weekKey));
 
       const dailySnap = await getDoc(doc(db, 'daily_checkins', `${currentUser.uid}_${targetKey}`));
-      if (!dailySnap.exists()) {
+      if (!dailySnap.exists() && beforeCutoff) {
         setShowDaily(!dailyDismissed);
       } else {
         setShowDaily(false);
       }
 
       const weeklySnap = await getDoc(doc(db, 'weekly_checkins', `${currentUser.uid}_${weekKey}`));
-      const weekShouldPrompt = today.getTime() >= startOfWeek(today, { weekStartsOn: 1 }).getTime();
+      const weekShouldPrompt = now.getTime() <= getEndOfTuesdayForWeek(startOfWeek(now, { weekStartsOn: 1 })).getTime();
       setShowWeekly(weekShouldPrompt && !weeklySnap.exists() && !weeklyDismissed);
     };
     run();

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Container, Card, Row, Col, Button, Form, InputGroup } from 'react-bootstrap';
+import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, deleteDoc, serverTimestamp, writeBatch, getDocs } from 'firebase/firestore';
@@ -17,12 +18,18 @@ import ConfirmDialog from './ConfirmDialog';
 import { arrayMove } from '@dnd-kit/sortable';
 import { useSidebar } from '../contexts/SidebarContext';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { computeWindowExpectedProgress, evaluateGoalTargetStatus } from '../utils/goalKpiStatus';
+import { goalNeedsLinkedPot } from '../utils/goalCost';
+import { isGoalInHierarchySet } from '../utils/goalHierarchy';
 
 const GoalsManagement: React.FC = () => {
   console.log('[GoalsManagement] Component RENDERING');
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
+  const [searchParams] = useSearchParams();
   const [goals, setGoals] = useState<Goal[]>([]);
+  const [stories, setStories] = useState<Story[]>([]);
+  const [goalKpiScope, setGoalKpiScope] = useState<'sprint' | 'year' | 'goal'>('sprint');
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [filterTheme, setFilterTheme] = useState<string>('all');
   const [filterYear, setFilterYear] = useState<string>('current');
@@ -43,11 +50,39 @@ const GoalsManagement: React.FC = () => {
   const [editGoal, setEditGoal] = useState<Goal | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<{ id: string; title: string } | null>(null);
   const [activeSprintGoalIds, setActiveSprintGoalIds] = useState<Set<string>>(new Set());
+  const [activeFocusGoalIds, setActiveFocusGoalIds] = useState<Set<string>>(new Set());
+  const [applyFocusOnlyFilter, setApplyFocusOnlyFilter] = useState(false);
+  const [focusToggleTouched, setFocusToggleTouched] = useState(false);
   const [applyActiveSprintFilter, setApplyActiveSprintFilter] = useState(true); // default on
   const [pots, setPots] = useState<Record<string, { name: string; balance: number }>>({});
+  const [goalKpiMetrics, setGoalKpiMetrics] = useState<Record<string, { resolvedKpis?: any[]; updatedAt?: any }>>({});
   const { selectedSprintId, setSelectedSprintId, sprints } = useSprint();
   const { themes: globalThemes } = useGlobalThemes();
   const { isCollapsed, toggleCollapse } = useSidebar();
+
+  useEffect(() => {
+    const filter = searchParams.get('filter');
+    if (filter === 'cost_without_pot') {
+      setViewMode('list');
+      setShowNoPotOnly(true);
+      setFilterYear('all');
+    }
+  }, [searchParams]);
+
+  const toMillis = (value: any): number | null => {
+    if (value == null) return null;
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (value?.toMillis && typeof value.toMillis === 'function') {
+      try {
+        return Number(value.toMillis());
+      } catch {
+        return null;
+      }
+    }
+    if (value?.seconds != null) return Number(value.seconds) * 1000;
+    const parsed = new Date(value).getTime();
+    return Number.isFinite(parsed) ? parsed : null;
+  };
 
   useEffect(() => {
     try {
@@ -119,6 +154,71 @@ const GoalsManagement: React.FC = () => {
     loadGoalsData();
   }, [currentUser, currentPersona]);
 
+  useEffect(() => {
+    if (!currentUser) {
+      setStories([]);
+      return;
+    }
+    const storiesQuery = query(
+      collection(db, 'stories'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona)
+    );
+    const unsub = onSnapshot(
+      storiesQuery,
+      (snapshot) => {
+        const rows = snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) })) as Story[];
+        setStories(rows);
+      },
+      (error) => {
+        console.warn('[GoalsManagement] stories load failed', error);
+        setStories([]);
+      }
+    );
+    return () => unsub();
+  }, [currentUser, currentPersona]);
+
+  useEffect(() => {
+    if (!currentUser?.uid) {
+      setActiveFocusGoalIds(new Set());
+      return;
+    }
+    const focusQuery = query(
+      collection(db, 'focusGoals'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+      where('isActive', '==', true)
+    );
+    const unsub = onSnapshot(
+      focusQuery,
+      (snapshot) => {
+        const setIds = new Set<string>();
+        snapshot.docs.forEach((docSnap) => {
+          const data = docSnap.data() as any;
+          const ids = Array.isArray(data.goalIds) ? data.goalIds : [];
+          ids.forEach((id) => {
+            const normalized = String(id || '').trim();
+            if (normalized) setIds.add(normalized);
+          });
+        });
+        setActiveFocusGoalIds(setIds);
+      },
+      () => setActiveFocusGoalIds(new Set())
+    );
+    return () => unsub();
+  }, [currentUser?.uid, currentPersona]);
+
+  useEffect(() => {
+    if (activeFocusGoalIds.size === 0) {
+      setApplyFocusOnlyFilter(false);
+      setFocusToggleTouched(false);
+      return;
+    }
+    if (!focusToggleTouched) {
+      setApplyFocusOnlyFilter(true);
+    }
+  }, [activeFocusGoalIds, focusToggleTouched]);
+
   const activeSprintId = useMemo(() => {
     const active = sprints.find((s) => s.status === 1);
     return active?.id || null;
@@ -148,25 +248,16 @@ const GoalsManagement: React.FC = () => {
 
   useEffect(() => {
     const sprintId = selectedSprintId === '' ? null : (selectedSprintId || activeSprintId);
-    if (!currentUser || !sprintId) {
+    if (!sprintId) {
       setActiveSprintGoalIds(new Set());
       return;
     }
-    const storiesQ = query(
-      collection(db, 'stories'),
-      where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona)
-    );
-    const unsub = onSnapshot(storiesQ, (snap) => {
-      const setIds = new Set<string>();
-      snap.docs.forEach(d => {
-        const s = d.data() as any;
-        if (s.sprintId === sprintId && s.goalId) setIds.add(s.goalId);
-      });
-      setActiveSprintGoalIds(setIds);
+    const setIds = new Set<string>();
+    stories.forEach((story) => {
+      if ((story as any).sprintId === sprintId && story.goalId) setIds.add(story.goalId);
     });
-    return unsub;
-  }, [currentUser, currentPersona, selectedSprintId, activeSprintId]);
+    setActiveSprintGoalIds(setIds);
+  }, [stories, selectedSprintId, activeSprintId]);
 
   useEffect(() => {
     if (!currentUser?.uid) return;
@@ -181,6 +272,38 @@ const GoalsManagement: React.FC = () => {
       });
       setPots(map);
     });
+    return () => unsub();
+  }, [currentUser?.uid]);
+
+  useEffect(() => {
+    if (!currentUser?.uid) {
+      setGoalKpiMetrics({});
+      return;
+    }
+    const metricsQuery = query(
+      collection(db, 'goal_kpi_metrics'),
+      where('ownerUid', '==', currentUser.uid)
+    );
+    const unsub = onSnapshot(
+      metricsQuery,
+      (snap) => {
+        const map: Record<string, { resolvedKpis?: any[]; updatedAt?: any }> = {};
+        snap.docs.forEach((docSnap) => {
+          const data = docSnap.data() as any;
+          const goalId = String(data.goalId || '').trim();
+          if (!goalId) return;
+          map[goalId] = {
+            resolvedKpis: Array.isArray(data.resolvedKpis) ? data.resolvedKpis : [],
+            updatedAt: data.updatedAt || null,
+          };
+        });
+        setGoalKpiMetrics(map);
+      },
+      (error) => {
+        console.warn('[GoalsManagement] goal KPI metrics load failed', error);
+        setGoalKpiMetrics({});
+      }
+    );
     return () => unsub();
   }, [currentUser?.uid]);
 
@@ -330,8 +453,7 @@ const GoalsManagement: React.FC = () => {
     if (filterStatus !== 'all' && !isStatus(goal.status, filterStatus)) return false;
     if (filterTheme !== 'all' && getThemeName(goal.theme) !== filterTheme) return false;
     if (showNoPotOnly) {
-      const potId = (goal as any).linkedPotId || (goal as any).potId;
-      if (potId) return false;
+      if (!goalNeedsLinkedPot(goal)) return false;
     }
     const derivedYear =
       (goal as any).targetYear ||
@@ -344,6 +466,7 @@ const GoalsManagement: React.FC = () => {
       if (derivedYear && String(derivedYear) !== filterYear) return false;
     }
     if (searchTerm && !goal.title.toLowerCase().includes(searchTerm.toLowerCase())) return false;
+    if (applyFocusOnlyFilter && activeFocusGoalIds.size > 0 && !isGoalInHierarchySet(goal.id, goals, activeFocusGoalIds)) return false;
     return true;
   });
 
@@ -400,6 +523,157 @@ const GoalsManagement: React.FC = () => {
     });
     return Array.from(years).sort();
   }, [goals]);
+
+  const kpiYear = useMemo(() => {
+    const numeric = Number(filterYear);
+    if (filterYear !== 'all' && filterYear !== 'current' && Number.isFinite(numeric) && numeric > 0) {
+      return numeric;
+    }
+    return new Date().getFullYear();
+  }, [filterYear]);
+
+  const yearStartMs = useMemo(() => new Date(kpiYear, 0, 1, 0, 0, 0, 0).getTime(), [kpiYear]);
+  const yearEndMs = useMemo(() => new Date(kpiYear, 11, 31, 23, 59, 59, 999).getTime(), [kpiYear]);
+
+  const kpiSprintId = useMemo(() => {
+    if (selectedSprintId && selectedSprintId !== '') return selectedSprintId;
+    return activeSprintId;
+  }, [selectedSprintId, activeSprintId]);
+
+  const kpiSprint = useMemo(() => {
+    if (!kpiSprintId) return null;
+    return sprints.find((s) => s.id === kpiSprintId) || null;
+  }, [sprints, kpiSprintId]);
+
+  const kpiScopeLabel = useMemo(() => {
+    if (goalKpiScope === 'sprint') return kpiSprint?.name || 'active sprint';
+    if (goalKpiScope === 'year') return String(kpiYear);
+    return 'goal timeline';
+  }, [goalKpiScope, kpiSprint, kpiYear]);
+
+  const filteredGoalIds = useMemo(() => new Set(orderedFilteredGoals.map((goal) => goal.id)), [orderedFilteredGoals]);
+
+  const filteredStories = useMemo(() => {
+    return stories.filter((story) => story.goalId && filteredGoalIds.has(story.goalId));
+  }, [stories, filteredGoalIds]);
+
+  const scopedStories = useMemo(() => {
+    if (goalKpiScope === 'goal') return filteredStories;
+    if (goalKpiScope === 'sprint') {
+      if (!kpiSprintId) return [];
+      return filteredStories.filter((story) => String((story as any).sprintId || '') === kpiSprintId);
+    }
+    return filteredStories.filter((story) => {
+      const candidates = [
+        (story as any).targetDate,
+        (story as any).dueDate,
+        (story as any).plannedStartDate,
+        (story as any).createdAt,
+        (story as any).updatedAt,
+      ].map((value) => toMillis(value));
+      return candidates.some((ms) => ms != null && ms >= yearStartMs && ms <= yearEndMs);
+    });
+  }, [goalKpiScope, filteredStories, kpiSprintId, yearStartMs, yearEndMs]);
+
+  const scopeExpectedProgressPct = useMemo(() => {
+    if (goalKpiScope === 'sprint') {
+      const startMs = toMillis((kpiSprint as any)?.startDate || (kpiSprint as any)?.start || null);
+      const endMs = toMillis((kpiSprint as any)?.endDate || (kpiSprint as any)?.end || null);
+      return computeWindowExpectedProgress(startMs, endMs);
+    }
+    if (goalKpiScope === 'year') {
+      return computeWindowExpectedProgress(yearStartMs, yearEndMs);
+    }
+    return null;
+  }, [goalKpiScope, kpiSprint, yearStartMs, yearEndMs]);
+
+  const getGoalPotBalance = (goal: Goal): number => {
+    const rawPotId = (goal as any).linkedPotId || (goal as any).potId;
+    if (!rawPotId) return 0;
+    const raw = String(rawPotId);
+    const candidates = [raw];
+    if (currentUser?.uid) {
+      if (raw.startsWith(`${currentUser.uid}_`)) candidates.push(raw.replace(`${currentUser.uid}_`, ''));
+      else candidates.push(`${currentUser.uid}_${raw}`);
+    }
+    const found = candidates.find((id) => pots[id]);
+    if (!found) return 0;
+    const balance = Number(pots[found]?.balance || 0);
+    return Number.isFinite(balance) ? balance : 0;
+  };
+
+  const goalKpiStatusByGoalId = useMemo(() => {
+    const storiesByGoal = new Map<string, Story[]>();
+    scopedStories.forEach((story) => {
+      const goalId = String(story.goalId || '').trim();
+      if (!goalId) return;
+      const list = storiesByGoal.get(goalId) || [];
+      list.push(story);
+      storiesByGoal.set(goalId, list);
+    });
+
+    const statusMap: Record<string, {
+      goalId: string;
+      goalTitle: string;
+      kpiSummary: string;
+      progressPct: number | null;
+      expectedProgressPct: number | null;
+      statusLabel: 'On target' | 'Behind' | 'No KPI';
+      statusTone: 'success' | 'danger' | 'muted';
+      reason: string;
+    }> = {};
+
+    orderedFilteredGoals.forEach((goal) => {
+      const goalStories = storiesByGoal.get(goal.id) || [];
+      const totalStoryPoints = goalStories.reduce((sum, story) => sum + (Number((story as any).points || 0) || 0), 0);
+      const doneStoryPoints = goalStories
+        .filter((story) => Number((story as any).status || 0) >= 4)
+        .reduce((sum, story) => sum + (Number((story as any).points || 0) || 0), 0);
+      const doneStoryCount = goalStories.filter((story) => Number((story as any).status || 0) >= 4).length;
+      const storyProgressPct = goalStories.length
+        ? (
+          totalStoryPoints > 0
+            ? Math.round((doneStoryPoints / totalStoryPoints) * 100)
+            : Math.round((doneStoryCount / goalStories.length) * 100)
+        )
+        : null;
+
+      const estimated = Number((goal as any).estimatedCost || 0) || 0;
+      const savedPence = getGoalPotBalance(goal);
+      const savingsPct = estimated > 0 ? Math.min(100, Math.round(((savedPence / 100) / estimated) * 100)) : null;
+      const fallbackParts = [storyProgressPct, savingsPct].filter((value): value is number => value != null);
+      const fallbackProgressPct = fallbackParts.length
+        ? Math.round(fallbackParts.reduce((sum, value) => sum + value, 0) / fallbackParts.length)
+        : null;
+
+      const startMs = toMillis((goal as any).startDate || goal.createdAt || null);
+      const endMs = toMillis((goal as any).endDate || (goal as any).targetDate || null);
+      const expectedProgressPct = goalKpiScope === 'goal'
+        ? computeWindowExpectedProgress(startMs, endMs)
+        : scopeExpectedProgressPct;
+      const resolvedKpis = Array.isArray(goalKpiMetrics[goal.id]?.resolvedKpis)
+        ? goalKpiMetrics[goal.id]?.resolvedKpis || []
+        : [];
+      const status = evaluateGoalTargetStatus({
+        resolvedKpis,
+        fallbackProgressPct,
+        expectedProgressPct,
+        scopeLabel: kpiScopeLabel,
+      });
+      statusMap[goal.id] = {
+        goalId: goal.id,
+        goalTitle: goal.title || goal.id,
+        kpiSummary: status.kpiSummary || 'No KPI attached',
+        progressPct: status.progressPct,
+        expectedProgressPct,
+        statusLabel: status.label,
+        statusTone: status.tone,
+        reason: status.reason,
+      };
+    });
+
+    return statusMap;
+  }, [scopedStories, orderedFilteredGoals, goalKpiMetrics, goalKpiScope, scopeExpectedProgressPct, kpiScopeLabel, currentUser?.uid, pots]);
 
   return (
     <div style={{
@@ -620,6 +894,21 @@ const GoalsManagement: React.FC = () => {
                   </div>
                 </Form.Group>
               </Col>
+              <Col md={1}>
+                <Form.Group>
+                  <Form.Label style={{ fontWeight: '500', marginBottom: '2px', fontSize: '11px' }}>KPI Scope</Form.Label>
+                  <Form.Select
+                    size="sm"
+                    value={goalKpiScope}
+                    onChange={(e) => setGoalKpiScope(e.target.value as 'sprint' | 'year' | 'goal')}
+                    style={{ border: '1px solid var(--notion-border)', background: 'var(--notion-bg)', color: 'var(--notion-text)' }}
+                  >
+                    <option value="sprint">Sprint</option>
+                    <option value="year">Year</option>
+                    <option value="goal">Goal</option>
+                  </Form.Select>
+                </Form.Group>
+              </Col>
               <Col md="auto">
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                   <Button
@@ -629,6 +918,10 @@ const GoalsManagement: React.FC = () => {
                       setFilterStatus('all');
                       setFilterTheme('all');
                       setSearchTerm('');
+                      setGoalKpiScope('sprint');
+                      setShowNoPotOnly(false);
+                      setApplyFocusOnlyFilter(false);
+                      setFocusToggleTouched(false);
                     }}
                     style={{ borderColor: 'var(--notion-border)', color: 'var(--notion-text)' }}
                   >
@@ -645,10 +938,22 @@ const GoalsManagement: React.FC = () => {
                   <Form.Check
                     type="switch"
                     id="toggle-goals-no-pots"
-                    label="Only goals without pots"
+                    label="Only goals with cost and no pot"
                     checked={showNoPotOnly}
                     onChange={(e) => setShowNoPotOnly(e.target.checked)}
                     className="text-muted"
+                  />
+                  <Form.Check
+                    type="switch"
+                    id="toggle-goals-focus-only"
+                    label={`Only active focus goals${activeFocusGoalIds.size ? ` (${activeFocusGoalIds.size})` : ''}`}
+                    checked={applyFocusOnlyFilter}
+                    onChange={(e) => {
+                      setApplyFocusOnlyFilter(e.target.checked);
+                      setFocusToggleTouched(true);
+                    }}
+                    className="text-muted"
+                    disabled={activeFocusGoalIds.size === 0}
                   />
                 </div>
               </Col>
@@ -690,6 +995,7 @@ const GoalsManagement: React.FC = () => {
                     onGoalPriorityChange={handleGoalPriorityChange}
                     onGoalReorder={handleGoalReorder}
                     onEditModal={(goal) => setEditGoal(goal)}
+                    goalKpiStatusByGoalId={goalKpiStatusByGoalId}
                   />
                 ) : (
                   <GoalsCardView
@@ -700,6 +1006,7 @@ const GoalsManagement: React.FC = () => {
                     themes={globalThemes}
                     cardLayout="grid"
                     showDescriptions={showGoalDescriptions}
+                    goalKpiStatusByGoalId={goalKpiStatusByGoalId}
                   />
                 )}
               </div>

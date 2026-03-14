@@ -8,6 +8,8 @@ import { useTheme } from '../../contexts/ThemeContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { PremiumCard } from '../common/PremiumCard';
 import ReactECharts from 'echarts-for-react';
+import TransactionsList from './TransactionsList';
+import { normalizeMerchantKey } from './financeInsights';
 import {
     TrendingUp,
     PieChart as PieIcon,
@@ -30,13 +32,15 @@ import {
 } from 'lucide-react';
 import './FinanceDashboardAdvanced.css';
 
-type DateFilter = 'month' | 'quarter' | 'year' | 'all' | 'custom';
-type ViewMode = 'category' | 'bucket';
-type FinanceView = 'overview' | 'spend' | 'optional' | 'actions' | 'sources' | 'assets';
+type DateFilter = '7d' | '30d' | '60d' | '90d' | '6m' | 'year' | 'all' | 'custom';
+type ViewMode = 'category' | 'bucket' | 'merchant';
+type FinanceView = 'overview' | 'analyst' | 'spend' | 'discretionary' | 'actions' | 'sources' | 'assets';
 type ExternalSource = 'barclays' | 'paypal' | 'other' | 'monzo_csv';
 type AnalysisDimension = 'bucket' | 'category' | 'merchant';
 type AnalysisChartType = 'trend' | 'pie' | 'breakdown';
+type AnalysisActionFilter = 'all' | 'with' | 'without';
 type ManualAccountType = 'asset' | 'debt' | 'investment' | 'cash' | 'savings';
+type DashboardCardFilter = 'all' | 'subscriptions' | 'discretionary' | 'anomaly' | 'actions' | 'missingCategory';
 
 const THEME_COLORS = ['#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF', '#FF9F40', '#C9CBCF', '#9B59B6', '#00C2A8', '#F39C12'];
 const EMPTY_LIST: any[] = [];
@@ -117,16 +121,70 @@ const toKeyText = (value: any, fallback = 'unknown') => {
     return text || fallback;
 };
 
+const INCOME_CATEGORY_KEYS = new Set(['income', 'net_salary', 'irregular_income']);
+const EXCLUDED_SPEND_CATEGORY_KEYS = new Set(['bank_transfer', 'unknown', '']);
+
+const resolveTxCategory = (tx: any) => {
+    const key = toText(tx.userCategoryKey || tx.aiCategoryKey || tx.categoryKey, '').toLowerCase();
+    const label = toText(
+        tx.userCategoryLabel || tx.aiCategoryLabel || tx.categoryLabel || key || tx.categoryType,
+        'Uncategorised'
+    );
+    const bucket = toText(tx.userCategoryType || tx.aiBucket || tx.categoryType, '').toLowerCase();
+    return { key, label, bucket };
+};
+
+const isSpendBreakdownTx = (tx: any) => {
+    const amountMinor = txAmountMinor(tx);
+    if (!(amountMinor < 0)) return false;
+    const { key, bucket } = resolveTxCategory(tx);
+    if (EXCLUDED_SPEND_CATEGORY_KEYS.has(key)) return false;
+    if (INCOME_CATEGORY_KEYS.has(key) || bucket === 'income') return false;
+    return true;
+};
+
 const parseFinanceView = (tab: string | null): FinanceView | null => {
     if (!tab) return null;
     if (tab === 'cashflow') return 'spend';
     if (tab === 'overview') return 'overview';
+    if (tab === 'analyst' || tab === 'budget-analyst') return 'analyst';
     if (tab === 'spend') return 'spend';
-    if (tab === 'optional') return 'optional';
+    if (tab === 'discretionary') return 'discretionary';
     if (tab === 'actions') return 'actions';
     if (tab === 'sources') return 'sources';
     if (tab === 'assets') return 'assets';
     return null;
+};
+
+const resolveDateRange = (filter: DateFilter, startDate: string, endDate: string) => {
+    const now = new Date();
+    let rangeStart = new Date(startDate);
+    let rangeEnd = new Date(endDate);
+
+    if (filter === '7d') {
+        rangeEnd = now;
+        rangeStart = new Date(now.getTime() - (7 * 24 * 60 * 60 * 1000));
+    } else if (filter === '30d') {
+        rangeEnd = now;
+        rangeStart = new Date(now.getTime() - (30 * 24 * 60 * 60 * 1000));
+    } else if (filter === '60d') {
+        rangeEnd = now;
+        rangeStart = new Date(now.getTime() - (60 * 24 * 60 * 60 * 1000));
+    } else if (filter === '90d') {
+        rangeEnd = now;
+        rangeStart = new Date(now.getTime() - (90 * 24 * 60 * 60 * 1000));
+    } else if (filter === '6m') {
+        rangeEnd = now;
+        rangeStart = new Date(now.getFullYear(), now.getMonth() - 6, now.getDate());
+    } else if (filter === 'year') {
+        rangeStart = new Date(now.getFullYear(), 0, 1);
+        rangeEnd = new Date(now.getFullYear(), 11, 31);
+    } else if (filter === 'all') {
+        rangeStart = new Date('2018-01-01T00:00:00.000Z');
+        rangeEnd = new Date();
+    }
+
+    return { rangeStart, rangeEnd };
 };
 
 const FinanceDashboardAdvanced: React.FC = () => {
@@ -136,7 +194,9 @@ const FinanceDashboardAdvanced: React.FC = () => {
     const [searchParams, setSearchParams] = useSearchParams();
 
     const [data, setData] = useState<any>(null);
+    const [yoyData, setYoyData] = useState<any>(null);
     const [enhancementData, setEnhancementData] = useState<any>(null);
+    const [yoyEnhancementData, setYoyEnhancementData] = useState<any>(null);
     const [loading, setLoading] = useState(true);
     const [syncing, setSyncing] = useState(false);
     const [busy, setBusy] = useState(false);
@@ -144,14 +204,15 @@ const FinanceDashboardAdvanced: React.FC = () => {
     const [error, setError] = useState<string | null>(null);
     const [opsMessage, setOpsMessage] = useState<string | null>(null);
     const [lastSync, setLastSync] = useState<Date | null>(null);
-    const [filter, setFilter] = useState<DateFilter>('month');
+    const [filter, setFilter] = useState<DateFilter>('30d');
+    const [compareYoY, setCompareYoY] = useState(false);
     const [startDate, setStartDate] = useState<string>(() => {
         const now = new Date();
-        return new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
+        return new Date(now.getTime() - (30 * 24 * 60 * 60 * 1000)).toISOString().slice(0, 10);
     });
     const [endDate, setEndDate] = useState<string>(() => {
         const now = new Date();
-        return new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().slice(0, 10);
+        return now.toISOString().slice(0, 10);
     });
     const [viewMode, setViewMode] = useState<ViewMode>('category');
     const [activeView, setActiveView] = useState<FinanceView>(() => parseFinanceView(searchParams.get('tab')) || 'overview');
@@ -168,6 +229,13 @@ const FinanceDashboardAdvanced: React.FC = () => {
     const [analysisBucketFilter, setAnalysisBucketFilter] = useState('all');
     const [analysisCategoryFilter, setAnalysisCategoryFilter] = useState('all');
     const [analysisMerchantFilter, setAnalysisMerchantFilter] = useState('all');
+    const [analysisActionFilter, setAnalysisActionFilter] = useState<AnalysisActionFilter>('all');
+
+    // Chart drill-down filter state
+    const [chartFilter, setChartFilter] = useState<{ type: 'category' | 'bucket' | 'merchant' | null; value: string | null }>({ type: null, value: null });
+    const [cardFilter, setCardFilter] = useState<DashboardCardFilter>('all');
+    const [debtStrategy, setDebtStrategy] = useState<'snowball' | 'avalanche'>('avalanche');
+    const [debtAprByAccount, setDebtAprByAccount] = useState<Record<string, number>>({});
 
     const [editingManualAccountId, setEditingManualAccountId] = useState<string | null>(null);
     const [manualForm, setManualForm] = useState<{
@@ -210,38 +278,51 @@ const FinanceDashboardAdvanced: React.FC = () => {
                 }
             }
 
-            const now = new Date();
-            let rangeStart = new Date(startDate);
-            let rangeEnd = new Date(endDate);
-
-            if (filter === 'month') {
-                rangeStart = new Date(now.getFullYear(), now.getMonth(), 1);
-                rangeEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-            } else if (filter === 'quarter') {
-                const q = Math.floor(now.getMonth() / 3);
-                rangeStart = new Date(now.getFullYear(), q * 3, 1);
-                rangeEnd = new Date(now.getFullYear(), (q + 1) * 3, 0);
-            } else if (filter === 'year') {
-                rangeStart = new Date(now.getFullYear(), 0, 1);
-                rangeEnd = new Date(now.getFullYear(), 11, 31);
-            } else if (filter === 'all') {
-                rangeStart = new Date('2018-01-01T00:00:00.000Z');
-                rangeEnd = new Date();
-            }
+            const { rangeStart, rangeEnd } = resolveDateRange(filter, startDate, endDate);
 
             const fetchDashboardData = httpsCallable(functions, 'fetchDashboardData');
             const fetchEnhancementData = httpsCallable(functions, 'fetchFinanceEnhancementData');
 
-            const [dashboardRes, enhancementRes] = await Promise.allSettled([
+            const requests: Array<Promise<any>> = [];
+            requests.push(
                 fetchDashboardData({
                     startDate: rangeStart.toISOString(),
                     endDate: rangeEnd.toISOString(),
-                }),
+                })
+            );
+            requests.push(
                 fetchEnhancementData({
                     startDate: rangeStart.toISOString(),
                     endDate: rangeEnd.toISOString(),
-                }),
-            ]);
+                })
+            );
+
+            let yoyDashboardIndex: number | null = null;
+            let yoyEnhancementIndex: number | null = null;
+            if (compareYoY && filter !== 'all') {
+                const prevStart = new Date(rangeStart);
+                const prevEnd = new Date(rangeEnd);
+                prevStart.setFullYear(prevStart.getFullYear() - 1);
+                prevEnd.setFullYear(prevEnd.getFullYear() - 1);
+                yoyDashboardIndex = requests.push(
+                    fetchDashboardData({
+                        startDate: prevStart.toISOString(),
+                        endDate: prevEnd.toISOString(),
+                    })
+                ) - 1;
+                yoyEnhancementIndex = requests.push(
+                    fetchEnhancementData({
+                        startDate: prevStart.toISOString(),
+                        endDate: prevEnd.toISOString(),
+                    })
+                ) - 1;
+            }
+
+            const settled = await Promise.allSettled(requests);
+            const dashboardRes = settled[0];
+            const enhancementRes = settled[1];
+            const yoyRes = yoyDashboardIndex !== null ? settled[yoyDashboardIndex] : null;
+            const yoyEnhancementRes = yoyEnhancementIndex !== null ? settled[yoyEnhancementIndex] : null;
 
             if (dashboardRes.status !== 'fulfilled') {
                 throw dashboardRes.reason;
@@ -254,13 +335,25 @@ const FinanceDashboardAdvanced: React.FC = () => {
                 console.warn('fetchFinanceEnhancementData failed', enhancementRes.reason);
                 setEnhancementData(null);
             }
+            if (compareYoY && yoyRes && yoyRes.status === 'fulfilled') {
+                setYoyData(((yoyRes.value.data as any)?.data || yoyRes.value.data) as any);
+            } else {
+                setYoyData(null);
+            }
+            if (compareYoY && yoyEnhancementRes && yoyEnhancementRes.status === 'fulfilled') {
+                setYoyEnhancementData((yoyEnhancementRes.value.data as any) || null);
+            } else {
+                setYoyEnhancementData(null);
+            }
         } catch (err: any) {
             console.error(err);
             setError(err?.message || 'Failed to load finance dashboard data');
+            setYoyData(null);
+            setYoyEnhancementData(null);
         } finally {
             setLoading(false);
         }
-    }, [currentUser, filter, startDate, endDate]);
+    }, [currentUser, filter, startDate, endDate, compareYoY]);
 
     useEffect(() => {
         fetchData();
@@ -277,6 +370,12 @@ const FinanceDashboardAdvanced: React.FC = () => {
             setActiveView(tabFromUrl);
         }
     }, [searchParams, activeView]);
+
+    useEffect(() => {
+        if (chartFilter.type && chartFilter.type !== viewMode) {
+            setChartFilter({ type: null, value: null });
+        }
+    }, [chartFilter.type, viewMode]);
 
     const handleViewChange = useCallback((nextView: FinanceView) => {
         setActiveView(nextView);
@@ -508,79 +607,200 @@ const FinanceDashboardAdvanced: React.FC = () => {
         });
     };
 
+    const activeRange = useMemo(
+        () => resolveDateRange(filter, startDate, endDate),
+        [filter, startDate, endDate]
+    );
+
+    const handleCardFilter = useCallback((nextFilter: DashboardCardFilter) => {
+        setChartFilter({ type: null, value: null });
+        setCardFilter((prev) => (prev === nextFilter ? 'all' : nextFilter));
+    }, []);
+
+    const transactionsExternalFilters = useMemo(() => {
+        const next: {
+            dateStartISO: string;
+            dateEndISO: string;
+            bucket?: string;
+            category?: string;
+            missingOnly?: boolean;
+            anomaly?: 'all' | 'flagged' | 'normal';
+            subscriptionOnly?: boolean;
+            action?: 'all' | 'with' | 'without';
+        } = {
+            dateStartISO: activeRange.rangeStart.toISOString(),
+            dateEndISO: activeRange.rangeEnd.toISOString(),
+        };
+
+        if (cardFilter === 'subscriptions') next.subscriptionOnly = true;
+        if (cardFilter === 'discretionary') next.bucket = 'discretionary';
+        if (cardFilter === 'anomaly') next.anomaly = 'flagged';
+        if (cardFilter === 'actions') next.action = 'with';
+        if (cardFilter === 'missingCategory') next.missingOnly = true;
+
+        if (chartFilter.type === 'bucket' && chartFilter.value) {
+            next.bucket = chartFilter.value;
+        }
+        if (chartFilter.type === 'category' && chartFilter.value) {
+            next.category = chartFilter.value;
+        }
+
+        return next;
+    }, [activeRange, cardFilter, chartFilter]);
+
+    const drilldownBadgeLabel = useMemo(() => {
+        if (chartFilter.type && chartFilter.value) return `${chartFilter.type}: ${chartFilter.value}`;
+        if (cardFilter === 'subscriptions') return 'subscriptions';
+        if (cardFilter === 'discretionary') return 'discretionary';
+        if (cardFilter === 'anomaly') return 'anomaly';
+        if (cardFilter === 'actions') return 'with recommendation';
+        if (cardFilter === 'missingCategory') return 'missing category';
+        return null;
+    }, [cardFilter, chartFilter]);
+
     const userBadge = (
         <div className="d-flex justify-content-end mb-2">
             <span className="small text-muted">Signed in as: <code>{currentUser?.uid || '—'}</code></span>
         </div>
     );
 
-    const bucketEntries = Object.entries(data?.spendByBucket || {}).filter(([key]) => key !== 'bank_transfer' && key !== 'unknown');
-    const bucketData = bucketEntries
-        .map(([key, value]: [string, any]) => ({ name: key.charAt(0).toUpperCase() + key.slice(1), value: Math.abs(value) / 100 }))
-        .filter((entry) => entry.value > 0);
+    const spendTransactions = ((data?.recentTransactions || []) as any[])
+        .filter((tx) => isSpendBreakdownTx(tx));
 
-    const categoryData = Object.entries(data?.spendByCategory || {})
-        .filter(([key]) => key !== 'bank_transfer' && key !== 'unknown')
-        .map(([key, value]: [string, any]) => ({ name: key, value: Math.abs(value) / 100 }))
+    const bucketTotals: Record<string, number> = {};
+    const categoryTotalsByKey: Record<string, number> = {};
+    const categoryLabelsByKey: Record<string, string> = {};
+    const bucketSeriesByMonth: Record<string, Record<string, number>> = {};
+    const categorySeriesByMonth: Record<string, Record<string, number>> = {};
+
+    spendTransactions.forEach((tx: any) => {
+        const amount = Math.abs(txAmountMinor(tx)) / 100;
+        const { key: categoryKey, label: categoryLabel, bucket } = resolveTxCategory(tx);
+        const normalizedBucket = bucket || 'uncategorised';
+
+        categoryTotalsByKey[categoryKey] = (categoryTotalsByKey[categoryKey] || 0) + amount;
+        categoryLabelsByKey[categoryKey] = categoryLabelsByKey[categoryKey] || categoryLabel;
+        bucketTotals[normalizedBucket] = (bucketTotals[normalizedBucket] || 0) + amount;
+
+        const txDate = parseTxDate(tx);
+        if (!txDate || Number.isNaN(txDate.getTime())) return;
+        const month = txDate.toISOString().slice(0, 7);
+
+        if (!categorySeriesByMonth[month]) categorySeriesByMonth[month] = {};
+        if (!bucketSeriesByMonth[month]) bucketSeriesByMonth[month] = {};
+
+        categorySeriesByMonth[month][categoryKey] = (categorySeriesByMonth[month][categoryKey] || 0) + amount;
+        bucketSeriesByMonth[month][normalizedBucket] = (bucketSeriesByMonth[month][normalizedBucket] || 0) + amount;
+    });
+
+    const bucketData = Object.entries(bucketTotals)
+        .map(([key, value]) => ({
+            name: key.charAt(0).toUpperCase() + key.slice(1),
+            value: Number(value || 0),
+        }))
+        .filter((entry) => entry.value > 0)
         .sort((a, b) => b.value - a.value);
-    const topCategoryData = categoryData.slice(0, 10);
 
-    const timeSeriesSourceRaw = viewMode === 'bucket' ? data?.timeSeriesByBucket : data?.timeSeriesByCategory;
-    const timeSeriesSource = Object.fromEntries(Object.entries(timeSeriesSourceRaw || {}).filter(([key]) => key !== 'bank_transfer'));
+    const categoryData = Object.entries(categoryTotalsByKey)
+        .map(([categoryKey, value]) => ({
+            key: categoryKey,
+            name: categoryLabelsByKey[categoryKey] || categoryKey || 'Uncategorised',
+            value: Number(value || 0),
+        }))
+        .filter((entry) => entry.value > 0)
+        .sort((a, b) => b.value - a.value);
+    const topCategoryData = categoryData.slice(0, 10).map(({ name, value }) => ({ name, value }));
 
-    const allMonths = new Set<string>();
-    Object.values(timeSeriesSource || {}).forEach((arr: any) => arr.forEach((entry: any) => allMonths.add(entry.month)));
-    const sortedMonths = Array.from(allMonths).sort();
+    const monthlySource = viewMode === 'bucket' ? bucketSeriesByMonth : categorySeriesByMonth;
+    const sortedMonths = Object.keys(monthlySource).sort();
 
     const trendData = sortedMonths.map((month) => {
         const row: any = { month };
-        Object.entries(timeSeriesSource || {}).forEach(([key, arr]: [string, any]) => {
-            const entry = arr.find((item: any) => item.month === month);
-            if (entry) row[key] = Math.abs(entry.amount) / 100;
+        const monthValues = monthlySource[month] || {};
+        Object.entries(monthValues).forEach(([rawKey, value]) => {
+            const seriesName = viewMode === 'bucket'
+                ? rawKey.charAt(0).toUpperCase() + rawKey.slice(1)
+                : (categoryLabelsByKey[rawKey] || rawKey || 'Uncategorised');
+            row[seriesName] = Number(value || 0);
         });
         return row;
     });
 
-    const activeKeys = Object.keys(timeSeriesSource || {}).slice(0, 5);
-    const bankTransferAmount = data?.spendByBucket?.bank_transfer ?? 0;
-    const filteredTotalSpend = Math.abs((data?.totalSpend || 0) - bankTransferAmount) / 100;
+    const trendKeyTotals = trendData.reduce((acc: Record<string, number>, row: any) => {
+        Object.entries(row).forEach(([key, value]) => {
+            if (key === 'month') return;
+            acc[key] = (acc[key] || 0) + Number(value || 0);
+        });
+        return acc;
+    }, {} as Record<string, number>);
 
-    const trendOption = {
-        tooltip: { trigger: 'axis' },
-        legend: { data: activeKeys },
-        grid: { left: 50, right: 10, top: 30, bottom: 20 },
-        xAxis: { type: 'category', data: trendData.map((r: any) => r.month) },
-        yAxis: { type: 'value', axisLabel: { formatter: (v: number) => `£${v}` } },
-        series: activeKeys.map((key, idx) => ({
-            name: key,
-            type: 'line',
-            stack: 'spend',
-            areaStyle: { opacity: 0.2 },
-            data: trendData.map((row: any) => Math.abs(row[key] || 0)),
-            color: THEME_COLORS[idx % THEME_COLORS.length],
-            smooth: true,
-            emphasis: { focus: 'series' },
-        })),
-    };
+    const activeKeys = Object.entries(trendKeyTotals)
+        .sort((a, b) => Number(b[1] || 0) - Number(a[1] || 0))
+        .slice(0, 5)
+        .map(([key]) => key);
 
-    const localDistribution = ((data?.recentTransactions || []) as any[])
-        .filter((tx) => {
-            const cat = (tx.userCategoryKey || tx.aiCategoryKey || tx.categoryKey || tx.categoryType || '').toLowerCase();
-            return cat && cat !== 'bank_transfer' && cat !== 'unknown';
-        })
+    const filteredTotalSpend = spendTransactions.reduce((sum: number, tx: any) => sum + Math.abs(txAmountMinor(tx)) / 100, 0);
+
+    // Merchant distribution from spend transactions only.
+    const merchantTopDataEarly = spendTransactions
         .reduce((acc: Record<string, number>, tx: any) => {
-            const label = toText(
-                tx.userCategoryLabel || tx.aiCategoryLabel || tx.categoryLabel || tx.categoryKey || tx.categoryType,
-                'Uncategorised'
-            );
+            const name = toText(tx.merchantName || tx.merchant?.name || tx.merchant, 'Unknown');
             const amt = Math.abs(txAmountMinor(tx)) / 100;
-            acc[label] = (acc[label] || 0) + amt;
+            acc[name] = (acc[name] || 0) + amt;
+            return acc;
+        }, {} as Record<string, number>);
+    const merchantDataEarly = Object.entries(merchantTopDataEarly)
+        .map(([name, value]) => ({ name, value: Number(value || 0) }))
+        .sort((a, b) => b.value - a.value)
+        .slice(0, 15);
+
+    const trendOption = viewMode === 'merchant'
+        ? {
+            tooltip: { trigger: 'axis', valueFormatter: (v: number) => `£${v.toFixed(2)}` },
+            grid: { left: 150, right: 20, top: 10, bottom: 30 },
+            xAxis: { type: 'value', axisLabel: { formatter: (v: number) => `£${v}` } },
+            yAxis: { type: 'category', data: merchantDataEarly.map((m) => m.name) },
+            series: [{
+                name: 'Spend',
+                type: 'bar',
+                data: merchantDataEarly.map((m, idx) => ({ value: m.value, itemStyle: { color: THEME_COLORS[idx % THEME_COLORS.length] } })),
+                label: { show: true, position: 'right', formatter: (p: any) => `£${Number(p.value).toFixed(0)}` },
+            }],
+        }
+        : {
+            tooltip: { trigger: 'axis' },
+            legend: { data: activeKeys },
+            grid: { left: 50, right: 10, top: 30, bottom: 50 },
+            xAxis: { type: 'category', data: trendData.map((r: any) => r.month) },
+            yAxis: { type: 'value', axisLabel: { formatter: (v: number) => `£${v}` } },
+            series: activeKeys.map((key, idx) => ({
+                name: key,
+                type: 'bar',
+                stack: 'spend',
+                data: trendData.map((row: any) => Math.abs(row[key] || 0)),
+                color: THEME_COLORS[idx % THEME_COLORS.length],
+                emphasis: { focus: 'series' },
+            })),
+        };
+
+    const localDistribution = spendTransactions
+        .reduce((acc: Record<string, number>, tx: any) => {
+            const { key } = resolveTxCategory(tx);
+            const normalizedKey = key || 'uncategorised';
+            const amt = Math.abs(txAmountMinor(tx)) / 100;
+            acc[normalizedKey] = (acc[normalizedKey] || 0) + amt;
             return acc;
         }, {} as Record<string, number>);
 
     const distributionSource = (() => {
+        if (viewMode === 'merchant') return merchantDataEarly.slice(0, 10);
         const local = Object.entries(localDistribution)
-            .map(([name, value]) => ({ name, value: Number(value || 0) }))
+            .map(([categoryKey, value]) => ({
+                name: viewMode === 'bucket'
+                    ? categoryKey.charAt(0).toUpperCase() + categoryKey.slice(1)
+                    : (categoryLabelsByKey[categoryKey] || categoryKey || 'Uncategorised'),
+                value: Number(value || 0),
+            }))
             .sort((a, b) => Number(b.value) - Number(a.value))
             .slice(0, 10);
         const aggregate = viewMode === 'bucket' ? bucketData : topCategoryData;
@@ -588,13 +808,44 @@ const FinanceDashboardAdvanced: React.FC = () => {
         return local;
     })();
 
+    const distributionCenterValue = useMemo(() => {
+        const total = distributionSource.reduce((sum: number, entry: any) => sum + Number(entry?.value || 0), 0);
+        return formatCurrency(total);
+    }, [distributionSource]);
+
     const distributionOption = {
         tooltip: { trigger: 'item', valueFormatter: (v: number) => `£${v}` },
         legend: { orient: 'horizontal', bottom: 0 },
+        graphic: [
+            {
+                type: 'text',
+                left: 'center',
+                top: '38%',
+                style: {
+                    text: distributionCenterValue,
+                    textAlign: 'center',
+                    fill: isDark ? '#ffffff' : '#1f2937',
+                    fontSize: 18,
+                    fontWeight: 700,
+                },
+            },
+            {
+                type: 'text',
+                left: 'center',
+                top: '49%',
+                style: {
+                    text: viewMode === 'merchant' ? 'Top merchants' : viewMode === 'bucket' ? 'Top buckets' : 'Top categories',
+                    textAlign: 'center',
+                    fill: isDark ? 'rgba(255,255,255,0.62)' : '#6b7280',
+                    fontSize: 11,
+                    fontWeight: 500,
+                },
+            },
+        ],
         series: [
             {
                 type: 'pie',
-                radius: ['50%', '70%'],
+                radius: ['62%', '82%'],
                 avoidLabelOverlap: false,
                 itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 2 },
                 label: { show: false },
@@ -607,20 +858,167 @@ const FinanceDashboardAdvanced: React.FC = () => {
         ],
     };
 
+    // Chart click handlers
+    const handleTrendClick = (params: any) => {
+        if (params.componentType === 'series') {
+            const selectedName = params.seriesName || params.name;
+            const filterType = viewMode === 'merchant' ? 'merchant' : viewMode === 'bucket' ? 'bucket' : 'category';
+            setCardFilter('all');
+            setChartFilter({ type: filterType, value: selectedName });
+        }
+    };
+
+    const handlePieClick = (params: any) => {
+        if (params.componentType === 'series') {
+            const selectedName = params.name;
+            const filterType = viewMode === 'merchant' ? 'merchant' : viewMode === 'bucket' ? 'bucket' : 'category';
+            setCardFilter('all');
+            setChartFilter({ type: filterType, value: selectedName });
+        }
+    };
+
+    const clearChartFilter = () => {
+        setChartFilter({ type: null, value: null });
+        setCardFilter('all');
+    };
+
     const filteredRecentTransactions = (data?.recentTransactions || [])
         .filter((tx: any) => {
-            const bucket = (tx.userCategoryType || tx.aiBucket || tx.categoryType || '').toLowerCase();
-            return bucket !== 'bank_transfer' && bucket !== 'unknown';
+            if (!isSpendBreakdownTx(tx)) return false;
+
+            // Apply chart filter
+            if (chartFilter.type && chartFilter.value) {
+                if (chartFilter.type === 'category') {
+                    const categoryLabel = resolveTxCategory(tx).label;
+                    if (categoryLabel !== chartFilter.value) return false;
+                } else if (chartFilter.type === 'bucket') {
+                    const bucketLabel = toText(tx.userCategoryType || tx.aiBucket || tx.categoryType, '');
+                    // Normalize bucket names for comparison
+                    const normalizedBucket = bucketLabel.toLowerCase();
+                    const normalizedFilter = chartFilter.value.toLowerCase();
+                    if (normalizedBucket !== normalizedFilter &&
+                        !(normalizedBucket === 'discretionary' && normalizedFilter === 'discretionary') &&
+                        !(normalizedBucket === 'mandatory' && normalizedFilter === 'mandatory')) {
+                        return false;
+                    }
+                } else if (chartFilter.type === 'merchant') {
+                    const merchantName = toText(tx.merchantName || tx.merchant?.name || tx.merchant, 'Unknown');
+                    if (merchantName !== chartFilter.value) return false;
+                }
+            }
+
+            if (cardFilter === 'subscriptions' && !tx.isSubscription) return false;
+            if (cardFilter === 'discretionary') {
+                const bucketLabel = toText(tx.userCategoryType || tx.aiBucket || tx.categoryType, '').toLowerCase();
+                if (bucketLabel !== 'discretionary' && bucketLabel !== 'optional') return false;
+            }
+            if (cardFilter === 'anomaly' && !tx.aiAnomalyFlag) return false;
+            if (cardFilter === 'missingCategory' && toText(tx.userCategoryKey, '')) return false;
+
+            return true;
         })
         .map((tx: any) => ({
             ...tx,
             __merchantLabel: toText(tx.merchantName || tx.merchant?.name || tx.merchant, 'Unknown merchant'),
             __potLabel: toText(tx.potName, '—'),
-            __categoryLabel: toText(
-                tx.userCategoryLabel || tx.aiCategoryLabel || tx.categoryLabel || tx.categoryKey || tx.categoryType,
-                'Uncategorised'
-            ),
+            __categoryLabel: resolveTxCategory(tx).label,
+            __bucketLabel: toText(tx.userCategoryType || tx.aiBucket || tx.categoryType, 'Unknown'),
         }));
+
+    // Pot Savings Analysis: Calculate transfers IN vs OUT per pot
+    const potSavingsAnalysis = useMemo(() => {
+        const potMap = new Map<string, { name: string; transfersIn: number; transfersOut: number; net: number }>();
+
+        (data?.recentTransactions || []).forEach((tx: any) => {
+            const metadata = tx.metadata || {};
+            const destPotId = metadata.destination_pot_id;
+            const sourcePotId = metadata.source_pot_id;
+            const potName = tx.potName || 'Unknown Pot';
+            const amount = Math.abs(txAmountMinor(tx));
+
+            if (destPotId) {
+                // Transfer TO pot (saving)
+                const potId = destPotId;
+                if (!potMap.has(potId)) {
+                    potMap.set(potId, { name: potName, transfersIn: 0, transfersOut: 0, net: 0 });
+                }
+                const pot = potMap.get(potId)!;
+                pot.transfersIn += amount;
+                pot.net += amount;
+                pot.name = potName; // Update name in case it changed
+            } else if (sourcePotId) {
+                // Transfer FROM pot (withdrawal)
+                const potId = sourcePotId;
+                if (!potMap.has(potId)) {
+                    potMap.set(potId, { name: potName, transfersIn: 0, transfersOut: 0, net: 0 });
+                }
+                const pot = potMap.get(potId)!;
+                pot.transfersOut += amount;
+                pot.net -= amount;
+                pot.name = potName; // Update name in case it changed
+            }
+        });
+
+        return Array.from(potMap.values())
+            .sort((a, b) => b.net - a.net); // Sort by net savings (highest first)
+    }, [data?.recentTransactions]);
+
+    // Investment Tracking: Calculate transfers to investment platforms during period
+    const investmentTracking = useMemo(() => {
+        const investmentPlatforms = ['plum', 'hargreaves', 'vanguard', 'trading 212', 'freetrade', 'stake', 'etoro'];
+        let totalIn = 0;
+        let totalOut = 0;
+        const details: any[] = [];
+
+        (data?.recentTransactions || []).forEach((tx: any) => {
+            const merchantName = (tx.merchantName || '').toLowerCase();
+            const categoryKey = (tx.userCategoryKey || tx.aiCategoryKey || '').toLowerCase();
+            const bucket = (tx.userCategoryType || tx.aiBucket || '').toLowerCase();
+            const amount = txAmountMinor(tx);
+
+            // Check if this is an investment-related transaction
+            const isInvestmentPlatform = investmentPlatforms.some(platform => merchantName.includes(platform));
+            const isInvestmentCategory = [
+                'investment_traditional',
+                'crypto_investment',
+                'retirement',
+                'pot_transfer_investment'
+            ].includes(categoryKey);
+            const isInvestmentBucket = bucket === 'investment';
+
+            if (isInvestmentPlatform || isInvestmentCategory || isInvestmentBucket) {
+                if (amount < 0) {
+                    // Money OUT (investing)
+                    totalIn += Math.abs(amount);
+                    details.push({
+                        merchant: tx.merchantName || 'Unknown',
+                        amount: Math.abs(amount),
+                        date: parseTxDate(tx),
+                        type: 'investment',
+                        category: categoryKey || 'unknown'
+                    });
+                } else {
+                    // Money IN (withdrawal)
+                    totalOut += amount;
+                    details.push({
+                        merchant: tx.merchantName || 'Unknown',
+                        amount: amount,
+                        date: parseTxDate(tx),
+                        type: 'withdrawal',
+                        category: categoryKey || 'unknown'
+                    });
+                }
+            }
+        });
+
+        return {
+            totalIn,
+            totalOut,
+            netInvested: totalIn - totalOut,
+            count: details.length,
+            details: details.sort((a, b) => (b.date?.getTime() || 0) - (a.date?.getTime() || 0))
+        };
+    }, [data?.recentTransactions]);
 
     const spendTrackingSeries = enhancementData?.spendTrackingSeries ?? EMPTY_LIST;
     const cashflowSeries = enhancementData?.cashflowSeries ?? EMPTY_LIST;
@@ -640,6 +1038,8 @@ const FinanceDashboardAdvanced: React.FC = () => {
     const matchSummary = enhancementData?.matchSummary ?? EMPTY_LIST;
     const debtService = enhancementData?.debtService?.totals || null;
     const analysisRows = enhancementData?.analysisRows ?? EMPTY_LIST;
+    const yoyAnalysisRows = yoyEnhancementData?.analysisRows ?? EMPTY_LIST;
+    const yoyActions = yoyEnhancementData?.actions ?? EMPTY_LIST;
     const budgetHealth = enhancementData?.budgetHealth || null;
     const goalForecasts = enhancementData?.goalForecasts ?? EMPTY_LIST;
     const manualAccounts = enhancementData?.manualAccounts ?? EMPTY_LIST;
@@ -658,7 +1058,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
 
     const spendTrackingOption = {
         tooltip: { trigger: 'axis' },
-        legend: { data: ['Mandatory', 'Optional', 'Savings', 'Income'] },
+        legend: { data: ['Mandatory', 'Discretionary', 'Savings', 'Income'] },
         grid: { left: 50, right: 15, top: 30, bottom: 30 },
         xAxis: {
             type: 'category',
@@ -677,7 +1077,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
                 data: spendTrackingSeries.map((item: any) => toPounds(item.mandatoryPence || 0)),
             },
             {
-                name: 'Optional',
+                name: 'Discretionary',
                 type: 'bar',
                 stack: 'spend',
                 itemStyle: { color: '#fd5d93' },
@@ -759,17 +1159,51 @@ const FinanceDashboardAdvanced: React.FC = () => {
         return Array.from(set).sort((a, b) => a.localeCompare(b));
     }, [analysisRows]);
 
-    const filteredAnalysisRows = useMemo(() => {
-        return analysisRows.filter((row: any) => {
+    const analysisActionMerchantKeys = useMemo(() => {
+        const keys = new Set<string>();
+        actions.forEach((action: any) => {
+            const key = normalizeMerchantKey(action.merchantKey || action.merchantName || action.__merchantName || '');
+            if (key) keys.add(key);
+        });
+        return keys;
+    }, [actions]);
+
+    const yoyActionMerchantKeys = useMemo(() => {
+        const keys = new Set<string>();
+        yoyActions.forEach((action: any) => {
+            const key = normalizeMerchantKey(action.merchantKey || action.merchantName || action.__merchantName || '');
+            if (key) keys.add(key);
+        });
+        return keys;
+    }, [yoyActions]);
+
+    const applyAnalysisFilters = useCallback((rowsToFilter: any[], actionMerchantKeys: Set<string>) => {
+        return rowsToFilter.filter((row: any) => {
             const bucketLabel = toText(row.bucket, 'unknown');
             if (analysisBucketFilter !== 'all' && bucketLabel !== analysisBucketFilter) return false;
             const categoryKey = toText(row.categoryKey || row.categoryLabel, 'uncategorized');
             if (analysisCategoryFilter !== 'all' && categoryKey !== analysisCategoryFilter) return false;
             const merchantName = toText(row.merchantName || row.merchant, 'Unknown');
             if (analysisMerchantFilter !== 'all' && merchantName !== analysisMerchantFilter) return false;
+            if (analysisActionFilter !== 'all') {
+                const merchantKey = normalizeMerchantKey(row.merchantKey || row.merchantName || row.merchant || '');
+                const hasAction = merchantKey ? actionMerchantKeys.has(merchantKey) : false;
+                if (analysisActionFilter === 'with' && !hasAction) return false;
+                if (analysisActionFilter === 'without' && hasAction) return false;
+            }
             return true;
         });
-    }, [analysisRows, analysisBucketFilter, analysisCategoryFilter, analysisMerchantFilter]);
+    }, [analysisActionFilter, analysisBucketFilter, analysisCategoryFilter, analysisMerchantFilter]);
+
+    const filteredAnalysisRows = useMemo(
+        () => applyAnalysisFilters(analysisRows, analysisActionMerchantKeys),
+        [analysisRows, analysisActionMerchantKeys, applyAnalysisFilters]
+    );
+
+    const filteredYoyAnalysisRows = useMemo(
+        () => applyAnalysisFilters(yoyAnalysisRows, yoyActionMerchantKeys),
+        [yoyAnalysisRows, yoyActionMerchantKeys, applyAnalysisFilters]
+    );
 
     const analysisStats = useMemo(() => {
         const totalPence = filteredAnalysisRows.reduce((sum: number, row: any) => sum + Number(row.amountPence || 0), 0);
@@ -782,12 +1216,12 @@ const FinanceDashboardAdvanced: React.FC = () => {
         };
     }, [filteredAnalysisRows]);
 
-    const analysisGrouped = useMemo(() => {
+    const groupAnalysisRows = useCallback((rowsToGroup: any[]) => {
         const groupedTotals: Record<string, number> = {};
         const groupedByMonth: Record<string, Record<string, number>> = {};
         const monthsSet = new Set<string>();
 
-        filteredAnalysisRows.forEach((row: any) => {
+        rowsToGroup.forEach((row: any) => {
             const month = toText(row.month, 'unknown');
             const key = analysisDimension === 'bucket'
                 ? toText(row.bucket, 'unknown')
@@ -808,7 +1242,17 @@ const FinanceDashboardAdvanced: React.FC = () => {
 
         const months = Array.from(monthsSet).sort();
         return { groups, groupedByMonth, months };
-    }, [filteredAnalysisRows, analysisDimension]);
+    }, [analysisDimension]);
+
+    const analysisGrouped = useMemo(
+        () => groupAnalysisRows(filteredAnalysisRows),
+        [filteredAnalysisRows, groupAnalysisRows]
+    );
+
+    const yoyAnalysisGrouped = useMemo(
+        () => groupAnalysisRows(filteredYoyAnalysisRows),
+        [filteredYoyAnalysisRows, groupAnalysisRows]
+    );
 
     const analysisTrendOption = useMemo(() => {
         const topGroups = analysisGrouped.groups.slice(0, 8);
@@ -834,6 +1278,61 @@ const FinanceDashboardAdvanced: React.FC = () => {
             })),
         };
     }, [analysisGrouped]);
+
+    const analysisYoYTrendOption = useMemo(() => {
+        const allMonths = Array.from(new Set<string>([...analysisGrouped.months, ...yoyAnalysisGrouped.months])).sort();
+        const rankedGroups = new Map<string, number>();
+        analysisGrouped.groups.forEach((group) => {
+            rankedGroups.set(group.name, Math.abs(Number(group.amountPence || 0)));
+        });
+        yoyAnalysisGrouped.groups.forEach((group) => {
+            rankedGroups.set(group.name, (rankedGroups.get(group.name) || 0) + Math.abs(Number(group.amountPence || 0)));
+        });
+        const topGroups = Array.from(rankedGroups.entries())
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 6)
+            .map(([name]) => name);
+
+        return {
+            tooltip: { trigger: 'axis' },
+            legend: {
+                data: topGroups.flatMap((name) => [`${name} (Current)`, `${name} (Prev year)`]),
+                type: 'scroll',
+            },
+            grid: { left: 50, right: 15, top: 45, bottom: 35 },
+            xAxis: {
+                type: 'category',
+                data: allMonths.map((month) => monthLabel(month)),
+            },
+            yAxis: {
+                type: 'value',
+                axisLabel: { formatter: (v: number) => `£${v}` },
+            },
+            series: topGroups.flatMap((groupName, index) => {
+                const color = THEME_COLORS[index % THEME_COLORS.length];
+                return [
+                    {
+                        name: `${groupName} (Current)`,
+                        type: 'line',
+                        smooth: true,
+                        symbolSize: 5,
+                        itemStyle: { color },
+                        lineStyle: { color, width: 2.2 },
+                        data: allMonths.map((month) => toPounds(Number(analysisGrouped.groupedByMonth?.[month]?.[groupName] || 0))),
+                    },
+                    {
+                        name: `${groupName} (Prev year)`,
+                        type: 'line',
+                        smooth: true,
+                        symbolSize: 4,
+                        itemStyle: { color },
+                        lineStyle: { color, width: 1.6, type: 'dashed', opacity: 0.75 },
+                        data: allMonths.map((month) => toPounds(Number(yoyAnalysisGrouped.groupedByMonth?.[month]?.[groupName] || 0))),
+                    },
+                ];
+            }),
+        };
+    }, [analysisGrouped, yoyAnalysisGrouped]);
 
     const analysisPieOption = useMemo(() => {
         const groups = analysisGrouped.groups.slice(0, 10);
@@ -911,167 +1410,431 @@ const FinanceDashboardAdvanced: React.FC = () => {
         };
     }, [budgetHealth]);
 
+    const yoyCategoryComparison = useMemo(() => {
+        if (!compareYoY || !data || !yoyData) return [];
+        const current = data?.spendByCategory || {};
+        const previous = yoyData?.spendByCategory || {};
+        const keys = new Set<string>([
+            ...Object.keys(current || {}),
+            ...Object.keys(previous || {}),
+        ]);
+        return Array.from(keys)
+            .map((key) => {
+                const currentPence = Math.abs(Number(current?.[key] || 0));
+                const previousPence = Math.abs(Number(previous?.[key] || 0));
+                const deltaPence = currentPence - previousPence;
+                const deltaPct = previousPence > 0 ? Number(((deltaPence / previousPence) * 100).toFixed(1)) : null;
+                return {
+                    key,
+                    currentPence,
+                    previousPence,
+                    deltaPence,
+                    deltaPct,
+                };
+            })
+            .filter((row) => row.currentPence > 0 || row.previousPence > 0)
+            .sort((a, b) => (b.currentPence + b.previousPence) - (a.currentPence + a.previousPence))
+            .slice(0, 15);
+    }, [compareYoY, data, yoyData]);
+
     const totalActionSavings = actions.reduce((sum: number, action: any) => sum + Number(action.estimatedMonthlySavings || 0), 0);
+    const anomalyRows = Array.isArray(data?.anomalyTransactions) ? data.anomalyTransactions : EMPTY_LIST;
+    const anomalyCount = anomalyRows.length;
+    const anomalySpend = anomalyRows.reduce((sum: number, tx: any) => sum + Math.abs(txAmountMinor(tx)), 0);
+    const classifiableCount = Math.max(0, Number(data?.classifiableTransactionCount || 0));
+    const uncategorizedCount = Math.max(0, Number(data?.uncategorizedCount || 0));
+    const uncategorizedPct = classifiableCount > 0 ? Number(data?.uncategorizedPct || 0) : 0;
+
+    const analystModel = useMemo(() => {
+        const months = Math.max(1, cashflowSeries.length || 1);
+        const totals = cashflowSeries.reduce((acc: any, item: any) => {
+            acc.inflow += Number(item.inflowPence || 0);
+            acc.outflow += Number(item.outflowPence || 0);
+            acc.net += Number(item.netPence || 0);
+            return acc;
+        }, { inflow: 0, outflow: 0, net: 0 });
+
+        const avgInflowPence = Math.round(totals.inflow / months);
+        const avgOutflowPence = Math.round(totals.outflow / months);
+        const avgNetPence = Math.round(totals.net / months);
+        const goalLockedPence = goalForecasts.reduce((sum: number, goal: any) => sum + Number(goal.monthlyContributionPence || 0), 0);
+        const optimizationHeadroomPence = avgNetPence - goalLockedPence;
+
+        const debtAccountsBase = manualAccounts
+            .filter((account: any) => String(account.type || '').toLowerCase() === 'debt')
+            .map((account: any) => {
+                const balancePence = Math.abs(Number(account.balancePence || 0));
+                const configuredApr = Number(
+                    debtAprByAccount[account.accountId]
+                    ?? account.aprPct
+                    ?? account.interestRatePct
+                    ?? account.interestApr
+                    ?? 19.9
+                );
+                const aprPct = Number.isFinite(configuredApr) ? configuredApr : 19.9;
+                return {
+                    accountId: account.accountId,
+                    name: account.name || 'Debt account',
+                    institution: account.institution || null,
+                    balancePence,
+                    aprPct,
+                    monthlyInterestPence: Math.round(balancePence * (aprPct / 1200)),
+                };
+            })
+            .filter((account: any) => account.balancePence > 0);
+
+        const debtAccounts = [...debtAccountsBase].sort((a: any, b: any) => {
+            if (debtStrategy === 'snowball') {
+                if (a.balancePence !== b.balancePence) return a.balancePence - b.balancePence;
+                return a.aprPct - b.aprPct;
+            }
+            if (a.aprPct !== b.aprPct) return b.aprPct - a.aprPct;
+            return b.balancePence - a.balancePence;
+        });
+
+        const totalDebtPence = debtAccounts.reduce((sum: number, debt: any) => sum + debt.balancePence, 0);
+        const debtInterestPence = debtAccounts.reduce((sum: number, debt: any) => sum + debt.monthlyInterestPence, 0);
+        const debtAccelerationPence = Math.max(0, Math.round(optimizationHeadroomPence * (totalDebtPence > 0 ? 0.7 : 0)));
+        const savingsAccelerationPence = Math.max(0, Math.round(optimizationHeadroomPence - debtAccelerationPence));
+
+        const liquidReservePence = manualAccounts
+            .filter((account: any) => ['cash', 'savings'].includes(String(account.type || '').toLowerCase()))
+            .reduce((sum: number, account: any) => sum + Number(account.balancePence || 0), 0);
+
+        const runwayTargetPence = Math.round(avgOutflowPence * 3);
+        const runwayCoveredMonths = avgOutflowPence > 0 ? liquidReservePence / avgOutflowPence : 0;
+        const runwayGapPence = Math.max(0, runwayTargetPence - liquidReservePence);
+        const runwayEtaMonths = savingsAccelerationPence > 0 ? Math.ceil(runwayGapPence / savingsAccelerationPence) : null;
+
+        // Very small deterministic simulation for debt payoff horizon under chosen strategy.
+        let payoffMonths: number | null = null;
+        if (debtAccounts.length > 0 && debtAccelerationPence > 0) {
+            const balances = debtAccounts.map((debt: any) => ({
+                ...debt,
+                remainingPence: debt.balancePence,
+            }));
+            for (let month = 1; month <= 600; month += 1) {
+                let budget = debtAccelerationPence;
+
+                balances.forEach((debt: any) => {
+                    if (debt.remainingPence <= 0) return;
+                    debt.remainingPence += Math.round(debt.remainingPence * (debt.aprPct / 1200));
+                    const minimumPence = Math.min(debt.remainingPence, Math.max(500, Math.round(debt.remainingPence * 0.02)));
+                    const pay = Math.min(minimumPence, budget);
+                    debt.remainingPence -= pay;
+                    budget -= pay;
+                });
+
+                for (const debt of balances) {
+                    if (budget <= 0) break;
+                    if (debt.remainingPence <= 0) continue;
+                    const pay = Math.min(debt.remainingPence, budget);
+                    debt.remainingPence -= pay;
+                    budget -= pay;
+                }
+
+                const remainingTotal = balances.reduce((sum: number, debt: any) => sum + Math.max(0, debt.remainingPence), 0);
+                if (remainingTotal <= 0) {
+                    payoffMonths = month;
+                    break;
+                }
+            }
+        }
+
+        const goalActions = goalForecasts
+            .map((goal: any) => {
+                const remainingPence = Number(goal.remainingPence || 0);
+                const currentContributionPence = Number(goal.monthlyContributionPence || 0);
+                const requiredFor6MonthsPence = Math.ceil(remainingPence / 6);
+                const monthlyGapPence = Math.max(0, requiredFor6MonthsPence - currentContributionPence);
+                return {
+                    kind: 'goal_gap',
+                    label: goal.goalTitle || goal.goalId || 'Goal',
+                    detail: monthlyGapPence > 0
+                        ? `Increase monthly pot transfer by ${formatCurrency(toPounds(monthlyGapPence))} to hit ~6 month target.`
+                        : 'Current contribution trajectory is on track for target horizon.',
+                    urgency: monthlyGapPence > 0 ? 'high' : 'normal',
+                    etaDateISO: goal.etaDateISO || null,
+                    monthlyGapPence,
+                };
+            })
+            .sort((a: any, b: any) => b.monthlyGapPence - a.monthlyGapPence)
+            .slice(0, 5);
+
+        const proactiveActions = [
+            ...(optimizationHeadroomPence < 0 ? [{
+                kind: 'budget_shortfall',
+                label: 'Monthly plan is over-committed',
+                detail: `Goal-linked commitments exceed net cashflow by ${formatCurrency(toPounds(Math.abs(optimizationHeadroomPence)))}.` ,
+                urgency: 'critical',
+            }] : []),
+            ...(debtInterestPence > 0 ? [{
+                kind: 'debt_interest',
+                label: 'Debt interest drag',
+                detail: `${formatCurrency(toPounds(debtInterestPence))} estimated interest/month. ${debtStrategy === 'avalanche' ? 'Avalanche' : 'Snowball'} strategy selected.`,
+                urgency: debtInterestPence > 20000 ? 'high' : 'normal',
+            }] : []),
+            ...goalActions,
+        ];
+
+        return {
+            months,
+            avgInflowPence,
+            avgOutflowPence,
+            avgNetPence,
+            goalLockedPence,
+            optimizationHeadroomPence,
+            debtAccounts,
+            totalDebtPence,
+            debtInterestPence,
+            debtAccelerationPence,
+            savingsAccelerationPence,
+            payoffMonths,
+            liquidReservePence,
+            runwayTargetPence,
+            runwayCoveredMonths,
+            runwayGapPence,
+            runwayEtaMonths,
+            proactiveActions,
+        };
+    }, [cashflowSeries, goalForecasts, manualAccounts, debtStrategy, debtAprByAccount]);
 
     const renderOverview = () => (
         <>
-            <Row className="g-4 mb-4">
-                <Col md={3}>
-                    <PremiumCard icon={DollarSign} title="Total Spend">
-                        <h2 className="fw-bold mb-0" style={{ color: colors.danger }}>
-                            {formatCurrency(filteredTotalSpend)}
-                        </h2>
-                        <p className="text-muted mb-0 mt-2">View excludes bank transfers</p>
-                    </PremiumCard>
+            <Row className="g-3 mb-3">
+                <Col xxl={2} xl={3} md={6}>
+                    <div
+                        className={`finance-dashboard-clickable-card${cardFilter === 'all' && !chartFilter.type ? ' is-active' : ''}`}
+                        role="button"
+                        tabIndex={0}
+                        onClick={clearChartFilter}
+                        onKeyDown={(event) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                                event.preventDefault();
+                                clearChartFilter();
+                            }
+                        }}
+                    >
+                        <PremiumCard icon={DollarSign} title="Total Spend" className="finance-summary-card">
+                            <div className="finance-summary-value" style={{ color: colors.danger }}>
+                                {formatCurrency(filteredTotalSpend)}
+                            </div>
+                            <p className="text-muted mb-0 mt-1 finance-summary-caption">View excludes bank transfers</p>
+                        </PremiumCard>
+                    </div>
                 </Col>
-                <Col md={3}>
-                    <PremiumCard icon={CreditCard} title="Discretionary">
-                        <h2 className="fw-bold mb-0" style={{ color: colors.info }}>
-                            {formatCurrency(Math.abs(data?.totalDiscretionarySpend || 0) / 100)}
-                        </h2>
-                        <p className="text-muted mb-0 mt-2">Optional day-to-day spend</p>
-                    </PremiumCard>
+                <Col xxl={2} xl={3} md={6}>
+                    <div
+                        className={`finance-dashboard-clickable-card${cardFilter === 'discretionary' ? ' is-active' : ''}`}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => handleCardFilter('discretionary')}
+                        onKeyDown={(event) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                                event.preventDefault();
+                                handleCardFilter('discretionary');
+                            }
+                        }}
+                    >
+                        <PremiumCard icon={CreditCard} title="Discretionary" className="finance-summary-card">
+                            <div className="finance-summary-value" style={{ color: colors.info }}>
+                                {formatCurrency(Math.abs(data?.totalDiscretionarySpend || 0) / 100)}
+                            </div>
+                            <p className="text-muted mb-0 mt-1 finance-summary-caption">Optional day-to-day spend</p>
+                        </PremiumCard>
+                    </div>
                 </Col>
-                <Col md={3}>
-                    <PremiumCard icon={Layers} title="Subscriptions">
-                        <h2 className="fw-bold mb-0" style={{ color: colors.warning }}>
-                            {formatCurrency(Math.abs(data?.totalSubscriptionSpend || 0) / 100)}
-                        </h2>
-                        <p className="text-muted mb-0 mt-2">Recurring costs</p>
-                    </PremiumCard>
+                <Col xxl={2} xl={3} md={6}>
+                    <div
+                        className={`finance-dashboard-clickable-card${cardFilter === 'subscriptions' ? ' is-active' : ''}`}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => handleCardFilter('subscriptions')}
+                        onKeyDown={(event) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                                event.preventDefault();
+                                handleCardFilter('subscriptions');
+                            }
+                        }}
+                    >
+                        <PremiumCard icon={Layers} title="Subscriptions" className="finance-summary-card">
+                            <div className="finance-summary-value" style={{ color: colors.warning }}>
+                                {formatCurrency(Math.abs(data?.totalSubscriptionSpend || 0) / 100)}
+                            </div>
+                            <p className="text-muted mb-0 mt-1 finance-summary-caption">Recurring costs</p>
+                        </PremiumCard>
+                    </div>
                 </Col>
-                <Col md={3}>
-                    <PremiumCard icon={Sparkles} title="Actions Potential">
-                        <h2 className="fw-bold mb-0" style={{ color: colors.success }}>
-                            {formatCurrency(totalActionSavings)}
-                        </h2>
-                        <p className="text-muted mb-0 mt-2">Estimated monthly savings ({actions.length} actions)</p>
-                    </PremiumCard>
+                <Col xxl={2} xl={3} md={6}>
+                    <div
+                        className={`finance-dashboard-clickable-card${cardFilter === 'actions' ? ' is-active' : ''}`}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => handleCardFilter('actions')}
+                        onKeyDown={(event) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                                event.preventDefault();
+                                handleCardFilter('actions');
+                            }
+                        }}
+                    >
+                        <PremiumCard icon={Sparkles} title="Actions Potential" className="finance-summary-card">
+                            <div className="finance-summary-value" style={{ color: colors.success }}>
+                                {formatCurrency(totalActionSavings)}
+                            </div>
+                            <p className="text-muted mb-0 mt-1 finance-summary-caption">Estimated monthly savings ({actions.length} actions)</p>
+                        </PremiumCard>
+                    </div>
+                </Col>
+                <Col xxl={2} xl={3} md={6}>
+                    <div
+                        className={`finance-dashboard-clickable-card finance-dashboard-clickable-card--small${cardFilter === 'missingCategory' ? ' is-active' : ''}`}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => handleCardFilter('missingCategory')}
+                        onKeyDown={(event) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                                event.preventDefault();
+                                handleCardFilter('missingCategory');
+                            }
+                        }}
+                    >
+                        <PremiumCard icon={AlertTriangle} title="Uncategorized" className="finance-summary-card finance-summary-card--tight">
+                            <div className="d-flex justify-content-between align-items-end">
+                                <div className="finance-summary-subvalue" style={{ color: uncategorizedCount > 0 ? colors.warning : colors.success }}>
+                                    {uncategorizedCount}
+                                </div>
+                                <span className="small text-muted">{uncategorizedPct.toFixed(1)}%</span>
+                            </div>
+                            <p className="text-muted mb-0 mt-1 finance-summary-caption">
+                                {classifiableCount.toLocaleString()} classifiable tx in range
+                            </p>
+                        </PremiumCard>
+                    </div>
+                </Col>
+                <Col xxl={2} xl={3} md={6}>
+                    <div
+                        className={`finance-dashboard-clickable-card finance-dashboard-clickable-card--small${cardFilter === 'anomaly' ? ' is-active' : ''}`}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => handleCardFilter('anomaly')}
+                        onKeyDown={(event) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                                event.preventDefault();
+                                handleCardFilter('anomaly');
+                            }
+                        }}
+                    >
+                        <PremiumCard icon={Activity} title="Spend Anomalies" className="finance-summary-card finance-summary-card--tight">
+                            <div className="d-flex justify-content-between align-items-end">
+                                <div className="finance-summary-subvalue" style={{ color: colors.warning }}>{anomalyCount}</div>
+                                <span className="small text-muted">{formatCurrency(toPounds(anomalySpend))}</span>
+                            </div>
+                            <p className="text-muted mb-0 mt-1 finance-summary-caption">Flagged transactions in range</p>
+                        </PremiumCard>
+                    </div>
                 </Col>
             </Row>
 
             {budgetHealth && (
-                <Row className="g-4 mb-4">
+                <Row className="g-3 mb-3">
                     <Col md={3}>
-                        <PremiumCard icon={Wallet} title="Budget Set">
-                            <h3 className="fw-bold mb-0">{formatCurrency(toPounds(budgetHealth.totalBudgetPence || 0))}</h3>
-                            <p className="text-muted mb-0 mt-2">Configured category budget</p>
+                        <PremiumCard icon={Wallet} title="Budget Set" className="finance-summary-card finance-summary-card--tight">
+                            <div className="finance-summary-subvalue">{formatCurrency(toPounds(budgetHealth.totalBudgetPence || 0))}</div>
+                            <p className="text-muted mb-0 mt-1 finance-summary-caption">Configured category budget</p>
                         </PremiumCard>
                     </Col>
                     <Col md={3}>
-                        <PremiumCard icon={Activity} title="Actual Spend">
-                            <h3 className="fw-bold mb-0" style={{ color: colors.danger }}>{formatCurrency(toPounds(budgetHealth.totalActualPence || 0))}</h3>
-                            <p className="text-muted mb-0 mt-2">In selected date range</p>
+                        <PremiumCard icon={Activity} title="Actual Spend" className="finance-summary-card finance-summary-card--tight">
+                            <div className="finance-summary-subvalue" style={{ color: colors.danger }}>{formatCurrency(toPounds(budgetHealth.totalActualPence || 0))}</div>
+                            <p className="text-muted mb-0 mt-1 finance-summary-caption">In selected date range</p>
                         </PremiumCard>
                     </Col>
                     <Col md={3}>
-                        <PremiumCard icon={TrendingUp} title="Variance">
-                            <h3 className="fw-bold mb-0" style={{ color: (budgetHealth.variancePence || 0) >= 0 ? colors.success : colors.warning }}>
+                        <PremiumCard icon={TrendingUp} title="Variance" className="finance-summary-card finance-summary-card--tight">
+                            <div className="finance-summary-subvalue" style={{ color: (budgetHealth.variancePence || 0) >= 0 ? colors.success : colors.warning }}>
                                 {formatCurrency(toPounds(budgetHealth.variancePence || 0))}
-                            </h3>
-                            <p className="text-muted mb-0 mt-2">Budget minus actual</p>
+                            </div>
+                            <p className="text-muted mb-0 mt-1 finance-summary-caption">Budget minus actual</p>
                         </PremiumCard>
                     </Col>
                     <Col md={3}>
-                        <PremiumCard icon={Target} title="Budget Used">
-                            <h3 className="fw-bold mb-0">{Number(budgetHealth.utilizationPct || 0).toFixed(1)}%</h3>
-                            <p className="text-muted mb-0 mt-2">Utilization against set budget</p>
+                        <PremiumCard icon={Target} title="Budget Used" className="finance-summary-card finance-summary-card--tight">
+                            <div className="finance-summary-subvalue">{Number(budgetHealth.utilizationPct || 0).toFixed(1)}%</div>
+                            <p className="text-muted mb-0 mt-1 finance-summary-caption">Utilization against set budget</p>
                         </PremiumCard>
                     </Col>
                 </Row>
             )}
 
-            <Row className="g-4 mb-4">
+            <Row className="g-3 mb-4">
                 <Col lg={8}>
-                    <PremiumCard title="Spend Trend" icon={TrendingUp} height={350}>
-                        <ReactECharts option={trendOption} style={{ height: '100%' }} />
+                    <PremiumCard
+                        title="Spend Trend (Click bars to filter)"
+                        icon={TrendingUp}
+                        height={310}
+                        className="finance-chart-card"
+                        action={
+                            <ButtonGroup size="sm">
+                                <Button variant={viewMode === 'category' ? 'primary' : 'outline-secondary'} onClick={() => setViewMode('category')}>Category</Button>
+                                <Button variant={viewMode === 'bucket' ? 'primary' : 'outline-secondary'} onClick={() => setViewMode('bucket')}>Bucket</Button>
+                                <Button variant={viewMode === 'merchant' ? 'primary' : 'outline-secondary'} onClick={() => setViewMode('merchant')}>Merchant</Button>
+                            </ButtonGroup>
+                        }
+                    >
+                        <ReactECharts
+                            option={trendOption}
+                            style={{ height: '100%' }}
+                            onEvents={{ click: handleTrendClick }}
+                        />
                     </PremiumCard>
                 </Col>
                 <Col lg={4}>
                     <PremiumCard
-                        title="Top 10 Distribution"
+                        title="Top 10 Distribution (Click to filter)"
                         icon={PieIcon}
-                        height={350}
+                        height={310}
+                        className="finance-chart-card"
                         action={
                             <ButtonGroup size="sm">
-                                <Button variant={viewMode === 'category' ? 'primary' : 'outline-secondary'} onClick={() => setViewMode('category')}>Cat</Button>
-                                <Button variant={viewMode === 'bucket' ? 'primary' : 'outline-secondary'} onClick={() => setViewMode('bucket')}>Bkt</Button>
+                                <Button variant={viewMode === 'category' ? 'primary' : 'outline-secondary'} onClick={() => setViewMode('category')}>Category</Button>
+                                <Button variant={viewMode === 'bucket' ? 'primary' : 'outline-secondary'} onClick={() => setViewMode('bucket')}>Bucket</Button>
+                                <Button variant={viewMode === 'merchant' ? 'primary' : 'outline-secondary'} onClick={() => setViewMode('merchant')}>Merchant</Button>
                             </ButtonGroup>
                         }
                     >
-                        <ReactECharts option={distributionOption} style={{ height: '100%' }} />
+                        <ReactECharts
+                            option={distributionOption}
+                            style={{ height: '100%' }}
+                            onEvents={{ click: handlePieClick }}
+                        />
                     </PremiumCard>
                 </Col>
             </Row>
 
-            <Row className="g-4">
-                <Col lg={8}>
-                    <PremiumCard title="Recent Transactions" icon={CreditCard}>
-                        <div className="table-responsive">
-                            <table className="table table-hover align-middle mb-0" style={{ color: colors.text }}>
-                                <thead>
-                                    <tr style={{ color: colors.textMuted, borderBottom: `1px solid ${colors.grid}` }}>
-                                        <th>Date</th>
-                                        <th>Merchant</th>
-                                        <th>Pot</th>
-                                        <th>Category</th>
-                                        <th className="text-end">Amount</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {filteredRecentTransactions.map((tx: any) => {
-                                        const date = parseTxDate(tx);
-                                        const rowKey = toKeyText(tx.id || tx.transactionId, `${tx.__merchantLabel}-${tx.__categoryLabel}-${txAmountMinor(tx)}`);
-                                        return (
-                                            <tr key={rowKey} style={{ borderColor: colors.grid }}>
-                                                <td>{date ? date.toLocaleDateString('en-GB') : '—'}</td>
-                                                <td>
-                                                    <div className="fw-bold">{tx.__merchantLabel}</div>
-                                                    {tx.isSubscription && <Badge bg="warning" text="dark" className="mt-1">Sub</Badge>}
-                                                </td>
-                                                <td>{tx.__potLabel}</td>
-                                                <td>
-                                                    <Badge bg="light" text="dark" className="border">
-                                                        {tx.__categoryLabel}
-                                                    </Badge>
-                                                </td>
-                                                <td className="text-end fw-bold" style={{ color: Number(txAmountMinor(tx)) < 0 ? colors.text : colors.success }}>
-                                                    {formatCurrency(Math.abs(txAmountMinor(tx)) / 100)}
-                                                </td>
-                                            </tr>
-                                        );
-                                    })}
-                                </tbody>
-                            </table>
-                        </div>
-                    </PremiumCard>
-                </Col>
-                <Col lg={4}>
-                    <PremiumCard title="Spend Anomalies" icon={Activity}>
-                        {Array.isArray(data?.anomalyTransactions) && data.anomalyTransactions.length ? (
-                            <div className="table-responsive">
-                                <table className="table table-hover align-middle mb-0" style={{ color: colors.text }}>
-                                    <thead>
-                                        <tr style={{ color: colors.textMuted, borderBottom: `1px solid ${colors.grid}` }}>
-                                            <th>Merchant</th>
-                                            <th>Reason</th>
-                                            <th className="text-end">Amount</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {data.anomalyTransactions.map((tx: any) => (
-                                            <tr key={toKeyText(tx.id, `anomaly-${toText(tx.merchantName || tx.merchant?.name, 'unknown')}-${txAmountMinor(tx)}`)} style={{ borderColor: colors.grid }}>
-                                                <td>{toText(tx.merchantName || tx.merchant?.name || tx.merchant, 'Unknown')}</td>
-                                                <td className="small text-muted">{tx.aiAnomalyReason || 'Anomaly'}</td>
-                                                <td className="text-end fw-bold">{formatCurrency(Math.abs(txAmountMinor(tx)) / 100)}</td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
-                            </div>
-                        ) : (
-                            <div className="text-muted small">No anomalies detected in the selected period.</div>
-                        )}
+            <Row className="g-3">
+                <Col lg={12}>
+                    <PremiumCard
+                        title={`Transactions + AI Recommendations (${filteredRecentTransactions.length})`}
+                        icon={CreditCard}
+                        action={
+                            drilldownBadgeLabel ? (
+                                <div className="d-flex align-items-center gap-2">
+                                    <Badge bg="primary">
+                                        {drilldownBadgeLabel}
+                                    </Badge>
+                                    <Button size="sm" variant="outline-secondary" onClick={clearChartFilter}>
+                                        Clear Filter
+                                    </Button>
+                                </div>
+                            ) : undefined
+                        }
+                    >
+                        <TransactionsList
+                            embedded
+                            autoCollapseFilters
+                            externalFilters={transactionsExternalFilters}
+                        />
                     </PremiumCard>
                 </Col>
             </Row>
@@ -1080,23 +1843,23 @@ const FinanceDashboardAdvanced: React.FC = () => {
 
     const renderSpendAnalysis = () => (
         <>
-            <Row className="g-4 mb-4">
+            <Row className="g-3 mb-3">
                 <Col md={4}>
-                    <PremiumCard icon={DollarSign} title="Filtered Spend">
-                        <h3 className="fw-bold mb-0">{formatCurrency(toPounds(analysisStats.totalPence || 0))}</h3>
-                        <p className="text-muted mb-0 mt-2">Based on active filters</p>
+                    <PremiumCard icon={DollarSign} title="Filtered Spend" className="finance-summary-card finance-summary-card--tight">
+                        <div className="finance-summary-subvalue">{formatCurrency(toPounds(analysisStats.totalPence || 0))}</div>
+                        <p className="text-muted mb-0 mt-1 finance-summary-caption">Based on active filters</p>
                     </PremiumCard>
                 </Col>
                 <Col md={4}>
-                    <PremiumCard icon={Layers} title="Transactions">
-                        <h3 className="fw-bold mb-0">{analysisStats.count}</h3>
-                        <p className="text-muted mb-0 mt-2">Rows in analysis set</p>
+                    <PremiumCard icon={Layers} title="Transactions" className="finance-summary-card finance-summary-card--tight">
+                        <div className="finance-summary-subvalue">{analysisStats.count}</div>
+                        <p className="text-muted mb-0 mt-1 finance-summary-caption">Rows in analysis set</p>
                     </PremiumCard>
                 </Col>
                 <Col md={4}>
-                    <PremiumCard icon={TrendingUp} title="Avg Transaction">
-                        <h3 className="fw-bold mb-0">{formatCurrency(toPounds(analysisStats.avgPence || 0))}</h3>
-                        <p className="text-muted mb-0 mt-2">Average spend per transaction</p>
+                    <PremiumCard icon={TrendingUp} title="Avg Transaction" className="finance-summary-card finance-summary-card--tight">
+                        <div className="finance-summary-subvalue">{formatCurrency(toPounds(analysisStats.avgPence || 0))}</div>
+                        <p className="text-muted mb-0 mt-1 finance-summary-caption">Average spend per transaction</p>
                     </PremiumCard>
                 </Col>
             </Row>
@@ -1115,7 +1878,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
                         }
                     >
                         <Row className="g-3 mb-3">
-                            <Col md={3}>
+                            <Col md={2}>
                                 <Form.Label>Group by</Form.Label>
                                 <Form.Select value={analysisDimension} onChange={(event) => setAnalysisDimension(event.target.value as AnalysisDimension)}>
                                     <option value="bucket">Bucket</option>
@@ -1123,7 +1886,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
                                     <option value="merchant">Merchant</option>
                                 </Form.Select>
                             </Col>
-                            <Col md={3}>
+                            <Col md={2}>
                                 <Form.Label>Bucket filter</Form.Label>
                                 <Form.Select value={analysisBucketFilter} onChange={(event) => setAnalysisBucketFilter(event.target.value)}>
                                     <option value="all">All buckets</option>
@@ -1150,14 +1913,87 @@ const FinanceDashboardAdvanced: React.FC = () => {
                                     ))}
                                 </Form.Select>
                             </Col>
+                            <Col md={2}>
+                                <Form.Label>Recommended action</Form.Label>
+                                <Form.Select value={analysisActionFilter} onChange={(event) => setAnalysisActionFilter(event.target.value as AnalysisActionFilter)}>
+                                    <option value="all">All</option>
+                                    <option value="with">With action</option>
+                                    <option value="without">Without action</option>
+                                </Form.Select>
+                            </Col>
                         </Row>
 
-                        {analysisChartType === 'trend' && <ReactECharts option={analysisTrendOption} style={{ height: 360 }} />}
+                        {analysisChartType === 'trend' && (
+                            compareYoY ? (
+                                <Row className="g-3">
+                                    <Col lg={6}>
+                                        <div className="small text-muted mb-2">Current range</div>
+                                        <ReactECharts option={analysisTrendOption} style={{ height: 340 }} />
+                                    </Col>
+                                    <Col lg={6}>
+                                        <div className="small text-muted mb-2">Current vs previous year (same filters)</div>
+                                        {filteredYoyAnalysisRows.length > 0 ? (
+                                            <ReactECharts option={analysisYoYTrendOption} style={{ height: 340 }} />
+                                        ) : (
+                                            <div className="small text-muted p-3 border rounded">
+                                                No prior-year rows match the active bucket/category/merchant filters.
+                                            </div>
+                                        )}
+                                    </Col>
+                                </Row>
+                            ) : (
+                                <ReactECharts option={analysisTrendOption} style={{ height: 360 }} />
+                            )
+                        )}
                         {analysisChartType === 'pie' && <ReactECharts option={analysisPieOption} style={{ height: 360 }} />}
                         {analysisChartType === 'breakdown' && <ReactECharts option={analysisBreakdownOption} style={{ height: 360 }} />}
                     </PremiumCard>
                 </Col>
             </Row>
+
+            {compareYoY && (
+                <Row className="g-4 mb-4">
+                    <Col lg={12}>
+                        <PremiumCard title="Year-on-Year Category Comparison" icon={Calendar}>
+                            {yoyCategoryComparison.length === 0 ? (
+                                <div className="text-muted small">
+                                    {filter === 'all'
+                                        ? 'YoY comparison is disabled for All History. Choose a bounded date range (for example 7D, 30D, Year, or custom).'
+                                        : 'No YoY comparison data available for this range.'}
+                                </div>
+                            ) : (
+                                <div className="table-responsive" style={{ maxHeight: 320, overflowY: 'auto' }}>
+                                    <table className="table table-sm align-middle mb-0">
+                                        <thead>
+                                            <tr>
+                                                <th>Category</th>
+                                                <th className="text-end">Current</th>
+                                                <th className="text-end">Previous year</th>
+                                                <th className="text-end">Delta</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {yoyCategoryComparison.map((row) => (
+                                                <tr key={row.key}>
+                                                    <td>{row.key}</td>
+                                                    <td className="text-end">{formatCurrency(toPounds(row.currentPence))}</td>
+                                                    <td className="text-end">{formatCurrency(toPounds(row.previousPence))}</td>
+                                                    <td className="text-end">
+                                                        <span style={{ color: row.deltaPence <= 0 ? colors.success : colors.warning }}>
+                                                            {formatCurrency(toPounds(row.deltaPence))}
+                                                            {row.deltaPct !== null ? ` (${row.deltaPct > 0 ? '+' : ''}${row.deltaPct}%)` : ''}
+                                                        </span>
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            )}
+                        </PremiumCard>
+                    </Col>
+                </Row>
+            )}
 
             <Row className="g-4 mb-4">
                 <Col lg={8}>
@@ -1219,6 +2055,150 @@ const FinanceDashboardAdvanced: React.FC = () => {
                     </Col>
                 </Row>
             )}
+
+            <Row className="g-4 mb-4">
+                <Col lg={6}>
+                    <PremiumCard title="Pot Savings Analysis" icon={Wallet}>
+                        <div className="small text-muted mb-3">
+                            Shows transfers IN vs OUT for each pot during the selected period to determine actual savings.
+                        </div>
+                        {potSavingsAnalysis.length === 0 ? (
+                            <div className="text-center text-muted py-4">
+                                No pot transfers found in this period
+                            </div>
+                        ) : (
+                            <div className="table-responsive" style={{ maxHeight: 320, overflowY: 'auto' }}>
+                                <table className="table table-sm table-hover align-middle mb-0">
+                                    <thead className="sticky-top bg-white" style={{ top: 0 }}>
+                                        <tr>
+                                            <th>Pot Name</th>
+                                            <th className="text-end">Transfers In</th>
+                                            <th className="text-end">Transfers Out</th>
+                                            <th className="text-end">Net Saved</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {potSavingsAnalysis.map((pot, idx) => (
+                                            <tr key={idx}>
+                                                <td>
+                                                    <strong>{pot.name}</strong>
+                                                </td>
+                                                <td className="text-end" style={{ color: colors.success }}>
+                                                    {formatCurrency(toPounds(pot.transfersIn))}
+                                                </td>
+                                                <td className="text-end" style={{ color: colors.danger }}>
+                                                    {formatCurrency(toPounds(pot.transfersOut))}
+                                                </td>
+                                                <td className="text-end">
+                                                    <Badge bg={pot.net > 0 ? 'success' : pot.net < 0 ? 'danger' : 'secondary'}>
+                                                        {formatCurrency(toPounds(pot.net))}
+                                                    </Badge>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                        {potSavingsAnalysis.length > 0 && (
+                                            <tr style={{ borderTop: '2px solid #dee2e6', fontWeight: 600 }}>
+                                                <td>Total</td>
+                                                <td className="text-end" style={{ color: colors.success }}>
+                                                    {formatCurrency(toPounds(potSavingsAnalysis.reduce((sum, p) => sum + p.transfersIn, 0)))}
+                                                </td>
+                                                <td className="text-end" style={{ color: colors.danger }}>
+                                                    {formatCurrency(toPounds(potSavingsAnalysis.reduce((sum, p) => sum + p.transfersOut, 0)))}
+                                                </td>
+                                                <td className="text-end">
+                                                    <Badge bg={potSavingsAnalysis.reduce((sum, p) => sum + p.net, 0) > 0 ? 'success' : 'danger'}>
+                                                        {formatCurrency(toPounds(potSavingsAnalysis.reduce((sum, p) => sum + p.net, 0)))}
+                                                    </Badge>
+                                                </td>
+                                            </tr>
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+                        )}
+                    </PremiumCard>
+                </Col>
+                <Col lg={6}>
+                    <PremiumCard title="Investment Tracking" icon={TrendingUp}>
+                        <div className="small text-muted mb-3">
+                            Tracks transfers to investment platforms (Plum, Hargreaves, etc.) during the selected period.
+                        </div>
+                        <Row className="mb-3">
+                            <Col xs={4}>
+                                <div className="text-center p-3" style={{ backgroundColor: isDark ? '#2a2a3e' : '#f8f9fa', borderRadius: 8 }}>
+                                    <div className="small text-muted mb-1">Invested</div>
+                                    <div className="fw-bold" style={{ color: colors.danger, fontSize: '1.1rem' }}>
+                                        {formatCurrency(toPounds(investmentTracking.totalIn))}
+                                    </div>
+                                </div>
+                            </Col>
+                            <Col xs={4}>
+                                <div className="text-center p-3" style={{ backgroundColor: isDark ? '#2a2a3e' : '#f8f9fa', borderRadius: 8 }}>
+                                    <div className="small text-muted mb-1">Withdrawn</div>
+                                    <div className="fw-bold" style={{ color: colors.success, fontSize: '1.1rem' }}>
+                                        {formatCurrency(toPounds(investmentTracking.totalOut))}
+                                    </div>
+                                </div>
+                            </Col>
+                            <Col xs={4}>
+                                <div className="text-center p-3" style={{ backgroundColor: isDark ? '#2a2a3e' : '#f8f9fa', borderRadius: 8 }}>
+                                    <div className="small text-muted mb-1">Net Invested</div>
+                                    <div className="fw-bold" style={{ fontSize: '1.1rem' }}>
+                                        <Badge bg={investmentTracking.netInvested > 0 ? 'success' : investmentTracking.netInvested < 0 ? 'danger' : 'secondary'}>
+                                            {formatCurrency(toPounds(investmentTracking.netInvested))}
+                                        </Badge>
+                                    </div>
+                                </div>
+                            </Col>
+                        </Row>
+                        {investmentTracking.count > 0 ? (
+                            <div className="table-responsive" style={{ maxHeight: 200, overflowY: 'auto' }}>
+                                <table className="table table-sm table-hover align-middle mb-0">
+                                    <thead className="sticky-top bg-white" style={{ top: 0 }}>
+                                        <tr>
+                                            <th>Date</th>
+                                            <th>Platform</th>
+                                            <th className="text-end">Amount</th>
+                                            <th>Type</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {investmentTracking.details.slice(0, 15).map((detail: any, idx: number) => (
+                                            <tr key={idx}>
+                                                <td style={{ fontSize: '0.85rem', whiteSpace: 'nowrap' }}>
+                                                    {detail.date ? detail.date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '—'}
+                                                </td>
+                                                <td style={{ fontSize: '0.85rem' }}>
+                                                    <div className="text-truncate" style={{ maxWidth: 120 }}>
+                                                        {detail.merchant}
+                                                    </div>
+                                                </td>
+                                                <td className="text-end" style={{
+                                                    fontSize: '0.9rem',
+                                                    fontWeight: 600,
+                                                    color: detail.type === 'investment' ? colors.danger : colors.success
+                                                }}>
+                                                    {detail.type === 'investment' ? '-' : '+'}
+                                                    {formatCurrency(toPounds(detail.amount))}
+                                                </td>
+                                                <td>
+                                                    <Badge bg={detail.type === 'investment' ? 'primary' : 'warning'} style={{ fontSize: '0.65rem' }}>
+                                                        {detail.type === 'investment' ? 'OUT' : 'IN'}
+                                                    </Badge>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        ) : (
+                            <div className="text-center text-muted py-4">
+                                No investment transactions found in this period
+                            </div>
+                        )}
+                    </PremiumCard>
+                </Col>
+            </Row>
 
             {renderCashflow()}
         </>
@@ -1444,6 +2424,180 @@ const FinanceDashboardAdvanced: React.FC = () => {
                                                         {convertingActionId === action.id ? 'Converting…' : 'Convert to story'}
                                                     </Button>
                                                 )}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </PremiumCard>
+                </Col>
+            </Row>
+        </>
+    );
+
+    const renderBudgetAnalyst = () => (
+        <>
+            <Row className="g-4 mb-4">
+                <Col md={3}>
+                    <PremiumCard title="Net Monthly Capacity" icon={Wallet}>
+                        <h3 className="fw-bold mb-0" style={{ color: analystModel.avgNetPence >= 0 ? colors.success : colors.warning }}>
+                            {formatCurrency(toPounds(analystModel.avgNetPence))}
+                        </h3>
+                        <p className="text-muted mb-0 mt-2">Avg inflow minus outflow</p>
+                    </PremiumCard>
+                </Col>
+                <Col md={3}>
+                    <PremiumCard title="Goal-Locked Transfers" icon={Target}>
+                        <h3 className="fw-bold mb-0">{formatCurrency(toPounds(analystModel.goalLockedPence))}</h3>
+                        <p className="text-muted mb-0 mt-2">Hard monthly commitments to linked goal pots</p>
+                    </PremiumCard>
+                </Col>
+                <Col md={3}>
+                    <PremiumCard title="Debt Acceleration" icon={CreditCard}>
+                        <h3 className="fw-bold mb-0" style={{ color: colors.warning }}>{formatCurrency(toPounds(analystModel.debtAccelerationPence))}</h3>
+                        <p className="text-muted mb-0 mt-2">Recommended extra debt payment</p>
+                    </PremiumCard>
+                </Col>
+                <Col md={3}>
+                    <PremiumCard title="Runway Cover" icon={Landmark}>
+                        <h3 className="fw-bold mb-0">{analystModel.runwayCoveredMonths.toFixed(1)} mo</h3>
+                        <p className="text-muted mb-0 mt-2">Liquidity coverage based on avg outflow</p>
+                    </PremiumCard>
+                </Col>
+            </Row>
+
+            <Row className="g-4 mb-4">
+                <Col lg={7}>
+                    <PremiumCard title="Debt-Clearance Strategist" icon={Sparkles}>
+                        <div className="d-flex flex-wrap align-items-center gap-2 mb-3">
+                            <span className="small text-muted">Strategy:</span>
+                            <ButtonGroup>
+                                <Button
+                                    size="sm"
+                                    variant={debtStrategy === 'avalanche' ? 'primary' : 'outline-secondary'}
+                                    onClick={() => setDebtStrategy('avalanche')}
+                                >
+                                    Avalanche (highest APR first)
+                                </Button>
+                                <Button
+                                    size="sm"
+                                    variant={debtStrategy === 'snowball' ? 'primary' : 'outline-secondary'}
+                                    onClick={() => setDebtStrategy('snowball')}
+                                >
+                                    Snowball (lowest balance first)
+                                </Button>
+                            </ButtonGroup>
+                        </div>
+
+                        <div className="small text-muted mb-3">
+                            Order is deterministic and testable. Adjust APR assumptions to refine payoff simulation.
+                        </div>
+
+                        <div className="table-responsive">
+                            <table className="table table-hover align-middle mb-0">
+                                <thead>
+                                    <tr>
+                                        <th>#</th>
+                                        <th>Debt</th>
+                                        <th className="text-end">Balance</th>
+                                        <th className="text-end">APR %</th>
+                                        <th className="text-end">Est. interest/mo</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {analystModel.debtAccounts.length === 0 && (
+                                        <tr>
+                                            <td colSpan={5} className="text-center text-muted py-4">
+                                                No debt accounts found in Assets & Debts.
+                                            </td>
+                                        </tr>
+                                    )}
+                                    {analystModel.debtAccounts.map((debt: any, idx: number) => (
+                                        <tr key={debt.accountId}>
+                                            <td>{idx + 1}</td>
+                                            <td>
+                                                <div className="fw-semibold">{debt.name}</div>
+                                                <div className="small text-muted">{debt.institution || 'No institution'}</div>
+                                            </td>
+                                            <td className="text-end">{formatCurrency(toPounds(debt.balancePence))}</td>
+                                            <td className="text-end" style={{ minWidth: 110 }}>
+                                                <Form.Control
+                                                    size="sm"
+                                                    type="number"
+                                                    step="0.1"
+                                                    min={0}
+                                                    value={Number(debt.aprPct || 0)}
+                                                    onChange={(event) => {
+                                                        const next = Number(event.target.value || 0);
+                                                        setDebtAprByAccount((prev) => ({ ...prev, [debt.accountId]: next }));
+                                                    }}
+                                                />
+                                            </td>
+                                            <td className="text-end">{formatCurrency(toPounds(debt.monthlyInterestPence))}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </PremiumCard>
+                </Col>
+
+                <Col lg={5}>
+                    <PremiumCard title="Allocation Simulation" icon={PieIcon}>
+                        <div className="d-flex justify-content-between mb-2">
+                            <span className="text-muted">Goal-linked pot transfers (hard)</span>
+                            <strong>{formatCurrency(toPounds(analystModel.goalLockedPence))}</strong>
+                        </div>
+                        <div className="d-flex justify-content-between mb-2">
+                            <span className="text-muted">Debt acceleration</span>
+                            <strong>{formatCurrency(toPounds(analystModel.debtAccelerationPence))}</strong>
+                        </div>
+                        <div className="d-flex justify-content-between mb-2">
+                            <span className="text-muted">Runway build</span>
+                            <strong>{formatCurrency(toPounds(analystModel.savingsAccelerationPence))}</strong>
+                        </div>
+                        <div className="d-flex justify-content-between mb-2">
+                            <span className="text-muted">Debt payoff horizon</span>
+                            <strong>{analystModel.payoffMonths ? `${analystModel.payoffMonths} mo` : 'Insufficient surplus'}</strong>
+                        </div>
+                        <div className="d-flex justify-content-between">
+                            <span className="text-muted">Emergency runway ETA (3 mo target)</span>
+                            <strong>{analystModel.runwayEtaMonths ? `${analystModel.runwayEtaMonths} mo` : analystModel.runwayGapPence <= 0 ? 'Already funded' : 'No allocation yet'}</strong>
+                        </div>
+                    </PremiumCard>
+                </Col>
+            </Row>
+
+            <Row>
+                <Col>
+                    <PremiumCard title="Proactive Actions (Goals + Obligations)" icon={AlertTriangle}>
+                        <div className="small text-muted mb-3">
+                            Actions combine AI-assisted finance insights with deterministic constraints from debt obligations and linked goal forecasts.
+                        </div>
+                        <div className="table-responsive">
+                            <table className="table table-hover align-middle mb-0">
+                                <thead>
+                                    <tr>
+                                        <th>Signal</th>
+                                        <th>Recommendation</th>
+                                        <th>Urgency</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {analystModel.proactiveActions.length === 0 && (
+                                        <tr>
+                                            <td colSpan={3} className="text-center text-muted py-4">No proactive actions at this time.</td>
+                                        </tr>
+                                    )}
+                                    {analystModel.proactiveActions.map((action: any, idx: number) => (
+                                        <tr key={`${action.kind}-${idx}`}>
+                                            <td className="fw-semibold">{action.label}</td>
+                                            <td>{action.detail}</td>
+                                            <td>
+                                                <Badge bg={action.urgency === 'critical' ? 'danger' : action.urgency === 'high' ? 'warning' : 'secondary'}>
+                                                    {action.urgency}
+                                                </Badge>
                                             </td>
                                         </tr>
                                     ))}
@@ -1769,8 +2923,9 @@ const FinanceDashboardAdvanced: React.FC = () => {
 
     const viewButtons: Array<{ key: FinanceView; label: string }> = [
         { key: 'overview', label: 'Overview' },
+        { key: 'analyst', label: 'AI Budget Analyst' },
         { key: 'spend', label: 'Spend analysis + Forecast' },
-        { key: 'optional', label: 'Optional spend' },
+        { key: 'discretionary', label: 'Discretionary spend' },
         { key: 'actions', label: 'Actions' },
         { key: 'sources', label: 'Data sources' },
         { key: 'assets', label: 'Assets & Debts' },
@@ -1786,8 +2941,11 @@ const FinanceDashboardAdvanced: React.FC = () => {
                     <div className="d-flex align-items-center gap-2 text-muted">
                         <Calendar size={16} />
                         <span>
-                            {filter === 'month' && 'This Month'}
-                            {filter === 'quarter' && 'This Quarter'}
+                            {filter === '7d' && 'Last 7 days'}
+                            {filter === '30d' && 'Last 30 days'}
+                            {filter === '60d' && 'Last 60 days'}
+                            {filter === '90d' && 'Last 90 days'}
+                            {filter === '6m' && 'Last 6 months'}
                             {filter === 'year' && 'This Year'}
                             {filter === 'all' && 'All History (since 2018)'}
                             {filter === 'custom' && 'Custom Range'}
@@ -1804,8 +2962,11 @@ const FinanceDashboardAdvanced: React.FC = () => {
 
                 <div className="d-flex flex-wrap gap-2 align-items-center">
                     <ButtonGroup>
-                        <Button variant={filter === 'month' ? 'primary' : 'outline-secondary'} onClick={() => setFilter('month')}>Month</Button>
-                        <Button variant={filter === 'quarter' ? 'primary' : 'outline-secondary'} onClick={() => setFilter('quarter')}>Quarter</Button>
+                        <Button variant={filter === '7d' ? 'primary' : 'outline-secondary'} onClick={() => setFilter('7d')}>7D</Button>
+                        <Button variant={filter === '30d' ? 'primary' : 'outline-secondary'} onClick={() => setFilter('30d')}>30D</Button>
+                        <Button variant={filter === '60d' ? 'primary' : 'outline-secondary'} onClick={() => setFilter('60d')}>60D</Button>
+                        <Button variant={filter === '90d' ? 'primary' : 'outline-secondary'} onClick={() => setFilter('90d')}>90D</Button>
+                        <Button variant={filter === '6m' ? 'primary' : 'outline-secondary'} onClick={() => setFilter('6m')}>6M</Button>
                         <Button variant={filter === 'year' ? 'primary' : 'outline-secondary'} onClick={() => setFilter('year')}>Year</Button>
                         <Button variant={filter === 'all' ? 'primary' : 'outline-secondary'} onClick={() => setFilter('all')}>All</Button>
                         <Button variant={filter === 'custom' ? 'primary' : 'outline-secondary'} onClick={() => setFilter('custom')}>Custom</Button>
@@ -1835,6 +2996,13 @@ const FinanceDashboardAdvanced: React.FC = () => {
                     <Button variant="outline-primary" onClick={handleSync} disabled={syncing}>
                         {syncing ? <Spinner size="sm" animation="border" /> : <RefreshCw size={18} />}
                     </Button>
+                    <Form.Check
+                        type="switch"
+                        id="finance-yoy-compare"
+                        label="YoY"
+                        checked={compareYoY}
+                        onChange={(event) => setCompareYoY(event.target.checked)}
+                    />
                 </div>
             </div>
 
@@ -1869,8 +3037,9 @@ const FinanceDashboardAdvanced: React.FC = () => {
             )}
 
             {activeView === 'overview' && renderOverview()}
+            {activeView === 'analyst' && renderBudgetAnalyst()}
             {activeView === 'spend' && renderSpendAnalysis()}
-            {activeView === 'optional' && renderOptionalSpend()}
+            {activeView === 'discretionary' && renderOptionalSpend()}
             {activeView === 'actions' && renderActions()}
             {activeView === 'sources' && renderDataSources()}
             {activeView === 'assets' && renderAssets()}

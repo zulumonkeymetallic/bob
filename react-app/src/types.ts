@@ -1,3 +1,49 @@
+export interface FocusGoal {
+  id: string;
+  ownerUid: string;
+  persona: 'personal' | 'work';
+  goalIds: string[]; // IDs of goals selected for focus
+  focusRootGoalIds?: string[]; // Strategic goals the user explicitly selected
+  focusLeafGoalIds?: string[]; // Execution goals expanded from root selections
+  goalTypeMap?: { [goalId: string]: 'story' | 'calendar' };
+  timeframe: 'sprint' | 'quarter' | 'year'; // Duration of focus
+  startDate: any; // Firebase Timestamp
+  endDate: any; // Firebase Timestamp (calculated from timeframe)
+  daysRemaining?: number; // Calculated: days until endDate
+  title?: string; // Optional custom title for this focus set
+  description?: string;
+  createdAt: any; // Firebase Timestamp
+  updatedAt: any; // Firebase Timestamp
+  isActive: boolean; // Whether this focus goal set is currently active
+  storiesCreatedFor?: string[]; // Track which goal stories were auto-created
+  potIdsCreatedFor?: { [goalId: string]: string }; // Track which pots were auto-created per goal
+  visionText?: string;
+  intentBrokerIntakeId?: string;
+  intentMatches?: Array<{ goalId: string; title: string; score: number; tag?: string }>;
+  intentProposals?: Array<{ tag: string; title: string; rationale: string; confidence: number }>;
+  storyTableHandoff?: boolean;
+  autoCreatedSprintIds?: string[];
+  deferredNonFocusCount?: number;
+  monzoPotGoalRefs?: { [goalId: string]: string };
+  sprintPlanByGoalId?: { [goalId: string]: number[] };
+  sprintPlanSegments?: Array<{
+    index: number;
+    label: string;
+    startDate: number;
+    endDate: number;
+  }>;
+  assignedSprintIdsByGoalId?: { [goalId: string]: string[] };
+  pendingLeafGoalsToCreate?: Array<{
+    tempId: string;
+    parentGoalId: string;
+    title: string;
+    theme?: number;
+    persona?: 'personal' | 'work';
+    goalKind?: 'milestone' | 'execution';
+    timeHorizon?: 'sprint' | 'quarter' | 'year';
+  }>;
+}
+
 export interface Goal {
   id: string;
   ref?: string;
@@ -8,10 +54,19 @@ export interface Goal {
   size: number; // 1=Small, 2=Medium, 3=Large
   timeToMasterHours: number;
   estimatedCost?: number; // Optional cost estimate used for budgeting
-  costType?: 'one_off' | 'recurring';
+  costType?: 'none' | 'one_off' | 'recurring';
   recurrence?: 'monthly' | 'annual';
   targetYear?: number;
+  goalRequiresStory?: boolean;
+  monzoPotGoalRef?: string | null;
+  monzoPotId?: string | null;
+  monzoPotLinkedAt?: any;
+  monzoPotRefRequestedAt?: any;
+  monzoPotLinkTimedOutAt?: any;
+  monzoPotLinkStatus?: 'pending' | 'linked' | 'timeout' | string | null;
+  monzoPotLinkError?: string | null;
   potId?: string | null; // Optional explicit Monzo pot mapping
+  linkedPotId?: string | null; // Canonical Monzo pot mapping id
   targetDate?: string;
   startDate?: number; // Timestamp for goal start date
   endDate?: number; // Timestamp for goal end date
@@ -21,10 +76,18 @@ export interface Goal {
   ownerUid: string;
   createdAt: any; // Firebase Timestamp
   updatedAt: any; // Firebase Timestamp
+  url?: string | null;
   orderIndex?: number; // Stable ordering for modern tables
   // Relationships
   parentGoalId?: string | null; // Optional parent goal relationship
   dependsOnGoalIds?: string[]; // Optional dependency links
+  goalKind?: 'umbrella' | 'milestone' | 'execution';
+  timeHorizon?: 'sprint' | 'quarter' | 'year' | 'multi_year';
+  rollupMode?: 'children_only' | 'mixed';
+  // Publishing & sharing
+  isPublished?: boolean; // Whether goal is publicly shareable
+  shareCode?: string; // Unique code for sharing (e.g., abc123xyz)
+  publishedAt?: any; // Firebase Timestamp when goal was published
   // Legacy fields for backward compatibility
   dueDate?: number;
   category?: string;
@@ -53,7 +116,10 @@ export interface Story {
   ownerUid: string;
   createdAt: any; // Firebase Timestamp
   updatedAt: any; // Firebase Timestamp
+  url?: string | null;
   dueDate?: number; // Legacy compatibility
+  dueTime?: string; // HH:mm format
+  timeOfDay?: 'morning' | 'afternoon' | 'evening';
   targetDate?: number | string;
   plannedStartDate?: number | string;
   taskCount?: number;
@@ -66,12 +132,87 @@ export interface Story {
   aiTop3Date?: string;
   aiPriorityLabel?: string;
   aiTop3Reason?: string;
+  // User-set #1 priority flag for gcal override
+  userPriorityFlag?: boolean;
+  userPriorityFlagAt?: string;
+  deferredUntil?: any;
+  deferredReason?: string;
+  deferredBy?: string;
   // Optional travel/location metadata
   countryCode?: string; // ISO alpha-2
   city?: string;
   locationName?: string; // Full display name
   locationLat?: number;
   locationLon?: number;
+}
+
+export interface JournalMindsetAnalysis {
+  emotionalTone?: string | null;
+  cognitiveStyle?: string | null;
+  motivationsAndDrivers?: string | null;
+  psychologicalStrengths?: string | null;
+  potentialStressors?: string | null;
+}
+
+export interface JournalEntryMetadata {
+  moodScore?: number | null;
+  stressLevel?: number | null;
+  energyLevel?: number | null;
+  primaryThemes?: string[];
+  cognitiveState?: string | null;
+  sentiment?: 'negative' | 'neutral' | 'mixed' | 'positive' | string | null;
+}
+
+export interface JournalEntry {
+  id: string;
+  persona: 'personal' | 'work';
+  ownerUid: string;
+  originalTranscript?: string;
+  journalDateKey?: string | null;
+  dateHeading?: string;
+  structuredEntry?: string;
+  oneLineSummary?: string;
+  aiSummaryBullets?: string[];
+  advice?: string;
+  mindsetAnalysis?: JournalMindsetAnalysis | null;
+  entryMetadata?: JournalEntryMetadata | null;
+  entryCount?: number;
+  summaryHistory?: string[];
+  docUrl?: string | null;
+  googleDoc?: {
+    attempted?: boolean;
+    appended?: boolean;
+    status?: string | null;
+    message?: string | null;
+    url?: string | null;
+  } | null;
+  googleDocAppendedAt?: any;
+  entryType?: 'journal' | 'mixed' | 'task_list' | 'url_only' | string;
+  transcriptFingerprint?: string;
+  source?: string;
+  sourceUrls?: string[];
+  storyIds?: string[];
+  taskIds?: string[];
+  linkedStories?: Array<{
+    id: string;
+    ref?: string;
+    title?: string;
+    url?: string | null;
+    deepLink?: string | null;
+    existing?: boolean;
+    updated?: boolean;
+  }>;
+  linkedTasks?: Array<{
+    id: string;
+    ref?: string;
+    title?: string;
+    url?: string | null;
+    deepLink?: string | null;
+    existing?: boolean;
+    updated?: boolean;
+  }>;
+  createdAt: any;
+  updatedAt: any;
 }
 
 export interface Sprint {
@@ -82,6 +223,9 @@ export interface Sprint {
   notes?: string;
   persona?: 'personal' | 'work';
   status: number; // 0=Planning, 1=Active, 2=Complete, 3=Cancelled
+  focusGoalIds?: string[];
+  alignmentMode?: 'warn' | 'strict';
+  alignmentLockedAt?: any;
   startDate: number;
   endDate: number;
   planningDate: number;
@@ -122,6 +266,8 @@ export interface Task {
   startDate?: number;
   dueDate?: number;
   dueDateMs?: number;
+  dueTime?: string; // HH:mm format
+  timeOfDay?: 'morning' | 'afternoon' | 'evening';
   dueDateLocked?: boolean;
   dueDateReason?: string;
   lockDueDate?: boolean;
@@ -160,12 +306,13 @@ export interface Task {
   aiCriticalityReason?: string;
   aiFlaggedTop?: boolean;
   aiPriorityRank?: number;
+  aiDailyRank?: number;
   aiTop3ForDay?: boolean;
   aiTop3Date?: string;
   aiPriorityLabel?: string;
   aiTop3Reason?: string;
   iosPriority?: string;
-  type?: 'task' | 'chore' | 'routine' | 'habit' | string;
+  type?: 'task' | 'chore' | 'routine' | 'habit' | 'read' | 'watch' | string;
   repeatFrequency?: 'daily' | 'weekly' | 'monthly' | 'yearly' | null;
   repeatInterval?: number | null;
   daysOfWeek?: string[] | null;
@@ -177,6 +324,7 @@ export interface Task {
   sprintId?: string;
   projectId?: string;
   deepLink?: string; // Optional deep link for navigation
+  url?: string | null;
   // Legacy fields for backward compatibility
   reference?: string;
   storyId?: string;
@@ -189,6 +337,9 @@ export interface Task {
   completedAt?: number; // when status first moved to Done
   deleteAfter?: number; // scheduled deletion timestamp (TTL)
   duplicateFlag?: boolean; // normalized duplicate indicator
+  deferredUntil?: any;
+  deferredReason?: string;
+  deferredBy?: string;
 }
 
 export interface Column {
@@ -272,6 +423,11 @@ export interface CalendarBlock {
   };
   aiScore?: number | null;
   aiReason?: string | null;
+  calendarMatchSource?: string;
+  calendarMatchNote?: string;
+  calendarMatchScore?: number;
+  calendarMatchConfidence?: number;
+  calendarMatchConfidenceTier?: 'high' | 'medium' | 'low' | string;
 }
 
 export interface PlanningPrefs {

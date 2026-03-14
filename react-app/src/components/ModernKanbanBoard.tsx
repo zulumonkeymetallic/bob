@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Card, Row, Col, Button, Form, Modal } from 'react-bootstrap';
+import { Card, Row, Col, Button, Form, Modal, Alert } from 'react-bootstrap';
 import {
   DndContext,
   closestCenter,
@@ -22,7 +22,7 @@ import {
 } from '@dnd-kit/sortable';
 import { pointerWithin } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
-import { Edit3, Trash2, Target, BookOpen, Activity, Plus, List, Grid, Maximize2, Minimize2, GripVertical, Wand2 } from 'lucide-react';
+import { Edit3, Trash2, Target, BookOpen, Activity, Plus, List, Grid, Maximize2, Minimize2, GripVertical, Wand2, Clock3 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { db, functions } from '../firebase';
 import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc, deleteDoc, orderBy, getDocs, limit } from 'firebase/firestore';
@@ -30,7 +30,7 @@ import { httpsCallable } from 'firebase/functions';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useSidebar } from '../contexts/SidebarContext';
-import { Story, Goal, Task, Sprint } from '../types';
+import { Story, Goal, Task, Sprint, CalendarBlock } from '../types';
 import { useSprint } from '../contexts/SprintContext';
 import { isStatus } from '../utils/statusHelpers';
 import { deriveTaskSprint, findSprintForDate, sprintNameForId } from '../utils/taskSprintHelpers';
@@ -38,6 +38,7 @@ import { useActivityTracking } from '../hooks/useActivityTracking';
 import { generateRef, displayRefForEntity, validateRef } from '../utils/referenceGenerator';
 import EditStoryModal from './EditStoryModal';
 import AddStoryModal from './AddStoryModal';
+import DeferItemModal from './DeferItemModal';
 import TagInput from './common/TagInput';
 import { DnDMutationHandler } from '../utils/dndMutations';
 import { themeVars } from '../utils/themeVars';
@@ -49,6 +50,7 @@ import { normalizePriorityValue, isCriticalPriority } from '../utils/priorityUti
 import { cascadeTaskPersona } from '../utils/personaCascade';
 import { formatTaskTagLabel } from '../utils/tagDisplay';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
+import NewCalendarEventModal, { BlockFormState, buildCalendarComposerInitialValues } from './planner/NewCalendarEventModal';
 
 const formatDueDate = (task: Task): string => {
   const ms = getTaskDueMs(task);
@@ -107,15 +109,22 @@ const getAiScoreValue = (item: Story | Task): number => {
   return Number.isFinite(parsed) ? parsed : -Infinity;
 };
 
-const isTop3Task = (task: Task): boolean => {
-  return (task as any).aiTop3ForDay === true
-    || (task as any).aiFlaggedTop === true
-    || Number((task as any).aiPriorityRank || 0) > 0;
+const isCurrentTop3 = (item: any): boolean => {
+  if (item?.aiTop3ForDay !== true) return false;
+  const top3Date = item?.aiTop3Date;
+  if (!top3Date) return true;
+  return String(top3Date).slice(0, 10) === new Date().toISOString().slice(0, 10);
 };
 
-const isTop3Story = (story: Story): boolean => {
-  return (story as any).aiTop3ForDay === true
-    || Number((story as any).aiFocusStoryRank || 0) > 0;
+const isTop3Task = (task: Task): boolean => isCurrentTop3(task);
+
+const isTop3Story = (story: Story): boolean => isCurrentTop3(story);
+
+const getRoutineLikeTaskKind = (task: Task): 'chore' | 'routine' | 'habit' | null => {
+  const raw = String((task as any)?.type || (task as any)?.task_type || '').trim().toLowerCase();
+  const normalized = raw === 'habitual' ? 'habit' : raw;
+  if (normalized === 'chore' || normalized === 'routine' || normalized === 'habit') return normalized;
+  return null;
 };
 
 const matchesCriticalOrHighAi = (item: Story | Task): boolean => {
@@ -134,6 +143,18 @@ interface ModernKanbanBoardProps {
 }
 
 type LaneStatus = 'backlog' | 'in-progress' | 'done';
+
+interface ScheduledBlockInfo {
+  id: string;
+  start: number;
+  end: number;
+  title?: string;
+  source?: string;
+  isAiGenerated?: boolean;
+  googleEventId?: string;
+  linkedStoryId?: string;
+  entryMethod?: string;
+}
 
 // Droppable Area Component
 const DroppableArea: React.FC<{
@@ -170,11 +191,13 @@ const SortableTaskCard: React.FC<{
   task: Task;
   story?: Story;
   themeColor: string;
+  scheduledBlock?: ScheduledBlockInfo;
   onEdit: (task: Task) => void;
   onItemClick: (task: Task) => void;
+  onDefer?: (task: Task) => void;
   showTags?: boolean;
   formatTag?: (tag: string) => string;
-}> = ({ task, story, themeColor, onEdit, onItemClick, showTags = false, formatTag }) => {
+}> = ({ task, story, themeColor, scheduledBlock, onEdit, onItemClick, onDefer, showTags = false, formatTag }) => {
   const { showSidebar } = useSidebar();
   const {
     attributes,
@@ -218,6 +241,15 @@ const SortableTaskCard: React.FC<{
   const taskTags = Array.isArray((task as any).tags) ? (task as any).tags : [];
   const visibleTags = taskTags.slice(0, 4);
   const remainingTags = taskTags.length - visibleTags.length;
+  const scheduledBlockLabel = (() => {
+    if (!scheduledBlock?.start || !scheduledBlock?.end) return null;
+    const start = new Date(scheduledBlock.start);
+    const end = new Date(scheduledBlock.end);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return null;
+    const dayLabel = start.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+    const timeLabel = `${start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}-${end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+    return `Planned ${dayLabel} ${timeLabel}`;
+  })();
   const criticalAccent = isCriticalTask
     ? {
       boxShadow: '0 0 0 2px rgba(251, 191, 36, 0.45)',
@@ -319,6 +351,22 @@ const SortableTaskCard: React.FC<{
               >
                 <Edit3 size={11} />
               </Button>
+              {onDefer && (
+                <Button
+                  variant="link"
+                  size="sm"
+                  className="p-0"
+                  style={{ width: 24, height: 24, color: themeVars.muted }}
+                  title="Defer intelligently"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onDefer(task);
+                  }}
+                  onPointerDown={(e) => e.stopPropagation()}
+                >
+                  <Clock3 size={11} />
+                </Button>
+              )}
             </div>
           </div>
 
@@ -389,6 +437,19 @@ const SortableTaskCard: React.FC<{
                 {pointsLabel}
               </span>
             )}
+            {scheduledBlockLabel && (
+              <span
+                className="kanban-card__meta-badge"
+                style={{
+                  borderColor: 'rgba(37, 99, 235, 0.45)',
+                  backgroundColor: 'rgba(37, 99, 235, 0.12)',
+                  color: '#2563eb',
+                }}
+                title={scheduledBlock?.title || 'Planned calendar block'}
+              >
+                {scheduledBlockLabel}
+              </span>
+            )}
             <span className="kanban-card__meta-text" title="Due date">
               Due {formatDueDate(task)}
             </span>
@@ -456,6 +517,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
   const [stories, setStories] = useState<Story[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [scheduledBlocksByEntity, setScheduledBlocksByEntity] = useState<Record<string, ScheduledBlockInfo>>({});
   const { sprints } = useSprint();
   const [loading, setLoading] = useState(true);
 
@@ -466,6 +528,9 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
   const [showAddModal, setShowAddModal] = useState(false);
   const [showAddStoryModal, setShowAddStoryModal] = useState(false);
   const [addType, setAddType] = useState<'story' | 'task'>('story');
+  const [scheduleStory, setScheduleStory] = useState<Story | null>(null);
+  const [autoLinkMessage, setAutoLinkMessage] = useState<string | null>(null);
+  const [deferTarget, setDeferTarget] = useState<{ type: 'task' | 'story'; id: string; title: string } | null>(null);
 
   // DnD state
   const [activeId, setActiveId] = useState<UniqueIdentifier | null>(null);
@@ -583,6 +648,136 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
       window.localStorage.setItem('kanbanTop3Only', filterTop3Only ? 'true' : 'false');
     } catch { }
   }, [filterTop3Only]);
+
+  useEffect(() => {
+    if (!currentUser?.uid) {
+      setScheduledBlocksByEntity({});
+      return undefined;
+    }
+
+    const blocksQuery = query(
+      collection(db, 'calendar_blocks'),
+      where('ownerUid', '==', currentUser.uid),
+      limit(2000)
+    );
+
+    return onSnapshot(
+      blocksQuery,
+      (snapshot) => {
+        const now = Date.now();
+        const windowEnd = now + (30 * 24 * 60 * 60 * 1000);
+        const nextMap: Record<string, ScheduledBlockInfo> = {};
+        snapshot.docs
+          .map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) }) as CalendarBlock)
+          .filter((block) => {
+            const start = Number(block.start);
+            const end = Number(block.end);
+            if (!Number.isFinite(start) || !Number.isFinite(end)) return false;
+            if (end < now - 5 * 60 * 1000) return false;
+            if (start > windowEnd) return false;
+            const persona = String((block as any).persona || '').toLowerCase();
+            if (currentPersona && persona && persona !== String(currentPersona).toLowerCase()) return false;
+            return Boolean(block.storyId || block.taskId);
+          })
+          .sort((a, b) => Number(a.start) - Number(b.start))
+          .forEach((block) => {
+            const key = block.taskId
+              ? `task:${block.taskId}`
+              : (block.storyId ? `story:${block.storyId}` : null);
+            if (!key || nextMap[key]) return;
+            nextMap[key] = {
+              id: block.id,
+              start: Number(block.start),
+              end: Number(block.end),
+              title: block.title,
+              source: String((block as any).source || ''),
+              isAiGenerated: Boolean((block as any).isAiGenerated),
+              googleEventId: (block as any).googleEventId ? String((block as any).googleEventId) : undefined,
+              linkedStoryId: (block as any).linkedStoryId ? String((block as any).linkedStoryId) : undefined,
+              entryMethod: (block as any).entryMethod ? String((block as any).entryMethod) : undefined,
+            };
+          });
+        setScheduledBlocksByEntity(nextMap);
+      },
+      (error) => {
+        console.warn('[ModernKanbanBoard] scheduled blocks query error', error?.message || error);
+        setScheduledBlocksByEntity({});
+      }
+    );
+  }, [currentUser?.uid, currentPersona]);
+
+  useEffect(() => {
+    if (!currentUser?.uid || typeof window === 'undefined') return;
+    const storageKey = `gcal_autolink_last_${currentUser.uid}`;
+    const now = Date.now();
+    const last = Number(window.localStorage.getItem(storageKey) || 0);
+    if (Number.isFinite(last) && (now - last) < 15 * 60 * 1000) return;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const callable = httpsCallable(functions, 'gcalLinkUnlinkedEvents');
+        const response: any = await callable({ dryRun: false });
+        const linked = Number(response?.data?.linked || 0);
+        const reviewed = Number(response?.data?.reviewed || 0);
+        if (!cancelled && linked > 0) {
+          setAutoLinkMessage(`Auto-linked ${linked} Google Calendar event${linked === 1 ? '' : 's'} (${reviewed} reviewed).`);
+        }
+      } catch (error) {
+        console.warn('[ModernKanbanBoard] gcalLinkUnlinkedEvents failed', (error as any)?.message || error);
+      } finally {
+        try {
+          window.localStorage.setItem(storageKey, String(now));
+        } catch {
+          // ignore storage failures
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser?.uid]);
+
+  const getStoryPointsRemaining = useCallback((story: Story): number => {
+    const explicitRemaining = Number((story as any).pointsRemaining);
+    if (Number.isFinite(explicitRemaining) && explicitRemaining >= 0) return explicitRemaining;
+    const totalPoints = Number((story as any).points || 0);
+    const progressPct = Number((story as any).progressPct || 0);
+    if (!Number.isFinite(totalPoints) || totalPoints <= 0) return 0;
+    return Math.max(0, Math.ceil((totalPoints * (1 - Math.min(100, Math.max(0, progressPct)) / 100)) * 10) / 10);
+  }, []);
+
+  const openScheduleModal = useCallback((story: Story) => {
+    setScheduleStory(story);
+  }, []);
+
+  const scheduleInitialValues = useMemo(() => {
+    if (!scheduleStory) return undefined;
+    return buildCalendarComposerInitialValues({
+      title: scheduleStory.title || 'Focus block',
+      rationale: 'Manual schedule from kanban board',
+      persona: ((scheduleStory as any).persona || currentPersona || 'personal') as 'personal' | 'work',
+      theme: String((scheduleStory as any).theme || 'General'),
+      category: (((scheduleStory as any).persona || currentPersona) === 'work' ? 'Work (Main Gig)' : 'Wellbeing') as any,
+      storyId: scheduleStory.id,
+      points: getStoryPointsRemaining(scheduleStory),
+      aiScore: Number.isFinite(Number((scheduleStory as any).aiCriticalityScore)) ? Number((scheduleStory as any).aiCriticalityScore) : null,
+      aiReason: String((scheduleStory as any).aiReason || (scheduleStory as any).aiPriorityReason || '').trim() || null,
+    }) as Partial<BlockFormState>;
+  }, [scheduleStory, currentPersona, getStoryPointsRemaining]);
+
+  const applyDeferredDate = useCallback(async ({ dateMs, rationale, source }: { dateMs: number; rationale: string; source: string }) => {
+    if (!deferTarget) return;
+    const collectionName = deferTarget.type === 'story' ? 'stories' : 'tasks';
+    await updateDoc(doc(db, collectionName, deferTarget.id), {
+      deferredUntil: dateMs,
+      deferredReason: rationale,
+      deferredBy: source,
+      deferredAt: serverTimestamp(),
+    } as any);
+    setDeferTarget(null);
+  }, [deferTarget]);
 
   // Wire sidebar inline editor to Firestore updates
   useEffect(() => {
@@ -768,6 +963,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
   });
 
   const filteredTasks = tasksInScope.filter((task) => {
+    if (getRoutineLikeTaskKind(task)) return false;
     if (filterTop3Only && !isTop3Task(task)) return false;
     if (filterCriticalOnly && !(isCriticalPriority(task.priority) || isTop3Task(task))) return false;
     if (filterCriticalAiOnly && !matchesCriticalOrHighAi(task)) return false;
@@ -1258,6 +1454,11 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
         </div>
       </div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', marginBottom: '16px' }}>
+        {autoLinkMessage && (
+          <Alert variant="info" className="py-1 px-2 mb-0 w-100" dismissible onClose={() => setAutoLinkMessage(null)}>
+            <small>{autoLinkMessage}</small>
+          </Alert>
+        )}
         <Form.Check
           inline
           type="switch"
@@ -1416,11 +1617,14 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
                                       story={story}
                                       goal={goal}
                                       taskCount={taskCount}
+                                      scheduledBlock={scheduledBlocksByEntity[`story:${story.id}`]}
                                       themeColor={themeColor}
                                       themes={globalThemes}
                                       onEdit={(story) => handleEdit(story, 'story')}
                                       onDelete={(story) => handleDelete(story, 'story')}
                                       onItemClick={(story) => handleItemClick(story, 'story')}
+                                      onManualSchedule={(story) => openScheduleModal(story)}
+                                      onDefer={(story) => setDeferTarget({ type: 'story', id: story.id, title: story.title || 'Untitled story' })}
                                       showTags={showTags}
                                     />
                                   );
@@ -1449,9 +1653,11 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
                                       key={task.id}
                                       task={task}
                                       story={story}
+                                      scheduledBlock={scheduledBlocksByEntity[`task:${task.id}`]}
                                       themeColor={themeColor}
                                       onEdit={(task) => handleEdit(task, 'task')}
                                       onItemClick={(task) => handleItemClick(task, 'task')}
+                                      onDefer={(task) => setDeferTarget({ type: 'task', id: task.id, title: task.title || 'Untitled task' })}
                                       showTags={showTags}
                                       formatTag={formatTaskTag}
                                     />
@@ -1637,6 +1843,23 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
             </Button>
           </Modal.Footer>
         </Modal>
+
+        <NewCalendarEventModal
+          show={!!scheduleStory}
+          onHide={() => setScheduleStory(null)}
+          initialValues={scheduleInitialValues}
+          stories={scheduleStory ? [scheduleStory] : []}
+          onSaved={() => setScheduleStory(null)}
+        />
+
+        <DeferItemModal
+          show={Boolean(deferTarget)}
+          onHide={() => setDeferTarget(null)}
+          itemType={deferTarget?.type || 'task'}
+          itemId={deferTarget?.id || ''}
+          itemTitle={deferTarget?.title || ''}
+          onApply={applyDeferredDate}
+        />
 
       </div>
 

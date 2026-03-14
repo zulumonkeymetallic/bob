@@ -1,10 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
-import { getFunctions, httpsCallable } from 'firebase/functions';
-import { Button, Modal, Form, Container, Spinner, Alert } from 'react-bootstrap';
-import { Save } from 'lucide-react';
+import { httpsCallable } from 'firebase/functions';
+import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
+import { Button, Modal, Form, Container, Spinner, Alert, Dropdown } from 'react-bootstrap';
+import { Calendar as CalendarIcon, LayoutDashboard, RefreshCw, Save, Sparkles } from 'lucide-react';
 import { GLOBAL_THEMES, type GlobalTheme } from '../../constants/globalThemes';
 import { useGlobalThemes } from '../../hooks/useGlobalThemes';
+import { useNavigate } from 'react-router-dom';
+import { addWeeks, format, parseISO, startOfWeek, subWeeks } from 'date-fns';
+import { db, functions } from '../../firebase';
 import './WeeklyThemePlanner.css';
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
@@ -16,6 +20,7 @@ const TIME_SLOTS = Array.from(
     (_, i) => START_HOUR * 60 + i * SLOT_MINUTES
 );
 const HEALTH_SUBTHEMES = ['Bike', 'Run', 'Swim', 'Walk', 'S&C', 'Crossfit', 'Meal Prep'];
+const CLEAR_THEME_OPTION = 'Clear';
 const WORK_MAIN_GIG_THEME: GlobalTheme = {
     id: 12,
     name: 'Work (Main Gig)',
@@ -35,6 +40,12 @@ interface Allocation {
     subTheme?: string | null;
 }
 
+interface ThemeAllocationPlanDoc {
+    allocations?: Allocation[];
+    weeklyOverrides?: Record<string, Allocation[]>;
+    updatedAt?: string;
+}
+
 const toMinutes = (hhmm: string) => {
     const [h = '0', m = '0'] = String(hhmm || '0:0').split(':');
     return Number(h) * 60 + Number(m);
@@ -49,6 +60,44 @@ const toTimeString = (minutes: number) => {
 const isHealthTheme = (themeName: string) => String(themeName || '').toLowerCase().includes('health');
 const getJsDay = (dayIndex: number) => (dayIndex + 1) % 7;
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
+const WEEK_OPTION_COUNT = 8;
+const cloneAllocations = (source: Allocation[]) => source.map((alloc) => ({ ...alloc, subTheme: alloc.subTheme || null }));
+const normalizeWeeklyOverrides = (value: unknown): Record<string, Allocation[]> => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+    return Object.entries(value as Record<string, unknown>).reduce((acc, [key, entry]) => {
+        acc[key] = Array.isArray(entry) ? cloneAllocations(entry as Allocation[]) : [];
+        return acc;
+    }, {} as Record<string, Allocation[]>);
+};
+const weekKeyFromDate = (value: Date) => format(startOfWeek(value, { weekStartsOn: 1 }), 'yyyy-MM-dd');
+const resolveAllocationsForWeek = (
+    templateAllocations: Allocation[],
+    weeklyOverrides: Record<string, Allocation[]>,
+    weekKey: string,
+) => {
+    if (Object.prototype.hasOwnProperty.call(weeklyOverrides, weekKey)) {
+        return cloneAllocations(weeklyOverrides[weekKey] || []);
+    }
+    return cloneAllocations(templateAllocations);
+};
+
+const normalizeCallableError = (error: any, fallbackMessage: string) => {
+    const rawCode = String(error?.code || '').toLowerCase();
+    const code = rawCode.includes('/') ? rawCode.split('/').pop() : rawCode;
+    if (code === 'deadline-exceeded') {
+        return 'The planner request timed out. This usually means orchestration is overloaded. Please retry and check planner stats in a minute.';
+    }
+    if (code === 'unavailable') {
+        return 'Planner service is temporarily unavailable. Please retry shortly.';
+    }
+    if (code === 'permission-denied') {
+        return 'Permission denied while calling planner orchestration. Please sign out/in and retry.';
+    }
+    if (code === 'failed-precondition') {
+        return 'Planner preconditions failed (usually missing calendar/profile data). Please verify integrations and retry.';
+    }
+    return String(error?.message || fallbackMessage);
+};
 
 type DragMode = 'create' | 'resize-start' | 'resize-end' | 'move' | null;
 
@@ -62,6 +111,7 @@ interface DragSelection {
 
 const WeeklyThemePlanner: React.FC = () => {
     const { currentUser } = useAuth();
+    const navigate = useNavigate();
     const { themes: globalThemes } = useGlobalThemes();
     const themeOptions = useMemo(() => {
         const base = globalThemes.length ? globalThemes : GLOBAL_THEMES;
@@ -71,6 +121,9 @@ const WeeklyThemePlanner: React.FC = () => {
         });
         return hasMainGig ? base : [...base, WORK_MAIN_GIG_THEME];
     }, [globalThemes]);
+    const [templateAllocations, setTemplateAllocations] = useState<Allocation[]>([]);
+    const [weeklyOverrides, setWeeklyOverrides] = useState<Record<string, Allocation[]>>({});
+    const [selectedWeekKey, setSelectedWeekKey] = useState(() => weekKeyFromDate(new Date()));
     const [allocations, setAllocations] = useState<Allocation[]>([]);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
@@ -85,13 +138,44 @@ const WeeklyThemePlanner: React.FC = () => {
     const [selectedSubTheme, setSelectedSubTheme] = useState('');
     const [applyFeedback, setApplyFeedback] = useState<{ variant: 'success' | 'danger' | 'info'; message: string } | null>(null);
     const [applying, setApplying] = useState(false);
+    const [deltaReplanLoading, setDeltaReplanLoading] = useState(false);
     const [nightlyRunning, setNightlyRunning] = useState(false);
+    const [seedLoading, setSeedLoading] = useState(false);
+    const [fitnessBlocksAutoCreate, setFitnessBlocksAutoCreate] = useState(true);
+    const [planningMode, setPlanningMode] = useState<'smart' | 'strict'>('smart');
+    const [savingSettings, setSavingSettings] = useState(false);
 
-    const functions = getFunctions();
-    const getAllocations = httpsCallable(functions, 'getThemeAllocations');
-    const saveAllocationsFn = httpsCallable(functions, 'saveThemeAllocations');
     const materializePlannerBlocks = httpsCallable(functions, 'materializeFitnessBlocksNow');
-    const runNightlyChainFn = httpsCallable(functions, 'runNightlyChain');
+    const replanCalendarNowFn = httpsCallable(functions, 'replanCalendarNow', { timeout: 180000 });
+    const runNightlyChainFn = httpsCallable(functions, 'runNightlyChainNow', { timeout: 540000 });
+    const seedNextWeekPlannerOverridesFn = httpsCallable(functions, 'seedNextWeekPlannerOverridesNow');
+    const selectedWeekDate = useMemo(() => parseISO(selectedWeekKey), [selectedWeekKey]);
+    const selectedWeekLabel = useMemo(() => format(selectedWeekDate, 'd MMM yyyy'), [selectedWeekDate]);
+    const hasWeekOverride = useMemo(
+        () => Object.prototype.hasOwnProperty.call(weeklyOverrides, selectedWeekKey),
+        [weeklyOverrides, selectedWeekKey],
+    );
+    const weekOptions = useMemo(() => {
+        const base = startOfWeek(new Date(), { weekStartsOn: 1 });
+        const options = Array.from({ length: WEEK_OPTION_COUNT }, (_, index) => {
+            const start = addWeeks(base, index);
+            const key = weekKeyFromDate(start);
+            return {
+                key,
+                start,
+                label: index === 0 ? `This week · ${format(start, 'd MMM')}` : `Week of ${format(start, 'd MMM')}`,
+            };
+        });
+        if (!options.some((option) => option.key === selectedWeekKey)) {
+            const selectedStart = startOfWeek(selectedWeekDate, { weekStartsOn: 1 });
+            options.unshift({
+                key: selectedWeekKey,
+                start: selectedStart,
+                label: `Week of ${format(selectedStart, 'd MMM')}`,
+            });
+        }
+        return options;
+    }, [selectedWeekDate, selectedWeekKey]);
 
     useEffect(() => {
         if (currentUser) loadAllocations();
@@ -99,18 +183,37 @@ const WeeklyThemePlanner: React.FC = () => {
 
     useEffect(() => {
         if (!themeOptions.length) return;
-        const exists = themeOptions.some((theme) => theme.name === selectedTheme || theme.label === selectedTheme);
+        const exists = selectedTheme === CLEAR_THEME_OPTION
+            || themeOptions.some((theme) => theme.name === selectedTheme || theme.label === selectedTheme);
         if (!exists) {
             setSelectedTheme(themeOptions[0].name || themeOptions[0].label);
         }
     }, [themeOptions, selectedTheme]);
 
+    useEffect(() => {
+        if (loading) return;
+        setAllocations(resolveAllocationsForWeek(templateAllocations, weeklyOverrides, selectedWeekKey));
+    }, [loading, selectedWeekKey, templateAllocations, weeklyOverrides]);
+
     const loadAllocations = async () => {
+        if (!currentUser) return;
         setLoading(true);
         try {
-            const res = await getAllocations();
-            const data = res.data as { allocations: Allocation[] };
-            setAllocations(data.allocations || []);
+            const [docSnap, profileSnap] = await Promise.all([
+                getDoc(doc(db, 'theme_allocations', currentUser.uid)),
+                getDoc(doc(db, 'profiles', currentUser.uid)),
+            ]);
+            const data = docSnap.exists() ? (docSnap.data() as ThemeAllocationPlanDoc) : null;
+            const nextTemplateAllocations = Array.isArray(data?.allocations) ? cloneAllocations(data?.allocations || []) : [];
+            const nextWeeklyOverrides = normalizeWeeklyOverrides(data?.weeklyOverrides);
+            setTemplateAllocations(nextTemplateAllocations);
+            setWeeklyOverrides(nextWeeklyOverrides);
+            setAllocations(resolveAllocationsForWeek(nextTemplateAllocations, nextWeeklyOverrides, selectedWeekKey));
+            if (profileSnap.exists()) {
+                const pd = profileSnap.data() || {};
+                if (typeof pd.fitnessBlocksAutoCreate === 'boolean') setFitnessBlocksAutoCreate(pd.fitnessBlocksAutoCreate);
+                if (pd.plannerMode === 'strict') setPlanningMode('strict');
+            }
         } catch (e) {
             console.error(e);
         } finally {
@@ -118,16 +221,76 @@ const WeeklyThemePlanner: React.FC = () => {
         }
     };
 
-    const saveAllocations = async () => {
-        setSaving(true);
-        setApplyFeedback(null);
+    const saveProfileSettings = async (updates: Record<string, unknown>) => {
+        if (!currentUser) return;
+        setSavingSettings(true);
         try {
-            await saveAllocationsFn({ allocations });
+            await updateDoc(doc(db, 'profiles', currentUser.uid), updates);
         } catch (e) {
             console.error(e);
         } finally {
+            setSavingSettings(false);
+        }
+    };
+
+    const persistPlan = async (
+        nextTemplateAllocations: Allocation[],
+        nextWeeklyOverrides: Record<string, Allocation[]>,
+        successMessage?: string,
+    ) => {
+        if (!currentUser) return;
+        setSaving(true);
+        setApplyFeedback(null);
+        try {
+            const docRef = doc(db, 'theme_allocations', currentUser.uid);
+            await setDoc(docRef, {
+                allocations: cloneAllocations(nextTemplateAllocations),
+                weeklyOverrides: nextWeeklyOverrides,
+                updatedAt: new Date().toISOString()
+            });
+            setTemplateAllocations(cloneAllocations(nextTemplateAllocations));
+            setWeeklyOverrides(nextWeeklyOverrides);
+            setAllocations(resolveAllocationsForWeek(nextTemplateAllocations, nextWeeklyOverrides, selectedWeekKey));
+            if (successMessage) {
+                setApplyFeedback({ variant: 'success', message: successMessage });
+            }
+        } catch (e: any) {
+            console.error(e);
+            setApplyFeedback({ variant: 'danger', message: e?.message || 'Failed to save weekly plan.' });
+        } finally {
             setSaving(false);
         }
+    };
+
+    const saveAllocations = async () => {
+        const nextOverrides = {
+            ...weeklyOverrides,
+            [selectedWeekKey]: cloneAllocations(allocations),
+        };
+        await persistPlan(templateAllocations, nextOverrides, `Saved week plan for ${selectedWeekLabel}.`);
+    };
+
+    const saveAsDefaultTemplate = async () => {
+        await persistPlan(cloneAllocations(allocations), weeklyOverrides, 'Saved current layout as the default weekly template.');
+    };
+
+    const copyPreviousWeek = async () => {
+        const previousWeekDate = subWeeks(selectedWeekDate, 1);
+        const previousWeekKey = weekKeyFromDate(previousWeekDate);
+        const copied = resolveAllocationsForWeek(templateAllocations, weeklyOverrides, previousWeekKey);
+        const nextOverrides = {
+            ...weeklyOverrides,
+            [selectedWeekKey]: cloneAllocations(copied),
+        };
+        setAllocations(copied);
+        await persistPlan(templateAllocations, nextOverrides, `Copied the plan from ${format(previousWeekDate, 'd MMM')} into ${selectedWeekLabel}.`);
+    };
+
+    const resetWeekToTemplate = async () => {
+        const nextOverrides = { ...weeklyOverrides };
+        delete nextOverrides[selectedWeekKey];
+        setAllocations(cloneAllocations(templateAllocations));
+        await persistPlan(templateAllocations, nextOverrides, `Reset ${selectedWeekLabel} to the default template.`);
     };
 
     const applyPlannerBlocksNow = async () => {
@@ -135,7 +298,7 @@ const WeeklyThemePlanner: React.FC = () => {
         setApplying(true);
         setApplyFeedback(null);
         try {
-            const res = await materializePlannerBlocks({ days: 7 });
+            const res = await materializePlannerBlocks({ days: 7, startDate: selectedWeekKey });
             const data = res.data as any;
             const created = Number(data?.created || 0);
             const skipped = Number(data?.skipped || 0);
@@ -152,21 +315,92 @@ const WeeklyThemePlanner: React.FC = () => {
         }
     };
 
+    const replanAroundCalendar = async () => {
+        if (!currentUser) return;
+        setDeltaReplanLoading(true);
+        setApplyFeedback(null);
+        try {
+            const res = await replanCalendarNowFn({ days: 7, startDate: selectedWeekKey, fitnessBlocksAutoCreate, planningMode });
+            const data = res.data as { created?: number; rescheduled?: number; blocked?: number; shortfallMinutes?: number; unscheduledStories?: number; unscheduledTasks?: number };
+            const parts: string[] = [];
+            if (data?.created) parts.push(`${data.created} created`);
+            if (data?.rescheduled) parts.push(`${data.rescheduled} moved`);
+            if (data?.blocked) parts.push(`${data.blocked} blocked`);
+            if (data?.shortfallMinutes) {
+                const shortfallHours = Math.round((data.shortfallMinutes / 60) * 10) / 10;
+                parts.push(`${shortfallHours}h short`);
+            }
+            if (data?.unscheduledStories) parts.push(`${data.unscheduledStories} stories unscheduled`);
+            if (data?.unscheduledTasks) parts.push(`${data.unscheduledTasks} tasks unscheduled`);
+            setApplyFeedback({
+                variant: 'success',
+                message: parts.length
+                    ? `Delta replan complete: ${parts.join(', ')}.`
+                    : 'Delta replan complete.',
+            });
+        } catch (e: any) {
+            console.error('Weekly planner delta replan failed', e);
+            setApplyFeedback({ variant: 'danger', message: normalizeCallableError(e, 'Failed to run delta replan.') });
+        } finally {
+            setDeltaReplanLoading(false);
+        }
+    };
+
     const runNightlyChainNow = async () => {
         if (!currentUser) return;
         setNightlyRunning(true);
         setApplyFeedback(null);
         try {
-            const res = await runNightlyChainFn({});
+            const res = await runNightlyChainFn({
+                planningMode,
+                fitnessBlocksAutoCreate,
+                startDate: selectedWeekKey,
+                days: 7,
+            });
             const data = res?.data as { results?: Array<{ step?: string; status?: string }> };
             const summary = Array.isArray(data?.results) && data.results.length
                 ? data.results.map((item) => `${item.step || 'step'}:${item.status || 'ok'}`).join(', ')
                 : 'Nightly chain triggered.';
             setApplyFeedback({ variant: 'success', message: `Nightly chain started. ${summary}` });
         } catch (e: any) {
-            setApplyFeedback({ variant: 'danger', message: e?.message || 'Failed to run nightly chain.' });
+            console.error('Weekly planner nightly orchestration failed', e);
+            setApplyFeedback({ variant: 'danger', message: normalizeCallableError(e, 'Failed to run nightly chain.') });
         } finally {
             setNightlyRunning(false);
+        }
+    };
+
+    const seedSelectedWeek = async () => {
+        if (!currentUser) return;
+        setSeedLoading(true);
+        setApplyFeedback(null);
+        try {
+            const res = await seedNextWeekPlannerOverridesFn({ targetWeekKey: selectedWeekKey });
+            const data = res?.data as { status?: string; source?: string; reason?: string };
+            if (data?.status === 'seeded') {
+                await loadAllocations();
+                setApplyFeedback({
+                    variant: 'success',
+                    message: `Seeded ${selectedWeekLabel} from ${data?.source || 'template'}.`,
+                });
+            } else if (data?.reason === 'already_seeded') {
+                setApplyFeedback({
+                    variant: 'info',
+                    message: `${selectedWeekLabel} already has a saved override.`,
+                });
+            } else {
+                setApplyFeedback({
+                    variant: 'info',
+                    message: data?.reason
+                        ? `No seed applied for ${selectedWeekLabel}: ${data.reason.replace(/_/g, ' ')}.`
+                        : `No seed applied for ${selectedWeekLabel}.`,
+                });
+            }
+        } catch (e: any) {
+            console.error(e);
+            setApplyFeedback({ variant: 'danger', message: e?.message || 'Failed to seed the selected week.' });
+        } finally {
+            setSeedLoading(false);
         }
     };
 
@@ -358,7 +592,7 @@ const WeeklyThemePlanner: React.FC = () => {
         });
 
         const nextAllocations: Allocation[] = [...otherAllocations, ...updatedDayAllocations];
-        if (theme !== 'Clear') {
+        if (theme !== CLEAR_THEME_OPTION) {
             nextAllocations.push({
                 dayOfWeek: day,
                 startTime: startStr,
@@ -373,18 +607,16 @@ const WeeklyThemePlanner: React.FC = () => {
     };
 
     const commitAllocations = async (nextAllocations: Allocation[]) => {
+        if (!currentUser) return;
         setAllocations(nextAllocations);
         setShowModal(false);
         setPendingSelection(null);
         clearDragState();
-        setSaving(true);
-        try {
-            await saveAllocationsFn({ allocations: nextAllocations });
-        } catch (e) {
-            console.error('save allocations failed', e);
-        } finally {
-            setSaving(false);
-        }
+        const nextOverrides = {
+            ...weeklyOverrides,
+            [selectedWeekKey]: cloneAllocations(nextAllocations),
+        };
+        await persistPlan(templateAllocations, nextOverrides);
     };
 
     const finalizeSelection = async () => {
@@ -426,7 +658,7 @@ const WeeklyThemePlanner: React.FC = () => {
             day: dragAlloc.dayOfWeek,
             startMinutes: originalStart,
             endMinutes: originalEnd,
-            theme: 'Clear',
+            theme: CLEAR_THEME_OPTION,
             subTheme: null,
         });
         next = applySelectionToAllocations(next, {
@@ -490,32 +722,179 @@ const WeeklyThemePlanner: React.FC = () => {
     };
 
     const getThemeColor = (themeName: string) => {
+        const isDarkTheme = typeof document !== 'undefined'
+            && document.documentElement.getAttribute('data-theme') === 'dark';
         const theme = themeOptions.find(t => t.name === themeName || t.label === themeName);
-        return theme ? theme.lightColor : '#f1f3f4';
+        if (!theme) return isDarkTheme ? 'var(--panel)' : '#f1f3f4';
+        if (isDarkTheme) return theme.darkColor || theme.color || theme.lightColor || 'var(--panel)';
+        return theme.lightColor || theme.color || '#f1f3f4';
     };
 
     if (loading) return <div className="p-5 text-center"><Spinner animation="border" /></div>;
 
     return (
         <Container fluid className="p-4">
-            <div className="d-flex justify-content-between align-items-center mb-4">
-                <div>
-                    <h2>Weekly Plan</h2>
-                    <p className="text-muted">Define your ideal week by assigning themes to time blocks. The AI will prioritize these themes when scheduling.</p>
-                    <small className="text-muted d-block">Tip: click and drag across time slots to create. Use the top/bottom handles to resize and drag the label to move. Use Clear to remove only the selected range.</small>
-                </div>
-                <div className="d-flex flex-wrap gap-2">
-                    <Button onClick={saveAllocations} disabled={saving || applying}>
-                    {saving ? <Spinner size="sm" animation="border" className="me-2" /> : <Save size={18} className="me-2" />}
-                    Save Changes
+            <div className="mb-3">
+                <h2 className="mb-2">Weekly Plan</h2>
+                <div style={{ display: 'flex', flexWrap: 'nowrap', gap: 8, overflowX: 'auto', paddingBottom: 4, alignItems: 'center' }}>
+                    <Button
+                        variant={fitnessBlocksAutoCreate ? 'success' : 'outline-secondary'}
+                        size="sm"
+                        onClick={async () => {
+                            const next = !fitnessBlocksAutoCreate;
+                            setFitnessBlocksAutoCreate(next);
+                            await saveProfileSettings({ fitnessBlocksAutoCreate: next });
+                        }}
+                        disabled={savingSettings}
+                        title="Toggle whether the AI auto-creates fitness sub-blocks (e.g. Walk, Run) from your weekly plan. Off = manage them manually in GCal."
+                        style={{ whiteSpace: 'nowrap' }}
+                    >
+                        🏃 Fitness {fitnessBlocksAutoCreate ? 'On' : 'Off'}
                     </Button>
-                    <Button variant="outline-primary" onClick={applyPlannerBlocksNow} disabled={saving || applying}>
-                        {applying ? <Spinner size="sm" animation="border" className="me-2" /> : null}
+                    <Button
+                        variant={planningMode === 'smart' ? 'primary' : 'outline-primary'}
+                        size="sm"
+                        onClick={async () => {
+                            const next = planningMode === 'smart' ? 'strict' : 'smart';
+                            setPlanningMode(next);
+                            await saveProfileSettings({ plannerMode: next });
+                        }}
+                        disabled={savingSettings}
+                        title={planningMode === 'smart'
+                            ? 'Smart (active): Top 3 priorities scheduled first. ALWAYS respects user calendar plus Fitness and Work (Main Gig) blocks as hard constraints. Planned blocks act as theme hints and free time is used for auto-scheduling.'
+                            : 'Strict (active): Fully respects planned blocks AND user calendar. Events are only inserted into their designated planned block window.'}
+                        style={{ whiteSpace: 'nowrap' }}
+                    >
+                        {planningMode === 'smart' ? 'Smart' : 'Strict'}
+                    </Button>
+                    <Button
+                        size="sm"
+                        onClick={saveAllocations}
+                        disabled={saving || applying || deltaReplanLoading || nightlyRunning || seedLoading}
+                        title="Save the currently selected week layout as this week's override."
+                        style={{ whiteSpace: 'nowrap' }}
+                    >
+                        {saving ? <Spinner size="sm" animation="border" className="me-2" /> : <Save size={14} className="me-1" />}
+                        Save Week Plan
+                    </Button>
+                    <Dropdown>
+                        <Dropdown.Toggle
+                            size="sm"
+                            variant="outline-secondary"
+                            disabled={saving || applying || deltaReplanLoading || nightlyRunning || seedLoading}
+                            title="Template actions: copy, seed, reset, or save default template."
+                            style={{ whiteSpace: 'nowrap' }}
+                        >
+                            Template Actions
+                        </Dropdown.Toggle>
+                        <Dropdown.Menu>
+                            <Dropdown.Item
+                                onClick={copyPreviousWeek}
+                                title="Copy the previous week's allocations into this week before making changes."
+                            >
+                                Copy Previous Week
+                            </Dropdown.Item>
+                            <Dropdown.Item
+                                onClick={seedSelectedWeek}
+                                title="Seed this week from prior data; falls back to default template when needed."
+                            >
+                                {seedLoading ? 'Seeding… ' : ''}Auto-seed Selected Week
+                            </Dropdown.Item>
+                            <Dropdown.Item
+                                onClick={resetWeekToTemplate}
+                                disabled={!hasWeekOverride}
+                                title="Remove this week's override and use the default template."
+                            >
+                                Use Default Template
+                            </Dropdown.Item>
+                            <Dropdown.Item
+                                onClick={saveAsDefaultTemplate}
+                                title="Save the current week layout as the reusable default template."
+                            >
+                                Save as Default Template
+                            </Dropdown.Item>
+                        </Dropdown.Menu>
+                    </Dropdown>
+                    <Button
+                        size="sm"
+                        variant="outline-primary"
+                        onClick={applyPlannerBlocksNow}
+                        disabled={saving || applying || deltaReplanLoading || nightlyRunning || seedLoading}
+                        title="Apply Planner Blocks Now: materializes Fitness and Work (Main Gig) allocations into calendar blocks for the next 7 days."
+                        style={{ whiteSpace: 'nowrap' }}
+                    >
+                        {applying ? <Spinner size="sm" animation="border" className="me-1" /> : null}
                         Apply Planner Blocks Now
                     </Button>
-                    <Button variant="outline-secondary" onClick={() => window.open('https://bob.jc1.tech/calendar/planner', '_blank', 'noopener,noreferrer')} disabled={saving || applying}>
+                    <Button
+                        size="sm"
+                        variant="outline-secondary"
+                        onClick={replanAroundCalendar}
+                        disabled={saving || applying || deltaReplanLoading || nightlyRunning || seedLoading}
+                        title="Replan Around Calendar (Delta): rebalances existing calendar blocks around your latest priorities and planner changes."
+                        style={{ whiteSpace: 'nowrap' }}
+                    >
+                        {deltaReplanLoading ? <Spinner size="sm" animation="border" className="me-1" /> : <RefreshCw size={14} className="me-1" />}
                         Replan Around Calendar
                     </Button>
+                    <Button
+                        size="sm"
+                        variant="primary"
+                        onClick={runNightlyChainNow}
+                        disabled={saving || applying || deltaReplanLoading || nightlyRunning || seedLoading}
+                        title="Full replan: runs the complete nightly orchestration (pointing, conversions, priority scoring, and calendar planning)."
+                        style={{ whiteSpace: 'nowrap' }}
+                    >
+                        {nightlyRunning ? <Spinner size="sm" animation="border" className="me-1" /> : <Sparkles size={14} className="me-1" />}
+                        Full replan
+                    </Button>
+                    <Dropdown>
+                        <Dropdown.Toggle size="sm" variant="outline-secondary" id="weekly-nav-dropdown" title="Navigation shortcuts to calendar and overview.">
+                            Navigate
+                        </Dropdown.Toggle>
+                        <Dropdown.Menu>
+                            <Dropdown.Item onClick={() => navigate('/calendar')} title="Open calendar view.">
+                                <CalendarIcon size={14} className="me-1" />
+                                View calendar
+                            </Dropdown.Item>
+                            <Dropdown.Item onClick={() => navigate('/dashboard')} title="Open overview dashboard.">
+                                <LayoutDashboard size={14} className="me-1" />
+                                View overview
+                            </Dropdown.Item>
+                        </Dropdown.Menu>
+                    </Dropdown>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, overflowX: 'auto', paddingBottom: 4, marginTop: 8 }}>
+                    <span className="text-muted small" style={{ whiteSpace: 'nowrap' }} title="Select which week to edit.">Week:</span>
+                    {weekOptions.map((option) => (
+                        <Button
+                            key={option.key}
+                            size="sm"
+                            variant={option.key === selectedWeekKey ? 'primary' : 'outline-secondary'}
+                            onClick={() => setSelectedWeekKey(option.key)}
+                            disabled={saving || applying || deltaReplanLoading || nightlyRunning || seedLoading}
+                            title={`Switch to ${option.label}.`}
+                            style={{ whiteSpace: 'nowrap' }}
+                        >
+                            {option.label}
+                        </Button>
+                    ))}
+                    <span
+                        title={hasWeekOverride ? 'This week has its own saved override.' : 'This week is inheriting from your default template.'}
+                        style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            padding: '2px 8px',
+                            borderRadius: 999,
+                            backgroundColor: hasWeekOverride ? 'rgba(37, 99, 235, 0.12)' : 'rgba(100, 116, 139, 0.12)',
+                            color: hasWeekOverride ? '#2563eb' : 'var(--bs-secondary)',
+                            fontSize: 12,
+                            fontWeight: 600,
+                            whiteSpace: 'nowrap',
+                        }}
+                    >
+                        {hasWeekOverride ? 'Week override active' : 'Using default template'}
+                    </span>
                 </div>
             </div>
 
@@ -546,7 +925,7 @@ const WeeklyThemePlanner: React.FC = () => {
                                 <div
                                     key={dIndex}
                                     className={cellClasses}
-                                    style={{ backgroundColor: alloc ? getThemeColor(alloc.theme) : 'white' }}
+                                    style={{ backgroundColor: alloc ? getThemeColor(alloc.theme) : 'var(--panel)' }}
                                     onMouseDown={(e) => {
                                         e.preventDefault();
                                         beginSelection(dIndex, slot);
@@ -606,6 +985,7 @@ const WeeklyThemePlanner: React.FC = () => {
                     <Form.Group>
                     <Form.Label>Select Theme for this time range</Form.Label>
                     <Form.Select
+                        title="Choose which theme this selected time range should represent."
                         value={selectedTheme}
                         onChange={e => {
                             const next = e.target.value;
@@ -614,12 +994,13 @@ const WeeklyThemePlanner: React.FC = () => {
                         }}
                     >
                         {themeOptions.map(t => <option key={t.id} value={t.name}>{t.label}</option>)}
-                        <option value="Clear">Clear (No Theme)</option>
+                        <option value={CLEAR_THEME_OPTION}>Clear (No Theme)</option>
                     </Form.Select>
                     {isHealthTheme(selectedTheme) && (
                         <Form.Group className="mt-3">
                             <Form.Label>Fitness subtype</Form.Label>
                             <Form.Select
+                                title="Optional subtype for health/fitness blocks (for clearer scheduling labels)."
                                 value={selectedSubTheme}
                                 onChange={(e) => setSelectedSubTheme(e.target.value)}
                             >
@@ -636,10 +1017,11 @@ const WeeklyThemePlanner: React.FC = () => {
                 <Button
                     variant="secondary"
                     onClick={handleModalClose}
+                    title="Close without applying changes."
                 >
                     Cancel
                 </Button>
-                    <Button variant="primary" onClick={handleSaveTheme}>Set Theme</Button>
+                    <Button variant="primary" onClick={handleSaveTheme} title="Apply selected theme to the highlighted time range.">Set Theme</Button>
                 </Modal.Footer>
             </Modal>
         </Container>

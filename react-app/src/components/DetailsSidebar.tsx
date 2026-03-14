@@ -7,6 +7,7 @@ import { normalizePriorityValue } from '../utils/priorityUtils';
 import { themeVars } from '../utils/themeVars';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { resolveThemeFromValue } from '../utils/themeResolver';
+import { parsePointsValue } from '../utils/points';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from '../firebase';
 
@@ -72,7 +73,11 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
   }
 
   const handleSave = () => {
-    onUpdate(editForm);
+    const updates = { ...editForm };
+    if (type === 'story') {
+      updates.points = parsePointsValue(updates.points) ?? 1;
+    }
+    onUpdate(updates);
     setIsEditing(false);
   };
 
@@ -338,10 +343,13 @@ const DetailsSidebar: React.FC<DetailsSidebarProps> = ({
                 {isEditing ? (
                   <Form.Control
                     type="number"
-                    min="1"
-                    max="13"
-                    value={editForm.points || 1}
-                    onChange={(e) => setEditForm({ ...editForm, points: parseInt(e.target.value) })}
+                    step="any"
+                    inputMode="decimal"
+                    value={editForm.points ?? ''}
+                    onChange={(e) => setEditForm({
+                      ...editForm,
+                      points: e.target.value,
+                    })}
                   />
                 ) : (
                   <Badge bg="info" style={{ fontSize: '14px', padding: '8px 12px' }}>

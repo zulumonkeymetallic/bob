@@ -11,12 +11,23 @@ import { formatDistanceToNow } from 'date-fns';
 interface ProfileData {
   googleCalendarLastSyncAt?: any;
   googleCalendarEventCount?: number;
+  defaultJournalDocUrl?: string;
+  journalEditorPrompt?: string;
+  aiPersonality?: {
+    intelligence?: number;
+    humour?: number;
+    sarcasm?: number;
+    directness?: number;
+    warmth?: number;
+    verbosity?: number;
+  };
   monzoConnected?: boolean;
   monzoLastSyncAt?: any;
   stravaConnected?: boolean;
   stravaLastSyncAt?: any;
   stravaAutoSync?: boolean;
   autoEnrichStravaHR?: boolean;
+  excludeWithDadFromMetrics?: boolean;
   traktUser?: string;
   traktLastSyncAt?: any;
   traktConnected?: boolean;
@@ -78,6 +89,15 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
   const [googleEvents, setGoogleEvents] = useState<any[]>([]);
   const [googleLoading, setGoogleLoading] = useState(false);
   const [showCalendarManager, setShowCalendarManager] = useState(false);
+  const [defaultJournalDocUrl, setDefaultJournalDocUrl] = useState('');
+  const [journalEditorPrompt, setJournalEditorPrompt] = useState('');
+    const defaultPersonality = { intelligence: 5, humour: 5, sarcasm: 5, directness: 7, warmth: 5, verbosity: 5 };
+    const [aiPersonality, setAiPersonality] = useState({ ...defaultPersonality });
+    const [personalityMessage, setPersonalityMessage] = useState<string | null>(null);
+    const [personalitySaving, setPersonalitySaving] = useState(false);
+  const [googleDocMessage, setGoogleDocMessage] = useState<string | null>(null);
+  const [googleDocsStatus, setGoogleDocsStatus] = useState<any | null>(null);
+  const [googleDocsTesting, setGoogleDocsTesting] = useState(false);
 
   const [monzoTotals, setMonzoTotals] = useState<typeof defaultTotals>(defaultTotals);
   const [monzoTransactions, setMonzoTransactions] = useState<MonzoTransactionPreview[]>([]);
@@ -88,8 +108,6 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
   const [monzoPots, setMonzoPots] = useState<Record<string, { name: string }>>({});
 
   const [stravaActivities, setStravaActivities] = useState<any[]>([]);
-  const [stravaMessage, setStravaMessage] = useState<string | null>(null);
-  const [stravaLoading, setStravaLoading] = useState(false);
 
   const [steamGames, setSteamGames] = useState<any[]>([]);
   const [steamMessage, setSteamMessage] = useState<string | null>(null);
@@ -151,6 +169,11 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
     const unsub = onSnapshot(doc(db, 'profiles', currentUser.uid), (snap) => {
       const data = snap.data() as ProfileData | undefined;
       setProfile(data || null);
+      setDefaultJournalDocUrl(data?.defaultJournalDocUrl || '');
+      setJournalEditorPrompt(data?.journalEditorPrompt || '');
+            if (data?.aiPersonality) {
+              setAiPersonality({ ...defaultPersonality, ...data.aiPersonality });
+            }
       if (data?.steamId) setSteamIdInput(data.steamId);
       if (data?.traktUser) setTraktUserInput(data.traktUser);
       if ((data as any)?.hardcoverToken) setHardcoverTokenInput((data as any).hardcoverToken);
@@ -330,7 +353,7 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
   }, [currentUser]);
 
   const connectGoogle = () => {
-    if (!profile || !currentUser) return;
+    if (!currentUser) return;
     const nonce = Math.random().toString(36).slice(2);
     const region = 'europe-west2';
     const projectId = firebaseConfig.projectId;
@@ -359,6 +382,27 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
       setGoogleEvents([]);
     } finally {
       setGoogleLoading(false);
+    }
+  };
+
+  const testGoogleDocs = async () => {
+    if (!currentUser) return;
+    setGoogleDocsTesting(true);
+    setGoogleDocsStatus(null);
+    try {
+      const fn = httpsCallable(functions, 'checkGoogleDocsAccess');
+      const res = await fn({ docUrl: defaultJournalDocUrl.trim() || null });
+      setGoogleDocsStatus((res.data as any) || null);
+    } catch (err: any) {
+      console.error('checkGoogleDocsAccess failed', err);
+      setGoogleDocsStatus({
+        ok: false,
+        code: err?.code || 'unknown',
+        message: err?.message || 'Failed to test Google Docs access.',
+        steps: [],
+      });
+    } finally {
+      setGoogleDocsTesting(false);
     }
   };
 
@@ -471,23 +515,6 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
         }
       }, 800);
       trackPopupTimer(timer);
-    }
-  };
-
-  const syncStrava = async () => {
-    if (!currentUser) return;
-    setStravaLoading(true);
-    setStravaMessage(null);
-    try {
-      const fn = httpsCallable(functions, 'syncStrava');
-      const res = await fn({});
-      const data = res.data as any;
-      setStravaMessage(`Imported ${data?.imported || 0} activities`);
-    } catch (err: any) {
-      console.error('syncStrava failed', err);
-      setStravaMessage(err?.message || 'Strava sync failed');
-    } finally {
-      setStravaLoading(false);
     }
   };
 
@@ -734,14 +761,91 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
             <i className="fas fa-stream me-2"></i>
             Integration Logs
           </Button>
+          <Button variant="outline-secondary" size="sm" className="ms-2" onClick={() => navigate('/logs/transcripts')}>
+            <i className="fas fa-file-alt me-2"></i>
+            Transcript Logs
+          </Button>
         </div>
       </div>
+
+      <Card>
+        <Card.Header>
+          <h4 className="mb-0">AI Personality</h4>
+          <small className="text-muted">Personalise the tone and style of AI responses across transcripts, daily digest, and all AI features</small>
+        </Card.Header>
+        <Card.Body>
+          {personalityMessage && (
+            <Alert variant={personalityMessage.startsWith('Saved') ? 'success' : 'danger'} dismissible onClose={() => setPersonalityMessage(null)}>
+              {personalityMessage}
+            </Alert>
+          )}
+          <Row className="g-4">
+            {([
+              { key: 'intelligence', label: 'Intelligence', low: 'Plain language', high: 'Expert vocabulary' },
+              { key: 'humour', label: 'Humour', low: 'None', high: 'Witty' },
+              { key: 'sarcasm', label: 'Sarcasm', low: 'None', high: 'Dry & sarcastic' },
+              { key: 'directness', label: 'Directness', low: 'Explanatory', high: 'Blunt' },
+              { key: 'warmth', label: 'Warmth', low: 'Neutral', high: 'Warm & encouraging' },
+              { key: 'verbosity', label: 'Verbosity', low: 'Terse', high: 'Detailed' },
+            ] as const).map(({ key, label, low, high }) => (
+              <Col key={key} md={6}>
+                <Form.Label className="d-flex justify-content-between mb-1">
+                  <span>{label}</span>
+                  <Badge bg="secondary">{aiPersonality[key]}</Badge>
+                </Form.Label>
+                <Form.Range
+                  min={0}
+                  max={10}
+                  step={1}
+                  value={aiPersonality[key]}
+                  onChange={(e) => setAiPersonality((prev) => ({ ...prev, [key]: Number(e.target.value) }))}
+                />
+                <div className="d-flex justify-content-between">
+                  <small className="text-muted">{low}</small>
+                  <small className="text-muted">{high}</small>
+                </div>
+              </Col>
+            ))}
+          </Row>
+          <div className="d-flex gap-2 mt-4 align-items-center">
+            <Button
+              variant="outline-primary"
+              disabled={personalitySaving}
+              onClick={async () => {
+                try {
+                  setPersonalitySaving(true);
+                  setPersonalityMessage(null);
+                  await updateProfile({ aiPersonality });
+                  setPersonalityMessage('Saved. AI responses will reflect your style on the next generation.');
+                } catch (err: any) {
+                  setPersonalityMessage(err?.message || 'Failed to save personality settings.');
+                } finally {
+                  setPersonalitySaving(false);
+                }
+              }}
+            >
+              {personalitySaving ? <><Spinner size="sm" animation="border" className="me-1" />Saving…</> : 'Save Personality'}
+            </Button>
+            <Button
+              variant="link"
+              size="sm"
+              onClick={() => setAiPersonality({ ...defaultPersonality })}
+            >
+              Reset to defaults
+            </Button>
+          </div>
+          <Form.Text className="text-muted d-block mt-2">
+            These settings feed into every AI prompt — transcripts, daily digest, task enrichment, stories, and more. Values at 5 are neutral and produce no change.
+          </Form.Text>
+        </Card.Body>
+      </Card>
+
       {show('google') && (
       <Card>
         <Card.Header className="d-flex justify-content-between align-items-center">
           <div>
-            <h4 className="mb-0">Google Calendar</h4>
-            <small>Auto-import hourly + manual sync</small>
+            <h4 className="mb-0">Google Calendar & Docs</h4>
+            <small>Calendar sync plus Google Docs journal append</small>
           </div>
           <Badge bg={googleConnected ? 'success' : 'secondary'}>
             {googleConnected ? 'Connected' : 'Not Connected'}
@@ -757,13 +861,16 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
               <Button variant="outline-primary" className="me-2" onClick={connectGoogle}>
                 {googleConnected ? 'Reconnect' : 'Connect'}
               </Button>
+              <Button variant="outline-secondary" className="me-2" onClick={testGoogleDocs} disabled={googleDocsTesting}>
+                {googleDocsTesting ? <Spinner size="sm" animation="border" className="me-2" /> : null}
+                Test Doc Access
+              </Button>
               <Button variant="primary" onClick={testGoogle} disabled={googleLoading}>
                 {googleLoading ? <Spinner size="sm" animation="border" className="me-2" /> : null}
                 Fetch Upcoming Events
               </Button>
             </Col>
           </Row>
-
           {googleEvents.length > 0 && (
             <Table size="sm" responsive className="mb-3">
               <thead>
@@ -782,6 +889,89 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
               </tbody>
             </Table>
           )}
+
+          <hr />
+          <Row className="g-3 align-items-end">
+            <Col md={9}>
+              <Form.Label>Default Journal Google Doc URL</Form.Label>
+              <Form.Control
+                type="url"
+                placeholder="https://docs.google.com/document/d/..."
+                value={defaultJournalDocUrl}
+                onChange={(event) => setDefaultJournalDocUrl(event.target.value)}
+              />
+              <Form.Text className="text-muted">
+                Transcript intake appends to this document. Reconnect Google if you have not yet granted Google Docs access.
+              </Form.Text>
+            </Col>
+            <Col md={3} className="d-grid">
+              <Button
+                variant="outline-secondary"
+                onClick={async () => {
+                  try {
+                    setGoogleDocMessage(null);
+                    await updateProfile({ defaultJournalDocUrl: defaultJournalDocUrl.trim() || null });
+                    setGoogleDocMessage('Default journal doc saved.');
+                  } catch (error: any) {
+                    setGoogleDocMessage(error?.message || 'Failed to save the default journal doc URL.');
+                  }
+                }}
+              >
+                Save Doc URL
+              </Button>
+            </Col>
+          </Row>
+          {googleDocMessage && <Alert variant="info" className="mt-3 mb-0">{googleDocMessage}</Alert>}
+          {googleDocsStatus && (
+            <Alert variant={googleDocsStatus.ok ? 'success' : 'warning'} className="mt-3 mb-0">
+              <div><strong>{googleDocsStatus.ok ? 'Google Docs ready' : 'Google Docs needs attention'}</strong></div>
+              <div>{googleDocsStatus.message}</div>
+              {googleDocsStatus.title && <div className="mt-1"><strong>Document:</strong> {googleDocsStatus.title}</div>}
+              {Array.isArray(googleDocsStatus.steps) && googleDocsStatus.steps.length > 0 && (
+                <ul className="mb-0 mt-2">
+                  {googleDocsStatus.steps.map((step: string, index: number) => (
+                    <li key={`${googleDocsStatus.code || 'step'}_${index}`}>{step}</li>
+                  ))}
+                </ul>
+              )}
+            </Alert>
+          )}
+
+          <hr />
+          <Row className="g-3 align-items-end">
+            <Col md={9}>
+              <Form.Label>Journal Editor Prompt Override</Form.Label>
+              <Form.Control
+                as="textarea"
+                rows={7}
+                placeholder="Optional. Add your own journal editing instructions for transcript processing."
+                value={journalEditorPrompt}
+                onChange={(event) => setJournalEditorPrompt(event.target.value)}
+              />
+              <Form.Text className="text-muted">
+                This is appended to the built-in journal processing prompt. Use it for deltas only, such as house style or extra analytical emphasis, rather than repeating the full base prompt. It only affects journal or mixed transcript entries and does not override the required JSON schema or faithfulness rules.
+              </Form.Text>
+            </Col>
+            <Col md={3} className="d-grid">
+              <Button
+                variant="outline-secondary"
+                onClick={async () => {
+                  try {
+                    setGoogleDocMessage(null);
+                    await updateProfile({ journalEditorPrompt: journalEditorPrompt.trim() || null });
+                    setGoogleDocMessage('Journal editor prompt saved.');
+                  } catch (error: any) {
+                    setGoogleDocMessage(error?.message || 'Failed to save the journal editor prompt.');
+                  }
+                }}
+              >
+                Save Prompt
+              </Button>
+            </Col>
+          </Row>
+          <Form.Text className="text-muted d-block mt-2">
+            Built-in base behavior: classify journal vs task list vs URL, keep journal prose highly faithful, remove filler words and dictation glitches, structure it cleanly, and extract only clearly actionable tasks or stories.
+          </Form.Text>
 
           <Button variant="link" onClick={() => setShowCalendarManager((v) => !v)}>
             {showCalendarManager ? 'Hide advanced options' : 'Show advanced options'}
@@ -967,19 +1157,23 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
                 checked={!!profile?.stravaAutoSync}
                 onChange={(e) => updateProfile({ stravaAutoSync: e.target.checked })}
               />
+              <Form.Check
+                type="switch"
+                id="strava-exclude-dad-metrics"
+                label="Exclude workouts with 'dad' in title/name/event from fitness metrics"
+                checked={profile?.excludeWithDadFromMetrics !== false}
+                onChange={(e) => updateProfile({ excludeWithDadFromMetrics: e.target.checked })}
+              />
             </Col>
             <Col md={6} className="text-md-end mt-3 mt-md-0">
               <Button variant="outline-primary" className="me-2" onClick={connectStrava}>
                 {stravaConnected ? 'Reconnect' : 'Connect'}
               </Button>
-              <Button variant="primary" onClick={syncStrava} disabled={stravaLoading}>
-                {stravaLoading ? <Spinner size="sm" animation="border" className="me-2" /> : null}
-                Sync Now
-              </Button>
             </Col>
           </Row>
-
-          {stravaMessage && <Alert variant="info">{stravaMessage}</Alert>}
+          <Alert variant="light" className="mb-3">
+            Strava data sync is automatic (daily schedule). No manual sync action is required.
+          </Alert>
 
           <h6>Recent Activities</h6>
           {stravaActivities.length === 0 ? (

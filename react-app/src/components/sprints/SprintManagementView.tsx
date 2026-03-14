@@ -78,8 +78,8 @@ const SprintManagementView = () => {
   const sprintForCharts: Sprint | null = selectedSprint || sprints[0] || null;
 
   const sprintStories = sprintForCharts ? stories.filter((s) => s.sprintId === sprintForCharts.id) : [];
-  const sprintPointsTotal = sprintStories.reduce((sum, s) => sum + (s.points || 0), 0);
-  const sprintPointsDone = sprintStories.filter((s) => s.status === 4).reduce((sum, s) => sum + (s.points || 0), 0);
+  const sprintPointsTotal = sprintStories.reduce((sum, s) => sum + (Number.isFinite(Number(s.points)) ? Number(s.points) : 0), 0);
+  const sprintPointsDone = sprintStories.filter((s) => s.status === 4).reduce((sum, s) => sum + (Number.isFinite(Number(s.points)) ? Number(s.points) : 0), 0);
 
   const burndownData = React.useMemo(() => {
     if (!sprintForCharts) return [];
@@ -108,8 +108,8 @@ const SprintManagementView = () => {
     const sorted = [...sprints].sort((a, b) => (b.endDate ?? 0) - (a.endDate ?? 0)).slice(0, 5);
     return sorted.map((s) => {
       const relatedStories = stories.filter((st) => st.sprintId === s.id);
-      const totalPts = relatedStories.reduce((sum, st) => sum + (st.points || 0), 0);
-      const donePts = relatedStories.filter((st) => st.status === 4).reduce((sum, st) => sum + (st.points || 0), 0);
+      const totalPts = relatedStories.reduce((sum, st) => sum + (Number.isFinite(Number(st.points)) ? Number(st.points) : 0), 0);
+      const donePts = relatedStories.filter((st) => st.status === 4).reduce((sum, st) => sum + (Number.isFinite(Number(st.points)) ? Number(st.points) : 0), 0);
       const days = Math.max(1, Math.ceil((Number(s.endDate) - Number(s.startDate)) / (1000 * 60 * 60 * 24)));
       const velocity = donePts / days;
       return {
@@ -494,7 +494,7 @@ const SprintManagementView = () => {
                         </div>
                         <div className="text-end">
                           <small className="text-muted d-block">
-                            {getSprintStories().length} stories • {getSprintStories().reduce((sum, s) => sum + (s.points || 0), 0)} points
+                            {getSprintStories().length} stories • {getSprintStories().reduce((sum, s) => sum + (Number.isFinite(Number(s.points)) ? Number(s.points) : 0), 0)} points
                           </small>
                         </div>
                       </div>

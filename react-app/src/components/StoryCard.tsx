@@ -42,6 +42,11 @@ const StoryCard: React.FC<StoryCardProps> = ({ story, index }) => {
                 {themeLabel}
               </span>
             )}
+            {((story as any).gcalLinked || (story as any).gcalEventCount > 0) && (
+              <span className="badge bg-info text-dark" style={{ fontSize: '0.65rem' }} title="Linked to calendar event">
+                📅 Planned
+              </span>
+            )}
             <button
               className="btn btn-sm btn-outline-primary"
               style={{ padding: '2px 6px' }}

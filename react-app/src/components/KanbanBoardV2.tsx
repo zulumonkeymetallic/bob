@@ -5,7 +5,7 @@ import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useSprint } from '../contexts/SprintContext';
-import { Story, Task, Goal, Sprint } from '../types';
+import { Story, Task, Goal, Sprint, CalendarBlock } from '../types';
 import type { GlobalTheme } from '../constants/globalThemes';
 import KanbanColumnV2 from './KanbanColumnV2';
 import KanbanCardV2 from './KanbanCardV2';
@@ -14,6 +14,8 @@ import { isStatus } from '../utils/statusHelpers';
 import { isCriticalPriority } from '../utils/priorityUtils';
 import { useActivityTracking } from '../hooks/useActivityTracking';
 import { formatTaskTagLabel } from '../utils/tagDisplay';
+import '../styles/KanbanCards.css';
+import '../styles/KanbanFixes.css';
 
 interface KanbanBoardV2Props {
     sprintId?: string | null;
@@ -26,6 +28,16 @@ interface KanbanBoardV2Props {
     dueFilter?: 'all' | 'today' | 'overdue' | 'top3' | 'critical';
     sortBy?: 'ai' | 'due' | 'priority' | 'default';
     themes?: GlobalTheme[];
+}
+
+interface ScheduledBlockInfo {
+    id: string;
+    start: number;
+    end: number;
+    title?: string;
+    sourceNote?: string;
+    matchConfidence?: number;
+    matchConfidenceTier?: string;
 }
 
 const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
@@ -52,6 +64,7 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
     const [latestNotesById, setLatestNotesById] = useState<Record<string, string>>({});
     const [steamByAppId, setSteamByAppId] = useState<Record<string, any>>({});
     const [steamLastSyncAt, setSteamLastSyncAt] = useState<any>(null);
+    const [scheduledBlocksByEntity, setScheduledBlocksByEntity] = useState<Record<string, ScheduledBlockInfo>>({});
     const formatTag = (tag: string) => formatTaskTagLabel(tag, goals, sprints);
 
     // Data fetching
@@ -173,6 +186,70 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
         };
     }, [currentUser]);
 
+    useEffect(() => {
+        if (!currentUser?.uid) {
+            setScheduledBlocksByEntity({});
+            return undefined;
+        }
+
+        const blocksQuery = query(
+            collection(db, 'calendar_blocks'),
+            where('ownerUid', '==', currentUser.uid),
+            limit(2000)
+        );
+
+        return onSnapshot(
+            blocksQuery,
+            (snapshot) => {
+                const now = Date.now();
+                const windowEnd = now + (30 * 24 * 60 * 60 * 1000);
+                const blocks = snapshot.docs
+                    .map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) }) as CalendarBlock)
+                    .filter((block) => {
+                        const start = Number(block.start);
+                        const end = Number(block.end);
+                        if (!Number.isFinite(start) || !Number.isFinite(end)) return false;
+                        if (end < now - 5 * 60 * 1000) return false;
+                        if (start > windowEnd) return false;
+                        const persona = String((block as any).persona || '').toLowerCase();
+                        if (currentPersona && persona && persona !== String(currentPersona).toLowerCase()) return false;
+                        return Boolean(block.storyId || block.taskId);
+                    })
+                    .sort((a, b) => Number(a.start) - Number(b.start));
+
+                const nextMap: Record<string, ScheduledBlockInfo> = {};
+                blocks.forEach((block) => {
+                    const key = block.taskId
+                        ? `task:${block.taskId}`
+                        : (block.storyId ? `story:${block.storyId}` : null);
+                    if (!key) return;
+                    if (nextMap[key]) return;
+                    const sourceRaw = String((block as any).calendarMatchSource || '').toLowerCase();
+                    const sourceNote = (block as any).calendarMatchNote
+                        || (sourceRaw === 'matched_user_created_calendar_event'
+                            ? 'Matched user created calendar event'
+                            : (sourceRaw === 'calendar_event_created_via_planner'
+                                ? 'Calendar event created via planner'
+                                : null));
+                    nextMap[key] = {
+                        id: block.id,
+                        start: Number(block.start),
+                        end: Number(block.end),
+                        title: block.title,
+                        sourceNote: sourceNote || undefined,
+                        matchConfidence: Number((block as any).calendarMatchConfidence || 0) || undefined,
+                        matchConfidenceTier: (block as any).calendarMatchConfidenceTier || undefined,
+                    };
+                });
+                setScheduledBlocksByEntity(nextMap);
+            },
+            (error) => {
+                console.warn('[KanbanBoardV2] scheduled blocks query error', error?.message || error);
+                setScheduledBlocksByEntity({});
+            }
+        );
+    }, [currentUser?.uid, currentPersona]);
+
     // Drag and Drop Monitor
     useEffect(() => {
         return monitorForElements({
@@ -249,16 +326,16 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
 
     // Filtering and Grouping
 
-    const isTop3Task = (task: Task): boolean => {
-        return (task as any).aiTop3ForDay === true
-            || (task as any).aiFlaggedTop === true
-            || Number((task as any).aiPriorityRank || 0) > 0;
+    const isCurrentTop3 = (item: any): boolean => {
+        if (item?.aiTop3ForDay !== true) return false;
+        const top3Date = item?.aiTop3Date;
+        if (!top3Date) return true;
+        return String(top3Date).slice(0, 10) === new Date().toISOString().slice(0, 10);
     };
 
-    const isTop3Story = (story: Story): boolean => {
-        return (story as any).aiTop3ForDay === true
-            || Number((story as any).aiFocusStoryRank || 0) > 0;
-    };
+    const isTop3Task = (task: Task): boolean => isCurrentTop3(task);
+
+    const isTop3Story = (story: Story): boolean => isCurrentTop3(story);
 
     const getItemDueMs = (item: any): number | null => {
         const raw = item?.dueDate ?? item?.targetDate ?? item?.endDate ?? item?.dueDateMs ?? null;
@@ -582,6 +659,7 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
                                 showDescription={showDescriptions}
                                 showLatestNote={showLatestNotes}
                                 latestNote={latestNotesById[item.id]}
+                                scheduledBlock={scheduledBlocksByEntity[`${type}:${item.id}`]}
                                 steamMeta={steamMeta}
                                 onEdit={() => onEdit?.(item, type)}
                                 formatTag={formatTag}

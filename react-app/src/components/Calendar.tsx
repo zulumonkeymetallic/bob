@@ -1,16 +1,26 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { Link } from 'react-router-dom';
 import { Container, Row, Col, Card, Button, Badge, Modal, Form, Spinner } from 'react-bootstrap';
 import { db, functions } from '../firebase';
-import { collection, query, where, onSnapshot, updateDoc, deleteDoc, doc, addDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
+import { collection, query, where, onSnapshot, updateDoc, deleteDoc, doc, addDoc, getDoc } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
-import { CalendarBlock, Task } from '../types';
+import { CalendarBlock, Task, Story, Goal } from '../types';
 import StoryBlock from './StoryBlock';
+import EditTaskModal from './EditTaskModal';
+import EditStoryModal from './EditStoryModal';
 import { DndContext, useDraggable, useDroppable, DragEndEvent } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
-import { ListChecks, Clock } from 'lucide-react';
+import { ListChecks, Clock, ExternalLink } from 'lucide-react';
 import { isRecurringDueOnDate, resolveRecurringDueMs, resolveTaskDueMs } from '../utils/recurringTaskDue';
+import {
+  callDeltaReplan,
+  callFullReplan,
+  formatDeltaReplanSummary,
+  formatFullReplanSummary,
+  normalizePlannerCallableError,
+} from '../utils/plannerOrchestration';
 
 // Draggable Block Wrapper
 const DraggableBlock = ({ block, children }: { block: any, children: React.ReactNode }) => {
@@ -79,7 +89,13 @@ const Calendar: React.FC = () => {
   const [choreCompletionBusy, setChoreCompletionBusy] = useState<Record<string, boolean>>({});
   const [tasksDueTodayList, setTasksDueTodayList] = useState<Task[]>([]);
   const [tasksDueTodayLoading, setTasksDueTodayLoading] = useState(false);
-  const [tasksDueTodaySortMode, setTasksDueTodaySortMode] = useState<'due' | 'ai'>('due');
+  const [tasksDueTodaySortMode, setTasksDueTodaySortMode] = useState<'due' | 'ai' | 'top3'>('due');
+  const [replanLoading, setReplanLoading] = useState(false);
+  const [fullReplanLoading, setFullReplanLoading] = useState(false);
+  const [replanFeedback, setReplanFeedback] = useState<string | null>(null);
+  const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [editingStory, setEditingStory] = useState<Story | null>(null);
+  const [goals, setGoals] = useState<Goal[]>([]);
 
   const getTaskDueMs = useCallback((task: Task): number | null => resolveTaskDueMs(task), []);
 
@@ -102,15 +118,38 @@ const Calendar: React.FC = () => {
   }, []);
 
   const getChoreKind = useCallback((task: Task): 'chore' | 'routine' | 'habit' | null => {
-    const raw = String((task as any)?.type || (task as any)?.task_type || '').toLowerCase();
+    const raw = String((task as any)?.type || (task as any)?.task_type || '').trim().toLowerCase();
     const normalized = raw === 'habitual' ? 'habit' : raw;
-    if (['chore', 'routine', 'habit'].includes(normalized)) return normalized as any;
+    if (normalized === 'chore' || normalized === 'routine' || normalized === 'habit') return normalized;
+    if (normalized) return null;
     const tags = Array.isArray((task as any)?.tags) ? (task as any).tags : [];
     const tagKeys = tags.map((tag) => String(tag || '').toLowerCase().replace(/^#/, ''));
     if (tagKeys.includes('chore')) return 'chore';
     if (tagKeys.includes('routine')) return 'routine';
     if (tagKeys.includes('habit') || tagKeys.includes('habitual')) return 'habit';
     return null;
+  }, []);
+
+  const handleOpenBlockEntity = useCallback(async (block: CalendarBlock) => {
+    const taskId: string | null = (block as any).taskId || null;
+    const storyId: string | null = (block as any).storyId || null;
+    const entityType: string = (block as any).entityType || '';
+
+    if (taskId && entityType !== 'story') {
+      try {
+        const snap = await getDoc(doc(db, 'tasks', taskId));
+        if (snap.exists()) setEditingTask({ id: snap.id, ...snap.data() } as Task);
+      } catch (e) {
+        console.warn('[Calendar] Failed to load task for edit', e);
+      }
+    } else if (storyId) {
+      try {
+        const snap = await getDoc(doc(db, 'stories', storyId));
+        if (snap.exists()) setEditingStory({ id: snap.id, ...snap.data() } as Story);
+      } catch (e) {
+        console.warn('[Calendar] Failed to load story for edit', e);
+      }
+    }
   }, []);
 
   const formatDueDetail = useCallback((dueMs: number) => {
@@ -126,6 +165,15 @@ const Calendar: React.FC = () => {
     d.setHours(0, 0, 0, 0);
     return d.getTime();
   }, []);
+
+  // Load goals (needed for EditStoryModal)
+  useEffect(() => {
+    if (!currentUser) return;
+    const q = query(collection(db, 'goals'), where('ownerUid', '==', currentUser.uid));
+    return onSnapshot(q, (snap) => {
+      setGoals(snap.docs.map((d) => ({ id: d.id, ...d.data() } as Goal)).filter((g) => !(g as any).deleted));
+    });
+  }, [currentUser]);
 
   // Load calendar blocks
   useEffect(() => {
@@ -214,7 +262,16 @@ const Calendar: React.FC = () => {
   }, [currentUser?.uid, currentPersona, getTaskDueMs, getChoreKind, getTaskLastDoneMs, todayStartMs]);
 
   const tasksDueTodaySorted = useMemo(() => {
-    const rows = [...tasksDueTodayList];
+    let rows = [...tasksDueTodayList];
+    if (tasksDueTodaySortMode === 'top3') {
+      rows = rows.filter((t) => (t as any).aiTop3ForDay === true);
+      rows.sort((a, b) => {
+        const ar = Number((a as any).aiPriorityRank || 0) || 99;
+        const br = Number((b as any).aiPriorityRank || 0) || 99;
+        return ar - br;
+      });
+      return rows;
+    }
     if (tasksDueTodaySortMode === 'ai') {
       rows.sort((a, b) => {
         const aScore = Number((a as any).aiCriticalityScore ?? (a as any).aiPriorityScore ?? 0);
@@ -301,6 +358,44 @@ const Calendar: React.FC = () => {
     setCurrentStart(newStart);
   };
 
+  const handleDeltaReplan = useCallback(async () => {
+    if (!currentUser) return;
+    setReplanFeedback(null);
+    setReplanLoading(true);
+    try {
+      const payload = await callDeltaReplan(functions, { days: 7 });
+      const parts = formatDeltaReplanSummary(payload);
+      setReplanFeedback(parts.length ? `Delta replan complete: ${parts.join(', ')}.` : 'Delta replan complete.');
+    } catch (err) {
+      console.error('Delta replan failed', err);
+      setReplanFeedback(normalizePlannerCallableError(err, 'Delta replan failed. Please retry.'));
+    } finally {
+      setReplanLoading(false);
+    }
+  }, [currentUser]);
+
+  const handleFullReplan = useCallback(async () => {
+    if (!currentUser) return;
+    setReplanFeedback(null);
+    setFullReplanLoading(true);
+    try {
+      const payload = await callFullReplan(functions, {});
+      const { total, ok } = formatFullReplanSummary(payload);
+      if (total > 0 && ok === total) {
+        setReplanFeedback(`Full replan complete: ${ok}/${total} orchestration steps succeeded.`);
+      } else if (total > 0 && ok > 0) {
+        setReplanFeedback(`Full replan partial: ${ok}/${total} orchestration steps succeeded.`);
+      } else {
+        setReplanFeedback('Full replan finished with errors. Check logs.');
+      }
+    } catch (err) {
+      console.error('Full replan failed', err);
+      setReplanFeedback(normalizePlannerCallableError(err, 'Full replan failed. Please retry.'));
+    } finally {
+      setFullReplanLoading(false);
+    }
+  }, [currentUser]);
+
   if (!currentUser) return <div>Please sign in.</div>;
 
   return (
@@ -311,9 +406,32 @@ const Calendar: React.FC = () => {
           <Button variant="outline-secondary" onClick={() => navigate(-1)} className="me-2">Prev</Button>
           <Button variant="outline-secondary" onClick={() => setCurrentStart(new Date())} className="me-2">Today</Button>
           <Button variant="outline-secondary" onClick={() => navigate(1)} className="me-2">Next</Button>
+          <Button
+            variant="outline-primary"
+            onClick={handleDeltaReplan}
+            className="me-2"
+            disabled={replanLoading || fullReplanLoading}
+            title="Delta replan: quickly rebalance existing calendar blocks using current priorities."
+          >
+            {replanLoading ? <Spinner size="sm" animation="border" className="me-1" /> : null}
+            Delta replan
+          </Button>
+          <Button
+            variant="primary"
+            onClick={handleFullReplan}
+            className="me-2"
+            disabled={fullReplanLoading || replanLoading}
+            title="Full replan: runs full nightly orchestration (pointing, conversions, priority scoring, and calendar planning)."
+          >
+            {fullReplanLoading ? <Spinner size="sm" animation="border" className="me-1" /> : null}
+            Full replan
+          </Button>
           <Button variant="primary" onClick={() => setShowCreateEvent(true)}>+ Event</Button>
         </div>
       </div>
+      {replanFeedback && (
+        <div className="text-muted small mb-3">{replanFeedback}</div>
+      )}
 
       <Row className="g-3">
         <Col lg={9} md={12}>
@@ -354,11 +472,38 @@ const Calendar: React.FC = () => {
 
                       return (
                         <DroppableSlot key={hour} date={date} hour={hour}>
-                          {slotBlocks.map(block => (
-                            <DraggableBlock key={block.id} block={block}>
-                              <StoryBlock event={{ ...block, title: block.title || 'Untitled' }} />
-                            </DraggableBlock>
-                          ))}
+                          {slotBlocks.map(block => {
+                            const hasEntity = !!(block as any).taskId || !!(block as any).storyId;
+                            return (
+                              <DraggableBlock key={block.id} block={block}>
+                                <div style={{ position: 'relative' }}>
+                                  <StoryBlock event={{ ...block, title: block.title || 'Untitled' }} />
+                                  {hasEntity && (
+                                    <button
+                                      title={(block as any).taskId ? 'Open task' : 'Open story'}
+                                      onPointerDown={(e) => e.stopPropagation()}
+                                      onClick={(e) => { e.stopPropagation(); handleOpenBlockEntity(block); }}
+                                      style={{
+                                        position: 'absolute',
+                                        top: 2,
+                                        right: 2,
+                                        background: 'rgba(255,255,255,0.85)',
+                                        border: 'none',
+                                        borderRadius: 3,
+                                        padding: '1px 3px',
+                                        cursor: 'pointer',
+                                        lineHeight: 1,
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                      }}
+                                    >
+                                      <ExternalLink size={10} color="#555" />
+                                    </button>
+                                  )}
+                                </div>
+                              </DraggableBlock>
+                            );
+                          })}
                         </DroppableSlot>
                       );
                     })}
@@ -372,16 +517,17 @@ const Calendar: React.FC = () => {
           <Card className="shadow-sm border-0 mb-3">
             <Card.Header className="d-flex align-items-center justify-content-between">
               <div className="fw-semibold d-flex align-items-center gap-2">
-                <Clock size={16} /> Tasks due today &amp; overdue
+                <Clock size={16} /> Tasks due today
               </div>
               <div className="d-flex align-items-center gap-2">
                 <Form.Select
                   size="sm"
                   value={tasksDueTodaySortMode}
-                  onChange={(e) => setTasksDueTodaySortMode(e.target.value as 'due' | 'ai')}
+                  onChange={(e) => setTasksDueTodaySortMode(e.target.value as 'due' | 'ai' | 'top3')}
                 >
                   <option value="due">Sort: Due time</option>
                   <option value="ai">Sort: AI score</option>
+                  <option value="top3">Top 3 (AI)</option>
                 </Form.Select>
                 <Badge bg={tasksDueTodaySorted.length > 0 ? 'info' : 'secondary'} pill>
                   {tasksDueTodaySorted.length}
@@ -394,29 +540,79 @@ const Calendar: React.FC = () => {
                   <Spinner size="sm" animation="border" /> Loading tasks…
                 </div>
               ) : tasksDueTodaySorted.length === 0 ? (
-                <div className="text-muted small">No tasks due today or overdue.</div>
+                <div className="text-muted small">No tasks due today.</div>
               ) : (
-                tasksDueTodaySorted.map((task) => {
-                  const dueMs = resolveRecurringDueMs(task, new Date(), todayStartMs);
-                  const dueLabel = dueMs ? formatDueDetail(dueMs) : 'today';
-                  const isOverdue = !!dueMs && dueMs < todayStartMs;
-                  const refLabel = task.ref || task.id;
-                  return (
-                    <div key={task.id} className="border rounded p-2 d-flex align-items-start gap-2">
-                      <div className="flex-grow-1">
-                        <div className="fw-semibold">
-                          <a href={`/tasks/${encodeURIComponent(refLabel)}`} className="text-decoration-none">
-                            {task.title}
-                          </a>
+                (() => {
+                  const morning: typeof tasksDueTodaySorted = [];
+                  const afternoon: typeof tasksDueTodaySorted = [];
+                  const evening: typeof tasksDueTodaySorted = [];
+                  const other: typeof tasksDueTodaySorted = [];
+
+                  tasksDueTodaySorted.forEach((task) => {
+                    const tod = (task as any).timeOfDay;
+                    if (tod === 'morning') morning.push(task);
+                    else if (tod === 'afternoon') afternoon.push(task);
+                    else if (tod === 'evening') evening.push(task);
+                    else other.push(task);
+                  });
+
+                  const renderTask = (task: any) => {
+                    const dueMs = resolveRecurringDueMs(task, new Date(), todayStartMs);
+                    const dueLabel = dueMs ? formatDueDetail(dueMs) : 'today';
+                    const isOverdue = !!dueMs && dueMs < todayStartMs;
+                    const refLabel = task.ref || task.id;
+                    return (
+                      <div key={task.id} className="border rounded p-2 mb-2 d-flex align-items-start gap-2">
+                        <div className="flex-grow-1">
+                          <div className="fw-semibold">
+                            <button
+                              type="button"
+                              className="btn btn-link p-0 text-decoration-none"
+                              onClick={() => setEditingTask(task as Task)}
+                            >
+                              {task.title}
+                            </button>
+                          </div>
+                          <div className="text-muted small d-flex align-items-center gap-1">
+                            <Clock size={12} /> {isOverdue ? `Overdue · ${dueLabel}` : `Due ${dueLabel}`}
+                          </div>
                         </div>
-                        <div className="text-muted small d-flex align-items-center gap-1">
-                          <Clock size={12} /> {isOverdue ? `Overdue · ${dueLabel}` : `Due ${dueLabel}`}
-                        </div>
+                        {isOverdue && <Badge bg="danger">Overdue</Badge>}
                       </div>
-                      {isOverdue && <Badge bg="danger">Overdue</Badge>}
-                    </div>
+                    );
+                  };
+
+                  return (
+                    <>
+                      {morning.length > 0 && (
+                        <div className="mb-2">
+                          <h6 className="text-muted mb-2 border-bottom pb-1 fw-bold"><small>Morning</small></h6>
+                          {morning.map((task) => renderTask(task))}
+                        </div>
+                      )}
+                      {afternoon.length > 0 && (
+                        <div className="mb-2">
+                          <h6 className="text-muted mb-2 border-bottom pb-1 fw-bold"><small>Afternoon</small></h6>
+                          {afternoon.map((task) => renderTask(task))}
+                        </div>
+                      )}
+                      {evening.length > 0 && (
+                        <div className="mb-2">
+                          <h6 className="text-muted mb-2 border-bottom pb-1 fw-bold"><small>Evening</small></h6>
+                          {evening.map((task) => renderTask(task))}
+                        </div>
+                      )}
+                      {other.length > 0 && (
+                        <div className="mb-0">
+                          {(morning.length > 0 || afternoon.length > 0 || evening.length > 0) && (
+                            <h6 className="text-muted mb-2 border-bottom pb-1 fw-bold"><small>Other / Anytime</small></h6>
+                          )}
+                          {other.map((task) => renderTask(task))}
+                        </div>
+                      )}
+                    </>
                   );
-                })
+                })()
               )}
             </Card.Body>
           </Card>
@@ -441,36 +637,82 @@ const Calendar: React.FC = () => {
               ) : choresDueToday.length === 0 ? (
                 <div className="text-muted small">No chores, habits, or routines due today.</div>
               ) : (
-                choresDueToday.map((task) => {
-                  const kind = getChoreKind(task) || 'chore';
-                  const dueMs = getTaskDueMs(task);
-                  const dueLabel = dueMs ? formatDueDetail(dueMs) : 'today';
-                  const isOverdue = !!dueMs && dueMs < todayStartMs;
-                  const badgeVariant = kind === 'routine' ? 'success' : kind === 'habit' ? 'secondary' : 'primary';
-                  const badgeLabel = kind === 'routine' ? 'Routine' : kind === 'habit' ? 'Habit' : 'Chore';
-                  const busy = !!choreCompletionBusy[task.id];
-                  return (
-                    <div key={task.id} className="border rounded p-2 d-flex align-items-start gap-2">
-                      <Form.Check
-                        type="checkbox"
-                        checked={busy}
-                        disabled={busy}
-                        onChange={() => handleCompleteChoreTask(task)}
-                        aria-label={`Complete ${task.title}`}
-                      />
-                      <div className="flex-grow-1">
-                        <div className="fw-semibold">{task.title}</div>
-                        <div className="text-muted small d-flex align-items-center gap-1">
-                          <Clock size={12} /> {isOverdue ? `Overdue · ${dueLabel}` : `Due ${dueLabel}`}
+                (() => {
+                  const morning: typeof choresDueToday = [];
+                  const afternoon: typeof choresDueToday = [];
+                  const evening: typeof choresDueToday = [];
+                  const other: typeof choresDueToday = [];
+
+                  choresDueToday.forEach((task) => {
+                    const tod = (task as any).timeOfDay;
+                    if (tod === 'morning') morning.push(task);
+                    else if (tod === 'afternoon') afternoon.push(task);
+                    else if (tod === 'evening') evening.push(task);
+                    else other.push(task);
+                  });
+
+                  const renderChore = (task: any) => {
+                    const kind = getChoreKind(task) || 'chore';
+                    const dueMs = getTaskDueMs(task);
+                    const dueLabel = dueMs ? formatDueDetail(dueMs) : 'today';
+                    const isOverdue = !!dueMs && dueMs < todayStartMs;
+                    const badgeVariant = kind === 'routine' ? 'success' : kind === 'habit' ? 'secondary' : 'primary';
+                    const badgeLabel = kind === 'routine' ? 'Routine' : kind === 'habit' ? 'Habit' : 'Chore';
+                    const busy = !!choreCompletionBusy[task.id];
+                    return (
+                      <div key={task.id} className="border rounded p-2 mb-2 d-flex align-items-start gap-2">
+                        <Form.Check
+                          type="checkbox"
+                          checked={busy}
+                          disabled={busy}
+                          onChange={() => handleCompleteChoreTask(task)}
+                          aria-label={`Complete ${task.title}`}
+                        />
+                        <div className="flex-grow-1">
+                          <div className="fw-semibold">{task.title}</div>
+                          <div className="text-muted small d-flex align-items-center gap-1">
+                            <Clock size={12} /> {isOverdue ? `Overdue · ${dueLabel}` : `Due ${dueLabel}`}
+                          </div>
+                        </div>
+                        <div className="d-flex flex-column align-items-end gap-1">
+                          {isOverdue && <Badge bg="danger">Overdue</Badge>}
+                          <Badge bg={badgeVariant}>{badgeLabel}</Badge>
                         </div>
                       </div>
-                      <div className="d-flex flex-column align-items-end gap-1">
-                        {isOverdue && <Badge bg="danger">Overdue</Badge>}
-                        <Badge bg={badgeVariant}>{badgeLabel}</Badge>
-                      </div>
-                    </div>
+                    );
+                  };
+
+                  return (
+                    <>
+                      {morning.length > 0 && (
+                        <div className="mb-2">
+                          <h6 className="text-muted mb-2 border-bottom pb-1 fw-bold"><small>Morning</small></h6>
+                          {morning.map((task) => renderChore(task))}
+                        </div>
+                      )}
+                      {afternoon.length > 0 && (
+                        <div className="mb-2">
+                          <h6 className="text-muted mb-2 border-bottom pb-1 fw-bold"><small>Afternoon</small></h6>
+                          {afternoon.map((task) => renderChore(task))}
+                        </div>
+                      )}
+                      {evening.length > 0 && (
+                        <div className="mb-2">
+                          <h6 className="text-muted mb-2 border-bottom pb-1 fw-bold"><small>Evening</small></h6>
+                          {evening.map((task) => renderChore(task))}
+                        </div>
+                      )}
+                      {other.length > 0 && (
+                        <div className="mb-0">
+                          {(morning.length > 0 || afternoon.length > 0 || evening.length > 0) && (
+                            <h6 className="text-muted mb-2 border-bottom pb-1 fw-bold"><small>Other / Anytime</small></h6>
+                          )}
+                          {other.map((task) => renderChore(task))}
+                        </div>
+                      )}
+                    </>
                   );
-                })
+                })()
               )}
             </Card.Body>
           </Card>
@@ -575,6 +817,21 @@ const Calendar: React.FC = () => {
           }}>Create</Button>
         </Modal.Footer>
       </Modal>
+
+      {/* Edit Task Modal — opened from calendar block */}
+      <EditTaskModal
+        show={!!editingTask}
+        task={editingTask}
+        onHide={() => setEditingTask(null)}
+      />
+
+      {/* Edit Story Modal — opened from calendar block */}
+      <EditStoryModal
+        show={!!editingStory}
+        story={editingStory}
+        goals={goals}
+        onHide={() => setEditingStory(null)}
+      />
     </Container>
   );
 };
