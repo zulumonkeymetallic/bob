@@ -686,6 +686,21 @@ function applyTimeOfDay(day, timeMs) {
   return d.getTime();
 }
 
+function formatDueTime(ms) {
+  const d = new Date(ms);
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
+function classifyTimeOfDay(ms) {
+  const d = new Date(ms);
+  const minutes = d.getHours() * 60 + d.getMinutes();
+  if (minutes >= (5 * 60) && minutes < (12 * 60)) return 'morning';
+  if (minutes >= (12 * 60) && minutes < (17 * 60)) return 'afternoon';
+  return 'evening';
+}
+
 function durationMinutesFromTask(task) {
   const points = Number(task?.points || 0);
   const estimateMin = Number(task?.estimateMin || 0);
@@ -749,7 +764,7 @@ async function findSlotForDay(db, ownerUid, dayStartMs, dayEndMs, durationMs) {
   return null;
 }
 
-async function upsertChoreBlocksForTask(db, task, lookaheadDays = 14) {
+async function upsertChoreBlocksForTask(db, task, lookaheadDays = 28) {
   if (!task?.ownerUid || !task?.id) return { created: 0, updated: 0 };
   const ownerUid = task.ownerUid;
   const today = startOfDay(new Date());
@@ -818,6 +833,50 @@ async function upsertChoreBlocksForTask(db, task, lookaheadDays = 14) {
     }
     return null;
   };
+
+  const findSlotFromDay = async (startDay, existingDocId = null, preferredMs = null) => {
+    for (const candidateDay of iterateNextDays(startDay, lookaheadDays)) {
+      const candidateStartMs = startOfDay(candidateDay).getTime();
+      if (snoozedUntil && candidateStartMs < startOfDay(new Date(snoozedUntil)).getTime()) continue;
+      const candidateKey = toDayKey(candidateDay);
+      const candidateDayStartMs = candidateStartMs;
+      const candidateDayEndMs = candidateDayStartMs + (24 * 60 * 60 * 1000) - 1;
+      const candidateCtx = await loadDayCtx(candidateDayStartMs, candidateDayEndMs, candidateKey);
+      if (!candidateCtx.windows.length) continue;
+      const occupiedWithoutSelf = candidateCtx.occupied.filter((o) => o.id !== existingDocId);
+
+      if (preferredMs && startOfDay(new Date(preferredMs)).getTime() === candidateDayStartMs) {
+        const preferredEnd = preferredMs + durationMs;
+        if (
+          fitsInWindows(preferredMs, preferredEnd, candidateCtx.windows) &&
+          !overlapsAny(preferredMs, preferredEnd, occupiedWithoutSelf)
+        ) {
+          return {
+            startMs: preferredMs,
+            endMs: preferredEnd,
+            dayCtx: candidateCtx,
+            dayKey: candidateKey,
+            day: candidateDay,
+            occupiedWithoutSelf,
+          };
+        }
+      }
+
+      const slot = findSlotInWindows(candidateCtx.windows, occupiedWithoutSelf, durationMs);
+      if (slot != null) {
+        return {
+          startMs: slot,
+          endMs: slot + durationMs,
+          dayCtx: candidateCtx,
+          dayKey: candidateKey,
+          day: candidateDay,
+          occupiedWithoutSelf,
+        };
+      }
+    }
+    return null;
+  };
+
   for (const day of iterateNextDays(today, lookaheadDays)) {
     if (snoozedUntil && day.getTime() < startOfDay(new Date(snoozedUntil)).getTime()) continue;
     if (!shouldScheduleOnDay(task, day)) continue;
@@ -865,15 +924,23 @@ async function upsertChoreBlocksForTask(db, task, lookaheadDays = 14) {
 
     if (startMs == null) {
       const slot = findSlotInWindows(dayCtx.windows, occupiedWithoutSelf, durationMs);
-      if (!slot) {
+      if (slot != null) {
+        startMs = slot;
+        endMs = slot + durationMs;
+      }
+    }
+
+    if (startMs == null) {
+      const fallback = await findSlotFromDay(day, docId, taskDueMs && dueHasTime ? applyTimeOfDay(day, taskDueMs) : null);
+      if (!fallback) {
         if (snap.exists) {
           await ref.delete();
           dayCtx.occupied = occupiedWithoutSelf;
         }
         continue;
       }
-      startMs = slot;
-      endMs = slot + durationMs;
+      startMs = fallback.startMs;
+      endMs = fallback.endMs;
     }
 
     if (startMs >= nowMs && (nextStartMs == null || startMs < nextStartMs)) {
@@ -920,16 +987,23 @@ async function upsertChoreBlocksForTask(db, task, lookaheadDays = 14) {
 
   if (nextStartMs && isRecurringChoreTask(task) && !isTaskLocked(task)) {
     const dueMs = toMillis(task?.dueDate || task?.dueDateMs || task?.targetDate);
+    const nextDueTime = formatDueTime(nextStartMs);
+    const nextTimeOfDay = classifyTimeOfDay(nextStartMs);
+    const currentDueTime = String(task?.dueTime || '').trim();
+    const currentTimeOfDay = String(task?.timeOfDay || '').trim().toLowerCase();
     const isMissing = !dueMs;
     const isOverdueBeyondGrace = !!dueMs && dueMs < (nowMs - CHORE_DUE_ROLLOVER_MS);
     const isFutureMismatch = !!dueMs && dueMs >= nowMs && Math.abs(dueMs - nextStartMs) > (5 * MS_IN_MINUTE);
-    if (isMissing || isOverdueBeyondGrace || isFutureMismatch) {
+    const isTimeMismatch = currentDueTime !== nextDueTime || currentTimeOfDay !== nextTimeOfDay;
+    if (isMissing || isOverdueBeyondGrace || isFutureMismatch || isTimeMismatch) {
       const hasStory = !!(task?.storyId || (task?.parentType === 'story' && task?.parentId));
       const sprintId = hasStory
         ? (task?.sprintId || null)
         : await resolveSprintIdForDate(db, ownerUid, task?.persona || null, nextStartMs, sprintCache);
       await db.collection('tasks').doc(task.id).set({
         dueDate: nextStartMs,
+        dueTime: nextDueTime,
+        timeOfDay: nextTimeOfDay,
         sprintId: sprintId ?? null,
         dueDateReason: isOverdueBeyondGrace ? 'chore_rollover' : 'chore_block',
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -12268,13 +12342,13 @@ function assembleDailyChecklist(summaryData) {
       await ref.set(patch, { merge: true });
     }
 
-    // Materialize chore/routine calendar blocks for next 14 days (active only)
+    // Materialize chore/routine calendar blocks for next 28 days (active only)
     const type = effectiveType;
     const effectiveStatus = Number(patch?.status ?? afterStatus);
     const active = Number(effectiveStatus) !== 2;
     if (isChoreLike && active) {
       const task = { id, ...(after || {}), ...(patch || {}) };
-      await upsertChoreBlocksForTask(db, task, 14);
+      await upsertChoreBlocksForTask(db, task, 28);
     }
 
     // If just completed, mark nearest block done and update lastDoneAt
@@ -12402,7 +12476,7 @@ function assembleDailyChecklist(summaryData) {
       const snap = await db.collection('tasks').where('type', '==', t).where('status', '==', 0).get();
       for (const doc of snap.docs) {
         scanned++;
-        const res = await upsertChoreBlocksForTask(db, { id: doc.id, ...(doc.data() || {}) }, 14);
+        const res = await upsertChoreBlocksForTask(db, { id: doc.id, ...(doc.data() || {}) }, 28);
         created += res.created; updated += res.updated;
       }
     }
@@ -17082,6 +17156,15 @@ exports.onStoryDueDateAutoSprint = functionsV2.firestore.onDocumentUpdated("stor
   if (!ownerUid) return;
   const persona = afterData.persona || beforeData.persona || null;
   const db = admin.firestore();
+  const profileSnap = await db.collection('profiles').doc(ownerUid).get().catch(() => null);
+  const profile = profileSnap && profileSnap.exists ? (profileSnap.data() || {}) : {};
+  // Safety guard: due-date based sprint mapping is opt-in only.
+  if (profile.autoMapStorySprintFromDueDate !== true) return;
+
+  // Never overwrite an existing sprint from due-date churn.
+  const currentSprintId = afterData.sprintId || null;
+  if (currentSprintId && afterDue) return;
+
   const sprintId = afterDue
     ? await resolveSprintIdForDate(db, ownerUid, persona, afterDue, new Map())
     : null;
