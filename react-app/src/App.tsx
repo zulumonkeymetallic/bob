@@ -66,7 +66,6 @@ import CurrentSprintKanban from './components/CurrentSprintKanban';
 import MobileView from './components/MobileView';
 import MobileChecklistView from './components/MobileChecklistView';
 import MobileHome from './components/MobileHome';
-import DailyPlanPage from './components/DailyPlanPage';
 import ChoresTasksPage from './components/ChoresTasksPage';
 import ChoreChecklistPage from './components/ChoreChecklistPage';
 import HabitsChoresDashboard from './components/HabitsChoresDashboard';
@@ -152,9 +151,9 @@ function AppContent() {
   const [showImportModal, setShowImportModal] = useState(false);
   const [showAssistant, setShowAssistant] = useState(false);
 
-  // Root path redirect: always start with Daily Plan for morning check-in flow.
+  // Root path redirect.
   const RootRedirect: React.FC = () => {
-    return <Navigate to="/daily-plan" replace />;
+    return <Navigate to="/dashboard" replace />;
   };
 
   // Data for the global sidebar
@@ -258,18 +257,7 @@ function AppContent() {
     logger.debug('nav', 'Location change', { path: location.pathname, key: location.key });
   }, [location.pathname, location.key]);
 
-  // First-run daily guard: route users to Daily Plan until morning review is acknowledged.
-  useEffect(() => {
-    if (!currentUser?.uid) return;
-    const path = location.pathname || '/';
-    if (path === '/daily-plan' || path === '/mobile/daily-plan') return;
-    const today = new Date().toISOString().slice(0, 10);
-    const key = `dailyPlanMorningReview:${currentUser.uid}:${today}`;
-    const reviewed = window.localStorage.getItem(key) === '1';
-    if (!reviewed) {
-      navigate('/daily-plan', { replace: true });
-    }
-  }, [currentUser?.uid, location.pathname, navigate]);
+  // Daily Plan is temporarily disabled while sync and due-date issues are investigated.
 
 
 
@@ -408,8 +396,8 @@ function AppContent() {
             <Route path="/chores" element={<ChoresTasksPage />} />
             <Route path="/chores/checklist" element={<ChoreChecklistPage />} />
             <Route path="/mobile" element={<MobileHome />} />
-            <Route path="/daily-plan" element={<DailyPlanPage />} />
-            <Route path="/mobile/daily-plan" element={<DailyPlanPage />} />
+            <Route path="/daily-plan" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/mobile/daily-plan" element={<Navigate to="/mobile" replace />} />
             <Route path="/mobile-view" element={<MobileView />} />
             <Route path="/mobile-checklist" element={<MobileChecklistView />} />
             <Route path="/habits" element={<Navigate to="/dashboard/habit-tracking" replace />} />

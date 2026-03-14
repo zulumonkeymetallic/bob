@@ -22,6 +22,33 @@ export type KpiType =
 
 export type KpiTimeframe = 'daily' | 'weekly' | 'monthly' | 'sprint' | 'quarterly' | 'annual';
 export type KpiStatus = 'on-target' | 'good' | 'ok' | 'behind' | 'no-data' | 'not-started';
+export type KpiAggregation = 'sum' | 'average' | 'min' | 'max' | 'count' | 'latest';
+export type KpiTargetDirection = 'increase' | 'decrease' | 'maintain';
+export type KpiVisualizationType = 'metric' | 'progress' | 'line' | 'bar' | 'table';
+export type KpiDesignerMode = 'curated' | 'registry';
+export type KpiSourceFieldType = 'number' | 'percentage' | 'duration' | 'count' | 'currency' | 'string' | 'date' | 'boolean';
+export type KpiDataSource =
+  | 'healthkit'
+  | 'strava'
+  | 'habit_occurrence'
+  | 'manual_task'
+  | 'user_input'
+  | 'story_progress'
+  | 'task_progress'
+  | 'finance';
+
+export interface MetricBinding {
+  source: KpiDataSource;
+  metricKey: string;
+  fieldId?: string;
+  collection?: string | null;
+  fieldPath?: string | null;
+  aggregation?: KpiAggregation;
+  timeframe?: KpiTimeframe;
+  dataType?: KpiSourceFieldType;
+  unit?: string;
+  label?: string;
+}
 
 /**
  * Base KPI interface - all KPI types extend this
@@ -34,6 +61,26 @@ export interface BaseKpi {
   timeframe: KpiTimeframe;    // Measurement period
   target: number;             // Target value
   unit: string;               // Unit of measurement: "km", "points", "$", "hours"
+  baseline?: number | null;   // Optional starting value for trend display
+  sourceId?: string;          // Canonical source key used by KPI designer
+  sourceLabel?: string;       // Human-friendly source label
+  metricId?: string;          // Canonical metric key used by KPI designer
+  sourceCollection?: string;  // Firestore collection or logical source store
+  sourceFieldPath?: string;   // Dot-path used by custom KPI builder
+  sourceDataType?: KpiSourceFieldType;
+  sourceMetricLabel?: string;
+  designerMode?: KpiDesignerMode;
+  sourcePriority?: KpiDataSource[];
+  sourceBindings?: Partial<Record<KpiDataSource, MetricBinding>>;
+  freshnessWindowHours?: number;
+  resolvedSource?: KpiDataSource | null;
+  resolvedAt?: any;
+  sourceFreshness?: Partial<Record<KpiDataSource, any>>;
+  metricKey?: string;
+  aggregation?: KpiAggregation;
+  targetDirection?: KpiTargetDirection;
+  visualizationType?: KpiVisualizationType;
+  displayOnDashboard?: boolean;
   
   // Runtime calculated fields (filled by sync)
   current?: number;           // Current progress

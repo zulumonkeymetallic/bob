@@ -1,8 +1,120 @@
 Comprehensive multi-phase rework spanning web, iOS/iPad, and health platforms:
 
-JD Updated 13 March at 13:33
+JD Updated 13 March at 15:55
 
-Latest execution log (13 March 13:33)
+Latest execution log (14 March 2026)
+- 14 Mar 2026: Upgraded roadmap V6 to be hierarchy-aware inside theme groups and reduced lane height.
+  - `react-app/src/components/visualization/GoalRoadmapV6.tsx` now resolves goal theme context with parent-theme fallback when a leaf goal does not carry its own theme, so child goals stay inside the correct strategic theme lane.
+  - The roadmap is no longer only a flat theme grouping: theme tracks are now subdivided into parent-goal sections, with child/leaf goals rendered inside their parent section rather than as an undifferentiated list.
+  - Timeline cards now surface parent-path context directly on the goal bars/milestones so leaf goals display their hierarchy without leaving the roadmap view.
+  - `react-app/src/components/visualization/GoalRoadmapV6.css` was tightened to reduce vertical height across theme headers, section headers, lane rows, task bars, and milestone bars.
+  - Validation: `npm run -s build --prefix react-app` completed successfully after the roadmap hierarchy/density pass. Remaining output is the repo’s existing ESLint noise, bundle-size warnings, and `rrule` source-map warnings.
+- 14 Mar 2026: Extended the focus-goal flow with hierarchy-aware milestone planning and sprint rollout mapping.
+  - `react-app/src/components/FocusGoalWizard.tsx` now inserts a dedicated `Milestones + Sprint Plan` step between timeframe selection and review.
+  - Selecting a parent goal now expands to its execution leaf goals immediately in the wizard, and the wizard overlays draft child milestones so users can plan year/quarter focus periods without leaving the modal.
+  - Users can add new child milestone leaf goals inline under each selected parent goal; those draft milestones are kept in execution scope, participate in goal-type selection and sprint planning, and are persisted later via `pendingLeafGoalsToCreate`.
+  - Quarter/year focus periods now generate sprint-window segments in the wizard, and every execution leaf goal must be assigned to at least one sprint window before the wizard can continue to review/confirm.
+  - Review/confirm now show the planned sprint rollout, count draft milestones queued for creation, and warn that KPI authoring only applies to already-persisted leaf goals until the new milestones are saved.
+  - `react-app/src/components/FocusGoalsPage.tsx` now materializes those queued draft leaf milestones into real `goals` documents before creating the focus goal, remaps temporary goal IDs to the created goal IDs, persists `sprintPlanByGoalId` / `sprintPlanSegments`, and writes sprint assignments back onto overlapping sprint docs plus `assignedSprintIdsByGoalId` on the created focus goal.
+  - Active focus cards on the page now surface a `Milestone sprint rollout` view so users can see which leaf goals are meant to land in which sprint windows after the focus set is saved.
+  - Validation: `npm run -s build --prefix react-app` completed successfully after this slice. Remaining output is the repo’s existing ESLint noise, bundle-size warnings, and `rrule` source-map warnings.
+- 14 Mar 2026: Enforced leaf-goal execution links across the primary story/task/habit flows.
+  - Added shared leaf-goal resolution helpers in `react-app/src/utils/goalHierarchy.ts` so execution surfaces can distinguish valid leaf goals from parent goals, auto-resolve a parent with a single leaf descendant, and block ambiguous parent selections.
+  - Updated `react-app/src/components/AddStoryModal.tsx` and `react-app/src/components/EditStoryModal.tsx` so stories now author against leaf goals only:
+    - goal pickers only show leaf goals
+    - parent selections with one child auto-resolve
+    - parent selections with multiple child leaves are blocked until the user picks the exact leaf goal
+  - Updated `react-app/src/components/EditTaskModal.tsx` so direct task goal links and story-inherited goal links both normalize to leaf goals before save; tasks now reject ambiguous parent-goal execution links.
+  - Updated `react-app/src/components/HabitsManagement.tsx` so habits only link to leaf goals, which keeps KPI adherence scoped to actionable milestone goals rather than umbrella parents.
+  - Updated goal-driven creation surfaces in `react-app/src/components/EditGoalModal.tsx` and `react-app/src/components/ModernGoalsTable.tsx` so creating a story/task from a parent goal no longer stamps the parent goal ID directly.
+  - Updated `react-app/src/components/checkins/CheckInDaily.tsx` so legacy parent-goal links on tasks, stories, blocks, and habits are normalized to leaf goals before daily execution/KPI refresh logic uses them.
+  - Validation: `npm run -s build --prefix react-app` completed successfully after the leaf-goal enforcement changes.
+  - Remaining gap: there are still secondary/legacy creation surfaces elsewhere in the repo that can stamp raw `goalId` values directly; the main execution flows are covered, but a full repo-wide normalization pass would still be needed if you want every niche creation path locked down the same way.
+- 14 Mar 2026: Added a one-off weekly KPI snapshot backfill callable in `functions/index.js`.
+  - New callable `backfillWeeklyGoalKpiSnapshots` backfills older `weekly_goal_kpi_snapshots` for the signed-in user from stored `weekly_checkins.metrics.focusSummary.leafGoals` where historical focus-goal summaries exist.
+  - Backfilled snapshots are explicitly marked as `backfilled: true` and `snapshotQuality: 'summary_only'` because the legacy weekly check-in payload only preserves top KPI summaries and KPI health counts, not full raw historical KPI rows.
+  - The backfill skips existing snapshots by default, supports bounded week ranges, and also refreshes the current week from live `goal_kpi_metrics` so forward coverage remains on the canonical snapshot path.
+  - Validation: `node --check functions/index.js` completed successfully after the backfill callable was added.
+- 14 Mar 2026: Added a server-side weekly KPI snapshot writer in `functions/index.js`.
+  - Nightly `syncFitnessKpis` now snapshots each user’s current `goal_kpi_metrics` into `weekly_goal_kpi_snapshots` after refreshing KPI state, so weekly history no longer depends on the web app being opened.
+  - Manual `syncFitnessKpisNow` now also writes current-week snapshots for the signed-in user, which keeps manual refreshes and nightly refreshes on the same persistence path.
+  - Snapshot keys are generated per user timezone week, and snapshot documents carry the originating KPI payload plus snapshot reason/timezone metadata.
+  - Validation: `node --check functions/index.js` completed successfully after the change.
+- 14 Mar 2026: Added persisted weekly KPI snapshots and switched weekly check-in to prefer historical snapshot reads.
+  - `react-app/src/utils/kpiResolver.ts` now writes a `weekly_goal_kpi_snapshots/{ownerUid}_{weekKey}_{goalId}` document whenever resolved KPI state is persisted to `goal_kpi_metrics`.
+  - Snapshot rows store the week key, goal metadata, resolved KPI payload, and snapshot timestamp so weekly review can read week-specific KPI state instead of only today’s derived state.
+  - `react-app/src/components/checkins/CheckInWeekly.tsx` now queries `weekly_goal_kpi_snapshots` for the reviewed week and falls back to `goal_kpi_metrics` only when no snapshot exists for that goal/week.
+  - Validation: `npm run -s build --prefix react-app` completed successfully after the snapshot changes.
+  - Remaining limitation: exact historical coverage starts from when the new resolver path runs; older weeks still need a backfill or scheduled server-side snapshot writer if you want complete historical KPI history everywhere.
+- 14 Mar 2026: Extended `react-app/src/components/checkins/CheckInWeekly.tsx` to support weekly progress against focus goals.
+  - Weekly check-in now loads overlapping/active `focusGoals`, `goals`, and `goal_kpi_metrics` for the reviewed week.
+  - Added a focus-goal rollup section that shows:
+    - parent/root goal summaries
+    - leaf-goal weekly completion percentages from `daily_checkins`
+    - counts of story/task/habit activity linked to focused leaf goals
+    - KPI health counts and top KPI readings for each focused leaf goal
+  - The legacy weekly sections for themes, habits, stories, tasks, spend, and reflection remain in place beneath the new focus-goal summary.
+  - Current limitation: weekly check-in uses weekly execution signals from `daily_checkins` plus current `goal_kpi_metrics`; it does not yet compute true week-over-week KPI deltas or reconstruct historical KPI values for arbitrary prior weeks.
+- 14 Mar 2026: Updated shared check-in reminder banner behavior in `react-app/src/components/checkins/CheckInBanner.tsx`.
+  - Daily banner now stops showing after 13:00 local time if the target daily check-in is still incomplete.
+  - Weekly banner now stops showing after Tuesday for the prior-week weekly check-in if it remains incomplete.
+  - This change only affects the reminder banners in layout chrome; it does not remove access to `/checkin/daily` or `/checkin/weekly`.
+- 14 Mar 2026: Implemented the hierarchical-goals + structured KPI + atomic check-in slice across the web app.
+  - Goal hierarchy model extended in `react-app/src/types.ts` with `goalKind`, `timeHorizon`, and `rollupMode`, and focus documents now persist `focusRootGoalIds` plus `focusLeafGoalIds`.
+  - Added shared hierarchy helpers in `react-app/src/utils/goalHierarchy.ts` to expand root goals to execution leaf goals, build display breadcrumbs, and evaluate hierarchy-aware focus alignment.
+  - Focus goal creation/save flow is now leaf-goal aware in `react-app/src/services/focusGoalsService.ts`, `react-app/src/components/FocusGoalWizard.tsx`, and `react-app/src/components/FocusGoalsPage.tsx`. Parent goals can be selected strategically, but story planning and focus execution now run on expanded leaf goals.
+  - KPI model expanded in `react-app/src/types/KpiTypes.ts` with `sourcePriority`, `sourceBindings`, freshness metadata, and structured source mapping fields.
+  - Added observation/freshness/resolution utilities:
+    - `react-app/src/utils/metricValues.ts`
+    - `react-app/src/utils/kpiFreshness.ts`
+    - `react-app/src/utils/kpiResolver.ts`
+    - `react-app/src/utils/kpiPersistence.ts`
+  - `react-app/src/components/KPIDesigner.tsx` now supports:
+    - curated KPI creation from supported metrics
+    - structured source-explorer KPI creation from registered fields only
+    - source-priority / stale-source fallback selection
+    - observation-stream browsing from `metric_values`
+    - `Promote to KPI` from observed metrics
+  - Daily check-in in `react-app/src/components/checkins/CheckInDaily.tsx` now debounced-autosaves instead of relying on a single submit action, writes manual health entries into `metric_values`, refreshes linked goal KPI projections, and surfaces stale automated HealthKit data with manual fallback messaging.
+  - Daily Plan focus alignment in `react-app/src/components/DailyPlanPage.tsx` is now hierarchy-aware and displays goal breadcrumb paths instead of flat goal labels.
+  - Focus-aware filtering and alignment logic was updated to use hierarchy-aware matching in:
+    - `react-app/src/components/FocusGoalCountdownBanner.tsx`
+    - `react-app/src/components/ModernKanbanPage.tsx`
+    - `react-app/src/components/Dashboard.tsx`
+    - `react-app/src/components/GoalsManagement.tsx`
+    - `react-app/src/components/AddStoryModal.tsx`
+    - `react-app/src/components/SprintPlanningMatrix.tsx`
+    - `react-app/src/components/ThemeProgressDashboard.tsx`
+    - `react-app/src/components/visualization/GoalRoadmapV6.tsx`
+    - `react-app/src/components/KpiDashboardWidget.tsx`
+  - KPI dashboard/state surfaces now refresh from `goal_kpi_metrics` using resolved source-aware KPI rows, and dashboard defer recommendations continue to use focus-aware scoring.
+  - Validation: `npm run -s build --prefix react-app` completed successfully after implementation. Remaining output is the repo’s pre-existing CRA/ESLint warning set and `rrule` source-map warnings; those were not cleaned up in this slice.
+  - Remaining gap from this slice: weekly check-in now includes focus-goal progress and KPI health, but historical KPI trend reconstruction for arbitrary past weeks still needs a dedicated persisted weekly KPI snapshot layer if exact prior-week KPI state is required.
+- 14 Mar 2026: Tightened recurring-item completion safety in `react-app/src/components/DailyPlanPage.tsx`. When a chore/routine/habit Daily Plan row has no matching `scheduled_instances` record for today, the UI now shows a dismissible warning and refuses to complete the parent task, preserving bob-ios / bob-mac-sync instance-only semantics. Rebuilt web bundle for deploy.
+- 14 Mar 2026: Fixed recurring-item consistency across kanban and Daily Plan. `react-app/src/components/ModernKanbanBoard.tsx` now excludes chore/routine/habit tasks from kanban task lanes, and `react-app/src/components/DailyPlanPage.tsx` now loads today’s `scheduled_instances` so completing a recurring Daily Plan item marks only that instance `completed` instead of closing the parent task. Deployed hosting.
+- 14 Mar 2026: Executed targeted production cleanup for missing-story task links discovered in validation checkpoint. Cleared invalid `storyId` references on 3 tasks (with `linkRepair` audit metadata), then re-ran consistency queries: `mismatchedTaskLinks=0`, `taskStoryMissing=0`, `taskStoryGoalMismatch=0`; pending suggestion queues remain non-stale (`task pending=5/stale=0`, `story-goal pending=8/stale=0`).
+- 14 Mar 2026: Ran focused production validation queries for linking reliability checkpoint. Current snapshot: task linkage mismatches = 3 (`task.storyId` points to missing story docs), task/story goal mismatches = 0, pending task suggestions = 5 (stale = 0), pending story-goal suggestions = 8 (stale = 0), latest sampled system activity rows did not include new fuzzy-link events yet in the inspected window.
+- 14 Mar 2026: Defined explicit re-enable criteria for validation-style task generation in fuzzy linking. Keep `ENABLE_FUZZY_VALIDATION_TASKS=false` until: (1) `taskStoryGoalMismatch` remains 0, (2) missing-story linkage count is 0 after cleanup/backfill, (3) stale pending suggestions remain 0, and (4) duplicate-pending suppression remains effective across at least one full nightly cycle for both `nightlyTaskLinking` and `nightlyStoryGoalLinking`.
+- 14 Mar 2026: Completed the third queued story/task linking reliability checklist item (suggestion acceptance/rejection hardening). Updated `functions/fuzzyTaskLinking.js` to suppress duplicate pending suggestions, apply a rejection cooldown before recreating the same suggestion, and carry canonical `suggestedLinkedGoalId` metadata so accepted story suggestions can apply canonical linkage updates safely via guardrails.
+- 14 Mar 2026: Completed the second queued story/task linking reliability checklist item (null->linked guardrails). Hardened `functions/fuzzyTaskLinking.js` update paths so task/story linkage now no-ops when target linkage is unchanged or an existing linkage would be overwritten (`goal_already_linked`, `story_already_linked`, conflict guards), including nightly auto-linking, manual trigger paths, and suggestion-acceptance write flows.
+- 14 Mar 2026: Completed the first queued story/task linking reliability checklist item (confidence-tier audit metrics). Updated `functions/fuzzyTaskLinking.js` so nightly + manual linking runs now compute and persist per-user/per-run tier counts (`no_match`, `low_confidence`, `auto_linked`) to Firestore `linking_run_metrics` with run metadata, scanned counts, and aggregate action counts for regression tracking. Deployed: `nightlyTaskLinking`, `triggerTaskLinking`, `nightlyStoryGoalLinking`, `triggerStoryGoalLinking`, `respondToTaskSuggestion`, `respondToStoryGoalSuggestion`.
+- 14 Mar 2026: Temporarily disabled Firebase App Check in web frontend to stop repeated reCAPTCHA prompts/errors during active roadmap execution. Confirmed `REACT_APP_ENABLE_APPCHECK=false` + `REACT_APP_DISABLE_APPCHECK=true` in `react-app/.env`, kept the hard-disable guard in `react-app/src/firebase.ts`, rebuilt web bundle, and deployed hosting (`https://bob20250810.web.app`).
+- 14 Mar 2026: Focus goals + finance spend-breakdown stabilization slice shipped. Focus goals now persist post-save rollout metadata (`autoCreatedSprintIds`, `deferredNonFocusCount`) back onto the created `focusGoals` document from `react-app/src/components/FocusGoalsPage.tsx`, so the wizard run captures its downstream sprint/defer effects for audit and revisit. Finance spend trend/pie now share a single transaction-category pipeline in `react-app/src/components/finance/FinanceDashboardAdvanced.tsx`: both use the same canonical category field resolution, exclude income and bank-transfer classes from spend breakdown, and treat only outflow transactions as spend.
+- 14 Mar 2026: Defect remediated for fuzzy-link validation noise. Deleted all existing validation-linkage tasks (matched by `entry_method=auto:fuzzy_link_validation` and validation title prefixes), disabled runtime creation of these tasks in `functions/fuzzyTaskLinking.js` (`no_match` + `low_confidence` paths), and deployed `nightlyTaskLinking`, `triggerTaskLinking`, `respondToTaskSuggestion`, `nightlyStoryGoalLinking`, `triggerStoryGoalLinking`, and `respondToStoryGoalSuggestion`. Auto-link activity now records only when linkage actually transitions from null to a linked value.
+- Backlog added (revisit): end-to-end story/task linking reliability pass. Re-validate fuzzy matching thresholds, null->linked transition rules, suggestion acceptance flows, and calendar/story/task cross-link consistency before any re-enable of validation-style task generation.
+- Next slice queued (14 Mar 2026): Story/task linking reliability implementation checklist.
+  - Add confidence-tier audit metrics in linking runs (`no_match`, `low_confidence`, `auto_linked`) and persist counts per user/run for regression tracking.
+  - Tighten null->linked transition guardrails for both task->goal and task->story paths, explicitly no-op when linkage already exists and target is unchanged.
+  - Re-verify suggestion acceptance/rejection write-paths so accepted suggestions update canonical linkage fields and rejected suggestions cannot recreate duplicate pending suggestions.
+  - Run focused production validation queries: count tasks with mismatched `goalId`/`storyId` consistency, count stale pending suggestions, and sample auto-link activity rows for field correctness.
+  - Define explicit re-enable criteria for any future validation-task generation: only after mismatch counts and duplicate suggestion counts remain at/near zero for at least one full nightly cycle.
+- 14 Mar 2026: Daily Plan login-first routing is disabled for now. Root route/login flow remains dashboard-first (`/dashboard` on desktop and `/mobile` auto-route on mobile) while Daily Plan is treated as a secondary planning surface.
+- Backlog added (enhance later): redesign Daily Plan as an opt-in guided flow (for example, first-session prompt card from Dashboard/Mobile Home) and only consider restoring login-first routing after sync reliability and scheduling/defer workflow quality are stable.
+- Adjusted finance dashboard chart sizing in `react-app/src/components/finance/FinanceDashboardAdvanced.tsx`: kept the compact metric cards but increased the primary spend trend and donut cards again so the charts are easier to read.
+- Mitigated the recurring App Check / reCAPTCHA prompt defect in `react-app/src/firebase.ts`: App Check now warms up without auto-refresh, disables token auto-refresh after 400/throttle-style exchange failures, and writes a local cooldown so affected users stop getting re-prompted every few minutes while Firebase App Check site-key/domain settings are corrected.
+- Tightened finance dashboard density in `react-app/src/components/finance/FinanceDashboardAdvanced.tsx` and `react-app/src/components/finance/FinanceDashboardAdvanced.css`: overview metric cards are now compact, spend trend + donut cards are materially shorter, and the donut now centers the rolled-up total for faster scanning.
+- Tightened Daily Plan density in `react-app/src/components/DailyPlanPage.tsx`: added compact summary pills, reduced row padding, surfaced deferred state inline, and extended schedule/defer controls to chores as well as standard tasks/stories.
+- Enriched fuzzy linkage validation tasks in `functions/fuzzyTaskLinking.js`, added reusable backfill script `scripts/backfillValidationTaskLabels.js`, deployed `nightlyTaskLinking` + `nightlyStoryGoalLinking`, and backfilled 3 existing production validation tasks with explicit story/goal references where metadata was sufficient.
 - Implemented morning-first planning flow: root login redirect now lands on `/daily-plan` for both mobile and desktop, and Daily Plan now shows a first-run daily check-in summary with explicit "review/defer" prompt and acknowledgement state (per-user/per-day local storage key).
 - Added inline Daily Plan actions for execution hygiene: task/story rows now expose `Schedule now` (calendar icon) and `Defer intelligently` (snooze icon) controls; defer opens existing smart deferral modal and persists `deferredUntil/deferredReason/deferredBy/deferredAt`.
 - Fixed trigger clarity in Kanban card actions: #1 priority toggle now uses explicit numeric marker (`1`) and defer uses clock icon, removing prior icon collision where calendar-style icon represented both actions.
@@ -11,6 +123,7 @@ Latest execution log (13 March 13:33)
 - Completed standalone Daily Plan surfacing in web: added dedicated route/page (`/daily-plan`, `/mobile/daily-plan`) and entry links from Dashboard and Mobile Home widgets.
 - Progressed Step 15A auto-link reliability: `functions/calendarSync.js` now writes canonical linkage fields (`storyId` + `linkedStoryId`) during `gcalLinkUnlinkedEvents` matching and adds new `onStoryCalendarAutoLink` trigger to auto-link newly created/renamed stories against unlinked Google-synced blocks without requiring manual callable invocation.
 - Progressed Step 15B label consistency: story scheduling cards now use canonical source label text (`auto-planned`, `linked from gcal`, `manual`) in `react-app/src/components/stories/SortableStoryCard.tsx`.
+- Investigated and remediated the Sprint 42 bulk-move incident: Firestore forensics isolated a backend automation chain where story due-date churn could feed the dueDate-to-sprint trigger, moving 255 stories into Sprint 42 in one window. Production rollback has been executed, `functions/index.js` now gates story due-date sprint auto-mapping behind explicit profile opt-in and refuses to overwrite an already-set sprint, and `scripts/rollbackSprint42Incident.js` now supports a second-pass activity rehydration mode for incident-marked stories when prior sprint history is available.
 - Extended Step 15 source-label parity into planner surfaces: Unified Planner event details now shows source badges (`auto-planned`, `linked from gcal`, `manual`) using block/instance/external metadata, matching the new Dashboard timeline source-badge behavior.
 - Progressed Step 15 card UX source labels: Dashboard Unified Timeline cards now surface source badges (`auto-planned`, `linked from gcal`, `manual`) derived from block/event metadata, reducing ambiguity between AI/planner/GCal/manual scheduling origins.
 - Completed Step 14 diagnostics range-filter follow-up: Integration & AI Logs now supports time window filtering (`24h`, `7d`, `30d`, `all`, and custom date range) in addition to trace/template/parse filters.
@@ -1368,6 +1481,14 @@ adherence = [(0.857 + 0.867 + 0.892 + 0.96) / 4] * 100 = 89.4%
 - ✅ All file anchors and line numbers documented
 
 **Completed Slice Log**:
+- ✅ 13 Mar 2026: App Check reCAPTCHA throttling mitigation slice shipped.
+  Scope completed: updated `react-app/src/firebase.ts` so web App Check initializes in warmup mode, enables token auto-refresh only after a successful token exchange, and disables itself into a local cooldown window after 400/throttle-style failures that were repeatedly re-triggering reCAPTCHA on `bob.jc1.tech`.
+  Validation completed: no TypeScript/Problems errors in touched firebase bootstrap file.
+  Remaining in this lane: verify Firebase Console App Check configuration for `bob.jc1.tech` and the configured reCAPTCHA v3 site key so the cooldown path is no longer needed in normal production use.
+- ✅ 13 Mar 2026: Finance dashboard compaction + Daily Plan density slice shipped.
+  Scope completed: reduced the footprint of finance summary metric cards and chart containers in `react-app/src/components/finance/FinanceDashboardAdvanced.tsx` and `react-app/src/components/finance/FinanceDashboardAdvanced.css`, improved donut readability with centered total context, and tightened `react-app/src/components/DailyPlanPage.tsx` with compact summary pills, denser row spacing, inline deferred badges, and chore-level defer/schedule parity.
+  Validation completed: pending final build/type validation after this slice.
+  Remaining in this lane: Daily Plan modal-first editing and bulk review table workflow still remain open.
 - ✅ 13 Mar 2026: Dashboard strict-violation telemetry slice shipped.
   Scope completed: added selected-sprint strict enforcement counters (24h/7d + last violation time) from `integration_logs` and surfaced selected sprint audit summary from `sprint_alignment_audit` in `react-app/src/components/Dashboard.tsx` Focus Alignment card.
   Validation completed: no TypeScript/Problems errors in touched Dashboard file.
@@ -1452,3 +1573,232 @@ adherence = [(0.857 + 0.867 + 0.892 + 0.96) / 4] * 100 = 89.4%
 **Location**: plan.md
 
 **Next Step**: Start the next implementation slice and continue updating this log with one commit per completed slice.
+
+
+Plan: Kanban GCal Defects + Remaining Web Work
+Add this as an immediate defect slice: the kanban “manual Google Calendar event” action should reuse the same event composer flow as Unified Planner “New event”, and the auto-linked GCal source text on kanban/story cards should be visually quieter than it is now. After that, the highest-value remaining web work is still Daily Plan completion, then validation of the App Check production config, then the larger health/fitness surfaces already outlined in plan.md.
+
+Immediate defect slice
+
+Extract or reuse the Unified Planner event composer currently embedded in react-app/src/components/planner/UnifiedPlannerPage.tsx so it can be opened from kanban surfaces.
+Replace the direct-create behavior in react-app/src/components/KanbanCardV2.tsx createManualCalendarEvent(...) with “open composer prefilled from this card”.
+Prefill the composer with the same data the current kanban shortcut already knows:
+task or story id, title, theme or category, sensible start/end defaults, and Google sync enabled.
+Keep save behavior aligned with Unified Planner submit handling rather than duplicating calendar block creation logic in the card component.
+Make the auto-linked GCal source text more subtle on kanban/story cards, starting with react-app/src/components/stories/SortableStoryCard.tsx.
+Audit react-app/src/components/KanbanCardV2.tsx for the same source-note treatment so the label style stays consistent across card surfaces.
+Next remaining work
+
+Finish Daily Plan defects in react-app/src/components/DailyPlanPage.tsx:
+modal-first task/story editing, bulk review table, and remaining triage workflow.
+Complete the wider Step 11 modal-only audit across react-app/src/components/CheckInDaily.tsx, react-app/src/components/HabitsChoresDashboard.tsx, react-app/src/components/Calendar.tsx, and react-app/src/components/JournalsManagement.tsx.
+Verify Firebase Console App Check settings for bob.jc1.tech and the configured reCAPTCHA v3 key. The client-side cooldown in react-app/src/firebase.ts is a mitigation, not the final root-cause fix.
+Then resume the larger web roadmap already open in plan.md: health data foundation, dashboard health banner, /fitness, and nutrition advisor.
+Relevant files
+
+react-app/src/components/KanbanCardV2.tsx — current manual gCal action is direct-create and should become composer-open.
+react-app/src/components/planner/UnifiedPlannerPage.tsx — current canonical “New event” composer behavior to reuse.
+react-app/src/components/stories/SortableStoryCard.tsx — auto-linked GCal source label styling is currently the clearest defect anchor.
+react-app/src/components/DailyPlanPage.tsx — next major unresolved UX surface.
+react-app/src/firebase.ts — current App Check mitigation already landed; production config still needs verification.
+plan.md — repo plan remains the canonical roadmap reference for the broader work.
+Verification
+
+Clicking the kanban manual calendar action opens the same composer UX as Unified Planner, not an immediate save.
+Saving from that composer creates the same type of calendar block and Google-sync behavior as Unified Planner “New event”.
+Auto-linked or matched GCal source text is visually subordinate to the main schedule badge on both story and kanban cards.
+Daily Plan remains the next unresolved defect cluster after this slice.
+I couldn’t persist this into /memories/session/plan.md because session memory storage is unavailable in this chat context, so I’m keeping the active plan here in the response rather than editing repo files while in planning mode.
+
+Recommended next execution order:
+
+Kanban gCal composer defect
+Subtle linked-from-gcal text defect
+Daily Plan modal and bulk-review completion
+Firebase App Check console-side verification
+
+
+Plan: Daily Plan Page — Critical Defects Overhaul
+TL;DR: react-app/src/components/DailyPlanPage.tsx has 9 documented defects. All changes are in that single file (plus a new useFocusGoals hook pull-in and two existing modals). The implementation splits into 5 logical phases that can be built sequentially, all landing in one PR.
+
+Phase DPO-1 — Performance + New Data Sources (unblocks everything)
+DPO-1A — calendar_blocks query for today: Add a date-bounded onSnapshot query: collection('calendar_blocks') where ownerUid==uid AND start >= todayStartMs AND start <= todayEndMs. This drives deduplication (DPO-2B) and provides actual scheduled times for tasks. Mirrors ChecklistPanel pattern already in codebase.
+
+DPO-1B — Goals subscription: Add a small onSnapshot for collection('goals') where ownerUid==uid. Build a goalMap: Map<id, {title, theme, color}> for O(1) lookup. Typical user has < 50 goals — not a performance concern.
+
+DPO-1C — Focus goals integration: Pull useFocusGoals(currentUser?.uid) hook. Materialize activeFocusGoalIds: Set<string> = the union of all activeFocusGoals[*].goalIds. Used by DPO-2D.
+
+DPO-1D — Temp performance cap: Add orderBy('updatedAt', 'desc') + limit(300) to both task and story queries. Not a long-term fix (proper fix = composite Firestore index with date+status filter) but prevents worst-case full-collection scans today.
+
+Phase DPO-2 — Data Model + Processing (depends on DPO-1)
+DPO-2A — Extend TimelineItem type: Add fields: ref: string | null, goalTitle: string | null, goalTheme: string | null, isFocusAligned: boolean, rawTask: Task | null, rawStory: Story | null, scheduledBlockStart: number | null.
+
+DPO-2B — Calendar deduplication + time promotion: In timelineItems useMemo, after building blocks snapshot: for each calendar_block that has a taskId or storyId, annotate the matching task/story TimelineItem with scheduledBlockStart = block.start (override sortMs and timeLabel). Skip creating a separate kind: 'event' for that block entirely — show the task/story row once with the block's scheduled time as its displayed time.
+
+DPO-2C — Eliminate "Anytime" label: In formatTimeLabel, replace the null/undefined → "Anytime" fallback. Instead, return a bucket-label sentinel: "Unscheduled" rendered in muted text. In bucketFromTime, items with no time AND no timeOfDay still default to 'morning' (existing behaviour) but display "Unscheduled (Morning)" rather than "Anytime". Also assign a pseudo-sortMs for items with only timeOfDay = the bucket mid-point (9:00 AM, 14:00 PM, 19:30 PM) so items sort sensibly within buckets.
+
+DPO-2D — Focus-aware defer candidates: In todoSummary useMemo, re-define deferCandidates: items where !item.isTop3 && !item.isFocusAligned. Focus-aligned non-Top3 items are no longer automatically "review" candidates unless the user explicitly defers them.
+
+Phase DPO-3 — Item Row UI (depends on DPO-2)
+DPO-3A — Title plain text + ref + time below: Replace
+
+with:
+
+Make the entire ListGroup.Item row role="button" + onClick to open the modal (DPO-3D).
+
+DPO-3B — Inline check-off (Done button): Add a small green circular done button to the left of each task/story/chore row (like ChecklistPanel). On click:
+
+Task/Chore: updateDoc('tasks/{id}', { status: 2, updatedAt: serverTimestamp() })
+Story: advance status by 1 step up to max 4 (or set 4 if already at 3). Use Firestore updateDoc.
+Real-time listener already removes done items from list automatically.
+Events have no check-off.
+DPO-3C — Goal chip per item: Below the title/ref/time block, add a small dim goal label when item.goalTitle is set:
+
+DPO-3D — Modal opener instead of navigation: Add state: editTask: Task | null, editStory: Story | null. Row onClick → if item.rawTask set editTask = item.rawTask, if item.rawStory set editStory = item.rawStory. Add <EditTaskModal show={!!editTask} task={editTask} onHide={() => setEditTask(null)} /> and <EditStoryModal show={!!editStory} story={editStory} goals={goals} onHide={() => setEditStory(null)} /> at component bottom.
+
+Phase DPO-4 — Filterable Count Chips (parallel with DPO-3)
+DPO-4A — Filter state: Add activeKindFilter: 'task' | 'story' | 'chore' | 'event' | 'top3' | null state.
+
+DPO-4B — Clickable badges: Replace <Badge> with <Button variant="..." size="sm"> styled as pill badges. Active filter gets a filled background; inactive = outline. Clicking the same filter again clears it.
+
+DPO-4C — Filter application: In the render, replace timelineItems.filter(item => item.bucket === bucket) with a filtered view that respects activeKindFilter. "Top 3" filter shows only isTop3 items across all buckets.
+
+Phase DPO-5 — Focus goal → Deferral integration (depends on DPO-1C + DPO-2D)
+DPO-5A — Focus badge on items: If item.isFocusAligned, show a small 🎯 chip or Focus badge next to the kind badge to visually call out why this item isn't in the "Review" bucket.
+
+DPO-5B — Auto-seed deferral with focus context: When opening DeferItemModal for a non-focus item, pass a new focusContext prop containing activeFocusGoals. The modal already calls suggestDeferralOptions cloud function — extend the call payload to include isFocusAligned: false so the backend can weight suggestions with "free up capacity for focus work" rationale. (DeferItemModal.tsx minor change.)
+
+Relevant files
+
+react-app/src/components/DailyPlanPage.tsx — all DPO phases
+react-app/src/hooks/useFocusGoals.ts — imported for DPO-1C (no changes needed)
+react-app/src/components/EditTaskModal.tsx — consumed in DPO-3D (no changes needed)
+react-app/src/components/EditStoryModal.tsx — consumed in DPO-3D (no changes needed)
+react-app/src/components/DeferItemModal.tsx — minor prop extension for DPO-5B
+Verification
+
+Load /daily-plan — confirm buckets all show Morning/Afternoon/Evening with no "Anytime" label on any row
+Click any count chip — confirm only that kind is shown across buckets; click again to clear filter
+Click an item row — confirm EditTaskModal/EditStoryModal opens, URL does not change
+Check off a task → confirm it disappears from the list within 1 second (Firestore real-time)
+Verify calendar event linked to a task shows only the task row (not a duplicate Event row)
+Confirm focus-aligned items (goalId in active focus goals) show 🎯 chip and are absent from "Review" count
+npm run build exits 0
+Decisions
+
+Calendar-block time wins over task dueDate for display/sorting when a block is linked to a task/story
+"Anytime" is completely eliminated; items with no time/timeOfDay show "Unscheduled" and sort last within their bucket (morning by default)
+Story check-off advances status by +1 step rather than jumping straight to Done (less destructive)
+The limit(300) cap is a temporary perf mitigation; the proper fix is a Firestore composite index (ownerUid, status, dueDate) which needs firestore.indexes.json update and deployment
+goals array is passed to EditStoryModal — requires fetching goals state which is already cheap (< 50 docs per user)
+Now I'll add this to plan.md via a subagent:
+
+File editing tools aren't available in planning mode. I'll use a subagent that has editing capability to write to plan.md:
+
+File writes aren't available in this planning session. I'll note the plan.md section is ready to insert when we implement — you can switch to the implementation agent to add it.
+
+Here is the complete plan:
+
+Plan: Daily Plan Page — Critical Defects Overhaul (DPO)
+TL;DR: react-app/src/components/DailyPlanPage.tsx has 9 defects degrading the primary daily planning surface. All changes land in that single file plus minor extensions to existing modal components. Implementation flows through 5 sequential phases.
+
+Phase DPO-1 — Performance + New Data Sources (unblocks everything else)
+DPO-1A — calendar_blocks query for today
+Add a date-bounded onSnapshot for calendar_blocks where ownerUid==uid AND start >= todayStartMs AND start <= todayEndMs. Mirrors the pattern already in react-app/src/components/ChecklistPanel.tsx. This enables block-based time promotion and deduplication in DPO-2.
+
+DPO-1B — Goals subscription
+Add onSnapshot for collection('goals') where ownerUid==uid. Build a goalMap via useMemo for O(1) goal title/theme lookup. Typical user < 50 goals — trivial query.
+
+DPO-1C — useFocusGoals integration
+Import useFocusGoals from react-app/src/hooks/useFocusGoals.ts. Materialise activeFocusGoalIds: Set<string> = union of all activeFocusGoals[*].goalIds. Feeds DPO-2D and DPO-5.
+
+DPO-1D — Temporary perf cap
+Add orderBy('updatedAt', 'desc') + limit(300) to both task and story queries. Mark with a TODO comment pointing to the proper fix: a Firestore composite index (ownerUid, status, dueDate) in firestore.indexes.json.
+
+Phase DPO-2 — Data Model + Processing (depends on DPO-1)
+DPO-2A — Extend TimelineItem type
+Add fields: ref, goalTitle, goalTheme, isFocusAligned, rawTask, rawStory, scheduledBlockStart.
+
+DPO-2B — Calendar deduplication + time promotion
+Inside timelineItems useMemo:
+
+Build blockByTaskId and blockByStoryId Maps from the new calendarBlocks state
+When a task/story has a linked block → override sortMs and timeLabel with the block's scheduled start time
+Skip creating a kind: 'event' row for any block already represented by a task/story row
+Result: No duplicate rows; tasks/stories show their actual calendar-scheduled time
+DPO-2C — Eliminate "Anytime" label
+In formatTimeLabel: return 'Unscheduled' (rendered muted) instead of 'Anytime'. For items with only timeOfDay set, assign pseudo sort times: morning → 09:00, afternoon → 14:00, evening → 19:30.
+
+DPO-2D — Focus-aware defer candidates
+Redefine deferCandidates as items where !isTop3 && !isFocusAligned. Focus-aligned items won't pollute the "Review" count.
+
+Phase DPO-3 — Item Row UI (depends on DPO-2)
+DPO-3A — Plain title + ref + time
+Replace the <Link> title with a three-line layout:
+
+Plain fw-semibold title text
+Muted 0.7rem line: {ref} spacer + {timeLabel}
+If goalTitle: dim ◆ {goalTitle} at 0.65rem, opacity 0.7, theme colour
+Make the entire row onClick the modal opener (DPO-3D).
+
+DPO-3B — Inline Done button
+Small circular btn-outline-success on the left for non-event items. On click:
+
+task/chore → updateDoc(tasks/{id}, { status: 2 })
+story → advance status +1 capped at 4
+Real-time listener removes items instantly.
+
+DPO-3D — Modal opener, not page navigation
+Add editTask: Task | null and editStory: Story | null state. Row click sets one of these. Mount at component bottom:
+
+Remove all <Link> components from item rows.
+
+Phase DPO-4 — Filterable Count Chips (parallel with DPO-3)
+DPO-4A Add activeKindFilter: 'task' | 'story' | 'chore' | 'event' | 'top3' | null state.
+
+DPO-4B Replace <Badge> counts with toggle <Button className="rounded-pill"> — filled when active, outline when not. Clicking the active filter deactivates it.
+
+DPO-4C In the bucket render loop, apply the active filter before rendering rows.
+
+Phase DPO-5 — Focus Goal → Deferral (depends on DPO-1C + DPO-2D)
+DPO-5A Show a 🎯 badge next to the kind badge on focus-aligned items.
+
+DPO-5B When opening DeferItemModal for a non-focus item, pass focus context. react-app/src/components/DeferItemModal.tsx shows a note: "This item is not linked to your active focus goals. Deferring it frees capacity for focus work."
+
+Relevant files
+
+react-app/src/components/DailyPlanPage.tsx — all DPO phases (primary)
+react-app/src/hooks/useFocusGoals.ts — imported DPO-1C, no changes
+react-app/src/components/EditTaskModal.tsx — consumed DPO-3D, no changes
+react-app/src/components/EditStoryModal.tsx — consumed DPO-3D, no changes
+react-app/src/components/DeferItemModal.tsx — minor prop extension DPO-5B
+Verification
+
+No "Anytime" label on any row at /daily-plan
+Count chips are clickable; clicking twice clears the filter
+Clicking any item row opens the modal — URL doesn't change
+Done button removes item within 1 second
+Calendar block linked to a task shows ONE row (task) — no duplicate Event row
+Focus-aligned items show 🎯 and are excluded from "Review" count
+npm run build exits 0
+Decisions
+
+Calendar block time wins over task dueDate for display and sorting when a block is linked
+"Anytime" fully eliminated; items with no time show "Unscheduled" and sort last in their bucket
+Story check-off is +1 status step (not instant-done) — less destructive
+limit(300) is a mitigation only — the real fix requires a new Firestore composite index
+
+---
+
+Latest execution log (14 Mar 2026, KPI designer expansion)
+- Expanded the live KPI designer from a simple goal + target form into a two-path authoring studio in `react-app/src/components/KPIDesigner.tsx`.
+- Added curated-metric browsing from a structured source catalog plus a custom KPI builder that lets users define their own source family, collection/store, field path, metric id, semantic KPI type, aggregation, timeframe, target direction, dashboard visualisation, and goal linkage.
+- Extended KPI metadata in `react-app/src/types/KpiTypes.ts` so saved KPI definitions now persist designer mode, source collection, field path, source data type, and source metric label.
+- Extended the source catalog in `react-app/src/utils/kpiDesignerCatalog.ts` so each source now exposes both curated KPI templates and raw browseable data points.
+- Updated `react-app/src/components/GoalKpiStudioPanel.tsx` so users can see whether a KPI was created from a curated metric or a custom design, plus the mapped source field path.
+
+Files touched for this slice
+- `react-app/src/components/KPIDesigner.tsx`
+- `react-app/src/components/GoalKpiStudioPanel.tsx`
+- `react-app/src/types/KpiTypes.ts`
+- `react-app/src/utils/kpiDesignerCatalog.ts`

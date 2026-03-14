@@ -121,6 +121,28 @@ const toKeyText = (value: any, fallback = 'unknown') => {
     return text || fallback;
 };
 
+const INCOME_CATEGORY_KEYS = new Set(['income', 'net_salary', 'irregular_income']);
+const EXCLUDED_SPEND_CATEGORY_KEYS = new Set(['bank_transfer', 'unknown', '']);
+
+const resolveTxCategory = (tx: any) => {
+    const key = toText(tx.userCategoryKey || tx.aiCategoryKey || tx.categoryKey, '').toLowerCase();
+    const label = toText(
+        tx.userCategoryLabel || tx.aiCategoryLabel || tx.categoryLabel || key || tx.categoryType,
+        'Uncategorised'
+    );
+    const bucket = toText(tx.userCategoryType || tx.aiBucket || tx.categoryType, '').toLowerCase();
+    return { key, label, bucket };
+};
+
+const isSpendBreakdownTx = (tx: any) => {
+    const amountMinor = txAmountMinor(tx);
+    if (!(amountMinor < 0)) return false;
+    const { key, bucket } = resolveTxCategory(tx);
+    if (EXCLUDED_SPEND_CATEGORY_KEYS.has(key)) return false;
+    if (INCOME_CATEGORY_KEYS.has(key) || bucket === 'income') return false;
+    return true;
+};
+
 const parseFinanceView = (tab: string | null): FinanceView | null => {
     if (!tab) return null;
     if (tab === 'cashflow') return 'spend';
@@ -642,47 +664,85 @@ const FinanceDashboardAdvanced: React.FC = () => {
         </div>
     );
 
-    const bucketEntries = Object.entries(data?.spendByBucket || {}).filter(([key]) => key !== 'bank_transfer' && key !== 'unknown');
-    const bucketData = bucketEntries
-        .map(([key, value]: [string, any]) => ({ name: key.charAt(0).toUpperCase() + key.slice(1), value: Math.abs(value) / 100 }))
-        .filter((entry) => entry.value > 0);
+    const spendTransactions = ((data?.recentTransactions || []) as any[])
+        .filter((tx) => isSpendBreakdownTx(tx));
 
-    const categoryData = Object.entries(data?.spendByCategory || {})
-        .filter(([key]) => key !== 'bank_transfer' && key !== 'unknown')
-        .map(([key, value]: [string, any]) => ({ name: key, value: Math.abs(value) / 100 }))
+    const bucketTotals: Record<string, number> = {};
+    const categoryTotalsByKey: Record<string, number> = {};
+    const categoryLabelsByKey: Record<string, string> = {};
+    const bucketSeriesByMonth: Record<string, Record<string, number>> = {};
+    const categorySeriesByMonth: Record<string, Record<string, number>> = {};
+
+    spendTransactions.forEach((tx: any) => {
+        const amount = Math.abs(txAmountMinor(tx)) / 100;
+        const { key: categoryKey, label: categoryLabel, bucket } = resolveTxCategory(tx);
+        const normalizedBucket = bucket || 'uncategorised';
+
+        categoryTotalsByKey[categoryKey] = (categoryTotalsByKey[categoryKey] || 0) + amount;
+        categoryLabelsByKey[categoryKey] = categoryLabelsByKey[categoryKey] || categoryLabel;
+        bucketTotals[normalizedBucket] = (bucketTotals[normalizedBucket] || 0) + amount;
+
+        const txDate = parseTxDate(tx);
+        if (!txDate || Number.isNaN(txDate.getTime())) return;
+        const month = txDate.toISOString().slice(0, 7);
+
+        if (!categorySeriesByMonth[month]) categorySeriesByMonth[month] = {};
+        if (!bucketSeriesByMonth[month]) bucketSeriesByMonth[month] = {};
+
+        categorySeriesByMonth[month][categoryKey] = (categorySeriesByMonth[month][categoryKey] || 0) + amount;
+        bucketSeriesByMonth[month][normalizedBucket] = (bucketSeriesByMonth[month][normalizedBucket] || 0) + amount;
+    });
+
+    const bucketData = Object.entries(bucketTotals)
+        .map(([key, value]) => ({
+            name: key.charAt(0).toUpperCase() + key.slice(1),
+            value: Number(value || 0),
+        }))
+        .filter((entry) => entry.value > 0)
         .sort((a, b) => b.value - a.value);
-    const topCategoryData = categoryData.slice(0, 10);
 
-    const timeSeriesSourceRaw = viewMode === 'bucket'
-        ? data?.timeSeriesByBucket
-        : viewMode === 'merchant'
-            ? null  // merchant has no backend time series; bar chart falls back to horizontal top-merchant view
-            : data?.timeSeriesByCategory;
-    const timeSeriesSource = Object.fromEntries(Object.entries(timeSeriesSourceRaw || {}).filter(([key]) => key !== 'bank_transfer'));
+    const categoryData = Object.entries(categoryTotalsByKey)
+        .map(([categoryKey, value]) => ({
+            key: categoryKey,
+            name: categoryLabelsByKey[categoryKey] || categoryKey || 'Uncategorised',
+            value: Number(value || 0),
+        }))
+        .filter((entry) => entry.value > 0)
+        .sort((a, b) => b.value - a.value);
+    const topCategoryData = categoryData.slice(0, 10).map(({ name, value }) => ({ name, value }));
 
-    const allMonths = new Set<string>();
-    Object.values(timeSeriesSource || {}).forEach((arr: any) => arr.forEach((entry: any) => allMonths.add(entry.month)));
-    const sortedMonths = Array.from(allMonths).sort();
+    const monthlySource = viewMode === 'bucket' ? bucketSeriesByMonth : categorySeriesByMonth;
+    const sortedMonths = Object.keys(monthlySource).sort();
 
     const trendData = sortedMonths.map((month) => {
         const row: any = { month };
-        Object.entries(timeSeriesSource || {}).forEach(([key, arr]: [string, any]) => {
-            const entry = arr.find((item: any) => item.month === month);
-            if (entry) row[key] = Math.abs(entry.amount) / 100;
+        const monthValues = monthlySource[month] || {};
+        Object.entries(monthValues).forEach(([rawKey, value]) => {
+            const seriesName = viewMode === 'bucket'
+                ? rawKey.charAt(0).toUpperCase() + rawKey.slice(1)
+                : (categoryLabelsByKey[rawKey] || rawKey || 'Uncategorised');
+            row[seriesName] = Number(value || 0);
         });
         return row;
     });
 
-    const activeKeys = Object.keys(timeSeriesSource || {}).slice(0, 5);
-    const bankTransferAmount = data?.spendByBucket?.bank_transfer ?? 0;
-    const filteredTotalSpend = Math.abs((data?.totalSpend || 0) - bankTransferAmount) / 100;
+    const trendKeyTotals = trendData.reduce((acc: Record<string, number>, row: any) => {
+        Object.entries(row).forEach(([key, value]) => {
+            if (key === 'month') return;
+            acc[key] = (acc[key] || 0) + Number(value || 0);
+        });
+        return acc;
+    }, {} as Record<string, number>);
 
-    // Merchant distribution from transactions (computed before trendOption)
-    const merchantTopDataEarly = ((data?.recentTransactions || []) as any[])
-        .filter((tx) => {
-            const cat = (tx.userCategoryKey || tx.aiCategoryKey || tx.categoryKey || tx.categoryType || '').toLowerCase();
-            return cat !== 'bank_transfer' && cat !== 'net_salary' && cat !== 'irregular_income';
-        })
+    const activeKeys = Object.entries(trendKeyTotals)
+        .sort((a, b) => Number(b[1] || 0) - Number(a[1] || 0))
+        .slice(0, 5)
+        .map(([key]) => key);
+
+    const filteredTotalSpend = spendTransactions.reduce((sum: number, tx: any) => sum + Math.abs(txAmountMinor(tx)) / 100, 0);
+
+    // Merchant distribution from spend transactions only.
+    const merchantTopDataEarly = spendTransactions
         .reduce((acc: Record<string, number>, tx: any) => {
             const name = toText(tx.merchantName || tx.merchant?.name || tx.merchant, 'Unknown');
             const amt = Math.abs(txAmountMinor(tx)) / 100;
@@ -723,27 +783,24 @@ const FinanceDashboardAdvanced: React.FC = () => {
             })),
         };
 
-    const localDistribution = ((data?.recentTransactions || []) as any[])
-        .filter((tx) => {
-            const cat = (tx.userCategoryKey || tx.aiCategoryKey || tx.categoryKey || tx.categoryType || '').toLowerCase();
-            // Exclude bank transfers, income, and unknown from distribution pie chart
-            return cat && cat !== 'bank_transfer' && cat !== 'unknown' &&
-                   cat !== 'net_salary' && cat !== 'irregular_income' && cat !== 'income';
-        })
+    const localDistribution = spendTransactions
         .reduce((acc: Record<string, number>, tx: any) => {
-            const label = toText(
-                tx.userCategoryLabel || tx.aiCategoryLabel || tx.categoryLabel || tx.categoryKey || tx.categoryType,
-                'Uncategorised'
-            );
+            const { key } = resolveTxCategory(tx);
+            const normalizedKey = key || 'uncategorised';
             const amt = Math.abs(txAmountMinor(tx)) / 100;
-            acc[label] = (acc[label] || 0) + amt;
+            acc[normalizedKey] = (acc[normalizedKey] || 0) + amt;
             return acc;
         }, {} as Record<string, number>);
 
     const distributionSource = (() => {
         if (viewMode === 'merchant') return merchantDataEarly.slice(0, 10);
         const local = Object.entries(localDistribution)
-            .map(([name, value]) => ({ name, value: Number(value || 0) }))
+            .map(([categoryKey, value]) => ({
+                name: viewMode === 'bucket'
+                    ? categoryKey.charAt(0).toUpperCase() + categoryKey.slice(1)
+                    : (categoryLabelsByKey[categoryKey] || categoryKey || 'Uncategorised'),
+                value: Number(value || 0),
+            }))
             .sort((a, b) => Number(b.value) - Number(a.value))
             .slice(0, 10);
         const aggregate = viewMode === 'bucket' ? bucketData : topCategoryData;
@@ -751,13 +808,44 @@ const FinanceDashboardAdvanced: React.FC = () => {
         return local;
     })();
 
+    const distributionCenterValue = useMemo(() => {
+        const total = distributionSource.reduce((sum: number, entry: any) => sum + Number(entry?.value || 0), 0);
+        return formatCurrency(total);
+    }, [distributionSource]);
+
     const distributionOption = {
         tooltip: { trigger: 'item', valueFormatter: (v: number) => `£${v}` },
         legend: { orient: 'horizontal', bottom: 0 },
+        graphic: [
+            {
+                type: 'text',
+                left: 'center',
+                top: '38%',
+                style: {
+                    text: distributionCenterValue,
+                    textAlign: 'center',
+                    fill: isDark ? '#ffffff' : '#1f2937',
+                    fontSize: 18,
+                    fontWeight: 700,
+                },
+            },
+            {
+                type: 'text',
+                left: 'center',
+                top: '49%',
+                style: {
+                    text: viewMode === 'merchant' ? 'Top merchants' : viewMode === 'bucket' ? 'Top buckets' : 'Top categories',
+                    textAlign: 'center',
+                    fill: isDark ? 'rgba(255,255,255,0.62)' : '#6b7280',
+                    fontSize: 11,
+                    fontWeight: 500,
+                },
+            },
+        ],
         series: [
             {
                 type: 'pie',
-                radius: ['50%', '70%'],
+                radius: ['62%', '82%'],
                 avoidLabelOverlap: false,
                 itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 2 },
                 label: { show: false },
@@ -796,19 +884,12 @@ const FinanceDashboardAdvanced: React.FC = () => {
 
     const filteredRecentTransactions = (data?.recentTransactions || [])
         .filter((tx: any) => {
-            const bucket = (tx.userCategoryType || tx.aiBucket || tx.categoryType || '').toLowerCase();
-            // Exclude bank transfers, income, and unknown transactions from spend analysis
-            if (bucket === 'bank_transfer' || bucket === 'unknown' ||
-                bucket === 'net_salary' || bucket === 'irregular_income' ||
-                bucket === 'income') return false;
+            if (!isSpendBreakdownTx(tx)) return false;
 
             // Apply chart filter
             if (chartFilter.type && chartFilter.value) {
                 if (chartFilter.type === 'category') {
-                    const categoryLabel = toText(
-                        tx.userCategoryLabel || tx.aiCategoryLabel || tx.categoryLabel || tx.categoryKey || tx.categoryType,
-                        'Uncategorised'
-                    );
+                    const categoryLabel = resolveTxCategory(tx).label;
                     if (categoryLabel !== chartFilter.value) return false;
                 } else if (chartFilter.type === 'bucket') {
                     const bucketLabel = toText(tx.userCategoryType || tx.aiBucket || tx.categoryType, '');
@@ -840,10 +921,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
             ...tx,
             __merchantLabel: toText(tx.merchantName || tx.merchant?.name || tx.merchant, 'Unknown merchant'),
             __potLabel: toText(tx.potName, '—'),
-            __categoryLabel: toText(
-                tx.userCategoryLabel || tx.aiCategoryLabel || tx.categoryLabel || tx.categoryKey || tx.categoryType,
-                'Uncategorised'
-            ),
+            __categoryLabel: resolveTxCategory(tx).label,
             __bucketLabel: toText(tx.userCategoryType || tx.aiBucket || tx.categoryType, 'Unknown'),
         }));
 
@@ -1523,7 +1601,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
 
     const renderOverview = () => (
         <>
-            <Row className="g-4 mb-4">
+            <Row className="g-3 mb-3">
                 <Col xxl={2} xl={3} md={6}>
                     <div
                         className={`finance-dashboard-clickable-card${cardFilter === 'all' && !chartFilter.type ? ' is-active' : ''}`}
@@ -1537,11 +1615,11 @@ const FinanceDashboardAdvanced: React.FC = () => {
                             }
                         }}
                     >
-                        <PremiumCard icon={DollarSign} title="Total Spend">
-                            <h2 className="fw-bold mb-0" style={{ color: colors.danger }}>
+                        <PremiumCard icon={DollarSign} title="Total Spend" className="finance-summary-card">
+                            <div className="finance-summary-value" style={{ color: colors.danger }}>
                                 {formatCurrency(filteredTotalSpend)}
-                            </h2>
-                            <p className="text-muted mb-0 mt-2">View excludes bank transfers</p>
+                            </div>
+                            <p className="text-muted mb-0 mt-1 finance-summary-caption">View excludes bank transfers</p>
                         </PremiumCard>
                     </div>
                 </Col>
@@ -1558,11 +1636,11 @@ const FinanceDashboardAdvanced: React.FC = () => {
                             }
                         }}
                     >
-                        <PremiumCard icon={CreditCard} title="Discretionary">
-                            <h2 className="fw-bold mb-0" style={{ color: colors.info }}>
+                        <PremiumCard icon={CreditCard} title="Discretionary" className="finance-summary-card">
+                            <div className="finance-summary-value" style={{ color: colors.info }}>
                                 {formatCurrency(Math.abs(data?.totalDiscretionarySpend || 0) / 100)}
-                            </h2>
-                            <p className="text-muted mb-0 mt-2">Optional day-to-day spend</p>
+                            </div>
+                            <p className="text-muted mb-0 mt-1 finance-summary-caption">Optional day-to-day spend</p>
                         </PremiumCard>
                     </div>
                 </Col>
@@ -1579,11 +1657,11 @@ const FinanceDashboardAdvanced: React.FC = () => {
                             }
                         }}
                     >
-                        <PremiumCard icon={Layers} title="Subscriptions">
-                            <h2 className="fw-bold mb-0" style={{ color: colors.warning }}>
+                        <PremiumCard icon={Layers} title="Subscriptions" className="finance-summary-card">
+                            <div className="finance-summary-value" style={{ color: colors.warning }}>
                                 {formatCurrency(Math.abs(data?.totalSubscriptionSpend || 0) / 100)}
-                            </h2>
-                            <p className="text-muted mb-0 mt-2">Recurring costs</p>
+                            </div>
+                            <p className="text-muted mb-0 mt-1 finance-summary-caption">Recurring costs</p>
                         </PremiumCard>
                     </div>
                 </Col>
@@ -1600,11 +1678,11 @@ const FinanceDashboardAdvanced: React.FC = () => {
                             }
                         }}
                     >
-                        <PremiumCard icon={Sparkles} title="Actions Potential">
-                            <h2 className="fw-bold mb-0" style={{ color: colors.success }}>
+                        <PremiumCard icon={Sparkles} title="Actions Potential" className="finance-summary-card">
+                            <div className="finance-summary-value" style={{ color: colors.success }}>
                                 {formatCurrency(totalActionSavings)}
-                            </h2>
-                            <p className="text-muted mb-0 mt-2">Estimated monthly savings ({actions.length} actions)</p>
+                            </div>
+                            <p className="text-muted mb-0 mt-1 finance-summary-caption">Estimated monthly savings ({actions.length} actions)</p>
                         </PremiumCard>
                     </div>
                 </Col>
@@ -1621,14 +1699,14 @@ const FinanceDashboardAdvanced: React.FC = () => {
                             }
                         }}
                     >
-                        <PremiumCard icon={AlertTriangle} title="Uncategorized">
+                        <PremiumCard icon={AlertTriangle} title="Uncategorized" className="finance-summary-card finance-summary-card--tight">
                             <div className="d-flex justify-content-between align-items-end">
-                                <h3 className="fw-bold mb-0" style={{ color: uncategorizedCount > 0 ? colors.warning : colors.success }}>
+                                <div className="finance-summary-subvalue" style={{ color: uncategorizedCount > 0 ? colors.warning : colors.success }}>
                                     {uncategorizedCount}
-                                </h3>
+                                </div>
                                 <span className="small text-muted">{uncategorizedPct.toFixed(1)}%</span>
                             </div>
-                            <p className="text-muted mb-0 mt-2">
+                            <p className="text-muted mb-0 mt-1 finance-summary-caption">
                                 {classifiableCount.toLocaleString()} classifiable tx in range
                             </p>
                         </PremiumCard>
@@ -1647,54 +1725,55 @@ const FinanceDashboardAdvanced: React.FC = () => {
                             }
                         }}
                     >
-                        <PremiumCard icon={Activity} title="Spend Anomalies">
+                        <PremiumCard icon={Activity} title="Spend Anomalies" className="finance-summary-card finance-summary-card--tight">
                             <div className="d-flex justify-content-between align-items-end">
-                                <h3 className="fw-bold mb-0" style={{ color: colors.warning }}>{anomalyCount}</h3>
+                                <div className="finance-summary-subvalue" style={{ color: colors.warning }}>{anomalyCount}</div>
                                 <span className="small text-muted">{formatCurrency(toPounds(anomalySpend))}</span>
                             </div>
-                            <p className="text-muted mb-0 mt-2">Flagged transactions in range</p>
+                            <p className="text-muted mb-0 mt-1 finance-summary-caption">Flagged transactions in range</p>
                         </PremiumCard>
                     </div>
                 </Col>
             </Row>
 
             {budgetHealth && (
-                <Row className="g-4 mb-4">
+                <Row className="g-3 mb-3">
                     <Col md={3}>
-                        <PremiumCard icon={Wallet} title="Budget Set">
-                            <h3 className="fw-bold mb-0">{formatCurrency(toPounds(budgetHealth.totalBudgetPence || 0))}</h3>
-                            <p className="text-muted mb-0 mt-2">Configured category budget</p>
+                        <PremiumCard icon={Wallet} title="Budget Set" className="finance-summary-card finance-summary-card--tight">
+                            <div className="finance-summary-subvalue">{formatCurrency(toPounds(budgetHealth.totalBudgetPence || 0))}</div>
+                            <p className="text-muted mb-0 mt-1 finance-summary-caption">Configured category budget</p>
                         </PremiumCard>
                     </Col>
                     <Col md={3}>
-                        <PremiumCard icon={Activity} title="Actual Spend">
-                            <h3 className="fw-bold mb-0" style={{ color: colors.danger }}>{formatCurrency(toPounds(budgetHealth.totalActualPence || 0))}</h3>
-                            <p className="text-muted mb-0 mt-2">In selected date range</p>
+                        <PremiumCard icon={Activity} title="Actual Spend" className="finance-summary-card finance-summary-card--tight">
+                            <div className="finance-summary-subvalue" style={{ color: colors.danger }}>{formatCurrency(toPounds(budgetHealth.totalActualPence || 0))}</div>
+                            <p className="text-muted mb-0 mt-1 finance-summary-caption">In selected date range</p>
                         </PremiumCard>
                     </Col>
                     <Col md={3}>
-                        <PremiumCard icon={TrendingUp} title="Variance">
-                            <h3 className="fw-bold mb-0" style={{ color: (budgetHealth.variancePence || 0) >= 0 ? colors.success : colors.warning }}>
+                        <PremiumCard icon={TrendingUp} title="Variance" className="finance-summary-card finance-summary-card--tight">
+                            <div className="finance-summary-subvalue" style={{ color: (budgetHealth.variancePence || 0) >= 0 ? colors.success : colors.warning }}>
                                 {formatCurrency(toPounds(budgetHealth.variancePence || 0))}
-                            </h3>
-                            <p className="text-muted mb-0 mt-2">Budget minus actual</p>
+                            </div>
+                            <p className="text-muted mb-0 mt-1 finance-summary-caption">Budget minus actual</p>
                         </PremiumCard>
                     </Col>
                     <Col md={3}>
-                        <PremiumCard icon={Target} title="Budget Used">
-                            <h3 className="fw-bold mb-0">{Number(budgetHealth.utilizationPct || 0).toFixed(1)}%</h3>
-                            <p className="text-muted mb-0 mt-2">Utilization against set budget</p>
+                        <PremiumCard icon={Target} title="Budget Used" className="finance-summary-card finance-summary-card--tight">
+                            <div className="finance-summary-subvalue">{Number(budgetHealth.utilizationPct || 0).toFixed(1)}%</div>
+                            <p className="text-muted mb-0 mt-1 finance-summary-caption">Utilization against set budget</p>
                         </PremiumCard>
                     </Col>
                 </Row>
             )}
 
-            <Row className="g-4 mb-4">
+            <Row className="g-3 mb-4">
                 <Col lg={8}>
                     <PremiumCard
                         title="Spend Trend (Click bars to filter)"
                         icon={TrendingUp}
-                        height={350}
+                        height={310}
+                        className="finance-chart-card"
                         action={
                             <ButtonGroup size="sm">
                                 <Button variant={viewMode === 'category' ? 'primary' : 'outline-secondary'} onClick={() => setViewMode('category')}>Category</Button>
@@ -1714,7 +1793,8 @@ const FinanceDashboardAdvanced: React.FC = () => {
                     <PremiumCard
                         title="Top 10 Distribution (Click to filter)"
                         icon={PieIcon}
-                        height={350}
+                        height={310}
+                        className="finance-chart-card"
                         action={
                             <ButtonGroup size="sm">
                                 <Button variant={viewMode === 'category' ? 'primary' : 'outline-secondary'} onClick={() => setViewMode('category')}>Category</Button>
@@ -1732,7 +1812,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
                 </Col>
             </Row>
 
-            <Row className="g-4">
+            <Row className="g-3">
                 <Col lg={12}>
                     <PremiumCard
                         title={`Transactions + AI Recommendations (${filteredRecentTransactions.length})`}
@@ -1763,23 +1843,23 @@ const FinanceDashboardAdvanced: React.FC = () => {
 
     const renderSpendAnalysis = () => (
         <>
-            <Row className="g-4 mb-4">
+            <Row className="g-3 mb-3">
                 <Col md={4}>
-                    <PremiumCard icon={DollarSign} title="Filtered Spend">
-                        <h3 className="fw-bold mb-0">{formatCurrency(toPounds(analysisStats.totalPence || 0))}</h3>
-                        <p className="text-muted mb-0 mt-2">Based on active filters</p>
+                    <PremiumCard icon={DollarSign} title="Filtered Spend" className="finance-summary-card finance-summary-card--tight">
+                        <div className="finance-summary-subvalue">{formatCurrency(toPounds(analysisStats.totalPence || 0))}</div>
+                        <p className="text-muted mb-0 mt-1 finance-summary-caption">Based on active filters</p>
                     </PremiumCard>
                 </Col>
                 <Col md={4}>
-                    <PremiumCard icon={Layers} title="Transactions">
-                        <h3 className="fw-bold mb-0">{analysisStats.count}</h3>
-                        <p className="text-muted mb-0 mt-2">Rows in analysis set</p>
+                    <PremiumCard icon={Layers} title="Transactions" className="finance-summary-card finance-summary-card--tight">
+                        <div className="finance-summary-subvalue">{analysisStats.count}</div>
+                        <p className="text-muted mb-0 mt-1 finance-summary-caption">Rows in analysis set</p>
                     </PremiumCard>
                 </Col>
                 <Col md={4}>
-                    <PremiumCard icon={TrendingUp} title="Avg Transaction">
-                        <h3 className="fw-bold mb-0">{formatCurrency(toPounds(analysisStats.avgPence || 0))}</h3>
-                        <p className="text-muted mb-0 mt-2">Average spend per transaction</p>
+                    <PremiumCard icon={TrendingUp} title="Avg Transaction" className="finance-summary-card finance-summary-card--tight">
+                        <div className="finance-summary-subvalue">{formatCurrency(toPounds(analysisStats.avgPence || 0))}</div>
+                        <p className="text-muted mb-0 mt-1 finance-summary-caption">Average spend per transaction</p>
                     </PremiumCard>
                 </Col>
             </Row>

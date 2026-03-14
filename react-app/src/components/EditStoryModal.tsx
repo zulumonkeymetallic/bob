@@ -18,6 +18,7 @@ import { useNavigate } from 'react-router-dom';
 import { Wand2 } from 'lucide-react';
 import { planningSprints } from '../utils/sprintFilter';
 import { evaluateStorySprintAlignment } from '../utils/sprintAlignment';
+import { getGoalDisplayPath, getLeafGoalOptions, resolveLeafGoalSelection } from '../utils/goalHierarchy';
 
 interface EditStoryModalProps {
   show: boolean;
@@ -84,6 +85,11 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
     () => (editedStory.goalId ? goals.find((g) => g.id === editedStory.goalId) : null),
     [editedStory.goalId, goals],
   );
+  const leafGoalOptions = useMemo(() => getLeafGoalOptions(goals), [goals]);
+  const selectedGoalResolution = useMemo(
+    () => resolveLeafGoalSelection(editedStory.goalId || null, goals),
+    [editedStory.goalId, goals],
+  );
   const sprintAlignment = useMemo(
     () => evaluateStorySprintAlignment(selectedSprint as any, editedStory.goalId || ''),
     [selectedSprint, editedStory.goalId],
@@ -146,7 +152,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
       setError(null);
       setAiResult(null);
       const currentGoal = goals.find(g => g.id === story.goalId);
-      setGoalInput(currentGoal?.title || '');
+      setGoalInput(currentGoal ? getGoalDisplayPath(currentGoal.id, goals) : '');
     }
   }, [story, goals]);
 
@@ -233,7 +239,17 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
         }
       }
 
-      const selectedGoal = goals.find(g => g.id === editedStory.goalId);
+      const resolvedGoalSelection = resolveLeafGoalSelection(editedStory.goalId || null, goals);
+      if (editedStory.goalId && !resolvedGoalSelection.goalId) {
+        setError(
+          resolvedGoalSelection.reason === 'ambiguous_parent'
+            ? 'Stories must link to a specific leaf goal. Select the child goal you want this story to execute against.'
+            : 'Please select a valid leaf goal before saving this story.'
+        );
+        return;
+      }
+
+      const selectedGoal = goals.find((g) => g.id === (resolvedGoalSelection.goalId || editedStory.goalId));
       const normalizedPriority = normalizePriorityValue(editedStory.priority);
       const parsedStoryPoints = parsePointsValue(editedStory.points);
       const normalizedStoryPoints = parsedStoryPoints == null ? 1 : parsedStoryPoints;
@@ -241,7 +257,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
         title: editedStory.title.trim(),
         description: editedStory.description.trim(),
         url: editedStory.url.trim() || null,
-        goalId: editedStory.goalId || null,
+        goalId: resolvedGoalSelection.goalId || null,
         priority: normalizedPriority > 0 ? normalizedPriority : 2,
         status: editedStory.status,
         blocked: !!editedStory.blocked,
@@ -452,16 +468,30 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
                       onChange={(e) => setGoalInput(e.target.value)}
                       onBlur={() => {
                         const val = goalInput.trim();
-                        const match = goals.find(g => g.title === val || g.id === val);
+                        const match = leafGoalOptions.find((g) => {
+                          const displayPath = getGoalDisplayPath(g.id, goals);
+                          return displayPath === val || g.id === val || g.title === val;
+                        });
+                        setGoalInput(match ? getGoalDisplayPath(match.id, goals) : val);
                         handleInputChange('goalId', match ? match.id : '');
                       }}
-                      placeholder="Search goals by title..."
+                      placeholder="Search leaf goals by title..."
                     />
                     <datalist id="edit-story-goal-options">
-                      {goals.map(g => (
-                        <option key={g.id} value={g.title} />
+                      {leafGoalOptions.map(g => (
+                        <option key={g.id} value={getGoalDisplayPath(g.id, goals)} />
                       ))}
                     </datalist>
+                    {selectedGoalResolution.reason === 'auto_descendant' && selectedGoalResolution.leafGoal && (
+                      <div className="form-text text-info">
+                        Parent goal selection auto-resolved to {getGoalDisplayPath(selectedGoalResolution.leafGoal.id, goals)}.
+                      </div>
+                    )}
+                    {selectedGoalResolution.reason === 'ambiguous_parent' && (
+                      <div className="form-text text-warning">
+                        This parent has multiple leaf goals. Choose the exact leaf goal this story should execute against.
+                      </div>
+                    )}
                     {editedStory.goalId ? (
                       <div className="form-text">
                         <Button

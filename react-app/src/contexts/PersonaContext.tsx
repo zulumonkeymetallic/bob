@@ -9,7 +9,7 @@ interface PersonaContextType {
   currentPersona: Persona;
   setPersona: (persona: Persona) => void;
   togglePersona: () => void;
-  /** True while a Work/Main Gig calendar block is active (startup auto-forced to work) */
+  /** True while a Work/Main Gig calendar block is active */
   workBlockActive: boolean;
 }
 
@@ -41,8 +41,8 @@ export const PersonaProvider = ({ children }: { children: ReactNode }) => {
     setPersona(newPersona);
   };
 
-  // Startup: if an active Work/Main Gig block exists right now, force persona to work.
-  // Only runs once per session per user to avoid fighting with manual persona switches.
+  // Startup: detect whether a Work/Main Gig block is active right now, but do not
+  // override the user's chosen persona.
   useEffect(() => {
     if (!currentUser?.uid || startupCheckedRef.current) return;
     startupCheckedRef.current = true;
@@ -63,13 +63,10 @@ export const PersonaProvider = ({ children }: { children: ReactNode }) => {
 
         if (activeWorkBlock) {
           setWorkBlockActive(true);
-          if (currentPersona !== 'work') {
-            logger.debug('PersonaContext', 'Active Work/Main Gig block detected — switching persona to work', {
-              blockId: activeWorkBlock.id,
-              category: (activeWorkBlock as any).category,
-            });
-            setPersona('work');
-          }
+          logger.debug('PersonaContext', 'Active Work/Main Gig block detected', {
+            blockId: activeWorkBlock.id,
+            category: (activeWorkBlock as any).category,
+          });
         } else {
           setWorkBlockActive(false);
         }

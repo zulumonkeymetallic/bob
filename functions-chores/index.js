@@ -140,16 +140,31 @@ function applyTimeOfDay(day, timeMs) {
   return d.getTime();
 }
 
-function formatDueTime(ms) {
+const CHORE_TIMEZONE = 'Europe/London';
+
+function extractZoneHourMinute(ms, timeZone = CHORE_TIMEZONE) {
   const d = new Date(ms);
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mm = String(d.getMinutes()).padStart(2, '0');
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    timeZone,
+  }).formatToParts(d);
+  const hour = Number(parts.find((p) => p.type === 'hour')?.value || '0');
+  const minute = Number(parts.find((p) => p.type === 'minute')?.value || '0');
+  return { hour, minute };
+}
+
+function formatDueTime(ms) {
+  const { hour, minute } = extractZoneHourMinute(ms);
+  const hh = String(hour).padStart(2, '0');
+  const mm = String(minute).padStart(2, '0');
   return `${hh}:${mm}`;
 }
 
 function classifyTimeOfDay(ms) {
-  const d = new Date(ms);
-  const minutes = d.getHours() * 60 + d.getMinutes();
+  const { hour, minute } = extractZoneHourMinute(ms);
+  const minutes = hour * 60 + minute;
   if (minutes >= (5 * 60) && minutes < (12 * 60)) return 'morning';
   if (minutes >= (12 * 60) && minutes < (17 * 60)) return 'afternoon';
   return 'evening';

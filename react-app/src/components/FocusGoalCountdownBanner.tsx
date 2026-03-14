@@ -5,6 +5,7 @@ import { FocusGoal, Goal, Story } from '../types';
 import { FitnessKPIQuickStatus } from './FitnessKPIDisplay';
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { db } from '../firebase';
+import { getGoalDisplayPath, getProtectedFocusGoalIds, isGoalInHierarchySet } from '../utils/goalHierarchy';
 
 interface MonzoGoalSummary {
   goalId: string;
@@ -84,6 +85,7 @@ export const FocusGoalCountdownBanner: React.FC<FocusGoalCountdownBannerProps> =
   compact = false
 }) => {
   const [goalKpiMetrics, setGoalKpiMetrics] = useState<Record<string, GoalKpiMetricRow>>({});
+  const protectedGoalIds = useMemo(() => new Set(getProtectedFocusGoalIds(focusGoal)), [focusGoal]);
 
   const ownerUid = useMemo(
     () => String((focusGoal as any)?.ownerUid || goals.find((g) => !!(g as any)?.ownerUid)?.ownerUid || '').trim(),
@@ -101,7 +103,7 @@ export const FocusGoalCountdownBanner: React.FC<FocusGoalCountdownBannerProps> =
       snap.docs.forEach((docSnap) => {
         const data = docSnap.data() as any;
         const goalId = String(data?.goalId || '').trim();
-        if (!goalId || !(focusGoal.goalIds || []).includes(goalId)) return;
+        if (!goalId || !isGoalInHierarchySet(goalId, goals, protectedGoalIds)) return;
         map[goalId] = {
           resolvedKpis: Array.isArray(data?.resolvedKpis) ? data.resolvedKpis : [],
           updatedAt: data?.updatedAt || null,
@@ -112,7 +114,7 @@ export const FocusGoalCountdownBanner: React.FC<FocusGoalCountdownBannerProps> =
       setGoalKpiMetrics({});
     });
     return () => unsubscribe();
-  }, [ownerUid, focusGoal.goalIds]);
+  }, [goals, ownerUid, protectedGoalIds]);
 
   const buildKpiSeries = (kpi: any): number[] => {
     const series = Array.isArray(kpi?.weeklyValues)
@@ -162,14 +164,14 @@ export const FocusGoalCountdownBanner: React.FC<FocusGoalCountdownBannerProps> =
 
   // Get selected goals
   const selectedGoals = useMemo(
-    () => goals.filter(g => focusGoal.goalIds.includes(g.id)),
-    [goals, focusGoal.goalIds]
+    () => goals.filter((goal) => isGoalInHierarchySet(goal.id, goals, protectedGoalIds)),
+    [goals, protectedGoalIds]
   );
 
   // Get stories linked to focus goals
   const focusStories = useMemo(
-    () => stories.filter(s => focusGoal.goalIds.includes(s.goalId)),
-    [stories, focusGoal.goalIds]
+    () => stories.filter((story) => isGoalInHierarchySet(String(story.goalId || '').trim(), goals, protectedGoalIds)),
+    [goals, protectedGoalIds, stories]
   );
 
   // Calculate story progress
@@ -189,8 +191,7 @@ export const FocusGoalCountdownBanner: React.FC<FocusGoalCountdownBannerProps> =
   }, [selectedGoals]);
 
   const alignmentStats = useMemo(() => {
-    const selectedSet = new Set(focusGoal.goalIds || []);
-    const nonFocus = goals.filter((g) => !selectedSet.has(g.id) && g.status !== 2);
+    const nonFocus = goals.filter((goal) => !isGoalInHierarchySet(goal.id, goals, protectedGoalIds) && goal.status !== 2);
     const deferredNonFocus = nonFocus.filter((g) => Number(g.status || 0) === 4).length;
     const alignedPercent = nonFocus.length
       ? Math.round((deferredNonFocus / nonFocus.length) * 100)
@@ -200,7 +201,7 @@ export const FocusGoalCountdownBanner: React.FC<FocusGoalCountdownBannerProps> =
       deferredNonFocus,
       alignedPercent,
     };
-  }, [goals, focusGoal.goalIds]);
+  }, [goals, protectedGoalIds]);
 
   // Build a quick lookup: goalId → Monzo alignment summary
   const monzoPotByGoalId = useMemo(() => {
@@ -414,7 +415,7 @@ export const FocusGoalCountdownBanner: React.FC<FocusGoalCountdownBannerProps> =
                 <Card key={goal.id} style={{ borderLeft: `4px solid #667eea` }}>
                   <Card.Body style={{ padding: '12px' }}>
                     <div style={{ fontWeight: '600', marginBottom: '8px', fontSize: '13px' }}>
-                      {goal.title}
+                      {getGoalDisplayPath(goal.id, goals)}
                       {goal.status === 2 && (
                         <Badge bg="success" className="ms-2" style={{ fontSize: '10px' }}>
                           ✓
@@ -558,7 +559,8 @@ export const FocusGoalCountdownBanner: React.FC<FocusGoalCountdownBannerProps> =
  * Text-only banner for email templates
  */
 export const FocusGoalCountdownEmailBanner = (focusGoal: FocusGoal, goals: Goal[]): string => {
-  const selectedGoals = goals.filter(g => focusGoal.goalIds.includes(g.id));
+  const protectedGoalIds = new Set(getProtectedFocusGoalIds(focusGoal));
+  const selectedGoals = goals.filter((goal) => isGoalInHierarchySet(goal.id, goals, protectedGoalIds));
   const urgency = getUrgency(focusGoal.daysRemaining || 0);
 
   return `
@@ -573,7 +575,7 @@ export const FocusGoalCountdownEmailBanner = (focusGoal: FocusGoal, goals: Goal[
       <div style="margin-bottom: 12px;">
         <strong>${selectedGoals.length} goals in focus:</strong>
         <ul style="margin: 8px 0; padding-left: 20px; font-size: 13px;">
-          ${selectedGoals.map(g => `<li>${g.title}</li>`).join('')}
+          ${selectedGoals.map((goal) => `<li>${getGoalDisplayPath(goal.id, goals)}</li>`).join('')}
         </ul>
       </div>
       <a href="https://bob.jc1.tech/metrics/progress" style="background: white; color: #667eea; padding: 8px 16px; border-radius: 6px; text-decoration: none; font-weight: 600; display: inline-block; font-size: 12px;">

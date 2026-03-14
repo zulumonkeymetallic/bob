@@ -278,6 +278,23 @@
   font-weight: 600;
 }
 
+.kanban-card__source-note {
+  font-size: 0.64rem;
+  line-height: 1.15;
+  letter-spacing: 0.01em;
+  text-transform: lowercase;
+  color: color-mix(in srgb, var(--muted) 78%, transparent);
+  opacity: 0.78;
+  font-weight: 500;
+}
+
+.kanban-card__source-note--quiet {
+  font-size: 0.6rem;
+  letter-spacing: 0.02em;
+  color: color-mix(in srgb, var(--muted) 64%, transparent);
+  opacity: 0.58;
+}
+
 .kanban-card__clickable {
   cursor: pointer;
 }

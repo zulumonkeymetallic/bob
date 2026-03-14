@@ -50,6 +50,7 @@ import ModernStoriesTable from './ModernStoriesTable';
 import { themeVars, rgbaCard } from '../utils/themeVars';
 import { getGoalLinkedPotId, normalizeGoalCostType } from '../utils/goalCost';
 import { MISSING_INFO_CELL_BG, MISSING_INFO_CELL_BG_HOVER } from '../utils/dataQuality';
+import { resolveLeafGoalSelection } from '../utils/goalHierarchy';
 
 interface GoalTableRow extends Goal {
   storiesCount?: number;
@@ -1482,6 +1483,14 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
   const handleStoryAdd = (goalId: string) => async (storyData: Omit<Story, 'ref' | 'id' | 'updatedAt' | 'createdAt'>) => {
     try {
       if (!currentUser) throw new Error('No user');
+      const resolvedGoalSelection = resolveLeafGoalSelection(goalId, goals);
+      if (!resolvedGoalSelection.goalId) {
+        throw new Error(
+          resolvedGoalSelection.reason === 'ambiguous_parent'
+            ? 'Stories must link to a specific leaf goal. Choose a child milestone goal instead of the parent goal.'
+            : 'Please select a valid leaf goal before creating a story.'
+        );
+      }
 
       // Generate unique reference number for story for this owner
       const existing = await getDocs(query(collection(db, 'stories'), where('ownerUid', '==', currentUser.uid)));
@@ -1492,7 +1501,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
       // Get goal theme to inherit if available
       let themeToUse = (storyData as any).theme ?? 1;
       try {
-        const gSnap = await getDoc(doc(db, 'goals', goalId));
+        const gSnap = await getDoc(doc(db, 'goals', resolvedGoalSelection.goalId));
         const gData: any = gSnap.exists() ? gSnap.data() : null;
         if (gData && typeof gData.theme !== 'undefined') themeToUse = gData.theme;
       } catch { }
@@ -1500,7 +1509,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
       const payload: any = {
         ...storyData,
         ref,
-        goalId,
+        goalId: resolvedGoalSelection.goalId,
         theme: themeToUse,
         ownerUid: currentUser.uid,
         persona: currentPersona,
@@ -1509,7 +1518,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
       };
 
       await addDoc(collection(db, 'stories'), payload);
-      console.log('✅ ModernGoalsTable: Inline story created', { goalId, ref });
+      console.log('✅ ModernGoalsTable: Inline story created', { goalId: resolvedGoalSelection.goalId, ref });
     } catch (e) {
       console.error('❌ ModernGoalsTable: Failed to add story inline', e);
       throw e;

@@ -9,6 +9,7 @@ import { Story, Goal, Task } from '../types';
 import { useSprint } from '../contexts/SprintContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { parsePointsValue } from '../utils/points';
+import { isGoalInHierarchySet } from '../utils/goalHierarchy';
 
 const isSprintActiveStatus = (status: any): boolean => {
   const numeric = Number(status);
@@ -235,7 +236,7 @@ const ModernKanbanPage: React.FC = () => {
     const storySprintId = String((story as any).sprintId || '').trim();
     const storyGoalId = String((story as any).goalId || '').trim();
     if (!storySprintId || storySprintId !== selectedSprintId) return false;
-    return !storyGoalId || !activeFocusGoalIds.has(storyGoalId);
+    return !storyGoalId || !isGoalInHierarchySet(storyGoalId, goals, activeFocusGoalIds);
   };
 
   const handleAddStory = async () => {

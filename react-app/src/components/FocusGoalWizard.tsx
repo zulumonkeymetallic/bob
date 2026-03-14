@@ -6,6 +6,7 @@ import { functions } from '../firebase';
 import { Goal, FocusGoal } from '../types';
 import { FocusWizardPrefill } from '../services/focusGoalsService';
 import KPIDesigner from './KPIDesigner';
+import { expandFocusGoalIdsToLeafGoalIds, getGoalDisplayPath, isLeafGoal } from '../utils/goalHierarchy';
 
 interface FocusGoalWizardProps {
   show: boolean;
@@ -17,7 +18,7 @@ interface FocusGoalWizardProps {
   onSave: (focusGoal: FocusGoal) => Promise<void>;
 }
 
-type WizardStep = 'vision' | 'select' | 'goalTypes' | 'timeframe' | 'review' | 'confirm';
+type WizardStep = 'vision' | 'select' | 'goalTypes' | 'timeframe' | 'milestones' | 'review' | 'confirm';
 type GoalPlanningType = 'story' | 'calendar';
 
 interface SelectedGoalSummary {
@@ -57,6 +58,25 @@ interface IntentResult {
   proposals?: IntentProposal[];
 }
 
+interface DraftLeafGoal {
+  tempId: string;
+  parentGoalId: string;
+  title: string;
+  theme: number;
+  persona: 'personal' | 'work';
+  goalKind: 'milestone';
+  timeHorizon: 'sprint' | 'quarter' | 'year';
+}
+
+interface SprintPlanSegment {
+  index: number;
+  label: string;
+  startDate: Date;
+  endDate: Date;
+}
+
+const DRAFT_LEAF_PREFIX = 'draft-leaf:';
+
 /**
  * Multi-step wizard for creating focus goal sets
  * - Step 1: Define the vision
@@ -93,6 +113,9 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
   const [goalSearchTerm, setGoalSearchTerm] = useState('');
   const [prefillMatchTriggered, setPrefillMatchTriggered] = useState(false);
   const [showKpiDesigner, setShowKpiDesigner] = useState(false);
+  const [draftLeafGoals, setDraftLeafGoals] = useState<DraftLeafGoal[]>([]);
+  const [draftLeafTitleByParentId, setDraftLeafTitleByParentId] = useState<Record<string, string>>({});
+  const [sprintPlanByGoalId, setSprintPlanByGoalId] = useState<Record<string, number[]>>({});
 
   // Reset on modal open
   useEffect(() => {
@@ -112,8 +135,34 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
       setGoalSearchTerm('');
       setPrefillMatchTriggered(false);
       setShowKpiDesigner(false);
+      setDraftLeafGoals([]);
+      setDraftLeafTitleByParentId({});
+      setSprintPlanByGoalId({});
     }
   }, [show]);
+
+  const planningGoals = useMemo<Goal[]>(() => {
+    const draftPlanningGoals: Goal[] = draftLeafGoals.map((draft) => ({
+      id: draft.tempId,
+      ref: draft.tempId,
+      ownerUid: currentUserId || '',
+      persona: draft.persona,
+      title: draft.title,
+      theme: draft.theme,
+      size: 2,
+      timeToMasterHours: 20,
+      confidence: 0.5,
+      status: 0,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      parentGoalId: draft.parentGoalId,
+      goalKind: draft.goalKind,
+      timeHorizon: draft.timeHorizon,
+      rollupMode: 'children_only',
+      goalRequiresStory: true,
+    }));
+    return [...goals, ...draftPlanningGoals];
+  }, [currentUserId, draftLeafGoals, goals]);
 
   useEffect(() => {
     if (!show || !initialPrefill) return;
@@ -167,10 +216,48 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
     };
   }, [timeframe]);
 
+  const sprintPlanSegments = useMemo<SprintPlanSegment[]>(() => {
+    const segments: SprintPlanSegment[] = [];
+    const startMs = timeframeInfo.startDate.getTime();
+    const endMs = timeframeInfo.endDate.getTime();
+    const segmentLengthMs = timeframe === 'sprint'
+      ? Math.max(1, endMs - startMs + 1)
+      : 14 * 24 * 60 * 60 * 1000;
+    let cursor = startMs;
+    let index = 0;
+    while (cursor <= endMs) {
+      const segmentStart = new Date(cursor);
+      const rawEnd = timeframe === 'sprint' ? endMs : Math.min(endMs, cursor + segmentLengthMs - 1);
+      const segmentEnd = new Date(rawEnd);
+      segments.push({
+        index,
+        label: timeframe === 'sprint'
+          ? `Current sprint window`
+          : `Sprint ${index + 1} (${segmentStart.toLocaleDateString()} - ${segmentEnd.toLocaleDateString()})`,
+        startDate: segmentStart,
+        endDate: segmentEnd,
+      });
+      cursor = rawEnd + 1;
+      index += 1;
+      if (timeframe === 'sprint') break;
+    }
+    return segments;
+  }, [timeframe, timeframeInfo.endDate, timeframeInfo.startDate]);
+
   // Get selected goals
   const selectedGoals = useMemo(
     () => goals.filter(g => selectedGoalIds.has(g.id)),
     [goals, selectedGoalIds]
+  );
+
+  const selectedLeafGoalIds = useMemo(
+    () => expandFocusGoalIdsToLeafGoalIds(Array.from(selectedGoalIds), planningGoals),
+    [planningGoals, selectedGoalIds],
+  );
+
+  const selectedLeafGoals = useMemo(
+    () => planningGoals.filter((goal) => selectedLeafGoalIds.includes(goal.id)),
+    [planningGoals, selectedLeafGoalIds],
   );
 
   useEffect(() => {
@@ -191,7 +278,7 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
     setGoalTypeMap((prev) => {
       const next: Record<string, GoalPlanningType> = {};
       let changed = false;
-      for (const goal of selectedGoals) {
+      for (const goal of selectedLeafGoals) {
         const existing = prev[goal.id];
         next[goal.id] = existing || (goal.goalRequiresStory === false ? 'calendar' : 'story');
         if (next[goal.id] !== existing) changed = true;
@@ -199,17 +286,45 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
       if (Object.keys(prev).length !== Object.keys(next).length) changed = true;
       return changed ? next : prev;
     });
-  }, [selectedGoals]);
+  }, [selectedLeafGoals]);
+
+  useEffect(() => {
+    if (selectedLeafGoals.length === 0 || sprintPlanSegments.length === 0) {
+      setSprintPlanByGoalId({});
+      return;
+    }
+    setSprintPlanByGoalId((prev) => {
+      const next: Record<string, number[]> = {};
+      const segmentIndexes = sprintPlanSegments.map((segment) => segment.index);
+      const leafCount = selectedLeafGoals.length;
+      selectedLeafGoals.forEach((goal, goalIndex) => {
+        const existing = Array.isArray(prev[goal.id]) ? prev[goal.id].filter((idx) => segmentIndexes.includes(idx)) : [];
+        if (existing.length > 0) {
+          next[goal.id] = existing;
+          return;
+        }
+        if (sprintPlanSegments.length === 1) {
+          next[goal.id] = [sprintPlanSegments[0].index];
+          return;
+        }
+        const chunkStart = Math.floor((goalIndex * sprintPlanSegments.length) / leafCount);
+        const chunkEndExclusive = Math.floor(((goalIndex + 1) * sprintPlanSegments.length) / leafCount);
+        const assigned = segmentIndexes.slice(chunkStart, Math.max(chunkStart + 1, chunkEndExclusive));
+        next[goal.id] = assigned.length > 0 ? assigned : [segmentIndexes[Math.min(goalIndex, segmentIndexes.length - 1)]];
+      });
+      return next;
+    });
+  }, [selectedLeafGoals, sprintPlanSegments]);
 
   // Count goals needing stories
   const goalsNeedingStories = useMemo(
-    () => selectedGoals.filter(g => goalTypeMap[g.id] === 'story' && ((g as any).storyCount === undefined || (g as any).storyCount === 0)),
-    [selectedGoals, goalTypeMap]
+    () => selectedLeafGoals.filter(g => goalTypeMap[g.id] === 'story' && ((g as any).storyCount === undefined || (g as any).storyCount === 0)),
+    [selectedLeafGoals, goalTypeMap]
   );
 
   const calendarTimeGoals = useMemo(
-    () => selectedGoals.filter((goal) => goalTypeMap[goal.id] === 'calendar'),
-    [selectedGoals, goalTypeMap]
+    () => selectedLeafGoals.filter((goal) => goalTypeMap[goal.id] === 'calendar'),
+    [selectedLeafGoals, goalTypeMap]
   );
 
   // Count goals with costs needing savings buckets
@@ -231,7 +346,11 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
   }, [goalsWithCosts]);
 
   const gapAnalysis = useMemo(() => {
-    const missingKpis = selectedGoals.filter((g) => !Array.isArray(g.kpis) || g.kpis.length === 0);
+    const missingKpis = selectedLeafGoals.filter((g) => {
+      const legacy = Array.isArray((g as any).kpis) ? (g as any).kpis : [];
+      const modern = Array.isArray((g as any).kpisV2) ? (g as any).kpisV2 : [];
+      return legacy.length === 0 && modern.length === 0;
+    });
     const missingStories = goalsNeedingStories;
     const missingBuckets = goalsWithCosts.filter((g) => !g.linkedPotId && !g.potId);
     return {
@@ -239,7 +358,7 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
       missingStories,
       missingBuckets,
     };
-  }, [selectedGoals, goalsNeedingStories, goalsWithCosts]);
+  }, [selectedLeafGoals, goalsNeedingStories, goalsWithCosts]);
 
   const handleSelectGoal = (goalId: string) => {
     const newSet = new Set(selectedGoalIds);
@@ -254,12 +373,19 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
         const { [goalId]: _removed, ...rest } = prev;
         return rest;
       }
-      if (prev[goalId]) return prev;
       const goal = goals.find((item) => item.id === goalId);
-      return {
-        ...prev,
-        [goalId]: goal?.goalRequiresStory === false ? 'calendar' : 'story',
-      };
+      if (goal && isLeafGoal(goal.id, planningGoals)) {
+        return {
+          ...prev,
+          [goalId]: prev[goalId] || (goal.goalRequiresStory === false ? 'calendar' : 'story'),
+        };
+      }
+      const next = { ...prev };
+      expandFocusGoalIdsToLeafGoalIds([goalId], planningGoals).forEach((leafId) => {
+        const leafGoal = planningGoals.find((item) => item.id === leafId);
+        next[leafId] = next[leafId] || (leafGoal?.goalRequiresStory === false ? 'calendar' : 'story');
+      });
+      return next;
     });
   };
 
@@ -268,6 +394,55 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
       ...prev,
       [goalId]: nextType,
     }));
+  };
+
+  const handleAddDraftLeafGoal = (parentGoal: Goal) => {
+    const title = String(draftLeafTitleByParentId[parentGoal.id] || '').trim();
+    if (!title) {
+      setError('Enter a child milestone title before adding it.');
+      return;
+    }
+    const tempId = `${DRAFT_LEAF_PREFIX}${parentGoal.id}:${Date.now()}`;
+    const nextDraft: DraftLeafGoal = {
+      tempId,
+      parentGoalId: parentGoal.id,
+      title,
+      theme: parentGoal.theme,
+      persona: parentGoal.persona,
+      goalKind: 'milestone',
+      timeHorizon: timeframe === 'year' ? 'quarter' : 'sprint',
+    };
+    setDraftLeafGoals((prev) => [...prev, nextDraft]);
+    setDraftLeafTitleByParentId((prev) => ({ ...prev, [parentGoal.id]: '' }));
+    setGoalTypeMap((prev) => ({ ...prev, [tempId]: prev[tempId] || 'story' }));
+    setError('');
+  };
+
+  const handleRemoveDraftLeafGoal = (tempId: string) => {
+    setDraftLeafGoals((prev) => prev.filter((draft) => draft.tempId !== tempId));
+    setGoalTypeMap((prev) => {
+      const next = { ...prev };
+      delete next[tempId];
+      return next;
+    });
+    setSprintPlanByGoalId((prev) => {
+      const next = { ...prev };
+      delete next[tempId];
+      return next;
+    });
+  };
+
+  const toggleSprintPlanAssignment = (goalId: string, segmentIndex: number) => {
+    setSprintPlanByGoalId((prev) => {
+      const existing = Array.isArray(prev[goalId]) ? prev[goalId] : [];
+      const nextIds = existing.includes(segmentIndex)
+        ? existing.filter((index) => index !== segmentIndex)
+        : [...existing, segmentIndex].sort((a, b) => a - b);
+      return {
+        ...prev,
+        [goalId]: nextIds,
+      };
+    });
   };
 
   const handleNext = async () => {
@@ -286,12 +461,22 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
       }
       setStep('goalTypes');
     } else if (step === 'goalTypes') {
-      if (selectedGoals.some((goal) => !goalTypeMap[goal.id])) {
+      if (selectedLeafGoals.some((goal) => !goalTypeMap[goal.id])) {
         setError('Please choose a planning mode for each selected goal.');
         return;
       }
       setStep('timeframe');
     } else if (step === 'timeframe') {
+      setStep('milestones');
+    } else if (step === 'milestones') {
+      if (selectedLeafGoals.length === 0) {
+        setError('Create or confirm at least one leaf goal for execution.');
+        return;
+      }
+      if (selectedLeafGoals.some((goal) => !Array.isArray(sprintPlanByGoalId[goal.id]) || sprintPlanByGoalId[goal.id].length === 0)) {
+        setError('Assign each leaf goal to at least one sprint window before continuing.');
+        return;
+      }
       setStep('review');
     } else if (step === 'review') {
       setStep('confirm');
@@ -367,7 +552,8 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
     if (step === 'select') setStep('vision');
     else if (step === 'goalTypes') setStep('select');
     else if (step === 'timeframe') setStep('goalTypes');
-    else if (step === 'review') setStep('timeframe');
+    else if (step === 'milestones') setStep('timeframe');
+    else if (step === 'review') setStep('milestones');
     else if (step === 'confirm') setStep('review');
   };
 
@@ -375,11 +561,22 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
     setLoading(true);
     setError('');
     try {
+      const selectedLeafGoalIdSet = new Set(selectedLeafGoalIds);
+      const filteredSprintPlanByGoalId = Object.entries(sprintPlanByGoalId).reduce<Record<string, number[]>>((acc, [goalId, segmentIndexes]) => {
+        if (!selectedLeafGoalIdSet.has(goalId)) return acc;
+        acc[goalId] = Array.isArray(segmentIndexes) ? segmentIndexes : [];
+        return acc;
+      }, {});
+      const filteredDraftLeafGoals = draftLeafGoals.filter((draft) => {
+        return selectedGoalIds.has(draft.parentGoalId) && selectedLeafGoalIdSet.has(draft.tempId);
+      });
       const focusGoal: FocusGoal = {
         id: `focus-${Date.now()}`,
         ownerUid: currentUserId || '',
         persona: 'personal',
-        goalIds: Array.from(selectedGoalIds),
+        goalIds: selectedLeafGoalIds,
+        focusRootGoalIds: Array.from(selectedGoalIds),
+        focusLeafGoalIds: selectedLeafGoalIds,
         goalTypeMap,
         timeframe: timeframe,
         startDate: timeframeInfo.startDate,
@@ -396,6 +593,22 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
         intentProposals: intentResult?.proposals || [],
         storyTableHandoff: useModernStoryTableHandoff,
         monzoPotGoalRefs: monzoGoalRefs,
+        sprintPlanByGoalId: filteredSprintPlanByGoalId,
+        sprintPlanSegments: sprintPlanSegments.map((segment) => ({
+          index: segment.index,
+          label: segment.label,
+          startDate: segment.startDate.getTime(),
+          endDate: segment.endDate.getTime(),
+        })),
+        pendingLeafGoalsToCreate: filteredDraftLeafGoals.map((draft) => ({
+          tempId: draft.tempId,
+          parentGoalId: draft.parentGoalId,
+          title: draft.title,
+          theme: draft.theme,
+          persona: draft.persona,
+          goalKind: draft.goalKind,
+          timeHorizon: draft.timeHorizon,
+        })),
       };
 
       await onSave(focusGoal);
@@ -411,11 +624,12 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
   };
 
   const progressPercent = {
-    vision: 16,
-    select: 32,
-    goalTypes: 48,
-    timeframe: 64,
-    review: 82,
+    vision: 14,
+    select: 28,
+    goalTypes: 42,
+    timeframe: 56,
+    milestones: 72,
+    review: 86,
     confirm: 100
   };
 
@@ -441,9 +655,11 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
                     ? 'Step 3: Goal Planning Types'
                     : step === 'timeframe'
                       ? 'Step 4: Choose Timeframe'
-                      : step === 'review'
-                        ? 'Step 5: Review Checklist'
-                        : 'Step 6: Confirm'}
+                      : step === 'milestones'
+                        ? 'Step 5: Milestones + Sprint Plan'
+                        : step === 'review'
+                          ? 'Step 6: Review Checklist'
+                          : 'Step 7: Confirm'}
             </span>
             <span style={{ color: '#666' }}>{progressPercent[step]}%</span>
           </div>
@@ -593,8 +809,25 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
             )}
 
             <div style={{ marginTop: '16px', padding: '12px', background: '#f8f9fa', borderRadius: '8px' }}>
-              <strong>{selectedGoalIds.size}</strong> goal{selectedGoalIds.size !== 1 ? 's' : ''} selected
+              <strong>{selectedGoalIds.size}</strong> root goal{selectedGoalIds.size !== 1 ? 's' : ''} selected
+              {' • '}
+              <strong>{selectedLeafGoals.length}</strong> leaf goal{selectedLeafGoals.length !== 1 ? 's' : ''} in execution scope
             </div>
+
+            {selectedLeafGoals.length > 0 && (
+              <Alert variant="secondary" className="mt-3 mb-0">
+                <div className="fw-semibold">Execution scope</div>
+                <div className="small text-muted mb-2">
+                  Focus alignment, KPI execution, and story planning will run against these leaf goals.
+                </div>
+                <ul className="mb-0 small">
+                  {selectedLeafGoals.slice(0, 6).map((goal) => (
+                    <li key={goal.id}>{getGoalDisplayPath(goal.id, planningGoals)}</li>
+                  ))}
+                  {selectedLeafGoals.length > 6 && <li>+{selectedLeafGoals.length - 6} more</li>}
+                </ul>
+              </Alert>
+            )}
           </div>
         )}
 
@@ -606,11 +839,11 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
             </p>
 
             <ListGroup>
-              {selectedGoals.map((goal) => (
+              {selectedLeafGoals.map((goal) => (
                 <ListGroup.Item key={goal.id} style={{ padding: '16px' }}>
                   <div className="d-flex justify-content-between align-items-start gap-3 flex-wrap">
                     <div style={{ flex: 1, minWidth: 220 }}>
-                      <div style={{ fontWeight: 600 }}>{selectedGoalsData[goal.id]?.title || goal.title}</div>
+                      <div style={{ fontWeight: 600 }}>{getGoalDisplayPath(goal.id, planningGoals)}</div>
                       <div style={{ fontSize: 12, color: '#666', marginTop: 4 }}>
                         Theme: {selectedGoalsData[goal.id]?.theme || goal.theme || 'Not set'}
                         {selectedGoalsData[goal.id]?.estimatedCost ? ` • Cost: £${Number(selectedGoalsData[goal.id].estimatedCost).toLocaleString()}` : ''}
@@ -680,7 +913,122 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
           </div>
         )}
 
-        {/* Step 5: Review Changes */}
+        {step === 'milestones' && (
+          <div>
+            <p style={{ color: '#666', marginBottom: '16px' }}>
+              Confirm the leaf milestones that will execute this focus period, then map each one to sprint windows.
+            </p>
+
+            <Alert variant="secondary" className="mb-3">
+              <div className="fw-semibold">Execution rule</div>
+              <div className="small text-muted">
+                Parent goals stay strategic. Leaf goals are the milestones that get stories, KPIs, daily-plan alignment, and sprint focus.
+              </div>
+            </Alert>
+
+            <div className="mb-4">
+              {selectedGoals.map((rootGoal) => {
+                const rootPath = getGoalDisplayPath(rootGoal.id, planningGoals);
+                const rootLeafGoals = selectedLeafGoals.filter((goal) => {
+                  const path = getGoalDisplayPath(goal.id, planningGoals);
+                  return goal.id === rootGoal.id || path === rootPath || path.startsWith(`${rootPath} >`);
+                });
+                return (
+                  <Card key={rootGoal.id} className="mb-3">
+                    <Card.Body>
+                      <div className="d-flex justify-content-between align-items-start gap-3 flex-wrap">
+                        <div>
+                          <div className="fw-semibold">{rootPath}</div>
+                          <div className="small text-muted">
+                            {rootLeafGoals.length} leaf goal{rootLeafGoals.length !== 1 ? 's' : ''} in execution scope
+                          </div>
+                        </div>
+                        <Badge bg="light" text="dark">
+                          {isLeafGoal(rootGoal.id, planningGoals) ? 'Leaf goal' : 'Parent goal'}
+                        </Badge>
+                      </div>
+
+                      {rootLeafGoals.length > 0 && (
+                        <ul className="small mt-3 mb-3">
+                          {rootLeafGoals.map((goal) => (
+                            <li key={goal.id}>{getGoalDisplayPath(goal.id, planningGoals)}</li>
+                          ))}
+                        </ul>
+                      )}
+
+                      <Row className="g-2 align-items-end">
+                        <Col md={9}>
+                          <Form.Label className="small">Add child milestone leaf goal</Form.Label>
+                          <Form.Control
+                            value={draftLeafTitleByParentId[rootGoal.id] || ''}
+                            onChange={(e) => setDraftLeafTitleByParentId((prev) => ({ ...prev, [rootGoal.id]: e.target.value }))}
+                            placeholder="e.g. Sprint triathlon, 70.3 block, Base phase"
+                          />
+                        </Col>
+                        <Col md={3}>
+                          <Button variant="outline-primary" className="w-100" onClick={() => handleAddDraftLeafGoal(rootGoal)}>
+                            Add milestone
+                          </Button>
+                        </Col>
+                      </Row>
+                    </Card.Body>
+                  </Card>
+                );
+              })}
+            </div>
+
+            {draftLeafGoals.length > 0 && (
+              <Alert variant="info" className="mb-3">
+                {draftLeafGoals.length} new leaf milestone{draftLeafGoals.length !== 1 ? 's' : ''} will be created when you save this focus set.
+              </Alert>
+            )}
+
+            <h6 style={{ fontWeight: 600 }}>Sprint rollout</h6>
+            <div className="small text-muted mb-3">
+              Assign each leaf goal to one or more sprint windows in this focus period.
+            </div>
+
+            <div className="mb-3 d-flex flex-wrap gap-2">
+              {sprintPlanSegments.map((segment) => (
+                <Badge key={segment.index} bg="light" text="dark">
+                  {segment.label}
+                </Badge>
+              ))}
+            </div>
+
+            <ListGroup>
+              {selectedLeafGoals.map((goal) => (
+                <ListGroup.Item key={goal.id}>
+                  <div className="fw-semibold mb-2">{getGoalDisplayPath(goal.id, planningGoals)}</div>
+                  <div className="d-flex flex-wrap gap-2">
+                    {sprintPlanSegments.map((segment) => {
+                      const assigned = Array.isArray(sprintPlanByGoalId[goal.id]) && sprintPlanByGoalId[goal.id].includes(segment.index);
+                      return (
+                        <Button
+                          key={`${goal.id}-${segment.index}`}
+                          size="sm"
+                          variant={assigned ? 'primary' : 'outline-secondary'}
+                          onClick={() => toggleSprintPlanAssignment(goal.id, segment.index)}
+                        >
+                          {segment.label}
+                        </Button>
+                      );
+                    })}
+                  </div>
+                  {String(goal.id).startsWith(DRAFT_LEAF_PREFIX) && (
+                    <div className="mt-2">
+                      <Button size="sm" variant="outline-danger" onClick={() => handleRemoveDraftLeafGoal(goal.id)}>
+                        Remove draft milestone
+                      </Button>
+                    </div>
+                  )}
+                </ListGroup.Item>
+              ))}
+            </ListGroup>
+          </div>
+        )}
+
+        {/* Step 6: Review Changes */}
         {step === 'review' && (
           <div>
             <div style={{ marginBottom: '20px' }}>
@@ -691,17 +1039,21 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
               <ListGroup>
                 <ListGroup.Item style={{ padding: '8px 12px' }}>
                   <CheckCircle size={14} className="me-2" style={{ display: 'inline', color: '#28a745' }} />
-                  Goals selected: <strong>{selectedGoals.length}</strong>
+                  Goals selected: <strong>{selectedGoalIds.size}</strong>
                 </ListGroup.Item>
                 <ListGroup.Item style={{ padding: '8px 12px' }}>
                   <CheckCircle size={14} className="me-2" style={{ display: 'inline', color: '#28a745' }} />
-                  Story-based goals: <strong>{selectedGoals.filter((goal) => goalTypeMap[goal.id] === 'story').length}</strong>
+                  Story-based leaf goals: <strong>{selectedLeafGoals.filter((goal) => goalTypeMap[goal.id] === 'story').length}</strong>
                   {' • '}
-                  Calendar-time goals: <strong>{calendarTimeGoals.length}</strong>
+                  Calendar-time leaf goals: <strong>{calendarTimeGoals.length}</strong>
                 </ListGroup.Item>
                 <ListGroup.Item style={{ padding: '8px 12px' }}>
                   <CheckCircle size={14} className="me-2" style={{ display: 'inline', color: '#28a745' }} />
                   Timeframe locked: <strong>{timeframeInfo.label}</strong>
+                </ListGroup.Item>
+                <ListGroup.Item style={{ padding: '8px 12px' }}>
+                  <CheckCircle size={14} className="me-2" style={{ display: 'inline', color: '#28a745' }} />
+                  Sprint windows planned: <strong>{sprintPlanSegments.length}</strong>
                 </ListGroup.Item>
                 <ListGroup.Item style={{ padding: '8px 12px' }}>
                   <CheckCircle size={14} className="me-2" style={{ display: 'inline', color: '#28a745' }} />
@@ -731,14 +1083,34 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
                 <li>{gapAnalysis.missingStories.length} selected goals currently have no stories</li>
                 <li>{gapAnalysis.missingKpis.length} selected goals currently have no KPI definitions</li>
                 <li>{gapAnalysis.missingBuckets.length} cost-based goals currently have no linked savings bucket</li>
+                <li>{draftLeafGoals.length} new leaf milestone{draftLeafGoals.length !== 1 ? 's' : ''} queued for creation</li>
+              </ul>
+            </div>
+
+            <div style={{ marginBottom: '20px' }}>
+              <h6 style={{ fontWeight: 600 }}>Sprint rollout</h6>
+              <ul style={{ marginBottom: 0, fontSize: '13px' }}>
+                {selectedLeafGoals.map((goal) => (
+                  <li key={goal.id}>
+                    {getGoalDisplayPath(goal.id, planningGoals)}: {(sprintPlanByGoalId[goal.id] || [])
+                      .map((segmentIndex) => sprintPlanSegments.find((segment) => segment.index === segmentIndex)?.label)
+                      .filter(Boolean)
+                      .join(', ') || 'No sprint window assigned'}
+                  </li>
+                ))}
               </ul>
             </div>
 
             <div style={{ marginBottom: '16px' }}>
               <h6 style={{ fontWeight: 600 }}>KPI setup</h6>
               <p style={{ marginBottom: 8, color: '#666', fontSize: 13 }}>
-                Add KPI definitions for selected goals before confirming your focus set.
+                Add KPI definitions for selected goals before confirming your focus set. KPIs can now be pinned to the dashboard as cards or charts.
               </p>
+              {draftLeafGoals.length > 0 && (
+                <Alert variant="secondary" className="py-2">
+                  Draft milestone goals must be saved first. KPI design here applies to already-persisted leaf goals only.
+                </Alert>
+              )}
               <Button variant="outline-primary" size="sm" onClick={() => setShowKpiDesigner(true)}>
                 Add KPIs to track progress
               </Button>
@@ -753,7 +1125,7 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
                 These stories will be created only after you confirm and save.
                 <ul style={{ marginTop: '8px', marginBottom: 0, fontSize: '12px' }}>
                   {goalsNeedingStories.map(g => (
-                    <li key={g.id}>{g.title}</li>
+                    <li key={g.id}>{getGoalDisplayPath(g.id, planningGoals)}</li>
                   ))}
                 </ul>
               </Alert>
@@ -809,7 +1181,7 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
           </div>
         )}
 
-        {/* Step 6: Confirm */}
+        {/* Step 7: Confirm */}
         {step === 'confirm' && (
           <div>
             <Alert variant="success">
@@ -818,8 +1190,8 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
                 You're all set. Your focus goals will be:
               </p>
               <ul style={{ marginBottom: '12px' }}>
-                {selectedGoals.map(g => (
-                  <li key={g.id}>{g.title}</li>
+                {selectedLeafGoals.map(g => (
+                  <li key={g.id}>{getGoalDisplayPath(g.id, planningGoals)}</li>
                 ))}
               </ul>
               <p style={{ marginBottom: 0 }}>
@@ -829,9 +1201,11 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
                 <br />
                 <strong>Intent Intake:</strong> {intentResult?.intakeId || 'Not run'}
                 <br />
-                <strong>Story-based goals:</strong> {selectedGoals.filter((goal) => goalTypeMap[goal.id] === 'story').length}
+                <strong>Story-based leaf goals:</strong> {selectedLeafGoals.filter((goal) => goalTypeMap[goal.id] === 'story').length}
                 {' • '}
-                <strong>Calendar-time goals:</strong> {calendarTimeGoals.length}
+                <strong>Calendar-time leaf goals:</strong> {calendarTimeGoals.length}
+                <br />
+                <strong>New leaf milestones:</strong> {draftLeafGoals.length}
                 <br />
                 <strong>Updates:</strong> Your KPIs will sync nightly, and progress will show in your daily email.
               </p>
@@ -849,7 +1223,7 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
       <KPIDesigner
         show={showKpiDesigner}
         onHide={() => setShowKpiDesigner(false)}
-        goals={selectedGoals}
+        goals={selectedLeafGoals.filter((goal) => !String(goal.id).startsWith(DRAFT_LEAF_PREFIX))}
         ownerUid={currentUserId || ''}
       />
 

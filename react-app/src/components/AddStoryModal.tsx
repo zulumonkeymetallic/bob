@@ -1,27 +1,22 @@
-import React, { useState, useCallback, useEffect } from 'react';
-import { Modal, Button, Form, Alert, Dropdown, DropdownButton, Row, Col } from 'react-bootstrap';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Modal, Button, Form, Alert, Row, Col } from 'react-bootstrap';
 import { db } from '../firebase';
 import { collection, addDoc, getDocs, query, where, orderBy, serverTimestamp } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useSprint } from '../contexts/SprintContext';
+import type { Goal } from '../types';
 import { generateRef } from '../utils/referenceGenerator';
 import { parsePointsValue } from '../utils/points';
 import TagInput from './common/TagInput';
 import { planningSprints, pickDefaultPlanningSprintId } from '../utils/sprintFilter';
 import { evaluateStorySprintAlignment } from '../utils/sprintAlignment';
+import { getGoalDisplayPath, getLeafGoalOptions, isGoalInHierarchySet, resolveLeafGoalSelection } from '../utils/goalHierarchy';
 
 interface AddStoryModalProps {
   onClose: () => void;
   show: boolean;
   goalId?: string; // Optional goalId to pre-select the goal
-}
-
-interface Goal {
-  id: string;
-  title: string;
-  theme: number;
-  persona?: 'personal' | 'work';
 }
 
 interface SprintLike {
@@ -59,16 +54,23 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
     ? (allSprints.find((sprint) => sprint.id === formData.sprintId) as SprintLike | undefined)
     : null;
   const sprintAlignment = evaluateStorySprintAlignment(selectedSprint as any, formData.goalId || '');
+  const leafGoalOptions = useMemo(() => getLeafGoalOptions(goals), [goals]);
+  const selectedGoalResolution = useMemo(
+    () => resolveLeafGoalSelection(formData.goalId || null, goals),
+    [formData.goalId, goals],
+  );
 
   // Update goalId when prop changes
   useEffect(() => {
     if (goalId) {
+      const resolved = resolveLeafGoalSelection(goalId, goals);
+      const nextGoalId = resolved.goalId || goalId;
       setFormData(prev => ({
         ...prev,
-        goalId: goalId
+        goalId: nextGoalId
       }));
-      const g = goals.find(gl => gl.id === goalId);
-      setGoalInput(g?.title || '');
+      const g = goals.find((gl) => gl.id === nextGoalId) || goals.find((gl) => gl.id === goalId);
+      setGoalInput(g ? getGoalDisplayPath(g.id, goals) : '');
     }
   }, [goalId, goals]);
 
@@ -170,12 +172,17 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
               id: doc.id,
               title: doc.data().title,
               theme: doc.data().theme as number,
-              persona: doc.data().persona as any
+              persona: doc.data().persona as any,
+              parentGoalId: doc.data().parentGoalId || null,
+              goalKind: doc.data().goalKind,
+              timeHorizon: doc.data().timeHorizon,
+              rollupMode: doc.data().rollupMode,
+              ref: doc.data().ref || null,
             }))
             .filter(goal => {
               if (selectedPersona === 'work') return goal.persona === 'work';
               return goal.persona == null || goal.persona === 'personal';
-            });
+            }) as Goal[];
 
           console.log('✅ AddStoryModal: Goals loaded successfully', {
             action: 'goals_loaded',
@@ -241,7 +248,7 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
     if (
       activeFocusGoalIds.size > 0
       && formData.goalId
-      && !activeFocusGoalIds.has(String(formData.goalId))
+      && !isGoalInHierarchySet(String(formData.goalId), goals as any, activeFocusGoalIds)
     ) {
       const proceed = window.confirm(
         'This goal is not in your active focus goals. Work linked here will be deferred until after the current focus period ends. Continue?'
@@ -260,6 +267,16 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
       if (!proceed) {
         return;
       }
+    }
+
+    const resolvedGoalSelection = resolveLeafGoalSelection(formData.goalId || null, goals);
+    if (formData.goalId && !resolvedGoalSelection.goalId) {
+      if (resolvedGoalSelection.reason === 'ambiguous_parent') {
+        setSubmitResult('❌ Stories must link to a specific leaf goal. Select the child goal you want this story to execute against.');
+      } else {
+        setSubmitResult('❌ Please select a valid leaf goal before creating the story.');
+      }
+      return;
     }
 
     setIsSubmitting(true);
@@ -294,14 +311,15 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
         timestamp: new Date().toISOString()
       });
 
-      const linkedGoal = goals.find(g => g.id === formData.goalId);
+      const resolvedGoalId = resolvedGoalSelection.goalId || '';
+      const linkedGoal = goals.find((g) => g.id === resolvedGoalId) || goals.find((g) => g.id === formData.goalId);
       const parsedPoints = parsePointsValue(formData.points);
       const storyData = {
         ref: ref, // Add reference number
         title: formData.title.trim(),
         description: formData.description.trim(),
           url: formData.url.trim() || null,
-        goalId: formData.goalId,
+        goalId: resolvedGoalId || null,
         sprintId: formData.sprintId || null,
         priority: formData.priority,
         points: parsedPoints == null ? 1 : parsedPoints,
@@ -331,7 +349,7 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
         action: 'story_creation_success',
         ref: ref,
         storyId: 'pending_from_firestore',
-        goalId: formData.goalId || 'none',
+        goalId: resolvedGoalId || 'none',
         timestamp: new Date().toISOString()
       });
 
@@ -427,22 +445,38 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
               onChange={(e) => setGoalInput(e.target.value)}
               onBlur={() => {
                 const val = goalInput.trim();
-                const match = goals.find(g => g.title === val || g.id === val);
+                const match = leafGoalOptions.find((g) => {
+                  const displayPath = getGoalDisplayPath(g.id, goals);
+                  return displayPath === val || g.id === val || g.title === val;
+                });
+                setGoalInput(match ? getGoalDisplayPath(match.id, goals) : val);
                 setFormData({ ...formData, goalId: match ? match.id : '' });
               }}
-              placeholder="Search goals by title..."
+              placeholder="Search leaf goals by title..."
             />
             <datalist id="add-story-goal-options">
-              {goals.map(g => (
-                <option key={g.id} value={g.title} />
+              {leafGoalOptions.map(g => (
+                <option key={g.id} value={getGoalDisplayPath(g.id, goals)} />
               ))}
             </datalist>
             <Form.Text className="text-muted">
-              Stories linked to goals contribute to goal progress
+              Stories must link to a leaf goal so sprint work maps to an executable milestone.
             </Form.Text>
           </Form.Group>
 
-          {activeFocusGoalIds.size > 0 && formData.goalId && !activeFocusGoalIds.has(String(formData.goalId)) && (
+          {selectedGoalResolution.reason === 'auto_descendant' && selectedGoalResolution.leafGoal && (
+            <Alert variant="info" className="mb-3">
+              Parent goal selection auto-resolved to leaf goal <strong>{getGoalDisplayPath(selectedGoalResolution.leafGoal.id, goals)}</strong>.
+            </Alert>
+          )}
+
+          {selectedGoalResolution.reason === 'ambiguous_parent' && (
+            <Alert variant="warning" className="mb-3">
+              That parent goal has multiple leaf goals. Select the exact leaf goal you want this story to execute against.
+            </Alert>
+          )}
+
+          {activeFocusGoalIds.size > 0 && formData.goalId && !isGoalInHierarchySet(String(formData.goalId), goals as any, activeFocusGoalIds) && (
             <Alert variant="warning" className="mb-3">
               This goal is outside your active focus set. If you continue, this work will be deferred until after the current focus period.
             </Alert>

@@ -24,6 +24,7 @@ import { colors } from '../utils/colors';
 import SprintMetricsPanel from './SprintMetricsPanel';
 import JournalInsightsCard from './JournalInsightsCard';
 import BirthdayMilestoneCard from './BirthdayMilestoneCard';
+import KpiDashboardWidget from './KpiDashboardWidget';
 import { GLOBAL_THEMES, LEGACY_THEME_MAP } from '../constants/globalThemes';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { useUnifiedPlannerData, type PlannerRange } from '../hooks/useUnifiedPlannerData';
@@ -36,6 +37,7 @@ import { goalNeedsLinkedPot } from '../utils/goalCost';
 import { ResponsiveContainer, LineChart, Line, CartesianGrid, XAxis, YAxis, Tooltip as RechartsTooltip, Legend } from 'recharts';
 import { Calendar as RBC, Views, dateFnsLocalizer } from 'react-big-calendar';
 import 'react-big-calendar/lib/css/react-big-calendar.css';
+import { isGoalInHierarchySet } from '../utils/goalHierarchy';
 import {
   callDeltaReplan,
   callFullReplan,
@@ -253,6 +255,7 @@ type DashboardWidgetKey =
   | 'dailySummary'
   | 'top3'
   | 'themeProgress'
+  | 'kpiStudio'
   | 'unifiedTimeline'
   | 'tasksDueToday'
   | 'choresHabits'
@@ -263,7 +266,7 @@ interface DashboardWidgetSize {
   height: number;
 }
 type DashboardWidgetSizes = Partial<Record<DashboardWidgetKey, DashboardWidgetSize>>;
-const SUMMARY_WIDGET_KEYS: DashboardWidgetKey[] = ['unifiedTimeline', 'top3', 'dailySummary', 'choresHabits', 'lowHangingFruit', 'themeProgress', 'tasksDueToday', 'calendar'];
+const SUMMARY_WIDGET_KEYS: DashboardWidgetKey[] = ['unifiedTimeline', 'top3', 'dailySummary', 'kpiStudio', 'choresHabits', 'lowHangingFruit', 'themeProgress', 'tasksDueToday', 'calendar'];
 const dashboardWidgetOrderStorageKey = (deviceType: DashboardDeviceType) => `${DASHBOARD_WIDGET_ORDER_STORAGE_PREFIX}_${deviceType}`;
 const readDashboardWidgetOrder = (deviceType: DashboardDeviceType): DashboardWidgetKey[] => {
   try {
@@ -500,6 +503,7 @@ const DASHBOARD_WIDGET_CONFIG: Array<{ key: DashboardWidgetKey; label: string }>
   { key: 'dailySummary', label: 'Daily summary' },
   { key: 'top3', label: 'Top 3 priorities' },
   { key: 'themeProgress', label: 'Theme progress' },
+  { key: 'kpiStudio', label: 'KPI studio' },
   { key: 'unifiedTimeline', label: 'Daily Plan' },
   { key: 'tasksDueToday', label: 'Tasks due today' },
   { key: 'choresHabits', label: 'Chores & habits' },
@@ -511,6 +515,7 @@ const DASHBOARD_WIDGET_DEFAULT_VISIBILITY: DashboardWidgetVisibility = {
   dailySummary: true,
   top3: true,
   themeProgress: false,
+  kpiStudio: true,
   unifiedTimeline: true,
   tasksDueToday: false,
   choresHabits: true,
@@ -758,6 +763,18 @@ const Dashboard: React.FC = () => {
     }
     return null;
   }, []);
+
+  const nextSprint = useMemo(() => {
+    const currentEndMs = decodeToDate(selectedSprint?.endDate)?.getTime() || Date.now();
+    return [...sprints]
+      .filter((sprint) => String(sprint.id || '') !== String(selectedSprint?.id || ''))
+      .map((sprint) => ({
+        sprint,
+        startMs: decodeToDate(sprint.startDate)?.getTime() || 0,
+      }))
+      .filter((row) => row.startMs > currentEndMs)
+      .sort((a, b) => a.startMs - b.startMs)[0]?.sprint || null;
+  }, [decodeToDate, selectedSprint, sprints]);
 
   const formatPotBalance = useCallback((value: number, currency = 'GBP') => {
     const minor = Number(value || 0);
@@ -4225,11 +4242,11 @@ const Dashboard: React.FC = () => {
 
     const unalignedStories = sprintStories.filter((story) => {
       const goalId = String((story as any).goalId || '').trim();
-      return !goalId || !activeFocusGoalIds.has(goalId);
+      return !goalId || !isGoalInHierarchySet(goalId, goalsList, activeFocusGoalIds);
     });
     const focusedStories = sprintStories.filter((story) => {
       const goalId = String((story as any).goalId || '').trim();
-      return !!goalId && activeFocusGoalIds.has(goalId);
+      return !!goalId && isGoalInHierarchySet(goalId, goalsList, activeFocusGoalIds);
     });
     const focusedStoriesDone = focusedStories.filter((story) => isStoryDoneState((story as any).status)).length;
     const focusedCompletionPct = focusedStories.length > 0
@@ -4248,7 +4265,7 @@ const Dashboard: React.FC = () => {
       focusedCompletionPct,
       alignmentPct,
     };
-  }, [activeFocusGoalIds, selectedSprint, selectedSprintId, sprintStories]);
+  }, [activeFocusGoalIds, goalsList, selectedSprint, selectedSprintId, sprintStories]);
 
   const selectedSprintAlignmentSummary = useMemo(() => {
     if (!selectedSprint) {
@@ -5456,6 +5473,7 @@ const Dashboard: React.FC = () => {
                                       unifiedTimeline: { width: half, height: 600 },
                                       top3: { width: third, height: 420 },
                                       dailySummary: { width: third, height: 420 },
+                                      kpiStudio: { width: third, height: 420 },
                                       choresHabits: { width: third, height: 420 },
                                       lowHangingFruit: { width: third, height: 400 },
                                       themeProgress: { width: third, height: 400 },
@@ -6127,6 +6145,31 @@ const Dashboard: React.FC = () => {
                               {renderWidgetResizeHandle('themeProgress', 280, 'Resize theme and goal progress widget')}
                           </div>
                         )}
+                        {widgetKey === 'kpiStudio' && widgetVisibility.kpiStudio && (
+                          <div
+                            ref={setWidgetResizeContainer('kpiStudio')}
+                            className="dashboard-widget-shell"
+                            style={getWidgetSizeStyle('kpiStudio', 340)}
+                          >
+                            <KpiDashboardWidget
+                              ownerUid={currentUser?.uid || ''}
+                              goals={goalsList}
+                              stories={sprintStories}
+                              tasks={sprintTasks}
+                              activeFocusGoalIds={activeFocusGoalIds}
+                              selectedSprintId={selectedSprintId || null}
+                              capacitySummary={capacitySummary}
+                              nextSprint={nextSprint ? {
+                                id: nextSprint.id,
+                                name: (nextSprint as any).name || (nextSprint as any).title || 'Next sprint',
+                                startDate: (nextSprint as any).startDate || null,
+                              } : null}
+                              onOpenFocusGoals={() => navigate('/focus-goals')}
+                            />
+                            {renderWidgetEdgeHandles('kpiStudio')}
+                            {renderWidgetResizeHandle('kpiStudio', 280, 'Resize KPI studio widget')}
+                          </div>
+                        )}
                         {widgetKey === 'unifiedTimeline' && widgetVisibility.unifiedTimeline && (
                           <div
                             ref={setWidgetResizeContainer('unifiedTimeline')}
@@ -6139,71 +6182,13 @@ const Dashboard: React.FC = () => {
                                   <CalendarIcon size={16} /> Daily Plan
                                 </div>
                                 <div className="d-flex align-items-center gap-2">
-                                  <Link to="/daily-plan" className="small">Full view</Link>
-                                  <Badge bg={unifiedTodayTimelineItems.length > 0 ? 'info' : 'secondary'} pill>
-                                    {unifiedTodayTimelineItems.length}
-                                  </Badge>
+                                  <Badge bg="secondary" pill>Disabled</Badge>
                                 </div>
                               </Card.Header>
                               <Card.Body ref={timelineScrollBodyRef} className="p-3 d-flex flex-column flex-grow-1" style={{ minHeight: 0, overflowY: 'auto' }}>
-                                {unscheduledToday.length > 0 && (
-                                  <Alert variant="warning" className="py-2 mb-2">
-                                    <div className="fw-semibold mb-1">Scheduling issues</div>
-                                    <ul className="mb-0 small">
-                                      {unscheduledSummary.map((item) => (
-                                        <li key={item.id}>{item.title || item.sourceId}</li>
-                                      ))}
-                                      {unscheduledToday.length > unscheduledSummary.length && (
-                                        <li className="text-muted">+{unscheduledToday.length - unscheduledSummary.length} more</li>
-                                      )}
-                                    </ul>
-                                  </Alert>
-                                )}
-                                {unifiedTodayTimelineItems.length === 0 ? (
-                                  <div className="text-muted small">No tasks, checklist items, or calendar events for today.</div>
-                                ) : (() => {
-                                  const isWide = (widgetSizes.unifiedTimeline?.width ?? 0) >= 600;
-                                  const now = new Date(timelineNowMs);
-                                  const nowBucket = bucketFromMinutes((now.getHours() * 60) + now.getMinutes());
-                                  const bucketEls = DAY_TIMELINE_BUCKETS.map((bucket) => {
-                                    const bucketItems = unifiedTodayTimelineByBucket[bucket.key] || [];
-                                    if (bucketItems.length === 0 && bucket.key !== nowBucket) return null;
-                                    const markerIndex = bucket.key === nowBucket
-                                      ? (() => {
-                                        const idx = bucketItems.findIndex((item: any) => Number.isFinite(item?.startMs) && item.startMs > timelineNowMs);
-                                        return idx === -1 ? bucketItems.length : idx;
-                                      })()
-                                      : -1;
-                                    return (
-                                      <div key={bucket.key} className="mb-3" style={isWide ? { flex: '1 1 0', minWidth: 0 } : undefined}>
-                                        <h6 className="text-muted mb-2 border-bottom pb-1 fw-bold d-flex align-items-center justify-content-between">
-                                          <small>{bucket.label}</small>
-                                          <small>{bucket.range}</small>
-                                        </h6>
-                                        {bucketItems.map((item: any, index: number) => (
-                                          <React.Fragment key={`${bucket.key}-${item.id}`}>
-                                            {bucket.key === nowBucket && index === markerIndex && (
-                                              <div ref={timelineNowMarkerRef} className="d-flex align-items-center gap-2 mb-2">
-                                                <small style={{ color: '#dc3545', fontWeight: 700 }}>Now {format(new Date(timelineNowMs), 'HH:mm')}</small>
-                                                <div style={{ height: 1.5, background: '#dc3545', flex: 1, borderRadius: 999 }} />
-                                              </div>
-                                            )}
-                                            {renderUnifiedTodayTimelineItem(item)}
-                                          </React.Fragment>
-                                        ))}
-                                        {bucket.key === nowBucket && markerIndex === bucketItems.length && (
-                                          <div ref={timelineNowMarkerRef} className="d-flex align-items-center gap-2 mb-2">
-                                            <small style={{ color: '#dc3545', fontWeight: 700 }}>Now {format(new Date(timelineNowMs), 'HH:mm')}</small>
-                                            <div style={{ height: 1.5, background: '#dc3545', flex: 1, borderRadius: 999 }} />
-                                          </div>
-                                        )}
-                                      </div>
-                                    );
-                                  });
-                                  return isWide
-                                    ? <div className="d-flex gap-3 align-items-start">{bucketEls}</div>
-                                    : <>{bucketEls}</>;
-                                })()}
+                                <Alert variant="secondary" className="mb-0 py-2">
+                                  Daily Plan is temporarily disabled while due-date and sync issues are investigated.
+                                </Alert>
                               </Card.Body>
                             </Card>
                             {renderWidgetEdgeHandles('unifiedTimeline')}

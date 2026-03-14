@@ -3,6 +3,8 @@ export interface FocusGoal {
   ownerUid: string;
   persona: 'personal' | 'work';
   goalIds: string[]; // IDs of goals selected for focus
+  focusRootGoalIds?: string[]; // Strategic goals the user explicitly selected
+  focusLeafGoalIds?: string[]; // Execution goals expanded from root selections
   goalTypeMap?: { [goalId: string]: 'story' | 'calendar' };
   timeframe: 'sprint' | 'quarter' | 'year'; // Duration of focus
   startDate: any; // Firebase Timestamp
@@ -23,6 +25,23 @@ export interface FocusGoal {
   autoCreatedSprintIds?: string[];
   deferredNonFocusCount?: number;
   monzoPotGoalRefs?: { [goalId: string]: string };
+  sprintPlanByGoalId?: { [goalId: string]: number[] };
+  sprintPlanSegments?: Array<{
+    index: number;
+    label: string;
+    startDate: number;
+    endDate: number;
+  }>;
+  assignedSprintIdsByGoalId?: { [goalId: string]: string[] };
+  pendingLeafGoalsToCreate?: Array<{
+    tempId: string;
+    parentGoalId: string;
+    title: string;
+    theme?: number;
+    persona?: 'personal' | 'work';
+    goalKind?: 'milestone' | 'execution';
+    timeHorizon?: 'sprint' | 'quarter' | 'year';
+  }>;
 }
 
 export interface Goal {
@@ -62,6 +81,9 @@ export interface Goal {
   // Relationships
   parentGoalId?: string | null; // Optional parent goal relationship
   dependsOnGoalIds?: string[]; // Optional dependency links
+  goalKind?: 'umbrella' | 'milestone' | 'execution';
+  timeHorizon?: 'sprint' | 'quarter' | 'year' | 'multi_year';
+  rollupMode?: 'children_only' | 'mixed';
   // Publishing & sharing
   isPublished?: boolean; // Whether goal is publicly shareable
   shareCode?: string; // Unique code for sharing (e.g., abc123xyz)

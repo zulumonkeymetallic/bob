@@ -16,6 +16,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { addDoc, collection, serverTimestamp, updateDoc, doc, getDocs, query, where } from 'firebase/firestore';
 import { ActivityStreamService } from '../services/ActivityStreamService';
 import DeferItemModal from './DeferItemModal';
+import NewCalendarEventModal, { BlockFormState, buildCalendarComposerInitialValues } from './planner/NewCalendarEventModal';
 
 interface KanbanCardV2Props {
     item: Story | Task;
@@ -39,6 +40,10 @@ interface KanbanCardV2Props {
         end: number;
         title?: string;
         sourceNote?: string;
+        source?: string;
+        entryMethod?: string;
+        googleEventId?: string;
+        linkedStoryId?: string;
         matchConfidence?: number;
         matchConfidenceTier?: string;
     };
@@ -78,7 +83,8 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
     const [showPriorityReplanPrompt, setShowPriorityReplanPrompt] = useState(false);
     const [priorityReplanLoading, setPriorityReplanLoading] = useState(false);
     const [showDeferModal, setShowDeferModal] = useState(false);
-    const [creatingCalendarEvent, setCreatingCalendarEvent] = useState(false);
+    const [showCalendarComposer, setShowCalendarComposer] = useState(false);
+    const [calendarComposerInitialValues, setCalendarComposerInitialValues] = useState<Partial<BlockFormState>>({});
 
     useEffect(() => {
         const el = ref.current;
@@ -340,10 +346,24 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
         return `${prefix} ${dayLabel} ${timeLabel}`;
     })();
     const scheduledBlockSourceNote = scheduledBlock?.sourceNote || null;
+    const scheduledBlockSourceLabel = (() => {
+        if (!scheduledBlockLabel) return null;
+        const source = String(scheduledBlock?.source || '').toLowerCase();
+        const entryMethod = String(scheduledBlock?.entryMethod || '').toLowerCase();
+        const note = String(scheduledBlock?.sourceNote || '').toLowerCase();
+        const fromGcal = source === 'gcal' || !!scheduledBlock?.googleEventId || note.includes('gcal') || note.includes('google');
+        if (fromGcal && (scheduledBlock?.linkedStoryId || scheduledBlock?.googleEventId || note.includes('matched'))) return 'linked from gcal';
+        if (note.includes('auto') || note.includes('ai')) return 'auto-planned';
+        if (entryMethod.includes('manual') || source === 'manual' || note.includes('manual')) return 'manual';
+        return 'calendar linked';
+    })();
     const scheduledBlockConfidence = Number(scheduledBlock?.matchConfidence || 0) || null;
     const scheduledBlockConfidenceTier = String(scheduledBlock?.matchConfidenceTier || '').trim();
+    const scheduledBlockSourceClassName = scheduledBlockSourceLabel === 'linked from gcal'
+        ? 'kanban-card__source-note kanban-card__source-note--quiet'
+        : 'kanban-card__source-note';
 
-    const createManualCalendarEvent = async (event: React.MouseEvent<HTMLButtonElement>) => {
+    const createManualCalendarEvent = (event: React.MouseEvent<HTMLButtonElement>) => {
         event.stopPropagation();
         if (!currentUser?.uid) {
             setActionMessage('Sign in required to schedule');
@@ -356,52 +376,22 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
             return;
         }
 
-        setCreatingCalendarEvent(true);
-        try {
-            const now = new Date();
-            now.setMinutes(0, 0, 0);
-            now.setHours(now.getHours() + 1);
-
-            const effortDuration = Number((item as any).estimateMin || 0)
-                || (Number((item as any).points || 0) * 60)
+        setCalendarComposerInitialValues(buildCalendarComposerInitialValues({
+            title: String(item.title || `Scheduled ${type}`).trim(),
+            rationale: 'Manual schedule from kanban card',
+            persona: ((item as any).persona || (parentStory as any)?.persona || 'personal') as 'personal' | 'work',
+            theme: String((goal as any)?.theme || (parentStory as any)?.theme || (item as any)?.theme || 'Growth'),
+            category: ((item as any)?.category || ((item as any).persona === 'work' ? 'Work (Main Gig)' : 'Wellbeing')) as any,
+            storyId: type === 'story' ? item.id : (parentStory?.id || undefined),
+            taskId: type === 'task' ? item.id : undefined,
+            estimateMin: Number((item as any).estimateMin || 0)
                 || (Number((item as any).effort || 0) * 30)
-                || 60;
-            const durationMin = Math.max(15, Math.min(240, Math.round(effortDuration)));
-            const end = new Date(now.getTime() + durationMin * 60 * 1000);
-
-            await addDoc(collection(db, 'calendar_blocks'), {
-                ownerUid: currentUser.uid,
-                title: String(item.title || `Scheduled ${type}`).trim(),
-                start: now.getTime(),
-                end: end.getTime(),
-                storyId: type === 'story' ? item.id : (parentStory?.id || null),
-                taskId: type === 'task' ? item.id : null,
-                goalId: goal?.id || (parentStory as any)?.goalId || null,
-                source: 'manual',
-                entryMethod: 'manual_kanban_icon',
-                isAiGenerated: false,
-                createdBy: 'user',
-                status: 'proposed',
-                flexibility: 'soft',
-                visibility: 'default',
-                version: 1,
-                persona: (item as any).persona || (parentStory as any)?.persona || 'personal',
-                theme: (goal as any)?.theme || (parentStory as any)?.theme || (item as any)?.theme || 'Growth',
-                category: (item as any)?.category || ((item as any).persona === 'work' ? 'Work (Main Gig)' : 'Fitness'),
-                syncToGoogle: true,
-                createdAt: serverTimestamp(),
-                updatedAt: serverTimestamp(),
-            });
-
-            setActionMessage('Manual calendar event created');
-            setTimeout(() => setActionMessage(null), 2200);
-        } catch (error) {
-            console.error('Failed to create manual calendar event', error);
-            setActionMessage('Calendar create failed');
-            setTimeout(() => setActionMessage(null), 2400);
-        } finally {
-            setCreatingCalendarEvent(false);
-        }
+                || null,
+            points: Number((item as any).points || 0) || null,
+            aiScore: Number.isFinite(Number((item as any).aiCriticalityScore)) ? Number((item as any).aiCriticalityScore) : null,
+            aiReason: String((item as any).aiReason || (item as any).aiPriorityReason || '').trim() || null,
+        }));
+        setShowCalendarComposer(true);
     };
 
     const handleStyle: React.CSSProperties = {
@@ -640,11 +630,11 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                             variant="link"
                             size="sm"
                             className="p-0"
-                            style={{ width: 24, height: 24, color: themeVars.muted, opacity: creatingCalendarEvent ? 0.6 : 1 }}
-                            title={scheduledBlock?.id ? 'Already has calendar event' : 'Create manual Google Calendar event'}
+                            style={{ width: 24, height: 24, color: themeVars.muted }}
+                            title={scheduledBlock?.id ? 'Already has calendar event' : 'Open calendar event composer'}
                             onClick={createManualCalendarEvent}
                             onPointerDown={(e) => e.stopPropagation()}
-                            disabled={creatingCalendarEvent || !!scheduledBlock?.id}
+                            disabled={!!scheduledBlock?.id}
                         >
                             <CalendarPlus size={12} />
                         </Button>
@@ -958,9 +948,9 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                         </span>
                     ) : null}
                 </div>
-                {scheduledBlockLabel && scheduledBlockSourceNote && (
-                    <div className="kanban-card__meta-text">
-                        {scheduledBlockSourceNote}
+                {scheduledBlockLabel && (scheduledBlockSourceLabel || scheduledBlockSourceNote) && (
+                    <div className={scheduledBlockSourceClassName}>
+                        {scheduledBlockSourceLabel || scheduledBlockSourceNote}
                     </div>
                 )}
                 {scheduledBlockLabel && scheduledBlockConfidence != null && (
@@ -1055,6 +1045,21 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                 setActionMessage('Deferred with capacity-aware date');
                 setTimeout(() => setActionMessage(null), 2500);
                 setShowDeferModal(false);
+            }}
+        />
+        <NewCalendarEventModal
+            show={showCalendarComposer}
+            onHide={() => setShowCalendarComposer(false)}
+            initialValues={calendarComposerInitialValues}
+            stories={
+                type === 'story'
+                    ? [item as Story]
+                    : (parentStory ? [parentStory] : [])
+            }
+            onSaved={() => {
+                setActionMessage('Manual calendar event created');
+                setTimeout(() => setActionMessage(null), 2200);
+                setShowCalendarComposer(false);
             }}
         />
         </>

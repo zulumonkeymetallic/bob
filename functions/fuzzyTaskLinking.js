@@ -110,7 +110,10 @@ async function ensureValidationTask({
   reason,
   suggestedType = null,
   suggestedId = null,
+  suggestedRef = null,
   suggestedTitle = null,
+  linkedGoalRef = null,
+  linkedGoalTitle = null,
   confidence = null,
 }) {
   const duplicateKey = `link_validation:${sourceType}:${sourceId}:${reason}`;
@@ -124,12 +127,18 @@ async function ensureValidationTask({
   if (!existing.empty) return existing.docs[0].id;
 
   const dueDate = tomorrowEndOfDayMillis();
-  const suggestedText = suggestedType && suggestedTitle
-    ? ` Suggested ${suggestedType}: ${suggestedTitle}${confidence != null ? ` (${confidence}% confidence)` : ''}.`
+  const suggestedLabel = suggestedType && (suggestedRef || suggestedTitle)
+    ? [suggestedRef, suggestedTitle].filter(Boolean).join(' · ')
+    : '';
+  const linkedGoalLabel = linkedGoalRef || linkedGoalTitle
+    ? [linkedGoalRef, linkedGoalTitle].filter(Boolean).join(' · ')
+    : '';
+  const suggestedText = suggestedType && suggestedLabel
+    ? ` Suggested ${suggestedType}: ${suggestedLabel}${linkedGoalLabel ? ` -> goal ${linkedGoalLabel}` : ''}${confidence != null ? ` (${confidence}% confidence)` : ''}.`
     : '';
   const title = reason === 'no_match'
-    ? `Validate ${sourceType} linkage for ${sourceRef}`
-    : `Review low-confidence ${sourceType} linkage for ${sourceRef}`;
+    ? `Validate ${sourceType} linkage for ${sourceRef}${suggestedLabel ? ` -> ${suggestedLabel}` : ''}`
+    : `Review low-confidence ${sourceType} linkage for ${sourceRef}${suggestedLabel ? ` -> ${suggestedLabel}` : ''}`;
   const description = `${sourceType.toUpperCase()}: ${sourceTitle || sourceRef}.${suggestedText}`.trim();
 
   const taskRef = db.collection('tasks').doc();
@@ -162,6 +171,215 @@ async function ensureValidationTask({
   return taskRef.id;
 }
 
+const ENABLE_FUZZY_VALIDATION_TASKS = false;
+
+function createConfidenceTierCounts() {
+  return {
+    no_match: 0,
+    low_confidence: 0,
+    auto_linked: 0,
+  };
+}
+
+function buildRunId(runType, context = null) {
+  const executionId = String(context?.executionId || '').trim();
+  const eventId = String(context?.eventId || '').trim();
+  const suffix = executionId || eventId || String(Date.now());
+  return `${runType}_${suffix}`;
+}
+
+async function persistLinkingRunMetrics({
+  db,
+  runId,
+  runType,
+  source,
+  userId,
+  confidenceTierCounts,
+  scanned,
+  matchesFound,
+  suggestionsCreated,
+  validationTasksCreated,
+  autoLinked,
+}) {
+  await db.collection('linking_run_metrics').add({
+    runId,
+    runType,
+    source,
+    userId,
+    confidenceTierCounts: {
+      no_match: Number(confidenceTierCounts?.no_match || 0),
+      low_confidence: Number(confidenceTierCounts?.low_confidence || 0),
+      auto_linked: Number(confidenceTierCounts?.auto_linked || 0),
+    },
+    scanned: Number(scanned || 0),
+    matchesFound: Number(matchesFound || 0),
+    suggestionsCreated: Number(suggestionsCreated || 0),
+    validationTasksCreated: Number(validationTasksCreated || 0),
+    autoLinked: Number(autoLinked || 0),
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+}
+
+function planTaskLinkUpdate(taskData, match) {
+  const currentGoalId = taskData?.goalId || null;
+  const currentStoryId = taskData?.storyId || null;
+
+  if (!match || !match.type || !match.id) {
+    return { shouldUpdate: false, reason: 'invalid_match', updateData: null };
+  }
+
+  if (match.type === 'goal') {
+    if (currentGoalId === match.id) {
+      return { shouldUpdate: false, reason: 'goal_unchanged', updateData: null };
+    }
+    if (currentGoalId) {
+      return { shouldUpdate: false, reason: 'goal_already_linked', updateData: null };
+    }
+    return { shouldUpdate: true, reason: 'goal_null_to_value', updateData: { goalId: match.id } };
+  }
+
+  if (match.type === 'story') {
+    if (currentStoryId === match.id) {
+      const linkedGoalMatches = !match.linkedGoal || currentGoalId === match.linkedGoal;
+      if (linkedGoalMatches) {
+        return { shouldUpdate: false, reason: 'story_unchanged', updateData: null };
+      }
+      return { shouldUpdate: false, reason: 'story_goal_conflict', updateData: null };
+    }
+    if (currentStoryId) {
+      return { shouldUpdate: false, reason: 'story_already_linked', updateData: null };
+    }
+
+    const updateData = { storyId: match.id };
+    if (match.linkedGoal) {
+      if (currentGoalId && currentGoalId !== match.linkedGoal) {
+        return { shouldUpdate: false, reason: 'goal_conflict_with_story_link', updateData: null };
+      }
+      if (!currentGoalId) {
+        updateData.goalId = match.linkedGoal;
+      }
+    }
+
+    return { shouldUpdate: true, reason: 'story_null_to_value', updateData };
+  }
+
+  return { shouldUpdate: false, reason: 'unsupported_match_type', updateData: null };
+}
+
+const SUGGESTION_REJECTION_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000;
+
+async function ensureTaskSuggestion({
+  db,
+  task,
+  userId,
+  bestMatch,
+  matches,
+}) {
+  const taskId = String(task?.id || '').trim();
+  if (!taskId) return { created: false, suggestionId: null, suppressedByRecentRejection: false };
+
+  const baseQuery = db.collection('task_suggestions')
+    .where('taskId', '==', taskId)
+    .where('userId', '==', userId)
+    .where('suggestedType', '==', bestMatch.type)
+    .where('suggestedId', '==', bestMatch.id)
+    .limit(1);
+
+  const pendingSnap = await baseQuery.where('status', '==', 'pending').get();
+  if (!pendingSnap.empty) {
+    return { created: false, suggestionId: pendingSnap.docs[0].id, suppressedByRecentRejection: false };
+  }
+
+  const rejectedSnap = await baseQuery.where('status', '==', 'rejected').get();
+  if (!rejectedSnap.empty) {
+    const now = Date.now();
+    const recentRejection = rejectedSnap.docs.find((doc) => {
+      const data = doc.data() || {};
+      const reviewedAt = data.reviewedAt && typeof data.reviewedAt.toMillis === 'function'
+        ? data.reviewedAt.toMillis()
+        : Number(data.reviewedAt || 0);
+      return reviewedAt > 0 && (now - reviewedAt) < SUGGESTION_REJECTION_COOLDOWN_MS;
+    });
+    if (recentRejection) {
+      return { created: false, suggestionId: recentRejection.id, suppressedByRecentRejection: true };
+    }
+  }
+
+  const suggestionRef = await db.collection('task_suggestions').add({
+    taskId,
+    userId,
+    taskTitle: task.title,
+    suggestedId: bestMatch.id,
+    suggestedTitle: bestMatch.title,
+    suggestedType: bestMatch.type,
+    suggestedLinkedGoalId: bestMatch.linkedGoal || null,
+    confidence: Math.round(bestMatch.score * 100),
+    allMatches: {
+      goals: matches.goals.slice(0, 3),
+      stories: matches.stories.slice(0, 3)
+    },
+    status: 'pending',
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+    reviewed: false
+  });
+
+  return { created: true, suggestionId: suggestionRef.id, suppressedByRecentRejection: false };
+}
+
+async function ensureStoryGoalSuggestion({
+  db,
+  story,
+  userId,
+  bestMatch,
+  matches,
+}) {
+  const storyId = String(story?.id || '').trim();
+  if (!storyId) return { created: false, suggestionId: null, suppressedByRecentRejection: false };
+
+  const baseQuery = db.collection('story_goal_suggestions')
+    .where('storyId', '==', storyId)
+    .where('userId', '==', userId)
+    .where('suggestedGoalId', '==', bestMatch.id)
+    .limit(1);
+
+  const pendingSnap = await baseQuery.where('status', '==', 'pending').get();
+  if (!pendingSnap.empty) {
+    return { created: false, suggestionId: pendingSnap.docs[0].id, suppressedByRecentRejection: false };
+  }
+
+  const rejectedSnap = await baseQuery.where('status', '==', 'rejected').get();
+  if (!rejectedSnap.empty) {
+    const now = Date.now();
+    const recentRejection = rejectedSnap.docs.find((doc) => {
+      const data = doc.data() || {};
+      const reviewedAt = data.reviewedAt && typeof data.reviewedAt.toMillis === 'function'
+        ? data.reviewedAt.toMillis()
+        : Number(data.reviewedAt || 0);
+      return reviewedAt > 0 && (now - reviewedAt) < SUGGESTION_REJECTION_COOLDOWN_MS;
+    });
+    if (recentRejection) {
+      return { created: false, suggestionId: recentRejection.id, suppressedByRecentRejection: true };
+    }
+  }
+
+  const suggestionRef = await db.collection('story_goal_suggestions').add({
+    storyId,
+    userId,
+    storyTitle: story.title || '',
+    suggestedGoalId: bestMatch.id,
+    suggestedGoalTitle: bestMatch.title,
+    confidence: Math.round(bestMatch.score * 100),
+    allMatches: matches.slice(0, 3),
+    status: 'pending',
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+    reviewed: false
+  });
+
+  return { created: true, suggestionId: suggestionRef.id, suppressedByRecentRejection: false };
+}
+
 /**
  * Find potential matches for an unlinked task
  */
@@ -178,6 +396,7 @@ async function findPotentialMatches(db, userId, task, goals, stories) {
       // Only suggest if > 50% similar
       matches.goals.push({
         id: goal.id,
+        ref: goal.ref || null,
         title: goal.title,
         score,
         type: 'goal'
@@ -191,10 +410,13 @@ async function findPotentialMatches(db, userId, task, goals, stories) {
     if (score > 0.5) {
       matches.stories.push({
         id: story.id,
+        ref: story.referenceNumber || story.ref || null,
         title: story.title,
         score,
         type: 'story',
-        linkedGoal: story.goalId
+        linkedGoal: story.goalId,
+        linkedGoalRef: (goals.find((goal) => goal.id === story.goalId) || {}).ref || null,
+        linkedGoalTitle: (goals.find((goal) => goal.id === story.goalId) || {}).title || null,
       });
     }
   }
@@ -219,13 +441,16 @@ exports.nightlyTaskLinking = onSchedule(
   },
   async (context) => {
     const db = admin.firestore();
+    const runId = buildRunId('nightlyTaskLinking', context);
     const results = {
+      runId,
       usersProcessed: 0,
       tasksScanned: 0,
       matchesFound: 0,
       autoLinked: 0,
       suggestionsCreated: 0,
       validationTasksCreated: 0,
+      confidenceTierTotals: createConfidenceTierCounts(),
       errors: []
     };
 
@@ -236,6 +461,12 @@ exports.nightlyTaskLinking = onSchedule(
 
       for (const userDoc of usersSnap.docs) {
         const userId = userDoc.id;
+        const userRunCounts = createConfidenceTierCounts();
+        let userTasksScanned = 0;
+        let userMatchesFound = 0;
+        let userSuggestionsCreated = 0;
+        let userValidationTasksCreated = 0;
+        let userAutoLinked = 0;
 
         try {
           // Get all unlinked tasks for this user
@@ -247,8 +478,24 @@ exports.nightlyTaskLinking = onSchedule(
             .get();
 
           results.tasksScanned += tasksSnap.size;
+          userTasksScanned += tasksSnap.size;
 
-          if (tasksSnap.size === 0) continue;
+          if (tasksSnap.size === 0) {
+            await persistLinkingRunMetrics({
+              db,
+              runId,
+              runType: 'nightlyTaskLinking',
+              source: 'nightly',
+              userId,
+              confidenceTierCounts: userRunCounts,
+              scanned: userTasksScanned,
+              matchesFound: userMatchesFound,
+              suggestionsCreated: userSuggestionsCreated,
+              validationTasksCreated: userValidationTasksCreated,
+              autoLinked: userAutoLinked,
+            });
+            continue;
+          }
 
           // Get all goals and stories
           const goalsSnap = await db
@@ -277,21 +524,27 @@ exports.nightlyTaskLinking = onSchedule(
             const matches = await findPotentialMatches(db, userId, task, goals, stories);
 
             if (matches.goals.length === 0 && matches.stories.length === 0) {
-              const taskRef = task.reference || `TK-${String(task.id).slice(-6).toUpperCase()}`;
-              await ensureValidationTask({
-                db,
-                userId,
-                sourceType: 'task',
-                sourceId: task.id,
-                sourceRef: taskRef,
-                sourceTitle: task.title || taskRef,
-                reason: 'no_match',
-              });
-              results.validationTasksCreated++;
+              userRunCounts.no_match++;
+              results.confidenceTierTotals.no_match++;
+              if (ENABLE_FUZZY_VALIDATION_TASKS) {
+                const taskRef = task.reference || `TK-${String(task.id).slice(-6).toUpperCase()}`;
+                await ensureValidationTask({
+                  db,
+                  userId,
+                  sourceType: 'task',
+                  sourceId: task.id,
+                  sourceRef: taskRef,
+                  sourceTitle: task.title || taskRef,
+                  reason: 'no_match',
+                });
+                results.validationTasksCreated++;
+                userValidationTasksCreated++;
+              }
               continue;
             }
 
             results.matchesFound++;
+            userMatchesFound++;
 
             // Get best match
             const bestGoalMatch = matches.goals[0];
@@ -302,20 +555,15 @@ exports.nightlyTaskLinking = onSchedule(
 
             if (!bestMatch) continue;
 
+            const previousGoalId = task.goalId || null;
+            const previousStoryId = task.storyId || null;
+
             // AUTO-LINK if confidence > 85%
             if (bestMatch.score > 0.85) {
-              const updateData = {};
-              if (bestMatch.type === 'goal') {
-                updateData.goalId = bestMatch.id;
-              } else {
-                updateData.storyId = bestMatch.id;
-                // If story linked, also set the goal
-                if (bestMatch.linkedGoal) {
-                  updateData.goalId = bestMatch.linkedGoal;
-                }
-              }
+              const linkPlan = planTaskLinkUpdate(task, bestMatch);
+              if (!linkPlan.shouldUpdate || !linkPlan.updateData) continue;
 
-              await db.collection('tasks').doc(task.id).update(updateData);
+              await db.collection('tasks').doc(task.id).update(linkPlan.updateData);
 
               // Log to activity stream
               await db.collection('activity_stream').add({
@@ -326,7 +574,7 @@ exports.nightlyTaskLinking = onSchedule(
                 userEmail: userDoc.data()?.email || 'system',
                 timestamp: admin.firestore.FieldValue.serverTimestamp(),
                 fieldName: bestMatch.type === 'goal' ? 'goalId' : 'storyId',
-                oldValue: '',
+                oldValue: bestMatch.type === 'goal' ? (previousGoalId || '') : (previousStoryId || ''),
                 newValue: bestMatch.id,
                 description: `Auto-linked task "${task.title}" to ${bestMatch.type} "${bestMatch.title}" (${(bestMatch.score * 100).toFixed(0)}% confidence)`,
                 persona: task.persona || 'personal',
@@ -336,69 +584,87 @@ exports.nightlyTaskLinking = onSchedule(
               });
 
               results.autoLinked++;
+              userRunCounts.auto_linked++;
+              results.confidenceTierTotals.auto_linked++;
+              userAutoLinked++;
             }
             // CREATE SUGGESTION if 65% < confidence <= 85%
             else if (bestMatch.score > 0.65) {
-              // Store suggestion for user review
-              const suggestionRef = await db.collection('task_suggestions').add({
-                taskId: task.id,
-                userId,
-                taskTitle: task.title,
-                suggestedId: bestMatch.id,
-                suggestedTitle: bestMatch.title,
-                suggestedType: bestMatch.type,
-                confidence: Math.round(bestMatch.score * 100),
-                allMatches: {
-                  goals: matches.goals.slice(0, 3),
-                  stories: matches.stories.slice(0, 3)
-                },
-                status: 'pending', // pending, accepted, rejected, expired
-                createdAt: admin.firestore.FieldValue.serverTimestamp(),
-                expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
-                reviewed: false
-              });
-
-              // Log suggestion to activity stream
-              await db.collection('activity_stream').add({
-                entityId: task.id,
-                entityType: 'task',
-                activityType: 'link_suggested',
-                userId,
-                userEmail: userDoc.data()?.email || 'system',
-                timestamp: admin.firestore.FieldValue.serverTimestamp(),
-                description: `Suggested linking task "${task.title}" to ${bestMatch.type} "${bestMatch.title}"`,
-                persona: task.persona || 'personal',
-                referenceNumber: task.reference || '',
-                source: 'system',
-                sourceDetails: `fuzzyTaskLinking_suggest_${bestMatch.score.toFixed(3)}`,
-                metadata: {
-                  suggestionId: suggestionRef.id,
-                  confidence: Math.round(bestMatch.score * 100),
-                  topMatches: {
-                    goals: matches.goals.slice(0, 2).map(m => ({ id: m.id, title: m.title, score: (m.score * 100).toFixed(0) + '%' })),
-                    stories: matches.stories.slice(0, 2).map(m => ({ id: m.id, title: m.title, score: (m.score * 100).toFixed(0) + '%' }))
-                  }
-                }
-              });
-
-              results.suggestionsCreated++;
-              const taskRef = task.reference || `TK-${String(task.id).slice(-6).toUpperCase()}`;
-              await ensureValidationTask({
+              const suggestionResult = await ensureTaskSuggestion({
                 db,
+                task,
                 userId,
-                sourceType: 'task',
-                sourceId: task.id,
-                sourceRef: taskRef,
-                sourceTitle: task.title || taskRef,
-                reason: 'low_confidence',
-                suggestedType: bestMatch.type,
-                suggestedId: bestMatch.id,
-                suggestedTitle: bestMatch.title,
-                confidence: Math.round(bestMatch.score * 100),
+                bestMatch,
+                matches,
               });
-              results.validationTasksCreated++;
+
+              if (suggestionResult.created) {
+                await db.collection('activity_stream').add({
+                  entityId: task.id,
+                  entityType: 'task',
+                  activityType: 'link_suggested',
+                  userId,
+                  userEmail: userDoc.data()?.email || 'system',
+                  timestamp: admin.firestore.FieldValue.serverTimestamp(),
+                  description: `Suggested linking task "${task.title}" to ${bestMatch.type} "${bestMatch.title}"`,
+                  persona: task.persona || 'personal',
+                  referenceNumber: task.reference || '',
+                  source: 'system',
+                  sourceDetails: `fuzzyTaskLinking_suggest_${bestMatch.score.toFixed(3)}`,
+                  metadata: {
+                    suggestionId: suggestionResult.suggestionId,
+                    confidence: Math.round(bestMatch.score * 100),
+                    topMatches: {
+                      goals: matches.goals.slice(0, 2).map(m => ({ id: m.id, title: m.title, score: (m.score * 100).toFixed(0) + '%' })),
+                      stories: matches.stories.slice(0, 2).map(m => ({ id: m.id, title: m.title, score: (m.score * 100).toFixed(0) + '%' }))
+                    }
+                  }
+                });
+              }
+
+              if (suggestionResult.created) {
+                results.suggestionsCreated++;
+                userSuggestionsCreated++;
+              }
+              userRunCounts.low_confidence++;
+              results.confidenceTierTotals.low_confidence++;
+              if (ENABLE_FUZZY_VALIDATION_TASKS) {
+                const taskRef = task.reference || `TK-${String(task.id).slice(-6).toUpperCase()}`;
+                await ensureValidationTask({
+                  db,
+                  userId,
+                  sourceType: 'task',
+                  sourceId: task.id,
+                  sourceRef: taskRef,
+                  sourceTitle: task.title || taskRef,
+                  reason: 'low_confidence',
+                  suggestedType: bestMatch.type,
+                  suggestedId: bestMatch.id,
+                  suggestedRef: bestMatch.ref || null,
+                  suggestedTitle: bestMatch.title,
+                  linkedGoalRef: bestMatch.linkedGoalRef || null,
+                  linkedGoalTitle: bestMatch.linkedGoalTitle || null,
+                  confidence: Math.round(bestMatch.score * 100),
+                });
+                results.validationTasksCreated++;
+                userValidationTasksCreated++;
+              }
             }
           }
+
+          await persistLinkingRunMetrics({
+            db,
+            runId,
+            runType: 'nightlyTaskLinking',
+            source: 'nightly',
+            userId,
+            confidenceTierCounts: userRunCounts,
+            scanned: userTasksScanned,
+            matchesFound: userMatchesFound,
+            suggestionsCreated: userSuggestionsCreated,
+            validationTasksCreated: userValidationTasksCreated,
+            autoLinked: userAutoLinked,
+          });
         } catch (userError) {
           results.errors.push(`User ${userId}: ${userError.message}`);
         }
@@ -445,13 +711,16 @@ exports.nightlyStoryGoalLinking = onSchedule(
   },
   async (context) => {
     const db = admin.firestore();
+    const runId = buildRunId('nightlyStoryGoalLinking', context);
     const results = {
+      runId,
       usersProcessed: 0,
       storiesScanned: 0,
       matchesFound: 0,
       autoLinked: 0,
       suggestionsCreated: 0,
       validationTasksCreated: 0,
+      confidenceTierTotals: createConfidenceTierCounts(),
       errors: []
     };
 
@@ -461,6 +730,12 @@ exports.nightlyStoryGoalLinking = onSchedule(
 
       for (const userDoc of usersSnap.docs) {
         const userId = userDoc.id;
+        const userRunCounts = createConfidenceTierCounts();
+        let userStoriesScanned = 0;
+        let userMatchesFound = 0;
+        let userSuggestionsCreated = 0;
+        let userValidationTasksCreated = 0;
+        let userAutoLinked = 0;
 
         try {
           const [storiesSnap, goalsSnap] = await Promise.all([
@@ -475,7 +750,23 @@ exports.nightlyStoryGoalLinking = onSchedule(
           ]);
 
           results.storiesScanned += storiesSnap.size;
-          if (storiesSnap.empty || goalsSnap.empty) continue;
+          userStoriesScanned += storiesSnap.size;
+          if (storiesSnap.empty || goalsSnap.empty) {
+            await persistLinkingRunMetrics({
+              db,
+              runId,
+              runType: 'nightlyStoryGoalLinking',
+              source: 'nightly',
+              userId,
+              confidenceTierCounts: userRunCounts,
+              scanned: userStoriesScanned,
+              matchesFound: userMatchesFound,
+              suggestionsCreated: userSuggestionsCreated,
+              validationTasksCreated: userValidationTasksCreated,
+              autoLinked: userAutoLinked,
+            });
+            continue;
+          }
 
           const goals = goalsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
 
@@ -486,6 +777,8 @@ exports.nightlyStoryGoalLinking = onSchedule(
             const matches = findPotentialGoalMatchesForStory(story, goals);
             const storyRef = story.ref || `ST-${String(story.id).slice(-6).toUpperCase()}`;
             if (!matches.length) {
+              userRunCounts.no_match++;
+              results.confidenceTierTotals.no_match++;
               await ensureValidationTask({
                 db,
                 userId,
@@ -496,10 +789,12 @@ exports.nightlyStoryGoalLinking = onSchedule(
                 reason: 'no_match',
               });
               results.validationTasksCreated++;
+              userValidationTasksCreated++;
               continue;
             }
 
             results.matchesFound++;
+            userMatchesFound++;
             const bestMatch = matches[0];
 
             if (bestMatch.score > 0.85) {
@@ -524,43 +819,47 @@ exports.nightlyStoryGoalLinking = onSchedule(
               });
 
               results.autoLinked++;
+              userRunCounts.auto_linked++;
+              results.confidenceTierTotals.auto_linked++;
+              userAutoLinked++;
             } else if (bestMatch.score > 0.65) {
-              const suggestionRef = await db.collection('story_goal_suggestions').add({
-                storyId: story.id,
+              const suggestionResult = await ensureStoryGoalSuggestion({
+                db,
+                story,
                 userId,
-                storyTitle: story.title || '',
-                suggestedGoalId: bestMatch.id,
-                suggestedGoalTitle: bestMatch.title,
-                confidence: Math.round(bestMatch.score * 100),
-                allMatches: matches.slice(0, 3),
-                status: 'pending',
-                createdAt: admin.firestore.FieldValue.serverTimestamp(),
-                expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-                reviewed: false
+                bestMatch,
+                matches,
               });
 
-              await db.collection('activity_stream').add({
-                entityId: story.id,
-                entityType: 'story',
-                activityType: 'story_goal_link_suggested',
-                userId,
-                userEmail: userDoc.data()?.email || 'system',
-                timestamp: admin.firestore.FieldValue.serverTimestamp(),
-                description: `Suggested linking story "${story.title || story.id}" to goal "${bestMatch.title}"`,
-                source: 'system',
-                sourceDetails: `fuzzyStoryGoalLinking_suggest_${bestMatch.score.toFixed(3)}`,
-                metadata: {
-                  suggestionId: suggestionRef.id,
-                  confidence: Math.round(bestMatch.score * 100),
-                  topMatches: matches.slice(0, 2).map((m) => ({
-                    id: m.id,
-                    title: m.title,
-                    score: `${(m.score * 100).toFixed(0)}%`
-                  }))
-                }
-              });
+              if (suggestionResult.created) {
+                await db.collection('activity_stream').add({
+                  entityId: story.id,
+                  entityType: 'story',
+                  activityType: 'story_goal_link_suggested',
+                  userId,
+                  userEmail: userDoc.data()?.email || 'system',
+                  timestamp: admin.firestore.FieldValue.serverTimestamp(),
+                  description: `Suggested linking story "${story.title || story.id}" to goal "${bestMatch.title}"`,
+                  source: 'system',
+                  sourceDetails: `fuzzyStoryGoalLinking_suggest_${bestMatch.score.toFixed(3)}`,
+                  metadata: {
+                    suggestionId: suggestionResult.suggestionId,
+                    confidence: Math.round(bestMatch.score * 100),
+                    topMatches: matches.slice(0, 2).map((m) => ({
+                      id: m.id,
+                      title: m.title,
+                      score: `${(m.score * 100).toFixed(0)}%`
+                    }))
+                  }
+                });
+              }
 
-              results.suggestionsCreated++;
+              if (suggestionResult.created) {
+                results.suggestionsCreated++;
+                userSuggestionsCreated++;
+              }
+              userRunCounts.low_confidence++;
+              results.confidenceTierTotals.low_confidence++;
               await ensureValidationTask({
                 db,
                 userId,
@@ -571,12 +870,28 @@ exports.nightlyStoryGoalLinking = onSchedule(
                 reason: 'low_confidence',
                 suggestedType: 'goal',
                 suggestedId: bestMatch.id,
+                suggestedRef: bestMatch.ref || null,
                 suggestedTitle: bestMatch.title,
                 confidence: Math.round(bestMatch.score * 100),
               });
               results.validationTasksCreated++;
+              userValidationTasksCreated++;
             }
           }
+
+          await persistLinkingRunMetrics({
+            db,
+            runId,
+            runType: 'nightlyStoryGoalLinking',
+            source: 'nightly',
+            userId,
+            confidenceTierCounts: userRunCounts,
+            scanned: userStoriesScanned,
+            matchesFound: userMatchesFound,
+            suggestionsCreated: userSuggestionsCreated,
+            validationTasksCreated: userValidationTasksCreated,
+            autoLinked: userAutoLinked,
+          });
         } catch (userError) {
           results.errors.push(`User ${userId}: ${userError.message}`);
         }
@@ -632,6 +947,7 @@ exports.triggerTaskLinking = onCall(
     }
 
     try {
+      const runId = buildRunId('triggerTaskLinking');
       const tasksSnap = await db
         .collection('tasks')
         .where('ownerUid', '==', userId)
@@ -646,9 +962,11 @@ exports.triggerTaskLinking = onCall(
       const stories = storiesSnap.docs.map(d => ({ id: d.id, ...d.data() }));
 
       const results = {
+        runId,
         tasksScanned: tasksSnap.size,
         autoLinked: 0,
         suggestionsCreated: 0,
+        confidenceTierCounts: createConfidenceTierCounts(),
         results: []
       };
 
@@ -661,16 +979,19 @@ exports.triggerTaskLinking = onCall(
           .filter(Boolean)
           .sort((a, b) => (b?.score || 0) - (a?.score || 0))[0];
 
-        if (!bestMatch) continue;
+        if (!bestMatch) {
+          results.confidenceTierCounts.no_match++;
+          continue;
+        }
 
         if (bestMatch.score > 0.85) {
-          const updateData =
-            bestMatch.type === 'goal' ? { goalId: bestMatch.id } : { storyId: bestMatch.id };
-          if (bestMatch.type === 'story' && bestMatch.linkedGoal) {
-            updateData.goalId = bestMatch.linkedGoal;
+          const linkPlan = planTaskLinkUpdate(task, bestMatch);
+          if (!linkPlan.shouldUpdate || !linkPlan.updateData) {
+            continue;
           }
-          await db.collection('tasks').doc(task.id).update(updateData);
+          await db.collection('tasks').doc(task.id).update(linkPlan.updateData);
           results.autoLinked++;
+          results.confidenceTierCounts.auto_linked++;
           results.results.push({
             taskId: task.id,
             action: 'auto_linked',
@@ -678,6 +999,7 @@ exports.triggerTaskLinking = onCall(
           });
         } else if (bestMatch.score > 0.65) {
           results.suggestionsCreated++;
+          results.confidenceTierCounts.low_confidence++;
           results.results.push({
             taskId: task.id,
             action: 'suggestion_created',
@@ -686,6 +1008,22 @@ exports.triggerTaskLinking = onCall(
           });
         }
       }
+
+      await persistLinkingRunMetrics({
+        db,
+        runId,
+        runType: 'triggerTaskLinking',
+        source: 'manual',
+        userId,
+        confidenceTierCounts: results.confidenceTierCounts,
+        scanned: results.tasksScanned,
+        matchesFound:
+          results.tasksScanned -
+          Number(results.confidenceTierCounts.no_match || 0),
+        suggestionsCreated: results.suggestionsCreated,
+        validationTasksCreated: 0,
+        autoLinked: results.autoLinked,
+      });
 
       return results;
     } catch (error) {
@@ -718,6 +1056,7 @@ exports.triggerStoryGoalLinking = onCall(
     }
 
     try {
+      const runId = buildRunId('triggerStoryGoalLinking');
       const [storiesSnap, goalsSnap] = await Promise.all([
         db.collection('stories')
           .where('ownerUid', '==', userId)
@@ -731,9 +1070,11 @@ exports.triggerStoryGoalLinking = onCall(
 
       const goals = goalsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
       const out = {
+        runId,
         storiesScanned: storiesSnap.size,
         autoLinked: 0,
         suggestionsCreated: 0,
+        confidenceTierCounts: createConfidenceTierCounts(),
         results: []
       };
 
@@ -743,7 +1084,10 @@ exports.triggerStoryGoalLinking = onCall(
 
         const matches = findPotentialGoalMatchesForStory(story, goals);
         const best = matches[0];
-        if (!best) continue;
+        if (!best) {
+          out.confidenceTierCounts.no_match++;
+          continue;
+        }
 
         if (best.score > 0.85) {
           await db.collection('stories').doc(story.id).set({
@@ -751,12 +1095,30 @@ exports.triggerStoryGoalLinking = onCall(
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
           }, { merge: true });
           out.autoLinked++;
+          out.confidenceTierCounts.auto_linked++;
           out.results.push({ storyId: story.id, action: 'auto_linked', matched: best });
         } else if (best.score > 0.65) {
           out.suggestionsCreated++;
+          out.confidenceTierCounts.low_confidence++;
           out.results.push({ storyId: story.id, action: 'suggestion_created', matched: best, score: best.score });
         }
       }
+
+      await persistLinkingRunMetrics({
+        db,
+        runId,
+        runType: 'triggerStoryGoalLinking',
+        source: 'manual',
+        userId,
+        confidenceTierCounts: out.confidenceTierCounts,
+        scanned: out.storiesScanned,
+        matchesFound:
+          out.storiesScanned -
+          Number(out.confidenceTierCounts.no_match || 0),
+        suggestionsCreated: out.suggestionsCreated,
+        validationTasksCreated: 0,
+        autoLinked: out.autoLinked,
+      });
 
       return out;
     } catch (error) {
@@ -799,13 +1161,18 @@ exports.respondToTaskSuggestion = onCall(
       }
 
       if (action === 'accept') {
-        // Apply the link
-        const updateData =
-          suggestion.suggestedType === 'goal'
-            ? { goalId: suggestion.suggestedId }
-            : { storyId: suggestion.suggestedId };
-
-        await db.collection('tasks').doc(suggestion.taskId).update(updateData);
+        const taskRef = db.collection('tasks').doc(suggestion.taskId);
+        const taskDoc = await taskRef.get();
+        const taskData = taskDoc.exists ? taskDoc.data() || {} : {};
+        const syntheticMatch = {
+          type: suggestion.suggestedType,
+          id: suggestion.suggestedId,
+          linkedGoal: suggestion.suggestedLinkedGoalId || null,
+        };
+        const linkPlan = planTaskLinkUpdate(taskData, syntheticMatch);
+        if (linkPlan.shouldUpdate && linkPlan.updateData) {
+          await taskRef.update(linkPlan.updateData);
+        }
 
         // Log acceptance
         await db.collection('activity_stream').add({
@@ -863,10 +1230,16 @@ exports.respondToStoryGoalSuggestion = onCall(
       }
 
       if (action === 'accept') {
-        await db.collection('stories').doc(suggestion.storyId).set({
-          goalId: suggestion.suggestedGoalId,
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        }, { merge: true });
+        const storyRef = db.collection('stories').doc(suggestion.storyId);
+        const storyDoc = await storyRef.get();
+        const storyData = storyDoc.exists ? storyDoc.data() || {} : {};
+        const currentGoalId = storyData.goalId || null;
+        if (!currentGoalId) {
+          await storyRef.set({
+            goalId: suggestion.suggestedGoalId,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          }, { merge: true });
+        }
 
         await db.collection('activity_stream').add({
           entityId: suggestion.storyId,

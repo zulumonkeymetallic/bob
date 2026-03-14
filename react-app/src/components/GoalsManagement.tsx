@@ -20,6 +20,7 @@ import { useSidebar } from '../contexts/SidebarContext';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { computeWindowExpectedProgress, evaluateGoalTargetStatus } from '../utils/goalKpiStatus';
 import { goalNeedsLinkedPot } from '../utils/goalCost';
+import { isGoalInHierarchySet } from '../utils/goalHierarchy';
 
 const GoalsManagement: React.FC = () => {
   console.log('[GoalsManagement] Component RENDERING');
@@ -465,7 +466,7 @@ const GoalsManagement: React.FC = () => {
       if (derivedYear && String(derivedYear) !== filterYear) return false;
     }
     if (searchTerm && !goal.title.toLowerCase().includes(searchTerm.toLowerCase())) return false;
-    if (applyFocusOnlyFilter && activeFocusGoalIds.size > 0 && !activeFocusGoalIds.has(goal.id)) return false;
+    if (applyFocusOnlyFilter && activeFocusGoalIds.size > 0 && !isGoalInHierarchySet(goal.id, goals, activeFocusGoalIds)) return false;
     return true;
   });
 

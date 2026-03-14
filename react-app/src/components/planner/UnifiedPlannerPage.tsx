@@ -72,6 +72,7 @@ import { getBadgeVariant, getPriorityBadge, getStatusName } from '../../utils/st
 import { isRecurringDueOnDate, resolveRecurringDueMs } from '../../utils/recurringTaskDue';
 import EditTaskModal from '../EditTaskModal';
 import EditStoryModal from '../EditStoryModal';
+import NewCalendarEventModal, { BlockFormState, DEFAULT_BLOCK_FORM, toInputValue } from './NewCalendarEventModal';
 import DayCapacityWarningBanner from './DayCapacityWarningBanner';
 import { useSidebar } from '../../contexts/SidebarContext';
 
@@ -119,49 +120,6 @@ type ThemeOption = {
   textColor: string;
 };
 
-interface BlockFormState {
-  id?: string;
-  title: string;
-  theme?: CalendarBlock['theme'];
-  category?: CalendarBlock['category'];
-  flexibility?: CalendarBlock['flexibility'];
-  rationale: string;
-  start: string;
-  end: string;
-  syncToGoogle: boolean;
-  subTheme: string;
-  persona?: 'personal' | 'work' | null;
-  storyId?: string;
-  taskId?: string;
-  aiScore?: number | null;
-  aiReason?: string | null;
-  storyInput?: string;
-  recurrenceFreq: 'none' | 'daily' | 'weekly';
-  recurrenceDays: string[]; // BYDAY codes e.g. ['MO','WE']
-  recurrenceUntil: string; // date input string
-}
-
-const DEFAULT_BLOCK_FORM: BlockFormState = {
-  title: 'Calendar entry',
-  theme: 'General',
-  category: 'Wellbeing',
-  flexibility: 'soft',
-  rationale: '',
-  start: '',
-  end: '',
-  syncToGoogle: true,
-  subTheme: '',
-  persona: null,
-  storyId: undefined,
-  taskId: undefined,
-  aiScore: null,
-  aiReason: null,
-  storyInput: '',
-  recurrenceFreq: 'none',
-  recurrenceDays: [],
-  recurrenceUntil: '',
-};
-
 type ViewType = 'day' | 'week' | 'month';
 
 type PlanningMode = 'strict' | 'smart';
@@ -205,8 +163,6 @@ const getInitialRange = (): PlannerRange => {
   const end = addDays(start, 6);
   return { start, end };
 };
-
-const toInputValue = (date: Date) => format(date, "yyyy-MM-dd'T'HH:mm");
 
 const isTaskDoneState = (status: any): boolean => {
   if (typeof status === 'number') {
@@ -981,7 +937,6 @@ const UnifiedPlannerPage: React.FC = () => {
       theme: blockDefaultTheme as CalendarBlock['theme'],
     });
     setComposerOpen(false);
-    setComposerSaving(false);
   }, [blockDefaultTheme]);
 
   const handleRangeChange = useCallback(

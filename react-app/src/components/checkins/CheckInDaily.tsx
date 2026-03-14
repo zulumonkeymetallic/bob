@@ -11,6 +11,10 @@ import { ActivityStreamService } from '../../services/ActivityStreamService';
 import type { Goal, Story, Task } from '../../types';
 import EditTaskModal from '../EditTaskModal';
 import EditStoryModal from '../EditStoryModal';
+import { getSourceFreshnessLabel, isFreshTimestamp } from '../../utils/kpiFreshness';
+import { upsertMetricValue, toPeriodKey } from '../../utils/metricValues';
+import { persistResolvedGoalKpisForOwner } from '../../utils/kpiResolver';
+import { getGoalDisplayPath, resolveLeafGoalSelection } from '../../utils/goalHierarchy';
 
 type CheckInItemType = 'block' | 'instance' | 'habit' | 'task' | 'chore' | 'routine';
 
@@ -62,6 +66,9 @@ const DAY_FORMAT = 'yyyyMMdd';
 interface HealthSnapshot {
   // source flags
   healthkitStatus?: string;
+  healthkitLastSyncAt?: any;
+  healthDataSource?: string;
+  updatedAt?: any;
   // steps
   healthkitStepsToday?: number;
   healthkitStepGoal?: number;
@@ -148,6 +155,27 @@ const CheckInDaily: React.FC = () => {
   const [quickEditTask, setQuickEditTask] = useState<Task | null>(null);
   const [quickEditStory, setQuickEditStory] = useState<Story | null>(null);
   const [goals, setGoals] = useState<Goal[]>([]);
+  const goalTitlesById = useMemo(() => {
+    const next = new Map<string, string>();
+    goals.forEach((goal) => {
+      if (!goal?.id) return;
+      next.set(String(goal.id), getGoalDisplayPath(String(goal.id), goals));
+    });
+    return next;
+  }, [goals]);
+
+  const refreshGoalKpis = useCallback(async (goalIds?: string[]) => {
+    if (!currentUser?.uid || goals.length === 0) return;
+    try {
+      await persistResolvedGoalKpisForOwner({
+        ownerUid: currentUser.uid,
+        goals,
+        goalIds,
+      });
+    } catch (err) {
+      console.warn('Failed to refresh goal KPI metrics from check-in', err);
+    }
+  }, [currentUser?.uid, goals]);
 
   const getEffectiveType = (item: DailyCheckInItem): string => String(item.taskType || item.sourceType || item.type || '').toLowerCase();
 
@@ -345,6 +373,15 @@ const CheckInDaily: React.FC = () => {
   const effectiveCarbs = health.healthkitCarbsTodayG ?? health.manualCarbsG;
   const effectiveWeightKg = health.healthkitWeightKg ?? health.manualWeightKg;
   const effectiveBodyFatPct = health.healthkitBodyFatPct ?? health.manualBodyFatPct;
+  const automatedHealthTimestamp = health.healthkitLastSyncAt || health.updatedAt || null;
+  const manualHealthTimestamp = health.healthDataSource === 'manual' ? (health.updatedAt || null) : null;
+  const staleAutomatedHealth = health.healthkitStatus === 'synced' && !isFreshTimestamp(automatedHealthTimestamp, 24);
+  const healthFreshnessLabel = getSourceFreshnessLabel({
+    source: 'healthkit',
+    automatedTimestamp: automatedHealthTimestamp,
+    manualObservedAt: manualHealthTimestamp,
+    freshnessWindowHours: 24,
+  });
 
   const saveHealthData = useCallback(async () => {
     if (!currentUser) return;
@@ -362,12 +399,41 @@ const CheckInDaily: React.FC = () => {
       if (manualInputs.weightKg) payload.manualWeightKg = parseFloat(manualInputs.weightKg);
       if (manualInputs.bodyFatPct) payload.manualBodyFatPct = parseFloat(manualInputs.bodyFatPct);
       await setDoc(doc(db, 'profiles', currentUser.uid), payload, { merge: true });
+      const observedAt = Date.now();
+      const periodKey = toPeriodKey('daily', new Date(observedAt));
+      const metricWrites: Array<Promise<unknown>> = [];
+      if (payload.manualSleepMinutes != null) {
+        metricWrites.push(upsertMetricValue({ ownerUid: currentUser.uid, metricKey: 'healthkitSleepMinutes', source: 'user_input', observedAt, periodKey, value: Number(payload.manualSleepMinutes), unit: 'minutes', dataType: 'duration', isManual: true, staleAfterAt: observedAt + (24 * 60 * 60 * 1000) }));
+      }
+      if (payload.manualStepsToday != null) {
+        metricWrites.push(upsertMetricValue({ ownerUid: currentUser.uid, metricKey: 'healthkitStepsToday', source: 'user_input', observedAt, periodKey, value: Number(payload.manualStepsToday), unit: 'steps', dataType: 'count', isManual: true, staleAfterAt: observedAt + (24 * 60 * 60 * 1000) }));
+      }
+      if (payload.manualDistanceKmToday != null) {
+        metricWrites.push(upsertMetricValue({ ownerUid: currentUser.uid, metricKey: 'healthkitDistanceKmToday', source: 'user_input', observedAt, periodKey, value: Number(payload.manualDistanceKmToday), unit: 'km', dataType: 'number', isManual: true, staleAfterAt: observedAt + (24 * 60 * 60 * 1000) }));
+      }
+      if (payload.manualWorkoutMinutesToday != null) {
+        metricWrites.push(upsertMetricValue({ ownerUid: currentUser.uid, metricKey: 'healthkitWorkoutMinutesToday', source: 'user_input', observedAt, periodKey, value: Number(payload.manualWorkoutMinutesToday), unit: 'minutes', dataType: 'duration', isManual: true, staleAfterAt: observedAt + (24 * 60 * 60 * 1000) }));
+      }
+      if (payload.manualCaloriesKcal != null) {
+        metricWrites.push(upsertMetricValue({ ownerUid: currentUser.uid, metricKey: 'healthkitCaloriesTodayKcal', source: 'user_input', observedAt, periodKey, value: Number(payload.manualCaloriesKcal), unit: 'kcal', dataType: 'number', isManual: true, staleAfterAt: observedAt + (24 * 60 * 60 * 1000) }));
+      }
+      if (payload.manualProteinG != null) {
+        metricWrites.push(upsertMetricValue({ ownerUid: currentUser.uid, metricKey: 'healthkitProteinTodayG', source: 'user_input', observedAt, periodKey, value: Number(payload.manualProteinG), unit: 'g', dataType: 'number', isManual: true, staleAfterAt: observedAt + (24 * 60 * 60 * 1000) }));
+      }
+      if (payload.manualWeightKg != null) {
+        metricWrites.push(upsertMetricValue({ ownerUid: currentUser.uid, metricKey: 'healthkitWeightKg', source: 'user_input', observedAt, periodKey, value: Number(payload.manualWeightKg), unit: 'kg', dataType: 'number', isManual: true, staleAfterAt: observedAt + (24 * 60 * 60 * 1000) }));
+      }
+      if (payload.manualBodyFatPct != null) {
+        metricWrites.push(upsertMetricValue({ ownerUid: currentUser.uid, metricKey: 'healthkitBodyFatPct', source: 'user_input', observedAt, periodKey, value: Number(payload.manualBodyFatPct), unit: '%', dataType: 'percentage', isManual: true, staleAfterAt: observedAt + (24 * 60 * 60 * 1000) }));
+      }
+      await Promise.all(metricWrites);
       setHealth((prev) => ({ ...prev, ...payload }));
       setHealthSaved(true);
       setTimeout(() => setHealthSaved(false), 3000);
+      await refreshGoalKpis();
     } catch { /* non-fatal */ }
     finally { setHealthSaving(false); }
-  }, [currentUser, manualInputs]);
+  }, [currentUser, manualInputs, refreshGoalKpis]);
 
   // Auto-mark routine/habit items as done when health data covers them
   const autoMarkHealthRoutines = useCallback((snapshot: HealthSnapshot) => {
@@ -400,6 +466,10 @@ const CheckInDaily: React.FC = () => {
     setError(null);
     try {
       const ownerUid = currentUser.uid;
+      const normalizeExecutionGoalId = (value: any): string | null => {
+        const resolved = resolveLeafGoalSelection(String(value || '').trim(), goals);
+        return resolved.goalId || null;
+      };
       const blockQuery = query(
         collection(db, 'calendar_blocks'),
         where('ownerUid', '==', ownerUid),
@@ -523,7 +593,8 @@ const CheckInDaily: React.FC = () => {
         return false;
       });
       dueHabits.forEach((habit) => {
-        if (habit.linkedGoalId) goalIds.add(String(habit.linkedGoalId));
+        const linkedLeafGoalId = normalizeExecutionGoalId(habit.linkedGoalId);
+        if (linkedLeafGoalId) goalIds.add(linkedLeafGoalId);
       });
 
       const habitCompletionMap = new Map<string, { completed: boolean; completedAt: number | null }>();
@@ -562,7 +633,8 @@ const CheckInDaily: React.FC = () => {
       blocks.forEach((block) => {
         if (block.taskId) taskIds.add(String(block.taskId));
         if (block.storyId) storyIds.add(String(block.storyId));
-        if (block.goalId) goalIds.add(String(block.goalId));
+        const linkedLeafGoalId = normalizeExecutionGoalId(block.goalId);
+        if (linkedLeafGoalId) goalIds.add(linkedLeafGoalId);
       });
 
       const taskRefs = new Map<string, string>();
@@ -587,12 +659,13 @@ const CheckInDaily: React.FC = () => {
               status: data.status,
               completedAtMs,
               lastDoneAtMs,
-              goalId: data.goalId ? String(data.goalId) : null,
+              goalId: normalizeExecutionGoalId(data.goalId),
               type: data.type ? String(data.type) : null,
               completedBy,
               points: data.points != null ? Number(data.points) || null : null,
             });
-            if (data.goalId) goalIds.add(String(data.goalId));
+            const linkedLeafGoalId = normalizeExecutionGoalId(data.goalId);
+            if (linkedLeafGoalId) goalIds.add(linkedLeafGoalId);
           } catch (err) {
             if (isPermissionDenied(err)) {
               console.warn('CheckInDaily: task read denied', id);
@@ -609,10 +682,11 @@ const CheckInDaily: React.FC = () => {
             const ref = data.ref || data.reference || data.referenceNumber || data.code || id.slice(-6).toUpperCase();
             storyRefs.set(id, String(ref));
             storyMeta.set(id, {
-              goalId: data.goalId ? String(data.goalId) : null,
+              goalId: normalizeExecutionGoalId(data.goalId),
               points: data.points != null ? Number(data.points) || null : null,
             });
-            if (data.goalId) goalIds.add(String(data.goalId));
+            const linkedLeafGoalId = normalizeExecutionGoalId(data.goalId);
+            if (linkedLeafGoalId) goalIds.add(linkedLeafGoalId);
           } catch (err) {
             if (isPermissionDenied(err)) {
               console.warn('CheckInDaily: story read denied', id);
@@ -626,6 +700,10 @@ const CheckInDaily: React.FC = () => {
       const goalTitles = new Map<string, string>();
       await Promise.all(
         Array.from(goalIds).map(async (id) => {
+          if (goalTitlesById.has(id)) {
+            goalTitles.set(id, goalTitlesById.get(id) || id);
+            return;
+          }
           try {
             const snap = await getDoc(doc(db, 'goals', id));
             if (!snap.exists()) return;
@@ -657,9 +735,10 @@ const CheckInDaily: React.FC = () => {
         const taskId = block.taskId ? String(block.taskId) : null;
         const taskInfo = taskId ? taskMeta.get(taskId) : null;
         const storyInfo = storyId ? storyMeta.get(storyId) : null;
-        const goalId = block.goalId
-          ? String(block.goalId)
-          : (taskInfo?.goalId || storyInfo?.goalId || null);
+        const goalId = normalizeExecutionGoalId(block.goalId)
+          || taskInfo?.goalId
+          || storyInfo?.goalId
+          || null;
         const goalTitle = goalId ? goalTitles.get(goalId) || null : null;
         const completedFromTask = taskInfo ? (isTaskDone(taskInfo.status) && wasCompletedToday(taskInfo.completedAtMs)) : false;
         const completedBy = completedFromTask ? (taskInfo?.completedBy || 'auto') : null;
@@ -735,8 +814,8 @@ const CheckInDaily: React.FC = () => {
           end,
           durationMin: start && end ? Math.round((end - start) / 60000) : null,
           habitId: habit.id,
-          goalId: habit.linkedGoalId || null,
-          goalTitle: habit.linkedGoalId ? goalTitles.get(String(habit.linkedGoalId)) || null : null,
+          goalId: normalizeExecutionGoalId(habit.linkedGoalId),
+          goalTitle: normalizeExecutionGoalId(habit.linkedGoalId) ? goalTitles.get(String(normalizeExecutionGoalId(habit.linkedGoalId))) || null : null,
           completed: habitState.completed,
           completedAt: habitState.completedAt,
           completedBy: habitState.completed ? 'user' : null,
@@ -827,7 +906,8 @@ const CheckInDaily: React.FC = () => {
         })
         .filter((task) => isRecurringDueToday(task));
       recurringTasks.forEach((task) => {
-        if (task.goalId) goalIds.add(String(task.goalId));
+        const linkedLeafGoalId = normalizeExecutionGoalId(task.goalId);
+        if (linkedLeafGoalId) goalIds.add(linkedLeafGoalId);
       });
 
       const missingGoalIds = Array.from(goalIds).filter((id) => !goalTitles.has(id));
@@ -873,8 +953,8 @@ const CheckInDaily: React.FC = () => {
           durationMin: start && end ? Math.round((end - start) / 60000) : null,
           taskId: task.id,
           taskRef: ref,
-          goalId: task.goalId || null,
-          goalTitle: task.goalId ? goalTitles.get(String(task.goalId)) || null : null,
+          goalId: normalizeExecutionGoalId(task.goalId),
+          goalTitle: normalizeExecutionGoalId(task.goalId) ? goalTitles.get(String(normalizeExecutionGoalId(task.goalId))) || null : null,
           taskType: task.type || null,
           completed,
           completedAt: completedAtMs,
@@ -922,7 +1002,7 @@ const CheckInDaily: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [currentUser, currentPersona, dateKey, dayEnd, dayStart, hydrateLastComments]);
+  }, [currentUser, currentPersona, dateKey, dayEnd, dayStart, goalTitlesById, goals, hydrateLastComments]);
 
   useEffect(() => {
     loadPlannedItems();
@@ -983,7 +1063,10 @@ const CheckInDaily: React.FC = () => {
         }
       }
     }
-  }, [dateKey, dayStart, currentUser]);
+    if (item.goalId) {
+      void refreshGoalKpis([item.goalId]);
+    }
+  }, [dateKey, dayStart, currentUser, refreshGoalKpis]);
 
   const handleNoteChange = useCallback((key: string, note: string) => {
     setItems((prev) =>
@@ -1134,6 +1217,20 @@ const CheckInDaily: React.FC = () => {
         });
       await Promise.all(progressWrites);
 
+      const changedGoalIds = new Set<string>();
+      itemsWithMeta.forEach((item) => {
+        const prev = prevMap.get(item.key);
+        const completedChanged = item.completed !== prev?.completed;
+        const progressChanged = (item.progressPct ?? null) !== (prev?.progressPct ?? null);
+        const noteChanged = (item.note || '') !== (prev?.note || '');
+        if ((completedChanged || progressChanged || noteChanged) && item.goalId) {
+          changedGoalIds.add(String(item.goalId));
+        }
+      });
+      if (changedGoalIds.size > 0) {
+        await refreshGoalKpis(Array.from(changedGoalIds));
+      }
+
       setItems(itemsWithMeta);
       initialItemsRef.current = new Map(itemsWithMeta.map((item) => [item.key, item]));
     } catch (err) {
@@ -1155,9 +1252,27 @@ const CheckInDaily: React.FC = () => {
       if (!prev) return;
       if ((item.note || '') !== (prev.note || '')) keys.add(item.key);
       if ((item.progressPct ?? null) !== (prev.progressPct ?? null)) keys.add(item.key);
+      if (item.completed !== prev.completed) keys.add(item.key);
     });
     return keys;
   }, [items]);
+
+  useEffect(() => {
+    if (loading || saving || dirtyKeys.size === 0) return;
+    const timer = window.setTimeout(() => {
+      void handleSave();
+    }, 700);
+    return () => window.clearTimeout(timer);
+  }, [dirtyKeys, handleSave, loading, saving]);
+
+  useEffect(() => {
+    const hasManualInput = Object.values(manualInputs).some((value) => String(value || '').trim().length > 0);
+    if (!hasManualInput || healthSaving) return;
+    const timer = window.setTimeout(() => {
+      void saveHealthData();
+    }, 700);
+    return () => window.clearTimeout(timer);
+  }, [healthSaving, manualInputs, saveHealthData]);
 
   const refreshComments = useCallback(async () => {
     setRefreshingComments(true);
@@ -1459,7 +1574,7 @@ const CheckInDaily: React.FC = () => {
           {refreshingComments ? <Spinner size="sm" animation="border" /> : '↺ Comments'}
         </Button>
         <Button variant="primary" onClick={handleSave} disabled={saving || loading} className="ms-auto">
-          {saving ? 'Saving…' : 'Submit check-in'}
+          {saving ? 'Saving…' : 'Sync now'}
         </Button>
       </div>
 
@@ -1485,10 +1600,15 @@ const CheckInDaily: React.FC = () => {
         <Card.Header className="py-2 d-flex justify-content-between align-items-center">
           <span className="fw-semibold small">Today's Health Data</span>
           <span className="text-muted small">
-            {health.healthkitStatus === 'synced' ? '● HealthKit synced' : 'Manual entry'}
+            {healthFreshnessLabel}
           </span>
         </Card.Header>
         <Card.Body className="py-2">
+          {staleAutomatedHealth && (
+            <Alert variant="warning" className="mb-2 py-2">
+              Stale Data: the latest automated health sync is older than 24 hours. Manual entries will be used for today where available.
+            </Alert>
+          )}
           <Row className="g-2">
             {/* Sleep */}
             <Col xs={6} md={4} xl={2}>

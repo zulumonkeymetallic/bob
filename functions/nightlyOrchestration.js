@@ -972,21 +972,43 @@ function isResearchTitle(value) {
 
 function nextOccurrenceForRecurring(entity, nowLocal) {
   const base = (nowLocal || DateTime.now()).startOf('day');
+  const interval = Math.max(1, Number(entity?.repeatInterval || entity?.recurrence?.interval || 1) || 1);
   const days = Array.isArray(entity?.daysOfWeek)
     ? entity.daysOfWeek.map(normalizeWeekdayValue).filter((v) => v != null)
     : [];
+  const repeatDays = Array.isArray(entity?.repeatDaysOfWeek)
+    ? entity.repeatDaysOfWeek.map((value) => {
+        const raw = String(value || '').toLowerCase().trim();
+        const map = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 };
+        return Object.prototype.hasOwnProperty.call(map, raw) ? map[raw] : normalizeWeekdayValue(value);
+      }).filter((v) => v != null)
+    : [];
+  const recurrenceDays = Array.isArray(entity?.recurrence?.daysOfWeek)
+    ? entity.recurrence.daysOfWeek.map((value) => {
+        const raw = String(value || '').toLowerCase().trim();
+        const map = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 };
+        return Object.prototype.hasOwnProperty.call(map, raw) ? map[raw] : normalizeWeekdayValue(value);
+      }).filter((v) => v != null)
+    : [];
+  const allowedDays = Array.from(new Set([].concat(days, repeatDays, recurrenceDays)));
+  const baseAnchorMs = getDueDateMs(entity) || getCreatedAtMs(entity) || base.toMillis();
+  const baseAnchor = DateTime.fromMillis(baseAnchorMs).setZone(base.zoneName).startOf('day');
+  const sundayWeekStart = (dt) => dt.minus({ days: dt.weekday % 7 }).startOf('day');
   if (days.length) {
     for (let offset = 1; offset <= 21; offset += 1) {
       const candidate = base.plus({ days: offset });
-      if (days.includes(candidate.weekday % 7)) {
+      if (allowedDays.includes(candidate.weekday % 7)) {
+        const weeksDiff = Math.floor(sundayWeekStart(candidate).diff(sundayWeekStart(baseAnchor), 'weeks').weeks || 0);
+        if (weeksDiff % interval !== 0) continue;
         return candidate.endOf('day').toMillis();
       }
     }
   }
-  const freq = String(entity?.repeatFrequency || entity?.repeatInterval || entity?.recurrence?.frequency || '').toLowerCase();
-  if (freq.includes('week')) return base.plus({ weeks: 1 }).endOf('day').toMillis();
-  if (freq.includes('month')) return base.plus({ months: 1 }).endOf('day').toMillis();
-  return base.plus({ days: 1 }).endOf('day').toMillis();
+  const freq = String(entity?.repeatFrequency || entity?.recurrence?.frequency || entity?.recurrence?.freq || '').toLowerCase();
+  if (freq.includes('week')) return base.plus({ weeks: interval }).endOf('day').toMillis();
+  if (freq.includes('month')) return base.plus({ months: interval }).endOf('day').toMillis();
+  if (freq.includes('year')) return base.plus({ years: interval }).endOf('day').toMillis();
+  return base.plus({ days: interval }).endOf('day').toMillis();
 }
 
 function nextWeekendDateByCapacity(nowLocal, dayLoadHours = new Map(), maxHours = 6) {
@@ -1060,6 +1082,10 @@ async function applyAggressiveDueDateReplanForUser({
   trigger = 'nightly',
 }) {
   if (!db || !userId) return { moved: 0, routineRolled: 0, researchShifted: 0, backlogDeferred: 0, suggestions: 0 };
+
+  // Auto-deferral is intentionally disabled. Due dates should only move through
+  // explicit user deferral flows or chore-specific planner rollover.
+  return { moved: 0, routineRolled: 0, researchShifted: 0, backlogDeferred: 0, suggestions: 0, disabled: true, trigger };
 
   const profileSnap = await db.collection('profiles').doc(userId).get().catch(() => null);
   const profile = profileSnap && profileSnap.exists ? (profileSnap.data() || {}) : {};
@@ -1165,7 +1191,7 @@ async function applyAggressiveDueDateReplanForUser({
       nextDueMs = nextWeekendDateByCapacity(nowLocal, dayLoadHours);
       reason = 'Research work moved to weekend capacity window';
     } else {
-      const shouldDefer = dueMs == null || dueMs <= tomorrowEnd || score < AUTO_DEFER_SCORE_THRESHOLD;
+      const shouldDefer = dueMs != null && dueMs <= tomorrowEnd;
       if (shouldDefer) {
         nextDueMs = nowLocal.plus({ days: AUTO_DEFER_LOOKAHEAD_DAYS }).endOf('day').toMillis();
         reason = 'Auto-deferred low priority non-critical work';
@@ -1229,7 +1255,7 @@ async function applyAggressiveDueDateReplanForUser({
       nextDueMs = nextWeekendDateByCapacity(nowLocal, dayLoadHours);
       reason = 'Research story moved to weekend capacity window';
     } else {
-      const shouldDefer = dueMs == null || dueMs <= tomorrowEnd || score < AUTO_DEFER_SCORE_THRESHOLD;
+      const shouldDefer = dueMs != null && dueMs <= tomorrowEnd;
       if (shouldDefer) {
         nextDueMs = nowLocal.plus({ days: AUTO_DEFER_LOOKAHEAD_DAYS }).endOf('day').toMillis();
         reason = 'Auto-deferred low priority non-critical story';

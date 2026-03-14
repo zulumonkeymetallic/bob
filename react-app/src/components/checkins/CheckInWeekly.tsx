@@ -1,11 +1,61 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Badge, Button, Card, Col, Form, OverlayTrigger, Row, Spinner, Tooltip } from 'react-bootstrap';
+import { Alert, Badge, Button, Card, Col, Form, OverlayTrigger, ProgressBar, Row, Spinner, Tooltip } from 'react-bootstrap';
 import { collection, doc, getDoc, getDocs, orderBy, query, setDoc, where } from 'firebase/firestore';
 import { addDays, endOfWeek, format, startOfWeek } from 'date-fns';
 import { useNavigate } from 'react-router-dom';
 import { BarChart2, ChevronLeft, ChevronRight, RefreshCw, Save } from 'lucide-react';
 import { db } from '../../firebase';
 import { useAuth } from '../../contexts/AuthContext';
+import type { FocusGoal, Goal } from '../../types';
+import { getGoalDisplayPath, getProtectedFocusGoalIds, isGoalInHierarchySet } from '../../utils/goalHierarchy';
+
+interface GoalMetricDoc {
+  goalId: string;
+  resolvedKpis?: Array<Record<string, any>>;
+  updatedAt?: any;
+}
+
+interface WeeklyFocusLeafSummary {
+  goalId: string;
+  title: string;
+  displayPath: string;
+  plannedItems: number;
+  completedItems: number;
+  completionPct: number;
+  totalMinutes: number;
+  storyItems: number;
+  taskItems: number;
+  routineItems: number;
+  totalKpis: number;
+  healthyKpis: number;
+  staleKpis: number;
+  topKpis: Array<{
+    id: string;
+    name: string;
+    currentDisplay: string;
+    progressPct: number | null;
+    healthy: boolean;
+  }>;
+}
+
+interface WeeklyFocusRootSummary {
+  goalId: string;
+  title: string;
+  displayPath: string;
+  leafCount: number;
+  avgCompletionPct: number;
+  healthyKpis: number;
+  staleKpis: number;
+  totalKpis: number;
+  completedLeafGoals: number;
+}
+
+interface WeeklyFocusSummary {
+  relevantFocusGoalIds: string[];
+  rootGoals: WeeklyFocusRootSummary[];
+  leafGoals: WeeklyFocusLeafSummary[];
+  focusLinkedItems: number;
+}
 
 interface WeeklyCheckInDoc {
   id: string;
@@ -20,6 +70,7 @@ interface WeeklyCheckInDoc {
     tasks: Array<{ label: string; planned: number; completed: number; minutes: number }>;
     spendLast3DaysPence?: number | null;
     spendLast7DaysPence?: number | null;
+    focusSummary?: WeeklyFocusSummary | null;
   };
   reflection: {
     wentWell: string;
@@ -35,6 +86,11 @@ const WEEK_FORMAT = "yyyy-'W'II";
 
 const formatMoney = (val: number, currency = 'GBP') =>
   (val / 100).toLocaleString('en-GB', { style: 'currency', currency });
+
+const toNumber = (value: any): number | null => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
 
 const CheckInWeekly: React.FC = () => {
   const { currentUser } = useAuth();
@@ -54,6 +110,7 @@ const CheckInWeekly: React.FC = () => {
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [capacityReviewed, setCapacityReviewed] = useState(false);
+  const [focusSummary, setFocusSummary] = useState<WeeklyFocusSummary | null>(null);
 
   const isIndexError = (err: any): boolean => {
     const msg = String(err?.message || err || '').toLowerCase();
@@ -87,6 +144,12 @@ const CheckInWeekly: React.FC = () => {
   const weekEnd = useMemo(() => endOfWeek(weekStart, { weekStartsOn: 1 }), [weekStart]);
   const weekKey = useMemo(() => format(weekStart, WEEK_FORMAT), [weekStart]);
 
+  const formatKpiHealthLabel = useCallback((healthy: number, total: number) => {
+    if (total === 0) return 'No KPIs';
+    if (healthy === total) return `${healthy}/${total} healthy`;
+    return `${healthy}/${total} healthy`;
+  }, []);
+
   const loadWeeklyData = useCallback(async () => {
     if (!currentUser) return;
     setLoading(true);
@@ -119,6 +182,53 @@ const CheckInWeekly: React.FC = () => {
         return { docs: filtered } as typeof fallbackSnap;
       });
       const checkins = checkinsSnap.docs.map((docSnap) => docSnap.data() as any);
+
+      const [goalsSnap, focusGoalsSnap, snapshotSnap, metricsSnap] = await Promise.all([
+        getDocs(query(collection(db, 'goals'), where('ownerUid', '==', ownerUid))).catch((err) => {
+          if (isPermissionDenied(err)) {
+            console.warn('CheckInWeekly: goals permission denied, skipping');
+            return { docs: [] } as any;
+          }
+          throw err;
+        }),
+        getDocs(query(collection(db, 'focusGoals'), where('ownerUid', '==', ownerUid))).catch((err) => {
+          if (isPermissionDenied(err)) {
+            console.warn('CheckInWeekly: focusGoals permission denied, skipping');
+            return { docs: [] } as any;
+          }
+          throw err;
+        }),
+        getDocs(
+          query(
+            collection(db, 'weekly_goal_kpi_snapshots'),
+            where('ownerUid', '==', ownerUid),
+            where('weekKey', '==', weekKey),
+          ),
+        ).catch(async (err) => {
+          if (isPermissionDenied(err)) {
+            console.warn('CheckInWeekly: weekly_goal_kpi_snapshots permission denied, skipping');
+            return { docs: [] } as any;
+          }
+          if (!isIndexError(err)) throw err;
+          const fallbackSnap = await getDocs(
+            query(collection(db, 'weekly_goal_kpi_snapshots'), where('ownerUid', '==', ownerUid)),
+          );
+          const filtered = fallbackSnap.docs.filter((docSnap) => String((docSnap.data() as any)?.weekKey || '') === weekKey);
+          return { docs: filtered } as typeof fallbackSnap;
+        }),
+        getDocs(query(collection(db, 'goal_kpi_metrics'), where('ownerUid', '==', ownerUid))).catch((err) => {
+          if (isPermissionDenied(err)) {
+            console.warn('CheckInWeekly: goal_kpi_metrics permission denied, skipping');
+            return { docs: [] } as any;
+          }
+          throw err;
+        }),
+      ]);
+
+      const goals = goalsSnap.docs.map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) })) as Goal[];
+      const focusGoals = focusGoalsSnap.docs.map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) })) as FocusGoal[];
+      const snapshotDocs = snapshotSnap.docs.map((docSnap) => ({ goalId: String((docSnap.data() as any)?.goalId || ''), ...(docSnap.data() as any) })) as GoalMetricDoc[];
+      const metricDocs = metricsSnap.docs.map((docSnap) => ({ goalId: String((docSnap.data() as any)?.goalId || ''), ...(docSnap.data() as any) })) as GoalMetricDoc[];
 
       const themeMap = new Map<string, { planned: number; completed: number }>();
       const routineMap = new Map<string, { planned: number; completed: number }>();
@@ -163,6 +273,113 @@ const CheckInWeekly: React.FC = () => {
           }
         });
       });
+
+      const weekStartMs = weekStart.getTime();
+      const weekEndMs = weekEnd.getTime();
+      const relevantFocusGoals = focusGoals.filter((focusGoal) => {
+        const startMs = resolveTimestampMs((focusGoal as any).startDate) || 0;
+        const endMs = resolveTimestampMs((focusGoal as any).endDate) || 0;
+        const overlapsWeek = startMs <= weekEndMs && endMs >= weekStartMs;
+        return focusGoal.isActive || overlapsWeek;
+      });
+
+      const relevantRootGoalIds = new Set<string>();
+      const relevantLeafGoalIds = new Set<string>();
+      relevantFocusGoals.forEach((focusGoal) => {
+        const protectedGoalIds = getProtectedFocusGoalIds(focusGoal);
+        protectedGoalIds.forEach((goalId) => relevantRootGoalIds.add(goalId));
+        const explicitLeafs = Array.isArray(focusGoal.focusLeafGoalIds) && focusGoal.focusLeafGoalIds.length > 0
+          ? focusGoal.focusLeafGoalIds
+          : Array.isArray(focusGoal.goalIds)
+            ? focusGoal.goalIds
+            : [];
+        explicitLeafs.forEach((goalId) => relevantLeafGoalIds.add(String(goalId || '').trim()));
+      });
+
+      const allItems = checkins.flatMap((checkin) => Array.isArray(checkin.items) ? checkin.items : []);
+      const leafGoalSummaries: WeeklyFocusLeafSummary[] = goals
+        .filter((goal) => relevantLeafGoalIds.has(goal.id))
+        .map((goal) => {
+          const goalItems = allItems.filter((item: any) => String(item.goalId || '').trim() === goal.id);
+          const plannedItems = goalItems.length;
+          const completedItems = goalItems.filter((item: any) => item.completed === true).length;
+          const totalMinutes = goalItems.reduce((sum: number, item: any) => sum + (Number(item.durationMin || 0) || 0), 0);
+          const storyItems = goalItems.filter((item: any) => item.storyId || item.storyRef).length;
+          const taskItems = goalItems.filter((item: any) => item.taskId || item.taskRef).length;
+          const routineItems = goalItems.filter((item: any) => ['habit', 'routine', 'chore', 'instance'].includes(String(item.type || '').toLowerCase())).length;
+          const completionPct = plannedItems > 0 ? Math.round((completedItems / plannedItems) * 100) : 0;
+          const snapshotDoc = snapshotDocs.find((doc) => doc.goalId === goal.id);
+          const metricDoc = metricDocs.find((doc) => doc.goalId === goal.id);
+          const resolvedKpis = Array.isArray(snapshotDoc?.resolvedKpis)
+            ? snapshotDoc?.resolvedKpis || []
+            : (Array.isArray(metricDoc?.resolvedKpis) ? metricDoc?.resolvedKpis || [] : []);
+          const totalKpis = resolvedKpis.length;
+          const healthyKpis = resolvedKpis.filter((kpi: any) => kpi?.healthy === true).length;
+          const staleKpis = resolvedKpis.filter((kpi: any) => kpi?.stale === true || kpi?.healthy === false).length;
+          const topKpis = resolvedKpis.slice(0, 3).map((kpi: any) => ({
+            id: String(kpi?.id || kpi?.metricKey || kpi?.name || goal.id),
+            name: String(kpi?.name || 'KPI'),
+            currentDisplay: String(kpi?.currentDisplay || '—'),
+            progressPct: toNumber(kpi?.progressPct),
+            healthy: kpi?.healthy === true,
+          }));
+
+          return {
+            goalId: goal.id,
+            title: goal.title || goal.id,
+            displayPath: getGoalDisplayPath(goal.id, goals),
+            plannedItems,
+            completedItems,
+            completionPct,
+            totalMinutes,
+            storyItems,
+            taskItems,
+            routineItems,
+            totalKpis,
+            healthyKpis,
+            staleKpis,
+            topKpis,
+          };
+        })
+        .sort((a, b) => {
+          if (a.completionPct !== b.completionPct) return a.completionPct - b.completionPct;
+          return a.displayPath.localeCompare(b.displayPath);
+        });
+
+      const rootGoalSummaries: WeeklyFocusRootSummary[] = goals
+        .filter((goal) => relevantRootGoalIds.has(goal.id))
+        .map((goal) => {
+          const leafGoals = leafGoalSummaries.filter((leafGoal) => isGoalInHierarchySet(leafGoal.goalId, goals, [goal.id]));
+          const leafCount = leafGoals.length || 1;
+          const totalCompletion = leafGoals.reduce((sum, leafGoal) => sum + leafGoal.completionPct, 0);
+          const totalKpis = leafGoals.reduce((sum, leafGoal) => sum + leafGoal.totalKpis, 0);
+          const healthyKpis = leafGoals.reduce((sum, leafGoal) => sum + leafGoal.healthyKpis, 0);
+          const staleKpis = leafGoals.reduce((sum, leafGoal) => sum + leafGoal.staleKpis, 0);
+          const completedLeafGoals = leafGoals.filter((leafGoal) => leafGoal.completionPct >= 100).length;
+          return {
+            goalId: goal.id,
+            title: goal.title || goal.id,
+            displayPath: getGoalDisplayPath(goal.id, goals),
+            leafCount,
+            avgCompletionPct: leafGoals.length > 0 ? Math.round(totalCompletion / leafGoals.length) : 0,
+            healthyKpis,
+            staleKpis,
+            totalKpis,
+            completedLeafGoals,
+          };
+        })
+        .sort((a, b) => a.displayPath.localeCompare(b.displayPath));
+
+      const nextFocusSummary: WeeklyFocusSummary | null = relevantFocusGoals.length > 0
+        ? {
+            relevantFocusGoalIds: relevantFocusGoals.map((focusGoal) => focusGoal.id),
+            rootGoals: rootGoalSummaries,
+            leafGoals: leafGoalSummaries,
+            focusLinkedItems: leafGoalSummaries.reduce((sum, leafGoal) => sum + leafGoal.plannedItems, 0),
+          }
+        : null;
+
+      setFocusSummary(nextFocusSummary);
 
       const spendLast3Days = await getDocs(
         query(
@@ -233,6 +450,7 @@ const CheckInWeekly: React.FC = () => {
         tasks: Array.from(taskMap.entries()).map(([label, stats]) => ({ label, ...stats })),
         spendLast3DaysPence,
         spendLast7DaysPence,
+        focusSummary: nextFocusSummary,
       });
 
       const existing = await getDoc(doc(db, 'weekly_checkins', `${ownerUid}_${weekKey}`));
@@ -246,6 +464,7 @@ const CheckInWeekly: React.FC = () => {
     } catch (err) {
       console.error('Failed to load weekly check-in', err);
       setError('Unable to load weekly check-in data.');
+      setFocusSummary(null);
     } finally {
       setLoading(false);
     }
@@ -365,6 +584,116 @@ const CheckInWeekly: React.FC = () => {
         </div>
       ) : (
         <>
+          {focusSummary && focusSummary.rootGoals.length > 0 && (
+            <div className="mb-3">
+              <Row className="g-3 mb-3">
+                <Col md={4}>
+                  <Card className="shadow-sm border-0">
+                    <Card.Body>
+                      <div className="text-muted small">Focus goals in scope</div>
+                      <div className="fs-4 fw-bold">{focusSummary.rootGoals.length}</div>
+                      <div className="small text-muted">{focusSummary.leafGoals.length} leaf goals</div>
+                    </Card.Body>
+                  </Card>
+                </Col>
+                <Col md={4}>
+                  <Card className="shadow-sm border-0">
+                    <Card.Body>
+                      <div className="text-muted small">Focus-linked weekly items</div>
+                      <div className="fs-4 fw-bold">{focusSummary.focusLinkedItems}</div>
+                      <div className="small text-muted">Daily check-in rows linked to focused leaves</div>
+                    </Card.Body>
+                  </Card>
+                </Col>
+                <Col md={4}>
+                  <Card className="shadow-sm border-0">
+                    <Card.Body>
+                      <div className="text-muted small">Healthy KPIs</div>
+                      <div className="fs-4 fw-bold">
+                        {focusSummary.leafGoals.reduce((sum, leafGoal) => sum + leafGoal.healthyKpis, 0)}
+                      </div>
+                      <div className="small text-muted">
+                        {focusSummary.leafGoals.reduce((sum, leafGoal) => sum + leafGoal.totalKpis, 0)} total KPI readings
+                      </div>
+                    </Card.Body>
+                  </Card>
+                </Col>
+              </Row>
+
+              <Row className="g-3 mb-3">
+                <Col lg={5}>
+                  <Card className="shadow-sm border-0 h-100">
+                    <Card.Header className="fw-semibold">Focus goal rollup</Card.Header>
+                    <Card.Body>
+                      {focusSummary.rootGoals.map((rootGoal) => (
+                        <div key={rootGoal.goalId} className="border rounded p-2 mb-2">
+                          <div className="fw-semibold">{rootGoal.displayPath}</div>
+                          <div className="small text-muted mb-2">
+                            {rootGoal.completedLeafGoals}/{rootGoal.leafCount} leaf goals complete
+                            {' · '}
+                            {formatKpiHealthLabel(rootGoal.healthyKpis, rootGoal.totalKpis)}
+                          </div>
+                          <ProgressBar now={Math.max(0, Math.min(100, rootGoal.avgCompletionPct))} style={{ height: 8 }} />
+                          <div className="small text-muted mt-2">
+                            Weekly completion {rootGoal.avgCompletionPct}%{rootGoal.staleKpis > 0 ? ` · ${rootGoal.staleKpis} stale KPI${rootGoal.staleKpis !== 1 ? 's' : ''}` : ''}
+                          </div>
+                        </div>
+                      ))}
+                    </Card.Body>
+                  </Card>
+                </Col>
+                <Col lg={7}>
+                  <Card className="shadow-sm border-0 h-100">
+                    <Card.Header className="fw-semibold">Leaf goal progress</Card.Header>
+                    <Card.Body>
+                      {focusSummary.leafGoals.length === 0 ? (
+                        <div className="text-muted">No leaf-goal activity linked this week.</div>
+                      ) : (
+                        focusSummary.leafGoals.map((leafGoal) => (
+                          <div key={leafGoal.goalId} className="border rounded p-2 mb-2">
+                            <div className="d-flex justify-content-between align-items-start gap-2">
+                              <div>
+                                <div className="fw-semibold">{leafGoal.displayPath}</div>
+                                <div className="small text-muted">
+                                  {leafGoal.completedItems}/{leafGoal.plannedItems || 0} items complete
+                                  {' · '}
+                                  {leafGoal.totalMinutes} min
+                                  {' · '}
+                                  {formatKpiHealthLabel(leafGoal.healthyKpis, leafGoal.totalKpis)}
+                                </div>
+                              </div>
+                              <Badge bg={leafGoal.completionPct >= 100 ? 'success' : leafGoal.completionPct >= 60 ? 'warning' : 'secondary'}>
+                                {leafGoal.completionPct}%
+                              </Badge>
+                            </div>
+                            <ProgressBar now={Math.max(0, Math.min(100, leafGoal.completionPct))} style={{ height: 6, marginTop: 8 }} />
+                            <div className="d-flex flex-wrap gap-2 mt-2">
+                              <Badge bg="light" text="dark">Stories {leafGoal.storyItems}</Badge>
+                              <Badge bg="light" text="dark">Tasks {leafGoal.taskItems}</Badge>
+                              <Badge bg="light" text="dark">Habits {leafGoal.routineItems}</Badge>
+                            </div>
+                            {leafGoal.topKpis.length > 0 && (
+                              <div className="mt-2">
+                                {leafGoal.topKpis.map((kpi) => (
+                                  <div key={kpi.id} className="d-flex justify-content-between align-items-center small py-1">
+                                    <span className="text-truncate pe-2">{kpi.name}</span>
+                                    <span className={kpi.healthy ? 'text-success' : 'text-muted'}>
+                                      {kpi.currentDisplay}{kpi.progressPct != null ? ` · ${Math.round(kpi.progressPct)}%` : ''}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        ))
+                      )}
+                    </Card.Body>
+                  </Card>
+                </Col>
+              </Row>
+            </div>
+          )}
+
           <div className="d-md-none">
             <div className="mb-3 p-2 border rounded">
               <div className="fw-semibold mb-1">Themes</div>

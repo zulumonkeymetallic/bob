@@ -20,6 +20,7 @@ import { cascadeGoalPersona } from '../utils/personaCascade';
 import { parsePointsValue, TASK_DEFAULT_POINTS } from '../utils/points';
 import { normalizeGoalCostType } from '../utils/goalCost';
 import { Wand2 } from 'lucide-react';
+import { resolveLeafGoalSelection } from '../utils/goalHierarchy';
 
 interface EditGoalModalProps {
   goal: Goal | null;
@@ -318,13 +319,22 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
 
   const handleStoryAdd = async (storyData: Omit<Story, 'ref' | 'id' | 'updatedAt' | 'createdAt'>) => {
     if (!goal) return;
+    const resolvedGoalSelection = resolveLeafGoalSelection((storyData as any).goalId || goal.id, allGoals);
+    if (!resolvedGoalSelection.goalId) {
+      alert(
+        resolvedGoalSelection.reason === 'ambiguous_parent'
+          ? 'Stories must link to a specific leaf goal. Choose the child goal you want this story to execute against.'
+          : 'Please select a valid leaf goal before creating a story.'
+      );
+      return;
+    }
     const parsedStoryPoints = parsePointsValue((storyData as any).points);
     const normalizedStoryPoints = parsedStoryPoints == null ? 1 : parsedStoryPoints;
     const payload: any = {
       ...storyData,
       url: (storyData as any).url || null,
       points: normalizedStoryPoints,
-      goalId: storyData.goalId || goal.id,
+      goalId: resolvedGoalSelection.goalId,
       ownerUid: currentUserId,
       persona: activePersona || 'personal',
       createdAt: serverTimestamp(),
@@ -360,6 +370,15 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
     if (!goal) return;
     const storyId = (newTask as any).storyId || null;
     const linkedStory = storyId ? linkedStories.find((story) => story.id === storyId) : null;
+    const resolvedGoalSelection = resolveLeafGoalSelection(linkedStory?.goalId || goal.id, allGoals);
+    if (!resolvedGoalSelection.goalId) {
+      alert(
+        resolvedGoalSelection.reason === 'ambiguous_parent'
+          ? 'Tasks must link to a specific leaf goal. Use a child milestone goal instead of the parent goal.'
+          : 'Please select a valid leaf goal before creating a task.'
+      );
+      return;
+    }
     const parsedTaskPoints = parsePointsValue((newTask as any).points);
     const normalizedTaskPoints = parsedTaskPoints == null ? TASK_DEFAULT_POINTS : parsedTaskPoints;
     const payload: any = {
@@ -373,7 +392,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
       points: normalizedTaskPoints,
       ownerUid: currentUserId,
       persona: activePersona || 'personal',
-      goalId: linkedStory?.goalId || goal.id,
+      goalId: resolvedGoalSelection.goalId,
       storyId: storyId || null,
       parentType: storyId ? 'story' : 'project',
       parentId: storyId || goal.id,

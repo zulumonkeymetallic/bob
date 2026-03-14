@@ -293,6 +293,192 @@ exports.updateGoalTargetYears = schedulerV2.onSchedule(
   });
 
 // Nightly fitness KPI sync: updates goal KPI progress from Strava/HealthKit workouts
+const buildWeeklySnapshotKey = (dt) => {
+  const resolved = DateTime.isDateTime(dt) ? dt : DateTime.fromJSDate(new Date(dt || Date.now()));
+  return `${resolved.weekYear}-W${String(resolved.weekNumber).padStart(2, '0')}`;
+};
+
+const parseWeeklySnapshotKey = (weekKey, zone = DEFAULT_TIMEZONE) => {
+  const match = /^(\d{4})-W(\d{2})$/.exec(String(weekKey || '').trim());
+  if (!match) return null;
+  const weekYear = Number(match[1]);
+  const weekNumber = Number(match[2]);
+  if (!Number.isFinite(weekYear) || !Number.isFinite(weekNumber)) return null;
+  const dt = DateTime.fromObject({ weekYear, weekNumber, weekday: 1 }, { zone });
+  return dt.isValid ? dt.startOf('day') : null;
+};
+
+const buildBackfilledResolvedKpis = (leafSummary = {}) => {
+  const topKpis = Array.isArray(leafSummary?.topKpis) ? leafSummary.topKpis : [];
+  return topKpis.map((kpi, index) => {
+    const progressPct = Number(kpi?.progressPct);
+    const healthy = kpi?.healthy === true;
+    return {
+      index,
+      id: String(kpi?.id || `${leafSummary.goalId || 'goal'}_${index}`),
+      name: String(kpi?.name || `KPI ${index + 1}`),
+      currentDisplay: kpi?.currentDisplay ?? null,
+      progressPct: Number.isFinite(progressPct) ? progressPct : null,
+      healthy,
+      stale: !healthy,
+      backfilled: true,
+      source: 'weekly_checkin_focus_summary',
+      snapshotQuality: 'summary_only',
+    };
+  });
+};
+
+const snapshotGoalKpiMetricsForUser = async (uid, { reason = 'manual', now = null } = {}) => {
+  const db = admin.firestore();
+  const profile = await loadProfile(db, uid).catch(() => ({ id: uid }));
+  const zone = resolveTimezone(profile, DEFAULT_TIMEZONE);
+  const snapshotDt = (DateTime.isDateTime(now)
+    ? now
+    : now
+      ? DateTime.fromJSDate(new Date(now))
+      : DateTime.now()).setZone(zone);
+  const weekKey = buildWeeklySnapshotKey(snapshotDt);
+  const metricsSnap = await db.collection('goal_kpi_metrics').where('ownerUid', '==', uid).get();
+  if (metricsSnap.empty) {
+    return { uid, zone, weekKey, snapshotCount: 0 };
+  }
+
+  let batch = db.batch();
+  let pendingWrites = 0;
+  let snapshotCount = 0;
+  const commitBatch = async () => {
+    if (pendingWrites === 0) return;
+    await batch.commit();
+    batch = db.batch();
+    pendingWrites = 0;
+  };
+
+  for (const docSnap of metricsSnap.docs) {
+    const data = docSnap.data() || {};
+    const goalId = String(data.goalId || '').trim();
+    if (!goalId) continue;
+    const snapshotRef = db.collection('weekly_goal_kpi_snapshots').doc(`${uid}_${weekKey}_${goalId}`);
+    batch.set(snapshotRef, {
+      ownerUid: uid,
+      goalId,
+      goalRef: data.goalRef || null,
+      goalTitle: data.goalTitle || null,
+      resolvedKpis: Array.isArray(data.resolvedKpis) ? data.resolvedKpis : [],
+      weekKey,
+      snapshotType: 'weekly',
+      snapshotReason: reason,
+      snapshotTimeZone: zone,
+      sourceUpdatedAt: data.updatedAt || null,
+      snapshotAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+    pendingWrites += 1;
+    snapshotCount += 1;
+    if (pendingWrites >= 400) {
+      await commitBatch();
+    }
+  }
+
+  await commitBatch();
+  return { uid, zone, weekKey, snapshotCount };
+};
+
+const backfillWeeklyGoalKpiSnapshotsForUser = async (uid, { maxWeeks = 26, overwrite = false } = {}) => {
+  const db = admin.firestore();
+  const profile = await loadProfile(db, uid).catch(() => ({ id: uid }));
+  const zone = resolveTimezone(profile, DEFAULT_TIMEZONE);
+  const boundedMaxWeeks = Math.max(1, Math.min(Number(maxWeeks) || 26, 104));
+
+  const [weeklyCheckinsSnap, existingSnapshotsSnap] = await Promise.all([
+    db.collection('weekly_checkins').where('ownerUid', '==', uid).get(),
+    db.collection('weekly_goal_kpi_snapshots').where('ownerUid', '==', uid).get(),
+  ]);
+
+  const existingSnapshotIds = new Set(existingSnapshotsSnap.docs.map((docSnap) => docSnap.id));
+  const candidateWeeks = weeklyCheckinsSnap.docs
+    .map((docSnap) => {
+      const data = docSnap.data() || {};
+      const weekKey = String(data.weekKey || '').trim();
+      const weekDt = parseWeeklySnapshotKey(weekKey, zone);
+      const focusSummary = data?.metrics?.focusSummary || null;
+      const leafGoals = Array.isArray(focusSummary?.leafGoals) ? focusSummary.leafGoals : [];
+      return {
+        id: docSnap.id,
+        weekKey,
+        weekDt,
+        updatedAt: data.updatedAt || data.createdAt || null,
+        leafGoals,
+      };
+    })
+    .filter((entry) => entry.weekDt && entry.leafGoals.length > 0)
+    .sort((a, b) => b.weekDt.toMillis() - a.weekDt.toMillis())
+    .slice(0, boundedMaxWeeks);
+
+  let batch = db.batch();
+  let pendingWrites = 0;
+  let snapshotsWritten = 0;
+  let snapshotsSkipped = 0;
+
+  const commitBatch = async () => {
+    if (pendingWrites === 0) return;
+    await batch.commit();
+    batch = db.batch();
+    pendingWrites = 0;
+  };
+
+  for (const weekly of candidateWeeks) {
+    for (const leafGoal of weekly.leafGoals) {
+      const goalId = String(leafGoal?.goalId || '').trim();
+      if (!goalId) continue;
+      const snapshotId = `${uid}_${weekly.weekKey}_${goalId}`;
+      if (!overwrite && existingSnapshotIds.has(snapshotId)) {
+        snapshotsSkipped += 1;
+        continue;
+      }
+      const snapshotRef = db.collection('weekly_goal_kpi_snapshots').doc(snapshotId);
+      batch.set(snapshotRef, {
+        ownerUid: uid,
+        goalId,
+        goalRef: null,
+        goalTitle: leafGoal?.title || null,
+        resolvedKpis: buildBackfilledResolvedKpis(leafGoal),
+        weekKey: weekly.weekKey,
+        snapshotType: 'weekly',
+        snapshotReason: 'backfillWeeklyGoalKpiSnapshots',
+        snapshotTimeZone: zone,
+        sourceUpdatedAt: weekly.updatedAt || null,
+        snapshotAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        backfilled: true,
+        snapshotQuality: 'summary_only',
+        backfilledFromWeeklyCheckinId: weekly.id,
+        totalKpis: Number(leafGoal?.totalKpis || 0) || 0,
+        healthyKpis: Number(leafGoal?.healthyKpis || 0) || 0,
+        staleKpis: Number(leafGoal?.staleKpis || 0) || 0,
+      }, { merge: true });
+      existingSnapshotIds.add(snapshotId);
+      snapshotsWritten += 1;
+      pendingWrites += 1;
+      if (pendingWrites >= 400) {
+        await commitBatch();
+      }
+    }
+  }
+
+  await commitBatch();
+  const currentWeekSnapshot = await snapshotGoalKpiMetricsForUser(uid, { reason: 'backfillWeeklyGoalKpiSnapshots_current' });
+
+  return {
+    uid,
+    zone,
+    weeksScanned: candidateWeeks.length,
+    snapshotsWritten,
+    snapshotsSkipped,
+    currentWeekSnapshotsWritten: Number(currentWeekSnapshot?.snapshotCount || 0),
+    currentWeekKey: currentWeekSnapshot?.weekKey || buildWeeklySnapshotKey(DateTime.now().setZone(zone)),
+  };
+};
+
 const syncFitnessKpis = async () => {
   try {
     const [fitnessResult, usersSnap] = await Promise.all([
@@ -301,19 +487,27 @@ const syncFitnessKpis = async () => {
     ]);
 
     let metricsDocsUpdated = 0;
+    let weeklySnapshotsUpdated = 0;
     for (const userDoc of usersSnap.docs) {
       const uid = String(userDoc.id || '').trim();
       if (!uid) continue;
       const rows = await computeGoalFitnessKpisForUser(uid, { persist: true });
       metricsDocsUpdated += Array.isArray(rows) ? rows.length : 0;
+      const snapshotResult = await snapshotGoalKpiMetricsForUser(uid, { reason: 'syncFitnessKpisNightly' });
+      weeklySnapshotsUpdated += Number(snapshotResult?.snapshotCount || 0);
     }
 
     const result = {
       ...fitnessResult,
       metricsDocsUpdated,
+      weeklySnapshotsUpdated,
     };
 
-    console.log(`✅ Fitness KPI sync completed: ${result.totalSynced} goals updated, ${metricsDocsUpdated} goal_kpi_metrics docs refreshed`);
+    console.log(
+      `✅ Fitness KPI sync completed: ${result.totalSynced} goals updated, ` +
+      `${metricsDocsUpdated} goal_kpi_metrics docs refreshed, ` +
+      `${weeklySnapshotsUpdated} weekly KPI snapshots written`
+    );
     return result;
   } catch (e) {
     console.error('[fitnessKpiSync] failed', e?.message || e);
@@ -337,10 +531,32 @@ exports.syncFitnessKpisNow = httpsV2.onCall({ region: 'europe-west2' }, async (r
       syncUserFitnessKpis(uid),
       computeGoalFitnessKpisForUser(uid, { persist: true }),
     ]);
-    return { ok: true, ...result, metricsDocsUpdated: Array.isArray(metricsRows) ? metricsRows.length : 0 };
+    const snapshotResult = await snapshotGoalKpiMetricsForUser(uid, { reason: 'syncFitnessKpisNow' });
+    return {
+      ok: true,
+      ...result,
+      metricsDocsUpdated: Array.isArray(metricsRows) ? metricsRows.length : 0,
+      weeklySnapshotsUpdated: Number(snapshotResult?.snapshotCount || 0),
+    };
   } catch (e) {
     console.error('[fitnessKpiSync] user sync failed:', e);
     throw new httpsV2.HttpsError('internal', e?.message || 'Sync failed');
+  }
+});
+
+exports.backfillWeeklyGoalKpiSnapshots = httpsV2.onCall({ region: 'europe-west2' }, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) {
+    throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  }
+  const maxWeeks = Math.max(1, Math.min(Number(req?.data?.maxWeeks) || 26, 104));
+  const overwrite = req?.data?.overwrite === true;
+  try {
+    const result = await backfillWeeklyGoalKpiSnapshotsForUser(uid, { maxWeeks, overwrite });
+    return { ok: true, ...result };
+  } catch (e) {
+    console.error('[weekly-kpi-backfill] failed', { uid, maxWeeks, overwrite, error: e });
+    throw new httpsV2.HttpsError('internal', e?.message || 'Weekly KPI snapshot backfill failed');
   }
 });
 
@@ -686,16 +902,31 @@ function applyTimeOfDay(day, timeMs) {
   return d.getTime();
 }
 
-function formatDueTime(ms) {
+const CHORE_TIMEZONE = 'Europe/London';
+
+function extractZoneHourMinute(ms, timeZone = CHORE_TIMEZONE) {
   const d = new Date(ms);
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mm = String(d.getMinutes()).padStart(2, '0');
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    timeZone,
+  }).formatToParts(d);
+  const hour = Number(parts.find((p) => p.type === 'hour')?.value || '0');
+  const minute = Number(parts.find((p) => p.type === 'minute')?.value || '0');
+  return { hour, minute };
+}
+
+function formatDueTime(ms) {
+  const { hour, minute } = extractZoneHourMinute(ms);
+  const hh = String(hour).padStart(2, '0');
+  const mm = String(minute).padStart(2, '0');
   return `${hh}:${mm}`;
 }
 
 function classifyTimeOfDay(ms) {
-  const d = new Date(ms);
-  const minutes = d.getHours() * 60 + d.getMinutes();
+  const { hour, minute } = extractZoneHourMinute(ms);
+  const minutes = hour * 60 + minute;
   if (minutes >= (5 * 60) && minutes < (12 * 60)) return 'morning';
   if (minutes >= (12 * 60) && minutes < (17 * 60)) return 'afternoon';
   return 'evening';

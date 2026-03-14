@@ -13,6 +13,7 @@ import { themeVars } from '../utils/themeVars';
 import { computeWindowExpectedProgress, evaluateGoalTargetStatus } from '../utils/goalKpiStatus';
 import { triggerFocusGoalDataRefresh } from '../services/focusGoalsService';
 import FocusGoalsWidget from './FocusGoalsWidget';
+import { isGoalInHierarchySet } from '../utils/goalHierarchy';
 
 // ── Status helpers ─────────────────────────────────────────────────────────────
 
@@ -700,7 +701,7 @@ const ThemeProgressDashboard: React.FC = () => {
         const dueThisSprint = !!(dueDateMs && sprintStartMs && sprintEndMs && dueDateMs >= sprintStartMs && dueDateMs <= sprintEndMs);
         const { statusLabel, statusBg } = resolveGoalStatus(goal);
         const transfer = resolveGoalPotTransfers(goal);
-        return { id: goal.id, title: goal.title || goal.id, status: (goal as any).status, statusLabel, statusBg, storiesDone, storiesTotal: goalStories.length, storiesProgressPct, tasksDone, tasksTotal: goalTasks.length, pointsDone, pointsTotal, pointsProgressPct, progressPct, dueDateMs, dueThisSprint, isFocusGoal: activeFocusGoalIds.has(goal.id), ...transfer };
+        return { id: goal.id, title: goal.title || goal.id, status: (goal as any).status, statusLabel, statusBg, storiesDone, storiesTotal: goalStories.length, storiesProgressPct, tasksDone, tasksTotal: goalTasks.length, pointsDone, pointsTotal, pointsProgressPct, progressPct, dueDateMs, dueThisSprint, isFocusGoal: isGoalInHierarchySet(goal.id, goals, activeFocusGoalIds), ...transfer };
       }).sort((a, b) => {
         if (a.dueThisSprint !== b.dueThisSprint) return a.dueThisSprint ? -1 : 1;
         if (a.pointsProgressPct !== b.pointsProgressPct) return a.pointsProgressPct - b.pointsProgressPct;
@@ -778,7 +779,7 @@ const ThemeProgressDashboard: React.FC = () => {
         const progressPct = pointsTotal > 0 ? pointsProgressPct : goalStories.length > 0 ? Math.round((storiesDone / goalStories.length) * 100) : (isGoalDone((goal as any).status) ? 100 : 0);
         const { statusLabel, statusBg } = resolveGoalStatus(goal);
         const transfer = resolveGoalPotTransfers(goal);
-        return { id: goal.id, title: goal.title || goal.id, status: (goal as any).status, statusLabel, statusBg, storiesDone, storiesTotal: goalStories.length, storiesProgressPct, tasksDone: 0, tasksTotal: 0, pointsDone, pointsTotal, pointsProgressPct, progressPct, dueDateMs: null, dueThisSprint: false, isFocusGoal: activeFocusGoalIds.has(goal.id), ...transfer };
+        return { id: goal.id, title: goal.title || goal.id, status: (goal as any).status, statusLabel, statusBg, storiesDone, storiesTotal: goalStories.length, storiesProgressPct, tasksDone: 0, tasksTotal: 0, pointsDone, pointsTotal, pointsProgressPct, progressPct, dueDateMs: null, dueThisSprint: false, isFocusGoal: isGoalInHierarchySet(goal.id, goals, activeFocusGoalIds), ...transfer };
       }).sort((a, b) => a.progressPct - b.progressPct || a.title.localeCompare(b.title));
 
       const goalsDone = themeGoals.filter((g) => isGoalDone((g as any).status)).length;

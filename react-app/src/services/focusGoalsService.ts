@@ -4,6 +4,7 @@ import { Goal } from '../types';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from '../firebase';
 import { generateRef } from '../utils/referenceGenerator';
+import { expandFocusGoalIdsToLeafGoalIds } from '../utils/goalHierarchy';
 
 export const FOCUS_WIZARD_PREFILL_KEY = 'bob_focus_wizard_prefill_v1';
 
@@ -213,7 +214,8 @@ export async function createFocusGoal(
   storiesCreatedFor?: string[],
   potIdsCreatedFor?: { [goalId: string]: string },
   goalTypeMap?: { [goalId: string]: 'story' | 'calendar' },
-  monzoPotGoalRefs?: { [goalId: string]: string }
+  monzoPotGoalRefs?: { [goalId: string]: string },
+  focusRootGoalIds?: string[]
 ) {
   try {
     const now = new Date();
@@ -225,11 +227,20 @@ export async function createFocusGoal(
     const endDate = new Date(now.getTime() + daysInMs[timeframe]);
     const daysRemaining = Math.ceil((endDate.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
 
+    const allGoalsSnap = await getDocs(query(collection(db, 'goals'), where('ownerUid', '==', userId)));
+    const allGoals = allGoalsSnap.docs.map((goalDoc) => ({ id: goalDoc.id, ...(goalDoc.data() as Goal) })) as Goal[];
+    const rootGoalIds = (focusRootGoalIds && focusRootGoalIds.length > 0 ? focusRootGoalIds : goalIds)
+      .map((goalId) => String(goalId || '').trim())
+      .filter(Boolean);
+    const focusLeafGoalIds = expandFocusGoalIdsToLeafGoalIds(rootGoalIds, allGoals);
+
     const focusRef = collection(db, 'focusGoals');
     const docRef = await addDoc(focusRef, {
       ownerUid: userId,
       persona: 'personal',
-      goalIds,
+      goalIds: focusLeafGoalIds,
+      focusRootGoalIds: rootGoalIds,
+      focusLeafGoalIds,
       goalTypeMap: goalTypeMap || {},
       timeframe,
       startDate: serverTimestamp(),

@@ -18,6 +18,7 @@ import { useNavigate } from 'react-router-dom';
 import { formatTaskTagLabel } from '../utils/tagDisplay';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { isStatus } from '../utils/statusHelpers';
+import { isGoalInHierarchySet } from '../utils/goalHierarchy';
 
 // Normalize sprint identifiers so we handle doc refs, strings, and legacy placeholders
 const normalizeSprintId = (value: any): string | null => {
@@ -378,7 +379,7 @@ const SprintPlanningMatrix: React.FC = () => {
       if (!showCompletedItems && isStatus((story as any).status, 'done')) return false;
       if (applyFocusOnlyFilter && activeFocusGoalIds.size > 0) {
         const goalId = String(story.goalId || '').trim();
-        if (!goalId || !activeFocusGoalIds.has(goalId)) return false;
+        if (!goalId || !isGoalInHierarchySet(goalId, goals, activeFocusGoalIds)) return false;
       }
       if (filterGoal !== 'all' && story.goalId !== filterGoal) return false;
       if (showTop3Only && !isTop3Story(story)) return false;
@@ -394,7 +395,7 @@ const SprintPlanningMatrix: React.FC = () => {
 
   const filteredGoals = useMemo(() => {
     const baseGoals = applyFocusOnlyFilter && activeFocusGoalIds.size > 0
-      ? goals.filter((goal) => activeFocusGoalIds.has(goal.id))
+      ? goals.filter((goal) => isGoalInHierarchySet(goal.id, goals, activeFocusGoalIds))
       : goals;
     if (!goalSearch.trim()) return baseGoals;
     const q = goalSearch.toLowerCase();

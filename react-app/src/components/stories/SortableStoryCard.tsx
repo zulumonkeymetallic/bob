@@ -134,6 +134,9 @@ const SortableStoryCard: React.FC<SortableStoryCardProps> = ({
     if (entryMethod.includes('manual') || source === 'manual' || source === 'bob') return 'manual';
     return 'manual';
   })();
+  const scheduledBlockSourceClassName = scheduledBlockSourceLabel === 'linked from gcal'
+    ? 'kanban-card__source-note kanban-card__source-note--quiet'
+    : 'kanban-card__source-note';
   const deferredUntilMs = (() => {
     const raw = (story as any).deferredUntil ?? null;
     if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
@@ -372,7 +375,7 @@ const SortableStoryCard: React.FC<SortableStoryCardProps> = ({
                   {scheduledBlockLabel}
                 </span>
                 {scheduledBlockSourceLabel && (
-                  <span className="text-muted" style={{ fontSize: '0.65rem', marginTop: 2 }}>
+                  <span className={scheduledBlockSourceClassName} style={{ marginTop: 2 }}>
                     {scheduledBlockSourceLabel}
                   </span>
                 )}

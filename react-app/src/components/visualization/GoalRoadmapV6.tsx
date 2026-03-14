@@ -17,11 +17,17 @@ import ConfirmSprintChangesModal from './ConfirmSprintChangesModal';
 import SprintSelector from '../SprintSelector';
 import './GoalRoadmapV6.css';
 import { buildGoalTimelineImpactPlan } from './goalTimelineImpact';
+import { getGoalAncestors, getGoalDisplayPath, isGoalInHierarchySet } from '../../utils/goalHierarchy';
 
 interface GanttTask {
   id: string;
   text: string;
   labelText?: string;
+  parentPath?: string;
+  hierarchyDepth?: number;
+  displayPath?: string;
+  rootGoalId?: string;
+  rootGoalTitle?: string;
   start: Date;
   end: Date;
   duration: number;
@@ -62,7 +68,8 @@ const MILESTONE_THRESHOLD_DAYS = 14;
 const PROGRESS_SHOW_MIN_ZOOM = 45;
 const PROGRESS_HIDE_AFTER_ZOOM = 75;
 const ROADMAP_LABEL_COL_WIDTH = 260;
-const ROADMAP_GROUP_HEADER_HEIGHT = 30;
+const ROADMAP_GROUP_HEADER_HEIGHT = 24;
+const ROADMAP_SECTION_HEADER_HEIGHT = 22;
 
 interface AxisBandSegment {
   key: string;
@@ -77,7 +84,17 @@ interface ThemeLaneGroup {
   themeName: string;
   themeColor: string;
   themeOrder: number;
-  lanes: GanttTask[][];
+  sections: Array<{
+    key: string;
+    rootGoalId: string;
+    title: string;
+    subtitle?: string;
+    lanes: GanttTask[][];
+    height: number;
+    goalCount: number;
+  }>;
+  goalCount: number;
+  laneCount: number;
   height: number;
 }
 
@@ -189,6 +206,7 @@ function buildAxisRow(
 
 const TaskTemplate: React.FC<{ data: GanttTask }> = ({ data }) => {
   const label = data.labelText || data.text;
+  const parentPath = data.parentPath || '';
   const titleSize = data.titleSize || 12;
   const storyTotal = data.storyPoints ?? 0;
   const storyDone = data.donePoints ?? 0;
@@ -248,6 +266,11 @@ const TaskTemplate: React.FC<{ data: GanttTask }> = ({ data }) => {
         >
           {label}
         </div>
+        {parentPath && (
+          <div className="grv6-milestone-parent-path">
+            {parentPath}
+          </div>
+        )}
         <div className="grv6-milestone-row">
           <div
             className="grv6-milestone"
@@ -297,14 +320,19 @@ const TaskTemplate: React.FC<{ data: GanttTask }> = ({ data }) => {
 
   return (
     <div className="grv6-task-shell" title={tooltipLabel} style={taskShellStyle}>
-      <div
-        className="grv6-task"
+        <div
+          className="grv6-task"
         style={{
           background: accentBackground,
           boxShadow: `inset 0 0 0 1px ${data.themeColor || 'rgba(59,130,246,0.4)'}`,
         }}
         aria-label={tooltipLabel}
-      >
+        >
+        {parentPath && (
+          <div className="grv6-task-parent-path">
+            {parentPath}
+          </div>
+        )}
         <div className="grv6-task-title-row">
           <div
             className="grv6-task-title"
@@ -665,7 +693,7 @@ const GoalRoadmapV6: React.FC = () => {
       const themeId = migrateThemeValue((g as any).theme);
       if (themeFilter !== 'all' && themeId !== themeFilter) return false;
       if (showStoryGoalsOnly && !(storyPoints[g.id] > 0)) return false;
-      if (showFocusGoalsOnly && activeFocusGoalIds.size > 0 && !activeFocusGoalIds.has(g.id)) return false;
+      if (showFocusGoalsOnly && activeFocusGoalIds.size > 0 && !isGoalInHierarchySet(g.id, goals, activeFocusGoalIds)) return false;
       if (respectSprintScope && selectedSprint) {
         const sprintStart = toMillis(selectedSprint.startDate);
         const sprintEnd = toMillis(selectedSprint.endDate);
@@ -716,7 +744,17 @@ const GoalRoadmapV6: React.FC = () => {
       if (!min || start < min) min = start;
       if (!max || end > max) max = end;
 
-      const themeId = migrateThemeValue((goal as any).theme);
+      const ancestors = getGoalAncestors(goal.id, goals);
+      const directThemeValue = (goal as any).theme;
+      const inheritedThemeValue = ancestors.find((ancestor) => {
+        const value = (ancestor as any)?.theme;
+        return value !== undefined && value !== null && value !== '';
+      })?.theme;
+      const resolvedThemeValue =
+        directThemeValue !== undefined && directThemeValue !== null && directThemeValue !== ''
+          ? directThemeValue
+          : inheritedThemeValue;
+      const themeId = migrateThemeValue(resolvedThemeValue);
       const themeDef = globalThemes.find(t => t.id === themeId);
       const color = themeDef?.color || '#3b82f6';
 
@@ -754,6 +792,13 @@ const GoalRoadmapV6: React.FC = () => {
       }
 
       const title = goal.title || 'Untitled Goal';
+      const parentPath = ancestors
+        .slice()
+        .reverse()
+        .map((ancestor) => ancestor.title || ancestor.id)
+        .filter(Boolean)
+        .join(' > ');
+      const rootGoal = ancestors.length > 0 ? ancestors[ancestors.length - 1] : goal;
       const titleSize = Math.max(10, Math.round(10 + (zoomPercent / 100) * 6));
       const showDetails = zoomPercent >= 65;
       const showChips = zoomPercent >= 75;
@@ -773,6 +818,11 @@ const GoalRoadmapV6: React.FC = () => {
         id: goal.id,
         text: '',
         labelText: title,
+        parentPath: parentPath || undefined,
+        hierarchyDepth: ancestors.length,
+        displayPath: getGoalDisplayPath(goal.id, goals),
+        rootGoalId: rootGoal.id,
+        rootGoalTitle: rootGoal.title || rootGoal.id,
         start,
         end,
         duration: durationDays,
@@ -817,7 +867,7 @@ const GoalRoadmapV6: React.FC = () => {
               140;
     const endDate = max ? new Date(max.getTime() + longHorizonDays * DAY_MS) : new Date(today.getTime() + longHorizonDays * DAY_MS);
     return { tasks: list, chartStart: startDate, chartEnd: endDate };
-  }, [sortedGoals, globalThemes, storyDonePoints, storyPoints, potBalances, calendarBlocks, goalDateOverrides, handleScheduleGoal, handleGenerateStories, showSidebar, zoomLevel, zoomPercent]);
+  }, [sortedGoals, globalThemes, storyDonePoints, storyPoints, potBalances, calendarBlocks, goalDateOverrides, handleScheduleGoal, handleGenerateStories, showSidebar, zoomLevel, zoomPercent, goals]);
 
   const handleThemeChange = useCallback((val: string) => {
     if (val === 'all') {
@@ -918,10 +968,10 @@ const GoalRoadmapV6: React.FC = () => {
   }, [chartEnd, chartStart, dayWidth]);
 
   const laneHeight = useMemo(() => {
-    if (zoomLevel === 'week') return 112;
-    if (zoomLevel === 'month') return 100;
-    if (zoomLevel === 'quarter') return 88;
-    return 82;
+    if (zoomLevel === 'week') return 92;
+    if (zoomLevel === 'month') return 84;
+    if (zoomLevel === 'quarter') return 74;
+    return 68;
   }, [zoomLevel]);
 
   const themeGroups = useMemo<ThemeLaneGroup[]>(() => {
@@ -958,19 +1008,69 @@ const GoalRoadmapV6: React.FC = () => {
         return a.themeName.localeCompare(b.themeName);
       })
       .map((group) => {
-        const lanes: Array<{ lastEnd: number; items: GanttTask[] }> = [];
+        const hierarchyGroups = new Map<string, {
+          key: string;
+          rootGoalId: string;
+          title: string;
+          subtitle?: string;
+          items: GanttTask[];
+          sortStartMs: number;
+        }>();
+
         group.items.forEach((item) => {
-          const startMs = item.start.getTime();
-          const endMs = item.end.getTime();
-          let lane = lanes.find((candidate) => startMs >= candidate.lastEnd + DAY_MS);
-          if (!lane) {
-            lane = { lastEnd: endMs, items: [] };
-            lanes.push(lane);
-          } else {
-            lane.lastEnd = endMs;
+          const sectionKey = String(item.rootGoalId || item.id);
+          const existing = hierarchyGroups.get(sectionKey);
+          const subtitle = item.rootGoalId && item.rootGoalId !== item.id
+            ? `${item.rootGoalTitle || item.labelText || item.id} subtree`
+            : 'Standalone goal';
+          if (existing) {
+            existing.items.push(item);
+            existing.sortStartMs = Math.min(existing.sortStartMs, item.start.getTime());
+            return;
           }
-          lane.items.push(item);
+          hierarchyGroups.set(sectionKey, {
+            key: sectionKey,
+            rootGoalId: sectionKey,
+            title: item.rootGoalTitle || item.labelText || item.id,
+            subtitle,
+            items: [item],
+            sortStartMs: item.start.getTime(),
+          });
         });
+
+        const sections = Array.from(hierarchyGroups.values())
+          .sort((a, b) => a.sortStartMs - b.sortStartMs || a.title.localeCompare(b.title))
+          .map((section) => {
+            const lanes: Array<{ lastEnd: number; items: GanttTask[] }> = [];
+            section.items
+              .slice()
+              .sort((a, b) => a.start.getTime() - b.start.getTime() || a.end.getTime() - b.end.getTime())
+              .forEach((item) => {
+                const startMs = item.start.getTime();
+                const endMs = item.end.getTime();
+                let lane = lanes.find((candidate) => startMs >= candidate.lastEnd + DAY_MS);
+                if (!lane) {
+                  lane = { lastEnd: endMs, items: [] };
+                  lanes.push(lane);
+                } else {
+                  lane.lastEnd = endMs;
+                }
+                lane.items.push(item);
+              });
+
+            return {
+              key: section.key,
+              rootGoalId: section.rootGoalId,
+              title: section.title,
+              subtitle: section.subtitle,
+              lanes: lanes.map((lane) => lane.items),
+              height: ROADMAP_SECTION_HEADER_HEIGHT + (Math.max(1, lanes.length) * laneHeight),
+              goalCount: section.items.length,
+            };
+          });
+
+        const laneCount = sections.reduce((total, section) => total + section.lanes.length, 0);
+        const totalHeight = ROADMAP_GROUP_HEADER_HEIGHT + sections.reduce((sum, section) => sum + section.height, 0);
 
         return {
           key: group.key,
@@ -978,8 +1078,10 @@ const GoalRoadmapV6: React.FC = () => {
           themeName: group.themeName,
           themeColor: group.themeColor,
           themeOrder: group.themeOrder,
-          lanes: lanes.map((lane) => lane.items),
-          height: ROADMAP_GROUP_HEADER_HEIGHT + (Math.max(1, lanes.length) * laneHeight)
+          sections,
+          goalCount: group.items.length,
+          laneCount,
+          height: totalHeight,
         };
       });
   }, [laneHeight, tasks]);
@@ -1484,7 +1586,7 @@ const GoalRoadmapV6: React.FC = () => {
             <div className="grv6-roadmap-header" style={{ width: ROADMAP_LABEL_COL_WIDTH + timelineWidth }}>
               <div className="grv6-roadmap-label-spacer">
                 <div className="grv6-roadmap-header-title">Themes</div>
-                <div className="grv6-roadmap-header-subtitle">Grouped by theme and packed into shared lanes</div>
+                <div className="grv6-roadmap-header-subtitle">Grouped by theme, then parent goal sections</div>
               </div>
               <div className="grv6-roadmap-axis" style={{ width: timelineWidth }}>
                 <div className="grv6-roadmap-axis-row year">
@@ -1525,7 +1627,7 @@ const GoalRoadmapV6: React.FC = () => {
                       <div className="grv6-theme-label-copy">
                         <span className="grv6-theme-label-title">{group.themeName}</span>
                         <span className="grv6-theme-label-meta">
-                          {group.lanes.reduce((total, lane) => total + lane.length, 0)} goals on {group.lanes.length} line{group.lanes.length === 1 ? '' : 's'}
+                          {group.goalCount} goals across {group.sections.length} parent section{group.sections.length === 1 ? '' : 's'} and {group.laneCount} line{group.laneCount === 1 ? '' : 's'}
                         </span>
                       </div>
                     </div>
@@ -1551,54 +1653,78 @@ const GoalRoadmapV6: React.FC = () => {
                     ))}
                     <div className="grv6-roadmap-today-line" style={{ left: todayLineX, height: group.height }} />
 
-                    {group.lanes.map((lane, laneIndex) => (
-                      <div
-                        key={`${group.key}-lane-${laneIndex}`}
-                        className="grv6-theme-lane-row"
-                        style={{
-                          top: ROADMAP_GROUP_HEADER_HEIGHT + (laneIndex * laneHeight),
-                          height: laneHeight
-                        }}
-                      >
-                        <span className="grv6-theme-lane-label">Line {laneIndex + 1}</span>
-                      </div>
-                    ))}
-
-                    {group.lanes.flatMap((lane, laneIndex) =>
-                      lane.map((task) => {
-                        const startMs = task.start.getTime();
-                        const endMs = Math.max(task.end.getTime() + DAY_MS, startMs + DAY_MS);
-                        const left = xFromMs(startMs);
-                        const width = Math.max(task.isMilestone ? 120 : 72, xFromMs(endMs) - xFromMs(startMs));
-                        const previousHeight = laneHeight - 16;
-                        const height = Math.max(22, Math.round(previousHeight * 0.5));
-                        const top = ROADMAP_GROUP_HEADER_HEIGHT + (laneIndex * laneHeight) + Math.round((laneHeight - height) / 2);
-                        const isDragging = activeDragGoalId === task.id;
-
+                    {(() => {
+                      let currentSectionTop = ROADMAP_GROUP_HEADER_HEIGHT;
+                      return group.sections.map((section) => {
+                        const sectionTop = currentSectionTop;
+                        currentSectionTop += section.height;
                         return (
-                          <div
-                            key={`${group.key}-${task.id}`}
-                            className={`grv6-roadmap-bar ${task.isMilestone ? 'milestone' : ''} ${isDragging ? 'dragging' : ''}`}
-                            style={{ left, top, width, height }}
-                            onPointerDown={(event) => startGoalDrag(event, task.id, 'move')}
-                          >
+                          <React.Fragment key={`${group.key}-${section.key}`}>
                             <div
-                              className="grv6-resize-handle start"
-                              title="Adjust goal start date"
-                              onPointerDown={(event) => startGoalDrag(event, task.id, 'resize-start')}
-                            />
-                            <div className="grv6-roadmap-bar-content">
-                              <TaskTemplate data={task} />
+                              className="grv6-roadmap-section-header"
+                              style={{
+                                top: sectionTop,
+                                height: ROADMAP_SECTION_HEADER_HEIGHT,
+                              }}
+                            >
+                              <span className="grv6-roadmap-section-title">{section.title}</span>
+                              <span className="grv6-roadmap-section-meta">
+                                {section.goalCount} goal{section.goalCount === 1 ? '' : 's'}
+                              </span>
                             </div>
-                            <div
-                              className="grv6-resize-handle end"
-                              title="Adjust goal end date"
-                              onPointerDown={(event) => startGoalDrag(event, task.id, 'resize-end')}
-                            />
-                          </div>
+
+                            {section.lanes.map((lane, laneIndex) => (
+                              <div
+                                key={`${group.key}-${section.key}-lane-${laneIndex}`}
+                                className="grv6-theme-lane-row"
+                                style={{
+                                  top: sectionTop + ROADMAP_SECTION_HEADER_HEIGHT + (laneIndex * laneHeight),
+                                  height: laneHeight
+                                }}
+                              >
+                                <span className="grv6-theme-lane-label">Line {laneIndex + 1}</span>
+                              </div>
+                            ))}
+
+                            {section.lanes.flatMap((lane, laneIndex) =>
+                              lane.map((task) => {
+                                const startMs = task.start.getTime();
+                                const endMs = Math.max(task.end.getTime() + DAY_MS, startMs + DAY_MS);
+                                const left = xFromMs(startMs);
+                                const width = Math.max(task.isMilestone ? 120 : 72, xFromMs(endMs) - xFromMs(startMs));
+                                const previousHeight = laneHeight - 12;
+                                const height = Math.max(20, Math.round(previousHeight * 0.56));
+                                const top = sectionTop + ROADMAP_SECTION_HEADER_HEIGHT + (laneIndex * laneHeight) + Math.round((laneHeight - height) / 2);
+                                const isDragging = activeDragGoalId === task.id;
+
+                                return (
+                                  <div
+                                    key={`${group.key}-${section.key}-${task.id}`}
+                                    className={`grv6-roadmap-bar ${task.isMilestone ? 'milestone' : ''} ${isDragging ? 'dragging' : ''}`}
+                                    style={{ left, top, width, height }}
+                                    onPointerDown={(event) => startGoalDrag(event, task.id, 'move')}
+                                  >
+                                    <div
+                                      className="grv6-resize-handle start"
+                                      title="Adjust goal start date"
+                                      onPointerDown={(event) => startGoalDrag(event, task.id, 'resize-start')}
+                                    />
+                                    <div className="grv6-roadmap-bar-content">
+                                      <TaskTemplate data={task} />
+                                    </div>
+                                    <div
+                                      className="grv6-resize-handle end"
+                                      title="Adjust goal end date"
+                                      onPointerDown={(event) => startGoalDrag(event, task.id, 'resize-end')}
+                                    />
+                                  </div>
+                                );
+                              })
+                            )}
+                          </React.Fragment>
                         );
-                      })
-                    )}
+                      });
+                    })()}
                   </div>
                 </div>
               ))}

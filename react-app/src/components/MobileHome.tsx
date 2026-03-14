@@ -25,8 +25,9 @@ import {
   formatFullReplanSummary,
   normalizePlannerCallableError,
 } from '../utils/plannerOrchestration';
+import DailyPlanPage from './DailyPlanPage';
 
-type TabKey = 'overview' | 'tasks' | 'stories' | 'goals' | 'chores';
+type TabKey = 'overview' | 'tasks' | 'stories' | 'goals' | 'chores' | 'daily_plan';
 type TaskViewFilter = 'top3' | 'due_today' | 'overdue' | 'all';
 type GoalsViewFilter = 'active_sprint' | 'year';
 
@@ -1231,11 +1232,11 @@ const MobileHome: React.FC = () => {
         </Card>
       </div>
       {/* AI Daily Summary + Focus */}
-      {/* Tabs: Overview | Tasks | Stories | Goals | Chores */}
+      {/* Tabs: Overview | Tasks | Stories | Goals | Chores | Daily Plan */}
       <div className="mobile-filter-tabs mb-3">
         <div className="d-flex align-items-center gap-1 flex-nowrap" style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
           <div className="btn-group flex-nowrap w-100" role="group">
-            {(['overview','tasks','stories','goals','chores'] as TabKey[]).map(key => (
+            {(['overview','tasks','stories','goals','chores','daily_plan'] as TabKey[]).map(key => (
               <Button
                 key={key}
                 variant={activeTab === key ? 'primary' : 'outline-primary'}
@@ -1243,7 +1244,17 @@ const MobileHome: React.FC = () => {
                 onClick={() => setActiveTab(key)}
                 style={{ padding: '3px 6px', fontSize: 11, whiteSpace: 'nowrap' }}
               >
-                {key === 'overview' ? 'Overview' : key === 'tasks' ? 'Tasks' : key === 'stories' ? 'Stories' : key === 'goals' ? 'Goals' : 'Chores'}
+                {key === 'overview'
+                  ? 'Overview'
+                  : key === 'tasks'
+                    ? 'Tasks'
+                    : key === 'stories'
+                      ? 'Stories'
+                      : key === 'goals'
+                        ? 'Goals'
+                        : key === 'chores'
+                          ? 'Chores'
+                          : 'Daily Plan'}
               </Button>
             ))}
           </div>
@@ -1519,92 +1530,18 @@ const MobileHome: React.FC = () => {
             </Card>
           )}
 
-              <Card className="mb-3" style={{ background: '#eef2ff' }}>
-              <Card.Header className="py-2 d-flex align-items-center justify-content-between" style={{ background: 'transparent', border: 'none' }}>
-                <div>
+          <Card className="mb-3" style={{ background: '#eef2ff' }}>
+            <Card.Header className="py-2 d-flex align-items-center justify-content-between" style={{ background: 'transparent', border: 'none' }}>
+              <div>
                 <strong>Daily Plan</strong>
-                <Badge bg="secondary" pill className="ms-2">{unifiedTimelineItems.length}</Badge>
+                <Badge bg="info" pill className="ms-2">Tab</Badge>
               </div>
-              <Button variant="outline-secondary" size="sm" onClick={() => navigate('/daily-plan')}>
-                Full view
-              </Button>
             </Card.Header>
             <Card.Body className="pt-0">
-              <div className="text-muted small mb-2">Tip: Use the clock icon on task/story cards to defer with smart suggestions.</div>
-              {unifiedTimelineItems.length === 0 ? (
-                <div className="text-muted small">No tasks, stories, chores, or calendar events scheduled today.</div>
-              ) : (
-                (['morning', 'afternoon', 'evening'] as MobileTimelineBucket[]).map((bucket) => {
-                  const items = unifiedTimelineItems.filter((row) => row.bucket === bucket);
-                  if (items.length === 0) return null;
-                  const label = bucket === 'morning' ? 'Morning' : bucket === 'afternoon' ? 'Afternoon' : 'Evening';
-                  return (
-                    <div key={bucket} className="mb-2">
-                      <div className="text-uppercase text-muted small fw-semibold mb-1">{label}</div>
-                      <ListGroup variant="flush">
-                        {items.map((item) => {
-                          const isTask = item.kind === 'task' || item.kind === 'chore';
-                          const isDone = !!item.task && Number(item.task.status ?? 0) === 2;
-                          const badgeVariant =
-                            item.kind === 'story' ? 'info' :
-                            item.kind === 'chore' ? 'success' :
-                            item.kind === 'event' ? 'secondary' : 'primary';
-                          const badgeLabel =
-                            item.kind === 'story' ? 'Story' :
-                            item.kind === 'chore' ? 'Chore' :
-                            item.kind === 'event' ? 'Event' : 'Task';
-                          return (
-                            <ListGroup.Item key={item.id} className="d-flex align-items-center gap-2" style={{ fontSize: 14 }}>
-                              {isTask && item.task ? (
-                                <Form.Check
-                                  type="checkbox"
-                                  checked={isDone || !!choreCompletionBusy[item.task.id]}
-                                  disabled={isDone || !!choreCompletionBusy[item.task.id]}
-                                  onChange={() => {
-                                    if (item.kind === 'chore') {
-                                      void handleCompleteChoreTask(item.task!);
-                                    } else {
-                                      void updateTaskField(item.task!, { status: 2 });
-                                    }
-                                  }}
-                                  aria-label={`Complete ${item.title}`}
-                                />
-                              ) : (
-                                <span style={{ width: 14 }} />
-                              )}
-                              <div className="flex-grow-1">
-                                <div className="fw-semibold">
-                                  {item.task ? (
-                                    <button
-                                      type="button"
-                                      className="btn btn-link p-0 text-decoration-none text-start align-baseline"
-                                      onClick={() => setEditingTask(item.task!)}
-                                    >
-                                      {item.title}
-                                    </button>
-                                  ) : item.story ? (
-                                    <button
-                                      type="button"
-                                      className="btn btn-link p-0 text-decoration-none text-start align-baseline"
-                                      onClick={() => setEditingStory(item.story!)}
-                                    >
-                                      {item.title}
-                                    </button>
-                                  ) : (
-                                    item.title
-                                  )}
-                                </div>
-                                <div className="text-muted small">{item.timeLabel}</div>
-                              </div>
-                              <Badge bg={badgeVariant}>{badgeLabel}</Badge>
-                            </ListGroup.Item>
-                          );
-                        })}
-                      </ListGroup>
-                    </div>
-                  );
-                })
-              )}
+              <div className="text-muted small mb-2">Daily Plan is available as its own tab in the mobile overview menu.</div>
+              <Button size="sm" variant="outline-primary" onClick={() => setActiveTab('daily_plan')}>
+                Open Daily Plan tab
+              </Button>
             </Card.Body>
           </Card>
 
@@ -1814,6 +1751,12 @@ const MobileHome: React.FC = () => {
               })}
             </ListGroup>
           )}
+        </div>
+      )}
+
+      {activeTab === 'daily_plan' && (
+        <div>
+          <DailyPlanPage />
         </div>
       )}
 

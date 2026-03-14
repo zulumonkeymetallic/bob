@@ -21,6 +21,7 @@ import { normalizeTaskTags } from '../utils/taskTagging';
 import { findSprintForDate } from '../utils/taskSprintHelpers';
 import { parsePointsValue, TASK_DEFAULT_POINTS } from '../utils/points';
 import { planningSprints } from '../utils/sprintFilter';
+import { getGoalDisplayPath, getLeafGoalOptions, resolveLeafGoalSelection } from '../utils/goalHierarchy';
 
 interface EditTaskModalProps {
   show: boolean;
@@ -133,6 +134,7 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
     () => (linkedGoalId ? goals.find((g) => g.id === linkedGoalId) : null),
     [linkedGoalId, goals],
   );
+  const leafGoalOptions = useMemo(() => getLeafGoalOptions(goals), [goals]);
 
   useEffect(() => {
     if (!currentUser?.uid) return;
@@ -228,7 +230,7 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
     setStoryInput(linkedStory ? (linkedStory.title || '') : '');
     const resolvedGoalId = (task as any)?.goalId || linkedStory?.goalId || '';
     const linkedGoalInit = resolvedGoalId ? goals.find((g) => g.id === resolvedGoalId) : undefined;
-    setGoalInput(linkedGoalInit ? (linkedGoalInit.title || '') : '');
+    setGoalInput(linkedGoalInit ? getGoalDisplayPath(linkedGoalInit.id, goals) : '');
   }, [task, show, stories, goals, currentPersona]);
 
   const storyLabel = (s: Story) => s.title || '(untitled)';
@@ -241,8 +243,13 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
     }
     const match = stories.find((s) => s.title === val || s.id === val);
     if (match) {
-      setForm((prev) => ({ ...prev, storyId: match.id, goalId: match.goalId || prev.goalId }));
+      const resolvedStoryGoal = resolveLeafGoalSelection(match.goalId || null, goals);
+      setForm((prev) => ({ ...prev, storyId: match.id, goalId: resolvedStoryGoal.goalId || prev.goalId }));
       setStoryInput(match.title || '');
+      if (resolvedStoryGoal.goalId) {
+        const linkedGoal = goals.find((goal) => goal.id === resolvedStoryGoal.goalId);
+        setGoalInput(linkedGoal ? getGoalDisplayPath(linkedGoal.id, goals) : '');
+      }
     } else {
       setForm((prev) => ({ ...prev, storyId: '' }));
     }
@@ -256,10 +263,13 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
       setForm((prev) => ({ ...prev, goalId: '' }));
       return;
     }
-    const match = goals.find((g) => g.title === val || g.id === val);
+    const match = leafGoalOptions.find((g) => {
+      const displayPath = getGoalDisplayPath(g.id, goals);
+      return displayPath === val || g.id === val || g.title === val;
+    });
     if (match) {
       setForm((prev) => ({ ...prev, goalId: match.id }));
-      setGoalInput(match.title || '');
+      setGoalInput(getGoalDisplayPath(match.id, goals));
     } else {
       setForm((prev) => ({ ...prev, goalId: '' }));
     }
@@ -314,10 +324,28 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
         daysOfWeek: normalizedDays,
         persona: form.persona || 'personal',
       };
+      const directGoalSelection = resolveLeafGoalSelection(form.goalId || null, goals);
+      if (!form.storyId && form.goalId && !directGoalSelection.goalId) {
+        alert(
+          directGoalSelection.reason === 'ambiguous_parent'
+            ? 'Tasks must link to a specific leaf goal. Select the child goal you want this task to execute against.'
+            : 'Please select a valid leaf goal before saving this task.'
+        );
+        setSaving(false);
+        return;
+      }
       if (form.storyId) {
         const linked = stories.find((s) => s.id === form.storyId);
-        if (linked?.goalId) basePayload.goalId = linked.goalId;
+        const storyGoalSelection = resolveLeafGoalSelection(linked?.goalId || null, goals);
+        if (linked?.goalId && !storyGoalSelection.goalId) {
+          alert('The linked story is attached to a parent goal. Re-link the story to a leaf goal before attaching tasks to it.');
+          setSaving(false);
+          return;
+        }
+        if (storyGoalSelection.goalId) basePayload.goalId = storyGoalSelection.goalId;
         if ((linked as any)?.sprintId) basePayload.sprintId = (linked as any).sprintId;
+      } else {
+        basePayload.goalId = directGoalSelection.goalId || null;
       }
       const storySprintId = linkedStory?.sprintId || (linkedStory as any)?.sprintId || null;
       const resolvedGoalId = basePayload.goalId || linkedStory?.goalId || null;
@@ -711,25 +739,30 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
               </Row>
               <Row>
                 <Col md={12}>
-                  <Form.Group className="mb-3">
-                    <Form.Label>Link to goal</Form.Label>
-                    <Form.Control
-                      list="task-goal-options"
-                      placeholder="Search goal by title..."
-                      value={goalInput}
-                      onChange={(e) => {
-                        setGoalInput(e.target.value);
-                      }}
-                      onBlur={(e) => resolveGoalSelection(e.target.value)}
-                    />
-                    <datalist id="task-goal-options">
-                      {goals.map((g) => (
-                        <option key={g.id} value={goalLabel(g)} />
+              <Form.Group className="mb-3">
+                <Form.Label>Link to goal</Form.Label>
+                <Form.Control
+                  list="task-goal-options"
+                  placeholder="Search leaf goal by title..."
+                  value={goalInput}
+                  onChange={(e) => {
+                    setGoalInput(e.target.value);
+                  }}
+                  onBlur={(e) => resolveGoalSelection(e.target.value)}
+                />
+                <datalist id="task-goal-options">
+                  {leafGoalOptions.map((g) => (
+                        <option key={g.id} value={getGoalDisplayPath(g.id, goals)} />
                       ))}
-                    </datalist>
-                    {linkedGoalId ? (
-                      <div className="form-text">
-                        <Button
+                </datalist>
+                {form.goalId && resolveLeafGoalSelection(form.goalId, goals).reason === 'ambiguous_parent' && (
+                  <div className="form-text text-warning">
+                    Tasks must link to a specific leaf goal. Select the child goal you want this task to execute against.
+                  </div>
+                )}
+                {linkedGoalId ? (
+                  <div className="form-text">
+                    <Button
                           size="sm"
                           variant="link"
                           className="p-0"
@@ -740,9 +773,9 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
                       </div>
                     ) : null}
                     {RECURRING_TASK_TYPES.has(form.type) && (
-                      <div className="form-text">Linking a goal is recommended for better planner/theme placement.</div>
+                      <div className="form-text">Recurring work only contributes to KPI adherence when linked to a leaf goal.</div>
                     )}
-                  </Form.Group>
+              </Form.Group>
                 </Col>
               </Row>
               <Row>
