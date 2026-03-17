@@ -159,6 +159,7 @@ exports.calculateNextWeekCapacity = onCall({
  */
 async function calculateCapacityInternal(db, userId, sprintId) {
     try {
+        const timezone = await resolveUserTimezone(db, userId);
         // 1. Fetch Sprint Data
         const sprintDoc = await db.collection('sprints').doc(sprintId).get();
         if (!sprintDoc.exists) {

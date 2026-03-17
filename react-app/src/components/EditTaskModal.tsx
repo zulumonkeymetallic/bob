@@ -4,7 +4,6 @@ import { Modal, Button, Form, Row, Col } from 'react-bootstrap';
 import { doc, updateDoc, serverTimestamp, collection, query, where, orderBy, limit, onSnapshot, addDoc, deleteDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { useNavigate } from 'react-router-dom';
-import { useSidebar } from '../contexts/SidebarContext';
 import { db, functions } from '../firebase';
 import { useSprint } from '../contexts/SprintContext';
 import { Task, Sprint, Story, Goal } from '../types';
@@ -22,6 +21,7 @@ import { findSprintForDate } from '../utils/taskSprintHelpers';
 import { parsePointsValue, TASK_DEFAULT_POINTS } from '../utils/points';
 import { planningSprints } from '../utils/sprintFilter';
 import { getGoalDisplayPath, getLeafGoalOptions, resolveLeafGoalSelection } from '../utils/goalHierarchy';
+import EditStoryModal from './EditStoryModal';
 
 interface EditTaskModalProps {
   show: boolean;
@@ -81,7 +81,6 @@ const formatSprintLabel = (sprint: Sprint, statusOverride?: string) => {
 
 const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpdated, container }) => {
   const navigate = useNavigate();
-  const { showSidebar } = useSidebar();
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const { sprints } = useSprint();
@@ -104,12 +103,13 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
     tags: [] as string[],
     type: 'task' as 'task' | 'chore' | 'routine' | 'habit' | 'read' | 'watch',
     repeatFrequency: '' as '' | 'daily' | 'weekly' | 'monthly' | 'yearly',
-    repeatInterval: 1 as number,
+    repeatInterval: 1 as number | string,
     daysOfWeek: [] as string[],
     persona: 'personal' as 'personal' | 'work',
   });
   const [storyInput, setStoryInput] = useState('');
   const [goalInput, setGoalInput] = useState('');
+  const [showLinkedStoryModal, setShowLinkedStoryModal] = useState(false);
   const [stories, setStories] = useState<Story[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [converting, setConverting] = useState(false);
@@ -570,8 +570,11 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
                         type="number"
                         min={1}
                         max={365}
-                        value={form.repeatInterval || 1}
-                        onChange={(e) => setForm({ ...form, repeatInterval: Number(e.target.value) || 1 })}
+                        value={form.repeatInterval ?? ''}
+                        onChange={(e) => setForm({
+                          ...form,
+                          repeatInterval: e.target.value === '' ? '' : e.target.value,
+                        })}
                       />
                     </Col>
                   </Row>
@@ -802,9 +805,9 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
                           size="sm"
                           variant="link"
                           className="p-0"
-                          onClick={() => { onHide(); showSidebar(linkedStory as any, 'story'); }}
+                          onClick={() => setShowLinkedStoryModal(true)}
                         >
-                          View linked story
+                          Edit linked story
                         </Button>
                       </div>
                     ) : null}
@@ -875,6 +878,12 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
           {saving ? 'Saving...' : task ? 'Save' : 'Create task'}
         </Button>
       </Modal.Footer>
+      <EditStoryModal
+        show={showLinkedStoryModal && !!linkedStory}
+        story={linkedStory}
+        goals={goals}
+        onHide={() => setShowLinkedStoryModal(false)}
+      />
     </Modal>
   );
 };

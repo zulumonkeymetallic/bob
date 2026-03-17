@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Card, Badge, ProgressBar, Row, Col, Button } from 'react-bootstrap';
-import { AlertCircle, Zap, Calendar, Target, TrendingUp } from 'lucide-react';
+import { AlertCircle, Zap, Target } from 'lucide-react';
 import { FocusGoal, Goal, Story } from '../types';
 import { FitnessKPIQuickStatus } from './FitnessKPIDisplay';
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
@@ -16,21 +16,22 @@ interface MonzoGoalSummary {
   potName: string | null;
 }
 
+interface GoalKpiMetricRow {
+  resolvedKpis?: any[];
+  updatedAt?: any;
+}
+
 interface FocusGoalCountdownBannerProps {
   focusGoal: FocusGoal;
   goals: Goal[];
   stories: Story[];
   onEdit?: () => void;
+  onDelete?: () => void;
   onRefresh?: () => void | Promise<void>;
   refreshing?: boolean;
   compact?: boolean;
   monzoBudgetSummary?: any;
   monzoGoalAlignment?: { goals: MonzoGoalSummary[] } | null;
-}
-
-interface GoalKpiMetricRow {
-  resolvedKpis?: any[];
-  updatedAt?: any;
 }
 
 const getUrgency = (daysRemaining: number): 'critical' | 'high' | 'normal' | 'low' => {
@@ -80,17 +81,29 @@ export const FocusGoalCountdownBanner: React.FC<FocusGoalCountdownBannerProps> =
   monzoBudgetSummary,
   monzoGoalAlignment,
   onEdit,
+  onDelete,
   onRefresh,
   refreshing = false,
   compact = false
 }) => {
   const [goalKpiMetrics, setGoalKpiMetrics] = useState<Record<string, GoalKpiMetricRow>>({});
   const protectedGoalIds = useMemo(() => new Set(getProtectedFocusGoalIds(focusGoal)), [focusGoal]);
-
   const ownerUid = useMemo(
-    () => String((focusGoal as any)?.ownerUid || goals.find((g) => !!(g as any)?.ownerUid)?.ownerUid || '').trim(),
+    () => String((focusGoal as any)?.ownerUid || goals.find((goal) => !!(goal as any)?.ownerUid)?.ownerUid || '').trim(),
     [focusGoal, goals]
   );
+
+  const focusRootGoalIds = useMemo(() => (
+    Array.isArray(focusGoal.focusRootGoalIds) && focusGoal.focusRootGoalIds.length > 0
+      ? focusGoal.focusRootGoalIds
+      : focusGoal.goalIds || []
+  ), [focusGoal.focusRootGoalIds, focusGoal.goalIds]);
+
+  const focusLeafGoalIds = useMemo(() => (
+    Array.isArray(focusGoal.focusLeafGoalIds) && focusGoal.focusLeafGoalIds.length > 0
+      ? focusGoal.focusLeafGoalIds
+      : focusGoal.goalIds || []
+  ), [focusGoal.focusLeafGoalIds, focusGoal.goalIds]);
 
   useEffect(() => {
     if (!ownerUid) {
@@ -99,17 +112,17 @@ export const FocusGoalCountdownBanner: React.FC<FocusGoalCountdownBannerProps> =
     }
     const metricsQuery = query(collection(db, 'goal_kpi_metrics'), where('ownerUid', '==', ownerUid));
     const unsubscribe = onSnapshot(metricsQuery, (snap) => {
-      const map: Record<string, GoalKpiMetricRow> = {};
+      const next: Record<string, GoalKpiMetricRow> = {};
       snap.docs.forEach((docSnap) => {
         const data = docSnap.data() as any;
         const goalId = String(data?.goalId || '').trim();
         if (!goalId || !isGoalInHierarchySet(goalId, goals, protectedGoalIds)) return;
-        map[goalId] = {
+        next[goalId] = {
           resolvedKpis: Array.isArray(data?.resolvedKpis) ? data.resolvedKpis : [],
           updatedAt: data?.updatedAt || null,
         };
       });
-      setGoalKpiMetrics(map);
+      setGoalKpiMetrics(next);
     }, () => {
       setGoalKpiMetrics({});
     });
@@ -164,8 +177,13 @@ export const FocusGoalCountdownBanner: React.FC<FocusGoalCountdownBannerProps> =
 
   // Get selected goals
   const selectedGoals = useMemo(
-    () => goals.filter((goal) => isGoalInHierarchySet(goal.id, goals, protectedGoalIds)),
-    [goals, protectedGoalIds]
+    () => goals.filter(g => focusLeafGoalIds.includes(g.id)),
+    [goals, focusLeafGoalIds]
+  );
+
+  const rootGoals = useMemo(
+    () => goals.filter((goal) => focusRootGoalIds.includes(goal.id)),
+    [goals, focusRootGoalIds]
   );
 
   // Get stories linked to focus goals
@@ -181,14 +199,6 @@ export const FocusGoalCountdownBanner: React.FC<FocusGoalCountdownBannerProps> =
     const progress = total > 0 ? Math.round((done / total) * 100) : 0;
     return { total, done, progress };
   }, [focusStories]);
-
-  // Calculate overall goal progress
-  const goalProgress = useMemo(() => {
-    const total = selectedGoals.length;
-    const done = selectedGoals.filter(g => g.status === 2).length;
-    const progress = total > 0 ? Math.round((done / total) * 100) : 0;
-    return { total, done, progress };
-  }, [selectedGoals]);
 
   const alignmentStats = useMemo(() => {
     const nonFocus = goals.filter((goal) => !isGoalInHierarchySet(goal.id, goals, protectedGoalIds) && goal.status !== 2);
@@ -296,7 +306,7 @@ export const FocusGoalCountdownBanner: React.FC<FocusGoalCountdownBannerProps> =
             </div>
             <div>
               <h5 style={{ margin: 0, fontWeight: '700' }}>
-                {getUrgencyIcon(urgency)} Focus Goals
+                {getUrgencyIcon(urgency)} {focusGoal.title?.trim() || 'Focus Goals'}
               </h5>
               <small style={{ color: '#666' }}>
                 {focusGoal.timeframe === 'sprint'
@@ -358,27 +368,27 @@ export const FocusGoalCountdownBanner: React.FC<FocusGoalCountdownBannerProps> =
           <Col md={4}>
             <div style={{ textAlign: 'center', padding: '12px', background: '#f8f9fa', borderRadius: '8px' }}>
               <div style={{ fontSize: '18px', fontWeight: '700', color: '#0066cc' }}>
-                {selectedGoals.length}
+                {rootGoals.length}
               </div>
-              <small style={{ color: '#666' }}>Focus Goals</small>
+              <small style={{ color: '#666' }}>Programs</small>
             </div>
           </Col>
           <Col md={4}>
             <div style={{ textAlign: 'center', padding: '12px', background: '#f8f9fa', borderRadius: '8px' }}>
               <div style={{ fontSize: '18px', fontWeight: '700', color: '#28a745' }}>
-                {storyStats.total}
+                {selectedGoals.length}
               </div>
-              <small style={{ color: '#666' }}>Stories</small>
+              <small style={{ color: '#666' }}>Leaf Goals</small>
             </div>
           </Col>
           <Col md={4}>
             <div style={{ textAlign: 'center', padding: '12px', background: '#f8f9fa', borderRadius: '8px' }}>
               <div style={{ fontSize: '18px', fontWeight: '700', color: '#fd7e14' }}>
-                {goalProgress.total > 0
-                  ? `${goalProgress.done}/${goalProgress.total}`
+                {storyStats.total > 0
+                  ? `${storyStats.done}/${storyStats.total}`
                   : '—'}
               </div>
-              <small style={{ color: '#666' }}>Goals Complete</small>
+              <small style={{ color: '#666' }}>Stories Complete</small>
             </div>
           </Col>
         </Row>
@@ -392,14 +402,27 @@ export const FocusGoalCountdownBanner: React.FC<FocusGoalCountdownBannerProps> =
           fontSize: '12px',
           color: '#495057'
         }}>
-          <strong>Focus Alignment:</strong> {selectedGoals.length} goals selected • {alignmentStats.deferredNonFocus}/{alignmentStats.nonFocusCount} non-focus goals deferred ({alignmentStats.alignedPercent}% aligned)
+          <strong>Focus Alignment:</strong> {rootGoals.length} program goal{rootGoals.length === 1 ? '' : 's'} • {selectedGoals.length} execution leaf goal{selectedGoals.length === 1 ? '' : 's'} • {alignmentStats.deferredNonFocus}/{alignmentStats.nonFocusCount} non-focus goals deferred ({alignmentStats.alignedPercent}% aligned)
         </div>
+
+        {rootGoals.length > 0 && (
+          <div style={{ marginBottom: '16px' }}>
+            <h6 style={{ fontWeight: '600', marginBottom: '8px' }}>Program Goals</h6>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              {rootGoals.map((goal) => (
+                <Badge key={goal.id} bg="light" text="dark" pill style={{ padding: '8px 10px', fontWeight: 500 }}>
+                  {getGoalDisplayPath(goal.id, goals)}
+                </Badge>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Goals List */}
         <div style={{ marginBottom: '16px' }}>
           <h6 style={{ fontWeight: '600', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
             <Target size={16} />
-            Selected Goals
+            Execution Leaf Goals
           </h6>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '12px' }}>
             {selectedGoals.map(goal => {
@@ -443,14 +466,13 @@ export const FocusGoalCountdownBanner: React.FC<FocusGoalCountdownBannerProps> =
                       </div>
                     )}
 
-                    {/* Fitness KPIs if present (legacy goal.kpis quick status) */}
+                    {/* Fitness KPIs if present */}
                     {goal.kpis && goal.kpis.length > 0 && (
                       <div style={{ marginTop: '8px', fontSize: '11px' }}>
                         <FitnessKPIQuickStatus kpis={goal.kpis} />
                       </div>
                     )}
 
-                    {/* KPI mini charts from goal_kpi_metrics */}
                     {resolvedKpis.length > 0 && (
                       <div style={{ marginTop: '8px', fontSize: '11px' }}>
                         <div style={{ color: '#495057', fontWeight: 600, marginBottom: '4px' }}>
@@ -540,6 +562,11 @@ export const FocusGoalCountdownBanner: React.FC<FocusGoalCountdownBannerProps> =
           {onEdit && (
             <Button size="sm" variant="outline-primary" onClick={onEdit}>
               Edit Focus Goals
+            </Button>
+          )}
+          {onDelete && (
+            <Button size="sm" variant="outline-danger" onClick={onDelete}>
+              Delete Focus Set
             </Button>
           )}
           <Button

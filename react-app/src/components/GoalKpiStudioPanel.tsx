@@ -5,6 +5,7 @@ import { BarChart3, Pin, Plus, Target } from 'lucide-react';
 import { db } from '../firebase';
 import type { Goal } from '../types';
 import type { Kpi } from '../types/KpiTypes';
+import { formatKpiValue, getKpiStateBadge, getKpiStateLabel, toKpiNumber } from '../utils/kpiDisplay';
 
 interface GoalMetricDoc {
   resolvedKpis?: Array<Record<string, any>>;
@@ -15,27 +16,16 @@ interface GoalKpiStudioPanelProps {
   goals: Goal[];
   title?: string;
   subtitle?: string;
+  emptyMessage?: string;
   onCreateKpi: (goalId?: string) => void;
 }
-
-const toNumber = (value: any): number | null => {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
-};
-
-const formatValue = (value: number | null, unit: string) => {
-  if (value == null) return '—';
-  if (unit === 'GBP') return `£${Math.round(value).toLocaleString()}`;
-  if (unit === '%') return `${Math.round(value)}%`;
-  if (unit === 'km' || unit === 'hours') return `${Number(value.toFixed(1))}`;
-  return `${Math.round(value)}`;
-};
 
 const GoalKpiStudioPanel: React.FC<GoalKpiStudioPanelProps> = ({
   ownerUid,
   goals,
-  title = 'KPI Studio',
-  subtitle = 'Map goal KPIs to real sources and dashboard visuals.',
+  title = 'Focus KPI Studio',
+  subtitle = 'Design KPIs here, then review their live metrics on focus cards and the dashboard.',
+  emptyMessage = 'No goals available for KPI design.',
   onCreateKpi,
 }) => {
   const [metricsByGoal, setMetricsByGoal] = useState<Record<string, GoalMetricDoc>>({});
@@ -86,13 +76,13 @@ const GoalKpiStudioPanel: React.FC<GoalKpiStudioPanelProps> = ({
         <div className="d-flex align-items-center gap-2">
           <Badge bg={totalKpis > 0 ? 'primary' : 'secondary'} pill>{totalKpis} KPI{totalKpis === 1 ? '' : 's'}</Badge>
           <Button size="sm" variant="outline-primary" onClick={() => onCreateKpi()}>
-            <Plus size={14} className="me-1" /> Add KPI
+            <Plus size={14} className="me-1" /> Design KPI
           </Button>
         </div>
       </Card.Header>
       <Card.Body className="p-3">
         {goalsWithKpis.length === 0 ? (
-          <div className="text-muted small">No goals available for KPI design.</div>
+          <div className="text-muted small">{emptyMessage}</div>
         ) : (
           <div className="d-flex flex-column gap-3">
             {goalsWithKpis.map(({ goal, kpis, resolved }) => (
@@ -103,7 +93,7 @@ const GoalKpiStudioPanel: React.FC<GoalKpiStudioPanelProps> = ({
                     <div className="text-muted small">Theme {goal.theme} · {kpis.length} KPI{kpis.length === 1 ? '' : 's'}</div>
                   </div>
                   <Button size="sm" variant="outline-secondary" onClick={() => onCreateKpi(goal.id)}>
-                    <Plus size={14} className="me-1" /> Design KPI
+                    <Plus size={14} className="me-1" /> {kpis.length > 0 ? 'Edit KPIs' : 'Design KPI'}
                   </Button>
                 </div>
 
@@ -115,10 +105,11 @@ const GoalKpiStudioPanel: React.FC<GoalKpiStudioPanelProps> = ({
                       const resolvedRow = resolved.find((entry) => String(entry?.id || entry?.metricKey || entry?.name || '') === String(kpi.id || kpi.metricId || kpi.name || ''))
                         || resolved.find((entry) => String(entry?.name || '').trim() === String(kpi.name || '').trim())
                         || {};
-                      const progressPct = toNumber(resolvedRow?.progressPct ?? (kpi as any).progress);
-                      const currentValue = toNumber(resolvedRow?.currentValue ?? (kpi as any).current);
-                      const targetValue = toNumber(resolvedRow?.targetNormalized ?? resolvedRow?.target ?? kpi.target);
+                      const progressPct = toKpiNumber(resolvedRow?.progressPct ?? (kpi as any).progress);
+                      const currentValue = toKpiNumber(resolvedRow?.currentValue ?? (kpi as any).current);
+                      const targetValue = toKpiNumber(resolvedRow?.targetNormalized ?? resolvedRow?.target ?? kpi.target);
                       const unit = String(resolvedRow?.unit || kpi.unit || '');
+                      const stateBadge = getKpiStateBadge(resolvedRow?.healthy === true, resolvedRow?.stale === true || resolvedRow?.healthy === false);
 
                       return (
                         <div key={kpi.id} className="border rounded p-2">
@@ -132,6 +123,7 @@ const GoalKpiStudioPanel: React.FC<GoalKpiStudioPanelProps> = ({
                               </div>
                             </div>
                             <div className="d-flex align-items-center gap-2 flex-wrap">
+                              <Badge bg={stateBadge.bg}>{stateBadge.label}</Badge>
                               <Badge bg={(kpi as any).designerMode === 'registry' ? 'info' : 'primary'}>
                                 {(kpi as any).designerMode === 'registry' ? 'Registry' : 'Curated'}
                               </Badge>
@@ -145,13 +137,13 @@ const GoalKpiStudioPanel: React.FC<GoalKpiStudioPanelProps> = ({
 
                           <div className="d-flex align-items-center justify-content-between gap-2 mt-2 flex-wrap">
                             <div className="small">
-                              <strong>{formatValue(currentValue, unit)}</strong>
+                              <strong>{formatKpiValue(currentValue, unit)}</strong>
                               {' / '}
-                              {formatValue(targetValue, unit)}
+                              {formatKpiValue(targetValue, unit)}
                             </div>
                             <div className="text-muted small d-flex align-items-center gap-1">
                               <Target size={12} />
-                              {progressPct != null ? `${Math.round(progressPct)}%` : 'Waiting for sync'}
+                              {getKpiStateLabel(progressPct, resolvedRow?.healthy === true, resolvedRow?.stale === true || resolvedRow?.healthy === false)}
                             </div>
                           </div>
 

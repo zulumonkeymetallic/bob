@@ -57,19 +57,19 @@ BUILD_USER=$(whoami)
 # ============================================================================
 
 log_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
+    echo -e "${BLUE}[INFO]${NC} $1" >&2
 }
 
 log_success() {
-    echo -e "${GREEN}[✓]${NC} $1"
+    echo -e "${GREEN}[✓]${NC} $1" >&2
 }
 
 log_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
+    echo -e "${RED}[ERROR]${NC} $1" >&2
 }
 
 log_warning() {
-    echo -e "${YELLOW}[!]${NC} $1"
+    echo -e "${YELLOW}[!]${NC} $1" >&2
 }
 
 get_git_commit() {
@@ -118,7 +118,7 @@ build_web() {
     
     # Install deps
     log_info "Installing dependencies..."
-    npm install --prefix react-app 2>&1 | tail -5
+    npm install --prefix react-app 2>&1 | tail -5 >&2
     
     # Build React
     log_info "Building React application..."
@@ -126,7 +126,7 @@ build_web() {
     REACT_APP_BUILD_ID="$BUILD_ID" \
     REACT_APP_VERSION="$web_version" \
     REACT_APP_GIT_COMMIT="$web_commit" \
-    npm run build --prefix react-app 2>&1 | tail -10
+    npm run build --prefix react-app 2>&1 | tail -10 >&2
     
     # Inject build info into index.html
     log_info "Injecting build metadata..."
@@ -147,11 +147,11 @@ EOF
     if [ "$DRY_RUN" != "true" ]; then
         # Deploy to Firebase Hosting
         log_info "Deploying to Firebase Hosting..."
-        firebase deploy --only hosting --force 2>&1 | grep -E "Deploy complete|Error" | head -5
+        firebase deploy --only hosting --force 2>&1 | grep -E "Deploy complete|Error" | head -5 >&2
         
         # Deploy functions
         log_info "Deploying Cloud Functions..."
-        firebase deploy --only functions --force 2>&1 | grep -E "Deploy complete|Error|functions" | head -10
+        firebase deploy --only functions --force 2>&1 | grep -E "Deploy complete|Error|functions" | head -10 >&2
     else
         log_warning "DRY RUN: Skipping Firebase deployment"
     fi
@@ -162,7 +162,7 @@ EOF
     log_success "Web build complete (${build_duration}s)"
     
     # Return build info
-    echo "$web_version:$web_commit:${build_duration}s:$BUILD_TIMESTAMP"
+    printf '%s\n' "$web_version|$web_commit|${build_duration}s|$BUILD_TIMESTAMP"
 }
 
 build_ios() {
@@ -192,7 +192,7 @@ build_ios() {
             -scheme BOB \
             -destination 'platform=macOS' \
             -derivedDataPath /tmp/bob-ios-build \
-            -configuration Release 2>&1 | grep -E "Build complete|error:" | head -5
+            -configuration Release 2>&1 | grep -E "Build complete|error:" | head -5 >&2
         
         # Copy app to Applications
         log_info "Installing to Applications..."
@@ -209,7 +209,7 @@ build_ios() {
     
     log_success "iOS build complete (${build_duration}s)"
     
-    echo "$ios_version:$ios_commit:${build_duration}s:$BUILD_TIMESTAMP"
+    printf '%s\n' "$ios_version|$ios_commit|${build_duration}s|$BUILD_TIMESTAMP"
 }
 
 build_mac() {
@@ -226,18 +226,18 @@ build_mac() {
         # Build with Cargo or Swift depending on project setup
         if [ -f "Cargo.toml" ]; then
             log_info "Building Rust project..."
-            cargo build --release 2>&1 | tail -10
+            cargo build --release 2>&1 | tail -10 >&2
             local binary_path="target/release/bob-mac-sync"
         else
             log_info "Building Swift project..."
-            swift build -c release 2>&1 | tail -10
+            swift build -c release 2>&1 | tail -10 >&2
             local binary_path=".build/release/bob-mac-sync"
         fi
         
         # Code sign
         log_info "Code signing..."
         if [ -f "$binary_path" ]; then
-            codesign -s - "$binary_path" 2>&1 | grep -v "replacing existing signature" || true
+            codesign -s - "$binary_path" 2>&1 | grep -v "replacing existing signature" >&2 || true
             log_success "Binary signed"
         fi
         
@@ -262,7 +262,7 @@ build_mac() {
     
     log_success "Mac build complete (${build_duration}s)"
     
-    echo "$mac_version:$mac_commit:${build_duration}s:$BUILD_TIMESTAMP"
+    printf '%s\n' "$mac_version|$mac_commit|${build_duration}s|$BUILD_TIMESTAMP"
 }
 
 # ============================================================================
@@ -311,7 +311,7 @@ create_build_pr() {
     local current_commit=$(git rev-parse --short HEAD)
     
     log_info "PR Summary:"
-    echo "$pr_body"
+    echo "$pr_body" >&2
     
     if command -v gh &> /dev/null; then
         log_info "Creating GitHub PR comment..."
@@ -326,33 +326,47 @@ create_build_pr() {
 
 save_build_manifest() {
     mkdir -p "$BUILD_LOGS_DIR"
-    
-    local manifest="{
-  \"buildId\": \"$BUILD_ID\",
-  \"timestamp\": \"$BUILD_TIMESTAMP\",
-  \"date\": \"$BUILD_DATE\",
-  \"branch\": \"$CURRENT_BRANCH\",
-  \"user\": \"$BUILD_USER\",
-  \"versions\": {
-    \"web\": \"$WEB_VERSION\",
-    \"ios\": \"$IOS_VERSION\",
-    \"mac\": \"$MAC_VERSION\"
-  },
-  \"commits\": {
-    \"web\": \"$WEB_COMMIT\",
-    \"ios\": \"$IOS_COMMIT\",
-    \"mac\": \"$MAC_COMMIT\"
-  },
-  \"durations\": {
-    \"web\": \"$WEB_DURATION\",
-    \"ios\": \"$IOS_DURATION\",
-    \"mac\": \"$MAC_DURATION\"
-  },
-  \"dryRun\": $DRY_RUN,
-  \"beta\": $IS_BETA
-}"
-    
-    echo "$manifest" | jq '.' > "$BUILD_MANIFEST_FILE" 2>/dev/null || echo "$manifest" > "$BUILD_MANIFEST_FILE"
+    jq -n \
+      --arg buildId "$BUILD_ID" \
+      --arg timestamp "$BUILD_TIMESTAMP" \
+      --arg date "$BUILD_DATE" \
+      --arg branch "$CURRENT_BRANCH" \
+      --arg user "$BUILD_USER" \
+      --arg webVersion "${WEB_VERSION:-}" \
+      --arg iosVersion "${IOS_VERSION:-}" \
+      --arg macVersion "${MAC_VERSION:-}" \
+      --arg webCommit "${WEB_COMMIT:-}" \
+      --arg iosCommit "${IOS_COMMIT:-}" \
+      --arg macCommit "${MAC_COMMIT:-}" \
+      --arg webDuration "${WEB_DURATION:-}" \
+      --arg iosDuration "${IOS_DURATION:-}" \
+      --arg macDuration "${MAC_DURATION:-}" \
+      --argjson dryRun "$DRY_RUN" \
+      --argjson beta "$IS_BETA" \
+      '{
+        buildId: $buildId,
+        timestamp: $timestamp,
+        date: $date,
+        branch: $branch,
+        user: $user,
+        versions: {
+          web: $webVersion,
+          ios: $iosVersion,
+          mac: $macVersion
+        },
+        commits: {
+          web: $webCommit,
+          ios: $iosCommit,
+          mac: $macCommit
+        },
+        durations: {
+          web: $webDuration,
+          ios: $iosDuration,
+          mac: $macDuration
+        },
+        dryRun: $dryRun,
+        beta: $beta
+      }' > "$BUILD_MANIFEST_FILE"
     log_success "Manifest saved: $BUILD_MANIFEST_FILE"
 }
 
@@ -446,18 +460,18 @@ log_info "========================================="
 
 case $BUILD_TARGET in
     web)
-        read -r WEB_VERSION WEB_COMMIT WEB_DURATION WEB_TIMESTAMP < <(build_web)
+        IFS='|' read -r WEB_VERSION WEB_COMMIT WEB_DURATION WEB_TIMESTAMP < <(build_web)
         ;;
     ios)
-        read -r IOS_VERSION IOS_COMMIT IOS_DURATION IOS_TIMESTAMP < <(build_ios)
+        IFS='|' read -r IOS_VERSION IOS_COMMIT IOS_DURATION IOS_TIMESTAMP < <(build_ios)
         ;;
     mac)
-        read -r MAC_VERSION MAC_COMMIT MAC_DURATION MAC_TIMESTAMP < <(build_mac)
+        IFS='|' read -r MAC_VERSION MAC_COMMIT MAC_DURATION MAC_TIMESTAMP < <(build_mac)
         ;;
     all)
-        read -r WEB_VERSION WEB_COMMIT WEB_DURATION WEB_TIMESTAMP < <(build_web)
-        read -r IOS_VERSION IOS_COMMIT IOS_DURATION IOS_TIMESTAMP < <(build_ios)
-        read -r MAC_VERSION MAC_COMMIT MAC_DURATION MAC_TIMESTAMP < <(build_mac)
+        IFS='|' read -r WEB_VERSION WEB_COMMIT WEB_DURATION WEB_TIMESTAMP < <(build_web)
+        IFS='|' read -r IOS_VERSION IOS_COMMIT IOS_DURATION IOS_TIMESTAMP < <(build_ios)
+        IFS='|' read -r MAC_VERSION MAC_COMMIT MAC_DURATION MAC_TIMESTAMP < <(build_mac)
         ;;
 esac
 

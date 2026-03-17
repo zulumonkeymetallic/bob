@@ -18,7 +18,7 @@ import ConfirmSprintChangesModal from './ConfirmSprintChangesModal';
 import './GoalRoadmapV3.css';
 import { useGlobalThemes } from '../../hooks/useGlobalThemes';
 import GLOBAL_THEMES, { migrateThemeValue, type GlobalTheme } from '../../constants/globalThemes';
-import { buildGoalTimelineImpactPlan, snapPlannerGoalMoveRange } from './goalTimelineImpact';
+import { buildGoalTimelineImpactPlan, snapPlannerGoalMoveRange, type GoalTimelineAffectedStory } from './goalTimelineImpact';
 
 type Zoom = 'weeks' | 'months' | 'quarters' | 'years';
 type AxisLabel = { label: string; subLabel?: string; x: number; width: number };
@@ -90,16 +90,7 @@ const GoalRoadmapV3: React.FC = () => {
     originalStart: number;
     originalEnd: number;
     themeId?: number | null;
-    affectedStories: Array<{
-      id: string;
-      ref: string;
-      title: string;
-      plannedSprintId?: string;
-      plannedSprintName?: string;
-      recommendedSprintId?: string;
-      recommendedSprintName?: string;
-      impactedTaskCount?: number;
-    }>;
+    affectedStories: GoalTimelineAffectedStory[];
   } | null>(null);
   const [showSprints, setShowSprints] = useState(true);
   const [snapEnabled, setSnapEnabled] = useState(true);

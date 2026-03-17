@@ -1,24 +1,28 @@
 import React, { useState, useEffect, useCallback, useMemo, useLayoutEffect, useRef } from 'react';
-import { Card, Badge, Button, Dropdown, Form } from 'react-bootstrap';
-import { Edit3, Trash2, ChevronDown, Target, Calendar, Activity, Clock } from 'lucide-react';
+import { Card, Badge, Button, Form, Toast, ToastContainer } from 'react-bootstrap';
+import { Edit3, Trash2, Target, Calendar, Activity, Clock, Clock3 } from 'lucide-react';
 import { collection, query, where, orderBy, limit, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
+import { usePersona } from '../contexts/PersonaContext';
 import { useSidebar } from '../contexts/SidebarContext';
 import { Story, Goal } from '../types';
-import { getStatusName, getPriorityColor } from '../utils/statusHelpers';
+import { getStatusName } from '../utils/statusHelpers';
 import { themeVars } from '../utils/themeVars';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { GLOBAL_THEMES, migrateThemeValue, type GlobalTheme } from '../constants/globalThemes';
 import { displayRefForEntity, validateRef } from '../utils/referenceGenerator';
 import { ActivityStreamService } from '../services/ActivityStreamService';
-import { priorityLabel, storyStatusText } from '../utils/storyCardFormatting';
+import { priorityLabel, priorityPillClass, storyStatusText } from '../utils/storyCardFormatting';
+import { getManualPriorityLabel, getManualPriorityRank } from '../utils/manualPriority';
 import DeferItemModal from './DeferItemModal';
+import NewCalendarEventModal, { type BlockFormState, buildCalendarComposerInitialValues } from './planner/NewCalendarEventModal';
+import '../styles/KanbanCards.css';
 
 interface StoriesCardViewProps {
   stories: Story[];
   goals: Goal[];
-  onStoryUpdate: (storyId: string, updates: any) => void;
+  onStoryUpdate: (storyId: string, updates: any) => void | Promise<void>;
   onStoryDelete: (storyId: string) => void;
   onStorySelect: (story: Story) => void;
   onEditStory: (story: Story) => void;
@@ -35,6 +39,7 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
   selectedStoryId
 }) => {
   const { currentUser } = useAuth();
+  const { currentPersona } = usePersona();
   const { showSidebar } = useSidebar();
   const { themes: globalThemes } = useGlobalThemes();
   const [latestActivities, setLatestActivities] = useState<{ [storyId: string]: any }>({});
@@ -60,6 +65,12 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
   const [rowSpans, setRowSpans] = useState<Record<string, number>>({});
   const gridRef = useRef<HTMLDivElement | null>(null);
   const [deferStory, setDeferStory] = useState<Story | null>(null);
+  const [scheduleStory, setScheduleStory] = useState<Story | null>(null);
+  const [feedback, setFeedback] = useState<{ show: boolean; message: string; variant: 'success' | 'danger' | 'info' }>({
+    show: false,
+    message: '',
+    variant: 'info',
+  });
 
   useEffect(() => {
     try {
@@ -124,37 +135,11 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
     return defaultTheme;
   };
 
-  const hexToRgb = (hex: string) => {
-    const value = hex.replace('#', '');
-    const full = value.length === 3 ? value.split('').map(c => c + c).join('') : value;
-    const bigint = parseInt(full, 16);
-    const r = (bigint >> 16) & 255;
-    const g = (bigint >> 8) & 255;
-    const b = bigint & 255;
-    return { r, g, b };
-  };
-
-  const rgbToHex = (r: number, g: number, b: number) => `#${[r, g, b]
-    .map(v => {
-      const clamped = Math.max(0, Math.min(255, Math.round(v)));
-      return clamped.toString(16).padStart(2, '0');
-    })
-    .join('')}`;
-
   const withAlpha = (color: string, alpha: number) => {
     const pct = Math.round(Math.max(0, Math.min(1, alpha)) * 100);
     if (pct <= 0) return 'transparent';
     if (pct >= 100) return color;
     return `color-mix(in srgb, ${color} ${pct}%, transparent)`;
-  };
-
-  const lightenColor = (hex: string, amount: number) => {
-    const { r, g, b } = hexToRgb(hex);
-    const factor = Math.max(0, Math.min(1, amount));
-    const nr = r + (255 - r) * factor;
-    const ng = g + (255 - g) * factor;
-    const nb = b + (255 - b) * factor;
-    return rgbToHex(nr, ng, nb);
   };
 
   const getGoalForStory = (storyGoalId: string): Goal | undefined => {
@@ -268,14 +253,45 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
     showSidebar(story, 'story');
   };
 
-  const handleStatusChange = (storyId: string, newStatus: 'Backlog' | 'In Progress' | 'Done' | 'Blocked') => {
-    const numericStatus = newStatus === 'Backlog' ? 0 : newStatus === 'In Progress' ? 2 : newStatus === 'Done' ? 4 : 3;
-    onStoryUpdate(storyId, { status: numericStatus });
+  const cycleStoryStatus = (story: Story) => {
+    const sequence = [0, 2, 4, 3];
+    const current = Number((story as any).status ?? 0);
+    const currentIndex = sequence.indexOf(current);
+    const nextValue = sequence[(currentIndex + 1) % sequence.length];
+    onStoryUpdate(story.id, { status: nextValue });
   };
 
-  const handlePriorityChange = (storyId: string, newPriority: number) => {
-    onStoryUpdate(storyId, { priority: newPriority });
+  const cycleStoryPriority = (story: Story) => {
+    const sequence = [0, 1, 2, 3, 4];
+    const current = Number((story as any).priority ?? 0);
+    const currentIndex = sequence.indexOf(current);
+    const nextValue = sequence[(currentIndex + 1) % sequence.length];
+    onStoryUpdate(story.id, { priority: nextValue });
   };
+
+  const showToast = (message: string, variant: 'success' | 'danger' | 'info' = 'info') => {
+    setFeedback({ show: true, message, variant });
+  };
+
+  const scheduleInitialValues = useMemo(() => {
+    if (!scheduleStory) return undefined;
+    const progressPct = Number((scheduleStory as any).progressPct || 0);
+    const points = Number((scheduleStory as any).points || 0);
+    const pointsRemaining = Number.isFinite(points) && points > 0
+      ? Math.max(0, Math.ceil((points * (1 - Math.min(100, Math.max(0, progressPct)) / 100)) * 10) / 10)
+      : 0;
+    return buildCalendarComposerInitialValues({
+      title: scheduleStory.title || 'Focus block',
+      rationale: 'Manual schedule from story card',
+      persona: ((scheduleStory as any).persona || currentPersona || 'personal') as 'personal' | 'work',
+      theme: String((scheduleStory as any).theme || 'General'),
+      category: (((scheduleStory as any).persona || currentPersona) === 'work' ? 'Work (Main Gig)' : 'Wellbeing') as any,
+      storyId: scheduleStory.id,
+      points: pointsRemaining,
+      aiScore: Number.isFinite(Number((scheduleStory as any).aiCriticalityScore)) ? Number((scheduleStory as any).aiCriticalityScore) : null,
+      aiReason: String((scheduleStory as any).aiReason || (scheduleStory as any).aiPriorityReason || '').trim() || null,
+    }) as Partial<BlockFormState>;
+  }, [currentPersona, scheduleStory]);
 
   const toDate = (value: any) => {
     if (!value) return null;
@@ -285,12 +301,20 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
     return Number.isNaN(parsed.getTime()) ? null : parsed;
   };
 
-  const statusColors = {
-    Backlog: 'var(--muted)',
-    'In Progress': 'var(--green)',
-    Done: 'var(--brand)',
-    Blocked: 'var(--red)'
-  } as const;
+  const statusPillClass = (label: string) => {
+    const normalized = String(label).toLowerCase();
+    const base = 'kanban-card__meta-pill';
+    if (normalized.includes('done')) return `${base} kanban-card__meta-pill--success`;
+    if (normalized.includes('progress')) return `${base} kanban-card__meta-pill--orange`;
+    if (normalized.includes('block')) return `${base} kanban-card__meta-pill--danger`;
+    return base;
+  };
+
+  const formatDateChip = (value: any) => {
+    const date = toDate(value);
+    if (!date) return null;
+    return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  };
 
   if (stories.length === 0) {
     return (
@@ -330,14 +354,11 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
           const themeDef = resolveTheme(themeValue);
           const themeColor = themeDef.color || (themeVars.brand as string);
           const themeTextColor = themeDef.textColor || (themeVars.onAccent as string);
-          const gradientStart = lightenColor(themeColor, 0.4);
-          const gradientEnd = lightenColor(themeColor, 0.75);
-          const cardBackground = `linear-gradient(165deg, ${gradientStart} 0%, ${gradientEnd} 100%)`;
           const textColor = themeVars.text as string;
           const mutedTextColor = themeVars.muted as string;
           const aiScore = Number((story as any).aiCriticalityScore ?? NaN);
           const storyPriorityText = priorityLabel(story.priority, `P${story.priority ?? 3}`);
-          const storyPriorityVariant = getPriorityColor(story.priority);
+          const manualPriorityLabel = getManualPriorityLabel(story);
           const statusLabel = storyStatusText(story.status);
           const latestActivity = latestActivities[story.id];
           const showActivity = showUpdates && !!latestActivity;
@@ -346,6 +367,7 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
           const updatedAt = toDate((story as any).updatedAt);
           const rowSpan = rowSpans[story.id];
           const nextBlock = nextBlocks[story.id];
+          const dueChip = formatDateChip((story as any).targetDate || (story as any).dueDate || (story as any).plannedStartDate);
 
           const refLabel = (() => {
             const shortRef = (story as any).referenceNumber || story.ref;
@@ -376,14 +398,13 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
                   overflow: 'hidden',
                   transition: 'all 0.3s ease',
                   cursor: 'pointer',
-                  background: cardBackground,
+                  background: 'var(--bs-body-bg, #fff)',
                   color: textColor,
                   display: 'flex',
                   flexDirection: 'column'
                 }}
                 onClick={() => {
                   onStorySelect(story);
-                  try { showSidebar(story, 'story'); } catch { }
                 }}
                 onMouseEnter={(e) => {
                   if (selectedStoryId !== story.id) {
@@ -398,18 +419,30 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
                   }
                 }}
               >
-                <div style={{ height: '6px', backgroundColor: themeColor }} />
-                <Card.Body style={{ padding: '14px 12px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <Card.Body style={{ padding: '14px 12px', display: 'flex', flexDirection: 'column', gap: '10px', borderLeft: `4px solid ${themeColor}` }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.4px', color: mutedTextColor }}>
                         {refLabel}
                       </div>
-                      <h5 style={{ margin: '4px 0 0 0', fontSize: '16px', fontWeight: 600, lineHeight: '1.3', color: textColor }}>
+                      <h5 className="kanban-card__title" style={{ margin: '4px 0 0 0', fontSize: '16px', fontWeight: 600, lineHeight: '1.3', color: textColor }}>
                         {story.title}
                       </h5>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <Button
+                        variant="link"
+                        size="sm"
+                        className="p-0"
+                        style={{ width: 24, height: 24, color: textColor }}
+                        title="Schedule story"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setScheduleStory(story);
+                        }}
+                      >
+                        <Calendar size={14} />
+                      </Button>
                       <Button
                         variant="link"
                         size="sm"
@@ -433,44 +466,39 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
                       >
                         <Edit3 size={14} />
                       </Button>
-                      <Dropdown onClick={(e) => e.stopPropagation()}>
-                        <Dropdown.Toggle
-                          variant="outline-secondary"
-                          size="sm"
-                          style={{ border: 'none', padding: '4px 6px', color: textColor }}
-                        >
-                          <ChevronDown size={16} />
-                        </Dropdown.Toggle>
-                        <Dropdown.Menu style={{ zIndex: 2000 }} popperConfig={{ strategy: 'fixed' }}>
-                          <Dropdown.Header>Change Status</Dropdown.Header>
-                          <Dropdown.Item onClick={() => handleStatusChange(story.id, 'Backlog')}>Backlog</Dropdown.Item>
-                          <Dropdown.Item onClick={() => handleStatusChange(story.id, 'In Progress')}>In Progress</Dropdown.Item>
-                          <Dropdown.Item onClick={() => handleStatusChange(story.id, 'Done')}>Done</Dropdown.Item>
-                          <Dropdown.Item onClick={() => handleStatusChange(story.id, 'Blocked')}>Blocked</Dropdown.Item>
-                          <Dropdown.Divider />
-                          <Dropdown.Header>Change Priority</Dropdown.Header>
-                          <Dropdown.Item onClick={() => handlePriorityChange(story.id, 4)}>Critical (4)</Dropdown.Item>
-                          <Dropdown.Item onClick={() => handlePriorityChange(story.id, 3)}>High (3)</Dropdown.Item>
-                          <Dropdown.Item onClick={() => handlePriorityChange(story.id, 2)}>Medium (2)</Dropdown.Item>
-                          <Dropdown.Item onClick={() => handlePriorityChange(story.id, 1)}>Low (1)</Dropdown.Item>
-                          <Dropdown.Divider />
-                          <Dropdown.Item onClick={() => setDeferStory(story)}>
-                            Defer intelligently
-                          </Dropdown.Item>
-                          <Dropdown.Item
-                            className="text-danger"
-                            onClick={() => {
-                              if (window.confirm('Delete this story? This cannot be undone.')) {
-                                onStoryDelete(story.id);
-                              }
-                            }}
-                          >
-                            <Trash2 size={14} className="me-2" />
-                            Delete Story
-                          </Dropdown.Item>
-                        </Dropdown.Menu>
-                      </Dropdown>
                     </div>
+                  </div>
+
+                  <div className="d-flex align-items-center gap-2 flex-wrap">
+                    <Badge bg="info">Story</Badge>
+                    <button
+                      type="button"
+                      className={statusPillClass(statusLabel)}
+                      style={{ appearance: 'none', backgroundClip: 'padding-box', cursor: 'pointer' }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        cycleStoryStatus(story);
+                      }}
+                      title="Tap to cycle status"
+                    >
+                      {statusLabel}
+                    </button>
+                    <button
+                      type="button"
+                      className={priorityPillClass(story.priority ?? null)}
+                      style={{ appearance: 'none', backgroundClip: 'padding-box', cursor: 'pointer' }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        cycleStoryPriority(story);
+                      }}
+                      title="Tap to cycle priority"
+                    >
+                      {storyPriorityText}
+                    </button>
+                    {dueChip && <Badge bg="light" text="dark">Due {dueChip}</Badge>}
+                    {Number.isFinite(aiScore) && <Badge bg="secondary">AI {Math.round(aiScore)}/100</Badge>}
+                    {getManualPriorityRank(story) && manualPriorityLabel && <Badge bg="danger">{manualPriorityLabel}</Badge>}
+                    {story.points != null && <Badge bg="dark">Pts {story.points || 0}</Badge>}
                   </div>
 
                   {(showStoryDescription || showActivity) && (
@@ -562,34 +590,34 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
                     </div>
                   )}
 
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  <div className="d-flex align-items-center gap-2 flex-wrap">
                     <Badge style={{ backgroundColor: themeColor, color: themeTextColor, fontSize: '11px' }}>
                       {themeDef.label}
                     </Badge>
-                    <Badge
-                      style={{
-                        backgroundColor: statusColors[statusLabel as keyof typeof statusColors] || 'var(--muted)',
-                        color: 'var(--on-accent)',
-                        fontSize: '11px'
+                    <Button
+                      variant="outline-warning"
+                      size="sm"
+                      className="d-inline-flex align-items-center gap-1"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setDeferStory(story);
                       }}
                     >
-                      {statusLabel}
-                    </Badge>
-                    <Badge bg={storyPriorityVariant} style={{ fontSize: '11px' }}>
-                      {storyPriorityText}
-                    </Badge>
-                    {Number.isFinite(aiScore) && (
-                      <Badge
-                        bg="light"
-                        text="dark"
-                        style={{ fontSize: '10px' }}
-                        title={((story as any).aiTop3ForDay && (story as any).aiTop3Reason)
-                          ? (story as any).aiTop3Reason
-                          : ((story as any).aiCriticalityReason || 'AI priority')}
-                      >
-                        AI {Math.round(aiScore)}/100
-                      </Badge>
-                    )}
+                      <Clock3 size={14} /> Defer
+                    </Button>
+                    <Button
+                      variant="outline-danger"
+                      size="sm"
+                      className="d-inline-flex align-items-center gap-1"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (window.confirm('Delete this story? This cannot be undone.')) {
+                          onStoryDelete(story.id);
+                        }
+                      }}
+                    >
+                      <Trash2 size={14} /> Delete
+                    </Button>
                   </div>
 
                   {nextBlock && (
@@ -661,15 +689,45 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
         itemTitle={deferStory?.title || ''}
         onApply={async ({ dateMs, rationale, source }) => {
           if (!deferStory) return;
-          onStoryUpdate(deferStory.id, {
-            targetDate: dateMs,
-            deferredUntil: dateMs,
-            deferredReason: rationale,
-            deferredBy: source,
-          });
-          setDeferStory(null);
+          try {
+            await Promise.resolve(onStoryUpdate(deferStory.id, {
+              targetDate: dateMs,
+              deferredUntil: dateMs,
+              deferredReason: rationale,
+              deferredBy: source,
+            }));
+            showToast(`${deferStory.title} deferred to ${new Date(dateMs).toLocaleDateString()}.`, 'success');
+            setDeferStory(null);
+          } catch (error) {
+            console.error('StoriesCardView: failed to defer story', error);
+            showToast('Failed to defer story.', 'danger');
+          }
         }}
       />
+      <NewCalendarEventModal
+        show={Boolean(scheduleStory)}
+        onHide={() => setScheduleStory(null)}
+        initialValues={scheduleInitialValues}
+        stories={scheduleStory ? [scheduleStory] : []}
+        onSaved={() => {
+          const title = scheduleStory?.title || 'Story';
+          setScheduleStory(null);
+          showToast(`${title} added to your calendar.`, 'success');
+        }}
+      />
+      <ToastContainer position="bottom-end" className="p-3" style={{ zIndex: 1080 }}>
+        <Toast
+          bg={feedback.variant}
+          onClose={() => setFeedback((prev) => ({ ...prev, show: false }))}
+          show={feedback.show}
+          delay={3500}
+          autohide
+        >
+          <Toast.Body className={feedback.variant === 'info' ? '' : 'text-white'}>
+            {feedback.message}
+          </Toast.Body>
+        </Toast>
+      </ToastContainer>
     </div>
   );
 };

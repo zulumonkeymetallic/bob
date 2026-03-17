@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { collection, doc, onSnapshot, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
 import { Star, Search, Edit3, Wand2, CalendarClock, Activity, Maximize2, Minimize2 } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { usePersona } from '../../contexts/PersonaContext';
 import { useTheme } from '../../contexts/ThemeContext';
@@ -14,9 +15,12 @@ import { useSidebar } from '../../contexts/SidebarContext';
 import { httpsCallable } from 'firebase/functions';
 import EditGoalModal from '../EditGoalModal';
 import ConfirmSprintChangesModal from './ConfirmSprintChangesModal';
+import type { GoalTimelineAffectedStory } from './goalTimelineImpact';
 import SprintSelector from '../SprintSelector';
 import './GoalRoadmapV6.css';
 import { buildGoalTimelineImpactPlan } from './goalTimelineImpact';
+import { applyGoalTimelineChanges } from '../../utils/goalTimelineChanges';
+import { parseBooleanParam, parseIdListParam, parseNumberListParam } from '../../utils/planningQuery';
 import { getGoalAncestors, getGoalDisplayPath, isGoalInHierarchySet } from '../../utils/goalHierarchy';
 
 interface GanttTask {
@@ -408,9 +412,22 @@ const GoalRoadmapV6: React.FC = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const { theme } = useTheme();
+  const [searchParams] = useSearchParams();
   const { themes: globalThemes } = useGlobalThemes();
   const { sprints, selectedSprintId } = useSprint();
   const { showSidebar } = useSidebar();
+  const embedded = parseBooleanParam(searchParams.get('embed'));
+  const queryGoalIds = useMemo(
+    () => parseIdListParam(searchParams.get('goalIds') || searchParams.get('goalId')),
+    [searchParams],
+  );
+  const queryGoalIdSet = useMemo(() => new Set(queryGoalIds), [queryGoalIds]);
+  const queryThemeIds = useMemo(
+    () => parseNumberListParam(searchParams.get('themeIds') || searchParams.get('themeId')),
+    [searchParams],
+  );
+  const queryThemeIdSet = useMemo(() => new Set(queryThemeIds), [queryThemeIds]);
+  const queryFocusOnly = parseBooleanParam(searchParams.get('focusOnly'));
   const [goals, setGoals] = useState<Goal[]>([]);
   const goalsById = useMemo(
     () => goals.reduce<Record<string, Goal>>((acc, goal) => {
@@ -441,20 +458,13 @@ const GoalRoadmapV6: React.FC = () => {
   const [respectSprintScope, setRespectSprintScope] = useState(true);
   const [editGoal, setEditGoal] = useState<Goal | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [timelineNotice, setTimelineNotice] = useState<string | null>(null);
+  const [timelineError, setTimelineError] = useState<string | null>(null);
   const [pendingSprintChanges, setPendingSprintChanges] = useState<{
     goalId: string;
     startDate: number;
     endDate: number;
-    affectedStories: Array<{
-      id: string;
-      ref: string;
-      title: string;
-      plannedSprintId?: string;
-      plannedSprintName?: string;
-      recommendedSprintId?: string;
-      recommendedSprintName?: string;
-      impactedTaskCount?: number;
-    }>;
+    affectedStories: GoalTimelineAffectedStory[];
   } | null>(null);
   const boardRef = useRef<HTMLDivElement | null>(null);
   const dragOperationRef = useRef<GoalDragOperation | null>(null);
@@ -468,6 +478,19 @@ const GoalRoadmapV6: React.FC = () => {
   const pointerUpHandlerRef = useRef<(event: PointerEvent) => void>(() => {});
 
   const ENABLE_MONZO_POTS = process.env.REACT_APP_ENABLE_MONZO_POTS === 'true';
+
+  useEffect(() => {
+    if (queryThemeIds.length === 1) {
+      setThemeFilter(queryThemeIds[0]);
+    }
+  }, [queryThemeIds]);
+
+  useEffect(() => {
+    if (queryFocusOnly) {
+      setShowFocusGoalsOnly(true);
+      setFocusToggleTouched(true);
+    }
+  }, [queryFocusOnly]);
 
   const handleGenerateStories = useCallback(async (goal: Goal) => {
     try {
@@ -692,6 +715,8 @@ const GoalRoadmapV6: React.FC = () => {
     return goals.filter(g => {
       const themeId = migrateThemeValue((g as any).theme);
       if (themeFilter !== 'all' && themeId !== themeFilter) return false;
+      if (queryThemeIdSet.size > 0 && !queryThemeIdSet.has(Number(themeId))) return false;
+      if (queryGoalIdSet.size > 0 && !isGoalInHierarchySet(g.id, goals, queryGoalIdSet)) return false;
       if (showStoryGoalsOnly && !(storyPoints[g.id] > 0)) return false;
       if (showFocusGoalsOnly && activeFocusGoalIds.size > 0 && !isGoalInHierarchySet(g.id, goals, activeFocusGoalIds)) return false;
       if (respectSprintScope && selectedSprint) {
@@ -709,7 +734,7 @@ const GoalRoadmapV6: React.FC = () => {
       if (!term) return true;
       return (g.title || '').toLowerCase().includes(term);
     });
-  }, [goals, search, themeFilter, showStoryGoalsOnly, showFocusGoalsOnly, activeFocusGoalIds, storyPoints, respectSprintScope, selectedSprint, storySprintMap]);
+  }, [goals, search, themeFilter, queryThemeIdSet, queryGoalIdSet, showStoryGoalsOnly, showFocusGoalsOnly, activeFocusGoalIds, storyPoints, respectSprintScope, selectedSprint, storySprintMap]);
 
   const sortedGoals = useMemo(() => {
     const enriched = filteredGoals.map(goal => {
@@ -1250,14 +1275,28 @@ const GoalRoadmapV6: React.FC = () => {
   }, []);
 
   const confirmSprintChanges = useCallback(async () => {
-    if (!pendingSprintChanges) return;
-    await persistGoalDates(
-      pendingSprintChanges.goalId,
-      pendingSprintChanges.startDate,
-      pendingSprintChanges.endDate
-    );
-    setPendingSprintChanges(null);
-  }, [pendingSprintChanges, persistGoalDates]);
+    if (!pendingSprintChanges || !currentUser?.uid || !currentPersona) return;
+    try {
+      const result = await applyGoalTimelineChanges({
+        goalId: pendingSprintChanges.goalId,
+        startDateMs: pendingSprintChanges.startDate,
+        endDateMs: pendingSprintChanges.endDate,
+        ownerUid: currentUser.uid,
+        persona: currentPersona,
+        affectedStories: pendingSprintChanges.affectedStories,
+      });
+      setTimelineError(null);
+      setTimelineNotice(
+        `Goal timeline updated. ${result.movedStoryCount} stor${result.movedStoryCount === 1 ? 'y was' : 'ies were'} moved to the nearest sprint start${result.reviewStoryCount > 0 ? `, and ${result.reviewStoryCount} still need manual review.` : '.'}`
+      );
+    } catch (error: any) {
+      console.error('[RoadmapV6] Failed to apply goal timeline changes', error);
+      setTimelineNotice(null);
+      setTimelineError(error?.message || 'Failed to update the goal timeline.');
+    } finally {
+      setPendingSprintChanges(null);
+    }
+  }, [currentPersona, currentUser?.uid, pendingSprintChanges]);
 
   useEffect(() => {
     pointerMoveHandlerRef.current = (event: PointerEvent) => {
@@ -1740,14 +1779,26 @@ const GoalRoadmapV6: React.FC = () => {
       ref={boardRef}
       className={`grv6-container theme-${theme} ${isFullscreen ? 'grv6-in-fullscreen' : ''}`}
     >
-      <div className="grv6-header">
-        <div className="grv6-title-stack">
-          <h1 className="grv6-title">Goal Roadmap V6</h1>
+      {!embedded && (
+        <div className="grv6-header">
+          <div className="grv6-title-stack">
+            <h1 className="grv6-title">Goal Roadmap V6</h1>
+          </div>
         </div>
-      </div>
+      )}
 
       <div className="grv6-body">
         <div className="grv6-main">
+          {timelineError && (
+            <div className="mb-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              {timelineError}
+            </div>
+          )}
+          {timelineNotice && (
+            <div className="mb-3 rounded border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700">
+              {timelineNotice}
+            </div>
+          )}
           {renderTopbar()}
           {renderGanttContent()}
         </div>

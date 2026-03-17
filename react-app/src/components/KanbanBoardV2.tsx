@@ -12,6 +12,7 @@ import KanbanCardV2 from './KanbanCardV2';
 import { themeVars } from '../utils/themeVars';
 import { isStatus } from '../utils/statusHelpers';
 import { isCriticalPriority } from '../utils/priorityUtils';
+import { getManualPriorityRank } from '../utils/manualPriority';
 import { useActivityTracking } from '../hooks/useActivityTracking';
 import { formatTaskTagLabel } from '../utils/tagDisplay';
 import '../styles/KanbanCards.css';
@@ -333,9 +334,17 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
         return String(top3Date).slice(0, 10) === new Date().toISOString().slice(0, 10);
     };
 
-    const isTop3Task = (task: Task): boolean => isCurrentTop3(task);
+    const getTaskManualRank = (task: Task): number | null => {
+        const directRank = getManualPriorityRank(task);
+        if (directRank) return directRank;
+        const parentStoryId = String(task.storyId || (task.parentType === 'story' ? task.parentId || '' : '')).trim();
+        if (!parentStoryId) return null;
+        return getManualPriorityRank(stories.find((story) => story.id === parentStoryId));
+    };
 
-    const isTop3Story = (story: Story): boolean => isCurrentTop3(story);
+    const isTop3Task = (task: Task): boolean => Boolean(getTaskManualRank(task)) || isCurrentTop3(task);
+
+    const isTop3Story = (story: Story): boolean => Boolean(getManualPriorityRank(story)) || isCurrentTop3(story);
 
     const getItemDueMs = (item: any): number | null => {
         const raw = item?.dueDate ?? item?.targetDate ?? item?.endDate ?? item?.dueDateMs ?? null;
@@ -569,6 +578,9 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
         };
 
         const sorter = (a: any, b: any) => {
+            const manualA = (a?.storyId || a?.parentId) ? getTaskManualRank(a as Task) : getManualPriorityRank(a);
+            const manualB = (b?.storyId || b?.parentId) ? getTaskManualRank(b as Task) : getManualPriorityRank(b);
+            if ((manualA || 99) !== (manualB || 99)) return (manualA || 99) - (manualB || 99);
             if (sortBy === 'ai') {
                 const sa = scoreOf(a);
                 const sb = scoreOf(b);

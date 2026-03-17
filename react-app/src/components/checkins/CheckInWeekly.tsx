@@ -8,6 +8,8 @@ import { db } from '../../firebase';
 import { useAuth } from '../../contexts/AuthContext';
 import type { FocusGoal, Goal } from '../../types';
 import { getGoalDisplayPath, getProtectedFocusGoalIds, isGoalInHierarchySet } from '../../utils/goalHierarchy';
+import { getKpiHealthRollupLabel, getKpiStateBadge } from '../../utils/kpiDisplay';
+import WeeklyPlannerSurface from '../planner/WeeklyPlannerSurface';
 
 interface GoalMetricDoc {
   goalId: string;
@@ -95,6 +97,7 @@ const toNumber = (value: any): number | null => {
 const CheckInWeekly: React.FC = () => {
   const { currentUser } = useAuth();
   const navigate = useNavigate();
+  const [mode, setMode] = useState<'reflect' | 'plan'>('reflect');
   const [weekStart, setWeekStart] = useState<Date>(() =>
     startOfWeek(addDays(new Date(), -7), { weekStartsOn: 1 }),
   );
@@ -143,11 +146,10 @@ const CheckInWeekly: React.FC = () => {
 
   const weekEnd = useMemo(() => endOfWeek(weekStart, { weekStartsOn: 1 }), [weekStart]);
   const weekKey = useMemo(() => format(weekStart, WEEK_FORMAT), [weekStart]);
-
-  const formatKpiHealthLabel = useCallback((healthy: number, total: number) => {
-    if (total === 0) return 'No KPIs';
-    if (healthy === total) return `${healthy}/${total} healthy`;
-    return `${healthy}/${total} healthy`;
+  const planningWeekStart = useMemo(() => startOfWeek(addDays(weekStart, 7), { weekStartsOn: 1 }), [weekStart]);
+  const showPlanningPrompt = useMemo(() => {
+    const day = new Date().getDay();
+    return day === 0 || day === 1;
   }, []);
 
   const loadWeeklyData = useCallback(async () => {
@@ -553,10 +555,29 @@ const CheckInWeekly: React.FC = () => {
         <Badge bg="secondary" className="py-2 px-3">
           {format(weekStart, 'dd MMM')} – {format(weekEnd, 'dd MMM yyyy')}
         </Badge>
+        <div className="ms-auto d-flex gap-2">
+          <Button size="sm" variant={mode === 'reflect' ? 'primary' : 'outline-primary'} onClick={() => setMode('reflect')}>
+            Reflect
+          </Button>
+          <Button size="sm" variant={mode === 'plan' ? 'primary' : 'outline-primary'} onClick={() => setMode('plan')}>
+            Plan next week
+          </Button>
+        </div>
       </div>
 
+      {showPlanningPrompt && mode === 'reflect' && (
+        <Alert variant="warning" className="py-2 mb-3 d-flex align-items-center justify-content-between gap-2 flex-wrap">
+          <div className="small">
+            Finish your reflection, then switch to <strong>Plan next week</strong> to move items across the next 7 days and accept defer proposals.
+          </div>
+          <Button size="sm" variant="outline-dark" onClick={() => setMode('plan')}>
+            Open planner
+          </Button>
+        </Alert>
+      )}
+
       {/* Capacity plan review reminder */}
-      {!capacityReviewed && !loading && (
+      {!capacityReviewed && !loading && mode === 'reflect' && (
         <Alert variant="warning" className="d-flex justify-content-between align-items-center py-2 mb-3">
           <span className="small">
             <BarChart2 size={13} className="me-1" />
@@ -578,7 +599,14 @@ const CheckInWeekly: React.FC = () => {
       )}
 
       {error && <Alert variant="danger">{error}</Alert>}
-      {loading || !metrics ? (
+      {mode === 'plan' ? (
+        <WeeklyPlannerSurface
+          weekStart={planningWeekStart}
+          embedded
+          title={`Plan week of ${format(planningWeekStart, 'dd MMM yyyy')}`}
+          storageScope="weekly_checkin"
+        />
+      ) : loading || !metrics ? (
         <div className="d-flex align-items-center gap-2 text-muted">
           <Spinner size="sm" animation="border" /> Loading weekly metrics…
         </div>
@@ -631,7 +659,7 @@ const CheckInWeekly: React.FC = () => {
                           <div className="small text-muted mb-2">
                             {rootGoal.completedLeafGoals}/{rootGoal.leafCount} leaf goals complete
                             {' · '}
-                            {formatKpiHealthLabel(rootGoal.healthyKpis, rootGoal.totalKpis)}
+                            {getKpiHealthRollupLabel(rootGoal.healthyKpis, rootGoal.totalKpis, rootGoal.staleKpis)}
                           </div>
                           <ProgressBar now={Math.max(0, Math.min(100, rootGoal.avgCompletionPct))} style={{ height: 8 }} />
                           <div className="small text-muted mt-2">
@@ -659,7 +687,7 @@ const CheckInWeekly: React.FC = () => {
                                   {' · '}
                                   {leafGoal.totalMinutes} min
                                   {' · '}
-                                  {formatKpiHealthLabel(leafGoal.healthyKpis, leafGoal.totalKpis)}
+                                  {getKpiHealthRollupLabel(leafGoal.healthyKpis, leafGoal.totalKpis, leafGoal.staleKpis)}
                                 </div>
                               </div>
                               <Badge bg={leafGoal.completionPct >= 100 ? 'success' : leafGoal.completionPct >= 60 ? 'warning' : 'secondary'}>
@@ -674,14 +702,20 @@ const CheckInWeekly: React.FC = () => {
                             </div>
                             {leafGoal.topKpis.length > 0 && (
                               <div className="mt-2">
-                                {leafGoal.topKpis.map((kpi) => (
-                                  <div key={kpi.id} className="d-flex justify-content-between align-items-center small py-1">
-                                    <span className="text-truncate pe-2">{kpi.name}</span>
-                                    <span className={kpi.healthy ? 'text-success' : 'text-muted'}>
-                                      {kpi.currentDisplay}{kpi.progressPct != null ? ` · ${Math.round(kpi.progressPct)}%` : ''}
-                                    </span>
-                                  </div>
-                                ))}
+                                {leafGoal.topKpis.map((kpi) => {
+                                  const stateBadge = getKpiStateBadge(kpi.healthy, !kpi.healthy);
+                                  return (
+                                    <div key={kpi.id} className="d-flex justify-content-between align-items-center small py-1 gap-2">
+                                      <span className="text-truncate pe-2 d-inline-flex align-items-center gap-1">
+                                        <span>{kpi.name}</span>
+                                        <Badge bg={stateBadge.bg}>{stateBadge.label}</Badge>
+                                      </span>
+                                      <span className={kpi.healthy ? 'text-success' : 'text-muted'}>
+                                        {kpi.currentDisplay}{kpi.progressPct != null ? ` · ${Math.round(kpi.progressPct)}%` : ''}
+                                      </span>
+                                    </div>
+                                  );
+                                })}
                               </div>
                             )}
                           </div>

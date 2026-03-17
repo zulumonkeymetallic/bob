@@ -53,7 +53,7 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
   const selectedSprint = formData.sprintId
     ? (allSprints.find((sprint) => sprint.id === formData.sprintId) as SprintLike | undefined)
     : null;
-  const sprintAlignment = evaluateStorySprintAlignment(selectedSprint as any, formData.goalId || '');
+  const sprintAlignment = evaluateStorySprintAlignment(selectedSprint as any, formData.goalId || '', goals);
   const leafGoalOptions = useMemo(() => getLeafGoalOptions(goals), [goals]);
   const selectedGoalResolution = useMemo(
     () => resolveLeafGoalSelection(formData.goalId || null, goals),
@@ -182,7 +182,7 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
             .filter(goal => {
               if (selectedPersona === 'work') return goal.persona === 'work';
               return goal.persona == null || goal.persona === 'personal';
-            }) as Goal[];
+            }) as unknown as Goal[];
 
           console.log('✅ AddStoryModal: Goals loaded successfully', {
             action: 'goals_loaded',

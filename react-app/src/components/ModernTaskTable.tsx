@@ -49,6 +49,7 @@ import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { normalizeTaskTags } from '../utils/taskTagging';
 import { parsePointsValue } from '../utils/points';
 import EditTaskModal from './EditTaskModal';
+import EditStoryModal from './EditStoryModal';
 import { MISSING_INFO_CELL_BG, MISSING_INFO_CELL_BG_HOVER, hasLinkedId, isBlankText, isMissingPoints } from '../utils/dataQuality';
 
 interface TaskTableRow extends Task {
@@ -353,6 +354,7 @@ interface SortableRowProps {
   onTaskUpdate: (taskId: string, updates: Partial<Task>) => Promise<void>;
   onTaskDelete: (taskId: string) => Promise<void>;
   onEditRequest: (task: TaskTableRow) => void;
+  onStoryEditRequest: (story: Story | null) => void;
   onSprintAssign: (taskId: string, sprintId: string | null) => Promise<void>;
   onConvertToStory: (task: TaskTableRow) => Promise<void>;
   convertLoadingId: string | null;
@@ -367,6 +369,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
   onTaskUpdate,
   onTaskDelete,
   onEditRequest,
+  onStoryEditRequest,
   onSprintAssign,
   onConvertToStory,
   convertLoadingId,
@@ -762,7 +765,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
-                    if (linkedStory) showSidebar(linkedStory, 'story');
+                    onStoryEditRequest(linkedStory || null);
                   }}
                   style={{
                     background: 'none',
@@ -973,6 +976,8 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
   // Edit modal state
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingTask, setEditingTask] = useState<TaskTableRow | null>(null);
+  const [showStoryEditModal, setShowStoryEditModal] = useState(false);
+  const [editingStory, setEditingStory] = useState<Story | null>(null);
   const [editForm, setEditForm] = useState<Partial<TaskTableRow>>({});
   const [storySearch, setStorySearch] = useState('');
   const [goalSearch, setGoalSearch] = useState('');
@@ -987,6 +992,12 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
   };
 
   const closeToast = () => setToastState(prev => ({ ...prev, show: false }));
+
+  const handleStoryEditRequest = (story: Story | null) => {
+    if (!story) return;
+    setEditingStory(story);
+    setShowStoryEditModal(true);
+  };
 
   // Activity stream helpers
   const { addNote, trackFieldChange } = useActivityTracking();
@@ -1615,6 +1626,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                           setEditingTask(t);
                           setShowEditModal(true);
                         }}
+                        onStoryEditRequest={handleStoryEditRequest}
                         onSprintAssign={handleSprintAssign}
                         onConvertToStory={handleConvertToStory}
                         convertLoadingId={convertLoadingId}
@@ -1926,6 +1938,15 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
         task={editingTask as Task | null}
         onHide={() => { setShowEditModal(false); setEditingTask(null); }}
       />
+      <EditStoryModal
+        show={showStoryEditModal && !!editingStory}
+        story={editingStory}
+        goals={goals}
+        onHide={() => {
+          setShowStoryEditModal(false);
+          setEditingStory(null);
+        }}
+      />
 
       {/* Create Task Modal (lightweight, only used for inline add) */}
       {showEditModal && !editingTask && (
@@ -1997,8 +2018,11 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                           min={1}
                           max={365}
                           className="form-control"
-                          value={(editForm as any).repeatInterval || 1}
-                          onChange={(e) => setEditForm({ ...editForm, repeatInterval: Number(e.target.value) || 1 })}
+                          value={(editForm as any).repeatInterval ?? ''}
+                          onChange={(e) => setEditForm({
+                            ...editForm,
+                            repeatInterval: (e.target.value === '' ? '' : e.target.value) as any,
+                          } as any)}
                         />
                       </div>
                     </div>

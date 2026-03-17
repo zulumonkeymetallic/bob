@@ -3,8 +3,8 @@ export interface FocusGoal {
   ownerUid: string;
   persona: 'personal' | 'work';
   goalIds: string[]; // IDs of goals selected for focus
-  focusRootGoalIds?: string[]; // Strategic goals the user explicitly selected
-  focusLeafGoalIds?: string[]; // Execution goals expanded from root selections
+  focusRootGoalIds?: string[];
+  focusLeafGoalIds?: string[];
   goalTypeMap?: { [goalId: string]: 'story' | 'calendar' };
   timeframe: 'sprint' | 'quarter' | 'year'; // Duration of focus
   startDate: any; // Firebase Timestamp
@@ -37,10 +37,10 @@ export interface FocusGoal {
     tempId: string;
     parentGoalId: string;
     title: string;
-    theme?: number;
-    persona?: 'personal' | 'work';
-    goalKind?: 'milestone' | 'execution';
-    timeHorizon?: 'sprint' | 'quarter' | 'year';
+    theme: number;
+    persona: 'personal' | 'work';
+    goalKind: string;
+    timeHorizon: string;
   }>;
 }
 
@@ -134,6 +134,7 @@ export interface Story {
   aiTop3Reason?: string;
   // User-set #1 priority flag for gcal override
   userPriorityFlag?: boolean;
+  userPriorityRank?: 1 | 2 | 3 | null;
   userPriorityFlagAt?: string;
   deferredUntil?: any;
   deferredReason?: string;
@@ -311,6 +312,8 @@ export interface Task {
   aiTop3Date?: string;
   aiPriorityLabel?: string;
   aiTop3Reason?: string;
+  userPriorityFlag?: boolean;
+  userPriorityRank?: 1 | 2 | 3 | null;
   iosPriority?: string;
   type?: 'task' | 'chore' | 'routine' | 'habit' | 'read' | 'watch' | string;
   repeatFrequency?: 'daily' | 'weekly' | 'monthly' | 'yearly' | null;

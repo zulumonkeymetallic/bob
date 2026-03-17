@@ -10,6 +10,7 @@ import ModernGoalsTable from './ModernGoalsTable';
 import GoalsCardView from './GoalsCardView';
 import AddGoalModal from './AddGoalModal';
 import EditGoalModal from './EditGoalModal';
+import GoalPlanningWorkspaceModal from './GoalPlanningWorkspaceModal';
 import { useSprint } from '../contexts/SprintContext';
 import SprintSelector from './SprintSelector';
 import { isStatus, getThemeName } from '../utils/statusHelpers';
@@ -20,7 +21,6 @@ import { useSidebar } from '../contexts/SidebarContext';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { computeWindowExpectedProgress, evaluateGoalTargetStatus } from '../utils/goalKpiStatus';
 import { goalNeedsLinkedPot } from '../utils/goalCost';
-import { isGoalInHierarchySet } from '../utils/goalHierarchy';
 
 const GoalsManagement: React.FC = () => {
   console.log('[GoalsManagement] Component RENDERING');
@@ -48,11 +48,11 @@ const GoalsManagement: React.FC = () => {
   });
   const [showNoPotOnly, setShowNoPotOnly] = useState(false);
   const [editGoal, setEditGoal] = useState<Goal | null>(null);
+  const [workspaceGoal, setWorkspaceGoal] = useState<Goal | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<{ id: string; title: string } | null>(null);
   const [activeSprintGoalIds, setActiveSprintGoalIds] = useState<Set<string>>(new Set());
   const [activeFocusGoalIds, setActiveFocusGoalIds] = useState<Set<string>>(new Set());
   const [applyFocusOnlyFilter, setApplyFocusOnlyFilter] = useState(false);
-  const [focusToggleTouched, setFocusToggleTouched] = useState(false);
   const [applyActiveSprintFilter, setApplyActiveSprintFilter] = useState(true); // default on
   const [pots, setPots] = useState<Record<string, { name: string; balance: number }>>({});
   const [goalKpiMetrics, setGoalKpiMetrics] = useState<Record<string, { resolvedKpis?: any[]; updatedAt?: any }>>({});
@@ -207,17 +207,6 @@ const GoalsManagement: React.FC = () => {
     );
     return () => unsub();
   }, [currentUser?.uid, currentPersona]);
-
-  useEffect(() => {
-    if (activeFocusGoalIds.size === 0) {
-      setApplyFocusOnlyFilter(false);
-      setFocusToggleTouched(false);
-      return;
-    }
-    if (!focusToggleTouched) {
-      setApplyFocusOnlyFilter(true);
-    }
-  }, [activeFocusGoalIds, focusToggleTouched]);
 
   const activeSprintId = useMemo(() => {
     const active = sprints.find((s) => s.status === 1);
@@ -466,7 +455,7 @@ const GoalsManagement: React.FC = () => {
       if (derivedYear && String(derivedYear) !== filterYear) return false;
     }
     if (searchTerm && !goal.title.toLowerCase().includes(searchTerm.toLowerCase())) return false;
-    if (applyFocusOnlyFilter && activeFocusGoalIds.size > 0 && !isGoalInHierarchySet(goal.id, goals, activeFocusGoalIds)) return false;
+    if (applyFocusOnlyFilter && activeFocusGoalIds.size > 0 && !activeFocusGoalIds.has(goal.id)) return false;
     return true;
   });
 
@@ -921,7 +910,6 @@ const GoalsManagement: React.FC = () => {
                       setGoalKpiScope('sprint');
                       setShowNoPotOnly(false);
                       setApplyFocusOnlyFilter(false);
-                      setFocusToggleTouched(false);
                     }}
                     style={{ borderColor: 'var(--notion-border)', color: 'var(--notion-text)' }}
                   >
@@ -948,10 +936,7 @@ const GoalsManagement: React.FC = () => {
                     id="toggle-goals-focus-only"
                     label={`Only active focus goals${activeFocusGoalIds.size ? ` (${activeFocusGoalIds.size})` : ''}`}
                     checked={applyFocusOnlyFilter}
-                    onChange={(e) => {
-                      setApplyFocusOnlyFilter(e.target.checked);
-                      setFocusToggleTouched(true);
-                    }}
+                    onChange={(e) => setApplyFocusOnlyFilter(e.target.checked)}
                     className="text-muted"
                     disabled={activeFocusGoalIds.size === 0}
                   />
@@ -995,6 +980,7 @@ const GoalsManagement: React.FC = () => {
                     onGoalPriorityChange={handleGoalPriorityChange}
                     onGoalReorder={handleGoalReorder}
                     onEditModal={(goal) => setEditGoal(goal)}
+                    onOpenWorkspace={(goal) => setWorkspaceGoal(goal)}
                     goalKpiStatusByGoalId={goalKpiStatusByGoalId}
                   />
                 ) : (
@@ -1020,6 +1006,13 @@ const GoalsManagement: React.FC = () => {
         show={!!editGoal}
         onClose={() => setEditGoal(null)}
         currentUserId={currentUser?.uid || ''}
+      />
+
+      <GoalPlanningWorkspaceModal
+        show={!!workspaceGoal}
+        goal={workspaceGoal}
+        allGoals={goals}
+        onHide={() => setWorkspaceGoal(null)}
       />
 
       <AddGoalModal

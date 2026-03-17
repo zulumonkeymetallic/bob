@@ -41,10 +41,11 @@ import { useSidebar } from '../contexts/SidebarContext';
 import { useNavigate } from 'react-router-dom';
 import { useSprint } from '../contexts/SprintContext';
 import { themeVars, rgbaCard } from '../utils/themeVars';
-import { storyStatusText } from '../utils/storyCardFormatting';
+import { priorityLabel, storyStatusText } from '../utils/storyCardFormatting';
 import { parsePointsValue } from '../utils/points';
 import { MISSING_INFO_CELL_BG, MISSING_INFO_CELL_BG_HOVER, hasLinkedId, isBlankText, isMissingPoints } from '../utils/dataQuality';
 import { planningSprints } from '../utils/sprintFilter';
+import { getManualPriorityLabel, getManualPriorityRank } from '../utils/manualPriority';
 
 interface StoryTableRow extends Story {
   goalTitle?: string;
@@ -125,10 +126,10 @@ const defaultColumns: Column[] = [
     key: 'priority', 
     label: 'Priority', 
     width: '8%', 
-    visible: false, 
+    visible: true, 
     editable: true, 
     type: 'select',
-    options: ['low', 'medium', 'high', 'critical']
+    options: ['Critical', 'High', 'Medium', 'Low']
   },
   { 
     key: 'points',
@@ -483,6 +484,24 @@ const SortableRow: React.FC<SortableRowProps> = ({
           'complete': 4,
         };
         valueToSave = map[label] ?? valueToSave;
+      } else if (actualKey === 'priority') {
+        const label = String(valueToSave).toLowerCase();
+        const map: Record<string, number> = {
+          '4': 4,
+          critical: 4,
+          p0: 4,
+          '3': 3,
+          high: 3,
+          p1: 3,
+          '2': 2,
+          medium: 2,
+          med: 2,
+          p2: 2,
+          '1': 1,
+          low: 1,
+          p3: 1,
+        };
+        valueToSave = map[label] ?? valueToSave;
       } else if (actualKey === 'points') {
         const parsedPoints = parsePointsValue(valueToSave);
         const fallbackPoints = parsePointsValue((story as any).points) ?? 1;
@@ -546,6 +565,9 @@ const SortableRow: React.FC<SortableRowProps> = ({
     if (key === 'status') {
       return storyStatusText(value);
     }
+    if (key === 'priority') {
+      return priorityLabel(value, 'Medium');
+    }
     if (key === 'sprintId' && value) {
       const sprint = sprints.find(s => s.id === value);
       return sprint ? sprint.name : value;
@@ -583,6 +605,9 @@ const SortableRow: React.FC<SortableRowProps> = ({
       }
       if (column.key === 'status') {
         return storyStatusText(value);
+      }
+      if (column.key === 'priority') {
+        return priorityLabel(value, 'Medium');
       }
       if (column.key === 'sprintId') {
         return value == null ? '' : String(value);
@@ -965,7 +990,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
             <button
               onClick={() => onPriorityFlag(story)}
               style={{
-                color: (story as any).userPriorityFlag ? 'var(--bs-danger)' : themeVars.brand as string,
+                color: getManualPriorityRank(story) ? 'var(--bs-danger)' : themeVars.brand as string,
                 padding: '4px',
                 borderRadius: '4px',
                 border: 'none',
@@ -973,7 +998,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
                 cursor: 'pointer',
                 transition: 'all 0.15s ease',
               }}
-              title={(story as any).userPriorityFlag ? 'Remove #1 priority flag' : 'Flag as #1 priority for calendar'}
+              title={getManualPriorityRank(story) ? `Remove ${getManualPriorityLabel(story) || 'manual priority'}` : 'Set manual priority for calendar'}
             >
               <CalendarClock size={14} />
             </button>
@@ -1543,9 +1568,10 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
             }}
           >
             <option value="">All Priorities</option>
-            <option value="1">P1 (High)</option>
-            <option value="2">P2 (Medium)</option>
-            <option value="3">P3 (Low)</option>
+            <option value="4">Critical</option>
+            <option value="3">High</option>
+            <option value="2">Medium</option>
+            <option value="1">Low</option>
           </select>
         </div>
 

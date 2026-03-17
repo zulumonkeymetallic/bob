@@ -3,7 +3,6 @@ import { Card, Form, Button, Row, Col, Table, Badge, Alert } from 'react-bootstr
 import { useAuth } from '../contexts/AuthContext';
 import { db } from '../firebase';
 import { addDoc, collection, deleteDoc, doc, getDocs, onSnapshot, orderBy, query, serverTimestamp, setDoc, updateDoc, where } from 'firebase/firestore';
-import { getGoalDisplayPath, getLeafGoalOptions, resolveLeafGoalSelection } from '../utils/goalHierarchy';
 
 const HabitsManagement: React.FC = () => {
   const { currentUser } = useAuth();
@@ -16,7 +15,6 @@ const HabitsManagement: React.FC = () => {
     const y = d.getFullYear(); const m = String(d.getMonth()+1).padStart(2,'0'); const dd = String(d.getDate()).padStart(2,'0');
     return `${y}${m}${dd}`;
   }, []);
-  const leafGoalOptions = useMemo(() => getLeafGoalOptions(goals as any), [goals]);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -38,15 +36,6 @@ const HabitsManagement: React.FC = () => {
       setError('Please link a goal for every habit.');
       return;
     }
-    const resolvedGoalSelection = resolveLeafGoalSelection(form.linkedGoalId || null, goals as any);
-    if (!resolvedGoalSelection.goalId) {
-      setError(
-        resolvedGoalSelection.reason === 'ambiguous_parent'
-          ? 'Habits must link to a leaf goal. Select the specific child goal this habit supports.'
-          : 'Please select a valid leaf goal for this habit.'
-      );
-      return;
-    }
     setError(null);
     const parseDays = (text: string) => {
       if (!text) return [] as number[];
@@ -62,8 +51,8 @@ const HabitsManagement: React.FC = () => {
       unit: form.unit||'times',
       scheduleTime: form.scheduleTime||'07:00',
       timeOfDay: form.timeOfDay !== 'auto' ? form.timeOfDay : null,
-      linkedGoalId: resolvedGoalSelection.goalId,
-      linkedGoalName: goals.find(g=>g.id===resolvedGoalSelection.goalId)?.title || null,
+      linkedGoalId: form.linkedGoalId || null,
+      linkedGoalName: goals.find(g=>g.id===form.linkedGoalId)?.title || null,
       daysOfWeek: Array.isArray(form.daysOfWeek) && form.daysOfWeek.length ? form.daysOfWeek : parseDays(form.daysText || ''),
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -146,9 +135,8 @@ const HabitsManagement: React.FC = () => {
                 <Form.Label>Link Goal (required)</Form.Label>
                 <Form.Select value={form.linkedGoalId} onChange={e=>setForm({ ...form, linkedGoalId: e.target.value })}>
                   <option value="">Select a goal...</option>
-                  {leafGoalOptions.map(g => <option key={g.id} value={g.id}>{getGoalDisplayPath(g.id, goals as any)}</option>)}
+                  {goals.map(g => <option key={g.id} value={g.id}>{g.title}</option>)}
                 </Form.Select>
-                <div className="form-text">Habits must link to a leaf goal to count toward KPI adherence.</div>
               </Col>
               <Col md={3}>
                 <Form.Label>Active</Form.Label>
@@ -223,7 +211,7 @@ const HabitsManagement: React.FC = () => {
                   <td>{h.frequency}</td>
                   <td>{h.scheduleTime || '—'}</td>
                   <td>{h.timeOfDay && h.timeOfDay !== 'auto' ? <Badge bg="info">{h.timeOfDay}</Badge> : <span className="text-muted small">auto</span>}</td>
-                  <td>{h.linkedGoalId ? (goals.find(g=>g.id===h.linkedGoalId) ? getGoalDisplayPath(h.linkedGoalId, goals as any) : h.linkedGoalId) : <Badge bg="warning">Missing</Badge>}</td>
+                  <td>{h.linkedGoalId ? (goals.find(g=>g.id===h.linkedGoalId)?.title || h.linkedGoalId) : <Badge bg="warning">Missing</Badge>}</td>
                   <td>{h.isActive ? <Badge bg="success">On</Badge> : <Badge bg="secondary">Off</Badge>}</td>
                   <td className="text-end">
                     <Button size="sm" className="me-2" variant="outline-success" onClick={()=>toggleCompleteToday(h)}>Mark Done Today</Button>

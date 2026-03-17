@@ -1,18 +1,23 @@
 import { db } from '../firebase';
-import { collection, addDoc, serverTimestamp, query, where, getDocs, updateDoc, doc, writeBatch, deleteField } from 'firebase/firestore';
-import { Goal } from '../types';
+import { collection, addDoc, serverTimestamp, query, where, getDocs, updateDoc, doc, writeBatch, deleteField, deleteDoc } from 'firebase/firestore';
+import { FocusGoal, Goal } from '../types';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from '../firebase';
 import { generateRef } from '../utils/referenceGenerator';
-import { expandFocusGoalIdsToLeafGoalIds } from '../utils/goalHierarchy';
 
 export const FOCUS_WIZARD_PREFILL_KEY = 'bob_focus_wizard_prefill_v1';
 
 export interface FocusWizardPrefill {
+  title?: string;
   visionText?: string;
   timeframe?: 'sprint' | 'quarter' | 'year';
   searchTerm?: string;
   autoRunMatch?: boolean;
+  endDateMs?: number;
+  autoSelectGoalIds?: string[];
+  queuedLeafMilestones?: string[];
+  goalTypeMap?: { [goalId: string]: 'story' | 'calendar' };
+  sprintPlanByGoalId?: { [goalId: string]: number[] };
   source?: string;
   createdAt?: number;
 }
@@ -215,7 +220,7 @@ export async function createFocusGoal(
   potIdsCreatedFor?: { [goalId: string]: string },
   goalTypeMap?: { [goalId: string]: 'story' | 'calendar' },
   monzoPotGoalRefs?: { [goalId: string]: string },
-  focusRootGoalIds?: string[]
+  focusGoalInput?: Partial<FocusGoal>
 ) {
   try {
     const now = new Date();
@@ -224,32 +229,42 @@ export async function createFocusGoal(
       quarter: 91 * 24 * 60 * 60 * 1000,
       year: 365 * 24 * 60 * 60 * 1000
     };
-    const endDate = new Date(now.getTime() + daysInMs[timeframe]);
-    const daysRemaining = Math.ceil((endDate.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
-
-    const allGoalsSnap = await getDocs(query(collection(db, 'goals'), where('ownerUid', '==', userId)));
-    const allGoals = allGoalsSnap.docs.map((goalDoc) => ({ id: goalDoc.id, ...(goalDoc.data() as Goal) })) as Goal[];
-    const rootGoalIds = (focusRootGoalIds && focusRootGoalIds.length > 0 ? focusRootGoalIds : goalIds)
-      .map((goalId) => String(goalId || '').trim())
-      .filter(Boolean);
-    const focusLeafGoalIds = expandFocusGoalIdsToLeafGoalIds(rootGoalIds, allGoals);
+    const requestedEndDate = focusGoalInput?.endDate
+      ? new Date((focusGoalInput.endDate as any)?.toDate?.() || focusGoalInput.endDate as any)
+      : null;
+    const endDate = requestedEndDate && !Number.isNaN(requestedEndDate.getTime())
+      ? requestedEndDate
+      : new Date(now.getTime() + daysInMs[timeframe]);
+    const daysRemaining = Math.max(0, Math.ceil((endDate.getTime() - now.getTime()) / (24 * 60 * 60 * 1000)));
 
     const focusRef = collection(db, 'focusGoals');
     const docRef = await addDoc(focusRef, {
       ownerUid: userId,
-      persona: 'personal',
-      goalIds: focusLeafGoalIds,
-      focusRootGoalIds: rootGoalIds,
-      focusLeafGoalIds,
+      persona: focusGoalInput?.persona || 'personal',
+      title: focusGoalInput?.title || null,
+      description: focusGoalInput?.description || null,
+      goalIds,
+      focusRootGoalIds: Array.isArray(focusGoalInput?.focusRootGoalIds) ? focusGoalInput?.focusRootGoalIds : goalIds,
+      focusLeafGoalIds: Array.isArray(focusGoalInput?.focusLeafGoalIds) ? focusGoalInput?.focusLeafGoalIds : goalIds,
       goalTypeMap: goalTypeMap || {},
       timeframe,
-      startDate: serverTimestamp(),
+      startDate: focusGoalInput?.startDate || serverTimestamp(),
       endDate,
       daysRemaining,
       isActive: true,
       storiesCreatedFor: storiesCreatedFor || [],
       potIdsCreatedFor: potIdsCreatedFor || {},
+      visionText: focusGoalInput?.visionText || null,
+      intentBrokerIntakeId: focusGoalInput?.intentBrokerIntakeId || null,
+      intentMatches: focusGoalInput?.intentMatches || [],
+      intentProposals: focusGoalInput?.intentProposals || [],
+      storyTableHandoff: focusGoalInput?.storyTableHandoff !== false,
+      autoCreatedSprintIds: focusGoalInput?.autoCreatedSprintIds || [],
+      deferredNonFocusCount: Number(focusGoalInput?.deferredNonFocusCount || 0) || 0,
       monzoPotGoalRefs: monzoPotGoalRefs || {},
+      sprintPlanByGoalId: focusGoalInput?.sprintPlanByGoalId || {},
+      sprintPlanSegments: focusGoalInput?.sprintPlanSegments || [],
+      pendingLeafGoalsToCreate: focusGoalInput?.pendingLeafGoalsToCreate || [],
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp()
     });
@@ -259,6 +274,48 @@ export async function createFocusGoal(
     console.error('Failed to create focus goal:', error);
     throw error;
   }
+}
+
+const normalizeFocusGoalUpdate = (focusGoal: Partial<FocusGoal>) => {
+  const payload: Record<string, any> = {
+    updatedAt: serverTimestamp(),
+  };
+
+  if ('title' in focusGoal) payload.title = focusGoal.title || null;
+  if ('description' in focusGoal) payload.description = focusGoal.description || null;
+  if ('persona' in focusGoal) payload.persona = focusGoal.persona || 'personal';
+  if (Array.isArray(focusGoal.goalIds)) payload.goalIds = focusGoal.goalIds;
+  if (Array.isArray(focusGoal.focusRootGoalIds)) payload.focusRootGoalIds = focusGoal.focusRootGoalIds;
+  if (Array.isArray(focusGoal.focusLeafGoalIds)) payload.focusLeafGoalIds = focusGoal.focusLeafGoalIds;
+  if ('goalTypeMap' in focusGoal) payload.goalTypeMap = focusGoal.goalTypeMap || {};
+  if ('timeframe' in focusGoal) payload.timeframe = focusGoal.timeframe;
+  if ('endDate' in focusGoal) payload.endDate = focusGoal.endDate || null;
+  if ('daysRemaining' in focusGoal) payload.daysRemaining = Number(focusGoal.daysRemaining || 0) || 0;
+  if ('isActive' in focusGoal) payload.isActive = focusGoal.isActive !== false;
+  if ('visionText' in focusGoal) payload.visionText = focusGoal.visionText || null;
+  if ('intentBrokerIntakeId' in focusGoal) payload.intentBrokerIntakeId = focusGoal.intentBrokerIntakeId || null;
+  if ('intentMatches' in focusGoal) payload.intentMatches = focusGoal.intentMatches || [];
+  if ('intentProposals' in focusGoal) payload.intentProposals = focusGoal.intentProposals || [];
+  if ('storyTableHandoff' in focusGoal) payload.storyTableHandoff = focusGoal.storyTableHandoff !== false;
+  if ('storiesCreatedFor' in focusGoal) payload.storiesCreatedFor = focusGoal.storiesCreatedFor || [];
+  if ('potIdsCreatedFor' in focusGoal) payload.potIdsCreatedFor = focusGoal.potIdsCreatedFor || {};
+  if ('monzoPotGoalRefs' in focusGoal) payload.monzoPotGoalRefs = focusGoal.monzoPotGoalRefs || {};
+  if ('sprintPlanByGoalId' in focusGoal) payload.sprintPlanByGoalId = focusGoal.sprintPlanByGoalId || {};
+  if ('sprintPlanSegments' in focusGoal) payload.sprintPlanSegments = focusGoal.sprintPlanSegments || [];
+  if ('pendingLeafGoalsToCreate' in focusGoal) payload.pendingLeafGoalsToCreate = focusGoal.pendingLeafGoalsToCreate || [];
+  if ('autoCreatedSprintIds' in focusGoal) payload.autoCreatedSprintIds = focusGoal.autoCreatedSprintIds || [];
+  if ('deferredNonFocusCount' in focusGoal) payload.deferredNonFocusCount = Number(focusGoal.deferredNonFocusCount || 0) || 0;
+
+  return payload;
+};
+
+export async function updateFocusGoal(focusGoalId: string, focusGoal: Partial<FocusGoal>) {
+  const focusGoalRef = doc(db, 'focusGoals', focusGoalId);
+  await updateDoc(focusGoalRef, normalizeFocusGoalUpdate(focusGoal));
+}
+
+export async function deleteFocusGoal(focusGoalId: string) {
+  await deleteDoc(doc(db, 'focusGoals', focusGoalId));
 }
 
 export async function persistMonzoGoalRefs(options: {

@@ -68,6 +68,66 @@ const DroppableSlot = ({ date, hour, children }: { date: Date, hour: number, chi
   );
 };
 
+const normalizeCalendarTitle = (value: any): string => {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\[[^\]]+\]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+};
+
+const resolveCalendarMillis = (value: any): number => {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (value && typeof value.toMillis === 'function') return value.toMillis();
+  if (value && typeof value.toDate === 'function') {
+    const date = value.toDate();
+    return date instanceof Date ? date.getTime() : 0;
+  }
+  const parsed = Date.parse(String(value || ''));
+  return Number.isNaN(parsed) ? 0 : parsed;
+};
+
+const dedupeCalendarBlocks = (rows: CalendarBlock[]): CalendarBlock[] => {
+  const bestByKey = new Map<string, CalendarBlock>();
+  rows.forEach((block) => {
+    const entityId = block.googleEventId
+      || block.seriesId
+      || block.taskId
+      || block.storyId
+      || block.goalId
+      || block.habitId
+      || '';
+    const key = block.googleEventId
+      ? `gcal:${block.googleEventId}`
+      : [
+          entityId || 'event',
+          String(block.persona || ''),
+          String(block.start || ''),
+          String(block.end || ''),
+          normalizeCalendarTitle(block.title),
+        ].join('|');
+    const existing = bestByKey.get(key);
+    if (!existing) {
+      bestByKey.set(key, block);
+      return;
+    }
+    const existingUpdated = resolveCalendarMillis((existing as any).updatedAt);
+    const nextUpdated = resolveCalendarMillis((block as any).updatedAt);
+    const existingCreated = resolveCalendarMillis((existing as any).createdAt);
+    const nextCreated = resolveCalendarMillis((block as any).createdAt);
+    const shouldReplace = (
+      (!existing.googleEventId && !!block.googleEventId)
+      || nextUpdated > existingUpdated
+      || nextCreated > existingCreated
+    );
+    if (shouldReplace) {
+      bestByKey.set(key, block);
+    }
+  });
+  return Array.from(bestByKey.values()).sort((a, b) => Number(a.start || 0) - Number(b.start || 0));
+};
+
 const Calendar: React.FC = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
@@ -193,7 +253,7 @@ const Calendar: React.FC = () => {
       snapshot.forEach((doc) => {
         blocksData.push({ id: doc.id, ...doc.data() } as CalendarBlock);
       });
-      setBlocks(blocksData);
+      setBlocks(dedupeCalendarBlocks(blocksData));
     });
     return () => unsubscribe();
   }, [currentUser, currentStart]);

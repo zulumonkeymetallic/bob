@@ -3,6 +3,15 @@ import { collection, query, where, onSnapshot, doc, updateDoc, serverTimestamp }
 import { db } from '../firebase';
 import { FocusGoal } from '../types';
 
+const toMillis = (value: any): number => {
+  if (!value) return Number.NaN;
+  if (typeof value?.toMillis === 'function') return value.toMillis();
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === 'number') return value;
+  const parsed = Date.parse(String(value));
+  return Number.isNaN(parsed) ? Number.NaN : parsed;
+};
+
 export const useFocusGoals = (userId: string | undefined) => {
   const [focusGoals, setFocusGoals] = useState<FocusGoal[]>([]);
   const [loading, setLoading] = useState(true);
@@ -27,11 +36,14 @@ export const useFocusGoals = (userId: string | undefined) => {
 
       // Calculate daysRemaining for each
       const withDaysRemaining = focusGoalsData.map(fg => {
-        const endDate = new Date(fg.endDate);
+        const endDateMs = toMillis(fg.endDate);
         const daysRemaining = Math.ceil(
-          (endDate.getTime() - Date.now()) / (24 * 60 * 60 * 1000)
+          (endDateMs - Date.now()) / (24 * 60 * 60 * 1000)
         );
-        return { ...fg, daysRemaining };
+        return {
+          ...fg,
+          daysRemaining: Number.isFinite(daysRemaining) ? daysRemaining : 0,
+        };
       });
 
       setFocusGoals(withDaysRemaining);

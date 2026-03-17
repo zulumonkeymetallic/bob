@@ -41,7 +41,8 @@ import {
   Activity,
   Wand2,
   Pencil,
-  Trash2
+  Trash2,
+  CalendarDays
 } from 'lucide-react';
 import { Goal, Story } from '../types';
 import { ChoiceHelper } from '../config/choices';
@@ -87,6 +88,7 @@ interface ModernGoalsTableProps {
   onGoalDelete: (goalId: string) => Promise<void>;
   onGoalPriorityChange: (goalId: string, newPriority: number) => Promise<void>;
   onEditModal?: (goal: Goal) => void;
+  onOpenWorkspace?: (goal: Goal) => void;
   onGoalReorder?: (activeId: string, overId: string) => Promise<void>;
   highlightStoryId?: string;
   highlightGoalId?: string;
@@ -146,7 +148,7 @@ const defaultColumns: Column[] = [
   {
     key: 'linkedPotId',
     label: 'Linked Pot',
-    width: '20%',
+    width: '16%',
     visible: true,
     editable: true,
     type: 'text'
@@ -250,6 +252,7 @@ interface SortableRowProps {
   onGoalUpdate: (goalId: string, updates: Partial<Goal>) => void;
   onGoalDelete: (goalId: string) => void;
   onEditModal: (goal: Goal) => void;
+  onOpenWorkspace?: (goal: Goal) => void;
   onRowClick: (goal: Goal) => void;
   expandedGoalId: string | null;
   goalStories: { [goalId: string]: Story[] };
@@ -322,6 +325,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
   onGoalUpdate,
   onGoalDelete,
   onEditModal,
+  onOpenWorkspace,
   onRowClick,
   onGoalExpand,
   onStoryUpdate,
@@ -1074,6 +1078,29 @@ const SortableRow: React.FC<SortableRowProps> = ({
               <Wand2 size={14} />
             </button>
             <button
+              onClick={() => onOpenWorkspace?.(goal)}
+              style={{
+                color: themeVars.brand as string,
+                padding: '4px',
+                borderRadius: '4px',
+                border: 'none',
+                backgroundColor: 'transparent',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = rgbaCard(0.08);
+                e.currentTarget.style.color = themeVars.brand as string;
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = 'transparent';
+                e.currentTarget.style.color = themeVars.brand as string;
+              }}
+              title="Open planning workspace"
+            >
+              <CalendarDays size={14} />
+            </button>
+            <button
               onClick={() => handleEditClick()}
               style={{
                 color: themeVars.brand as string,
@@ -1167,6 +1194,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
   onGoalDelete,
   onGoalPriorityChange,
   onEditModal,
+  onOpenWorkspace,
   onGoalReorder,
   highlightStoryId,
   highlightGoalId,
@@ -1863,6 +1891,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
                       onGoalUpdate={onGoalUpdate}
                       onGoalDelete={onGoalDelete}
                       onEditModal={onEditModal ? onEditModal : handleEditModal}
+                      onOpenWorkspace={onOpenWorkspace}
                       onRowClick={handleRowClick}
                       onGoalExpand={handleGoalExpand}
                       onStoryUpdate={handleStoryUpdate}

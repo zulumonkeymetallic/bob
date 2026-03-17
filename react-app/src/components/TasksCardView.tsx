@@ -1,26 +1,29 @@
 import React, { useState, useEffect, useCallback, useMemo, useLayoutEffect, useRef } from 'react';
-import { Card, Badge, Button, Dropdown, Form } from 'react-bootstrap';
-import { Edit3, Trash2, ChevronDown, Target, Calendar, Activity, Clock } from 'lucide-react';
+import { Card, Badge, Button, Form, Toast, ToastContainer } from 'react-bootstrap';
+import { Edit3, Trash2, Target, Calendar, Activity, Clock, Clock3 } from 'lucide-react';
 import { collection, query, where, orderBy, limit, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
+import { usePersona } from '../contexts/PersonaContext';
 import { useSidebar } from '../contexts/SidebarContext';
 import { Task, Story, Goal } from '../types';
-import { getPriorityColor } from '../utils/statusHelpers';
 import { themeVars } from '../utils/themeVars';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { GLOBAL_THEMES, migrateThemeValue, type GlobalTheme } from '../constants/globalThemes';
 import { ActivityStreamService } from '../services/ActivityStreamService';
-import { priorityLabel, taskStatusText } from '../utils/storyCardFormatting';
+import { priorityLabel, priorityPillClass, taskStatusText } from '../utils/storyCardFormatting';
 import DeferItemModal from './DeferItemModal';
+import NewCalendarEventModal, { type BlockFormState, buildCalendarComposerInitialValues } from './planner/NewCalendarEventModal';
+import '../styles/KanbanCards.css';
 
 interface TasksCardViewProps {
   tasks: Task[];
   stories: Story[];
   goals: Goal[];
-  onTaskUpdate: (taskId: string, updates: Partial<Task>) => void;
+  onTaskUpdate: (taskId: string, updates: Partial<Task>) => void | Promise<void>;
   onTaskDelete: (taskId: string) => void;
   onTaskPriorityChange: (taskId: string, newPriority: number) => void;
+  onEditTask: (task: Task) => void;
 }
 
 const TasksCardView: React.FC<TasksCardViewProps> = ({
@@ -29,9 +32,11 @@ const TasksCardView: React.FC<TasksCardViewProps> = ({
   goals,
   onTaskUpdate,
   onTaskDelete,
-  onTaskPriorityChange
+  onTaskPriorityChange,
+  onEditTask
 }) => {
   const { currentUser } = useAuth();
+  const { currentPersona } = usePersona();
   const { showSidebar } = useSidebar();
   const { themes: globalThemes } = useGlobalThemes();
   const [latestActivities, setLatestActivities] = useState<{ [taskId: string]: any }>({});
@@ -57,6 +62,12 @@ const TasksCardView: React.FC<TasksCardViewProps> = ({
   const [rowSpans, setRowSpans] = useState<Record<string, number>>({});
   const gridRef = useRef<HTMLDivElement | null>(null);
   const [deferTask, setDeferTask] = useState<Task | null>(null);
+  const [scheduleTask, setScheduleTask] = useState<Task | null>(null);
+  const [feedback, setFeedback] = useState<{ show: boolean; message: string; variant: 'success' | 'danger' | 'info' }>({
+    show: false,
+    message: '',
+    variant: 'info',
+  });
 
   useEffect(() => {
     try {
@@ -121,37 +132,11 @@ const TasksCardView: React.FC<TasksCardViewProps> = ({
     return defaultTheme;
   };
 
-  const hexToRgb = (hex: string) => {
-    const value = hex.replace('#', '');
-    const full = value.length === 3 ? value.split('').map(c => c + c).join('') : value;
-    const bigint = parseInt(full, 16);
-    const r = (bigint >> 16) & 255;
-    const g = (bigint >> 8) & 255;
-    const b = bigint & 255;
-    return { r, g, b };
-  };
-
-  const rgbToHex = (r: number, g: number, b: number) => `#${[r, g, b]
-    .map(v => {
-      const clamped = Math.max(0, Math.min(255, Math.round(v)));
-      return clamped.toString(16).padStart(2, '0');
-    })
-    .join('')}`;
-
   const withAlpha = (color: string, alpha: number) => {
     const pct = Math.round(Math.max(0, Math.min(1, alpha)) * 100);
     if (pct <= 0) return 'transparent';
     if (pct >= 100) return color;
     return `color-mix(in srgb, ${color} ${pct}%, transparent)`;
-  };
-
-  const lightenColor = (hex: string, amount: number) => {
-    const { r, g, b } = hexToRgb(hex);
-    const factor = Math.max(0, Math.min(1, amount));
-    const nr = r + (255 - r) * factor;
-    const ng = g + (255 - g) * factor;
-    const nb = b + (255 - b) * factor;
-    return rgbToHex(nr, ng, nb);
   };
 
   const getStoryForTask = (task: Task): Story | undefined => {
@@ -269,10 +254,49 @@ const TasksCardView: React.FC<TasksCardViewProps> = ({
     return () => observer.disconnect();
   }, [tasks, showDescriptions, showUpdates]);
 
-  const handleStatusChange = (taskId: string, newStatus: 'Backlog' | 'In Progress' | 'Done' | 'Blocked') => {
-    const numericStatus = newStatus === 'Backlog' ? 0 : newStatus === 'In Progress' ? 1 : newStatus === 'Done' ? 2 : 3;
-    onTaskUpdate(taskId, { status: numericStatus as any });
+  const cycleTaskStatus = (task: Task) => {
+    const sequence = [0, 1, 2, 3];
+    const current = Number((task as any).status ?? 0);
+    const currentIndex = sequence.indexOf(current);
+    const nextValue = sequence[(currentIndex + 1) % sequence.length];
+    onTaskUpdate(task.id, { status: nextValue as any });
   };
+
+  const cycleTaskPriority = (task: Task) => {
+    const sequence = [0, 1, 2, 3, 4];
+    const current = Number((task as any).priority ?? 0);
+    const currentIndex = sequence.indexOf(current);
+    const nextValue = sequence[(currentIndex + 1) % sequence.length];
+    onTaskPriorityChange(task.id, nextValue);
+  };
+
+  const showToast = (message: string, variant: 'success' | 'danger' | 'info' = 'info') => {
+    setFeedback({ show: true, message, variant });
+  };
+
+  const linkedScheduleStories = useMemo(() => {
+    if (!scheduleTask) return [] as Story[];
+    const linkedStory = getStoryForTask(scheduleTask);
+    return linkedStory ? [linkedStory] : [];
+  }, [scheduleTask, stories]);
+
+  const scheduleInitialValues = useMemo(() => {
+    if (!scheduleTask) return undefined;
+    const linkedStory = getStoryForTask(scheduleTask);
+    const estimateMin = Number((scheduleTask as any).estimateMin || 0) || (Number((scheduleTask as any).points || 0) * 60);
+    return buildCalendarComposerInitialValues({
+      title: scheduleTask.title || 'Task block',
+      rationale: 'Manual schedule from task card',
+      persona: ((scheduleTask as any).persona || (linkedStory as any)?.persona || currentPersona || 'personal') as 'personal' | 'work',
+      theme: String((linkedStory as any)?.theme || (scheduleTask as any)?.theme || 'General'),
+      category: (((scheduleTask as any).persona || currentPersona) === 'work' ? 'Work (Main Gig)' : 'Wellbeing') as any,
+      storyId: linkedStory?.id,
+      taskId: scheduleTask.id,
+      estimateMin,
+      aiScore: Number.isFinite(Number((scheduleTask as any).aiCriticalityScore)) ? Number((scheduleTask as any).aiCriticalityScore) : null,
+      aiReason: String((scheduleTask as any).aiReason || (scheduleTask as any).aiPriorityReason || '').trim() || null,
+    }) as Partial<BlockFormState>;
+  }, [currentPersona, scheduleTask, stories]);
 
   const toDate = (value: any) => {
     if (!value) return null;
@@ -282,12 +306,20 @@ const TasksCardView: React.FC<TasksCardViewProps> = ({
     return Number.isNaN(parsed.getTime()) ? null : parsed;
   };
 
-  const statusColors = {
-    Backlog: 'var(--muted)',
-    'In Progress': 'var(--green)',
-    Done: 'var(--brand)',
-    Blocked: 'var(--red)'
-  } as const;
+  const statusPillClass = (label: string) => {
+    const normalized = String(label).toLowerCase();
+    const base = 'kanban-card__meta-pill';
+    if (normalized.includes('done')) return `${base} kanban-card__meta-pill--success`;
+    if (normalized.includes('progress')) return `${base} kanban-card__meta-pill--orange`;
+    if (normalized.includes('block')) return `${base} kanban-card__meta-pill--danger`;
+    return base;
+  };
+
+  const formatDateChip = (value: any) => {
+    const date = toDate(value);
+    if (!date) return null;
+    return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  };
 
   if (tasks.length === 0) {
     return (
@@ -328,14 +360,10 @@ const TasksCardView: React.FC<TasksCardViewProps> = ({
           const themeDef = resolveTheme(themeValue);
           const themeColor = themeDef.color || (themeVars.brand as string);
           const themeTextColor = themeDef.textColor || (themeVars.onAccent as string);
-          const gradientStart = lightenColor(themeColor, 0.45);
-          const gradientEnd = lightenColor(themeColor, 0.78);
-          const cardBackground = `linear-gradient(165deg, ${gradientStart} 0%, ${gradientEnd} 100%)`;
           const textColor = themeVars.text as string;
           const mutedTextColor = themeVars.muted as string;
           const statusLabel = taskStatusText(task.status);
           const priorityText = priorityLabel(task.priority, `P${task.priority ?? 2}`);
-          const priorityVariant = getPriorityColor(task.priority);
           const latestActivity = latestActivities[task.id];
           const showActivity = showUpdates && !!latestActivity;
           const showTaskDescription = showDescriptions && !!task.description;
@@ -345,6 +373,10 @@ const TasksCardView: React.FC<TasksCardViewProps> = ({
           const lastSyncedAt = toDate(lastSyncedRaw);
           const rowSpan = rowSpans[task.id];
           const nextBlock = nextBlocks[task.id];
+          const aiScore = Number((task as any).aiCriticalityScore ?? NaN);
+          const dueChip = formatDateChip(task.dueDate || (task as any).targetDate);
+          const isTop3 = Boolean((task as any).aiTop3ForDay);
+          const points = Number((task as any).points ?? 0);
 
           return (
             <div
@@ -364,13 +396,13 @@ const TasksCardView: React.FC<TasksCardViewProps> = ({
                   overflow: 'hidden',
                   transition: 'all 0.3s ease',
                   cursor: 'pointer',
-                  background: cardBackground,
+                  background: 'var(--bs-body-bg, #fff)',
                   color: textColor,
                   display: 'flex',
                   flexDirection: 'column'
                 }}
                 onClick={() => {
-                  try { showSidebar(task, 'task'); } catch { }
+                  onEditTask(task);
                 }}
                 onMouseEnter={(e) => {
                   e.currentTarget.style.transform = 'translateY(-2px)';
@@ -381,8 +413,7 @@ const TasksCardView: React.FC<TasksCardViewProps> = ({
                   e.currentTarget.style.boxShadow = '0 6px 12px var(--glass-shadow-color)';
                 }}
               >
-                <div style={{ height: '6px', backgroundColor: themeColor }} />
-                <Card.Body style={{ padding: '14px 12px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <Card.Body style={{ padding: '14px 12px', display: 'flex', flexDirection: 'column', gap: '10px', borderLeft: `4px solid ${themeColor}` }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       {task.ref && (
@@ -390,11 +421,24 @@ const TasksCardView: React.FC<TasksCardViewProps> = ({
                           {task.ref}
                         </div>
                       )}
-                      <h5 style={{ margin: '4px 0 0 0', fontSize: '16px', fontWeight: 600, lineHeight: '1.3', color: textColor }}>
+                      <h5 className="kanban-card__title" style={{ margin: '4px 0 0 0', fontSize: '16px', fontWeight: 600, lineHeight: '1.3', color: textColor }}>
                         {task.title}
                       </h5>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <Button
+                        variant="link"
+                        size="sm"
+                        className="p-0"
+                        style={{ width: 24, height: 24, color: textColor }}
+                        title="Schedule task"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setScheduleTask(task);
+                        }}
+                      >
+                        <Calendar size={14} />
+                      </Button>
                       <Button
                         variant="link"
                         size="sm"
@@ -416,49 +460,44 @@ const TasksCardView: React.FC<TasksCardViewProps> = ({
                         title="Edit task"
                         onClick={(e) => {
                           e.stopPropagation();
-                          showSidebar(task, 'task');
+                          onEditTask(task);
                         }}
                       >
                         <Edit3 size={14} />
                       </Button>
-                      <Dropdown onClick={(e) => e.stopPropagation()}>
-                        <Dropdown.Toggle
-                          variant="outline-secondary"
-                          size="sm"
-                          style={{ border: 'none', padding: '4px 6px', color: textColor }}
-                        >
-                          <ChevronDown size={16} />
-                        </Dropdown.Toggle>
-                        <Dropdown.Menu style={{ zIndex: 2000 }} popperConfig={{ strategy: 'fixed' }}>
-                          <Dropdown.Header>Change Status</Dropdown.Header>
-                          <Dropdown.Item onClick={() => handleStatusChange(task.id, 'Backlog')}>Backlog</Dropdown.Item>
-                          <Dropdown.Item onClick={() => handleStatusChange(task.id, 'In Progress')}>In Progress</Dropdown.Item>
-                          <Dropdown.Item onClick={() => handleStatusChange(task.id, 'Done')}>Done</Dropdown.Item>
-                          <Dropdown.Item onClick={() => handleStatusChange(task.id, 'Blocked')}>Blocked</Dropdown.Item>
-                          <Dropdown.Divider />
-                          <Dropdown.Header>Change Priority</Dropdown.Header>
-                          <Dropdown.Item onClick={() => onTaskPriorityChange(task.id, 4)}>Critical (4)</Dropdown.Item>
-                          <Dropdown.Item onClick={() => onTaskPriorityChange(task.id, 3)}>High (3)</Dropdown.Item>
-                          <Dropdown.Item onClick={() => onTaskPriorityChange(task.id, 2)}>Medium (2)</Dropdown.Item>
-                          <Dropdown.Item onClick={() => onTaskPriorityChange(task.id, 1)}>Low (1)</Dropdown.Item>
-                          <Dropdown.Divider />
-                          <Dropdown.Item onClick={() => setDeferTask(task)}>
-                            Defer intelligently
-                          </Dropdown.Item>
-                          <Dropdown.Item
-                            className="text-danger"
-                            onClick={() => {
-                              if (window.confirm('Delete this task? This cannot be undone.')) {
-                                onTaskDelete(task.id);
-                              }
-                            }}
-                          >
-                            <Trash2 size={14} className="me-2" />
-                            Delete Task
-                          </Dropdown.Item>
-                        </Dropdown.Menu>
-                      </Dropdown>
                     </div>
+                  </div>
+
+                  <div className="d-flex align-items-center gap-2 flex-wrap">
+                    <Badge bg="primary">Task</Badge>
+                    <button
+                      type="button"
+                      className={statusPillClass(statusLabel)}
+                      style={{ appearance: 'none', backgroundClip: 'padding-box', cursor: 'pointer' }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        cycleTaskStatus(task);
+                      }}
+                      title="Tap to cycle status"
+                    >
+                      {statusLabel}
+                    </button>
+                    <button
+                      type="button"
+                      className={priorityPillClass(task.priority ?? null)}
+                      style={{ appearance: 'none', backgroundClip: 'padding-box', cursor: 'pointer' }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        cycleTaskPriority(task);
+                      }}
+                      title="Tap to cycle priority"
+                    >
+                      {priorityText}
+                    </button>
+                    {dueChip && <Badge bg="light" text="dark">Due {dueChip}</Badge>}
+                    {Number.isFinite(aiScore) && <Badge bg="secondary">AI {Math.round(aiScore)}/100</Badge>}
+                    {points > 0 && <Badge bg="dark">Pts {points}</Badge>}
+                    {isTop3 && <Badge bg="danger">Top 3</Badge>}
                   </div>
 
                   {(showTaskDescription || showActivity) && (
@@ -553,24 +592,6 @@ const TasksCardView: React.FC<TasksCardViewProps> = ({
                     </div>
                   )}
 
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                    <Badge style={{ backgroundColor: themeColor, color: themeTextColor, fontSize: '11px' }}>
-                      {themeDef.label}
-                    </Badge>
-                    <Badge
-                      style={{
-                        backgroundColor: statusColors[statusLabel as keyof typeof statusColors] || 'var(--muted)',
-                        color: 'var(--on-accent)',
-                        fontSize: '11px'
-                      }}
-                    >
-                      {statusLabel}
-                    </Badge>
-                    <Badge bg={priorityVariant} style={{ fontSize: '11px' }}>
-                      {priorityText}
-                    </Badge>
-                  </div>
-
                   {nextBlock && (
                     <div
                       style={{
@@ -596,6 +617,33 @@ const TasksCardView: React.FC<TasksCardViewProps> = ({
                       </span>
                     </div>
                   )}
+
+                  <div className="d-flex align-items-center gap-2 flex-wrap">
+                    <Button
+                      variant="outline-warning"
+                      size="sm"
+                      className="d-inline-flex align-items-center gap-1"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setDeferTask(task);
+                      }}
+                    >
+                      <Clock3 size={14} /> Defer
+                    </Button>
+                    <Button
+                      variant="outline-danger"
+                      size="sm"
+                      className="d-inline-flex align-items-center gap-1"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (window.confirm('Delete this task? This cannot be undone.')) {
+                          onTaskDelete(task.id);
+                        }
+                      }}
+                    >
+                      <Trash2 size={14} /> Delete
+                    </Button>
+                  </div>
 
                   <div
                     style={{
@@ -646,15 +694,45 @@ const TasksCardView: React.FC<TasksCardViewProps> = ({
         itemTitle={deferTask?.title || ''}
         onApply={async ({ dateMs, rationale, source }) => {
           if (!deferTask) return;
-          onTaskUpdate(deferTask.id, {
-            dueDate: dateMs,
-            deferredUntil: dateMs,
-            deferredReason: rationale,
-            deferredBy: source,
-          });
-          setDeferTask(null);
+          try {
+            await Promise.resolve(onTaskUpdate(deferTask.id, {
+              dueDate: dateMs,
+              deferredUntil: dateMs,
+              deferredReason: rationale,
+              deferredBy: source,
+            }));
+            showToast(`${deferTask.title} deferred to ${new Date(dateMs).toLocaleDateString()}.`, 'success');
+            setDeferTask(null);
+          } catch (error) {
+            console.error('TasksCardView: failed to defer task', error);
+            showToast('Failed to defer task.', 'danger');
+          }
         }}
       />
+      <NewCalendarEventModal
+        show={Boolean(scheduleTask)}
+        onHide={() => setScheduleTask(null)}
+        initialValues={scheduleInitialValues}
+        stories={linkedScheduleStories}
+        onSaved={() => {
+          const title = scheduleTask?.title || 'Task';
+          setScheduleTask(null);
+          showToast(`${title} added to your calendar.`, 'success');
+        }}
+      />
+      <ToastContainer position="bottom-end" className="p-3" style={{ zIndex: 1080 }}>
+        <Toast
+          bg={feedback.variant}
+          onClose={() => setFeedback((prev) => ({ ...prev, show: false }))}
+          show={feedback.show}
+          delay={3500}
+          autohide
+        >
+          <Toast.Body className={feedback.variant === 'info' ? '' : 'text-white'}>
+            {feedback.message}
+          </Toast.Body>
+        </Toast>
+      </ToastContainer>
     </div>
   );
 };

@@ -30,6 +30,7 @@ const TaskListView: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'list' | 'cards'>('list');
   const [showAddTaskModal, setShowAddTaskModal] = useState(false);
+  const [editTask, setEditTask] = useState<Task | null>(null);
   const { selectedSprintId, setSelectedSprintId, sprints: rawSprints } = useSprint();
   const { themes: globalThemes } = useGlobalThemes();
   const location = useLocation();
@@ -544,6 +545,7 @@ const TaskListView: React.FC = () => {
                 onTaskUpdate={handleTaskUpdate}
                 onTaskDelete={handleTaskDelete}
                 onTaskPriorityChange={handleTaskPriorityChange}
+                onEditTask={setEditTask}
               />
             ) : (
               <div style={{ height: '600px', overflow: 'auto' }}>
@@ -566,6 +568,12 @@ const TaskListView: React.FC = () => {
         task={null}
         onHide={() => setShowAddTaskModal(false)}
         onUpdated={() => setShowAddTaskModal(false)}
+      />
+      <EditTaskModal
+        show={!!editTask}
+        task={editTask}
+        onHide={() => setEditTask(null)}
+        onUpdated={() => setEditTask(null)}
       />
     </div>
   );

@@ -5,6 +5,7 @@ import { collection, query, where, orderBy, limit, onSnapshot, doc, setDoc } fro
 import { useAuth } from '../contexts/AuthContext';
 import { useLocation } from 'react-router-dom';
 import { Line } from 'react-chartjs-2';
+import { ResponsiveContainer, PieChart, Pie, Cell, Tooltip as RechartsTooltip } from 'recharts';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -79,6 +80,38 @@ interface HealthTrendPoint {
   readiness: number | null;
 }
 
+interface RecoveryTrendPoint {
+  dayKey: string;
+  label: string;
+  ms: number;
+  hrvMs: number | null;
+  vo2Max: number | null;
+}
+
+interface ComplianceCardSummary {
+  key: string;
+  label: string;
+  valueLabel: string;
+  targetLabel: string;
+  progressPct: number | null;
+  tone: 'success' | 'warning' | 'secondary';
+  labels: string[];
+  series: Array<number | null>;
+}
+
+const CARDIO_FITNESS_METRIC_KEYS = [
+  'healthkitVo2Max',
+  'healthkitVO2Max',
+  'healthkitCardioFitness',
+  'vo2Max',
+  'cardioFitness',
+  'cardioFitnessVo2Max',
+  'appleHealthCardioFitness',
+  'appleHealthVo2Max',
+];
+
+const clampPercent = (value: number): number => Math.max(0, Math.min(999, Math.round(value)));
+
 function fmtTime(sec?: number | null): string {
   const s = Math.floor(sec || 0);
   const h = Math.floor(s/3600), m = Math.floor((s%3600)/60), ss = s%60;
@@ -115,6 +148,16 @@ function resolveWorkoutStartMs(w: WorkoutDoc): number {
 
 type SportMode = 'run' | 'swim' | 'bike';
 
+type ActivityCompositionKey =
+  | 'run'
+  | 'swim'
+  | 'bike'
+  | 'walk'
+  | 'strength'
+  | 'crossfit'
+  | 'mobility'
+  | 'other';
+
 function getWorkoutSport(w: WorkoutDoc): SportMode | 'other' {
   if (w.provider === 'parkrun') return 'run';
   if (w.run === true) return 'run';
@@ -123,6 +166,19 @@ function getWorkoutSport(w: WorkoutDoc): SportMode | 'other' {
   if (type.includes('ride') || type.includes('bike') || type.includes('cycling')) return 'bike';
   if (type.includes('run') || type.includes('walk') || type.includes('hike')) return 'run';
   return 'other';
+}
+
+function classifyWorkoutActivityType(w: WorkoutDoc): ActivityCompositionKey {
+  if (w.provider === 'parkrun') return 'run';
+  const haystack = `${String(w.type || '')} ${String(w.sportType || '')} ${String(w.title || '')} ${String(w.name || '')} ${String(w.event || '')}`.toLowerCase();
+  if (haystack.includes('crossfit')) return 'crossfit';
+  if (haystack.includes('strength') || haystack.includes('weights') || haystack.includes('resistance') || haystack.includes('gym')) return 'strength';
+  if (haystack.includes('yoga') || haystack.includes('pilates') || haystack.includes('mobility') || haystack.includes('stretch')) return 'mobility';
+  if (haystack.includes('swim')) return 'swim';
+  if (haystack.includes('ride') || haystack.includes('bike') || haystack.includes('cycling')) return 'bike';
+  if (haystack.includes('walk') || haystack.includes('hike')) return 'walk';
+  if (haystack.includes('run')) return 'run';
+  return getWorkoutSport(w);
 }
 
 function workoutMatchesSport(w: WorkoutDoc, sportMode: SportMode): boolean {
@@ -159,6 +215,10 @@ function resolveMetricDateMs(metric: any): number {
     if (Number.isFinite(parsed)) return parsed;
   }
   return toMillis(metric?.updatedAt) || toMillis(metric?.createdAt) || 0;
+}
+
+function resolveObservedMetricMs(metric: any): number {
+  return Number(metric?.observedAt || 0) || toMillis(metric?.observedAt) || resolveMetricDateMs(metric);
 }
 
 function formatMetricLabel(ms: number): string {
@@ -210,6 +270,43 @@ function formatSignedSecDelta(deltaSec: number | null): string {
   return `${sign}${s}s`;
 }
 
+function formatMinutesCompact(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '—';
+  const minutes = Math.max(0, Math.round(value));
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  if (hours > 0 && mins > 0) return `${hours}h ${mins}m`;
+  if (hours > 0) return `${hours}h`;
+  return `${mins}m`;
+}
+
+function formatPercentCompact(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '—';
+  return `${Math.round(value)}%`;
+}
+
+const ACTIVITY_COMPOSITION_COLORS: Record<ActivityCompositionKey, string> = {
+  run: '#2563eb',
+  swim: '#0f766e',
+  bike: '#d97706',
+  walk: '#16a34a',
+  strength: '#7c3aed',
+  crossfit: '#dc2626',
+  mobility: '#0891b2',
+  other: '#6b7280',
+};
+
+const ACTIVITY_COMPOSITION_LABELS: Record<ActivityCompositionKey, string> = {
+  run: 'Run',
+  swim: 'Swim',
+  bike: 'Bike',
+  walk: 'Walk / Hike',
+  strength: 'Strength',
+  crossfit: 'CrossFit',
+  mobility: 'Mobility',
+  other: 'Other',
+};
+
 function trendArrow(delta: number | null, lowerIsBetter: boolean): JSX.Element {
   if (delta == null || !Number.isFinite(delta) || Math.abs(delta) < 0.001) {
     return <span className="text-muted ms-1">→</span>;
@@ -259,6 +356,7 @@ const WorkoutsDashboard: React.FC = () => {
   const [workouts, setWorkouts] = useState<WorkoutDoc[]>([]);
   const [healthProfile, setHealthProfile] = useState<any | null>(null);
   const [healthMetrics, setHealthMetrics] = useState<any[]>([]);
+  const [vo2Metrics, setVo2Metrics] = useState<any[]>([]);
   const [providerFilter, setProviderFilter] = useState<'all'|'strava'|'parkrun'>('all');
   const [settingsMsg, setSettingsMsg] = useState<string>('');
   const [zoneDisplayMode, setZoneDisplayMode] = useState<'time'|'percent'>('time');
@@ -391,6 +489,23 @@ const WorkoutsDashboard: React.FC = () => {
     return () => unsub();
   }, [currentUser]);
 
+  useEffect(() => {
+    if (!currentUser) {
+      setVo2Metrics([]);
+      return;
+    }
+    const qRef = query(
+      collection(db, 'metric_values'),
+      where('ownerUid', '==', currentUser.uid),
+      where('metricKey', 'in', CARDIO_FITNESS_METRIC_KEYS),
+      limit(180)
+    );
+    const unsub = onSnapshot(qRef, (snap) => {
+      setVo2Metrics(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })));
+    }, () => setVo2Metrics([]));
+    return () => unsub();
+  }, [currentUser]);
+
   const minWindowStartMs = useMemo(() => {
     if (lookbackWindow === 'all') return null;
     const now = new Date();
@@ -417,6 +532,17 @@ const WorkoutsDashboard: React.FC = () => {
       sourceLabel: ['authorized', 'synced'].includes(String(healthProfile.healthkitStatus || '').toLowerCase()) ? 'HealthKit' : 'Manual',
       weightKg: readNumericValue(healthProfile, 'healthkitWeightKg', 'manualWeightKg'),
       bodyFatPct: readNumericValue(healthProfile, 'healthkitBodyFatPct', 'manualBodyFatPct'),
+      vo2Max: readNumericValue(
+        healthProfile,
+        'healthkitVo2Max',
+        'healthkitVO2Max',
+        'healthkitCardioFitness',
+        'vo2Max',
+        'cardioFitness',
+        'cardioFitnessVo2Max',
+        'appleHealthCardioFitness',
+        'appleHealthVo2Max',
+      ),
       stepsToday: readNumericValue(healthProfile, 'healthkitStepsToday', 'manualStepsToday'),
       distanceKmToday: readNumericValue(healthProfile, 'healthkitDistanceKmToday', 'manualDistanceKmToday'),
       workoutMinutesToday: readNumericValue(healthProfile, 'healthkitWorkoutMinutesToday', 'manualWorkoutMinutesToday'),
@@ -502,10 +628,85 @@ const WorkoutsDashboard: React.FC = () => {
       byDay.set(dayKey, current);
     }
 
+    if (currentHealthSnapshot) {
+      const todayMs = Date.now();
+      const todayKey = new Date(todayMs).toISOString().slice(0, 10);
+      const current = byDay.get(todayKey) || {
+        dayKey: todayKey,
+        label: formatMetricLabel(todayMs),
+        ms: todayMs,
+        steps: null,
+        workoutMinutes: 0,
+        distanceKm: 0,
+      };
+      if (currentHealthSnapshot.stepsToday != null) current.steps = currentHealthSnapshot.stepsToday;
+      if (currentHealthSnapshot.workoutMinutesToday != null) current.workoutMinutes = Math.max(current.workoutMinutes, currentHealthSnapshot.workoutMinutesToday);
+      if (currentHealthSnapshot.distanceKmToday != null) current.distanceKm = Math.max(current.distanceKm, currentHealthSnapshot.distanceKmToday);
+      current.ms = Math.max(current.ms, todayMs);
+      current.label = formatMetricLabel(current.ms);
+      byDay.set(todayKey, current);
+    }
+
     return Array.from(byDay.values())
       .sort((a, b) => a.ms - b.ms)
       .slice(-30);
-  }, [healthTrendRows, workouts, excludeWithDadFromMetrics]);
+  }, [healthTrendRows, workouts, excludeWithDadFromMetrics, currentHealthSnapshot]);
+
+  const recoveryTrendRows = useMemo<RecoveryTrendPoint[]>(() => {
+    const byDay = new Map<string, RecoveryTrendPoint>();
+
+    for (const metric of healthMetrics) {
+      const metricMs = resolveMetricDateMs(metric);
+      if (!metricMs) continue;
+      const dayKey = new Date(metricMs).toISOString().slice(0, 10);
+      const hrvValue = readNumericValue(metric, 'value', 'rMSSD', 'hrv');
+      const current = byDay.get(dayKey) || {
+        dayKey,
+        label: formatMetricLabel(metricMs),
+        ms: metricMs,
+        hrvMs: null,
+        vo2Max: null,
+      };
+      if (hrvValue != null) current.hrvMs = hrvValue;
+      current.ms = Math.max(current.ms, metricMs);
+      current.label = formatMetricLabel(current.ms);
+      byDay.set(dayKey, current);
+    }
+
+    for (const metric of vo2Metrics) {
+      const metricMs = resolveObservedMetricMs(metric);
+      if (!metricMs) continue;
+      const dayKey = new Date(metricMs).toISOString().slice(0, 10);
+      const vo2Value = readNumericValue(
+        metric,
+        'value',
+        'vo2Max',
+        'healthkitVo2Max',
+        'healthkitVO2Max',
+        'healthkitCardioFitness',
+        'cardioFitness',
+        'cardioFitnessVo2Max',
+        'appleHealthCardioFitness',
+        'appleHealthVo2Max',
+      );
+      if (vo2Value == null) continue;
+      const current = byDay.get(dayKey) || {
+        dayKey,
+        label: formatMetricLabel(metricMs),
+        ms: metricMs,
+        hrvMs: null,
+        vo2Max: null,
+      };
+      current.vo2Max = vo2Value;
+      current.ms = Math.max(current.ms, metricMs);
+      current.label = formatMetricLabel(current.ms);
+      byDay.set(dayKey, current);
+    }
+
+    return Array.from(byDay.values())
+      .sort((a, b) => a.ms - b.ms)
+      .slice(-30);
+  }, [healthMetrics, vo2Metrics]);
 
   const bodyCompositionChartData = useMemo(() => ({
     labels: healthTrendRows.map((row) => row.label),
@@ -592,6 +793,47 @@ const WorkoutsDashboard: React.FC = () => {
         type: 'linear',
         position: 'right',
         title: { display: true, text: 'Minutes / km' },
+        grid: { drawOnChartArea: false },
+      },
+    },
+  }), []);
+
+  const recoveryChartData = useMemo(() => ({
+    labels: recoveryTrendRows.map((row) => row.label),
+    datasets: [
+      {
+        label: 'HRV (ms)',
+        data: recoveryTrendRows.map((row) => row.hrvMs),
+        borderColor: '#dc3545',
+        backgroundColor: 'rgba(220, 53, 69, 0.12)',
+        yAxisID: 'yHrv',
+        spanGaps: true,
+      },
+      {
+        label: 'Cardio Fitness (VO2 Max)',
+        data: recoveryTrendRows.map((row) => row.vo2Max),
+        borderColor: '#0d6efd',
+        backgroundColor: 'rgba(13, 110, 253, 0.12)',
+        yAxisID: 'yVo2',
+        spanGaps: true,
+      },
+    ],
+  }), [recoveryTrendRows]);
+
+  const recoveryChartOptions: any = useMemo(() => ({
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: { mode: 'index', intersect: false },
+    scales: {
+      yHrv: {
+        type: 'linear',
+        position: 'left',
+        title: { display: true, text: 'HRV (ms)' },
+      },
+      yVo2: {
+        type: 'linear',
+        position: 'right',
+        title: { display: true, text: 'Cardio Fitness' },
         grid: { drawOnChartArea: false },
       },
     },
@@ -1252,6 +1494,289 @@ const WorkoutsDashboard: React.FC = () => {
     ? sportCards.filter((card) => card.sport === 'run')
     : sportCards;
 
+  const workoutTargetModel = useMemo(() => {
+    const explicitTargetMinutes = readNumericValue(
+      healthProfile,
+      'weeklyWorkoutTargetMinutes',
+      'targetWorkoutMinutesPerWeek',
+      'workoutTargetMinutesWeekly',
+      'healthTargetWorkoutMinutesWeekly',
+      'targetExerciseMinutesWeekly',
+    );
+    const awakeHoursPerDay = Math.max(0, readNumericValue(
+      healthProfile,
+      'awakeHoursPerDay',
+      'targetAwakeHoursPerDay',
+      'healthAwakeHoursPerDay',
+    ) ?? 16);
+    const workHoursPerDay = Math.max(0, readNumericValue(
+      healthProfile,
+      'workHoursPerDay',
+      'targetWorkHoursPerDay',
+      'healthWorkHoursPerDay',
+    ) ?? 8);
+    const workoutPctOfFreeTime = Math.max(1, readNumericValue(
+      healthProfile,
+      'targetWorkoutPctOfFreeTime',
+      'weeklyWorkoutTargetPercent',
+      'weeklyExerciseTimePercent',
+      'trainingTimePercent',
+    ) ?? 20);
+    const discretionaryHoursPerWeek = Math.max(0, awakeHoursPerDay - workHoursPerDay) * 7;
+    const derivedTargetMinutes = Math.round(discretionaryHoursPerWeek * (workoutPctOfFreeTime / 100) * 60);
+    const hasDerivedConfig = readNumericValue(
+      healthProfile,
+      'awakeHoursPerDay',
+      'targetAwakeHoursPerDay',
+      'healthAwakeHoursPerDay',
+      'workHoursPerDay',
+      'targetWorkHoursPerDay',
+      'healthWorkHoursPerDay',
+      'targetWorkoutPctOfFreeTime',
+      'weeklyWorkoutTargetPercent',
+      'weeklyExerciseTimePercent',
+      'trainingTimePercent',
+    ) != null;
+    const treatExplicitAsLegacyFallback = explicitTargetMinutes === 240 && !hasDerivedConfig;
+    const usesDerivedTarget = explicitTargetMinutes == null || treatExplicitAsLegacyFallback;
+    return {
+      targetMinutes: usesDerivedTarget ? derivedTargetMinutes : Math.max(1, Math.round(explicitTargetMinutes)),
+      awakeHoursPerDay,
+      workHoursPerDay,
+      workoutPctOfFreeTime,
+      discretionaryHoursPerWeek,
+      usesDerivedTarget,
+    };
+  }, [healthProfile]);
+
+  const workoutTargetMinutesPerWeek = workoutTargetModel.targetMinutes;
+
+  const workoutTimeSummary = useMemo(() => {
+    const nowMs = Date.now();
+    const weekStartMs = nowMs - (7 * 24 * 60 * 60 * 1000);
+    const prevWeekStartMs = nowMs - (14 * 24 * 60 * 60 * 1000);
+    let currentMinutes = 0;
+    let previousMinutes = 0;
+    const byActivity = new Map<ActivityCompositionKey, number>();
+
+    workouts.forEach((workout) => {
+      if (activeProviderFilter !== 'all' && workout.provider !== activeProviderFilter) return;
+      if (excludeWithDadFromMetrics && workoutHasDadMarker(workout)) return;
+      const startMs = resolveWorkoutStartMs(workout);
+      if (!startMs) return;
+      const minutes = Number(workout.movingTime_s ?? workout.elapsedTime_s ?? 0) / 60;
+      if (!Number.isFinite(minutes) || minutes <= 0) return;
+      if (startMs >= weekStartMs && startMs <= nowMs) {
+        currentMinutes += minutes;
+        const key = classifyWorkoutActivityType(workout);
+        byActivity.set(key, (byActivity.get(key) || 0) + minutes);
+      } else if (startMs >= prevWeekStartMs && startMs < weekStartMs) {
+        previousMinutes += minutes;
+      }
+    });
+
+    const breakdown = Array.from(byActivity.entries())
+      .map(([key, minutes]) => ({
+        key,
+        label: ACTIVITY_COMPOSITION_LABELS[key],
+        minutes: Number(minutes.toFixed(1)),
+      }))
+      .sort((a, b) => b.minutes - a.minutes);
+
+    const pct = workoutTargetMinutesPerWeek > 0
+      ? Math.round((currentMinutes / workoutTargetMinutesPerWeek) * 100)
+      : null;
+
+    return {
+      currentMinutes: Number(currentMinutes.toFixed(1)),
+      previousMinutes: Number(previousMinutes.toFixed(1)),
+      deltaMinutes: Number((currentMinutes - previousMinutes).toFixed(1)),
+      progressPct: pct != null ? Math.max(0, Math.min(999, pct)) : null,
+      breakdown,
+    };
+  }, [workouts, activeProviderFilter, excludeWithDadFromMetrics, workoutTargetMinutesPerWeek]);
+
+  const healthTargets = useMemo(() => ({
+    stepTarget: readNumericValue(
+      healthProfile,
+      'targetStepsPerDay',
+      'dailyStepTarget',
+      'healthTargetStepsPerDay',
+      'stepTarget',
+    ) ?? 10000,
+    distanceTargetKm: readNumericValue(
+      healthProfile,
+      'targetDistanceKmPerDay',
+      'dailyDistanceTargetKm',
+      'healthTargetDistanceKmPerDay',
+      'distanceTargetKm',
+    ) ?? 5,
+    workoutTargetMinutesPerDay: Math.max(1, Math.round(workoutTargetMinutesPerWeek / 7)),
+    proteinTargetG: readNumericValue(healthProfile, 'targetProteinG', 'dailyProteinTargetG', 'healthTargetProteinG'),
+    fatTargetG: readNumericValue(healthProfile, 'targetFatG', 'dailyFatTargetG', 'healthTargetFatG'),
+    carbsTargetG: readNumericValue(healthProfile, 'targetCarbsG', 'dailyCarbsTargetG', 'healthTargetCarbsG'),
+    caloriesTargetKcal: readNumericValue(healthProfile, 'targetCaloriesKcal', 'dailyCaloriesTargetKcal', 'healthTargetCaloriesKcal'),
+  }), [healthProfile, workoutTargetMinutesPerWeek]);
+
+  const complianceSparklineOptions: any = useMemo(() => ({
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: false,
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        callbacks: {
+          label: (context: any) => {
+            const value = Number(context.parsed?.y);
+            return Number.isFinite(value) ? `${Math.round(value)}% of target` : 'No data';
+          },
+        },
+      },
+    },
+    scales: {
+      x: { display: false, grid: { display: false } },
+      y: { display: false, grid: { display: false }, min: 0, max: 100 },
+    },
+    elements: {
+      point: { radius: 0, hoverRadius: 3 },
+      line: { tension: 0.35, borderWidth: 2 },
+    },
+  }), []);
+
+  const complianceCards = useMemo<ComplianceCardSummary[]>(() => {
+    const last7Activity = activityTrendRows.slice(-7);
+    const last7Health = healthTrendRows.slice(-7);
+    const toTone = (pct: number | null): ComplianceCardSummary['tone'] => (
+      pct == null ? 'secondary' : pct >= 100 ? 'success' : pct >= 70 ? 'warning' : 'secondary'
+    );
+    const adherencePct = (actual: number | null, target: number | null): number | null => {
+      if (actual == null || target == null || target <= 0) return null;
+      return clampPercent((actual / target) * 100);
+    };
+    const macroTodayComponents = [
+      adherencePct(currentHealthSnapshot?.proteinTodayG ?? null, healthTargets.proteinTargetG),
+      adherencePct(currentHealthSnapshot?.fatTodayG ?? null, healthTargets.fatTargetG),
+      adherencePct(currentHealthSnapshot?.carbsTodayG ?? null, healthTargets.carbsTargetG),
+      adherencePct(currentHealthSnapshot?.caloriesTodayKcal ?? null, healthTargets.caloriesTargetKcal),
+    ].filter((value): value is number => value != null);
+    const macroTodayPct = macroTodayComponents.length
+      ? Math.round(macroTodayComponents.reduce((sum, value) => sum + value, 0) / macroTodayComponents.length)
+      : null;
+
+    const macroSeries = last7Health.map((row) => {
+      const parts = [
+        adherencePct(row.proteinG, healthTargets.proteinTargetG),
+        adherencePct(row.fatG, healthTargets.fatTargetG),
+        adherencePct(row.carbsG, healthTargets.carbsTargetG),
+        adherencePct(row.caloriesKcal, healthTargets.caloriesTargetKcal),
+      ].filter((value): value is number => value != null);
+      return parts.length ? Math.round(parts.reduce((sum, value) => sum + value, 0) / parts.length) : null;
+    });
+
+    return [
+      {
+        key: 'steps',
+        label: 'Steps Compliance',
+        valueLabel: currentHealthSnapshot?.stepsToday != null
+          ? `${Math.round(currentHealthSnapshot.stepsToday).toLocaleString()} steps`
+          : 'No steps today',
+        targetLabel: `${healthTargets.stepTarget.toLocaleString()} target`,
+        progressPct: currentHealthSnapshot?.stepsToday != null
+          ? clampPercent((currentHealthSnapshot.stepsToday / healthTargets.stepTarget) * 100)
+          : null,
+        tone: toTone(currentHealthSnapshot?.stepsToday != null
+          ? clampPercent((currentHealthSnapshot.stepsToday / healthTargets.stepTarget) * 100)
+          : null),
+        labels: last7Activity.map((row) => row.label),
+        series: last7Activity.map((row) => row.steps != null ? clampPercent((row.steps / healthTargets.stepTarget) * 100) : null),
+      },
+      {
+        key: 'distance',
+        label: 'Distance Compliance',
+        valueLabel: currentHealthSnapshot?.distanceKmToday != null
+          ? `${currentHealthSnapshot.distanceKmToday.toFixed(1)} km`
+          : 'No distance today',
+        targetLabel: `${healthTargets.distanceTargetKm.toFixed(1)} km target`,
+        progressPct: currentHealthSnapshot?.distanceKmToday != null
+          ? clampPercent((currentHealthSnapshot.distanceKmToday / healthTargets.distanceTargetKm) * 100)
+          : null,
+        tone: toTone(currentHealthSnapshot?.distanceKmToday != null
+          ? clampPercent((currentHealthSnapshot.distanceKmToday / healthTargets.distanceTargetKm) * 100)
+          : null),
+        labels: last7Activity.map((row) => row.label),
+        series: last7Activity.map((row) => row.distanceKm > 0 ? clampPercent((row.distanceKm / healthTargets.distanceTargetKm) * 100) : 0),
+      },
+      {
+        key: 'workout',
+        label: 'Workout Compliance',
+        valueLabel: currentHealthSnapshot?.workoutMinutesToday != null
+          ? `${Math.round(currentHealthSnapshot.workoutMinutesToday)} min`
+          : 'No workout today',
+        targetLabel: `${healthTargets.workoutTargetMinutesPerDay} min/day target`,
+        progressPct: currentHealthSnapshot?.workoutMinutesToday != null
+          ? clampPercent((currentHealthSnapshot.workoutMinutesToday / healthTargets.workoutTargetMinutesPerDay) * 100)
+          : null,
+        tone: toTone(currentHealthSnapshot?.workoutMinutesToday != null
+          ? clampPercent((currentHealthSnapshot.workoutMinutesToday / healthTargets.workoutTargetMinutesPerDay) * 100)
+          : null),
+        labels: last7Activity.map((row) => row.label),
+        series: last7Activity.map((row) => row.workoutMinutes > 0 ? clampPercent((row.workoutMinutes / healthTargets.workoutTargetMinutesPerDay) * 100) : 0),
+      },
+      {
+        key: 'macros',
+        label: 'Macro Compliance',
+        valueLabel: macroTodayPct != null ? `${macroTodayPct}% of plan` : 'No macro data today',
+        targetLabel: 'Protein, fat, carbs, calories',
+        progressPct: macroTodayPct,
+        tone: toTone(macroTodayPct),
+        labels: last7Health.map((row) => row.label),
+        series: macroSeries,
+      },
+    ];
+  }, [activityTrendRows, currentHealthSnapshot, healthTargets, healthTrendRows]);
+
+  const activityComposition30d = useMemo(() => {
+    const nowMs = Date.now();
+    const startMs = nowMs - (30 * 24 * 60 * 60 * 1000);
+    const byActivity = new Map<ActivityCompositionKey, { minutes: number; sessions: number }>();
+
+    workouts.forEach((workout) => {
+      if (activeProviderFilter !== 'all' && workout.provider !== activeProviderFilter) return;
+      if (excludeWithDadFromMetrics && workoutHasDadMarker(workout)) return;
+      const workoutStartMs = resolveWorkoutStartMs(workout);
+      if (!workoutStartMs || workoutStartMs < startMs || workoutStartMs > nowMs) return;
+      const minutes = Number(workout.movingTime_s ?? workout.elapsedTime_s ?? 0) / 60;
+      if (!Number.isFinite(minutes) || minutes <= 0) return;
+      const key = classifyWorkoutActivityType(workout);
+      const current = byActivity.get(key) || { minutes: 0, sessions: 0 };
+      current.minutes += minutes;
+      current.sessions += 1;
+      byActivity.set(key, current);
+    });
+
+    return Array.from(byActivity.entries())
+      .map(([key, value]) => ({
+        key,
+        name: ACTIVITY_COMPOSITION_LABELS[key],
+        value: Number(value.minutes.toFixed(1)),
+        sessions: value.sessions,
+        color: ACTIVITY_COMPOSITION_COLORS[key],
+      }))
+      .sort((a, b) => b.value - a.value);
+  }, [workouts, activeProviderFilter, excludeWithDadFromMetrics]);
+
+  const activityCompositionTotalMinutes = useMemo(
+    () => activityComposition30d.reduce((sum, entry) => sum + entry.value, 0),
+    [activityComposition30d]
+  );
+
+  const activityCompositionWithShare = useMemo(() => (
+    activityComposition30d.map((entry) => ({
+      ...entry,
+      pct: activityCompositionTotalMinutes > 0 ? Math.round((entry.value / activityCompositionTotalMinutes) * 100) : 0,
+    }))
+  ), [activityComposition30d, activityCompositionTotalMinutes]);
+
   return (
     <div className="container-fluid py-3">
       <Row className="mb-3">
@@ -1354,78 +1879,6 @@ const WorkoutsDashboard: React.FC = () => {
         </Card.Body>
       </Card>
 
-      {(currentHealthSnapshot || healthTrendRows.length > 0 || activityTrendRows.length > 0) && (
-        <>
-          <Card className="mb-3">
-            <Card.Header>
-              <strong>Health Snapshot</strong>
-            </Card.Header>
-            <Card.Body>
-              <div className="d-flex flex-wrap gap-3 small mb-2">
-                <span><strong>Source:</strong> {currentHealthSnapshot?.sourceLabel || '—'}</span>
-                <span><strong>Weight:</strong> {currentHealthSnapshot?.weightKg != null ? `${currentHealthSnapshot.weightKg.toFixed(1)} kg` : '—'}</span>
-                <span><strong>Body Fat:</strong> {currentHealthSnapshot?.bodyFatPct != null ? `${currentHealthSnapshot.bodyFatPct.toFixed(1)}%` : '—'}</span>
-                <span><strong>Target:</strong> {currentHealthSnapshot?.targetWeightKg != null ? `${currentHealthSnapshot.targetWeightKg.toFixed(1)} kg` : '—'} / {currentHealthSnapshot?.targetBodyFatPct != null ? `${currentHealthSnapshot.targetBodyFatPct.toFixed(1)}%` : '—'}</span>
-                <span><strong>Steps Today:</strong> {currentHealthSnapshot?.stepsToday != null ? Math.round(currentHealthSnapshot.stepsToday).toLocaleString() : '—'}</span>
-                <span><strong>Workout Today:</strong> {currentHealthSnapshot?.workoutMinutesToday != null ? `${Math.round(currentHealthSnapshot.workoutMinutesToday)} min` : '—'}</span>
-                <span><strong>Distance Today:</strong> {currentHealthSnapshot?.distanceKmToday != null ? `${currentHealthSnapshot.distanceKmToday.toFixed(2)} km` : '—'}</span>
-                <span><strong>Macros:</strong> {currentHealthSnapshot?.proteinTodayG != null ? `P ${Math.round(currentHealthSnapshot.proteinTodayG)}g` : 'P —'} · {currentHealthSnapshot?.fatTodayG != null ? `F ${Math.round(currentHealthSnapshot.fatTodayG)}g` : 'F —'} · {currentHealthSnapshot?.carbsTodayG != null ? `C ${Math.round(currentHealthSnapshot.carbsTodayG)}g` : 'C —'}</span>
-                <span><strong>Calories:</strong> {currentHealthSnapshot?.caloriesTodayKcal != null ? `${Math.round(currentHealthSnapshot.caloriesTodayKcal)} kcal` : '—'}</span>
-                <span><strong>ETA:</strong> {currentHealthSnapshot?.weeksToTargetBodyFat != null ? `${Math.round(currentHealthSnapshot.weeksToTargetBodyFat)} weeks to body-fat target` : '—'}</span>
-              </div>
-              <div className="text-muted" style={{ fontSize: '0.85rem' }}>
-                Health trends combine profile targets, HealthKit/manual metrics, and workout history so the drill-down shows body composition, daily activity, and nutrition in one place.
-              </div>
-            </Card.Body>
-          </Card>
-
-          <Row className="g-3 mb-3">
-            <Col xs={12} xl={4}>
-              <Card className="h-100">
-                <Card.Header>
-                  <strong>Body Composition Trend</strong>
-                </Card.Header>
-                <Card.Body style={{ height: '32vh', minHeight: 260 }}>
-                  {healthTrendRows.some((row) => row.weightKg != null || row.bodyFatPct != null) ? (
-                    <Line data={bodyCompositionChartData as any} options={bodyCompositionChartOptions as any} />
-                  ) : (
-                    <div className="text-muted small">No body-composition trend data yet.</div>
-                  )}
-                </Card.Body>
-              </Card>
-            </Col>
-            <Col xs={12} xl={4}>
-              <Card className="h-100">
-                <Card.Header>
-                  <strong>Daily Activity Trend</strong>
-                </Card.Header>
-                <Card.Body style={{ height: '32vh', minHeight: 260 }}>
-                  {activityTrendRows.some((row) => row.steps != null || row.workoutMinutes > 0 || row.distanceKm > 0) ? (
-                    <Line data={activityChartData as any} options={activityChartOptions as any} />
-                  ) : (
-                    <div className="text-muted small">No activity trend data yet.</div>
-                  )}
-                </Card.Body>
-              </Card>
-            </Col>
-            <Col xs={12} xl={4}>
-              <Card className="h-100">
-                <Card.Header>
-                  <strong>Nutrition Trend</strong>
-                </Card.Header>
-                <Card.Body style={{ height: '32vh', minHeight: 260 }}>
-                  {healthTrendRows.some((row) => row.caloriesKcal != null || row.proteinG != null || row.fatG != null || row.carbsG != null) ? (
-                    <Line data={nutritionChartData as any} options={nutritionChartOptions as any} />
-                  ) : (
-                    <div className="text-muted small">No nutrition trend data yet.</div>
-                  )}
-                </Card.Body>
-              </Card>
-            </Col>
-          </Row>
-        </>
-      )}
-
       <Row className="g-3 mb-3">
         {visibleSportCards.map((card) => (
           <Col key={card.sport} xs={12} md={6} xl={4}>
@@ -1464,6 +1917,262 @@ const WorkoutsDashboard: React.FC = () => {
           </Col>
         ))}
       </Row>
+
+      <Row className="g-3 mb-3">
+        <Col xs={12} lg={5}>
+          <Card className="h-100">
+            <Card.Header className="py-2">
+              <strong>Workout Time KPI</strong>
+            </Card.Header>
+            <Card.Body className="py-2">
+              <div className="d-flex align-items-start justify-content-between gap-3 flex-wrap mb-3">
+                <div>
+                  <div className="text-muted small">Last 7 days</div>
+                  <div className="fw-semibold" style={{ fontSize: '1.15rem', lineHeight: 1.2 }}>
+                    {formatMinutesCompact(workoutTimeSummary.currentMinutes)} / {formatMinutesCompact(workoutTargetMinutesPerWeek)}
+                  </div>
+                  <div className="text-muted small">
+                    {workoutTimeSummary.progressPct != null ? `${workoutTimeSummary.progressPct}% of target` : 'No target set'}
+                    {' · '}
+                    {workoutTimeSummary.deltaMinutes === 0
+                      ? 'Flat vs previous week'
+                      : `${workoutTimeSummary.deltaMinutes > 0 ? '+' : ''}${formatMinutesCompact(Math.abs(workoutTimeSummary.deltaMinutes))} vs previous week`}
+                  </div>
+                  <div className="text-muted small mt-1">
+                    {workoutTargetModel.usesDerivedTarget
+                      ? `${formatPercentCompact(workoutTargetModel.workoutPctOfFreeTime)} of ${formatMinutesCompact(workoutTargetModel.discretionaryHoursPerWeek * 60)} discretionary time/week`
+                      : 'Explicit weekly workout target'}
+                  </div>
+                </div>
+                <Badge bg={
+                  (workoutTimeSummary.progressPct || 0) >= 100
+                    ? 'success'
+                    : (workoutTimeSummary.progressPct || 0) >= 70
+                      ? 'warning'
+                      : 'secondary'
+                }>
+                  {(workoutTimeSummary.progressPct || 0) >= 100 ? 'On target' : (workoutTimeSummary.progressPct || 0) >= 70 ? 'Building' : 'Below target'}
+                </Badge>
+              </div>
+              <div
+                style={{
+                  height: 6,
+                  borderRadius: 999,
+                  background: 'rgba(15, 23, 42, 0.08)',
+                  overflow: 'hidden',
+                  marginBottom: 12,
+                }}
+              >
+                <div
+                  style={{
+                    width: `${Math.max(0, Math.min(100, workoutTimeSummary.progressPct || 0))}%`,
+                    height: '100%',
+                    background: (workoutTimeSummary.progressPct || 0) >= 100 ? '#198754' : (workoutTimeSummary.progressPct || 0) >= 70 ? '#fd7e14' : '#0d6efd',
+                  }}
+                />
+              </div>
+              <div className="d-flex flex-wrap gap-2">
+                {workoutTimeSummary.breakdown.length === 0 ? (
+                  <div className="text-muted small">No workout-time data recorded this week yet.</div>
+                ) : (
+                  workoutTimeSummary.breakdown.slice(0, 6).map((entry) => (
+                    <Badge key={entry.key} bg="light" text="dark" pill>
+                      {entry.label}: {formatMinutesCompact(entry.minutes)}
+                    </Badge>
+                  ))
+                )}
+              </div>
+            </Card.Body>
+          </Card>
+        </Col>
+        <Col xs={12} lg={7}>
+          <Card className="h-100">
+            <Card.Header className="py-2">
+              <strong>30-Day Training Composition</strong>
+            </Card.Header>
+            <Card.Body className="py-2">
+              {activityCompositionWithShare.length === 0 ? (
+                <div className="text-muted small">No recent workout composition data yet.</div>
+              ) : (
+                <Row className="g-3 align-items-center">
+                  <Col xs={12} md={5} style={{ height: 210 }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={activityCompositionWithShare}
+                          dataKey="value"
+                          nameKey="name"
+                          innerRadius={46}
+                          outerRadius={76}
+                          paddingAngle={3}
+                          labelLine={false}
+                          label={({ value, percent }: any) => {
+                            const pct = Math.round((Number(percent) || 0) * 100);
+                            if (pct < 9) return '';
+                            return `${pct}% · ${formatMinutesCompact(Number(value))}`;
+                          }}
+                        >
+                          {activityCompositionWithShare.map((entry) => (
+                            <Cell key={entry.key} fill={entry.color} />
+                          ))}
+                        </Pie>
+                        <RechartsTooltip formatter={(value: number, name: string, meta: any) => [`${formatMinutesCompact(value)} · ${meta?.payload?.pct || 0}%`, `${name}${meta?.payload?.sessions ? ` · ${meta.payload.sessions} sessions` : ''}`]} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </Col>
+                  <Col xs={12} md={7}>
+                    <div className="d-flex flex-column gap-2">
+                      {activityCompositionWithShare.map((entry) => (
+                        <div key={entry.key} className="d-flex align-items-center justify-content-between gap-2">
+                          <div className="d-flex align-items-center gap-2">
+                            <span style={{ width: 10, height: 10, borderRadius: 999, background: entry.color, display: 'inline-block' }} />
+                            <span className="small fw-semibold">{entry.name}</span>
+                          </div>
+                          <div className="text-muted small">
+                            {entry.pct}% · {formatMinutesCompact(entry.value)} · {entry.sessions} sessions
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </Col>
+                </Row>
+              )}
+            </Card.Body>
+          </Card>
+        </Col>
+      </Row>
+
+      <Row className="g-3 mb-3">
+        {complianceCards.map((card) => (
+          <Col key={card.key} xs={12} md={6} xl={3}>
+            <Card className="h-100">
+              <Card.Body>
+                <div className="d-flex align-items-start justify-content-between gap-3 mb-2">
+                  <div>
+                    <div className="text-muted small">{card.label}</div>
+                    <div className="fw-semibold">{card.valueLabel}</div>
+                    <div className="text-muted small">{card.targetLabel}</div>
+                  </div>
+                  <Badge bg={card.tone}>
+                    {card.progressPct != null ? `${card.progressPct}%` : 'Pending'}
+                  </Badge>
+                </div>
+                <div style={{ height: 54 }}>
+                  {card.series.some((value) => value != null) ? (
+                    <Line
+                      data={{
+                        labels: card.labels,
+                        datasets: [{
+                          data: card.series,
+                          borderColor: card.tone === 'success' ? '#198754' : card.tone === 'warning' ? '#fd7e14' : '#0d6efd',
+                          backgroundColor: 'transparent',
+                          fill: false,
+                          spanGaps: true,
+                        }],
+                      } as any}
+                      options={complianceSparklineOptions}
+                    />
+                  ) : (
+                    <div className="text-muted small">No recent data yet.</div>
+                  )}
+                </div>
+              </Card.Body>
+            </Card>
+          </Col>
+        ))}
+      </Row>
+
+      {(currentHealthSnapshot || healthTrendRows.length > 0 || activityTrendRows.length > 0) && (
+        <>
+          <Card className="mb-3">
+            <Card.Header>
+              <strong>Health Snapshot</strong>
+            </Card.Header>
+            <Card.Body>
+              <div className="d-flex flex-wrap gap-3 small mb-2">
+                <span><strong>Source:</strong> {currentHealthSnapshot?.sourceLabel || '—'}</span>
+                <span><strong>Weight:</strong> {currentHealthSnapshot?.weightKg != null ? `${currentHealthSnapshot.weightKg.toFixed(1)} kg` : '—'}</span>
+                <span><strong>Body Fat:</strong> {currentHealthSnapshot?.bodyFatPct != null ? `${currentHealthSnapshot.bodyFatPct.toFixed(1)}%` : '—'}</span>
+                <span><strong>Cardio Fitness:</strong> {currentHealthSnapshot?.vo2Max != null ? currentHealthSnapshot.vo2Max.toFixed(1) : '—'}</span>
+                <span><strong>Target:</strong> {currentHealthSnapshot?.targetWeightKg != null ? `${currentHealthSnapshot.targetWeightKg.toFixed(1)} kg` : '—'} / {currentHealthSnapshot?.targetBodyFatPct != null ? `${currentHealthSnapshot.targetBodyFatPct.toFixed(1)}%` : '—'}</span>
+                <span><strong>Steps Today:</strong> {currentHealthSnapshot?.stepsToday != null ? Math.round(currentHealthSnapshot.stepsToday).toLocaleString() : '—'}</span>
+                <span><strong>Workout Today:</strong> {currentHealthSnapshot?.workoutMinutesToday != null ? `${Math.round(currentHealthSnapshot.workoutMinutesToday)} min` : '—'}</span>
+                <span><strong>Distance Today:</strong> {currentHealthSnapshot?.distanceKmToday != null ? `${currentHealthSnapshot.distanceKmToday.toFixed(2)} km` : '—'}</span>
+                <span><strong>Macros:</strong> {currentHealthSnapshot?.proteinTodayG != null ? `P ${Math.round(currentHealthSnapshot.proteinTodayG)}g` : 'P —'} · {currentHealthSnapshot?.fatTodayG != null ? `F ${Math.round(currentHealthSnapshot.fatTodayG)}g` : 'F —'} · {currentHealthSnapshot?.carbsTodayG != null ? `C ${Math.round(currentHealthSnapshot.carbsTodayG)}g` : 'C —'}</span>
+                <span><strong>Calories:</strong> {currentHealthSnapshot?.caloriesTodayKcal != null ? `${Math.round(currentHealthSnapshot.caloriesTodayKcal)} kcal` : '—'}</span>
+                <span><strong>ETA:</strong> {currentHealthSnapshot?.weeksToTargetBodyFat != null ? `${Math.round(currentHealthSnapshot.weeksToTargetBodyFat)} weeks to body-fat target` : '—'}</span>
+              </div>
+              <div className="text-muted mt-1" style={{ fontSize: '0.8rem' }}>
+                Workout target basis: {workoutTargetModel.usesDerivedTarget
+                  ? `${workoutTargetModel.awakeHoursPerDay}h awake/day − ${workoutTargetModel.workHoursPerDay}h work/day = ${formatMinutesCompact(workoutTargetModel.discretionaryHoursPerWeek * 60)} discretionary time/week; target set to ${workoutTargetModel.workoutPctOfFreeTime}%`
+                  : `${formatMinutesCompact(workoutTargetMinutesPerWeek)} explicit weekly target`}
+              </div>
+              <div className="text-muted" style={{ fontSize: '0.85rem' }}>
+                Health trends combine profile targets, HealthKit/manual metrics, and workout history so the drill-down shows body composition, daily activity, and nutrition in one place.
+              </div>
+            </Card.Body>
+          </Card>
+
+          <Row className="g-3 mb-3">
+            <Col xs={12} xl={6}>
+              <Card className="h-100">
+                <Card.Header>
+                  <strong>Body Composition Trend</strong>
+                </Card.Header>
+                <Card.Body style={{ height: '32vh', minHeight: 260 }}>
+                  {healthTrendRows.some((row) => row.weightKg != null || row.bodyFatPct != null) ? (
+                    <Line data={bodyCompositionChartData as any} options={bodyCompositionChartOptions as any} />
+                  ) : (
+                    <div className="text-muted small">No body-composition trend data yet.</div>
+                  )}
+                </Card.Body>
+              </Card>
+            </Col>
+            <Col xs={12} xl={6}>
+              <Card className="h-100">
+                <Card.Header>
+                  <strong>Daily Activity Trend</strong>
+                </Card.Header>
+                <Card.Body style={{ height: '32vh', minHeight: 260 }}>
+                  {activityTrendRows.some((row) => row.steps != null || row.workoutMinutes > 0 || row.distanceKm > 0) ? (
+                    <Line data={activityChartData as any} options={activityChartOptions as any} />
+                  ) : (
+                    <div className="text-muted small">No activity trend data yet.</div>
+                  )}
+                </Card.Body>
+              </Card>
+            </Col>
+            <Col xs={12} xl={6}>
+              <Card className="h-100">
+                <Card.Header>
+                  <strong>Recovery + Cardio Fitness</strong>
+                </Card.Header>
+                <Card.Body style={{ height: '32vh', minHeight: 260 }}>
+                  {recoveryTrendRows.some((row) => row.hrvMs != null || row.vo2Max != null) ? (
+                    <Line data={recoveryChartData as any} options={recoveryChartOptions as any} />
+                  ) : (
+                    <div className="text-muted small">No HRV or Cardio Fitness trend data yet.</div>
+                  )}
+                </Card.Body>
+              </Card>
+            </Col>
+            <Col xs={12} xl={6}>
+              <Card className="h-100">
+                <Card.Header>
+                  <strong>Nutrition Trend</strong>
+                </Card.Header>
+                <Card.Body style={{ height: '32vh', minHeight: 260 }}>
+                  {healthTrendRows.some((row) => row.caloriesKcal != null || row.proteinG != null || row.fatG != null || row.carbsG != null) ? (
+                    <Line data={nutritionChartData as any} options={nutritionChartOptions as any} />
+                  ) : (
+                    <div className="text-muted small">No nutrition trend data yet.</div>
+                  )}
+                </Card.Body>
+              </Card>
+            </Col>
+          </Row>
+        </>
+      )}
 
       <Card className="mb-3">
         <Card.Header>
