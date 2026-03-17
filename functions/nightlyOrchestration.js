@@ -25,6 +25,15 @@ const {
   groupTasksByStory,
   writeScheduledTimesToSources,
 } = require('./scheduler/syncToFirestore');
+const {
+  buildDayLoadPointsMap,
+  nextWeekendDateByCapacity,
+  inferItemPoints,
+  deriveSprintCapacityPoints,
+} = require('./services/capacityService');
+const {
+  schedulePlannerItemMutation,
+} = require('./services/schedulingService');
 
 // Secrets
 const GOOGLE_AI_STUDIO_API_KEY = defineSecret('GOOGLEAISTUDIOAPIKEY');
@@ -572,6 +581,12 @@ function normalizeUserPriority(value) {
   return null;
 }
 
+function getManualPriorityRank(value) {
+  const explicit = Number(value?.userPriorityRank);
+  if (explicit === 1 || explicit === 2 || explicit === 3) return explicit;
+  return value?.userPriorityFlag === true ? 1 : null;
+}
+
 function priorityBoostFor(level) {
   switch (level) {
     case 'critical':
@@ -850,7 +865,7 @@ async function collectStoryTop3CandidateDocs(db, ownerUid, pageSize = 400) {
 
 function storyForcesTop3Tasks(storyData) {
   if (!storyData) return false;
-  if (storyData.userPriorityFlag === true) return true;
+  if (getManualPriorityRank(storyData)) return true;
   const level = normalizeUserPriority(storyData.userPriority || storyData.priority || storyData.priorityLabel);
   return level === 'critical';
 }
@@ -872,8 +887,18 @@ function selectTopStoriesFresh(items) {
     selectedIds.add(entry.id);
   };
 
-  const manualStories = sorted.filter((story) => story?.data?.userPriorityFlag === true);
-  if (manualStories.length) pick(manualStories[0]);
+  const manualStories = sorted
+    .filter((story) => getManualPriorityRank(story?.data))
+    .sort((a, b) => {
+      const ar = getManualPriorityRank(a?.data) || 99;
+      const br = getManualPriorityRank(b?.data) || 99;
+      if (ar !== br) return ar - br;
+      return scoreCreatedSort(a, b);
+    });
+  manualStories.forEach((story) => {
+    if (selected.length >= 3) return;
+    pick(story);
+  });
 
   const criticalStories = sorted.filter((story) => storyForcesTop3Tasks(story?.data));
   for (const story of criticalStories) {
@@ -901,11 +926,18 @@ function selectTopTasksFresh(items, storyMap = new Map()) {
     selectedIds.add(entry.id);
   };
 
-  const manualTasks = sorted.filter((task) => task?.data?.userPriorityFlag === true);
-  if (manualTasks.length) {
-    // Explicit user #1 flag always owns rank 1.
-    pick(manualTasks[0]);
-  }
+  const manualTasks = sorted
+    .filter((task) => getManualPriorityRank(task?.data))
+    .sort((a, b) => {
+      const ar = getManualPriorityRank(a?.data) || 99;
+      const br = getManualPriorityRank(b?.data) || 99;
+      if (ar !== br) return ar - br;
+      return scoreCreatedSort(a, b);
+    });
+  manualTasks.forEach((task) => {
+    if (selected.length >= 3) return;
+    pick(task);
+  });
 
   const storyDrivenTasks = sorted.filter((task) => {
     const storyId = task?.data?.storyId;
@@ -1011,40 +1043,8 @@ function nextOccurrenceForRecurring(entity, nowLocal) {
   return base.plus({ days: interval }).endOf('day').toMillis();
 }
 
-function nextWeekendDateByCapacity(nowLocal, dayLoadHours = new Map(), maxHours = 6) {
-  const base = (nowLocal || DateTime.now()).startOf('day');
-  let fallback = null;
-  for (let offset = 1; offset <= 56; offset += 1) {
-    const candidate = base.plus({ days: offset });
-    if (![6, 7].includes(candidate.weekday)) continue;
-    if (!fallback) fallback = candidate;
-    const key = candidate.toISODate();
-    const load = Number(dayLoadHours.get(key) || 0);
-    if (load < maxHours) {
-      return candidate.endOf('day').toMillis();
-    }
-  }
-  return (fallback || base.plus({ days: 6 })).endOf('day').toMillis();
-}
-
 async function buildDayLoadHoursMap(db, userId, startMs, endMs) {
-  const map = new Map();
-  const snap = await db.collection('calendar_blocks')
-    .where('ownerUid', '==', userId)
-    .where('start', '>=', startMs)
-    .where('start', '<=', endMs)
-    .get()
-    .catch(() => ({ docs: [] }));
-  for (const doc of (snap.docs || [])) {
-    const data = doc.data() || {};
-    const start = Number(data.start || 0);
-    const end = Number(data.end || 0);
-    if (!(start > 0) || !(end > start)) continue;
-    const key = DateTime.fromMillis(start).toISODate();
-    const hours = Math.max(0.25, (end - start) / (60 * 60 * 1000));
-    map.set(key, (map.get(key) || 0) + hours);
-  }
-  return map;
+  return buildDayLoadPointsMap(db, userId, startMs, endMs);
 }
 
 function entityIsCritical({
@@ -1056,7 +1056,7 @@ function entityIsCritical({
 }) {
   if (!entity) return false;
   if (isTop) return true;
-  if (entity.userPriorityFlag === true) return true;
+  if (getManualPriorityRank(entity)) return true;
   const level = normalizeUserPriority(entity.userPriority || entity.priority || entity.priorityLabel);
   if (level === 'critical') return true;
   const score = Number(entity.aiCriticalityScore || 0);
@@ -1064,7 +1064,7 @@ function entityIsCritical({
   const goalId = String(entity.goalId || '').trim();
   if (goalId && focusGoalIds?.has(goalId)) return true;
   if (entityType === 'task' && parentStory) {
-    if (parentStory.userPriorityFlag === true) return true;
+    if (getManualPriorityRank(parentStory)) return true;
     const parentLevel = normalizeUserPriority(parentStory.userPriority || parentStory.priority || parentStory.priorityLabel);
     if (parentLevel === 'critical') return true;
     const parentScore = Number(parentStory.aiCriticalityScore || 0);
@@ -1321,6 +1321,10 @@ async function applyAggressiveDueDateReplanForUser({
  * No max cap — the scheduler fills available slots up to this total.
  */
 function estimateRequiredMinutes(candidate, kind) {
+  const pointsRemaining = Number(candidate?.pointsRemaining);
+  if (Number.isFinite(pointsRemaining) && pointsRemaining > 0) {
+    return Math.max(kind === 'task' ? 30 : 60, Math.round(pointsRemaining * 60));
+  }
   const points = Number(candidate?.points) || 0;
   const rawProgress = candidate?.progressPct ?? candidate?.progress ?? candidate?.completionPct ?? 0;
   const progressPct = Math.min(100, Math.max(0, Number(rawProgress || 0)));
@@ -1365,9 +1369,9 @@ function sortPlannerCandidates(items, {
   extraPriorityFn,
 }) {
   return [...(items || [])].sort((a, b) => {
-    const aManual = a?.userPriorityFlag === true ? 1 : 0;
-    const bManual = b?.userPriorityFlag === true ? 1 : 0;
-    if (aManual !== bManual) return bManual - aManual;
+    const aManual = getManualPriorityRank(a);
+    const bManual = getManualPriorityRank(b);
+    if ((aManual || 99) !== (bManual || 99)) return (aManual || 99) - (bManual || 99);
 
     const aExtra = extraPriorityFn?.(a) ? 1 : 0;
     const bExtra = extraPriorityFn?.(b) ? 1 : 0;
@@ -1412,7 +1416,7 @@ function buildUnifiedPlacementQueue({
     ...stories.map((story) => ({
       kind: 'story',
       candidate: story,
-      manual: story?.userPriorityFlag === true ? 1 : 0,
+      manual: getManualPriorityRank(story) || 99,
       extra: storyForcesTop3Tasks(story) ? 1 : 0,
       top: isTopStory?.(story) ? 1 : 0,
       rank: Number(story?.aiFocusStoryRank || 0) || 99,
@@ -1426,7 +1430,7 @@ function buildUnifiedPlacementQueue({
       return {
         kind: 'task',
         candidate: task,
-        manual: task?.userPriorityFlag === true ? 1 : 0,
+        manual: getManualPriorityRank(task) || 99,
         extra: storyForcesTop3Tasks(parentStory) ? 1 : 0,
         top: isTopTask?.(task) ? 1 : 0,
         rank: Number(task?.aiPriorityRank || 0) || 99,
@@ -1439,7 +1443,7 @@ function buildUnifiedPlacementQueue({
   ];
 
   rows.sort((a, b) => {
-    if (a.manual !== b.manual) return b.manual - a.manual;
+    if (a.manual !== b.manual) return a.manual - b.manual;
     if (a.extra !== b.extra) return b.extra - a.extra;
     if (a.top !== b.top) return b.top - a.top;
     if (a.rank !== b.rank) return a.rank - b.rank;
@@ -1517,6 +1521,269 @@ function buildPlannerCoverageSummary({ stories, tasks, scheduledMinutesByEntity 
     shortfallMinutes: storyShortfallMinutes + taskShortfallMinutes,
     unscheduledStories,
     unscheduledTasks,
+  };
+}
+
+function plannerWeekStart(dt) {
+  return dt.startOf('week').startOf('day');
+}
+
+function buildSprintWeekBuckets({
+  sprintMap,
+  windowStart,
+  windowEnd,
+  defaultWeeklyCapacityPoints = 20,
+}) {
+  const bucketsBySprintId = new Map();
+  const fallbackBuckets = [];
+
+  const createBuckets = ({ sprintId = null, sprintMeta = null, startMs, endMs }) => {
+    const start = DateTime.fromMillis(startMs, { zone: windowStart.zoneName }).startOf('day');
+    const end = DateTime.fromMillis(endMs, { zone: windowStart.zoneName }).endOf('day');
+    if (end < start) return [];
+    const weekStarts = [];
+    let cursor = plannerWeekStart(start);
+    while (cursor.toMillis() <= end.toMillis()) {
+      const bucketEnd = cursor.plus({ days: 6 }).endOf('day');
+      const effectiveStartMs = Math.max(cursor.toMillis(), start.toMillis());
+      const effectiveEndMs = Math.min(bucketEnd.toMillis(), end.toMillis());
+      if (effectiveEndMs >= effectiveStartMs) {
+        weekStarts.push({
+          sprintId,
+          weekKey: cursor.toISODate(),
+          startMs: effectiveStartMs,
+          endMs: effectiveEndMs,
+          plannedPoints: 0,
+          capacityPoints: 0,
+        });
+      }
+      cursor = cursor.plus({ weeks: 1 });
+    }
+    const sprintCapacityPoints = deriveSprintCapacityPoints(sprintMeta || {}, defaultWeeklyCapacityPoints);
+    const perWeekCapacity = weekStarts.length > 0
+      ? sprintCapacityPoints / weekStarts.length
+      : defaultWeeklyCapacityPoints;
+    weekStarts.forEach((bucket) => {
+      bucket.capacityPoints = perWeekCapacity;
+    });
+    return weekStarts;
+  };
+
+  for (const [sprintId, sprintMeta] of sprintMap.entries()) {
+    const sprintStart = toMillis(sprintMeta?.start);
+    const sprintEnd = toMillis(sprintMeta?.end);
+    if (!Number.isFinite(sprintStart) || !Number.isFinite(sprintEnd)) continue;
+    const boundedStartMs = Math.max(sprintStart, windowStart.toMillis());
+    const boundedEndMs = Math.min(sprintEnd, windowEnd.toMillis());
+    if (boundedEndMs < boundedStartMs) continue;
+    bucketsBySprintId.set(sprintId, createBuckets({
+      sprintId,
+      sprintMeta,
+      startMs: boundedStartMs,
+      endMs: boundedEndMs,
+    }));
+  }
+
+  fallbackBuckets.push(...createBuckets({
+    sprintId: null,
+    sprintMeta: null,
+    startMs: windowStart.toMillis(),
+    endMs: windowEnd.toMillis(),
+  }));
+
+  return { bucketsBySprintId, fallbackBuckets };
+}
+
+function seedWeekBucketLoads({
+  bucketsBySprintId,
+  fallbackBuckets,
+  existingBlocks,
+}) {
+  const addLoadToBuckets = (buckets, startMs, points) => {
+    if (!Array.isArray(buckets) || !buckets.length) return false;
+    const bucket = buckets.find((entry) => startMs >= entry.startMs && startMs <= entry.endMs);
+    if (!bucket) return false;
+    bucket.plannedPoints += points;
+    return true;
+  };
+
+  (existingBlocks || []).forEach((block) => {
+    if (!(block?.storyId || block?.taskId)) return;
+    const startMs = toMillis(block.start);
+    const endMs = toMillis(block.end);
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return;
+    const points = Math.max(0.25, (endMs - startMs) / (60 * 60 * 1000));
+    const sprintId = String(block.sprintId || '').trim() || null;
+    if (sprintId && addLoadToBuckets(bucketsBySprintId.get(sprintId) || [], startMs, points)) return;
+    addLoadToBuckets(fallbackBuckets, startMs, points);
+  });
+}
+
+function chooseSprintWeekBucket({
+  candidate,
+  kind,
+  isTop,
+  parentStory,
+  storyWeekById,
+  sprintMap,
+  bucketsBySprintId,
+  fallbackBuckets,
+  windowStart,
+}) {
+  const candidateSprintId = String(candidate?.sprintId || parentStory?.sprintId || '').trim() || null;
+  const buckets = (candidateSprintId && bucketsBySprintId.get(candidateSprintId)?.length)
+    ? bucketsBySprintId.get(candidateSprintId)
+    : fallbackBuckets;
+  if (!Array.isArray(buckets) || buckets.length === 0) return null;
+
+  if (kind === 'task' && candidate?.storyId && storyWeekById.has(candidate.storyId)) {
+    const parentWeekKey = storyWeekById.get(candidate.storyId);
+    const sameWeek = buckets.find((bucket) => bucket.weekKey === parentWeekKey);
+    if (sameWeek) return sameWeek;
+  }
+
+  const candidatePoints = inferItemPoints(kind, candidate);
+  const dueMs = getDueDateMs(candidate);
+  const currentWeekKey = plannerWeekStart(windowStart).toISODate();
+  const currentWeekBucket = buckets.find((bucket) => bucket.weekKey === currentWeekKey) || buckets[0];
+
+  if (isTop && currentWeekBucket) {
+    currentWeekBucket.plannedPoints += candidatePoints;
+    return currentWeekBucket;
+  }
+
+  let preferredBucket = null;
+  if (Number.isFinite(dueMs)) {
+    preferredBucket = buckets.find((bucket) => dueMs >= bucket.startMs && dueMs <= bucket.endMs) || null;
+  }
+  const ordered = preferredBucket
+    ? [preferredBucket, ...buckets.filter((bucket) => bucket !== preferredBucket)]
+    : buckets;
+
+  const fitting = ordered.find((bucket) => (bucket.capacityPoints - bucket.plannedPoints) >= candidatePoints);
+  const chosen = fitting || ordered
+    .slice()
+    .sort((a, b) => {
+      const overA = a.plannedPoints - a.capacityPoints;
+      const overB = b.plannedPoints - b.capacityPoints;
+      if (overA !== overB) return overA - overB;
+      return a.startMs - b.startMs;
+    })[0];
+  if (!chosen) return null;
+  chosen.plannedPoints += candidatePoints;
+  return chosen;
+}
+
+async function schedulePlacementQueueWithCanonicalScheduler({
+  db,
+  userId,
+  placementQueue,
+  storyMap,
+  sprintMap,
+  existingBlocks,
+  windowStart,
+  windowEnd,
+  planningMode = 'smart',
+  source = 'nightly_calendar_planner',
+}) {
+  const scheduledMinutesByEntity = collectScheduledMinutesByEntity(existingBlocks);
+  const manuallyScheduledEntityKeys = new Set(
+    (existingBlocks || [])
+      .filter((block) => {
+        const isAi = block.aiGenerated === true || block.isAiGenerated === true || block.createdBy === 'ai';
+        return !isAi && (block.storyId || block.taskId);
+      })
+      .map((block) => (block.storyId ? getEntityKey('story', block.storyId) : getEntityKey('task', block.taskId)))
+      .filter(Boolean),
+  );
+
+  const { bucketsBySprintId, fallbackBuckets } = buildSprintWeekBuckets({
+    sprintMap,
+    windowStart,
+    windowEnd,
+  });
+  seedWeekBucketLoads({ bucketsBySprintId, fallbackBuckets, existingBlocks });
+
+  const storyWeekById = new Map();
+  let created = 0;
+  let blocked = 0;
+
+  for (const entry of placementQueue) {
+    const { kind, candidate } = entry;
+    const entityKey = getEntityKey(kind, candidate?.id);
+    if (!entityKey || manuallyScheduledEntityKeys.has(entityKey)) continue;
+
+    const totalNeededMs = estimateRequiredMinutes(candidate, kind) * 60000;
+    const alreadyMs = (scheduledMinutesByEntity.get(entityKey) || 0) * 60000;
+    if (alreadyMs >= totalNeededMs) continue;
+
+    const rawScore = Number(candidate?.aiCriticalityScore || 0);
+    const isCriticalPriority = Number(candidate?.priority || 0) >= 4;
+    const isTop = candidate?.aiTop3ForDay === true;
+    if (rawScore > 0 && rawScore < 40 && !isCriticalPriority && !isTop) {
+      continue;
+    }
+
+    const parentStory = kind === 'task' && candidate?.storyId ? storyMap.get(candidate.storyId) : null;
+    const bucket = chooseSprintWeekBucket({
+      candidate,
+      kind,
+      isTop,
+      parentStory,
+      storyWeekById,
+      sprintMap,
+      bucketsBySprintId,
+      fallbackBuckets,
+      windowStart,
+    });
+    if (!bucket) {
+      blocked += 1;
+      continue;
+    }
+
+    const targetStartMs = Math.max(bucket.startMs, windowStart.toMillis());
+    const targetSprintId = String(candidate?.sprintId || parentStory?.sprintId || bucket.sprintId || '').trim() || null;
+    const remainingDays = Math.max(
+      1,
+      Math.floor((windowEnd.toMillis() - targetStartMs) / (24 * 60 * 60 * 1000)) + 1,
+    );
+
+    try {
+      const result = await schedulePlannerItemMutation({
+        db,
+        userId,
+        itemType: kind,
+        itemId: candidate.id,
+        targetDateMs: targetStartMs,
+        targetBucket: candidate.timeOfDay || null,
+        intent: 'move',
+        source,
+        rationale: `Nightly sprint placement for week of ${bucket.weekKey}`,
+        linkedBlockId: null,
+        targetSprintId,
+        durationMinutes: estimateRequiredMinutes(candidate, kind),
+        planningMode,
+        searchDays: remainingDays,
+        allowSplit: true,
+      });
+      created += 1;
+      addScheduledMinutes(
+        scheduledMinutesByEntity,
+        kind,
+        candidate.id,
+        Math.max(15, Math.round(Number(result.scheduledMinutes || 0) || 0)),
+      );
+      if (kind === 'story') storyWeekById.set(candidate.id, String(result.appliedWeekKey || bucket.weekKey));
+    } catch (error) {
+      console.warn(`[${source}] failed to schedule ${kind}:${candidate.id}`, error?.message || error);
+      blocked += 1;
+    }
+  }
+
+  return {
+    created,
+    blocked,
+    scheduledMinutesByEntity,
   };
 }
 
@@ -3253,7 +3520,7 @@ async function runCalendarPlannerJob() {
     if (dedupeResult.removed > 0) {
       console.log(`[calendar-planner] removed ${dedupeResult.removed} duplicate blocks for ${userId}`);
     }
-    const existingBlocks = dedupeResult.blocks;
+    let existingBlocks = dedupeResult.blocks;
 
     const fitnessBlocksAutoCreate = profile?.fitnessBlocksAutoCreate !== false;
     const plannerBlockResult = await materializePlannerThemeBlocks({
@@ -3267,6 +3534,13 @@ async function runCalendarPlannerJob() {
     });
     if (plannerBlockResult.created > 0) {
       console.log(`[calendar-planner] planner blocks created for ${userId}: ${plannerBlockResult.created}`);
+      const refreshedBlocksSnap = await db.collection('calendar_blocks')
+        .where('ownerUid', '==', userId)
+        .where('start', '>=', windowStart.toMillis())
+        .where('start', '<=', windowEnd.toMillis())
+        .get()
+        .catch(() => ({ docs: [] }));
+      existingBlocks = refreshedBlocksSnap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
     }
 
     const rescheduleResult = await replanExistingBlocksForUser({
@@ -3395,30 +3669,6 @@ async function runCalendarPlannerJob() {
       }
     }
 
-    const scheduledMinutesByEntity = collectScheduledMinutesByEntity(remainingBlocks);
-    const manuallyScheduledEntityKeys = new Set(
-      remainingBlocks
-        .filter((block) => {
-          const isAi = block.aiGenerated === true || block.isAiGenerated === true || block.createdBy === 'ai';
-          return !isAi && (block.storyId || block.taskId);
-        })
-        .map((block) => (block.storyId ? getEntityKey('story', block.storyId) : getEntityKey('task', block.taskId)))
-    );
-
-    const mainGigBlocks = []; // Track main gig planner blocks separately
-    remainingBlocks.forEach((b) => {
-      if (b.start && b.end) {
-        const blockTheme = b.theme || b.category || '';
-        if (isMainGigBlock(b)) {
-          mainGigBlocks.push({ start: b.start, end: b.end, theme: blockTheme });
-          busyPersonal.push({ start: b.start, end: b.end });
-        } else {
-          busyPersonal.push({ start: b.start, end: b.end });
-          busyWork.push({ start: b.start, end: b.end });
-        }
-      }
-    });
-
     const placementQueue = buildUnifiedPlacementQueue({
       stories: storyQueue,
       tasks: taskQueue,
@@ -3427,150 +3677,23 @@ async function runCalendarPlannerJob() {
       storyMap,
     });
 
-    let created = 0;
-    let blocked = 0;
-
-    // Greedy multi-block scheduler: fills all available free time until total needed is covered
-    const placeEntry = async (candidate, kind) => {
-      const sprint = candidate.sprintId ? sprintMap.get(candidate.sprintId) : null;
-      const sprintStart = sprint?.start ? toMillis(sprint.start) : null;
-      const sprintEnd = sprint?.end ? toMillis(sprint.end) : null;
-      const isWorkPersona = String(candidate?.persona || '').toLowerCase() === 'work';
-      const busyList = isWorkPersona ? busyWork : busyPersonal;
-
-      const totalNeededMs = estimateRequiredMinutes(candidate, kind) * 60000;
-      const entityKey = getEntityKey(kind, candidate.id);
-      const alreadyScheduledMs = (scheduledMinutesByEntity.get(entityKey) || 0) * 60000;
-      let stillNeededMs = totalNeededMs - alreadyScheduledMs;
-      if (stillNeededMs <= 0) return { created: 0, blocked: 0 };
-
-      const MIN_BLOCK_MS = 30 * 60000;
-      const title = candidate.title;
-      const basePayload = {
-        ownerUid: userId,
-        title,
-        entityType: kind,
-        taskId: kind === 'task' ? candidate.id : null,
-        storyId: kind === 'story' ? candidate.id : null,
-        sprintId: candidate.sprintId || null,
-        theme: candidate.theme || null,
-        goalId: candidate.goalId || null,
-        status: 'planned',
-        aiGenerated: true,
-        aiScore: candidate.aiScore || null,
-        aiReason: candidate.aiCriticalityReason || null,
-        placementReason: 'Nightly planner: greedy fill for remaining work',
-        calendarMatchSource: 'calendar_event_created_via_planner',
-        calendarMatchNote: 'Calendar event created via planner',
-        deepLink: buildEntityUrl(kind === 'story' ? 'story' : 'task', candidate.id, candidate.ref || null),
-        persona: candidate.persona || (isWorkPersona ? 'work' : 'personal'),
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      };
-
-      let created = 0;
-
-      if (isWorkPersona) {
-        if (!mainGigBlocks.length) return { created: 0, blocked: 1 };
-        const sortedMainGig = mainGigBlocks.filter((mg) => mg.start && mg.end).sort((a, b) => a.start - b.start);
-        for (const mg of sortedMainGig) {
-          if (stillNeededMs <= 0) break;
-          if (sprintStart && mg.end < sprintStart) continue;
-          if (sprintEnd && mg.start > sprintEnd) continue;
-          const gaps = findFreeGapsInSlot(mg.start, mg.end, busyList, MIN_BLOCK_MS);
-          for (const gap of gaps) {
-            if (stillNeededMs <= 0) break;
-            const blockMs = Math.min(gap.end - gap.start, stillNeededMs);
-            if (blockMs < MIN_BLOCK_MS) continue;
-            const blockRef = db.collection('calendar_blocks').doc();
-            const payload = { ...basePayload, start: gap.start, end: gap.start + blockMs };
-            await blockRef.set(payload);
-            busyPersonal.push({ start: payload.start, end: payload.end });
-            busyWork.push({ start: payload.start, end: payload.end });
-            const minutesAdded = Math.round(blockMs / 60000);
-            addScheduledMinutes(scheduledMinutesByEntity, kind, candidate.id, minutesAdded);
-            stillNeededMs -= blockMs;
-            created++;
-            const slotDt = DateTime.fromMillis(gap.start, { zone: windowStart.zoneName });
-            await db.collection('activity_stream').add(activityPayload({
-              ownerUid: userId,
-              entityId: candidate.id,
-              entityType: kind,
-              activityType: 'calendar_insertion',
-              description: `Calendar block created (${slotDt.toISODate()} ${slotDt.toFormat('HH:mm')}–${DateTime.fromMillis(gap.start + blockMs, { zone: windowStart.zoneName }).toFormat('HH:mm')})`,
-              metadata: { blockId: blockRef.id, reason: payload.placementReason, theme: payload.theme || null, goalId: payload.goalId || null },
-            }));
-          }
-        }
-        return { created, blocked: stillNeededMs > MIN_BLOCK_MS ? 1 : 0 };
-      }
-
-      for (let offset = 0; offset < planningDays && stillNeededMs > MIN_BLOCK_MS; offset++) {
-        const day = windowStart.plus({ days: offset });
-        const dayStartMs = day.toMillis();
-        const dayEndMs = day.endOf('day').toMillis();
-        if ((sprintStart && dayEndMs < sprintStart) || (sprintEnd && dayStartMs > sprintEnd)) continue;
-
-        const allSlots = pickSlots(candidate.theme || candidate.goal || null, day);
-        const slots = filterSlotsByTimeOfDay(allSlots, candidate.timeOfDay || null);
-        for (const slot of slots) {
-          if (stillNeededMs <= 0) break;
-          if (isMainGigLabel(slot.label)) continue;
-          const slotDays = slot.days || [1, 2, 3, 4, 5, 6, 7];
-          if (!slotDays.includes(day.weekday)) continue;
-          const slotStart = day.set({ hour: Math.floor(slot.start), minute: Math.round((slot.start % 1) * 60), second: 0, millisecond: 0 });
-          const slotEnd = day.set({ hour: Math.floor(slot.end), minute: Math.round((slot.end % 1) * 60), second: 0, millisecond: 0 });
-          if (sprintStart && slotEnd.toMillis() < sprintStart) continue;
-          if (sprintEnd && slotStart.toMillis() > sprintEnd) continue;
-
-          const gaps = findFreeGapsInSlot(slotStart.toMillis(), slotEnd.toMillis(), busyList, MIN_BLOCK_MS);
-          for (const gap of gaps) {
-            if (stillNeededMs <= 0) break;
-            if (mainGigBlocks.some((mg) => mg.end > gap.start && mg.start < gap.end)) continue;
-            const blockMs = Math.min(gap.end - gap.start, stillNeededMs);
-            if (blockMs < MIN_BLOCK_MS) continue;
-            const blockRef = db.collection('calendar_blocks').doc();
-            const payload = { ...basePayload, start: gap.start, end: gap.start + blockMs };
-            await blockRef.set(payload);
-            busyPersonal.push({ start: payload.start, end: payload.end });
-            busyWork.push({ start: payload.start, end: payload.end });
-            const minutesAdded = Math.round(blockMs / 60000);
-            addScheduledMinutes(scheduledMinutesByEntity, kind, candidate.id, minutesAdded);
-            stillNeededMs -= blockMs;
-            created++;
-            const slotDt = DateTime.fromMillis(gap.start, { zone: windowStart.zoneName });
-            await db.collection('activity_stream').add(activityPayload({
-              ownerUid: userId,
-              entityId: candidate.id,
-              entityType: kind,
-              activityType: 'calendar_insertion',
-              description: `Calendar block created (${slotDt.toISODate()} ${slotDt.toFormat('HH:mm')}–${DateTime.fromMillis(gap.start + blockMs, { zone: windowStart.zoneName }).toFormat('HH:mm')})`,
-              metadata: { blockId: blockRef.id, reason: payload.placementReason, theme: payload.theme || null, goalId: payload.goalId || null },
-            }));
-          }
-        }
-      }
-      return { created, blocked: stillNeededMs > MIN_BLOCK_MS ? 1 : 0 };
-    };
-
-    for (const entry of placementQueue) {
-      const { kind, candidate } = entry;
-      const entityKey = getEntityKey(kind, candidate?.id);
-      if (manuallyScheduledEntityKeys.has(entityKey)) {
-        continue;
-      }
-      const totalNeededMs = estimateRequiredMinutes(candidate, kind) * 60000;
-      const alreadyMs = (scheduledMinutesByEntity.get(entityKey) || 0) * 60000;
-      if (alreadyMs >= totalNeededMs) continue; // fully covered
-      const res = await placeEntry(candidate, kind);
-      created += res.created || 0;
-      blocked += res.blocked || 0;
-    }
+    const plannerScheduleResult = await schedulePlacementQueueWithCanonicalScheduler({
+      db,
+      userId,
+      placementQueue,
+      storyMap,
+      sprintMap,
+      existingBlocks: remainingBlocks,
+      windowStart,
+      windowEnd,
+      planningMode: 'smart',
+      source: 'nightly_calendar_planner',
+    });
 
     const coverage = buildPlannerCoverageSummary({
       stories: storyQueue,
       tasks: taskQueue,
-      scheduledMinutesByEntity,
+      scheduledMinutesByEntity: plannerScheduleResult.scheduledMinutesByEntity,
     });
 
     await writePlannerStats({
@@ -3580,8 +3703,8 @@ async function runCalendarPlannerJob() {
       windowStart,
       windowEnd,
       result: {
-        created,
-        blocked,
+        created: plannerScheduleResult.created || 0,
+        blocked: plannerScheduleResult.blocked || 0,
         rescheduled: rescheduleResult.rescheduled || 0,
         replaced: dedupeResult.removed || 0,
         totalMovable: rescheduleResult.totalMovable || 0,
@@ -3974,7 +4097,7 @@ exports.replanCalendarNow = onCall({
     .where('start', '<=', windowEnd.toMillis())
     .get()
     .catch(() => ({ docs: [] }));
-  const existingBlocks = blocksSnap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+  let existingBlocks = blocksSnap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
 
   let storiesSnap = { docs: [] };
   try {
@@ -4182,175 +4305,54 @@ exports.replanCalendarNow = onCall({
     existingBlocks: remainingBlocks,
     fitnessBlocksAutoCreate,
   });
-
-  const scheduledMinutesByEntity = collectScheduledMinutesByEntity(remainingBlocks);
-
-  const busyPersonal = [];
-  const busyWork = [];
-  const mainGigBlocks = []; // Track main gig planner blocks separately
-  const addBusyPersonal = (start, end) => {
-    if (start && end) busyPersonal.push({ start, end });
-  };
-  const addBusyWork = (start, end) => {
-    if (start && end) busyWork.push({ start, end });
-  };
-
-  remainingBlocks.forEach((b) => {
-    // In smart mode only hard-busy blocks (user GCal / work / fitness) block time.
-    // In strict mode every remaining block blocks time.
-    if (planningMode === 'smart' && !isHardBusy(b)) return;
-
-    if (isMainGigBlock(b)) {
-      mainGigBlocks.push({ start: b.start, end: b.end, theme: b.theme || b.category || '' });
-      addBusyPersonal(b.start, b.end);
-    } else {
-      addBusyPersonal(b.start, b.end);
-      addBusyWork(b.start, b.end);
-    }
-  });
-
-  const { pickSlots } = buildPickSlots(themeAllocations);
-
-  /**
-   * Schedule a candidate greedily across multiple free slots/days until the
-   * total remaining time is covered.  Blocks fill all available free time in
-   * each slot (no hard per-block cap), split across as many days as needed.
-   */
-  const placeEntry = async (candidate, kind) => {
-    const sprint = candidate.sprintId ? sprintMap.get(candidate.sprintId) : null;
-    const sprintStart = sprint?.start ? toMillis(sprint.start) : null;
-    const sprintEnd = sprint?.end ? toMillis(sprint.end) : null;
-    const isWorkPersona = String(candidate?.persona || '').toLowerCase() === 'work';
-    const busyList = isWorkPersona ? busyWork : busyPersonal;
-
-    const totalNeededMs = estimateRequiredMinutes(candidate, kind) * 60000;
-    const entityKey = getEntityKey(kind, candidate.id);
-    const alreadyScheduledMs = (scheduledMinutesByEntity.get(entityKey) || 0) * 60000;
-    let stillNeededMs = totalNeededMs - alreadyScheduledMs;
-    if (stillNeededMs <= 0) return { created: 0, blocked: 0 };
-
-      // Skip low-scored items — only schedule if Top 3, critical priority, or score >= 40
-      const rawScore = Number(candidate?.aiCriticalityScore || 0);
-      const isCriticalPriority = Number(candidate?.priority || 0) >= 4;
-      const isTop = candidate?.aiTop3ForDay === true;
-      if (rawScore > 0 && rawScore < 40 && !isCriticalPriority && !isTop) {
-        return { created: 0, blocked: 0 };
-      }
-
-    const MIN_BLOCK_MS = 30 * 60000; // 30-minute minimum useful block
-    const title = candidate.title;
-    const basePayload = {
-      ownerUid: uid,
-      title,
-      entityType: kind,
-      taskId: kind === 'task' ? candidate.id : null,
-      storyId: kind === 'story' ? candidate.id : null,
-      sprintId: candidate.sprintId || null,
-      theme: candidate.theme || null,
-      goalId: candidate.goalId || null,
-      status: 'planned',
-      aiGenerated: true,
-      aiScore: candidate.aiScore || null,
-      aiReason: candidate.aiCriticalityReason || null,
-      placementReason: 'Replan: greedy fill for remaining work',
-      deepLink: buildEntityUrl(kind === 'story' ? 'story' : 'task', candidate.id, candidate.ref || null),
-      persona: candidate.persona || (isWorkPersona ? 'work' : 'personal'),
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    };
-
-    let created = 0;
-
-    if (isWorkPersona) {
-      if (!mainGigBlocks.length) return { created: 0, blocked: 1 };
-      const sortedMainGig = mainGigBlocks.filter((mg) => mg.start && mg.end).sort((a, b) => a.start - b.start);
-      for (const mg of sortedMainGig) {
-        if (stillNeededMs <= 0) break;
-        if (sprintStart && mg.end < sprintStart) continue;
-        if (sprintEnd && mg.start > sprintEnd) continue;
-        const gaps = findFreeGapsInSlot(mg.start, mg.end, busyList, MIN_BLOCK_MS);
-        for (const gap of gaps) {
-          if (stillNeededMs <= 0) break;
-          const blockMs = Math.min(gap.end - gap.start, stillNeededMs);
-          if (blockMs < MIN_BLOCK_MS) continue;
-          const blockRef = db.collection('calendar_blocks').doc();
-          const payload = { ...basePayload, start: gap.start, end: gap.start + blockMs };
-          await blockRef.set(payload);
-          busyPersonal.push({ start: payload.start, end: payload.end });
-          busyWork.push({ start: payload.start, end: payload.end });
-          const minutesAdded = Math.round(blockMs / 60000);
-          addScheduledMinutes(scheduledMinutesByEntity, kind, candidate.id, minutesAdded);
-          stillNeededMs -= blockMs;
-          created++;
+  {
+    const refreshedBlocksSnap = await db.collection('calendar_blocks')
+      .where('ownerUid', '==', uid)
+      .where('start', '>=', windowStart.toMillis())
+      .where('start', '<=', windowEnd.toMillis())
+      .get()
+      .catch(() => ({ docs: [] }));
+    existingBlocks = refreshedBlocksSnap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+    const retainedIds = new Set(remainingBlocks.map((block) => block.id));
+    for (const block of existingBlocks) {
+      if (retainedIds.has(block.id)) continue;
+      const isAi = isAiPlannerBlock(block);
+      const key = block.storyId ? getEntityKey('story', block.storyId) : block.taskId ? getEntityKey('task', block.taskId) : null;
+      if (planningMode === 'smart') {
+        if (isHardBusy(block)) {
+          remainingBlocks.push(block);
+          retainedIds.add(block.id);
         }
-      }
-      return { created, blocked: stillNeededMs > MIN_BLOCK_MS ? 1 : 0 };
-    }
-
-    for (let offset = 0; offset < planningDays && stillNeededMs > MIN_BLOCK_MS; offset++) {
-      const day = windowStart.plus({ days: offset });
-      const dayStartMs = day.toMillis();
-      const dayEndMs = day.endOf('day').toMillis();
-      if ((sprintStart && dayEndMs < sprintStart) || (sprintEnd && dayStartMs > sprintEnd)) continue;
-
-      const allSlots = pickSlots(candidate.theme || candidate.goal || null, day);
-      const slots = filterSlotsByTimeOfDay(allSlots, candidate.timeOfDay || null);
-      for (const slot of slots) {
-        if (stillNeededMs <= 0) break;
-        if (isMainGigLabel(slot.label)) continue;
-        const slotDays = slot.days || [1, 2, 3, 4, 5, 6, 7];
-        if (!slotDays.includes(day.weekday)) continue;
-        const slotStart = day.set({ hour: Math.floor(slot.start), minute: Math.round((slot.start % 1) * 60), second: 0, millisecond: 0 });
-        const slotEnd = day.set({ hour: Math.floor(slot.end), minute: Math.round((slot.end % 1) * 60), second: 0, millisecond: 0 });
-        if (sprintStart && slotEnd.toMillis() < sprintStart) continue;
-        if (sprintEnd && slotStart.toMillis() > sprintEnd) continue;
-
-        const gaps = findFreeGapsInSlot(slotStart.toMillis(), slotEnd.toMillis(), busyList, MIN_BLOCK_MS);
-        for (const gap of gaps) {
-          if (stillNeededMs <= 0) break;
-          // Never place in main gig overlap
-          if (mainGigBlocks.some((mg) => mg.end > gap.start && mg.start < gap.start + Math.min(gap.end - gap.start, stillNeededMs))) continue;
-          const blockMs = Math.min(gap.end - gap.start, stillNeededMs);
-          if (blockMs < MIN_BLOCK_MS) continue;
-          const blockRef = db.collection('calendar_blocks').doc();
-          const payload = { ...basePayload, start: gap.start, end: gap.start + blockMs };
-          await blockRef.set(payload);
-          busyPersonal.push({ start: payload.start, end: payload.end });
-          busyWork.push({ start: payload.start, end: payload.end });
-          const minutesAdded = Math.round(blockMs / 60000);
-          addScheduledMinutes(scheduledMinutesByEntity, kind, candidate.id, minutesAdded);
-          stillNeededMs -= blockMs;
-          created++;
-        }
+      } else if (!(isAi && key && !candidateIds.has(key))) {
+        remainingBlocks.push(block);
+        retainedIds.add(block.id);
       }
     }
-    return { created, blocked: stillNeededMs > MIN_BLOCK_MS ? 1 : 0 };
-  };
-
-  let created = 0;
-  let blocked = 0;
-  let gcalLinks = [];
-
-  for (const entry of placementQueue) {
-    const { kind, candidate } = entry;
-    const entityKey = getEntityKey(kind, candidate?.id);
-    const totalNeededMs = estimateRequiredMinutes(candidate, kind) * 60000;
-    const alreadyMs = (scheduledMinutesByEntity.get(entityKey) || 0) * 60000;
-    if (alreadyMs >= totalNeededMs) continue; // fully covered already
-    const res = await placeEntry(candidate, kind);
-    created += res.created || 0;
-    blocked += res.blocked || 0;
   }
+
+  const plannerScheduleResult = await schedulePlacementQueueWithCanonicalScheduler({
+    db,
+    userId: uid,
+    placementQueue,
+    storyMap,
+    sprintMap,
+    existingBlocks: remainingBlocks,
+    windowStart,
+    windowEnd,
+    planningMode,
+    source: 'replan_calendar',
+  });
+  let gcalLinks = [];
 
   const coverage = buildPlannerCoverageSummary({
     stories: storyQueue,
     tasks: taskQueue,
-    scheduledMinutesByEntity,
+    scheduledMinutesByEntity: plannerScheduleResult.scheduledMinutesByEntity,
   });
 
   const result = {
-    created,
-    blocked,
+    created: plannerScheduleResult.created || 0,
+    blocked: plannerScheduleResult.blocked || 0,
     rescheduled: 0,
     replaced,
     gcalLinks,
@@ -4436,6 +4438,58 @@ exports.replanCalendarNow = onCall({
     ok: true,
     ...result,
   };
+});
+
+exports.schedulePlannerItem = onCall({
+  region: 'europe-west2',
+  memory: '512MiB',
+}, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new https.HttpsError('unauthenticated', 'Sign in required');
+  const itemType = String(req?.data?.itemType || '').trim().toLowerCase();
+  const itemId = String(req?.data?.itemId || '').trim();
+  if (!itemId || (itemType !== 'task' && itemType !== 'story')) {
+    throw new https.HttpsError('invalid-argument', 'A valid task or story target is required.');
+  }
+
+  const db = ensureFirestore();
+  try {
+    const result = await schedulePlannerItemMutation({
+      db,
+      userId: uid,
+      itemType,
+      itemId,
+      targetDateMs: req?.data?.targetDateMs,
+      targetBucket: req?.data?.targetBucket || null,
+      intent: req?.data?.intent || 'move',
+      source: req?.data?.source || 'planner',
+      rationale: req?.data?.rationale || null,
+      linkedBlockId: req?.data?.linkedBlockId || null,
+      targetSprintId: req?.data?.targetSprintId || null,
+      durationMinutes: req?.data?.durationMinutes || null,
+      planningMode: req?.data?.planningMode || null,
+      searchDays: req?.data?.searchDays || null,
+      maxTargetDateMs: req?.data?.maxTargetDateMs || null,
+      allowSplit: req?.data?.allowSplit === true,
+      debugRequestId: req?.data?.debugRequestId || null,
+    });
+    return result;
+  } catch (error) {
+    const message = error?.message || 'Failed to schedule planner item';
+    console.error('[schedulePlannerItem] failure', {
+      debugRequestId: req?.data?.debugRequestId || null,
+      uid,
+      itemType,
+      itemId,
+      intent: req?.data?.intent || 'move',
+      source: req?.data?.source || 'planner',
+      targetDateMs: req?.data?.targetDateMs || null,
+      targetBucket: req?.data?.targetBucket || null,
+      linkedBlockId: req?.data?.linkedBlockId || null,
+      error: message,
+    });
+    throw new https.HttpsError('failed-precondition', message);
+  }
 });
 
 // Manual trigger to run the nightly chain (pointing → conversions → scoring+Top3 → calendar)
@@ -4616,6 +4670,7 @@ exports.deltaPriorityRescore = onCall({
       aiTop3Date: admin.firestore.FieldValue.delete(),
       aiTop3Reason: admin.firestore.FieldValue.delete(),
       userPriorityFlag: false,
+      userPriorityRank: admin.firestore.FieldValue.delete(),
       userPriorityFlagAt: admin.firestore.FieldValue.delete(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       syncState: 'dirty',
@@ -4662,10 +4717,11 @@ exports.deltaPriorityRescore = onCall({
 
   const isHobbyTheme = effectiveTheme && String(effectiveTheme).toLowerCase().includes('hobb');
 
-  // User #1 priority flag gives massive boost
-  if (entity.userPriorityFlag === true) {
-    bonus += 1000;
-    bonusReasons.push('User #1 priority flag');
+  const manualPriorityRank = getManualPriorityRank(entity);
+  if (manualPriorityRank != null) {
+    const manualBoost = manualPriorityRank === 1 ? 1000 : manualPriorityRank === 2 ? 900 : 800;
+    bonus += manualBoost;
+    bonusReasons.push(`User manual priority #${manualPriorityRank}`);
   }
 
   if (entityType === 'task' && !entity.storyId) {
@@ -4751,10 +4807,25 @@ async function _deltaTop3ForPersona(db, userId, persona) {
   const topTasks = selectTopTasksFresh(taskCandidates, storyMap);
   const topTaskIds = new Set(topTasks.map((task) => task.id));
   const topStoryIds = new Set(topStories.map((story) => story.id));
+  const forcedStoryTaskCandidates = taskCandidates.filter((task) => {
+    const storyId = task?.data?.storyId;
+    if (!storyId) return false;
+    const parentStory = storyMap.get(storyId);
+    return !!getManualPriorityRank(parentStory?.data);
+  });
+  const promotedTasks = [
+    ...topTasks,
+    ...forcedStoryTaskCandidates.filter((task) => !topTaskIds.has(task.id)),
+  ];
+  const promotedTaskIds = new Set(promotedTasks.map((task) => task.id));
 
   const promoteTaskBatch = db.batch();
-  topTasks.forEach((task, idx) => {
-    const reason = ['Top 3 priority', `score=${Math.round(task.score || 0)}`].filter(Boolean).join(' | ');
+  promotedTasks.forEach((task, idx) => {
+    const parentStory = task?.data?.storyId ? storyMap.get(task.data.storyId) : null;
+    const parentManualRank = getManualPriorityRank(parentStory?.data);
+    const reason = parentManualRank
+      ? [`Manual story priority #${parentManualRank}`, `score=${Math.round(task.score || 0)}`].filter(Boolean).join(' | ')
+      : ['Top 3 priority', `score=${Math.round(task.score || 0)}`].filter(Boolean).join(' | ');
     const patch = {
       aiFlaggedTop: true,
       aiPriorityRank: idx + 1,
@@ -4773,12 +4844,12 @@ async function _deltaTop3ForPersona(db, userId, persona) {
     }
     promoteTaskBatch.set(task.refObj, patch, { merge: true });
   });
-  if (topTasks.length > 0) await promoteTaskBatch.commit();
+  if (promotedTasks.length > 0) await promoteTaskBatch.commit();
 
   const demoteTaskMap = await collectTaskTop3CandidateDocs(db, userId, 200);
   const demoteTaskWriter = db.bulkWriter();
   demoteTaskMap.forEach((doc) => {
-    if (topTaskIds.has(doc.id)) return;
+    if (promotedTaskIds.has(doc.id)) return;
     const data = doc.data() || {};
     if (resolvePersona(data.persona) !== persona) return;
     const cleanedTags = stripTop3Tags(data.tags);
