@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Alert, Button, Form, Modal, Spinner } from 'react-bootstrap';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from '../firebase';
+import { normalizePlannerSchedulingError } from '../utils/plannerScheduling';
 
 type ItemType = 'task' | 'story';
 
@@ -20,6 +21,16 @@ interface DeferItemModalProps {
   itemType: ItemType;
   itemId: string;
   itemTitle: string;
+  focusContext?: {
+    isFocusAligned?: boolean;
+    activeFocusGoals?: Array<{
+      id: string;
+      title?: string | null;
+      focusRootGoalIds?: string[];
+      focusLeafGoalIds?: string[];
+      goalIds?: string[];
+    }>;
+  };
   onApply: (payload: { dateMs: number; rationale: string; source: string }) => Promise<void>;
 }
 
@@ -43,6 +54,7 @@ const DeferItemModal: React.FC<DeferItemModalProps> = ({
   itemType,
   itemId,
   itemTitle,
+  focusContext,
   onApply,
 }) => {
   const [loading, setLoading] = useState(false);
@@ -54,21 +66,35 @@ const DeferItemModal: React.FC<DeferItemModalProps> = ({
   const [selectedKey, setSelectedKey] = useState<string>('');
   const [customDate, setCustomDate] = useState<string>('');
   const [showMoreSuggestions, setShowMoreSuggestions] = useState(false);
+  const hasFocusPressure = !focusContext?.isFocusAligned && (focusContext?.activeFocusGoals?.length || 0) > 0;
 
   useEffect(() => {
     if (!show) return;
     let cancelled = false;
+    console.info('[DeferItemModal] opened', { itemType, itemId, itemTitle });
 
     const loadOptions = async () => {
       setLoading(true);
       setError(null);
       try {
         const callable = httpsCallable(functions, 'suggestDeferralOptions');
-        const resp: any = await callable({ itemType, itemId, horizonDays: 21 });
+        const resp: any = await callable({
+          itemType,
+          itemId,
+          horizonDays: 21,
+          focusContext,
+        });
         const next = Array.isArray(resp?.data?.options) ? resp.data.options : [];
         const top = Array.isArray(resp?.data?.topOptions) ? resp.data.topOptions : next.slice(0, 3);
         const more = Array.isArray(resp?.data?.moreOptions) ? resp.data.moreOptions : next.slice(3);
         if (cancelled) return;
+        console.info('[DeferItemModal] suggestions_loaded', {
+          itemType,
+          itemId,
+          options: next.length,
+          topOptions: top.length,
+          moreOptions: more.length,
+        });
         setOptions(next);
         setTopOptions(top);
         setMoreOptions(more);
@@ -76,7 +102,8 @@ const DeferItemModal: React.FC<DeferItemModalProps> = ({
         setShowMoreSuggestions(false);
       } catch (err: any) {
         if (cancelled) return;
-        setError(err?.message || 'Could not generate defer suggestions.');
+        console.error('[DeferItemModal] suggestions_failed', { itemType, itemId, err });
+        setError(normalizePlannerSchedulingError(err).message || 'Could not generate defer suggestions.');
         setOptions([]);
         setTopOptions([]);
         setMoreOptions([]);
@@ -90,7 +117,7 @@ const DeferItemModal: React.FC<DeferItemModalProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [show, itemId, itemType]);
+  }, [show, itemId, itemType, itemTitle, focusContext]);
 
   const selectedOption = useMemo(
     () => options.find((opt) => opt.key === selectedKey) || null,
@@ -127,11 +154,21 @@ const DeferItemModal: React.FC<DeferItemModalProps> = ({
     }
 
     setApplying(true);
+    console.info('[DeferItemModal] apply_clicked', {
+      itemType,
+      itemId,
+      itemTitle,
+      selectedKey,
+      dateMs,
+      source,
+      rationale,
+    });
     try {
       await onApply({ dateMs, rationale, source });
       onHide();
     } catch (err: any) {
-      setError(err?.message || 'Failed to defer this item.');
+      console.error('[DeferItemModal] apply_failed', { itemType, itemId, err });
+      setError(normalizePlannerSchedulingError(err).message || 'Failed to defer this item.');
     } finally {
       setApplying(false);
     }
@@ -149,6 +186,11 @@ const DeferItemModal: React.FC<DeferItemModalProps> = ({
         <p className="text-muted small mb-3">
           Suggestions are ranked to reduce near-term overload using sprint windows and calendar utilization.
         </p>
+        {hasFocusPressure && (
+          <Alert variant="info" className="py-2 small">
+            This item is outside your active focus goals. Deferring it can free capacity for focus work.
+          </Alert>
+        )}
 
         {error && <Alert variant="warning" className="py-2">{error}</Alert>}
 
