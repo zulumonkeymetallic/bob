@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Container, Card, Row, Col, Badge, Button, Alert, Collapse, OverlayTrigger, Tooltip, Form, Spinner, Table, ProgressBar } from 'react-bootstrap';
+import { Container, Card, Row, Col, Badge, Button, Alert, Collapse, OverlayTrigger, Tooltip, Form, Spinner, Table } from 'react-bootstrap';
 import { useNavigate, Link } from 'react-router-dom';
 import { Target, BookOpen, TrendingUp, Wallet, Clock, ListChecks, Calendar as CalendarIcon, LayoutGrid, RefreshCw, Sparkles, Activity, GripVertical, Heart, CheckCircle, X } from 'lucide-react';
 import { DndContext, DragEndEvent, PointerSensor, useSensor, useSensors, closestCenter } from '@dnd-kit/core';
@@ -25,6 +25,8 @@ import SprintMetricsPanel from './SprintMetricsPanel';
 import JournalInsightsCard from './JournalInsightsCard';
 import BirthdayMilestoneCard from './BirthdayMilestoneCard';
 import KpiDashboardWidget from './KpiDashboardWidget';
+import DailyPlanSummaryCard from './planner/DailyPlanSummaryCard';
+import WeeklyPlannerSummaryCard from './planner/WeeklyPlannerSummaryCard';
 import { GLOBAL_THEMES, LEGACY_THEME_MAP } from '../constants/globalThemes';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { useUnifiedPlannerData, type PlannerRange } from '../hooks/useUnifiedPlannerData';
@@ -503,7 +505,7 @@ const DASHBOARD_WIDGET_CONFIG: Array<{ key: DashboardWidgetKey; label: string }>
   { key: 'dailySummary', label: 'Daily summary' },
   { key: 'top3', label: 'Top 3 priorities' },
   { key: 'themeProgress', label: 'Theme progress' },
-  { key: 'kpiStudio', label: 'KPI studio' },
+  { key: 'kpiStudio', label: 'Pinned focus KPIs' },
   { key: 'unifiedTimeline', label: 'Daily Plan' },
   { key: 'tasksDueToday', label: 'Tasks due today' },
   { key: 'choresHabits', label: 'Chores & habits' },
@@ -1110,14 +1112,15 @@ const Dashboard: React.FC = () => {
     const gridWidth = grid ? grid.getBoundingClientRect().width : window.innerWidth - 80;
     if (gridWidth < 300) return;
     const gap = 4;
-    // Daily timeline takes 75% of the grid; Top 3 priorities fills the remaining 25%
+    // Keep the top summary widgets visually aligned by default while preserving relative widths.
     const threeQuarter = Math.max(400, Math.floor((gridWidth - gap) * 0.75));
     const quarter = Math.max(220, Math.floor((gridWidth - gap) * 0.25));
     const third = Math.max(240, Math.floor((gridWidth - gap * 2) / 3));
     setWidgetSizes({
-      unifiedTimeline: { width: threeQuarter, height: 600 },
-      top3: { width: quarter, height: 600 },
+      unifiedTimeline: { width: threeQuarter, height: 420 },
+      top3: { width: quarter, height: 420 },
       dailySummary: { width: third, height: 420 },
+      kpiStudio: { width: third, height: 420 },
       choresHabits: { width: third, height: 420 },
       lowHangingFruit: { width: third, height: 400 },
       themeProgress: { width: third, height: 400 },
@@ -1169,13 +1172,21 @@ const Dashboard: React.FC = () => {
   }, []);
 
   const monzoLastSyncDate = useMemo(() => {
-    if (!monzoIntegrationStatus) return null;
-    return decodeToDate(
-      monzoIntegrationStatus.lastSyncAt
-      ?? monzoIntegrationStatus.lastSyncedAt
-      ?? monzoIntegrationStatus.lastSync,
-    );
-  }, [decodeToDate, monzoIntegrationStatus]);
+    const candidates = [
+      decodeToDate(
+        monzoIntegrationStatus?.lastSyncAt
+        ?? monzoIntegrationStatus?.lastSyncedAt
+        ?? monzoIntegrationStatus?.lastSync,
+      ),
+      decodeToDate(profileSnapshot?.monzoLastSyncAt ?? profileSnapshot?.monzoLastSyncedAt),
+      decodeToDate(monzoSummary?.updatedAt),
+    ].filter((value): value is Date => value instanceof Date && !Number.isNaN(value.getTime()));
+
+    if (candidates.length === 0) return null;
+    return candidates.reduce((latest, current) => (
+      current.getTime() > latest.getTime() ? current : latest
+    ));
+  }, [decodeToDate, monzoIntegrationStatus, monzoSummary?.updatedAt, profileSnapshot?.monzoLastSyncAt, profileSnapshot?.monzoLastSyncedAt]);
 
   const monzoSyncAgeDays = useMemo(() => {
     if (!monzoLastSyncDate) return null;
@@ -1302,7 +1313,7 @@ const Dashboard: React.FC = () => {
     const macroTone = macroAdherencePct == null ? 'secondary' : macroAdherencePct >= 80 ? 'success' : macroAdherencePct >= 60 ? 'warning' : 'danger';
     const bodyFatGoalProgressPct = bodyFatPct == null
       ? null
-      : (bodyFatPct <= bodyFatGoalPct ? 100 : clampPct((bodyFatGoalPct / bodyFatPct) * 100));
+      : (bodyFatPct <= bodyFatGoalPct ? 100 : 0);
     const primaryProgressPct = bodyFatGoalProgressPct ?? macroAdherencePct ?? null;
     const primaryProgressLabel = bodyFatGoalProgressPct != null
       ? `Body fat target ${bodyFatGoalPct}%`
@@ -2900,6 +2911,88 @@ const Dashboard: React.FC = () => {
     });
     return map;
   }, [recentStories, sprintStories, storyRefLabel]);
+
+  const top3TargetsByRef = useMemo(() => {
+    const map = new Map<string, { href: string; label: string }>();
+    top3Stories.forEach((story) => {
+      const ref = storyRefLabel(story).toUpperCase();
+      if (!ref) return;
+      map.set(ref, {
+        href: `/stories/${story.id}`,
+        label: `${storyRefLabel(story)} — ${story.title || 'Story'}`,
+      });
+    });
+    top3Tasks.forEach((task) => {
+      const ref = taskRefLabel(task).toUpperCase();
+      if (!ref) return;
+      map.set(ref, {
+        href: `/tasks/${task.id}`,
+        label: `${taskRefLabel(task)} — ${task.title || 'Task'}`,
+      });
+    });
+    return map;
+  }, [top3Stories, top3Tasks, storyRefLabel, taskRefLabel]);
+
+  const renderDailySummaryLine = useCallback((line: string) => {
+    const text = String(line || '').trim();
+    if (!text) return text;
+    if (!text.toLowerCase().startsWith('focus:')) return text;
+
+    const lineUpper = text.toUpperCase();
+    const top3Match = Array.from(top3TargetsByRef.entries()).find(([ref]) => lineUpper.includes(ref));
+    const refMatch = text.match(/\b[A-Z]{2,4}-[A-Z0-9]{4,}\b/i);
+    const matchedRef = String(top3Match?.[0] || refMatch?.[0] || '').toUpperCase();
+    const target = top3Match
+      ? top3Match[1]
+      : (() => {
+          if (!matchedRef) return null;
+          const matchedTask = tasksByRef.get(matchedRef);
+          if (matchedTask) {
+            return {
+              href: `/tasks/${matchedTask.id}`,
+              label: `${taskRefLabel(matchedTask)} — ${matchedTask.title || 'Task'}`,
+            };
+          }
+          const matchedStory = storiesByRef.get(matchedRef);
+          if (matchedStory) {
+            return {
+              href: `/stories/${matchedStory.id}`,
+              label: `${storyRefLabel(matchedStory)} — ${matchedStory.title || 'Story'}`,
+            };
+          }
+          return null;
+        })();
+
+    if (!target) return text;
+
+    const labelIndex = lineUpper.indexOf(target.label.toUpperCase());
+    if (labelIndex >= 0) {
+      const prefix = text.slice(0, labelIndex);
+      const suffix = text.slice(labelIndex + target.label.length);
+      return (
+        <>
+          {prefix}
+          <a href={target.href} className="text-decoration-none">{target.label}</a>
+          {suffix}
+        </>
+      );
+    }
+
+    const refIndex = matchedRef ? lineUpper.indexOf(matchedRef) : -1;
+    if (refIndex >= 0 && matchedRef) {
+      const prefix = text.slice(0, refIndex);
+      const suffix = text.slice(refIndex + matchedRef.length);
+      return (
+        <>
+          {prefix}
+          <a href={target.href} className="text-decoration-none">{text.slice(refIndex, refIndex + matchedRef.length)}</a>
+          {suffix}
+        </>
+      );
+    }
+
+    return text;
+  }, [storiesByRef, storyRefLabel, taskRefLabel, tasksByRef, top3TargetsByRef]);
 
   const nextWorkPath = useMemo(() => {
     const item = nextWorkRecommendation?.recommendedItem;
@@ -4567,15 +4660,15 @@ const Dashboard: React.FC = () => {
                       : 'linear-gradient(135deg, #0d6efd 0%, #0b5ed7 100%)',
                   border: 'none',
                   color: '#fff',
-                  boxShadow: '0 8px 24px rgba(13, 110, 253, 0.22)'
+                  boxShadow: '0 6px 18px rgba(13, 110, 253, 0.18)'
                 }}
               >
-                <Card.Body style={{ padding: '12px 16px' }}>
-                  <div className="d-flex align-items-center gap-3 flex-wrap">
+                <Card.Body style={{ padding: '10px 14px' }}>
+                  <div className="d-flex align-items-center gap-2 flex-wrap">
                     <div
                       style={{
-                        width: 40,
-                        height: 40,
+                        width: 34,
+                        height: 34,
                         borderRadius: 8,
                         backgroundColor: 'rgba(255, 255, 255, 0.18)',
                         display: 'flex',
@@ -4585,13 +4678,13 @@ const Dashboard: React.FC = () => {
                         flexShrink: 0,
                       }}
                     >
-                      <Heart size={20} />
+                      <Heart size={18} />
                     </div>
                     <div style={{ flex: 1, minWidth: 220 }}>
-                      <div style={{ margin: 0, fontSize: 14, fontWeight: 700 }}>
+                      <div style={{ margin: 0, fontSize: 13, fontWeight: 700 }}>
                         Daily Health Progress
                       </div>
-                      <div style={{ marginTop: 2, fontSize: 11, opacity: 0.9 }}>
+                      <div style={{ marginTop: 2, fontSize: 10.5, opacity: 0.9 }}>
                         {healthBannerData.weightKg != null ? `${healthBannerData.weightKg.toFixed(1)} kg` : 'weight missing'}
                         {' • '}
                         {healthBannerData.bodyFatPct != null ? `${healthBannerData.bodyFatPct.toFixed(1)}% body fat` : 'body fat missing'}
@@ -4603,11 +4696,11 @@ const Dashboard: React.FC = () => {
                         {healthBannerData.weeksToTargetBodyFat != null ? `${Math.round(healthBannerData.weeksToTargetBodyFat)}w ETA` : 'ETA n/a'}
                       </div>
                     </div>
-                    <div style={{ textAlign: 'right', minWidth: 72 }}>
-                      <div style={{ fontSize: 20, fontWeight: 800, lineHeight: 1 }}>
+                    <div style={{ textAlign: 'right', minWidth: 64 }}>
+                      <div style={{ fontSize: 18, fontWeight: 800, lineHeight: 1 }}>
                         {healthBannerData.primaryProgressPct != null ? `${healthBannerData.primaryProgressPct}%` : '—'}
                       </div>
-                      <div style={{ fontSize: 11, opacity: 0.85 }}>
+                      <div style={{ fontSize: 10, opacity: 0.85 }}>
                         {healthBannerData.primaryProgressLabel}
                       </div>
                     </div>
@@ -4631,19 +4724,7 @@ const Dashboard: React.FC = () => {
                     </button>
                   </div>
 
-                  <div style={{ marginTop: 8 }}>
-                    <ProgressBar
-                      now={healthBannerData.primaryProgressPct ?? 0}
-                      style={{
-                        height: 4,
-                        backgroundColor: 'rgba(255, 255, 255, 0.22)',
-                        borderRadius: 2,
-                      }}
-                      className="bg-light"
-                    />
-                  </div>
-
-                  <div className="d-flex align-items-center justify-content-between gap-2 flex-wrap" style={{ marginTop: 8, fontSize: 11, opacity: 0.9 }}>
+                  <div className="d-flex align-items-center justify-content-between gap-2 flex-wrap" style={{ marginTop: 8, fontSize: 10.5, opacity: 0.9 }}>
                     <div>
                       Source {healthBannerData.sourceLabel}
                       {' • '}
@@ -5400,6 +5481,9 @@ const Dashboard: React.FC = () => {
                       <Button variant="outline-secondary" size="sm" onClick={() => navigate('/sprints/kanban')}>
                         <LayoutGrid size={14} className="me-1" /> View kanban
                       </Button>
+                      <Button variant="outline-secondary" size="sm" onClick={() => navigate('/planner/weekly')}>
+                        <Clock size={14} className="me-1" /> 7-day planner
+                      </Button>
                       <Button
                         variant="outline-primary"
                         size="sm"
@@ -5470,7 +5554,7 @@ const Dashboard: React.FC = () => {
                                     const half = Math.max(300, Math.floor((gridWidth - gap) / 2));
                                     const third = Math.max(240, Math.floor((gridWidth - gap * 2) / 3));
                                     setWidgetSizes({
-                                      unifiedTimeline: { width: half, height: 600 },
+                                      unifiedTimeline: { width: half, height: 420 },
                                       top3: { width: third, height: 420 },
                                       dailySummary: { width: third, height: 420 },
                                       kpiStudio: { width: third, height: 420 },
@@ -5631,7 +5715,7 @@ const Dashboard: React.FC = () => {
                                     )}
                                     <ul className="mb-0 small">
                                       {dailySummaryLines.map((line, idx) => (
-                                        <li key={idx}>{line}</li>
+                                        <li key={idx}>{renderDailySummaryLine(line)}</li>
                                       ))}
                                     </ul>
                                   </div>
@@ -6176,21 +6260,10 @@ const Dashboard: React.FC = () => {
                             className="dashboard-widget-shell"
                             style={getWidgetSizeStyle('unifiedTimeline', 360)}
                           >
-                            <Card className="shadow-sm border-0 dashboard-calendar-card d-flex flex-column">
-                              <Card.Header className="d-flex align-items-center justify-content-between">
-                                <div className="fw-semibold d-flex align-items-center gap-2">
-                                  <CalendarIcon size={16} /> Daily Plan
-                                </div>
-                                <div className="d-flex align-items-center gap-2">
-                                  <Badge bg="secondary" pill>Disabled</Badge>
-                                </div>
-                              </Card.Header>
-                              <Card.Body ref={timelineScrollBodyRef} className="p-3 d-flex flex-column flex-grow-1" style={{ minHeight: 0, overflowY: 'auto' }}>
-                                <Alert variant="secondary" className="mb-0 py-2">
-                                  Daily Plan is temporarily disabled while due-date and sync issues are investigated.
-                                </Alert>
-                              </Card.Body>
-                            </Card>
+                            <div className="d-flex flex-column gap-3 h-100 dashboard-summary-stack">
+                              <DailyPlanSummaryCard />
+                              <WeeklyPlannerSummaryCard />
+                            </div>
                             {renderWidgetEdgeHandles('unifiedTimeline')}
                             {renderWidgetResizeHandle('unifiedTimeline', 360, 'Resize Daily Plan widget')}
                           </div>

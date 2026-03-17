@@ -1,15 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Container, Card, Button, Badge, ListGroup, Form, Modal, Spinner } from 'react-bootstrap';
-import { useNavigate } from 'react-router-dom';
 import { httpsCallable } from 'firebase/functions';
 import { collection, query, where, onSnapshot, orderBy, limit, updateDoc, doc, serverTimestamp } from 'firebase/firestore';
 import { db, functions } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { useSprint } from '../contexts/SprintContext';
 import { usePersona } from '../contexts/PersonaContext';
-import { Goal, Story, Task, Sprint as SprintType } from '../types';
+import { Goal, Story, Task } from '../types';
 import { ActivityStreamService } from '../services/ActivityStreamService';
-import { ChoiceHelper, StoryStatus } from '../config/choices';
+import { ChoiceHelper } from '../config/choices';
 import { getBadgeVariant, getPriorityBadge, getStatusName } from '../utils/statusHelpers';
 import { taskStatusText } from '../utils/storyCardFormatting';
 import { extractWeatherSummary, extractWeatherTemp, formatWeatherLine } from '../utils/weatherFormat';
@@ -25,11 +24,24 @@ import {
   formatFullReplanSummary,
   normalizePlannerCallableError,
 } from '../utils/plannerOrchestration';
-import DailyPlanPage from './DailyPlanPage';
+import {
+  findItemWithManualPriorityRank,
+  getManualPriorityLabel,
+  getManualPriorityRank,
+  getNextManualPriorityRank,
+} from '../utils/manualPriority';
+import { useFocusGoals } from '../hooks/useFocusGoals';
+import { getProtectedFocusGoalIds, isGoalInHierarchySet } from '../utils/goalHierarchy';
+import { schedulePlannerItem as schedulePlannerItemMutation } from '../utils/plannerScheduling';
 
-type TabKey = 'overview' | 'tasks' | 'stories' | 'goals' | 'chores' | 'daily_plan';
+type TabKey = 'overview' | 'tasks' | 'stories' | 'goals' | 'chores';
 type TaskViewFilter = 'top3' | 'due_today' | 'overdue' | 'all';
 type GoalsViewFilter = 'active_sprint' | 'year';
+type MobileSharedFilters = {
+  top3: boolean;
+  chores: boolean;
+  focusAligned: boolean;
+};
 
 const THEME_COLORS: Record<number, string> = {
   1: '#22c55e', // Health
@@ -60,10 +72,10 @@ const formatShortDate = (value?: number) => {
 };
 
 const MobileHome: React.FC = () => {
-  const navigate = useNavigate();
   const { currentUser } = useAuth();
   const { selectedSprintId, setSelectedSprintId, sprints } = useSprint();
   const { currentPersona, setPersona } = usePersona();
+  const { activeFocusGoals } = useFocusGoals(currentUser?.uid);
 
   const [activeTab, setActiveTab] = useState<TabKey>('overview');
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -90,11 +102,11 @@ const MobileHome: React.FC = () => {
   const [choreCompletionBusy, setChoreCompletionBusy] = useState<Record<string, boolean>>({});
   const [convertingTaskId, setConvertingTaskId] = useState<string | null>(null);
   const [flaggingStoryId, setFlaggingStoryId] = useState<string | null>(null);
-  const [priorityFlagConfirm, setPriorityFlagConfirm] = useState<{ story: Story; existing: Story } | null>(null);
   const [priorityReplanPromptStory, setPriorityReplanPromptStory] = useState<Story | null>(null);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [editingStory, setEditingStory] = useState<Story | null>(null);
   const [deferTarget, setDeferTarget] = useState<{ type: 'task' | 'story'; id: string; title: string } | null>(null);
+  const [sharedFilters, setSharedFilters] = useState<MobileSharedFilters>({ top3: false, chores: false, focusAligned: false });
   const todayIso = useMemo(() => new Date().toISOString().split('T')[0], []);
   const activePlanningSprints = useMemo(
     () => sprints.filter((s) => s.status === 0 || s.status === 1),
@@ -353,6 +365,13 @@ const MobileHome: React.FC = () => {
   const storiesByRef = useMemo(() => new Map(stories.map(s => [(s.ref || s.id || '').toUpperCase(), s])), [stories]);
   const tasksByRef = useMemo(() => new Map(tasks.map(t => [(t.ref || t.id || '').toUpperCase(), t])), [tasks]);
   const goalsById = useMemo(() => new Map(goals.map(g => [g.id, g])), [goals]);
+  const protectedFocusGoalIds = useMemo(() => {
+    const ids = new Set<string>();
+    activeFocusGoals.forEach((focusGoal) => {
+      getProtectedFocusGoalIds(focusGoal).forEach((goalId) => ids.add(goalId));
+    });
+    return ids;
+  }, [activeFocusGoals]);
   const currentSprint = useMemo(() => {
     const source = activePlanningSprints.length ? activePlanningSprints : sprints;
     if (!source || !source.length) return undefined;
@@ -381,21 +400,69 @@ const MobileHome: React.FC = () => {
     return normalizeAiScore((story.metadata?.aiScore ?? story.metadata?.aiCriticalityScore ?? (story as any).aiCriticalityScore ?? null));
   }, [normalizeAiScore]);
 
+  const getTaskManualRank = useCallback((task: Task) => {
+    const directRank = getManualPriorityRank(task);
+    if (directRank) return directRank;
+    const parentStoryId = String(task.storyId || (task.parentType === 'story' ? task.parentId || '' : '')).trim();
+    if (!parentStoryId) return null;
+    return getManualPriorityRank(storiesById.get(parentStoryId));
+  }, [storiesById]);
+
+  const isStoryFocusAligned = useCallback((story?: Story | null) => {
+    const goalId = String(story?.goalId || '').trim();
+    if (!goalId || protectedFocusGoalIds.size === 0) return false;
+    return isGoalInHierarchySet(goalId, goals, protectedFocusGoalIds);
+  }, [goals, protectedFocusGoalIds]);
+
+  const isTaskFocusAligned = useCallback((task?: Task | null) => {
+    const directGoalId = String((task as any)?.goalId || '').trim();
+    if (directGoalId && protectedFocusGoalIds.size > 0) {
+      return isGoalInHierarchySet(directGoalId, goals, protectedFocusGoalIds);
+    }
+    const parentStoryId = String(task?.storyId || (task?.parentType === 'story' ? task?.parentId || '' : '')).trim();
+    if (!parentStoryId) return false;
+    return isStoryFocusAligned(storiesById.get(parentStoryId));
+  }, [goals, protectedFocusGoalIds, isStoryFocusAligned, storiesById]);
+
   const isTop3Task = useCallback((task: Task) => {
+    if (getTaskManualRank(task)) return true;
     const flagged = (task as any).aiTop3ForDay === true;
     if (!flagged) return false;
     const aiDate = (task as any).aiTop3Date;
     if (!aiDate) return true;
     return String(aiDate).slice(0, 10) === todayIso;
-  }, [todayIso]);
+  }, [getTaskManualRank, todayIso]);
 
   const isTop3Story = useCallback((story: Story) => {
+    if (getManualPriorityRank(story)) return true;
     const flagged = (story as any).aiTop3ForDay === true;
     if (!flagged) return false;
     const aiDate = (story as any).aiTop3Date;
     if (!aiDate) return true;
     return String(aiDate).slice(0, 10) === todayIso;
   }, [todayIso]);
+
+  const matchesTaskSharedFilters = useCallback((task: Task) => {
+    if (sharedFilters.top3 && !isTop3Task(task)) return false;
+    if (sharedFilters.chores && !getChoreKind(task)) return false;
+    if (sharedFilters.focusAligned && !isTaskFocusAligned(task)) return false;
+    return true;
+  }, [sharedFilters, isTop3Task, getChoreKind, isTaskFocusAligned]);
+
+  const matchesStorySharedFilters = useCallback((story: Story) => {
+    if (sharedFilters.top3 && !isTop3Story(story)) return false;
+    if (sharedFilters.chores) return false;
+    if (sharedFilters.focusAligned && !isStoryFocusAligned(story)) return false;
+    return true;
+  }, [sharedFilters, isTop3Story, isStoryFocusAligned]);
+
+  const matchesTimelineSharedFilters = useCallback((item: MobileTimelineItem) => {
+    if (!sharedFilters.top3 && !sharedFilters.chores && !sharedFilters.focusAligned) return true;
+    if (item.kind === 'event') return false;
+    if (item.story) return matchesStorySharedFilters(item.story);
+    if (item.task) return matchesTaskSharedFilters(item.task);
+    return false;
+  }, [sharedFilters, matchesStorySharedFilters, matchesTaskSharedFilters]);
 
   const sprintDaysLeft = useMemo(() => {
     if (!currentSprint) return null;
@@ -456,11 +523,6 @@ const MobileHome: React.FC = () => {
   const openNoteModal = (type: 'task'|'story'|'goal', id: string) => {
     setNoteText('');
     setNoteModal({ type, id, show: true });
-  };
-
-  const openDeepLink = (task: Task) => {
-    const href = task.ref ? `/tasks/${task.ref}` : `/tasks/${task.id}`;
-    window.open(href, '_blank');
   };
 
   const saveNote = async () => {
@@ -556,13 +618,6 @@ const MobileHome: React.FC = () => {
   };
 
   const handleFlagPriorityStory = async (story: Story) => {
-    const existing = stories.find(
-      (s) => s.id !== story.id && (s as any).userPriorityFlag === true && s.status !== 4
-    );
-    if (existing) {
-      setPriorityFlagConfirm({ story, existing });
-      return;
-    }
     await applyPriorityFlag(story);
   };
 
@@ -573,39 +628,72 @@ const MobileHome: React.FC = () => {
 
   const applyDeferredDate = useCallback(async ({ dateMs, rationale, source }: { dateMs: number; rationale: string; source: string }) => {
     if (!deferTarget) return;
-    const collectionName = deferTarget.type === 'story' ? 'stories' : 'tasks';
-    await updateDoc(doc(db, collectionName, deferTarget.id), {
-      deferredUntil: dateMs,
-      deferredReason: rationale,
-      deferredBy: source,
-      deferredAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    } as any);
+    const debugRequestId = `mobile-defer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const targetEntity = deferTarget.type === 'task'
+      ? tasks.find((task) => task.id === deferTarget.id) || null
+      : stories.find((story) => story.id === deferTarget.id) || null;
+    console.info('[MobileHome] defer_confirmed', {
+      debugRequestId,
+      itemType: deferTarget.type,
+      itemId: deferTarget.id,
+      title: deferTarget.title,
+      dateMs,
+      source,
+      rationale,
+    });
+    const targetBucketRaw = String((targetEntity as any)?.timeOfDay || '').trim().toLowerCase();
+    const targetBucket = targetBucketRaw === 'morning' || targetBucketRaw === 'afternoon' || targetBucketRaw === 'evening' || targetBucketRaw === 'anytime'
+      ? targetBucketRaw
+      : null;
+    await schedulePlannerItemMutation({
+      itemType: deferTarget.type,
+      itemId: deferTarget.id,
+      targetDateMs: dateMs,
+      targetBucket,
+      intent: 'defer',
+      source: source || 'mobile_home',
+      rationale,
+      durationMinutes: deferTarget.type === 'task'
+        ? Math.max(15, Number((targetEntity as any)?.estimateMin || 30))
+        : Math.max(15, Number((targetEntity as any)?.estimateMin || 60)),
+      debugRequestId,
+    });
     setDeferTarget(null);
-  }, [deferTarget]);
+  }, [deferTarget, tasks, stories]);
 
   const applyPriorityFlag = async (story: Story) => {
     setFlaggingStoryId(story.id);
     try {
-      // Clear any existing flag
-      const existingFlagged = stories.filter(
-        (s) => s.id !== story.id && (s as any).userPriorityFlag === true
-      );
-      for (const s of existingFlagged) {
-        await updateDoc(doc(db, 'stories', s.id), {
+      const storyPersona = String((story as any).persona || 'personal');
+      const currentRank = getManualPriorityRank(story);
+      if (currentRank) {
+        await updateDoc(doc(db, 'stories', story.id), {
           userPriorityFlag: false,
+          userPriorityRank: null,
+          userPriorityFlagAt: null,
           updatedAt: serverTimestamp(),
         });
-      }
-      // Set new flag (toggle if already flagged)
-      const isAlreadyFlagged = (story as any).userPriorityFlag === true;
-      await updateDoc(doc(db, 'stories', story.id), {
-        userPriorityFlag: !isAlreadyFlagged,
-        userPriorityFlagAt: isAlreadyFlagged ? null : new Date().toISOString(),
-        updatedAt: serverTimestamp(),
-      });
-      // Trigger rescore + replan
-      if (!isAlreadyFlagged) {
+      } else {
+        const nextRank = getNextManualPriorityRank(
+          stories.filter((entry) => entry.status !== 4),
+          storyPersona,
+          story.id,
+        );
+        const conflictingStory = findItemWithManualPriorityRank(stories, storyPersona, nextRank, story.id);
+        if (conflictingStory?.id) {
+          await updateDoc(doc(db, 'stories', conflictingStory.id), {
+            userPriorityFlag: false,
+            userPriorityRank: null,
+            userPriorityFlagAt: null,
+            updatedAt: serverTimestamp(),
+          });
+        }
+        await updateDoc(doc(db, 'stories', story.id), {
+          userPriorityFlag: true,
+          userPriorityRank: nextRank,
+          userPriorityFlagAt: new Date().toISOString(),
+          updatedAt: serverTimestamp(),
+        });
         const rescore = httpsCallable(functions, 'deltaPriorityRescore');
         await rescore({ entityId: story.id, entityType: 'story' }).catch(() => {});
         setPriorityReplanPromptStory(story);
@@ -614,7 +702,6 @@ const MobileHome: React.FC = () => {
       console.error('Failed to flag priority story', e);
     } finally {
       setFlaggingStoryId(null);
-      setPriorityFlagConfirm(null);
     }
   };
 
@@ -692,23 +779,27 @@ const MobileHome: React.FC = () => {
     return Number.isNaN(parsed) ? null : parsed;
   };
 
-  const getTaskDueValue = (task: Task) => {
+  const getTaskDueValue = useCallback((task: Task) => {
     const candidate = task.dueDate || task.dueDateMs || task.targetDate || null;
     return resolveDateValue(candidate) ?? Infinity;
-  };
+  }, []);
 
   const pendingTasks = useMemo(() => {
     let base = showCompleted ? tasks : tasks.filter(t => t.status !== 2);
     if (aiFocusOnly) {
       base = base.filter((task) => {
+        if (getTaskManualRank(task)) return true;
         const aiScore = getTaskAiScore(task);
         return aiScore != null && aiScore >= aiThreshold;
       });
     }
     return base;
-  }, [tasks, showCompleted, aiFocusOnly, aiThreshold, getTaskAiScore]);
+  }, [tasks, showCompleted, aiFocusOnly, aiThreshold, getTaskAiScore, getTaskManualRank]);
   const sortedPendingTasks = useMemo(() => {
     return [...pendingTasks].sort((a, b) => {
+      const manualA = getTaskManualRank(a) || 99;
+      const manualB = getTaskManualRank(b) || 99;
+      if (manualA !== manualB) return manualA - manualB;
       const aiA = getTaskAiScore(a) ?? 0;
       const aiB = getTaskAiScore(b) ?? 0;
       if (aiA !== aiB) return aiB - aiA;
@@ -717,17 +808,18 @@ const MobileHome: React.FC = () => {
       if (dueA !== dueB) return dueA - dueB;
       return (b.priority || 0) - (a.priority || 0);
     });
-  }, [pendingTasks, getTaskAiScore]);
+  }, [pendingTasks, getTaskAiScore, getTaskManualRank, getTaskDueValue]);
 
-  const getStoryDueValue = (story: Story) => {
+  const getStoryDueValue = useCallback((story: Story) => {
     const candidate = story.dueDate || story.targetDate || story.plannedStartDate || null;
     return resolveDateValue(candidate) ?? Infinity;
-  };
+  }, []);
 
   const filteredStories = useMemo(() => {
     let base = showCompleted ? stories : stories.filter(s => s.status !== 4);
     if (aiFocusOnly) {
       base = base.filter((story) => {
+        if (getManualPriorityRank(story)) return true;
         const aiScore = getStoryAiScore(story);
         return aiScore != null && aiScore >= aiThreshold;
       });
@@ -737,6 +829,9 @@ const MobileHome: React.FC = () => {
 
   const sortedStories = useMemo(() => {
     return [...filteredStories].sort((a, b) => {
+      const manualA = getManualPriorityRank(a) || 99;
+      const manualB = getManualPriorityRank(b) || 99;
+      if (manualA !== manualB) return manualA - manualB;
       const aiA = getStoryAiScore(a) ?? 0;
       const aiB = getStoryAiScore(b) ?? 0;
       if (aiA !== aiB) return aiB - aiA;
@@ -745,7 +840,7 @@ const MobileHome: React.FC = () => {
       if (dueA !== dueB) return dueA - dueB;
       return (b.priority || 0) - (a.priority || 0);
     });
-  }, [filteredStories, getStoryAiScore]);
+  }, [filteredStories, getStoryAiScore, getStoryDueValue]);
 
   const top3Tasks = useMemo(() => {
     return tasks
@@ -753,6 +848,9 @@ const MobileHome: React.FC = () => {
       .filter(t => t.status !== 2)
       .filter(isTop3Task)
       .sort((a, b) => {
+        const manualA = getTaskManualRank(a) || 99;
+        const manualB = getTaskManualRank(b) || 99;
+        if (manualA !== manualB) return manualA - manualB;
         const ar = Number((a as any).aiPriorityRank || 0) || 99;
         const br = Number((b as any).aiPriorityRank || 0) || 99;
         if (ar !== br) return ar - br;
@@ -762,13 +860,16 @@ const MobileHome: React.FC = () => {
         return String(a.title || '').localeCompare(String(b.title || ''));
       })
       .slice(0, 3);
-  }, [tasks, isTop3Task, getTaskAiScore]);
+  }, [tasks, isTop3Task, getTaskAiScore, getTaskManualRank]);
 
   const top3Stories = useMemo(() => {
     return stories
       .filter(s => s.status !== 4)
       .filter(isTop3Story)
       .sort((a, b) => {
+        const manualA = getManualPriorityRank(a) || 99;
+        const manualB = getManualPriorityRank(b) || 99;
+        if (manualA !== manualB) return manualA - manualB;
         const ar = Number((a as any).aiFocusStoryRank || 0) || 99;
         const br = Number((b as any).aiFocusStoryRank || 0) || 99;
         if (ar !== br) return ar - br;
@@ -779,8 +880,6 @@ const MobileHome: React.FC = () => {
       })
       .slice(0, 3);
   }, [stories, isTop3Story, getStoryAiScore]);
-
-  const top3TaskIdSet = useMemo(() => new Set(top3Tasks.map((task) => task.id)), [top3Tasks]);
 
   const tasksDueTodayForMobile = useMemo(() => {
     const today = new Date();
@@ -805,17 +904,28 @@ const MobileHome: React.FC = () => {
   }, [sortedPendingTasks, getTaskDueMs]);
 
   const visibleTaskRows = useMemo(() => {
+    let rows: Task[];
     if (tasksViewFilter === 'top3') {
-      return sortedPendingTasks.filter((task) => top3TaskIdSet.has(task.id));
+      rows = sortedPendingTasks.filter((task) => isTop3Task(task));
+    } else if (tasksViewFilter === 'due_today') {
+      rows = tasksDueTodayForMobile;
+    } else if (tasksViewFilter === 'overdue') {
+      rows = tasksOverdueForMobile;
+    } else {
+      rows = sortedPendingTasks;
     }
-    if (tasksViewFilter === 'due_today') {
-      return tasksDueTodayForMobile;
-    }
-    if (tasksViewFilter === 'overdue') {
-      return tasksOverdueForMobile;
-    }
-    return sortedPendingTasks;
-  }, [tasksViewFilter, sortedPendingTasks, top3TaskIdSet, tasksDueTodayForMobile, tasksOverdueForMobile]);
+    return rows.filter(matchesTaskSharedFilters);
+  }, [tasksViewFilter, sortedPendingTasks, isTop3Task, tasksDueTodayForMobile, tasksOverdueForMobile, matchesTaskSharedFilters]);
+
+  const visibleStoryRows = useMemo(
+    () => sortedStories.filter(matchesStorySharedFilters),
+    [sortedStories, matchesStorySharedFilters],
+  );
+
+  const visibleChoreRows = useMemo(
+    () => choresDueToday.filter(matchesTaskSharedFilters),
+    [choresDueToday, matchesTaskSharedFilters],
+  );
 
   const filteredGoalsForMobile = useMemo(() => {
     const currentYear = new Date().getFullYear();
@@ -842,7 +952,7 @@ const MobileHome: React.FC = () => {
     story?: Story;
   };
 
-  const bucketFromTime = (ms: number | null | undefined, timeOfDay?: string | null): MobileTimelineBucket => {
+  const bucketFromTime = useCallback((ms: number | null | undefined, timeOfDay?: string | null): MobileTimelineBucket => {
     const tod = String(timeOfDay || '').toLowerCase().trim();
     if (tod === 'morning' || tod === 'afternoon' || tod === 'evening') return tod as MobileTimelineBucket;
     if (!ms || !Number.isFinite(ms)) return 'morning';
@@ -851,7 +961,7 @@ const MobileHome: React.FC = () => {
     if (minute >= 300 && minute <= 779) return 'morning';
     if (minute >= 780 && minute <= 1139) return 'afternoon';
     return 'evening';
-  };
+  }, []);
 
   const timelineTimeLabel = (startMs: number | null | undefined, endMs?: number | null): string => {
     if (!startMs || !Number.isFinite(startMs)) return 'Anytime';
@@ -976,13 +1086,15 @@ const MobileHome: React.FC = () => {
       });
     });
 
-    return rows.sort((a, b) => {
+    return rows
+      .filter(matchesTimelineSharedFilters)
+      .sort((a, b) => {
       const aTime = a.sortMs ?? Number.MAX_SAFE_INTEGER;
       const bTime = b.sortMs ?? Number.MAX_SAFE_INTEGER;
       if (aTime !== bTime) return aTime - bTime;
       return a.title.localeCompare(b.title);
     });
-  }, [tasksDueTodayForMobile, choresDueToday, sortedStories, overviewCalendarEvents, getTaskDueMs]);
+  }, [tasksDueTodayForMobile, choresDueToday, sortedStories, overviewCalendarEvents, getTaskDueMs, matchesTimelineSharedFilters, bucketFromTime]);
 
   const renderChoresHabitsWidget = () => {
     // Group by time-of-day bucket, respecting explicit timeOfDay field before falling back to schedule time.
@@ -993,7 +1105,7 @@ const MobileHome: React.FC = () => {
       { key: 'evening' as const, label: 'Evening' },
     ] as const;
     const grouped = { morning: [] as Task[], afternoon: [] as Task[], evening: [] as Task[] };
-    choresDueToday.forEach((task) => {
+    visibleChoreRows.forEach((task) => {
       const bucket = bucketFromTime(toChoreMs(task), (task as any).timeOfDay);
       grouped[bucket].push(task);
     });
@@ -1007,6 +1119,10 @@ const MobileHome: React.FC = () => {
       const dueLabel = formatDueLabel(dueMs);
       const isOverdue = !!dueMs && dueMs < todayStartMs;
       const busy = !!choreCompletionBusy[task.id];
+      const aiScore = getTaskAiScore(task);
+      const manualPriority = getManualPriorityLabel(task) || null;
+      const top3 = isTop3Task(task);
+      const focusAligned = isTaskFocusAligned(task);
       return (
         <ListGroup.Item key={task.id} className="d-flex align-items-center gap-2" style={{ fontSize: 14 }}>
           <Form.Check
@@ -1019,6 +1135,12 @@ const MobileHome: React.FC = () => {
           <div className="flex-grow-1">
             <div className="fw-semibold">{task.title}</div>
             <div className="text-muted small">{isOverdue ? `Overdue · ${dueLabel}` : `Due ${dueLabel}`}</div>
+            <div className="d-flex flex-wrap gap-1 mt-1">
+              {manualPriority && <Badge bg="danger">{manualPriority}</Badge>}
+              {top3 && <Badge bg="warning" text="dark">Top 3</Badge>}
+              {focusAligned && <Badge bg="success">Focus</Badge>}
+              {aiScore != null && <Badge bg="secondary">AI {Math.round(aiScore)}/100</Badge>}
+            </div>
           </div>
           <div className="d-flex flex-column align-items-end gap-1">
             {isOverdue && <Badge bg="danger">Overdue</Badge>}
@@ -1033,13 +1155,13 @@ const MobileHome: React.FC = () => {
         <Card.Header className="py-2 d-flex align-items-center justify-content-between" style={{ background: 'transparent', border: 'none' }}>
           <div>
             <strong>Chores &amp; Habits</strong>
-            <Badge bg="secondary" pill className="ms-2">{choresDueToday.length}</Badge>
+            <Badge bg="secondary" pill className="ms-2">{visibleChoreRows.length}</Badge>
           </div>
         </Card.Header>
         <Card.Body className="pt-0">
           {choresLoading ? (
             <div className="text-muted small">Loading chores…</div>
-          ) : choresDueToday.length === 0 ? (
+          ) : visibleChoreRows.length === 0 ? (
             <div className="text-muted small">No chores, habits, or routines due today.</div>
           ) : hasGroups ? (
             <>
@@ -1060,7 +1182,7 @@ const MobileHome: React.FC = () => {
             </>
           ) : (
             <ListGroup variant="flush">
-              {choresDueToday.map(renderChoreItem)}
+              {visibleChoreRows.map(renderChoreItem)}
             </ListGroup>
           )}
         </Card.Body>
@@ -1232,11 +1354,11 @@ const MobileHome: React.FC = () => {
         </Card>
       </div>
       {/* AI Daily Summary + Focus */}
-      {/* Tabs: Overview | Tasks | Stories | Goals | Chores | Daily Plan */}
+      {/* Tabs: Overview | Tasks | Stories | Goals | Chores */}
       <div className="mobile-filter-tabs mb-3">
         <div className="d-flex align-items-center gap-1 flex-nowrap" style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
           <div className="btn-group flex-nowrap w-100" role="group">
-            {(['overview','tasks','stories','goals','chores','daily_plan'] as TabKey[]).map(key => (
+            {(['overview','tasks','stories','goals','chores'] as TabKey[]).map(key => (
               <Button
                 key={key}
                 variant={activeTab === key ? 'primary' : 'outline-primary'}
@@ -1244,22 +1366,46 @@ const MobileHome: React.FC = () => {
                 onClick={() => setActiveTab(key)}
                 style={{ padding: '3px 6px', fontSize: 11, whiteSpace: 'nowrap' }}
               >
-                {key === 'overview'
-                  ? 'Overview'
-                  : key === 'tasks'
-                    ? 'Tasks'
-                    : key === 'stories'
-                      ? 'Stories'
-                      : key === 'goals'
-                        ? 'Goals'
-                        : key === 'chores'
-                          ? 'Chores'
-                          : 'Daily Plan'}
+                {key === 'overview' ? 'Overview' : key === 'tasks' ? 'Tasks' : key === 'stories' ? 'Stories' : key === 'goals' ? 'Goals' : 'Chores'}
               </Button>
             ))}
           </div>
         </div>
       </div>
+
+      {activeTab !== 'goals' && (
+        <>
+          <div className="d-flex flex-wrap gap-2 mb-2">
+            <Button
+              size="sm"
+              variant={sharedFilters.top3 ? 'danger' : 'outline-danger'}
+              className="rounded-pill"
+              onClick={() => setSharedFilters((prev) => ({ ...prev, top3: !prev.top3 }))}
+            >
+              Top 3
+            </Button>
+            <Button
+              size="sm"
+              variant={sharedFilters.chores ? 'success' : 'outline-success'}
+              className="rounded-pill"
+              onClick={() => setSharedFilters((prev) => ({ ...prev, chores: !prev.chores }))}
+            >
+              Chores
+            </Button>
+            <Button
+              size="sm"
+              variant={sharedFilters.focusAligned ? 'primary' : 'outline-primary'}
+              className="rounded-pill"
+              onClick={() => setSharedFilters((prev) => ({ ...prev, focusAligned: !prev.focusAligned }))}
+            >
+              Focus aligned
+            </Button>
+          </div>
+          <div className="text-muted small mb-3">
+            Top 3 is AI-ranked by default. Manual <strong>#1</strong>, <strong>#2</strong>, and <strong>#3</strong> override AI ranking, and any unassigned Top 3 slots are filled by AI during replanning.
+          </div>
+        </>
+      )}
 
       {(activeTab === 'tasks' || activeTab === 'stories' || activeTab === 'goals') && (
         <div className="d-flex flex-wrap gap-2 mb-3 align-items-center">
@@ -1530,18 +1676,137 @@ const MobileHome: React.FC = () => {
             </Card>
           )}
 
-          <Card className="mb-3" style={{ background: '#eef2ff' }}>
-            <Card.Header className="py-2 d-flex align-items-center justify-content-between" style={{ background: 'transparent', border: 'none' }}>
-              <div>
+              <Card className="mb-3" style={{ background: '#eef2ff' }}>
+              <Card.Header className="py-2 d-flex align-items-center justify-content-between" style={{ background: 'transparent', border: 'none' }}>
+                <div>
                 <strong>Daily Plan</strong>
-                <Badge bg="info" pill className="ms-2">Tab</Badge>
+                <Badge bg="secondary" pill className="ms-2">{unifiedTimelineItems.length}</Badge>
               </div>
             </Card.Header>
             <Card.Body className="pt-0">
-              <div className="text-muted small mb-2">Daily Plan is available as its own tab in the mobile overview menu.</div>
-              <Button size="sm" variant="outline-primary" onClick={() => setActiveTab('daily_plan')}>
-                Open Daily Plan tab
-              </Button>
+              <div className="text-muted small mb-2">Tip: Use the clock icon on task/story cards to defer with smart suggestions.</div>
+              {unifiedTimelineItems.length === 0 ? (
+                <div className="text-muted small">No tasks, stories, chores, or calendar events scheduled today.</div>
+              ) : (
+                (['morning', 'afternoon', 'evening'] as MobileTimelineBucket[]).map((bucket) => {
+                  const items = unifiedTimelineItems.filter((row) => row.bucket === bucket);
+                  if (items.length === 0) return null;
+                  const label = bucket === 'morning' ? 'Morning' : bucket === 'afternoon' ? 'Afternoon' : 'Evening';
+                  return (
+                    <div key={bucket} className="mb-2">
+                      <div className="text-uppercase text-muted small fw-semibold mb-1">{label}</div>
+                      <ListGroup variant="flush">
+                        {items.map((item) => {
+                          const isTask = item.kind === 'task' || item.kind === 'chore';
+                          const isDone = !!item.task && Number(item.task.status ?? 0) === 2;
+                          const aiScore = item.task ? getTaskAiScore(item.task) : item.story ? getStoryAiScore(item.story) : null;
+                          const manualPriority = item.task
+                            ? getManualPriorityLabel(item.task)
+                            : item.story
+                              ? getManualPriorityLabel(item.story)
+                              : null;
+                          const top3 = item.task ? isTop3Task(item.task) : item.story ? isTop3Story(item.story) : false;
+                          const focusAligned = item.task ? isTaskFocusAligned(item.task) : item.story ? isStoryFocusAligned(item.story) : false;
+                          const badgeVariant =
+                            item.kind === 'story' ? 'info' :
+                            item.kind === 'chore' ? 'success' :
+                            item.kind === 'event' ? 'secondary' : 'primary';
+                          const badgeLabel =
+                            item.kind === 'story' ? 'Story' :
+                            item.kind === 'chore' ? 'Chore' :
+                            item.kind === 'event' ? 'Event' : 'Task';
+                          return (
+                            <ListGroup.Item key={item.id} className="d-flex align-items-center gap-2" style={{ fontSize: 14 }}>
+                              {isTask && item.task ? (
+                                <Form.Check
+                                  type="checkbox"
+                                  checked={isDone || !!choreCompletionBusy[item.task.id]}
+                                  disabled={isDone || !!choreCompletionBusy[item.task.id]}
+                                  onChange={() => {
+                                    if (item.kind === 'chore') {
+                                      void handleCompleteChoreTask(item.task!);
+                                    } else {
+                                      void updateTaskField(item.task!, { status: 2 });
+                                    }
+                                  }}
+                                  aria-label={`Complete ${item.title}`}
+                                />
+                              ) : (
+                                <span style={{ width: 14 }} />
+                              )}
+                              <div className="flex-grow-1">
+                                <div className="fw-semibold">
+                                  {item.task ? (
+                                    <button
+                                      type="button"
+                                      className="btn btn-link p-0 text-decoration-none text-start align-baseline"
+                                      onClick={() => setEditingTask(item.task!)}
+                                    >
+                                      {item.title}
+                                    </button>
+                                  ) : item.story ? (
+                                    <button
+                                      type="button"
+                                      className="btn btn-link p-0 text-decoration-none text-start align-baseline"
+                                      onClick={() => setEditingStory(item.story!)}
+                                    >
+                                      {item.title}
+                                    </button>
+                                  ) : (
+                                    item.title
+                                  )}
+                                </div>
+                                <div className="text-muted small">{item.timeLabel}</div>
+                                {(manualPriority || top3 || focusAligned || aiScore != null || item.task || item.story) && (
+                                  <div className="d-flex flex-wrap gap-1 mt-1">
+                                    {manualPriority && <Badge bg="danger">{manualPriority}</Badge>}
+                                    {top3 && <Badge bg="warning" text="dark">Top 3</Badge>}
+                                    {focusAligned && <Badge bg="success">Focus</Badge>}
+                                    {aiScore != null && <Badge bg="secondary">AI {Math.round(aiScore)}/100</Badge>}
+                                  </div>
+                                )}
+                                {(item.task || item.story) && (
+                                  <div className="d-flex flex-wrap gap-2 mt-2">
+                                    <Button
+                                      variant="outline-secondary"
+                                      size="sm"
+                                      onClick={() => openNoteModal(item.task ? 'task' : 'story', item.task ? item.task.id : item.story!.id)}
+                                    >
+                                      Note
+                                    </Button>
+                                    <Button
+                                      variant="outline-warning"
+                                      size="sm"
+                                      onClick={() => setDeferTarget({
+                                        type: item.story ? 'story' : 'task',
+                                        id: item.story ? item.story.id : item.task!.id,
+                                        title: item.title,
+                                      })}
+                                    >
+                                      Defer
+                                    </Button>
+                                    <Button
+                                      variant="outline-primary"
+                                      size="sm"
+                                      onClick={() => {
+                                        if (item.task) setEditingTask(item.task);
+                                        if (item.story) setEditingStory(item.story);
+                                      }}
+                                    >
+                                      Edit
+                                    </Button>
+                                  </div>
+                                )}
+                              </div>
+                              <Badge bg={badgeVariant}>{badgeLabel}</Badge>
+                            </ListGroup.Item>
+                          );
+                        })}
+                      </ListGroup>
+                    </div>
+                  );
+                })
+              )}
             </Card.Body>
           </Card>
 
@@ -1657,7 +1922,9 @@ const MobileHome: React.FC = () => {
                 const storyLabel = story ? `${story.ref} · ${story.title}` : task.ref;
                 const goalLabel = goal ? `Goal: ${goal.title}` : 'Unlinked goal';
                 const aiScore = getTaskAiScore(task);
-                const isCriticalTask = (task.priority || 0) >= 4;
+                const manualPriorityLabel = getManualPriorityLabel(task);
+                const isTaskTop3 = isTop3Task(task);
+                const focusAligned = isTaskFocusAligned(task);
                 return (
                   <ListGroup.Item
                     key={task.id}
@@ -1691,14 +1958,12 @@ const MobileHome: React.FC = () => {
                             <option value={3}>High</option>
                             <option value={4}>Critical</option>
                           </select>
-                          {aiScore != null && (
-                            <Badge pill bg="secondary">AI {Math.round(aiScore)}/100</Badge>
-                          )}
                         </div>
                       </div>
                       <div className="d-flex align-items-center gap-2 mt-2 flex-nowrap" style={{ minWidth: 0 }}>
                         <Form.Select
                           size="sm"
+                          className="dashboard-chip-select"
                           value={Number(task.status)}
                           onChange={(e) => updateTaskField(task, { status: Number(e.target.value) as any })}
                           style={{ flex: 1, minWidth: 0 }}
@@ -1721,6 +1986,14 @@ const MobileHome: React.FC = () => {
                       <div className="d-flex flex-wrap gap-2 mt-1 align-items-center small text-muted">
                         <span>Status: {taskStatusText(task.status)}</span>
                         <span>Due: {formatShortDate(task.dueDate)}</span>
+                      </div>
+                      <div className="d-flex flex-wrap gap-1 mt-2">
+                        {manualPriorityLabel && <Badge pill bg="danger">{manualPriorityLabel}</Badge>}
+                        {isTaskTop3 && <Badge pill bg="warning" text="dark">Top 3</Badge>}
+                        {focusAligned && <Badge pill bg="success">Focus</Badge>}
+                        {aiScore != null && (
+                          <Badge pill bg="secondary">AI {Math.round(aiScore)}/100</Badge>
+                        )}
                       </div>
                       <div className="d-flex flex-wrap gap-2 mt-2 align-items-center">
                         <Button variant="outline-secondary" size="sm" onClick={() => openNoteModal('task', task.id)}>Note</Button>
@@ -1754,20 +2027,28 @@ const MobileHome: React.FC = () => {
         </div>
       )}
 
-      {activeTab === 'daily_plan' && (
-        <div>
-          <DailyPlanPage />
-        </div>
-      )}
-
       {activeTab === 'stories' && (
+        visibleStoryRows.length === 0 ? (
+          <Card className="text-center p-4">
+            <Card.Body>
+              <div className="text-muted">No stories match the current mobile filters.</div>
+            </Card.Body>
+          </Card>
+        ) : (
         <ListGroup>
-          {sortedStories.map(story => {
+          {visibleStoryRows.map(story => {
             const goal = goalsById.get(story.goalId);
             const themeColor = resolveThemeColor(goal?.theme ?? story.theme);
             const acceptance = story.acceptanceCriteria?.slice(0, 2).join(' · ');
-            const isCriticalStory = (story.priority || 0) >= 4;
             const aiScore = getStoryAiScore(story);
+            const manualPriorityRank = getManualPriorityRank(story);
+            const focusAligned = isStoryFocusAligned(story);
+            const isStoryTop3 = isTop3Story(story);
+            const suggestedManualRank = manualPriorityRank || getNextManualPriorityRank(
+              stories.filter((entry) => entry.status !== 4),
+              String((story as any).persona || 'personal'),
+              story.id,
+            );
             return (
               <ListGroup.Item
                 key={story.id}
@@ -1803,17 +2084,12 @@ const MobileHome: React.FC = () => {
                           </select>
                         );
                       })()}
-                      {(story as any).userPriorityFlag && (
-                        <Badge pill bg="danger">#1 Priority</Badge>
-                      )}
-                      {aiScore != null && (
-                        <Badge pill bg="secondary">AI {Math.round(aiScore)}/100</Badge>
-                      )}
                     </div>
                   </div>
                   <div className="d-flex flex-wrap gap-2 align-items-center mt-2">
                     <Form.Select
                       size="sm"
+                      className="dashboard-chip-select"
                       value={Number(story.status)}
                       onChange={(e) => updateStoryField(story, { status: Number(e.target.value) as any })}
                       style={{ minWidth: 160 }}
@@ -1824,13 +2100,13 @@ const MobileHome: React.FC = () => {
                     </Form.Select>
                     <Button variant="outline-secondary" size="sm" onClick={() => openNoteModal('story', story.id)}>Add Note</Button>
                     <Button
-                      variant={(story as any).userPriorityFlag ? 'danger' : 'outline-warning'}
+                      variant={manualPriorityRank ? 'danger' : 'outline-warning'}
                       size="sm"
                       disabled={flaggingStoryId === story.id}
                       onClick={() => handleFlagPriorityStory(story)}
-                      title={(story as any).userPriorityFlag ? 'Remove #1 priority flag' : 'Flag as #1 priority for calendar'}
+                      title={manualPriorityRank ? `Remove manual ${getManualPriorityLabel(story)}` : `Set manual #${suggestedManualRank} priority`}
                     >
-                      <AlertCircle size={14} /> {(story as any).userPriorityFlag ? '#1' : 'Priority'}
+                      <AlertCircle size={14} /> #{manualPriorityRank || suggestedManualRank}
                     </Button>
                     <Button
                       variant="outline-secondary"
@@ -1843,6 +2119,10 @@ const MobileHome: React.FC = () => {
                   </div>
                   <div className="d-flex flex-wrap gap-2 mt-2">
                     <Badge pill bg="dark">Pts {story.points || 0}</Badge>
+                    {manualPriorityRank && <Badge pill bg="danger">{getManualPriorityLabel(story)}</Badge>}
+                    {isStoryTop3 && <Badge pill bg="warning" text="dark">Top 3</Badge>}
+                    {focusAligned && <Badge pill bg="success">Focus</Badge>}
+                    {aiScore != null && <Badge pill bg="secondary">AI {Math.round(aiScore)}/100</Badge>}
                     {sprintDaysLeft != null && (
                       <Badge
                         pill
@@ -1861,6 +2141,7 @@ const MobileHome: React.FC = () => {
             );
           })}
         </ListGroup>
+        )
       )}
 
       {activeTab === 'goals' && (
@@ -1980,37 +2261,13 @@ const MobileHome: React.FC = () => {
         </Modal.Footer>
       </Modal>
 
-      {/* Priority flag confirmation modal */}
-      <Modal show={!!priorityFlagConfirm} onHide={() => setPriorityFlagConfirm(null)} centered>
-        <Modal.Header closeButton>
-          <Modal.Title style={{ fontSize: 16 }}>#1 Priority Already Set</Modal.Title>
-        </Modal.Header>
-        <Modal.Body>
-          <p>
-            <strong>{priorityFlagConfirm?.existing?.title}</strong> is already flagged as the #1 priority story.
-          </p>
-          <p>Replace it with <strong>{priorityFlagConfirm?.story?.title}</strong>?</p>
-        </Modal.Body>
-        <Modal.Footer>
-          <Button variant="secondary" size="sm" onClick={() => setPriorityFlagConfirm(null)}>Cancel</Button>
-          <Button
-            variant="danger"
-            size="sm"
-            disabled={!!flaggingStoryId}
-            onClick={() => priorityFlagConfirm && applyPriorityFlag(priorityFlagConfirm.story)}
-          >
-            {flaggingStoryId ? <Spinner animation="border" size="sm" /> : 'Replace'}
-          </Button>
-        </Modal.Footer>
-      </Modal>
-
       <Modal show={!!priorityReplanPromptStory} onHide={() => setPriorityReplanPromptStory(null)} centered>
         <Modal.Header closeButton>
           <Modal.Title style={{ fontSize: 16 }}>Run Delta Replan?</Modal.Title>
         </Modal.Header>
         <Modal.Body>
           <p className="mb-2">
-            <strong>{priorityReplanPromptStory?.title || 'This story'}</strong> is now flagged as your #1 priority.
+            <strong>{priorityReplanPromptStory?.title || 'This story'}</strong> is now flagged as {getManualPriorityLabel(priorityReplanPromptStory) || 'a manual priority'}.
           </p>
           <p className="mb-0 text-muted small">
             Run delta replan now to create or rebalance calendar blocks around the new priority.

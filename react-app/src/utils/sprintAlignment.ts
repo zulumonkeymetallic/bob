@@ -1,4 +1,5 @@
-import { Sprint } from '../types';
+import { Goal, Sprint } from '../types';
+import { isGoalInHierarchySet } from './goalHierarchy';
 
 export type SprintAlignmentMode = 'warn' | 'strict';
 
@@ -29,6 +30,7 @@ export const getSprintFocusGoalIds = (sprint: Sprint | null | undefined): string
 export const evaluateStorySprintAlignment = (
   sprint: Sprint | null | undefined,
   goalId: string | null | undefined,
+  goals: Goal[] = [],
 ): SprintAlignmentEvaluation => {
   const focusGoalIds = getSprintFocusGoalIds(sprint);
   const mode = getSprintAlignmentMode(sprint);
@@ -44,7 +46,10 @@ export const evaluateStorySprintAlignment = (
     };
   }
 
-  const aligned = !!normalizedGoalId && focusGoalIds.includes(normalizedGoalId);
+  const aligned = !!normalizedGoalId && (
+    focusGoalIds.includes(normalizedGoalId)
+    || isGoalInHierarchySet(normalizedGoalId, goals, focusGoalIds)
+  );
   if (aligned) {
     return {
       hasRule: true,
@@ -61,7 +66,7 @@ export const evaluateStorySprintAlignment = (
       mode,
       blocking: true,
       aligned: false,
-      message: 'This sprint is in strict focus mode. Story goal must match one of the sprint focus goals.',
+      message: 'This sprint is in strict focus mode. Story goal must map to one of the sprint focus goals or one of their leaf goals.',
     };
   }
 
@@ -70,6 +75,6 @@ export const evaluateStorySprintAlignment = (
     mode,
     blocking: false,
     aligned: false,
-    message: 'This story is outside sprint focus goals. You can continue, but it will be tracked as unaligned.',
+    message: 'This story is outside sprint focus goals. You can continue, but it will stay in the sprint’s unaligned-story warning until you link it to a focus leaf goal.',
   };
 };

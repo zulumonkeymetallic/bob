@@ -114,6 +114,16 @@ const SettingsPage: React.FC = () => {
   const [excludeWithDadFromMetrics, setExcludeWithDadFromMetrics] = useState(true);
   const [targetWeightKg, setTargetWeightKg] = useState('');
   const [targetBodyFatPct, setTargetBodyFatPct] = useState('');
+  const [targetStepsPerDay, setTargetStepsPerDay] = useState('');
+  const [targetDistanceKmPerDay, setTargetDistanceKmPerDay] = useState('');
+  const [targetWorkoutMinutesPerWeek, setTargetWorkoutMinutesPerWeek] = useState('');
+  const [targetAwakeHoursPerDay, setTargetAwakeHoursPerDay] = useState('');
+  const [targetWorkHoursPerDay, setTargetWorkHoursPerDay] = useState('');
+  const [targetWorkoutPctOfFreeTime, setTargetWorkoutPctOfFreeTime] = useState('');
+  const [targetProteinG, setTargetProteinG] = useState('');
+  const [targetFatG, setTargetFatG] = useState('');
+  const [targetCarbsG, setTargetCarbsG] = useState('');
+  const [targetCaloriesKcal, setTargetCaloriesKcal] = useState('');
   const [locationName, setLocationName] = useState('');
   const [locationLat, setLocationLat] = useState<string>('');
   const [locationLon, setLocationLon] = useState<string>('');
@@ -319,6 +329,16 @@ const SettingsPage: React.FC = () => {
         setExcludeWithDadFromMetrics(p.excludeWithDadFromMetrics !== false);
           setTargetWeightKg(p.targetWeightKg != null ? String(p.targetWeightKg) : (p.healthTargetWeightKg != null ? String(p.healthTargetWeightKg) : ''));
           setTargetBodyFatPct(p.targetBodyFatPct != null ? String(p.targetBodyFatPct) : (p.healthTargetBodyFatPct != null ? String(p.healthTargetBodyFatPct) : ''));
+          setTargetStepsPerDay(p.targetStepsPerDay != null ? String(p.targetStepsPerDay) : (p.dailyStepTarget != null ? String(p.dailyStepTarget) : (p.healthTargetStepsPerDay != null ? String(p.healthTargetStepsPerDay) : '')));
+          setTargetDistanceKmPerDay(p.targetDistanceKmPerDay != null ? String(p.targetDistanceKmPerDay) : (p.dailyDistanceTargetKm != null ? String(p.dailyDistanceTargetKm) : (p.healthTargetDistanceKmPerDay != null ? String(p.healthTargetDistanceKmPerDay) : '')));
+          setTargetWorkoutMinutesPerWeek(p.weeklyWorkoutTargetMinutes != null ? String(p.weeklyWorkoutTargetMinutes) : (p.targetWorkoutMinutesPerWeek != null ? String(p.targetWorkoutMinutesPerWeek) : (p.healthTargetWorkoutMinutesWeekly != null ? String(p.healthTargetWorkoutMinutesWeekly) : '')));
+          setTargetAwakeHoursPerDay(p.awakeHoursPerDay != null ? String(p.awakeHoursPerDay) : (p.targetAwakeHoursPerDay != null ? String(p.targetAwakeHoursPerDay) : (p.healthAwakeHoursPerDay != null ? String(p.healthAwakeHoursPerDay) : '')));
+          setTargetWorkHoursPerDay(p.workHoursPerDay != null ? String(p.workHoursPerDay) : (p.targetWorkHoursPerDay != null ? String(p.targetWorkHoursPerDay) : (p.healthWorkHoursPerDay != null ? String(p.healthWorkHoursPerDay) : '')));
+          setTargetWorkoutPctOfFreeTime(p.targetWorkoutPctOfFreeTime != null ? String(p.targetWorkoutPctOfFreeTime) : (p.weeklyWorkoutTargetPercent != null ? String(p.weeklyWorkoutTargetPercent) : (p.trainingTimePercent != null ? String(p.trainingTimePercent) : '')));
+          setTargetProteinG(p.targetProteinG != null ? String(p.targetProteinG) : (p.dailyProteinTargetG != null ? String(p.dailyProteinTargetG) : (p.healthTargetProteinG != null ? String(p.healthTargetProteinG) : '')));
+          setTargetFatG(p.targetFatG != null ? String(p.targetFatG) : (p.dailyFatTargetG != null ? String(p.dailyFatTargetG) : (p.healthTargetFatG != null ? String(p.healthTargetFatG) : '')));
+          setTargetCarbsG(p.targetCarbsG != null ? String(p.targetCarbsG) : (p.dailyCarbsTargetG != null ? String(p.dailyCarbsTargetG) : (p.healthTargetCarbsG != null ? String(p.healthTargetCarbsG) : '')));
+          setTargetCaloriesKcal(p.targetCaloriesKcal != null ? String(p.targetCaloriesKcal) : (p.dailyCaloriesTargetKcal != null ? String(p.dailyCaloriesTargetKcal) : (p.healthTargetCaloriesKcal != null ? String(p.healthTargetCaloriesKcal) : '')));
         setMonzoConnected(!!p.monzoConnected);
         setLocationName(p.locationName || '');
         setLocationLat(p.locationLat != null ? String(p.locationLat) : '');
@@ -1159,6 +1179,16 @@ firebase deploy --only functions:remindersPush,functions:remindersPull --project
                                 try {
                                   const parsedTargetWeightKg = targetWeightKg.trim() !== '' ? Number(targetWeightKg) : null;
                                   const parsedTargetBodyFatPct = targetBodyFatPct.trim() !== '' ? Number(targetBodyFatPct) : null;
+                                  const parsedTargetStepsPerDay = targetStepsPerDay.trim() !== '' ? Number(targetStepsPerDay) : null;
+                                  const parsedTargetDistanceKmPerDay = targetDistanceKmPerDay.trim() !== '' ? Number(targetDistanceKmPerDay) : null;
+                                  const parsedTargetWorkoutMinutesPerWeek = targetWorkoutMinutesPerWeek.trim() !== '' ? Number(targetWorkoutMinutesPerWeek) : null;
+                                  const parsedTargetAwakeHoursPerDay = targetAwakeHoursPerDay.trim() !== '' ? Number(targetAwakeHoursPerDay) : null;
+                                  const parsedTargetWorkHoursPerDay = targetWorkHoursPerDay.trim() !== '' ? Number(targetWorkHoursPerDay) : null;
+                                  const parsedTargetWorkoutPctOfFreeTime = targetWorkoutPctOfFreeTime.trim() !== '' ? Number(targetWorkoutPctOfFreeTime) : null;
+                                  const parsedTargetProteinG = targetProteinG.trim() !== '' ? Number(targetProteinG) : null;
+                                  const parsedTargetFatG = targetFatG.trim() !== '' ? Number(targetFatG) : null;
+                                  const parsedTargetCarbsG = targetCarbsG.trim() !== '' ? Number(targetCarbsG) : null;
+                                  const parsedTargetCaloriesKcal = targetCaloriesKcal.trim() !== '' ? Number(targetCaloriesKcal) : null;
                                   await setDoc(doc(db, 'profiles', currentUser.uid), {
                                     ownerUid: currentUser.uid,
                                     parkrunAthleteId,
@@ -1174,6 +1204,36 @@ firebase deploy --only functions:remindersPush,functions:remindersPull --project
                                     healthTargetWeightKg: parsedTargetWeightKg,
                                     targetBodyFatPct: parsedTargetBodyFatPct,
                                     healthTargetBodyFatPct: parsedTargetBodyFatPct,
+                                    targetStepsPerDay: parsedTargetStepsPerDay,
+                                    dailyStepTarget: parsedTargetStepsPerDay,
+                                    healthTargetStepsPerDay: parsedTargetStepsPerDay,
+                                    targetDistanceKmPerDay: parsedTargetDistanceKmPerDay,
+                                    dailyDistanceTargetKm: parsedTargetDistanceKmPerDay,
+                                    healthTargetDistanceKmPerDay: parsedTargetDistanceKmPerDay,
+                                    weeklyWorkoutTargetMinutes: parsedTargetWorkoutMinutesPerWeek,
+                                    targetWorkoutMinutesPerWeek: parsedTargetWorkoutMinutesPerWeek,
+                                    healthTargetWorkoutMinutesWeekly: parsedTargetWorkoutMinutesPerWeek,
+                                    awakeHoursPerDay: parsedTargetAwakeHoursPerDay,
+                                    targetAwakeHoursPerDay: parsedTargetAwakeHoursPerDay,
+                                    healthAwakeHoursPerDay: parsedTargetAwakeHoursPerDay,
+                                    workHoursPerDay: parsedTargetWorkHoursPerDay,
+                                    targetWorkHoursPerDay: parsedTargetWorkHoursPerDay,
+                                    healthWorkHoursPerDay: parsedTargetWorkHoursPerDay,
+                                    targetWorkoutPctOfFreeTime: parsedTargetWorkoutPctOfFreeTime,
+                                    weeklyWorkoutTargetPercent: parsedTargetWorkoutPctOfFreeTime,
+                                    trainingTimePercent: parsedTargetWorkoutPctOfFreeTime,
+                                    targetProteinG: parsedTargetProteinG,
+                                    dailyProteinTargetG: parsedTargetProteinG,
+                                    healthTargetProteinG: parsedTargetProteinG,
+                                    targetFatG: parsedTargetFatG,
+                                    dailyFatTargetG: parsedTargetFatG,
+                                    healthTargetFatG: parsedTargetFatG,
+                                    targetCarbsG: parsedTargetCarbsG,
+                                    dailyCarbsTargetG: parsedTargetCarbsG,
+                                    healthTargetCarbsG: parsedTargetCarbsG,
+                                    targetCaloriesKcal: parsedTargetCaloriesKcal,
+                                    dailyCaloriesTargetKcal: parsedTargetCaloriesKcal,
+                                    healthTargetCaloriesKcal: parsedTargetCaloriesKcal,
                                   }, { merge: true });
                                   setSaveProfileMsg('Saved');
                                   setTimeout(() => setSaveProfileMsg(''), 2500);
@@ -1217,9 +1277,134 @@ firebase deploy --only functions:remindersPush,functions:remindersPull --project
                               />
                             </Form.Group>
                           </Col>
+                          <Col md={3}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Steps Target</Form.Label>
+                              <Form.Control
+                                type="number"
+                                step="100"
+                                placeholder="e.g., 10000"
+                                value={targetStepsPerDay}
+                                onChange={(e) => setTargetStepsPerDay(e.target.value)}
+                              />
+                            </Form.Group>
+                          </Col>
+                          <Col md={3}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Distance Target (km/day)</Form.Label>
+                              <Form.Control
+                                type="number"
+                                step="0.1"
+                                placeholder="e.g., 5"
+                                value={targetDistanceKmPerDay}
+                                onChange={(e) => setTargetDistanceKmPerDay(e.target.value)}
+                              />
+                            </Form.Group>
+                          </Col>
+                          <Col md={3}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Workout Target Override (min/week)</Form.Label>
+                              <Form.Control
+                                type="number"
+                                step="5"
+                                placeholder="Leave blank to derive"
+                                value={targetWorkoutMinutesPerWeek}
+                                onChange={(e) => setTargetWorkoutMinutesPerWeek(e.target.value)}
+                              />
+                              <Form.Text className="text-muted">Optional explicit override. Leave blank to derive from awake/work hours and training %.</Form.Text>
+                            </Form.Group>
+                          </Col>
+                          <Col md={3}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Awake Hours / Day</Form.Label>
+                              <Form.Control
+                                type="number"
+                                step="0.5"
+                                placeholder="e.g., 16"
+                                value={targetAwakeHoursPerDay}
+                                onChange={(e) => setTargetAwakeHoursPerDay(e.target.value)}
+                              />
+                            </Form.Group>
+                          </Col>
+                          <Col md={3}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Work Hours / Day</Form.Label>
+                              <Form.Control
+                                type="number"
+                                step="0.5"
+                                placeholder="e.g., 8"
+                                value={targetWorkHoursPerDay}
+                                onChange={(e) => setTargetWorkHoursPerDay(e.target.value)}
+                              />
+                            </Form.Group>
+                          </Col>
+                          <Col md={3}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Workout % Of Free Time</Form.Label>
+                              <Form.Control
+                                type="number"
+                                step="1"
+                                placeholder="e.g., 20"
+                                value={targetWorkoutPctOfFreeTime}
+                                onChange={(e) => setTargetWorkoutPctOfFreeTime(e.target.value)}
+                              />
+                            </Form.Group>
+                          </Col>
+                        </Row>
+                        <Row className="g-3 mt-1">
+                          <Col md={3}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Protein Target (g/day)</Form.Label>
+                              <Form.Control
+                                type="number"
+                                step="1"
+                                placeholder="e.g., 180"
+                                value={targetProteinG}
+                                onChange={(e) => setTargetProteinG(e.target.value)}
+                              />
+                            </Form.Group>
+                          </Col>
+                          <Col md={3}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Fat Target (g/day)</Form.Label>
+                              <Form.Control
+                                type="number"
+                                step="1"
+                                placeholder="e.g., 70"
+                                value={targetFatG}
+                                onChange={(e) => setTargetFatG(e.target.value)}
+                              />
+                            </Form.Group>
+                          </Col>
+                          <Col md={3}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Carbs Target (g/day)</Form.Label>
+                              <Form.Control
+                                type="number"
+                                step="1"
+                                placeholder="e.g., 250"
+                                value={targetCarbsG}
+                                onChange={(e) => setTargetCarbsG(e.target.value)}
+                              />
+                            </Form.Group>
+                          </Col>
+                          <Col md={3}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Calories Target (kcal/day)</Form.Label>
+                              <Form.Control
+                                type="number"
+                                step="10"
+                                placeholder="e.g., 2400"
+                                value={targetCaloriesKcal}
+                                onChange={(e) => setTargetCaloriesKcal(e.target.value)}
+                              />
+                            </Form.Group>
+                          </Col>
+                        </Row>
+                        <Row className="g-3 mt-1">
                           <Col md={6} className="d-flex align-items-end">
                             <Form.Text className="text-muted">
-                              These targets feed the dashboard health progress card and the health trends shown on the fitness dashboard.
+                              These targets feed the dashboard health card, the `/fitness` compliance cards, and the health/nutrition trends shown across the app.
                             </Form.Text>
                           </Col>
                         </Row>

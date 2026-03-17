@@ -2,7 +2,7 @@ import React from 'react';
 import { Button } from 'react-bootstrap';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { GripVertical, Activity, Wand2, Edit3, Trash2, Target, CalendarPlus, CalendarClock, Clock3 } from 'lucide-react';
+import { GripVertical, Activity, Wand2, Edit3, Trash2, Target, CalendarPlus, Clock3 } from 'lucide-react';
 import { httpsCallable } from 'firebase/functions';
 
 import { Story, Goal } from '../../types';
@@ -13,6 +13,7 @@ import { storyStatusText, priorityLabel as formatPriorityLabel, priorityPillClas
 import { colorWithAlpha, goalThemeColor } from '../../utils/storyCardFormatting';
 import { themeVars } from '../../utils/themeVars';
 import type { GlobalTheme } from '../../constants/globalThemes';
+import { getManualPriorityLabel, getManualPriorityRank } from '../../utils/manualPriority';
 
 interface SortableStoryCardProps {
   story: Story;
@@ -96,14 +97,17 @@ const SortableStoryCard: React.FC<SortableStoryCardProps> = ({
   })();
 
   const statusLabel = storyStatusText((story as any).status);
+  const manualPriorityRank = getManualPriorityRank(story);
+  const manualPriorityLabel = getManualPriorityLabel(story);
   const isTop3 = (() => {
+    if (manualPriorityRank) return true;
     if ((story as any).aiTop3ForDay !== true) return false;
     const top3Date = (story as any).aiTop3Date;
     if (!top3Date) return true;
     return String(top3Date).slice(0, 10) === new Date().toISOString().slice(0, 10);
   })();
-  const priorityClass = isTop3 ? priorityPillClass(4) : priorityPillClass(story.priority);
-  const priorityLabel = isTop3 ? 'Critical' : formatPriorityLabel(story.priority);
+  const priorityClass = isTop3 && !manualPriorityRank ? priorityPillClass(4) : priorityPillClass(story.priority);
+  const priorityLabel = isTop3 && !manualPriorityRank ? 'Critical' : formatPriorityLabel(story.priority);
   const handleStyle: React.CSSProperties = {
     color: resolvedThemeColor,
     borderColor: colorWithAlpha(resolvedThemeColor, 0.45),
@@ -129,39 +133,10 @@ const SortableStoryCard: React.FC<SortableStoryCardProps> = ({
     const source = String(scheduledBlock?.source || '').toLowerCase();
     const entryMethod = String(scheduledBlock?.entryMethod || '').toLowerCase();
     const fromGcal = source === 'gcal' || !!scheduledBlock?.googleEventId;
-    if (fromGcal && (scheduledBlock?.linkedStoryId || scheduledBlock?.googleEventId)) return 'linked from gcal';
-    if (scheduledBlock?.isAiGenerated) return 'auto-planned';
-    if (entryMethod.includes('manual') || source === 'manual' || source === 'bob') return 'manual';
-    return 'manual';
-  })();
-  const scheduledBlockSourceClassName = scheduledBlockSourceLabel === 'linked from gcal'
-    ? 'kanban-card__source-note kanban-card__source-note--quiet'
-    : 'kanban-card__source-note';
-  const deferredUntilMs = (() => {
-    const raw = (story as any).deferredUntil ?? null;
-    if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
-    if (raw?.toDate) return raw.toDate().getTime();
-    const parsed = raw ? Date.parse(String(raw)) : NaN;
-    return Number.isNaN(parsed) ? null : parsed;
-  })();
-  const isDeferred = Number.isFinite(deferredUntilMs as number) && (deferredUntilMs as number) > Date.now();
-  const deferredLabel = isDeferred
-    ? `Deferred to ${new Date(deferredUntilMs as number).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`
-    : null;
-  const storyProgressPct = (() => {
-    const raw = (story as any).progressPct ?? (story as any).progress ?? null;
-    const value = Number(raw);
-    if (!Number.isFinite(value)) return null;
-    return Math.max(0, Math.min(100, Math.round(value)));
-  })();
-  const storyLastComment = (() => {
-    const raw = (story as any).lastComment
-      ?? (story as any).latestComment
-      ?? (story as any).lastNote
-      ?? '';
-    const text = String(raw || '').replace(/\s+/g, ' ').trim();
-    if (!text) return null;
-    return text.length > 140 ? `${text.slice(0, 140)}...` : text;
+    if (fromGcal && (scheduledBlock?.linkedStoryId || scheduledBlock?.googleEventId)) return 'Linked from Google Calendar';
+    if (scheduledBlock?.isAiGenerated) return 'Auto planned';
+    if (entryMethod.includes('manual') || source === 'manual' || source === 'bob') return 'Manually planned';
+    return 'Planned';
   })();
 
   const safeTaskCount = Number.isFinite(taskCount) ? Number(taskCount) : 0;
@@ -308,12 +283,6 @@ const SortableStoryCard: React.FC<SortableStoryCardProps> = ({
               {story.description}
             </div>
           )}
-          {storyLastComment && (
-            <div className="kanban-card__note">
-              <span className="kanban-card__note-label">Last comment:</span>{' '}
-              {storyLastComment}
-            </div>
-          )}
 
           {resolvedShowTags && visibleTags.length > 0 && (
             <div className="kanban-card__tags">
@@ -334,7 +303,7 @@ const SortableStoryCard: React.FC<SortableStoryCardProps> = ({
             <span className={priorityClass} title={`Priority: ${priorityLabel}`}>
               {priorityLabel}
             </span>
-            {(story as any).userPriorityFlag && (
+            {manualPriorityRank && manualPriorityLabel && (
               <span
                 className="kanban-card__meta-badge"
                 style={{
@@ -342,9 +311,9 @@ const SortableStoryCard: React.FC<SortableStoryCardProps> = ({
                   backgroundColor: 'rgba(220, 53, 69, 0.12)',
                   color: 'var(--bs-danger)',
                 }}
-                title="User #1 priority flag"
+                title={manualPriorityLabel}
               >
-                <span style={{ fontWeight: 800 }}>1</span>&nbsp;Priority
+                {manualPriorityLabel}
               </span>
             )}
             {isTop3 && (
@@ -355,11 +324,6 @@ const SortableStoryCard: React.FC<SortableStoryCardProps> = ({
             <span className="kanban-card__meta-badge" title="Story points">
               {(story.points ?? 0)} pts
             </span>
-            {storyProgressPct != null && (
-              <span className="kanban-card__meta-badge" title="Story progress percentage">
-                Progress {storyProgressPct}%
-              </span>
-            )}
             {scheduledBlockLabel && (
               <span className="d-inline-flex flex-column" style={{ lineHeight: 1.2 }}>
                 <span
@@ -371,28 +335,13 @@ const SortableStoryCard: React.FC<SortableStoryCardProps> = ({
                   }}
                   title={scheduledBlock?.title || 'Planned calendar block'}
                 >
-                  <CalendarClock size={11} style={{ marginRight: 4, marginTop: -1 }} />
                   {scheduledBlockLabel}
                 </span>
                 {scheduledBlockSourceLabel && (
-                  <span className={scheduledBlockSourceClassName} style={{ marginTop: 2 }}>
+                  <span className="text-muted" style={{ fontSize: '0.65rem', marginTop: 2 }}>
                     {scheduledBlockSourceLabel}
                   </span>
                 )}
-              </span>
-            )}
-            {deferredLabel && (
-              <span
-                className="kanban-card__meta-badge"
-                style={{
-                  borderColor: 'rgba(245, 158, 11, 0.45)',
-                  backgroundColor: 'rgba(245, 158, 11, 0.12)',
-                  color: '#b45309',
-                }}
-                title={deferredLabel}
-              >
-                <Clock3 size={11} style={{ marginRight: 4, marginTop: -1 }} />
-                Deferred
               </span>
             )}
             <span className="kanban-card__meta-text" title="Status">

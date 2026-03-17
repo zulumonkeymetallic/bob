@@ -127,6 +127,15 @@
   overflow: auto;
 }
 
+.dashboard-summary-stack > .card {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.dashboard-summary-stack > .card .card-body {
+  min-height: 0;
+}
+
 .dashboard-widget-resize-handle {
   position: absolute;
   right: 10px;

@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { Container, Row, Col, Button, Card, Alert, Spinner, Tabs, Tab, ListGroup } from 'react-bootstrap';
+import { Container, Row, Col, Button, Card, Alert, Spinner, ListGroup } from 'react-bootstrap';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
-import { collection, query, where, onSnapshot, getDocs, getDoc, doc, updateDoc, serverTimestamp, addDoc, writeBatch } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, getDocs, getDoc, doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { FocusGoal, Goal, Story } from '../types';
 import { useFocusGoals } from '../hooks/useFocusGoals';
@@ -15,21 +15,28 @@ import {
   autoCreateSprintsForFocusPeriod,
   consumeFocusWizardPrefill,
   createFocusGoal,
+  deleteFocusGoal,
   deferNonFocusGoalsForPeriod,
   deactivateExistingFocusGoals,
   FocusWizardPrefill,
   persistMonzoGoalRefs,
   retryMonzoPotLinkForGoal,
   triggerFocusGoalDataRefresh,
+  updateFocusGoal,
 } from '../services/focusGoalsService';
-import { Plus, Edit2, Trash2, Zap } from 'lucide-react';
-import {
-  getActiveFocusLeafGoalIds,
-  getGoalDisplayPath,
-  getProtectedFocusGoalIds,
-  isGoalInHierarchySet,
-} from '../utils/goalHierarchy';
-import { generateRef } from '../utils/referenceGenerator';
+import { getActiveFocusLeafGoalIds, getGoalDisplayPath, getProtectedFocusGoalIds, isGoalInHierarchySet } from '../utils/goalHierarchy';
+import { Plus, Zap } from 'lucide-react';
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+const toMillis = (value: any): number => {
+  if (!value) return Number.NaN;
+  if (typeof value?.toMillis === 'function') return value.toMillis();
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === 'number') return value;
+  const parsed = Date.parse(String(value));
+  return Number.isNaN(parsed) ? Number.NaN : parsed;
+};
 
 /**
  * Focus Goals Page
@@ -46,11 +53,13 @@ export const FocusGoalsPage: React.FC = () => {
   const [stories, setStories] = useState<Story[]>([]);
   const [activeSprintIds, setActiveSprintIds] = useState<string[]>([]);
   const [showWizard, setShowWizard] = useState(false);
+  const [wizardPrefill, setWizardPrefill] = useState<FocusWizardPrefill | null>(null);
+  const [editingFocusGoal, setEditingFocusGoal] = useState<FocusGoal | null>(null);
   const [showKpiDesigner, setShowKpiDesigner] = useState(false);
   const [kpiDesignerGoalId, setKpiDesignerGoalId] = useState<string | undefined>(undefined);
-  const [wizardPrefill, setWizardPrefill] = useState<FocusWizardPrefill | null>(null);
   const [wizardLoading, setWizardLoading] = useState(false);
   const [refreshingFocusData, setRefreshingFocusData] = useState(false);
+  const [deletingFocusGoalId, setDeletingFocusGoalId] = useState<string | null>(null);
   const [retryingMonzoGoalIds, setRetryingMonzoGoalIds] = useState<Set<string>>(new Set());
   const [updatingStoryIds, setUpdatingStoryIds] = useState<Set<string>>(new Set());
   const [monzoRetryMessage, setMonzoRetryMessage] = useState<string>('');
@@ -58,13 +67,29 @@ export const FocusGoalsPage: React.FC = () => {
   const [monzoBudgetSummary, setMonzoBudgetSummary] = useState<any>(null);
   const [monzoGoalAlignment, setMonzoGoalAlignment] = useState<any>(null);
 
-  const activeFocusGoalIdSet = React.useMemo(() => {
-    return getActiveFocusLeafGoalIds(activeFocusGoals);
+  const activeFocusLeafGoalIdSet = React.useMemo(
+    () => getActiveFocusLeafGoalIds(activeFocusGoals),
+    [activeFocusGoals]
+  );
+
+  const activeProtectedGoalIdSet = React.useMemo(() => {
+    const ids = new Set<string>();
+    activeFocusGoals.forEach((focusGoal) => {
+      getProtectedFocusGoalIds(focusGoal).forEach((goalId) => ids.add(goalId));
+    });
+    return ids;
   }, [activeFocusGoals]);
 
   const activeFocusGoalsWithMonzoRefs = React.useMemo(
-    () => goals.filter((goal) => activeFocusGoalIdSet.has(goal.id) && !!String(goal.monzoPotGoalRef || '').trim()),
-    [goals, activeFocusGoalIdSet]
+    () => goals.filter((goal) => activeFocusLeafGoalIdSet.has(goal.id) && !!String(goal.monzoPotGoalRef || '').trim()),
+    [goals, activeFocusLeafGoalIdSet]
+  );
+
+  const kpiStudioGoals = React.useMemo(
+    () => (activeProtectedGoalIdSet.size > 0
+      ? goals.filter((goal) => isGoalInHierarchySet(goal.id, goals, activeProtectedGoalIdSet))
+      : goals),
+    [activeProtectedGoalIdSet, goals]
   );
 
   const monzoLinkTimeoutGoals = React.useMemo(
@@ -88,26 +113,20 @@ export const FocusGoalsPage: React.FC = () => {
   );
 
   const unalignedStoriesInActiveSprint = React.useMemo(() => {
-    if (!activeFocusGoalIdSet.size || activeSprintIds.length === 0) return [];
+    if (!activeProtectedGoalIdSet.size || activeSprintIds.length === 0) return [];
     const sprintSet = new Set(activeSprintIds);
     return stories.filter((story) => {
       const inActiveSprint = !!story.sprintId && sprintSet.has(String(story.sprintId));
-      const hasAlignedGoal = !!story.goalId && activeFocusGoalIdSet.has(String(story.goalId));
+      const hasAlignedGoal = !!story.goalId && isGoalInHierarchySet(String(story.goalId), goals, activeProtectedGoalIdSet);
       return inActiveSprint && !hasAlignedGoal;
     });
-  }, [stories, activeFocusGoalIdSet, activeSprintIds]);
-
-  const kpiStudioGoals = React.useMemo(() => {
-    if (activeFocusGoalIdSet.size > 0) {
-      return goals.filter((goal) => activeFocusGoalIdSet.has(goal.id));
-    }
-    return goals.filter((goal) => Number(goal.status || 0) !== 2).slice(0, 6);
-  }, [activeFocusGoalIdSet, goals]);
+  }, [stories, activeProtectedGoalIdSet, activeSprintIds, goals]);
 
   // Load Monzo budget summary and goal alignment (best-effort)
   useEffect(() => {
     const prefill = consumeFocusWizardPrefill();
     if (prefill) {
+      setEditingFocusGoal(null);
       setWizardPrefill(prefill);
       setShowWizard(true);
     }
@@ -182,162 +201,42 @@ export const FocusGoalsPage: React.FC = () => {
     };
   }, [currentUser?.uid, currentPersona]);
 
-  const materializePendingLeafGoals = async (focusGoal: FocusGoal) => {
-    if (!currentUser?.uid) {
-      return {
-        goals,
-        focusGoal,
-      };
-    }
-    const pendingLeafGoals = Array.isArray(focusGoal.pendingLeafGoalsToCreate) ? focusGoal.pendingLeafGoalsToCreate : [];
-    if (pendingLeafGoals.length === 0) {
-      return {
-        goals,
-        focusGoal,
-      };
-    }
-
-    const existingRefs = goals.map((goal) => String((goal as any).ref || '')).filter(Boolean);
-    const tempToRealGoalId = new Map<string, string>();
-    const createdGoals: Goal[] = [];
-
-    for (const draftGoal of pendingLeafGoals) {
-      const parentGoal = goals.find((goal) => goal.id === draftGoal.parentGoalId) || null;
-      const ref = generateRef('goal', existingRefs);
-      existingRefs.push(ref);
-      const payload: any = {
-        ref,
-        title: draftGoal.title,
-        description: '',
-        theme: draftGoal.theme ?? parentGoal?.theme ?? 1,
-        size: 2,
-        timeToMasterHours: 20,
-        confidence: 0.5,
-        status: 0,
-        ownerUid: currentUser.uid,
-        persona: draftGoal.persona || parentGoal?.persona || currentPersona || 'personal',
-        parentGoalId: draftGoal.parentGoalId,
-        goalKind: draftGoal.goalKind || 'milestone',
-        timeHorizon: draftGoal.timeHorizon || 'sprint',
-        rollupMode: 'children_only',
-        goalRequiresStory: true,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      };
-      const docRef = await addDoc(collection(db, 'goals'), payload);
-      tempToRealGoalId.set(draftGoal.tempId, docRef.id);
-      createdGoals.push({
-        id: docRef.id,
-        ...(payload as any),
-      } as Goal);
-    }
-
-    const remapGoalId = (goalId: string) => tempToRealGoalId.get(goalId) || goalId;
-    const remappedFocusGoal: FocusGoal = {
-      ...focusGoal,
-      goalIds: (focusGoal.goalIds || []).map(remapGoalId),
-      focusLeafGoalIds: (focusGoal.focusLeafGoalIds || []).map(remapGoalId),
-      goalTypeMap: Object.entries(focusGoal.goalTypeMap || {}).reduce<Record<string, 'story' | 'calendar'>>((acc, [goalId, value]) => {
-        acc[remapGoalId(goalId)] = value;
-        return acc;
-      }, {}),
-      sprintPlanByGoalId: Object.entries(focusGoal.sprintPlanByGoalId || {}).reduce<Record<string, number[]>>((acc, [goalId, value]) => {
-        acc[remapGoalId(goalId)] = Array.isArray(value) ? value : [];
-        return acc;
-      }, {}),
-      pendingLeafGoalsToCreate: [],
-    };
-
-    return {
-      goals: [...goals, ...createdGoals],
-      focusGoal: remappedFocusGoal,
-    };
-  };
-
-  const applySprintPlanAssignments = async (focusGoalId: string, focusGoal: FocusGoal) => {
-    if (!currentUser?.uid) return;
-    const sprintPlanSegments = Array.isArray(focusGoal.sprintPlanSegments) ? focusGoal.sprintPlanSegments : [];
-    const sprintPlanByGoalId = focusGoal.sprintPlanByGoalId || {};
-    if (sprintPlanSegments.length === 0 || Object.keys(sprintPlanByGoalId).length === 0) return;
-
-    const sprintsSnap = await getDocs(
-      query(
-        collection(db, 'sprints'),
-        where('ownerUid', '==', currentUser.uid),
-        where('persona', '==', currentPersona || 'personal'),
-      ),
-    );
-
-    const plannedSprints = sprintsSnap.docs
-      .map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) }))
-      .filter((sprint) => {
-        const startMs = Number((sprint as any).startDate || 0);
-        const endMs = Number((sprint as any).endDate || 0);
-        return startMs <= new Date(focusGoal.endDate).getTime() && endMs >= new Date(focusGoal.startDate).getTime();
-      })
-      .sort((a, b) => Number((a as any).startDate || 0) - Number((b as any).startDate || 0));
-
-    const assignedSprintIdsByGoalId: Record<string, string[]> = {};
-    const batch = writeBatch(db);
-
-    sprintPlanSegments.forEach((segment) => {
-      const sprint = plannedSprints[segment.index];
-      if (!sprint) return;
-      const assignedGoalIds = Object.entries(sprintPlanByGoalId)
-        .filter(([, segmentIndexes]) => Array.isArray(segmentIndexes) && segmentIndexes.includes(segment.index))
-        .map(([goalId]) => goalId);
-      if (assignedGoalIds.length === 0) return;
-
-      assignedGoalIds.forEach((goalId) => {
-        assignedSprintIdsByGoalId[goalId] = [...(assignedSprintIdsByGoalId[goalId] || []), sprint.id];
-      });
-
-      const existingFocusGoalIds = Array.isArray((sprint as any).focusGoalIds)
-        ? (sprint as any).focusGoalIds.map((goalId: any) => String(goalId || '').trim()).filter(Boolean)
-        : [];
-      const nextFocusGoalIds = Array.from(new Set([...existingFocusGoalIds, ...assignedGoalIds]));
-      batch.update(doc(db, 'sprints', sprint.id), {
-        focusGoalIds: nextFocusGoalIds,
-        updatedAt: serverTimestamp(),
-      });
-    });
-
-    batch.update(doc(db, 'focusGoals', focusGoalId), {
-      assignedSprintIdsByGoalId,
-      updatedAt: serverTimestamp(),
-    });
-    await batch.commit();
+  const closeWizard = () => {
+    setShowWizard(false);
+    setWizardPrefill(null);
+    setEditingFocusGoal(null);
   };
 
   const handleWizardSave = async (focusGoal: FocusGoal) => {
     setWizardLoading(true);
     try {
-      const materialized = await materializePendingLeafGoals(focusGoal);
-      const normalizedFocusGoal = materialized.focusGoal;
-      const planningGoals = materialized.goals;
+      if (!currentUser?.uid) return;
 
-      // Deactivate existing focus goals for this timeframe
-      if (currentUser?.uid) {
-        await deactivateExistingFocusGoals(currentUser.uid, normalizedFocusGoal.timeframe);
+      const selectedLeafGoalIds = Array.isArray(focusGoal.focusLeafGoalIds) && focusGoal.focusLeafGoalIds.length > 0
+        ? focusGoal.focusLeafGoalIds
+        : focusGoal.goalIds;
+      const selectedRootGoalIds = Array.isArray(focusGoal.focusRootGoalIds) && focusGoal.focusRootGoalIds.length > 0
+        ? focusGoal.focusRootGoalIds
+        : selectedLeafGoalIds;
+      const selectedGoalTypeMap = focusGoal.goalTypeMap || {};
+
+      if (!editingFocusGoal) {
+        await deactivateExistingFocusGoals(currentUser.uid, focusGoal.timeframe);
       }
 
       // Auto-create stories if needed
-      const selectedLeafGoalIds = Array.isArray(normalizedFocusGoal.focusLeafGoalIds) && normalizedFocusGoal.focusLeafGoalIds.length > 0
-        ? normalizedFocusGoal.focusLeafGoalIds
-        : normalizedFocusGoal.goalIds;
-      const selectedGoals = planningGoals.filter(g => selectedLeafGoalIds.includes(g.id));
-      const selectedGoalTypeMap = normalizedFocusGoal.goalTypeMap || {};
+      const selectedGoals = goals.filter(g => selectedLeafGoalIds.includes(g.id));
       const goalsNeedingStories = selectedGoals.filter(
         g => selectedGoalTypeMap[g.id] !== 'calendar' && ((g as any).storyCount === undefined || (g as any).storyCount === 0)
       );
 
       let storiesCreated: string[] = [];
-      if (goalsNeedingStories.length > 0 && currentUser?.uid) {
+      if (goalsNeedingStories.length > 0) {
         storiesCreated = await autoCreateStoriesForGoals(goalsNeedingStories.map(g => g.id), currentUser.uid);
       }
 
-      const monzoGoalRefs = normalizedFocusGoal.monzoPotGoalRefs || {};
-      if (currentUser?.uid && Object.keys(monzoGoalRefs).length > 0) {
+      const monzoGoalRefs = focusGoal.monzoPotGoalRefs || {};
+      if (Object.keys(monzoGoalRefs).length > 0) {
         await persistMonzoGoalRefs({
           userId: currentUser.uid,
           goalRefMap: monzoGoalRefs,
@@ -345,74 +244,117 @@ export const FocusGoalsPage: React.FC = () => {
       }
 
       let bucketsCreated: { [key: string]: string } = {};
+      const endDateMs = toMillis(focusGoal.endDate);
+      const normalizedDaysRemaining = Number.isFinite(endDateMs)
+        ? Math.max(0, Math.ceil((endDateMs - Date.now()) / DAY_MS))
+        : focusGoal.daysRemaining || 0;
+      const focusGoalPayload: FocusGoal = {
+        ...focusGoal,
+        goalIds: selectedLeafGoalIds,
+        focusRootGoalIds: selectedRootGoalIds,
+        focusLeafGoalIds: selectedLeafGoalIds,
+        storiesCreatedFor: Array.from(new Set([...(editingFocusGoal?.storiesCreatedFor || []), ...storiesCreated])),
+        potIdsCreatedFor: editingFocusGoal?.potIdsCreatedFor || bucketsCreated,
+        monzoPotGoalRefs: monzoGoalRefs,
+        daysRemaining: normalizedDaysRemaining,
+        deferredNonFocusCount: editingFocusGoal?.deferredNonFocusCount || 0,
+      };
 
       // Create focus goal
       let createdSprintIds: string[] = [];
       let deferredNonFocusCount = 0;
-      let createdFocusGoalId: string | null = null;
-      if (currentUser?.uid) {
-        createdFocusGoalId = await createFocusGoal(
+      if (editingFocusGoal?.id) {
+        await updateFocusGoal(editingFocusGoal.id, focusGoalPayload);
+      } else {
+        await createFocusGoal(
           selectedLeafGoalIds,
-          normalizedFocusGoal.timeframe,
+          focusGoal.timeframe,
           currentUser.uid,
-          storiesCreated,
+          focusGoalPayload.storiesCreatedFor,
           bucketsCreated,
           selectedGoalTypeMap,
           monzoGoalRefs,
-          normalizedFocusGoal.focusRootGoalIds,
+          focusGoalPayload,
         );
-
-        if (createdFocusGoalId) {
-          await updateDoc(doc(db, 'focusGoals', createdFocusGoalId), {
-            sprintPlanByGoalId: normalizedFocusGoal.sprintPlanByGoalId || {},
-            sprintPlanSegments: normalizedFocusGoal.sprintPlanSegments || [],
-            visionText: normalizedFocusGoal.visionText || null,
-            updatedAt: serverTimestamp(),
-          });
-        }
 
         createdSprintIds = await autoCreateSprintsForFocusPeriod({
           userId: currentUser.uid,
           persona: currentPersona || 'personal',
-          timeframe: normalizedFocusGoal.timeframe,
-          startDate: new Date(normalizedFocusGoal.startDate),
-          endDate: new Date(normalizedFocusGoal.endDate),
-          visionText: normalizedFocusGoal.visionText,
-          intentProposals: normalizedFocusGoal.intentProposals,
+          timeframe: focusGoal.timeframe,
+          startDate: new Date(focusGoal.startDate),
+          endDate: new Date(focusGoal.endDate),
+          visionText: focusGoal.visionText,
+          intentProposals: focusGoal.intentProposals,
         });
 
-        deferredNonFocusCount = await deferNonFocusGoalsForPeriod({
-          userId: currentUser.uid,
-          persona: currentPersona || 'personal',
-          selectedGoalIds: getProtectedFocusGoalIds(normalizedFocusGoal),
-          deferUntilMs: new Date(normalizedFocusGoal.endDate).getTime(),
-          reason: `Deferred for active ${normalizedFocusGoal.timeframe} focus window`,
-        });
-
-        if (createdFocusGoalId) {
-          await applySprintPlanAssignments(createdFocusGoalId, normalizedFocusGoal);
-          await updateDoc(doc(db, 'focusGoals', createdFocusGoalId), {
-            autoCreatedSprintIds: createdSprintIds,
-            deferredNonFocusCount,
-            updatedAt: serverTimestamp(),
+        if (Number.isFinite(endDateMs)) {
+          deferredNonFocusCount = await deferNonFocusGoalsForPeriod({
+            userId: currentUser.uid,
+            persona: currentPersona || 'personal',
+            selectedGoalIds: selectedLeafGoalIds,
+            deferUntilMs: endDateMs,
+            reason: `Deferred for active ${focusGoal.timeframe} focus window`,
           });
         }
       }
 
       console.log('[FocusGoalsPage] focus setup extras', {
-        focusGoalId: createdFocusGoalId,
+        focusGoalId: editingFocusGoal?.id || 'new',
         createdSprintIds: createdSprintIds.length,
         deferredNonFocusCount,
       });
 
-      setShowWizard(false);
-      setWizardPrefill(null);
+      closeWizard();
     } catch (error) {
       console.error('Failed to save focus goal:', error);
       alert(`Failed to save focus goal: ${(error as any)?.message || 'Unknown error'}`);
     } finally {
       setWizardLoading(false);
     }
+  };
+
+  const handleEditFocusGoal = (focusGoal: FocusGoal) => {
+    const rootIds = Array.isArray(focusGoal.focusRootGoalIds) && focusGoal.focusRootGoalIds.length > 0
+      ? focusGoal.focusRootGoalIds
+      : focusGoal.goalIds;
+    setEditingFocusGoal(focusGoal);
+    setWizardPrefill({
+      title: focusGoal.title,
+      visionText: focusGoal.visionText,
+      timeframe: focusGoal.timeframe,
+      endDateMs: toMillis(focusGoal.endDate),
+      autoSelectGoalIds: rootIds,
+      goalTypeMap: focusGoal.goalTypeMap || {},
+      sprintPlanByGoalId: focusGoal.sprintPlanByGoalId || {},
+      source: 'focus-goal-edit',
+    });
+    setShowWizard(true);
+  };
+
+  const handleDeleteFocusGoal = async (focusGoal: FocusGoal) => {
+    if (!focusGoal?.id) return;
+    const confirmed = window.confirm(
+      `Delete the focus set "${focusGoal.title || 'Untitled focus set'}"? This removes only the focus set record and leaves goals, stories, and sprints intact.`
+    );
+    if (!confirmed) return;
+
+    setDeletingFocusGoalId(focusGoal.id);
+    try {
+      await deleteFocusGoal(focusGoal.id);
+      if (editingFocusGoal?.id === focusGoal.id) {
+        closeWizard();
+      }
+    } catch (error) {
+      console.error('Failed to delete focus goal:', error);
+      alert(`Failed to delete focus goal: ${(error as any)?.message || 'Unknown error'}`);
+    } finally {
+      setDeletingFocusGoalId(null);
+    }
+  };
+
+  const handleOpenKpiDesigner = (goalId?: string) => {
+    setKpiDesignerGoalId(goalId);
+    setShowKpiDesigner(true);
   };
 
   const handleManualRefresh = async () => {
@@ -483,13 +425,8 @@ export const FocusGoalsPage: React.FC = () => {
     }
   };
 
-  const handleOpenKpiDesigner = (goalId?: string) => {
-    setKpiDesignerGoalId(goalId);
-    setShowKpiDesigner(true);
-  };
-
   const handleAlignStoryToFocus = async (storyId: string) => {
-    const targetGoalId = Array.from(activeFocusGoalIdSet)[0];
+    const targetGoalId = Array.from(activeFocusLeafGoalIdSet)[0];
     if (!targetGoalId) {
       setFocusAlignmentMessage('No active focus goals available to align this story.');
       return;
@@ -537,6 +474,7 @@ export const FocusGoalsPage: React.FC = () => {
           variant="primary"
           size="lg"
           onClick={() => {
+            setEditingFocusGoal(null);
             setWizardPrefill(null);
             setShowWizard(true);
           }}
@@ -558,6 +496,8 @@ export const FocusGoalsPage: React.FC = () => {
                 focusGoal={focusGoal}
                 goals={goals}
                 stories={stories}
+                onEdit={() => handleEditFocusGoal(focusGoal)}
+                onDelete={() => handleDeleteFocusGoal(focusGoal)}
                 onRefresh={handleManualRefresh}
                 refreshing={refreshingFocusData}
                 compact={false}
@@ -705,8 +645,8 @@ export const FocusGoalsPage: React.FC = () => {
       <GoalKpiStudioPanel
         ownerUid={currentUser?.uid || ''}
         goals={kpiStudioGoals}
-        title={activeFocusGoalIdSet.size > 0 ? 'Focus KPI Studio' : 'Goal KPI Studio'}
-        subtitle={activeFocusGoalIdSet.size > 0
+        title={activeFocusLeafGoalIdSet.size > 0 ? 'Focus KPI Studio' : 'Goal KPI Studio'}
+        subtitle={activeFocusLeafGoalIdSet.size > 0
           ? 'Design KPIs for your active focus goals and pin the right ones to the dashboard.'
           : 'Design KPIs for your current goals and pin the right ones to the dashboard.'}
         onCreateKpi={handleOpenKpiDesigner}
@@ -720,27 +660,39 @@ export const FocusGoalsPage: React.FC = () => {
             {focusGoals
               .filter(fg => !fg.isActive)
               .map(focusGoal => {
-                const protectedGoalIds = new Set(getProtectedFocusGoalIds(focusGoal));
-                const selectedGoals = goals.filter((goal) => isGoalInHierarchySet(goal.id, goals, protectedGoalIds));
+                const selectedGoals = goals.filter(g => focusGoal.goalIds.includes(g.id));
                 return (
                   <Col md={6} lg={4} key={focusGoal.id} style={{ marginBottom: '16px' }}>
                     <Card>
                       <Card.Body>
                         <div style={{ marginBottom: '12px' }}>
-                          <strong>{selectedGoals.length} goals</strong>
+                          <strong>{focusGoal.title?.trim() || `${selectedGoals.length} goals`}</strong>
                           <div style={{ fontSize: '12px', color: '#666' }}>
                             {focusGoal.timeframe === 'sprint' ? '2 weeks' : focusGoal.timeframe === 'quarter' ? '13 weeks' : '52 weeks'}
                           </div>
                         </div>
                         <ul style={{ fontSize: '13px', marginBottom: '12px', paddingLeft: '20px' }}>
-                          {selectedGoals.slice(0, 3).map((goal) => (
-                            <li key={goal.id}>{getGoalDisplayPath(goal.id, goals)}</li>
+                          {selectedGoals.slice(0, 3).map(g => (
+                            <li key={g.id}>{g.title}</li>
                           ))}
                           {selectedGoals.length > 3 && <li>+{selectedGoals.length - 3} more</li>}
                         </ul>
                         <small style={{ color: '#666' }}>
-                          Completed: {new Date(focusGoal.endDate).toLocaleDateString()}
+                          Completed: {Number.isFinite(toMillis(focusGoal.endDate)) ? new Date(toMillis(focusGoal.endDate)).toLocaleDateString() : 'Unknown'}
                         </small>
+                        <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
+                          <Button size="sm" variant="outline-primary" onClick={() => handleEditFocusGoal(focusGoal)}>
+                            Edit
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline-danger"
+                            disabled={deletingFocusGoalId === focusGoal.id}
+                            onClick={() => handleDeleteFocusGoal(focusGoal)}
+                          >
+                            {deletingFocusGoalId === focusGoal.id ? 'Deleting…' : 'Delete'}
+                          </Button>
+                        </div>
                       </Card.Body>
                     </Card>
                   </Col>
@@ -753,12 +705,9 @@ export const FocusGoalsPage: React.FC = () => {
       {/* Wizard Modal */}
       <FocusGoalWizard
         show={showWizard}
-        onHide={() => {
-          setShowWizard(false);
-          setWizardPrefill(null);
-        }}
+        onHide={closeWizard}
         goals={goals}
-        existingFocusGoals={activeFocusGoals}
+        existingFocusGoals={editingFocusGoal ? activeFocusGoals.filter((focusGoal) => focusGoal.id !== editingFocusGoal.id) : activeFocusGoals}
         initialPrefill={wizardPrefill || undefined}
         currentUserId={currentUser?.uid}
         onSave={handleWizardSave}

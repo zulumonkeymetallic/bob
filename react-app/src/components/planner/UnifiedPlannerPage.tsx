@@ -72,7 +72,6 @@ import { getBadgeVariant, getPriorityBadge, getStatusName } from '../../utils/st
 import { isRecurringDueOnDate, resolveRecurringDueMs } from '../../utils/recurringTaskDue';
 import EditTaskModal from '../EditTaskModal';
 import EditStoryModal from '../EditStoryModal';
-import NewCalendarEventModal, { BlockFormState, DEFAULT_BLOCK_FORM, toInputValue } from './NewCalendarEventModal';
 import DayCapacityWarningBanner from './DayCapacityWarningBanner';
 import { useSidebar } from '../../contexts/SidebarContext';
 
@@ -120,6 +119,49 @@ type ThemeOption = {
   textColor: string;
 };
 
+interface BlockFormState {
+  id?: string;
+  title: string;
+  theme?: CalendarBlock['theme'];
+  category?: CalendarBlock['category'];
+  flexibility?: CalendarBlock['flexibility'];
+  rationale: string;
+  start: string;
+  end: string;
+  syncToGoogle: boolean;
+  subTheme: string;
+  persona?: 'personal' | 'work' | null;
+  storyId?: string;
+  taskId?: string;
+  aiScore?: number | null;
+  aiReason?: string | null;
+  storyInput?: string;
+  recurrenceFreq: 'none' | 'daily' | 'weekly';
+  recurrenceDays: string[]; // BYDAY codes e.g. ['MO','WE']
+  recurrenceUntil: string; // date input string
+}
+
+const DEFAULT_BLOCK_FORM: BlockFormState = {
+  title: 'Calendar entry',
+  theme: 'General',
+  category: 'Wellbeing',
+  flexibility: 'soft',
+  rationale: '',
+  start: '',
+  end: '',
+  syncToGoogle: true,
+  subTheme: '',
+  persona: null,
+  storyId: undefined,
+  taskId: undefined,
+  aiScore: null,
+  aiReason: null,
+  storyInput: '',
+  recurrenceFreq: 'none',
+  recurrenceDays: [],
+  recurrenceUntil: '',
+};
+
 type ViewType = 'day' | 'week' | 'month';
 
 type PlanningMode = 'strict' | 'smart';
@@ -163,6 +205,8 @@ const getInitialRange = (): PlannerRange => {
   const end = addDays(start, 6);
   return { start, end };
 };
+
+const toInputValue = (date: Date) => format(date, "yyyy-MM-dd'T'HH:mm");
 
 const isTaskDoneState = (status: any): boolean => {
   if (typeof status === 'number') {
@@ -555,29 +599,6 @@ const UnifiedPlannerPage: React.FC = () => {
     return ref ? String(ref) : '';
   }, []);
 
-  const getPlannerEventSourceLabel = useCallback((event: PlannerCalendarEvent): 'auto-planned' | 'linked from gcal' | 'manual' => {
-    if (event.type === 'external') return 'linked from gcal';
-
-    const block: any = event.block || null;
-    const source = String(block?.source || '').toLowerCase();
-    const entryMethod = String(block?.entry_method || '').toLowerCase();
-    const hasGcalLink = !!(event.instance?.external?.gcalEventId || block?.googleEventId);
-
-    if (hasGcalLink || source === 'gcal' || entryMethod === 'google_calendar') {
-      return 'linked from gcal';
-    }
-    if (
-      entryMethod.includes('auto')
-      || source.includes('auto')
-      || source.includes('ai')
-      || source === 'planner'
-      || source === 'bob_auto'
-    ) {
-      return 'auto-planned';
-    }
-    return 'manual';
-  }, []);
-
   const unscheduledItems = useMemo(
     () => planner.instances.filter((instance) => instance.status === 'unscheduled'),
     [planner.instances],
@@ -816,118 +837,6 @@ const UnifiedPlannerPage: React.FC = () => {
     };
   }, [currentUser, currentPersona]);
 
-  useEffect(() => {
-    if (!currentUser || !currentPersona) {
-      setTop3Tasks([]);
-      setTop3Stories([]);
-      setTop3Loading(false);
-      return;
-    }
-    setTop3Loading(true);
-    const todayIso = new Date().toISOString().slice(0, 10);
-    let tasksReady = false;
-    let storiesReady = false;
-    const markReady = () => {
-      if (tasksReady && storiesReady) setTop3Loading(false);
-    };
-
-    const isTaskDone = (status: any) => {
-      if (typeof status === 'number') return status >= 2;
-      const s = String(status || '').toLowerCase();
-      return ['done', 'complete', 'completed', 'finished', 'closed'].includes(s);
-    };
-    const isStoryDone = (status: any) => {
-      if (typeof status === 'number') return status >= 4;
-      const s = String(status || '').toLowerCase();
-      return ['done', 'complete', 'completed', 'finished', 'closed'].includes(s);
-    };
-
-    const taskQuery = query(
-      collection(db, 'tasks'),
-      where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona),
-      where('aiTop3ForDay', '==', true),
-    );
-    const storyQuery = query(
-      collection(db, 'stories'),
-      where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona),
-      where('aiTop3ForDay', '==', true),
-    );
-
-    const unsubTasks = onSnapshot(
-      taskQuery,
-      (snap) => {
-        const rows = snap.docs
-          .map((doc) => ({ id: doc.id, ...(doc.data() as any) } as Task))
-          .filter((task) => !task.deleted)
-          .filter((task) => !isTaskDone(task.status))
-          .filter((task) => {
-            const aiDate = (task as any).aiTop3Date;
-            if (!aiDate) return true;
-            return String(aiDate).slice(0, 10) === todayIso;
-          })
-          .sort((a, b) => {
-            const ar = Number((a as any).aiPriorityRank || 0) || 99;
-            const br = Number((b as any).aiPriorityRank || 0) || 99;
-            if (ar !== br) return ar - br;
-            const as = Number((a as any).aiCriticalityScore ?? -1);
-            const bs = Number((b as any).aiCriticalityScore ?? -1);
-            if (as !== bs) return bs - as;
-            return String(a.title || '').localeCompare(String(b.title || ''));
-          })
-          .slice(0, 3);
-        setTop3Tasks(rows);
-        tasksReady = true;
-        markReady();
-      },
-      (err) => {
-        console.warn('Failed to load top 3 tasks', err);
-        setTop3Tasks([]);
-        tasksReady = true;
-        markReady();
-      },
-    );
-
-    const unsubStories = onSnapshot(
-      storyQuery,
-      (snap) => {
-        const rows = snap.docs
-          .map((doc) => ({ id: doc.id, ...(doc.data() as any) } as Story))
-          .filter((story) => !isStoryDone(story.status))
-          .filter((story) => {
-            const aiDate = (story as any).aiTop3Date;
-            if (!aiDate) return true;
-            return String(aiDate).slice(0, 10) === todayIso;
-          })
-          .sort((a, b) => {
-            const ar = Number((a as any).aiFocusStoryRank || 0) || 99;
-            const br = Number((b as any).aiFocusStoryRank || 0) || 99;
-            if (ar !== br) return ar - br;
-            const as = Number((a as any).aiCriticalityScore ?? -1);
-            const bs = Number((b as any).aiCriticalityScore ?? -1);
-            if (as !== bs) return bs - as;
-            return String(a.title || '').localeCompare(String(b.title || ''));
-          })
-          .slice(0, 3);
-        setTop3Stories(rows);
-        storiesReady = true;
-        markReady();
-      },
-      (err) => {
-        console.warn('Failed to load top 3 stories', err);
-        setTop3Stories([]);
-        storiesReady = true;
-        markReady();
-      },
-    );
-
-    return () => {
-      unsubTasks();
-      unsubStories();
-    };
-  }, [currentUser, currentPersona]);
-
   const topChores = useMemo(() => planner.chores.slice(0, 5), [planner.chores]);
   const topRoutines = useMemo(() => planner.routines.slice(0, 5), [planner.routines]);
 
@@ -937,6 +846,7 @@ const UnifiedPlannerPage: React.FC = () => {
       theme: blockDefaultTheme as CalendarBlock['theme'],
     });
     setComposerOpen(false);
+    setComposerSaving(false);
   }, [blockDefaultTheme]);
 
   const handleRangeChange = useCallback(
@@ -2558,14 +2468,6 @@ const UnifiedPlannerPage: React.FC = () => {
                 )}
                 {activeEvent.type === 'instance' && activeEvent.instance && (
                   <>
-                    <div className="text-muted small">
-                      Source{' '}
-                      {(() => {
-                        const sourceLabel = getPlannerEventSourceLabel(activeEvent);
-                        const variant = sourceLabel === 'auto-planned' ? 'success' : sourceLabel === 'linked from gcal' ? 'info' : 'secondary';
-                        return <Badge bg={variant}>{sourceLabel}</Badge>;
-                      })()}
-                    </div>
                     {['chore', 'routine', 'habit'].includes(
                       (activeEvent.instance.sourceType || '').toLowerCase(),
                     ) && (
@@ -2650,14 +2552,6 @@ const UnifiedPlannerPage: React.FC = () => {
                 )}
                 {activeEvent.type === 'block' && activeEvent.block && (
                   <>
-                    <div className="text-muted small">
-                      Source{' '}
-                      {(() => {
-                        const sourceLabel = getPlannerEventSourceLabel(activeEvent);
-                        const variant = sourceLabel === 'auto-planned' ? 'success' : sourceLabel === 'linked from gcal' ? 'info' : 'secondary';
-                        return <Badge bg={variant}>{sourceLabel}</Badge>;
-                      })()}
-                    </div>
                     <div className="text-muted small">
                       Theme{' '}
                       <Badge bg="light" text="dark">

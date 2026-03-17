@@ -105,7 +105,9 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
   const [matching, setMatching] = useState(false);
   const [error, setError] = useState('');
   const [copiedGoalRef, setCopiedGoalRef] = useState<string | null>(null);
+  const [focusTitle, setFocusTitle] = useState('');
   const [visionText, setVisionText] = useState('');
+  const [customEndDateInput, setCustomEndDateInput] = useState('');
   const [prompts, setPrompts] = useState<IntentPrompt[]>([]);
   const [selectedPromptId, setSelectedPromptId] = useState('');
   const [intentResult, setIntentResult] = useState<IntentResult | null>(null);
@@ -116,6 +118,7 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
   const [draftLeafGoals, setDraftLeafGoals] = useState<DraftLeafGoal[]>([]);
   const [draftLeafTitleByParentId, setDraftLeafTitleByParentId] = useState<Record<string, string>>({});
   const [sprintPlanByGoalId, setSprintPlanByGoalId] = useState<Record<string, number[]>>({});
+  const [prefillStructureApplied, setPrefillStructureApplied] = useState(false);
 
   // Reset on modal open
   useEffect(() => {
@@ -127,7 +130,9 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
       setTimeframe('sprint');
       setError('');
       setCopiedGoalRef(null);
+      setFocusTitle('');
       setVisionText('');
+      setCustomEndDateInput('');
       setPrompts([]);
       setSelectedPromptId('');
       setIntentResult(null);
@@ -138,6 +143,7 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
       setDraftLeafGoals([]);
       setDraftLeafTitleByParentId({});
       setSprintPlanByGoalId({});
+      setPrefillStructureApplied(false);
     }
   }, [show]);
 
@@ -166,10 +172,65 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
 
   useEffect(() => {
     if (!show || !initialPrefill) return;
+    if (initialPrefill.title) setFocusTitle(initialPrefill.title);
     if (initialPrefill.timeframe) setTimeframe(initialPrefill.timeframe);
     if (initialPrefill.visionText) setVisionText(initialPrefill.visionText);
     if (initialPrefill.searchTerm) setGoalSearchTerm(initialPrefill.searchTerm);
+    if (initialPrefill.goalTypeMap) setGoalTypeMap(initialPrefill.goalTypeMap);
+    if (initialPrefill.sprintPlanByGoalId) setSprintPlanByGoalId(initialPrefill.sprintPlanByGoalId);
+    if (initialPrefill.endDateMs) {
+      const nextDate = new Date(initialPrefill.endDateMs);
+      if (!Number.isNaN(nextDate.getTime())) setCustomEndDateInput(nextDate.toISOString().slice(0, 10));
+    }
   }, [show, initialPrefill]);
+
+  useEffect(() => {
+    if (!show || !initialPrefill || prefillStructureApplied) return;
+
+    const requestedGoalIds = Array.isArray(initialPrefill.autoSelectGoalIds)
+      ? initialPrefill.autoSelectGoalIds.map((goalId) => String(goalId || '').trim()).filter(Boolean)
+      : [];
+    const requestedMilestones = Array.isArray(initialPrefill.queuedLeafMilestones)
+      ? initialPrefill.queuedLeafMilestones.map((title) => String(title || '').trim()).filter(Boolean)
+      : [];
+
+    if (requestedGoalIds.length > 0) {
+      const allGoalsReady = requestedGoalIds.every((goalId) => goals.some((goal) => goal.id === goalId));
+      if (!allGoalsReady) return;
+    }
+
+    if (requestedGoalIds.length > 0) {
+      setSelectedGoalIds((prev) => {
+        const next = new Set(prev);
+        requestedGoalIds.forEach((goalId) => next.add(goalId));
+        return next;
+      });
+    }
+
+    if (requestedMilestones.length > 0 && requestedGoalIds.length === 1) {
+      const parentGoal = goals.find((goal) => goal.id === requestedGoalIds[0]) || null;
+      if (parentGoal) {
+        setDraftLeafGoals((prev) => {
+          if (prev.length > 0) return prev;
+          const existingTitles = goals
+            .filter((goal) => String(goal.parentGoalId || '') === parentGoal.id)
+            .map((goal) => String(goal.title || '').trim().toLowerCase());
+          const draftTitles = requestedMilestones.filter((title) => !existingTitles.includes(title.toLowerCase()));
+          return draftTitles.map((title, index) => ({
+            tempId: `${DRAFT_LEAF_PREFIX}${parentGoal.id}:${Date.now() + index}`,
+            parentGoalId: parentGoal.id,
+            title,
+            theme: parentGoal.theme,
+            persona: parentGoal.persona,
+            goalKind: 'milestone',
+            timeHorizon: timeframe === 'year' ? 'quarter' : 'sprint',
+          }));
+        });
+      }
+    }
+
+    setPrefillStructureApplied(true);
+  }, [goals, initialPrefill, prefillStructureApplied, show, timeframe]);
 
   const loadPrompts = async () => {
     setLoadingPrompts(true);
@@ -200,21 +261,26 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
       quarter: 91 * 24 * 60 * 60 * 1000,
       year: 365 * 24 * 60 * 60 * 1000
     };
-    const endDate = new Date(now.getTime() + daysInMs[timeframe]);
+    const customEndMs = customEndDateInput ? Date.parse(`${customEndDateInput}T12:00:00`) : Number.NaN;
+    const endDate = Number.isFinite(customEndMs) && customEndMs > now.getTime()
+      ? new Date(customEndMs)
+      : new Date(now.getTime() + daysInMs[timeframe]);
     const daysRemaining = Math.ceil((endDate.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
 
     return {
       label:
-        timeframe === 'sprint'
-          ? `2 weeks (${now.toLocaleDateString()} - ${endDate.toLocaleDateString()})`
-          : timeframe === 'quarter'
-            ? `13 weeks (${now.toLocaleDateString()} - ${endDate.toLocaleDateString()})`
-            : `1 year (${now.toLocaleDateString()} - ${endDate.toLocaleDateString()})`,
+        Number.isFinite(customEndMs) && customEndMs > now.getTime()
+          ? `Custom window (${now.toLocaleDateString()} - ${endDate.toLocaleDateString()})`
+          : timeframe === 'sprint'
+            ? `2 weeks (${now.toLocaleDateString()} - ${endDate.toLocaleDateString()})`
+            : timeframe === 'quarter'
+              ? `13 weeks (${now.toLocaleDateString()} - ${endDate.toLocaleDateString()})`
+              : `1 year (${now.toLocaleDateString()} - ${endDate.toLocaleDateString()})`,
       startDate: now,
       endDate,
       daysRemaining
     };
-  }, [timeframe]);
+  }, [customEndDateInput, timeframe]);
 
   const sprintPlanSegments = useMemo<SprintPlanSegment[]>(() => {
     const segments: SprintPlanSegment[] = [];
@@ -449,6 +515,10 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
     setError('');
 
     if (step === 'vision') {
+      if (!focusTitle.trim()) {
+        setError('Please provide a short program name before continuing.');
+        return;
+      }
       if (!visionText.trim()) {
         setError('Please provide a short vision before continuing.');
         return;
@@ -574,6 +644,7 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
         id: `focus-${Date.now()}`,
         ownerUid: currentUserId || '',
         persona: 'personal',
+        title: focusTitle.trim() || undefined,
         goalIds: selectedLeafGoalIds,
         focusRootGoalIds: Array.from(selectedGoalIds),
         focusLeafGoalIds: selectedLeafGoalIds,
@@ -674,6 +745,16 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
             <p style={{ color: '#666', marginBottom: '16px' }}>
               Capture the outcome you want first, then optionally run AI matching against your current goal snapshot.
             </p>
+
+            <Form.Group className="mb-3">
+              <Form.Label>Program name</Form.Label>
+              <Form.Control
+                type="text"
+                value={focusTitle}
+                onChange={(e) => setFocusTitle(e.target.value)}
+                placeholder="Project 45 v2"
+              />
+            </Form.Group>
 
             <Form.Group className="mb-3">
               <Form.Label>Vision (free text)</Form.Label>
@@ -910,6 +991,19 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
                 That's <strong>{timeframeInfo.daysRemaining} days</strong> to achieve your focus goals
               </div>
             </Alert>
+
+            <Form.Group className="mt-3">
+              <Form.Label>Exact target end date (optional override)</Form.Label>
+              <Form.Control
+                type="date"
+                min={new Date().toISOString().slice(0, 10)}
+                value={customEndDateInput}
+                onChange={(e) => setCustomEndDateInput(e.target.value)}
+              />
+              <Form.Text className="text-muted">
+                Leave blank to use the standard {timeframe} window. Set a date here for milestone programs like birthdays or race targets.
+              </Form.Text>
+            </Form.Group>
           </div>
         )}
 
@@ -1196,6 +1290,8 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
               </ul>
               <p style={{ marginBottom: 0 }}>
                 <strong>Timeframe:</strong> {timeframeInfo.label}
+                <br />
+                <strong>Program:</strong> {focusTitle.trim() || 'Untitled focus program'}
                 <br />
                 <strong>Vision:</strong> {visionText.trim() || 'Not provided'}
                 <br />

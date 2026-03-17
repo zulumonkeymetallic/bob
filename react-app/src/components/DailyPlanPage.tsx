@@ -1,174 +1,169 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, Badge, Button, Card, Container, ListGroup } from 'react-bootstrap';
-import { collection, doc, getDoc, onSnapshot, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
-import { CalendarPlus, Check, Clock3, Target } from 'lucide-react';
-import { db } from '../firebase';
+import { Alert, Badge, Button, Card, Container, Form, Modal } from 'react-bootstrap';
+import { collection, doc, getDoc, limit, onSnapshot, orderBy, query, serverTimestamp, setDoc, updateDoc, where } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
+import { format } from 'date-fns';
+import { bucketLabel, bucketOrder, type TimelineBucket } from '../utils/timelineBuckets';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { db, functions } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useSprint } from '../contexts/SprintContext';
-import { Goal, Story, Task } from '../types';
-import { isRecurringDueOnDate, resolveTaskDueMs } from '../utils/recurringTaskDue';
+import { useSidebar } from '../contexts/SidebarContext';
+import type { Goal, Sprint, Story, Task } from '../types';
+import { ChoiceHelper } from '../config/choices';
 import DeferItemModal from './DeferItemModal';
-import EditTaskModal from './EditTaskModal';
 import EditStoryModal from './EditStoryModal';
-import NewCalendarEventModal, { BlockFormState, toInputValue } from './planner/NewCalendarEventModal';
+import EditTaskModal from './EditTaskModal';
+import NewCalendarEventModal, { type BlockFormState, toInputValue } from './planner/NewCalendarEventModal';
+import PlannerWorkCard from './planner/PlannerWorkCard';
 import { useFocusGoals } from '../hooks/useFocusGoals';
-import { getActiveFocusLeafGoalIds, getGoalAncestors, getGoalDisplayPath } from '../utils/goalHierarchy';
+import {
+  buildPlannerItems,
+  normalizeStoryStatus,
+  toDayKey,
+  toMs,
+  type PlannerCalendarBlockRow,
+  type PlannerItem,
+  type PlannerScheduledInstanceRow,
+  type PlannerSummaryEvent,
+} from '../utils/plannerItems';
+import { getActiveFocusLeafGoalIds } from '../utils/goalHierarchy';
 import { isFreshTimestamp } from '../utils/kpiFreshness';
+import { buildPlannerRecommendation, type PlannerRecommendation } from '../utils/plannerRecommendations';
+import CheckInDaily from './checkins/CheckInDaily';
+import { buildDayCapacityMap, plannerItemPoints } from '../utils/plannerCapacity';
+import { schedulePlannerItem as schedulePlannerItemMutation } from '../utils/plannerScheduling';
 
-type TimelineBucket = 'morning' | 'afternoon' | 'evening';
-type TimelineFilter = 'task' | 'story' | 'chore' | 'event' | 'top3' | 'review' | null;
+type TimelineFilter = 'task' | 'story' | 'chore' | 'focus' | 'review' | 'top3' | null;
+type DailyPlanMode = 'list' | 'plan' | 'review' | 'checkin';
 
-type TimelineItem = {
+type DeferTarget = {
+  type: 'task' | 'story';
   id: string;
-  kind: 'task' | 'story' | 'chore' | 'event';
   title: string;
-  ref: string | null;
-  timeLabel: string;
-  sortMs: number | null;
-  bucket: TimelineBucket;
-  sourceId?: string;
-  isTop3?: boolean;
-  deferredUntilMs?: number | null;
-  goalTitle: string | null;
-  goalTheme: string | null;
   isFocusAligned: boolean;
-  rawTask: Task | null;
-  rawStory: Story | null;
-  scheduledBlockStart: number | null;
-  scheduledBlockEnd: number | null;
 };
 
-type CalendarBlockRow = {
-  id: string;
-  title?: string;
-  start?: number;
-  end?: number;
-  taskId?: string | null;
-  storyId?: string | null;
-  linkedStoryId?: string | null;
+const dayStartMs = (date: Date | number) => {
+  const next = new Date(date);
+  next.setHours(0, 0, 0, 0);
+  return next.getTime();
 };
 
-type ScheduledInstanceRow = {
-  id: string;
-  ownerUid: string;
-  sourceType?: string | null;
-  sourceId?: string | null;
-  occurrenceDate?: string | null;
-  status?: string | null;
-  updatedAt?: number | null;
-};
-
-const bucketOrder: TimelineBucket[] = ['morning', 'afternoon', 'evening'];
-
-const bucketLabel = (bucket: TimelineBucket) => (
-  bucket === 'morning' ? 'Morning' : bucket === 'afternoon' ? 'Afternoon' : 'Evening'
+const createPlannerActionId = (prefix: 'move' | 'defer') => (
+  `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 );
 
-const toMs = (value: any): number | null => {
-  if (value == null) return null;
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-  if (value instanceof Date) return value.getTime();
-  if (typeof value?.toDate === 'function') {
-    try {
-      return value.toDate().getTime();
-    } catch {
-      return null;
-    }
+const nextSprintForDate = (sprints: Sprint[], afterMs: number) =>
+  [...sprints]
+    .filter((sprint) => Number(sprint.startDate || 0) > afterMs)
+    .sort((a, b) => Number(a.startDate || 0) - Number(b.startDate || 0))[0] || null;
+
+const extractSummaryEvents = (summary: any): PlannerSummaryEvent[] => {
+  const candidates = [summary?.calendar?.events, summary?.eventsToday, summary?.upcomingEvents, summary?.calendarEvents, summary?.dailyBrief?.calendar];
+  for (const candidate of candidates) {
+    if (!Array.isArray(candidate) || candidate.length === 0) continue;
+    const mapped = candidate
+      .map((item: any, index: number) => {
+        const title = String(item?.title || item?.summary || item?.name || '').trim();
+        if (!title) return null;
+        return {
+          id: String(item?.id || item?.eventId || `${title}-${index}`),
+          title,
+          startMs: toMs(item?.start ?? item?.startAt ?? item?.startDate ?? item?.when),
+          endMs: toMs(item?.end ?? item?.endAt ?? item?.endDate),
+        };
+      })
+      .filter(Boolean) as PlannerSummaryEvent[];
+    if (mapped.length > 0) return mapped;
   }
-  const parsed = Date.parse(String(value));
-  return Number.isNaN(parsed) ? null : parsed;
+  return [];
 };
 
-const isDoneStatus = (value: any): boolean => {
-  if (typeof value === 'number') return value >= 2;
-  const raw = String(value || '').trim().toLowerCase();
-  return raw === 'done' || raw === 'complete' || raw === 'completed' || raw === 'archived';
+const getAutoMode = ({
+  isMobile,
+  reviewDone,
+  reviewCount,
+  hour,
+}: {
+  isMobile: boolean;
+  reviewDone: boolean;
+  reviewCount: number;
+  hour: number;
+}): DailyPlanMode => {
+  if (hour >= 19) return 'checkin';
+  if (!reviewDone && reviewCount > 0 && hour < 13) return 'review';
+  return isMobile ? 'list' : 'plan';
 };
-
-const normalizeStoryStatus = (value: any): number => {
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-  const raw = String(value || '').trim().toLowerCase();
-  if (raw === 'done' || raw === 'complete' || raw === 'completed') return 4;
-  if (raw === 'testing' || raw === 'qa' || raw === 'review') return 3;
-  if (raw === 'in progress' || raw === 'in-progress' || raw === 'active' || raw === 'doing' || raw === 'blocked') return 2;
-  if (raw === 'planned' || raw === 'ready') return 1;
-  return 0;
-};
-
-const getChoreKind = (task: Task): 'chore' | 'routine' | 'habit' | null => {
-  const raw = String((task as any)?.type || (task as any)?.task_type || '').trim().toLowerCase();
-  const normalized = raw === 'habitual' ? 'habit' : raw;
-  if (normalized === 'chore' || normalized === 'routine' || normalized === 'habit') return normalized;
-  return null;
-};
-
-const bucketFromTime = (ms: number | null | undefined, timeOfDay?: string | null): TimelineBucket => {
-  const tod = String(timeOfDay || '').toLowerCase().trim();
-  if (tod === 'morning' || tod === 'afternoon' || tod === 'evening') return tod as TimelineBucket;
-  if (!ms || !Number.isFinite(ms)) return 'morning';
-  const date = new Date(ms);
-  const minute = date.getHours() * 60 + date.getMinutes();
-  if (minute >= 300 && minute <= 779) return 'morning';
-  if (minute >= 780 && minute <= 1139) return 'afternoon';
-  return 'evening';
-};
-
-const bucketPseudoTime = (dayStartMs: number, bucket: TimelineBucket) => {
-  if (bucket === 'morning') return dayStartMs + (9 * 60 * 60 * 1000);
-  if (bucket === 'afternoon') return dayStartMs + (14 * 60 * 60 * 1000);
-  return dayStartMs + (19.5 * 60 * 60 * 1000);
-};
-
-const formatTimeLabel = (startMs: number | null | undefined, endMs?: number | null, timeOfDay?: string | null): string => {
-  if (!startMs || !Number.isFinite(startMs)) {
-    return `Unscheduled (${bucketLabel(bucketFromTime(null, timeOfDay))})`;
-  }
-  const start = new Date(startMs);
-  const startLabel = start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  if (endMs && Number.isFinite(endMs)) {
-    const end = new Date(endMs);
-    const endLabel = end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    return `${startLabel} - ${endLabel}`;
-  }
-  return startLabel;
-};
-
-const resolveTaskRef = (task: Task) => task.ref || `TK-${task.id.slice(-6).toUpperCase()}`;
-const resolveStoryRef = (story: Story) => ((story as any).referenceNumber || story.ref || `ST-${story.id.slice(-6).toUpperCase()}`);
 
 const DailyPlanPage: React.FC = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
-  const { selectedSprintId } = useSprint();
+  const { selectedSprintId, sprints } = useSprint();
   const { activeFocusGoals } = useFocusGoals(currentUser?.uid);
+  const { showSidebar } = useSidebar();
+  const location = useLocation();
+  const navigate = useNavigate();
 
   const [tasks, setTasks] = useState<Task[]>([]);
   const [stories, setStories] = useState<Story[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
-  const [calendarBlocks, setCalendarBlocks] = useState<CalendarBlockRow[]>([]);
-  const [scheduledInstances, setScheduledInstances] = useState<ScheduledInstanceRow[]>([]);
+  const [calendarBlocks, setCalendarBlocks] = useState<PlannerCalendarBlockRow[]>([]);
+  const [scheduledInstances, setScheduledInstances] = useState<PlannerScheduledInstanceRow[]>([]);
   const [summary, setSummary] = useState<any | null>(null);
-  const [deferTarget, setDeferTarget] = useState<{ type: 'task' | 'story'; id: string; title: string } | null>(null);
-  const [morningReviewDone, setMorningReviewDone] = useState(false);
-  const [activeKindFilter, setActiveKindFilter] = useState<TimelineFilter>(null);
+  const [deferTarget, setDeferTarget] = useState<DeferTarget | null>(null);
   const [pageMessage, setPageMessage] = useState<{ variant: 'warning' | 'danger' | 'success'; text: string } | null>(null);
   const [editTask, setEditTask] = useState<Task | null>(null);
   const [editStory, setEditStory] = useState<Story | null>(null);
-  const [scheduleTarget, setScheduleTarget] = useState<TimelineItem | null>(null);
+  const [scheduleTarget, setScheduleTarget] = useState<PlannerItem | null>(null);
+  const [activeKindFilter, setActiveKindFilter] = useState<TimelineFilter>(null);
+  const [morningReviewDone, setMorningReviewDone] = useState(false);
+  const [applyingKey, setApplyingKey] = useState<string | null>(null);
+  const [isMobileLayout, setIsMobileLayout] = useState<boolean>(typeof window !== 'undefined' ? window.innerWidth < 768 : false);
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+  const [userSelectedMode, setUserSelectedMode] = useState(false);
+  const [mode, setMode] = useState<DailyPlanMode>(() => {
+    if (typeof window === 'undefined') return 'plan';
+    const params = new URLSearchParams(window.location.search);
+    const forcedTab = params.get('tab');
+    if (forcedTab === 'checkin') return 'checkin';
+    return getAutoMode({
+      isMobile: window.innerWidth < 768,
+      reviewDone: false,
+      reviewCount: 0,
+      hour: new Date().getHours(),
+    });
+  });
+  const [moveModal, setMoveModal] = useState<{ item: PlannerItem; recommendation: PlannerRecommendation | null } | null>(null);
 
-  const today = useMemo(() => new Date(), []);
-  const todayStartMs = useMemo(() => {
-    const d = new Date();
-    d.setHours(0, 0, 0, 0);
-    return d.getTime();
+  const todayStartMs = useMemo(() => dayStartMs(new Date()), []);
+  const todayEndMs = useMemo(() => todayStartMs + (24 * 60 * 60 * 1000) - 1, [todayStartMs]);
+  const todayIso = useMemo(() => new Date(todayStartMs).toISOString().slice(0, 10), [todayStartMs]);
+  const activeFocusGoalIds = useMemo(() => getActiveFocusLeafGoalIds(activeFocusGoals), [activeFocusGoals]);
+  const nextSprint = useMemo(() => nextSprintForDate(sprints as Sprint[], todayEndMs), [sprints, todayEndMs]);
+  const reviewStateId = useMemo(
+    () => (currentUser?.uid ? `${currentUser.uid}_${currentPersona || 'personal'}_${todayIso}` : null),
+    [currentUser?.uid, currentPersona, todayIso],
+  );
+
+  useEffect(() => {
+    const update = () => {
+      const mobile = window.innerWidth < 768;
+      setIsMobileLayout(mobile);
+    };
+    update();
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
   }, []);
-  const todayEndMs = useMemo(() => {
-    const d = new Date();
-    d.setHours(23, 59, 59, 999);
-    return d.getTime();
-  }, []);
-  const todayIso = useMemo(() => new Date().toISOString().slice(0, 10), []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    if (params.get('tab') === 'checkin' && mode !== 'checkin') {
+      setMode('checkin');
+      setUserSelectedMode(false);
+    }
+  }, [location.search, mode]);
 
   useEffect(() => {
     if (!currentUser?.uid) return;
@@ -189,19 +184,33 @@ const DailyPlanPage: React.FC = () => {
   }, [currentUser?.uid]);
 
   useEffect(() => {
+    if (!reviewStateId) {
+      setMorningReviewDone(false);
+      return;
+    }
+    const unsub = onSnapshot(doc(db, 'daily_plan_state', reviewStateId), (snap) => {
+      const data = snap.data() as any;
+      setMorningReviewDone(!!(data?.reviewCompletedAt || data?.reviewCompletedAtMs));
+    }, (error) => {
+      console.warn('DailyPlanPage: daily_plan_state listener denied/failed', error?.message || error);
+      setMorningReviewDone(false);
+    });
+    return () => unsub();
+  }, [reviewStateId]);
+
+  useEffect(() => {
     if (!currentUser?.uid) {
       setTasks([]);
       return;
     }
-    const q = query(collection(db, 'tasks'), where('ownerUid', '==', currentUser.uid));
+    const q = query(collection(db, 'tasks'), where('ownerUid', '==', currentUser.uid), orderBy('updatedAt', 'desc'), limit(300));
     const unsub = onSnapshot(q, (snap) => {
       let rows = snap.docs.map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) })) as Task[];
-      const persona = currentPersona || 'personal';
-      rows = rows.filter((task: any) => {
-        if (persona === 'work') return task.persona === 'work';
-        return task.persona == null || task.persona === 'personal';
-      });
+      rows = rows.filter((task: any) => currentPersona === 'work' ? task.persona === 'work' : task.persona == null || task.persona === 'personal');
       setTasks(rows);
+    }, (error) => {
+      console.warn('DailyPlanPage: tasks listener denied/failed', error?.message || error);
+      setTasks([]);
     });
     return () => unsub();
   }, [currentUser?.uid, currentPersona]);
@@ -211,15 +220,14 @@ const DailyPlanPage: React.FC = () => {
       setStories([]);
       return;
     }
-    const q = query(collection(db, 'stories'), where('ownerUid', '==', currentUser.uid));
+    const q = query(collection(db, 'stories'), where('ownerUid', '==', currentUser.uid), orderBy('updatedAt', 'desc'), limit(300));
     const unsub = onSnapshot(q, (snap) => {
       let rows = snap.docs.map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) })) as Story[];
-      const persona = currentPersona || 'personal';
-      rows = rows.filter((story: any) => {
-        if (persona === 'work') return story.persona === 'work';
-        return story.persona == null || story.persona === 'personal';
-      });
+      rows = rows.filter((story: any) => currentPersona === 'work' ? story.persona === 'work' : story.persona == null || story.persona === 'personal');
       setStories(rows);
+    }, (error) => {
+      console.warn('DailyPlanPage: stories listener denied/failed', error?.message || error);
+      setStories([]);
     });
     return () => unsub();
   }, [currentUser?.uid, currentPersona]);
@@ -232,6 +240,9 @@ const DailyPlanPage: React.FC = () => {
     const q = query(collection(db, 'goals'), where('ownerUid', '==', currentUser.uid));
     const unsub = onSnapshot(q, (snap) => {
       setGoals(snap.docs.map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) })) as Goal[]);
+    }, (error) => {
+      console.warn('DailyPlanPage: goals listener denied/failed', error?.message || error);
+      setGoals([]);
     });
     return () => unsub();
   }, [currentUser?.uid]);
@@ -241,15 +252,17 @@ const DailyPlanPage: React.FC = () => {
       setCalendarBlocks([]);
       return;
     }
-    const q = query(collection(db, 'calendar_blocks'), where('ownerUid', '==', currentUser.uid));
+    const q = query(
+      collection(db, 'calendar_blocks'),
+      where('ownerUid', '==', currentUser.uid),
+      where('start', '>=', todayStartMs),
+      where('start', '<=', todayEndMs),
+    );
     const unsub = onSnapshot(q, (snap) => {
-      const rows = snap.docs
-        .map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) }))
-        .filter((row: any) => {
-          const startMs = toMs(row.start);
-          return startMs != null && startMs >= todayStartMs && startMs <= todayEndMs;
-        }) as CalendarBlockRow[];
-      setCalendarBlocks(rows);
+      setCalendarBlocks(snap.docs.map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) })) as PlannerCalendarBlockRow[]);
+    }, (error) => {
+      console.warn('DailyPlanPage: calendar_blocks listener denied/failed', error?.message || error);
+      setCalendarBlocks([]);
     });
     return () => unsub();
   }, [currentUser?.uid, todayStartMs, todayEndMs]);
@@ -265,7 +278,10 @@ const DailyPlanPage: React.FC = () => {
       where('occurrenceDate', '==', todayIso),
     );
     const unsub = onSnapshot(q, (snap) => {
-      setScheduledInstances(snap.docs.map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) })) as ScheduledInstanceRow[]);
+      setScheduledInstances(snap.docs.map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) })) as PlannerScheduledInstanceRow[]);
+    }, (error) => {
+      console.warn('DailyPlanPage: scheduled_instances listener denied/failed', error?.message || error);
+      setScheduledInstances([]);
     });
     return () => unsub();
   }, [currentUser?.uid, todayIso]);
@@ -280,271 +296,120 @@ const DailyPlanPage: React.FC = () => {
       const sorted = [...snap.docs].sort((a, b) => (toMs(b.data()?.generatedAt) || 0) - (toMs(a.data()?.generatedAt) || 0));
       const row = sorted[0]?.data() as any;
       setSummary(row?.summary || null);
+    }, (error) => {
+      console.warn('DailyPlanPage: daily_summaries listener denied/failed', error?.message || error);
+      setSummary(null);
     });
     return () => unsub();
   }, [currentUser?.uid]);
 
-  useEffect(() => {
-    if (!currentUser?.uid) {
-      setMorningReviewDone(false);
-      return;
-    }
-    const key = `dailyPlanMorningReview:${currentUser.uid}:${todayIso}`;
-    setMorningReviewDone(window.localStorage.getItem(key) === '1');
-  }, [currentUser?.uid, todayIso]);
+  const timelineItems = useMemo(
+    () =>
+      buildPlannerItems({
+        tasks,
+        stories,
+        goals,
+        calendarBlocks,
+        scheduledInstances,
+        activeFocusGoalIds,
+        rangeStartMs: todayStartMs,
+        rangeEndMs: todayEndMs,
+        selectedSprintId,
+        includeUnscheduledTasks: true,
+        summaryEvents: extractSummaryEvents(summary),
+      }),
+    [tasks, stories, goals, calendarBlocks, scheduledInstances, activeFocusGoalIds, todayStartMs, todayEndMs, selectedSprintId, summary],
+  );
 
-  const storyMap = useMemo(() => new Map(stories.map((story) => [story.id, story])), [stories]);
-  const goalMap = useMemo(() => new Map(goals.map((goal) => [goal.id, goal])), [goals]);
-  const activeFocusGoalIds = useMemo(() => getActiveFocusLeafGoalIds(activeFocusGoals), [activeFocusGoals]);
+  const timelineWorkItems = useMemo(() => timelineItems.filter((item) => item.kind !== 'event'), [timelineItems]);
 
-  const isGoalAlignedToFocus = useMemo(() => (
-    (goalId: string | null | undefined) => {
-      const normalized = String(goalId || '').trim();
-      if (!normalized) return false;
-      if (activeFocusGoalIds.has(normalized)) return true;
-      return getGoalAncestors(normalized, goals).some((goal) => activeFocusGoalIds.has(goal.id));
-    }
-  ), [activeFocusGoalIds, goals]);
-
-  const overviewCalendarEvents = useMemo(() => {
-    const candidates = [summary?.calendar?.events, summary?.eventsToday, summary?.upcomingEvents, summary?.calendarEvents, summary?.dailyBrief?.calendar];
-    for (const candidate of candidates) {
-      if (!Array.isArray(candidate) || candidate.length === 0) continue;
-      const mapped = candidate
-        .map((item: any, index: number) => {
-          const title = String(item?.title || item?.summary || item?.name || '').trim();
-          if (!title) return null;
-          const startMs = toMs(item?.start ?? item?.startAt ?? item?.startDate ?? item?.when);
-          const endMs = toMs(item?.end ?? item?.endAt ?? item?.endDate);
-          return { id: String(item?.id || item?.eventId || `${title}-${index}`), title, startMs, endMs };
-        })
-        .filter(Boolean) as Array<{ id: string; title: string; startMs: number | null; endMs: number | null }>;
-      if (mapped.length > 0) return mapped;
-    }
-    return [] as Array<{ id: string; title: string; startMs: number | null; endMs: number | null }>;
-  }, [summary]);
-
-  const scheduledInstanceBySourceKey = useMemo(() => {
-    const map = new Map<string, ScheduledInstanceRow>();
-    scheduledInstances.forEach((instance) => {
-      const sourceType = String(instance.sourceType || '').trim().toLowerCase();
-      const sourceId = String(instance.sourceId || '').trim();
-      if (!sourceType || !sourceId) return;
-      map.set(`${sourceType}:${sourceId}`, instance);
+  const dailyLoadHours = useMemo(() => {
+    const map = new Map<string, number>();
+    timelineWorkItems.forEach((item) => {
+      map.set(item.dayKey, (map.get(item.dayKey) || 0) + plannerItemPoints(item));
     });
     return map;
-  }, [scheduledInstances]);
+  }, [timelineWorkItems]);
 
-  const timelineItems = useMemo(() => {
-    const rows: TimelineItem[] = [];
-    const seen = new Set<string>();
-    const blockByTaskId = new Map<string, CalendarBlockRow>();
-    const blockByStoryId = new Map<string, CalendarBlockRow>();
+  const dayCapacity = useMemo(() => buildDayCapacityMap([todayIso], timelineWorkItems, 8).get(todayIso) || null, [timelineWorkItems, todayIso]);
 
-    calendarBlocks.forEach((block) => {
-      const taskId = String(block.taskId || '').trim();
-      const storyId = String(block.storyId || block.linkedStoryId || '').trim();
-      if (taskId) blockByTaskId.set(taskId, block);
-      if (storyId) blockByStoryId.set(storyId, block);
+  const reviewItems = useMemo(
+    () =>
+      timelineWorkItems.filter(
+        (item) =>
+          (item.kind === 'task' || item.kind === 'story')
+          && !item.isTop3
+          && !item.isFocusAligned
+          && !(item.deferredUntilMs && item.deferredUntilMs > Date.now()),
+      ),
+    [timelineWorkItems],
+  );
+
+  const recommendationByItemId = useMemo(() => {
+    const next = new Map<string, PlannerRecommendation>();
+    reviewItems.forEach((item) => {
+      next.set(item.id, buildPlannerRecommendation({
+        item,
+        weekStartMs: todayStartMs,
+        weekEndMs: todayEndMs,
+        dailyLoadHours,
+        nextSprint,
+      }));
     });
+    return next;
+  }, [reviewItems, todayStartMs, todayEndMs, dailyLoadHours, nextSprint]);
 
-    const push = (row: TimelineItem, dedupeKey = row.id) => {
-      if (seen.has(dedupeKey)) return;
-      seen.add(dedupeKey);
-      rows.push(row);
-    };
+  const reviewItemIds = useMemo(() => new Set(reviewItems.map((item) => item.id)), [reviewItems]);
 
-    const buildTaskRow = (task: Task, kind: 'task' | 'chore') => {
-      const choreKind = getChoreKind(task);
-      const instanceSourceTypes = choreKind === 'habit'
-        ? ['habit', 'routine', 'chore']
-        : choreKind
-          ? [choreKind]
-          : ['task'];
-      const matchingInstance = instanceSourceTypes
-        .map((sourceType) => scheduledInstanceBySourceKey.get(`${sourceType}:${task.id}`) || null)
-        .find(Boolean) || null;
-      const instanceStatus = String(matchingInstance?.status || '').trim().toLowerCase();
-      if (matchingInstance && ['completed', 'missed', 'skipped', 'cancelled'].includes(instanceStatus)) {
-        return;
-      }
-      const linkedBlock = blockByTaskId.get(task.id) || null;
-      const parentStory = (task as any).storyId ? storyMap.get((task as any).storyId) || null : null;
-      const goalId = String((task as any).goalId || (parentStory as any)?.goalId || '').trim() || null;
-      const goal = goalId ? goalMap.get(goalId) || null : null;
-      const dueMs = linkedBlock ? toMs(linkedBlock.start) : resolveTaskDueMs(task);
-      const endMs = linkedBlock ? toMs(linkedBlock.end) : null;
-      const bucket = bucketFromTime(dueMs, (task as any).timeOfDay);
-      const include = !!linkedBlock || !dueMs || dueMs <= todayEndMs;
-      if (!include) return;
-      push({
-        id: `${kind}-${task.id}`,
-        kind,
-        title: task.title || (kind === 'chore' ? 'Chore' : 'Task'),
-        ref: resolveTaskRef(task),
-        timeLabel: formatTimeLabel(dueMs, endMs, (task as any).timeOfDay),
-        sortMs: dueMs ?? bucketPseudoTime(todayStartMs, bucket),
-        bucket,
-        sourceId: task.id,
-        isTop3: !!((task as any).aiTop3ForDay && String((task as any).aiTop3Date || '').slice(0, 10) === todayIso),
-        deferredUntilMs: toMs((task as any).deferredUntil),
-        goalTitle: goalId ? getGoalDisplayPath(goalId, goals) : (goal?.title || null),
-        goalTheme: goal ? String((goal as any).theme || '') || null : null,
-        isFocusAligned: isGoalAlignedToFocus(goalId),
-        rawTask: task,
-        rawStory: null,
-        scheduledBlockStart: linkedBlock ? toMs(linkedBlock.start) : null,
-        scheduledBlockEnd: linkedBlock ? toMs(linkedBlock.end) : null,
-      });
-    };
+  useEffect(() => {
+    if (new URLSearchParams(location.search).get('tab') === 'checkin') return;
+    if (userSelectedMode) return;
+    setMode(getAutoMode({
+      isMobile: isMobileLayout,
+      reviewDone: morningReviewDone,
+      reviewCount: reviewItems.length,
+      hour: new Date().getHours(),
+    }));
+  }, [isMobileLayout, location.search, morningReviewDone, reviewItems.length, userSelectedMode]);
 
-    tasks.filter((task) => !isDoneStatus((task as any).status)).filter((task) => !getChoreKind(task)).forEach((task) => buildTaskRow(task, 'task'));
-    tasks
-      .filter((task) => !isDoneStatus((task as any).status))
-      .filter((task) => !!getChoreKind(task))
-      .filter((task) => !!blockByTaskId.get(task.id) || isRecurringDueOnDate(task, today, todayStartMs) || !!resolveTaskDueMs(task))
-      .forEach((task) => buildTaskRow(task, 'chore'));
-
-    stories
-      .filter((story) => !isDoneStatus((story as any).status))
-      .filter((story) => (selectedSprintId ? String((story as any).sprintId || '') === String(selectedSprintId) : true))
-      .forEach((story) => {
-        const linkedBlock = blockByStoryId.get(story.id) || null;
-        const dueMs = linkedBlock ? toMs(linkedBlock.start) : toMs((story as any).targetDate || (story as any).dueDate || (story as any).plannedStartDate);
-        const endMs = linkedBlock ? toMs(linkedBlock.end) : null;
-        const bucket = bucketFromTime(dueMs, (story as any).timeOfDay);
-        const include = !!linkedBlock || !dueMs || dueMs <= todayEndMs;
-        if (!include) return;
-        const goalId = String((story as any).goalId || '').trim() || null;
-        const goal = goalId ? goalMap.get(goalId) || null : null;
-        push({
-          id: `story-${story.id}`,
-          kind: 'story',
-          title: story.title || 'Story',
-          ref: resolveStoryRef(story),
-          timeLabel: formatTimeLabel(dueMs, endMs, (story as any).timeOfDay),
-          sortMs: dueMs ?? bucketPseudoTime(todayStartMs, bucket),
-          bucket,
-          sourceId: story.id,
-          isTop3: !!((story as any).aiTop3ForDay && String((story as any).aiTop3Date || '').slice(0, 10) === todayIso),
-          deferredUntilMs: toMs((story as any).deferredUntil),
-          goalTitle: goalId ? getGoalDisplayPath(goalId, goals) : (goal?.title || null),
-          goalTheme: goal ? String((goal as any).theme || '') || null : null,
-          isFocusAligned: isGoalAlignedToFocus(goalId),
-          rawTask: null,
-          rawStory: story,
-          scheduledBlockStart: linkedBlock ? toMs(linkedBlock.start) : null,
-          scheduledBlockEnd: linkedBlock ? toMs(linkedBlock.end) : null,
-        });
-      });
-
-    calendarBlocks.filter((block) => !String(block.taskId || '').trim() && !String(block.storyId || block.linkedStoryId || '').trim()).forEach((block) => {
-      const startMs = toMs(block.start);
-      const endMs = toMs(block.end);
-      const bucket = bucketFromTime(startMs);
-      const timeLabel = formatTimeLabel(startMs, endMs);
-      const dedupeKey = `event:${String(block.title || '').toLowerCase()}:${timeLabel}`;
-      push({
-        id: `event-block-${block.id}`,
-        kind: 'event',
-        title: String(block.title || 'Calendar event').trim() || 'Calendar event',
-        ref: null,
-        timeLabel,
-        sortMs: startMs ?? bucketPseudoTime(todayStartMs, bucket),
-        bucket,
-        goalTitle: null,
-        goalTheme: null,
-        isFocusAligned: false,
-        rawTask: null,
-        rawStory: null,
-        scheduledBlockStart: startMs,
-        scheduledBlockEnd: endMs,
-      }, dedupeKey);
-    });
-
-    overviewCalendarEvents.forEach((event) => {
-      if (event.startMs && (event.startMs < todayStartMs || event.startMs > todayEndMs)) return;
-      const bucket = bucketFromTime(event.startMs);
-      const timeLabel = formatTimeLabel(event.startMs, event.endMs);
-      const dedupeKey = `event:${event.title.toLowerCase()}:${timeLabel}`;
-      push({
-        id: `event-summary-${event.id}`,
-        kind: 'event',
-        title: event.title,
-        ref: null,
-        timeLabel,
-        sortMs: event.startMs ?? bucketPseudoTime(todayStartMs, bucket),
-        bucket,
-        goalTitle: null,
-        goalTheme: null,
-        isFocusAligned: false,
-        rawTask: null,
-        rawStory: null,
-        scheduledBlockStart: event.startMs,
-        scheduledBlockEnd: event.endMs,
-      }, dedupeKey);
-    });
-
-    return rows.sort((a, b) => {
-      const aMs = a.sortMs ?? Number.MAX_SAFE_INTEGER;
-      const bMs = b.sortMs ?? Number.MAX_SAFE_INTEGER;
-      if (aMs !== bMs) return aMs - bMs;
-      return a.title.localeCompare(b.title);
-    });
-  }, [tasks, stories, selectedSprintId, overviewCalendarEvents, today, todayStartMs, todayEndMs, todayIso, goalMap, storyMap, activeFocusGoalIds, calendarBlocks, scheduledInstanceBySourceKey, goals, isGoalAlignedToFocus]);
-
-  const todoSummary = useMemo(() => {
-    const tasksCount = timelineItems.filter((item) => item.kind === 'task').length;
-    const storiesCount = timelineItems.filter((item) => item.kind === 'story').length;
-    const choresCount = timelineItems.filter((item) => item.kind === 'chore').length;
-    const eventsCount = timelineItems.filter((item) => item.kind === 'event').length;
-    const top3Count = timelineItems.filter((item) => (item.kind === 'task' || item.kind === 'story') && item.isTop3).length;
-    const deferCandidates = timelineItems.filter((item) =>
-      (item.kind === 'task' || item.kind === 'story')
-      && !item.isTop3
-      && !item.isFocusAligned
-      && !(item.deferredUntilMs && item.deferredUntilMs > Date.now())
-    );
-    return { tasksCount, storiesCount, choresCount, eventsCount, top3Count, deferCandidates };
-  }, [timelineItems]);
+  const todoSummary = useMemo(() => ({
+    tasksCount: timelineWorkItems.filter((item) => item.kind === 'task').length,
+    storiesCount: timelineWorkItems.filter((item) => item.kind === 'story').length,
+    choresCount: timelineWorkItems.filter((item) => item.kind === 'chore').length,
+    eventsCount: timelineItems.filter((item) => item.kind === 'event').length,
+    top3Count: timelineWorkItems.filter((item) => (item.kind === 'task' || item.kind === 'story') && item.isTop3).length,
+    focusCount: timelineWorkItems.filter((item) => item.isFocusAligned).length,
+    reviewCount: reviewItems.length,
+    overdueCount: timelineWorkItems.filter((item) => item.dueAt != null && item.dueAt < Date.now()).length,
+  }), [timelineItems, timelineWorkItems, reviewItems]);
 
   const filteredTimelineItems = useMemo(() => {
-    if (!activeKindFilter) return timelineItems;
-    if (activeKindFilter === 'top3') {
-      return timelineItems.filter((item) => (item.kind === 'task' || item.kind === 'story') && item.isTop3);
-    }
-    if (activeKindFilter === 'review') {
-      return timelineItems.filter((item) =>
-        (item.kind === 'task' || item.kind === 'story')
-        && !item.isTop3
-        && !item.isFocusAligned
-        && !(item.deferredUntilMs && item.deferredUntilMs > Date.now())
-      );
-    }
-    return timelineItems.filter((item) => item.kind === activeKindFilter);
-  }, [timelineItems, activeKindFilter]);
-
-  const empty = filteredTimelineItems.length === 0;
+    const source = mode === 'review' ? reviewItems : mode === 'plan' ? timelineItems : timelineWorkItems;
+    if (!activeKindFilter) return source;
+    if (activeKindFilter === 'focus') return source.filter((item) => item.isFocusAligned);
+    if (activeKindFilter === 'review') return reviewItems;
+    if (activeKindFilter === 'top3') return source.filter((item) => item.isTop3);
+    return source.filter((item) => item.kind === activeKindFilter);
+  }, [timelineItems, timelineWorkItems, reviewItems, activeKindFilter, mode]);
 
   const scheduleStories = useMemo(() => {
     if (!scheduleTarget) return [] as Story[];
     if (scheduleTarget.rawStory) return [scheduleTarget.rawStory];
     if (scheduleTarget.rawTask && (scheduleTarget.rawTask as any).storyId) {
-      const parent = storyMap.get((scheduleTarget.rawTask as any).storyId);
+      const parent = stories.find((story) => story.id === (scheduleTarget.rawTask as any).storyId);
       return parent ? [parent] : [];
     }
     return [] as Story[];
-  }, [scheduleTarget, storyMap]);
+  }, [scheduleTarget, stories]);
 
   const scheduleInitialValues = useMemo(() => {
     if (!scheduleTarget) return undefined;
     const rawTask = scheduleTarget.rawTask;
     const rawStory = scheduleTarget.rawStory;
-    const parentStory = rawTask && (rawTask as any).storyId ? storyMap.get((rawTask as any).storyId) || null : null;
     const base = new Date();
     base.setMinutes(0, 0, 0);
     base.setHours(base.getHours() + 1);
-    const startMs = scheduleTarget.scheduledBlockStart || (scheduleTarget.sortMs && !scheduleTarget.timeLabel.startsWith('Unscheduled') ? scheduleTarget.sortMs : null);
+    const startMs = scheduleTarget.scheduledBlockStart || scheduleTarget.sortMs || null;
     const start = startMs ? new Date(startMs) : base;
     const durationMin = Math.max(15, Math.min(240, Math.round(Number((rawTask as any)?.estimateMin || 0) || (Number((rawTask as any)?.points || (rawStory as any)?.points || 0) * 60) || 60)));
     const end = scheduleTarget.scheduledBlockEnd ? new Date(scheduleTarget.scheduledBlockEnd) : new Date(start.getTime() + durationMin * 60 * 1000);
@@ -554,70 +419,276 @@ const DailyPlanPage: React.FC = () => {
       end: toInputValue(end),
       syncToGoogle: true,
       rationale: 'Scheduled from Daily Plan',
-      persona: ((rawTask as any)?.persona || (rawStory as any)?.persona || (parentStory as any)?.persona || currentPersona || 'personal') as 'personal' | 'work',
-      theme: String((rawStory as any)?.theme || (parentStory as any)?.theme || (rawTask as any)?.theme || 'General'),
+      persona: ((rawTask as any)?.persona || (rawStory as any)?.persona || currentPersona || 'personal') as 'personal' | 'work',
+      theme: String((rawStory as any)?.theme || (rawTask as any)?.theme || 'General'),
       category: ((rawTask as any)?.category || 'Wellbeing') as any,
-      storyId: rawStory?.id || parentStory?.id,
+      storyId: rawStory?.id || (rawTask as any)?.storyId || undefined,
       taskId: rawTask?.id,
       aiScore: Number.isFinite(Number((rawTask as any)?.aiCriticalityScore || (rawStory as any)?.aiCriticalityScore)) ? Number((rawTask as any)?.aiCriticalityScore || (rawStory as any)?.aiCriticalityScore) : null,
       aiReason: String((rawTask as any)?.aiReason || (rawTask as any)?.aiPriorityReason || (rawStory as any)?.aiReason || (rawStory as any)?.aiPriorityReason || '').trim() || null,
     } as Partial<BlockFormState>;
-  }, [scheduleTarget, storyMap, currentPersona]);
+  }, [scheduleTarget, currentPersona]);
 
   const markMorningReviewDone = () => {
-    if (!currentUser?.uid) return;
-    const key = `dailyPlanMorningReview:${currentUser.uid}:${todayIso}`;
-    window.localStorage.setItem(key, '1');
+    if (!currentUser?.uid || !reviewStateId) return;
+    void setDoc(doc(db, 'daily_plan_state', reviewStateId), {
+      ownerUid: currentUser.uid,
+      persona: currentPersona || 'personal',
+      dayKey: todayIso,
+      reviewCompletedAt: serverTimestamp(),
+      reviewCompletedAtMs: Date.now(),
+      updatedAt: serverTimestamp(),
+    }, { merge: true });
     setMorningReviewDone(true);
+    setActiveKindFilter(null);
+    setMode(isMobileLayout ? 'list' : 'plan');
   };
 
-  const applyDefer = async (payload: { dateMs: number; rationale: string; source: string }) => {
-    if (!deferTarget) return;
-    const collectionName = deferTarget.type === 'story' ? 'stories' : 'tasks';
-    await updateDoc(doc(db, collectionName, deferTarget.id), {
-      deferredUntil: payload.dateMs,
-      deferredReason: payload.rationale,
-      deferredBy: payload.source,
-      deferredAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
+  const selectMode = (nextMode: DailyPlanMode) => {
+    setUserSelectedMode(true);
+    setMode(nextMode);
+    if (nextMode === 'checkin') {
+      if (location.search !== '?tab=checkin') {
+        navigate('/daily-plan?tab=checkin', { replace: true });
+      }
+      return;
+    }
+    if (location.search) {
+      navigate('/daily-plan', { replace: true });
+    }
+  };
+
+  const updateTaskQuick = async (task: Task, patch: Record<string, any>) => {
+    try {
+      await updateDoc(doc(db, 'tasks', task.id), {
+        ...patch,
+        updatedAt: serverTimestamp(),
+      });
+    } catch (error: any) {
+      console.error('Failed to update task from daily plan', error);
+      setPageMessage({ variant: 'danger', text: error?.message || 'Failed to update this task.' });
+    }
+  };
+
+  const updateStoryQuick = async (story: Story, patch: Record<string, any>) => {
+    try {
+      await updateDoc(doc(db, 'stories', story.id), {
+        ...patch,
+        updatedAt: serverTimestamp(),
+      });
+    } catch (error: any) {
+      console.error('Failed to update story from daily plan', error);
+      setPageMessage({ variant: 'danger', text: error?.message || 'Failed to update this story.' });
+    }
+  };
+
+  const cycleTaskStatus = (task: Task) => {
+    const options = ChoiceHelper.getOptions('task', 'status').map((opt) => opt.value);
+    const current = Number((task as any)?.status ?? 0);
+    const currentIndex = Math.max(0, options.indexOf(current));
+    const next = options[(currentIndex + 1) % options.length] ?? 0;
+    void updateTaskQuick(task, { status: next });
+  };
+
+  const cycleStoryStatus = (story: Story) => {
+    const options = ChoiceHelper.getOptions('story', 'status').map((opt) => opt.value);
+    const current = normalizeStoryStatus((story as any)?.status);
+    const currentIndex = Math.max(0, options.indexOf(current));
+    const next = options[(currentIndex + 1) % options.length] ?? 0;
+    void updateStoryQuick(story, { status: next });
+  };
+
+  const cycleTaskPriority = (task: Task) => {
+    const options = [0, ...ChoiceHelper.getOptions('task', 'priority').map((opt) => opt.value)];
+    const current = Number((task as any)?.priority ?? 0);
+    const currentIndex = Math.max(0, options.indexOf(current));
+    const next = options[(currentIndex + 1) % options.length] ?? 0;
+    void updateTaskQuick(task, { priority: next });
+  };
+
+  const cycleStoryPriority = (story: Story) => {
+    const options = [0, ...ChoiceHelper.getOptions('story', 'priority').map((opt) => opt.value)];
+    const current = Number((story as any)?.priority ?? 0);
+    const currentIndex = Math.max(0, options.indexOf(current));
+    const next = options[(currentIndex + 1) % options.length] ?? 0;
+    void updateStoryQuick(story, { priority: next });
+  };
+
+  const buildTargetTiming = (targetDateMs: number, targetBucket: TimelineBucket, durationMinutes: number) => {
+    const startHour = targetBucket === 'morning' ? 9 : targetBucket === 'afternoon' ? 14 : targetBucket === 'evening' ? 19 : 12;
+    const startMs = dayStartMs(targetDateMs) + startHour * 60 * 60 * 1000;
+    const safeDurationMinutes = Math.max(15, durationMinutes || 30);
+    return {
+      startMs,
+      endMs: startMs + safeDurationMinutes * 60 * 1000,
+    };
+  };
+
+  const updateScheduledInstanceTiming = async (item: PlannerItem, targetDateMs: number, targetBucket: TimelineBucket) => {
+    if (!item.scheduledInstanceId) return;
+    const durationMinutes = Math.max(
+      15,
+      Math.round((((item.scheduledBlockEnd || 0) - (item.scheduledBlockStart || 0)) / 60000) || Number((item.rawTask as any)?.estimateMin || 0) || 30),
+    );
+    const { startMs, endMs } = buildTargetTiming(targetDateMs, targetBucket, durationMinutes);
+    await updateDoc(doc(db, 'scheduled_instances', item.scheduledInstanceId), {
+      occurrenceDate: toDayKey(targetDateMs),
+      dayKey: toDayKey(targetDateMs),
+      timeOfDay: targetBucket,
+      plannedStart: new Date(startMs).toISOString(),
+      plannedEnd: new Date(endMs).toISOString(),
+      updatedAt: Date.now(),
     });
   };
 
-  const handleItemDone = async (item: TimelineItem, event: React.MouseEvent<HTMLButtonElement>) => {
-    event.stopPropagation();
-    if (item.rawTask) {
-      const choreKind = getChoreKind(item.rawTask);
-      if (choreKind) {
-        const candidateSourceTypes = choreKind === 'habit'
-          ? ['habit', 'routine', 'chore']
-          : [choreKind];
-        const matchingInstance = candidateSourceTypes
-          .map((sourceType) => scheduledInstanceBySourceKey.get(`${sourceType}:${item.rawTask!.id}`) || null)
-          .find(Boolean) || null;
-        if (matchingInstance) {
-          await updateDoc(doc(db, 'scheduled_instances', matchingInstance.id), {
-            status: 'completed',
-            statusUpdatedAt: Date.now(),
-            updatedAt: Date.now(),
-          });
-          return;
-        }
-        setPageMessage({
-          variant: 'warning',
-          text: 'Could not find today\'s scheduled instance for this recurring item, so the parent reminder was left unchanged.',
+  const updateGroupTiming = async (item: PlannerItem, targetDateMs: number, targetBucket: TimelineBucket) => {
+    const children = Array.isArray(item.childItems) ? item.childItems : [];
+    await Promise.all(children.map((child) => updateScheduledInstanceTiming(child, targetDateMs, targetBucket)));
+  };
+
+  const handleItemDone = async (item: PlannerItem) => {
+    setApplyingKey(item.id);
+    try {
+      if (item.scheduledInstanceId) {
+        await updateDoc(doc(db, 'scheduled_instances', item.scheduledInstanceId), {
+          status: 'completed',
+          statusUpdatedAt: Date.now(),
+          updatedAt: Date.now(),
         });
-        return;
+        const taskType = String((item.rawTask as any)?.type || '').toLowerCase();
+        if (['chore', 'routine', 'habit', 'habitual'].includes(taskType) && item.rawTask?.id) {
+          const callable = httpsCallable(functions, 'completeChoreTask');
+          await callable({ taskId: item.rawTask.id });
+        }
+        setPageMessage({ variant: 'success', text: `${item.title} marked complete for today.` });
+      } else if (item.rawTask) {
+        await updateDoc(doc(db, 'tasks', item.rawTask.id), { status: 2, updatedAt: serverTimestamp() });
+        setPageMessage({ variant: 'success', text: `${item.title} marked done.` });
+      } else if (item.rawStory) {
+        const nextStatus = Math.min(4, normalizeStoryStatus((item.rawStory as any).status) + 1);
+        await updateDoc(doc(db, 'stories', item.rawStory.id), { status: nextStatus, updatedAt: serverTimestamp() });
+        setPageMessage({ variant: 'success', text: `${item.title} advanced to the next story stage.` });
       }
-      await updateDoc(doc(db, 'tasks', item.rawTask.id), { status: 2, updatedAt: serverTimestamp() });
-      return;
-    }
-    if (item.rawStory) {
-      const nextStatus = Math.min(4, normalizeStoryStatus((item.rawStory as any).status) + 1);
-      await updateDoc(doc(db, 'stories', item.rawStory.id), { status: nextStatus, updatedAt: serverTimestamp() });
+    } catch (error: any) {
+      console.error('Failed to mark planner item done', error);
+      setPageMessage({ variant: 'danger', text: error?.message || 'Failed to update this item.' });
+    } finally {
+      setApplyingKey(null);
     }
   };
 
-  const openItemEditor = (item: TimelineItem) => {
+  const applyMove = async (item: PlannerItem, targetDateMs: number, targetBucket: TimelineBucket, recommendation?: PlannerRecommendation | null) => {
+    setApplyingKey(item.id);
+    const debugRequestId = createPlannerActionId('move');
+    console.info('[DailyPlanPage] move_confirmed', {
+      debugRequestId,
+      itemId: item.id,
+      itemKind: item.kind,
+      sourceId: item.sourceId || null,
+      targetDateMs,
+      targetBucket,
+      recommendation: recommendation || null,
+    });
+    try {
+      if (item.childItems?.length) {
+        await updateGroupTiming(item, targetDateMs, targetBucket);
+      } else if (item.scheduledInstanceId) {
+        await updateScheduledInstanceTiming(item, targetDateMs, targetBucket);
+      } else if (item.rawTask) {
+        const result = await schedulePlannerItemMutation({
+          itemType: 'task',
+          itemId: item.rawTask.id,
+          targetDateMs,
+          targetBucket,
+          intent: recommendation?.action === 'next_sprint' ? 'defer' : 'move',
+          source: 'daily_plan',
+          rationale: recommendation?.rationale || null,
+          linkedBlockId: item.scheduledBlockId || null,
+          targetSprintId: recommendation?.action === 'next_sprint' ? (nextSprint?.id || null) : null,
+          durationMinutes: Math.max(
+            15,
+            Math.round((((item.scheduledBlockEnd || 0) - (item.scheduledBlockStart || 0)) / 60000) || Number((item.rawTask as any)?.estimateMin || 0) || 30),
+          ),
+          debugRequestId,
+        });
+        setPageMessage({
+          variant: 'success',
+          text: `${item.title} moved to ${new Date(result.appliedStartMs).toLocaleDateString()} ${bucketLabel((result.appliedBucket || targetBucket) as TimelineBucket).toLowerCase()}.`,
+        });
+      } else if (item.rawStory) {
+        const result = await schedulePlannerItemMutation({
+          itemType: 'story',
+          itemId: item.rawStory.id,
+          targetDateMs,
+          targetBucket,
+          intent: recommendation?.action === 'next_sprint' ? 'defer' : 'move',
+          source: 'daily_plan',
+          rationale: recommendation?.rationale || null,
+          linkedBlockId: item.scheduledBlockId || null,
+          targetSprintId: recommendation?.action === 'next_sprint' ? (nextSprint?.id || null) : null,
+          durationMinutes: Math.max(
+            15,
+            Math.round((((item.scheduledBlockEnd || 0) - (item.scheduledBlockStart || 0)) / 60000) || Number((item.rawStory as any)?.estimateMin || 0) || 60),
+          ),
+          debugRequestId,
+        });
+        setPageMessage({
+          variant: 'success',
+          text: `${item.title} moved to ${new Date(result.appliedStartMs).toLocaleDateString()} ${bucketLabel((result.appliedBucket || targetBucket) as TimelineBucket).toLowerCase()}.`,
+        });
+      } else {
+        setPageMessage({
+          variant: 'success',
+          text: `${item.title} moved to ${new Date(targetDateMs).toLocaleDateString()} ${bucketLabel(targetBucket).toLowerCase()}.`,
+        });
+      }
+      setMoveModal(null);
+    } catch (error: any) {
+      console.error('[DailyPlanPage] move_failed', { debugRequestId, error });
+      setPageMessage({ variant: 'danger', text: error?.message || 'Failed to move this item.' });
+    } finally {
+      setApplyingKey(null);
+    }
+  };
+
+  const applyRecommendation = async (item: PlannerItem, recommendation: PlannerRecommendation) => {
+    if (recommendation.action === 'keep_week') {
+      setPageMessage({ variant: 'success', text: `${item.title} kept in today’s plan.` });
+      return;
+    }
+    if (recommendation.targetDateMs == null || recommendation.targetBucket == null) {
+      setPageMessage({ variant: 'warning', text: 'No actionable recommendation was available.' });
+      return;
+    }
+    if (recommendation.action === 'next_recurrence') {
+      setApplyingKey(item.id);
+      try {
+        if (item.childItems?.length) {
+          await updateGroupTiming(item, recommendation.targetDateMs, recommendation.targetBucket || item.timeOfDay);
+        } else if (item.scheduledInstanceId) {
+          await updateScheduledInstanceTiming(item, recommendation.targetDateMs, recommendation.targetBucket || item.timeOfDay);
+        } else if (item.rawTask) {
+          await updateDoc(doc(db, 'tasks', item.rawTask.id), {
+            deferredUntil: recommendation.targetDateMs,
+            deferredReason: recommendation.rationale,
+            deferredBy: 'daily_plan',
+            deferredAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+        }
+        setPageMessage({ variant: 'success', text: `${item.title} deferred to its next sensible recurrence.` });
+      } catch (error: any) {
+        console.error('Failed to defer recurring item', error);
+        setPageMessage({ variant: 'danger', text: error?.message || 'Failed to defer this recurring item.' });
+      } finally {
+        setApplyingKey(null);
+      }
+      return;
+    }
+    await applyMove(item, recommendation.targetDateMs, recommendation.targetBucket, recommendation);
+  };
+
+  const openItemEditor = (item: PlannerItem) => {
     if (item.rawTask) {
       setEditTask(item.rawTask);
       return;
@@ -625,160 +696,231 @@ const DailyPlanPage: React.FC = () => {
     if (item.rawStory) setEditStory(item.rawStory);
   };
 
-  const filterButtons: Array<{ key: TimelineFilter; label: string; count: number; variant: string; }> = [
+  const renderPlannerCard = (item: PlannerItem) => {
+    const recommendation = recommendationByItemId.get(item.id) || null;
+    return (
+      <PlannerWorkCard
+        item={item}
+        context="daily"
+        isMobileLayout={isMobileLayout}
+        applyingKey={applyingKey}
+        showDoneControl={mode !== 'review'}
+        doneAsCheckbox={mode === 'list'}
+        showInlineRecommendation={!!recommendation && (mode === 'review' || reviewItemIds.has(item.id))}
+        recommendation={recommendation}
+        expanded={!!expandedGroups[item.id]}
+        onToggleExpanded={(nextItem) => setExpandedGroups((prev) => ({ ...prev, [nextItem.id]: !prev[nextItem.id] }))}
+        onToggleDone={(nextItem) => { void handleItemDone(nextItem); }}
+        onOpenActivity={(nextItem) => showSidebar(nextItem.rawTask ? nextItem.rawTask as any : nextItem.rawStory as any, nextItem.rawTask ? 'task' : 'story')}
+        onOpenEditor={openItemEditor}
+        onSchedule={setScheduleTarget}
+        onMove={(nextItem) => {
+          console.info('[DailyPlanPage] move_clicked', {
+            itemId: nextItem.id,
+            itemKind: nextItem.kind,
+            sourceId: nextItem.sourceId || null,
+          });
+          const fallbackRecommendation = nextItem.kind === 'chore'
+            ? buildPlannerRecommendation({
+              item: nextItem,
+              weekStartMs: todayStartMs,
+              weekEndMs: todayEndMs,
+              dailyLoadHours,
+              nextSprint,
+            })
+            : null;
+          const nextRecommendation = recommendationByItemId.get(nextItem.id) || fallbackRecommendation || null;
+          console.info('[DailyPlanPage] move_modal_opened', {
+            itemId: nextItem.id,
+            itemKind: nextItem.kind,
+            recommendation: nextRecommendation || null,
+          });
+          setMoveModal({ item: nextItem, recommendation: nextRecommendation });
+          if (nextItem.kind === 'chore' && nextRecommendation?.targetDateMs != null) {
+            setPageMessage({
+              variant: 'success',
+              text: `${nextItem.title} move defaults were prefilled using its recurrence and current load.`,
+            });
+          }
+        }}
+        onDefer={(nextItem) => {
+          console.info('[DailyPlanPage] defer_clicked', {
+            itemId: nextItem.id,
+            itemKind: nextItem.kind,
+            sourceId: nextItem.sourceId || null,
+          });
+          if (nextItem.kind === 'event' || nextItem.childItems?.length) return;
+          const recurringRecommendation = nextItem.kind === 'chore'
+            ? buildPlannerRecommendation({
+              item: nextItem,
+              weekStartMs: todayStartMs,
+              weekEndMs: todayEndMs,
+              dailyLoadHours,
+              nextSprint,
+            })
+            : null;
+          if (recurringRecommendation?.action === 'next_recurrence') {
+            void applyRecommendation(nextItem, recurringRecommendation);
+            return;
+          }
+          setDeferTarget({ type: nextItem.kind === 'story' ? 'story' : 'task', id: nextItem.sourceId || '', title: nextItem.title, isFocusAligned: nextItem.isFocusAligned });
+        }}
+        onAcceptRecommendation={(nextItem) => {
+          const nextRecommendation = recommendationByItemId.get(nextItem.id);
+          if (nextRecommendation) void applyRecommendation(nextItem, nextRecommendation);
+        }}
+        onCycleStatus={(nextItem) => {
+          if (nextItem.rawTask) cycleTaskStatus(nextItem.rawTask);
+          else if (nextItem.rawStory) cycleStoryStatus(nextItem.rawStory);
+        }}
+        onCyclePriority={(nextItem) => {
+          if (nextItem.rawTask) cycleTaskPriority(nextItem.rawTask);
+          else if (nextItem.rawStory) cycleStoryPriority(nextItem.rawStory);
+        }}
+        onStatusChange={(nextItem, nextStatus) => {
+          if (nextItem.rawTask) updateTaskQuick(nextItem.rawTask, { status: nextStatus as any });
+          else if (nextItem.rawStory) updateStoryQuick(nextItem.rawStory, { status: nextStatus as any });
+        }}
+        onPriorityChange={(nextItem, nextPriority) => {
+          if (nextItem.rawTask) updateTaskQuick(nextItem.rawTask, { priority: nextPriority as any });
+          else if (nextItem.rawStory) updateStoryQuick(nextItem.rawStory, { priority: nextPriority as any });
+        }}
+      />
+    );
+  };
+
+  const filterButtons: Array<{ key: TimelineFilter; label: string; count: number; variant: string }> = [
     { key: 'task', label: 'Tasks', count: todoSummary.tasksCount, variant: 'primary' },
     { key: 'story', label: 'Stories', count: todoSummary.storiesCount, variant: 'info' },
     { key: 'chore', label: 'Chores', count: todoSummary.choresCount, variant: 'success' },
-    { key: 'event', label: 'Events', count: todoSummary.eventsCount, variant: 'secondary' },
     { key: 'top3', label: 'Top 3', count: todoSummary.top3Count, variant: 'danger' },
-    { key: 'review', label: 'Review', count: todoSummary.deferCandidates.length, variant: 'warning' },
+    { key: 'focus', label: 'Focus', count: todoSummary.focusCount, variant: 'success' },
+    { key: 'review', label: 'Review', count: todoSummary.reviewCount, variant: 'warning' },
   ];
 
   return (
-    <Container fluid="sm" className="py-3">
+    <Container fluid="sm" className={isMobileLayout ? 'py-2 px-2' : 'py-3'}>
       <Card className="border-0 shadow-sm">
-        <Card.Header className="d-flex align-items-center justify-content-between">
-          <div className="fw-semibold">Daily Plan</div>
-          <Badge bg={empty ? 'secondary' : 'info'} pill>{filteredTimelineItems.length}</Badge>
+        <Card.Header className="d-flex align-items-center justify-content-between flex-wrap gap-2">
+          <div>
+            <div className="fw-semibold">Daily Plan</div>
+            <div className="text-muted small">Overview stays the home page; this is the daily operating surface.</div>
+          </div>
+          <div className="d-flex align-items-center gap-2 flex-wrap">
+            <Badge bg="secondary">Open {timelineWorkItems.length}</Badge>
+            <Badge bg="warning" text="dark">Review {todoSummary.reviewCount}</Badge>
+            <Badge bg="danger">Overdue {todoSummary.overdueCount}</Badge>
+          </div>
         </Card.Header>
         <Card.Body>
           {pageMessage && (
-            <Alert variant={pageMessage.variant} className="py-2 px-3" dismissible onClose={() => setPageMessage(null)}>
+            <Alert variant={pageMessage.variant} dismissible className="py-2" onClose={() => setPageMessage(null)}>
               {pageMessage.text}
             </Alert>
           )}
-          <div className="text-muted small mb-3">
-            Review today in one place: open items inline, finish them quickly, and schedule or defer without leaving the page.
+
+          <div className="d-flex gap-2 flex-wrap mb-3">
+            <Button size="sm" variant={mode === 'list' ? 'primary' : 'outline-primary'} onClick={() => selectMode('list')}>
+              Today
+            </Button>
+            <Button size="sm" variant={mode === 'plan' ? 'primary' : 'outline-primary'} onClick={() => selectMode('plan')}>
+              Schedule
+            </Button>
+            <Button size="sm" variant={mode === 'review' ? 'primary' : 'outline-primary'} onClick={() => selectMode('review')}>
+              Triage
+            </Button>
+            <Button size="sm" variant={mode === 'checkin' ? 'primary' : 'outline-primary'} onClick={() => selectMode('checkin')}>
+              Check-in
+            </Button>
           </div>
 
-          <div className="d-flex flex-wrap gap-2 mb-3">
-            {filterButtons.map((filter) => {
-              const active = activeKindFilter === filter.key;
-              return (
+          <div className="text-muted small mb-3">
+            {mode === 'list' && 'Today: actionable work only, best for checking things off.'}
+            {mode === 'plan' && 'Schedule: your day laid out by morning, afternoon, evening, and standalone events.'}
+            {mode === 'review' && 'Triage: items outside today’s focus or capacity, with defer recommendations.'}
+            {mode === 'checkin' && 'Check-in: update progress, comments, and completion so nightly planning uses the latest state.'}
+          </div>
+
+          {mode !== 'checkin' && (
+            <div className="d-flex flex-wrap gap-2 mb-3">
+              {filterButtons.map((filter) => (
                 <Button
                   key={filter.key || 'all'}
                   size="sm"
-                  variant={active ? filter.variant : `outline-${filter.variant}`}
+                  variant={activeKindFilter === filter.key ? filter.variant : `outline-${filter.variant}`}
                   className="rounded-pill"
                   onClick={() => setActiveKindFilter((prev) => (prev === filter.key ? null : filter.key))}
                 >
                   {filter.label} {filter.count}
                 </Button>
-              );
-            })}
-          </div>
+              ))}
+            </div>
+          )}
 
-          {!morningReviewDone && timelineItems.length > 0 && (
-            <Alert variant="warning" className="d-flex align-items-center justify-content-between gap-2 flex-wrap py-2 px-3">
-              <div>
-                <div className="fw-semibold">Morning check-in</div>
-                <div className="small">
-                  Today: {todoSummary.tasksCount} tasks, {todoSummary.storiesCount} stories, {todoSummary.choresCount} chores, {todoSummary.eventsCount} events. Top 3 protected: {todoSummary.top3Count}. Review non-focus, non-Top 3 work first.
-                </div>
+          {mode === 'plan' && dayCapacity && (
+            <Alert variant={dayCapacity.overCapacity ? 'danger' : dayCapacity.remainingPoints <= 2 ? 'warning' : 'light'} className="py-2 px-3">
+              <div className="fw-semibold">Today capacity</div>
+              <div className="small text-muted">
+                {dayCapacity.plannedPoints.toFixed(1)}/{dayCapacity.capacityPoints.toFixed(1)} pts planned · {dayCapacity.remainingPoints.toFixed(1)} pts free · {dayCapacity.utilizationPct}% used
               </div>
-              <Button size="sm" variant="primary" onClick={markMorningReviewDone}>
-                Mark reviewed
-              </Button>
             </Alert>
           )}
 
-          {empty ? (
-            <Alert variant="light" className="mb-0">
-              {activeKindFilter ? 'No items match the current filter.' : 'No items scheduled for today.'}
+          {mode !== 'checkin' && !morningReviewDone && reviewItems.length > 0 && (
+            <Alert variant="warning" className="d-flex align-items-center justify-content-between gap-2 flex-wrap py-2 px-3">
+              <div>
+                <div className="fw-semibold">Morning review</div>
+                <div className="small">
+                  {todoSummary.reviewCount} items are outside your Top 3 and active focus goals. Triage them before the day fills up.
+                </div>
+              </div>
+              <div className={`d-flex gap-2 ${isMobileLayout ? 'w-100 flex-column' : ''}`}>
+                <Button size="sm" variant="outline-dark" className={isMobileLayout ? 'w-100' : undefined} onClick={() => selectMode('review')}>
+                  Open review
+                </Button>
+                <Button size="sm" variant="primary" className={isMobileLayout ? 'w-100' : undefined} onClick={markMorningReviewDone}>
+                  Mark reviewed
+                </Button>
+              </div>
             </Alert>
+          )}
+
+          {mode === 'checkin' ? (
+            <CheckInDaily embedded fixedDate={new Date(todayStartMs)} />
+          ) : mode === 'review' ? (
+            filteredTimelineItems.length === 0 ? (
+              <Alert variant="light" className="mb-0">No review items waiting.</Alert>
+            ) : (
+              <div className="d-flex flex-column gap-2">
+                {filteredTimelineItems.map((item) => renderPlannerCard(item))}
+              </div>
+            )
+          ) : mode === 'list' ? (
+            filteredTimelineItems.length === 0 ? (
+              <Alert variant="light" className="mb-0">No items in the current list view.</Alert>
+            ) : (
+              <div className="d-flex flex-column gap-2">
+                {filteredTimelineItems.map((item) => renderPlannerCard(item))}
+              </div>
+            )
+          ) : filteredTimelineItems.length === 0 ? (
+            <Alert variant="light" className="mb-0">No items in today’s plan.</Alert>
           ) : (
             bucketOrder.map((bucket) => {
               const items = filteredTimelineItems.filter((item) => item.bucket === bucket);
               if (items.length === 0) return null;
+              const bucketPoints = items.reduce((sum, item) => sum + plannerItemPoints(item), 0);
               return (
                 <div key={bucket} className="mb-3">
-                  <div className="text-uppercase text-muted small fw-semibold mb-1">{bucketLabel(bucket)}</div>
-                  <ListGroup variant="flush">
-                    {items.map((item) => {
-                      const editable = item.kind !== 'event';
-                      const variant = item.kind === 'story' ? 'info' : item.kind === 'chore' ? 'success' : item.kind === 'event' ? 'secondary' : 'primary';
-                      const kindLabel = item.kind === 'story' ? 'Story' : item.kind === 'chore' ? 'Chore' : item.kind === 'event' ? 'Event' : 'Task';
-                      return (
-                        <ListGroup.Item
-                          key={item.id}
-                          className="d-flex align-items-start gap-2 py-2 px-0 border-0 border-bottom"
-                          role={editable ? 'button' : undefined}
-                          tabIndex={editable ? 0 : undefined}
-                          onClick={() => editable && openItemEditor(item)}
-                          onKeyDown={(event) => {
-                            if (!editable) return;
-                            if (event.key === 'Enter' || event.key === ' ') {
-                              event.preventDefault();
-                              openItemEditor(item);
-                            }
-                          }}
-                          style={{ cursor: editable ? 'pointer' : 'default' }}
-                        >
-                          {editable && (
-                            <Button
-                              size="sm"
-                              variant="outline-success"
-                              className="rounded-circle d-inline-flex align-items-center justify-content-center p-1 mt-1"
-                              title={item.kind === 'chore' ? 'Mark instance done' : 'Mark done'}
-                              onClick={(event) => void handleItemDone(item, event)}
-                            >
-                              <Check size={14} />
-                            </Button>
-                          )}
-
-                          <div className="flex-grow-1 min-w-0">
-                            <div className="d-flex flex-wrap align-items-center gap-2 mb-1">
-                              <div className="fw-semibold text-truncate small">{item.title}</div>
-                              <Badge bg={variant}>{kindLabel}</Badge>
-                              {item.isTop3 && <Badge bg="danger">Top 3</Badge>}
-                              {item.isFocusAligned && <Badge bg="success">Focus</Badge>}
-                              {item.deferredUntilMs && item.deferredUntilMs > Date.now() && <Badge bg="warning" text="dark">Deferred</Badge>}
-                            </div>
-                            <div className="text-muted" style={{ fontSize: '0.74rem' }}>
-                              {[item.ref, item.timeLabel].filter(Boolean).join(' · ')}
-                            </div>
-                            {item.goalTitle && (
-                              <div className="d-flex align-items-center gap-1 mt-1" style={{ fontSize: '0.72rem', opacity: 0.8 }}>
-                                <Target size={12} />
-                                <span>{item.goalTitle}</span>
-                              </div>
-                            )}
-                          </div>
-
-                          {editable && (
-                            <div className="d-flex align-items-center gap-1 ms-2">
-                              <Button
-                                size="sm"
-                                variant="outline-secondary"
-                                title="Schedule now"
-                                className="d-inline-flex align-items-center justify-content-center p-1"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  setScheduleTarget(item);
-                                }}
-                              >
-                                <CalendarPlus size={14} />
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline-warning"
-                                title="Defer intelligently"
-                                className="d-inline-flex align-items-center justify-content-center p-1"
-                                disabled={!item.sourceId || (!!item.isTop3 && item.kind !== 'chore')}
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  if (!item.sourceId) return;
-                                  setDeferTarget({ type: item.kind === 'story' ? 'story' : 'task', id: item.sourceId, title: item.title });
-                                }}
-                              >
-                                <Clock3 size={14} />
-                              </Button>
-                            </div>
-                          )}
-                        </ListGroup.Item>
-                      );
-                    })}
-                  </ListGroup>
+                  <div className="d-flex align-items-center justify-content-between gap-2 mb-1">
+                    <div className="text-uppercase text-muted small fw-semibold">{bucketLabel(bucket)}</div>
+                    <div className="text-muted" style={{ fontSize: '0.72rem' }}>
+                      {bucketPoints.toFixed(1)} pts in bucket{dayCapacity ? ` · ${dayCapacity.remainingPoints.toFixed(1)} pts free today` : ''}
+                    </div>
+                  </div>
+                  <div className="d-flex flex-column gap-2">
+                    {items.map((item) => renderPlannerCard(item))}
+                  </div>
                 </div>
               );
             })
@@ -793,13 +935,129 @@ const DailyPlanPage: React.FC = () => {
           itemType={deferTarget.type}
           itemId={deferTarget.id}
           itemTitle={deferTarget.title}
-          onApply={applyDefer}
+          focusContext={{
+            isFocusAligned: deferTarget.isFocusAligned,
+            activeFocusGoals: activeFocusGoals.map((focusGoal) => ({
+              id: focusGoal.id,
+              title: focusGoal.title || null,
+              focusRootGoalIds: Array.isArray(focusGoal.focusRootGoalIds) ? focusGoal.focusRootGoalIds : [],
+              focusLeafGoalIds: Array.isArray(focusGoal.focusLeafGoalIds) ? focusGoal.focusLeafGoalIds : [],
+              goalIds: Array.isArray(focusGoal.goalIds) ? focusGoal.goalIds : [],
+            })),
+          }}
+          onApply={async (payload) => {
+            if (!deferTarget) return;
+            const affectedItem = timelineWorkItems.find((item) => item.sourceId === deferTarget.id && item.kind === deferTarget.type) || null;
+            const debugRequestId = createPlannerActionId('defer');
+            console.info('[DailyPlanPage] defer_confirmed', {
+              debugRequestId,
+              itemType: deferTarget.type,
+              itemId: deferTarget.id,
+              title: deferTarget.title,
+              payload,
+              affectedItemId: affectedItem?.id || null,
+              linkedBlockId: affectedItem?.scheduledBlockId || null,
+            });
+            const result = await schedulePlannerItemMutation({
+              itemType: deferTarget.type,
+              itemId: deferTarget.id,
+              targetDateMs: payload.dateMs,
+              targetBucket: affectedItem?.timeOfDay || null,
+              intent: 'defer',
+              source: payload.source || 'daily_plan',
+              rationale: payload.rationale,
+              linkedBlockId: affectedItem?.scheduledBlockId || null,
+              durationMinutes: affectedItem
+                ? Math.max(
+                    15,
+                    Math.round((((affectedItem.scheduledBlockEnd || 0) - (affectedItem.scheduledBlockStart || 0)) / 60000)
+                      || Number((affectedItem.rawTask as any)?.estimateMin || (affectedItem.rawStory as any)?.estimateMin || 0)
+                      || 30),
+                  )
+                : null,
+              debugRequestId,
+            });
+            setPageMessage({ variant: 'success', text: `${deferTarget.title} deferred to ${new Date(result.appliedStartMs).toLocaleDateString()}.` });
+            setDeferTarget(null);
+          }}
         />
+      )}
+
+      {moveModal && (
+        <Modal show={!!moveModal} onHide={() => setMoveModal(null)} centered>
+          <Modal.Header closeButton>
+            <Modal.Title style={{ fontSize: 16 }}>Move item</Modal.Title>
+          </Modal.Header>
+          <Modal.Body>
+            <div className="fw-semibold mb-2">{moveModal.item.title}</div>
+            <div className="text-muted small mb-3">{moveModal.recommendation?.rationale || 'Pick a bucket for this item.'}</div>
+            <Form.Group className="mb-3">
+              <Form.Label className="small text-muted">Date</Form.Label>
+              <Form.Control
+                type="date"
+                value={format(new Date(moveModal.recommendation?.targetDateMs || todayStartMs), 'yyyy-MM-dd')}
+                onChange={(e) => {
+                  const parsed = Date.parse(`${e.target.value}T12:00:00`);
+                  setMoveModal({
+                    ...moveModal,
+                    recommendation: {
+                      ...(moveModal.recommendation || { action: 'move_day', label: 'Move day', rationale: '' }),
+                      targetDateMs: parsed,
+                      targetBucket: moveModal.recommendation?.targetBucket || 'morning',
+                    },
+                  });
+                }}
+              />
+            </Form.Group>
+            <Form.Group>
+              <Form.Label className="small text-muted">Time of day</Form.Label>
+              <Form.Select
+                value={moveModal.recommendation?.targetBucket || 'morning'}
+                onChange={(e) => {
+                  setMoveModal({
+                    ...moveModal,
+                    recommendation: {
+                      ...(moveModal.recommendation || { action: 'move_day', label: 'Move day', rationale: '' }),
+                      targetDateMs: moveModal.recommendation?.targetDateMs || todayStartMs,
+                      targetBucket: e.target.value as TimelineBucket,
+                    },
+                  });
+                }}
+              >
+                {bucketOrder.map((bucket) => (
+                  <option key={bucket} value={bucket}>{bucketLabel(bucket)}</option>
+                ))}
+              </Form.Select>
+            </Form.Group>
+          </Modal.Body>
+          <Modal.Footer>
+            <Button variant="secondary" onClick={() => setMoveModal(null)}>Cancel</Button>
+            <Button
+              variant="primary"
+              disabled={!moveModal.recommendation?.targetDateMs || !moveModal.recommendation?.targetBucket}
+              onClick={() => moveModal.recommendation?.targetDateMs != null && moveModal.recommendation?.targetBucket != null
+                ? void applyMove(moveModal.item, moveModal.recommendation.targetDateMs, moveModal.recommendation.targetBucket, moveModal.recommendation)
+                : undefined}
+            >
+              Save move
+            </Button>
+          </Modal.Footer>
+        </Modal>
       )}
 
       <EditTaskModal show={!!editTask} task={editTask} onHide={() => setEditTask(null)} onUpdated={() => setEditTask(null)} />
       <EditStoryModal show={!!editStory} onHide={() => setEditStory(null)} story={editStory} goals={goals} onStoryUpdated={() => setEditStory(null)} />
-      <NewCalendarEventModal show={!!scheduleTarget} onHide={() => setScheduleTarget(null)} initialValues={scheduleInitialValues} stories={scheduleStories} onSaved={() => setScheduleTarget(null)} />
+      <NewCalendarEventModal
+        show={!!scheduleTarget}
+        onHide={() => setScheduleTarget(null)}
+        initialValues={scheduleInitialValues}
+        stories={scheduleStories}
+        onSaved={() => {
+          const scheduledTitle = scheduleTarget?.title || 'Item';
+          setScheduleTarget(null);
+          setPageMessage({ variant: 'success', text: `${scheduledTitle} added to your calendar.` });
+        }}
+      />
     </Container>
   );
 };

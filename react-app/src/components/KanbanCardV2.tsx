@@ -17,6 +17,7 @@ import { addDoc, collection, serverTimestamp, updateDoc, doc, getDocs, query, wh
 import { ActivityStreamService } from '../services/ActivityStreamService';
 import DeferItemModal from './DeferItemModal';
 import NewCalendarEventModal, { BlockFormState, buildCalendarComposerInitialValues } from './planner/NewCalendarEventModal';
+import { findItemWithManualPriorityRank, getManualPriorityLabel, getManualPriorityRank, getNextManualPriorityRank } from '../utils/manualPriority';
 
 interface KanbanCardV2Props {
     item: Story | Task;
@@ -155,7 +156,13 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
         return `${y}-${m}-${day}`;
     };
 
+    const manualPriorityRank = type === 'story'
+        ? getManualPriorityRank(item)
+        : (getManualPriorityRank(item) || getManualPriorityRank(parentStory));
+    const manualPriorityLabel = type === 'story' ? getManualPriorityLabel(item) : null;
+
     const isTop3 = (() => {
+        if (manualPriorityRank) return true;
         if ((item as any).aiTop3ForDay !== true) return false;
         const top3Date = (item as any).aiTop3Date;
         if (!top3Date) return true;
@@ -536,34 +543,38 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
             );
             const existingFlagged = storiesSnap.docs
                 .map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) }))
-                .filter((s: any) => (
-                    s.id !== story.id
-                    && s.userPriorityFlag === true
-                    && String(s.persona || 'personal') === storyPersona
-                ));
+                .filter((s: any) => String(s.persona || 'personal') === storyPersona);
 
-            for (const flagged of existingFlagged) {
-                await updateDoc(doc(db, 'stories', flagged.id), {
+            const currentRank = getManualPriorityRank(story);
+            if (currentRank) {
+                await updateDoc(doc(db, 'stories', story.id), {
                     userPriorityFlag: false,
+                    userPriorityRank: null,
                     userPriorityFlagAt: null,
                     updatedAt: serverTimestamp(),
                 });
-            }
-
-            const isAlreadyFlagged = (story as any).userPriorityFlag === true;
-            await updateDoc(doc(db, 'stories', story.id), {
-                userPriorityFlag: !isAlreadyFlagged,
-                userPriorityFlagAt: isAlreadyFlagged ? null : new Date().toISOString(),
-                updatedAt: serverTimestamp(),
-            });
-
-            if (!isAlreadyFlagged) {
+                setActionMessage(`Removed ${getManualPriorityLabel(story) || 'manual priority'}`);
+            } else {
+                const nextRank = getNextManualPriorityRank(existingFlagged, storyPersona, story.id);
+                const conflictingStory = findItemWithManualPriorityRank(existingFlagged, storyPersona, nextRank, story.id);
+                if (conflictingStory?.id) {
+                    await updateDoc(doc(db, 'stories', conflictingStory.id), {
+                        userPriorityFlag: false,
+                        userPriorityRank: null,
+                        userPriorityFlagAt: null,
+                        updatedAt: serverTimestamp(),
+                    });
+                }
+                await updateDoc(doc(db, 'stories', story.id), {
+                    userPriorityFlag: true,
+                    userPriorityRank: nextRank,
+                    userPriorityFlagAt: new Date().toISOString(),
+                    updatedAt: serverTimestamp(),
+                });
                 const rescore = httpsCallable(functions, 'deltaPriorityRescore');
                 await rescore({ entityId: story.id, entityType: 'story' }).catch(() => { });
-                setActionMessage('Marked as #1 priority');
+                setActionMessage(`Marked as manual #${nextRank} priority`);
                 setShowPriorityReplanPrompt(true);
-            } else {
-                setActionMessage('Removed #1 priority');
             }
             setTimeout(() => setActionMessage(null), 2200);
         } catch (error) {
@@ -700,15 +711,15 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                                 style={{
                                     width: 24,
                                     height: 24,
-                                    color: (item as any).userPriorityFlag ? 'var(--bs-danger)' : themeVars.muted,
+                                    color: manualPriorityRank ? 'var(--bs-danger)' : themeVars.muted,
                                     opacity: flaggingPriority ? 0.6 : 1,
                                 }}
-                                title={(item as any).userPriorityFlag ? 'Remove #1 priority flag' : 'Set as #1 priority'}
+                                title={manualPriorityRank ? `Remove ${manualPriorityLabel || 'manual priority'}` : 'Set manual priority'}
                                 onClick={handleFlagPriorityStory}
                                 onPointerDown={(e) => e.stopPropagation()}
                                 disabled={flaggingPriority}
                             >
-                                <span style={{ fontSize: 11, fontWeight: 800, lineHeight: 1 }}>1</span>
+                                <span style={{ fontSize: 11, fontWeight: 800, lineHeight: 1 }}>{manualPriorityRank || 1}</span>
                             </Button>
                         )}
                         <Button
@@ -875,7 +886,7 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                     </div>
                 )}
                 <div className="kanban-card__meta">
-                    {type === 'story' && (item as any).userPriorityFlag && (
+                    {type === 'story' && manualPriorityRank && (
                         <span
                             className="kanban-card__meta-badge"
                             style={{
@@ -883,9 +894,9 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                                 backgroundColor: 'rgba(220, 53, 69, 0.12)',
                                 color: 'var(--bs-danger)',
                             }}
-                            title="User #1 priority flag"
+                            title={manualPriorityLabel || 'Manual priority'}
                         >
-                            <span style={{ fontWeight: 800 }}>1</span>&nbsp;Priority
+                            <span style={{ fontWeight: 800 }}>{manualPriorityRank}</span>&nbsp;Priority
                         </span>
                     )}
                     {isTop3 && (
@@ -997,7 +1008,7 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
             </Modal.Header>
             <Modal.Body>
                 <p className="mb-2">
-                    <strong>{(item as Story).title || 'This story'}</strong> is now flagged as #1 priority.
+                    <strong>{(item as Story).title || 'This story'}</strong> is now flagged as {manualPriorityLabel || 'a manual priority'}.
                 </p>
                 <p className="mb-0 text-muted small">
                     Run delta replan now to create or rebalance calendar blocks for the new priority.

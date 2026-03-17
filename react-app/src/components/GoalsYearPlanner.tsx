@@ -3,19 +3,27 @@ import { Badge, Button, Card, Col, Container, Dropdown, Form, InputGroup, Modal,
 import { dropTargetForElements, monitorForElements, draggable } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
 import { collection, doc, onSnapshot, orderBy, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
 import { Calendar, ChevronLeft, ChevronRight } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useSprint } from '../contexts/SprintContext';
-import { Goal } from '../types';
+import { Goal, Story, Task } from '../types';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { getStatusName, getThemeName, isStatus } from '../utils/statusHelpers';
 import { goalThemeColor, colorWithAlpha } from '../utils/storyCardFormatting';
 import { themeVars } from '../utils/themeVars';
 import SprintSelector from './SprintSelector';
 import EditGoalModal from './EditGoalModal';
+import GoalPlanningWorkspaceModal from './GoalPlanningWorkspaceModal';
+import ConfirmSprintChangesModal from './visualization/ConfirmSprintChangesModal';
+import type { GoalTimelineAffectedStory } from './visualization/goalTimelineImpact';
 import { useSidebar } from '../contexts/SidebarContext';
 import { goalNeedsLinkedPot } from '../utils/goalCost';
+import { buildGoalTimelineImpactPlan } from './visualization/goalTimelineImpact';
+import { applyGoalTimelineChanges } from '../utils/goalTimelineChanges';
+import { parseBooleanParam, parseIdListParam, parseNumberListParam } from '../utils/planningQuery';
+import { isGoalInHierarchySet } from '../utils/goalHierarchy';
 import '../styles/KanbanCards.css';
 
 interface GoalYearColumnProps {
@@ -26,6 +34,7 @@ interface GoalYearColumnProps {
   droppableId: string;
   showDescriptions: boolean;
   onEdit: (goal: Goal) => void;
+  onOpenWorkspace: (goal: Goal) => void;
 }
 
 const parseDateInput = (value: string) => {
@@ -127,7 +136,8 @@ const GoalYearCard: React.FC<{
   pots: Record<string, { name: string; balance: number }>;
   showDescription: boolean;
   onEdit: (goal: Goal) => void;
-}> = ({ goal, themePalette, pots, showDescription, onEdit }) => {
+  onOpenWorkspace: (goal: Goal) => void;
+}> = ({ goal, themePalette, pots, showDescription, onEdit, onOpenWorkspace }) => {
   const ref = useRef<HTMLDivElement>(null);
   const [dragging, setDragging] = useState(false);
 
@@ -190,6 +200,28 @@ const GoalYearCard: React.FC<{
             />
           </div>
         )}
+        <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+          <Button
+            size="sm"
+            variant="outline-primary"
+            onClick={(event) => {
+              event.stopPropagation();
+              onOpenWorkspace(goal);
+            }}
+          >
+            Planner
+          </Button>
+          <Button
+            size="sm"
+            variant="outline-secondary"
+            onClick={(event) => {
+              event.stopPropagation();
+              onEdit(goal);
+            }}
+          >
+            Edit
+          </Button>
+        </div>
       </Card.Body>
     </Card>
   );
@@ -203,6 +235,7 @@ const GoalYearColumn: React.FC<GoalYearColumnProps> = ({
   droppableId,
   showDescriptions,
   onEdit,
+  onOpenWorkspace,
 }) => {
   const ref = useRef<HTMLDivElement>(null);
   const [isOver, setIsOver] = useState(false);
@@ -284,6 +317,7 @@ const GoalYearColumn: React.FC<GoalYearColumnProps> = ({
             pots={pots}
             showDescription={showDescriptions}
             onEdit={onEdit}
+            onOpenWorkspace={onOpenWorkspace}
           />
         ))}
         {goals.length === 0 && (
@@ -435,17 +469,32 @@ const YearDateAdjustModal: React.FC<{
 const GoalsYearPlanner: React.FC = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
+  const [searchParams] = useSearchParams();
   const { sprints, selectedSprintId, setSelectedSprintId } = useSprint();
   const { themes } = useGlobalThemes();
   const { isCollapsed, toggleCollapse } = useSidebar();
+  const embedded = parseBooleanParam(searchParams.get('embed'));
+  const queryGoalIds = useMemo(
+    () => parseIdListParam(searchParams.get('goalIds') || searchParams.get('goalId')),
+    [searchParams],
+  );
+  const queryGoalIdSet = useMemo(() => new Set(queryGoalIds), [queryGoalIds]);
+  const queryThemeIds = useMemo(
+    () => parseNumberListParam(searchParams.get('themeIds') || searchParams.get('themeId')),
+    [searchParams],
+  );
+  const queryThemeIdSet = useMemo(() => new Set(queryThemeIds), [queryThemeIds]);
 
   const [goals, setGoals] = useState<Goal[]>([]);
+  const [storyDocs, setStoryDocs] = useState<Story[]>([]);
+  const [taskDocs, setTaskDocs] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [filterStatus, setFilterStatus] = useState('all');
   const [filterTheme, setFilterTheme] = useState('all');
   const currentYear = useMemo(() => new Date().getFullYear(), []);
-  const [allYears, setAllYears] = useState(true);
-  const [selectedYears, setSelectedYears] = useState<number[]>([currentYear]);
+  const defaultSelectedYears = useMemo(() => [currentYear, currentYear + 1, currentYear + 2], [currentYear]);
+  const [allYears, setAllYears] = useState(false);
+  const [selectedYears, setSelectedYears] = useState<number[]>(defaultSelectedYears);
   const [showNoYear, setShowNoYear] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [showGoalDescriptions, setShowGoalDescriptions] = useState(true);
@@ -456,6 +505,23 @@ const GoalsYearPlanner: React.FC = () => {
   const [dateAdjustGoal, setDateAdjustGoal] = useState<{ goal: Goal; year: number | null; sourceYear: number | null } | null>(null);
   const [pots, setPots] = useState<Record<string, { name: string; balance: number }>>({});
   const [moveError, setMoveError] = useState<string | null>(null);
+  const [moveNotice, setMoveNotice] = useState<string | null>(null);
+  const [pendingSprintChanges, setPendingSprintChanges] = useState<{
+    goalId: string;
+    targetYear: number | null;
+    startDate: number;
+    endDate: number;
+    affectedStories: GoalTimelineAffectedStory[];
+  } | null>(null);
+  const [workspaceGoal, setWorkspaceGoal] = useState<Goal | null>(null);
+
+  useEffect(() => {
+    if (queryThemeIds.length === 1) {
+      const themeId = queryThemeIds[0];
+      const matchedTheme = themes.find((entry) => entry.id === themeId);
+      setFilterTheme(matchedTheme?.label || 'all');
+    }
+  }, [queryThemeIds, themes]);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -497,6 +563,42 @@ const GoalsYearPlanner: React.FC = () => {
   }, [currentUser, currentPersona]);
 
   useEffect(() => {
+    if (!currentUser) {
+      setStoryDocs([]);
+      return;
+    }
+    const storiesQuery = query(
+      collection(db, 'stories'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+      orderBy('createdAt', 'desc')
+    );
+    const unsub = onSnapshot(storiesQuery, (snapshot) => {
+      const rows = snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) })) as Story[];
+      setStoryDocs(rows);
+    });
+    return () => unsub();
+  }, [currentUser, currentPersona]);
+
+  useEffect(() => {
+    if (!currentUser) {
+      setTaskDocs([]);
+      return;
+    }
+    const tasksQuery = query(
+      collection(db, 'tasks'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+      orderBy('createdAt', 'desc')
+    );
+    const unsub = onSnapshot(tasksQuery, (snapshot) => {
+      const rows = snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) })) as Task[];
+      setTaskDocs(rows);
+    });
+    return () => unsub();
+  }, [currentUser, currentPersona]);
+
+  useEffect(() => {
     if (!currentUser?.uid) return;
     const potQuery = query(collection(db, 'monzo_pots'), where('ownerUid', '==', currentUser.uid));
     const unsub = onSnapshot(potQuery, (snap) => {
@@ -523,9 +625,9 @@ const GoalsYearPlanner: React.FC = () => {
 
   useEffect(() => {
     if (!allYears && selectedYears.length === 0) {
-      setSelectedYears([currentYear]);
+      setSelectedYears(defaultSelectedYears);
     }
-  }, [allYears, selectedYears, currentYear]);
+  }, [allYears, selectedYears, defaultSelectedYears]);
 
   useEffect(() => {
     if (!isCurrentYearOnly) {
@@ -577,6 +679,8 @@ const GoalsYearPlanner: React.FC = () => {
     }
     if (filterStatus !== 'all' && !isStatus(goal.status, filterStatus)) return false;
     if (filterTheme !== 'all' && getThemeName(goal.theme) !== filterTheme) return false;
+    if (queryThemeIdSet.size > 0 && !queryThemeIdSet.has(Number(goal.theme))) return false;
+    if (queryGoalIdSet.size > 0 && !isGoalInHierarchySet(goal.id, goals, queryGoalIdSet)) return false;
     if (showNoPotOnly) {
       if (!goalNeedsLinkedPot(goal)) return false;
     }
@@ -637,9 +741,9 @@ const GoalsYearPlanner: React.FC = () => {
       const yr = resolveGoalYear(g);
       if (yr) years.add(yr);
     });
-    years.add(currentYear);
+    defaultSelectedYears.forEach((year) => years.add(year));
     return Array.from(years).sort((a, b) => a - b);
-  }, [goals, currentYear]);
+  }, [goals, defaultSelectedYears]);
 
   const yearColumns = useMemo(() => {
     let years = allYears ? [...availableYears] : [...selectedYears];
@@ -722,31 +826,35 @@ const GoalsYearPlanner: React.FC = () => {
 
   return (
     <Container fluid style={{ padding: '24px', backgroundColor: themeVars.bg as string, minHeight: '100vh' }}>
-      <Row className="mb-4">
-        <Col>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-              <h2 style={{ margin: 0, fontSize: '28px', fontWeight: '700', color: themeVars.text as string }}>
-                Goals by Year
-              </h2>
-              <Badge bg="primary" style={{ fontSize: '12px', padding: '6px 12px' }}>
-                {currentPersona.charAt(0).toUpperCase() + currentPersona.slice(1)} Persona
-              </Badge>
+      {!embedded && (
+        <Row className="mb-4">
+          <Col>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                <h2 style={{ margin: 0, fontSize: '28px', fontWeight: '700', color: themeVars.text as string }}>
+                  Goals by Year
+                </h2>
+                <Badge bg="primary" style={{ fontSize: '12px', padding: '6px 12px' }}>
+                  {currentPersona.charAt(0).toUpperCase() + currentPersona.slice(1)} Persona
+                </Badge>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <Button
+                  size="sm"
+                  variant="outline-secondary"
+                  title={isCollapsed ? 'Expand details panel' : 'Collapse details panel'}
+                  onClick={toggleCollapse}
+                >
+                  {isCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
+                </Button>
+              </div>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <Button
-                size="sm"
-                variant="outline-secondary"
-                title={isCollapsed ? 'Expand details panel' : 'Collapse details panel'}
-                onClick={toggleCollapse}
-              >
-                {isCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
-              </Button>
-            </div>
-          </div>
-        </Col>
-      </Row>
+          </Col>
+        </Row>
+      )}
 
+      {!embedded && (
+        <>
       <Row className="mb-1">
         <Col lg={3} md={6} className="mb-3">
           <Card style={{ height: '100%', border: '1px solid var(--notion-border)', background: 'var(--notion-bg)' }}>
@@ -836,10 +944,17 @@ const GoalsYearPlanner: React.FC = () => {
           </Card>
         </Col>
       </Row>
+        </>
+      )}
 
       {moveError && (
         <div className="alert alert-danger" role="alert">
           {moveError}
+        </div>
+      )}
+      {moveNotice && (
+        <div className="alert alert-info" role="alert">
+          {moveNotice}
         </div>
       )}
 
@@ -922,7 +1037,7 @@ const GoalsYearPlanner: React.FC = () => {
                         const checked = e.target.checked;
                         setAllYears(checked);
                         if (!checked && selectedYears.length === 0) {
-                          setSelectedYears([currentYear]);
+                          setSelectedYears(defaultSelectedYears);
                         }
                       }}
                       className="mb-1"
@@ -1018,6 +1133,7 @@ const GoalsYearPlanner: React.FC = () => {
             droppableId={`year-${year}`}
             showDescriptions={showGoalDescriptions}
             onEdit={(g) => setEditGoal(g)}
+            onOpenWorkspace={(g) => setWorkspaceGoal(g)}
           />
         ))}
       </div>
@@ -1038,13 +1154,94 @@ const GoalsYearPlanner: React.FC = () => {
         onClose={() => setDateAdjustGoal(null)}
         onSave={async (payload) => {
           if (!dateAdjustGoal?.goal) return;
-          await updateDoc(doc(db, 'goals', dateAdjustGoal.goal.id), {
-            ...payload,
-            targetYear: dateAdjustGoal.year ?? null,
-            updatedAt: serverTimestamp(),
+          const startDate = payload.startDate ?? null;
+          const endDate = payload.endDate ?? null;
+          if (startDate == null || endDate == null || !currentUser) {
+            await updateDoc(doc(db, 'goals', dateAdjustGoal.goal.id), {
+              ...payload,
+              targetYear: dateAdjustGoal.year ?? null,
+              updatedAt: serverTimestamp(),
+            });
+            setDateAdjustGoal(null);
+            return;
+          }
+
+          const impactPlan = buildGoalTimelineImpactPlan({
+            goalId: dateAdjustGoal.goal.id,
+            newStartDate: new Date(startDate),
+            newEndDate: new Date(endDate),
+            stories: storyDocs,
+            tasks: taskDocs,
+            sprints,
           });
+
+          if (impactPlan.affectedStories.length > 0) {
+            setPendingSprintChanges({
+              goalId: dateAdjustGoal.goal.id,
+              targetYear: dateAdjustGoal.year ?? null,
+              startDate,
+              endDate,
+              affectedStories: impactPlan.affectedStories,
+            });
+            setDateAdjustGoal(null);
+            return;
+          }
+
+          await applyGoalTimelineChanges({
+            goalId: dateAdjustGoal.goal.id,
+            startDateMs: startDate,
+            endDateMs: endDate,
+            targetYear: dateAdjustGoal.year ?? null,
+            ownerUid: currentUser.uid,
+            persona: currentPersona,
+            affectedStories: [],
+          });
+          setMoveError(null);
+          setMoveNotice('Goal dates updated with no sprint moves required.');
           setDateAdjustGoal(null);
         }}
+      />
+
+      <ConfirmSprintChangesModal
+        visible={!!pendingSprintChanges}
+        pendingChanges={pendingSprintChanges ? {
+          goalId: pendingSprintChanges.goalId,
+          startDate: pendingSprintChanges.startDate,
+          endDate: pendingSprintChanges.endDate,
+          affectedStories: pendingSprintChanges.affectedStories,
+        } : null}
+        onCancel={() => setPendingSprintChanges(null)}
+        onConfirm={async () => {
+          if (!pendingSprintChanges || !currentUser) return;
+          try {
+            const result = await applyGoalTimelineChanges({
+              goalId: pendingSprintChanges.goalId,
+              startDateMs: pendingSprintChanges.startDate,
+              endDateMs: pendingSprintChanges.endDate,
+              targetYear: pendingSprintChanges.targetYear,
+              ownerUid: currentUser.uid,
+              persona: currentPersona,
+              affectedStories: pendingSprintChanges.affectedStories,
+            });
+            setMoveError(null);
+            setMoveNotice(
+              `Goal dates updated. ${result.movedStoryCount} stor${result.movedStoryCount === 1 ? 'y was' : 'ies were'} moved to the closest sprint${result.reviewStoryCount > 0 ? `, and ${result.reviewStoryCount} still need manual review.` : '.'}`
+            );
+          } catch (error: any) {
+            console.error('Failed to apply goal timeline changes from year planner:', error);
+            setMoveNotice(null);
+            setMoveError(error?.message || 'Failed to update the goal and related stories.');
+          } finally {
+            setPendingSprintChanges(null);
+          }
+        }}
+      />
+
+      <GoalPlanningWorkspaceModal
+        show={!!workspaceGoal}
+        goal={workspaceGoal}
+        allGoals={goals}
+        onHide={() => setWorkspaceGoal(null)}
       />
     </Container>
   );

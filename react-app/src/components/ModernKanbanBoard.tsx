@@ -50,7 +50,7 @@ import { normalizePriorityValue, isCriticalPriority } from '../utils/priorityUti
 import { cascadeTaskPersona } from '../utils/personaCascade';
 import { formatTaskTagLabel } from '../utils/tagDisplay';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
-import NewCalendarEventModal, { BlockFormState, buildCalendarComposerInitialValues } from './planner/NewCalendarEventModal';
+import { getManualPriorityRank } from '../utils/manualPriority';
 
 const formatDueDate = (task: Task): string => {
   const ms = getTaskDueMs(task);
@@ -114,17 +114,6 @@ const isCurrentTop3 = (item: any): boolean => {
   const top3Date = item?.aiTop3Date;
   if (!top3Date) return true;
   return String(top3Date).slice(0, 10) === new Date().toISOString().slice(0, 10);
-};
-
-const isTop3Task = (task: Task): boolean => isCurrentTop3(task);
-
-const isTop3Story = (story: Story): boolean => isCurrentTop3(story);
-
-const getRoutineLikeTaskKind = (task: Task): 'chore' | 'routine' | 'habit' | null => {
-  const raw = String((task as any)?.type || (task as any)?.task_type || '').trim().toLowerCase();
-  const normalized = raw === 'habitual' ? 'habit' : raw;
-  if (normalized === 'chore' || normalized === 'routine' || normalized === 'habit') return normalized;
-  return null;
 };
 
 const matchesCriticalOrHighAi = (item: Story | Task): boolean => {
@@ -529,6 +518,13 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
   const [showAddStoryModal, setShowAddStoryModal] = useState(false);
   const [addType, setAddType] = useState<'story' | 'task'>('story');
   const [scheduleStory, setScheduleStory] = useState<Story | null>(null);
+  const [showScheduleModal, setShowScheduleModal] = useState(false);
+  const [scheduleForm, setScheduleForm] = useState<{ title: string; startLocal: string; durationMin: number }>({
+    title: '',
+    startLocal: '',
+    durationMin: 60,
+  });
+  const [scheduleSaving, setScheduleSaving] = useState(false);
   const [autoLinkMessage, setAutoLinkMessage] = useState<string | null>(null);
   const [deferTarget, setDeferTarget] = useState<{ type: 'task' | 'story'; id: string; title: string } | null>(null);
 
@@ -564,6 +560,22 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
       return true;
     }
   });
+
+  const getTaskManualRank = useCallback((task: Task): number | null => {
+    const directRank = getManualPriorityRank(task);
+    if (directRank) return directRank;
+    const parentStoryId = String(task.storyId || (task.parentType === 'story' ? task.parentId || '' : '')).trim();
+    if (!parentStoryId) return null;
+    return getManualPriorityRank(stories.find((story) => story.id === parentStoryId));
+  }, [stories]);
+
+  const isTop3Task = useCallback((task: Task): boolean => {
+    return Boolean(getTaskManualRank(task)) || isCurrentTop3(task);
+  }, [getTaskManualRank]);
+
+  const isTop3Story = useCallback((story: Story): boolean => {
+    return Boolean(getManualPriorityRank(story)) || isCurrentTop3(story);
+  }, []);
   const formatTaskTag = useCallback(
     (tag: string) => formatTaskTagLabel(tag, goals, sprints),
     [goals, sprints]
@@ -749,23 +761,49 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
   }, []);
 
   const openScheduleModal = useCallback((story: Story) => {
+    const nextHour = new Date();
+    nextHour.setMinutes(0, 0, 0);
+    nextHour.setHours(nextHour.getHours() + 1);
+    const local = new Date(nextHour.getTime() - nextHour.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
     setScheduleStory(story);
+    setScheduleForm({
+      title: story.title || 'Focus block',
+      startLocal: local,
+      durationMin: 60,
+    });
+    setShowScheduleModal(true);
   }, []);
 
-  const scheduleInitialValues = useMemo(() => {
-    if (!scheduleStory) return undefined;
-    return buildCalendarComposerInitialValues({
-      title: scheduleStory.title || 'Focus block',
-      rationale: 'Manual schedule from kanban board',
-      persona: ((scheduleStory as any).persona || currentPersona || 'personal') as 'personal' | 'work',
-      theme: String((scheduleStory as any).theme || 'General'),
-      category: (((scheduleStory as any).persona || currentPersona) === 'work' ? 'Work (Main Gig)' : 'Wellbeing') as any,
-      storyId: scheduleStory.id,
-      points: getStoryPointsRemaining(scheduleStory),
-      aiScore: Number.isFinite(Number((scheduleStory as any).aiCriticalityScore)) ? Number((scheduleStory as any).aiCriticalityScore) : null,
-      aiReason: String((scheduleStory as any).aiReason || (scheduleStory as any).aiPriorityReason || '').trim() || null,
-    }) as Partial<BlockFormState>;
-  }, [scheduleStory, currentPersona, getStoryPointsRemaining]);
+  const saveManualSchedule = useCallback(async () => {
+    if (!currentUser?.uid || !scheduleStory || !scheduleForm.startLocal) return;
+    setScheduleSaving(true);
+    try {
+      const start = new Date(scheduleForm.startLocal);
+      const durationMin = Math.max(15, Number(scheduleForm.durationMin || 60));
+      const end = new Date(start.getTime() + durationMin * 60 * 1000);
+      await addDoc(collection(db, 'calendar_blocks'), {
+        ownerUid: currentUser.uid,
+        title: String(scheduleForm.title || scheduleStory.title || 'Focus block').trim(),
+        start: start.getTime(),
+        end: end.getTime(),
+        storyId: scheduleStory.id,
+        source: 'manual',
+        entryMethod: 'manual_kanban',
+        isAiGenerated: false,
+        status: 'planned',
+        persona: currentPersona || 'personal',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      setShowScheduleModal(false);
+      setScheduleStory(null);
+    } catch (error) {
+      console.error('[ModernKanbanBoard] manual schedule failed', error);
+      alert((error as any)?.message || 'Failed to create calendar block.');
+    } finally {
+      setScheduleSaving(false);
+    }
+  }, [currentUser?.uid, currentPersona, scheduleForm, scheduleStory]);
 
   const applyDeferredDate = useCallback(async ({ dateMs, rationale, source }: { dateMs: number; rationale: string; source: string }) => {
     if (!deferTarget) return;
@@ -963,7 +1001,6 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
   });
 
   const filteredTasks = tasksInScope.filter((task) => {
-    if (getRoutineLikeTaskKind(task)) return false;
     if (filterTop3Only && !isTop3Task(task)) return false;
     if (filterCriticalOnly && !(isCriticalPriority(task.priority) || isTop3Task(task))) return false;
     if (filterCriticalAiOnly && !matchesCriticalOrHighAi(task)) return false;
@@ -978,6 +1015,9 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
     const score = getAiScoreValue;
     const dueMs = (story: Story) => getStoryDueMs(story);
     arr.sort((a, b) => {
+      const manualA = getManualPriorityRank(a) || 99;
+      const manualB = getManualPriorityRank(b) || 99;
+      if (manualA !== manualB) return manualA - manualB;
       if (sortMode === 'ai') return (score(b) || -Infinity) - (score(a) || -Infinity);
       if (sortMode === 'overdue') {
         const da = dueMs(a); const db = dueMs(b);
@@ -1001,6 +1041,9 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
       return Math.max(0, now - due);
     };
     arr.sort((a, b) => {
+      const manualA = getTaskManualRank(a) || 99;
+      const manualB = getTaskManualRank(b) || 99;
+      if (manualA !== manualB) return manualA - manualB;
       if (sortMode === 'ai') return (score(b) || -Infinity) - (score(a) || -Infinity);
       if (sortMode === 'due') return (getTaskDueMs(a) || Infinity) - (getTaskDueMs(b) || Infinity);
       if (sortMode === 'overdue') return overdueMs(b) - overdueMs(a);
@@ -1008,7 +1051,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
       return 0;
     });
     return arr;
-  }, [filteredTasks, sortMode]);
+  }, [filteredTasks, getTaskManualRank, sortMode]);
 
   const getStoriesForLane = (status: string): Story[] => {
     const lane = (status as LaneStatus) || 'backlog';
@@ -1844,13 +1887,53 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
           </Modal.Footer>
         </Modal>
 
-        <NewCalendarEventModal
-          show={!!scheduleStory}
-          onHide={() => setScheduleStory(null)}
-          initialValues={scheduleInitialValues}
-          stories={scheduleStory ? [scheduleStory] : []}
-          onSaved={() => setScheduleStory(null)}
-        />
+        <Modal show={showScheduleModal} onHide={() => setShowScheduleModal(false)} centered>
+          <Modal.Header closeButton>
+            <Modal.Title>Schedule Story Block</Modal.Title>
+          </Modal.Header>
+          <Modal.Body>
+            <div className="mb-2"><strong>{scheduleStory?.title || 'Story'}</strong></div>
+            {scheduleStory && (
+              <div className="text-muted small mb-3">
+                Recommendation: create about {Math.max(1, Math.ceil(getStoryPointsRemaining(scheduleStory) / 2))} calendar block{Math.max(1, Math.ceil(getStoryPointsRemaining(scheduleStory) / 2)) === 1 ? '' : 's'} based on ~{getStoryPointsRemaining(scheduleStory)} points remaining.
+              </div>
+            )}
+            <Form.Group className="mb-3">
+              <Form.Label>Event title</Form.Label>
+              <Form.Control
+                type="text"
+                value={scheduleForm.title}
+                onChange={(e) => setScheduleForm((prev) => ({ ...prev, title: e.target.value }))}
+              />
+            </Form.Group>
+            <Form.Group className="mb-3">
+              <Form.Label>Start</Form.Label>
+              <Form.Control
+                type="datetime-local"
+                value={scheduleForm.startLocal}
+                onChange={(e) => setScheduleForm((prev) => ({ ...prev, startLocal: e.target.value }))}
+              />
+            </Form.Group>
+            <Form.Group>
+              <Form.Label>Duration (minutes)</Form.Label>
+              <Form.Control
+                type="number"
+                min={15}
+                step={15}
+                value={scheduleForm.durationMin}
+                onChange={(e) => setScheduleForm((prev) => ({ ...prev, durationMin: Number(e.target.value) || 60 }))}
+              />
+            </Form.Group>
+          </Modal.Body>
+          <Modal.Footer>
+            <Button variant="secondary" onClick={() => setShowScheduleModal(false)}>
+              Cancel
+            </Button>
+            <Button variant="primary" onClick={saveManualSchedule} disabled={scheduleSaving || !scheduleForm.startLocal}>
+              {scheduleSaving ? 'Scheduling…' : 'Create calendar event'}
+            </Button>
+          </Modal.Footer>
+        </Modal>
 
         <DeferItemModal
           show={Boolean(deferTarget)}

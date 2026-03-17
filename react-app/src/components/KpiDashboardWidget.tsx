@@ -1,12 +1,15 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Badge, Button, Card, ProgressBar, Spinner } from 'react-bootstrap';
 import { collection, doc, onSnapshot, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
-import { BarChart3, Gauge, Target, TrendingUp } from 'lucide-react';
+import { Activity, Pin, Target, TrendingUp } from 'lucide-react';
 import { db } from '../firebase';
+import { useSidebar } from '../contexts/SidebarContext';
 import type { Goal, Story, Task } from '../types';
 import type { Kpi } from '../types/KpiTypes';
 import { buildSprintDeferRecommendations, type CapacitySummaryLike, type SprintLike } from '../utils/prioritizationInsights';
 import { isGoalInHierarchySet } from '../utils/goalHierarchy';
+import { formatKpiValue, getKpiStateBadge, getKpiStateLabel, toKpiNumber } from '../utils/kpiDisplay';
+import { ActivityStreamService } from '../services/ActivityStreamService';
 
 interface GoalMetricDoc {
   resolvedKpis?: Array<Record<string, any>>;
@@ -38,12 +41,9 @@ interface DashboardKpiCard {
   currentDisplay: string;
   targetDisplay: string;
   series: number[];
+  healthy?: boolean | null;
+  stale?: boolean | null;
 }
-
-const toNumber = (value: any): number | null => {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
-};
 
 const toSeries = (kpi: Record<string, any>): number[] => {
   const weeklyValues = Array.isArray(kpi?.weeklyValues) ? kpi.weeklyValues : [];
@@ -51,8 +51,8 @@ const toSeries = (kpi: Record<string, any>): number[] => {
     .map((entry: any) => Number(entry?.value))
     .filter((value: number) => Number.isFinite(value));
   if (values.length >= 2) return values.slice(-8);
-  const current = toNumber(kpi?.currentValue ?? kpi?.current);
-  const target = toNumber(kpi?.targetNormalized ?? kpi?.target);
+  const current = toKpiNumber(kpi?.currentValue ?? kpi?.current);
+  const target = toKpiNumber(kpi?.targetNormalized ?? kpi?.target);
   if (current != null && target != null) return [Math.max(0, current * 0.75), current, target];
   if (current != null) return [Math.max(0, current * 0.75), current];
   return [];
@@ -111,14 +111,6 @@ const renderSparkline = (values: number[], variant: 'line' | 'bar') => {
   );
 };
 
-const formatMetricValue = (value: number | null, unit: string): string => {
-  if (value == null) return '—';
-  if (unit === 'GBP') return `£${Math.round(value).toLocaleString()}`;
-  if (unit === '%') return `${Math.round(value)}%`;
-  if (unit === 'km' || unit === 'hours') return `${Number(value.toFixed(1))}`;
-  return `${Math.round(value)}`;
-};
-
 const KpiDashboardWidget: React.FC<KpiDashboardWidgetProps> = ({
   ownerUid,
   goals,
@@ -130,6 +122,7 @@ const KpiDashboardWidget: React.FC<KpiDashboardWidgetProps> = ({
   nextSprint = null,
   onOpenFocusGoals,
 }) => {
+  const { showSidebar } = useSidebar();
   const [metricsByGoal, setMetricsByGoal] = useState<Record<string, GoalMetricDoc>>({});
   const [applyingId, setApplyingId] = useState<string | null>(null);
 
@@ -173,8 +166,8 @@ const KpiDashboardWidget: React.FC<KpiDashboardWidgetProps> = ({
             const resolved = metricRows.find((entry) => String(entry?.id || entry?.metricKey || entry?.name || '') === String(kpi.id || kpi.metricId || kpi.name || ''))
               || metricRows.find((entry) => String(entry?.name || '').trim() === String(kpi.name || '').trim())
               || {};
-            const currentValue = toNumber(resolved?.currentValue ?? (kpi as any).current);
-            const targetValue = toNumber(resolved?.targetNormalized ?? resolved?.target ?? kpi.target);
+            const currentValue = toKpiNumber(resolved?.currentValue ?? (kpi as any).current);
+            const targetValue = toKpiNumber(resolved?.targetNormalized ?? resolved?.target ?? kpi.target);
             cards.push({
               goalId: goal.id,
               goalTitle: goal.title,
@@ -184,14 +177,16 @@ const KpiDashboardWidget: React.FC<KpiDashboardWidgetProps> = ({
               visualizationType: kpi.visualizationType || 'progress',
               target: targetValue,
               unit: resolved?.unit || kpi.unit || '',
-              progressPct: toNumber(resolved?.progressPct ?? (kpi as any).progress),
-              currentDisplay: String(resolved?.currentDisplay || formatMetricValue(currentValue, resolved?.unit || kpi.unit || '')),
-              targetDisplay: targetValue == null ? '—' : formatMetricValue(targetValue, resolved?.unit || kpi.unit || ''),
+              progressPct: toKpiNumber(resolved?.progressPct ?? (kpi as any).progress),
+              currentDisplay: String(resolved?.currentDisplay || formatKpiValue(currentValue, resolved?.unit || kpi.unit || '')),
+              targetDisplay: targetValue == null ? '—' : formatKpiValue(targetValue, resolved?.unit || kpi.unit || ''),
               series: toSeries({
                 ...resolved,
                 currentValue,
                 target: targetValue,
               }),
+              healthy: resolved?.healthy === true,
+              stale: resolved?.stale === true || resolved?.healthy === false,
             });
           });
       });
@@ -205,8 +200,8 @@ const KpiDashboardWidget: React.FC<KpiDashboardWidgetProps> = ({
       .forEach((goal) => {
         const resolved = (metricsByGoal[goal.id]?.resolvedKpis || [])[0];
         if (!resolved) return;
-        const currentValue = toNumber(resolved?.currentValue);
-        const targetValue = toNumber(resolved?.targetNormalized ?? resolved?.target);
+        const currentValue = toKpiNumber(resolved?.currentValue);
+        const targetValue = toKpiNumber(resolved?.targetNormalized ?? resolved?.target);
         fallback.push({
           goalId: goal.id,
           goalTitle: goal.title,
@@ -216,10 +211,12 @@ const KpiDashboardWidget: React.FC<KpiDashboardWidgetProps> = ({
           visualizationType: 'progress',
           target: targetValue,
           unit: String(resolved?.unit || ''),
-          progressPct: toNumber(resolved?.progressPct),
-          currentDisplay: String(resolved?.currentDisplay || formatMetricValue(currentValue, resolved?.unit || '')),
-          targetDisplay: targetValue == null ? '—' : formatMetricValue(targetValue, resolved?.unit || ''),
+          progressPct: toKpiNumber(resolved?.progressPct),
+          currentDisplay: String(resolved?.currentDisplay || formatKpiValue(currentValue, resolved?.unit || '')),
+          targetDisplay: targetValue == null ? '—' : formatKpiValue(targetValue, resolved?.unit || ''),
           series: toSeries(resolved),
+          healthy: resolved?.healthy === true,
+          stale: resolved?.stale === true || resolved?.healthy === false,
         });
       });
     return fallback;
@@ -239,25 +236,51 @@ const KpiDashboardWidget: React.FC<KpiDashboardWidgetProps> = ({
     if (!item.nextSprintId || !item.nextSprintStartMs) return;
     setApplyingId(item.id);
     try {
+      const sourceStory = item.type === 'story' ? stories.find((story) => story.id === item.id) || null : null;
+      const sourceTask = item.type === 'task' ? tasks.find((task) => task.id === item.id) || null : null;
       if (item.type === 'story') {
         await updateDoc(doc(db, 'stories', item.id), {
           sprintId: item.nextSprintId,
+          targetDate: item.nextSprintStartMs,
+          dueDate: item.nextSprintStartMs,
+          plannedStartDate: item.nextSprintStartMs,
           deferredUntil: item.nextSprintStartMs,
           deferredReason: `Deferred from dashboard capacity review to ${nextSprint?.name || 'next sprint'}.`,
           deferredBy: 'dashboard_capacity_review',
+          deferredAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
       } else {
         await updateDoc(doc(db, 'tasks', item.id), {
           sprintId: item.nextSprintId,
           dueDate: item.nextSprintStartMs,
-          targetDate: item.nextSprintStartMs,
+          dueDateMs: item.nextSprintStartMs,
           deferredUntil: item.nextSprintStartMs,
           deferredReason: `Deferred from dashboard capacity review to ${nextSprint?.name || 'next sprint'}.`,
           deferredBy: 'dashboard_capacity_review',
+          deferredAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
       }
+      await ActivityStreamService.addActivity({
+        entityId: item.id,
+        entityType: item.type,
+        activityType: 'sprint_changed',
+        userId: ownerUid,
+        userEmail: undefined,
+        description: `Deferred from capacity review to ${nextSprint?.name || 'next sprint'} starting ${new Date(item.nextSprintStartMs).toLocaleDateString()}.`,
+        persona: String((sourceStory as any)?.persona || (sourceTask as any)?.persona || 'personal'),
+        referenceNumber: String((sourceStory as any)?.ref || (sourceStory as any)?.referenceNumber || (sourceTask as any)?.ref || '').trim() || undefined,
+        source: 'human',
+        sourceDetails: 'dashboard_capacity_review',
+        metadata: {
+          previousSprintId: String((sourceStory as any)?.sprintId || (sourceTask as any)?.sprintId || '') || null,
+          nextSprintId: item.nextSprintId,
+          previousDueAt: (sourceStory as any)?.dueDate || (sourceStory as any)?.targetDate || (sourceTask as any)?.dueDate || null,
+          nextDueAt: item.nextSprintStartMs,
+          keepScore: item.keepScore,
+        },
+      });
     } finally {
       setApplyingId(null);
     }
@@ -267,13 +290,13 @@ const KpiDashboardWidget: React.FC<KpiDashboardWidgetProps> = ({
     <Card className="shadow-sm border-0 mb-3 h-100">
       <Card.Header className="d-flex align-items-center justify-content-between gap-2">
         <div className="fw-semibold d-flex align-items-center gap-2">
-          <Gauge size={16} /> KPI Studio
+          <Pin size={16} /> Pinned Focus KPIs
         </div>
         <div className="d-flex align-items-center gap-2">
           <Badge bg={pinnedKpis.length > 0 ? 'primary' : 'secondary'} pill>{pinnedKpis.length}</Badge>
           {onOpenFocusGoals && (
             <Button variant="outline-secondary" size="sm" onClick={onOpenFocusGoals}>
-              Open Focus
+              Open Focus Goals
             </Button>
           )}
         </div>
@@ -281,45 +304,51 @@ const KpiDashboardWidget: React.FC<KpiDashboardWidgetProps> = ({
       <Card.Body className="p-3">
         <div className="mb-3">
           <div className="text-muted small mb-2">
-            Pinned KPI cards from goal definitions, plus defer guidance when sprint load exceeds capacity.
+            Dashboard pins from your focus-goal KPI definitions, plus defer guidance when sprint load exceeds capacity.
           </div>
           {pinnedKpis.length === 0 ? (
             <div className="text-muted small">
-              No dashboard KPIs pinned yet. Add KPIs in Focus Goals and enable “Pin to dashboard”.
+              No pinned focus KPIs yet. Design them in Focus Goals and enable "Pin to dashboard".
             </div>
           ) : (
             <div className="d-grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
-              {pinnedKpis.map((card) => (
-                <div key={`${card.goalId}-${card.kpiId}`} className="border rounded p-2">
-                  <div className="d-flex align-items-start justify-content-between gap-2">
-                    <div>
-                      <div className="fw-semibold small">{card.name}</div>
-                      <div className="text-muted" style={{ fontSize: 11 }}>{card.goalTitle}</div>
+              {pinnedKpis.map((card) => {
+                const stateBadge = getKpiStateBadge(card.healthy, card.stale);
+                return (
+                  <div key={`${card.goalId}-${card.kpiId}`} className="border rounded p-2">
+                    <div className="d-flex align-items-start justify-content-between gap-2">
+                      <div>
+                        <div className="fw-semibold small">{card.name}</div>
+                        <div className="text-muted" style={{ fontSize: 11 }}>{card.goalTitle}</div>
+                      </div>
+                      <div className="d-flex align-items-center gap-1 flex-wrap justify-content-end">
+                        <Badge bg={stateBadge.bg}>{stateBadge.label}</Badge>
+                        <Badge bg="light" text="dark">{card.visualizationType}</Badge>
+                      </div>
                     </div>
-                    <Badge bg="light" text="dark">{card.visualizationType}</Badge>
-                  </div>
-                  <div className="d-flex align-items-end justify-content-between mt-2 gap-2">
-                    <div>
-                      <div style={{ fontSize: 18, fontWeight: 700 }}>{card.currentDisplay}</div>
-                      <div className="text-muted" style={{ fontSize: 11 }}>Target {card.targetDisplay}</div>
+                    <div className="d-flex align-items-end justify-content-between mt-2 gap-2">
+                      <div>
+                        <div style={{ fontSize: 18, fontWeight: 700 }}>{card.currentDisplay}</div>
+                        <div className="text-muted" style={{ fontSize: 11 }}>Target {card.targetDisplay}</div>
+                      </div>
+                      {(card.visualizationType === 'line' || card.visualizationType === 'bar')
+                        ? renderSparkline(card.series, card.visualizationType === 'bar' ? 'bar' : 'line')
+                        : <TrendingUp size={18} className="text-primary" />}
                     </div>
-                    {(card.visualizationType === 'line' || card.visualizationType === 'bar')
-                      ? renderSparkline(card.series, card.visualizationType === 'bar' ? 'bar' : 'line')
-                      : <TrendingUp size={18} className="text-primary" />}
-                  </div>
-                  {card.visualizationType === 'progress' && (
-                    <div className="mt-2">
-                      <ProgressBar
-                        now={Math.max(0, Math.min(100, Number(card.progressPct || 0)))}
-                        style={{ height: 6 }}
-                      />
+                    {card.visualizationType === 'progress' && (
+                      <div className="mt-2">
+                        <ProgressBar
+                          now={Math.max(0, Math.min(100, Number(card.progressPct || 0)))}
+                          style={{ height: 6 }}
+                        />
+                      </div>
+                    )}
+                    <div className="text-muted mt-2" style={{ fontSize: 11 }}>
+                      {getKpiStateLabel(card.progressPct, card.healthy, card.stale)}
                     </div>
-                  )}
-                  <div className="text-muted mt-2" style={{ fontSize: 11 }}>
-                    {card.progressPct != null ? `${Math.round(card.progressPct)}% of target` : 'Waiting for synced KPI metrics'}
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -351,7 +380,29 @@ const KpiDashboardWidget: React.FC<KpiDashboardWidgetProps> = ({
                         {item.alignedToFocus ? ' · focus aligned' : ' · not focus aligned'}
                       </div>
                     </div>
-                    <Badge bg={item.alignedToFocus ? 'success' : 'secondary'}>Keep {Math.round(item.keepScore)}</Badge>
+                    <div className="d-flex align-items-center gap-1">
+                      {(item.type === 'story'
+                        ? stories.find((story) => story.id === item.id)
+                        : tasks.find((task) => task.id === item.id)) && (
+                        <Button
+                          size="sm"
+                          variant="outline-secondary"
+                          className="p-1 d-inline-flex align-items-center justify-content-center"
+                          title="Open activity stream"
+                          onClick={() => {
+                            const target = item.type === 'story'
+                              ? stories.find((story) => story.id === item.id)
+                              : tasks.find((task) => task.id === item.id);
+                            if (target) showSidebar(target as any, item.type);
+                          }}
+                        >
+                          <Activity size={14} />
+                        </Button>
+                      )}
+                      <Badge bg={item.alignedToFocus ? 'success' : 'secondary'}>
+                        {item.alignedToFocus ? 'Focus aligned' : 'Defer candidate'}
+                      </Badge>
+                    </div>
                   </div>
                   <div className="text-muted mt-2" style={{ fontSize: 11 }}>{item.rationale}</div>
                   <div className="mt-2">

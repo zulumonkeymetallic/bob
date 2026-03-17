@@ -1,5 +1,6 @@
 import React from 'react';
 import { AlertTriangle, X } from 'lucide-react';
+import type { GoalTimelineAffectedStory } from './goalTimelineImpact';
 
 interface Props {
   visible: boolean;
@@ -7,16 +8,7 @@ interface Props {
     goalId: string;
     startDate: number;
     endDate: number;
-    affectedStories: Array<{
-      id: string;
-      ref: string;
-      title: string;
-      plannedSprintId?: string;
-      plannedSprintName?: string;
-      recommendedSprintId?: string;
-      recommendedSprintName?: string;
-      impactedTaskCount?: number;
-    }>;
+    affectedStories: GoalTimelineAffectedStory[];
   } | null;
   onConfirm: () => void;
   onCancel: () => void;
@@ -33,6 +25,11 @@ const ConfirmSprintChangesModal: React.FC<Props> = ({
   const formatDate = (timestamp: number) => {
     return new Date(timestamp).toLocaleDateString();
   };
+
+  const movableStories = pendingChanges.affectedStories.filter(
+    (story) => story.recommendedSprintId && story.recommendedSprintId !== story.plannedSprintId,
+  );
+  const manualReviewStories = pendingChanges.affectedStories.length - movableStories.length;
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
@@ -54,7 +51,7 @@ const ConfirmSprintChangesModal: React.FC<Props> = ({
           <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
             <p className="text-sm text-amber-800">
               <strong>Warning:</strong> Changing this goal's timeline will affect {pendingChanges.affectedStories.length} stories 
-              and may require updating their planned sprints.
+              and will move the stories below to the sprint closest to the new start date when a recommendation is available.
             </p>
           </div>
           
@@ -110,7 +107,8 @@ const ConfirmSprintChangesModal: React.FC<Props> = ({
           
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
             <p className="text-sm text-blue-800">
-              <strong>Next Steps:</strong> After confirming, review the recommended sprint mapping and reassign each affected story if needed.
+              <strong>What happens on confirm:</strong> {movableStories.length} stor{movableStories.length === 1 ? 'y' : 'ies'} will be reassigned automatically.
+              {manualReviewStories > 0 ? ` ${manualReviewStories} stor${manualReviewStories === 1 ? 'y has' : 'ies have'} no safe recommendation and will stay where they are for manual review.` : ''}
             </p>
           </div>
         </div>
@@ -126,7 +124,7 @@ const ConfirmSprintChangesModal: React.FC<Props> = ({
             onClick={onConfirm}
             className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700"
           >
-            Confirm Changes
+            Confirm and Move Stories
           </button>
         </div>
       </div>

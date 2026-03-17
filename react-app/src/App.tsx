@@ -151,9 +151,17 @@ function AppContent() {
   const [showImportModal, setShowImportModal] = useState(false);
   const [showAssistant, setShowAssistant] = useState(false);
 
-  // Root path redirect.
+  // Root path redirect: mobile -> /mobile, desktop -> rotate between overview, kanban, and calendar
   const RootRedirect: React.FC = () => {
-    return <Navigate to="/dashboard" replace />;
+    const dev = useDeviceInfo();
+    if (dev?.isMobile) return <Navigate to="/mobile" replace />;
+    const hour = new Date().getHours();
+    // Before 7am: show calendar first so you can review today's schedule
+    if (hour < 7) return <Navigate to="/calendar" replace />;
+    // 7am onwards: 3-way rotation — dashboard / kanban / calendar
+    const targets = ['/dashboard', '/sprints/kanban', '/calendar'] as const;
+    const target = targets[hour % 3];
+    return <Navigate to={target} replace />;
   };
 
   // Data for the global sidebar
@@ -256,8 +264,6 @@ function AppContent() {
   useEffect(() => {
     logger.debug('nav', 'Location change', { path: location.pathname, key: location.key });
   }, [location.pathname, location.key]);
-
-  // Daily Plan is temporarily disabled while sync and due-date issues are investigated.
 
 
 
@@ -396,8 +402,6 @@ function AppContent() {
             <Route path="/chores" element={<ChoresTasksPage />} />
             <Route path="/chores/checklist" element={<ChoreChecklistPage />} />
             <Route path="/mobile" element={<MobileHome />} />
-            <Route path="/daily-plan" element={<Navigate to="/dashboard" replace />} />
-            <Route path="/mobile/daily-plan" element={<Navigate to="/mobile" replace />} />
             <Route path="/mobile-view" element={<MobileView />} />
             <Route path="/mobile-checklist" element={<MobileChecklistView />} />
             <Route path="/habits" element={<Navigate to="/dashboard/habit-tracking" replace />} />

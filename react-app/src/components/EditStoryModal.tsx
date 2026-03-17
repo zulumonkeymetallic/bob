@@ -91,8 +91,8 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
     [editedStory.goalId, goals],
   );
   const sprintAlignment = useMemo(
-    () => evaluateStorySprintAlignment(selectedSprint as any, editedStory.goalId || ''),
-    [selectedSprint, editedStory.goalId],
+    () => evaluateStorySprintAlignment(selectedSprint as any, editedStory.goalId || '', goals),
+    [selectedSprint, editedStory.goalId, goals],
   );
 
   const reloadLinkedTasks = useCallback(async (sourceStory: Story | null) => {

@@ -33,6 +33,7 @@ import { usePersona } from '../contexts/PersonaContext';
 import { Sprint, Story, Task, Goal } from '../types';
 import { generateRef } from '../utils/referenceGenerator';
 import { isStatus, getStatusName } from '../utils/statusHelpers';
+import { getGoalDisplayPath, isLeafGoal } from '../utils/goalHierarchy';
 
 // Sprint status helpers with null checking
 const getSprintStatusLabel = (status: number | undefined): string => {
@@ -698,12 +699,13 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
                 <div style={{ maxHeight: 180, overflowY: 'auto', border: '1px solid var(--bs-border-color)', borderRadius: 6, padding: 10 }}>
                   {goals.map((goal) => {
                     const checked = formData.focusGoalIds.includes(goal.id);
+                    const leaf = isLeafGoal(goal.id, goals);
                     return (
                       <Form.Check
                         key={goal.id}
                         type="checkbox"
                         id={`sprint-focus-goal-${goal.id}`}
-                        label={goal.title}
+                        label={`${getGoalDisplayPath(goal.id, goals)} ${leaf ? '(Leaf goal)' : '(Program goal)'}`}
                         checked={checked}
                         onChange={(e) => {
                           const nextIds = e.target.checked
@@ -718,7 +720,7 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
                 </div>
               )}
               <Form.Text className="text-muted">
-                If status is Active, at least one sprint focus goal is required.
+                If status is Active, at least one sprint focus goal is required. Program goals cover their child leaf goals; stories still attach to the leaf goal itself.
               </Form.Text>
             </Form.Group>
           </Form>

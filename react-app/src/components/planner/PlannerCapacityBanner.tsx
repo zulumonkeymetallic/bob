@@ -476,9 +476,9 @@ const PlannerCapacityBanner: React.FC = () => {
             <ArrowRightLeft size={14} className="me-1" />
             Priority matrix
           </Button>
-          <Button size="sm" variant="outline-dark" onClick={() => navigate('/calendar/planner')}>
+          <Button size="sm" variant="outline-dark" onClick={() => navigate('/planner/sprint-capacity')}>
             <Settings2 size={14} className="me-1" />
-            Weekly planner
+            Sprint capacity plan
           </Button>
           <Button size="sm" variant="outline-dark" onClick={() => navigate('/calendar')}>
             <CalendarClock size={14} className="me-1" />

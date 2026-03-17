@@ -11,9 +11,65 @@ const ALLOWED_ROUTINE_TYPES = new Set(['chore', 'routine', 'habit']);
 const TASK_TABLE_LIMIT = 12;
 const MAX_PRIVATE_TASK_REFS = 6;
 const GOOGLE_EVENT_COLORS_TTL_MS = 6 * 60 * 60 * 1000;
+const SYNC_LEASE_MS = 2 * 60 * 1000;
 
 let cachedGoogleEventColors = null;
 let cachedGoogleEventColorsAt = 0;
+
+function createSyncLeaseId(blockId, action) {
+  return `${action}-${blockId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function getCalendarSyncLeaseRef(blockId) {
+  return admin.firestore().collection('calendar_sync_leases').doc(String(blockId));
+}
+
+async function acquireCalendarSyncLease(blockId, uid, action) {
+  const leaseRef = getCalendarSyncLeaseRef(blockId);
+  const leaseId = createSyncLeaseId(blockId, action);
+  const now = Date.now();
+  const expiresAtMs = now + SYNC_LEASE_MS;
+  try {
+    await admin.firestore().runTransaction(async (tx) => {
+      const snap = await tx.get(leaseRef);
+      const data = snap.exists ? (snap.data() || {}) : {};
+      const currentLeaseId = String(data.leaseId || '').trim();
+      const currentExpiresAtMs = Number(data.expiresAtMs || 0);
+      if (currentLeaseId && currentExpiresAtMs > now) {
+        throw new Error('calendar_sync_lease_busy');
+      }
+      tx.set(leaseRef, {
+        blockId,
+        ownerUid: uid,
+        action,
+        leaseId,
+        acquiredAtMs: now,
+        expiresAtMs,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+    });
+    return { leaseId, leaseRef };
+  } catch (error) {
+    if (String(error?.message || '') === 'calendar_sync_lease_busy') return null;
+    throw error;
+  }
+}
+
+async function releaseCalendarSyncLease(blockId, leaseId) {
+  if (!blockId || !leaseId) return;
+  const leaseRef = getCalendarSyncLeaseRef(blockId);
+  try {
+    await admin.firestore().runTransaction(async (tx) => {
+      const snap = await tx.get(leaseRef);
+      if (!snap.exists) return;
+      const data = snap.data() || {};
+      if (String(data.leaseId || '') !== String(leaseId)) return;
+      tx.delete(leaseRef);
+    });
+  } catch (error) {
+    console.warn('[calendarSync] failed to release sync lease', blockId, error?.message || error);
+  }
+}
 
 // Legacy numeric theme index mapping (1-based order in DEFAULT_THEMES)
 const NUMERIC_THEME_MAP = {
@@ -691,6 +747,26 @@ async function findExistingEventByPrivateProp(calendar, { key, value, timeMin, t
   return events.find((ev) => ev && ev.id) || null;
 }
 
+function getBobPrivateProps(event) {
+  return event?.extendedProperties?.private || {};
+}
+
+function getBobBlockIdFromEvent(event) {
+  const priv = getBobPrivateProps(event);
+  return String(priv['bob-block-id'] || priv['bobBlockId'] || '').trim();
+}
+
+function isConfidentBobCreatedEvent(event) {
+  const priv = getBobPrivateProps(event);
+  return Boolean(
+    getBobBlockIdFromEvent(event)
+      || priv['bob-entity-type']
+      || priv['bob-story-id']
+      || priv['bob-task-id']
+      || priv['bob-deeplink']
+  );
+}
+
 function parseEventTime(timeObj) {
   if (!timeObj) return null;
   if (timeObj.dateTime) return new Date(timeObj.dateTime).getTime();
@@ -729,6 +805,7 @@ async function getActiveSprintId(uid) {
 async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
   let block = blockData;
   let eventId = null;
+  let syncLease = null;
   const errorContext = {};
   const debugLogs = [];
   const testMode = !!process.env.CALENDAR_SYNC_TEST_MODE;
@@ -739,6 +816,32 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
       const snap = await admin.firestore().collection('calendar_blocks').doc(blockId).get();
       if (!snap.exists) throw new Error('Block not found');
       block = snap.data();
+    }
+
+    if (action === 'create' || action === 'update') {
+      syncLease = await acquireCalendarSyncLease(blockId, uid, action);
+      if (!syncLease) {
+        debugLogs.push({ step: 'sync_skipped', reason: 'sync_lease_busy' });
+        await logCalendarIntegration(uid, {
+          action: 'push',
+          direction: action,
+          status: 'skipped',
+          blockId,
+          blockTitle: block?.title || null,
+          reason: 'sync_lease_busy',
+        });
+        return { skipped: true, reason: 'sync_lease_busy' };
+      }
+      const freshSnap = await admin.firestore().collection('calendar_blocks').doc(blockId).get();
+      if (!freshSnap.exists) {
+        debugLogs.push({ step: 'sync_skipped', reason: 'block_missing_after_lease' });
+        return { skipped: true, reason: 'block_missing_after_lease' };
+      }
+      block = freshSnap.data();
+      if (action === 'create' && block?.googleEventId) {
+        debugLogs.push({ step: 'sync_skipped', reason: 'google_event_already_linked', eventId: block.googleEventId });
+        return { skipped: true, reason: 'google_event_already_linked', eventId: block.googleEventId };
+      }
     }
 
     if (block && block.syncToGoogle === false && action !== 'delete') {
@@ -1651,8 +1754,133 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
       debug: debugLogs,
     });
     throw err;
+  } finally {
+    if (syncLease?.leaseId) {
+      await releaseCalendarSyncLease(blockId, syncLease.leaseId);
+    }
   }
 }
+
+exports.repairDuplicateCalendarEvents = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'Must be authenticated');
+  }
+  const uid = context.auth.uid;
+  const dryRun = data?.dryRun !== false;
+  const lookbackDays = Math.max(1, Math.min(Number(data?.lookbackDays || 21), 180));
+  const forwardDays = Math.max(1, Math.min(Number(data?.forwardDays || 90), 365));
+  const now = Date.now();
+  const timeMin = new Date(now - (lookbackDays * MS_IN_DAY)).toISOString();
+  const timeMax = new Date(now + (forwardDays * MS_IN_DAY)).toISOString();
+
+  await logCalendarIntegration(uid, {
+    action: 'repair_duplicates',
+    status: 'started',
+    dryRun,
+    timeMin,
+    timeMax,
+  });
+
+  try {
+    const { calendar } = await getCalendarClientForUser(uid);
+    const events = await listAllEvents(calendar, { timeMin, timeMax });
+    const duplicateGroups = new Map();
+    events.forEach((event) => {
+      if (!isConfidentBobCreatedEvent(event)) return;
+      const blockId = getBobBlockIdFromEvent(event);
+      if (!blockId) return;
+      const list = duplicateGroups.get(blockId) || [];
+      list.push(event);
+      duplicateGroups.set(blockId, list);
+    });
+
+    let groupsFound = 0;
+    let eventsDeleted = 0;
+    let blocksRelinked = 0;
+    let skipped = 0;
+    const repairs = [];
+
+    for (const [blockId, group] of duplicateGroups.entries()) {
+      if (!Array.isArray(group) || group.length <= 1) continue;
+      groupsFound += 1;
+      const blockRef = admin.firestore().collection('calendar_blocks').doc(String(blockId));
+      const blockSnap = await blockRef.get().catch(() => null);
+      const block = blockSnap && blockSnap.exists ? (blockSnap.data() || {}) : null;
+      const linkedGoogleEventId = String(block?.googleEventId || '').trim();
+      const sortedGroup = [...group].sort((a, b) => {
+        const aUpdated = Date.parse(String(a?.updated || '')) || 0;
+        const bUpdated = Date.parse(String(b?.updated || '')) || 0;
+        return bUpdated - aUpdated;
+      });
+      const survivor = sortedGroup.find((event) => String(event?.id || '') === linkedGoogleEventId) || sortedGroup[0];
+      if (!survivor?.id) {
+        skipped += group.length;
+        continue;
+      }
+      const duplicates = sortedGroup.filter((event) => String(event?.id || '') !== String(survivor.id));
+      repairs.push({
+        blockId,
+        survivorEventId: survivor.id,
+        duplicateEventIds: duplicates.map((event) => event.id).filter(Boolean),
+      });
+
+      if (!dryRun && blockSnap && blockSnap.exists && linkedGoogleEventId !== String(survivor.id)) {
+        await blockRef.set({
+          googleEventId: survivor.id,
+          externalLink: survivor.htmlLink || block?.externalLink || admin.firestore.FieldValue.delete(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+        blocksRelinked += 1;
+      } else if (dryRun && linkedGoogleEventId !== String(survivor.id)) {
+        blocksRelinked += 1;
+      }
+
+      for (const duplicate of duplicates) {
+        if (!duplicate?.id) {
+          skipped += 1;
+          continue;
+        }
+        if (!dryRun) {
+          await calendar.events.delete({ calendarId: 'primary', eventId: duplicate.id });
+        }
+        eventsDeleted += 1;
+      }
+    }
+
+    await logCalendarIntegration(uid, {
+      action: 'repair_duplicates',
+      status: 'success',
+      dryRun,
+      timeMin,
+      timeMax,
+      groupsFound,
+      eventsDeleted,
+      blocksRelinked,
+      skipped,
+      repairs: repairs.slice(0, 50),
+    });
+
+    return {
+      ok: true,
+      dryRun,
+      groupsFound,
+      eventsDeleted,
+      blocksRelinked,
+      skipped,
+      repairs,
+    };
+  } catch (error) {
+    await logCalendarIntegration(uid, {
+      action: 'repair_duplicates',
+      status: 'error',
+      dryRun,
+      timeMin,
+      timeMax,
+      error: error?.message || String(error),
+    });
+    throw new functions.https.HttpsError('internal', error?.message || 'Failed to repair duplicate calendar events');
+  }
+});
 
 exports._syncBlockToGoogle = syncBlockToGoogle;
 

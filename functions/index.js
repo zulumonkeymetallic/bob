@@ -94,11 +94,11 @@ try {
   if (calendarSync) {
     exports.syncCalendarBlock = calendarSync.syncCalendarBlock;
     exports.onCalendarBlockWrite = calendarSync.onCalendarBlockWrite;
-    exports.onStoryCalendarAutoLink = calendarSync.onStoryCalendarAutoLink;
     exports.syncFromGoogleCalendar = calendarSync.syncFromGoogleCalendar;
     exports.syncCalendarNow = calendarSync.syncCalendarNow;
     exports.scheduledCalendarSync = calendarSync.scheduledCalendarSync;
     exports.gcalLinkUnlinkedEvents = calendarSync.gcalLinkUnlinkedEvents;
+    exports.repairDuplicateCalendarEvents = calendarSync.repairDuplicateCalendarEvents;
   }
 } catch (e) {
   console.warn('[init] calendarSync not loaded', e?.message || e);
@@ -253,9 +253,6 @@ try {
     if (nightlyOrchestration.deltaPriorityRescore) {
       exports.deltaPriorityRescore = nightlyOrchestration.deltaPriorityRescore;
     }
-    if (nightlyOrchestration.applyEveningPullForward) {
-      exports.applyEveningPullForward = nightlyOrchestration.applyEveningPullForward;
-    }
   }
 } catch (e) {
   console.warn('[init] nightlyOrchestration not loaded', e?.message || e);
@@ -293,221 +290,10 @@ exports.updateGoalTargetYears = schedulerV2.onSchedule(
   });
 
 // Nightly fitness KPI sync: updates goal KPI progress from Strava/HealthKit workouts
-const buildWeeklySnapshotKey = (dt) => {
-  const resolved = DateTime.isDateTime(dt) ? dt : DateTime.fromJSDate(new Date(dt || Date.now()));
-  return `${resolved.weekYear}-W${String(resolved.weekNumber).padStart(2, '0')}`;
-};
-
-const parseWeeklySnapshotKey = (weekKey, zone = DEFAULT_TIMEZONE) => {
-  const match = /^(\d{4})-W(\d{2})$/.exec(String(weekKey || '').trim());
-  if (!match) return null;
-  const weekYear = Number(match[1]);
-  const weekNumber = Number(match[2]);
-  if (!Number.isFinite(weekYear) || !Number.isFinite(weekNumber)) return null;
-  const dt = DateTime.fromObject({ weekYear, weekNumber, weekday: 1 }, { zone });
-  return dt.isValid ? dt.startOf('day') : null;
-};
-
-const buildBackfilledResolvedKpis = (leafSummary = {}) => {
-  const topKpis = Array.isArray(leafSummary?.topKpis) ? leafSummary.topKpis : [];
-  return topKpis.map((kpi, index) => {
-    const progressPct = Number(kpi?.progressPct);
-    const healthy = kpi?.healthy === true;
-    return {
-      index,
-      id: String(kpi?.id || `${leafSummary.goalId || 'goal'}_${index}`),
-      name: String(kpi?.name || `KPI ${index + 1}`),
-      currentDisplay: kpi?.currentDisplay ?? null,
-      progressPct: Number.isFinite(progressPct) ? progressPct : null,
-      healthy,
-      stale: !healthy,
-      backfilled: true,
-      source: 'weekly_checkin_focus_summary',
-      snapshotQuality: 'summary_only',
-    };
-  });
-};
-
-const snapshotGoalKpiMetricsForUser = async (uid, { reason = 'manual', now = null } = {}) => {
-  const db = admin.firestore();
-  const profile = await loadProfile(db, uid).catch(() => ({ id: uid }));
-  const zone = resolveTimezone(profile, DEFAULT_TIMEZONE);
-  const snapshotDt = (DateTime.isDateTime(now)
-    ? now
-    : now
-      ? DateTime.fromJSDate(new Date(now))
-      : DateTime.now()).setZone(zone);
-  const weekKey = buildWeeklySnapshotKey(snapshotDt);
-  const metricsSnap = await db.collection('goal_kpi_metrics').where('ownerUid', '==', uid).get();
-  if (metricsSnap.empty) {
-    return { uid, zone, weekKey, snapshotCount: 0 };
-  }
-
-  let batch = db.batch();
-  let pendingWrites = 0;
-  let snapshotCount = 0;
-  const commitBatch = async () => {
-    if (pendingWrites === 0) return;
-    await batch.commit();
-    batch = db.batch();
-    pendingWrites = 0;
-  };
-
-  for (const docSnap of metricsSnap.docs) {
-    const data = docSnap.data() || {};
-    const goalId = String(data.goalId || '').trim();
-    if (!goalId) continue;
-    const snapshotRef = db.collection('weekly_goal_kpi_snapshots').doc(`${uid}_${weekKey}_${goalId}`);
-    batch.set(snapshotRef, {
-      ownerUid: uid,
-      goalId,
-      goalRef: data.goalRef || null,
-      goalTitle: data.goalTitle || null,
-      resolvedKpis: Array.isArray(data.resolvedKpis) ? data.resolvedKpis : [],
-      weekKey,
-      snapshotType: 'weekly',
-      snapshotReason: reason,
-      snapshotTimeZone: zone,
-      sourceUpdatedAt: data.updatedAt || null,
-      snapshotAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    }, { merge: true });
-    pendingWrites += 1;
-    snapshotCount += 1;
-    if (pendingWrites >= 400) {
-      await commitBatch();
-    }
-  }
-
-  await commitBatch();
-  return { uid, zone, weekKey, snapshotCount };
-};
-
-const backfillWeeklyGoalKpiSnapshotsForUser = async (uid, { maxWeeks = 26, overwrite = false } = {}) => {
-  const db = admin.firestore();
-  const profile = await loadProfile(db, uid).catch(() => ({ id: uid }));
-  const zone = resolveTimezone(profile, DEFAULT_TIMEZONE);
-  const boundedMaxWeeks = Math.max(1, Math.min(Number(maxWeeks) || 26, 104));
-
-  const [weeklyCheckinsSnap, existingSnapshotsSnap] = await Promise.all([
-    db.collection('weekly_checkins').where('ownerUid', '==', uid).get(),
-    db.collection('weekly_goal_kpi_snapshots').where('ownerUid', '==', uid).get(),
-  ]);
-
-  const existingSnapshotIds = new Set(existingSnapshotsSnap.docs.map((docSnap) => docSnap.id));
-  const candidateWeeks = weeklyCheckinsSnap.docs
-    .map((docSnap) => {
-      const data = docSnap.data() || {};
-      const weekKey = String(data.weekKey || '').trim();
-      const weekDt = parseWeeklySnapshotKey(weekKey, zone);
-      const focusSummary = data?.metrics?.focusSummary || null;
-      const leafGoals = Array.isArray(focusSummary?.leafGoals) ? focusSummary.leafGoals : [];
-      return {
-        id: docSnap.id,
-        weekKey,
-        weekDt,
-        updatedAt: data.updatedAt || data.createdAt || null,
-        leafGoals,
-      };
-    })
-    .filter((entry) => entry.weekDt && entry.leafGoals.length > 0)
-    .sort((a, b) => b.weekDt.toMillis() - a.weekDt.toMillis())
-    .slice(0, boundedMaxWeeks);
-
-  let batch = db.batch();
-  let pendingWrites = 0;
-  let snapshotsWritten = 0;
-  let snapshotsSkipped = 0;
-
-  const commitBatch = async () => {
-    if (pendingWrites === 0) return;
-    await batch.commit();
-    batch = db.batch();
-    pendingWrites = 0;
-  };
-
-  for (const weekly of candidateWeeks) {
-    for (const leafGoal of weekly.leafGoals) {
-      const goalId = String(leafGoal?.goalId || '').trim();
-      if (!goalId) continue;
-      const snapshotId = `${uid}_${weekly.weekKey}_${goalId}`;
-      if (!overwrite && existingSnapshotIds.has(snapshotId)) {
-        snapshotsSkipped += 1;
-        continue;
-      }
-      const snapshotRef = db.collection('weekly_goal_kpi_snapshots').doc(snapshotId);
-      batch.set(snapshotRef, {
-        ownerUid: uid,
-        goalId,
-        goalRef: null,
-        goalTitle: leafGoal?.title || null,
-        resolvedKpis: buildBackfilledResolvedKpis(leafGoal),
-        weekKey: weekly.weekKey,
-        snapshotType: 'weekly',
-        snapshotReason: 'backfillWeeklyGoalKpiSnapshots',
-        snapshotTimeZone: zone,
-        sourceUpdatedAt: weekly.updatedAt || null,
-        snapshotAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        backfilled: true,
-        snapshotQuality: 'summary_only',
-        backfilledFromWeeklyCheckinId: weekly.id,
-        totalKpis: Number(leafGoal?.totalKpis || 0) || 0,
-        healthyKpis: Number(leafGoal?.healthyKpis || 0) || 0,
-        staleKpis: Number(leafGoal?.staleKpis || 0) || 0,
-      }, { merge: true });
-      existingSnapshotIds.add(snapshotId);
-      snapshotsWritten += 1;
-      pendingWrites += 1;
-      if (pendingWrites >= 400) {
-        await commitBatch();
-      }
-    }
-  }
-
-  await commitBatch();
-  const currentWeekSnapshot = await snapshotGoalKpiMetricsForUser(uid, { reason: 'backfillWeeklyGoalKpiSnapshots_current' });
-
-  return {
-    uid,
-    zone,
-    weeksScanned: candidateWeeks.length,
-    snapshotsWritten,
-    snapshotsSkipped,
-    currentWeekSnapshotsWritten: Number(currentWeekSnapshot?.snapshotCount || 0),
-    currentWeekKey: currentWeekSnapshot?.weekKey || buildWeeklySnapshotKey(DateTime.now().setZone(zone)),
-  };
-};
-
 const syncFitnessKpis = async () => {
   try {
-    const [fitnessResult, usersSnap] = await Promise.all([
-      syncAllUsersFitnessKpis(),
-      admin.firestore().collection('profiles').get(),
-    ]);
-
-    let metricsDocsUpdated = 0;
-    let weeklySnapshotsUpdated = 0;
-    for (const userDoc of usersSnap.docs) {
-      const uid = String(userDoc.id || '').trim();
-      if (!uid) continue;
-      const rows = await computeGoalFitnessKpisForUser(uid, { persist: true });
-      metricsDocsUpdated += Array.isArray(rows) ? rows.length : 0;
-      const snapshotResult = await snapshotGoalKpiMetricsForUser(uid, { reason: 'syncFitnessKpisNightly' });
-      weeklySnapshotsUpdated += Number(snapshotResult?.snapshotCount || 0);
-    }
-
-    const result = {
-      ...fitnessResult,
-      metricsDocsUpdated,
-      weeklySnapshotsUpdated,
-    };
-
-    console.log(
-      `✅ Fitness KPI sync completed: ${result.totalSynced} goals updated, ` +
-      `${metricsDocsUpdated} goal_kpi_metrics docs refreshed, ` +
-      `${weeklySnapshotsUpdated} weekly KPI snapshots written`
-    );
+    const result = await syncAllUsersFitnessKpis();
+    console.log(`✅ Fitness KPI sync completed: ${result.totalSynced} goals updated`);
     return result;
   } catch (e) {
     console.error('[fitnessKpiSync] failed', e?.message || e);
@@ -527,36 +313,11 @@ exports.syncFitnessKpisNow = httpsV2.onCall({ region: 'europe-west2' }, async (r
     throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   }
   try {
-    const [result, metricsRows] = await Promise.all([
-      syncUserFitnessKpis(uid),
-      computeGoalFitnessKpisForUser(uid, { persist: true }),
-    ]);
-    const snapshotResult = await snapshotGoalKpiMetricsForUser(uid, { reason: 'syncFitnessKpisNow' });
-    return {
-      ok: true,
-      ...result,
-      metricsDocsUpdated: Array.isArray(metricsRows) ? metricsRows.length : 0,
-      weeklySnapshotsUpdated: Number(snapshotResult?.snapshotCount || 0),
-    };
+    const result = await syncUserFitnessKpis(uid);
+    return { ok: true, ...result };
   } catch (e) {
     console.error('[fitnessKpiSync] user sync failed:', e);
     throw new httpsV2.HttpsError('internal', e?.message || 'Sync failed');
-  }
-});
-
-exports.backfillWeeklyGoalKpiSnapshots = httpsV2.onCall({ region: 'europe-west2' }, async (req) => {
-  const uid = req?.auth?.uid;
-  if (!uid) {
-    throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
-  }
-  const maxWeeks = Math.max(1, Math.min(Number(req?.data?.maxWeeks) || 26, 104));
-  const overwrite = req?.data?.overwrite === true;
-  try {
-    const result = await backfillWeeklyGoalKpiSnapshotsForUser(uid, { maxWeeks, overwrite });
-    return { ok: true, ...result };
-  } catch (e) {
-    console.error('[weekly-kpi-backfill] failed', { uid, maxWeeks, overwrite, error: e });
-    throw new httpsV2.HttpsError('internal', e?.message || 'Weekly KPI snapshot backfill failed');
   }
 });
 
@@ -902,36 +663,6 @@ function applyTimeOfDay(day, timeMs) {
   return d.getTime();
 }
 
-const CHORE_TIMEZONE = 'Europe/London';
-
-function extractZoneHourMinute(ms, timeZone = CHORE_TIMEZONE) {
-  const d = new Date(ms);
-  const parts = new Intl.DateTimeFormat('en-GB', {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-    timeZone,
-  }).formatToParts(d);
-  const hour = Number(parts.find((p) => p.type === 'hour')?.value || '0');
-  const minute = Number(parts.find((p) => p.type === 'minute')?.value || '0');
-  return { hour, minute };
-}
-
-function formatDueTime(ms) {
-  const { hour, minute } = extractZoneHourMinute(ms);
-  const hh = String(hour).padStart(2, '0');
-  const mm = String(minute).padStart(2, '0');
-  return `${hh}:${mm}`;
-}
-
-function classifyTimeOfDay(ms) {
-  const { hour, minute } = extractZoneHourMinute(ms);
-  const minutes = hour * 60 + minute;
-  if (minutes >= (5 * 60) && minutes < (12 * 60)) return 'morning';
-  if (minutes >= (12 * 60) && minutes < (17 * 60)) return 'afternoon';
-  return 'evening';
-}
-
 function durationMinutesFromTask(task) {
   const points = Number(task?.points || 0);
   const estimateMin = Number(task?.estimateMin || 0);
@@ -995,7 +726,7 @@ async function findSlotForDay(db, ownerUid, dayStartMs, dayEndMs, durationMs) {
   return null;
 }
 
-async function upsertChoreBlocksForTask(db, task, lookaheadDays = 28) {
+async function upsertChoreBlocksForTask(db, task, lookaheadDays = 14) {
   if (!task?.ownerUid || !task?.id) return { created: 0, updated: 0 };
   const ownerUid = task.ownerUid;
   const today = startOfDay(new Date());
@@ -1064,50 +795,6 @@ async function upsertChoreBlocksForTask(db, task, lookaheadDays = 28) {
     }
     return null;
   };
-
-  const findSlotFromDay = async (startDay, existingDocId = null, preferredMs = null) => {
-    for (const candidateDay of iterateNextDays(startDay, lookaheadDays)) {
-      const candidateStartMs = startOfDay(candidateDay).getTime();
-      if (snoozedUntil && candidateStartMs < startOfDay(new Date(snoozedUntil)).getTime()) continue;
-      const candidateKey = toDayKey(candidateDay);
-      const candidateDayStartMs = candidateStartMs;
-      const candidateDayEndMs = candidateDayStartMs + (24 * 60 * 60 * 1000) - 1;
-      const candidateCtx = await loadDayCtx(candidateDayStartMs, candidateDayEndMs, candidateKey);
-      if (!candidateCtx.windows.length) continue;
-      const occupiedWithoutSelf = candidateCtx.occupied.filter((o) => o.id !== existingDocId);
-
-      if (preferredMs && startOfDay(new Date(preferredMs)).getTime() === candidateDayStartMs) {
-        const preferredEnd = preferredMs + durationMs;
-        if (
-          fitsInWindows(preferredMs, preferredEnd, candidateCtx.windows) &&
-          !overlapsAny(preferredMs, preferredEnd, occupiedWithoutSelf)
-        ) {
-          return {
-            startMs: preferredMs,
-            endMs: preferredEnd,
-            dayCtx: candidateCtx,
-            dayKey: candidateKey,
-            day: candidateDay,
-            occupiedWithoutSelf,
-          };
-        }
-      }
-
-      const slot = findSlotInWindows(candidateCtx.windows, occupiedWithoutSelf, durationMs);
-      if (slot != null) {
-        return {
-          startMs: slot,
-          endMs: slot + durationMs,
-          dayCtx: candidateCtx,
-          dayKey: candidateKey,
-          day: candidateDay,
-          occupiedWithoutSelf,
-        };
-      }
-    }
-    return null;
-  };
-
   for (const day of iterateNextDays(today, lookaheadDays)) {
     if (snoozedUntil && day.getTime() < startOfDay(new Date(snoozedUntil)).getTime()) continue;
     if (!shouldScheduleOnDay(task, day)) continue;
@@ -1155,23 +842,15 @@ async function upsertChoreBlocksForTask(db, task, lookaheadDays = 28) {
 
     if (startMs == null) {
       const slot = findSlotInWindows(dayCtx.windows, occupiedWithoutSelf, durationMs);
-      if (slot != null) {
-        startMs = slot;
-        endMs = slot + durationMs;
-      }
-    }
-
-    if (startMs == null) {
-      const fallback = await findSlotFromDay(day, docId, taskDueMs && dueHasTime ? applyTimeOfDay(day, taskDueMs) : null);
-      if (!fallback) {
+      if (!slot) {
         if (snap.exists) {
           await ref.delete();
           dayCtx.occupied = occupiedWithoutSelf;
         }
         continue;
       }
-      startMs = fallback.startMs;
-      endMs = fallback.endMs;
+      startMs = slot;
+      endMs = slot + durationMs;
     }
 
     if (startMs >= nowMs && (nextStartMs == null || startMs < nextStartMs)) {
@@ -1218,23 +897,16 @@ async function upsertChoreBlocksForTask(db, task, lookaheadDays = 28) {
 
   if (nextStartMs && isRecurringChoreTask(task) && !isTaskLocked(task)) {
     const dueMs = toMillis(task?.dueDate || task?.dueDateMs || task?.targetDate);
-    const nextDueTime = formatDueTime(nextStartMs);
-    const nextTimeOfDay = classifyTimeOfDay(nextStartMs);
-    const currentDueTime = String(task?.dueTime || '').trim();
-    const currentTimeOfDay = String(task?.timeOfDay || '').trim().toLowerCase();
     const isMissing = !dueMs;
     const isOverdueBeyondGrace = !!dueMs && dueMs < (nowMs - CHORE_DUE_ROLLOVER_MS);
     const isFutureMismatch = !!dueMs && dueMs >= nowMs && Math.abs(dueMs - nextStartMs) > (5 * MS_IN_MINUTE);
-    const isTimeMismatch = currentDueTime !== nextDueTime || currentTimeOfDay !== nextTimeOfDay;
-    if (isMissing || isOverdueBeyondGrace || isFutureMismatch || isTimeMismatch) {
+    if (isMissing || isOverdueBeyondGrace || isFutureMismatch) {
       const hasStory = !!(task?.storyId || (task?.parentType === 'story' && task?.parentId));
       const sprintId = hasStory
         ? (task?.sprintId || null)
         : await resolveSprintIdForDate(db, ownerUid, task?.persona || null, nextStartMs, sprintCache);
       await db.collection('tasks').doc(task.id).set({
         dueDate: nextStartMs,
-        dueTime: nextDueTime,
-        timeOfDay: nextTimeOfDay,
         sprintId: sprintId ?? null,
         dueDateReason: isOverdueBeyondGrace ? 'chore_rollover' : 'chore_block',
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -2984,7 +2656,6 @@ exports.priorityNow = httpsV2.onRequest({ invoker: 'public', secrets: [GOOGLE_AI
       await recordAiLog(uid, 'priority_now_trace', 'success', 'Priority now response generated', {
         ...priorityTraceBase,
         parseStatus: llmText ? 'ok' : 'ok_empty',
-        rawOutput: String(llmText || '').slice(0, 12000),
         rawOutputText: String(llmText || '').slice(0, 12000),
         rawOutputLength: String(llmText || '').length,
         latencyMs: Date.now() - priorityStartedAtMs,
@@ -2996,7 +2667,6 @@ exports.priorityNow = httpsV2.onRequest({ invoker: 'public', secrets: [GOOGLE_AI
       await recordAiLog(uid, 'priority_now_trace', 'warning', 'Priority now LLM parse/runtime failure', {
         ...priorityTraceBase,
         parseStatus: 'failed',
-        rawOutput: String(llmText || '').slice(0, 12000),
         rawOutputText: String(llmText || '').slice(0, 12000),
         rawOutputLength: String(llmText || '').length,
         error: String(error?.message || error || 'unknown'),
@@ -11024,7 +10694,7 @@ exports.suggestTaskStoryConversions = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDI
   };
 });
 
-exports.monzoGoalPotRefLinker = schedulerV2.onSchedule('every 12 hours', async () => {
+exports.monzoGoalPotRefLinker = schedulerV2.onSchedule('every 30 minutes', async () => {
   const db = admin.firestore();
   const tokens = await db.collection('tokens').where('provider', '==', 'monzo').get();
   let usersChecked = 0;
@@ -11069,134 +10739,6 @@ exports.monzoGoalPotRefLinker = schedulerV2.onSchedule('every 12 hours', async (
     totalLinked,
     totalTimedOut,
     totalPending,
-  };
-});
-
-function normalizeSprintFocusGoalIds(value) {
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((goalId) => String(goalId || '').trim())
-    .filter((goalId) => !!goalId);
-}
-
-function normalizeAlignmentMode(value) {
-  const normalized = String(value || 'warn').trim().toLowerCase();
-  return normalized === 'strict' ? 'strict' : 'warn';
-}
-
-exports.enforceSprintFocusAlignment = firestoreV2.onDocumentWritten('stories/{storyId}', async (event) => {
-  const afterSnap = event.data?.after;
-  if (!afterSnap?.exists) return;
-
-  const storyId = String(event.params?.storyId || '').trim();
-  const story = afterSnap.data() || {};
-  const sprintId = String(story.sprintId || '').trim();
-  if (!sprintId) return;
-
-  const ownerUid = String(story.ownerUid || '').trim();
-  if (!ownerUid) return;
-
-  const db = admin.firestore();
-  const sprintSnap = await db.collection('sprints').doc(sprintId).get();
-  if (!sprintSnap.exists) return;
-
-  const sprint = sprintSnap.data() || {};
-  const mode = normalizeAlignmentMode(sprint.alignmentMode);
-  if (mode !== 'strict') return;
-
-  const focusGoalIds = normalizeSprintFocusGoalIds(sprint.focusGoalIds);
-  if (!focusGoalIds.length) return;
-
-  const goalId = String(story.goalId || '').trim();
-  const aligned = !!goalId && focusGoalIds.includes(goalId);
-  if (aligned) return;
-
-  await afterSnap.ref.set({
-    sprintId: null,
-    sprintAlignmentViolation: {
-      sprintId,
-      alignmentMode: 'strict',
-      reason: 'goal_not_in_sprint_focus_goals',
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    },
-    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-  }, { merge: true });
-
-  await db.collection('integration_logs').add({
-    integration: 'sprint_alignment',
-    type: 'strict_enforcement',
-    status: 'blocked',
-    userId: ownerUid,
-    storyId,
-    sprintId,
-    goalId: goalId || null,
-    reason: 'goal_not_in_sprint_focus_goals',
-    timestamp: admin.firestore.FieldValue.serverTimestamp(),
-  });
-});
-
-exports.sprintAlignmentAuditNightly = schedulerV2.onSchedule('every day 03:10', async () => {
-  const db = admin.firestore();
-  const activeSprintSnap = await db.collection('sprints').where('status', '==', 1).get();
-  let sprintsChecked = 0;
-  let sprintsWithRules = 0;
-  let totalUnaligned = 0;
-
-  for (const sprintDoc of activeSprintSnap.docs) {
-    const sprint = sprintDoc.data() || {};
-    const focusGoalIds = normalizeSprintFocusGoalIds(sprint.focusGoalIds);
-    if (!focusGoalIds.length) continue;
-
-    sprintsChecked += 1;
-    sprintsWithRules += 1;
-    const focusGoalSet = new Set(focusGoalIds);
-    const ownerUid = String(sprint.ownerUid || '').trim();
-    const persona = String(sprint.persona || 'personal');
-
-    if (!ownerUid) continue;
-
-    const storiesSnap = await db.collection('stories')
-      .where('ownerUid', '==', ownerUid)
-      .where('persona', '==', persona)
-      .where('sprintId', '==', sprintDoc.id)
-      .get();
-
-    const totalStories = storiesSnap.size;
-    const unalignedStories = storiesSnap.docs.filter((docSnap) => {
-      const row = docSnap.data() || {};
-      const goalId = String(row.goalId || '').trim();
-      return !goalId || !focusGoalSet.has(goalId);
-    }).length;
-    totalUnaligned += unalignedStories;
-
-    await db.collection('sprint_alignment_audit').doc(`${ownerUid}_${sprintDoc.id}`).set({
-      ownerUid,
-      sprintId: sprintDoc.id,
-      sprintName: sprint.name || sprint.ref || sprintDoc.id,
-      persona,
-      alignmentMode: normalizeAlignmentMode(sprint.alignmentMode),
-      focusGoalIds,
-      totalStories,
-      unalignedStories,
-      alignedStories: Math.max(totalStories - unalignedStories, 0),
-      alignmentPct: totalStories > 0
-        ? Math.max(0, Math.round(((totalStories - unalignedStories) / totalStories) * 100))
-        : 100,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    }, { merge: true });
-  }
-
-  console.log('[sprintAlignmentAuditNightly] complete', {
-    sprintsChecked,
-    sprintsWithRules,
-    totalUnaligned,
-  });
-
-  return {
-    ok: true,
-    sprintsChecked,
-    sprintsWithRules,
-    totalUnaligned,
   };
 });
 
@@ -12146,20 +11688,6 @@ async function buildDailySummaryAiFocus({ summaryData, userId }) {
         timezone: zone,
         activeWorkContext: context,
         calendarContext,
-        healthContext: {
-          source: ['authorized', 'synced'].includes(String(summaryData?.profile?.healthkitStatus || '').toLowerCase()) ? 'healthkit' : 'manual',
-          stepsToday: Number(summaryData?.profile?.healthkitStepsToday ?? summaryData?.profile?.manualStepsToday ?? 0) || null,
-          workoutMinutesToday: Number(summaryData?.profile?.healthkitWorkoutMinutesToday ?? summaryData?.profile?.manualWorkoutMinutesToday ?? 0) || null,
-          bodyFatPct: Number(summaryData?.profile?.healthkitBodyFatPct ?? summaryData?.profile?.manualBodyFatPct ?? 0) || null,
-          macroTargetsPresent: !!(
-            summaryData?.profile?.targetProteinG
-            || summaryData?.profile?.dailyProteinTargetG
-            || summaryData?.profile?.healthTargetProteinG
-            || summaryData?.profile?.targetCaloriesKcal
-            || summaryData?.profile?.dailyCaloriesTargetKcal
-            || summaryData?.profile?.healthTargetCaloriesKcal
-          ),
-        },
       },
     };
 
@@ -12180,7 +11708,6 @@ async function buildDailySummaryAiFocus({ summaryData, userId }) {
       await recordAiLog(userId, 'daily_summary_focus_trace', 'warning', 'Daily summary focus parse failure', {
         ...llmTraceBase,
         parseStatus: 'failed',
-        rawOutput: String(raw || '').slice(0, 12000),
         rawOutputText: String(raw || '').slice(0, 12000),
         rawOutputLength: String(raw || '').length,
         parseError: String(error?.message || error || 'unknown'),
@@ -12250,7 +11777,6 @@ async function buildDailySummaryAiFocus({ summaryData, userId }) {
       await recordAiLog(userId, 'daily_summary_focus_trace', 'warning', 'Daily summary focus returned no actionable items', {
         ...llmTraceBase,
         parseStatus: 'ok_empty',
-        rawOutput: String(raw || '').slice(0, 12000),
         rawOutputText: String(raw || '').slice(0, 12000),
         rawOutputLength: String(raw || '').length,
         latencyMs: Date.now() - startedAtMs,
@@ -12273,7 +11799,6 @@ async function buildDailySummaryAiFocus({ summaryData, userId }) {
     await recordAiLog(userId, 'daily_summary_focus_trace', 'success', 'Daily summary focus generated', {
       ...llmTraceBase,
       parseStatus: 'ok',
-      rawOutput: String(raw || '').slice(0, 12000),
       rawOutputText: String(raw || '').slice(0, 12000),
       rawOutputLength: String(raw || '').length,
       resultItemCount: result.items.length,
@@ -12573,13 +12098,13 @@ function assembleDailyChecklist(summaryData) {
       await ref.set(patch, { merge: true });
     }
 
-    // Materialize chore/routine calendar blocks for next 28 days (active only)
+    // Materialize chore/routine calendar blocks for next 14 days (active only)
     const type = effectiveType;
     const effectiveStatus = Number(patch?.status ?? afterStatus);
     const active = Number(effectiveStatus) !== 2;
     if (isChoreLike && active) {
       const task = { id, ...(after || {}), ...(patch || {}) };
-      await upsertChoreBlocksForTask(db, task, 28);
+      await upsertChoreBlocksForTask(db, task, 14);
     }
 
     // If just completed, mark nearest block done and update lastDoneAt
@@ -12707,7 +12232,7 @@ function assembleDailyChecklist(summaryData) {
       const snap = await db.collection('tasks').where('type', '==', t).where('status', '==', 0).get();
       for (const doc of snap.docs) {
         scanned++;
-        const res = await upsertChoreBlocksForTask(db, { id: doc.id, ...(doc.data() || {}) }, 28);
+        const res = await upsertChoreBlocksForTask(db, { id: doc.id, ...(doc.data() || {}) }, 14);
         created += res.created; updated += res.updated;
       }
     }
@@ -17387,15 +16912,6 @@ exports.onStoryDueDateAutoSprint = functionsV2.firestore.onDocumentUpdated("stor
   if (!ownerUid) return;
   const persona = afterData.persona || beforeData.persona || null;
   const db = admin.firestore();
-  const profileSnap = await db.collection('profiles').doc(ownerUid).get().catch(() => null);
-  const profile = profileSnap && profileSnap.exists ? (profileSnap.data() || {}) : {};
-  // Safety guard: due-date based sprint mapping is opt-in only.
-  if (profile.autoMapStorySprintFromDueDate !== true) return;
-
-  // Never overwrite an existing sprint from due-date churn.
-  const currentSprintId = afterData.sprintId || null;
-  if (currentSprintId && afterDue) return;
-
   const sprintId = afterDue
     ? await resolveSprintIdForDate(db, ownerUid, persona, afterDue, new Map())
     : null;
@@ -18163,30 +17679,10 @@ async function recordAiLog(uid, event, status, message, metadata = {}) {
     const level = status === 'error' ? 'error' : (status === 'warning' ? 'warning' : 'info');
     const expiresAt = createExpiryTimestamp();
     const now = admin.firestore.FieldValue.serverTimestamp();
-    const randomSuffix = Math.random().toString(36).slice(2, 8);
-    const traceIdRaw = metadata.traceId || metadata.trace_id || metadata.correlationId || metadata.correlation_id;
-    const traceId = String(traceIdRaw || `${String(event || 'ai_event')}_${Date.now()}_${randomSuffix}`).trim();
-    const promptTemplateId = String(metadata.promptTemplateId || metadata.templateId || metadata.template || '').trim() || null;
-    const parseStatus = String(metadata.parseStatus || (status === 'error' ? 'runtime_error' : 'ok')).trim().toLowerCase() || null;
-    const latencyRaw = Number(metadata.latencyMs ?? metadata.durationMs ?? metadata.latency ?? NaN);
-    const latencyMs = Number.isFinite(latencyRaw) && latencyRaw >= 0 ? Math.round(latencyRaw) : null;
-    const tokenRaw = Number(metadata.tokenCount ?? metadata.tokens ?? metadata.totalTokens ?? NaN);
-    const tokenCount = Number.isFinite(tokenRaw) && tokenRaw >= 0 ? Math.round(tokenRaw) : null;
-    const promptText = metadata.promptText || metadata.prompt || null;
-    const inputPayload = metadata.inputPayload || metadata.input || null;
-    const rawOutput = metadata.rawOutput || metadata.output || null;
     await ref.set({
       id: ref.id,
       ownerUid: uid,
       event,
-      traceId,
-      promptTemplateId,
-      parseStatus,
-      latencyMs,
-      tokenCount,
-      prompt: promptText,
-      input: inputPayload,
-      output: rawOutput,
       status,
       level,
       message,
@@ -19825,7 +19321,6 @@ async function buildFinanceCommentary({ summary, userId, windowLabel }) {
       await recordAiLog(userId, 'finance_commentary_trace', 'warning', 'Finance commentary returned empty output', {
         ...llmTraceBase,
         parseStatus: 'ok_empty',
-        rawOutput: '',
         rawOutputText: '',
         rawOutputLength: 0,
         latencyMs: Date.now() - startedAtMs,
@@ -19837,7 +19332,6 @@ async function buildFinanceCommentary({ summary, userId, windowLabel }) {
     await recordAiLog(userId, 'finance_commentary_trace', 'success', 'Finance commentary generated', {
       ...llmTraceBase,
       parseStatus: 'ok',
-      rawOutput: String(text).slice(0, 12000),
       rawOutputText: String(text).slice(0, 12000),
       rawOutputLength: String(text).length,
       outputLength: normalised.length,
