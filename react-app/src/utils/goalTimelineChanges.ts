@@ -36,12 +36,17 @@ export async function applyGoalTimelineChanges({
   batch.update(goalRef, goalPatch);
 
   let movedStoryCount = 0;
+  let unchangedStoryCount = 0;
   let reviewStoryCount = 0;
 
   affectedStories.forEach((story) => {
     if (!story?.id) return;
-    if (!story.recommendedSprintId || story.recommendedSprintId === story.plannedSprintId) {
+    if (!story.recommendedSprintId) {
       reviewStoryCount += 1;
+      return;
+    }
+    if (story.recommendedSprintId === story.plannedSprintId) {
+      unchangedStoryCount += 1;
       return;
     }
     batch.update(doc(db, 'stories', story.id), {
@@ -57,6 +62,7 @@ export async function applyGoalTimelineChanges({
 
   return {
     movedStoryCount,
+    unchangedStoryCount,
     reviewStoryCount,
   };
 }

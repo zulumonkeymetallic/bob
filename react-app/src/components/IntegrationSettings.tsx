@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Alert, Badge, Button, Card, Col, Collapse, Form, ListGroup, Row, Spinner, Table } from 'react-bootstrap';
+import { Alert, Badge, Button, Card, Col, Collapse, Form, ListGroup, Nav, Row, Spinner, Tab, Table } from 'react-bootstrap';
+import TelegramSettings from './settings/integrations/TelegramSettings';
 import { useAuth } from '../contexts/AuthContext';
 import { db, functions, firebaseConfig } from '../firebase';
 import { httpsCallable } from 'firebase/functions';
@@ -74,16 +75,29 @@ const relativeTime = (value: any) => {
   return formatDistanceToNow(date, { addSuffix: true });
 };
 
-type IntegrationSection = 'google' | 'youtube' | 'monzo' | 'strava' | 'steam' | 'trakt' | 'hardcover' | 'all';
+type IntegrationSection = 'google' | 'youtube' | 'monzo' | 'strava' | 'steam' | 'trakt' | 'hardcover' | 'telegram' | 'all';
 
 interface IntegrationSettingsProps {
   section?: IntegrationSection;
 }
 
+const INTEGRATION_TABS: { key: IntegrationSection; label: string; emoji: string }[] = [
+  { key: 'google',    label: 'Calendar',   emoji: '📅' },
+  { key: 'monzo',     label: 'Monzo',      emoji: '🏦' },
+  { key: 'strava',    label: 'Strava',     emoji: '🏃' },
+  { key: 'hardcover', label: 'Hardcover',  emoji: '📚' },
+  { key: 'youtube',   label: 'YouTube',    emoji: '▶️' },
+  { key: 'trakt',     label: 'Trakt',      emoji: '🎬' },
+  { key: 'steam',     label: 'Steam',      emoji: '🎮' },
+  { key: 'telegram',  label: 'Telegram',   emoji: '✈️' },
+];
+
 const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'all' }) => {
   const { currentUser } = useAuth();
   const navigate = useNavigate();
   const [profile, setProfile] = useState<ProfileData | null>(null);
+  // Active sub-tab when rendering in "all" mode (the full integrations page)
+  const [activeInteg, setActiveInteg] = useState<IntegrationSection>('google');
 
   const [googleConnected, setGoogleConnected] = useState<boolean>(false);
   const [googleEvents, setGoogleEvents] = useState<any[]>([]);
@@ -747,28 +761,44 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
   };
 
 
-  const show = (name: IntegrationSection) => section === 'all' || section === name;
+  // In "all" mode: show only the active sub-tab. In filtered mode: show only that section.
+  const show = (name: IntegrationSection) =>
+    section !== 'all' ? section === name : activeInteg === name;
 
   return (
-    <div className="d-flex flex-column gap-4">
+    <div className="d-flex flex-column gap-3">
+      {/* Header row */}
       <div className="d-flex justify-content-between align-items-center">
         <div>
           <h3 className="mb-0">Integrations</h3>
           <small className="text-muted">Connect services and view sync status</small>
         </div>
-        <div>
+        <div className="d-flex gap-2">
           <Button variant="outline-secondary" size="sm" onClick={() => navigate('/logs/integrations')}>
-            <i className="fas fa-stream me-2"></i>
             Integration Logs
           </Button>
-          <Button variant="outline-secondary" size="sm" className="ms-2" onClick={() => navigate('/logs/transcripts')}>
-            <i className="fas fa-file-alt me-2"></i>
+          <Button variant="outline-secondary" size="sm" onClick={() => navigate('/logs/transcripts')}>
             Transcript Logs
           </Button>
         </div>
       </div>
 
-      <Card>
+      {/* Sub-tab navigation (only when showing all integrations) */}
+      {section === 'all' && (
+        <Nav variant="tabs" activeKey={activeInteg} onSelect={(k) => k && setActiveInteg(k as IntegrationSection)}>
+          {INTEGRATION_TABS.map(({ key, label, emoji }) => (
+            <Nav.Item key={key}>
+              <Nav.Link eventKey={key} className="d-flex align-items-center gap-1">
+                <span>{emoji}</span>
+                <span className="d-none d-sm-inline">{label}</span>
+              </Nav.Link>
+            </Nav.Item>
+          ))}
+        </Nav>
+      )}
+
+      {/* AI Personality — hidden in tabbed mode (it lives in the AI settings tab now) */}
+      {section !== 'all' && <Card>
         <Card.Header>
           <h4 className="mb-0">AI Personality</h4>
           <small className="text-muted">Personalise the tone and style of AI responses across transcripts, daily digest, and all AI features</small>
@@ -838,7 +868,7 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
             These settings feed into every AI prompt — transcripts, daily digest, task enrichment, stories, and more. Values at 5 are neutral and produce no change.
           </Form.Text>
         </Card.Body>
-      </Card>
+      </Card>}
 
       {show('google') && (
       <Card>
@@ -1419,6 +1449,12 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
         </Card.Body>
       </Card>
       )}
+
+      {/* ── Telegram ──────────────────────────────────────────────────────── */}
+      {show('telegram') && (
+        <TelegramSettings />
+      )}
+
     </div>
   );
 };

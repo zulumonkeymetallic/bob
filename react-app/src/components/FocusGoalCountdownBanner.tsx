@@ -44,13 +44,13 @@ const getUrgency = (daysRemaining: number): 'critical' | 'high' | 'normal' | 'lo
 const getUrgencyColor = (urgency: 'critical' | 'high' | 'normal' | 'low'): string => {
   switch (urgency) {
     case 'critical':
-      return '#dc3545';
+      return 'var(--color-urgency-critical)';
     case 'high':
-      return '#fd7e14';
+      return 'var(--color-urgency-high)';
     case 'normal':
-      return '#0066cc';
+      return 'var(--brand)';
     case 'low':
-      return '#6c757d';
+      return 'var(--color-urgency-low)';
   }
 };
 
@@ -308,7 +308,7 @@ export const FocusGoalCountdownBanner: React.FC<FocusGoalCountdownBannerProps> =
               <h5 style={{ margin: 0, fontWeight: '700' }}>
                 {getUrgencyIcon(urgency)} {focusGoal.title?.trim() || 'Focus Goals'}
               </h5>
-              <small style={{ color: '#666' }}>
+              <small style={{ color: 'var(--muted)' }}>
                 {focusGoal.timeframe === 'sprint'
                   ? 'This Sprint'
                   : focusGoal.timeframe === 'quarter'
@@ -322,7 +322,7 @@ export const FocusGoalCountdownBanner: React.FC<FocusGoalCountdownBannerProps> =
             <div style={{ fontSize: '28px', fontWeight: '700', color: urgencyColor }}>
               {focusGoal.daysRemaining}
             </div>
-            <small style={{ color: '#666' }}>days left</small>
+            <small style={{ color: 'var(--muted)' }}>days left</small>
             {onRefresh && (
               <div style={{ marginTop: '8px' }}>
                 <Button size="sm" variant="outline-secondary" onClick={onRefresh} disabled={refreshing}>
@@ -336,7 +336,7 @@ export const FocusGoalCountdownBanner: React.FC<FocusGoalCountdownBannerProps> =
         {/* Days remaining progress */}
         <div style={{ marginBottom: '20px' }}>
           <ProgressBar now={Math.max(0, 100 - ((focusGoal.daysRemaining || 0) / 14) * 100)} variant="warning" />
-          <small style={{ color: '#666', marginTop: '4px', display: 'block' }}>
+          <small style={{ color: 'var(--muted)', marginTop: '4px', display: 'block' }}>
             {focusGoal.daysRemaining === 1 ? '1 day remains' : `${focusGoal.daysRemaining} days remain`}
           </small>
         </div>
@@ -344,8 +344,8 @@ export const FocusGoalCountdownBanner: React.FC<FocusGoalCountdownBannerProps> =
         {/* Finance guardrail warning */}
         {financeGuardrail && (
           <div style={{
-            background: '#fff3cd',
-            border: '1px solid #ffc107',
+            background: 'color-mix(in srgb, var(--color-urgency-medium) 12%, var(--card))',
+            border: '1px solid color-mix(in srgb, var(--color-urgency-medium) 40%, transparent)',
             borderRadius: '8px',
             padding: '12px 16px',
             marginBottom: '16px',
@@ -353,8 +353,8 @@ export const FocusGoalCountdownBanner: React.FC<FocusGoalCountdownBannerProps> =
             alignItems: 'flex-start',
             gap: '10px'
           }}>
-            <AlertCircle size={18} style={{ color: '#856404', flexShrink: 0, marginTop: '1px' }} />
-            <div style={{ fontSize: '13px', color: '#856404' }}>
+            <AlertCircle size={18} style={{ color: 'var(--color-urgency-medium)', flexShrink: 0, marginTop: '1px' }} />
+            <div style={{ fontSize: '13px', color: 'var(--color-urgency-medium)' }}>
               <strong>Finance Guardrail:</strong> Discretionary spend is{' '}
               <strong>{financeGuardrail.discretionaryPct}% of income</strong> but only{' '}
               {financeGuardrail.monthElapsedPct}% of the month has elapsed.
@@ -366,29 +366,29 @@ export const FocusGoalCountdownBanner: React.FC<FocusGoalCountdownBannerProps> =
         {/* Goals Overview */}
         <Row style={{ marginBottom: '20px' }}>
           <Col md={4}>
-            <div style={{ textAlign: 'center', padding: '12px', background: '#f8f9fa', borderRadius: '8px' }}>
-              <div style={{ fontSize: '18px', fontWeight: '700', color: '#0066cc' }}>
+            <div style={{ textAlign: 'center', padding: '12px', background: 'var(--panel)', borderRadius: '8px' }}>
+              <div style={{ fontSize: '18px', fontWeight: '700', color: 'var(--brand)' }}>
                 {rootGoals.length}
               </div>
-              <small style={{ color: '#666' }}>Programs</small>
+              <small style={{ color: 'var(--muted)' }}>Programs</small>
             </div>
           </Col>
           <Col md={4}>
-            <div style={{ textAlign: 'center', padding: '12px', background: '#f8f9fa', borderRadius: '8px' }}>
-              <div style={{ fontSize: '18px', fontWeight: '700', color: '#28a745' }}>
+            <div style={{ textAlign: 'center', padding: '12px', background: 'var(--panel)', borderRadius: '8px' }}>
+              <div style={{ fontSize: '18px', fontWeight: '700', color: 'var(--color-status-done)' }}>
                 {selectedGoals.length}
               </div>
-              <small style={{ color: '#666' }}>Leaf Goals</small>
+              <small style={{ color: 'var(--muted)' }}>Leaf Goals</small>
             </div>
           </Col>
           <Col md={4}>
-            <div style={{ textAlign: 'center', padding: '12px', background: '#f8f9fa', borderRadius: '8px' }}>
+            <div style={{ textAlign: 'center', padding: '12px', background: 'var(--panel)', borderRadius: '8px' }}>
               <div style={{ fontSize: '18px', fontWeight: '700', color: '#fd7e14' }}>
                 {storyStats.total > 0
                   ? `${storyStats.done}/${storyStats.total}`
                   : '—'}
               </div>
-              <small style={{ color: '#666' }}>Stories Complete</small>
+              <small style={{ color: 'var(--muted)' }}>Stories Complete</small>
             </div>
           </Col>
         </Row>
@@ -397,7 +397,7 @@ export const FocusGoalCountdownBanner: React.FC<FocusGoalCountdownBannerProps> =
           marginBottom: '16px',
           padding: '10px 12px',
           borderRadius: '8px',
-          background: '#f8f9fa',
+          background: 'var(--panel)',
           border: '1px solid #e9ecef',
           fontSize: '12px',
           color: '#495057'
@@ -453,7 +453,7 @@ export const FocusGoalCountdownBanner: React.FC<FocusGoalCountdownBannerProps> =
                             display: 'flex',
                             justifyContent: 'space-between',
                             fontSize: '11px',
-                            color: '#666',
+                            color: 'var(--muted)',
                             marginBottom: '4px'
                           }}
                         >
@@ -507,7 +507,7 @@ export const FocusGoalCountdownBanner: React.FC<FocusGoalCountdownBannerProps> =
                     {/* Savings pot progress (Monzo-linked) */}
                     {goal.estimatedCost && goal.estimatedCost > 0 && monzoPot ? (
                       <div style={{ marginTop: '8px', fontSize: '11px' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', color: '#666', marginBottom: '3px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--muted)', marginBottom: '3px' }}>
                           <span>💰 {monzoPot.potName ?? 'Savings pot'}</span>
                           <span style={{ color: monzoPot.fundedPercent && monzoPot.fundedPercent >= 100 ? '#28a745' : '#fd7e14', fontWeight: '600' }}>
                             £{monzoPot.potBalance.toLocaleString(undefined, { maximumFractionDigits: 0 })} / £{goal.estimatedCost.toLocaleString()}
@@ -527,7 +527,7 @@ export const FocusGoalCountdownBanner: React.FC<FocusGoalCountdownBannerProps> =
                         )}
                       </div>
                     ) : goal.estimatedCost && goal.estimatedCost > 0 ? (
-                      <div style={{ marginTop: '8px', fontSize: '11px', color: '#666' }}>
+                      <div style={{ marginTop: '8px', fontSize: '11px', color: 'var(--muted)' }}>
                         💰 Budget: £{goal.estimatedCost.toLocaleString()}
                       </div>
                     ) : null}
@@ -539,7 +539,7 @@ export const FocusGoalCountdownBanner: React.FC<FocusGoalCountdownBannerProps> =
         </div>
 
         {/* Overall Progress */}
-        <div style={{ marginBottom: '16px', padding: '12px', background: '#f8f9fa', borderRadius: '8px' }}>
+        <div style={{ marginBottom: '16px', padding: '12px', background: 'var(--panel)', borderRadius: '8px' }}>
           <div
             style={{
               display: 'flex',
@@ -549,10 +549,10 @@ export const FocusGoalCountdownBanner: React.FC<FocusGoalCountdownBannerProps> =
             }}
           >
             <span>Overall Progress</span>
-            <span style={{ color: '#0066cc' }}>{storyStats.progress}%</span>
+            <span style={{ color: 'var(--brand)' }}>{storyStats.progress}%</span>
           </div>
           <ProgressBar now={storyStats.progress} variant="info" />
-          <small style={{ color: '#666', marginTop: '4px', display: 'block' }}>
+          <small style={{ color: 'var(--muted)', marginTop: '4px', display: 'block' }}>
             {storyStats.done}/{storyStats.total} stories complete
           </small>
         </div>

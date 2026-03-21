@@ -217,15 +217,45 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
     });
   }, [allGoals, goal, wouldCreateCycle]);
 
+  const formatParentGoalOption = useCallback((candidate: Goal) => {
+    const ref = String((candidate as any)?.ref || '').trim();
+    const title = String(candidate.title || 'Untitled goal').trim();
+    return ref ? `${ref} - ${title}` : title;
+  }, []);
+
+  const resolveParentGoalSelection = useCallback((input: string): Goal | null => {
+    const normalized = String(input || '').trim().toLowerCase();
+    if (!normalized) return null;
+    return parentCandidates.find((candidate) => {
+      const byId = candidate.id.toLowerCase() === normalized;
+      const byRef = String((candidate as any)?.ref || '').trim().toLowerCase() === normalized;
+      const byTitle = String(candidate.title || '').trim().toLowerCase() === normalized;
+      const byLabel = formatParentGoalOption(candidate).toLowerCase() === normalized;
+      return byId || byRef || byTitle || byLabel;
+    }) || null;
+  }, [formatParentGoalOption, parentCandidates]);
+
+  const selectedParentGoal = useMemo(() => {
+    if (!formData.parentGoalId) return null;
+    return parentCandidates.find((candidate) => candidate.id === formData.parentGoalId)
+      || allGoals.find((candidate) => candidate.id === formData.parentGoalId)
+      || null;
+  }, [allGoals, formData.parentGoalId, parentCandidates]);
+
   const filteredParentOptions = useMemo(() => {
     const query = parentSearch.trim().toLowerCase();
     if (!query) return parentCandidates;
     return parentCandidates.filter((candidate) => {
       const title = candidate.title || '';
       const ref = (candidate as any)?.ref || '';
-      return title.toLowerCase().includes(query) || ref.toLowerCase().includes(query);
+      const label = formatParentGoalOption(candidate);
+      return (
+        title.toLowerCase().includes(query)
+        || ref.toLowerCase().includes(query)
+        || label.toLowerCase().includes(query)
+      );
     });
-  }, [parentCandidates, parentSearch]);
+  }, [parentCandidates, parentSearch, formatParentGoalOption]);
 
   const activePersona = (formData.persona || (goal as any)?.persona || currentPersona || 'personal') as 'personal' | 'work';
 
@@ -459,7 +489,8 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         const linkedPot = (goal as any).linkedPotId || (goal as any).potId || '';
         const linkedPotName = monzoPots.find((pot) => pot.id === linkedPot)?.name;
         setPotSearch(linkedPotName || String(linkedPot || ''));
-        setParentSearch('');
+        const selectedParent = allGoals.find((candidate) => candidate.id === (goal.parentGoalId || ''));
+        setParentSearch(selectedParent ? formatParentGoalOption(selectedParent) : '');
         setThemeTouched(false);
       } else {
         // CREATE MODE: Reset to defaults
@@ -494,7 +525,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         setThemeTouched(false);
       }
     }
-  }, [goal, show, resolveThemeId, currentPersona, monzoPots]);
+  }, [goal, show, resolveThemeId, currentPersona, monzoPots, allGoals, formatParentGoalOption]);
 
   useEffect(() => {
     if (!show) {
@@ -1092,24 +1123,46 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
                     <Form.Control
                       type="text"
                       size="sm"
-                      placeholder="Search parent goals..."
+                      placeholder="Search parent goals by ref or title..."
+                      list="edit-goal-parent-options"
                       value={parentSearch}
-                      onChange={(e) => setParentSearch(e.target.value)}
-                      className="mb-2"
+                      onChange={(e) => {
+                        const nextInput = e.target.value;
+                        setParentSearch(nextInput);
+                        if (!nextInput.trim()) {
+                          setFormData({ ...formData, parentGoalId: '' });
+                          return;
+                        }
+                        const resolved = resolveParentGoalSelection(nextInput);
+                        if (resolved) {
+                          setFormData({ ...formData, parentGoalId: resolved.id });
+                        }
+                      }}
+                      onBlur={() => {
+                        const resolved = resolveParentGoalSelection(parentSearch);
+                        if (resolved) {
+                          setParentSearch(formatParentGoalOption(resolved));
+                          setFormData({ ...formData, parentGoalId: resolved.id });
+                          return;
+                        }
+                        if (!parentSearch.trim()) {
+                          setFormData({ ...formData, parentGoalId: '' });
+                          return;
+                        }
+                        setFormData({ ...formData, parentGoalId: '' });
+                      }}
                     />
-                    <Form.Select
-                      value={formData.parentGoalId}
-                      onChange={(e) => setFormData({ ...formData, parentGoalId: e.target.value })}
-                      size="sm"
-                    >
-                      <option value="">No parent</option>
-                      {filteredParentOptions.map(option => (
-                        <option key={option.id} value={option.id}>
-                          {option.title || 'Untitled goal'}
-                        </option>
+                    <datalist id="edit-goal-parent-options">
+                      {filteredParentOptions.map((option) => (
+                        <option key={option.id} value={formatParentGoalOption(option)} />
                       ))}
-                    </Form.Select>
+                    </datalist>
                     <Form.Text className="text-muted">
+                      {selectedParentGoal
+                        ? `Selected parent: ${formatParentGoalOption(selectedParentGoal)}`
+                        : 'Start typing to search parent goals, or leave blank for no parent.'}
+                    </Form.Text>
+                    <Form.Text className="text-muted d-block">
                       Hold Option/Alt while dragging one goal onto another in the roadmap to link quickly.
                     </Form.Text>
                   </Form.Group>

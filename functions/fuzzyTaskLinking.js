@@ -441,6 +441,7 @@ exports.nightlyTaskLinking = onSchedule(
   },
   async (context) => {
     const db = admin.firestore();
+    const startedAt = Date.now();
     const runId = buildRunId('nightlyTaskLinking', context);
     const results = {
       runId,
@@ -676,7 +677,8 @@ exports.nightlyTaskLinking = onSchedule(
         timestamp: admin.firestore.FieldValue.serverTimestamp(),
         status: 'success',
         results,
-        duration: context.executionId
+        durationMs: Date.now() - startedAt,
+        runId,
       });
 
       console.log('✅ Nightly task linking complete:', results);
@@ -689,6 +691,8 @@ exports.nightlyTaskLinking = onSchedule(
           functionName: 'nightlyTaskLinking',
           timestamp: admin.firestore.FieldValue.serverTimestamp(),
           status: 'error',
+          durationMs: Date.now() - startedAt,
+          runId,
           error: error.message,
           stack: error.stack
         })
@@ -711,6 +715,7 @@ exports.nightlyStoryGoalLinking = onSchedule(
   },
   async (context) => {
     const db = admin.firestore();
+    const startedAt = Date.now();
     const runId = buildRunId('nightlyStoryGoalLinking', context);
     const results = {
       runId,
@@ -902,7 +907,8 @@ exports.nightlyStoryGoalLinking = onSchedule(
         timestamp: admin.firestore.FieldValue.serverTimestamp(),
         status: 'success',
         results,
-        duration: context.executionId
+        durationMs: Date.now() - startedAt,
+        runId,
       });
 
       console.log('✅ Nightly story-goal linking complete:', results);
@@ -913,6 +919,8 @@ exports.nightlyStoryGoalLinking = onSchedule(
         functionName: 'nightlyStoryGoalLinking',
         timestamp: admin.firestore.FieldValue.serverTimestamp(),
         status: 'error',
+        durationMs: Date.now() - startedAt,
+        runId,
         error: error.message,
         stack: error.stack
       }).catch(logError => console.error('Failed to log error:', logError));

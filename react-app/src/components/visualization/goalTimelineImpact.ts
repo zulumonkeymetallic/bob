@@ -13,6 +13,7 @@ export interface GoalTimelineAffectedStory {
   recommendedSprintId?: string;
   recommendedSprintName?: string;
   impactedTaskCount: number;
+  recommendationKind?: 'move' | 'already_closest' | 'no_sprint_available';
 }
 
 export interface GoalTimelineImpactPlan {
@@ -101,7 +102,6 @@ function pickRecommendedSprint(sprints: Sprint[], targetStartMs: number, current
 
   const best = sorted[0]?.sprint ?? null;
   if (!best) return null;
-  if (best.id === currentSprintId) return null;
   return best;
 }
 
@@ -113,37 +113,34 @@ export function buildGoalTimelineImpactPlan(args: {
   tasks: Task[];
   sprints: Sprint[];
 }): GoalTimelineImpactPlan {
-  const { goalId, newStartDate, newEndDate, stories, tasks, sprints } = args;
+  const { goalId, newStartDate, stories, tasks, sprints } = args;
   const affectedTaskIds = new Set<string>();
   const affectedStories: GoalTimelineAffectedStory[] = [];
 
   const goalStories = stories.filter((story) => story.goalId === goalId);
   for (const story of goalStories) {
     const sprint = sprints.find((candidate) => candidate.id === story.sprintId);
-    if (!sprint) continue;
-
-    const sprintStartMs = toMillis(sprint.startDate);
-    const sprintEndMs = toMillis(sprint.endDate);
-    if (sprintStartMs == null || sprintEndMs == null) continue;
-
-    const sprintStart = new Date(sprintStartMs);
-    const sprintEnd = new Date(sprintEndMs);
-    const stillFitsCurrentSprint = !(newStartDate > sprintEnd || newEndDate < sprintStart);
-    if (stillFitsCurrentSprint) continue;
-
-    const storyTasks = tasks.filter((task) => task.parentType === 'story' && task.parentId === story.id);
+    const storyTasks = tasks.filter((task) => {
+      const parentStoryId = String((task as any).storyId || '').trim();
+      if (parentStoryId && parentStoryId === story.id) return true;
+      return task.parentType === 'story' && task.parentId === story.id;
+    });
     storyTasks.forEach((task) => affectedTaskIds.add(task.id));
 
-    const recommendedSprint = pickRecommendedSprint(sprints, newStartDate.getTime(), sprint.id);
+    const recommendedSprint = pickRecommendedSprint(sprints, newStartDate.getTime(), sprint?.id);
+    const recommendationKind: GoalTimelineAffectedStory['recommendationKind'] = !recommendedSprint
+      ? 'no_sprint_available'
+      : (recommendedSprint.id === sprint?.id ? 'already_closest' : 'move');
     affectedStories.push({
       id: story.id,
       ref: String((story as any).ref || story.id),
       title: story.title,
-      plannedSprintId: sprint.id,
-      plannedSprintName: sprint.name,
+      plannedSprintId: sprint?.id,
+      plannedSprintName: sprint?.name,
       recommendedSprintId: recommendedSprint?.id,
       recommendedSprintName: recommendedSprint?.name,
       impactedTaskCount: storyTasks.length,
+      recommendationKind,
     });
   }
 

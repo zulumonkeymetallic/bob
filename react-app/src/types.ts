@@ -122,6 +122,11 @@ export interface Story {
   timeOfDay?: 'morning' | 'afternoon' | 'evening';
   targetDate?: number | string;
   plannedStartDate?: number | string;
+  progressPct?: number | null;
+  progressPctUpdatedAt?: number | null;
+  pointsRemaining?: number | null;
+  pointsRemainingAsOfDateKey?: string | null;
+  pointsRemainingUpdatedAt?: number | null;
   taskCount?: number;
   doneTaskCount?: number;
   metadata?: Record<string, any>;

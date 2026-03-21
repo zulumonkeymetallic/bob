@@ -1,40 +1,25 @@
-// Version tracking for cache busting
-// Align version with branch build
-export const VERSION = '4.5.484';
-export const BUILD_TIME = new Date().toISOString();
-export const BUILD_HASH = 'kanban-roadmap-theming-4.5.0';
+/**
+ * version.ts
+ *
+ * Build-time constants injected by scripts/build.js via REACT_APP_* env vars.
+ * Never hardcode version strings here — they are always derived from git + package.json.
+ *
+ * Local dev fallbacks are intentionally generic so they can never be confused
+ * with a real deployed version.
+ */
+
+export const VERSION    = process.env.REACT_APP_VERSION          ?? '0.0.0-dev';
+export const BUILD_HASH = process.env.REACT_APP_GIT_COMMIT       ?? 'dev';
+export const BUILD_TIME = process.env.REACT_APP_BUILD_TIME       ?? new Date().toISOString();
+export const BRANCH     = process.env.REACT_APP_GIT_BRANCH       ?? '';
+export const PR_NUMBER  = process.env.REACT_APP_PR_NUMBER        ?? '';
+
+// Legacy aliases kept for compatibility with existing consumers
+export const BUILD_ID   = PR_NUMBER ? `pr.${PR_NUMBER}` : (BRANCH || 'dev');
 
 console.log(`🚀 BOB App loaded - Version: ${VERSION}`);
-console.log(`✅ Status: Entity audit coverage`);
-console.log(`🔧 Fixes: Roadmap layout tweaks & toolbar overlap`);
-console.log(`🎯 Features: Global goals/stories/tasks change auditing`);
-console.log(`🚀 Architecture: Cache bust via ${BUILD_HASH}`);
+console.log(`🔗 Commit: ${BUILD_HASH}`);
+console.log(`🌿 Branch: ${BRANCH || '(unknown)'}`);
 console.log(`📅 Build time: ${BUILD_TIME}`);
 
-// Force refresh if version mismatch detected
-export const checkForUpdates = () => {
-  const lastVersion = localStorage.getItem('bob_version');
-  const lastCheck = localStorage.getItem('bob_last_check');
-  const now = Date.now();
-  
-  // Check for updates every 5 minutes
-  if (!lastCheck || now - parseInt(lastCheck) > 5 * 60 * 1000) {
-    localStorage.setItem('bob_last_check', now.toString());
-    
-    if (lastVersion && lastVersion !== VERSION) {
-      console.log(`🔄 Version update detected: ${lastVersion} → ${VERSION}`);
-      
-      if (window.confirm(`New version available (${VERSION}). Refresh to update?`)) {
-        window.location.reload();
-      }
-    }
-    
-    localStorage.setItem('bob_version', VERSION);
-  }
-};
-
-// Auto-check for updates
-checkForUpdates();
-
-// Ensure this file is treated as a module
 export {};

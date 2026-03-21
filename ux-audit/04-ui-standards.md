@@ -23,7 +23,37 @@ The UI for a work item adapts to three density tiers — **Compact** (Kanban), *
 
 ---
 
-## 2. Status Pill Standard
+## 2. Pills vs Buttons — The Core Rule
+
+**Pills/chips represent data state.** Tapping a pill changes that data value (status, priority).
+**Buttons trigger actions.** Tapping a button executes an operation (defer, move, schedule, edit, delete).
+
+These must never be confused:
+- Defer is always a button, never a pill.
+- Move is always a button, never a pill.
+- Schedule is always a button, never a pill.
+- Status is always a pill (or dropdown in table view) — never a button labelled "mark in progress".
+- Priority is always a pill (or dropdown in table view) — never a button.
+
+**Redundancy rule**: if a context already has a dropdown for a field (e.g. table status dropdown), do not also show a status pill. The dropdown *is* the data control. Pills and dropdowns for the same field must not coexist.
+
+---
+
+## 3. Searchable Entity Selectors Standard
+
+Entity linking for goals, stories, and tasks must be searchable by default. Plain long dropdowns are not allowed for entity selection.
+
+- Applies to: `goalId`, `parentGoalId`, `storyId`, `taskId`, and sprint-linked goal/story/task selectors where option counts can grow.
+- Required control pattern: searchable text input with suggestion list (`datalist`) or an equivalent searchable picker.
+- Matching keys must include: reference (`ref`) and title. ID-only labels are not acceptable.
+- Empty state must support explicit "none/unlinked" when the relationship is optional.
+- If typed text does not map to a valid entity, the bound ID value must not be set silently.
+
+This is mandatory across desktop and mobile surfaces so goal/story/task linking behavior stays consistent as data volume grows.
+
+---
+
+## 4. Status Pill Standard
 
 **Component**: `StatusPill`
 **File to create**: `src/components/shared/StatusPill.tsx`
@@ -68,7 +98,7 @@ The UI for a work item adapts to three density tiers — **Compact** (Kanban), *
 
 ---
 
-## 3. Priority Pill Standard
+## 5. Priority Pill Standard
 
 **Component**: `PriorityPill`
 **File to create**: `src/components/shared/PriorityPill.tsx`
@@ -88,7 +118,7 @@ Priority pills follow the same `mode` prop contract as StatusPill.
 
 ---
 
-## 4. AI Score Badge Standard
+## 6. AI Score Badge Standard
 
 **Component**: `AiScoreBadge`
 **File to create**: `src/components/shared/AiScoreBadge.tsx`
@@ -113,7 +143,7 @@ Priority pills follow the same `mode` prop contract as StatusPill.
 
 ---
 
-## 5. Manual Priority Badge Standard
+## 7. Manual Priority Badge Standard
 
 **Component**: `ManualPriorityBadge`
 **File to create**: `src/components/shared/ManualPriorityBadge.tsx`
@@ -236,30 +266,91 @@ Each row in the overflow menu is full-width with a 44px minimum tap target. Icon
 **Density**: Mobile
 **Applies to**: All work items rendered in MobileHome tabs or in mobile-responsive card views
 
+Mobile cards split into two patterns based on item type.
+
+### Pills vs Buttons on Mobile
+- **Pills** (status, priority) = data indicators. Tap to change the value.
+- **Buttons** (Defer, Move, checkbox) = actions. Tap to execute an operation.
+- Tables on desktop already have dropdowns for status/priority — no pill shown in that context.
+
+### 9A. Tasks — Checkbox Pattern
+
 ```
 ┌─────────────────────────────────────────────────────────┐
-│ Refactor authentication middleware         [High] [•••]  │
-│ STORY-012  •  In Progress  •  Due Mar 20               │
-│ ↳ Health goal                                           │
+│ ☐  Refactor authentication middleware     [Defer]  [•••] │
+│    TASK-042  •  Due Mar 20  •  Sprint 14                │
 └─────────────────────────────────────────────────────────┘
 ```
 
-- Full-width tap target (entire card, minimum 60px height)
-- Title is the primary element — large, truncate to 2 lines
-- Meta row: Ref ID • Status text • Due date (compact inline)
-- Priority chip shown (compact, right-aligned in title row)
-- Manual priority badge (`#N`) replaces priority chip if present (one or the other)
-- AI Score: hidden
-- Actions: `•••` button only (opens bottom sheet with full action list)
-- Goal/theme link as small muted text on 3rd line if present
-- No drag handle
+- **Checkbox** far left. Tap = mark done. Checked state strikes through title.
+- No status pill — done/not-done is binary. The checkbox *is* the status control.
+- No priority pill — not a primary execution decision on mobile.
+- **Defer** = labelled button, always visible, min 44px tap target.
+- `•••` overflow: Schedule, Activity, Edit, Delete, Convert to Story.
 
-### Tap Behaviours
-| Tap target | Action |
-|-----------|--------|
-| Main card area | Open detail/edit modal |
-| Priority chip | Quick cycle priority (if `interactive` mode) |
-| `•••` button | Open overflow action bottom sheet |
+### 9B. Chores — Checkbox + Move Pattern
+
+```
+┌─────────────────────────────────────────────────────────┐
+│ ☐  Clean bathroom                  [Move]  [Defer]  [•••]│
+│    CHORE  •  Every 7 days  •  Due Mar 18                │
+└─────────────────────────────────────────────────────────┘
+```
+
+- **Checkbox** = mark done (records completion, schedules next occurrence).
+- **Move** = smart interval postpone button, always visible:
+  - Daily chore → next day
+  - Weekly chore → next week
+  - Monthly chore (N months interval) → postpone by `Math.ceil(N / 2)` months (e.g. 4-month → 2 months, 1-month → 1 month)
+- **Defer** = standard defer modal (pick a custom date).
+- `•••` overflow: Edit, Delete.
+
+### 9C. Stories — Status Pill + Defer Button
+
+```
+┌─────────────────────────────────────────────────────────┐
+│ Refactor authentication middleware          [Defer]  [•••]│
+│ STORY-042  •  [In Progress]  •  Due Mar 20              │
+│ ↳ Sprint 14                                             │
+└─────────────────────────────────────────────────────────┘
+```
+
+- **No checkbox** — multi-state status (Backlog / In Progress / Review / Done).
+- **[In Progress]** = status pill in the meta row. Tap opens a compact status picker.
+- No priority pill on mobile — not shown.
+- **Defer** = labelled button, always visible.
+- `•••` overflow: Schedule, Activity, Edit, Delete.
+
+### 9D. Goals — Status Pill only (no Defer on mobile)
+
+```
+┌─────────────────────────────────────────────────────────┐
+│ Run a 10k race under 50 minutes                    [•••] │
+│ GOAL  •  [Active]  •  Health  •  Due Jun 30             │
+└─────────────────────────────────────────────────────────┘
+```
+
+- Status pill tappable in meta row.
+- No Defer button — goals are not deferred on mobile.
+- `•••` overflow: Edit, View roadmap (desktop link).
+
+### Common Mobile Card Rules
+- Full-width card body tap target (min 60px height) opens detail/edit.
+- Title truncates to 2 lines.
+- No drag handle.
+- Meta row: type indicator • key data points (status pill where applicable • due date).
+- Theme/goal link as muted text on 3rd line if present.
+- All visible buttons are min 44px tap target.
+
+### Tap Behaviour Summary
+| Tap target | Item type | Action |
+|-----------|-----------|--------|
+| Checkbox | Task / Chore | Toggle done state |
+| Status pill | Story / Goal | Open compact status picker |
+| Defer button | Task / Story | Open defer modal |
+| Move button | Chore | Smart interval postpone (no modal) |
+| `•••` | All | Open overflow bottom sheet |
+| Card body (elsewhere) | All | Open detail/edit modal |
 
 ---
 

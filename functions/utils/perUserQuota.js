@@ -33,6 +33,10 @@ const OPERATION_COSTS = {
   auto_enrich_tasks:     2,  // one Gemini call per task, but called in batch
   enhance_new_task:      1,  // single task enrichment
   task_story_conversion: 2,  // suggest + optional conversion
+  agent_context:         1,  // get_today_context aggregation
+  agent_weekly_review:   3,  // get_weekly_review with Gemini highlights
+  agent_briefing:        2,  // morning/weekly proactive Telegram briefing
+  agent_propose_plan:    5,  // propose_day_plan Gemini planning call
   default:               1,
 };
 

@@ -1,16 +1,18 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Badge, Button, Card, Form, ListGroup, Spinner } from 'react-bootstrap';
+import { Alert, Badge, Button, Card, Form, ListGroup, Spinner } from 'react-bootstrap';
 import { useSearchParams } from 'react-router-dom';
 import { collection, doc, getDoc, onSnapshot, query, where } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { endOfDay, format, startOfDay } from 'date-fns';
-import { Activity } from 'lucide-react';
+import { Activity, Clock3 } from 'lucide-react';
 import { db, functions } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useSidebar } from '../contexts/SidebarContext';
 import { Task } from '../types';
-import { resolveRecurringDueMs, resolveTaskDueMs } from '../utils/recurringTaskDue';
+import DeferItemModal from './DeferItemModal';
+import { resolveRecurringDueMs } from '../utils/recurringTaskDue';
+import { schedulePlannerItem as schedulePlannerItemMutation } from '../utils/plannerScheduling';
 
 interface BlockWindow {
   start: number;
@@ -18,8 +20,6 @@ interface BlockWindow {
 }
 
 const toIsoDate = (value: Date) => value.toISOString().slice(0, 10);
-
-const getTaskDueMs = (task: Task): number | null => resolveTaskDueMs(task);
 
 const getLastDoneMs = (task: Task): number | null => {
   const raw: any = (task as any).lastDoneAt ?? (task as any).completedAt;
@@ -69,6 +69,8 @@ const ChoreChecklistPage: React.FC = () => {
   const [completing, setCompleting] = useState<Record<string, boolean>>({});
   const [localDone, setLocalDone] = useState<Record<string, boolean>>({});
   const [blockWindow, setBlockWindow] = useState<BlockWindow | null>(null);
+  const [deferTask, setDeferTask] = useState<Task | null>(null);
+  const [feedback, setFeedback] = useState<{ variant: 'success' | 'danger' | 'info'; message: string } | null>(null);
 
   const dateParam = searchParams.get('date') || toIsoDate(new Date());
   const taskHighlightId = searchParams.get('taskId');
@@ -182,6 +184,42 @@ const ChoreChecklistPage: React.FC = () => {
     }
   }, [currentUser?.uid, completing]);
 
+  const handleApplyDefer = useCallback(async ({ dateMs, rationale, source }: { dateMs: number; rationale: string; source: string }) => {
+    if (!deferTask) return;
+    const debugRequestId = `chore-checklist-defer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const bucketRaw = String((deferTask as any)?.timeOfDay || '').trim().toLowerCase();
+    const targetBucket = bucketRaw === 'morning' || bucketRaw === 'afternoon' || bucketRaw === 'evening' || bucketRaw === 'anytime'
+      ? bucketRaw
+      : null;
+    try {
+      await schedulePlannerItemMutation({
+        itemType: 'task',
+        itemId: deferTask.id,
+        targetDateMs: dateMs,
+        targetBucket,
+        intent: 'defer',
+        source: source || 'chore_checklist',
+        rationale,
+        linkedBlockId: blockId || null,
+        durationMinutes: Math.max(10, Number((deferTask as any)?.estimateMin || 30)),
+        debugRequestId,
+      });
+      setFeedback({
+        variant: 'success',
+        message: `${deferTask.title} moved to ${new Date(dateMs).toLocaleDateString()}.`,
+      });
+      setDeferTask(null);
+    } catch (error) {
+      console.error('[ChoreChecklistPage] defer_failed', {
+        debugRequestId,
+        taskId: deferTask.id,
+        targetDateMs: dateMs,
+        error,
+      });
+      throw error;
+    }
+  }, [blockId, deferTask]);
+
   const titleDate = format(selectedDate, 'MMMM d, yyyy');
 
   return (
@@ -201,6 +239,12 @@ const ChoreChecklistPage: React.FC = () => {
           <Button variant="outline-secondary" size="sm" onClick={() => handleDateChange(toIsoDate(new Date()))}>Today</Button>
         </div>
       </div>
+
+      {feedback && (
+        <Alert variant={feedback.variant} dismissible onClose={() => setFeedback(null)} className="py-2">
+          {feedback.message}
+        </Alert>
+      )}
 
       <Card>
         <Card.Body>
@@ -249,25 +293,56 @@ const ChoreChecklistPage: React.FC = () => {
                       </div>
                       <div className="d-flex flex-column align-items-end gap-1">
                         <Badge bg={badgeVariant}>{badgeLabel}</Badge>
-                        <button
-                          type="button"
-                          className="d-inline-flex align-items-center justify-content-center"
-                          onClick={() => showSidebar(task as any, 'task')}
-                          title="Activity stream"
-                          aria-label={`Open activity stream for ${task.title}`}
-                          style={{
-                            color: 'var(--bs-secondary-color)',
-                            padding: 4,
-                            borderRadius: 4,
-                            border: 'none',
-                            background: 'transparent',
-                            cursor: 'pointer',
-                            lineHeight: 0,
-                            flexShrink: 0,
-                          }}
-                        >
-                          <Activity size={14} />
-                        </button>
+                        <div className="d-flex align-items-center gap-1">
+                          <Button
+                            size="sm"
+                            variant="outline-secondary"
+                            className="d-md-none py-0 px-2"
+                            onClick={() => setDeferTask(task)}
+                            title="Move/defer chore"
+                            aria-label={`Move or defer ${task.title}`}
+                          >
+                            Move/Defer
+                          </Button>
+                          <button
+                            type="button"
+                            className="d-none d-md-inline-flex align-items-center justify-content-center"
+                            onClick={() => setDeferTask(task)}
+                            title="Move/defer chore"
+                            aria-label={`Move or defer ${task.title}`}
+                            style={{
+                              color: 'var(--bs-secondary-color)',
+                              padding: 4,
+                              borderRadius: 4,
+                              border: 'none',
+                              background: 'transparent',
+                              cursor: 'pointer',
+                              lineHeight: 0,
+                              flexShrink: 0,
+                            }}
+                          >
+                            <Clock3 size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            className="d-inline-flex align-items-center justify-content-center"
+                            onClick={() => showSidebar(task as any, 'task')}
+                            title="Activity stream"
+                            aria-label={`Open activity stream for ${task.title}`}
+                            style={{
+                              color: 'var(--bs-secondary-color)',
+                              padding: 4,
+                              borderRadius: 4,
+                              border: 'none',
+                              background: 'transparent',
+                              cursor: 'pointer',
+                              lineHeight: 0,
+                              flexShrink: 0,
+                            }}
+                          >
+                            <Activity size={14} />
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </ListGroup.Item>
@@ -308,6 +383,15 @@ const ChoreChecklistPage: React.FC = () => {
           )}
         </Card.Body>
       </Card>
+
+      <DeferItemModal
+        show={Boolean(deferTask)}
+        onHide={() => setDeferTask(null)}
+        itemType="task"
+        itemId={deferTask?.id || ''}
+        itemTitle={deferTask?.title || ''}
+        onApply={handleApplyDefer}
+      />
     </div>
   );
 };

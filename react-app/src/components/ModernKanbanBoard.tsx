@@ -52,6 +52,15 @@ import { formatTaskTagLabel } from '../utils/tagDisplay';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { getManualPriorityRank } from '../utils/manualPriority';
 
+const normalizeBoardTaskType = (value: any): 'task' | 'chore' | 'routine' | 'habit' | 'read' | 'watch' => {
+  const raw = String(value || 'task').trim().toLowerCase();
+  if (raw === 'habitual') return 'habit';
+  if (['task', 'chore', 'routine', 'habit', 'read', 'watch'].includes(raw)) {
+    return raw as 'task' | 'chore' | 'routine' | 'habit' | 'read' | 'watch';
+  }
+  return 'task';
+};
+
 const formatDueDate = (task: Task): string => {
   const ms = getTaskDueMs(task);
   if (!ms) return '—';
@@ -541,6 +550,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
   const [filterOverdueOnly, setFilterOverdueOnly] = useState(false);
   const [filterUnlinkedStoriesOnly, setFilterUnlinkedStoriesOnly] = useState(false);
   const [filterUnlinkedTasksOnly, setFilterUnlinkedTasksOnly] = useState(false);
+  const [showChoreTasks, setShowChoreTasks] = useState(false);
   const [filterTop3Only, setFilterTop3Only] = useState(() => {
     if (typeof window === 'undefined') return false;
     try {
@@ -776,6 +786,11 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
 
   const saveManualSchedule = useCallback(async () => {
     if (!currentUser?.uid || !scheduleStory || !scheduleForm.startLocal) return;
+    const existingScheduled = scheduledBlocksByEntity[`story:${scheduleStory.id}`];
+    if (existingScheduled?.id) {
+      alert('This story already has a linked calendar block. Edit or remove that block instead of creating another one.');
+      return;
+    }
     setScheduleSaving(true);
     try {
       const start = new Date(scheduleForm.startLocal);
@@ -790,8 +805,10 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
         source: 'manual',
         entryMethod: 'manual_kanban',
         isAiGenerated: false,
+        createdBy: 'user',
         status: 'planned',
         persona: currentPersona || 'personal',
+        syncToGoogle: true,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
@@ -803,7 +820,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
     } finally {
       setScheduleSaving(false);
     }
-  }, [currentUser?.uid, currentPersona, scheduleForm, scheduleStory]);
+  }, [currentUser?.uid, currentPersona, scheduleForm, scheduleStory, scheduledBlocksByEntity]);
 
   const applyDeferredDate = useCallback(async ({ dateMs, rationale, source }: { dateMs: number; rationale: string; source: string }) => {
     if (!deferTarget) return;
@@ -985,6 +1002,21 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
     return ms >= sprintStartMs && ms <= sprintEndMs;
   };
 
+  const isStoryDueDateInSprint = (story: Story): boolean => {
+    if (!resolvedSprintId || !sprintStartMs || !sprintEndMs) return false;
+    const raw = (story as any).dueDate ?? (story as any).targetDate ?? (story as any).plannedEndDate ?? (story as any).plannedStartDate ?? null;
+    if (!raw) return false;
+    let ms: number | null = null;
+    if (typeof raw === 'number') ms = raw;
+    else if ((raw as any)?.toDate) ms = (raw as any).toDate().getTime();
+    else {
+      const parsed = Date.parse(String(raw));
+      ms = Number.isNaN(parsed) ? null : parsed;
+    }
+    if (!ms) return false;
+    return ms >= sprintStartMs && ms <= sprintEndMs;
+  };
+
   const tasksInScope = resolvedSprintId
     ? tasks.filter(t => {
       const explicit = (t as any).sprintId === resolvedSprintId;
@@ -1001,6 +1033,8 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
   });
 
   const filteredTasks = tasksInScope.filter((task) => {
+    const taskType = normalizeBoardTaskType((task as any).type);
+    if (!showChoreTasks && ['chore', 'routine', 'habit'].includes(taskType)) return false;
     if (filterTop3Only && !isTop3Task(task)) return false;
     if (filterCriticalOnly && !(isCriticalPriority(task.priority) || isTop3Task(task))) return false;
     if (filterCriticalAiOnly && !matchesCriticalOrHighAi(task)) return false;
@@ -1055,12 +1089,25 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
 
   const getStoriesForLane = (status: string): Story[] => {
     const lane = (status as LaneStatus) || 'backlog';
-    return sortedStories.filter(story => storyLaneForStatus(story) === lane);
+    return sortedStories.filter((story) => {
+      if (storyLaneForStatus(story) !== lane) return false;
+      if (lane === 'done' && resolvedSprintId) {
+        return isStoryDueDateInSprint(story);
+      }
+      return true;
+    });
   };
 
   const getTasksForLane = (status: string): Task[] => {
     const lane = (status as LaneStatus) || 'backlog';
-    return sortedTasks.filter(task => taskLaneForStatus(task) === lane);
+    return sortedTasks.filter((task) => {
+      if (taskLaneForStatus(task) !== lane) return false;
+      if (normalizeBoardTaskType((task as any).type) !== 'task' && !showChoreTasks) return false;
+      if (lane === 'done' && resolvedSprintId) {
+        return isDueDateInSprint(task) && normalizeBoardTaskType((task as any).type) === 'task';
+      }
+      return true;
+    });
   };
 
   const parseDroppableId = (id: string): { lane: LaneStatus; type: 'stories' | 'tasks' } | null => {
@@ -1373,6 +1420,17 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
             }
           }
         }
+      } else if (selectedType === 'story') {
+        const existingStory = stories.find((s) => s.id === selectedItem.id);
+        if (existingStory) {
+          const existingDue = (existingStory as any).dueDate ?? (existingStory as any).targetDate ?? null;
+          const nextDue = (editForm as any).dueDate ?? null;
+          if ((existingDue ?? null) !== (nextDue ?? null)) {
+            payload.dueDateLocked = true;
+            payload.dueDateReason = 'user';
+            payload.targetDate = nextDue;
+          }
+        }
       }
 
       await updateDoc(docRef, payload);
@@ -1440,6 +1498,10 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
     navigate('/sprints/planning');
   }, [navigate]);
 
+  const handleOpenSevenDayPlanner = useCallback(() => {
+    navigate('/planner/weekly');
+  }, [navigate]);
+
   if (loading) {
     return (
       <div style={{ minHeight: '100vh', padding: '24px', backgroundColor: themeVars.bg }}>
@@ -1484,6 +1546,15 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
             className="btn-icon-themed"
           >
             <Grid size={16} />
+          </Button>
+          <Button
+            variant="outline-secondary"
+            onClick={handleOpenSevenDayPlanner}
+            aria-label="Open 7-day view"
+            title="Open 7-day view"
+            className="btn-icon-themed"
+          >
+            <Clock3 size={16} />
           </Button>
           <Button
             variant="outline-secondary"
@@ -1549,6 +1620,14 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
           label="Unlinked tasks"
           checked={filterUnlinkedTasksOnly}
           onChange={(e) => setFilterUnlinkedTasksOnly(e.currentTarget.checked)}
+        />
+        <Form.Check
+          inline
+          type="switch"
+          id="toggle-chores"
+          label="Show chores/routines"
+          checked={showChoreTasks}
+          onChange={(e) => setShowChoreTasks(e.currentTarget.checked)}
         />
         <Form.Check
           inline

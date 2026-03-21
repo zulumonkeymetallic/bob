@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Card, Container, Row, Col, Button, Dropdown, Badge, Form, Spinner } from 'react-bootstrap';
 import { db, functions } from '../firebase';
 import { collection, query, where, onSnapshot, orderBy, limit } from 'firebase/firestore';
@@ -17,6 +17,8 @@ import SprintSelector from './SprintSelector';
 import EditStoryModal from './EditStoryModal';
 import EditTaskModal from './EditTaskModal';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
+import { useFocusGoals } from '../hooks/useFocusGoals';
+import { getActiveFocusLeafGoalIds, isGoalInHierarchySet } from '../utils/goalHierarchy';
 import {
     callDeltaReplan,
     callFullReplan,
@@ -24,6 +26,7 @@ import {
     formatFullReplanSummary,
     normalizePlannerCallableError,
 } from '../utils/plannerOrchestration';
+import PlanActionBar from './planner/PlanActionBar';
 
 const SprintKanbanPageV2: React.FC = () => {
     const navigate = useNavigate();
@@ -32,6 +35,7 @@ const SprintKanbanPageV2: React.FC = () => {
     const { selectedSprintId, setSelectedSprintId, sprints } = useSprint();
     const { isCollapsed, toggleCollapse, showSidebar } = useSidebar();
     const { themes: globalThemes } = useGlobalThemes();
+    const { activeFocusGoals } = useFocusGoals(currentUser?.uid);
 
     const [stories, setStories] = useState<Story[]>([]);
     const [tasks, setTasks] = useState<Task[]>([]);
@@ -47,11 +51,13 @@ const SprintKanbanPageV2: React.FC = () => {
     const [editStory, setEditStory] = useState<Story | null>(null);
     const [editTask, setEditTask] = useState<Task | null>(null);
     const [dueFilter, setDueFilter] = useState<'all' | 'today' | 'overdue' | 'top3' | 'critical'>('top3');
+    const [showFocusOnly, setShowFocusOnly] = useState(false);
     const [sortBy, setSortBy] = useState<'ai' | 'due' | 'priority' | 'default'>('ai');
     const [replanLoading, setReplanLoading] = useState(false);
     const [fullReplanLoading, setFullReplanLoading] = useState(false);
     const [replanFeedback, setReplanFeedback] = useState<string | null>(null);
     const boardContainerRef = React.useRef<HTMLDivElement>(null);
+    const activeFocusGoalIds = useMemo(() => getActiveFocusLeafGoalIds(activeFocusGoals), [activeFocusGoals]);
 
     const resolveTimestampMs = (value: any): number | null => {
         if (!value) return null;
@@ -189,6 +195,11 @@ const SprintKanbanPageV2: React.FC = () => {
         if (!filterSprintId && !currentSprint) return true;
         if (!filterSprintId) return true;
         return storySprint === filterSprintId;
+    }).filter((story) => {
+        if (!showFocusOnly || activeFocusGoalIds.size === 0) return true;
+        const goalId = String((story as any).goalId || '').trim();
+        if (!goalId) return false;
+        return isGoalInHierarchySet(goalId, goals, activeFocusGoalIds);
     });
 
     const sprintTasks = tasks; // Already filtered by query if sprintId is set
@@ -200,6 +211,15 @@ const SprintKanbanPageV2: React.FC = () => {
         const dueMs = resolveTimestampMs((task as any).dueDate ?? (task as any).targetDate ?? (task as any).endDate ?? (task as any).dueDateMs);
         if (dueMs == null) return false;
         return dueMs >= sprintStartMs && dueMs <= sprintEndMs;
+    }).filter((task) => {
+        if (!showFocusOnly || activeFocusGoalIds.size === 0) return true;
+        const directGoalId = String((task as any).goalId || '').trim();
+        if (directGoalId && isGoalInHierarchySet(directGoalId, goals, activeFocusGoalIds)) return true;
+        const storyId = String((task as any).storyId || (task as any).parentId || '').trim();
+        if (!storyId) return false;
+        const linkedStory = stories.find((story) => story.id === storyId);
+        const storyGoalId = String((linkedStory as any)?.goalId || '').trim();
+        return !!storyGoalId && isGoalInHierarchySet(storyGoalId, goals, activeFocusGoalIds);
     });
 
     // Sprint metrics
@@ -430,6 +450,15 @@ const SprintKanbanPageV2: React.FC = () => {
                                     <Dropdown.Item active={dueFilter === 'critical'} onClick={() => setDueFilter('critical')}>Critical</Dropdown.Item>
                                 </Dropdown.Menu>
                             </Dropdown>
+                            <Form.Check
+                                type="switch"
+                                id="toggle-kanban-focus-only"
+                                label={`Focus only${activeFocusGoalIds.size > 0 ? ` (${activeFocusGoalIds.size})` : ''}`}
+                                checked={showFocusOnly}
+                                onChange={(e) => setShowFocusOnly(e.target.checked)}
+                                disabled={activeFocusGoalIds.size === 0}
+                                className="ms-2"
+                            />
 
                                 <Form.Group className="ms-2">
                                     <Form.Select
@@ -474,28 +503,7 @@ const SprintKanbanPageV2: React.FC = () => {
                                 )}
                             </div>
                             <div className="d-flex gap-2">
-                                <Button
-                                    variant="outline-secondary"
-                                    size="sm"
-                                    onClick={() => navigate('/dashboard')}
-                                >
-                                    View overview
-                                </Button>
-                                <Button
-                                    variant="outline-secondary"
-                                    size="sm"
-                                    onClick={() => navigate('/calendar')}
-                                >
-                                    <CalendarIcon size={14} className="me-1" />
-                                    View calendar
-                                </Button>
-                                <Button
-                                    variant="outline-secondary"
-                                    size="sm"
-                                    onClick={() => navigate('/sprints/planning')}
-                                >
-                                    View planner
-                                </Button>
+                                <PlanActionBar />
                                 <Button
                                     variant="outline-primary"
                                     size="sm"
@@ -610,6 +618,8 @@ const SprintKanbanPageV2: React.FC = () => {
                                     sprintId={filterSprintId}
                                     themeFilter={themeFilter}
                                     goalFilter={goalFilter}
+                                    focusOnly={showFocusOnly}
+                                    focusGoalIds={activeFocusGoalIds}
                                     onItemSelect={(item, type) => showSidebar(item, type)}
                                     onEdit={handleEditItem}
                                     showDescriptions={showDescriptions}

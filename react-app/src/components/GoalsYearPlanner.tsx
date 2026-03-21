@@ -2,9 +2,10 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Badge, Button, Card, Col, Container, Dropdown, Form, InputGroup, Modal, Row } from 'react-bootstrap';
 import { dropTargetForElements, monitorForElements, draggable } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
 import { collection, doc, onSnapshot, orderBy, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
-import { Calendar, ChevronLeft, ChevronRight } from 'lucide-react';
+import { httpsCallable } from 'firebase/functions';
+import { Activity, Calendar, CalendarPlus, ChevronLeft, ChevronRight, Edit3, Wand2 } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
-import { db } from '../firebase';
+import { db, functions } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useSprint } from '../contexts/SprintContext';
@@ -23,7 +24,9 @@ import { goalNeedsLinkedPot } from '../utils/goalCost';
 import { buildGoalTimelineImpactPlan } from './visualization/goalTimelineImpact';
 import { applyGoalTimelineChanges } from '../utils/goalTimelineChanges';
 import { parseBooleanParam, parseIdListParam, parseNumberListParam } from '../utils/planningQuery';
-import { isGoalInHierarchySet } from '../utils/goalHierarchy';
+import { getActiveFocusLeafGoalIds, isGoalInHierarchySet } from '../utils/goalHierarchy';
+import { useFocusGoals } from '../hooks/useFocusGoals';
+import PlanActionBar from './planner/PlanActionBar';
 import '../styles/KanbanCards.css';
 
 interface GoalYearColumnProps {
@@ -35,6 +38,11 @@ interface GoalYearColumnProps {
   showDescriptions: boolean;
   onEdit: (goal: Goal) => void;
   onOpenWorkspace: (goal: Goal) => void;
+  onOpenActivity: (goal: Goal) => void;
+  onAutoGenerateStories: (goal: Goal) => void;
+  onScheduleGoal: (goal: Goal) => void;
+  generatingGoalId: string | null;
+  schedulingGoalId: string | null;
 }
 
 const parseDateInput = (value: string) => {
@@ -133,11 +141,26 @@ const formatMoney = (v: number) => v.toLocaleString('en-GB', { style: 'currency'
 const GoalYearCard: React.FC<{
   goal: Goal;
   themePalette: any[];
-  pots: Record<string, { name: string; balance: number }>;
   showDescription: boolean;
   onEdit: (goal: Goal) => void;
   onOpenWorkspace: (goal: Goal) => void;
-}> = ({ goal, themePalette, pots, showDescription, onEdit, onOpenWorkspace }) => {
+  onOpenActivity: (goal: Goal) => void;
+  onAutoGenerateStories: (goal: Goal) => void;
+  onScheduleGoal: (goal: Goal) => void;
+  generatingGoalId: string | null;
+  schedulingGoalId: string | null;
+}> = ({
+  goal,
+  themePalette,
+  showDescription,
+  onEdit,
+  onOpenWorkspace,
+  onOpenActivity,
+  onAutoGenerateStories,
+  onScheduleGoal,
+  generatingGoalId,
+  schedulingGoalId,
+}) => {
   const ref = useRef<HTMLDivElement>(null);
   const [dragging, setDragging] = useState(false);
 
@@ -153,51 +176,92 @@ const GoalYearCard: React.FC<{
   }, [goal]);
 
   const themeColor = goalThemeColor(goal, themePalette) || (themeVars.brand as string);
-  const estimated = Number((goal as any).estimatedCost || 0);
-  const potId = (goal as any).linkedPotId || (goal as any).potId;
-  const potInfo = potId ? pots[String(potId)] : undefined;
-  const potBalance = potInfo?.balance || 0;
-  const savingsPct = estimated > 0 ? Math.min(100, Math.round(((potBalance / 100) / estimated) * 100)) : 0;
   const statusLabel = getStatusName(goal.status);
+  const themeLabel = getThemeName(goal.theme);
 
   return (
     <Card
       ref={ref}
+      className="kanban-card"
       style={{
         border: `1px solid ${colorWithAlpha(themeColor, 0.35)}`,
-        background: colorWithAlpha(themeColor, 0.12),
+        background: 'var(--notion-bg)',
         boxShadow: '0 6px 12px var(--glass-shadow-color)',
         cursor: 'grab',
         opacity: dragging ? 0.6 : 1,
       }}
-      onClick={() => onEdit(goal)}
     >
       <div style={{ height: 4, background: themeColor }} />
       <Card.Body style={{ padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 6 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
-          <div style={{ fontWeight: 600, fontSize: 14, color: themeVars.text as string }}>{goal.title || 'Untitled goal'}</div>
-          <Badge bg="light" text="dark" style={{ fontSize: 10 }}>{statusLabel}</Badge>
+          <div style={{ fontWeight: 600, fontSize: 14, color: themeVars.text as string, lineHeight: 1.25 }}>
+            {goal.title || 'Untitled goal'}
+          </div>
+          <div style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+            <Button
+              variant="link"
+              size="sm"
+              className="p-0"
+              style={{ width: 20, height: 20, color: 'var(--notion-text)' }}
+              title="View activity stream"
+              onClick={(event) => {
+                event.stopPropagation();
+                onOpenActivity(goal);
+              }}
+            >
+              <Activity size={13} />
+            </Button>
+            <Button
+              variant="link"
+              size="sm"
+              className="p-0"
+              style={{ width: 20, height: 20, color: 'var(--notion-text)' }}
+              title="Edit goal"
+              onClick={(event) => {
+                event.stopPropagation();
+                onEdit(goal);
+              }}
+            >
+              <Edit3 size={13} />
+            </Button>
+            <Button
+              variant="link"
+              size="sm"
+              className="p-0"
+              style={{ width: 20, height: 20, color: 'var(--notion-text)' }}
+              title="Auto-generate stories"
+              disabled={generatingGoalId === goal.id}
+              onClick={(event) => {
+                event.stopPropagation();
+                onAutoGenerateStories(goal);
+              }}
+            >
+              <Wand2 size={13} />
+            </Button>
+            <Button
+              variant="link"
+              size="sm"
+              className="p-0"
+              style={{ width: 20, height: 20, color: 'var(--notion-text)' }}
+              title="Generate calendar blocks"
+              disabled={schedulingGoalId === goal.id}
+              onClick={(event) => {
+                event.stopPropagation();
+                onScheduleGoal(goal);
+              }}
+            >
+              <CalendarPlus size={13} />
+            </Button>
+          </div>
+        </div>
+        <div className="kanban-card__meta">
+          <span className="kanban-card__meta-badge">{themeLabel || 'General'}</span>
+          <span className="kanban-card__meta-badge">{statusLabel}</span>
+          {(goal as any).ref && <span className="kanban-card__meta-text">{String((goal as any).ref)}</span>}
         </div>
         {showDescription && goal.description && (
           <div style={{ fontSize: 11, color: themeVars.muted as string }}>
             {goal.description}
-          </div>
-        )}
-        {estimated > 0 && (
-          <div style={{ fontSize: 11, color: themeVars.muted as string }}>
-            Savings: {formatMoney(potBalance / 100)} of {formatMoney(estimated)} ({savingsPct}%)
-          </div>
-        )}
-        {estimated > 0 && (
-          <div style={{ height: 6, background: 'rgba(0,0,0,0.08)', borderRadius: 999 }}>
-            <div
-              style={{
-                width: `${savingsPct}%`,
-                height: '100%',
-                background: themeColor,
-                borderRadius: 999,
-              }}
-            />
           </div>
         )}
         <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
@@ -236,6 +300,11 @@ const GoalYearColumn: React.FC<GoalYearColumnProps> = ({
   showDescriptions,
   onEdit,
   onOpenWorkspace,
+  onOpenActivity,
+  onAutoGenerateStories,
+  onScheduleGoal,
+  generatingGoalId,
+  schedulingGoalId,
 }) => {
   const ref = useRef<HTMLDivElement>(null);
   const [isOver, setIsOver] = useState(false);
@@ -314,10 +383,14 @@ const GoalYearColumn: React.FC<GoalYearColumnProps> = ({
             key={goal.id}
             goal={goal}
             themePalette={themePalette}
-            pots={pots}
             showDescription={showDescriptions}
             onEdit={onEdit}
             onOpenWorkspace={onOpenWorkspace}
+            onOpenActivity={onOpenActivity}
+            onAutoGenerateStories={onAutoGenerateStories}
+            onScheduleGoal={onScheduleGoal}
+            generatingGoalId={generatingGoalId}
+            schedulingGoalId={schedulingGoalId}
           />
         ))}
         {goals.length === 0 && (
@@ -472,7 +545,7 @@ const GoalsYearPlanner: React.FC = () => {
   const [searchParams] = useSearchParams();
   const { sprints, selectedSprintId, setSelectedSprintId } = useSprint();
   const { themes } = useGlobalThemes();
-  const { isCollapsed, toggleCollapse } = useSidebar();
+  const { isCollapsed, toggleCollapse, showSidebar } = useSidebar();
   const embedded = parseBooleanParam(searchParams.get('embed'));
   const queryGoalIds = useMemo(
     () => parseIdListParam(searchParams.get('goalIds') || searchParams.get('goalId')),
@@ -484,6 +557,7 @@ const GoalsYearPlanner: React.FC = () => {
     [searchParams],
   );
   const queryThemeIdSet = useMemo(() => new Set(queryThemeIds), [queryThemeIds]);
+  const queryFocusOnly = parseBooleanParam(searchParams.get('focusOnly'));
 
   const [goals, setGoals] = useState<Goal[]>([]);
   const [storyDocs, setStoryDocs] = useState<Story[]>([]);
@@ -497,8 +571,10 @@ const GoalsYearPlanner: React.FC = () => {
   const [selectedYears, setSelectedYears] = useState<number[]>(defaultSelectedYears);
   const [showNoYear, setShowNoYear] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
-  const [showGoalDescriptions, setShowGoalDescriptions] = useState(true);
+  const [showGoalDescriptions, setShowGoalDescriptions] = useState(false);
   const [showNoPotOnly, setShowNoPotOnly] = useState(false);
+  const [showFocusGoalsOnly, setShowFocusGoalsOnly] = useState(queryFocusOnly);
+  const [focusToggleTouched, setFocusToggleTouched] = useState(false);
   const [activeSprintGoalIds, setActiveSprintGoalIds] = useState<Set<string>>(new Set());
   const [applyActiveSprintFilter, setApplyActiveSprintFilter] = useState(true);
   const [editGoal, setEditGoal] = useState<Goal | null>(null);
@@ -506,6 +582,8 @@ const GoalsYearPlanner: React.FC = () => {
   const [pots, setPots] = useState<Record<string, { name: string; balance: number }>>({});
   const [moveError, setMoveError] = useState<string | null>(null);
   const [moveNotice, setMoveNotice] = useState<string | null>(null);
+  const { activeFocusGoals } = useFocusGoals(currentUser?.uid);
+  const activeFocusGoalIds = useMemo(() => getActiveFocusLeafGoalIds(activeFocusGoals), [activeFocusGoals]);
   const [pendingSprintChanges, setPendingSprintChanges] = useState<{
     goalId: string;
     targetYear: number | null;
@@ -514,6 +592,8 @@ const GoalsYearPlanner: React.FC = () => {
     affectedStories: GoalTimelineAffectedStory[];
   } | null>(null);
   const [workspaceGoal, setWorkspaceGoal] = useState<Goal | null>(null);
+  const [generatingGoalId, setGeneratingGoalId] = useState<string | null>(null);
+  const [schedulingGoalId, setSchedulingGoalId] = useState<string | null>(null);
 
   useEffect(() => {
     if (queryThemeIds.length === 1) {
@@ -522,6 +602,11 @@ const GoalsYearPlanner: React.FC = () => {
       setFilterTheme(matchedTheme?.label || 'all');
     }
   }, [queryThemeIds, themes]);
+
+  useEffect(() => {
+    if (focusToggleTouched) return;
+    setShowFocusGoalsOnly(queryFocusOnly);
+  }, [queryFocusOnly, focusToggleTouched]);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -681,6 +766,7 @@ const GoalsYearPlanner: React.FC = () => {
     if (filterTheme !== 'all' && getThemeName(goal.theme) !== filterTheme) return false;
     if (queryThemeIdSet.size > 0 && !queryThemeIdSet.has(Number(goal.theme))) return false;
     if (queryGoalIdSet.size > 0 && !isGoalInHierarchySet(goal.id, goals, queryGoalIdSet)) return false;
+    if (showFocusGoalsOnly && activeFocusGoalIds.size > 0 && !isGoalInHierarchySet(goal.id, goals, activeFocusGoalIds)) return false;
     if (showNoPotOnly) {
       if (!goalNeedsLinkedPot(goal)) return false;
     }
@@ -772,6 +858,60 @@ const GoalsYearPlanner: React.FC = () => {
     return map;
   }, [orderedFilteredGoals]);
 
+  const handleOpenGoalActivity = (goal: Goal) => {
+    showSidebar(goal, 'goal');
+  };
+
+  const handleAutoGenerateStories = async (goal: Goal) => {
+    if (!currentUser?.uid) return;
+    try {
+      setGeneratingGoalId(goal.id);
+      const callable = httpsCallable(functions, 'generateStoriesForGoal');
+      const resp: any = await callable({ goalId: goal.id });
+      const created = Number(resp?.data?.created || 0);
+      setMoveNotice(
+        created > 0
+          ? `Generated ${created} stor${created === 1 ? 'y' : 'ies'} for "${goal.title}".`
+          : `No new stories were generated for "${goal.title}".`,
+      );
+    } catch (error: any) {
+      console.error('Goal year planner auto-generate failed', error);
+      setMoveError(error?.message || 'Failed to auto-generate stories for this goal.');
+    } finally {
+      setGeneratingGoalId(null);
+    }
+  };
+
+  const handleScheduleGoal = async (goal: Goal) => {
+    if (!currentUser?.uid) return;
+    try {
+      setSchedulingGoalId(goal.id);
+      const runPlanner = httpsCallable(functions, 'runPlanner');
+      const result: any = await runPlanner({
+        startDate: new Date().toISOString().slice(0, 10),
+        days: 7,
+        persona: currentPersona || 'personal',
+        focusGoalId: goal.id,
+        goalTimeRequest: Number((goal as any).timeToMasterHours || 0) > 0
+          ? Math.min(Number((goal as any).timeToMasterHours) * 60, 300)
+          : 120,
+      });
+      const planResult = result?.data || {};
+      const createdBlocks = Number(planResult?.llm?.blocksCreated || 0)
+        || (Array.isArray(planResult?.llm?.blocks) ? planResult.llm.blocks.length : 0);
+      if (createdBlocks > 0) {
+        setMoveNotice(`Scheduled ${createdBlocks} calendar block${createdBlocks === 1 ? '' : 's'} for "${goal.title}".`);
+      } else {
+        setMoveNotice(`No free slot found to schedule "${goal.title}" this week.`);
+      }
+    } catch (error: any) {
+      console.error('Goal year planner schedule failed', error);
+      setMoveError(error?.message || 'Failed to schedule calendar blocks for this goal.');
+    } finally {
+      setSchedulingGoalId(null);
+    }
+  };
+
   useEffect(() => {
     return monitorForElements({
       onDrop: async ({ source, location }) => {
@@ -849,6 +989,18 @@ const GoalsYearPlanner: React.FC = () => {
                 </Button>
               </div>
             </div>
+          </Col>
+        </Row>
+      )}
+
+      {!embedded && (
+        <Row className="mb-3">
+          <Col>
+            <Card style={{ border: '1px solid var(--notion-border)', background: 'var(--notion-bg)' }}>
+              <Card.Body style={{ padding: '8px 12px' }}>
+                <PlanActionBar />
+              </Card.Body>
+            </Card>
           </Col>
         </Row>
       )}
@@ -1095,11 +1247,24 @@ const GoalsYearPlanner: React.FC = () => {
                     setFilterStatus('all');
                     setFilterTheme('all');
                     setSearchTerm('');
+                    setShowFocusGoalsOnly(false);
                   }}
                   style={{ borderColor: 'var(--notion-border)', color: 'var(--notion-text)' }}
                 >
                   Clear Filters
                 </Button>
+                <Form.Check
+                  type="switch"
+                  id="toggle-goals-focus-only"
+                  label={`Focus goals only${activeFocusGoalIds.size > 0 ? ` (${activeFocusGoalIds.size})` : ''}`}
+                  checked={showFocusGoalsOnly}
+                  onChange={(e) => {
+                    setFocusToggleTouched(true);
+                    setShowFocusGoalsOnly(e.target.checked);
+                  }}
+                  disabled={activeFocusGoalIds.size === 0}
+                  className="text-muted"
+                />
                 <Form.Check
                   type="switch"
                   id="toggle-goal-descriptions"
@@ -1134,6 +1299,11 @@ const GoalsYearPlanner: React.FC = () => {
             showDescriptions={showGoalDescriptions}
             onEdit={(g) => setEditGoal(g)}
             onOpenWorkspace={(g) => setWorkspaceGoal(g)}
+            onOpenActivity={handleOpenGoalActivity}
+            onAutoGenerateStories={handleAutoGenerateStories}
+            onScheduleGoal={handleScheduleGoal}
+            generatingGoalId={generatingGoalId}
+            schedulingGoalId={schedulingGoalId}
           />
         ))}
       </div>
@@ -1225,7 +1395,7 @@ const GoalsYearPlanner: React.FC = () => {
             });
             setMoveError(null);
             setMoveNotice(
-              `Goal dates updated. ${result.movedStoryCount} stor${result.movedStoryCount === 1 ? 'y was' : 'ies were'} moved to the closest sprint${result.reviewStoryCount > 0 ? `, and ${result.reviewStoryCount} still need manual review.` : '.'}`
+              `Goal dates updated. ${result.movedStoryCount} stor${result.movedStoryCount === 1 ? 'y was' : 'ies were'} moved to the closest sprint start${result.unchangedStoryCount > 0 ? `, ${result.unchangedStoryCount} already matched` : ''}${result.reviewStoryCount > 0 ? `, and ${result.reviewStoryCount} still need manual review.` : '.'}`
             );
           } catch (error: any) {
             console.error('Failed to apply goal timeline changes from year planner:', error);

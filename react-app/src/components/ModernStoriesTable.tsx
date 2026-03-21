@@ -46,6 +46,7 @@ import { parsePointsValue } from '../utils/points';
 import { MISSING_INFO_CELL_BG, MISSING_INFO_CELL_BG_HOVER, hasLinkedId, isBlankText, isMissingPoints } from '../utils/dataQuality';
 import { planningSprints } from '../utils/sprintFilter';
 import { getManualPriorityLabel, getManualPriorityRank } from '../utils/manualPriority';
+import { buildStoryProgressUpdate, formatStoryProgressLabel, normalizeProgressPct } from '../utils/storyProgress';
 
 interface StoryTableRow extends Story {
   goalTitle?: string;
@@ -146,6 +147,15 @@ const defaultColumns: Column[] = [
     visible: true,
     editable: false,
     type: 'number'
+  },
+  {
+    key: 'progressPct',
+    label: 'Progress',
+    width: '12%',
+    visible: true,
+    editable: true,
+    type: 'select',
+    options: ['0', '25', '50', '75', '90', '100']
   },
   {
     key: 'aiCriticalityReason',
@@ -506,11 +516,24 @@ const SortableRow: React.FC<SortableRowProps> = ({
         const parsedPoints = parsePointsValue(valueToSave);
         const fallbackPoints = parsePointsValue((story as any).points) ?? 1;
         valueToSave = parsedPoints == null ? fallbackPoints : parsedPoints;
+      } else if (actualKey === 'progressPct') {
+        valueToSave = normalizeProgressPct(valueToSave);
       }
       
       // Only proceed if the value actually changed
       if (oldValue !== valueToSave) {
         const updates: Partial<Story> = { [actualKey]: valueToSave } as any;
+        if (actualKey === 'progressPct') {
+          Object.assign(updates, buildStoryProgressUpdate({
+            points: (story as any).points,
+            progressPct: valueToSave,
+          }));
+        } else if (actualKey === 'points') {
+          Object.assign(updates, buildStoryProgressUpdate({
+            points: valueToSave,
+            progressPct: (story as any).progressPct ?? 0,
+          }));
+        }
         // If goal changed, inherit theme from selected goal
         if (actualKey === 'goalId') {
           const newGoal = goals.find(g => g.id === valueToSave);
@@ -568,6 +591,9 @@ const SortableRow: React.FC<SortableRowProps> = ({
     if (key === 'priority') {
       return priorityLabel(value, 'Medium');
     }
+    if (key === 'progressPct') {
+      return formatStoryProgressLabel((story as any).points, value);
+    }
     if (key === 'sprintId' && value) {
       const sprint = sprints.find(s => s.id === value);
       return sprint ? sprint.name : value;
@@ -608,6 +634,9 @@ const SortableRow: React.FC<SortableRowProps> = ({
       }
       if (column.key === 'priority') {
         return priorityLabel(value, 'Medium');
+      }
+      if (column.key === 'progressPct') {
+        return String(normalizeProgressPct(value));
       }
       if (column.key === 'sprintId') {
         return value == null ? '' : String(value);

@@ -34,6 +34,14 @@ function normalizeBucket(value) {
   return raw === 'morning' || raw === 'afternoon' || raw === 'evening' || raw === 'anytime' ? raw : null;
 }
 
+function inferBucketFromHour(hour) {
+  const h = Number(hour);
+  if (!Number.isFinite(h)) return 'anytime';
+  if (h >= 5 && h < 13) return 'morning';
+  if (h >= 13 && h < 19) return 'afternoon';
+  return 'evening';
+}
+
 function toMinutes(hhmm) {
   const [h = '0', m = '0'] = String(hhmm || '0:0').split(':');
   return (Number(h) * 60) + Number(m);
@@ -232,6 +240,78 @@ async function resolveSprintIdForDate(db, userId, dateMs) {
   return exact?.id || null;
 }
 
+function resolvePlannerDateMs(value) {
+  if (value == null) return null;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value?.toMillis === 'function') return value.toMillis();
+  if (typeof value?.toDate === 'function') {
+    const dateValue = value.toDate();
+    return dateValue instanceof Date ? dateValue.getTime() : null;
+  }
+  if (typeof value === 'string') {
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? null : parsed;
+  }
+  if (typeof value?.seconds === 'number') {
+    return (value.seconds * 1000) + Math.floor((value.nanoseconds || 0) / 1e6);
+  }
+  return null;
+}
+
+function resolveExactDueStartMs(dateMs, dueTime, zone) {
+  const raw = String(dueTime || '').trim();
+  if (!raw) return null;
+  const match = raw.match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+    return null;
+  }
+  return DateTime.fromMillis(dateMs, { zone }).startOf('day').set({
+    hour,
+    minute,
+    second: 0,
+    millisecond: 0,
+  }).toMillis();
+}
+
+function resolveManualScheduleOverride(itemType, entity, zone, durationMinutes) {
+  if (!entity) return null;
+  const isLocked = entity.dueDateLocked || entity.lockDueDate || entity.immovable === true || entity.status === 'immovable';
+  if (!isLocked) return null;
+
+  const rawDate = itemType === 'task'
+    ? (entity.dueDate ?? entity.dueDateMs ?? entity.targetDate ?? null)
+    : (entity.targetDate ?? entity.dueDate ?? entity.plannedStartDate ?? null);
+  const resolvedDateMs = resolvePlannerDateMs(rawDate);
+  if (!Number.isFinite(resolvedDateMs)) return null;
+
+  const day = DateTime.fromMillis(resolvedDateMs, { zone }).startOf('day');
+  const exactStartMs = resolveExactDueStartMs(resolvedDateMs, entity.dueTime, zone);
+  const effectiveDurationMs = Math.max(MIN_BLOCK_MS, Math.round(durationMinutes) * 60 * 1000);
+
+  if (Number.isFinite(exactStartMs)) {
+    return {
+      exactTargetStartMs: exactStartMs,
+      exactTargetEndMs: exactStartMs + effectiveDurationMs,
+      targetDateMs: exactStartMs,
+      targetBucket: normalizeBucket(entity.timeOfDay) || inferBucketFromHour(DateTime.fromMillis(exactStartMs, { zone }).hour),
+      maxTargetDateMs: exactStartMs + effectiveDurationMs,
+      reason: 'locked_due_time',
+    };
+  }
+
+  return {
+    exactTargetStartMs: null,
+    exactTargetEndMs: null,
+    targetDateMs: day.toMillis(),
+    targetBucket: normalizeBucket(entity.timeOfDay),
+    maxTargetDateMs: day.endOf('day').toMillis(),
+    reason: 'locked_due_date',
+  };
+}
+
 function choosePlacement({
   targetDateMs,
   targetBucket,
@@ -402,6 +482,8 @@ async function schedulePlannerItemMutation({
   maxTargetDateMs = null,
   allowSplit = false,
   debugRequestId = null,
+  exactTargetStartMs = null,
+  exactTargetEndMs = null,
 }) {
   const logContext = {
     debugRequestId: debugRequestId || null,
@@ -418,6 +500,8 @@ async function schedulePlannerItemMutation({
     searchDays: searchDays || null,
     maxTargetDateMs: maxTargetDateMs || null,
     allowSplit: allowSplit === true,
+    exactTargetStartMs: Number.isFinite(Number(exactTargetStartMs)) ? Number(exactTargetStartMs) : null,
+    exactTargetEndMs: Number.isFinite(Number(exactTargetEndMs)) ? Number(exactTargetEndMs) : null,
   };
   const normalizedType = String(itemType || '').trim().toLowerCase();
   if (normalizedType !== 'task' && normalizedType !== 'story') {
@@ -464,7 +548,18 @@ async function schedulePlannerItemMutation({
   const { pickSlots } = buildPickSlots(themePlan);
   const normalizedSearchDays = Math.max(1, Math.min(Number(searchDays || DEFAULT_SEARCH_DAYS), 84));
   const busyIntervals = buildBusyIntervals(allBlocks, { planningMode: effectivePlanningMode, persona, excludedBlockIds });
-  const placements = allowSplit
+  const forcedStartMs = Number(exactTargetStartMs);
+  const forcedEndMs = Number(exactTargetEndMs);
+  const forcedDurationMs = Math.max(MIN_BLOCK_MS, Math.round(effectiveDurationMinutes) * 60 * 1000);
+  const placements = Number.isFinite(forcedStartMs) && forcedStartMs > 0
+    ? [{
+        appliedStartMs: forcedStartMs,
+        appliedEndMs: (Number.isFinite(forcedEndMs) && forcedEndMs > forcedStartMs)
+          ? forcedEndMs
+          : (forcedStartMs + forcedDurationMs),
+        appliedBucket: normalizeBucket(targetBucket) || inferBucketFromHour(DateTime.fromMillis(forcedStartMs, { zone }).hour),
+      }]
+    : allowSplit
     ? chooseSplitPlacements({
         targetDateMs: targetMs,
         targetBucket,
@@ -595,7 +690,7 @@ async function schedulePlannerItemMutation({
     });
 
   await batch.commit();
-  console.info('[schedulePlannerItemMutation] committed', {
+    console.info('[schedulePlannerItemMutation] committed', {
     ...logContext,
     effectivePlanningMode,
     durationMinutes: effectiveDurationMinutes,
@@ -610,6 +705,7 @@ async function schedulePlannerItemMutation({
     usedBlockIds: Array.from(usedBlockIds),
     splitGroupId,
     resolvedSprintId: resolvedSprintId || null,
+    forcedPlacement: Number.isFinite(forcedStartMs) && forcedStartMs > 0,
   });
 
   const activityPlacement = firstPlacement;
@@ -662,5 +758,6 @@ async function schedulePlannerItemMutation({
 }
 
 module.exports = {
+  resolveManualScheduleOverride,
   schedulePlannerItemMutation,
 };

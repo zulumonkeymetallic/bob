@@ -31,6 +31,8 @@ export class VersionTimeoutService implements IVersionTimeoutService {
   private readonly TIMEOUT_DURATION = 30 * 60 * 1000; // 30 minutes
   private readonly CHECK_INTERVAL = 5 * 60 * 1000; // Check every 5 minutes
   private readonly SERVER_CHECK_ENDPOINT = '/version.json';
+  // Guard: only show the mismatch/timeout dialog once per service lifetime
+  private versionDialogShown = false;
   
   private constructor() {
     this.initializeService();
@@ -151,11 +153,16 @@ export class VersionTimeoutService implements IVersionTimeoutService {
   }
 
   private isServerVersionDifferent(status: VersionStatus): boolean {
-    return status.serverVersion && status.serverVersion !== status.currentVersion;
+    if (!status.serverVersion) return false;
+    // Normalise both sides: strip any non-semver suffixes like ".local" or "-dev"
+    const normalise = (v: string) => v.replace(/[^0-9.]/g, '').replace(/\.$/, '');
+    return normalise(status.serverVersion) !== normalise(status.currentVersion);
   }
 
   private async handleTimeout(): Promise<void> {
     if (!VERSION_CHECKS_ENABLED) return; // Guard: disabled
+    if (this.versionDialogShown) return; // Guard: only once per session
+    this.versionDialogShown = true;
     console.log('⏰ 30-minute timeout reached - forcing app refresh');
     
     // Show notification to user
@@ -177,6 +184,8 @@ export class VersionTimeoutService implements IVersionTimeoutService {
 
   private async handleVersionMismatch(status: VersionStatus): Promise<void> {
     if (!VERSION_CHECKS_ENABLED) return; // Guard: disabled
+    if (this.versionDialogShown) return; // Guard: only once per session
+    this.versionDialogShown = true;
     console.log(`🆕 New version available: ${status.currentVersion} → ${status.serverVersion}`);
     
     const shouldUpdate = window.confirm(

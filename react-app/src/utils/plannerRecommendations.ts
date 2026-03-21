@@ -22,13 +22,26 @@ const startOfDayMs = (value: number) => {
 const titleForDay = (ms: number) =>
   new Date(ms).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
 
+const addMonths = (baseMs: number, months: number) => {
+  const d = new Date(baseMs);
+  d.setMonth(d.getMonth() + months);
+  return startOfDayMs(d.getTime());
+};
+
 const normaliseRecurringFrequency = (data: any) => {
   const direct = String(data?.repeatFrequency || data?.recurrence?.frequency || data?.recurrence?.freq || '').trim().toLowerCase();
+  const interval = Math.max(1, Number(data?.repeatInterval || data?.recurrence?.interval || 1) || 1);
+  if (direct === 'quarterly') return 'quarterly';
+  if (direct === 'monthly' && interval >= 3) return 'quarterly';
   if (['daily', 'weekly', 'monthly', 'yearly'].includes(direct)) return direct;
   const rrule = String(data?.rrule || '').toUpperCase();
   if (rrule.includes('DAILY')) return 'daily';
   if (rrule.includes('WEEKLY')) return 'weekly';
-  if (rrule.includes('MONTHLY')) return 'monthly';
+  if (rrule.includes('MONTHLY')) {
+    const match = rrule.match(/INTERVAL=(\d+)/);
+    const rruleInterval = Number(match?.[1] || interval) || interval;
+    return rruleInterval >= 3 ? 'quarterly' : 'monthly';
+  }
   if (rrule.includes('YEARLY') || rrule.includes('ANNUAL')) return 'yearly';
   return null;
 };
@@ -39,8 +52,9 @@ export const recurrenceAwareDeferDays = (data: Task | any) => {
   const interval = Math.max(1, Number(data?.repeatInterval || data?.recurrence?.interval || 1) || 1);
   if (frequency === 'daily') return interval;
   if (frequency === 'weekly') return 7 * interval;
-  if (frequency === 'monthly') return 14 * interval;
-  if (frequency === 'yearly') return 60 * interval;
+  if (frequency === 'monthly') return 21;
+  if (frequency === 'quarterly') return 42;
+  if (frequency === 'yearly') return null;
   return null;
 };
 
@@ -78,9 +92,12 @@ export const buildPlannerRecommendation = ({
   const isOverCapacity = thisDayLoad > dailyCapacityHours;
 
   if (item.kind === 'chore' && item.rawTask) {
+    const recurrenceFrequency = normaliseRecurringFrequency(item.rawTask);
     const recurrenceDays = recurrenceAwareDeferDays(item.rawTask);
-    if (recurrenceDays != null) {
-      const targetDateMs = itemDayMs + recurrenceDays * DAY_MS;
+    const targetDateMs = recurrenceFrequency === 'yearly'
+      ? addMonths(itemDayMs, 3)
+      : (recurrenceDays != null ? itemDayMs + recurrenceDays * DAY_MS : null);
+    if (targetDateMs != null) {
       return {
         action: 'next_recurrence',
         label: 'Defer to next recurrence',

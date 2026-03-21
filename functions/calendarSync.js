@@ -371,6 +371,153 @@ function isChecklistWindowBlock(block) {
   return ['chore', 'routine', 'habit'].some((key) => routineType.includes(key) || themeLower.includes(key));
 }
 
+function isExternalCalendarBlock(block) {
+  const source = String(block?.source || block?.entry_method || block?.sourceType || '').toLowerCase();
+  return source === 'gcal' || source === 'google_calendar' || block?.createdBy === 'google';
+}
+
+function getSyncEntityKindFromBlock(block) {
+  const candidates = [
+    block?.entityType,
+    block?.sourceType,
+    block?.source,
+    block?.category,
+  ]
+    .map((value) => String(value || '').trim().toLowerCase())
+    .filter(Boolean);
+  for (const candidate of candidates) {
+    if (candidate === 'task' || candidate === 'story') return candidate;
+  }
+  for (const candidate of candidates) {
+    if (ALLOWED_ROUTINE_TYPES.has(candidate)) return candidate;
+  }
+  if (block?.storyId) return 'story';
+  if (block?.taskId) return 'task';
+  if (block?.choreId) return 'chore';
+  if (block?.routineId) return 'routine';
+  if (block?.habitId) return 'habit';
+  return null;
+}
+
+function isRoutineEntityLive(entity, { kind, collection } = {}) {
+  if (!entity) return false;
+  if (entity.deleted === true || entity.archived === true) return false;
+  const rawStatus = String(entity.status ?? '').trim().toLowerCase();
+  if (collection === 'tasks') {
+    if (isDoneStatus(entity.status)) return false;
+  }
+  if (['done', 'completed', 'complete', 'archived', 'cancelled', 'canceled'].includes(rawStatus)) return false;
+  if (kind && collection === 'tasks') {
+    const taskKind = String(entity.type || entity.entityType || '').trim().toLowerCase();
+    if (taskKind && taskKind !== kind) return false;
+  }
+  return true;
+}
+
+async function loadRoutineEntityForBlock(block) {
+  if (!block) return { kind: null, collection: null, id: null, exists: false, data: null };
+  const db = admin.firestore();
+
+  if (block.storyId) {
+    const snap = await db.collection('stories').doc(String(block.storyId)).get().catch(() => null);
+    const data = snap && snap.exists ? (snap.data() || {}) : null;
+    return {
+      kind: 'story',
+      collection: 'stories',
+      id: String(block.storyId),
+      exists: !!(snap && snap.exists),
+      data,
+    };
+  }
+
+  if (block.taskId) {
+    const snap = await db.collection('tasks').doc(String(block.taskId)).get().catch(() => null);
+    const data = snap && snap.exists ? (snap.data() || {}) : null;
+    const taskKind = String(data?.type || block.entityType || '').trim().toLowerCase();
+    return {
+      kind: ALLOWED_ROUTINE_TYPES.has(taskKind) ? taskKind : 'task',
+      collection: 'tasks',
+      id: String(block.taskId),
+      exists: !!(snap && snap.exists),
+      data,
+    };
+  }
+
+  const refs = [
+    { kind: 'chore', collection: 'chores', id: block.choreId },
+    { kind: 'routine', collection: 'routines', id: block.routineId },
+    { kind: 'habit', collection: 'habits', id: block.habitId },
+  ].filter((entry) => entry.id);
+
+  for (const ref of refs) {
+    const snap = await db.collection(ref.collection).doc(String(ref.id)).get().catch(() => null);
+    if (snap && snap.exists) {
+      return {
+        kind: ref.kind,
+        collection: ref.collection,
+        id: String(ref.id),
+        exists: true,
+        data: snap.data() || {},
+      };
+    }
+  }
+
+  const inferredKind = getSyncEntityKindFromBlock(block);
+  return {
+    kind: inferredKind,
+    collection: refs[0]?.collection || null,
+    id: refs[0]?.id ? String(refs[0].id) : (block.taskId ? String(block.taskId) : null),
+    exists: false,
+    data: null,
+  };
+}
+
+async function evaluateGoogleSyncPolicyForBlock(block) {
+  if (!block) return { eligible: false, reason: 'missing_block', kind: null };
+  if (isExternalCalendarBlock(block)) {
+    return { eligible: false, reason: 'external_gcal_block', kind: null };
+  }
+
+  const entityKind = getSyncEntityKindFromBlock(block);
+  if (!entityKind) {
+    return { eligible: false, reason: 'unsupported_block', kind: null };
+  }
+  if (entityKind === 'routine' || entityKind === 'habit') {
+    return { eligible: false, reason: `${entityKind}_blocks_do_not_sync`, kind: entityKind };
+  }
+  if (entityKind === 'work_shift' || entityKind === 'health') {
+    return { eligible: false, reason: `${entityKind}_blocks_do_not_sync`, kind: entityKind };
+  }
+
+  const linked = await loadRoutineEntityForBlock(block);
+  if (!linked.exists || !linked.data) {
+    return {
+      eligible: false,
+      reason: linked.id ? `linked_${entityKind}_missing` : `linked_${entityKind}_unresolved`,
+      kind: entityKind,
+      linkedCollection: linked.collection || null,
+      linkedId: linked.id || null,
+    };
+  }
+  if (!isRoutineEntityLive(linked.data, linked)) {
+    return {
+      eligible: false,
+      reason: `linked_${entityKind}_closed`,
+      kind: entityKind,
+      linkedCollection: linked.collection || null,
+      linkedId: linked.id || null,
+    };
+  }
+
+  return {
+    eligible: true,
+    reason: `live_${entityKind}`,
+    kind: entityKind,
+    linkedCollection: linked.collection || null,
+    linkedId: linked.id || null,
+  };
+}
+
 function resolveBlockDeepLink(block) {
   if (!block) return null;
   const raw = block.deepLink || block.linkUrl || block.url || block.link || null;
@@ -847,6 +994,22 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
     if (block && block.syncToGoogle === false && action !== 'delete') {
       debugLogs.push({ step: 'sync_skipped', reason: 'syncToGoogle=false' });
       return { skipped: true, reason: 'syncToGoogle=false' };
+    }
+
+    if (block && action !== 'delete') {
+      const syncPolicy = await evaluateGoogleSyncPolicyForBlock(block);
+      if (!syncPolicy.eligible) {
+        debugLogs.push({ step: 'sync_skipped', reason: syncPolicy.reason, kind: syncPolicy.kind || null });
+        await logCalendarIntegration(uid, {
+          action: 'push',
+          direction: action,
+          status: 'skipped',
+          blockId,
+          blockTitle: block?.title || null,
+          reason: syncPolicy.reason,
+        });
+        return { skipped: true, reason: syncPolicy.reason };
+      }
     }
 
     if (block && action === 'create') {
@@ -1883,6 +2046,7 @@ exports.repairDuplicateCalendarEvents = functions.https.onCall(async (data, cont
 });
 
 exports._syncBlockToGoogle = syncBlockToGoogle;
+exports._evaluateGoogleSyncPolicyForBlock = evaluateGoogleSyncPolicyForBlock;
 
 exports.syncCalendarBlock = functions.https.onCall(async (data, context) => {
   if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Must be authenticated');

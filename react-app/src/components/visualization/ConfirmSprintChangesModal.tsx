@@ -29,7 +29,10 @@ const ConfirmSprintChangesModal: React.FC<Props> = ({
   const movableStories = pendingChanges.affectedStories.filter(
     (story) => story.recommendedSprintId && story.recommendedSprintId !== story.plannedSprintId,
   );
-  const manualReviewStories = pendingChanges.affectedStories.length - movableStories.length;
+  const unchangedStories = pendingChanges.affectedStories.filter(
+    (story) => story.recommendedSprintId && story.recommendedSprintId === story.plannedSprintId,
+  );
+  const manualReviewStories = pendingChanges.affectedStories.length - movableStories.length - unchangedStories.length;
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
@@ -50,8 +53,8 @@ const ConfirmSprintChangesModal: React.FC<Props> = ({
         <div className="p-4 space-y-4">
           <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
             <p className="text-sm text-amber-800">
-              <strong>Warning:</strong> Changing this goal's timeline will affect {pendingChanges.affectedStories.length} stories 
-              and will move the stories below to the sprint closest to the new start date when a recommendation is available.
+              <strong>Warning:</strong> Changing this goal's timeline will evaluate {pendingChanges.affectedStories.length} linked stories
+              and move each one to the sprint with the closest start date when a recommendation is available.
             </p>
           </div>
           
@@ -78,6 +81,7 @@ const ConfirmSprintChangesModal: React.FC<Props> = ({
                     <th className="px-3 py-2 text-left font-medium text-gray-700">Story</th>
                     <th className="px-3 py-2 text-left font-medium text-gray-700">Current Sprint</th>
                     <th className="px-3 py-2 text-left font-medium text-gray-700">Recommended Sprint</th>
+                    <th className="px-3 py-2 text-left font-medium text-gray-700">Outcome</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -98,6 +102,13 @@ const ConfirmSprintChangesModal: React.FC<Props> = ({
                       <td className="px-3 py-2 text-gray-600">
                         {story.recommendedSprintName || story.recommendedSprintId || 'Review manually'}
                       </td>
+                      <td className="px-3 py-2 text-gray-600">
+                        {story.recommendedSprintId
+                          ? story.recommendedSprintId === story.plannedSprintId
+                            ? 'Already closest'
+                            : 'Will move'
+                          : 'Manual review'}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -108,7 +119,8 @@ const ConfirmSprintChangesModal: React.FC<Props> = ({
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
             <p className="text-sm text-blue-800">
               <strong>What happens on confirm:</strong> {movableStories.length} stor{movableStories.length === 1 ? 'y' : 'ies'} will be reassigned automatically.
-              {manualReviewStories > 0 ? ` ${manualReviewStories} stor${manualReviewStories === 1 ? 'y has' : 'ies have'} no safe recommendation and will stay where they are for manual review.` : ''}
+              {unchangedStories.length > 0 ? ` ${unchangedStories.length} stor${unchangedStories.length === 1 ? 'y is' : 'ies are'} already in the closest sprint and will stay put.` : ''}
+              {manualReviewStories > 0 ? ` ${manualReviewStories} stor${manualReviewStories === 1 ? 'y has' : 'ies have'} no recommendation and will stay where they are for manual review.` : ''}
             </p>
           </div>
         </div>

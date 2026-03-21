@@ -118,6 +118,11 @@ export function useVersionCheck(options: UseVersionCheckOptions = {}) {
   };
 
   const dismissUpdate = () => {
+    // Store the new version so future checks don't re-trigger the banner
+    // for the same version. User has acknowledged the update exists.
+    if (newVersion) {
+      localStorage.setItem(VERSION_KEY, JSON.stringify(newVersion));
+    }
     setUpdateAvailable(false);
   };
 

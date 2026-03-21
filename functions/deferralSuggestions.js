@@ -14,6 +14,10 @@ if (!admin.apps.length) {
   admin.initializeApp();
 }
 
+const CAPACITY_CACHE_TTL_MS = 90 * 1000;
+const CAPACITY_CACHE_MAX_ENTRIES = 120;
+const capacityLoadCache = new Map();
+
 function titleForDay(ms) {
   return new Date(ms).toLocaleDateString('en-GB', {
     weekday: 'short',
@@ -24,11 +28,18 @@ function titleForDay(ms) {
 
 function normaliseRecurringFrequency(data) {
   const direct = String(data?.repeatFrequency || data?.recurrence?.frequency || data?.recurrence?.freq || '').trim().toLowerCase();
+  const interval = Math.max(1, Number(data?.repeatInterval || data?.recurrence?.interval || 1) || 1);
+  if (direct === 'quarterly') return 'quarterly';
+  if (direct === 'monthly' && interval >= 3) return 'quarterly';
   if (['daily', 'weekly', 'monthly', 'yearly'].includes(direct)) return direct;
   const rrule = String(data?.rrule || '').toUpperCase();
   if (rrule.includes('DAILY')) return 'daily';
   if (rrule.includes('WEEKLY')) return 'weekly';
-  if (rrule.includes('MONTHLY')) return 'monthly';
+  if (rrule.includes('MONTHLY')) {
+    const match = rrule.match(/INTERVAL=(\d+)/);
+    const rruleInterval = Number(match?.[1] || interval) || interval;
+    return rruleInterval >= 3 ? 'quarterly' : 'monthly';
+  }
   if (rrule.includes('YEARLY') || rrule.includes('ANNUAL')) return 'yearly';
   return null;
 }
@@ -39,9 +50,54 @@ function recurrenceAwareDeferDays(data) {
   const interval = Math.max(1, Number(data?.repeatInterval || data?.recurrence?.interval || 1) || 1);
   if (frequency === 'daily') return interval;
   if (frequency === 'weekly') return 7 * interval;
-  if (frequency === 'monthly') return 14 * interval;
-  if (frequency === 'yearly') return 60 * interval;
+  if (frequency === 'monthly') return 21;
+  if (frequency === 'quarterly') return 42;
+  if (frequency === 'yearly') return null;
   return null;
+}
+
+function addMonthsMs(baseMs, months) {
+  const d = new Date(baseMs);
+  d.setMonth(d.getMonth() + months);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+function capacityCacheKey(uid, startMs, endMs) {
+  return `${uid}:${startMs}:${endMs}`;
+}
+
+function trimCapacityCache(nowMs) {
+  for (const [key, entry] of capacityLoadCache.entries()) {
+    if (!entry || entry.expiresAt <= nowMs) {
+      capacityLoadCache.delete(key);
+    }
+  }
+  if (capacityLoadCache.size <= CAPACITY_CACHE_MAX_ENTRIES) return;
+  const overflow = capacityLoadCache.size - CAPACITY_CACHE_MAX_ENTRIES;
+  const sorted = [...capacityLoadCache.entries()].sort((a, b) => (a[1]?.lastAccessedAt || 0) - (b[1]?.lastAccessedAt || 0));
+  for (let i = 0; i < overflow; i += 1) {
+    capacityLoadCache.delete(sorted[i][0]);
+  }
+}
+
+async function getDayLoadPointsCached(db, uid, startMs, endMs) {
+  const key = capacityCacheKey(uid, startMs, endMs);
+  const nowMs = Date.now();
+  const hit = capacityLoadCache.get(key);
+  if (hit && hit.expiresAt > nowMs && hit.map instanceof Map) {
+    hit.lastAccessedAt = nowMs;
+    return { map: hit.map, cacheHit: true };
+  }
+
+  const map = await buildDayLoadPointsMap(db, uid, startMs, endMs);
+  capacityLoadCache.set(key, {
+    map,
+    expiresAt: nowMs + CAPACITY_CACHE_TTL_MS,
+    lastAccessedAt: nowMs,
+  });
+  trimCapacityCache(nowMs);
+  return { map, cacheHit: false };
 }
 
 function buildFocusCapacityNote(focusContext) {
@@ -128,9 +184,12 @@ const suggestDeferralOptions = httpsV2.onCall({ region: 'europe-west2', memory: 
         const item = itemSnap.data() || {};
         itemData = item;
         const inferredTaskType = String(item?.type || '').trim().toLowerCase();
+        const recurrenceFrequency = normaliseRecurringFrequency(item);
         const recurrenceDays = recurrenceAwareDeferDays(item);
-        if (itemType === 'task' && recurrenceDays != null && ['chore', 'routine', 'habit'].includes(inferredTaskType)) {
-          const recurrenceMs = todayMs + (recurrenceDays * DAY_MS);
+        const recurrenceMs = recurrenceFrequency === 'yearly'
+          ? addMonthsMs(todayMs, 3)
+          : (recurrenceDays != null ? todayMs + (recurrenceDays * DAY_MS) : null);
+        if (itemType === 'task' && recurrenceMs != null && ['chore', 'routine', 'habit'].includes(inferredTaskType)) {
           recurrenceAwareOption = {
             key: 'recurrence_aware',
             dateMs: recurrenceMs,
@@ -146,7 +205,7 @@ const suggestDeferralOptions = httpsV2.onCall({ region: 'europe-west2', memory: 
   }
   const itemPoints = inferItemPoints(itemType, itemData);
 
-  const dayLoadPoints = await buildDayLoadPointsMap(db, uid, todayMs, horizonEndMs);
+  const { map: dayLoadPoints, cacheHit: capacityCacheHit } = await getDayLoadPointsCached(db, uid, todayMs, horizonEndMs);
 
   const candidates = [];
   for (let offset = 1; offset <= Math.min(21, horizonDays); offset += 1) {
@@ -217,6 +276,9 @@ const suggestDeferralOptions = httpsV2.onCall({ region: 'europe-west2', memory: 
     ok: true,
     generatedAtMs: Date.now(),
     dailyCapacityHours,
+    cache: {
+      capacityDayLoadHit: capacityCacheHit,
+    },
     topOptions,
     moreOptions,
     options,

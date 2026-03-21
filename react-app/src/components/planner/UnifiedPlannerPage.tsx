@@ -31,8 +31,6 @@ import {
   CheckCircle,
   Clock,
   ExternalLink,
-  LayoutDashboard,
-  LayoutGrid,
   Link as LinkIcon,
   ListChecks,
   RefreshCw,
@@ -74,6 +72,7 @@ import EditTaskModal from '../EditTaskModal';
 import EditStoryModal from '../EditStoryModal';
 import DayCapacityWarningBanner from './DayCapacityWarningBanner';
 import { useSidebar } from '../../contexts/SidebarContext';
+import PlanActionBar from './PlanActionBar';
 
 const locales = { 'en-GB': enGB } as const;
 const localizer = dateFnsLocalizer({
@@ -1757,15 +1756,7 @@ const UnifiedPlannerPage: React.FC = () => {
                   {orchestrationLoading ? <Spinner size="sm" animation="border" className="me-1" /> : <Sparkles size={14} className="me-1" />}
                   Full replan
                 </Button>
-                <Button variant="outline-secondary" size="sm" onClick={() => navigate('/dashboard')} title="Open overview dashboard">
-                  <LayoutDashboard size={14} className="me-1" /> View overview
-                </Button>
-                <Button variant="outline-secondary" size="sm" onClick={() => navigate('/calendar/planner')} title="Open weekly theme planner">
-                  <CalendarIcon size={14} className="me-1" /> View planner
-                </Button>
-                <Button variant="outline-secondary" size="sm" onClick={() => navigate('/sprints/kanban')} title="Open sprint kanban board">
-                  <LayoutGrid size={14} className="me-1" /> View kanban
-                </Button>
+                <PlanActionBar />
                 <Button size="sm" variant="outline-primary" onClick={() => openComposerForSlot(new Date(), addMinutes(new Date(), 60))} title="Create a new calendar entry">
                   + New Entry
                 </Button>

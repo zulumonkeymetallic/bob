@@ -7,6 +7,7 @@ import { Story, Goal, Sprint, Task } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import { useSprint } from '../contexts/SprintContext';
 import { usePersona } from '../contexts/PersonaContext';
+import { useSidebar } from '../contexts/SidebarContext';
 import { isStatus } from '../utils/statusHelpers';
 import { normalizePriorityValue } from '../utils/priorityUtils';
 import { parsePointsValue, TASK_DEFAULT_POINTS } from '../utils/points';
@@ -15,10 +16,20 @@ import ActivityStreamPanel from './common/ActivityStreamPanel';
 import ModernTaskTable from './ModernTaskTable';
 import { cascadeStoryPersona } from '../utils/personaCascade';
 import { useNavigate } from 'react-router-dom';
-import { Wand2 } from 'lucide-react';
+import { Activity, CalendarPlus, Clock3, Shuffle, Trash2, Wand2 } from 'lucide-react';
 import { planningSprints } from '../utils/sprintFilter';
 import { evaluateStorySprintAlignment } from '../utils/sprintAlignment';
 import { getGoalDisplayPath, getLeafGoalOptions, resolveLeafGoalSelection } from '../utils/goalHierarchy';
+import NewCalendarEventModal, { buildCalendarComposerInitialValues } from './planner/NewCalendarEventModal';
+import DeferItemModal from './DeferItemModal';
+import { findItemWithManualPriorityRank, getManualPriorityLabel, getManualPriorityRank, getNextManualPriorityRank } from '../utils/manualPriority';
+import {
+  buildStoryProgressUpdate,
+  computePointsRemaining,
+  deriveProgressPctFromPointsRemaining,
+  formatStoryProgressLabel,
+  normalizeProgressPct,
+} from '../utils/storyProgress';
 
 interface EditStoryModalProps {
   show: boolean;
@@ -38,6 +49,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
   container
 }) => {
   const navigate = useNavigate();
+  const { showSidebar } = useSidebar();
   const { sprints } = useSprint();
   const { currentPersona } = usePersona();
   const [editedStory, setEditedStory] = useState({
@@ -49,6 +61,8 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
     status: 0,
     theme: 1,
     points: '' as string | number,
+    progressPct: 0,
+    pointsRemaining: '' as string | number,
     acceptanceCriteria: '',
     sprintId: '' as string | '',
     dueDate: '' as string,
@@ -68,6 +82,10 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
   const [linkedTasks, setLinkedTasks] = useState<Task[]>([]);
   const [tasksLoading, setTasksLoading] = useState(false);
   const [isGeneratingTasks, setIsGeneratingTasks] = useState(false);
+  const [showCalendarComposer, setShowCalendarComposer] = useState(false);
+  const [calendarComposerInitialValues, setCalendarComposerInitialValues] = useState<any>({});
+  const [showDeferModal, setShowDeferModal] = useState(false);
+  const [flaggingPriority, setFlaggingPriority] = useState(false);
   const isHiddenSprint = (sprint: Sprint) => isStatus(sprint.status, 'closed') || isStatus(sprint.status, 'cancelled');
   const formatSprintLabel = (sprint: Sprint, statusOverride?: string) => {
     const name = sprint.name || sprint.ref || `Sprint ${sprint.id.slice(-4)}`;
@@ -138,6 +156,8 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
         status: (typeof story.status === 'number' ? (story.status >= 4 ? 4 : story.status >= 2 ? 2 : 0) : 0),
         theme: story.theme || 1,
         points: normalizedPoints,
+        progressPct: normalizeProgressPct((story as any).progressPct ?? 0),
+        pointsRemaining: (story as any).pointsRemaining ?? computePointsRemaining(normalizedPoints, (story as any).progressPct ?? 0),
         acceptanceCriteria: Array.isArray(story.acceptanceCriteria)
           ? story.acceptanceCriteria.join('\n')
           : story.acceptanceCriteria || '',
@@ -253,6 +273,16 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
       const normalizedPriority = normalizePriorityValue(editedStory.priority);
       const parsedStoryPoints = parsePointsValue(editedStory.points);
       const normalizedStoryPoints = parsedStoryPoints == null ? 1 : parsedStoryPoints;
+      const progressUpdate = buildStoryProgressUpdate({
+        points: normalizedStoryPoints,
+        pointsRemaining: editedStory.pointsRemaining,
+      });
+      const existingDueDate = (story as any).dueDate ? new Date((story as any).dueDate).toISOString().slice(0, 10) : '';
+      const existingDueTime = String((story as any).dueTime || '');
+      const existingTimeOfDay = String((story as any).timeOfDay || '');
+      const dueOverrideChanged = existingDueDate !== editedStory.dueDate
+        || existingDueTime !== editedStory.dueTime
+        || existingTimeOfDay !== editedStory.timeOfDay;
       const updates: any = {
         title: editedStory.title.trim(),
         description: editedStory.description.trim(),
@@ -262,6 +292,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
         status: editedStory.status,
         blocked: !!editedStory.blocked,
         points: normalizedStoryPoints,
+        ...progressUpdate,
         sprintId: editedStory.sprintId || null,
         dueDate: editedStory.dueDate ? new Date(`${editedStory.dueDate}T00:00:00`).getTime() : null,
         dueTime: editedStory.dueTime || null,
@@ -273,6 +304,11 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
         updatedAt: serverTimestamp(),
         tags: editedStory.tags
       };
+      if (dueOverrideChanged) {
+        updates.dueDateLocked = !!editedStory.dueDate;
+        updates.dueDateReason = editedStory.dueDate ? 'user' : null;
+        updates.targetDate = updates.dueDate;
+      }
       // Inherit theme from linked goal when available
       if (selectedGoal && typeof (selectedGoal as any).theme !== 'undefined') {
         updates.theme = (selectedGoal as any).theme;
@@ -339,6 +375,28 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
           }
         }
       }
+      if (field === 'progressPct') {
+        const progressPct = normalizeProgressPct(value);
+        return {
+          ...prev,
+          progressPct,
+          pointsRemaining: computePointsRemaining(prev.points, progressPct),
+        };
+      }
+      if (field === 'pointsRemaining') {
+        return {
+          ...prev,
+          pointsRemaining: value,
+          progressPct: deriveProgressPctFromPointsRemaining(prev.points, value),
+        };
+      }
+      if (field === 'points') {
+        return {
+          ...prev,
+          points: value,
+          pointsRemaining: computePointsRemaining(value, prev.progressPct),
+        };
+      }
       return { ...prev, [field]: value };
     });
   };
@@ -375,22 +433,133 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
     }
   };
 
+  const handleOpenCalendarComposer = () => {
+    if (!story) return;
+    setCalendarComposerInitialValues(buildCalendarComposerInitialValues({
+      title: editedStory.title || story.title || 'Story block',
+      persona: editedStory.persona || ((story as any).persona || currentPersona || 'personal'),
+      theme: String((linkedGoal as any)?.theme || (story as any).theme || 'General'),
+      category: ((editedStory.persona || (story as any).persona || currentPersona) === 'work' ? 'Work (Main Gig)' : 'Wellbeing') as any,
+      storyId: story.id,
+      points: Number(editedStory.points || (story as any).points || 0) || null,
+      aiScore: Number.isFinite(Number((story as any).aiCriticalityScore)) ? Number((story as any).aiCriticalityScore) : null,
+      aiReason: String((story as any).aiTop3Reason || (story as any).aiCriticalityReason || '').trim() || null,
+      rationale: 'Manual schedule from story editor',
+    }));
+    setShowCalendarComposer(true);
+  };
+
+  const handleConvertToTask = async () => {
+    if (!story || !currentUser) return;
+    const confirmed = window.confirm('Convert this story into a task card copy?');
+    if (!confirmed) return;
+    try {
+      await addDoc(collection(db, 'tasks'), {
+        ownerUid: currentUser.uid,
+        title: editedStory.title.trim() || story.title || 'Converted story',
+        description: editedStory.description.trim() || story.description || '',
+        status: 0,
+        priority: normalizePriorityValue(editedStory.priority),
+        sprintId: editedStory.sprintId || (story as any).sprintId || null,
+        goalId: resolvedLeafGoalSelection(editedStory.goalId || story.goalId || null, goals),
+        persona: editedStory.persona || ((story as any).persona || currentPersona || 'personal'),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    } catch (err) {
+      console.error('Failed to convert story to task copy', err);
+      setError('Could not create a task copy for this story.');
+    }
+  };
+
+  const handleToggleManualPriority = async () => {
+    if (!story || !currentUser?.uid || flaggingPriority) return;
+    setFlaggingPriority(true);
+    try {
+      const storiesSnap = await getDocs(query(collection(db, 'stories'), where('ownerUid', '==', currentUser.uid)));
+      const existingFlagged = storiesSnap.docs
+        .map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) }))
+        .filter((s: any) => String(s.persona || 'personal') === String((story as any).persona || currentPersona || 'personal'));
+      const currentRank = getManualPriorityRank(story);
+      if (currentRank) {
+        await updateDoc(doc(db, 'stories', story.id), {
+          userPriorityFlag: false,
+          userPriorityRank: null,
+          userPriorityFlagAt: null,
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        const nextRank = getNextManualPriorityRank(existingFlagged, String((story as any).persona || currentPersona || 'personal'), story.id);
+        const conflicting = findItemWithManualPriorityRank(existingFlagged, String((story as any).persona || currentPersona || 'personal'), nextRank, story.id);
+        if (conflicting?.id) {
+          await updateDoc(doc(db, 'stories', conflicting.id), {
+            userPriorityFlag: false,
+            userPriorityRank: null,
+            userPriorityFlagAt: null,
+            updatedAt: serverTimestamp(),
+          });
+        }
+        await updateDoc(doc(db, 'stories', story.id), {
+          userPriorityFlag: true,
+          userPriorityRank: nextRank,
+          userPriorityFlagAt: new Date().toISOString(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+    } catch (err) {
+      console.error('Failed to toggle manual priority for story', err);
+      setError('Could not update manual priority.');
+    } finally {
+      setFlaggingPriority(false);
+    }
+  };
+
+  const resolvedManualPriorityRank = story ? getManualPriorityRank(story) : null;
+  const resolvedManualPriorityLabel = story ? getManualPriorityLabel(story) : null;
+  const resolvedLeafGoalSelection = (goalId: string | null, availableGoals: Goal[]) =>
+    resolveLeafGoalSelection(goalId, availableGoals).goalId || null;
+
   return (
     <Modal show={show} onHide={onHide} size="xl" container={container || undefined} fullscreen="lg-down" scrollable>
       <Modal.Header closeButton>
         <div className="d-flex w-100 align-items-center justify-content-between gap-2">
           <Modal.Title>Edit Story: {story?.ref}</Modal.Title>
           {story && (
-            <Button
-              variant="outline-primary"
-              size="sm"
-              onClick={handleGenerateTasks}
-              disabled={isGeneratingTasks || loading || deleting}
-              title="Auto-generate tasks for this story"
-            >
-              <Wand2 size={14} className="me-1" />
-              {isGeneratingTasks ? 'Generating...' : 'AI Tasks'}
-            </Button>
+            <div className="d-flex align-items-center gap-2">
+              <Button variant="outline-secondary" size="sm" title="Activity stream" onClick={() => showSidebar(story, 'story')}>
+                <Activity size={14} />
+              </Button>
+              <Button
+                variant="outline-secondary"
+                size="sm"
+                onClick={handleGenerateTasks}
+                disabled={isGeneratingTasks || loading || deleting}
+                title="Auto-generate tasks for this story"
+              >
+                <Wand2 size={14} />
+              </Button>
+              <Button variant="outline-secondary" size="sm" title="Create task copy" onClick={handleConvertToTask}>
+                <Shuffle size={14} />
+              </Button>
+              <Button
+                variant={resolvedManualPriorityRank ? 'outline-danger' : 'outline-secondary'}
+                size="sm"
+                title={resolvedManualPriorityLabel || 'Set manual priority'}
+                onClick={handleToggleManualPriority}
+                disabled={flaggingPriority}
+              >
+                <span style={{ fontSize: 11, fontWeight: 800, lineHeight: 1 }}>{resolvedManualPriorityRank || 1}</span>
+              </Button>
+              <Button variant="outline-secondary" size="sm" title="Open calendar composer" onClick={handleOpenCalendarComposer}>
+                <CalendarPlus size={14} />
+              </Button>
+              <Button variant="outline-secondary" size="sm" title="Defer intelligently" onClick={() => setShowDeferModal(true)}>
+                <Clock3 size={14} />
+              </Button>
+              <Button variant="outline-danger" size="sm" title="Delete story" onClick={handleDelete} disabled={loading || deleting}>
+                <Trash2 size={14} />
+              </Button>
+            </div>
           )}
         </div>
       </Modal.Header>
@@ -433,6 +602,44 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
                       value={editedStory.points}
                       onChange={(e) => handleInputChange('points', e.target.value)}
                     />
+                  </Form.Group>
+                </Col>
+              </Row>
+
+              <Row>
+                <Col md={6}>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Progress</Form.Label>
+                    <Form.Select
+                      value={Number(editedStory.progressPct || 0)}
+                      onChange={(e) => handleInputChange('progressPct', Number(e.target.value))}
+                    >
+                      <option value={0}>0% complete</option>
+                      <option value={25}>25% complete</option>
+                      <option value={50}>50% complete</option>
+                      <option value={75}>75% complete</option>
+                      <option value={90}>90% complete</option>
+                      <option value={100}>100% complete</option>
+                    </Form.Select>
+                    <div className="form-text">
+                      {formatStoryProgressLabel(editedStory.points, editedStory.progressPct)}
+                    </div>
+                  </Form.Group>
+                </Col>
+                <Col md={6}>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Points Remaining</Form.Label>
+                    <Form.Control
+                      type="number"
+                      step="1"
+                      min="0"
+                      inputMode="numeric"
+                      value={editedStory.pointsRemaining}
+                      onChange={(e) => handleInputChange('pointsRemaining', e.target.value)}
+                    />
+                    <div className="form-text">
+                      Enter the remaining effort directly when you know the exact points left.
+                    </div>
                   </Form.Group>
                 </Col>
               </Row>
@@ -700,6 +907,31 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
           {loading ? 'Saving...' : 'Save Changes'}
         </Button>
       </Modal.Footer>
+      <NewCalendarEventModal
+        show={showCalendarComposer}
+        onHide={() => setShowCalendarComposer(false)}
+        initialValues={calendarComposerInitialValues}
+        stories={story ? [story] : []}
+      />
+      <DeferItemModal
+        show={showDeferModal && !!story}
+        onHide={() => setShowDeferModal(false)}
+        itemType="story"
+        itemId={story?.id || ''}
+        itemTitle={story?.title || 'Story'}
+        onApply={async ({ dateMs, rationale, source }) => {
+          if (!story) return;
+          await updateDoc(doc(db, 'stories', story.id), {
+            deferredUntil: dateMs,
+            deferredReason: rationale,
+            deferredBy: source,
+            deferredAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          } as any);
+          setShowDeferModal(false);
+          onStoryUpdated?.();
+        }}
+      />
     </Modal>
   );
 };

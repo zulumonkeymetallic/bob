@@ -160,7 +160,7 @@ const WeeklyPlannerSurface: React.FC<WeeklyPlannerSurfaceProps> = ({
   const [themeAllocations, setThemeAllocations] = useState<ThemeAllocation[]>([]);
   const [loading, setLoading] = useState(true);
   const [feedback, setFeedback] = useState<{ variant: 'success' | 'warning' | 'danger'; text: string } | null>(null);
-  const [activeView, setActiveView] = useState<WeeklyPlannerView>('table');
+  const [activeView, setActiveView] = useState<WeeklyPlannerView>('planner');
   const [isMobileLayout, setIsMobileLayout] = useState<boolean>(typeof window !== 'undefined' ? window.innerWidth < 768 : false);
   const [moveTarget, setMoveTarget] = useState<MoveTarget | null>(null);
   const [deferTarget, setDeferTarget] = useState<PlannerItem | null>(null);
@@ -280,6 +280,7 @@ const WeeklyPlannerSurface: React.FC<WeeklyPlannerSurfaceProps> = ({
             if (summary.view === 'planner' || summary.view === 'table') setActiveView(summary.view);
           } else {
             setPlanningSummary({ acceptedMoves: 0, acceptedDefers: 0 });
+            setActiveView('planner');
           }
         }
       } catch (error: any) {

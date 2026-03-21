@@ -34,6 +34,28 @@ interface NavigationItem {
   icon: string;
 }
 
+const normalizePath = (value: string) => (value.endsWith('/') && value.length > 1 ? value.slice(0, -1) : value);
+
+const resolveActiveGroupLabel = (pathname: string, groups: NavigationGroup[]): string | null => {
+  const currentPath = normalizePath(pathname);
+  let best: { label: string; score: number } | null = null;
+
+  groups.forEach((group) => {
+    group.items.forEach((item) => {
+      const itemPath = normalizePath(item.path);
+      const exact = currentPath === itemPath;
+      const prefix = currentPath.startsWith(`${itemPath}/`);
+      if (!exact && !prefix) return;
+      const score = itemPath.length + (exact ? 1000 : 0);
+      if (!best || score > best.score) {
+        best = { label: group.label, score };
+      }
+    });
+  });
+
+  return best?.label || null;
+};
+
 const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) => {
   const { currentUser, signOut } = useAuth();
   const { currentPersona, setPersona } = usePersona();
@@ -67,19 +89,13 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   const hidePlannerCapacityBanner = isSmallScreen && /^\/mobile(?:\/|$)/.test(location.pathname);
 
   const navigationGroups: NavigationGroup[] = [
-    {
-      label: 'Overview',
-      icon: 'home',
+      {
+        label: 'Overview',
+        icon: 'home',
       items: [
         { label: 'Overview', path: '/dashboard', icon: 'home' },
-      ],
-    },
-      {
-        label: 'Dashboards',
-        icon: 'chart-bar',
-      items: [
         { label: 'Daily Check-in', path: '/dashboard/daily-checkin', icon: 'clipboard-check' },
-        { label: 'Mobile Priorities', path: '/dashboard/mobile-priorities', icon: 'mobile-alt' },
+        { label: 'Mobile', path: '/mobile', icon: 'mobile-alt' },
         { label: 'Theme Progress', path: '/dashboard/theme-progress', icon: 'chart-line' },
         { label: 'Finance Dashboard', path: '/dashboard/finance', icon: 'wallet' },
         { label: 'Habit Tracking', path: '/dashboard/habit-tracking', icon: 'check-square' },
@@ -103,11 +119,22 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       icon: 'target',
       items: [
         { label: 'Goals List', path: '/goals', icon: 'list' },
+        { label: 'Focus Goals', path: '/focus-goals', icon: 'bullseye' },
         { label: 'Goal Planner', path: '/goals/year-planner', icon: 'columns' },
         { label: 'Goals Roadmap', path: '/goals/roadmap-v6', icon: 'sparkles' },
         { label: 'Theme Progress', path: '/metrics/progress', icon: 'chart-bar' },
         { label: 'Visual Canvas', path: '/canvas', icon: 'share-alt' }
       ]
+    },
+    {
+      label: 'Plan',
+      icon: 'project-diagram',
+      items: [
+        { label: 'Year Planner', path: '/goals/year-planner', icon: 'route' },
+        { label: 'Quarter/Month Roadmap', path: '/goals/roadmap-v6', icon: 'stream' },
+        { label: 'Sprint Planning', path: '/sprints/planning', icon: 'th' },
+        { label: '7-Day Prioritisation', path: '/planner/weekly', icon: 'th-large' },
+      ],
     },
     {
       label: 'Finance',
@@ -163,7 +190,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       items: [
         { label: 'Sprint Management', path: '/sprints/management', icon: 'tasks' },
         { label: 'Sprint Kanban', path: '/sprints/kanban', icon: 'columns' },
-        { label: 'Planning Matrix', path: '/sprints/planning', icon: 'th' },
+        { label: 'Sprint Planning', path: '/sprints/planning', icon: 'th' },
         { label: 'Capacity Planning', path: '/sprints/capacity', icon: 'chart-pie' },
         { label: 'Retrospective', path: '/sprints/retrospective', icon: 'rotate-left' }
       ]
@@ -173,7 +200,8 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       icon: 'calendar',
       items: [
         { label: 'Calendar', path: '/calendar', icon: 'calendar' },
-        { label: 'Weekly Plan', path: '/calendar/planner', icon: 'palette' },
+        { label: 'Weekly Capacity', path: '/calendar/planner', icon: 'palette' },
+        { label: '7-Day Prioritisation', path: '/planner/weekly', icon: 'th-large' },
         { label: 'Sprint Capacity', path: '/sprints/capacity', icon: 'chart-pie' },
         { label: 'Google Integration', path: '/calendar/integration', icon: 'google' }
       ]
@@ -239,6 +267,12 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
     window.addEventListener('resize', handler);
     return () => window.removeEventListener('resize', handler);
   }, []);
+
+  useEffect(() => {
+    const activeGroup = resolveActiveGroupLabel(location.pathname, navigationGroups);
+    if (!activeGroup) return;
+    setExpandedGroups((prev) => (prev.includes(activeGroup) ? prev : [...prev, activeGroup]));
+  }, [location.pathname]);
 
   const toggleGroup = (groupLabel: string) => {
     setExpandedGroups(prev =>

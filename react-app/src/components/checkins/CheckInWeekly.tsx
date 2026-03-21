@@ -600,12 +600,35 @@ const CheckInWeekly: React.FC = () => {
 
       {error && <Alert variant="danger">{error}</Alert>}
       {mode === 'plan' ? (
-        <WeeklyPlannerSurface
-          weekStart={planningWeekStart}
-          embedded
-          title={`Plan week of ${format(planningWeekStart, 'dd MMM yyyy')}`}
-          storageScope="weekly_checkin"
-        />
+        <>
+          <Card className="shadow-sm border-0 mb-3">
+            <Card.Body className="d-flex flex-wrap align-items-center justify-content-between gap-2">
+              <div>
+                <div className="fw-semibold">Weekly Review Tools</div>
+                <div className="text-muted small">
+                  Use Weekly Capacity and the 7-day prioritisation matrix together before locking next week.
+                </div>
+              </div>
+              <div className="d-flex flex-wrap gap-2">
+                <Button size="sm" variant="outline-secondary" onClick={() => navigate('/calendar/planner')}>
+                  Weekly Capacity
+                </Button>
+                <Button size="sm" variant="outline-primary" onClick={() => navigate('/planner/weekly')}>
+                  7-Day Prioritisation
+                </Button>
+                <Button size="sm" variant="outline-secondary" onClick={() => navigate('/sprints/planning')}>
+                  Sprint Planning
+                </Button>
+              </div>
+            </Card.Body>
+          </Card>
+          <WeeklyPlannerSurface
+            weekStart={planningWeekStart}
+            embedded
+            title={`7-Day Prioritisation Matrix · Week of ${format(planningWeekStart, 'dd MMM yyyy')}`}
+            storageScope="weekly_checkin"
+          />
+        </>
       ) : loading || !metrics ? (
         <div className="d-flex align-items-center gap-2 text-muted">
           <Spinner size="sm" animation="border" /> Loading weekly metrics…

@@ -268,9 +268,18 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
         try {
             const dueMs = next ? new Date(`${next}T12:00:00`).getTime() : null;
             if (type === 'story') {
-                await applyQuickPatch({ targetDate: dueMs });
+                await applyQuickPatch({
+                    targetDate: dueMs,
+                    dueDate: dueMs,
+                    dueDateLocked: dueMs != null,
+                    dueDateReason: dueMs != null ? 'user' : null,
+                });
             } else {
-                await applyQuickPatch({ dueDate: dueMs });
+                await applyQuickPatch({
+                    dueDate: dueMs,
+                    dueDateLocked: dueMs != null,
+                    dueDateReason: dueMs != null ? 'user' : null,
+                });
             }
         } catch (error) {
             console.warn('Failed to update due date on kanban card', error);

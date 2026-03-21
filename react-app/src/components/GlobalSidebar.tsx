@@ -25,6 +25,12 @@ import { isStatus, getPriorityBadge } from '../utils/statusHelpers';
 import { normalizePriorityValue } from '../utils/priorityUtils';
 import { resolveThemeFromValue } from '../utils/themeResolver';
 import { parsePointsValue, TASK_DEFAULT_POINTS } from '../utils/points';
+import {
+  buildStoryProgressUpdate,
+  computePointsRemaining,
+  formatStoryProgressLabel,
+  normalizeProgressPct,
+} from '../utils/storyProgress';
 
 interface EntityLookupInputProps {
   type: 'goal' | 'story';
@@ -439,6 +445,8 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
       base.sprintId = (selectedItem as any).sprintId || '';
       base.goalId = (selectedItem as any).goalId || '';
       base.description = (selectedItem as any).description || '';
+      base.pointsRemaining = (selectedItem as any).pointsRemaining ?? computePointsRemaining((selectedItem as any).points, (selectedItem as any).progressPct ?? 0);
+      base.progressPct = normalizeProgressPct((selectedItem as any).progressPct ?? 0);
     } else if (selectedType === 'goal') {
       base.dueDate = toDateInput((selectedItem as any).targetDate || (selectedItem as any).dueDate || null);
       base.description = (selectedItem as any).description || '';
@@ -496,6 +504,25 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
         const newGoalId = typeof quickEdit.goalId === 'string' ? quickEdit.goalId : quickEdit.goalId?.toString() || '';
         const prevGoal = (selectedItem as any).goalId || '';
         if ((newGoalId || '') !== (prevGoal || '')) { updates.goalId = newGoalId || null; before.goalId = prevGoal || null; }
+        if (quickEdit.pointsRemaining !== undefined) {
+          const progressUpdate = buildStoryProgressUpdate({
+            points: (selectedItem as any).points,
+            pointsRemaining: quickEdit.pointsRemaining,
+          });
+          const prevProgress = Number((selectedItem as any).progressPct ?? 0);
+          const prevRemaining = Number((selectedItem as any).pointsRemaining ?? computePointsRemaining((selectedItem as any).points, prevProgress));
+          if (progressUpdate.progressPct !== prevProgress) {
+            updates.progressPct = progressUpdate.progressPct;
+            before.progressPct = prevProgress;
+            updates.progressPctUpdatedAt = progressUpdate.progressPctUpdatedAt;
+          }
+          if (progressUpdate.pointsRemaining !== prevRemaining) {
+            updates.pointsRemaining = progressUpdate.pointsRemaining;
+            before.pointsRemaining = prevRemaining;
+            updates.pointsRemainingAsOfDateKey = progressUpdate.pointsRemainingAsOfDateKey;
+            updates.pointsRemainingUpdatedAt = progressUpdate.pointsRemainingUpdatedAt;
+          }
+        }
       } else if (selectedType === 'goal') {
         const newDueMsGoal = fromDateInput(quickEdit.dueDate);
         const prevDueGoal = (selectedItem as any).targetDate || (selectedItem as any).dueDate || null;
@@ -1324,6 +1351,29 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                             Open goal{linkedGoal ? `: ${linkedGoal.title}` : ''}
                           </Button>
                         )}
+                      </div>
+                    )}
+                    {selectedType === 'story' && (
+                      <div>
+                        <label className="small" style={{ display: 'block', marginBottom: 4 }}>Points Remaining</label>
+                        <Form.Control
+                          size="sm"
+                          type="number"
+                          step="1"
+                          min="0"
+                          inputMode="numeric"
+                          value={quickEdit.pointsRemaining ?? ''}
+                          onChange={(e) => setQuickEdit((q: any) => ({ ...q, pointsRemaining: e.target.value }))}
+                        />
+                        <div className="small text-muted mt-1">
+                          {(() => {
+                            const preview = buildStoryProgressUpdate({
+                              points: (selectedItem as any).points,
+                              pointsRemaining: quickEdit.pointsRemaining,
+                            });
+                            return formatStoryProgressLabel((selectedItem as any).points, preview.progressPct);
+                          })()}
+                        </div>
                       </div>
                     )}
                     {selectedType === 'task' && (

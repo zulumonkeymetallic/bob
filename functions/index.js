@@ -727,195 +727,7 @@ async function findSlotForDay(db, ownerUid, dayStartMs, dayEndMs, durationMs) {
 }
 
 async function upsertChoreBlocksForTask(db, task, lookaheadDays = 14) {
-  if (!task?.ownerUid || !task?.id) return { created: 0, updated: 0 };
-  const ownerUid = task.ownerUid;
-  const today = startOfDay(new Date());
-  const snoozedUntil = toMillis(task?.snoozedUntil) || 0;
-  let created = 0, updated = 0;
-  let nextStartMs = null;
-  const nowMs = Date.now();
-  const durationMin = durationMinutesFromTask(task);
-  const durationMs = durationMin * MS_IN_MINUTE;
-  const taskDueMs = toMillis(task?.dueDate || task?.dueDateMs || task?.targetDate);
-  const dueHasTime = hasTimeComponent(taskDueMs);
-  const dayCtxCache = new Map();
-  const sprintCache = new Map();
-
-  const loadDayCtx = async (dayStartMs, dayEndMs, dayKey) => {
-    if (dayCtxCache.has(dayKey)) return dayCtxCache.get(dayKey);
-    const snap = await db.collection('calendar_blocks')
-      .where('ownerUid', '==', ownerUid)
-      .where('start', '>=', dayStartMs)
-      .where('start', '<=', dayEndMs)
-      .get()
-      .catch(() => ({ docs: [] }));
-    const windows = [];
-    const occupied = [];
-    snap.docs.forEach((docSnap) => {
-      const data = docSnap.data() || {};
-      const start = toMillis(data.start);
-      const end = toMillis(data.end);
-      if (!start || !end || end <= start) return;
-      const source = String(data.source || data.entityType || data.entry_method || '').toLowerCase();
-      const entityType = String(data.entityType || '').toLowerCase();
-      const isChoreEvent = source === 'chore' || entityType === 'chore';
-      const themeLabel = themeLabelFromValue(
-        data.theme ?? data.theme_id ?? data.themeId ?? data.category ?? data.title ?? ''
-      );
-      const isChoreTheme = String(themeLabel || '').toLowerCase().includes('chore');
-      if (isChoreEvent) {
-        occupied.push({ id: docSnap.id, start, end });
-      } else if (isChoreTheme) {
-        windows.push({ start, end });
-      }
-    });
-    windows.sort((a, b) => a.start - b.start);
-    occupied.sort((a, b) => a.start - b.start);
-    const ctx = { windows, occupied };
-    dayCtxCache.set(dayKey, ctx);
-    return ctx;
-  };
-
-  const fitsInWindows = (startMs, endMs, windows) =>
-    windows.some((w) => startMs >= w.start && endMs <= w.end);
-
-  const overlapsAny = (startMs, endMs, occupied) =>
-    occupied.some((o) => startMs < o.end && endMs > o.start);
-
-  const findSlotInWindows = (windows, occupied, duration) => {
-    for (const window of windows) {
-      let cursor = window.start;
-      for (const occ of occupied) {
-        if (occ.end <= window.start || occ.start >= window.end) continue;
-        if (cursor + duration <= occ.start) return cursor;
-        cursor = Math.max(cursor, occ.end);
-        if (cursor >= window.end) break;
-      }
-      if (cursor + duration <= window.end) return cursor;
-    }
-    return null;
-  };
-  for (const day of iterateNextDays(today, lookaheadDays)) {
-    if (snoozedUntil && day.getTime() < startOfDay(new Date(snoozedUntil)).getTime()) continue;
-    if (!shouldScheduleOnDay(task, day)) continue;
-    const dayKey = toDayKey(day);
-    const iso = toISODate(day);
-    const docId = `chore_${task.id}_${dayKey}`;
-    const ref = db.collection('calendar_blocks').doc(docId);
-    const snap = await ref.get();
-    const dayStartMs = startOfDay(day).getTime();
-    const dayEndMs = dayStartMs + (24 * 60 * 60 * 1000) - 1;
-    const dayCtx = await loadDayCtx(dayStartMs, dayEndMs, dayKey);
-    if (!dayCtx.windows.length) {
-      if (snap.exists) {
-        await ref.delete();
-        dayCtx.occupied = dayCtx.occupied.filter((o) => o.id !== docId);
-      }
-      continue;
-    }
-
-    const occupiedWithoutSelf = dayCtx.occupied.filter((o) => o.id !== docId);
-    let startMs = null;
-    let endMs = null;
-
-    if (snap.exists) {
-      const existing = snap.data() || {};
-      const existingStart = toMillis(existing.start);
-      const existingEnd = toMillis(existing.end);
-      if (existingStart && existingEnd &&
-        fitsInWindows(existingStart, existingEnd, dayCtx.windows) &&
-        !overlapsAny(existingStart, existingEnd, occupiedWithoutSelf)) {
-        startMs = existingStart;
-        endMs = existingEnd;
-      }
-    }
-
-    if (startMs == null && taskDueMs && dueHasTime) {
-      const preferred = applyTimeOfDay(day, taskDueMs);
-      const preferredEnd = preferred + durationMs;
-      if (fitsInWindows(preferred, preferredEnd, dayCtx.windows) &&
-        !overlapsAny(preferred, preferredEnd, occupiedWithoutSelf)) {
-        startMs = preferred;
-        endMs = preferredEnd;
-      }
-    }
-
-    if (startMs == null) {
-      const slot = findSlotInWindows(dayCtx.windows, occupiedWithoutSelf, durationMs);
-      if (!slot) {
-        if (snap.exists) {
-          await ref.delete();
-          dayCtx.occupied = occupiedWithoutSelf;
-        }
-        continue;
-      }
-      startMs = slot;
-      endMs = slot + durationMs;
-    }
-
-    if (startMs >= nowMs && (nextStartMs == null || startMs < nextStartMs)) {
-      nextStartMs = startMs;
-    }
-    const checklistLink = `/chores/checklist?date=${encodeURIComponent(iso)}&taskId=${encodeURIComponent(task.id)}`;
-    const base = {
-      ownerUid,
-      entityType: 'chore',
-      taskId: task.id,
-      date: iso,
-      title: task.title || 'Chore',
-      status: 'planned',
-      start: startMs,
-      end: endMs,
-      source: 'chore',
-      syncToGoogle: false,
-      deepLink: checklistLink,
-      metadata: {
-        frequency: task.repeatFrequency || null,
-        interval: Number(task.repeatInterval || 1) || 1,
-        daysOfWeek: Array.isArray(task.daysOfWeek) ? task.daysOfWeek : null,
-      },
-    };
-    if (snap.exists) {
-      const existing = snap.data() || {};
-      const needsUpdate = existing.title !== base.title
-        || existing.status === undefined
-        || existing.ownerUid !== ownerUid
-        || existing.start !== base.start
-        || existing.end !== base.end
-        || existing.syncToGoogle !== base.syncToGoogle
-        || existing.deepLink !== base.deepLink;
-      if (needsUpdate) {
-        await ref.set({ ...existing, ...base, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-        updated++;
-      }
-    } else {
-      await ref.set({ ...base, createdAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-      created++;
-    }
-    dayCtx.occupied = [...occupiedWithoutSelf, { id: docId, start: base.start, end: base.end }];
-  }
-
-  if (nextStartMs && isRecurringChoreTask(task) && !isTaskLocked(task)) {
-    const dueMs = toMillis(task?.dueDate || task?.dueDateMs || task?.targetDate);
-    const isMissing = !dueMs;
-    const isOverdueBeyondGrace = !!dueMs && dueMs < (nowMs - CHORE_DUE_ROLLOVER_MS);
-    const isFutureMismatch = !!dueMs && dueMs >= nowMs && Math.abs(dueMs - nextStartMs) > (5 * MS_IN_MINUTE);
-    if (isMissing || isOverdueBeyondGrace || isFutureMismatch) {
-      const hasStory = !!(task?.storyId || (task?.parentType === 'story' && task?.parentId));
-      const sprintId = hasStory
-        ? (task?.sprintId || null)
-        : await resolveSprintIdForDate(db, ownerUid, task?.persona || null, nextStartMs, sprintCache);
-      await db.collection('tasks').doc(task.id).set({
-        dueDate: nextStartMs,
-        sprintId: sprintId ?? null,
-        dueDateReason: isOverdueBeyondGrace ? 'chore_rollover' : 'chore_block',
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        serverUpdatedAt: Date.now(),
-        syncState: 'dirty',
-      }, { merge: true });
-    }
-  }
-  return { created, updated };
+  return { created: 0, updated: 0, disabled: true };
 }
 
 function makeRef(type) {
@@ -1864,8 +1676,7 @@ exports.planBlocksV2 = httpsV2.onCall(async (req) => {
     const endMs = instance.plannedEnd ? new Date(instance.plannedEnd).getTime() : null;
     if (startMs && endMs) {
       const sourceType = String(instance.sourceType || 'routine').toLowerCase();
-      const hasThemeContext = instance.theme != null || instance.goalId != null;
-      const syncRoutineLikeToGoogle = (sourceType === 'routine' || sourceType === 'habit') && hasThemeContext;
+      const syncRoutineLikeToGoogle = sourceType === 'chore';
       batch.set(blockRef, {
         ownerUid: uid,
         title: instance.title || 'Routine',
@@ -2145,12 +1956,14 @@ exports.planBlocksV2Http = httpsV2.onRequest({ invoker: 'public' }, async (req, 
       if (!isExisting) payload.createdAt = nowMs;
       batch.set(ref, payload, { merge: true });
 
-      // Mirror routines/chores/habits into calendar_blocks for GCal sync
+      // Mirror routines/chores/habits into calendar_blocks for internal tracking.
+      // Only live chores are eligible for Google sync.
       const blockId = `sched_${instance.id}`;
       const blockRef = db.collection('calendar_blocks').doc(blockId);
       const startMs = instance.plannedStart ? new Date(instance.plannedStart).getTime() : null;
       const endMs = instance.plannedEnd ? new Date(instance.plannedEnd).getTime() : null;
       if (startMs && endMs) {
+        const sourceType = String(instance.sourceType || 'routine').toLowerCase();
         batch.set(blockRef, {
           ownerUid: uid,
           title: instance.title || 'Routine',
@@ -2164,9 +1977,12 @@ exports.planBlocksV2Http = httpsV2.onRequest({ invoker: 'public' }, async (req, 
           placementReason: (instance.schedulingContext && instance.schedulingContext.policyMode) || 'routine',
           theme: instance.theme || null,
           goalId: instance.goalId || null,
+          choreId: sourceType === 'chore' ? instance.sourceId || null : null,
+          routineId: sourceType === 'routine' ? instance.sourceId || null : null,
+          habitId: sourceType === 'habit' ? instance.sourceId || null : null,
           updatedAt: nowMs,
           createdAt: nowMs,
-          syncToGoogle: false,
+          syncToGoogle: sourceType === 'chore',
         }, { merge: true });
       }
     }
@@ -7741,15 +7557,27 @@ exports.generateStoriesForGoal = functionsV2.https.onCall({ secrets: [GOOGLE_AI_
       throw new functionsV2.https.HttpsError('permission-denied', 'Not your goal');
     }
 
-    // Optional per-user prompt
+    // Optional per-user prompt/model
     let basePrompt = null;
+    let configuredModel = null;
     try {
       const settingsDoc = await db.collection('user_settings').doc(uid).get();
-      basePrompt = settingsDoc.exists ? (settingsDoc.data().storyGenPrompt || null) : null;
+      if (settingsDoc.exists) {
+        const settingsData = settingsDoc.data() || {};
+        basePrompt = settingsData.storyGenPrompt || null;
+        configuredModel = settingsData.storyGenModel || null;
+      }
     } catch { }
 
     const goalPersona = goal?.persona || 'personal';
     const personaLabel = goalPersona === 'work' ? 'work' : 'personal';
+    const requestedModel = String(configuredModel || '').trim();
+    const wantsOpenAIModel = /^(gpt|o\d)/i.test(requestedModel);
+    const canUseOpenAI = wantsOpenAIModel && !!process.env.OPENAI_API_KEY;
+    const llmProvider = canUseOpenAI ? 'openai' : 'gemini';
+    const llmModel = requestedModel
+      ? (canUseOpenAI ? requestedModel : (wantsOpenAIModel ? GEMINI_MODEL : requestedModel))
+      : GEMINI_MODEL;
     const prompt = promptOverride || basePrompt || (
       `Generate between 3 and 6 user stories for the following ${personaLabel} goal. ` +
       `Each story must include a clear title and a 1-2 sentence description. ` +
@@ -7763,7 +7591,9 @@ exports.generateStoriesForGoal = functionsV2.https.onCall({ secrets: [GOOGLE_AI_
       user: userContent,
       purpose: 'generateStoriesForGoal',
       userId: uid,
-      expectJson: true
+      expectJson: true,
+      provider: llmProvider,
+      model: llmModel
     });
 
     let parsed;
@@ -10253,8 +10083,7 @@ async function generateCalendarPlanForUser({ db, userId, profile, runId }) {
     const endMs = instance.plannedEnd ? new Date(instance.plannedEnd).getTime() : null;
     if (startMs && endMs) {
       const sourceType = String(instance.sourceType || 'routine').toLowerCase();
-      const hasThemeContext = instance.theme != null || instance.goalId != null;
-      const syncRoutineLikeToGoogle = (sourceType === 'routine' || sourceType === 'habit') && hasThemeContext;
+      const syncRoutineLikeToGoogle = sourceType === 'chore';
       batch.set(blockRef, {
         ownerUid: userId,
         title: instance.title || 'Routine',
@@ -10898,17 +10727,120 @@ function buildPersonalityInstruction(personality) {
   return `Communication style:\n${parts.map((p) => `- ${p}`).join('\n')}`;
 }
 
-async function callLLMJson({ system, user, purpose, userId, expectJson = false, temperature = 0.2, provider = 'gemini', model = GEMINI_MODEL, personality = null }) {
+// Maps purpose strings → feature config keys in aiFeatureConfig.
+// Purposes not listed here use the user's global provider/model.
+const PURPOSE_TO_FEATURE = {
+  // Telegram / agent
+  agent_query:                    'telegram',
+  agent_briefing:                 'digest',
+  agent_propose_plan:             'telegram',
+  agent_weekly_review:            'digest',
+
+  // Journal / transcripts
+  journalProcess:                 'journal',
+  transcriptProcess:              'journal',
+  journalEnrich:                  'journal',
+
+  // Morning / weekly digest
+  sendMorningBriefing:            'digest',
+  sendWeeklyReview:               'digest',
+  dailySummaryFocus:              'digest',
+  dailyChecklistBriefing:        'digest',
+
+  // Story & KPI generation
+  storyTasks:                     'story',
+  storyResearchDoc:               'story',
+  deriveFromResearch:             'story',
+  goalChat:                       'story',
+  generateStoriesForGoal:         'story',
+  generateStoryAcceptanceCriteria:'story',
+  autoAcceptanceCriteria:         'story',
+  chatSummary:                    'story',
+
+  // Task enrichment & sizing
+  taskEnrich:                     'taskEnrich',
+  enhanceNewTask:                 'taskEnrich',
+  enhanceTaskDescription:         'taskEnrich',
+  taskSizing:                     'taskEnrich',
+  storySizing:                    'taskEnrich',
+  suggestTaskStoryConversions:    'taskEnrich',
+
+  // Planning & prioritisation
+  priority_now:                   'planning',
+  replan_day:                     'planning',
+  nightlyTaskPrioritization:      'planning',
+  prioritizeBacklog:              'planning',
+  planCalendar:                   'planning',
+  calendarBlockSummary:          'planning',
+  goalResearchPlan:               'planning',
+  goalResearchDoc:                'planning',
+
+  // Finance
+  monzo_ai_category:              'finance',
+  finance_commentary:             'finance',
+};
+
+async function callLLMJson({ system, user, purpose, userId, expectJson = false, temperature = 0.2, provider = 'gemini', model = GEMINI_MODEL, personality = null, userApiKey = null }) {
+  // ── Resolve provider / model / API key from user profile ───────────────────
+  let resolvedProvider = provider;
+  let resolvedModel    = model;
+  let resolvedApiKey   = userApiKey;
+
+  if (userId && !userApiKey) {
+    try {
+      const db = admin.firestore();
+      const profileSnap = await db.collection('profiles').doc(userId).get();
+      if (profileSnap.exists) {
+        const profileData = profileSnap.data() || {};
+
+        // 1. Start with global default provider + model
+        if (profileData.aiProvider) resolvedProvider = profileData.aiProvider;
+        if (profileData.aiModel)    resolvedModel    = profileData.aiModel;
+
+        // 2. Check for a per-feature override (e.g. telegram uses Claude, journal uses GPT-4o)
+        const featureKey = PURPOSE_TO_FEATURE[purpose];
+        const featureConfig = featureKey && profileData.aiFeatureConfig?.[featureKey];
+        if (featureConfig) {
+          if (featureConfig.provider) resolvedProvider = featureConfig.provider;
+          if (featureConfig.model)    resolvedModel    = featureConfig.model;
+        }
+
+        // 3. Resolve API key for the effective provider
+        //    New schema: aiApiKeys.{provider}   Legacy: aiApiKey (single key)
+        const perProviderKeys = profileData.aiApiKeys || {};
+        resolvedApiKey =
+          perProviderKeys[resolvedProvider] ||  // per-provider key
+          profileData.aiApiKey              ||  // legacy single key
+          null;
+
+        // 4. Auto-load personality if caller didn't supply one explicitly
+        if (!personality && profileData.aiPersonality) {
+          personality = profileData.aiPersonality;
+        }
+
+        // 5. Merge global system-prompt override
+        if (profileData.aiSystemPromptOverride) {
+          system = `${profileData.aiSystemPromptOverride}\n\n${system}`;
+        }
+      }
+    } catch (e) {
+      // Non-fatal — fall back to server defaults
+      console.warn('[callLLMJson] Profile lookup failed:', e?.message);
+    }
+  }
+
   const effectiveSystem = personality ? `${buildPersonalityInstruction(personality)}\n\n${system}` : system;
   const attempts = 3; // initial + 2 retries
   let lastErr = null;
   for (let i = 0; i < attempts; i++) {
     try {
       let text;
-      if (provider === 'openai') {
-        text = await callOpenAIChat({ system: effectiveSystem, user, model, expectJson, temperature });
+      if (resolvedProvider === 'openai') {
+        text = await callOpenAIChat({ system: effectiveSystem, user, model: resolvedModel, expectJson, temperature, apiKey: resolvedApiKey });
+      } else if (resolvedProvider === 'anthropic') {
+        text = await callAnthropic({ system: effectiveSystem, user, model: resolvedModel, expectJson, temperature, apiKey: resolvedApiKey });
       } else {
-        text = await callGemini({ system: effectiveSystem, user, model, expectJson, temperature });
+        text = await callGemini({ system: effectiveSystem, user, model: resolvedModel, expectJson, temperature, apiKey: resolvedApiKey });
       }
       // lightweight usage log
       const wrapped = aiUsageLogger.wrapAICall('google-ai-studio', GEMINI_MODEL);
@@ -10923,8 +10855,8 @@ async function callLLMJson({ system, user, purpose, userId, expectJson = false, 
   throw lastErr || new Error('LLM unavailable');
 }
 
-async function callGemini({ system, user, model = GEMINI_MODEL, expectJson, temperature }) {
-  const apiKey = (process.env.GOOGLEAISTUDIOAPIKEY || '').trim();
+async function callGemini({ system, user, model = GEMINI_MODEL, expectJson, temperature, apiKey: userApiKey = null }) {
+  const apiKey = (userApiKey || process.env.GOOGLEAISTUDIOAPIKEY || '').trim();
   if (!apiKey) throw new Error('GOOGLEAISTUDIOAPIKEY not configured');
 
   try {
@@ -10996,8 +10928,29 @@ async function callGemini({ system, user, model = GEMINI_MODEL, expectJson, temp
   }
 }
 
-async function callOpenAIChat({ system, user, model = 'gpt-4o-mini', expectJson, temperature }) {
-  const apiKey = process.env.OPENAI_API_KEY;
+async function callAnthropic({ system, user, model = 'claude-haiku-3-5', expectJson, temperature, apiKey: userApiKey = null }) {
+  const apiKey = (userApiKey || process.env.ANTHROPIC_API_KEY || '').trim();
+  if (!apiKey) throw new Error('ANTHROPIC_API_KEY not configured');
+  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+    body: JSON.stringify({
+      model,
+      max_tokens: 8192,
+      system,
+      messages: [{ role: 'user', content: user }],
+      temperature: temperature ?? 0.2,
+    }),
+  });
+  if (!resp.ok) throw new Error(`Anthropic HTTP ${resp.status}: ${await resp.text()}`);
+  const data = await resp.json();
+  const text = data?.content?.[0]?.text || '';
+  if (!text) throw new Error('Empty response from Anthropic');
+  return text;
+}
+
+async function callOpenAIChat({ system, user, model = 'gpt-4o-mini', expectJson, temperature, apiKey: userApiKey = null }) {
+  const apiKey = (userApiKey || process.env.OPENAI_API_KEY || '').trim();
   if (!apiKey) throw new Error('OPENAI_API_KEY not configured');
   const url = 'https://api.openai.com/v1/chat/completions';
   const body = {
@@ -12098,15 +12051,6 @@ function assembleDailyChecklist(summaryData) {
       await ref.set(patch, { merge: true });
     }
 
-    // Materialize chore/routine calendar blocks for next 14 days (active only)
-    const type = effectiveType;
-    const effectiveStatus = Number(patch?.status ?? afterStatus);
-    const active = Number(effectiveStatus) !== 2;
-    if (isChoreLike && active) {
-      const task = { id, ...(after || {}), ...(patch || {}) };
-      await upsertChoreBlocksForTask(db, task, 14);
-    }
-
     // If just completed, mark nearest block done and update lastDoneAt
     if ((beforeStatus !== 2) && (afterStatus === 2) && isChoreLike) {
       const today = startOfDay(new Date());
@@ -12223,26 +12167,18 @@ function assembleDailyChecklist(summaryData) {
     } catch { }
   });
 
-  // ===== Hourly: ensure next 14 days of chore/routine blocks exist
+  // ===== Hourly: legacy chore block materialization retired in favor of canonical scheduler
   exports.ensureChoreBlocksHourly = schedulerV2.onSchedule('every 1 hours', async () => {
-    const db = admin.firestore();
-    let scanned = 0, created = 0, updated = 0;
-    for (const t of ['chore', 'routine', 'habit']) {
-      // Only open tasks (status == 0)
-      const snap = await db.collection('tasks').where('type', '==', t).where('status', '==', 0).get();
-      for (const doc of snap.docs) {
-        scanned++;
-        const res = await upsertChoreBlocksForTask(db, { id: doc.id, ...(doc.data() || {}) }, 14);
-        created += res.created; updated += res.updated;
-      }
-    }
+    const scanned = 0;
+    const created = 0;
+    const updated = 0;
     try {
       const activityRef = admin.firestore().collection('activity_stream').doc();
       await activityRef.set({
         id: activityRef.id,
         entityType: 'chore_blocks',
         activityType: 'ensure_blocks',
-        description: `Ensured blocks: scanned=${scanned}, created=${created}, updated=${updated}`,
+        description: `Legacy chore block materialization skipped: scanned=${scanned}, created=${created}, updated=${updated}`,
         timestamp: admin.firestore.FieldValue.serverTimestamp(),
       });
     } catch { }
@@ -20781,3 +20717,60 @@ Keep it professional, actionable, and encourage the team.`;
 });
 
 // ===== Theme Allocations =====
+
+// ===== LLM User Settings =====
+try {
+  const llmSettingsModule = require('./agent/llmSettings');
+  if (llmSettingsModule) {
+    exports.testLLMConnection    = llmSettingsModule.testLLMConnection;
+    exports.getAIModels          = llmSettingsModule.getAIModels;
+    exports.refreshModelRegistry = llmSettingsModule.refreshModelRegistry;
+  }
+} catch (e) {
+  console.warn('[init] agent/llmSettings not loaded', e?.message || e);
+}
+
+// ===== Agent Integration Layer =====
+// Phase 1: audit helpers, context aggregator, and tool dispatcher
+try {
+  const agentToolsModule = require('./agent/agentTools');
+  if (agentToolsModule) {
+    exports.agentTool = agentToolsModule.agentTool;
+  }
+} catch (e) {
+  console.warn('[init] agent/agentTools not loaded', e?.message || e);
+}
+
+// Phase 2: Telegram webhook + account linking
+try {
+  const agentTelegramModule = require('./agent/telegramWebhook');
+  if (agentTelegramModule) {
+    exports.telegramWebhook = agentTelegramModule.telegramWebhook;
+    exports.linkTelegramAccount = agentTelegramModule.linkTelegramAccount;
+    exports.unlinkTelegramAccount = agentTelegramModule.unlinkTelegramAccount;
+  }
+} catch (e) {
+  console.warn('[init] agent/telegramWebhook not loaded', e?.message || e);
+}
+
+// Phase 3: Approval expiry sweep
+try {
+  const approvalWorkerModule = require('./agent/approvalWorker');
+  if (approvalWorkerModule) {
+    exports.sweepExpiredApprovals = approvalWorkerModule.sweepExpiredApprovals;
+  }
+} catch (e) {
+  console.warn('[init] agent/approvalWorker not loaded', e?.message || e);
+}
+
+// Phase 4: Proactive scheduled briefings
+try {
+  const agentBriefingModule = require('./agent/agentBriefing');
+  if (agentBriefingModule) {
+    exports.sendMorningBriefing = agentBriefingModule.sendMorningBriefing;
+    exports.sendWeeklyReview = agentBriefingModule.sendWeeklyReview;
+    exports.triggerBriefingNow = agentBriefingModule.triggerBriefingNow;
+  }
+} catch (e) {
+  console.warn('[init] agent/agentBriefing not loaded', e?.message || e);
+}

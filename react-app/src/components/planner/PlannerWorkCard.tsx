@@ -130,6 +130,10 @@ const PlannerWorkCard: React.FC<PlannerWorkCardProps> = ({
   const pointsValue = Number((item.rawTask as any)?.points ?? (item.rawStory as any)?.points ?? 0);
   const actionButtons = canShowActions && !isEvent;
   const color = item.kind === 'story' ? '#0dcaf0' : item.kind === 'chore' ? '#198754' : item.kind === 'event' ? '#6c757d' : '#0d6efd';
+  const compactWeekly = context === 'weekly';
+  const secondaryMeta = compactWeekly
+    ? [item.ref].filter(Boolean).join(' · ')
+    : [item.ref, !scheduledBlockLabel ? item.timeLabel : null].filter(Boolean).join(' · ');
 
   return (
     <Card
@@ -229,7 +233,7 @@ const PlannerWorkCard: React.FC<PlannerWorkCardProps> = ({
                       Progress {Math.round(item.progressPct)}%
                     </span>
                   )}
-                  {scheduledBlockLabel && (
+                  {!compactWeekly && scheduledBlockLabel && (
                     <span className="d-inline-flex flex-column" style={{ lineHeight: 1.2 }}>
                       <span
                         className="kanban-card__meta-badge"
@@ -250,7 +254,7 @@ const PlannerWorkCard: React.FC<PlannerWorkCardProps> = ({
                       )}
                     </span>
                   )}
-                  {deferredLabel && (
+                  {!compactWeekly && deferredLabel && (
                     <span
                       className="kanban-card__meta-badge"
                       style={{
@@ -264,7 +268,7 @@ const PlannerWorkCard: React.FC<PlannerWorkCardProps> = ({
                       Deferred
                     </span>
                   )}
-                  {dueValue && (
+                  {!compactWeekly && dueValue && (
                     <span className="kanban-card__meta-badge" title={`Due ${dueValue}`}>
                       Due {dueValue}
                     </span>
@@ -274,12 +278,12 @@ const PlannerWorkCard: React.FC<PlannerWorkCardProps> = ({
                       Focus
                     </span>
                   )}
-                  {itemKindLabel && (
+                  {!compactWeekly && itemKindLabel && (
                     <span className="kanban-card__meta-badge" title="Item type">
                       {itemKindLabel}
                     </span>
                   )}
-                  {aiScore != null && (
+                  {!compactWeekly && aiScore != null && (
                     <span className="kanban-card__meta-badge" title="AI score">
                       AI {aiScore}/100
                     </span>
@@ -315,10 +319,12 @@ const PlannerWorkCard: React.FC<PlannerWorkCardProps> = ({
                     </span>
                   )}
                 </div>
-                <div className="text-muted kanban-card__description" style={{ fontSize: '0.74rem' }}>
-                  {[item.ref, !scheduledBlockLabel ? item.timeLabel : null].filter(Boolean).join(' · ')}
-                </div>
-                {item.goalTitle && (
+                {secondaryMeta && (
+                  <div className="text-muted kanban-card__description" style={{ fontSize: '0.74rem' }}>
+                    {secondaryMeta}
+                  </div>
+                )}
+                {item.goalTitle && !compactWeekly && (
                   <div className="kanban-card__goal mt-1">
                     <Target size={12} />
                     <span style={{ overflowWrap: 'anywhere' }}>{item.goalTitle}</span>

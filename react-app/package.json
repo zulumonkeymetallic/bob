@@ -70,7 +70,7 @@
   },
   "scripts": {
     "start": "react-scripts start",
-    "build": "react-scripts build && node ../scripts/generate-version.js",
+    "build": "node ../scripts/build.js",
     "build:dev": "react-scripts build",
     "test": "react-scripts test",
     "eject": "react-scripts eject",

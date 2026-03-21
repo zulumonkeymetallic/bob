@@ -15,6 +15,7 @@ import { isCriticalPriority } from '../utils/priorityUtils';
 import { getManualPriorityRank } from '../utils/manualPriority';
 import { useActivityTracking } from '../hooks/useActivityTracking';
 import { formatTaskTagLabel } from '../utils/tagDisplay';
+import { isGoalInHierarchySet } from '../utils/goalHierarchy';
 import '../styles/KanbanCards.css';
 import '../styles/KanbanFixes.css';
 
@@ -29,6 +30,8 @@ interface KanbanBoardV2Props {
     dueFilter?: 'all' | 'today' | 'overdue' | 'top3' | 'critical';
     sortBy?: 'ai' | 'due' | 'priority' | 'default';
     themes?: GlobalTheme[];
+    focusOnly?: boolean;
+    focusGoalIds?: Set<string>;
 }
 
 interface ScheduledBlockInfo {
@@ -51,7 +54,9 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
     showLatestNotes = false,
     dueFilter = 'all',
     sortBy = 'ai',
-    themes
+    themes,
+    focusOnly = false,
+    focusGoalIds = new Set(),
     }) => {
     const { currentUser } = useAuth();
     const { currentPersona } = usePersona();
@@ -381,6 +386,18 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
             result = result.filter(t => t.sprintId === sprintId);
         }
 
+        if (focusOnly && focusGoalIds.size > 0) {
+            result = result.filter((t) => {
+                const directGoalId = String((t as any).goalId || '').trim();
+                if (directGoalId && isGoalInHierarchySet(directGoalId, goals, focusGoalIds)) return true;
+                const parentStoryId = String(t.storyId || (t.parentType === 'story' ? t.parentId || '' : '')).trim();
+                if (!parentStoryId) return false;
+                const parentStory = stories.find((s) => s.id === parentStoryId);
+                const parentGoalId = String((parentStory as any)?.goalId || '').trim();
+                return !!parentGoalId && isGoalInHierarchySet(parentGoalId, goals, focusGoalIds);
+            });
+        }
+
         if (goalFilter) {
             // Filter tasks by goal. Tasks might have goalId or be linked to a story with goalId.
             result = result.filter(t => {
@@ -414,13 +431,20 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
 
         result = result.filter((t) => matchesDueFilter(t, isTop3Task(t)));
         return result;
-    }, [tasks, stories, goals, sprintId, goalFilter, themeFilter, dueFilter]);
+    }, [tasks, stories, goals, sprintId, goalFilter, themeFilter, dueFilter, focusOnly, focusGoalIds]);
 
     const filteredStories = useMemo(() => {
         let result = stories;
         if (sprintId) {
             result = result.filter(s => (s as any).sprintId === sprintId);
         }
+        if (focusOnly && focusGoalIds.size > 0) {
+            result = result.filter((s) => {
+                const goalId = String((s as any).goalId || '').trim();
+                return !!goalId && isGoalInHierarchySet(goalId, goals, focusGoalIds);
+            });
+        }
+
         if (goalFilter) {
             result = result.filter(s => (s as any).goalId === goalFilter);
         }
@@ -436,7 +460,7 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
         }
         result = result.filter((s) => matchesDueFilter(s, isTop3Story(s)));
         return result;
-    }, [stories, goals, sprintId, goalFilter, themeFilter, dueFilter]);
+    }, [stories, goals, sprintId, goalFilter, themeFilter, dueFilter, focusOnly, focusGoalIds]);
 
     const visibleEntityIds = useMemo(() => {
         const ids = new Set<string>();

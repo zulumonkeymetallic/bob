@@ -7,7 +7,7 @@ const GOOGLE_AI_STUDIO_API_KEY = defineSecret('GOOGLEAISTUDIOAPIKEY');
  * Calls the LLM (Gemini) with the given system and user prompts.
  * Returns the text response.
  */
-async function callLLM(systemPrompt, userPrompt, modelName = 'gemini-1.5-flash') {
+async function callLLM(systemPrompt, userPrompt, modelName = (process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite')) {
     // Note: In a real Firebase Functions environment, we might use the Vertex AI SDK 
     // or the Google AI Studio REST API directly depending on the setup.
     // The existing codebase seems to use a custom implementation or Vertex AI.

@@ -11,6 +11,7 @@ import { ActivityStreamService } from '../../services/ActivityStreamService';
 import type { Goal, Story, Task } from '../../types';
 import EditTaskModal from '../EditTaskModal';
 import EditStoryModal from '../EditStoryModal';
+import { callDeltaReplan } from '../../utils/plannerOrchestration';
 
 type CheckInItemType = 'block' | 'instance' | 'habit' | 'task' | 'chore' | 'routine';
 
@@ -1111,39 +1112,47 @@ const CheckInDaily: React.FC<CheckInDailyProps> = ({ embedded = false, fixedDate
       await Promise.all(noteWrites);
 
       // Persist progress % to source task/story documents
-      const progressWrites = itemsWithMeta
+      const changedProgressItems = itemsWithMeta
         .filter((item) => {
           const effectiveType = String(item.taskType || item.sourceType || item.type || '').toLowerCase();
           const isRecurringLike = ['chore', 'routine', 'habit'].includes(effectiveType);
           const supportsProgress = !!(item.storyId || (item.taskId && !isRecurringLike));
-          return supportsProgress && item.progressPct != null && (item.storyId || item.taskId);
-        })
-        .map(async (item) => {
+          if (!(supportsProgress && item.progressPct != null && (item.storyId || item.taskId))) return false;
           const prev = prevMap.get(item.key);
-          if (item.progressPct === prev?.progressPct) return;
-          try {
-            const col = item.storyId ? 'stories' : 'tasks';
-            const id = item.storyId || item.taskId!;
-            const payload: Record<string, any> = {
-              progressPct: item.progressPct,
-              progressPctUpdatedAt: Date.now(),
-            };
-            if (item.storyId) {
-              const points = Number(item.points ?? 0);
-              const pct = Number(item.progressPct ?? 0);
-              const remaining = Number.isFinite(points) && points > 0
-                ? Math.max(0, Math.ceil((points * (1 - Math.min(100, Math.max(0, pct)) / 100)) * 10) / 10)
-                : 0;
-              payload.pointsRemaining = remaining;
-              payload.pointsRemainingAsOfDateKey = dateKey;
-              payload.pointsRemainingUpdatedAt = Date.now();
-            }
-            await updateDoc(doc(db, col, id), payload);
-          } catch (err) {
-            console.warn('Failed to write progressPct to source doc', err);
-          }
+          return item.progressPct !== prev?.progressPct;
         });
+      const progressWrites = changedProgressItems.map(async (item) => {
+        try {
+          const col = item.storyId ? 'stories' : 'tasks';
+          const id = item.storyId || item.taskId!;
+          const payload: Record<string, any> = {
+            progressPct: item.progressPct,
+            progressPctUpdatedAt: Date.now(),
+          };
+          if (item.storyId) {
+            const points = Number(item.points ?? 0);
+            const pct = Number(item.progressPct ?? 0);
+            const remaining = Number.isFinite(points) && points > 0
+              ? Math.max(0, Math.ceil((points * (1 - Math.min(100, Math.max(0, pct)) / 100)) * 10) / 10)
+              : 0;
+            payload.pointsRemaining = remaining;
+            payload.pointsRemainingAsOfDateKey = dateKey;
+            payload.pointsRemainingUpdatedAt = Date.now();
+          }
+          await updateDoc(doc(db, col, id), payload);
+        } catch (err) {
+          console.warn('Failed to write progressPct to source doc', err);
+        }
+      });
       await Promise.all(progressWrites);
+      const progressChanged = changedProgressItems.length > 0;
+      if (progressChanged) {
+        try {
+          await callDeltaReplan(functions, { days: 7 });
+        } catch (replanError) {
+          console.warn('Daily check-in delta replan failed after progress update', replanError);
+        }
+      }
 
       setItems(itemsWithMeta);
       initialItemsRef.current = new Map(itemsWithMeta.map((item) => [item.key, item]));

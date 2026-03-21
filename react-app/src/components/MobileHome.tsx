@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Container, Card, Button, Badge, ListGroup, Form, Modal, Spinner } from 'react-bootstrap';
 import { httpsCallable } from 'firebase/functions';
 import { collection, query, where, onSnapshot, orderBy, limit, updateDoc, doc, serverTimestamp } from 'firebase/firestore';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { db, functions } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { useSprint } from '../contexts/SprintContext';
@@ -33,14 +34,28 @@ import {
 import { useFocusGoals } from '../hooks/useFocusGoals';
 import { getProtectedFocusGoalIds, isGoalInHierarchySet } from '../utils/goalHierarchy';
 import { schedulePlannerItem as schedulePlannerItemMutation } from '../utils/plannerScheduling';
+import {
+  buildStoryProgressUpdate,
+  formatStoryProgressLabel,
+  MOBILE_STORY_PROGRESS_OPTIONS,
+} from '../utils/storyProgress';
 
-type TabKey = 'overview' | 'tasks' | 'stories' | 'goals' | 'chores';
+type TabKey = 'overview' | 'daily_plan' | 'tasks' | 'stories' | 'goals' | 'chores';
 type TaskViewFilter = 'top3' | 'due_today' | 'overdue' | 'all';
 type GoalsViewFilter = 'active_sprint' | 'year';
 type MobileSharedFilters = {
   top3: boolean;
   chores: boolean;
   focusAligned: boolean;
+};
+const MOBILE_TAB_ORDER: TabKey[] = ['overview', 'daily_plan', 'tasks', 'stories', 'goals', 'chores'];
+const MOBILE_TAB_LABELS: Record<TabKey, string> = {
+  overview: 'Overview',
+  daily_plan: 'Daily Plan',
+  tasks: 'Tasks',
+  stories: 'Stories',
+  goals: 'Goals',
+  chores: 'Chores',
 };
 
 const THEME_COLORS: Record<number, string> = {
@@ -71,13 +86,24 @@ const formatShortDate = (value?: number) => {
   return new Date(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 };
 
+const normalizeTabKey = (rawValue: string | null | undefined): TabKey => {
+  const normalized = String(rawValue || '').trim().toLowerCase();
+  if (normalized === 'daily-plan' || normalized === 'dailyplan') return 'daily_plan';
+  if (MOBILE_TAB_ORDER.includes(normalized as TabKey)) return normalized as TabKey;
+  return 'overview';
+};
+
 const MobileHome: React.FC = () => {
+  const location = useLocation();
+  const navigate = useNavigate();
   const { currentUser } = useAuth();
   const { selectedSprintId, setSelectedSprintId, sprints } = useSprint();
   const { currentPersona, setPersona } = usePersona();
   const { activeFocusGoals } = useFocusGoals(currentUser?.uid);
 
-  const [activeTab, setActiveTab] = useState<TabKey>('overview');
+  const [activeTab, setActiveTab] = useState<TabKey>(() =>
+    normalizeTabKey(typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('tab'))
+  );
   const [tasks, setTasks] = useState<Task[]>([]);
   const [stories, setStories] = useState<Story[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
@@ -107,6 +133,17 @@ const MobileHome: React.FC = () => {
   const [editingStory, setEditingStory] = useState<Story | null>(null);
   const [deferTarget, setDeferTarget] = useState<{ type: 'task' | 'story'; id: string; title: string } | null>(null);
   const [sharedFilters, setSharedFilters] = useState<MobileSharedFilters>({ top3: false, chores: false, focusAligned: false });
+  const setActiveMobileTab = useCallback((nextTab: TabKey) => {
+    setActiveTab(nextTab);
+    const params = new URLSearchParams(location.search);
+    if (nextTab === 'overview') {
+      params.delete('tab');
+    } else {
+      params.set('tab', nextTab);
+    }
+    const nextSearch = params.toString();
+    navigate({ pathname: '/mobile', search: nextSearch ? `?${nextSearch}` : '' }, { replace: true });
+  }, [location.search, navigate]);
   const todayIso = useMemo(() => new Date().toISOString().split('T')[0], []);
   const activePlanningSprints = useMemo(
     () => sprints.filter((s) => s.status === 0 || s.status === 1),
@@ -160,6 +197,11 @@ const MobileHome: React.FC = () => {
     }
     return [] as string[];
   })();
+
+  useEffect(() => {
+    const tabFromLocation = normalizeTabKey(new URLSearchParams(location.search).get('tab'));
+    setActiveTab((prev) => (prev === tabFromLocation ? prev : tabFromLocation));
+  }, [location.search]);
 
   const getTaskDueMs = useCallback((task: Task): number | null => resolveTaskDueMs(task), []);
 
@@ -755,6 +797,22 @@ const MobileHome: React.FC = () => {
     }
   };
 
+  const updateStoryProgress = useCallback(async (story: Story, progressPct: number) => {
+    try {
+      const progressUpdate = buildStoryProgressUpdate({
+        points: (story as any).points || 0,
+        progressPct,
+      });
+      await updateDoc(doc(db, 'stories', story.id), {
+        ...progressUpdate,
+        updatedAt: serverTimestamp(),
+      });
+    } catch (e) {
+      console.error('Failed to update story progress', e);
+      alert('Failed to update story progress');
+    }
+  }, []);
+
   const updateGoalField = async (goal: Goal, updates: Partial<Goal>) => {
     try {
       await updateDoc(doc(db, 'goals', goal.id), { ...updates, updatedAt: serverTimestamp() });
@@ -1096,6 +1154,12 @@ const MobileHome: React.FC = () => {
     });
   }, [tasksDueTodayForMobile, choresDueToday, sortedStories, overviewCalendarEvents, getTaskDueMs, matchesTimelineSharedFilters, bucketFromTime]);
 
+  const dailyPlanBucketCounts = useMemo(() => ({
+    morning: unifiedTimelineItems.filter((item) => item.bucket === 'morning').length,
+    afternoon: unifiedTimelineItems.filter((item) => item.bucket === 'afternoon').length,
+    evening: unifiedTimelineItems.filter((item) => item.bucket === 'evening').length,
+  }), [unifiedTimelineItems]);
+
   const renderChoresHabitsWidget = () => {
     // Group by time-of-day bucket, respecting explicit timeOfDay field before falling back to schedule time.
     const toChoreMs = (task: Task): number | null => resolveRecurringDueMs(task, new Date(), todayStartMs) ?? null;
@@ -1358,15 +1422,15 @@ const MobileHome: React.FC = () => {
       <div className="mobile-filter-tabs mb-3">
         <div className="d-flex align-items-center gap-1 flex-nowrap" style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
           <div className="btn-group flex-nowrap w-100" role="group">
-            {(['overview','tasks','stories','goals','chores'] as TabKey[]).map(key => (
+            {MOBILE_TAB_ORDER.map((key) => (
               <Button
                 key={key}
                 variant={activeTab === key ? 'primary' : 'outline-primary'}
                 size="sm"
-                onClick={() => setActiveTab(key)}
+                onClick={() => setActiveMobileTab(key)}
                 style={{ padding: '3px 6px', fontSize: 11, whiteSpace: 'nowrap' }}
               >
-                {key === 'overview' ? 'Overview' : key === 'tasks' ? 'Tasks' : key === 'stories' ? 'Stories' : key === 'goals' ? 'Goals' : 'Chores'}
+                {MOBILE_TAB_LABELS[key]}
               </Button>
             ))}
           </div>
@@ -1676,9 +1740,118 @@ const MobileHome: React.FC = () => {
             </Card>
           )}
 
-              <Card className="mb-3" style={{ background: '#eef2ff' }}>
-              <Card.Header className="py-2 d-flex align-items-center justify-content-between" style={{ background: 'transparent', border: 'none' }}>
+          <Card className="mb-3" style={{ background: '#eef2ff' }}>
+            <Card.Header className="py-2 d-flex align-items-center justify-content-between" style={{ background: 'transparent', border: 'none' }}>
+              <div>
+                <strong>Daily Plan</strong>
+                <Badge bg="secondary" pill className="ms-2">{unifiedTimelineItems.length}</Badge>
+              </div>
+            </Card.Header>
+            <Card.Body className="pt-0">
+              <div className="text-muted small mb-2">
+                {unifiedTimelineItems.length === 0
+                  ? 'No tasks, stories, chores, or calendar events scheduled today.'
+                  : 'Grouped into morning, afternoon, and evening for quick triage.'}
+              </div>
+              <div className="d-flex flex-wrap gap-1 mb-3">
+                <Badge bg="light" text="dark">Morning {dailyPlanBucketCounts.morning}</Badge>
+                <Badge bg="light" text="dark">Afternoon {dailyPlanBucketCounts.afternoon}</Badge>
+                <Badge bg="light" text="dark">Evening {dailyPlanBucketCounts.evening}</Badge>
+              </div>
+              <Button size="sm" variant="primary" onClick={() => setActiveMobileTab('daily_plan')}>
+                Open Daily Plan
+              </Button>
+            </Card.Body>
+          </Card>
+
+          {renderChoresHabitsWidget()}
+
+          {(summary?.worldSummary || worldWeatherLine || worldNewsItems.length > 0) && (
+            <Card className="mb-3" style={{ background: '#fff7ed' }}>
+              <Card.Header className="py-2" style={{ background: 'transparent', border: 'none' }}>
+                <strong>World & Weather</strong>
+              </Card.Header>
+              <Card.Body>
+                {renderBriefText(summary?.worldSummary?.summary) && (
+                  <div className="mb-2" style={{ fontSize: 14 }}>{renderBriefText(summary?.worldSummary?.summary)}</div>
+                )}
+                {worldWeatherLine && (
+                  <div className="text-muted" style={{ fontSize: 13 }}>{worldWeatherLine}</div>
+                )}
+                {worldNewsItems.length > 0 && (
+                  <div className="mt-2">
+                    <div className="fw-semibold" style={{ fontSize: 14 }}>News</div>
+                    <ul className="mb-0 small">
+                      {worldNewsItems.map((headline: string, idx: number) => (
+                        <li key={idx}>{headline}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </Card.Body>
+            </Card>
+          )}
+
+          <Card className="mb-3" style={{ background: '#eef2ff' }}>
+            <Card.Body>
+              <div className="d-flex justify-content-between align-items-center">
                 <div>
+                  <div className="small text-muted">AI Planning summary</div>
+                  <div className="fw-semibold" style={{ fontSize: 14 }}>{formatPlannerLine(plannerStats)}</div>
+                </div>
+                <Badge bg="secondary" pill>
+                  {plannerStats?.source || 'replan'}
+                </Badge>
+              </div>
+              <div className="d-flex flex-wrap gap-2 mt-2">
+                <Button
+                  size="sm"
+                  variant="outline-primary"
+                  disabled={replanLoading || fullReplanLoading}
+                  onClick={handleReplan}
+                  title="Delta replan: quickly rebalance existing calendar blocks using current priorities."
+                >
+                  {replanLoading ? <Spinner animation="border" size="sm" className="me-1" role="status" /> : <RefreshCw size={12} className="me-1" />}
+                  {replanLoading ? 'Delta…' : 'Delta replan'}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="primary"
+                  disabled={fullReplanLoading || replanLoading}
+                  onClick={handleFullReplan}
+                  title="Full replan: runs full nightly orchestration (pointing, conversions, priority scoring, and calendar planning)."
+                >
+                  {fullReplanLoading ? <Spinner animation="border" size="sm" className="me-1" role="status" /> : <Sparkles size={12} className="me-1" />}
+                  {fullReplanLoading ? 'Full…' : 'Full replan'}
+                </Button>
+              </div>
+              {replanFeedback && (
+                <div className="text-muted small mt-2">
+                  {replanFeedback}
+                </div>
+              )}
+              {replanLoading && (
+                <div className="mt-2 small d-flex align-items-center text-primary" role="status" aria-live="polite">
+                  <Spinner animation="border" size="sm" className="me-2" />
+                  Delta replan is in progress—calendar blocks are being rebalanced.
+                </div>
+              )}
+              {fullReplanLoading && (
+                <div className="mt-2 small d-flex align-items-center text-primary" role="status" aria-live="polite">
+                  <Spinner animation="border" size="sm" className="me-2" />
+                  Full replan is in progress—running the complete nightly orchestration chain.
+                </div>
+              )}
+            </Card.Body>
+          </Card>
+        </div>
+      )}
+
+      {activeTab === 'daily_plan' && (
+        <div>
+          <Card className="mb-3" style={{ background: '#eef2ff' }}>
+            <Card.Header className="py-2 d-flex align-items-center justify-content-between" style={{ background: 'transparent', border: 'none' }}>
+              <div>
                 <strong>Daily Plan</strong>
                 <Badge bg="secondary" pill className="ms-2">{unifiedTimelineItems.length}</Badge>
               </div>
@@ -1767,6 +1940,20 @@ const MobileHome: React.FC = () => {
                                 )}
                                 {(item.task || item.story) && (
                                   <div className="d-flex flex-wrap gap-2 mt-2">
+                                    {item.story && (
+                                      <Form.Select
+                                        size="sm"
+                                        value={Number((item.story as any).progressPct || 0)}
+                                        onChange={(e) => void updateStoryProgress(item.story!, Number(e.target.value))}
+                                        style={{ maxWidth: 170 }}
+                                      >
+                                        {MOBILE_STORY_PROGRESS_OPTIONS.map((pct) => (
+                                          <option key={pct} value={pct}>
+                                            {formatStoryProgressLabel((item.story as any).points, pct)}
+                                          </option>
+                                        ))}
+                                      </Form.Select>
+                                    )}
                                     <Button
                                       variant="outline-secondary"
                                       size="sm"
@@ -1806,87 +1993,6 @@ const MobileHome: React.FC = () => {
                     </div>
                   );
                 })
-              )}
-            </Card.Body>
-          </Card>
-
-          {renderChoresHabitsWidget()}
-
-          {(summary?.worldSummary || worldWeatherLine || worldNewsItems.length > 0) && (
-            <Card className="mb-3" style={{ background: '#fff7ed' }}>
-              <Card.Header className="py-2" style={{ background: 'transparent', border: 'none' }}>
-                <strong>World & Weather</strong>
-              </Card.Header>
-              <Card.Body>
-                {renderBriefText(summary?.worldSummary?.summary) && (
-                  <div className="mb-2" style={{ fontSize: 14 }}>{renderBriefText(summary?.worldSummary?.summary)}</div>
-                )}
-                {worldWeatherLine && (
-                  <div className="text-muted" style={{ fontSize: 13 }}>{worldWeatherLine}</div>
-                )}
-                {worldNewsItems.length > 0 && (
-                  <div className="mt-2">
-                    <div className="fw-semibold" style={{ fontSize: 14 }}>News</div>
-                    <ul className="mb-0 small">
-                      {worldNewsItems.map((headline: string, idx: number) => (
-                        <li key={idx}>{headline}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </Card.Body>
-            </Card>
-          )}
-
-          <Card className="mb-3" style={{ background: '#eef2ff' }}>
-            <Card.Body>
-              <div className="d-flex justify-content-between align-items-center">
-                <div>
-                  <div className="small text-muted">AI Planning summary</div>
-                  <div className="fw-semibold" style={{ fontSize: 14 }}>{formatPlannerLine(plannerStats)}</div>
-                </div>
-                <Badge bg="secondary" pill>
-                  {plannerStats?.source || 'replan'}
-                </Badge>
-              </div>
-              <div className="d-flex flex-wrap gap-2 mt-2">
-                <Button
-                  size="sm"
-                  variant="outline-primary"
-                  disabled={replanLoading || fullReplanLoading}
-                  onClick={handleReplan}
-                  title="Delta replan: quickly rebalance existing calendar blocks using current priorities."
-                >
-                  {replanLoading ? <Spinner animation="border" size="sm" className="me-1" role="status" /> : <RefreshCw size={12} className="me-1" />}
-                  {replanLoading ? 'Delta…' : 'Delta replan'}
-                </Button>
-                <Button
-                  size="sm"
-                  variant="primary"
-                  disabled={fullReplanLoading || replanLoading}
-                  onClick={handleFullReplan}
-                  title="Full replan: runs full nightly orchestration (pointing, conversions, priority scoring, and calendar planning)."
-                >
-                  {fullReplanLoading ? <Spinner animation="border" size="sm" className="me-1" role="status" /> : <Sparkles size={12} className="me-1" />}
-                  {fullReplanLoading ? 'Full…' : 'Full replan'}
-                </Button>
-              </div>
-              {replanFeedback && (
-                <div className="text-muted small mt-2">
-                  {replanFeedback}
-                </div>
-              )}
-              {replanLoading && (
-                <div className="mt-2 small d-flex align-items-center text-primary" role="status" aria-live="polite">
-                  <Spinner animation="border" size="sm" className="me-2" />
-                  Delta replan is in progress—calendar blocks are being rebalanced.
-                </div>
-              )}
-              {fullReplanLoading && (
-                <div className="mt-2 small d-flex align-items-center text-primary" role="status" aria-live="polite">
-                  <Spinner animation="border" size="sm" className="me-2" />
-                  Full replan is in progress—running the complete nightly orchestration chain.
-                </div>
               )}
             </Card.Body>
           </Card>
@@ -2098,6 +2204,19 @@ const MobileHome: React.FC = () => {
                         <option key={opt.value} value={opt.value}>{opt.label}</option>
                       ))}
                     </Form.Select>
+                    <Form.Select
+                      size="sm"
+                      className="dashboard-chip-select"
+                      value={Number((story as any).progressPct || 0)}
+                      onChange={(e) => void updateStoryProgress(story, Number(e.target.value))}
+                      style={{ minWidth: 180 }}
+                    >
+                      {MOBILE_STORY_PROGRESS_OPTIONS.map((pct) => (
+                        <option key={pct} value={pct}>
+                          {formatStoryProgressLabel(story.points, pct)}
+                        </option>
+                      ))}
+                    </Form.Select>
                     <Button variant="outline-secondary" size="sm" onClick={() => openNoteModal('story', story.id)}>Add Note</Button>
                     <Button
                       variant={manualPriorityRank ? 'danger' : 'outline-warning'}
@@ -2119,6 +2238,9 @@ const MobileHome: React.FC = () => {
                   </div>
                   <div className="d-flex flex-wrap gap-2 mt-2">
                     <Badge pill bg="dark">Pts {story.points || 0}</Badge>
+                    <Badge pill bg="light" text="dark">
+                      {formatStoryProgressLabel(story.points, (story as any).progressPct || 0)}
+                    </Badge>
                     {manualPriorityRank && <Badge pill bg="danger">{getManualPriorityLabel(story)}</Badge>}
                     {isStoryTop3 && <Badge pill bg="warning" text="dark">Top 3</Badge>}
                     {focusAligned && <Badge pill bg="success">Focus</Badge>}

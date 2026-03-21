@@ -3,7 +3,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { httpsCallable } from 'firebase/functions';
 import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 import { Button, Modal, Form, Container, Spinner, Alert, Dropdown } from 'react-bootstrap';
-import { Calendar as CalendarIcon, LayoutDashboard, RefreshCw, Save, Sparkles } from 'lucide-react';
+import { Calendar as CalendarIcon, Clock, LayoutDashboard, RefreshCw, Save, Sparkles } from 'lucide-react';
 import { GLOBAL_THEMES, type GlobalTheme } from '../../constants/globalThemes';
 import { useGlobalThemes } from '../../hooks/useGlobalThemes';
 import { useNavigate } from 'react-router-dom';
@@ -735,7 +735,7 @@ const WeeklyThemePlanner: React.FC = () => {
     return (
         <Container fluid className="p-4">
             <div className="mb-3">
-                <h2 className="mb-2">Weekly Plan</h2>
+                <h2 className="mb-2">Weekly Capacity</h2>
                 <div style={{ display: 'flex', flexWrap: 'nowrap', gap: 8, overflowX: 'auto', paddingBottom: 4, alignItems: 'center' }}>
                     <Button
                         variant={fitnessBlocksAutoCreate ? 'success' : 'outline-secondary'}
@@ -848,6 +848,17 @@ const WeeklyThemePlanner: React.FC = () => {
                         {nightlyRunning ? <Spinner size="sm" animation="border" className="me-1" /> : <Sparkles size={14} className="me-1" />}
                         Full replan
                     </Button>
+                    <Button
+                        size="sm"
+                        variant="outline-secondary"
+                        onClick={() => navigate('/planner/weekly')}
+                        disabled={saving || applying || deltaReplanLoading || nightlyRunning || seedLoading}
+                        title="Open 7-day prioritisation view."
+                        style={{ whiteSpace: 'nowrap' }}
+                    >
+                        <Clock size={14} className="me-1" />
+                        7-day view
+                    </Button>
                     <Dropdown>
                         <Dropdown.Toggle size="sm" variant="outline-secondary" id="weekly-nav-dropdown" title="Navigation shortcuts to calendar and overview.">
                             Navigate
@@ -860,6 +871,10 @@ const WeeklyThemePlanner: React.FC = () => {
                             <Dropdown.Item onClick={() => navigate('/dashboard')} title="Open overview dashboard.">
                                 <LayoutDashboard size={14} className="me-1" />
                                 View overview
+                            </Dropdown.Item>
+                            <Dropdown.Item onClick={() => navigate('/planner/weekly')} title="Open 7-day prioritisation view.">
+                                <Clock size={14} className="me-1" />
+                                7-day view
                             </Dropdown.Item>
                         </Dropdown.Menu>
                     </Dropdown>

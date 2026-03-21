@@ -9,6 +9,7 @@ import KanbanPage from './components/KanbanPage';
 import ModernKanbanPage from './components/ModernKanbanPage';
 import UnifiedPlannerPage from './components/planner/UnifiedPlannerPage';
 import WeeklyThemePlanner from './components/planner/WeeklyThemePlanner';
+import WeeklyPlannerPage from './components/planner/WeeklyPlannerPage';
 import PlanningApprovalPage from './components/planner/PlanningApprovalPage';
 import ApprovalsCenter from './components/planner/ApprovalsCenter';
 import ThemeProgressDashboard from './components/ThemeProgressDashboard';
@@ -23,7 +24,6 @@ import BooksBacklog from './components/BooksBacklog';
 import ShowsBacklog from './components/ShowsBacklog';
 import VideosBacklog from './components/VideosBacklog';
 import YouTubeHistoryDashboard from './components/YouTubeHistoryDashboard';
-import MobilePriorityDashboard from './components/MobilePriorityDashboard';
 // import ModernTableDemo from './components/ModernTableDemo';
 import FloatingActionButton from './components/FloatingActionButton';
 import FloatingAssistantButton from './components/FloatingAssistantButton';
@@ -46,7 +46,7 @@ import { TestModeProvider } from './contexts/TestModeContext';
 import PersonaSwitcher from './components/PersonaSwitcher';
 import GlobalSidebar from './components/GlobalSidebar';
 import { useDeviceInfo } from './utils/deviceDetection';
-import { checkForUpdates, VERSION } from './version';
+import { VERSION } from './version';
 // import { versionTimeoutService } from './services/versionTimeoutService';
 import SprintPlannerSimple from './components/SprintPlannerSimple';
 import { clickTrackingService } from './services/ClickTrackingService';
@@ -61,6 +61,7 @@ import SprintTablePage from './components/sprints/SprintTablePage';
 import SprintRetrospective from './components/SprintRetrospective';
 import CheckInDaily from './components/checkins/CheckInDaily';
 import CheckInWeekly from './components/checkins/CheckInWeekly';
+import DailyPlanPage from './components/DailyPlanPage';
 import RoutesManagementView from './components/routes/RoutesManagementView';
 import CurrentSprintKanban from './components/CurrentSprintKanban';
 import MobileView from './components/MobileView';
@@ -102,6 +103,8 @@ import SteamSettings from './components/settings/integrations/SteamSettings';
 import HardcoverSettings from './components/settings/integrations/HardcoverSettings';
 import TraktSettings from './components/settings/integrations/TraktSettings';
 import YoutubeSettings from './components/settings/integrations/YoutubeSettings';
+import TelegramSettings from './components/settings/integrations/TelegramSettings';
+import LLMSettings from './components/settings/LLMSettings';
 import PublicGoalView from './components/PublicGoalView';
 import { useEntityAudit } from './hooks/useEntityAudit';
 import DeepLinkStory from './components/routes/DeepLinkStory';
@@ -285,8 +288,7 @@ function AppContent() {
     logger.info('global', 'Initializing Version Timeout Service');
     // versionTimeoutService.forceVersionCheck(); // Temporarily disabled to fix cache loop
 
-    // Legacy update check as fallback
-    checkForUpdates();
+    // Version checks handled by useVersionCheck hook and versionTimeoutService
 
     // Add keyboard shortcut for force refresh (Ctrl+Shift+R or Cmd+Shift+R)
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -345,11 +347,12 @@ function AppContent() {
           <Routes>
             <Route path="/" element={<RootRedirect />} />
             <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/overview" element={<Navigate to="/dashboard" replace />} />
             <Route path="/dashboard/habit-tracking" element={<HabitsChoresDashboard />} />
             <Route path="/dashboard/habits-chores" element={<Navigate to="/dashboard/habit-tracking" replace />} />
             <Route path="/dashboard/daily-checkin" element={<Navigate to="/checkin/daily" replace />} />
             <Route path="/dashboard/ai-planner" element={<Navigate to="/calendar" replace />} />
-            <Route path="/dashboard/mobile-priorities" element={<Navigate to="/mobile-priorities" replace />} />
+            <Route path="/dashboard/mobile-priorities" element={<Navigate to="/mobile" replace />} />
             <Route path="/dashboard/theme-progress" element={<Navigate to="/metrics/progress" replace />} />
             <Route path="/dashboard/finance" element={<Navigate to="/finance/dashboard" replace />} />
             <Route path="/metrics/progress" element={<ThemeProgressDashboard />} />
@@ -365,7 +368,7 @@ function AppContent() {
             <Route path="/task/:id" element={<DeepLinkTask />} />
             <Route path="/task" element={<Navigate to="/tasks" replace />} />
             <Route path="/task-list" element={<Navigate to="/tasks" replace />} />
-            <Route path="/mobile-priorities" element={<MobilePriorityDashboard />} />
+            <Route path="/mobile-priorities" element={<Navigate to="/mobile" replace />} />
             <Route path="/games-backlog" element={<GamesBacklog />} />
             <Route path="/books-backlog" element={<BooksBacklog />} />
             <Route path="/shows-backlog" element={<ShowsBacklog />} />
@@ -395,6 +398,7 @@ function AppContent() {
             <Route path="/sprints/retrospective" element={<SprintRetrospective />} />
             <Route path="/checkin/daily" element={<CheckInDaily />} />
             <Route path="/checkin/weekly" element={<CheckInWeekly />} />
+            <Route path="/daily-plan" element={<DailyPlanPage />} />
             <Route path="/sprints/capacity" element={<CapacityDashboard />} />
             <Route path="/capacity" element={<Navigate to="/sprints/capacity" replace />} />
 
@@ -402,6 +406,7 @@ function AppContent() {
             <Route path="/chores" element={<ChoresTasksPage />} />
             <Route path="/chores/checklist" element={<ChoreChecklistPage />} />
             <Route path="/mobile" element={<MobileHome />} />
+            <Route path="/mobile/daily-plan" element={<Navigate to="/mobile?tab=daily_plan" replace />} />
             <Route path="/mobile-view" element={<MobileView />} />
             <Route path="/mobile-checklist" element={<MobileChecklistView />} />
             <Route path="/habits" element={<Navigate to="/dashboard/habit-tracking" replace />} />
@@ -463,6 +468,10 @@ function AppContent() {
             <Route path="/calendar" element={<UnifiedPlannerPage />} />
             <Route path="/calendar/planner" element={<WeeklyThemePlanner />} />
             <Route path="/calendar/themes" element={<Navigate to="/calendar/planner" replace />} />
+            <Route path="/planner/weekly" element={<WeeklyPlannerPage />} />
+            <Route path="/planner/weekly/*" element={<WeeklyPlannerPage />} />
+            <Route path="/weekly-planner" element={<Navigate to="/planner/weekly" replace />} />
+            <Route path="/planner/week" element={<Navigate to="/planner/weekly" replace />} />
             <Route path="/fitness" element={<WorkoutsDashboard />} />
             <Route path="/running-results" element={<Navigate to="/fitness" replace />} />
             <Route path="/parkrun-results" element={<WorkoutsDashboard />} />
@@ -479,7 +488,7 @@ function AppContent() {
             <Route path="/finance/advanced" element={<Navigate to="/finance/dashboard" replace />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/settings/profile" element={<Navigate to="/settings?tab=profile" replace />} />
-            <Route path="/settings/ai" element={<Navigate to="/settings?tab=ai" replace />} />
+            <Route path="/settings/ai" element={<LLMSettings />} />
             <Route path="/settings/finance" element={<Navigate to="/settings?tab=finance" replace />} />
             <Route path="/settings/notifications" element={<Navigate to="/settings?tab=notifications" replace />} />
             <Route path="/settings/privacy-security" element={<Navigate to="/settings?tab=privacy" replace />} />
@@ -494,6 +503,7 @@ function AppContent() {
             <Route path="/settings/integrations/hardcover" element={<HardcoverSettings />} />
             <Route path="/settings/integrations/trakt" element={<TraktSettings />} />
             <Route path="/settings/integrations/youtube" element={<YoutubeSettings />} />
+            <Route path="/settings/integrations/telegram" element={<TelegramSettings />} />
             <Route path="/theme-colors" element={<Navigate to="/settings" replace />} />
             <Route path="/admin" element={<Navigate to="/settings/integrations" replace />} />
             {/* Removed by request: Test Suite and Changelog routes */}
@@ -502,6 +512,7 @@ function AppContent() {
             
             {/* Public shared goals */}
             <Route path="/share/:shareCode" element={<PublicGoalView />} />
+            <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
 
           {/* Assistant (floating, near FAB but separate) */}

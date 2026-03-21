@@ -63,6 +63,70 @@
   --defect-lighter: rgba(220, 53, 69, 0.1);
 }
 
+/* Dark mode token overrides for all domain themes.
+ * Lighter -primary values for readability on --card: #171a21.
+ * Higher opacity on -lighter (0.15) and -light (0.25) so theme strips remain visible.
+ */
+[data-theme="dark"] {
+  --theme-health-primary: #e87d87;
+  --theme-health-light: rgba(232, 125, 135, 0.25);
+  --theme-health-lighter: rgba(232, 125, 135, 0.15);
+  --theme-health-dark: #dc3545;
+  --theme-health-darker: #c53030;
+
+  --theme-growth-primary: #6aabdf;
+  --theme-growth-light: rgba(106, 171, 223, 0.25);
+  --theme-growth-lighter: rgba(106, 171, 223, 0.15);
+  --theme-growth-dark: #3182ce;
+  --theme-growth-darker: #2b6cb0;
+
+  --theme-wealth-primary: #68d391;
+  --theme-wealth-light: rgba(104, 211, 145, 0.25);
+  --theme-wealth-lighter: rgba(104, 211, 145, 0.15);
+  --theme-wealth-dark: #38a169;
+  --theme-wealth-darker: #276749;
+
+  --theme-tribe-primary: #b794f4;
+  --theme-tribe-light: rgba(183, 148, 244, 0.25);
+  --theme-tribe-lighter: rgba(183, 148, 244, 0.15);
+  --theme-tribe-dark: #805ad5;
+  --theme-tribe-darker: #6b46c1;
+
+  --theme-home-primary: #f6c05a;
+  --theme-home-light: rgba(246, 192, 90, 0.25);
+  --theme-home-lighter: rgba(246, 192, 90, 0.15);
+  --theme-home-dark: #d69e2e;
+  --theme-home-darker: #b7791f;
+
+  --theme-work-primary: #7aadff;
+  --theme-work-light: rgba(122, 173, 255, 0.25);
+  --theme-work-lighter: rgba(122, 173, 255, 0.15);
+  --theme-work-dark: #2563eb;
+  --theme-work-darker: #1e40af;
+
+  --theme-sidegig-primary: #4fd1c5;
+  --theme-sidegig-light: rgba(79, 209, 197, 0.25);
+  --theme-sidegig-lighter: rgba(79, 209, 197, 0.15);
+  --theme-sidegig-dark: #14b8a6;
+  --theme-sidegig-darker: #0d9488;
+
+  --theme-sleep-primary: #a5b4fc;
+  --theme-sleep-light: rgba(165, 180, 252, 0.25);
+  --theme-sleep-lighter: rgba(165, 180, 252, 0.15);
+  --theme-sleep-dark: #6366f1;
+  --theme-sleep-darker: #4f46e5;
+
+  --theme-random-primary: #94a3b8;
+  --theme-random-light: rgba(148, 163, 184, 0.25);
+  --theme-random-lighter: rgba(148, 163, 184, 0.15);
+  --theme-random-dark: #64748b;
+  --theme-random-darker: #475569;
+
+  --defect-primary: #e87d87;
+  --defect-light: rgba(232, 125, 135, 0.25);
+  --defect-lighter: rgba(232, 125, 135, 0.15);
+}
+
 /* Theme-based component styling */
 
 /* Story Cards with Theme Colors */
@@ -109,38 +173,74 @@
   font-weight: 600;
 }
 
-/* Dark mode adjustments */
+/* Dark mode adjustments — [data-theme="dark"] is the primary app toggle.
+ * [data-bs-theme="dark"] rules are kept for Bootstrap component compatibility.
+ * Both are set simultaneously by ModernThemeContext.
+ * Because [data-theme="dark"] now overrides the CSS variables themselves (see :root block above),
+ * the component rules below simply need to reference those vars — the values will be correct.
+ */
+[data-theme="dark"] .story-card[data-theme="Health"],
 [data-bs-theme="dark"] .story-card[data-theme="Health"] {
   background-color: var(--theme-health-light);
   border-color: var(--theme-health-primary);
 }
 
+[data-theme="dark"] .story-card[data-theme="Growth"],
 [data-bs-theme="dark"] .story-card[data-theme="Growth"] {
   background-color: var(--theme-growth-light);
   border-color: var(--theme-growth-primary);
 }
 
+[data-theme="dark"] .story-card[data-theme="Wealth"],
 [data-bs-theme="dark"] .story-card[data-theme="Wealth"] {
   background-color: var(--theme-wealth-light);
   border-color: var(--theme-wealth-primary);
 }
 
+[data-theme="dark"] .story-card[data-theme="Tribe"],
 [data-bs-theme="dark"] .story-card[data-theme="Tribe"] {
   background-color: var(--theme-tribe-light);
   border-color: var(--theme-tribe-primary);
 }
 
+[data-theme="dark"] .story-card[data-theme="Home"],
 [data-bs-theme="dark"] .story-card[data-theme="Home"] {
   background-color: var(--theme-home-light);
   border-color: var(--theme-home-primary);
 }
 
+[data-theme="dark"] .story-card[data-theme="Work"],
+[data-bs-theme="dark"] .story-card[data-theme="Work"] {
+  background-color: var(--theme-work-light);
+  border-color: var(--theme-work-primary);
+}
+
+[data-theme="dark"] .story-card[data-theme="Sidegig"],
+[data-bs-theme="dark"] .story-card[data-theme="Sidegig"] {
+  background-color: var(--theme-sidegig-light);
+  border-color: var(--theme-sidegig-primary);
+}
+
+[data-theme="dark"] .story-card[data-theme="Sleep"],
+[data-bs-theme="dark"] .story-card[data-theme="Sleep"] {
+  background-color: var(--theme-sleep-light);
+  border-color: var(--theme-sleep-primary);
+}
+
+[data-theme="dark"] .story-card[data-theme="Random"],
+[data-bs-theme="dark"] .story-card[data-theme="Random"] {
+  background-color: var(--theme-random-light);
+  border-color: var(--theme-random-primary);
+}
+
 /* Dark mode for defect cards */
+[data-theme="dark"] .story-card[data-status="defect"],
 [data-bs-theme="dark"] .story-card[data-status="defect"] {
   background-color: var(--defect-light);
   border-color: var(--defect-primary);
 }
 
+[data-theme="dark"] .kanban-column[data-status="defect"] .card-header,
 [data-bs-theme="dark"] .kanban-column[data-status="defect"] .card-header {
   background-color: var(--defect-light);
 }

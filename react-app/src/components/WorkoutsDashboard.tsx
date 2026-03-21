@@ -146,7 +146,8 @@ function resolveWorkoutStartMs(w: WorkoutDoc): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-type SportMode = 'run' | 'swim' | 'bike';
+type WorkoutSportMode = 'run' | 'swim' | 'bike';
+type SportMode = 'all' | WorkoutSportMode;
 
 type ActivityCompositionKey =
   | 'run'
@@ -158,7 +159,7 @@ type ActivityCompositionKey =
   | 'mobility'
   | 'other';
 
-function getWorkoutSport(w: WorkoutDoc): SportMode | 'other' {
+function getWorkoutSport(w: WorkoutDoc): WorkoutSportMode | 'other' {
   if (w.provider === 'parkrun') return 'run';
   if (w.run === true) return 'run';
   const type = String(w.type || w.sportType || '').toLowerCase();
@@ -182,6 +183,7 @@ function classifyWorkoutActivityType(w: WorkoutDoc): ActivityCompositionKey {
 }
 
 function workoutMatchesSport(w: WorkoutDoc, sportMode: SportMode): boolean {
+  if (sportMode === 'all') return true;
   return getWorkoutSport(w) === sportMode;
 }
 
@@ -248,7 +250,21 @@ function estimateEquivalentRaceSec(
 }
 
 type LookbackWindow = '1y' | '2y' | '3y' | 'all';
-type SportSummaryMode = SportMode;
+type SportSummaryMode = WorkoutSportMode;
+
+interface SportConfig {
+  label: string;
+  primaryTargetKm: number | null;
+  secondaryTargetKm: number | null;
+  primaryLabel: string | null;
+  secondaryLabel: string | null;
+  primaryDisplayLabel: string | null;
+  secondaryDisplayLabel: string | null;
+  minKm: number | null;
+  maxKm: number | null;
+  exponent: number | null;
+  supportsPredictions: boolean;
+}
 
 function formatSignedKmDelta(deltaKm: number | null): string {
   if (deltaKm == null || !Number.isFinite(deltaKm)) return '—';
@@ -360,7 +376,7 @@ const WorkoutsDashboard: React.FC = () => {
   const [providerFilter, setProviderFilter] = useState<'all'|'strava'|'parkrun'>('all');
   const [settingsMsg, setSettingsMsg] = useState<string>('');
   const [zoneDisplayMode, setZoneDisplayMode] = useState<'time'|'percent'>('time');
-  const [sportMode, setSportMode] = useState<SportMode>('run');
+  const [sportMode, setSportMode] = useState<SportMode>('all');
   const [lookbackWindow, setLookbackWindow] = useState<LookbackWindow>('1y');
   const [excludeWithDadFromMetrics, setExcludeWithDadFromMetrics] = useState(true);
   const [fitnessOverview, setFitnessOverview] = useState<any | null>(null);
@@ -376,7 +392,22 @@ const WorkoutsDashboard: React.FC = () => {
   }, [location.pathname, queryParams]);
   const activeProviderFilter = forcedProvider || providerFilter;
   const pageTitle = location.pathname === '/parkrun-results' ? 'Parkrun Results' : 'Fitness Dashboard';
-  const sportConfig = useMemo(() => {
+  const sportConfig = useMemo<SportConfig>(() => {
+    if (sportMode === 'all') {
+      return {
+        label: 'All activities',
+        primaryTargetKm: null,
+        secondaryTargetKm: null,
+        primaryLabel: null,
+        secondaryLabel: null,
+        primaryDisplayLabel: null,
+        secondaryDisplayLabel: null,
+        minKm: null,
+        maxKm: null,
+        exponent: null,
+        supportsPredictions: false,
+      };
+    }
     if (sportMode === 'swim') {
       return {
         label: 'Swim',
@@ -389,6 +420,7 @@ const WorkoutsDashboard: React.FC = () => {
         minKm: 0.2,
         maxKm: 5,
         exponent: 1.04,
+        supportsPredictions: true,
       };
     }
     if (sportMode === 'bike') {
@@ -403,6 +435,7 @@ const WorkoutsDashboard: React.FC = () => {
         minKm: 10,
         maxKm: 250,
         exponent: 1.06,
+        supportsPredictions: true,
       };
     }
     return {
@@ -416,6 +449,7 @@ const WorkoutsDashboard: React.FC = () => {
       minKm: 3,
       maxKm: 21.2,
       exponent: 1.06,
+      supportsPredictions: true,
     };
   }, [sportMode]);
 
@@ -1201,7 +1235,15 @@ const WorkoutsDashboard: React.FC = () => {
         cur.rpeSum += rpeForTrend;
         cur.rpeCount += 1;
       }
-      if (distKm > 0 && durationSec > 0) {
+      if (
+        sportConfig.supportsPredictions &&
+        distKm > 0 &&
+        durationSec > 0 &&
+        sportConfig.primaryTargetKm != null &&
+        sportConfig.minKm != null &&
+        sportConfig.maxKm != null &&
+        sportConfig.exponent != null
+      ) {
         const primaryEq = estimateEquivalentRaceSec(distKm, durationSec, sportConfig.primaryTargetKm, {
           minKm: sportConfig.minKm,
           maxKm: sportConfig.maxKm,
@@ -1322,17 +1364,19 @@ const WorkoutsDashboard: React.FC = () => {
         backgroundColor: 'rgba(16,185,129,0.2)'
       });
     }
-    datasets.push({
-      label: sportConfig.primaryLabel,
-      data: monthly.map(m => m.primaryPredictionSec ? (m.primaryPredictionSec / 60) : null),
-      yAxisID: 'yParkrun',
-      borderColor: '#0f766e',
-      backgroundColor: 'rgba(15,118,110,0.15)',
-      borderDash: [6, 4],
-      pointRadius: 2,
-      tension: 0.25,
-    });
-    if (sportConfig.secondaryLabel) {
+    if (sportConfig.supportsPredictions && sportConfig.primaryLabel) {
+      datasets.push({
+        label: sportConfig.primaryLabel,
+        data: monthly.map(m => m.primaryPredictionSec ? (m.primaryPredictionSec / 60) : null),
+        yAxisID: 'yParkrun',
+        borderColor: '#0f766e',
+        backgroundColor: 'rgba(15,118,110,0.15)',
+        borderDash: [6, 4],
+        pointRadius: 2,
+        tension: 0.25,
+      });
+    }
+    if (sportConfig.supportsPredictions && sportConfig.secondaryLabel) {
       datasets.push({
         label: sportConfig.secondaryLabel,
         data: monthly.map(m => m.secondaryPredictionSec ? (m.secondaryPredictionSec / 60) : null),
@@ -1433,6 +1477,15 @@ const WorkoutsDashboard: React.FC = () => {
   };
 
   const sportPredictions = useMemo(() => {
+    if (
+      !sportConfig.supportsPredictions ||
+      sportConfig.primaryTargetKm == null ||
+      sportConfig.minKm == null ||
+      sportConfig.maxKm == null ||
+      sportConfig.exponent == null
+    ) {
+      return { primarySec: null, secondarySec: null };
+    }
     let bestPrimarySec: number | null = null;
     let bestSecondarySec: number | null = null;
     for (const w of filtered) {
@@ -1476,11 +1529,13 @@ const WorkoutsDashboard: React.FC = () => {
   const predictedPrimaryDisplay = sportPredictions.primarySec != null
     ? fmtTime(sportPredictions.primarySec)
     : (
-      sportMode === 'run'
-        ? (fitnessOverview?.predictions?.fiveKDisplay || runAnalysis?.predicted5kDisplay || null)
-        : sportMode === 'swim'
-          ? (fitnessOverview?.predictions?.swim800mDisplay || null)
-          : (fitnessOverview?.predictions?.bike50kDisplay || fitnessOverview?.predictions?.bike30miDisplay || null)
+      !sportConfig.supportsPredictions
+        ? null
+        : sportMode === 'run'
+          ? (fitnessOverview?.predictions?.fiveKDisplay || runAnalysis?.predicted5kDisplay || null)
+          : sportMode === 'swim'
+            ? (fitnessOverview?.predictions?.swim800mDisplay || null)
+            : (fitnessOverview?.predictions?.bike50kDisplay || fitnessOverview?.predictions?.bike30miDisplay || null)
     );
   const predictedSecondaryDisplay = sportConfig.secondaryDisplayLabel
     ? (
@@ -1793,10 +1848,11 @@ const WorkoutsDashboard: React.FC = () => {
           )}
           <Form.Select
             value={sportMode}
-            onChange={(e)=>setSportMode((e.target.value as SportMode) || 'run')}
+            onChange={(e)=>setSportMode((e.target.value as SportMode) || 'all')}
             style={{ display: 'inline-block', width: 130, marginLeft: 8 }}
             disabled={forcedProvider === 'parkrun'}
           >
+            <option value="all">All</option>
             <option value="run">Run</option>
             <option value="swim">Swim</option>
             <option value="bike">Bike</option>
@@ -1823,7 +1879,9 @@ const WorkoutsDashboard: React.FC = () => {
         <Card.Body>
           <div className="d-flex flex-wrap gap-3 small mb-2">
             <span><strong>Fitness:</strong> {fitnessScoreDisplay ?? '—'}{fitnessLevelDisplay ? ` (${fitnessLevelDisplay})` : ''}</span>
-            <span><strong>{sportConfig.primaryDisplayLabel}:</strong> {predictedPrimaryDisplay || '—'}</span>
+            {sportConfig.primaryDisplayLabel && (
+              <span><strong>{sportConfig.primaryDisplayLabel}:</strong> {predictedPrimaryDisplay || '—'}</span>
+            )}
             {sportConfig.secondaryDisplayLabel && (
               <span><strong>{sportConfig.secondaryDisplayLabel}:</strong> {predictedSecondaryDisplay || '—'}</span>
             )}
@@ -2203,7 +2261,7 @@ const WorkoutsDashboard: React.FC = () => {
                 <th>Event/Name</th>
                 <th>Distance (km)</th>
                 <th>Time</th>
-                <th>{sportMode === 'swim' ? 'Pace (min/100m)' : sportMode === 'bike' ? 'Speed (km/h)' : 'Pace (min/km)'}</th>
+                <th>{sportMode === 'all' ? 'Pace / Speed' : sportMode === 'swim' ? 'Pace (min/100m)' : sportMode === 'bike' ? 'Speed (km/h)' : 'Pace (min/km)'}</th>
                 <th>Avg HR</th>
                 <th>RPE</th>
                 <th>Pos</th>
@@ -2222,11 +2280,17 @@ const WorkoutsDashboard: React.FC = () => {
               {filtered.map(w => {
                 const date = w.startDate ? new Date(w.startDate) : (w.utcStartDate ? new Date(w.utcStartDate) : null);
                 const workoutSport = getWorkoutSport(w);
-                const pace = sportMode === 'swim'
-                  ? paceMinPer100m(w)
-                  : sportMode === 'bike'
-                    ? speedKmh(w)
-                    : paceMinPerKm(w);
+                const pace = sportMode === 'all'
+                  ? (workoutSport === 'swim'
+                    ? paceMinPer100m(w)
+                    : workoutSport === 'bike'
+                      ? speedKmh(w)
+                      : paceMinPerKm(w))
+                  : sportMode === 'swim'
+                    ? paceMinPer100m(w)
+                    : sportMode === 'bike'
+                      ? speedKmh(w)
+                      : paceMinPerKm(w);
                 const hasZoneData = !!w.hrZones;
                 const z1s = w.hrZones ? Number(w.hrZones.z1Time_s || 0) : 0;
                 const z2s = w.hrZones ? Number(w.hrZones.z2Time_s || 0) : 0;

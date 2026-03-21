@@ -22,6 +22,7 @@ import { buildGoalTimelineImpactPlan } from './goalTimelineImpact';
 import { applyGoalTimelineChanges } from '../../utils/goalTimelineChanges';
 import { parseBooleanParam, parseIdListParam, parseNumberListParam } from '../../utils/planningQuery';
 import { getGoalAncestors, getGoalDisplayPath, isGoalInHierarchySet } from '../../utils/goalHierarchy';
+import PlanActionBar from '../planner/PlanActionBar';
 
 interface GanttTask {
   id: string;
@@ -617,8 +618,10 @@ const GoalRoadmapV6: React.FC = () => {
         const ids = new Set<string>();
         snapshot.docs.forEach((docSnap) => {
           const data = docSnap.data() as any;
+          const rootIds = Array.isArray(data?.focusRootGoalIds) ? data.focusRootGoalIds : [];
+          const leafIds = Array.isArray(data?.focusLeafGoalIds) ? data.focusLeafGoalIds : [];
           const goalIds = Array.isArray(data?.goalIds) ? data.goalIds : [];
-          goalIds.forEach((goalId: any) => {
+          [...rootIds, ...leafIds, ...goalIds].forEach((goalId: any) => {
             const normalized = String(goalId || '').trim();
             if (normalized) ids.add(normalized);
           });
@@ -1287,7 +1290,7 @@ const GoalRoadmapV6: React.FC = () => {
       });
       setTimelineError(null);
       setTimelineNotice(
-        `Goal timeline updated. ${result.movedStoryCount} stor${result.movedStoryCount === 1 ? 'y was' : 'ies were'} moved to the nearest sprint start${result.reviewStoryCount > 0 ? `, and ${result.reviewStoryCount} still need manual review.` : '.'}`
+        `Goal timeline updated. ${result.movedStoryCount} stor${result.movedStoryCount === 1 ? 'y was' : 'ies were'} moved to the nearest sprint start${result.unchangedStoryCount > 0 ? `, ${result.unchangedStoryCount} already matched` : ''}${result.reviewStoryCount > 0 ? `, and ${result.reviewStoryCount} still need manual review.` : '.'}`
       );
     } catch (error: any) {
       console.error('[RoadmapV6] Failed to apply goal timeline changes', error);
@@ -1783,6 +1786,9 @@ const GoalRoadmapV6: React.FC = () => {
         <div className="grv6-header">
           <div className="grv6-title-stack">
             <h1 className="grv6-title">Goal Roadmap V6</h1>
+            <div style={{ marginTop: 8 }}>
+              <PlanActionBar />
+            </div>
           </div>
         </div>
       )}

@@ -32,6 +32,7 @@ const {
   deriveSprintCapacityPoints,
 } = require('./services/capacityService');
 const {
+  resolveManualScheduleOverride,
   schedulePlannerItemMutation,
 } = require('./services/schedulingService');
 
@@ -1747,6 +1748,12 @@ async function schedulePlacementQueueWithCanonicalScheduler({
       1,
       Math.floor((windowEnd.toMillis() - targetStartMs) / (24 * 60 * 60 * 1000)) + 1,
     );
+    const manualOverride = resolveManualScheduleOverride(
+      kind,
+      candidate,
+      windowStart.zoneName,
+      estimateRequiredMinutes(candidate, kind),
+    );
 
     try {
       const result = await schedulePlannerItemMutation({
@@ -1754,17 +1761,30 @@ async function schedulePlacementQueueWithCanonicalScheduler({
         userId,
         itemType: kind,
         itemId: candidate.id,
-        targetDateMs: targetStartMs,
-        targetBucket: candidate.timeOfDay || null,
+        targetDateMs: Number.isFinite(Number(manualOverride?.targetDateMs))
+          ? Number(manualOverride.targetDateMs)
+          : targetStartMs,
+        targetBucket: manualOverride?.targetBucket ?? candidate.timeOfDay ?? null,
         intent: 'move',
         source,
-        rationale: `Nightly sprint placement for week of ${bucket.weekKey}`,
+        rationale: manualOverride?.reason
+          ? `Nightly sprint placement with ${manualOverride.reason} override for week of ${bucket.weekKey}`
+          : `Nightly sprint placement for week of ${bucket.weekKey}`,
         linkedBlockId: null,
         targetSprintId,
         durationMinutes: estimateRequiredMinutes(candidate, kind),
         planningMode,
-        searchDays: remainingDays,
+        searchDays: manualOverride?.maxTargetDateMs ? 1 : remainingDays,
+        maxTargetDateMs: Number.isFinite(Number(manualOverride?.maxTargetDateMs))
+          ? Number(manualOverride.maxTargetDateMs)
+          : null,
         allowSplit: true,
+        exactTargetStartMs: Number.isFinite(Number(manualOverride?.exactTargetStartMs))
+          ? Number(manualOverride.exactTargetStartMs)
+          : null,
+        exactTargetEndMs: Number.isFinite(Number(manualOverride?.exactTargetEndMs))
+          ? Number(manualOverride.exactTargetEndMs)
+          : null,
       });
       created += 1;
       addScheduledMinutes(
@@ -1944,6 +1964,7 @@ async function materializePlannerThemeBlocks({
       conflictStatus: overlapsExisting ? 'overlap_with_existing' : null,
       status: 'planned',
       aiGenerated: true,
+      syncToGoogle: false,
       rationale: `Weekly theme plan: ${themeLabel}`,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -3521,6 +3542,16 @@ async function runCalendarPlannerJob() {
       console.log(`[calendar-planner] removed ${dedupeResult.removed} duplicate blocks for ${userId}`);
     }
     let existingBlocks = dedupeResult.blocks;
+    const syncPolicyCleanup = await enforceGoogleSyncPolicyForWindow(db, userId, windowStart, windowEnd);
+    if (syncPolicyCleanup.deleted > 0 || syncPolicyCleanup.updated > 0) {
+      const refreshedBlocksSnap = await db.collection('calendar_blocks')
+        .where('ownerUid', '==', userId)
+        .where('start', '>=', windowStart.toMillis())
+        .where('start', '<=', windowEnd.toMillis())
+        .get()
+        .catch(() => ({ docs: [] }));
+      existingBlocks = refreshedBlocksSnap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+    }
 
     const fitnessBlocksAutoCreate = profile?.fitnessBlocksAutoCreate !== false;
     const plannerBlockResult = await materializePlannerThemeBlocks({
@@ -3989,6 +4020,89 @@ async function clearStaleCalendarInstances(db, userId, windowStart, windowEnd, c
   };
 }
 
+async function enforceGoogleSyncPolicyForWindow(db, userId, windowStart, windowEnd) {
+  if (!userId) return { deleted: 0, updated: 0, kept: 0 };
+  let calendarSync = null;
+  try {
+    calendarSync = require('./calendarSync');
+  } catch (error) {
+    console.warn('[GoogleSyncPolicy] calendarSync load failed:', error?.message || error);
+    return { deleted: 0, updated: 0, kept: 0, skipped: true };
+  }
+  const evaluatePolicy = calendarSync?._evaluateGoogleSyncPolicyForBlock;
+  if (typeof evaluatePolicy !== 'function') {
+    return { deleted: 0, updated: 0, kept: 0, skipped: true };
+  }
+
+  const blocksSnap = await db.collection('calendar_blocks')
+    .where('ownerUid', '==', userId)
+    .where('start', '>=', windowStart.toMillis())
+    .where('start', '<=', windowEnd.toMillis())
+    .get()
+    .catch(() => ({ docs: [] }));
+
+  let deleted = 0;
+  let updated = 0;
+  let kept = 0;
+
+  for (const docSnap of blocksSnap.docs) {
+    const block = { id: docSnap.id, ...(docSnap.data() || {}) };
+    const source = String(block.source || block.entry_method || block.sourceType || '').toLowerCase();
+    if (source === 'gcal' || source === 'google_calendar' || block.createdBy === 'google') {
+      kept += 1;
+      continue;
+    }
+
+    const policy = await evaluatePolicy(block).catch((error) => ({
+      eligible: false,
+      reason: `policy_error:${error?.message || 'unknown'}`,
+      kind: null,
+    }));
+
+    if (policy.eligible) {
+      kept += 1;
+      continue;
+    }
+
+    const isLinkedEntityBlock = ['story', 'task', 'chore'].includes(String(policy.kind || '').toLowerCase());
+    const shouldDeleteBlock = isLinkedEntityBlock && (
+      policy.reason === `linked_${policy.kind}_missing`
+      || policy.reason === `linked_${policy.kind}_unresolved`
+      || policy.reason === `linked_${policy.kind}_closed`
+    );
+
+    if (shouldDeleteBlock) {
+      await docSnap.ref.delete().catch((error) => {
+        console.warn('[GoogleSyncPolicy] failed to delete stale entity block', docSnap.id, error?.message || error);
+      });
+      deleted += 1;
+      continue;
+    }
+
+    const hasGoogleLink = !!String(block.googleEventId || '').trim();
+    const beforeSync = block.syncToGoogle !== false;
+    if (!hasGoogleLink && !beforeSync) {
+      kept += 1;
+      continue;
+    }
+
+    await docSnap.ref.set({
+      syncToGoogle: false,
+      googleEventId: null,
+      googleSyncPolicyReason: policy.reason || 'non_chore_block',
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true }).catch((error) => {
+      console.warn('[GoogleSyncPolicy] failed to disable sync for block', docSnap.id, error?.message || error);
+    });
+    updated += 1;
+  }
+
+  if (deleted > 0 || updated > 0) {
+    console.log(`[GoogleSyncPolicy] ${userId}: deleted=${deleted}, updated=${updated}, kept=${kept}`);
+  }
+  return { deleted, updated, kept };
+}
+
 exports.replanCalendarNow = onCall({
   timeZone: 'Europe/London',
   memory: '512MiB',
@@ -4098,6 +4212,16 @@ exports.replanCalendarNow = onCall({
     .get()
     .catch(() => ({ docs: [] }));
   let existingBlocks = blocksSnap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+  const syncPolicyCleanup = await enforceGoogleSyncPolicyForWindow(db, uid, windowStart, windowEnd);
+  if (syncPolicyCleanup.deleted > 0 || syncPolicyCleanup.updated > 0) {
+    const refreshedBlocksSnap = await db.collection('calendar_blocks')
+      .where('ownerUid', '==', uid)
+      .where('start', '>=', windowStart.toMillis())
+      .where('start', '<=', windowEnd.toMillis())
+      .get()
+      .catch(() => ({ docs: [] }));
+    existingBlocks = refreshedBlocksSnap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+  }
 
   let storiesSnap = { docs: [] };
   try {

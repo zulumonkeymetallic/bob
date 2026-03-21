@@ -9,6 +9,7 @@ import { useSprint } from '../contexts/SprintContext';
 import { Task, Sprint, Story, Goal } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
+import { useSidebar } from '../contexts/SidebarContext';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { isStatus } from '../utils/statusHelpers';
 import { normalizePriorityValue } from '../utils/priorityUtils';
@@ -22,6 +23,9 @@ import { parsePointsValue, TASK_DEFAULT_POINTS } from '../utils/points';
 import { planningSprints } from '../utils/sprintFilter';
 import { getGoalDisplayPath, getLeafGoalOptions, resolveLeafGoalSelection } from '../utils/goalHierarchy';
 import EditStoryModal from './EditStoryModal';
+import NewCalendarEventModal, { buildCalendarComposerInitialValues } from './planner/NewCalendarEventModal';
+import DeferItemModal from './DeferItemModal';
+import { Activity, CalendarPlus, Clock3, Trash2, Wand2 } from 'lucide-react';
 
 interface EditTaskModalProps {
   show: boolean;
@@ -81,6 +85,7 @@ const formatSprintLabel = (sprint: Sprint, statusOverride?: string) => {
 
 const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpdated, container }) => {
   const navigate = useNavigate();
+  const { showSidebar } = useSidebar();
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const { sprints } = useSprint();
@@ -113,6 +118,9 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
   const [stories, setStories] = useState<Story[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [converting, setConverting] = useState(false);
+  const [showCalendarComposer, setShowCalendarComposer] = useState(false);
+  const [calendarComposerInitialValues, setCalendarComposerInitialValues] = useState<any>({});
+  const [showDeferModal, setShowDeferModal] = useState(false);
   const visibleSprints = planningSprints(sprints);
   const selectedSprint = form.sprintId ? sprints.find((sprint) => sprint.id === form.sprintId) : null;
   const selectedSprintStatus = selectedSprint
@@ -254,8 +262,6 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
       setForm((prev) => ({ ...prev, storyId: '' }));
     }
   };
-
-  const goalLabel = (g: Goal) => g.title || '(untitled)';
 
   const resolveGoalSelection = (value: string) => {
     const val = value.trim();
@@ -491,10 +497,62 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
     }
   };
 
+  const handleOpenCalendarComposer = () => {
+    if (!task) return;
+    setCalendarComposerInitialValues(buildCalendarComposerInitialValues({
+      title: form.title || task.title || 'Task block',
+      persona: form.persona || ((task as any).persona || currentPersona || 'personal'),
+      theme: String((linkedGoal as any)?.theme || (linkedStory as any)?.theme || (task as any).theme || 'General'),
+      category: ((form.persona || (task as any).persona || currentPersona) === 'work' ? 'Work (Main Gig)' : 'Wellbeing') as any,
+      storyId: form.storyId || linkedStory?.id || undefined,
+      taskId: task.id,
+      points: Number(form.points || (task as any).points || 0) || null,
+      estimateMin: Number((task as any).estimateMin || 0) || null,
+      aiScore: Number.isFinite(Number((task as any).aiCriticalityScore)) ? Number((task as any).aiCriticalityScore) : null,
+      aiReason: String((task as any).aiTop3Reason || (task as any).aiCriticalityReason || '').trim() || null,
+      rationale: 'Manual schedule from task editor',
+    }));
+    setShowCalendarComposer(true);
+  };
+
   return (
     <Modal show={show} onHide={onHide} size="lg" container={container || undefined}>
       <Modal.Header closeButton>
-        <Modal.Title>{task ? 'Edit Task' : 'Add Task'}</Modal.Title>
+        <div className="d-flex w-100 align-items-center justify-content-between gap-2">
+          <Modal.Title>{task ? 'Edit Task' : 'Add Task'}</Modal.Title>
+          {task && (
+            <div className="d-flex align-items-center gap-2">
+              <Button variant="outline-secondary" size="sm" title="Activity stream" onClick={() => showSidebar(task, 'task')}>
+                <Activity size={14} />
+              </Button>
+              <Button
+                variant="outline-secondary"
+                size="sm"
+                title="Convert to story"
+                onClick={handleConvertToStory}
+                disabled={
+                  converting
+                  || deleting
+                  || saving
+                  || !!(task as any)?.convertedToStoryId
+                  || !!(task as any)?.deleted
+                  || !!form.storyId
+                }
+              >
+                <Wand2 size={14} />
+              </Button>
+              <Button variant="outline-secondary" size="sm" title="Open calendar composer" onClick={handleOpenCalendarComposer}>
+                <CalendarPlus size={14} />
+              </Button>
+              <Button variant="outline-secondary" size="sm" title="Defer intelligently" onClick={() => setShowDeferModal(true)}>
+                <Clock3 size={14} />
+              </Button>
+              <Button variant="outline-danger" size="sm" title="Delete task" onClick={handleDelete} disabled={saving || converting || deleting}>
+                <Trash2 size={14} />
+              </Button>
+            </div>
+          )}
+        </div>
       </Modal.Header>
       <Modal.Body>
         <Row className="g-3">
@@ -883,6 +941,31 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
         story={linkedStory}
         goals={goals}
         onHide={() => setShowLinkedStoryModal(false)}
+      />
+      <NewCalendarEventModal
+        show={showCalendarComposer}
+        onHide={() => setShowCalendarComposer(false)}
+        initialValues={calendarComposerInitialValues}
+        stories={stories}
+      />
+      <DeferItemModal
+        show={showDeferModal && !!task}
+        onHide={() => setShowDeferModal(false)}
+        itemType="task"
+        itemId={task?.id || ''}
+        itemTitle={task?.title || 'Task'}
+        onApply={async ({ dateMs, rationale, source }) => {
+          if (!task) return;
+          await updateDoc(doc(db, 'tasks', task.id), {
+            deferredUntil: dateMs,
+            deferredReason: rationale,
+            deferredBy: source,
+            deferredAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          } as any);
+          setShowDeferModal(false);
+          onUpdated?.();
+        }}
       />
     </Modal>
   );

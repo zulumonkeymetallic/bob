@@ -357,9 +357,9 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
           });
           
           if (result.warning) {
-            setSubmitResult(`⚠️ Task created locally: ${result.warning}`);
+            setSubmitResult(`⚠️ Task created with warning! (${taskRef}) ${result.warning}`);
           } else {
-            setSubmitResult(`✅ Task created successfully!`);
+            setSubmitResult(`✅ Task created successfully! (${taskRef})`);
           }
         } else {
           throw new Error(result.error || 'Emergency task creation failed');

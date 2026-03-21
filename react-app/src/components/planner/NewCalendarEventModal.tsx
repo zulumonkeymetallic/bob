@@ -11,8 +11,7 @@ import { Alert, Button, Col, Form, Modal, Row, Spinner } from 'react-bootstrap';
 import { useAuth } from '../../contexts/AuthContext';
 import { usePersona } from '../../contexts/PersonaContext';
 import { useGlobalThemes } from '../../hooks/useGlobalThemes';
-import { db, functions } from '../../firebase';
-import { httpsCallable } from 'firebase/functions';
+import { db } from '../../firebase';
 import { addDoc, collection, doc, updateDoc } from 'firebase/firestore';
 import type { CalendarBlock, Story } from '../../types';
 import { LEGACY_THEME_MAP } from '../../constants/globalThemes';
@@ -86,6 +85,22 @@ export interface CalendarComposerPrefillInput {
 // ---------------------------------------------------------------------------
 
 const toInputValue = (date: Date) => format(date, "yyyy-MM-dd'T'HH:mm");
+
+const stripUndefinedDeep = (value: any): any => {
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => stripUndefinedDeep(entry))
+      .filter((entry) => entry !== undefined);
+  }
+  if (value && typeof value === 'object') {
+    return Object.entries(value).reduce<Record<string, any>>((acc, [key, entry]) => {
+      const cleaned = stripUndefinedDeep(entry);
+      if (cleaned !== undefined) acc[key] = cleaned;
+      return acc;
+    }, {});
+  }
+  return value === undefined ? undefined : value;
+};
 
 export const buildCalendarComposerInitialValues = (
   input: CalendarComposerPrefillInput,
@@ -288,6 +303,9 @@ const NewCalendarEventModal: React.FC<NewCalendarEventModalProps> = ({
       supersededBy: null,
       ownerUid: currentUser.uid,
       title: blockForm.title,
+      source: 'manual',
+      entryMethod: 'manual_composer',
+      isAiGenerated: false,
       updatedAt: Date.now(),
       recurrence: recurrence
         ? { freq: recurrence.freq, byDay: recurrence.byDay, until: recurrence.until }
@@ -307,45 +325,16 @@ const NewCalendarEventModal: React.FC<NewCalendarEventModalProps> = ({
       },
     };
 
+    const cleanPayload = stripUndefinedDeep(payload);
+    const cleanExtendedProps = stripUndefinedDeep(extendedProps);
+
     try {
       if (blockForm.id) {
         const ref = doc(db, 'calendar_blocks', blockForm.id);
-        await updateDoc(ref, payload);
-        try {
-          if ((blockForm as any).googleEventId) {
-            const updateEv = httpsCallable(functions, 'updateCalendarEvent');
-            await updateEv({
-              eventId: (blockForm as any).googleEventId,
-              summary: blockForm.title,
-              start: start.toISOString(),
-              end: end.toISOString(),
-            });
-          }
-        } catch (err) {
-          console.warn('NewCalendarEventModal: failed to update Google event', err);
-        }
+        await updateDoc(ref, cleanPayload);
       } else {
         const ref = collection(db, 'calendar_blocks');
-        const docRef = await addDoc(ref, { ...payload, createdAt: Date.now() });
-        try {
-          const createEv = httpsCallable(functions, 'createCalendarEvent');
-          const res: any = await createEv({
-            summary: blockForm.title || 'Calendar entry',
-            start: start.toISOString(),
-            end: end.toISOString(),
-            recurrence: recurrence?.rrule ? [recurrence.rrule] : undefined,
-            extendedProperties: {
-              ...extendedProps,
-              private: { ...extendedProps.private, blockId: docRef.id },
-            },
-          });
-          const evId = res?.data?.event?.id;
-          if (evId) {
-            await updateDoc(docRef, { googleEventId: evId, syncToGoogle: true });
-          }
-        } catch (err) {
-          console.warn('NewCalendarEventModal: failed to push to Google Calendar', err);
-        }
+        await addDoc(ref, { ...cleanPayload, createdAt: Date.now(), extendedProperties: cleanExtendedProps });
       }
 
       onSaved?.();
@@ -359,7 +348,15 @@ const NewCalendarEventModal: React.FC<NewCalendarEventModalProps> = ({
         message: 'Failed to save calendar entry.',
         details: err instanceof Error ? err.message : String(err),
       });
-      setFeedback({ variant: 'danger', message: 'Unable to save the calendar entry. Please try again.' });
+      const code = String((err as any)?.code || '').toLowerCase();
+      const message = String((err as any)?.message || '');
+      if (code.includes('permission-denied')) {
+        setFeedback({ variant: 'danger', message: 'Save blocked by permissions. Please re-sign in and retry.' });
+      } else if (message) {
+        setFeedback({ variant: 'danger', message: `Unable to save the calendar entry. ${message}` });
+      } else {
+        setFeedback({ variant: 'danger', message: 'Unable to save the calendar entry. Please try again.' });
+      }
     } finally {
       setSaving(false);
     }

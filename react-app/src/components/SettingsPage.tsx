@@ -8,7 +8,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import { useThemeAwareColors, getContrastTextColor } from '../hooks/useThemeAwareColors';
 import { GLOBAL_THEMES, GlobalTheme } from '../constants/globalThemes';
 import { Settings, Palette, Database, Wand2, KeyRound, Clipboard, FileCode, Plug, User, Bell, Shield, FlaskConical } from 'lucide-react';
-import AIStoryKPISettings from './AIStoryKPISettings';
+import LLMSettings from './settings/LLMSettings';
 import { useThemeDebugger } from '../utils/themeDebugger';
 import IntegrationSettings from './IntegrationSettings';
 import BudgetSettings from './finance/BudgetSettings';
@@ -941,7 +941,7 @@ firebase deploy --only functions:remindersPush,functions:remindersPull --project
 
               {/* AI Story/KPI Settings */}
               <Tab.Pane eventKey="ai">
-                <AIStoryKPISettings />
+                <LLMSettings />
               </Tab.Pane>
 
               <Tab.Pane eventKey="diagnostics">

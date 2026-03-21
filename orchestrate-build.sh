@@ -87,7 +87,11 @@ get_version() {
     else
         case $target in
             web)
-                cd "$BOB_ROOT" && jq -r '.version' package.json 2>/dev/null || echo "4.5.0"
+                cd "$BOB_ROOT" && (
+                    jq -r '.version' react-app/package.json 2>/dev/null \
+                    || jq -r '.version' package.json 2>/dev/null \
+                    || echo "4.5.0"
+                )
                 ;;
             ios)
                 cd "$BOB_IOS_ROOT" && grep -o 'MARKETING_VERSION = .*;' BOB\ Universal.xcodeproj/project.pbxproj | head -1 | sed 's/.*= \(.*\);/\1/' | tr -d ' "' || echo "4.5.0"
@@ -110,11 +114,13 @@ build_web() {
     log_info "Building Web UI..."
     
     cd "$BOB_ROOT"
-    local web_version=$(get_version "web")
+    local web_base_version=$(get_version "web")
+    local web_build_suffix="${BUILD_ID: -4}"
+    local web_version="${web_base_version}.${web_build_suffix}"
     local web_commit=$(get_git_commit "$BOB_ROOT")
     local build_start=$(date +%s)
     
-    log_info "Version: $web_version | Commit: $web_commit"
+    log_info "Version: $web_version (base: $web_base_version) | Commit: $web_commit"
     
     # Install deps
     log_info "Installing dependencies..."
@@ -124,6 +130,7 @@ build_web() {
     log_info "Building React application..."
     REACT_APP_BUILD_TIME="$BUILD_TIMESTAMP" \
     REACT_APP_BUILD_ID="$BUILD_ID" \
+    REACT_APP_BASE_VERSION="$web_base_version" \
     REACT_APP_VERSION="$web_version" \
     REACT_APP_GIT_COMMIT="$web_commit" \
     npm run build --prefix react-app 2>&1 | tail -10 >&2
@@ -135,6 +142,7 @@ build_web() {
 <script>
   window.__BOB_BUILD__ = {
     version: '$web_version',
+    baseVersion: '$web_base_version',
     commit: '$web_commit',
     buildId: '$BUILD_ID',
     timestamp: '$BUILD_TIMESTAMP',

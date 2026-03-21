@@ -27,6 +27,7 @@ import BirthdayMilestoneCard from './BirthdayMilestoneCard';
 import KpiDashboardWidget from './KpiDashboardWidget';
 import DailyPlanSummaryCard from './planner/DailyPlanSummaryCard';
 import WeeklyPlannerSummaryCard from './planner/WeeklyPlannerSummaryCard';
+import PlanActionBar from './planner/PlanActionBar';
 import { GLOBAL_THEMES, LEGACY_THEME_MAP } from '../constants/globalThemes';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { useUnifiedPlannerData, type PlannerRange } from '../hooks/useUnifiedPlannerData';
@@ -5475,15 +5476,7 @@ const Dashboard: React.FC = () => {
                       )}
                     </div>
                     <div className="d-flex align-items-center gap-2 flex-wrap">
-                      <Button variant="outline-secondary" size="sm" onClick={handleOpenChecklist}>
-                        <CalendarIcon size={14} className="me-1" /> View calendar
-                      </Button>
-                      <Button variant="outline-secondary" size="sm" onClick={() => navigate('/sprints/kanban')}>
-                        <LayoutGrid size={14} className="me-1" /> View kanban
-                      </Button>
-                      <Button variant="outline-secondary" size="sm" onClick={() => navigate('/planner/weekly')}>
-                        <Clock size={14} className="me-1" /> 7-day planner
-                      </Button>
+                      <PlanActionBar />
                       <Button
                         variant="outline-primary"
                         size="sm"

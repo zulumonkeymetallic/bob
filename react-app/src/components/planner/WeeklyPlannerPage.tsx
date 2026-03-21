@@ -4,6 +4,7 @@ import { addDays, addWeeks, format, startOfWeek } from 'date-fns';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { useSprint } from '../../contexts/SprintContext';
 import WeeklyPlannerSurface from './WeeklyPlannerSurface';
+import PlanActionBar from './PlanActionBar';
 
 const WeeklyPlannerPage: React.FC = () => {
   const { sprints, selectedSprintId } = useSprint();
@@ -61,13 +62,19 @@ const WeeklyPlannerPage: React.FC = () => {
     <div className="p-3">
       <div className="d-flex justify-content-between align-items-center gap-2 flex-wrap mb-3">
         <div>
-          <h3 className="mb-1">Weekly Planner</h3>
-          <div className="text-muted small">Review story and task placement week by week and adjust the schedule without leaving the planner.</div>
+          <h3 className="mb-1">7-Day Prioritisation</h3>
+          <div className="text-muted small">Review story and task placement over the next 7 days and rebalance priority before execution.</div>
         </div>
         <Badge bg="info">
           {format(weekStart, 'dd MMM')} – {format(addDays(weekStart, 6), 'dd MMM yyyy')}
         </Badge>
       </div>
+
+      <Card className="shadow-sm border-0 mb-3">
+        <Card.Body className="py-2">
+          <PlanActionBar />
+        </Card.Body>
+      </Card>
 
       {isPlanningPromptWeek && (
         <Alert variant="warning" className="py-2 d-flex align-items-center justify-content-between flex-wrap gap-2">
@@ -120,7 +127,7 @@ const WeeklyPlannerPage: React.FC = () => {
         </Card>
       )}
 
-      <WeeklyPlannerSurface weekStart={weekStart} title="Weekly Planner" />
+      <WeeklyPlannerSurface weekStart={weekStart} title="7-Day Prioritisation Matrix" />
     </div>
   );
 };

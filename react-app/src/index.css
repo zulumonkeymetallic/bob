@@ -1,3 +1,20 @@
+/*
+ * THEME SYSTEM — CSS load order and precedence
+ * -----------------------------------------------
+ * 1. index.css          — Core System A tokens (light + dark). Global resets. [THIS FILE]
+ * 2. ThemeColors.css    — System B: 16 domain colour palettes (Health, Wealth, etc.)
+ * 3. theme-aware.css    — System C: component-level dark mode overrides (Notion-style)
+ * 4. themeConsistency.css — System C continued: must not conflict with 1-3
+ * 5. Bootstrap CSS      — loaded by React entry point
+ * 6. Dashboard.css      — calendar-specific overrides
+ * 7. KanbanCards.css    — pill/badge CSS
+ * 8. GlobalEditButton.css, unified-planner.css — component-specific
+ *
+ * Active theme system: index.css (System A) + ThemeColors.css (System B)
+ * ModernThemeContext sets: data-theme, data-bs-theme, and .dark class atomically
+ * No component may set theme attributes directly
+ */
+
 /* Temporarily disable Tailwind CSS until configuration is resolved */
 /* @import url('https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css'); */
 
@@ -25,6 +42,24 @@
   --glass-shadow-color: rgba(0, 0, 0, 0.1);
   --glass-blur: 10px;
   --card-rgb: 255, 255, 255; /* RGB for #ffffff */
+
+  /* Semantic Status & Urgency Tokens
+   * Use these everywhere status/priority/urgency colour is needed.
+   * Never use hex values directly in feature components — reference these vars.
+   */
+  --color-urgency-critical: #dc3545;
+  --color-urgency-high: #fd7e14;
+  --color-urgency-medium: #e5a400;
+  --color-urgency-low: #6c757d;
+
+  --color-status-done: #198754;
+  --color-status-inprogress: #0d6efd;
+  --color-status-backlog: #6c757d;
+  --color-status-blocked: #dc3545;
+  --color-status-review: #fd7e14;
+
+  --color-gradient-accent-start: #fd7e14;
+  --color-gradient-accent-end: #b35c00;
 }
 
 [data-theme="dark"] {
@@ -49,6 +84,23 @@
   --glass-shadow-color: rgba(0, 0, 0, 0.3); /* Darker shadow */
   --glass-blur: 20px; /* Stronger blur for dark glass */
   --card-rgb: 23, 26, 33; /* RGB for #171a21 */
+
+  /* Semantic Status & Urgency Tokens — dark mode overrides
+   * Lightened/shifted to maintain readability on dark surfaces.
+   */
+  --color-urgency-critical: #e87d87;
+  --color-urgency-high: #f4a45a;
+  --color-urgency-medium: #f0c040;
+  --color-urgency-low: #a0a5b1;
+
+  --color-status-done: #5dba85;
+  --color-status-inprogress: #6aa5ff;
+  --color-status-backlog: #a0a5b1;
+  --color-status-blocked: #e87d87;
+  --color-status-review: #f4a45a;
+
+  --color-gradient-accent-start: #c46a0a;
+  --color-gradient-accent-end: #8a4200;
 }
 
 html, body {

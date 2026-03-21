@@ -513,5 +513,41 @@ service cloud.firestore {
     }
 
     // No client access to tokens by default (server-only)
+
+    // ── Agent Integration Layer ────────────────────────────────────────────
+    // All agent collections are admin-SDK only. Clients may read their own
+    // action log and context cache but can never write directly.
+
+    match /agent_action_log/{id} {
+      allow read: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow write: if false; // server-only via Admin SDK
+    }
+
+    match /pending_approvals/{id} {
+      allow read: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow write: if false; // server-only via Admin SDK
+    }
+
+    match /telegram_sessions/{chatId} {
+      allow read, write: if false; // server-only via Admin SDK
+    }
+
+    match /agent_idempotency_keys/{key} {
+      allow read, write: if false; // server-only via Admin SDK
+    }
+
+    match /agent_context_cache/{uid} {
+      allow read: if isSignedIn() && request.auth.uid == uid;
+      allow write: if false; // server-only via Admin SDK
+    }
+
+    // ── LLM Model Registry ─────────────────────────────────────────────────
+    // Refreshed daily by refreshModelRegistry scheduled function.
+    // All authenticated users can read (used by getAIModels fallback chain).
+    // Clients cannot write.
+    match /llm_model_registry/{provider} {
+      allow read: if isSignedIn();
+      allow write: if false; // server-only via Admin SDK
+    }
   }
 }

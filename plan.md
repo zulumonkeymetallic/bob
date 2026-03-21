@@ -1,3 +1,699 @@
+# UX Consistency Refactor — Implementation Plan
+**Branch**: `feature/ux-consistency-refactor`
+**Base commit**: `88a3a2b1` (chore: reconcile current web state and release backlog)
+**Audit docs**: `ux-audit/` — read these before touching any file in this plan
+**Audit date**: 2026-03-17
+
+## Overview
+This plan implements the prioritised findings from the UX consistency audit. The goal is one shared interaction language for goals, stories, and tasks across desktop table, card, and kanban views — plus correct dark mode behaviour and mobile gating for complex planning surfaces.
+
+**Constraints**:
+- No backend changes. No Firestore schema changes. No Cloud Function changes.
+- Existing kanban cards (KanbanCardV2, SortableStoryCard) and card views (StoriesCardView, TasksCardView, GoalsCardView) are kept. They are the reference standard, not the thing being replaced.
+- Changes flow *toward* kanban/card patterns, not away from them.
+- Implementation is additive: extract shared sub-components, apply them, do not rewrite working surfaces.
+
+## Commit Reconciliation (last reviewed 2026-03-20)
+The following commits landed **after** the original audit (2026-03-17) and affect implementation scope. Auditing agents must verify these before re-implementing anything:
+
+| Commit | Summary | Plan impact |
+|--------|---------|-------------|
+| `b9bc17a0` | feat: mobile UX consistency and shared filters | **Phase 9 utility done** (`manualPriority.ts`). MobileHome now consumes it. Desktop UI still required. |
+| `b9bc17a0` | Same | **Phase 10 partially done** — `ChoreChecklistPage` has Move/Defer pattern. `plannerScheduling.ts` is the correct mutation. MobileHome chores tab still needs it. |
+| `b9bc17a0` | Same | `DeferItemModal` updated — now accepts `focusContext` prop. Use updated signature. |
+| `b9bc17a0` | Same | `MobileSharedFilters` (top3, chores, focusAligned) added to MobileHome — do not duplicate. |
+| `b9bc17a0` | Same | `PlannerWorkCard.tsx` added (460 lines) — used in `WeeklyPlannerSurface` and `DailyPlanPage`. Not relevant to this refactor but do not conflict with it. |
+| `d7ecf0c9` | feat: planner move/defer diagnostics | Backend only (Cloud Functions) — no frontend impact. |
+| `9dcbeecd` | feat: prevent duplicate GCal sync | Backend only — no frontend impact. |
+
+---
+
+## Audit Reference
+| Doc | Purpose |
+|-----|---------|
+| `ux-audit/01-surface-inventory.md` | Route map with mobile/desktop/legacy classification |
+| `ux-audit/02-consistency-matrix.md` | What differs across goals/stories/tasks per view type |
+| `ux-audit/03-recommendation-backlog.md` | 42 recommendations with severity/effort/template |
+| `ux-audit/04-ui-standards.md` | Target component specs (StatusPill, PriorityPill, AiScoreBadge, etc.) |
+| `ux-audit/05-responsive-policy.md` | Per-route mobile classification and implementation pattern |
+| `ux-audit/06-theme-governance.md` | CSS token rules, violation catalogue, before/after sketches |
+
+---
+
+## Mobile Card Interaction Decisions
+These override the generic mobile card spec in `ux-audit/04-ui-standards.md` Section 9.
+
+### Tasks and Chores — Checkbox pattern
+```
+☐  Task title here                   [⏱ Defer]  [•••]
+   TASK-042  •  Mar 20
+   ↳ Sprint 14
+```
+- Checkbox on the far left. Tapping it marks the item done (sets status to done/complete). Checked state strikes through the title.
+- **No status pill shown** — done/not-done is binary for tasks and chores.
+- `⏱ Defer` button visible inline (labelled icon, min 44px tap target).
+- `•••` overflow for: Schedule, Activity, Edit, Delete, Convert to Story.
+- Applies to: `TasksCardView` mobile render, `MobileHome` tasks tab cards, `ChoresTasksPage` mobile cards.
+
+### Stories and Goals — Status pill pattern
+```
+Story/goal title here          [High]  [⏱ Defer]  [•••]
+STORY-042  •  In Progress  •  Mar 20
+↳ Sprint 14
+```
+- **No checkbox** — status has multiple meaningful states (Backlog / In Progress / Review / Done).
+- Tapping the status pill opens a compact status picker (not cycling — explicit choice on mobile).
+- Priority chip visible (compact, right of title).
+- `⏱ Defer` button visible inline.
+- `•••` overflow for: Schedule, Activity, Edit, Delete.
+- Applies to: `StoriesCardView` mobile render, `MobileHome` stories/goals tab cards.
+
+### Chores specifically
+Chores have a **Move** button (not Defer). Move applies a smart interval postpone with no modal:
+- `intervalUnit === 'days'` → add 1 day to due date
+- `intervalUnit === 'weeks'` → add 1 week to due date
+- `intervalUnit === 'months'` → add `Math.ceil(intervalValue / 2)` months (e.g. 4-month interval → +2 months, 1-month → +1 month)
+
+Move fires immediately on tap — no confirmation modal. Defer is also available in `•••` overflow for custom-date snoozing.
+
+The existing `ChoreChecklistPage` checklist interaction is preserved — this applies to card-view renders of chores elsewhere (e.g. MobileHome chores tab).
+
+### Pills vs Buttons — The Rule
+- **Pills** = data state indicators (status, priority). Tap to change the data value.
+- **Buttons** = actions (Defer, Move, Schedule, Edit, Delete). Tap to execute an operation.
+- If a context already has a **dropdown** for a field (table view status/priority dropdowns), do **not** also show a pill for that field. The dropdown is the control.
+- Defer is always a button. Move is always a button. Never render these as pills.
+
+---
+
+## Phase 0 — iPad 11" Analysis & Support
+**Device target**: iPad Air / iPad Pro 11" — 820×1180px portrait, 1180×820px landscape
+**Effort**: Analysis ~0.5 day, implementation ~1–2 days
+**Why this matters**: iPad sits between the app's current breakpoints. Portrait (820px) gets a squeezed desktop layout. Landscape (1180px) gets full desktop but with touch-only interaction that assumes pointer events (drag-and-drop, hover-reveal actions, no touch targets).
+
+### 0A. Viewport Behaviour Audit (Analysis — read existing code, no changes yet)
+
+**Current breakpoints to verify in code**:
+| File | Breakpoint logic | iPad portrait result |
+|------|-----------------|---------------------|
+| `SidebarLayout.tsx` | `window.innerWidth <= 768` → mobile | 820px = **desktop layout** (sidebar visible) |
+| `deviceDetection.ts` | `width < 768px OR mobile UA` → isMobile | 820px = **not mobile** |
+| CSS Bootstrap grid | `md` = 768px, `lg` = 992px | 820px = between md and lg |
+| `KanbanBoardV2.tsx` | No breakpoint check | 820px = 3-column flex (likely cramped) |
+| `UnifiedPlannerPage.tsx` | No breakpoint check | 820px = full drag-drop calendar |
+| `ModernTaskTable.tsx` | No breakpoint check | 820px = full table (may overflow) |
+
+**Safari on iPad specifics**:
+- UA string contains "iPad" → `isTablet()` in deviceDetection.ts returns true, but `isMobile()` returns false
+- Supports both touch events AND pointer events (when keyboard/pencil attached)
+- Hover states: only triggered when keyboard/pencil attached; finger touch skips hover
+- Drag-and-drop: broken with finger touch; works with Apple Pencil
+
+**Key screens to audit at 820px portrait**:
+
+| Screen | Expected issue at 820px |
+|--------|------------------------|
+| Sidebar + content | Sidebar (250px) + content (570px) — content is tight but workable |
+| Kanban 3-column | Each column ~183px — card content will overflow or wrap badly |
+| Sprint planning matrix | Dense grid — likely unusable at 820px |
+| Finance dashboard charts | Side-by-side charts collapse awkwardly |
+| Goal roadmap (Gantt) | Canvas-based — no touch scroll/zoom |
+| Table views | Horizontal scroll needed — acceptable on iPad |
+| Calendar (React Big Cal) | Week view at 820px — events very narrow |
+| MobileHome | Currently excluded (820px > 768px mobile gate) — iPad users can't access mobile-first UI |
+
+### 0B. Breakpoint Strategy for iPad
+
+Add a **tablet breakpoint** at 1024px as a distinct tier:
+
+| Name | Width | Layout |
+|------|-------|--------|
+| Mobile | < 768px | MobileHome, single-column, no sidebar |
+| Tablet | 768–1024px | Collapsible sidebar, touch-safe cards, no drag-and-drop |
+| Desktop | ≥ 1024px | Full desktop with sidebar, drag-and-drop, hover actions |
+
+**Changes required in `deviceDetection.ts`**:
+- Add `isTablet(): width >= 768 && width < 1024` (already partially there)
+- Expose a `useIsTablet()` hook alongside `useIsMobile()`
+
+**Changes required in `SidebarLayout.tsx`**:
+- Currently collapses sidebar at ≤ 768px only
+- Change to: sidebar collapsed (offcanvas) at < 1024px on touch devices (iPad portrait), visible at ≥ 1024px
+- Detection: `(isTablet() && isTouchDevice()) || isMobile()`
+
+### 0C. Per-Screen iPad Recommendations
+
+| Screen | iPad portrait (820px) | iPad landscape (1180px) |
+|--------|----------------------|------------------------|
+| Dashboard | Simplify to 1-col card grid | Full desktop layout |
+| Tasks/Stories/Goals table | Show card view (same as mobile rule) | Show table |
+| Kanban board | 2-column (Backlog + In Progress), Done hidden behind tab | 3-column desktop layout |
+| Sprint planning | Show `MobileUnsupportedScreen` (touch-incompatible) | Full desktop |
+| Goal roadmap | Show `MobileUnsupportedScreen` | Full desktop |
+| Calendar | Agenda view + FAB (same as mobile) | Full week view, no drag-drop |
+| Finance dashboard | Summary cards (same as mobile) | Full dashboard |
+| Settings | Full settings (tablet screen is large enough) | Full settings |
+| MobileHome `/mobile` | Should be accessible — add iPad portrait to mobile redirect | Not needed in landscape |
+
+### 0D. Touch-Safe Action Adjustments for Tablet
+
+On tablet (touch device, not pointer device):
+- All action buttons: minimum 44px tap target (same rule as mobile)
+- Hover-reveal action buttons (if any exist in kanban/cards): always visible on touch devices (no `hover` state available with finger)
+- Drag-and-drop in Kanban: **disabled** on touch devices — replace with status picker (same as mobile kanban stacked view in Phase 7)
+- Drag-and-drop in tables: disabled on touch — reordering deferred to desktop
+
+**Detection pattern**:
+```typescript
+const isTouchOnly = !window.matchMedia('(pointer: fine)').matches;
+// pointer: fine = mouse/trackpad/pencil
+// pointer: coarse = finger touch
+// iPad with keyboard cover: pointer: fine (trackpad)
+// iPad without keyboard: pointer: coarse
+```
+Use `pointer: coarse` media query in CSS and a `useTouchOnly()` hook in components to disable drag-and-drop and reveal action buttons permanently.
+
+### 0E. Auditor Checklist for Phase 0
+
+- [ ] `deviceDetection.ts` exposes `isTablet()` returning true for 768–1024px
+- [ ] `useIsTablet()` hook exists alongside `useIsMobile()`
+- [ ] `SidebarLayout.tsx` collapses to offcanvas on tablet + touch
+- [ ] Task/story/goal tables auto-switch to card view at < 1024px on touch devices
+- [ ] Kanban board shows 2-column layout (or stacked) on tablet touch
+- [ ] Calendar shows agenda view on tablet touch
+- [ ] All action buttons are 44px minimum on tablet (pointer: coarse)
+- [ ] Drag-and-drop disabled when `pointer: coarse`
+- [ ] `MobileUnsupportedScreen` gates applied at tablet width for sprint planning and goal roadmap
+- [ ] iPad portrait (820px) does not route to `/mobile` but gets the tablet layout
+- [ ] App renders without horizontal overflow at 820px portrait
+
+---
+
+## Phase 1 — CSS Foundation (no component changes yet)
+**Audit refs**: REC-001, REC-002, REC-012, REC-020, REC-022, REC-035
+**Effort**: ~1 day
+**Must complete before Phase 2**
+
+### 1A. Add semantic status/urgency tokens to index.css
+**File**: `react-app/src/index.css`
+Add under a `/* Semantic Status & Urgency Tokens */` comment block in both `:root` and `[data-theme="dark"]`:
+```css
+/* :root */
+--color-urgency-critical: #dc3545;
+--color-urgency-high: #fd7e14;
+--color-urgency-medium: #e5a400;
+--color-urgency-low: #6c757d;
+--color-status-done: #198754;
+--color-status-inprogress: #0d6efd;
+--color-status-backlog: #6c757d;
+--color-status-blocked: #dc3545;
+--color-status-review: #fd7e14;
+--color-gradient-accent-start: #fd7e14;
+--color-gradient-accent-end: #b35c00;
+
+/* [data-theme="dark"] */
+--color-urgency-critical: #e87d87;
+--color-urgency-high: #f4a45a;
+--color-urgency-medium: #f0c040;
+--color-urgency-low: #a0a5b1;
+--color-status-done: #5dba85;
+--color-status-inprogress: #6aa5ff;
+--color-status-backlog: #a0a5b1;
+--color-status-blocked: #e87d87;
+--color-status-review: #f4a45a;
+--color-gradient-accent-start: #c46a0a;
+--color-gradient-accent-end: #8a4200;
+```
+
+### 1B. Add dark mode overrides to ThemeColors.css
+**File**: `react-app/src/styles/ThemeColors.css`
+For all 16 domain themes (health, growth, wealth, tribe, home, work, sidegig, sleep, random, chores, rest, travel, defect + any others present), add a `[data-theme="dark"]` block that:
+- Increases `-lighter` opacity from ~0.1 to ~0.15
+- Lightens `-primary` colour so it remains visible on `--card: #171a21`
+See `ux-audit/06-theme-governance.md` Section 9 for the Health example pattern to follow.
+
+### 1C. Fix FocusGoalCountdownBanner hard-coded urgency colours
+**File**: `react-app/src/components/FocusGoalCountdownBanner.tsx`
+Find `getUrgencyColor()` function. Replace all returned hex strings with CSS variable references:
+- `'critical'` → `var(--color-urgency-critical)`
+- `'high'` → `var(--color-urgency-high)`
+- `'normal'` → `var(--color-urgency-low)` (use low/muted for normal)
+- `'low'` → `var(--color-urgency-low)`
+Also check for any `color:` or `background:` inline styles in this component using hex values and replace with the appropriate token.
+
+### 1D. Fix Dashboard calendar hard-coded colours
+**File**: `react-app/src/styles/Dashboard.css`
+Find `.rbc-current-time-indicator` rule. Replace `background-color: #dc3545` with `background-color: var(--color-urgency-critical)`.
+Find any gradient definitions with hard-coded hex values in dashboard banner cards. Replace with `var(--color-gradient-accent-start)` and `var(--color-gradient-accent-end)`.
+
+### 1E. Fix KanbanCardV2 and SortableStoryCard hard-coded colours
+**Files**: `react-app/src/components/KanbanCardV2.tsx`, `react-app/src/components/stories/SortableStoryCard.tsx`
+- KanbanCardV2: Replace `rgba(59, 130, 246, ...)` on drag handle with `var(--brand)` at opacity via CSS
+- KanbanCardV2: Replace `var(--bs-danger, #dc3545)` blocked border fallback with `var(--color-urgency-critical)`
+- SortableStoryCard: Replace `rgba(220, 53, 69, 0.45)` on manual priority badge with `var(--color-urgency-critical)` at 20% opacity
+
+### 1F. Update KanbanCards.css pill colours to use tokens
+**File**: `react-app/src/styles/KanbanCards.css`
+Find the `.pill--danger`, `.pill--warning`, `.pill--success`, `.pill--orange` variant rules. Replace their hard-coded RGBA values with the corresponding `var(--color-urgency-*)` and `var(--color-status-*)` tokens defined in 1A.
+
+### 1G. Remove MaterialDesign.css
+**Files**: `react-app/src/styles/MaterialDesign.css` + its import location
+Find where MaterialDesign.css is imported (likely `index.css` or `App.tsx`). Remove the import. Delete the file. Verify no component references `--md-*` variables (none found in audit).
+
+### 1H. Add theme precedence comment block to index.css
+**File**: `react-app/src/index.css`
+Add a comment block at the top explaining the CSS load order and which system is active (see `ux-audit/06-theme-governance.md` Section 6).
+
+---
+
+## Phase 2 — Shared Component Library
+**Audit refs**: REC-008, REC-009, REC-010, REC-013, REC-014, REC-016, REC-033
+**Effort**: ~3 days
+**Depends on Phase 1**
+**Create directory**: `react-app/src/components/shared/`
+
+### 2A. StatusPill component
+**File**: `react-app/src/components/shared/StatusPill.tsx`
+Props: `status: string`, `mode: 'readonly' | 'interactive' | 'select'`, `onChange?: (newStatus) => void`
+- `readonly`: `<span>` with `.pill` CSS class + status-specific class
+- `interactive`: `<button>` that cycles status on click, same visual
+- `select`: `<select>` styled to look like the pill (using the same CSS class, custom select styling)
+Colour mapping uses `var(--color-status-*)` tokens from Phase 1A.
+See `ux-audit/04-ui-standards.md` Section 2 for full spec.
+
+### 2B. PriorityPill component
+**File**: `react-app/src/components/shared/PriorityPill.tsx`
+Same structure as StatusPill. Props: `priority: string`, `mode`, `onChange?`
+Colour mapping uses `var(--color-urgency-*)` tokens.
+See `ux-audit/04-ui-standards.md` Section 3.
+
+### 2C. AiScoreBadge component
+**File**: `react-app/src/components/shared/AiScoreBadge.tsx`
+Props: `score?: number`, `threshold?: number` (default 20)
+Renders `AI {score}` as compact pill. Hidden when score < threshold or undefined.
+Replaces Bootstrap `<Badge bg="secondary">AI NN/100</Badge>` in card views.
+See `ux-audit/04-ui-standards.md` Section 4.
+
+### 2D. ManualPriorityBadge component
+**File**: `react-app/src/components/shared/ManualPriorityBadge.tsx`
+Props: `rank?: number`
+Renders `#{rank}` as compact bold pill using `var(--color-urgency-critical)` at 20% opacity.
+Hidden when rank is undefined or 0.
+Replaces Bootstrap `<Badge bg="danger">#N Priority</Badge>` in card views and `.kanban-card__meta-badge` with inline red in SortableStoryCard.
+See `ux-audit/04-ui-standards.md` Section 5.
+
+### 2E. EmptyState component
+**File**: `react-app/src/components/shared/EmptyState.tsx`
+Props: `icon: LucideIcon`, `title: string`, `message: string`, `action?: {label, onClick}`, `filterActive?: boolean`, `onClearFilters?: () => void`
+Two variants: no-data (with create CTA) and filter-active (with clear-filters CTA).
+Extracts the existing pattern from StoriesCardView/TasksCardView.
+See `ux-audit/04-ui-standards.md` Section 12.
+
+### 2F. MobileUnsupportedScreen component
+**File**: `react-app/src/components/shared/MobileUnsupportedScreen.tsx`
+Props: `title: string`, `description: string`
+Renders centred card with Monitor icon, title, message, and "Copy link to clipboard" button.
+Used as a gate for desktop-only surfaces.
+See `ux-audit/04-ui-standards.md` Section 14.
+
+### 2G. useIsMobile hook
+**File**: `react-app/src/hooks/useIsMobile.ts`
+Wraps existing `deviceDetection.ts` utility in a React hook with window resize listener.
+Returns `boolean`. Used by all mobile-gating logic in Phase 3+.
+Do not duplicate the detection logic — call through to the existing utility.
+
+---
+
+## Phase 3 — Apply Shared Components to Kanban + Card Views
+**Audit refs**: REC-008, REC-009, REC-010, REC-011, REC-013, REC-014, REC-021
+**Effort**: ~3 days
+**Depends on Phase 2**
+**Important**: Card structure is preserved. Only internals change.
+
+### 3A. Update KanbanCardV2
+**File**: `react-app/src/components/KanbanCardV2.tsx`
+- Import and use `AiScoreBadge` — add to the meta row after priority pill
+- Import and use `ManualPriorityBadge` — add to meta row before priority pill
+- Change `Edit3` import to `Pencil`
+- Change `CalendarPlus` / `Calendar` (whichever is present) to `CalendarClock`
+- Add `title` attributes to all icon buttons (e.g., `title="Edit"`, `title="Schedule"`)
+- Status and priority pills: can keep existing `.pill` CSS approach (it is already the reference standard) — no mandatory refactor to StatusPill component, but may use it
+
+### 3B. Update SortableStoryCard
+**File**: `react-app/src/components/stories/SortableStoryCard.tsx`
+- Replace `.kanban-card__meta-badge` + inline red for manual priority with `ManualPriorityBadge`
+- Add `AiScoreBadge` to meta row if not already present
+- Add `title` attributes to all icon buttons
+- Standardise edit icon to `Pencil`
+
+### 3C. Update StoriesCardView
+**File**: `react-app/src/components/StoriesCardView.tsx`
+- Replace `<Badge bg="secondary">AI NN/100</Badge>` with `<AiScoreBadge score={...} />`
+- Replace `<Badge bg="danger">#N Priority</Badge>` with `<ManualPriorityBadge rank={...} />`
+- Remove `Badge` import from react-bootstrap if no longer used
+- Change schedule icon to `CalendarClock` if it isn't already
+- Add `title` attributes to all icon buttons
+- Replace existing EmptyState JSX (icon + title + message) with `<EmptyState ... />`
+
+### 3D. Update TasksCardView
+**File**: `react-app/src/components/TasksCardView.tsx`
+Same changes as 3C applied to the tasks equivalent.
+
+### 3E. Update GoalsCardView
+**File**: `react-app/src/components/GoalsCardView.tsx`
+
+**Design intent confirmed**: Goals card is intentionally different from stories/tasks — it is an information/strategy card, not an execution card. The following elements are **by design and must not be changed to match stories/tasks**:
+- **Top 6px theme bar** (not a left-border strip) — appropriate for a strategic object
+- **No Defer button** — goals are not deferred
+- **No manual priority** — `{/* Priority removed */}` comments in code reflect a product decision; do not re-add
+- **No AI score** — goals do not have `aiCriticalityScore`
+- **No status cycling** — goal status is not interactively cycled on the card
+
+**Changes required in GoalsCardView**:
+
+1. **Edit icon**: Change `Edit3` import to `Pencil` (line ~4 and ~875) — standardise across all cards.
+
+2. **Status badge in footer** (lines ~1140–1148): Replace Bootstrap `Badge` with `StatusPill` in `mode="readonly"`:
+   ```tsx
+   // Before
+   <Badge style={{ backgroundColor: statusColors[getStatusName(goal.status)] ... }}>
+     {getStatusName(goal.status)}
+   </Badge>
+   // After
+   <StatusPill status={goal.status} mode="readonly" size="sm" />
+   ```
+   This makes status visually consistent with the pill language used on story/task cards.
+
+3. **KPI badge** (lines ~1149–1158): Keep as-is — this is goal-specific metadata with no equivalent on stories/tasks. Ensure `kpiStatusColor` resolves to a CSS variable, not a hard-coded hex. Audit the `kpiStatusColor` computation and replace any hex values with `var(--color-status-*)` tokens.
+
+4. **Pot badge** (lines ~1163–1166): Change `bg="light" text="dark"` to use CSS variables:
+   ```tsx
+   // Before
+   <Badge bg="light" text="dark" className="border">
+   // After
+   <Badge style={{ backgroundColor: 'var(--card-bg)', color: 'var(--text-primary)', border: '1px solid var(--border-subtle)' }}>
+   ```
+   The `bg="light"` pattern is a dark mode failure — it produces a white badge on a dark background.
+
+5. **No structural changes** — keep the card's overall layout, the theme bar, progress section, stats, habits metrics, and footer as-is.
+
+**Auditor note for 3E**: Do not add StatusPill in interactive mode to goals. Do not add Defer, manual priority, or AI score. The goal card is intentionally more analytical than the story/task card.
+
+---
+
+## Phase 4 — Mobile Gating
+**Audit refs**: REC-003, REC-004, REC-005, REC-006, REC-007, REC-017, REC-018, REC-031
+**Effort**: ~2 days
+**Depends on Phase 2 (MobileUnsupportedScreen + useIsMobile)**
+
+### 4A. Auto-switch tables to card view on mobile
+**Files**:
+- `react-app/src/components/TaskListView.tsx` (wraps ModernTaskTable + TasksCardView)
+- `react-app/src/components/StoriesManagement.tsx` (or whichever wraps story views)
+- `react-app/src/components/GoalsManagement.tsx` (wraps goal views)
+
+In each wrapper, import `useIsMobile`. If `isMobile`, force `viewMode = 'card'` and hide the table/card toggle button. The card views already exist and are the mobile render target.
+
+### 4B. Gate roadmap and year planner surfaces
+**Files**:
+- `react-app/src/components/visualization/GoalRoadmapV6.tsx`
+- `react-app/src/components/GoalsYearPlanner.tsx`
+- `react-app/src/components/visualization/EnhancedGanttChart.tsx` (if routable)
+
+At top of render, add: `const isMobile = useIsMobile(); if (isMobile) return <MobileUnsupportedScreen title="Goal Roadmap" description="The roadmap is a Gantt chart designed for desktop use." />;`
+
+### 4C. Gate sprint planning matrix
+**File**: `react-app/src/components/SprintPlanningMatrix.tsx`
+Same gate pattern as 4B.
+
+### 4D. Calendar agenda-only on mobile
+**File**: `react-app/src/components/planner/UnifiedPlannerPage.tsx`
+On mobile: set `defaultView="agenda"`, remove `DragDropCalendar` wrapper (use plain `Calendar`), show a FAB for adding items instead of click-to-create.
+This is the most complex gate in Phase 4 — the DragDropCalendar wrapper must be conditionally omitted.
+
+### 4E. Finance dashboard mobile summary
+**File**: `react-app/src/components/FinanceDashboardAdvanced.tsx` (or equivalent active file)
+On mobile: render a `FinanceMobileSummary` section showing 3 key metrics (month spend, budget remaining, recent transactions). Hide chart tabs and transaction table. Add "Full dashboard available on desktop" link.
+
+### 4F. FocusGoalsPage mobile simplification
+**File**: `react-app/src/components/FocusGoalsPage.tsx`
+On mobile: render countdown banner + simplified goal list only. Hide `FocusGoalWizard` and `GoalKpiStudioPanel`. Add `MobileUnsupportedScreen` message for those sections.
+
+### 4G. Settings page mobile simplification
+**File**: `react-app/src/components/SettingsPage.tsx`
+On mobile: show only profile and notification tabs. Hide AI, finance, developer, privacy, integrations tabs. Add "More settings available on desktop" at bottom.
+For `/settings/integrations/*` routes: add `MobileUnsupportedScreen` gate at route level or in SidebarLayout.
+
+### 4H. Hide desktop-only nav items on mobile
+**File**: `react-app/src/components/SidebarLayout.tsx`
+Add a `desktopOnly: true` flag to nav item definitions for: roadmap routes, year planner, sprint planning, finance deep pages, analytics, logs, canvas.
+In the nav render loop, skip items with `desktopOnly: true` when `isMobile`.
+
+---
+
+## Phase 5 — MobileHome THEME_COLORS and Capacity Banner
+**Audit refs**: REC-015, REC-039
+**Effort**: ~0.5 day
+**Depends on Phase 1B (ThemeColors.css dark overrides)**
+
+### 5A. Replace hard-coded THEME_COLORS map in MobileHome
+**File**: `react-app/src/components/MobileHome.tsx`
+Find the `THEME_COLORS` object mapping category names to hex values. Replace with a `THEME_CSS_VARS` map pointing to CSS variable names (e.g., `'health': '--theme-health-primary'`). Apply using `style={{ color: 'var(--theme-health-primary)' }}`.
+
+### 5B. Compact capacity indicator for MobileHome
+**File**: `react-app/src/components/MobileHome.tsx` (overview tab)
+Extract capacity state from `PlannerCapacityBanner`. In MobileHome overview, render a compact capacity badge when over-capacity. Use `var(--color-urgency-high)` for the warning colour.
+
+---
+
+## Phase 6 — Icon and Label Standardisation
+**Audit refs**: REC-013, REC-014, REC-032
+**Effort**: ~0.5 day
+**Can run in parallel with Phase 5**
+
+### 6A. Global icon audit pass
+Search for all `Edit3` imports → replace with `Pencil`.
+Search for `CalendarPlus` or standalone `Calendar` used as a schedule action icon → replace with `CalendarClock`.
+Files expected to be affected: KanbanCardV2 (done in 3A), ModernTaskTable, ModernStoriesTable, ModernGoalsTable, any other card or table component.
+
+### 6B. Terminology copy pass
+Search for "top3", "Top3", "AI Critical" in JSX string content and filter button labels.
+Standardise to: "Top 3" (user-facing label), "AI Critical" (filter name), "#N Priority" (rank badge).
+Files: KanbanBoardV2 filter labels, MobileHome filter labels, any filter bar components.
+
+---
+
+## Phase 7 — Kanban Mobile Stacked View
+**Audit refs**: REC-003
+**Effort**: ~2 days
+**Depends on Phase 2 (useIsMobile), Phase 3 (shared badges)**
+
+### 7A. Mobile stack mode in KanbanBoardV2
+**File**: `react-app/src/components/KanbanBoardV2.tsx`
+On mobile: instead of 3-column flex layout, render a single-column list grouped by status (Backlog / In Progress / Done as collapsible sections). Drag-and-drop is removed. Each card gets a status picker (tap opens a small status selector using StatusPill mode="interactive"). Action buttons follow the mobile overflow pattern (44px `...` button).
+This is the largest change in Phase 7. It requires a conditional render path inside KanbanBoardV2 — do not create a separate component.
+
+---
+
+## Phase 9 — Manual Priority 3-State Cycle (Desktop)
+**Audit refs**: existing feature extension
+**Effort**: ~0.5 day (was 1 day — utility pre-built, see below)
+**Files**: `react-app/src/components/KanbanCardV2.tsx`, `react-app/src/components/stories/SortableStoryCard.tsx`, `react-app/src/components/StoriesCardView.tsx`, `react-app/src/components/TasksCardView.tsx`, `react-app/src/components/ModernStoriesTable.tsx`, `react-app/src/components/ModernTaskTable.tsx`
+
+### ⚠️ Pre-built — do NOT recreate
+**`react-app/src/utils/manualPriority.ts`** was added in commit `b9bc17a0` (2026-03-17).
+It exports: `getManualPriorityRank`, `getManualPriorityLabel`, `getNextManualPriorityRank`, `findItemWithManualPriorityRank`.
+**Import from this file directly.** Do not inline the logic or create a duplicate utility.
+
+`MobileHome.tsx` already consumes this utility and has a working `applyPriorityFlag` handler (lines 706–748) that performs the 3-state cycle (clear existing rank, assign next rank, bump conflicting item, fire `deltaPriorityRescore`).
+**Use this handler as the reference implementation.** Desktop components should replicate the same Firestore write pattern and callable invocation.
+
+### 9A. Change KanbanCardV2 priority button from toggle to 3-state cycle
+**File**: `react-app/src/components/KanbanCardV2.tsx`
+
+Current behaviour: click sets priority (assigns next available rank), click again removes it.
+Required behaviour: cycle through ranks 1 → 2 → 3 → off → 1.
+
+Reference the `applyPriorityFlag` handler in `MobileHome.tsx:706` for the write pattern.
+
+Colour coding:
+- Rank 1: `var(--color-urgency-critical)` (red)
+- Rank 2: `var(--color-urgency-high)` (amber)
+- Rank 3: `var(--muted)` (grey)
+- Unranked: muted outline
+
+After each change: show replan prompt (already implemented — keep existing behaviour).
+
+### 9B. Add interactive priority button to SortableStoryCard
+**File**: `react-app/src/components/stories/SortableStoryCard.tsx`
+
+Currently shows a read-only badge. Replace the badge with the same interactive button as 9A.
+The button goes in the card action row (same position as KanbanCardV2).
+
+### 9C. Add priority button to StoriesCardView and TasksCardView
+**Files**: `react-app/src/components/StoriesCardView.tsx`, `react-app/src/components/TasksCardView.tsx`
+
+Add the priority cycle button to each card, in the badge row (after status and priority pills).
+Same 3-state cycle and colour logic as 9A.
+
+### 9D. Add manual priority column to ModernStoriesTable and ModernTaskTable
+**Files**: `react-app/src/components/ModernStoriesTable.tsx`, `react-app/src/components/ModernTaskTable.tsx`
+
+Add a `#` column showing the rank badge (read-only display). The badge is clickable and uses the same cycle logic. Place as the first sortable column after the drag handle.
+
+---
+
+## Phase 10 — Chore Move/Defer Consistency (Desktop)
+**Effort**: ~0.5 day
+**Status update from commit `b9bc17a0` (2026-03-17)**: Significant pre-existing work discovered.
+
+### ⚠️ Pre-built — what already exists
+
+**`ChoreChecklistPage.tsx`** already has a working Move/Defer button:
+- Uses `DeferItemModal` (the existing modal, not a custom chore one)
+- Calls `schedulePlannerItemMutation` from `plannerScheduling.ts` with `intent: 'defer'`
+- Button labelled "Move/Defer" (line 302) with `title="Move/defer chore"`
+- This is the **reference implementation** — replicate this pattern on desktop
+
+**`plannerScheduling.ts`** (added in `b9bc17a0`) — `schedulePlannerItemMutation` is the correct mutation to use. Do not call Firestore directly for scheduling.
+
+**`DeferItemModal.tsx`** (updated in `b9bc17a0`) — now accepts a `focusContext` prop and passes it to `suggestDeferralOptions`. Use this updated signature when opening the modal from desktop chore views.
+
+**`MobileHome.tsx`** — the chores tab does NOT yet have a Move/Defer button for individual chores. The existing defer flow is wired to tasks/stories only. This needs to be added (see 10C below).
+
+### 10A. Verify calculateChoreMoveDueDate utility
+**File**: `react-app/src/utils/recurringTaskDue.ts`
+
+Check whether this function already exists (it may have been added). If not, add it using the field names from actual chore data (check `ChoreChecklistPage.tsx` for field references — `intervalUnit`, `intervalValue`):
+
+```typescript
+export function calculateChoreMoveDueDate(chore: Task): Date {
+  const base = chore.dueDate ? new Date(chore.dueDate) : new Date();
+  const unit = (chore as any).intervalUnit;
+  const value = Number((chore as any).intervalValue || 1);
+  switch (unit) {
+    case 'days':   return addDays(base, 1);
+    case 'weeks':  return addWeeks(base, 1);
+    case 'months': return addMonths(base, Math.ceil(value / 2));
+    default:       return addDays(base, 1);
+  }
+}
+```
+
+### 10B. Add Move/Defer button to desktop chore views
+**Target files**: whichever desktop component renders the chore list (check `/chores` route in `App.tsx`).
+
+Copy the pattern from `ChoreChecklistPage.tsx:187–221` (the `handleApplyDefer` handler) and `ChoreChecklistPage.tsx:301–311` (the button rendering).
+
+The desktop chore view should have a Move/Defer button per chore row that:
+- Opens `DeferItemModal` with `itemType="task"`, `itemId`, `itemTitle`, and `focusContext`
+- On apply, calls `schedulePlannerItemMutation` with `intent: 'defer'`
+- Shows a brief success message
+
+### 10C. Add Move/Defer to MobileHome chores tab
+**File**: `react-app/src/components/MobileHome.tsx`
+
+The chores tab renders individual chore tasks but currently has no Move/Defer action per chore. Add:
+- **Move/Defer** button per chore card (same 44px minimum tap target, labelled)
+- Sets `deferTarget` state with `type: 'task'` — the existing `DeferItemModal` + `applyDefer` handler already handles tasks
+- This re-uses the existing defer machinery already in `MobileHome.tsx` (lines 676–704)
+
+---
+
+## Phase 8 — Roadmap Version Cleanup
+**Audit refs**: REC-029, REC-034
+**Effort**: ~0.5 day
+
+### 8A. Point /goals/roadmap default to V6
+**File**: `react-app/src/App.tsx`
+Change the `/goals/roadmap` route to render `GoalRoadmapV6` instead of `GoalRoadmapV5`.
+
+### 8B. Remove V5 and legacy roadmap from sidebar navigation
+**File**: `react-app/src/components/SidebarLayout.tsx`
+Remove nav links for `/goals/roadmap-v5`, `/goals/roadmap-legacy`, `/goals/timeline` (or mark visually as legacy). Keep the routes in App.tsx alive for backwards compat.
+
+---
+
+## Auditor Checklist (for agent reviewing this work)
+
+An auditor agent reviewing completed PRs should verify:
+
+**Phase 1 (CSS)**
+- [ ] `index.css` contains `--color-urgency-*` and `--color-status-*` tokens in both `:root` and `[data-theme="dark"]`
+- [ ] `ThemeColors.css` has `[data-theme="dark"]` blocks for all domain themes
+- [ ] `FocusGoalCountdownBanner.tsx` contains no hex colour values — only CSS var references
+- [ ] `Dashboard.css` contains no hex values on `.rbc-current-time-indicator`
+- [ ] `MaterialDesign.css` is deleted
+- [ ] `KanbanCards.css` pill colour rules reference CSS variables, not RGBA literals
+
+**Phase 2 (Shared components)**
+- [ ] `src/components/shared/StatusPill.tsx` exists, exports `StatusPill`, accepts `mode` prop
+- [ ] `src/components/shared/PriorityPill.tsx` exists, exports `PriorityPill`
+- [ ] `src/components/shared/AiScoreBadge.tsx` exists, hides when score < threshold
+- [ ] `src/components/shared/ManualPriorityBadge.tsx` exists, hides when rank undefined
+- [ ] `src/components/shared/EmptyState.tsx` exists, has both no-data and filter-active variants
+- [ ] `src/components/shared/MobileUnsupportedScreen.tsx` exists, renders with CSS variable colours
+- [ ] `src/hooks/useIsMobile.ts` exists, calls through to `deviceDetection.ts`
+
+**Phase 3 (Kanban + card views)**
+- [ ] `KanbanCardV2.tsx` renders `AiScoreBadge` and `ManualPriorityBadge` in the meta row
+- [ ] `SortableStoryCard.tsx` uses `ManualPriorityBadge`, no inline red RGBA
+- [ ] `StoriesCardView.tsx` and `TasksCardView.tsx` use `AiScoreBadge` and `ManualPriorityBadge` — no Bootstrap `Badge` for these
+- [ ] All icon buttons in kanban/card views have `title` attributes
+- [ ] Edit icon is `Pencil` not `Edit3` in all modified files
+- [ ] Schedule icon is `CalendarClock` in all modified files
+
+**Phase 4 (Mobile gating)**
+- [ ] `TaskListView`, story wrapper, and `GoalsManagement` force card view when `useIsMobile()` is true
+- [ ] `GoalRoadmapV6`, `GoalsYearPlanner` render `MobileUnsupportedScreen` on mobile
+- [ ] `SprintPlanningMatrix` renders `MobileUnsupportedScreen` on mobile
+- [ ] `UnifiedPlannerPage` renders agenda-only (no drag-drop) on mobile
+- [ ] `SidebarLayout` hides desktop-only nav items on mobile
+
+**Phase 5 (MobileHome)**
+- [ ] `MobileHome.tsx` has no hex colour values in the THEME_COLORS / category map
+
+**Phase 9 (Manual priority cycle)**
+- [ ] KanbanCardV2 priority button cycles 1 → 2 → 3 → off (not toggle)
+- [ ] Rank 1 = red, Rank 2 = amber, Rank 3 = grey
+- [ ] SortableStoryCard has interactive priority button (not read-only badge)
+- [ ] StoriesCardView and TasksCardView have priority cycle button
+- [ ] ModernStoriesTable and ModernTaskTable have `#` column with cycle button
+- [ ] Replan prompt fires after each rank change
+
+**Phase 10 (Chore Move)**
+- [ ] `calculateChoreMoveDueDate()` exists in `recurringTaskDue.ts`
+- [ ] Move fires immediately with no modal
+- [ ] Daily → +1 day, Weekly → +1 week, Monthly(N) → +ceil(N/2) months
+- [ ] Move button present on desktop chores UI
+- [ ] Move button present on MobileHome chores tab
+- [ ] Defer is still available in `•••` overflow on mobile chores
+
+**Phase 6 (Icons/copy)**
+- [ ] No `Edit3` import remaining in any component (except if genuinely different semantic use)
+- [ ] No `CalendarPlus` used as the schedule action icon
+- [ ] Filter labels use "Top 3" (with space) not "top3" or "Top3"
+
+**Cross-cutting**
+- [ ] No new hex colour values introduced in any `.tsx` file
+- [ ] No new Bootstrap `Badge` usages for status, priority, AI score, or manual priority
+- [ ] The app builds without TypeScript errors (`npm run build` in `react-app/`)
+- [ ] The app renders correctly in both light and dark mode (manual visual check)
+- [ ] MobileHome `/mobile` route still functions as before
+
+---
+
+## What Is NOT in Scope for This Refactor
+- FilterBar / FilterChip shared component (REC-019) — valuable but medium effort; separate PR
+- SkeletonCard / SkeletonRow loading states (REC-026) — separate PR
+- ModalLayout standardisation (REC-037) — separate PR
+- DailyPlanPage standalone route (REC-030) — separate PR
+- Sprint management tab style unification (REC-028) — separate PR
+- Checkins linked from MobileHome (REC-038) — separate PR
+- Public share page mobile optimisation (REC-040) — separate PR
+
+---
+
 Comprehensive multi-phase rework spanning web, iOS/iPad, and health platforms:
 
 JD Updated 12tyh March at 21:38

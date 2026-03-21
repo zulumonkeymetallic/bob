@@ -25,6 +25,7 @@ import DeferItemModal from './DeferItemModal';
 import { buildSprintCapacitySummary, storyPoints } from '../utils/plannerCapacity';
 import { schedulePlannerItem as schedulePlannerItemMutation } from '../utils/plannerScheduling';
 import { parseBooleanParam, parseIdListParam, parseNumberListParam } from '../utils/planningQuery';
+import PlanActionBar from './planner/PlanActionBar';
 
 // Normalize sprint identifiers so we handle doc refs, strings, and legacy placeholders
 const normalizeSprintId = (value: any): string | null => {
@@ -852,23 +853,15 @@ const SprintPlanningMatrix: React.FC = () => {
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
                 <h2 style={{ margin: 0, fontSize: '28px', fontWeight: '700', color: themeVars.text as string }}>
-                  Sprint Planning Matrix
+                  Sprint Planning
                 </h2>
                 <Badge bg="primary" style={{ fontSize: '12px', padding: '6px 12px' }}>
                   {currentPersona.charAt(0).toUpperCase() + currentPersona.slice(1)} Persona
                 </Badge>
               </div>
               
-              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                <Button
-                  variant="outline-secondary"
-                  size="sm"
-                  onClick={() => navigate('/sprints/kanban')}
-                  className="d-inline-flex align-items-center"
-                >
-                  <LayoutGrid size={16} style={{ marginRight: 6 }} />
-                  Kanban
-                </Button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                <PlanActionBar />
                 <Button
                   variant="outline-secondary"
                   size="sm"
