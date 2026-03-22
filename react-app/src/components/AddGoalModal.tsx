@@ -8,6 +8,13 @@ import { generateRef } from '../utils/referenceGenerator';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { normalizeGoalCostType } from '../utils/goalCost';
 
+// Goal type options — maps to goalKind in Firestore
+const GOAL_TYPES = [
+  { value: '',          label: 'Standalone goal',                   hint: 'A single goal with no parent or children' },
+  { value: 'umbrella',  label: 'Project / Programme (has phases)',   hint: 'E.g. Ironman 2027, Home renovation — has child milestone goals beneath it' },
+  { value: 'milestone', label: 'Phase / Milestone (part of a project)', hint: 'E.g. Phase 1: Base Building — belongs under a parent project goal' },
+];
+
 interface AddGoalModalProps {
   onClose: () => void;
   show: boolean;
@@ -16,10 +23,10 @@ interface AddGoalModalProps {
 const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
-  const [formData, setFormData] = useState({
+  const emptyForm = {
     title: '',
     description: '',
-    theme: 1, // Default to Health & Fitness (ID 1)
+    theme: 1,
     size: 'M',
     timeToMasterHours: 40,
     confidence: 0.5,
@@ -30,14 +37,35 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
     estimatedCost: '',
     costType: '',
     linkedPotId: '',
-    kpis: [] as Array<{name: string; target: number; unit: string}>
-  });
+    kpis: [] as Array<{name: string; target: number; unit: string}>,
+    goalKind: '' as '' | 'umbrella' | 'milestone',
+    parentGoalId: '' as string,
+  };
+  const [formData, setFormData] = useState(emptyForm);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState<string | null>(null);
   const { themes } = useGlobalThemes();
   const [themeInput, setThemeInput] = useState('');
   const [monzoPots, setMonzoPots] = useState<Array<{ id: string; name: string }>>([]);
+  const [parentGoalSearch, setParentGoalSearch] = useState('');
+  const [candidateParents, setCandidateParents] = useState<Array<{ id: string; title: string; ref?: string }>>([]);
   const [potSearch, setPotSearch] = useState('');
+
+  // Load candidate parent goals (umbrella goals + goals without a parent)
+  useEffect(() => {
+    if (!show || !currentUser) return;
+    getDocs(query(collection(db, 'goals'), where('ownerUid', '==', currentUser.uid)))
+      .then(snap => {
+        const all = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
+        // Only offer non-milestone goals as parents (avoid circular/deep nesting)
+        const parents = all
+          .filter((g: any) => g.goalKind !== 'milestone')
+          .map((g: any) => ({ id: g.id, title: g.title || 'Untitled', ref: g.ref }))
+          .sort((a, b) => a.title.localeCompare(b.title));
+        setCandidateParents(parents);
+      })
+      .catch(() => setCandidateParents([]));
+  }, [show, currentUser]);
 
   useEffect(() => {
     const loadPots = async () => {
@@ -148,11 +176,11 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
       const sizeMap = { 'XS': 1, 'S': 2, 'M': 3, 'L': 4, 'XL': 5 };
       const statusMap = { 'New': 0, 'Work in Progress': 1, 'Complete': 2, 'Blocked': 3, 'Deferred': 4 };
       
-      const goalData = {
-        ref: ref, // Add reference number
+      const goalData: Record<string, any> = {
+        ref: ref,
         title: formData.title.trim(),
         description: formData.description.trim(),
-        theme: formData.theme, // Use the theme ID directly
+        theme: formData.theme,
         size: sizeMap[formData.size as keyof typeof sizeMap] || 3,
         timeToMasterHours: selectedSize?.hours || formData.timeToMasterHours,
         confidence: formData.confidence,
@@ -166,10 +194,17 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
         potId: normalizedPotId,
         kpis: formData.kpis,
         persona: currentPersona || 'personal',
-        ownerUid: currentUser.uid, // Ensure ownerUid is included
+        ownerUid: currentUser.uid,
         createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp()
+        updatedAt: serverTimestamp(),
       };
+      // Goal hierarchy fields — only write if set
+      if (formData.goalKind) goalData.goalKind = formData.goalKind;
+      if (formData.goalKind === 'milestone' && formData.parentGoalId) {
+        goalData.parentGoalId = formData.parentGoalId;
+      }
+      // Umbrella goals get multi_year timeHorizon by default
+      if (formData.goalKind === 'umbrella') goalData.timeHorizon = 'multi_year';
 
       console.log('💾 AddGoalModal: Saving GOAL to database', {
         action: 'goal_save_start',
@@ -187,22 +222,8 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
       });
 
       setSubmitResult(`✅ Goal created successfully! (${ref})`);
-      setFormData({
-        title: '',
-        description: '',
-        theme: 1, // Health & Fitness
-        size: 'M',
-        timeToMasterHours: 40,
-        confidence: 0.5,
-        startDate: '',
-        endDate: '',
-        status: 'New',
-        priority: 2,
-        estimatedCost: '',
-        costType: '',
-        linkedPotId: '',
-        kpis: []
-      });
+      setFormData(emptyForm);
+      setParentGoalSearch('');
       setPotSearch('');
       
       // Auto-close after success
@@ -224,26 +245,12 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
   };
 
   const handleClose = () => {
-    setFormData({
-      title: '',
-      description: '',
-      theme: 1, // Health & Fitness
-      size: 'M',
-      timeToMasterHours: 40,
-      confidence: 0.5,
-      startDate: '',
-      endDate: '',
-      status: 'New',
-      priority: 2,
-      estimatedCost: '',
-      costType: '',
-      linkedPotId: '',
-      kpis: []
-    });
-      setPotSearch('');
-      setSubmitResult(null);
-      onClose();
-    };
+    setFormData(emptyForm);
+    setParentGoalSearch('');
+    setPotSearch('');
+    setSubmitResult(null);
+    onClose();
+  };
 
   return (
     <Modal show={show} onHide={handleClose} centered size="lg">
@@ -273,6 +280,56 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
               placeholder="Describe this goal in detail..."
             />
           </Form.Group>
+
+          {/* ── Goal Type & Parent ───────────────────────────── */}
+          <Form.Group className="mb-3">
+            <Form.Label>Goal Type</Form.Label>
+            <Form.Select
+              value={formData.goalKind}
+              onChange={(e) => {
+                const v = e.target.value as '' | 'umbrella' | 'milestone';
+                setFormData({ ...formData, goalKind: v, parentGoalId: '' });
+                setParentGoalSearch('');
+              }}
+            >
+              {GOAL_TYPES.map(t => (
+                <option key={t.value} value={t.value}>{t.label}</option>
+              ))}
+            </Form.Select>
+            {formData.goalKind && (
+              <Form.Text className="text-muted">
+                {GOAL_TYPES.find(t => t.value === formData.goalKind)?.hint}
+              </Form.Text>
+            )}
+          </Form.Group>
+
+          {formData.goalKind === 'milestone' && (
+            <Form.Group className="mb-3">
+              <Form.Label>Parent Project Goal</Form.Label>
+              <Form.Control
+                list="add-goal-parent-options"
+                value={parentGoalSearch}
+                onChange={(e) => {
+                  setParentGoalSearch(e.target.value);
+                  const match = candidateParents.find(
+                    g => g.title === e.target.value || g.ref === e.target.value
+                  );
+                  setFormData(prev => ({ ...prev, parentGoalId: match?.id || '' }));
+                }}
+                placeholder="Search by title…"
+              />
+              <datalist id="add-goal-parent-options">
+                {candidateParents.map(g => (
+                  <option key={g.id} value={g.title} label={g.ref} />
+                ))}
+              </datalist>
+              {formData.parentGoalId && (
+                <Form.Text className="text-success fw-medium">
+                  ✓ Linked to: {candidateParents.find(g => g.id === formData.parentGoalId)?.title}
+                </Form.Text>
+              )}
+            </Form.Group>
+          )}
 
           <div className="row">
             <div className="col-md-4">

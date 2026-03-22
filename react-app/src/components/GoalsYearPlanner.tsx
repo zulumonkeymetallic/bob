@@ -257,8 +257,29 @@ const GoalYearCard: React.FC<{
         <div className="kanban-card__meta">
           <span className="kanban-card__meta-badge">{themeLabel || 'General'}</span>
           <span className="kanban-card__meta-badge">{statusLabel}</span>
+          {(goal as any).goalKind && (
+            <span className="kanban-card__meta-badge" style={{ textTransform: 'capitalize' }}>
+              {String((goal as any).goalKind)}
+            </span>
+          )}
+          {(goal as any).confidence != null && (
+            <span className="kanban-card__meta-badge">
+              {(goal as any).confidence === 3 ? 'High' : (goal as any).confidence === 2 ? 'Med' : 'Low'} confidence
+            </span>
+          )}
           {(goal as any).ref && <span className="kanban-card__meta-text">{String((goal as any).ref)}</span>}
         </div>
+        {/* Target date — matches GoalsCardView */}
+        {(goal.targetDate || (goal as any).endDate) && (
+          <div style={{ fontSize: 11, color: themeVars.muted as string, display: 'flex', alignItems: 'center', gap: 4 }}>
+            <span>🎯</span>
+            <span>
+              {goal.targetDate
+                ? new Date(goal.targetDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+                : new Date((goal as any).endDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
+            </span>
+          </div>
+        )}
         {showDescription && goal.description && (
           <div style={{ fontSize: 11, color: themeVars.muted as string }}>
             {goal.description}

@@ -15,6 +15,9 @@ declare global {
 const RECAPTCHA_SITE_KEY = process.env.REACT_APP_RECAPTCHA_V2_SITE_KEY || '';
 let recaptchaReady = false;
 
+// Disabled — too disruptive for trusted single-user app
+const RECAPTCHA_ENABLED = false;
+
 /**
  * Initialize reCAPTCHA script and prepare for token generation
  */
@@ -77,6 +80,7 @@ export function initializeRecaptcha(): Promise<void> {
  * @returns Promise<string> - reCAPTCHA token
  */
 export async function getRecaptchaToken(action: string): Promise<string> {
+  if (!RECAPTCHA_ENABLED) return '';
   if (!RECAPTCHA_SITE_KEY) {
     console.warn(`[reCAPTCHA] No site key configured, returning empty token for action: ${action}`);
     return '';
@@ -131,6 +135,7 @@ export async function callWithRecaptcha(
  * Call this once in your App component useEffect
  */
 export async function setupRecaptchaOnStartup(): Promise<void> {
+  if (!RECAPTCHA_ENABLED) return;
   if (!RECAPTCHA_SITE_KEY) {
     console.info('[reCAPTCHA] reCAPTCHA not configured (no REACT_APP_RECAPTCHA_V2_SITE_KEY)');
     return;

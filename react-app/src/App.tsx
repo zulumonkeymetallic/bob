@@ -83,6 +83,7 @@ import SprintKanbanPageV2 from './components/SprintKanbanPageV2';
 import TasksManagement from './components/TasksManagement';
 import SprintPlanningMatrix from './components/SprintPlanningMatrix';
 import WorkoutsDashboard from './components/WorkoutsDashboard';
+import AiCoachPage from './components/coach/AiCoachPage';
 import FinanceDashboardModern from './components/FinanceDashboardModern';
 import MerchantMappings from './components/finance/MerchantMappings';
 import BudgetsPage from './components/finance/BudgetsPage';
@@ -472,6 +473,7 @@ function AppContent() {
             <Route path="/planner/weekly/*" element={<WeeklyPlannerPage />} />
             <Route path="/weekly-planner" element={<Navigate to="/planner/weekly" replace />} />
             <Route path="/planner/week" element={<Navigate to="/planner/weekly" replace />} />
+            <Route path="/ai-coach" element={<AiCoachPage />} />
             <Route path="/fitness" element={<WorkoutsDashboard />} />
             <Route path="/running-results" element={<Navigate to="/fitness" replace />} />
             <Route path="/parkrun-results" element={<WorkoutsDashboard />} />

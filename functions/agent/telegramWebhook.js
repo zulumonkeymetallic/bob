@@ -182,6 +182,18 @@ async function sendTelegramMessage(chatId, text, { replyMarkup, parseMode } = {}
 }
 exports.sendTelegramMessage = sendTelegramMessage;
 
+/** Fire-and-forget typing indicator — shows "BOB is typing…" in Telegram immediately. */
+async function sendChatAction(chatId, action = 'typing') {
+  const token = TELEGRAM_BOT_TOKEN.value();
+  try {
+    await fetch(`https://api.telegram.org/bot${token}/sendChatAction`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, action }),
+    });
+  } catch (_) { /* non-critical */ }
+}
+
 async function editTelegramMessage(chatId, messageId, text, { replyMarkup } = {}) {
   const token = TELEGRAM_BOT_TOKEN.value();
   const url = `https://api.telegram.org/bot${token}/editMessageText`;
@@ -450,6 +462,16 @@ async function _handleInboundMessage(db, message, session, chatId, text) {
     return sendTelegramMessage(chatId, _helpText());
   }
 
+  if (text === '/coach') {
+    try {
+      const { handleCoachCommand } = require('../coach');
+      return handleCoachCommand(ownerUid, chatId);
+    } catch (e) {
+      console.warn('[telegramWebhook] /coach handler not available:', e?.message);
+      return sendTelegramMessage(chatId, '🏊 Coach module is not available right now.');
+    }
+  }
+
   // Free text → processAgentRequestInternal (existing transcript pipeline)
   await _handleFreeText(db, chatId, ownerUid, session, text, message.message_id, startMs);
 }
@@ -579,6 +601,9 @@ async function _handleWeeklyCommand(db, chatId, ownerUid, session, startMs) {
 }
 
 async function _handleFreeText(db, chatId, ownerUid, session, text, messageId, startMs) {
+  // Show "BOB is typing…" immediately — fire-and-forget, don't await
+  sendChatAction(chatId, 'typing').catch(() => {});
+
   // Triage shortcut: "move overdue tasks" → propose_task_triage
   const triageMatch = /\b(move|defer|triage|clear)\b.*\b(overdue|nonessential|non-essential|today)\b/i.test(text);
   if (triageMatch) {

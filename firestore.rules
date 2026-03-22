@@ -541,6 +541,46 @@ service cloud.firestore {
       allow write: if false; // server-only via Admin SDK
     }
 
+    // ── AI Coach collections ───────────────────────────────────────────────
+    // coach_daily: keyed as {uid}_{YYYY-MM-DD} — daily readiness + macros snapshot
+    match /coach_daily/{docId} {
+      allow read: if isSignedIn() && docId.matches('^' + request.auth.uid + '_.*');
+      allow write: if false; // server-only via Cloud Functions / Admin SDK
+    }
+    // health_metrics: keyed as {uid}_{YYYY-MM-DD} — HRV, sleep, weight logged by iOS
+    match /health_metrics/{docId} {
+      allow read: if isSignedIn() && (
+        docId.matches('^' + request.auth.uid + '_.*') ||
+        (resource.data.ownerUid != null && resource.data.ownerUid == request.auth.uid)
+      );
+      allow create, update: if isSignedIn() && (
+        docId.matches('^' + request.auth.uid + '_.*') ||
+        request.resource.data.ownerUid == request.auth.uid
+      );
+      allow delete: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+    }
+    // fitness_overview: per-user aggregated doc keyed by uid
+    match /fitness_overview/{uid} {
+      allow read: if isSignedIn() && request.auth.uid == uid;
+      allow write: if false; // server-only via Admin SDK
+    }
+    // coach_weekly_prompts: per-user photo prompt state keyed by uid
+    match /coach_weekly_prompts/{uid} {
+      allow read: if isSignedIn() && request.auth.uid == uid;
+      allow write: if false; // server-only via Cloud Functions
+    }
+    // coach_photos: body composition photo gallery per user
+    match /coach_photos/{uid} {
+      allow read: if isSignedIn() && request.auth.uid == uid;
+      allow write: if false;
+      match /photos/{photoId} {
+        allow read: if isSignedIn() && request.auth.uid == uid;
+        allow create: if isSignedIn() && request.auth.uid == uid
+                      && request.resource.data.ownerUid == uid;
+        allow update, delete: if isSignedIn() && request.auth.uid == uid;
+      }
+    }
+
     // ── LLM Model Registry ─────────────────────────────────────────────────
     // Refreshed daily by refreshModelRegistry scheduled function.
     // All authenticated users can read (used by getAIModels fallback chain).

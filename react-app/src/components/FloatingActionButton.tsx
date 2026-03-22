@@ -40,6 +40,12 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
   const [showQuickAdd, setShowQuickAdd] = useState(false);
   const [showBulkCreate, setShowBulkCreate] = useState(false);
   const [quickAddType, setQuickAddType] = useState<'goal' | 'story' | 'task'>('task');
+  const getTomorrowStr = () => {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    return d.toISOString().split('T')[0];
+  };
+
   const [quickAddData, setQuickAddData] = useState({
     title: '',
     description: '',
@@ -53,7 +59,8 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
     type: 'task',
     repeatFrequency: '',
     repeatInterval: 1,
-    daysOfWeek: [] as string[]
+    daysOfWeek: [] as string[],
+    dueDate: getTomorrowStr(),
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState<string | null>(null);
@@ -77,6 +84,40 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
   ];
   const isRecurringQuickAdd = quickAddType === 'task' && ['chore', 'routine', 'habit'].includes(String(quickAddData.type || '').toLowerCase());
   const defaultFabSprintId = pickDefaultPlanningSprintId(_availableSprints as any);
+
+  // Auto-select the sprint whose window contains the chosen due date.
+  // Falls back to the closest future sprint, then the planning default.
+  const sprintForDueDate = (dueDateStr: string): string => {
+    if (!dueDateStr || !_availableSprints?.length) return defaultFabSprintId;
+    const dueDateMs = new Date(dueDateStr + 'T00:00:00').getTime();
+    const sprints = _availableSprints as any[];
+    // 1. Exact containment
+    const exact = sprints.find(
+      (s) => s.startDate <= dueDateMs && s.endDate >= dueDateMs
+    );
+    if (exact) return exact.id;
+    // 2. Closest sprint whose startDate is after the due date
+    const future = sprints
+      .filter((s) => s.startDate > dueDateMs)
+      .sort((a, b) => a.startDate - b.startDate);
+    if (future.length) return future[0].id;
+    // 3. Closest sprint whose endDate is before the due date (most recent past)
+    const past = sprints
+      .filter((s) => s.endDate < dueDateMs)
+      .sort((a, b) => b.endDate - a.endDate);
+    if (past.length) return past[0].id;
+    return defaultFabSprintId;
+  };
+
+  // Sync sprint whenever due date changes
+  useEffect(() => {
+    if (quickAddType !== 'task') return;
+    const resolved = sprintForDueDate(quickAddData.dueDate);
+    if (resolved && resolved !== quickAddData.sprintId) {
+      setQuickAddData((prev) => ({ ...prev, sprintId: resolved }));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quickAddData.dueDate, quickAddType, _availableSprints]);
 
   useEffect(() => {
     const loadActiveFocusGoals = async () => {
@@ -308,6 +349,9 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
           storyRef: null,
           themes: GLOBAL_THEMES as any,
         });
+        const dueDateMs = quickAddData.dueDate
+          ? new Date(quickAddData.dueDate + 'T00:00:00').getTime()
+          : new Date(new Date().setDate(new Date().getDate() + 1)).setHours(0, 0, 0, 0);
         const taskData = {
           ...baseData,
           ref: taskRef,
@@ -316,6 +360,8 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
           sprintId: quickAddData.sprintId || defaultFabSprintId || null,
           effort: quickAddData.effort,
           priority: quickAddData.priority,
+          dueDate: quickAddData.dueDate || null,
+          dueDateMs,
           estimateMin: estimateMinutes,
           estimatedHours,
           points: effortPoints,
@@ -380,6 +426,7 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
         repeatFrequency: '',
         repeatInterval: 1,
         daysOfWeek: [],
+        dueDate: getTomorrowStr(),
       });
       
       // Auto-close after success
@@ -482,7 +529,7 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
             }}
             title="Process Text"
           >
-            T
+            P
           </button>
           <button
             className="md-fab-mini"
@@ -491,13 +538,14 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
               setQuickAddData((prev) => ({
                 ...prev,
                 persona: (currentPersona || 'personal') as 'personal' | 'work',
+                dueDate: getTomorrowStr(),
               }));
               setShowQuickAdd(true);
               setShowMenu(false);
             }}
             title="Quick Task"
           >
-            Q
+            T
           </button>
         </div>
       )}
@@ -626,7 +674,7 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
       {quickAddType === 'story' ? (
         <AddStoryModal show={showQuickAdd} onClose={() => setShowQuickAdd(false)} goalId={quickAddData.goalId || undefined} />
       ) : (
-      <Modal show={showQuickAdd} onHide={() => setShowQuickAdd(false)} centered>
+      <Modal show={showQuickAdd} onHide={() => setShowQuickAdd(false)} centered scrollable dialogClassName="fab-quick-add-modal">
         <Modal.Header closeButton>
           <Modal.Title>
             Add New {quickAddType.charAt(0).toUpperCase() + quickAddType.slice(1)}
@@ -801,17 +849,55 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
             )}
 
             {quickAddType === 'task' && (
-              <Form.Group className="mb-3">
-                <Form.Label>Priority</Form.Label>
-                <Form.Select
-                  value={quickAddData.priority}
-                  onChange={(e) => setQuickAddData({ ...quickAddData, priority: e.target.value })}
-                >
-                  <option value="low">Low</option>
-                  <option value="med">Medium</option>
-                  <option value="high">High</option>
-                </Form.Select>
-              </Form.Group>
+              <>
+                <div className="row mb-3">
+                  <div className="col-6">
+                    <Form.Label>Priority</Form.Label>
+                    <Form.Select
+                      value={quickAddData.priority}
+                      onChange={(e) => setQuickAddData({ ...quickAddData, priority: e.target.value })}
+                    >
+                      <option value="low">Low</option>
+                      <option value="med">Medium</option>
+                      <option value="high">High</option>
+                      <option value="critical">🔴 Critical</option>
+                    </Form.Select>
+                  </div>
+                  <div className="col-6">
+                    <Form.Label>Due Date</Form.Label>
+                    <Form.Control
+                      type="date"
+                      value={quickAddData.dueDate}
+                      onChange={(e) => setQuickAddData({ ...quickAddData, dueDate: e.target.value })}
+                    />
+                  </div>
+                </div>
+                {(_availableSprints as any[])?.length > 0 && (
+                  <Form.Group className="mb-3">
+                    <Form.Label>
+                      Sprint
+                      <span className="text-muted ms-1" style={{ fontSize: '0.75rem' }}>
+                        (auto-matched to due date)
+                      </span>
+                    </Form.Label>
+                    <Form.Select
+                      value={quickAddData.sprintId || defaultFabSprintId}
+                      onChange={(e) => setQuickAddData({ ...quickAddData, sprintId: e.target.value })}
+                    >
+                      {(_availableSprints as any[]).map((s: any) => {
+                        const start = s.startDate ? new Date(s.startDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '';
+                        const end = s.endDate ? new Date(s.endDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '';
+                        const label = s.name || s.title || `Sprint ${s.index ?? ''}`;
+                        return (
+                          <option key={s.id} value={s.id}>
+                            {label}{start && end ? ` · ${start} – ${end}` : ''}
+                          </option>
+                        );
+                      })}
+                    </Form.Select>
+                  </Form.Group>
+                )}
+              </>
             )}
           </Form>
 

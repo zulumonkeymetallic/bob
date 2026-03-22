@@ -3,11 +3,9 @@
 
 import { VERSION, BUILD_HASH } from '../version';
 
-// Feature flag: disable version checks in development unless explicitly enabled
-// Avoid dev hot-reload loops caused by /version.json mismatches
-const VERSION_CHECKS_ENABLED =
-  process.env.NODE_ENV === 'production' ||
-  String(process.env.REACT_APP_ENABLE_VERSION_CHECKS).toLowerCase() === 'true';
+// Feature flag: disabled — 30-minute forced refresh is too disruptive
+// Re-enable by setting this to true if needed for cache-busting in future
+const VERSION_CHECKS_ENABLED = false;
 
 interface VersionStatus {
   currentVersion: string;

@@ -1,5 +1,6 @@
 import React from 'react';
-import { AlertTriangle, X } from 'lucide-react';
+import { Modal, Button, Alert, Badge, Table } from 'react-bootstrap';
+import { AlertTriangle } from 'lucide-react';
 import type { GoalTimelineAffectedStory } from './goalTimelineImpact';
 
 interface Props {
@@ -18,129 +19,122 @@ const ConfirmSprintChangesModal: React.FC<Props> = ({
   visible,
   pendingChanges,
   onConfirm,
-  onCancel
+  onCancel,
 }) => {
-  if (!visible || !pendingChanges) return null;
+  if (!pendingChanges) return null;
 
-  const formatDate = (timestamp: number) => {
-    return new Date(timestamp).toLocaleDateString();
+  const formatDate = (ts: number) =>
+    new Date(ts).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+
+  const movable = pendingChanges.affectedStories.filter(
+    (s) => s.recommendedSprintId && s.recommendedSprintId !== s.plannedSprintId,
+  );
+  const unchanged = pendingChanges.affectedStories.filter(
+    (s) => s.recommendedSprintId && s.recommendedSprintId === s.plannedSprintId,
+  );
+  const manual = pendingChanges.affectedStories.length - movable.length - unchanged.length;
+
+  const outcomeVariant = (story: GoalTimelineAffectedStory) => {
+    if (!story.recommendedSprintId) return 'secondary';
+    return story.recommendedSprintId === story.plannedSprintId ? 'success' : 'warning';
+  };
+  const outcomeLabel = (story: GoalTimelineAffectedStory) => {
+    if (!story.recommendedSprintId) return 'Manual review';
+    return story.recommendedSprintId === story.plannedSprintId ? 'No change' : 'Will move';
   };
 
-  const movableStories = pendingChanges.affectedStories.filter(
-    (story) => story.recommendedSprintId && story.recommendedSprintId !== story.plannedSprintId,
-  );
-  const unchangedStories = pendingChanges.affectedStories.filter(
-    (story) => story.recommendedSprintId && story.recommendedSprintId === story.plannedSprintId,
-  );
-  const manualReviewStories = pendingChanges.affectedStories.length - movableStories.length - unchangedStories.length;
-
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg shadow-xl max-w-lg w-full mx-4">
-        <div className="flex items-center justify-between p-4 border-b">
-          <div className="flex items-center gap-2">
-            <AlertTriangle className="w-5 h-5 text-amber-500" />
-            <h3 className="text-lg font-semibold">Confirm Sprint Changes</h3>
+    <Modal show={visible} onHide={onCancel} size="lg" centered>
+      <Modal.Header closeButton>
+        <Modal.Title className="d-flex align-items-center gap-2" style={{ fontSize: '1rem' }}>
+          <AlertTriangle size={18} className="text-warning" />
+          Confirm Sprint Changes
+        </Modal.Title>
+      </Modal.Header>
+
+      <Modal.Body className="vstack gap-3">
+        <Alert variant="warning" className="mb-0">
+          Changing this goal's timeline will evaluate{' '}
+          <strong>{pendingChanges.affectedStories.length}</strong> linked{' '}
+          {pendingChanges.affectedStories.length === 1 ? 'story' : 'stories'} and move each one to
+          the sprint with the closest start date where a recommendation is available.
+        </Alert>
+
+        <div>
+          <div className="fw-semibold small text-muted text-uppercase mb-2" style={{ letterSpacing: '0.05em' }}>
+            Timeline Changes
           </div>
-          <button
-            onClick={onCancel}
-            className="text-gray-400 hover:text-gray-600"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-        
-        <div className="p-4 space-y-4">
-          <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
-            <p className="text-sm text-amber-800">
-              <strong>Warning:</strong> Changing this goal's timeline will evaluate {pendingChanges.affectedStories.length} linked stories
-              and move each one to the sprint with the closest start date when a recommendation is available.
-            </p>
-          </div>
-          
-          <div>
-            <h4 className="font-medium text-gray-900 mb-2">Timeline Changes</h4>
-            <div className="space-y-1 text-sm">
-              <div>
-                <span className="text-gray-600">New Start Date:</span> 
-                <span className="ml-2 font-medium">{formatDate(pendingChanges.startDate)}</span>
-              </div>
-              <div>
-                <span className="text-gray-600">New End Date:</span> 
-                <span className="ml-2 font-medium">{formatDate(pendingChanges.endDate)}</span>
-              </div>
+          <div className="d-flex gap-4 small">
+            <div>
+              <span className="text-muted">New start:</span>{' '}
+              <strong>{formatDate(pendingChanges.startDate)}</strong>
+            </div>
+            <div>
+              <span className="text-muted">New end:</span>{' '}
+              <strong>{formatDate(pendingChanges.endDate)}</strong>
             </div>
           </div>
-          
-          <div>
-            <h4 className="font-medium text-gray-900 mb-2">Affected Stories</h4>
-            <div className="max-h-40 overflow-y-auto border border-gray-200 rounded">
-              <table className="w-full text-sm">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-3 py-2 text-left font-medium text-gray-700">Story</th>
-                    <th className="px-3 py-2 text-left font-medium text-gray-700">Current Sprint</th>
-                    <th className="px-3 py-2 text-left font-medium text-gray-700">Recommended Sprint</th>
-                    <th className="px-3 py-2 text-left font-medium text-gray-700">Outcome</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {pendingChanges.affectedStories.map((story) => (
-                    <tr key={story.id} className="border-t border-gray-100">
-                      <td className="px-3 py-2">
-                        <div>
-                          <div className="font-medium">{story.ref}</div>
-                          <div className="text-gray-600 text-xs truncate">{story.title}</div>
-                          {typeof story.impactedTaskCount === 'number' && story.impactedTaskCount > 0 && (
-                            <div className="text-gray-500 text-xs">{story.impactedTaskCount} linked task{story.impactedTaskCount === 1 ? '' : 's'}</div>
-                          )}
+        </div>
+
+        <div>
+          <div className="fw-semibold small text-muted text-uppercase mb-2" style={{ letterSpacing: '0.05em' }}>
+            Affected Stories
+          </div>
+          <div style={{ maxHeight: 220, overflowY: 'auto' }}>
+            <Table size="sm" bordered className="mb-0" style={{ fontSize: '0.8rem' }}>
+              <thead className="table-light">
+                <tr>
+                  <th>Story</th>
+                  <th>Current Sprint</th>
+                  <th>Recommended Sprint</th>
+                  <th>Outcome</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pendingChanges.affectedStories.map((story) => (
+                  <tr key={story.id}>
+                    <td>
+                      <div className="fw-medium">{story.ref}</div>
+                      <div className="text-muted" style={{ fontSize: '0.75rem' }}>
+                        {story.title}
+                      </div>
+                      {typeof story.impactedTaskCount === 'number' && story.impactedTaskCount > 0 && (
+                        <div className="text-muted" style={{ fontSize: '0.72rem' }}>
+                          {story.impactedTaskCount} linked task{story.impactedTaskCount !== 1 ? 's' : ''}
                         </div>
-                      </td>
-                      <td className="px-3 py-2 text-gray-600">
-                        {story.plannedSprintName || story.plannedSprintId || 'Unassigned'}
-                      </td>
-                      <td className="px-3 py-2 text-gray-600">
-                        {story.recommendedSprintName || story.recommendedSprintId || 'Review manually'}
-                      </td>
-                      <td className="px-3 py-2 text-gray-600">
-                        {story.recommendedSprintId
-                          ? story.recommendedSprintId === story.plannedSprintId
-                            ? 'Already closest'
-                            : 'Will move'
-                          : 'Manual review'}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-          
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-            <p className="text-sm text-blue-800">
-              <strong>What happens on confirm:</strong> {movableStories.length} stor{movableStories.length === 1 ? 'y' : 'ies'} will be reassigned automatically.
-              {unchangedStories.length > 0 ? ` ${unchangedStories.length} stor${unchangedStories.length === 1 ? 'y is' : 'ies are'} already in the closest sprint and will stay put.` : ''}
-              {manualReviewStories > 0 ? ` ${manualReviewStories} stor${manualReviewStories === 1 ? 'y has' : 'ies have'} no recommendation and will stay where they are for manual review.` : ''}
-            </p>
+                      )}
+                    </td>
+                    <td className="text-muted">{story.plannedSprintName || story.plannedSprintId || 'Unassigned'}</td>
+                    <td className="text-muted">{story.recommendedSprintName || story.recommendedSprintId || '—'}</td>
+                    <td>
+                      <Badge bg={outcomeVariant(story)} text={outcomeVariant(story) === 'warning' ? 'dark' : undefined}>
+                        {outcomeLabel(story)}
+                      </Badge>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </Table>
           </div>
         </div>
-        
-        <div className="flex justify-end gap-3 p-4 border-t">
-          <button
-            onClick={onCancel}
-            className="px-4 py-2 border border-gray-300 rounded-md hover:bg-gray-50"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={onConfirm}
-            className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700"
-          >
-            Confirm and Move Stories
-          </button>
-        </div>
-      </div>
-    </div>
+
+        <Alert variant="info" className="mb-0 small">
+          <strong>On confirm:</strong>{' '}
+          {movable.length} {movable.length === 1 ? 'story' : 'stories'} will be reassigned automatically.
+          {unchanged.length > 0 && ` ${unchanged.length} ${unchanged.length === 1 ? 'story is' : 'stories are'} already in the correct sprint.`}
+          {manual > 0 && ` ${manual} ${manual === 1 ? 'story has' : 'stories have'} no recommendation and will stay put for manual review.`}
+        </Alert>
+      </Modal.Body>
+
+      <Modal.Footer>
+        <Button variant="secondary" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button variant="danger" onClick={onConfirm}>
+          Confirm and Move Stories
+        </Button>
+      </Modal.Footer>
+    </Modal>
   );
 };
 

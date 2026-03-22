@@ -53,6 +53,25 @@ try {
 }
 
 try {
+  const coachModule = require('./coach');
+  if (coachModule) {
+    exports.runCoachOrchestratorNightly = coachModule.runCoachOrchestratorNightly;
+    exports.logHealthMetric            = coachModule.logHealthMetric;
+    exports.getCoachToday              = coachModule.getCoachToday;
+    exports.provisionIronmanGoals      = coachModule.provisionIronmanGoals;
+    exports.analyzeBodyPhoto           = coachModule.analyzeBodyPhoto;
+    exports.sendCoachNudgesNoon        = coachModule.sendCoachNudgesNoon;
+    exports.sendCoachNudgesEvening     = coachModule.sendCoachNudgesEvening;
+    exports.sendCoachMorningBriefing   = coachModule.sendCoachMorningBriefing;
+    exports.sendWeeklyPhaseProgress    = coachModule.sendWeeklyPhaseProgress;
+    exports.checkKpiOffTrack           = coachModule.checkKpiOffTrack;
+    exports.triggerCoachBriefingNow    = coachModule.triggerCoachBriefingNow;
+  }
+} catch (e) {
+  console.warn('[init] coachModule not loaded', e?.message || e);
+}
+
+try {
   const financeEnhancements = require('./finance/enhancements');
   if (financeEnhancements) {
     exports.importExternalFinanceTransactions = financeEnhancements.importExternalFinanceTransactions;

@@ -13,6 +13,7 @@ import CompactSprintMetrics from './CompactSprintMetrics';
 import AssistantDock from './AssistantDock';
 import SprintClosureBanner from './sprints/SprintClosureBanner';
 import CheckInBanner from './checkins/CheckInBanner';
+import { CoachVerdictBanner } from './coach/CoachVerdictBanner';
 import ProcessTextActivityHost from './ProcessTextActivityHost';
 import PlannerCapacityBanner from './planner/PlannerCapacityBanner';
 // Test mode UI removed per request
@@ -110,6 +111,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       label: 'Health',
       icon: 'heartbeat',
       items: [
+        { label: 'AI Coach', path: '/ai-coach', icon: 'dumbbell' },
         { label: 'Fitness Results', path: '/fitness', icon: 'running' },
         { label: 'Parkrun Results', path: '/parkrun-results', icon: 'flag-checkered' }
       ]
@@ -744,6 +746,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         <main className="h-100">
           <div className="p-3">
             <CheckInBanner />
+            <CoachVerdictBanner />
             {!hidePlannerCapacityBanner && <PlannerCapacityBanner />}
             <SprintClosureBanner />
             <ProcessTextActivityHost />

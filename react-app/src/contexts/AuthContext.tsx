@@ -68,10 +68,14 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     }
   }, [currentUser]);
 
+  // Auto-logout disabled — too disruptive for trusted single-user app
+  // Set AUTO_LOGOUT_ENABLED = true to re-enable
+  const AUTO_LOGOUT_ENABLED = false;
   const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const AUTO_LOGOUT_MS = 30 * 60 * 1000; // 30 minutes
 
   const scheduleAutoLogout = useCallback(() => {
+    if (!AUTO_LOGOUT_ENABLED) return;
     if (inactivityTimerRef.current) {
       clearTimeout(inactivityTimerRef.current);
     }
@@ -114,6 +118,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   }, [localLoginEnabled]);
 
   useEffect(() => {
+    if (!AUTO_LOGOUT_ENABLED) return;
     if (!currentUser) {
       if (inactivityTimerRef.current) {
         clearTimeout(inactivityTimerRef.current);

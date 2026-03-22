@@ -931,6 +931,34 @@ const SortableRow: React.FC<SortableRowProps> = ({
                 </a>
               );
             }
+            if (column.key === 'title') {
+              const kind = (goal as any).goalKind as string | undefined;
+              const kindBadge =
+                kind === 'umbrella' ? { label: '📁 Project', style: { background: 'var(--bs-primary)', color: '#fff' } } :
+                kind === 'milestone' ? { label: '🎯 Phase', style: { background: 'var(--bs-info)', color: '#fff' } } :
+                null;
+              const hasParent = !!(goal as any).parentGoalId;
+              return (
+                <span style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                  {hasParent && (
+                    <span style={{ color: 'var(--bs-secondary)', fontSize: '11px', marginRight: '2px' }}>└─</span>
+                  )}
+                  {kindBadge && (
+                    <span style={{
+                      fontSize: '10px',
+                      padding: '1px 6px',
+                      borderRadius: '10px',
+                      fontWeight: 600,
+                      whiteSpace: 'nowrap',
+                      ...kindBadge.style,
+                    }}>
+                      {kindBadge.label}
+                    </span>
+                  )}
+                  <span>{formatValue(column.key, value)}</span>
+                </span>
+              );
+            }
             return (
               <span>{formatValue(column.key, value)}</span>
             );

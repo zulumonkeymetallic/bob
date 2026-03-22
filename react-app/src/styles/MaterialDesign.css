@@ -174,6 +174,44 @@
   box-shadow: 0 0 0 0.2rem rgba(25, 118, 210, 0.25) !important;
 }
 
+/* FAB quick-add modal: fits any screen without page scroll
+   - iPad portrait 768px, MacBook Air 2021 900px, etc.
+   - Header + footer stay fixed; only the form body scrolls     */
+.fab-quick-add-modal {
+  max-height: 90vh;
+}
+.fab-quick-add-modal .modal-content {
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+}
+.fab-quick-add-modal .modal-body {
+  overflow-y: auto;
+  flex: 1 1 auto;
+  /* tighten vertical rhythm inside the form on small screens */
+  padding: 1rem;
+}
+.fab-quick-add-modal .modal-body .mb-3 {
+  margin-bottom: 0.6rem !important;
+}
+
+/* On screens shorter than 700px (iPad portrait browser) shrink further */
+@media (max-height: 700px) {
+  .fab-quick-add-modal {
+    max-height: 95vh;
+  }
+  .fab-quick-add-modal .modal-body {
+    padding: 0.6rem;
+  }
+  .fab-quick-add-modal .modal-body .mb-3 {
+    margin-bottom: 0.4rem !important;
+  }
+  .fab-quick-add-modal .modal-body textarea {
+    rows: 2;
+    min-height: 48px;
+  }
+}
+
 [data-theme="dark"] .modal-content {
   background-color: #1e1e1e !important;
   color: #ffffff !important;

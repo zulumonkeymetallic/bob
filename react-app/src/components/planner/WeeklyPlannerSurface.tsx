@@ -310,7 +310,7 @@ const WeeklyPlannerSurface: React.FC<WeeklyPlannerSurfaceProps> = ({
         activeFocusGoalIds,
         rangeStartMs: weekStartMs,
         rangeEndMs: weekEndMs,
-        includeUnscheduledTasks: false,
+        includeUnscheduledTasks: true,
       }).filter((item) => item.kind !== 'event'),
     [tasks, stories, goals, calendarBlocks, scheduledInstances, activeFocusGoalIds, weekStartMs, weekEndMs],
   );
