@@ -19,6 +19,7 @@
     "firebase-functions": "^5.1.0",
     "googleapis": "^166.0.0",
     "luxon": "^3.4.4",
+    "node-ical": "^0.19.0",
     "rrule": "^2.7.2",
     "uuid": "^11.1.0"
   },

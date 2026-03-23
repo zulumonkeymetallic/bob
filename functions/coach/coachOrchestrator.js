@@ -51,6 +51,21 @@ async function sendTelegram(chatId, text) {
   }
 }
 
+/** Write a structured event to integration_logs for observability */
+async function logCoachEvent(uid, event, metadata = {}) {
+  try {
+    await db().collection('integration_logs').add({
+      integration: 'coach_scheduler',
+      event,
+      ownerUid: uid,
+      metadata,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  } catch (e) {
+    console.warn(`[coachOrchestrator] logCoachEvent failed: ${e?.message}`);
+  }
+}
+
 /** Get all Telegram-linked chat IDs for a uid */
 async function getTelegramChatId(uid) {
   const snap = await db()
@@ -375,15 +390,40 @@ async function _runOrchestratorForUser(uid) {
     }
   }
 
-  // 12. Pre-render briefing text
+  // 12a. Load today's fitness programme from cache
+  let todayProgramme = null;
+  try {
+    const cacheSnap = await firestore.collection('fitness_programme_cache').doc(uid).get();
+    if (cacheSnap.exists) {
+      const cache = cacheSnap.data();
+      todayProgramme = {
+        runner: (cache.runnerEvents || []).find(e => e.date === today) || null,
+        crossFit: (cache.crossFitEvents || []).find(e => e.date === today) || null,
+      };
+    }
+  } catch (e) {
+    console.warn('[coachOrchestrator] fitness cache read failed:', e?.message);
+  }
+
+  // 12b. Pre-render briefing text
   const readinessPct = Math.round(readinessScore * 100);
+  const progParts = [];
+  if (todayProgramme?.runner) {
+    progParts.push(`Run: ${todayProgramme.runner.title} (${todayProgramme.runner.durationMin}min)`);
+  }
+  if (todayProgramme?.crossFit) {
+    progParts.push(`CrossFit: ${todayProgramme.crossFit.title}`);
+  }
+  const programmeLine = progParts.length > 0 ? `\nProgramme: ${progParts.join(' + ')}` : '';
+
   const briefingText =
     `🏊 Coach Briefing\n` +
     `HRV: ${hrvToday !== null ? `${Math.round(hrvToday)}ms` : 'n/a'} (${readinessLabel === 'green' ? '🟢' : readinessLabel === 'amber' ? '🟡' : '🔴'} ${readinessPct}%). ` +
     `Sleep: ${sleepToday !== null ? `${sleepToday.toFixed(1)}h` : 'n/a'}.\n` +
     `Today: ${todayBlockTitle}.\n` +
     `Targets: P:${proteinG}g C:${carbG}g F:${fatG}g\n` +
-    `R-Score: ${(readinessScore).toFixed(2)}`;
+    `R-Score: ${(readinessScore).toFixed(2)}` +
+    programmeLine;
 
   // 13. Write coach_daily
   const coachDailyData = {
@@ -415,6 +455,7 @@ async function _runOrchestratorForUser(uid) {
     currentBodyFatPct: bodyFatPct,
     currentWeightKg: weightKg,
     briefingText,
+    todayProgramme,
     weeklyPhotoPromptActive,
     muscleAtrophyAlert,
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -556,6 +597,8 @@ exports.provisionIronmanGoals = httpsV2.onCall({ region: REGION }, async (req) =
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
 
   const { raceDate: raceDateOverride } = req.data || {};
+  console.log(`[coachOrchestrator] provisionIronmanGoals uid=${uid} raceDate=${raceDateOverride || 'none'}`);
+  await logCoachEvent(uid, 'provision_started', { raceDate: raceDateOverride || null });
   const firestore = db();
 
   // Derive race date from the active FocusGoal endDate
@@ -615,6 +658,7 @@ exports.provisionIronmanGoals = httpsV2.onCall({ region: REGION }, async (req) =
       .where('isActive', '==', true)
       .limit(1)
       .get();
+    await logCoachEvent(uid, 'provision_complete', { umbrellaId, alreadyExisted: true });
     return {
       ok: true,
       alreadyExisted: true,
@@ -809,6 +853,8 @@ exports.provisionIronmanGoals = httpsV2.onCall({ region: REGION }, async (req) =
     focusGoalId = fgRef.id;
   }
 
+  console.log(`[coachOrchestrator] provision complete uid=${uid} umbrella=${umbrellaGoalId} phases=${phaseGoalIds.length}`);
+  await logCoachEvent(uid, 'provision_complete', { umbrellaGoalId, phaseCount: phaseGoalIds.length, raceDate });
   return { ok: true, alreadyExisted: false, umbrellaGoalId, phaseGoalIds, focusGoalId };
 });
 

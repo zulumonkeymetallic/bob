@@ -615,6 +615,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
                       onChange={(e) => handleInputChange('progressPct', Number(e.target.value))}
                     >
                       <option value={0}>0% complete</option>
+                      <option value={10}>10% complete</option>
                       <option value={25}>25% complete</option>
                       <option value={50}>50% complete</option>
                       <option value={75}>75% complete</option>

@@ -2017,7 +2017,8 @@ async function dedupePlannerBlocksForUser({ db, userId, windowStart, windowEnd }
     const isAi = data.aiGenerated === true || data.isAiGenerated === true || data.createdBy === 'ai';
     const isPlanner = source.includes('theme_allocation') || source.includes('health_allocation') || source.includes('work_shift_allocation');
     const isExternal = source === 'gcal' || source === 'google_calendar' || data.createdBy === 'google';
-    if (isExternal) return false;
+    const isCoachManaged = source.startsWith('coach_');
+    if (isExternal || isCoachManaged) return false;
     return isAi || isPlanner || ['health', 'work_shift', 'task', 'story'].includes(entityType);
   };
   const buildKey = (data) => {
@@ -3553,7 +3554,13 @@ async function runCalendarPlannerJob() {
       existingBlocks = refreshedBlocksSnap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
     }
 
-    const fitnessBlocksAutoCreate = profile?.fitnessBlocksAutoCreate !== false;
+    // Skip fitness theme blocks when the Ironman coach is managing fitness scheduling
+    const hasIronmanCoach = Boolean(profile?.ironmanUmbrellaGoalId) &&
+      (Boolean(profile?.runnerProgrammeUrl) || Boolean(profile?.crossFitProgrammeUrl));
+    const fitnessBlocksAutoCreate = !hasIronmanCoach && profile?.fitnessBlocksAutoCreate !== false;
+    if (hasIronmanCoach) {
+      console.log(`[calendar-planner] coach managing fitness for uid=${userId}, skipping health theme blocks`);
+    }
     const plannerBlockResult = await materializePlannerThemeBlocks({
       db,
       userId,
@@ -4115,7 +4122,10 @@ exports.replanCalendarNow = onCall({
   const db = ensureFirestore();
   const profileSnap = await db.collection('profiles').doc(uid).get().catch(() => null);
   const profile = profileSnap && profileSnap.exists ? (profileSnap.data() || {}) : {};
-  const fitnessBlocksAutoCreate = req?.data?.fitnessBlocksAutoCreate !== false
+  const hasIronmanCoachCallable = Boolean(profile?.ironmanUmbrellaGoalId) &&
+    (Boolean(profile?.runnerProgrammeUrl) || Boolean(profile?.crossFitProgrammeUrl));
+  const fitnessBlocksAutoCreate = !hasIronmanCoachCallable
+    && req?.data?.fitnessBlocksAutoCreate !== false
     && profile?.fitnessBlocksAutoCreate !== false;
   const zone = resolveTimezone(profile, 'Europe/London');
   // planningMode: 'smart' (default) = only user GCal + work/fitness are hard-busy, everything else is fair game

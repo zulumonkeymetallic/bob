@@ -19373,6 +19373,22 @@ async function dispatchDailySummaryForUser({ db, userId, profile, nowUtc, runCon
   summaryData.dailyChecklist = assembleDailyChecklist(summaryData);
   summaryData.dailyBriefing = null;
 
+  // Fitness programme from iCal cache
+  try {
+    const fpSnap = await db.collection('fitness_programme_cache').doc(userId).get();
+    if (fpSnap.exists) {
+      const fp = fpSnap.data();
+      const dayIso = summaryData.metadata.dayIso;
+      summaryData.fitnessProgramme = {
+        runnerToday: (fp.runnerEvents || []).find(e => e.date === dayIso) || null,
+        crossFitToday: (fp.crossFitEvents || []).find(e => e.date === dayIso) || null,
+        runnerWeek: (fp.runnerEvents || []).filter(e => e.date >= dayIso).slice(0, 5),
+      };
+    }
+  } catch (e) {
+    console.warn('[dailySummary] fitness_programme_cache read failed:', e?.message);
+  }
+
   const html = renderDailySummaryEmail(summaryData);
   const subject = `Daily Summary · ${summaryData.metadata.dayIso}`;
 

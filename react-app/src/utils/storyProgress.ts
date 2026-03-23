@@ -1,4 +1,4 @@
-export const MOBILE_STORY_PROGRESS_OPTIONS = [0, 25, 50, 75, 90, 100] as const;
+export const MOBILE_STORY_PROGRESS_OPTIONS = [0, 10, 25, 50, 75, 90, 100] as const;
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 

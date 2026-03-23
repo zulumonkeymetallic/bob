@@ -7,6 +7,7 @@
 
 const orchestrator = require('./coachOrchestrator');
 const briefing = require('./coachDailyBriefing');
+const scheduler = require('./coachFitnessScheduler');
 
 // Orchestration & data
 exports.runCoachOrchestratorNightly = orchestrator.runCoachOrchestratorNightly;
@@ -25,3 +26,9 @@ exports.triggerCoachBriefingNow    = briefing.triggerCoachBriefingNow;
 
 // Internal helper re-exported for telegramWebhook.js command router
 exports.handleCoachCommand         = briefing.handleCoachCommand;
+
+// Fitness programme scheduler — iCal polling + calendar block creation
+exports.pollFitnessProgrammes             = scheduler.pollFitnessProgrammes;
+exports.scheduleCoachFitnessBlocks        = scheduler.scheduleCoachFitnessBlocks;
+exports.triggerPollFitnessProgrammes      = scheduler.triggerPollFitnessProgrammes;
+exports.triggerScheduleCoachFitnessBlocks = scheduler.triggerScheduleCoachFitnessBlocks;

@@ -260,6 +260,7 @@ const SetupScreen: React.FC<{ onComplete: () => void }> = ({ onComplete }) => {
   const [focusGoalEnd, setFocusGoalEnd] = useState<string | null>(null);
   const [umbrellaGoals, setUmbrellaGoals] = useState<any[]>([]);
   const [selectedGoalId, setSelectedGoalId] = useState('');
+  const [raceDate, setRaceDate] = useState('');
 
   useEffect(() => {
     if (!uid) return;
@@ -293,7 +294,9 @@ const SetupScreen: React.FC<{ onComplete: () => void }> = ({ onComplete }) => {
     setLoading(true);
     setError(null);
     try {
-      await httpsCallable(functions, 'provisionIronmanGoals')({});
+      await httpsCallable(functions, 'provisionIronmanGoals')({
+        raceDate: raceDate || undefined,
+      });
       onComplete();
     } catch (e: any) {
       setError(e?.message || 'Setup failed. Please try again.');
@@ -342,8 +345,20 @@ const SetupScreen: React.FC<{ onComplete: () => void }> = ({ onComplete }) => {
       )}
       {!focusGoalEnd && (
         <div className="alert alert-warning small mb-3">
-          ⚠️ No active Focus Goal detected. The coach will default to an 18-month window from
-          today. You can set a race date by creating a Focus Goal with an end date.
+          <div className="fw-medium mb-2">
+            ⚠️ No active Focus Goal detected. Please enter your race date to set the programme window.
+          </div>
+          <label className="form-label small mb-1">Race Date</label>
+          <input
+            type="date"
+            className="form-control form-control-sm"
+            value={raceDate}
+            min={new Date().toISOString().split('T')[0]}
+            onChange={e => setRaceDate(e.target.value)}
+          />
+          <div className="form-text small mt-1">
+            Or create a Focus Goal with an end date and come back here.
+          </div>
         </div>
       )}
 
@@ -365,7 +380,7 @@ const SetupScreen: React.FC<{ onComplete: () => void }> = ({ onComplete }) => {
               <button
                 className="btn btn-primary btn-sm"
                 onClick={handleQuickProvision}
-                disabled={loading}
+                disabled={loading || (!focusGoalEnd && !raceDate)}
               >
                 {loading ? (
                   <><span className="spinner-border spinner-border-sm me-2" />Setting up…</>
@@ -422,6 +437,99 @@ const SetupScreen: React.FC<{ onComplete: () => void }> = ({ onComplete }) => {
               first (set <code>goalKind = umbrella</code> and add phase child goals), then
               come back here to link it.
             </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ─── Training Programmes ─────────────────────────────────────────────────────
+
+const TrainingProgrammesSection: React.FC<{ uid: string }> = ({ uid }) => {
+  const [runnerUrl, setRunnerUrl] = useState('');
+  const [crossFitUrl, setCrossFitUrl] = useState('');
+  const [lastPolled, setLastPolled] = useState<Date | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    getDoc(doc(db, 'profiles', uid)).then(snap => {
+      const d = snap.data();
+      setRunnerUrl(d?.runnerProgrammeUrl || '');
+      setCrossFitUrl(d?.crossFitProgrammeUrl || '');
+    });
+    getDoc(doc(db, 'fitness_programme_cache', uid)).then(snap => {
+      if (snap.exists()) {
+        const ts = snap.data()?.lastPolledAt;
+        const d = ts?.toDate?.() ?? null;
+        setLastPolled(d);
+      }
+    });
+  }, [uid]);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await updateDoc(doc(db, 'profiles', uid), {
+        runnerProgrammeUrl: runnerUrl.trim() || null,
+        crossFitProgrammeUrl: crossFitUrl.trim() || null,
+      });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 3000);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="card border-0 shadow-sm">
+      <div className="card-body">
+        <h6 className="text-muted mb-3" style={{ fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+          Training Programmes
+        </h6>
+        <p className="text-muted small mb-3">
+          Provide iCal feed URLs for your training apps. The coach polls these every 2 hours,
+          creates calendar blocks, and includes them in your morning briefing and daily email.
+        </p>
+        <div className="vstack gap-3">
+          <div>
+            <label className="form-label small fw-medium mb-1">Runner Programme iCal URL</label>
+            <input
+              type="url"
+              className="form-control form-control-sm"
+              placeholder="webcal:// or https://..."
+              value={runnerUrl}
+              onChange={e => setRunnerUrl(e.target.value)}
+            />
+            <div className="form-text small">From the Runner app: Share Plan → Copy iCal Link</div>
+          </div>
+          <div>
+            <label className="form-label small fw-medium mb-1">CrossFit Programme iCal URL</label>
+            <input
+              type="url"
+              className="form-control form-control-sm"
+              placeholder="webcal:// or https://..."
+              value={crossFitUrl}
+              onChange={e => setCrossFitUrl(e.target.value)}
+            />
+            <div className="form-text small">From your CrossFit gym's booking system iCal export</div>
+          </div>
+          <div className="d-flex align-items-center justify-content-between">
+            <button
+              className={`btn btn-sm ${saved ? 'btn-success' : 'btn-primary'}`}
+              onClick={handleSave}
+              disabled={saving}
+            >
+              {saving ? (
+                <><span className="spinner-border spinner-border-sm me-1" />Saving…</>
+              ) : saved ? '✓ Saved' : 'Save'}
+            </button>
+            {lastPolled && (
+              <span className="text-muted small">
+                Last synced: {lastPolled.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}
+              </span>
+            )}
           </div>
         </div>
       </div>
@@ -522,18 +630,8 @@ export const AiCoachPage: React.FC = () => {
     return unsub;
   }, [uid, hasUmbrella, today]);
 
-  // Hydrate via getCoachToday if no doc present after 2s
-  useEffect(() => {
-    if (!uid || !hasUmbrella || coachData) return;
-    const timer = setTimeout(async () => {
-      try {
-        await httpsCallable(functions, 'getCoachToday')({});
-      } catch (e) {
-        console.warn('[AiCoachPage] getCoachToday failed:', e);
-      }
-    }, 2000);
-    return () => clearTimeout(timer);
-  }, [uid, hasUmbrella, coachData]);
+  // Coach data is written nightly at 05:00 by runCoachOrchestratorNightly.
+  // Do not call getCoachToday from the UI — it causes errors before goals are provisioned.
 
   // Weekly photo prompt
   useEffect(() => {
@@ -710,6 +808,9 @@ export const AiCoachPage: React.FC = () => {
             <AiCoachPhotoGallery onUploadClick={() => fileInputRef.current?.click()} />
           </div>
         </div>
+
+        {/* Training programme iCal settings */}
+        {uid && <TrainingProgrammesSection uid={uid} />}
       </div>
     </div>
   );

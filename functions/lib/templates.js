@@ -1164,6 +1164,38 @@ const renderDailySummaryEmail = (data) => {
         ${renderSchedule(data.calendarBlocks || [])}
       </section>
 
+      ${data.fitnessProgramme ? `
+      <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
+        <h2 style="margin-top:0;font-size:18px;color:#1f2937;">🏊 Training Programme</h2>
+        ${data.fitnessProgramme.runnerToday ? `
+        <div style="margin-bottom:12px;padding:12px;background:#f0fdf4;border-radius:8px;border-left:4px solid #16a34a;">
+          <div style="font-weight:600;color:#15803d;font-size:14px;">Today's Run</div>
+          <div style="margin-top:4px;color:#374151;font-size:13px;">${escape(data.fitnessProgramme.runnerToday.title)}</div>
+          <div style="margin-top:2px;color:#6b7280;font-size:12px;">${escape(String(data.fitnessProgramme.runnerToday.durationMin))} min${data.fitnessProgramme.runnerToday.description ? ` · ${escape(data.fitnessProgramme.runnerToday.description)}` : ''}</div>
+        </div>
+        ` : '<p style="color:#6b7280;font-size:13px;">No run scheduled today.</p>'}
+        ${data.fitnessProgramme.crossFitToday ? `
+        <div style="margin-bottom:12px;padding:12px;background:#eff6ff;border-radius:8px;border-left:4px solid #2563eb;">
+          <div style="font-weight:600;color:#1d4ed8;font-size:14px;">CrossFit</div>
+          <div style="margin-top:4px;color:#374151;font-size:13px;">${escape(data.fitnessProgramme.crossFitToday.title)}</div>
+        </div>
+        ` : ''}
+        ${(data.fitnessProgramme.runnerWeek || []).length > 1 ? `
+        <div style="margin-top:12px;">
+          <div style="font-weight:600;font-size:13px;color:#374151;margin-bottom:8px;">Running This Week</div>
+          <table style="width:100%;border-collapse:collapse;font-size:12px;">
+            ${data.fitnessProgramme.runnerWeek.map(e => `
+            <tr style="border-bottom:1px solid #f3f4f6;">
+              <td style="padding:6px 8px 6px 0;color:#6b7280;white-space:nowrap;">${escape(e.date)}</td>
+              <td style="padding:6px 0;color:#374151;">${escape(e.title)}</td>
+              <td style="padding:6px 0 6px 8px;color:#9ca3af;text-align:right;white-space:nowrap;">${escape(String(e.durationMin))}min</td>
+            </tr>`).join('')}
+          </table>
+        </div>
+        ` : ''}
+      </section>
+      ` : ''}
+
       <section style="margin-top:24px;background:#fff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;">
         <h2 style="margin-top:0;font-size:18px;color:#1f2937;">AI Planner Output</h2>
         ${renderPlannerOutput(data.plannerSummary, data.plannerBlocks || [])}
