@@ -14,7 +14,7 @@ import { getBadgeVariant, getPriorityBadge, getStatusName } from '../utils/statu
 import { taskStatusText } from '../utils/storyCardFormatting';
 import { extractWeatherSummary, extractWeatherTemp, formatWeatherLine } from '../utils/weatherFormat';
 import { isRecurringDueOnDate, resolveRecurringDueMs, resolveTaskDueMs } from '../utils/recurringTaskDue';
-import { Wand2, AlertCircle, RefreshCw, Sparkles, Clock3 } from 'lucide-react';
+import { Wand2, AlertCircle, RefreshCw, Sparkles, Clock3, Pencil } from 'lucide-react';
 import EditTaskModal from './EditTaskModal';
 import EditStoryModal from './EditStoryModal';
 import DeferItemModal from './DeferItemModal';
@@ -119,6 +119,12 @@ const MobileHome: React.FC = () => {
   const [showCompleted, setShowCompleted] = useState(false);
   const [tasksViewFilter, setTasksViewFilter] = useState<TaskViewFilter>('top3');
   const [goalsViewFilter, setGoalsViewFilter] = useState<GoalsViewFilter>('active_sprint');
+  const [tasksViewType, setTasksViewType] = useState<'list' | 'detail'>(() => {
+    try { return (localStorage.getItem('mobile_tasks_view_type') as 'list' | 'detail') || 'list'; } catch { return 'list'; }
+  });
+  const [storiesViewType, setStoriesViewType] = useState<'list' | 'detail'>(() => {
+    try { return (localStorage.getItem('mobile_stories_view_type') as 'list' | 'detail') || 'list'; } catch { return 'list'; }
+  });
   const [isSmallScreen, setIsSmallScreen] = useState<boolean>(typeof window !== 'undefined' ? window.innerWidth <= 768 : false);
   const [replanLoading, setReplanLoading] = useState(false);
   const [fullReplanLoading, setFullReplanLoading] = useState(false);
@@ -131,7 +137,7 @@ const MobileHome: React.FC = () => {
   const [priorityReplanPromptStory, setPriorityReplanPromptStory] = useState<Story | null>(null);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [editingStory, setEditingStory] = useState<Story | null>(null);
-  const [deferTarget, setDeferTarget] = useState<{ type: 'task' | 'story'; id: string; title: string } | null>(null);
+  const [deferTarget, setDeferTarget] = useState<{ type: 'task' | 'story'; id: string; title: string; listView?: boolean } | null>(null);
   const [sharedFilters, setSharedFilters] = useState<MobileSharedFilters>({ top3: false, chores: false, focusAligned: false });
   const setActiveMobileTab = useCallback((nextTab: TabKey) => {
     setActiveTab(nextTab);
@@ -687,6 +693,12 @@ const MobileHome: React.FC = () => {
     const targetBucket = targetBucketRaw === 'morning' || targetBucketRaw === 'afternoon' || targetBucketRaw === 'evening' || targetBucketRaw === 'anytime'
       ? targetBucketRaw
       : null;
+    if (source === 'recurring_quick_move' || deferTarget.listView) {
+      const coll = deferTarget.type === 'task' ? 'tasks' : 'stories';
+      await updateDoc(doc(db, coll, deferTarget.id), { dueDate: dateMs });
+      setDeferTarget(null);
+      return;
+    }
     await schedulePlannerItemMutation({
       itemType: deferTarget.type,
       itemId: deferTarget.id,
@@ -1521,6 +1533,32 @@ const MobileHome: React.FC = () => {
               </Form.Select>
             </Form.Group>
           )}
+          {(activeTab === 'tasks' || activeTab === 'stories') && (
+            <div className="d-flex align-items-center gap-1 ms-auto">
+              <Button
+                size="sm"
+                variant={(activeTab === 'tasks' ? tasksViewType : storiesViewType) === 'list' ? 'secondary' : 'outline-secondary'}
+                onClick={() => {
+                  if (activeTab === 'tasks') { setTasksViewType('list'); try { localStorage.setItem('mobile_tasks_view_type', 'list'); } catch {} }
+                  else { setStoriesViewType('list'); try { localStorage.setItem('mobile_stories_view_type', 'list'); } catch {} }
+                }}
+                title="Simple list view"
+              >
+                List
+              </Button>
+              <Button
+                size="sm"
+                variant={(activeTab === 'tasks' ? tasksViewType : storiesViewType) === 'detail' ? 'secondary' : 'outline-secondary'}
+                onClick={() => {
+                  if (activeTab === 'tasks') { setTasksViewType('detail'); try { localStorage.setItem('mobile_tasks_view_type', 'detail'); } catch {} }
+                  else { setStoriesViewType('detail'); try { localStorage.setItem('mobile_stories_view_type', 'detail'); } catch {} }
+                }}
+                title="Detail view"
+              >
+                Detail
+              </Button>
+            </div>
+          )}
         </div>
       )}
 
@@ -2018,6 +2056,71 @@ const MobileHome: React.FC = () => {
                 </div>
               </Card.Body>
             </Card>
+          ) : tasksViewType === 'list' ? (
+            (() => {
+              const tMorning: Task[] = [], tAfternoon: Task[] = [], tEvening: Task[] = [], tOther: Task[] = [];
+              visibleTaskRows.forEach((task) => {
+                const b = bucketFromTime(task.dueDate as any, (task as any).timeOfDay);
+                if (b === 'morning') tMorning.push(task);
+                else if (b === 'afternoon') tAfternoon.push(task);
+                else if (b === 'evening') tEvening.push(task);
+                else tOther.push(task);
+              });
+              const iconBtnStyle: React.CSSProperties = {
+                color: 'var(--bs-secondary-color)', padding: 4, borderRadius: 4,
+                border: 'none', background: 'transparent', cursor: 'pointer', lineHeight: 0, flexShrink: 0,
+              };
+              const renderTaskListRow = (task: Task) => {
+                const story = task.parentType === 'story' ? storiesById.get(task.parentId) : undefined;
+                const goal = story?.goalId ? goalsById.get(story.goalId) : undefined;
+                const themeColor = resolveThemeColor(goal?.theme ?? story?.theme ?? (task as any).theme);
+                const dueLabel = task.dueDate ? new Date(task.dueDate as any).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : 'No date';
+                const meta = [story?.ref, goal?.title || 'Unlinked'].filter(Boolean).join(' · ');
+                return (
+                  <ListGroup.Item
+                    key={task.id}
+                    className="d-flex align-items-center gap-2 py-2"
+                    style={themeColor ? { borderLeft: `4px solid ${themeColor}` } : undefined}
+                  >
+                    <Form.Check
+                      type="checkbox"
+                      checked={task.status === 2}
+                      onChange={(e) => updateTaskField(task, { status: e.target.checked ? 2 : 0 })}
+                    />
+                    <div className="flex-grow-1" style={{ minWidth: 0 }}>
+                      <div className="fw-semibold text-truncate" style={{ lineHeight: 1.2 }}>{task.title}</div>
+                      <div className="text-muted small">{meta} · Due {dueLabel}</div>
+                    </div>
+                    <div className="d-flex gap-1 flex-shrink-0">
+                      <button type="button" style={iconBtnStyle} title="Move due date"
+                        onClick={() => setDeferTarget({ type: 'task', id: task.id, title: task.title, listView: true })}>
+                        <Clock3 size={14} />
+                      </button>
+                      <button type="button" style={iconBtnStyle} title="Edit task"
+                        onClick={() => setEditingTask(task)}>
+                        <Pencil size={14} />
+                      </button>
+                    </div>
+                  </ListGroup.Item>
+                );
+              };
+              const sectionHeader = (label: string) => (
+                <h6 className="text-muted mb-2 border-bottom pb-1 fw-bold mt-1"><small>{label}</small></h6>
+              );
+              return (
+                <ListGroup variant="flush">
+                  {tMorning.length > 0 && <div className="mb-2">{sectionHeader('Morning')}{tMorning.map(renderTaskListRow)}</div>}
+                  {tAfternoon.length > 0 && <div className="mb-2">{sectionHeader('Afternoon')}{tAfternoon.map(renderTaskListRow)}</div>}
+                  {tEvening.length > 0 && <div className="mb-2">{sectionHeader('Evening')}{tEvening.map(renderTaskListRow)}</div>}
+                  {tOther.length > 0 && (
+                    <div className="mb-0">
+                      {(tMorning.length > 0 || tAfternoon.length > 0 || tEvening.length > 0) && sectionHeader('Anytime')}
+                      {tOther.map(renderTaskListRow)}
+                    </div>
+                  )}
+                </ListGroup>
+              );
+            })()
           ) : (
             <ListGroup>
               {visibleTaskRows.map(task => {
@@ -2140,6 +2243,43 @@ const MobileHome: React.FC = () => {
               <div className="text-muted">No stories match the current mobile filters.</div>
             </Card.Body>
           </Card>
+        ) : storiesViewType === 'list' ? (
+          <ListGroup variant="flush">
+            {visibleStoryRows.map(story => {
+              const goal = goalsById.get(story.goalId);
+              const themeColor = resolveThemeColor(goal?.theme ?? story.theme);
+              const dueLabel = (story as any).dueDate
+                ? new Date((story as any).dueDate as any).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+                : 'No date';
+              const meta = [story.ref, goal?.title || 'No goal', `Due ${dueLabel}`].filter(Boolean).join(' · ');
+              const iconBtnStyle: React.CSSProperties = {
+                color: 'var(--bs-secondary-color)', padding: 4, borderRadius: 4,
+                border: 'none', background: 'transparent', cursor: 'pointer', lineHeight: 0, flexShrink: 0,
+              };
+              return (
+                <ListGroup.Item
+                  key={story.id}
+                  className="d-flex align-items-center gap-2 py-2"
+                  style={themeColor ? { borderLeft: `4px solid ${themeColor}` } : undefined}
+                >
+                  <div className="flex-grow-1" style={{ minWidth: 0 }}>
+                    <div className="fw-semibold text-truncate" style={{ lineHeight: 1.2 }}>{story.title}</div>
+                    <div className="text-muted small">{meta}</div>
+                  </div>
+                  <div className="d-flex gap-1 flex-shrink-0">
+                    <button type="button" style={iconBtnStyle} title="Move due date"
+                      onClick={() => setDeferTarget({ type: 'story', id: story.id, title: story.title, listView: true })}>
+                      <Clock3 size={14} />
+                    </button>
+                    <button type="button" style={iconBtnStyle} title="Edit story"
+                      onClick={() => setEditingStory(story)}>
+                      <Pencil size={14} />
+                    </button>
+                  </div>
+                </ListGroup.Item>
+              );
+            })}
+          </ListGroup>
         ) : (
         <ListGroup>
           {visibleStoryRows.map(story => {

@@ -473,7 +473,7 @@ const JournalsManagement: React.FC = () => {
       />
 
       <Row className="g-4">
-        <Col lg={4}>
+        <Col md={4}>
           <Card style={{ border: 'none', boxShadow: 'var(--glass-shadow, 0 1px 3px var(--glass-shadow-color))' }}>
             <Card.Body>
               <Form.Group className="mb-3">
@@ -557,7 +557,7 @@ const JournalsManagement: React.FC = () => {
           </Card>
         </Col>
 
-        <Col lg={8}>
+        <Col md={8}>
           <Card style={{ border: 'none', boxShadow: 'var(--glass-shadow, 0 1px 3px var(--glass-shadow-color))' }}>
             <Card.Body style={{ padding: '1.5rem 1.75rem' }}>
               {loading ? (

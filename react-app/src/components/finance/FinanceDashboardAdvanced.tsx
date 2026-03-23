@@ -1768,7 +1768,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
             )}
 
             <Row className="g-3 mb-4">
-                <Col lg={8}>
+                <Col md={8} lg={8}>
                     <PremiumCard
                         title="Spend Trend (Click bars to filter)"
                         icon={TrendingUp}
@@ -1789,7 +1789,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
                         />
                     </PremiumCard>
                 </Col>
-                <Col lg={4}>
+                <Col md={4} lg={4}>
                     <PremiumCard
                         title="Top 10 Distribution (Click to filter)"
                         icon={PieIcon}
@@ -1926,11 +1926,11 @@ const FinanceDashboardAdvanced: React.FC = () => {
                         {analysisChartType === 'trend' && (
                             compareYoY ? (
                                 <Row className="g-3">
-                                    <Col lg={6}>
+                                    <Col md={6} lg={6}>
                                         <div className="small text-muted mb-2">Current range</div>
                                         <ReactECharts option={analysisTrendOption} style={{ height: 340 }} />
                                     </Col>
-                                    <Col lg={6}>
+                                    <Col md={6} lg={6}>
                                         <div className="small text-muted mb-2">Current vs previous year (same filters)</div>
                                         {filteredYoyAnalysisRows.length > 0 ? (
                                             <ReactECharts option={analysisYoYTrendOption} style={{ height: 340 }} />
@@ -1996,12 +1996,12 @@ const FinanceDashboardAdvanced: React.FC = () => {
             )}
 
             <Row className="g-4 mb-4">
-                <Col lg={8}>
+                <Col md={8} lg={8}>
                     <PremiumCard title="Multi-Year Spend Tracking" icon={TrendingUp} height={360}>
                         <ReactECharts option={spendTrackingOption} style={{ height: '100%' }} />
                     </PremiumCard>
                 </Col>
-                <Col lg={4}>
+                <Col md={4} lg={4}>
                     <PremiumCard title="Coverage" icon={Calendar}>
                         <div className="small text-muted mb-2">Monzo coverage</div>
                         <div className="mb-2">
@@ -2022,12 +2022,12 @@ const FinanceDashboardAdvanced: React.FC = () => {
 
             {budgetHealth && (
                 <Row className="g-4 mb-4">
-                    <Col lg={7}>
+                    <Col md={7} lg={7}>
                         <PremiumCard title="Budget vs Actual" icon={Target} height={360}>
                             <ReactECharts option={budgetBucketOption} style={{ height: '100%' }} />
                         </PremiumCard>
                     </Col>
-                    <Col lg={5}>
+                    <Col md={5} lg={5}>
                         <PremiumCard title="Budget Variance by Category" icon={Wallet}>
                             <div className="table-responsive" style={{ maxHeight: 330, overflowY: 'auto' }}>
                                 <table className="table table-sm align-middle mb-0">
@@ -2057,7 +2057,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
             )}
 
             <Row className="g-4 mb-4">
-                <Col lg={6}>
+                <Col md={6} lg={6}>
                     <PremiumCard title="Pot Savings Analysis" icon={Wallet}>
                         <div className="small text-muted mb-3">
                             Shows transfers IN vs OUT for each pot during the selected period to determine actual savings.
@@ -2118,7 +2118,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
                         )}
                     </PremiumCard>
                 </Col>
-                <Col lg={6}>
+                <Col md={6} lg={6}>
                     <PremiumCard title="Investment Tracking" icon={TrendingUp}>
                         <div className="small text-muted mb-3">
                             Tracks transfers to investment platforms (Plum, Hargreaves, etc.) during the selected period.
@@ -2468,7 +2468,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
             </Row>
 
             <Row className="g-4 mb-4">
-                <Col lg={7}>
+                <Col md={7} lg={7}>
                     <PremiumCard title="Debt-Clearance Strategist" icon={Sparkles}>
                         <div className="d-flex flex-wrap align-items-center gap-2 mb-3">
                             <span className="small text-muted">Strategy:</span>
@@ -2543,7 +2543,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
                     </PremiumCard>
                 </Col>
 
-                <Col lg={5}>
+                <Col md={5} lg={5}>
                     <PremiumCard title="Allocation Simulation" icon={PieIcon}>
                         <div className="d-flex justify-content-between mb-2">
                             <span className="text-muted">Goal-linked pot transfers (hard)</span>
@@ -2613,7 +2613,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
     const renderDataSources = () => (
         <>
             <Row className="g-4 mb-4">
-                <Col lg={5}>
+                <Col md={5} lg={5}>
                     <PremiumCard title="External Source Import" icon={Upload}>
                         <Form.Group className="mb-3">
                             <Form.Label>Source</Form.Label>
@@ -2676,7 +2676,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
                     </PremiumCard>
                 </Col>
 
-                <Col lg={7}>
+                <Col md={7} lg={7}>
                     <PremiumCard title="Source Coverage & Matching" icon={Link2}>
                         <div className="table-responsive">
                             <table className="table table-hover align-middle mb-0">
@@ -2786,7 +2786,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
             </Row>
 
             <Row className="g-4 mb-4">
-                <Col lg={5}>
+                <Col md={5} lg={5}>
                     <PremiumCard title={editingManualAccountId ? 'Update Account' : 'Add Account'} icon={Wallet}>
                         <Form.Group className="mb-2">
                             <Form.Label>Name</Form.Label>
@@ -2848,7 +2848,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
                     </PremiumCard>
                 </Col>
 
-                <Col lg={7}>
+                <Col md={7} lg={7}>
                     <PremiumCard title="Assets / Debts Register" icon={Landmark}>
                         {manualAccountSummary.staleCount > 0 && (
                             <Alert variant="warning" className="py-2">

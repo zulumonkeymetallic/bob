@@ -4449,15 +4449,18 @@ async function processAgentRequest({
     }
   }
 
-  const { profile } = await resolveProfile(db, uid);
+  // Parallelise profile read and URL preview fetch — both are independent I/O
+  const sourceUrls = extractUrls(normalizedTranscript, sourceUrl);
+  const [{ profile }, urlPreviews] = await Promise.all([
+    resolveProfile(db, uid),
+    fetchUrlPreviews(sourceUrls),
+  ]);
   const timezone = String(
     profile?.timezone ||
     profile?.timeZone ||
     profile?.settings?.timezone ||
     DEFAULT_TIMEZONE
   ).trim() || DEFAULT_TIMEZONE;
-  const sourceUrls = extractUrls(normalizedTranscript, sourceUrl);
-  const urlPreviews = await fetchUrlPreviews(sourceUrls);
   let effectiveRoute;
   if (!likelyQueryOrAction) {
     effectiveRoute = sanitizeAgentRoute({

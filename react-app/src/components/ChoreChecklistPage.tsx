@@ -1,18 +1,18 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Badge, Button, Card, Form, ListGroup, Spinner } from 'react-bootstrap';
 import { useSearchParams } from 'react-router-dom';
-import { collection, doc, getDoc, onSnapshot, query, where } from 'firebase/firestore';
+import { collection, doc, getDoc, onSnapshot, query, updateDoc, where } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { endOfDay, format, startOfDay } from 'date-fns';
-import { Activity, Clock3 } from 'lucide-react';
+import { Activity, Clock3, Pencil } from 'lucide-react';
 import { db, functions } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useSidebar } from '../contexts/SidebarContext';
 import { Task } from '../types';
 import DeferItemModal from './DeferItemModal';
+import EditTaskModal from './EditTaskModal';
 import { resolveRecurringDueMs } from '../utils/recurringTaskDue';
-import { schedulePlannerItem as schedulePlannerItemMutation } from '../utils/plannerScheduling';
 
 interface BlockWindow {
   start: number;
@@ -70,6 +70,7 @@ const ChoreChecklistPage: React.FC = () => {
   const [localDone, setLocalDone] = useState<Record<string, boolean>>({});
   const [blockWindow, setBlockWindow] = useState<BlockWindow | null>(null);
   const [deferTask, setDeferTask] = useState<Task | null>(null);
+  const [editingChore, setEditingChore] = useState<Task | null>(null);
   const [feedback, setFeedback] = useState<{ variant: 'success' | 'danger' | 'info'; message: string } | null>(null);
 
   const dateParam = searchParams.get('date') || toIsoDate(new Date());
@@ -192,18 +193,8 @@ const ChoreChecklistPage: React.FC = () => {
       ? bucketRaw
       : null;
     try {
-      await schedulePlannerItemMutation({
-        itemType: 'task',
-        itemId: deferTask.id,
-        targetDateMs: dateMs,
-        targetBucket,
-        intent: 'defer',
-        source: source || 'chore_checklist',
-        rationale,
-        linkedBlockId: blockId || null,
-        durationMinutes: Math.max(10, Number((deferTask as any)?.estimateMin || 30)),
-        debugRequestId,
-      });
+      // Chore checklist always does a direct due-date write — no scheduler needed
+      await updateDoc(doc(db, 'tasks', deferTask.id), { dueDate: dateMs });
       setFeedback({
         variant: 'success',
         message: `${deferTask.title} moved to ${new Date(dateMs).toLocaleDateString()}.`,
@@ -326,6 +317,25 @@ const ChoreChecklistPage: React.FC = () => {
                           <button
                             type="button"
                             className="d-inline-flex align-items-center justify-content-center"
+                            onClick={() => setEditingChore(task)}
+                            title="Edit chore"
+                            aria-label={`Edit ${task.title}`}
+                            style={{
+                              color: 'var(--bs-secondary-color)',
+                              padding: 4,
+                              borderRadius: 4,
+                              border: 'none',
+                              background: 'transparent',
+                              cursor: 'pointer',
+                              lineHeight: 0,
+                              flexShrink: 0,
+                            }}
+                          >
+                            <Pencil size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            className="d-inline-flex align-items-center justify-content-center"
                             onClick={() => showSidebar(task as any, 'task')}
                             title="Activity stream"
                             aria-label={`Open activity stream for ${task.title}`}
@@ -392,6 +402,14 @@ const ChoreChecklistPage: React.FC = () => {
         itemTitle={deferTask?.title || ''}
         onApply={handleApplyDefer}
       />
+      {editingChore && (
+        <EditTaskModal
+          show={Boolean(editingChore)}
+          task={editingChore}
+          onHide={() => setEditingChore(null)}
+          onUpdated={() => setEditingChore(null)}
+        />
+      )}
     </div>
   );
 };

@@ -371,7 +371,7 @@ const AdvancedOverview: React.FC = () => {
       >
         <Tab eventKey="summary" title="Summary">
           <Row className="g-4 mb-4">
-            <Col md={4} xl={2}>
+            <Col md={6} lg={4} xl={2}>
               <button
                 type="button"
                 className="btn p-0 text-start w-100"
@@ -388,7 +388,7 @@ const AdvancedOverview: React.FC = () => {
                 </PremiumCard>
               </button>
             </Col>
-            <Col md={4} xl={2}>
+            <Col md={6} lg={4} xl={2}>
               <button
                 type="button"
                 className="btn p-0 text-start w-100"
@@ -404,7 +404,7 @@ const AdvancedOverview: React.FC = () => {
                 </PremiumCard>
               </button>
             </Col>
-            <Col md={4} xl={2}>
+            <Col md={6} lg={4} xl={2}>
               <button
                 type="button"
                 className="btn p-0 text-start w-100"
@@ -421,7 +421,7 @@ const AdvancedOverview: React.FC = () => {
                 </PremiumCard>
               </button>
             </Col>
-            <Col md={4} xl={2}>
+            <Col md={6} lg={4} xl={2}>
               <button
                 type="button"
                 className="btn p-0 text-start w-100"
@@ -436,7 +436,7 @@ const AdvancedOverview: React.FC = () => {
                 </PremiumCard>
               </button>
             </Col>
-            <Col md={4} xl={2}>
+            <Col md={6} lg={4} xl={2}>
               <button
                 type="button"
                 className="btn p-0 text-start w-100"
@@ -457,7 +457,7 @@ const AdvancedOverview: React.FC = () => {
                 </PremiumCard>
               </button>
             </Col>
-            <Col md={4} xl={2}>
+            <Col md={6} lg={4} xl={2}>
               <button
                 type="button"
                 className="btn p-0 text-start w-100"

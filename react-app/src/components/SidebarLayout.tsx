@@ -65,9 +65,9 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   const navigate = useNavigate();
   const [showSidebar, setShowSidebar] = useState(false);
   const location = useLocation();
-  const [isSmallScreen, setIsSmallScreen] = useState<boolean>(typeof window !== 'undefined' ? window.innerWidth <= 768 : false);
+  const [isSmallScreen, setIsSmallScreen] = useState<boolean>(typeof window !== 'undefined' ? window.innerWidth < 768 : false);
   const [navCollapsed, setNavCollapsed] = useState<boolean>(() => {
-    if (typeof window !== 'undefined' && window.innerWidth <= 768) return true;
+    if (typeof window !== 'undefined' && window.innerWidth < 768) return true;
     try { return localStorage.getItem('leftNavCollapsed') === '1'; } catch { return false; }
   });
   const toggleNavCollapsed = () => {
@@ -264,7 +264,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    const handler = () => setIsSmallScreen(window.innerWidth <= 768);
+    const handler = () => setIsSmallScreen(window.innerWidth < 768);
     handler();
     window.addEventListener('resize', handler);
     return () => window.removeEventListener('resize', handler);
@@ -285,10 +285,10 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   };
 
   return (
-    <div className="d-flex" style={{ minHeight: '100vh' }}>
+    <div className="d-flex sidebar-layout-outer" style={{ height: '100vh', overflow: 'hidden' }}>
       {/* Desktop Sidebar (collapsible) */}
       {!navCollapsed && (
-        <div className="sidebar-desktop d-none d-lg-block" style={{ width: '250px', minHeight: '100vh' }}>
+        <div className="sidebar-desktop d-none d-md-block" style={{ width: '250px', height: '100vh', flexShrink: 0 }}>
           <div className="h-100 d-flex flex-column" style={{
             background: 'var(--panel)',
             color: 'var(--notion-text)',
@@ -503,7 +503,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       )}
 
       {/* Mobile Header */}
-      <div className="d-lg-none fixed-top" style={{
+      <div className="d-md-none fixed-top" style={{
         background: currentPersona === 'work' ? '#d3d3d3' : 'white',
         color: currentPersona === 'work' ? '#000' : '#000',
         zIndex: 1050
@@ -689,15 +689,16 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
 
       {/* Main Content Area */}
       <div
-        className="flex-grow-1"
+        className="flex-grow-1 sidebar-layout-main"
         style={{
           paddingTop: isSmallScreen ? '60px' : '0',
-          marginRight: isRightSidebarVisible && window.innerWidth >= 992 ? (isRightSidebarCollapsed ? '60px' : '400px') : '0',
-          transition: 'margin-right 0.3s ease'
+          marginRight: isRightSidebarVisible && window.innerWidth >= 768 ? (isRightSidebarCollapsed ? '60px' : '400px') : '0',
+          transition: 'margin-right 0.3s ease',
+          minWidth: 0,
         }}
       >
         {/* Desktop top toolbar with global Sprint selector */}
-        <div className="d-none d-lg-block" style={{
+        <div className="d-none d-md-block sidebar-layout-toolbar" style={{
           borderBottom: '1px solid var(--notion-border)',
           background: currentPersona === 'work' ? '#d3d3d3' : 'white',
           position: 'relative',
@@ -743,8 +744,8 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
           </div>
         </div>
 
-        <main className="h-100">
-          <div className="p-3">
+        <main className="sidebar-layout-page">
+          <div className="sidebar-layout-banners">
             <CheckInBanner />
             <CoachVerdictBanner />
             {!hidePlannerCapacityBanner && <PlannerCapacityBanner />}

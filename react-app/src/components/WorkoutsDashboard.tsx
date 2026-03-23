@@ -1977,7 +1977,7 @@ const WorkoutsDashboard: React.FC = () => {
       </Row>
 
       <Row className="g-3 mb-3">
-        <Col xs={12} lg={5}>
+        <Col xs={12} md={5} lg={5}>
           <Card className="h-100">
             <Card.Header className="py-2">
               <strong>Workout Time KPI</strong>
@@ -2043,7 +2043,7 @@ const WorkoutsDashboard: React.FC = () => {
             </Card.Body>
           </Card>
         </Col>
-        <Col xs={12} lg={7}>
+        <Col xs={12} md={7} lg={7}>
           <Card className="h-100">
             <Card.Header className="py-2">
               <strong>30-Day Training Composition</strong>

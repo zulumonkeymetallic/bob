@@ -649,16 +649,25 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
 
                         let itemGoal: Goal | undefined;
                         let parentStory: Story | undefined;
+                        let isFocusAligned = false;
 
                         if (type === 'story') {
                             itemGoal = goals.find(g => g.id === (item as any).goalId);
+                            const sGoalId = String((item as any).goalId || '').trim();
+                            if (sGoalId && focusGoalIds.size > 0) {
+                                isFocusAligned = isGoalInHierarchySet(sGoalId, goals, focusGoalIds);
+                            }
                         } else {
                             // Task
                             parentStory = stories.find(s => s.id === (item as any).parentId);
                             if (parentStory) {
                                 itemGoal = goals.find(g => g.id === parentStory.goalId);
+                                const pgId = String((parentStory as any).goalId || '').trim();
+                                if (pgId && focusGoalIds.size > 0) isFocusAligned = isGoalInHierarchySet(pgId, goals, focusGoalIds);
                             } else if ((item as any).goalId) {
                                 itemGoal = goals.find(g => g.id === (item as any).goalId);
+                                const tgId = String((item as any).goalId || '').trim();
+                                if (tgId && focusGoalIds.size > 0) isFocusAligned = isGoalInHierarchySet(tgId, goals, focusGoalIds);
                             }
                         }
 
@@ -700,6 +709,7 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
                                 onEdit={() => onEdit?.(item, type)}
                                 formatTag={formatTag}
                                 themes={themes}
+                                isFocusAligned={isFocusAligned}
                             />
                         );
                     })}

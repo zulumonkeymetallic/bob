@@ -219,7 +219,7 @@ const DevelopmentTracking: React.FC = () => {
       <h4 className="mb-3">🛠️ Feature Development Roadmap</h4>
       <Row>
         {roadmapStatus.map((category, categoryIndex) => (
-          <Col lg={6} key={categoryIndex} className="mb-4">
+          <Col md={6} key={categoryIndex} className="mb-4">
             <Card className="h-100">
               <Card.Header>
                 <div className="d-flex justify-content-between align-items-center">

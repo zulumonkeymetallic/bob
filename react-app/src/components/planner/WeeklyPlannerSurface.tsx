@@ -37,6 +37,7 @@ import { GLOBAL_THEMES, type GlobalTheme } from '../../constants/globalThemes';
 import type { Goal, Sprint, Story, Task } from '../../types';
 import DeferItemModal from '../DeferItemModal';
 import PlannerWorkCard from './PlannerWorkCard';
+import KanbanCardV2 from '../KanbanCardV2';
 import {
   buildPlannerItems,
   type PlannerCalendarBlockRow,
@@ -732,41 +733,81 @@ const WeeklyPlannerSurface: React.FC<WeeklyPlannerSurfaceProps> = ({
   const renderPlannerCard = (item: PlannerItem) => {
     const recommendation = recommendationByItemId.get(item.id) || null;
     const plannerMode = activeView === 'planner';
+
+    // Events and chores keep the planner-specific card (no KanbanCardV2 equivalent)
+    if (item.kind === 'event' || item.kind === 'chore') {
+      return (
+        <div
+          key={item.id}
+          draggable={!isMobileLayout && item.kind !== 'event'}
+          onDragStart={() => setDragItemId(item.id)}
+          onDragEnd={() => setDragItemId(null)}
+        >
+          <PlannerWorkCard
+            item={item}
+            context="weekly"
+            isMobileLayout={isMobileLayout}
+            applyingKey={applyingKey}
+            showDoneControl={false}
+            canEditState={false}
+            showInlineRecommendation={!plannerMode && !!recommendation}
+            recommendation={recommendation}
+            canShowActions={!plannerMode || isMobileLayout}
+            expanded={!!expandedGroups[item.id]}
+            onToggleExpanded={(nextItem) => setExpandedGroups((prev) => ({ ...prev, [nextItem.id]: !prev[nextItem.id] }))}
+            onMove={(nextItem) => setMoveTarget({ item: nextItem, recommendation: deriveAutoPlacement(nextItem) })}
+            onDefer={(nextItem) => {
+              if (nextItem.childItems?.length) return;
+              const recurringRecommendation = nextItem.kind === 'chore'
+                ? deriveAutoPlacement(nextItem)
+                : null;
+              if (recurringRecommendation?.action === 'next_recurrence') {
+                void applyRecommendation(nextItem, recurringRecommendation);
+                return;
+              }
+              setDeferTarget(nextItem);
+            }}
+            onAcceptRecommendation={(nextItem) => {
+              const nextRecommendation = recommendationByItemId.get(nextItem.id);
+              if (nextRecommendation) void applyRecommendation(nextItem, nextRecommendation);
+            }}
+          />
+        </div>
+      );
+    }
+
+    // Stories and tasks — use KanbanCardV2 for exact visual parity with /sprints/kanban
+    const rawItem = item.rawStory ?? item.rawTask;
+    if (!rawItem) return null;
+    const cardType: 'story' | 'task' = item.rawStory ? 'story' : 'task';
+    const itemGoal = item.goalId ? goals.find(g => g.id === item.goalId) : undefined;
+    const parentStory = cardType === 'task' && item.rawTask
+      ? stories.find(s => s.id === (item.rawTask as any)?.storyId)
+      : undefined;
+    const scheduledBlock = item.scheduledBlockId ? {
+      id: item.scheduledBlockId,
+      start: item.scheduledBlockStart ?? 0,
+      end: item.scheduledBlockEnd ?? 0,
+      sourceNote: item.scheduledSourceLabel ?? undefined,
+    } : undefined;
+
     return (
       <div
         key={item.id}
-        draggable={!isMobileLayout && item.kind !== 'event'}
+        style={{ marginBottom: 8 }}
+        draggable={!isMobileLayout}
         onDragStart={() => setDragItemId(item.id)}
         onDragEnd={() => setDragItemId(null)}
       >
-        <PlannerWorkCard
-          item={item}
-          context="weekly"
-          isMobileLayout={isMobileLayout}
-          applyingKey={applyingKey}
-          showDoneControl={false}
-          canEditState={false}
-          showInlineRecommendation={!plannerMode && !!recommendation}
-          recommendation={recommendation}
-          canShowActions={!plannerMode || isMobileLayout}
-          expanded={!!expandedGroups[item.id]}
-          onToggleExpanded={(nextItem) => setExpandedGroups((prev) => ({ ...prev, [nextItem.id]: !prev[nextItem.id] }))}
-          onMove={(nextItem) => setMoveTarget({ item: nextItem, recommendation: deriveAutoPlacement(nextItem) })}
-          onDefer={(nextItem) => {
-            if (nextItem.childItems?.length) return;
-            const recurringRecommendation = nextItem.kind === 'chore'
-              ? deriveAutoPlacement(nextItem)
-              : null;
-            if (recurringRecommendation?.action === 'next_recurrence') {
-              void applyRecommendation(nextItem, recurringRecommendation);
-              return;
-            }
-            setDeferTarget(nextItem);
-          }}
-          onAcceptRecommendation={(nextItem) => {
-            const nextRecommendation = recommendationByItemId.get(nextItem.id);
-            if (nextRecommendation) void applyRecommendation(nextItem, nextRecommendation);
-          }}
+        <KanbanCardV2
+          item={rawItem}
+          type={cardType}
+          goal={itemGoal}
+          story={parentStory}
+          isFocusAligned={item.isFocusAligned}
+          scheduledBlock={scheduledBlock}
+          themes={themePalette}
+          showDescription={false}
         />
       </div>
     );

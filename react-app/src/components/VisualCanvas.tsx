@@ -208,7 +208,7 @@ const NodeCard: React.FC<{
         border: `1px solid ${colorWithAlpha(accentColor, 0.3)}`,
         borderRadius: 8,
         overflow: 'hidden',
-        cursor: linkMode ? 'crosshair' : 'pointer',
+        cursor: linkMode ? 'crosshair' : 'grab',
         boxShadow: ring !== 'none' ? ring : '0 2px 6px rgba(0,0,0,0.08)',
         transition: 'box-shadow 0.15s ease',
       }}
@@ -270,7 +270,7 @@ const VisualCanvas: React.FC = () => {
   const [showDescriptions, setShowDescriptions] = useState(false);
 
   // ── Layout ───────────────────────────────────────────────────────────────────
-  const [viewLayout, setViewLayout] = useState<ViewLayout>('swimlane');
+  const [viewLayout, setViewLayout] = useState<ViewLayout>('tree');
 
   // ── Canvas state ─────────────────────────────────────────────────────────────
   const [scale,     setScale]     = useState(1);
@@ -283,6 +283,14 @@ const VisualCanvas: React.FC = () => {
   const [linkMode,    setLinkMode]    = useState(false);
   const [linkSource,  setLinkSource]  = useState<string | null>(null);
   const [linkStatus,  setLinkStatus]  = useState<string | null>(null);
+
+  // ── Card drag (independent of link mode) ─────────────────────────────────────
+  const [customPositions, setCustomPositions] = useState<Map<string, { x: number; y: number }>>(new Map());
+  const [draggingId,      setDraggingId]      = useState<string | null>(null);
+  const draggingNodeId  = useRef<string | null>(null);
+  const dragStartMouse  = useRef({ x: 0, y: 0 });
+  const dragStartPos    = useRef({ x: 0, y: 0 });
+  const wasDragged      = useRef(false);
 
   // ── Firestore subscriptions ──────────────────────────────────────────────────
   useEffect(() => {
@@ -441,24 +449,46 @@ const VisualCanvas: React.FC = () => {
     const from = nodeMap.get(fromId);
     const to   = nodeMap.get(toId);
     if (!from || !to) return '';
-    const fx = nodeX(from.col) + COL_WIDTH;
-    const fy = nodeY(from.colIndex) + NODE_HEIGHT / 2;
-    const tx = nodeX(to.col);
-    const ty = nodeY(to.colIndex) + NODE_HEIGHT / 2;
+    const fc = customPositions.get(fromId);
+    const tc = customPositions.get(toId);
+    const fx = (fc?.x ?? nodeX(from.col)) + COL_WIDTH;
+    const fy = (fc?.y ?? nodeY(from.colIndex)) + NODE_HEIGHT / 2;
+    const tx = tc?.x ?? nodeX(to.col);
+    const ty = (tc?.y ?? nodeY(to.colIndex)) + NODE_HEIGHT / 2;
     return bezierPath(fx, fy, tx, ty);
-  }, [nodeMap]);
+  }, [nodeMap, customPositions]);
 
   const getTreePathD = useCallback((fromId: string, toId: string): string => {
-    const fp = treePositions.get(fromId);
-    const tp = treePositions.get(toId);
-    if (!fp || !tp) return '';
+    const fp0 = treePositions.get(fromId);
+    const tp0 = treePositions.get(toId);
+    if (!fp0 || !tp0) return '';
+    // Use custom position if the card was dragged
+    const fp = customPositions.get(fromId) ?? fp0;
+    const tp = customPositions.get(toId)   ?? tp0;
     // Centre-bottom of parent → centre-top of child
     const fx = fp.x + TREE_NODE_W / 2;
     const fy = fp.y + TREE_NODE_H;
     const tx = tp.x + TREE_NODE_W / 2;
     const ty = tp.y;
     return elbowPath(fx, fy, tx, ty);
-  }, [treePositions]);
+  }, [treePositions, customPositions]);
+
+  // ── Card drag handler (attach to each card wrapper) ──────────────────────────
+  const handleCardMouseDown = useCallback((e: React.MouseEvent, node: CanvasNode) => {
+    if (linkMode) return; // in link mode, clicks are for linking
+    e.stopPropagation();  // prevent canvas pan starting
+
+    const custom = customPositions.get(node.id);
+    const curPos = custom ?? (viewLayout === 'tree'
+      ? (treePositions.get(node.id) ?? { x: 0, y: 0 })
+      : { x: nodeX(node.col), y: nodeY(node.colIndex) });
+
+    draggingNodeId.current = node.id;
+    dragStartMouse.current = { x: e.clientX, y: e.clientY };
+    dragStartPos.current   = { x: curPos.x, y: curPos.y };
+    wasDragged.current     = false;
+    setDraggingId(node.id);
+  }, [linkMode, viewLayout, treePositions, customPositions]);
 
   // ── Pan ───────────────────────────────────────────────────────────────────────
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -467,10 +497,26 @@ const VisualCanvas: React.FC = () => {
     panStart.current = { x: e.clientX - offset.x, y: e.clientY - offset.y };
   };
   const handleMouseMove = (e: React.MouseEvent) => {
+    if (draggingNodeId.current) {
+      const dx = (e.clientX - dragStartMouse.current.x) / scale;
+      const dy = (e.clientY - dragStartMouse.current.y) / scale;
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) wasDragged.current = true;
+      const nid = draggingNodeId.current;
+      setCustomPositions(prev => {
+        const next = new Map(prev);
+        next.set(nid, { x: dragStartPos.current.x + dx, y: dragStartPos.current.y + dy });
+        return next;
+      });
+      return;
+    }
     if (!isPanning) return;
     setOffset({ x: e.clientX - panStart.current.x, y: e.clientY - panStart.current.y });
   };
-  const handleMouseUp = () => setIsPanning(false);
+  const handleMouseUp = () => {
+    draggingNodeId.current = null;
+    setDraggingId(null);
+    setIsPanning(false);
+  };
 
   const handleWheel = (e: React.WheelEvent) => {
     e.preventDefault();
@@ -479,6 +525,8 @@ const VisualCanvas: React.FC = () => {
 
   // ── Link creation ─────────────────────────────────────────────────────────────
   const handleNodeClick = async (node: CanvasNode) => {
+    // If the mousedown → mouseup included a drag, suppress the click
+    if (wasDragged.current) { wasDragged.current = false; return; }
     if (!linkMode) {
       setSelectedId(prev => prev === node.id ? null : node.id);
       return;
@@ -535,9 +583,21 @@ const VisualCanvas: React.FC = () => {
     return COL_ORDER.filter(c => s.has(c));
   }, [nodes]);
 
-  const canvasW = viewLayout === 'tree' ? treeWidth  : swimlaneWidth;
-  const canvasH = viewLayout === 'tree' ? treeHeight : swimlaneHeight;
-  const nodeW   = viewLayout === 'tree' ? TREE_NODE_W : COL_WIDTH;
+  const baseW = viewLayout === 'tree' ? treeWidth  : swimlaneWidth;
+  const baseH = viewLayout === 'tree' ? treeHeight : swimlaneHeight;
+  const nodeW = viewLayout === 'tree' ? TREE_NODE_W : COL_WIDTH;
+  // Expand canvas if any cards have been dragged beyond the default bounds
+  const canvasW = useMemo(() => {
+    if (!customPositions.size) return baseW;
+    const maxX = Math.max(...[...customPositions.values()].map(p => p.x + nodeW + 80));
+    return Math.max(baseW, maxX);
+  }, [baseW, customPositions, nodeW]);
+  const canvasH = useMemo(() => {
+    if (!customPositions.size) return baseH;
+    const nodeH = viewLayout === 'tree' ? TREE_NODE_H : NODE_HEIGHT;
+    const maxY = Math.max(...[...customPositions.values()].map(p => p.y + nodeH + 80));
+    return Math.max(baseH, maxY);
+  }, [baseH, customPositions, viewLayout]);
 
   // ─── Render ───────────────────────────────────────────────────────────────────
   return (
@@ -646,6 +706,11 @@ const VisualCanvas: React.FC = () => {
           <RotateCcw size={14} />
         </Button>
         <Badge bg="secondary" className="align-self-center">{Math.round(scale * 100)}%</Badge>
+        {customPositions.size > 0 && (
+          <Button size="sm" variant="outline-warning" onClick={() => setCustomPositions(new Map())}>
+            Reset positions
+          </Button>
+        )}
 
         <div className="vr" />
 
@@ -686,7 +751,7 @@ const VisualCanvas: React.FC = () => {
       {/* Canvas */}
       <div
         ref={canvasRef}
-        style={{ flex: 1, overflow: 'hidden', cursor: isPanning ? 'grabbing' : linkMode ? 'crosshair' : 'grab', background: 'var(--bs-light, #f8f9fa)' }}
+        style={{ flex: 1, overflow: 'hidden', cursor: draggingId || isPanning ? 'grabbing' : linkMode ? 'crosshair' : 'grab', background: 'var(--bs-light, #f8f9fa)' }}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
@@ -771,24 +836,34 @@ const VisualCanvas: React.FC = () => {
               ))}
 
               {/* Swimlane nodes */}
-              {nodes.map(node => (
-                <div
-                  key={node.id}
-                  className="canvas-node-card"
-                  style={{ position: 'absolute', left: nodeX(node.col), top: nodeY(node.colIndex), zIndex: 2 }}
-                >
-                  <NodeCard
-                    node={node}
-                    nodeW={COL_WIDTH}
-                    selected={selectedId === node.id}
-                    linkSource={linkSource === node.id}
-                    linkTarget={linkMode && !!linkSource && linkSource !== node.id}
-                    linkMode={linkMode}
-                    showDescriptions={showDescriptions}
-                    onClick={() => handleNodeClick(node)}
-                  />
-                </div>
-              ))}
+              {nodes.map(node => {
+                const cp = customPositions.get(node.id);
+                return (
+                  <div
+                    key={node.id}
+                    className="canvas-node-card"
+                    onMouseDown={(e) => handleCardMouseDown(e, node)}
+                    style={{
+                      position: 'absolute',
+                      left: cp?.x ?? nodeX(node.col),
+                      top:  cp?.y ?? nodeY(node.colIndex),
+                      zIndex: draggingId === node.id ? 100 : 2,
+                      cursor: linkMode ? 'crosshair' : 'grab',
+                    }}
+                  >
+                    <NodeCard
+                      node={node}
+                      nodeW={COL_WIDTH}
+                      selected={selectedId === node.id}
+                      linkSource={linkSource === node.id}
+                      linkTarget={linkMode && !!linkSource && linkSource !== node.id}
+                      linkMode={linkMode}
+                      showDescriptions={showDescriptions}
+                      onClick={() => handleNodeClick(node)}
+                    />
+                  </div>
+                );
+              })}
             </>
           )}
 
@@ -799,11 +874,19 @@ const VisualCanvas: React.FC = () => {
               {nodes.map(node => {
                 const pos = treePositions.get(node.id);
                 if (!pos) return null;
+                const cp = customPositions.get(node.id);
                 return (
                   <div
                     key={node.id}
                     className="canvas-node-card"
-                    style={{ position: 'absolute', left: pos.x, top: pos.y, zIndex: 2 }}
+                    onMouseDown={(e) => handleCardMouseDown(e, node)}
+                    style={{
+                      position: 'absolute',
+                      left: cp?.x ?? pos.x,
+                      top:  cp?.y ?? pos.y,
+                      zIndex: draggingId === node.id ? 100 : 2,
+                      cursor: linkMode ? 'crosshair' : 'grab',
+                    }}
                   >
                     <NodeCard
                       node={node}

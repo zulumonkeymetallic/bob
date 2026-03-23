@@ -404,14 +404,15 @@ function AppContent() {
             <Route path="/capacity" element={<Navigate to="/sprints/capacity" replace />} />
 
             <Route path="/tasks-management" element={<TasksManagement />} />
-            <Route path="/chores" element={<ChoresTasksPage />} />
+            <Route path="/chores" element={<Navigate to="/chores/checklist" replace />} />
+            <Route path="/chores/manage" element={<ChoresTasksPage />} />
             <Route path="/chores/checklist" element={<ChoreChecklistPage />} />
             <Route path="/mobile" element={<MobileHome />} />
             <Route path="/mobile/daily-plan" element={<Navigate to="/mobile?tab=daily_plan" replace />} />
             <Route path="/mobile-view" element={<MobileView />} />
             <Route path="/mobile-checklist" element={<MobileChecklistView />} />
             <Route path="/habits" element={<Navigate to="/dashboard/habit-tracking" replace />} />
-            <Route path="/routines" element={<Navigate to="/chores" replace />} />
+            <Route path="/routines" element={<Navigate to="/chores/checklist" replace />} />
             <Route path="/ai-planner" element={<Navigate to="/calendar" replace />} />
             <Route path="/ai-usage" element={<AIUsageDashboard />} />
             <Route path="/planning" element={<Navigate to="/calendar" replace />} />

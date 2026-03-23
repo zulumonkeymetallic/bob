@@ -4,6 +4,7 @@ import { Activity, CalendarClock, CalendarPlus, Check, ChevronDown, ChevronUp, C
 import type { PlannerItem } from '../../utils/plannerItems';
 import { priorityLabel as formatPriorityLabel, priorityPillClass, storyStatusText, taskStatusText } from '../../utils/storyCardFormatting';
 import { getManualPriorityLabel } from '../../utils/manualPriority';
+import { GLOBAL_THEMES } from '../../constants/globalThemes';
 import '../../styles/KanbanCards.css';
 
 type PlannerCardContext = 'daily' | 'weekly';
@@ -129,7 +130,17 @@ const PlannerWorkCard: React.FC<PlannerWorkCardProps> = ({
     : 'kanban-card__source-note';
   const pointsValue = Number((item.rawTask as any)?.points ?? (item.rawStory as any)?.points ?? 0);
   const actionButtons = canShowActions && !isEvent;
-  const color = item.kind === 'story' ? '#0dcaf0' : item.kind === 'chore' ? '#198754' : item.kind === 'event' ? '#6c757d' : '#0d6efd';
+  // Use goal theme color when available — same approach as KanbanCardV2 — fallback to kind colour
+  const themeColor = (() => {
+    if (!item.goalTheme) return null;
+    const themeNum = Number(item.goalTheme);
+    const match = Number.isFinite(themeNum)
+      ? GLOBAL_THEMES.find(t => t.id === themeNum)
+      : GLOBAL_THEMES.find(t => String(t.label).toLowerCase() === String(item.goalTheme).toLowerCase());
+    return match?.color ?? null;
+  })();
+  const kindColor = item.kind === 'story' ? '#0dcaf0' : item.kind === 'chore' ? '#198754' : item.kind === 'event' ? '#6c757d' : '#0d6efd';
+  const color = themeColor || kindColor;
   const compactWeekly = context === 'weekly';
   const secondaryMeta = compactWeekly
     ? [item.ref].filter(Boolean).join(' · ')
@@ -216,6 +227,21 @@ const PlannerWorkCard: React.FC<PlannerWorkCardProps> = ({
                   {item.isTop3 && (
                     <span className="kanban-card__meta-badge kanban-card__meta-badge--top3" title="Top 3 priority">
                       Top 3
+                    </span>
+                  )}
+                  {item.isFocusAligned && (
+                    <span
+                      className="kanban-card__meta-badge"
+                      style={{
+                        borderColor: 'rgba(99, 102, 241, 0.45)',
+                        backgroundColor: 'rgba(99, 102, 241, 0.12)',
+                        color: '#6366f1',
+                        fontWeight: 600,
+                      }}
+                      title="Aligned to an active Focus Goal"
+                    >
+                      <Target size={10} style={{ marginRight: 3, marginTop: -1 }} />
+                      Focus
                     </span>
                   )}
                   {isGroup && (

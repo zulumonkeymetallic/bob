@@ -398,7 +398,7 @@ const SprintDashboard: React.FC = () => {
 
           {/* Sprint Metrics Row */}
           <Row className="mb-4">
-            <Col md={2}>
+            <Col md={4} lg={2}>
               <Card className="text-center h-100">
                 <Card.Body>
                   <h3 className="text-primary">{stats.sprintMetrics.totalStories}</h3>
@@ -406,7 +406,7 @@ const SprintDashboard: React.FC = () => {
                 </Card.Body>
               </Card>
             </Col>
-            <Col md={2}>
+            <Col md={4} lg={2}>
               <Card className="text-center h-100">
                 <Card.Body>
                   <h3 className="text-warning">{stats.sprintMetrics.activeStories}</h3>
@@ -414,7 +414,7 @@ const SprintDashboard: React.FC = () => {
                 </Card.Body>
               </Card>
             </Col>
-            <Col md={2}>
+            <Col md={4} lg={2}>
               <Card className="text-center h-100">
                 <Card.Body>
                   <h3 className="text-success">{stats.sprintMetrics.doneStories}</h3>
@@ -422,7 +422,7 @@ const SprintDashboard: React.FC = () => {
                 </Card.Body>
               </Card>
             </Col>
-            <Col md={2}>
+            <Col md={4} lg={2}>
               <Card className="text-center h-100">
                 <Card.Body>
                   <h3 className="text-danger">{stats.sprintMetrics.defectStories}</h3>
@@ -430,7 +430,7 @@ const SprintDashboard: React.FC = () => {
                 </Card.Body>
               </Card>
             </Col>
-            <Col md={2}>
+            <Col md={4} lg={2}>
               <Card className="text-center h-100">
                 <Card.Body>
                   <h3 className="text-info">{stats.sprintMetrics.completedTasks}/{stats.sprintMetrics.totalTasks}</h3>
@@ -438,7 +438,7 @@ const SprintDashboard: React.FC = () => {
                 </Card.Body>
               </Card>
             </Col>
-            <Col md={2}>
+            <Col md={4} lg={2}>
               <Card className="text-center h-100">
                 <Card.Body>
                   <h3 className="text-primary">{stats.sprintMetrics.sprintProgress.toFixed(1)}%</h3>
@@ -465,7 +465,7 @@ const SprintDashboard: React.FC = () => {
                   <Card.Body>
                     <Row>
                       {Object.entries(stats.sprintMetrics.themeProgress).map(([theme, progress]) => (
-                        <Col md={2} key={theme} className="mb-3">
+                        <Col md={4} lg={2} key={theme} className="mb-3">
                           <div className="text-center">
                             <Badge bg={getThemeColor(theme)} className="mb-2 w-100 p-2">
                               {theme}
@@ -606,32 +606,32 @@ const SprintDashboard: React.FC = () => {
             </Card.Header>
             <Card.Body>
               <Row>
-                <Col md={2} className="mb-2">
+                <Col md={4} lg={2} className="mb-2">
                   <Button variant="primary" href="/kanban" className="w-100">
                     Kanban Board
                   </Button>
                 </Col>
-                <Col md={2} className="mb-2">
+                <Col md={4} lg={2} className="mb-2">
                   <Button variant="success" href="/goals" className="w-100">
                     Plan Goals
                   </Button>
                 </Col>
-                <Col md={2} className="mb-2">
+                <Col md={4} lg={2} className="mb-2">
                   <Button variant="info" href="/backlog" className="w-100">
                     Story Backlog
                   </Button>
                 </Col>
-                <Col md={2} className="mb-2">
+                <Col md={4} lg={2} className="mb-2">
                   <Button variant="warning" href="/ai-planner" className="w-100">
                     AI Planning
                   </Button>
                 </Col>
-                <Col md={2} className="mb-2">
+                <Col md={4} lg={2} className="mb-2">
                   <Button variant="outline-primary" onClick={() => setShowCreateSprint(true)} className="w-100">
                     New Sprint
                   </Button>
                 </Col>
-                <Col md={2} className="mb-2">
+                <Col md={4} lg={2} className="mb-2">
                   <Button variant="outline-info" href="/calendar" className="w-100">
                     Calendar Sync
                   </Button>

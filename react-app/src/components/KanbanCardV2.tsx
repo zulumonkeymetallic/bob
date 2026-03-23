@@ -54,6 +54,7 @@ interface KanbanCardV2Props {
         lastPlayedAt?: number | null;
         lastSyncAt?: any;
     };
+    isFocusAligned?: boolean;
 }
 
 const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
@@ -74,6 +75,7 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
     scheduledBlock,
     steamMeta,
     showTags,
+    isFocusAligned = false,
 }) => {
     const ref = useRef<HTMLDivElement>(null);
     const [dragging, setDragging] = useState(false);
@@ -911,6 +913,21 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                     {isTop3 && (
                         <span className="kanban-card__meta-badge kanban-card__meta-badge--top3" title="Top 3 priority">
                             Top 3
+                        </span>
+                    )}
+                    {isFocusAligned && (
+                        <span
+                            className="kanban-card__meta-badge"
+                            style={{
+                                borderColor: 'rgba(99, 102, 241, 0.45)',
+                                backgroundColor: 'rgba(99, 102, 241, 0.12)',
+                                color: '#6366f1',
+                                fontWeight: 600,
+                            }}
+                            title="Aligned to an active Focus Goal"
+                        >
+                            <Target size={10} style={{ marginRight: 3, marginTop: -1 }} />
+                            Focus
                         </span>
                     )}
                     {overdueDays > 0 && (

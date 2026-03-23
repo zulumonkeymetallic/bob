@@ -158,6 +158,13 @@ code {
   color: inherit;
 }
 
+/* Tablet font scale: shave ~6% off all rem-based sizing globally on iPad viewports */
+@media (min-width: 768px) and (max-width: 1199px) {
+  html {
+    font-size: 87.5%; /* 14px base — keeps all content within viewport on iPad */
+  }
+}
+
 /* Mobile fit: keep summaries/widgets within viewport on small screens */
 @media (max-width: 768px) {
   html {

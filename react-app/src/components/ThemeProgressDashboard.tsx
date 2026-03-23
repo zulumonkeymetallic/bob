@@ -147,7 +147,7 @@ const ThemeProgressWidget: React.FC<ThemeProgressWidgetProps> = ({
         </Badge>
       </div>
     </Card.Header>
-    <Card.Body className="p-3" style={{ overflowY: 'auto' }}>
+    <Card.Body className="p-3" style={{ overflowY: 'auto', maxHeight: 'clamp(300px, 58vh, 800px)' }}>
       {lowProgressAlert && lowProgressAlert.length > 0 && (
         <Alert variant="warning" className="py-2 mb-3">
           <div className="fw-semibold small mb-1">
@@ -938,9 +938,9 @@ const ThemeProgressDashboard: React.FC = () => {
   }, [overallThemeRows]);
 
   return (
-    <Container fluid className="py-4" style={{ maxWidth: 1400 }}>
+    <Container fluid className="py-2 py-lg-4" style={{ maxWidth: 1400 }}>
       {/* Header */}
-      <div className="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-4">
+      <div className="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2 mb-lg-4">
         <div>
           <h3 className="mb-1">Theme &amp; Goal Progress</h3>
           <div className="text-muted small">
@@ -975,8 +975,8 @@ const ThemeProgressDashboard: React.FC = () => {
       {loading ? (
         <div className="text-muted">Loading…</div>
       ) : (
-        <Row className="g-3 mb-4">
-          <Col md={6}>
+        <Row className="g-2 g-lg-3 mb-2 mb-lg-4">
+          <Col sm={6}>
             <ThemeProgressWidget
               title={`Sprint: ${selectedSprint?.name || 'No sprint selected'}`}
               rows={sprintThemeRows}
@@ -989,7 +989,7 @@ const ThemeProgressDashboard: React.FC = () => {
               overallBreakdown={sprintOverallBreakdown}
             />
           </Col>
-          <Col md={6}>
+          <Col sm={6}>
             <ThemeProgressWidget
               title="Overall progress"
               rows={overallThemeRows}

@@ -835,7 +835,7 @@ const CheckInWeekly: React.FC = () => {
 
           <div className="d-none d-md-block">
             <Row className="g-3 mb-3">
-              <Col lg={6}>
+              <Col md={6}>
                 <Card className="shadow-sm border-0">
                   <Card.Header className="fw-semibold">Planned vs completed (Themes)</Card.Header>
                   <Card.Body>
@@ -854,7 +854,7 @@ const CheckInWeekly: React.FC = () => {
                   </Card.Body>
                 </Card>
               </Col>
-              <Col lg={6}>
+              <Col md={6}>
                 <Card className="shadow-sm border-0">
                   <Card.Header className="fw-semibold">Habits</Card.Header>
                   <Card.Body>
@@ -876,7 +876,7 @@ const CheckInWeekly: React.FC = () => {
             </Row>
 
             <Row className="g-3 mb-3">
-              <Col lg={6}>
+              <Col md={6}>
                 <Card className="shadow-sm border-0">
                   <Card.Header className="fw-semibold">Stories worked on</Card.Header>
                   <Card.Body>
@@ -895,7 +895,7 @@ const CheckInWeekly: React.FC = () => {
                   </Card.Body>
                 </Card>
               </Col>
-              <Col lg={6}>
+              <Col md={6}>
                 <Card className="shadow-sm border-0">
                   <Card.Header className="fw-semibold">Tasks worked on</Card.Header>
                   <Card.Body>
@@ -917,7 +917,7 @@ const CheckInWeekly: React.FC = () => {
             </Row>
 
             <Row className="g-3 mb-3">
-              <Col lg={6}>
+              <Col md={6}>
                 <Card className="shadow-sm border-0">
                   <Card.Header className="fw-semibold">Spend (Monzo)</Card.Header>
                   <Card.Body>
@@ -936,7 +936,7 @@ const CheckInWeekly: React.FC = () => {
                   </Card.Body>
                 </Card>
               </Col>
-              <Col lg={6}>
+              <Col md={6}>
                 <Card className="shadow-sm border-0">
                   <Card.Header className="fw-semibold">Reflection</Card.Header>
                   <Card.Body className="d-flex flex-column gap-2">

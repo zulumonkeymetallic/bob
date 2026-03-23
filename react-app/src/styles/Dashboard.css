@@ -379,6 +379,26 @@ body.dashboard-widget-resizing * {
   }
 }
 
+/* Tablet 2-column layout: keep summary+due/chores side-by-side, calendar full-width */
+@media (min-width: 768px) and (max-width: 991.98px) {
+  .today-plan-layout {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    flex-direction: unset !important;
+  }
+
+  .today-plan-layout > .today-plan-col-calendar {
+    grid-column: 1 / -1;
+    width: 100% !important;
+  }
+
+  .today-plan-layout > .today-plan-col {
+    width: 100% !important;
+    flex: none !important;
+  }
+}
+
 @media (max-width: 767.98px) {
   .dashboard-widget-resize-handle {
     display: none;
