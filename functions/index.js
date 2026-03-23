@@ -65,7 +65,11 @@ try {
     exports.sendCoachMorningBriefing   = coachModule.sendCoachMorningBriefing;
     exports.sendWeeklyPhaseProgress    = coachModule.sendWeeklyPhaseProgress;
     exports.checkKpiOffTrack           = coachModule.checkKpiOffTrack;
-    exports.triggerCoachBriefingNow    = coachModule.triggerCoachBriefingNow;
+    exports.triggerCoachBriefingNow           = coachModule.triggerCoachBriefingNow;
+    exports.pollFitnessProgrammes             = coachModule.pollFitnessProgrammes;
+    exports.scheduleCoachFitnessBlocks        = coachModule.scheduleCoachFitnessBlocks;
+    exports.triggerPollFitnessProgrammes      = coachModule.triggerPollFitnessProgrammes;
+    exports.triggerScheduleCoachFitnessBlocks = coachModule.triggerScheduleCoachFitnessBlocks;
   }
 } catch (e) {
   console.warn('[init] coachModule not loaded', e?.message || e);
