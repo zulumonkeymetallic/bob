@@ -22,7 +22,7 @@ import '../styles/KanbanFixes.css';
 interface KanbanBoardV2Props {
     sprintId?: string | null;
     themeFilter?: number | number[] | null;
-    goalFilter?: string | null;
+    goalFilter?: string | string[] | null;
     onItemSelect?: (item: Story | Task, type: 'story' | 'task') => void;
     onEdit?: (item: Story | Task, type: 'story' | 'task') => void;
     showDescriptions?: boolean;
@@ -32,6 +32,7 @@ interface KanbanBoardV2Props {
     themes?: GlobalTheme[];
     focusOnly?: boolean;
     focusGoalIds?: Set<string>;
+    detailLevel?: 'full' | 'compact' | 'minimal';
 }
 
 interface ScheduledBlockInfo {
@@ -57,6 +58,7 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
     themes,
     focusOnly = false,
     focusGoalIds = new Set(),
+    detailLevel = 'full',
     }) => {
     const { currentUser } = useAuth();
     const { currentPersona } = usePersona();
@@ -398,13 +400,14 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
             });
         }
 
-        if (goalFilter) {
+        const goalIds = Array.isArray(goalFilter) ? goalFilter : goalFilter ? [goalFilter] : [];
+        if (goalIds.length > 0) {
             // Filter tasks by goal. Tasks might have goalId or be linked to a story with goalId.
             result = result.filter(t => {
-                if ((t as any).goalId === goalFilter) return true;
+                if (goalIds.includes((t as any).goalId)) return true;
                 if (t.parentType === 'story' && t.parentId) {
                     const s = stories.find(s => s.id === t.parentId);
-                    return s?.goalId === goalFilter;
+                    return !!(s?.goalId && goalIds.includes(s.goalId));
                 }
                 return false;
             });
@@ -445,8 +448,9 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
             });
         }
 
-        if (goalFilter) {
-            result = result.filter(s => (s as any).goalId === goalFilter);
+        const storyGoalIds = Array.isArray(goalFilter) ? goalFilter : goalFilter ? [goalFilter] : [];
+        if (storyGoalIds.length > 0) {
+            result = result.filter(s => !!(s as any).goalId && storyGoalIds.includes((s as any).goalId));
         }
         const storyThemeIds = Array.isArray(themeFilter) ? themeFilter : themeFilter != null ? [themeFilter] : [];
         if (storyThemeIds.length > 0) {
@@ -712,6 +716,7 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
                                 formatTag={formatTag}
                                 themes={themes}
                                 isFocusAligned={isFocusAligned}
+                                detailLevel={detailLevel}
                             />
                         );
                     })}

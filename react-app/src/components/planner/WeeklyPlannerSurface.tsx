@@ -50,6 +50,7 @@ import { getActiveFocusLeafGoalIds } from '../../utils/goalHierarchy';
 import { buildPlannerRecommendation, type PlannerRecommendation } from '../../utils/plannerRecommendations';
 import { buildDayCapacityMap, plannerItemPoints } from '../../utils/plannerCapacity';
 import { schedulePlannerItem as schedulePlannerItemMutation } from '../../utils/plannerScheduling';
+import { useDetailLevel } from '../../contexts/DetailLevelContext';
 
 type WeeklyPlannerView = 'table' | 'planner';
 
@@ -169,6 +170,7 @@ const WeeklyPlannerSurface: React.FC<WeeklyPlannerSurfaceProps> = ({
   const [dragItemId, setDragItemId] = useState<string | null>(null);
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const [plannerFilter, setPlannerFilter] = useState<'all' | 'focus' | 'top3' | 'stories'>('all');
+  const { detailLevel, setDetailLevel } = useDetailLevel();
   const [planningSummary, setPlanningSummary] = useState<{ acceptedMoves: number; acceptedDefers: number }>({
     acceptedMoves: 0,
     acceptedDefers: 0,
@@ -808,6 +810,7 @@ const WeeklyPlannerSurface: React.FC<WeeklyPlannerSurfaceProps> = ({
           scheduledBlock={scheduledBlock}
           themes={themePalette}
           showDescription={false}
+          detailLevel={detailLevel}
         />
       </div>
     );
@@ -870,6 +873,17 @@ const WeeklyPlannerSurface: React.FC<WeeklyPlannerSurfaceProps> = ({
             <Button size="sm" variant={plannerFilter === 'stories' ? 'info' : 'outline-info'} onClick={() => setPlannerFilter('stories')}>
               Stories
             </Button>
+            <Form.Select
+              size="sm"
+              value={detailLevel}
+              onChange={(e) => setDetailLevel(e.target.value as any)}
+              style={{ width: 'auto' }}
+              title="Card detail level"
+            >
+              <option value="full">Detail: Full</option>
+              <option value="compact">Detail: Compact</option>
+              <option value="minimal">Detail: Minimal</option>
+            </Form.Select>
           </>
         )}
       </div>

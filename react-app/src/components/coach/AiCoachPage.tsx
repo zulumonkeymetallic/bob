@@ -267,6 +267,13 @@ const SetupScreen: React.FC<{ onComplete: () => void }> = ({ onComplete }) => {
   const [showManualDate, setShowManualDate] = useState(false);
   const [raceDate, setRaceDate] = useState('');
 
+  // Optional race events — pre-filled with sensible defaults
+  const defaultSprintTri = new Date(Date.now() + 90 * 86400000).toISOString().split('T')[0];
+  const [sprintTriDate, setSprintTriDate] = useState(defaultSprintTri);
+  const [sprintTriTitle, setSprintTriTitle] = useState('Sprint Triathlon');
+  const [halfIronDate, setHalfIronDate] = useState('2027-05-15');
+  const [halfIronTitle, setHalfIronTitle] = useState('70.3 Half Ironman');
+
   useEffect(() => {
     if (!uid) return;
     getDocs(query(
@@ -298,8 +305,12 @@ const SetupScreen: React.FC<{ onComplete: () => void }> = ({ onComplete }) => {
     setLoading(true);
     setError(null);
     try {
+      const raceEvents = [];
+      if (sprintTriDate) raceEvents.push({ title: sprintTriTitle || 'Sprint Triathlon', date: sprintTriDate });
+      if (halfIronDate) raceEvents.push({ title: halfIronTitle || '70.3 Half Ironman', date: halfIronDate });
       await httpsCallable(functions, 'provisionIronmanGoals')({
         raceDate: raceDate || undefined,
+        raceEvents,
       });
       onComplete();
     } catch (e: any) {
@@ -413,6 +424,50 @@ const SetupScreen: React.FC<{ onComplete: () => void }> = ({ onComplete }) => {
               Base, Build, Peak, and Taper — each with fitness KPIs that sync nightly from Strava.
               Takes 5 seconds.
             </p>
+
+            {/* Optional race events */}
+            <div className="mb-3">
+              <p className="small fw-medium mb-2">Race events <span className="text-muted fw-normal">(optional — shown as star markers on the timeline)</span></p>
+              <div className="vstack gap-2">
+                <div className="d-flex gap-2 align-items-center flex-wrap">
+                  <input
+                    type="text"
+                    className="form-control form-control-sm"
+                    style={{ maxWidth: 180 }}
+                    value={sprintTriTitle}
+                    onChange={e => setSprintTriTitle(e.target.value)}
+                    placeholder="Sprint Triathlon"
+                  />
+                  <input
+                    type="date"
+                    className="form-control form-control-sm"
+                    style={{ maxWidth: 160 }}
+                    value={sprintTriDate}
+                    onChange={e => setSprintTriDate(e.target.value)}
+                  />
+                  <span className="text-muted small">Phase 0 target</span>
+                </div>
+                <div className="d-flex gap-2 align-items-center flex-wrap">
+                  <input
+                    type="text"
+                    className="form-control form-control-sm"
+                    style={{ maxWidth: 180 }}
+                    value={halfIronTitle}
+                    onChange={e => setHalfIronTitle(e.target.value)}
+                    placeholder="70.3 Half Ironman"
+                  />
+                  <input
+                    type="date"
+                    className="form-control form-control-sm"
+                    style={{ maxWidth: 160 }}
+                    value={halfIronDate}
+                    onChange={e => setHalfIronDate(e.target.value)}
+                  />
+                  <span className="text-muted small">Phase 2 target</span>
+                </div>
+              </div>
+            </div>
+
             <button
               className="btn btn-primary btn-sm"
               onClick={handleQuickProvision}

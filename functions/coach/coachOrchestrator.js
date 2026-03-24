@@ -608,7 +608,7 @@ exports.provisionIronmanGoals = httpsV2.onCall({ region: REGION }, async (req) =
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
 
-  const { raceDate: raceDateOverride } = req.data || {};
+  const { raceDate: raceDateOverride, raceEvents = [] } = req.data || {};
   console.log(`[coachOrchestrator] provisionIronmanGoals uid=${uid} raceDate=${raceDateOverride || 'none'}`);
   await logCoachEvent(uid, 'provision_started', { raceDate: raceDateOverride || null });
   const firestore = db();
@@ -826,6 +826,47 @@ exports.provisionIronmanGoals = httpsV2.onCall({ region: REGION }, async (req) =
       updatedAt: ts,
     });
     phaseGoalIds.push(ref.id);
+  }
+
+  // Race event sub-goals (e.g. sprint tri, 70.3) — shown as star markers on timeline
+  // Each event is { title, date: 'YYYY-MM-DD' }; auto-assign to the phase that contains that date
+  const phaseRanges = [
+    { start: phase0Start, end: phase0End, id: phaseGoalIds[0] },
+    { start: phase1Start, end: phase1End, id: phaseGoalIds[1] },
+    { start: phase2Start, end: phase2End, id: phaseGoalIds[2] },
+    { start: phase3Start, end: phase3End, id: phaseGoalIds[3] },
+  ];
+  for (const event of raceEvents) {
+    if (!event?.title || !event?.date) continue;
+    const eventMs = new Date(event.date).getTime();
+    if (!eventMs || isNaN(eventMs)) continue;
+    // Find the phase that contains this date
+    const phase = phaseRanges.find(p => eventMs >= p.start && eventMs <= p.end)
+      ?? phaseRanges.reduce((best, p) => {
+        // Fallback: nearest phase by distance
+        const d = Math.abs(eventMs - (p.start + p.end) / 2);
+        return d < Math.abs(eventMs - (best.start + best.end) / 2) ? p : best;
+      }, phaseRanges[0]);
+    await firestore.collection('goals').add({
+      ownerUid: uid,
+      persona: 'personal',
+      theme: 1,
+      size: 1,
+      confidence: 3,
+      goalKind: 'milestone',
+      timeHorizon: 'quarter',
+      parentGoalId: phase.id,
+      raceEvent: true,
+      title: event.title,
+      description: `Race event: ${event.title}`,
+      status: 1,
+      startDate: eventMs,
+      endDate: eventMs,
+      targetDate: event.date,
+      createdAt: ts,
+      updatedAt: ts,
+    });
+    console.log(`[coachOrchestrator] created race event "${event.title}" on ${event.date} → phase ${phaseGoalIds.indexOf(phase.id)}`);
   }
 
   // Save umbrellaGoalId to profile for quick lookup

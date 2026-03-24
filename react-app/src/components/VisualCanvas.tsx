@@ -33,6 +33,8 @@ import { colorWithAlpha, goalThemeColor as resolveGoalThemeColor } from '../util
 import { getThemeName } from '../utils/statusHelpers';
 import PlanActionBar from './planner/PlanActionBar';
 import ThemeMultiSelect from './shared/ThemeMultiSelect';
+import SprintMultiSelect from './shared/SprintMultiSelect';
+import ShareGoalsPanel from './shared/ShareGoalsPanel';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -263,7 +265,7 @@ const VisualCanvas: React.FC = () => {
   // ── Filters ─────────────────────────────────────────────────────────────────
   const [searchTerm,       setSearchTerm]       = useState('');
   const [filterThemeIds,   setFilterThemeIds]   = useState<number[]>([]);
-  const [filterSprintId,   setFilterSprintId]   = useState('');
+  const [filterSprintIds,  setFilterSprintIds]  = useState<string[]>([]);
   const [activeOnly,       setActiveOnly]       = useState(false);
   const [focusOnly,        setFocusOnly]        = useState(false);
   const [showStories,      setShowStories]      = useState(true);
@@ -354,7 +356,7 @@ const VisualCanvas: React.FC = () => {
     const filteredStories = showStories ? stories.filter(s => {
       if (!s.goalId || !goalIdSet.has(s.goalId)) return false;
       if (activeOnly && s.status !== 1) return false;
-      if (filterSprintId && (s as any).sprintId !== filterSprintId) return false;
+      if (filterSprintIds.length > 0 && !filterSprintIds.includes((s as any).sprintId)) return false;
       if (search && !s.title?.toLowerCase().includes(search)) return false;
       return true;
     }) : [];
@@ -363,11 +365,11 @@ const VisualCanvas: React.FC = () => {
     const filteredTasks = showTasks ? tasks.filter(t => {
       if (!t.storyId || !storyIdSet.has(t.storyId)) return false;
       if (activeOnly && String(t.status) !== 'in_progress') return false;
-      if (filterSprintId) {
+      if (filterSprintIds.length > 0) {
         // Tasks inherit sprint from their story; also check direct sprintId if present
         const story = filteredStories.find(s => s.id === t.storyId);
         if (!story) return false;
-        if ((story as any).sprintId !== filterSprintId) return false;
+        if (!filterSprintIds.includes((story as any).sprintId)) return false;
       }
       if (search && !t.title?.toLowerCase().includes(search)) return false;
       return true;
@@ -407,7 +409,7 @@ const VisualCanvas: React.FC = () => {
     return { nodes: allNodes, connections: conns };
   }, [
     goals, stories, tasks, focusGoals, focusGoalIds,
-    filterThemeIds, filterSprintId, activeOnly, focusOnly,
+    filterThemeIds, filterSprintIds, activeOnly, focusOnly,
     showStories, showTasks, searchTerm,
   ]);
 
@@ -653,17 +655,12 @@ const VisualCanvas: React.FC = () => {
 
         {/* Sprint filter (stories/tasks) */}
         {showStories && (
-          <Form.Select
-            size="sm"
-            value={filterSprintId}
-            onChange={e => setFilterSprintId(e.target.value)}
-            style={{ width: 150 }}
-          >
-            <option value="">All sprints</option>
-            {sortedSprints.map(s => (
-              <option key={s.id} value={s.id}>{(s as any).name || s.id}</option>
-            ))}
-          </Form.Select>
+          <SprintMultiSelect
+            sprints={sortedSprints}
+            selectedIds={filterSprintIds}
+            onChange={setFilterSprintIds}
+            style={{ width: 160 }}
+          />
         )}
 
         <div className="vr" />
@@ -729,6 +726,8 @@ const VisualCanvas: React.FC = () => {
             <Info size={15} />
           </span>
         </OverlayTrigger>
+
+        {currentUser?.uid && <ShareGoalsPanel uid={currentUser.uid} />}
       </div>
 
       {/* Link status bar */}

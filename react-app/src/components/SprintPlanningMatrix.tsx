@@ -27,6 +27,7 @@ import { schedulePlannerItem as schedulePlannerItemMutation } from '../utils/pla
 import { parseBooleanParam, parseIdListParam, parseNumberListParam } from '../utils/planningQuery';
 import PlanActionBar from './planner/PlanActionBar';
 import ThemeMultiSelect from './shared/ThemeMultiSelect';
+import GoalMultiSelect from './shared/GoalMultiSelect';
 
 // Normalize sprint identifiers so we handle doc refs, strings, and legacy placeholders
 const normalizeSprintId = (value: any): string | null => {
@@ -901,53 +902,13 @@ const SprintPlanningMatrix: React.FC = () => {
                     <Target size={14} style={{ marginRight: '6px' }} />
                     Goals
                   </Form.Label>
-                  <Dropdown autoClose="outside">
-                    <Dropdown.Toggle variant="outline-secondary" size="sm" style={{ minWidth: '200px' }} className="text-truncate">
-                      {goalFilterLabel}
-                    </Dropdown.Toggle>
-                    <Dropdown.Menu style={{ maxHeight: '420px', overflowY: 'auto', minWidth: '260px' }}>
-                      <div className="p-2 sticky-top bg-white border-bottom">
-                        <Form.Control
-                          size="sm"
-                          placeholder="Search goals..."
-                          value={goalSearch}
-                          onChange={(e) => setGoalSearch(e.target.value)}
-                          autoFocus
-                        />
-                      </div>
-                      <Form.Check
-                        type="checkbox"
-                        id="goal-filter-all"
-                        label="All Goals"
-                        checked={selectedGoalIds.length === 0}
-                        onChange={(e) => {
-                          if (e.target.checked) setSelectedGoalIds([]);
-                        }}
-                        className="px-3 py-1"
-                      />
-                      <Dropdown.Divider />
-                      {filteredGoals.length > 0 ? (
-                        filteredGoals.map(goal => (
-                          <Form.Check
-                            key={goal.id}
-                            type="checkbox"
-                            id={`goal-filter-${goal.id}`}
-                            label={getGoalDisplayPath(goal.id, goals)}
-                            checked={selectedGoalIds.includes(goal.id)}
-                            onChange={(e) => {
-                              const nextIds = e.target.checked
-                                ? [...selectedGoalIds, goal.id]
-                                : selectedGoalIds.filter((id) => id !== goal.id);
-                              setSelectedGoalIds(nextIds);
-                            }}
-                            className="px-3 py-1"
-                          />
-                        ))
-                      ) : (
-                        <div className="p-2 text-center text-muted small">No goals found</div>
-                      )}
-                    </Dropdown.Menu>
-                  </Dropdown>
+                  <GoalMultiSelect
+                    goals={goalFilterOptions}
+                    selectedIds={selectedGoalIds}
+                    onChange={setSelectedGoalIds}
+                    getLabel={goal => getGoalDisplayPath(goal.id, goals)}
+                    style={{ minWidth: 200 }}
+                  />
                 </Col>
                 <Col md={3}>
                   <Form.Label style={{ fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>

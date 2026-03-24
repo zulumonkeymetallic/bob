@@ -18,6 +18,7 @@ import { Wand2, AlertCircle, RefreshCw, Sparkles, Clock3, Pencil } from 'lucide-
 import EditTaskModal from './EditTaskModal';
 import EditStoryModal from './EditStoryModal';
 import DeferItemModal from './DeferItemModal';
+import KanbanCardV2 from './KanbanCardV2';
 import {
   callDeltaReplan,
   callFullReplan,
@@ -124,6 +125,9 @@ const MobileHome: React.FC = () => {
   });
   const [storiesViewType, setStoriesViewType] = useState<'list' | 'detail'>(() => {
     try { return (localStorage.getItem('mobile_stories_view_type') as 'list' | 'detail') || 'list'; } catch { return 'list'; }
+  });
+  const [dailyPlanViewType, setDailyPlanViewType] = useState<'list' | 'detail'>(() => {
+    try { return (localStorage.getItem('mobile_daily_plan_view_type') as 'list' | 'detail') || 'list'; } catch { return 'list'; }
   });
   const [isSmallScreen, setIsSmallScreen] = useState<boolean>(typeof window !== 'undefined' ? window.innerWidth <= 768 : false);
   const [replanLoading, setReplanLoading] = useState(false);
@@ -1207,9 +1211,10 @@ const MobileHome: React.FC = () => {
             disabled={busy}
             onChange={() => handleCompleteChoreTask(task)}
             aria-label={`Complete ${task.title}`}
+            style={{ flexShrink: 0 }}
           />
-          <div className="flex-grow-1">
-            <div className="fw-semibold">{task.title}</div>
+          <div className="flex-grow-1" style={{ minWidth: 0 }}>
+            <div className="fw-semibold text-truncate">{task.title}</div>
             <div className="text-muted small">{isOverdue ? `Overdue · ${dueLabel}` : `Due ${dueLabel}`}</div>
             <div className="d-flex flex-wrap gap-1 mt-1">
               {manualPriority && <Badge bg="danger">{manualPriority}</Badge>}
@@ -1218,9 +1223,17 @@ const MobileHome: React.FC = () => {
               {aiScore != null && <Badge bg="secondary">AI {Math.round(aiScore)}/100</Badge>}
             </div>
           </div>
-          <div className="d-flex flex-column align-items-end gap-1">
+          <div className="d-flex align-items-center gap-1 flex-shrink-0">
             {isOverdue && <Badge bg="danger">Overdue</Badge>}
             <Badge bg={badgeVariant}>{badgeLabel}</Badge>
+            <button
+              type="button"
+              style={{ background: 'none', border: 'none', padding: '4px 6px', color: 'var(--bs-secondary)', cursor: 'pointer' }}
+              title="Defer"
+              onClick={() => setDeferTarget({ type: 'task', id: task.id, title: task.title, listView: true })}
+            >
+              <Clock3 size={14} />
+            </button>
           </div>
         </ListGroup.Item>
       );
@@ -1518,14 +1531,15 @@ const MobileHome: React.FC = () => {
             checked={showCompleted}
             onChange={(e) => setShowCompleted(e.target.checked)}
           />
+        </div>
+      )}
+
+      {(activeTab === 'tasks' || activeTab === 'stories' || activeTab === 'daily_plan') && (
+        <div className="d-flex align-items-center gap-1 mb-3 justify-content-end">
           {activeTab === 'tasks' && (
-            <Form.Group className="d-flex align-items-center gap-1 mb-0" style={{ minWidth: 170 }}>
+            <Form.Group className="d-flex align-items-center gap-1 mb-0 me-auto" style={{ minWidth: 170 }}>
               <Form.Label className="mb-0 small text-muted">Tasks view</Form.Label>
-              <Form.Select
-                size="sm"
-                value={tasksViewFilter}
-                onChange={(e) => setTasksViewFilter(e.target.value as TaskViewFilter)}
-              >
+              <Form.Select size="sm" value={tasksViewFilter} onChange={(e) => setTasksViewFilter(e.target.value as TaskViewFilter)}>
                 <option value="top3">Top 3</option>
                 <option value="due_today">Due today</option>
                 <option value="overdue">Overdue</option>
@@ -1533,32 +1547,20 @@ const MobileHome: React.FC = () => {
               </Form.Select>
             </Form.Group>
           )}
-          {(activeTab === 'tasks' || activeTab === 'stories') && (
-            <div className="d-flex align-items-center gap-1 ms-auto">
-              <Button
-                size="sm"
-                variant={(activeTab === 'tasks' ? tasksViewType : storiesViewType) === 'list' ? 'secondary' : 'outline-secondary'}
-                onClick={() => {
-                  if (activeTab === 'tasks') { setTasksViewType('list'); try { localStorage.setItem('mobile_tasks_view_type', 'list'); } catch {} }
-                  else { setStoriesViewType('list'); try { localStorage.setItem('mobile_stories_view_type', 'list'); } catch {} }
-                }}
-                title="Simple list view"
-              >
-                List
-              </Button>
-              <Button
-                size="sm"
-                variant={(activeTab === 'tasks' ? tasksViewType : storiesViewType) === 'detail' ? 'secondary' : 'outline-secondary'}
-                onClick={() => {
-                  if (activeTab === 'tasks') { setTasksViewType('detail'); try { localStorage.setItem('mobile_tasks_view_type', 'detail'); } catch {} }
-                  else { setStoriesViewType('detail'); try { localStorage.setItem('mobile_stories_view_type', 'detail'); } catch {} }
-                }}
-                title="Detail view"
-              >
-                Detail
-              </Button>
-            </div>
-          )}
+          {(() => {
+            const vt = activeTab === 'tasks' ? tasksViewType : activeTab === 'daily_plan' ? dailyPlanViewType : storiesViewType;
+            const setVt = (v: 'list' | 'detail') => {
+              if (activeTab === 'tasks') { setTasksViewType(v); try { localStorage.setItem('mobile_tasks_view_type', v); } catch {} }
+              else if (activeTab === 'daily_plan') { setDailyPlanViewType(v); try { localStorage.setItem('mobile_daily_plan_view_type', v); } catch {} }
+              else { setStoriesViewType(v); try { localStorage.setItem('mobile_stories_view_type', v); } catch {} }
+            };
+            return (
+              <>
+                <Button size="sm" variant={vt === 'list' ? 'secondary' : 'outline-secondary'} onClick={() => setVt('list')}>List</Button>
+                <Button size="sm" variant={vt === 'detail' ? 'secondary' : 'outline-secondary'} onClick={() => setVt('detail')}>Detail</Button>
+              </>
+            );
+          })()}
         </div>
       )}
 
@@ -1887,153 +1889,111 @@ const MobileHome: React.FC = () => {
 
       {activeTab === 'daily_plan' && (
         <div>
-          <Card className="mb-3" style={{ background: '#eef2ff' }}>
-            <Card.Header className="py-2 d-flex align-items-center justify-content-between" style={{ background: 'transparent', border: 'none' }}>
-              <div>
-                <strong>Daily Plan</strong>
-                <Badge bg="secondary" pill className="ms-2">{unifiedTimelineItems.length}</Badge>
-              </div>
-            </Card.Header>
-            <Card.Body className="pt-0">
-              <div className="text-muted small mb-2">Tip: Use the clock icon on task/story cards to defer with smart suggestions.</div>
-              {unifiedTimelineItems.length === 0 ? (
-                <div className="text-muted small">No tasks, stories, chores, or calendar events scheduled today.</div>
-              ) : (
-                (['morning', 'afternoon', 'evening'] as MobileTimelineBucket[]).map((bucket) => {
-                  const items = unifiedTimelineItems.filter((row) => row.bucket === bucket);
-                  if (items.length === 0) return null;
-                  const label = bucket === 'morning' ? 'Morning' : bucket === 'afternoon' ? 'Afternoon' : 'Evening';
-                  return (
-                    <div key={bucket} className="mb-2">
-                      <div className="text-uppercase text-muted small fw-semibold mb-1">{label}</div>
-                      <ListGroup variant="flush">
-                        {items.map((item) => {
-                          const isTask = item.kind === 'task' || item.kind === 'chore';
-                          const isDone = !!item.task && Number(item.task.status ?? 0) === 2;
-                          const aiScore = item.task ? getTaskAiScore(item.task) : item.story ? getStoryAiScore(item.story) : null;
-                          const manualPriority = item.task
-                            ? getManualPriorityLabel(item.task)
-                            : item.story
-                              ? getManualPriorityLabel(item.story)
-                              : null;
-                          const top3 = item.task ? isTop3Task(item.task) : item.story ? isTop3Story(item.story) : false;
-                          const focusAligned = item.task ? isTaskFocusAligned(item.task) : item.story ? isStoryFocusAligned(item.story) : false;
-                          const badgeVariant =
-                            item.kind === 'story' ? 'info' :
-                            item.kind === 'chore' ? 'success' :
-                            item.kind === 'event' ? 'secondary' : 'primary';
-                          const badgeLabel =
-                            item.kind === 'story' ? 'Story' :
-                            item.kind === 'chore' ? 'Chore' :
-                            item.kind === 'event' ? 'Event' : 'Task';
+          {unifiedTimelineItems.length === 0 ? (
+            <div className="text-muted small p-2">No tasks, stories, chores, or calendar events scheduled today.</div>
+          ) : (
+            (['morning', 'afternoon', 'evening'] as MobileTimelineBucket[]).map((bucket) => {
+              const items = unifiedTimelineItems.filter((row) => row.bucket === bucket);
+              if (items.length === 0) return null;
+              const label = bucket === 'morning' ? 'Morning' : bucket === 'afternoon' ? 'Afternoon' : 'Evening';
+              return (
+                <div key={bucket} className="mb-3">
+                  <div className="text-uppercase text-muted small fw-semibold px-1 mb-1" style={{ letterSpacing: '0.05em' }}>{label}</div>
+
+                  {dailyPlanViewType === 'list' ? (
+                    /* LIST MODE: simple rows with checkbox + title + clock */
+                    <ListGroup variant="flush">
+                      {items.map((item) => {
+                        const isTask = item.kind === 'task' || item.kind === 'chore';
+                        const isDone = !!item.task && Number(item.task.status ?? 0) === 2;
+                        const iconBtnStyle: React.CSSProperties = {
+                          background: 'none', border: 'none', padding: '4px 6px',
+                          color: 'var(--bs-secondary)', cursor: 'pointer', flexShrink: 0,
+                        };
+                        return (
+                          <ListGroup.Item key={item.id} className="d-flex align-items-center gap-2 py-2" style={{ fontSize: 14 }}>
+                            {isTask && item.task ? (
+                              <Form.Check
+                                type="checkbox"
+                                checked={isDone || !!choreCompletionBusy[item.task.id]}
+                                disabled={isDone || !!choreCompletionBusy[item.task.id]}
+                                onChange={() => {
+                                  if (item.kind === 'chore') void handleCompleteChoreTask(item.task!);
+                                  else void updateTaskField(item.task!, { status: 2 });
+                                }}
+                                aria-label={`Complete ${item.title}`}
+                                style={{ flexShrink: 0 }}
+                              />
+                            ) : (
+                              <span style={{ width: 18, flexShrink: 0 }} />
+                            )}
+                            <div className="flex-grow-1" style={{ minWidth: 0 }}>
+                              <div className="fw-semibold text-truncate" style={{ lineHeight: 1.2 }}>{item.title}</div>
+                              {item.timeLabel && <div className="text-muted" style={{ fontSize: 11 }}>{item.timeLabel}</div>}
+                            </div>
+                            {(item.task || item.story) && (
+                              <button
+                                type="button"
+                                style={iconBtnStyle}
+                                title="Defer"
+                                onClick={() => setDeferTarget({
+                                  type: item.story ? 'story' : 'task',
+                                  id: item.story ? item.story.id : item.task!.id,
+                                  title: item.title,
+                                  listView: true,
+                                })}
+                              >
+                                <Clock3 size={14} />
+                              </button>
+                            )}
+                          </ListGroup.Item>
+                        );
+                      })}
+                    </ListGroup>
+                  ) : (
+                    /* DETAIL MODE: KanbanCardV2 for tasks/stories/chores, simple row for events */
+                    <div>
+                      {items.map((item) => {
+                        if (item.kind === 'event') {
                           return (
-                            <ListGroup.Item key={item.id} className="d-flex align-items-center gap-2" style={{ fontSize: 14 }}>
-                              {isTask && item.task ? (
-                                <Form.Check
-                                  type="checkbox"
-                                  checked={isDone || !!choreCompletionBusy[item.task.id]}
-                                  disabled={isDone || !!choreCompletionBusy[item.task.id]}
-                                  onChange={() => {
-                                    if (item.kind === 'chore') {
-                                      void handleCompleteChoreTask(item.task!);
-                                    } else {
-                                      void updateTaskField(item.task!, { status: 2 });
-                                    }
-                                  }}
-                                  aria-label={`Complete ${item.title}`}
-                                />
-                              ) : (
-                                <span style={{ width: 14 }} />
-                              )}
-                              <div className="flex-grow-1">
-                                <div className="fw-semibold">
-                                  {item.task ? (
-                                    <button
-                                      type="button"
-                                      className="btn btn-link p-0 text-decoration-none text-start align-baseline"
-                                      onClick={() => setEditingTask(item.task!)}
-                                    >
-                                      {item.title}
-                                    </button>
-                                  ) : item.story ? (
-                                    <button
-                                      type="button"
-                                      className="btn btn-link p-0 text-decoration-none text-start align-baseline"
-                                      onClick={() => setEditingStory(item.story!)}
-                                    >
-                                      {item.title}
-                                    </button>
-                                  ) : (
-                                    item.title
-                                  )}
-                                </div>
-                                <div className="text-muted small">{item.timeLabel}</div>
-                                {(manualPriority || top3 || focusAligned || aiScore != null || item.task || item.story) && (
-                                  <div className="d-flex flex-wrap gap-1 mt-1">
-                                    {manualPriority && <Badge bg="danger">{manualPriority}</Badge>}
-                                    {top3 && <Badge bg="warning" text="dark">Top 3</Badge>}
-                                    {focusAligned && <Badge bg="success">Focus</Badge>}
-                                    {aiScore != null && <Badge bg="secondary">AI {Math.round(aiScore)}/100</Badge>}
-                                  </div>
-                                )}
-                                {(item.task || item.story) && (
-                                  <div className="d-flex flex-wrap gap-2 mt-2">
-                                    {item.story && (
-                                      <Form.Select
-                                        size="sm"
-                                        value={Number((item.story as any).progressPct || 0)}
-                                        onChange={(e) => void updateStoryProgress(item.story!, Number(e.target.value))}
-                                        style={{ maxWidth: 170 }}
-                                      >
-                                        {MOBILE_STORY_PROGRESS_OPTIONS.map((pct) => (
-                                          <option key={pct} value={pct}>
-                                            {formatStoryProgressLabel((item.story as any).points, pct)}
-                                          </option>
-                                        ))}
-                                      </Form.Select>
-                                    )}
-                                    <Button
-                                      variant="outline-secondary"
-                                      size="sm"
-                                      onClick={() => openNoteModal(item.task ? 'task' : 'story', item.task ? item.task.id : item.story!.id)}
-                                    >
-                                      Note
-                                    </Button>
-                                    <Button
-                                      variant="outline-warning"
-                                      size="sm"
-                                      onClick={() => setDeferTarget({
-                                        type: item.story ? 'story' : 'task',
-                                        id: item.story ? item.story.id : item.task!.id,
-                                        title: item.title,
-                                      })}
-                                    >
-                                      Defer
-                                    </Button>
-                                    <Button
-                                      variant="outline-primary"
-                                      size="sm"
-                                      onClick={() => {
-                                        if (item.task) setEditingTask(item.task);
-                                        if (item.story) setEditingStory(item.story);
-                                      }}
-                                    >
-                                      Edit
-                                    </Button>
-                                  </div>
-                                )}
-                              </div>
-                              <Badge bg={badgeVariant}>{badgeLabel}</Badge>
-                            </ListGroup.Item>
+                            <div key={item.id} className="d-flex align-items-center gap-2 py-2 px-1 border-bottom text-muted" style={{ fontSize: 13 }}>
+                              <span style={{ width: 18, flexShrink: 0 }} />
+                              <span className="flex-grow-1 text-truncate">{item.title}</span>
+                              {item.timeLabel && <span style={{ fontSize: 11, flexShrink: 0 }}>{item.timeLabel}</span>}
+                              <Badge bg="secondary" style={{ flexShrink: 0 }}>Event</Badge>
+                            </div>
                           );
-                        })}
-                      </ListGroup>
+                        }
+                        const rawItem = item.story ?? item.task;
+                        if (!rawItem) return null;
+                        const cardType: 'story' | 'task' = item.story ? 'story' : 'task';
+                        const itemGoal = item.story
+                          ? goalsById.get((item.story as any).goalId)
+                          : item.task?.parentType === 'story'
+                            ? (() => { const s = storiesById.get(item.task!.parentId); return s ? goalsById.get(s.goalId) : undefined; })()
+                            : undefined;
+                        const parentStory = cardType === 'task' && item.task?.parentType === 'story'
+                          ? storiesById.get(item.task.parentId)
+                          : undefined;
+                        return (
+                          <div key={item.id} style={{ marginBottom: 8 }}>
+                            <KanbanCardV2
+                              item={rawItem}
+                              type={cardType}
+                              goal={itemGoal}
+                              story={parentStory}
+                              showDescription={false}
+                              onEdit={() => { if (item.task) setEditingTask(item.task); else if (item.story) setEditingStory(item.story!); }}
+                            />
+                          </div>
+                        );
+                      })}
                     </div>
-                  );
-                })
-              )}
-            </Card.Body>
-          </Card>
+                  )}
+                </div>
+              );
+            })
+          )}
         </div>
       )}
 
@@ -2122,116 +2082,24 @@ const MobileHome: React.FC = () => {
               );
             })()
           ) : (
-            <ListGroup>
+            <div className="pt-1">
               {visibleTaskRows.map(task => {
                 const story = task.parentType === 'story' ? storiesById.get(task.parentId) : undefined;
                 const goal = story?.goalId ? goalsById.get(story.goalId) : undefined;
-                const pr = getPriorityBadge(task.priority);
-                const themeColor = resolveThemeColor(goal?.theme ?? story?.theme ?? (task as any).theme);
-                const storyLabel = story ? `${story.ref} · ${story.title}` : task.ref;
-                const goalLabel = goal ? `Goal: ${goal.title}` : 'Unlinked goal';
-                const aiScore = getTaskAiScore(task);
-                const manualPriorityLabel = getManualPriorityLabel(task);
-                const isTaskTop3 = isTop3Task(task);
-                const focusAligned = isTaskFocusAligned(task);
                 return (
-                  <ListGroup.Item
-                    key={task.id}
-                    className="mobile-task-item d-flex align-items-start"
-                    style={themeColor ? { borderLeft: `4px solid ${themeColor}` } : undefined}
-                  >
-                    <div className="me-3 mt-1">
-                      <Form.Check
-                        type="checkbox"
-                        checked={task.status === 2}
-                        onChange={(e) => updateTaskField(task, { status: e.target.checked ? 2 : 0 })}
-                      />
-                    </div>
-                    <div className="flex-grow-1">
-                      <div className="d-flex justify-content-between align-items-start">
-                        <div>
-                          <div className="fw-semibold" style={{ lineHeight: 1.2 }}>{task.title}</div>
-                          <div className="text-muted small">{storyLabel}</div>
-                          <div className="text-muted small">{goalLabel}</div>
-                        </div>
-                        <div className="d-flex flex-column align-items-end gap-1">
-                          <select
-                            className="dashboard-chip-select"
-                            value={Number(task.priority ?? 0)}
-                            onChange={(e) => updateTaskField(task, { priority: Number(e.target.value) as any })}
-                            style={{ backgroundColor: `var(--bs-${pr.bg})`, color: pr.bg === 'warning' || pr.bg === 'light' ? '#000' : '#fff' }}
-                          >
-                            <option value={0}>None</option>
-                            <option value={1}>Low</option>
-                            <option value={2}>Medium</option>
-                            <option value={3}>High</option>
-                            <option value={4}>Critical</option>
-                          </select>
-                        </div>
-                      </div>
-                      <div className="d-flex align-items-center gap-2 mt-2 flex-nowrap" style={{ minWidth: 0 }}>
-                        <Form.Select
-                          size="sm"
-                          className="dashboard-chip-select"
-                          value={Number(task.status)}
-                          onChange={(e) => updateTaskField(task, { status: Number(e.target.value) as any })}
-                          style={{ flex: 1, minWidth: 0 }}
-                        >
-                          {ChoiceHelper.getOptions('task','status').map(opt => (
-                            <option key={opt.value} value={opt.value}>{opt.label}</option>
-                          ))}
-                        </Form.Select>
-                        <Form.Control
-                          size="sm"
-                          type="date"
-                          value={task.dueDate ? new Date(task.dueDate).toISOString().slice(0,10) : ''}
-                          onChange={(e) => {
-                            const val = e.target.value ? new Date(e.target.value + 'T00:00:00').getTime() : undefined;
-                            updateTaskField(task, { dueDate: val as any });
-                          }}
-                          style={{ flex: 1, minWidth: 0 }}
-                        />
-                      </div>
-                      <div className="d-flex flex-wrap gap-2 mt-1 align-items-center small text-muted">
-                        <span>Status: {taskStatusText(task.status)}</span>
-                        <span>Due: {formatShortDate(task.dueDate)}</span>
-                      </div>
-                      <div className="d-flex flex-wrap gap-1 mt-2">
-                        {manualPriorityLabel && <Badge pill bg="danger">{manualPriorityLabel}</Badge>}
-                        {isTaskTop3 && <Badge pill bg="warning" text="dark">Top 3</Badge>}
-                        {focusAligned && <Badge pill bg="success">Focus</Badge>}
-                        {aiScore != null && (
-                          <Badge pill bg="secondary">AI {Math.round(aiScore)}/100</Badge>
-                        )}
-                      </div>
-                      <div className="d-flex flex-wrap gap-2 mt-2 align-items-center">
-                        <Button variant="outline-secondary" size="sm" onClick={() => openNoteModal('task', task.id)}>Note</Button>
-                        <Button variant="outline-primary" size="sm" onClick={() => setEditingTask(task)}>Edit</Button>
-                        <Button
-                          variant="outline-secondary"
-                          size="sm"
-                          onClick={() => setDeferTarget({ type: 'task', id: task.id, title: task.title })}
-                        >
-                          <Clock3 size={14} className="me-1" /> Defer
-                        </Button>
-                        <Button
-                          variant="outline-info"
-                          size="sm"
-                          disabled={convertingTaskId === task.id}
-                          onClick={() => handleConvertTaskToStory(task)}
-                          title="Convert to Story"
-                        >
-                          <Wand2 size={14} /> {convertingTaskId === task.id ? '...' : 'Story'}
-                        </Button>
-                        {task.points != null && (
-                          <Badge pill bg="dark">Pts {task.points}</Badge>
-                        )}
-                      </div>
+                  <div key={task.id} style={{ marginBottom: 8 }}>
+                    <KanbanCardV2
+                      item={task}
+                      type="task"
+                      goal={goal}
+                      story={story}
+                      showDescription={false}
+                      onEdit={() => setEditingTask(task)}
+                    />
                   </div>
-                </ListGroup.Item>
                 );
               })}
-            </ListGroup>
+            </div>
           )}
         </div>
       )}
@@ -2281,128 +2149,22 @@ const MobileHome: React.FC = () => {
             })}
           </ListGroup>
         ) : (
-        <ListGroup>
-          {visibleStoryRows.map(story => {
-            const goal = goalsById.get(story.goalId);
-            const themeColor = resolveThemeColor(goal?.theme ?? story.theme);
-            const acceptance = story.acceptanceCriteria?.slice(0, 2).join(' · ');
-            const aiScore = getStoryAiScore(story);
-            const manualPriorityRank = getManualPriorityRank(story);
-            const focusAligned = isStoryFocusAligned(story);
-            const isStoryTop3 = isTop3Story(story);
-            const suggestedManualRank = manualPriorityRank || getNextManualPriorityRank(
-              stories.filter((entry) => entry.status !== 4),
-              String((story as any).persona || 'personal'),
-              story.id,
-            );
-            return (
-              <ListGroup.Item
-                key={story.id}
-                className="mobile-task-item d-flex align-items-start"
-                style={themeColor ? { borderLeft: `4px solid ${themeColor}` } : undefined}
-              >
-                <div className="flex-grow-1">
-                  <div className="d-flex justify-content-between align-items-start">
-                    <div>
-                      <div className="fw-semibold">{story.title}</div>
-                      <div className="text-muted small">
-                        {story.ref} · {goal ? `Goal: ${goal.title}` : 'No goal linked'}
-                      </div>
-                      {acceptance && (
-                        <div className="text-muted small">{acceptance}</div>
-                      )}
-                    </div>
-                    <div className="d-flex flex-column align-items-end gap-1">
-                      {(() => {
-                        const stPr = getPriorityBadge(story.priority);
-                        return (
-                          <select
-                            className="dashboard-chip-select"
-                            value={Number(story.priority ?? 0)}
-                            onChange={(e) => updateStoryField(story, { priority: Number(e.target.value) as any })}
-                            style={{ backgroundColor: `var(--bs-${stPr.bg})`, color: stPr.bg === 'warning' || stPr.bg === 'light' ? '#000' : '#fff' }}
-                          >
-                            <option value={0}>None</option>
-                            <option value={1}>Low</option>
-                            <option value={2}>Medium</option>
-                            <option value={3}>High</option>
-                            <option value={4}>Critical</option>
-                          </select>
-                        );
-                      })()}
-                    </div>
-                  </div>
-                  <div className="d-flex flex-wrap gap-2 align-items-center mt-2">
-                    <Form.Select
-                      size="sm"
-                      className="dashboard-chip-select"
-                      value={Number(story.status)}
-                      onChange={(e) => updateStoryField(story, { status: Number(e.target.value) as any })}
-                      style={{ minWidth: 160 }}
-                    >
-                      {ChoiceHelper.getOptions('story','status').map(opt => (
-                        <option key={opt.value} value={opt.value}>{opt.label}</option>
-                      ))}
-                    </Form.Select>
-                    <Form.Select
-                      size="sm"
-                      className="dashboard-chip-select"
-                      value={Number((story as any).progressPct || 0)}
-                      onChange={(e) => void updateStoryProgress(story, Number(e.target.value))}
-                      style={{ minWidth: 180 }}
-                    >
-                      {MOBILE_STORY_PROGRESS_OPTIONS.map((pct) => (
-                        <option key={pct} value={pct}>
-                          {formatStoryProgressLabel(story.points, pct)}
-                        </option>
-                      ))}
-                    </Form.Select>
-                    <Button variant="outline-secondary" size="sm" onClick={() => openNoteModal('story', story.id)}>Add Note</Button>
-                    <Button
-                      variant={manualPriorityRank ? 'danger' : 'outline-warning'}
-                      size="sm"
-                      disabled={flaggingStoryId === story.id}
-                      onClick={() => handleFlagPriorityStory(story)}
-                      title={manualPriorityRank ? `Remove manual ${getManualPriorityLabel(story)}` : `Set manual #${suggestedManualRank} priority`}
-                    >
-                      <AlertCircle size={14} /> #{manualPriorityRank || suggestedManualRank}
-                    </Button>
-                    <Button
-                      variant="outline-secondary"
-                      size="sm"
-                      onClick={() => setDeferTarget({ type: 'story', id: story.id, title: story.title })}
-                    >
-                      <Clock3 size={14} className="me-1" /> Defer
-                    </Button>
-                    <Button variant="outline-primary" size="sm" onClick={() => setEditingStory(story)}>Edit</Button>
-                  </div>
-                  <div className="d-flex flex-wrap gap-2 mt-2">
-                    <Badge pill bg="dark">Pts {story.points || 0}</Badge>
-                    <Badge pill bg="light" text="dark">
-                      {formatStoryProgressLabel(story.points, (story as any).progressPct || 0)}
-                    </Badge>
-                    {manualPriorityRank && <Badge pill bg="danger">{getManualPriorityLabel(story)}</Badge>}
-                    {isStoryTop3 && <Badge pill bg="warning" text="dark">Top 3</Badge>}
-                    {focusAligned && <Badge pill bg="success">Focus</Badge>}
-                    {aiScore != null && <Badge pill bg="secondary">AI {Math.round(aiScore)}/100</Badge>}
-                    {sprintDaysLeft != null && (
-                      <Badge
-                        pill
-                        style={{
-                          backgroundColor: themeColor || '#1f2937',
-                          color: '#fff',
-                          fontWeight: 500,
-                        }}
-                      >
-                        {sprintDaysLeft}d sprint
-                      </Badge>
-                    )}
-                  </div>
+          <div className="pt-1">
+            {visibleStoryRows.map(story => {
+              const goal = goalsById.get(story.goalId);
+              return (
+                <div key={story.id} style={{ marginBottom: 8 }}>
+                  <KanbanCardV2
+                    item={story}
+                    type="story"
+                    goal={goal}
+                    showDescription={false}
+                    onEdit={() => setEditingStory(story)}
+                  />
                 </div>
-              </ListGroup.Item>
-            );
-          })}
-        </ListGroup>
+              );
+            })}
+          </div>
         )
       )}
 

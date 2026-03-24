@@ -17,6 +17,8 @@ import EditStoryModal from './EditStoryModal';
 import EditTaskModal from './EditTaskModal';
 import NewCalendarEventModal, { type BlockFormState, toInputValue } from './planner/NewCalendarEventModal';
 import PlannerWorkCard from './planner/PlannerWorkCard';
+import KanbanCardV2 from './KanbanCardV2';
+import { Clock3 } from 'lucide-react';
 import { useFocusGoals } from '../hooks/useFocusGoals';
 import {
   buildPlannerItems,
@@ -698,94 +700,141 @@ const DailyPlanPage: React.FC = () => {
 
   const renderPlannerCard = (item: PlannerItem) => {
     const recommendation = recommendationByItemId.get(item.id) || null;
+
+    // LIST MODE: simple row with checkbox + title + clock/defer icon
+    if (mode === 'list') {
+      const deferType = item.kind === 'story' ? 'story' : 'task';
+      const itemGoalTitle = item.goalId ? goals.find(g => g.id === item.goalId)?.title : undefined;
+      return (
+        <div key={item.id} className="d-flex align-items-center gap-2 py-2 px-1 border-bottom">
+          <Form.Check
+            type="checkbox"
+            checked={applyingKey === item.id}
+            disabled={applyingKey === item.id}
+            onChange={() => void handleItemDone(item)}
+            aria-label={`Complete ${item.title}`}
+            style={{ flexShrink: 0 }}
+          />
+          <div className="flex-grow-1" style={{ minWidth: 0 }}>
+            <div className="text-truncate" style={{ fontSize: 14, fontWeight: 500 }}>{item.title}</div>
+            {itemGoalTitle && (
+              <div className="text-muted text-truncate" style={{ fontSize: 11 }}>{itemGoalTitle}</div>
+            )}
+          </div>
+          <button
+            type="button"
+            style={{ background: 'none', border: 'none', padding: '4px 6px', color: 'var(--bs-secondary)', cursor: 'pointer', flexShrink: 0 }}
+            title="Defer"
+            onClick={() => setDeferTarget({ type: deferType, id: item.sourceId || '', title: item.title, isFocusAligned: item.isFocusAligned })}
+          >
+            <Clock3 size={14} />
+          </button>
+        </div>
+      );
+    }
+
+    // NON-LIST: calendar events keep PlannerWorkCard (planner-specific interactions)
+    if (item.kind === 'event') {
+      return (
+        <PlannerWorkCard
+          key={item.id}
+          item={item}
+          context="daily"
+          isMobileLayout={isMobileLayout}
+          applyingKey={applyingKey}
+          showDoneControl={true}
+          doneAsCheckbox={false}
+          showInlineRecommendation={!!recommendation && (mode === 'review' || reviewItemIds.has(item.id))}
+          recommendation={recommendation}
+          expanded={!!expandedGroups[item.id]}
+          onToggleExpanded={(nextItem) => setExpandedGroups((prev) => ({ ...prev, [nextItem.id]: !prev[nextItem.id] }))}
+          onToggleDone={(nextItem) => { void handleItemDone(nextItem); }}
+          onOpenActivity={(nextItem) => showSidebar(nextItem.rawTask ? nextItem.rawTask as any : nextItem.rawStory as any, nextItem.rawTask ? 'task' : 'story')}
+          onOpenEditor={openItemEditor}
+          onSchedule={setScheduleTarget}
+          onMove={(nextItem) => {
+            const fallbackRecommendation = buildPlannerRecommendation({ item: nextItem, weekStartMs: todayStartMs, weekEndMs: todayEndMs, dailyLoadHours, nextSprint });
+            setMoveModal({ item: nextItem, recommendation: recommendationByItemId.get(nextItem.id) || fallbackRecommendation || null });
+          }}
+          onDefer={(nextItem) => {
+            if (nextItem.childItems?.length) return;
+            setDeferTarget({ type: 'task', id: nextItem.sourceId || '', title: nextItem.title, isFocusAligned: nextItem.isFocusAligned });
+          }}
+          onAcceptRecommendation={(nextItem) => { const rec = recommendationByItemId.get(nextItem.id); if (rec) void applyRecommendation(nextItem, rec); }}
+          onCycleStatus={(nextItem) => { if (nextItem.rawTask) cycleTaskStatus(nextItem.rawTask); else if (nextItem.rawStory) cycleStoryStatus(nextItem.rawStory); }}
+          onCyclePriority={(nextItem) => { if (nextItem.rawTask) cycleTaskPriority(nextItem.rawTask); else if (nextItem.rawStory) cycleStoryPriority(nextItem.rawStory); }}
+          onStatusChange={(nextItem, nextStatus) => { if (nextItem.rawTask) updateTaskQuick(nextItem.rawTask, { status: nextStatus as any }); else if (nextItem.rawStory) updateStoryQuick(nextItem.rawStory, { status: nextStatus as any }); }}
+          onPriorityChange={(nextItem, nextPriority) => { if (nextItem.rawTask) updateTaskQuick(nextItem.rawTask, { priority: nextPriority as any }); else if (nextItem.rawStory) updateStoryQuick(nextItem.rawStory, { priority: nextPriority as any }); }}
+        />
+      );
+    }
+
+    // Stories, tasks, chores → KanbanCardV2 (visual parity with /sprints/kanban)
+    const rawItem = item.rawStory ?? item.rawTask;
+    if (!rawItem) return null;
+    const cardType: 'story' | 'task' = item.rawStory ? 'story' : 'task';
+    const itemGoal = item.goalId ? goals.find(g => g.id === item.goalId) : undefined;
+    const parentStory = cardType === 'task' && item.rawTask
+      ? stories.find(s => s.id === (item.rawTask as any)?.storyId)
+      : undefined;
+    const scheduledBlock = item.scheduledBlockId ? {
+      id: item.scheduledBlockId,
+      start: item.scheduledBlockStart ?? 0,
+      end: item.scheduledBlockEnd ?? 0,
+      sourceNote: item.scheduledSourceLabel ?? undefined,
+    } : undefined;
+
     return (
-      <PlannerWorkCard
-        item={item}
-        context="daily"
-        isMobileLayout={isMobileLayout}
-        applyingKey={applyingKey}
-        showDoneControl={mode !== 'review'}
-        doneAsCheckbox={mode === 'list'}
-        showInlineRecommendation={!!recommendation && (mode === 'review' || reviewItemIds.has(item.id))}
-        recommendation={recommendation}
-        expanded={!!expandedGroups[item.id]}
-        onToggleExpanded={(nextItem) => setExpandedGroups((prev) => ({ ...prev, [nextItem.id]: !prev[nextItem.id] }))}
-        onToggleDone={(nextItem) => { void handleItemDone(nextItem); }}
-        onOpenActivity={(nextItem) => showSidebar(nextItem.rawTask ? nextItem.rawTask as any : nextItem.rawStory as any, nextItem.rawTask ? 'task' : 'story')}
-        onOpenEditor={openItemEditor}
-        onSchedule={setScheduleTarget}
-        onMove={(nextItem) => {
-          console.info('[DailyPlanPage] move_clicked', {
-            itemId: nextItem.id,
-            itemKind: nextItem.kind,
-            sourceId: nextItem.sourceId || null,
-          });
-          const fallbackRecommendation = nextItem.kind === 'chore'
-            ? buildPlannerRecommendation({
-              item: nextItem,
-              weekStartMs: todayStartMs,
-              weekEndMs: todayEndMs,
-              dailyLoadHours,
-              nextSprint,
-            })
-            : null;
-          const nextRecommendation = recommendationByItemId.get(nextItem.id) || fallbackRecommendation || null;
-          console.info('[DailyPlanPage] move_modal_opened', {
-            itemId: nextItem.id,
-            itemKind: nextItem.kind,
-            recommendation: nextRecommendation || null,
-          });
-          setMoveModal({ item: nextItem, recommendation: nextRecommendation });
-          if (nextItem.kind === 'chore' && nextRecommendation?.targetDateMs != null) {
-            setPageMessage({
-              variant: 'success',
-              text: `${nextItem.title} move defaults were prefilled using its recurrence and current load.`,
-            });
-          }
-        }}
-        onDefer={(nextItem) => {
-          console.info('[DailyPlanPage] defer_clicked', {
-            itemId: nextItem.id,
-            itemKind: nextItem.kind,
-            sourceId: nextItem.sourceId || null,
-          });
-          if (nextItem.kind === 'event' || nextItem.childItems?.length) return;
-          const recurringRecommendation = nextItem.kind === 'chore'
-            ? buildPlannerRecommendation({
-              item: nextItem,
-              weekStartMs: todayStartMs,
-              weekEndMs: todayEndMs,
-              dailyLoadHours,
-              nextSprint,
-            })
-            : null;
-          if (recurringRecommendation?.action === 'next_recurrence') {
-            void applyRecommendation(nextItem, recurringRecommendation);
-            return;
-          }
-          setDeferTarget({ type: nextItem.kind === 'story' ? 'story' : 'task', id: nextItem.sourceId || '', title: nextItem.title, isFocusAligned: nextItem.isFocusAligned });
-        }}
-        onAcceptRecommendation={(nextItem) => {
-          const nextRecommendation = recommendationByItemId.get(nextItem.id);
-          if (nextRecommendation) void applyRecommendation(nextItem, nextRecommendation);
-        }}
-        onCycleStatus={(nextItem) => {
-          if (nextItem.rawTask) cycleTaskStatus(nextItem.rawTask);
-          else if (nextItem.rawStory) cycleStoryStatus(nextItem.rawStory);
-        }}
-        onCyclePriority={(nextItem) => {
-          if (nextItem.rawTask) cycleTaskPriority(nextItem.rawTask);
-          else if (nextItem.rawStory) cycleStoryPriority(nextItem.rawStory);
-        }}
-        onStatusChange={(nextItem, nextStatus) => {
-          if (nextItem.rawTask) updateTaskQuick(nextItem.rawTask, { status: nextStatus as any });
-          else if (nextItem.rawStory) updateStoryQuick(nextItem.rawStory, { status: nextStatus as any });
-        }}
-        onPriorityChange={(nextItem, nextPriority) => {
-          if (nextItem.rawTask) updateTaskQuick(nextItem.rawTask, { priority: nextPriority as any });
-          else if (nextItem.rawStory) updateStoryQuick(nextItem.rawStory, { priority: nextPriority as any });
-        }}
-      />
+      <div key={item.id} style={{ marginBottom: 8 }}>
+        <KanbanCardV2
+          item={rawItem}
+          type={cardType}
+          goal={itemGoal}
+          story={parentStory}
+          isFocusAligned={item.isFocusAligned}
+          scheduledBlock={scheduledBlock}
+          showDescription={false}
+          onEdit={() => openItemEditor(item)}
+        />
+        {mode !== 'checkin' && (
+          <div
+            className="d-flex align-items-center gap-2 px-2 py-1"
+            style={{
+              background: 'var(--notion-hover)',
+              borderTop: '1px solid rgba(0,0,0,0.06)',
+              borderRadius: '0 0 6px 6px',
+              marginTop: -2,
+            }}
+          >
+            <Button
+              size="sm"
+              variant="link"
+              className="p-0 text-success"
+              style={{ fontSize: 12 }}
+              onClick={() => void handleItemDone(item)}
+              disabled={applyingKey === item.id}
+            >
+              ✓ Done
+            </Button>
+            {recommendation && (
+              <>
+                <span className="text-muted flex-grow-1 text-truncate" style={{ fontSize: 11 }}>
+                  {recommendation.rationale}
+                </span>
+                <Button
+                  size="sm"
+                  variant="link"
+                  className="p-0 text-primary"
+                  style={{ fontSize: 12, flexShrink: 0 }}
+                  onClick={() => void applyRecommendation(item, recommendation)}
+                >
+                  Accept
+                </Button>
+              </>
+            )}
+          </div>
+        )}
+      </div>
     );
   };
 
@@ -899,7 +948,7 @@ const DailyPlanPage: React.FC = () => {
             filteredTimelineItems.length === 0 ? (
               <Alert variant="light" className="mb-0">No items in the current list view.</Alert>
             ) : (
-              <div className="d-flex flex-column gap-2">
+              <div>
                 {filteredTimelineItems.map((item) => renderPlannerCard(item))}
               </div>
             )

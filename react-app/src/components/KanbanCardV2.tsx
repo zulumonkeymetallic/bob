@@ -13,6 +13,7 @@ import { themeVars } from '../utils/themeVars';
 import type { GlobalTheme } from '../constants/globalThemes';
 import { resolveThemeFromValue } from '../utils/themeResolver';
 import { useAuth } from '../contexts/AuthContext';
+import { useDetailLevel } from '../contexts/DetailLevelContext';
 import { addDoc, collection, serverTimestamp, updateDoc, doc, getDocs, query, where } from 'firebase/firestore';
 import { ActivityStreamService } from '../services/ActivityStreamService';
 import DeferItemModal from './DeferItemModal';
@@ -35,6 +36,7 @@ interface KanbanCardV2Props {
     showLatestNote?: boolean;
     showTags?: boolean;
     latestNote?: string;
+    detailLevel?: 'full' | 'compact' | 'minimal';
     scheduledBlock?: {
         id: string;
         start: number;
@@ -76,7 +78,10 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
     steamMeta,
     showTags,
     isFocusAligned = false,
+    detailLevel: detailLevelProp,
 }) => {
+    const { detailLevel: ctxDetailLevel } = useDetailLevel();
+    const detailLevel = detailLevelProp ?? ctxDetailLevel;
     const ref = useRef<HTMLDivElement>(null);
     const [dragging, setDragging] = useState(false);
     const { showSidebar } = useSidebar();
@@ -788,42 +793,46 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                     {item.title || `Untitled ${type}`}
                 </div>
 
-                {showDescription && item.description && item.description.trim().length > 0 && (
+                {detailLevel !== 'minimal' && showDescription && item.description && item.description.trim().length > 0 && (
                     <div className="kanban-card__description">
                         {item.description}
                     </div>
                 )}
 
                 <div className="kanban-card__quick-edit">
-                    <select
-                        className="kanban-card__chip-select"
-                        value={priorityValue}
-                        onChange={handlePriorityChange}
-                        onClick={(e) => e.stopPropagation()}
-                        onPointerDown={(e) => e.stopPropagation()}
-                        disabled={updatingField === 'priority'}
-                        title="Priority"
-                        style={{
-                            backgroundColor: `var(--bs-${priorityBadge.bg})`,
-                            color: priorityBadge.bg === 'warning' || priorityBadge.bg === 'orange' || priorityBadge.bg === 'light' ? '#000' : '#fff',
-                        }}
-                    >
-                        <option value={0}>None</option>
-                        <option value={1}>Low</option>
-                        <option value={2}>Medium</option>
-                        <option value={3}>High</option>
-                        <option value={4}>Critical</option>
-                    </select>
-                    <input
-                        type="date"
-                        className="kanban-card__chip-date"
-                        value={dueInputValue}
-                        onChange={handleDueDateChange}
-                        onClick={(e) => e.stopPropagation()}
-                        onPointerDown={(e) => e.stopPropagation()}
-                        disabled={updatingField === 'dueDate'}
-                        title="Due date"
-                    />
+                    {detailLevel !== 'minimal' && (
+                        <select
+                            className="kanban-card__chip-select"
+                            value={priorityValue}
+                            onChange={handlePriorityChange}
+                            onClick={(e) => e.stopPropagation()}
+                            onPointerDown={(e) => e.stopPropagation()}
+                            disabled={updatingField === 'priority'}
+                            title="Priority"
+                            style={{
+                                backgroundColor: `var(--bs-${priorityBadge.bg})`,
+                                color: priorityBadge.bg === 'warning' || priorityBadge.bg === 'orange' || priorityBadge.bg === 'light' ? '#000' : '#fff',
+                            }}
+                        >
+                            <option value={0}>None</option>
+                            <option value={1}>Low</option>
+                            <option value={2}>Medium</option>
+                            <option value={3}>High</option>
+                            <option value={4}>Critical</option>
+                        </select>
+                    )}
+                    {detailLevel !== 'minimal' && (
+                        <input
+                            type="date"
+                            className="kanban-card__chip-date"
+                            value={dueInputValue}
+                            onChange={handleDueDateChange}
+                            onClick={(e) => e.stopPropagation()}
+                            onPointerDown={(e) => e.stopPropagation()}
+                            disabled={updatingField === 'dueDate'}
+                            title="Due date"
+                        />
+                    )}
                     <select
                         className="kanban-card__chip-select"
                         value={statusValue}
@@ -856,7 +865,7 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                     </select>
                 </div>
 
-                {resolvedShowTags && visibleTags.length > 0 && (
+                {detailLevel !== 'minimal' && resolvedShowTags && visibleTags.length > 0 && (
                     <div className="kanban-card__tags">
                         {visibleTags.map((tag: string) => {
                             const formatted = formatTag ? formatTag(tag) : tag;
@@ -875,19 +884,19 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                         )}
                     </div>
                 )}
-                {showLatestNote && trimmedNote && (
+                {detailLevel === 'full' && showLatestNote && trimmedNote && (
                     <div className="kanban-card__note">
                         <span className="kanban-card__note-label">Last note:</span>{' '}
                         {trimmedNote}
                     </div>
                 )}
-                {type === 'story' && storyLastComment && (
+                {detailLevel === 'full' && type === 'story' && storyLastComment && (
                     <div className="kanban-card__note">
                         <span className="kanban-card__note-label">Last comment:</span>{' '}
                         {storyLastComment}
                     </div>
                 )}
-                {showSteamInfo && (
+                {detailLevel === 'full' && showSteamInfo && (
                     <div className="kanban-card__steam">
                         <span className="kanban-card__steam-label">Steam</span>
                         <span>{steamPlaytimeHours != null ? ` ${steamPlaytimeHours}h` : ' —'}</span>
@@ -896,6 +905,7 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                         )}
                     </div>
                 )}
+                {detailLevel !== 'minimal' && (
                 <div className="kanban-card__meta">
                     {type === 'story' && manualPriorityRank && (
                         <span
@@ -963,34 +973,35 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                             Deferred
                         </span>
                     )}
-                    {type === 'story' && (
+                    {detailLevel === 'full' && type === 'story' && (
                         <span className="kanban-card__meta-badge" title="Story points">
                             {((item as Story).points ?? 0)} pts
                         </span>
                     )}
-                    {type === 'story' && storyProgressPct != null && (
+                    {detailLevel === 'full' && type === 'story' && storyProgressPct != null && (
                         <span className="kanban-card__meta-badge" title="Story progress percentage">
                             Progress {storyProgressPct}%
                         </span>
                     )}
-                    {type === 'task' && (item as Task).effort && (
+                    {detailLevel === 'full' && type === 'task' && (item as Task).effort && (
                         <span className="kanban-card__meta-badge" title="Effort">
                             {(item as Task).effort}
                         </span>
                     )}
-                    {(item as any).aiCriticalityScore != null ? (
+                    {detailLevel === 'full' && (item as any).aiCriticalityScore != null ? (
                         <span className="kanban-card__meta-badge" title={aiReason ? `AI reason: ${aiReason}` : 'AI score'}>
                             AI&nbsp;
                             {Math.round(Number((item as any).aiCriticalityScore))}
                         </span>
                     ) : null}
                 </div>
-                {scheduledBlockLabel && (scheduledBlockSourceLabel || scheduledBlockSourceNote) && (
+                )}
+                {detailLevel === 'full' && scheduledBlockLabel && (scheduledBlockSourceLabel || scheduledBlockSourceNote) && (
                     <div className={scheduledBlockSourceClassName}>
                         {scheduledBlockSourceLabel || scheduledBlockSourceNote}
                     </div>
                 )}
-                {scheduledBlockLabel && scheduledBlockConfidence != null && (
+                {detailLevel === 'full' && scheduledBlockLabel && scheduledBlockConfidence != null && (
                     <div className="kanban-card__meta-text">
                         Match confidence {scheduledBlockConfidence}%{scheduledBlockConfidenceTier ? ` (${scheduledBlockConfidenceTier})` : ''}
                     </div>

@@ -15,9 +15,11 @@ import { useSidebar } from '../contexts/SidebarContext';
 import GLOBAL_THEMES from '../constants/globalThemes';
 import SprintSelector from './SprintSelector';
 import ThemeMultiSelect from './shared/ThemeMultiSelect';
+import GoalMultiSelect from './shared/GoalMultiSelect';
 import EditStoryModal from './EditStoryModal';
 import EditTaskModal from './EditTaskModal';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
+import { useDetailLevel } from '../contexts/DetailLevelContext';
 import { useFocusGoals } from '../hooks/useFocusGoals';
 import { getActiveFocusLeafGoalIds, isGoalInHierarchySet } from '../utils/goalHierarchy';
 import {
@@ -44,8 +46,7 @@ const SprintKanbanPageV2: React.FC = () => {
     const [loading, setLoading] = useState(true);
 
     const [themeFilterIds, setThemeFilterIds] = useState<number[]>([]);
-    const [goalFilter, setGoalFilter] = useState<string | null>(null);
-    const [goalSearch, setGoalSearch] = useState('');
+    const [goalFilterIds, setGoalFilterIds] = useState<string[]>([]);
     const [isFullscreen, setIsFullscreen] = useState(false);
     const [showDescriptions, setShowDescriptions] = useState(false);
     const [showLatestNotes, setShowLatestNotes] = useState(false);
@@ -57,6 +58,7 @@ const SprintKanbanPageV2: React.FC = () => {
     const [replanLoading, setReplanLoading] = useState(false);
     const [fullReplanLoading, setFullReplanLoading] = useState(false);
     const [replanFeedback, setReplanFeedback] = useState<string | null>(null);
+    const { detailLevel, setDetailLevel } = useDetailLevel();
     const boardContainerRef = React.useRef<HTMLDivElement>(null);
     const activeFocusGoalIds = useMemo(() => getActiveFocusLeafGoalIds(activeFocusGoals), [activeFocusGoals]);
 
@@ -268,12 +270,6 @@ const SprintKanbanPageV2: React.FC = () => {
 
 
 
-    const filteredGoals = goals.filter(g =>
-        g.title.toLowerCase().includes(goalSearch.toLowerCase())
-    );
-
-
-
     const handleEditItem = (item: Story | Task, type: 'story' | 'task') => {
         if (type === 'story') {
             setEditStory(item as Story);
@@ -353,33 +349,12 @@ const SprintKanbanPageV2: React.FC = () => {
                                 style={{ minWidth: 140 }}
                             />
 
-                            <Dropdown>
-                                <Dropdown.Toggle variant="outline-secondary" size="sm" style={{ minWidth: '160px', maxWidth: '240px' }} className="text-truncate">
-                                    {goalFilter ? (goals.find(g => g.id === goalFilter)?.title || 'Unknown Goal') : 'All Goals'}
-                                </Dropdown.Toggle>
-                                <Dropdown.Menu style={{ maxHeight: '400px', overflowY: 'auto', minWidth: '260px' }}>
-                                    <div className="p-2 sticky-top bg-white border-bottom">
-                                        <Form.Control
-                                            size="sm"
-                                            placeholder="Search goals..."
-                                            value={goalSearch}
-                                            onChange={(e) => setGoalSearch(e.target.value)}
-                                            autoFocus
-                                        />
-                                    </div>
-                                    <Dropdown.Item onClick={() => setGoalFilter(null)} active={goalFilter === null}>All Goals</Dropdown.Item>
-                                    <Dropdown.Divider />
-                                    {filteredGoals.length > 0 ? (
-                                        filteredGoals.map(g => (
-                                            <Dropdown.Item key={g.id} onClick={() => setGoalFilter(g.id)} active={goalFilter === g.id}>
-                                                <div className="text-truncate" title={g.title}>{g.title}</div>
-                                            </Dropdown.Item>
-                                        ))
-                                    ) : (
-                                        <div className="p-2 text-muted small text-center">No goals found</div>
-                                    )}
-                                </Dropdown.Menu>
-                            </Dropdown>
+                            <GoalMultiSelect
+                                goals={goals}
+                                selectedIds={goalFilterIds}
+                                onChange={setGoalFilterIds}
+                                style={{ minWidth: 160 }}
+                            />
 
                             <Button
                                 variant="outline-secondary"
@@ -455,6 +430,19 @@ const SprintKanbanPageV2: React.FC = () => {
                                         <option value="due">Sort: Due date</option>
                                         <option value="priority">Sort: Priority</option>
                                         <option value="default">Sort: Default</option>
+                                    </Form.Select>
+                                </Form.Group>
+
+                                <Form.Group className="ms-2">
+                                    <Form.Select
+                                        size="sm"
+                                        value={detailLevel}
+                                        onChange={(e) => setDetailLevel(e.target.value as any)}
+                                        title="Card detail level"
+                                    >
+                                        <option value="full">Detail: Full</option>
+                                        <option value="compact">Detail: Compact</option>
+                                        <option value="minimal">Detail: Minimal</option>
                                     </Form.Select>
                                 </Form.Group>
 
@@ -602,7 +590,7 @@ const SprintKanbanPageV2: React.FC = () => {
                                 <KanbanBoardV2
                                     sprintId={filterSprintId}
                                     themeFilter={themeFilterIds.length > 0 ? themeFilterIds : null}
-                                    goalFilter={goalFilter}
+                                    goalFilter={goalFilterIds.length > 0 ? goalFilterIds : null}
                                     focusOnly={showFocusOnly}
                                     focusGoalIds={activeFocusGoalIds}
                                     onItemSelect={(item, type) => showSidebar(item, type)}
@@ -612,6 +600,7 @@ const SprintKanbanPageV2: React.FC = () => {
                                     dueFilter={dueFilter}
                                     sortBy={sortBy}
                                     themes={globalThemes}
+                                    detailLevel={detailLevel}
                                 />
                         </Card.Body>
                     </Card>

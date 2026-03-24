@@ -43,6 +43,7 @@ import { ProcessTextActivityProvider } from './contexts/ProcessTextActivityConte
 // Import theme-aware styles
 import './styles/theme-aware.css';
 import { TestModeProvider } from './contexts/TestModeContext';
+import { DetailLevelProvider } from './contexts/DetailLevelContext';
 import PersonaSwitcher from './components/PersonaSwitcher';
 import GlobalSidebar from './components/GlobalSidebar';
 import { useDeviceInfo } from './utils/deviceDetection';
@@ -107,6 +108,7 @@ import YoutubeSettings from './components/settings/integrations/YoutubeSettings'
 import TelegramSettings from './components/settings/integrations/TelegramSettings';
 import LLMSettings from './components/settings/LLMSettings';
 import PublicGoalView from './components/PublicGoalView';
+import PublicRoadmapView from './components/PublicRoadmapView';
 import { useEntityAudit } from './hooks/useEntityAudit';
 import DeepLinkStory from './components/routes/DeepLinkStory';
 import DeepLinkGoal from './components/routes/DeepLinkGoal';
@@ -128,17 +130,19 @@ const TravelMap = React.lazy(() => import('./components/travel/TravelMap'));
 function App() {
   return (
     <TestModeProvider>
-      <PersonaProvider>
-        <SprintProvider>
-          <ProcessTextActivityProvider>
-            <SidebarProvider>
-              <Router>
-                <AppContent />
-              </Router>
-            </SidebarProvider>
-          </ProcessTextActivityProvider>
-        </SprintProvider>
-      </PersonaProvider>
+      <DetailLevelProvider>
+        <PersonaProvider>
+          <SprintProvider>
+            <ProcessTextActivityProvider>
+              <SidebarProvider>
+                <Router>
+                  <AppContent />
+                </Router>
+              </SidebarProvider>
+            </ProcessTextActivityProvider>
+          </SprintProvider>
+        </PersonaProvider>
+      </DetailLevelProvider>
     </TestModeProvider>
   );
 }
@@ -515,6 +519,7 @@ function AppContent() {
             
             {/* Public shared goals */}
             <Route path="/share/:shareCode" element={<PublicGoalView />} />
+            <Route path="/public/roadmap/:shareCode" element={<PublicRoadmapView />} />
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
 

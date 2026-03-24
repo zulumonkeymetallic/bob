@@ -138,6 +138,31 @@ const resolveGoalYear = (goal: Goal): number | null => {
 
 const formatMoney = (v: number) => v.toLocaleString('en-GB', { style: 'currency', currency: 'GBP' });
 
+// Hex → RGB helper for gradient computation
+function hexToRgb(hex: string) {
+  const h = hex.replace('#', '');
+  const n = parseInt(h.length === 3 ? h.split('').map(c => c + c).join('') : h, 16);
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+}
+function rgbToHex(r: number, g: number, b: number) {
+  return '#' + [r, g, b].map(v => Math.round(Math.max(0, Math.min(255, v))).toString(16).padStart(2, '0')).join('');
+}
+function lightenHex(hex: string, amount: number) {
+  try {
+    const { r, g, b } = hexToRgb(hex);
+    const f = Math.max(0, Math.min(1, amount));
+    return rgbToHex(r + (255 - r) * f, g + (255 - g) * f, b + (255 - b) * f);
+  } catch {
+    return hex;
+  }
+}
+function withAlphaColor(color: string, alpha: number) {
+  const pct = Math.round(Math.max(0, Math.min(1, alpha)) * 100);
+  if (pct <= 0) return 'transparent';
+  if (pct >= 100) return color;
+  return `color-mix(in srgb, ${color} ${pct}%, transparent)`;
+}
+
 const GoalYearCard: React.FC<{
   goal: Goal;
   themePalette: any[];
@@ -175,103 +200,96 @@ const GoalYearCard: React.FC<{
     });
   }, [goal]);
 
-  const themeColor = goalThemeColor(goal, themePalette) || (themeVars.brand as string);
+  const themeColor = goalThemeColor(goal, themePalette) || '#6c757d';
   const statusLabel = getStatusName(goal.status);
   const themeLabel = getThemeName(goal.theme);
+  const targetYear = resolveGoalYear(goal);
+
+  // GoalsCardView-style gradient background
+  const gradientStart = lightenHex(themeColor, 0.55);
+  const gradientEnd = lightenHex(themeColor, 0.78);
+  const cardBg = `linear-gradient(165deg, ${gradientStart} 0%, ${gradientEnd} 100%)`;
+
+  // Badge style using theme color
+  const badgeStyle: React.CSSProperties = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    padding: '2px 7px',
+    borderRadius: 20,
+    fontSize: 10,
+    fontWeight: 600,
+    background: withAlphaColor(themeColor, 0.15),
+    color: themeColor,
+    border: `1px solid ${withAlphaColor(themeColor, 0.35)}`,
+    letterSpacing: '0.02em',
+  };
+
+  const yearBadgeStyle: React.CSSProperties = {
+    ...badgeStyle,
+    background: themeColor,
+    color: '#fff',
+    border: 'none',
+  };
+
+  const iconColor = themeColor;
 
   return (
     <Card
       ref={ref}
       className="kanban-card"
       style={{
-        border: `1px solid ${colorWithAlpha(themeColor, 0.35)}`,
-        background: 'var(--notion-bg)',
-        boxShadow: '0 6px 12px var(--glass-shadow-color)',
+        border: `1px solid ${withAlphaColor(themeColor, 0.3)}`,
+        background: cardBg,
+        boxShadow: '0 4px 12px var(--glass-shadow-color)',
         cursor: 'grab',
         opacity: dragging ? 0.6 : 1,
+        borderRadius: 14,
+        overflow: 'hidden',
+        transition: 'transform 0.2s, box-shadow 0.2s',
       }}
     >
-      <div style={{ height: 4, background: themeColor }} />
+      {/* Theme bar */}
+      <div style={{ height: 5, background: themeColor }} />
       <Card.Body style={{ padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {/* Title + action icons */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
-          <div style={{ fontWeight: 600, fontSize: 14, color: themeVars.text as string, lineHeight: 1.25 }}>
+          <div style={{ fontWeight: 600, fontSize: 14, color: 'var(--notion-text)', lineHeight: 1.25, flex: 1, minWidth: 0 }}>
             {goal.title || 'Untitled goal'}
           </div>
-          <div style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
-            <Button
-              variant="link"
-              size="sm"
-              className="p-0"
-              style={{ width: 20, height: 20, color: 'var(--notion-text)' }}
-              title="View activity stream"
-              onClick={(event) => {
-                event.stopPropagation();
-                onOpenActivity(goal);
-              }}
-            >
+          <div style={{ display: 'inline-flex', gap: 4, alignItems: 'center', flexShrink: 0 }}>
+            <Button variant="link" size="sm" className="p-0" style={{ width: 20, height: 20, color: iconColor }} title="Activity" onClick={e => { e.stopPropagation(); onOpenActivity(goal); }}>
               <Activity size={13} />
             </Button>
-            <Button
-              variant="link"
-              size="sm"
-              className="p-0"
-              style={{ width: 20, height: 20, color: 'var(--notion-text)' }}
-              title="Edit goal"
-              onClick={(event) => {
-                event.stopPropagation();
-                onEdit(goal);
-              }}
-            >
+            <Button variant="link" size="sm" className="p-0" style={{ width: 20, height: 20, color: iconColor }} title="Edit" onClick={e => { e.stopPropagation(); onEdit(goal); }}>
               <Edit3 size={13} />
             </Button>
-            <Button
-              variant="link"
-              size="sm"
-              className="p-0"
-              style={{ width: 20, height: 20, color: 'var(--notion-text)' }}
-              title="Auto-generate stories"
-              disabled={generatingGoalId === goal.id}
-              onClick={(event) => {
-                event.stopPropagation();
-                onAutoGenerateStories(goal);
-              }}
-            >
+            <Button variant="link" size="sm" className="p-0" style={{ width: 20, height: 20, color: iconColor }} title="Generate stories" disabled={generatingGoalId === goal.id} onClick={e => { e.stopPropagation(); onAutoGenerateStories(goal); }}>
               <Wand2 size={13} />
             </Button>
-            <Button
-              variant="link"
-              size="sm"
-              className="p-0"
-              style={{ width: 20, height: 20, color: 'var(--notion-text)' }}
-              title="Generate calendar blocks"
-              disabled={schedulingGoalId === goal.id}
-              onClick={(event) => {
-                event.stopPropagation();
-                onScheduleGoal(goal);
-              }}
-            >
+            <Button variant="link" size="sm" className="p-0" style={{ width: 20, height: 20, color: iconColor }} title="Schedule calendar blocks" disabled={schedulingGoalId === goal.id} onClick={e => { e.stopPropagation(); onScheduleGoal(goal); }}>
               <CalendarPlus size={13} />
             </Button>
           </div>
         </div>
-        <div className="kanban-card__meta">
-          <span className="kanban-card__meta-badge">{themeLabel || 'General'}</span>
-          <span className="kanban-card__meta-badge">{statusLabel}</span>
+
+        {/* Theme-colored badges: theme, status, year, kind */}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+          <span style={badgeStyle}>{themeLabel || 'General'}</span>
+          <span style={badgeStyle}>{statusLabel}</span>
+          {targetYear && <span style={yearBadgeStyle}>{targetYear}</span>}
           {(goal as any).goalKind && (
-            <span className="kanban-card__meta-badge" style={{ textTransform: 'capitalize' }}>
-              {String((goal as any).goalKind)}
-            </span>
+            <span style={{ ...badgeStyle, textTransform: 'capitalize' }}>{String((goal as any).goalKind)}</span>
           )}
           {(goal as any).confidence != null && (
-            <span className="kanban-card__meta-badge">
+            <span style={badgeStyle}>
               {(goal as any).confidence === 3 ? 'High' : (goal as any).confidence === 2 ? 'Med' : 'Low'} confidence
             </span>
           )}
-          {(goal as any).ref && <span className="kanban-card__meta-text">{String((goal as any).ref)}</span>}
         </div>
-        {/* Target date — matches GoalsCardView */}
+
+        {/* Target date */}
         {(goal.targetDate || (goal as any).endDate) && (
-          <div style={{ fontSize: 11, color: themeVars.muted as string, display: 'flex', alignItems: 'center', gap: 4 }}>
+          <div style={{ fontSize: 11, color: themeColor, display: 'flex', alignItems: 'center', gap: 4, fontWeight: 500 }}>
             <span>🎯</span>
             <span>
               {goal.targetDate
@@ -280,30 +298,26 @@ const GoalYearCard: React.FC<{
             </span>
           </div>
         )}
+
         {showDescription && goal.description && (
-          <div style={{ fontSize: 11, color: themeVars.muted as string }}>
+          <div style={{
+            fontSize: 11,
+            color: 'var(--notion-text-secondary)',
+            padding: '6px 8px',
+            background: withAlphaColor(themeColor, 0.1),
+            borderRadius: 8,
+            border: `1px solid ${withAlphaColor(themeColor, 0.2)}`,
+            lineHeight: 1.4,
+          }}>
             {goal.description}
           </div>
         )}
-        <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-          <Button
-            size="sm"
-            variant="outline-primary"
-            onClick={(event) => {
-              event.stopPropagation();
-              onOpenWorkspace(goal);
-            }}
-          >
+
+        <div style={{ display: 'flex', gap: 8, marginTop: 2 }}>
+          <Button size="sm" style={{ background: withAlphaColor(themeColor, 0.15), border: `1px solid ${withAlphaColor(themeColor, 0.4)}`, color: themeColor, fontSize: 12 }} onClick={e => { e.stopPropagation(); onOpenWorkspace(goal); }}>
             Planner
           </Button>
-          <Button
-            size="sm"
-            variant="outline-secondary"
-            onClick={(event) => {
-              event.stopPropagation();
-              onEdit(goal);
-            }}
-          >
+          <Button size="sm" variant="outline-secondary" style={{ fontSize: 12 }} onClick={e => { e.stopPropagation(); onEdit(goal); }}>
             Edit
           </Button>
         </div>

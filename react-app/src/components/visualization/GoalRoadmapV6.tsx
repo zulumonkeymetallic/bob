@@ -19,6 +19,7 @@ import type { GoalTimelineAffectedStory } from './goalTimelineImpact';
 import SprintSelector from '../SprintSelector';
 import ThemeMultiSelect from '../shared/ThemeMultiSelect';
 import YearMultiSelect from '../shared/YearMultiSelect';
+import ShareGoalsPanel from '../shared/ShareGoalsPanel';
 import './GoalRoadmapV6.css';
 import { buildGoalTimelineImpactPlan } from './goalTimelineImpact';
 import { applyGoalTimelineChanges } from '../../utils/goalTimelineChanges';
@@ -1611,6 +1612,7 @@ const GoalRoadmapV6: React.FC = () => {
         <button className="grv6-ghost-btn" onClick={handleClearFilters}>Clear filters</button>
         <a className="grv6-link" href="/goals" target="_blank" rel="noreferrer">Goals list</a>
         <a className="grv6-link" href="/goals-management" target="_blank" rel="noreferrer">Card view</a>
+        {currentUser?.uid && <ShareGoalsPanel uid={currentUser.uid} />}
         <button
           className="grv6-fullscreen-toggle"
           onClick={toggleFullscreen}
