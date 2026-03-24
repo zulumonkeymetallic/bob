@@ -17,6 +17,7 @@ import EditGoalModal from '../EditGoalModal';
 import ConfirmSprintChangesModal from './ConfirmSprintChangesModal';
 import type { GoalTimelineAffectedStory } from './goalTimelineImpact';
 import SprintSelector from '../SprintSelector';
+import ThemeMultiSelect from '../shared/ThemeMultiSelect';
 import './GoalRoadmapV6.css';
 import { buildGoalTimelineImpactPlan } from './goalTimelineImpact';
 import { applyGoalTimelineChanges } from '../../utils/goalTimelineChanges';
@@ -448,7 +449,7 @@ const GoalRoadmapV6: React.FC = () => {
   const [activeDragGoalId, setActiveDragGoalId] = useState<string | null>(null);
 
   const [search, setSearch] = useState('');
-  const [themeFilter, setThemeFilter] = useState<number | 'all'>('all');
+  const [themeFilterIds, setThemeFilterIds] = useState<number[]>([]);
   const [sortMode, setSortMode] = useState<'start' | 'end'>('start');
   const [zoomLevel, setZoomLevel] = useState<'year' | 'quarter' | 'month' | 'week'>('year');
   const [zoomPercent, setZoomPercent] = useState<number>(5); // 5..100 mapped to levels
@@ -482,7 +483,7 @@ const GoalRoadmapV6: React.FC = () => {
 
   useEffect(() => {
     if (queryThemeIds.length === 1) {
-      setThemeFilter(queryThemeIds[0]);
+      setThemeFilterIds(queryThemeIds);
     }
   }, [queryThemeIds]);
 
@@ -717,7 +718,7 @@ const GoalRoadmapV6: React.FC = () => {
     const term = search.trim().toLowerCase();
     return goals.filter(g => {
       const themeId = migrateThemeValue((g as any).theme);
-      if (themeFilter !== 'all' && themeId !== themeFilter) return false;
+      if (themeFilterIds.length > 0 && !themeFilterIds.includes(themeId as number)) return false;
       if (queryThemeIdSet.size > 0 && !queryThemeIdSet.has(Number(themeId))) return false;
       if (queryGoalIdSet.size > 0 && !isGoalInHierarchySet(g.id, goals, queryGoalIdSet)) return false;
       if (showStoryGoalsOnly && !(storyPoints[g.id] > 0)) return false;
@@ -737,7 +738,7 @@ const GoalRoadmapV6: React.FC = () => {
       if (!term) return true;
       return (g.title || '').toLowerCase().includes(term);
     });
-  }, [goals, search, themeFilter, queryThemeIdSet, queryGoalIdSet, showStoryGoalsOnly, showFocusGoalsOnly, activeFocusGoalIds, storyPoints, respectSprintScope, selectedSprint, storySprintMap]);
+  }, [goals, search, themeFilterIds, queryThemeIdSet, queryGoalIdSet, showStoryGoalsOnly, showFocusGoalsOnly, activeFocusGoalIds, storyPoints, respectSprintScope, selectedSprint, storySprintMap]);
 
   const sortedGoals = useMemo(() => {
     const enriched = filteredGoals.map(goal => {
@@ -897,16 +898,6 @@ const GoalRoadmapV6: React.FC = () => {
     return { tasks: list, chartStart: startDate, chartEnd: endDate };
   }, [sortedGoals, globalThemes, storyDonePoints, storyPoints, potBalances, calendarBlocks, goalDateOverrides, handleScheduleGoal, handleGenerateStories, showSidebar, zoomLevel, zoomPercent, goals]);
 
-  const handleThemeChange = useCallback((val: string) => {
-    if (val === 'all') {
-      setThemeFilter('all');
-      return;
-    }
-    const parsed = Number(val);
-    if (!Number.isNaN(parsed)) {
-      setThemeFilter(parsed as number);
-    }
-  }, []);
 
   const levelToPercent = useCallback((level: typeof zoomLevel) => {
     switch (level) {
@@ -959,7 +950,7 @@ const GoalRoadmapV6: React.FC = () => {
 
   const handleClearFilters = useCallback(() => {
     setSearch('');
-    setThemeFilter('all');
+    setThemeFilterIds([]);
     setShowStoryGoalsOnly(false);
     setShowFocusGoalsOnly(activeFocusGoalIds.size > 0);
     setFocusToggleTouched(false);
@@ -1500,17 +1491,11 @@ const GoalRoadmapV6: React.FC = () => {
       </div>
       <div className="grv6-control-group">
         <label className="grv6-label">Theme</label>
-        <select
-          value={themeFilter === 'all' ? 'all' : String(themeFilter)}
-          onChange={e => handleThemeChange(e.target.value)}
-        >
-          <option value="all">All themes</option>
-          {themeOptions.map(t => (
-            <option key={t.id} value={t.id}>
-              {t.name}
-            </option>
-          ))}
-        </select>
+        <ThemeMultiSelect
+          selectedIds={themeFilterIds}
+          onChange={setThemeFilterIds}
+          style={{ minWidth: 140 }}
+        />
       </div>
       <div className="grv6-control-group">
         <label className="grv6-label">Arrange</label>

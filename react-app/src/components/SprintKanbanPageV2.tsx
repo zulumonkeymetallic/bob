@@ -14,6 +14,7 @@ import { isStatus } from '../utils/statusHelpers';
 import { useSidebar } from '../contexts/SidebarContext';
 import GLOBAL_THEMES from '../constants/globalThemes';
 import SprintSelector from './SprintSelector';
+import ThemeMultiSelect from './shared/ThemeMultiSelect';
 import EditStoryModal from './EditStoryModal';
 import EditTaskModal from './EditTaskModal';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
@@ -42,7 +43,7 @@ const SprintKanbanPageV2: React.FC = () => {
     const [goals, setGoals] = useState<Goal[]>([]); // Added goals state
     const [loading, setLoading] = useState(true);
 
-    const [themeFilter, setThemeFilter] = useState<number | null>(null);
+    const [themeFilterIds, setThemeFilterIds] = useState<number[]>([]);
     const [goalFilter, setGoalFilter] = useState<string | null>(null);
     const [goalSearch, setGoalSearch] = useState('');
     const [isFullscreen, setIsFullscreen] = useState(false);
@@ -271,7 +272,7 @@ const SprintKanbanPageV2: React.FC = () => {
         g.title.toLowerCase().includes(goalSearch.toLowerCase())
     );
 
-    const activeTheme = themeFilter !== null ? GLOBAL_THEMES.find(t => t.id === themeFilter) : null;
+
 
     const handleEditItem = (item: Story | Task, type: 'story' | 'task') => {
         if (type === 'story') {
@@ -346,27 +347,11 @@ const SprintKanbanPageV2: React.FC = () => {
                                 {isCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
                             </Button>
 
-                            <Dropdown>
-                                <Dropdown.Toggle variant="outline-secondary" size="sm" style={{ minWidth: '140px' }}>
-                                    {activeTheme ? activeTheme.label : 'All Themes'}
-                                </Dropdown.Toggle>
-                                <Dropdown.Menu style={{ maxHeight: '400px', overflowY: 'auto' }}>
-                                    <Dropdown.Item onClick={() => setThemeFilter(null)} active={themeFilter === null}>All Themes</Dropdown.Item>
-                                    <Dropdown.Divider />
-                                    {GLOBAL_THEMES.map((theme) => (
-                                        <Dropdown.Item
-                                            key={theme.id}
-                                            onClick={() => setThemeFilter(theme.id)}
-                                            active={themeFilter === theme.id}
-                                        >
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                                <div style={{ width: 12, height: 12, borderRadius: '50%', backgroundColor: theme.color }}></div>
-                                                {theme.label}
-                                            </div>
-                                        </Dropdown.Item>
-                                    ))}
-                                </Dropdown.Menu>
-                            </Dropdown>
+                            <ThemeMultiSelect
+                                selectedIds={themeFilterIds}
+                                onChange={setThemeFilterIds}
+                                style={{ minWidth: 140 }}
+                            />
 
                             <Dropdown>
                                 <Dropdown.Toggle variant="outline-secondary" size="sm" style={{ minWidth: '160px', maxWidth: '240px' }} className="text-truncate">
@@ -616,7 +601,7 @@ const SprintKanbanPageV2: React.FC = () => {
                         <Card.Body style={{ padding: '24px', height: '100%', overflow: 'hidden', backgroundColor: isFullscreen ? 'var(--bg)' : undefined }}>
                                 <KanbanBoardV2
                                     sprintId={filterSprintId}
-                                    themeFilter={themeFilter}
+                                    themeFilter={themeFilterIds.length > 0 ? themeFilterIds : null}
                                     goalFilter={goalFilter}
                                     focusOnly={showFocusOnly}
                                     focusGoalIds={activeFocusGoalIds}

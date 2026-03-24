@@ -695,6 +695,9 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
           marginRight: isRightSidebarVisible && window.innerWidth >= 768 ? (isRightSidebarCollapsed ? '60px' : '400px') : '0',
           transition: 'margin-right 0.3s ease',
           minWidth: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          height: '100%',
         }}
       >
         {/* Desktop top toolbar with global Sprint selector */}
@@ -744,7 +747,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
           </div>
         </div>
 
-        <main className="sidebar-layout-page">
+        <main className="sidebar-layout-page" style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
           <div className="sidebar-layout-banners">
             <CheckInBanner />
             <CoachVerdictBanner />

@@ -26,6 +26,7 @@ import { buildSprintCapacitySummary, storyPoints } from '../utils/plannerCapacit
 import { schedulePlannerItem as schedulePlannerItemMutation } from '../utils/plannerScheduling';
 import { parseBooleanParam, parseIdListParam, parseNumberListParam } from '../utils/planningQuery';
 import PlanActionBar from './planner/PlanActionBar';
+import ThemeMultiSelect from './shared/ThemeMultiSelect';
 
 // Normalize sprint identifiers so we handle doc refs, strings, and legacy placeholders
 const normalizeSprintId = (value: any): string | null => {
@@ -953,40 +954,11 @@ const SprintPlanningMatrix: React.FC = () => {
                     <Filter size={14} style={{ marginRight: '6px' }} />
                     Themes
                   </Form.Label>
-                  <Dropdown autoClose="outside">
-                    <Dropdown.Toggle variant="outline-secondary" size="sm" style={{ minWidth: '200px' }}>
-                      {themeFilterLabel}
-                    </Dropdown.Toggle>
-                    <Dropdown.Menu style={{ maxHeight: '420px', overflowY: 'auto' }}>
-                      <Form.Check
-                        type="checkbox"
-                        id="theme-filter-all"
-                        label="All Themes"
-                        checked={selectedThemeIds.length === 0}
-                        onChange={(e) => {
-                          if (e.target.checked) setSelectedThemeIds([]);
-                        }}
-                        className="px-3 py-1"
-                      />
-                      <Dropdown.Divider />
-                      {GLOBAL_THEMES.map(theme => (
-                        <Form.Check
-                          key={theme.id}
-                          type="checkbox"
-                          id={`theme-filter-${theme.id}`}
-                          label={theme.label}
-                          checked={selectedThemeIds.includes(theme.id)}
-                          onChange={(e) => {
-                            const nextIds = e.target.checked
-                              ? [...selectedThemeIds, theme.id]
-                              : selectedThemeIds.filter((id) => id !== theme.id);
-                            setSelectedThemeIds(nextIds);
-                          }}
-                          className="px-3 py-1"
-                        />
-                      ))}
-                    </Dropdown.Menu>
-                  </Dropdown>
+                  <ThemeMultiSelect
+                    selectedIds={selectedThemeIds}
+                    onChange={setSelectedThemeIds}
+                    style={{ minWidth: 200 }}
+                  />
                 </Col>
                 <Col md={3}>
                   <Form.Label style={{ fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>

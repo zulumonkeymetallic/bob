@@ -21,7 +21,7 @@ import '../styles/KanbanFixes.css';
 
 interface KanbanBoardV2Props {
     sprintId?: string | null;
-    themeFilter?: number | null;
+    themeFilter?: number | number[] | null;
     goalFilter?: string | null;
     onItemSelect?: (item: Story | Task, type: 'story' | 'task') => void;
     onEdit?: (item: Story | Task, type: 'story' | 'task') => void;
@@ -410,20 +410,20 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
             });
         }
 
-        if (themeFilter) {
+        const themeIds = Array.isArray(themeFilter) ? themeFilter : themeFilter != null ? [themeFilter] : [];
+        if (themeIds.length > 0) {
+            const matchTheme = (v: any) => themeIds.includes(Number(v));
             result = result.filter(t => {
-                if (t.theme === themeFilter) return true;
-                // Check parent story -> goal -> theme
+                if (matchTheme(t.theme)) return true;
                 if (t.parentType === 'story' && t.parentId) {
                     const s = stories.find(s => s.id === t.parentId);
-                    if (s?.theme === themeFilter) return true;
+                    if (matchTheme(s?.theme)) return true;
                     const g = goals.find(g => g.id === s?.goalId);
-                    return g?.theme === themeFilter;
+                    return matchTheme(g?.theme);
                 }
-                // Check direct goal link
                 if ((t as any).goalId) {
                     const g = goals.find(g => g.id === (t as any).goalId);
-                    return g?.theme === themeFilter;
+                    return matchTheme(g?.theme);
                 }
                 return false;
             });
@@ -448,12 +448,14 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
         if (goalFilter) {
             result = result.filter(s => (s as any).goalId === goalFilter);
         }
-        if (themeFilter) {
+        const storyThemeIds = Array.isArray(themeFilter) ? themeFilter : themeFilter != null ? [themeFilter] : [];
+        if (storyThemeIds.length > 0) {
+            const matchTheme = (v: any) => storyThemeIds.includes(Number(v));
             result = result.filter(s => {
-                if ((s as any).theme === themeFilter) return true;
+                if (matchTheme((s as any).theme)) return true;
                 if ((s as any).goalId) {
                     const g = goals.find(g => g.id === (s as any).goalId);
-                    return g?.theme === themeFilter;
+                    return matchTheme(g?.theme);
                 }
                 return false;
             });

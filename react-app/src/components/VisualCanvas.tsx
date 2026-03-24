@@ -32,6 +32,7 @@ import { themeVars } from '../utils/themeVars';
 import { colorWithAlpha, goalThemeColor as resolveGoalThemeColor } from '../utils/storyCardFormatting';
 import { getThemeName } from '../utils/statusHelpers';
 import PlanActionBar from './planner/PlanActionBar';
+import ThemeMultiSelect from './shared/ThemeMultiSelect';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -261,7 +262,7 @@ const VisualCanvas: React.FC = () => {
 
   // ── Filters ─────────────────────────────────────────────────────────────────
   const [searchTerm,       setSearchTerm]       = useState('');
-  const [filterTheme,      setFilterTheme]      = useState('');
+  const [filterThemeIds,   setFilterThemeIds]   = useState<number[]>([]);
   const [filterSprintId,   setFilterSprintId]   = useState('');
   const [activeOnly,       setActiveOnly]       = useState(false);
   const [focusOnly,        setFocusOnly]        = useState(false);
@@ -335,7 +336,7 @@ const VisualCanvas: React.FC = () => {
     const filteredGoals = goals.filter(g => {
       if (activeOnly && Number(g.status) !== 1) return false;
       if (focusOnly && !focusGoalIds.has(g.id)) return false;
-      if (filterTheme && getThemeName(g.theme) !== filterTheme) return false;
+      if (filterThemeIds.length > 0 && !filterThemeIds.includes(Number(g.theme))) return false;
       if (search && !g.title?.toLowerCase().includes(search)) return false;
       return true;
     });
@@ -406,7 +407,7 @@ const VisualCanvas: React.FC = () => {
     return { nodes: allNodes, connections: conns };
   }, [
     goals, stories, tasks, focusGoals, focusGoalIds,
-    filterTheme, filterSprintId, activeOnly, focusOnly,
+    filterThemeIds, filterSprintId, activeOnly, focusOnly,
     showStories, showTasks, searchTerm,
   ]);
 
@@ -644,17 +645,11 @@ const VisualCanvas: React.FC = () => {
         />
 
         {/* Theme filter */}
-        <Form.Select
-          size="sm"
-          value={filterTheme}
-          onChange={e => setFilterTheme(e.target.value)}
-          style={{ width: 130 }}
-        >
-          <option value="">All themes</option>
-          {GLOBAL_THEMES.map(t => (
-            <option key={t.id} value={t.label}>{t.label}</option>
-          ))}
-        </Form.Select>
+        <ThemeMultiSelect
+          selectedIds={filterThemeIds}
+          onChange={setFilterThemeIds}
+          style={{ width: 160 }}
+        />
 
         {/* Sprint filter (stories/tasks) */}
         {showStories && (
