@@ -555,34 +555,46 @@ exports.getCoachToday = httpsV2.onCall({ region: REGION }, async (req) => {
 
   const today = todayStr();
   const docId = `${uid}_${today}`;
-  const snap = await db().collection('coach_daily').doc(docId).get();
 
-  let data;
-  if (snap.exists) {
-    data = snap.data();
-  } else {
-    data = await _runOrchestratorForUser(uid);
+  try {
+    const snap = await db().collection('coach_daily').doc(docId).get();
+
+    let data;
+    if (snap.exists) {
+      data = snap.data();
+    } else {
+      // Only hydrate if user has an umbrella goal — avoids errors for unprovisiond users
+      const profileSnap = await db().collection('profiles').doc(uid).get();
+      if (!profileSnap.data()?.ironmanUmbrellaGoalId) {
+        return { notProvisioned: true };
+      }
+      data = await _runOrchestratorForUser(uid);
+    }
+
+    return {
+      readiness: {
+        score: data.readinessScore,
+        label: data.readinessLabel,
+        hrvToday: data.hrvToday,
+        hrv7dAvg: data.hrv7dAvg,
+        sleepToday: data.sleepToday,
+      },
+      macros: data.macros,
+      todayTraining: {
+        blockId: data.adaptedBlockId,
+        title: (data.briefingText || '').split('\n')[2]?.replace('Today: ', '').replace('.', '') || 'No training scheduled',
+        adapted: data.adaptationAction !== 'none',
+        adaptationAction: data.adaptationAction,
+      },
+      phase: data.phase,
+      weeklyPhotoPrompt: data.weeklyPhotoPromptActive,
+      briefingText: data.briefingText,
+    };
+  } catch (e) {
+    console.error(`[coachOrchestrator] getCoachToday failed uid=${uid}:`, e?.message);
+    await logCoachEvent(uid, 'get_coach_today_error', { error: e?.message });
+    throw new httpsV2.HttpsError('internal', `Coach data unavailable: ${e?.message}`);
   }
-
-  return {
-    readiness: {
-      score: data.readinessScore,
-      label: data.readinessLabel,
-      hrvToday: data.hrvToday,
-      hrv7dAvg: data.hrv7dAvg,
-      sleepToday: data.sleepToday,
-    },
-    macros: data.macros,
-    todayTraining: {
-      blockId: data.adaptedBlockId,
-      title: data.briefingText.split('\n')[2]?.replace('Today: ', '').replace('.', '') || 'No training scheduled',
-      adapted: data.adaptationAction !== 'none',
-      adaptationAction: data.adaptationAction,
-    },
-    phase: data.phase,
-    weeklyPhotoPrompt: data.weeklyPhotoPromptActive,
-    briefingText: data.briefingText,
-  };
 });
 
 /**
