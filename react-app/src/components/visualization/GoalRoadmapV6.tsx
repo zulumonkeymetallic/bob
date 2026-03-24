@@ -18,6 +18,7 @@ import ConfirmSprintChangesModal from './ConfirmSprintChangesModal';
 import type { GoalTimelineAffectedStory } from './goalTimelineImpact';
 import SprintSelector from '../SprintSelector';
 import ThemeMultiSelect from '../shared/ThemeMultiSelect';
+import YearMultiSelect from '../shared/YearMultiSelect';
 import './GoalRoadmapV6.css';
 import { buildGoalTimelineImpactPlan } from './goalTimelineImpact';
 import { applyGoalTimelineChanges } from '../../utils/goalTimelineChanges';
@@ -450,6 +451,9 @@ const GoalRoadmapV6: React.FC = () => {
 
   const [search, setSearch] = useState('');
   const [themeFilterIds, setThemeFilterIds] = useState<number[]>([]);
+  const currentYear = useMemo(() => new Date().getFullYear(), []);
+  const [selectedYears, setSelectedYears] = useState<number[]>([new Date().getFullYear(), new Date().getFullYear() + 1, new Date().getFullYear() + 2]);
+  const [allYears, setAllYears] = useState(false);
   const [sortMode, setSortMode] = useState<'start' | 'end'>('start');
   const [zoomLevel, setZoomLevel] = useState<'year' | 'quarter' | 'month' | 'week'>('year');
   const [zoomPercent, setZoomPercent] = useState<number>(5); // 5..100 mapped to levels
@@ -714,11 +718,27 @@ const GoalRoadmapV6: React.FC = () => {
     return sprints.find(s => s.id === selectedSprintId);
   }, [selectedSprintId, sprints]);
 
+  const availableYears = useMemo(() => {
+    const yrs = new Set<number>();
+    goals.forEach(g => {
+      const end = toMillis((g as any).endDate) ?? toMillis((g as any).targetDate);
+      if (end) yrs.add(new Date(end).getFullYear());
+    });
+    return Array.from(yrs).sort((a, b) => a - b);
+  }, [goals]);
+
   const filteredGoals = useMemo(() => {
     const term = search.trim().toLowerCase();
     return goals.filter(g => {
       const themeId = migrateThemeValue((g as any).theme);
       if (themeFilterIds.length > 0 && !themeFilterIds.includes(themeId as number)) return false;
+      if (!allYears && selectedYears.length > 0) {
+        const end = toMillis((g as any).endDate) ?? toMillis((g as any).targetDate);
+        if (end) {
+          const yr = new Date(end).getFullYear();
+          if (!selectedYears.includes(yr)) return false;
+        }
+      }
       if (queryThemeIdSet.size > 0 && !queryThemeIdSet.has(Number(themeId))) return false;
       if (queryGoalIdSet.size > 0 && !isGoalInHierarchySet(g.id, goals, queryGoalIdSet)) return false;
       if (showStoryGoalsOnly && !(storyPoints[g.id] > 0)) return false;
@@ -738,7 +758,7 @@ const GoalRoadmapV6: React.FC = () => {
       if (!term) return true;
       return (g.title || '').toLowerCase().includes(term);
     });
-  }, [goals, search, themeFilterIds, queryThemeIdSet, queryGoalIdSet, showStoryGoalsOnly, showFocusGoalsOnly, activeFocusGoalIds, storyPoints, respectSprintScope, selectedSprint, storySprintMap]);
+  }, [goals, search, themeFilterIds, selectedYears, allYears, queryThemeIdSet, queryGoalIdSet, showStoryGoalsOnly, showFocusGoalsOnly, activeFocusGoalIds, storyPoints, respectSprintScope, selectedSprint, storySprintMap]);
 
   const sortedGoals = useMemo(() => {
     const enriched = filteredGoals.map(goal => {
@@ -951,11 +971,13 @@ const GoalRoadmapV6: React.FC = () => {
   const handleClearFilters = useCallback(() => {
     setSearch('');
     setThemeFilterIds([]);
+    setSelectedYears([currentYear, currentYear + 1, currentYear + 2]);
+    setAllYears(false);
     setShowStoryGoalsOnly(false);
     setShowFocusGoalsOnly(activeFocusGoalIds.size > 0);
     setFocusToggleTouched(false);
     setRespectSprintScope(false);
-  }, [activeFocusGoalIds]);
+  }, [activeFocusGoalIds, currentYear]);
 
   const handleFitAll = useCallback(() => {
     const z = computeFitZoom();
@@ -1487,6 +1509,17 @@ const GoalRoadmapV6: React.FC = () => {
           placeholder="Search goals"
           value={search}
           onChange={e => setSearch(e.target.value)}
+        />
+      </div>
+      <div className="grv6-control-group">
+        <label className="grv6-label">Year</label>
+        <YearMultiSelect
+          availableYears={availableYears}
+          selectedYears={selectedYears}
+          onChange={setSelectedYears}
+          allYears={allYears}
+          onAllYearsChange={setAllYears}
+          style={{ minWidth: 120 }}
         />
       </div>
       <div className="grv6-control-group">

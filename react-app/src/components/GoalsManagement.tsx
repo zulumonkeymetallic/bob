@@ -13,7 +13,9 @@ import EditGoalModal from './EditGoalModal';
 import GoalPlanningWorkspaceModal from './GoalPlanningWorkspaceModal';
 import { useSprint } from '../contexts/SprintContext';
 import SprintSelector from './SprintSelector';
-import { isStatus, getThemeName } from '../utils/statusHelpers';
+import ThemeMultiSelect from './shared/ThemeMultiSelect';
+import YearMultiSelect from './shared/YearMultiSelect';
+import { isStatus } from '../utils/statusHelpers';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import ConfirmDialog from './ConfirmDialog';
 import { arrayMove } from '@dnd-kit/sortable';
@@ -31,8 +33,9 @@ const GoalsManagement: React.FC = () => {
   const [stories, setStories] = useState<Story[]>([]);
   const [goalKpiScope, setGoalKpiScope] = useState<'sprint' | 'year' | 'goal'>('sprint');
   const [filterStatus, setFilterStatus] = useState<string>('all');
-  const [filterTheme, setFilterTheme] = useState<string>('all');
-  const [filterYear, setFilterYear] = useState<string>('current');
+  const [filterThemeIds, setFilterThemeIds] = useState<number[]>([]);
+  const [selectedYears, setSelectedYears] = useState<number[]>([new Date().getFullYear(), new Date().getFullYear() + 1, new Date().getFullYear() + 2]);
+  const [allYears, setAllYears] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'list' | 'cards'>('cards');
@@ -65,7 +68,7 @@ const GoalsManagement: React.FC = () => {
     if (filter === 'cost_without_pot') {
       setViewMode('list');
       setShowNoPotOnly(true);
-      setFilterYear('all');
+      setAllYears(true);
     }
   }, [searchParams]);
 
@@ -213,27 +216,23 @@ const GoalsManagement: React.FC = () => {
     return active?.id || null;
   }, [sprints]);
 
-  // If user picks a non-current year, stop scoping by sprint so they can see all goals for that year
+  // When viewing past/future years, stop scoping by sprint
+  const currentYear = new Date().getFullYear();
   useEffect(() => {
-    if (filterYear !== 'current') {
+    const isCurrentYearSelected = allYears || selectedYears.includes(currentYear);
+    if (!isCurrentYearSelected) {
       if (applyActiveSprintFilter) setApplyActiveSprintFilter(false);
       if (selectedSprintId !== '') setSelectedSprintId('');
       return;
     }
-    // Restore sprint scoping when back on current year
     if (!applyActiveSprintFilter) setApplyActiveSprintFilter(true);
     const hasSavedPreference = (() => {
-      try {
-        const saved = localStorage.getItem('bob_selected_sprint');
-        return saved !== null && saved !== undefined;
-      } catch {
-        return false;
-      }
+      try { return localStorage.getItem('bob_selected_sprint') !== null; } catch { return false; }
     })();
     if (selectedSprintId === '' && activeSprintId && !hasSavedPreference) {
       setSelectedSprintId(activeSprintId);
     }
-  }, [filterYear, applyActiveSprintFilter, selectedSprintId, setSelectedSprintId, activeSprintId]);
+  }, [selectedYears, allYears, currentYear, applyActiveSprintFilter, selectedSprintId, setSelectedSprintId, activeSprintId]);
 
   useEffect(() => {
     const sprintId = selectedSprintId === '' ? null : (selectedSprintId || activeSprintId);
@@ -440,7 +439,7 @@ const GoalsManagement: React.FC = () => {
       if (!activeSprintGoalIds.has(goal.id)) return false;
     }
     if (filterStatus !== 'all' && !isStatus(goal.status, filterStatus)) return false;
-    if (filterTheme !== 'all' && getThemeName(goal.theme) !== filterTheme) return false;
+    if (filterThemeIds.length > 0 && !filterThemeIds.includes(Number(goal.theme))) return false;
     if (showNoPotOnly) {
       if (!goalNeedsLinkedPot(goal)) return false;
     }
@@ -448,11 +447,8 @@ const GoalsManagement: React.FC = () => {
       (goal as any).targetYear ||
       ((goal as any).endDate ? new Date((goal as any).endDate as any).getFullYear() : undefined) ||
       ((goal as any).targetDate ? new Date((goal as any).targetDate as any).getFullYear() : undefined);
-    if (filterYear === 'current') {
-      const cy = new Date().getFullYear();
-      if (derivedYear && derivedYear !== cy) return false;
-    } else if (filterYear !== 'all') {
-      if (derivedYear && String(derivedYear) !== filterYear) return false;
+    if (!allYears && selectedYears.length > 0) {
+      if (derivedYear && !selectedYears.includes(Number(derivedYear))) return false;
     }
     if (searchTerm && !goal.title.toLowerCase().includes(searchTerm.toLowerCase())) return false;
     if (applyFocusOnlyFilter && activeFocusGoalIds.size > 0 && !activeFocusGoalIds.has(goal.id)) return false;
@@ -514,12 +510,9 @@ const GoalsManagement: React.FC = () => {
   }, [goals]);
 
   const kpiYear = useMemo(() => {
-    const numeric = Number(filterYear);
-    if (filterYear !== 'all' && filterYear !== 'current' && Number.isFinite(numeric) && numeric > 0) {
-      return numeric;
-    }
+    if (selectedYears.length === 1) return selectedYears[0];
     return new Date().getFullYear();
-  }, [filterYear]);
+  }, [selectedYears]);
 
   const yearStartMs = useMemo(() => new Date(kpiYear, 0, 1, 0, 0, 0, 0).getTime(), [kpiYear]);
   const yearEndMs = useMemo(() => new Date(kpiYear, 11, 31, 23, 59, 59, 999).getTime(), [kpiYear]);
@@ -842,34 +835,24 @@ const GoalsManagement: React.FC = () => {
               <Col md={2}>
                 <Form.Group>
                   <Form.Label style={{ fontWeight: '500', marginBottom: '2px', fontSize: '11px' }}>Theme</Form.Label>
-                  <Form.Select
-                    size="sm"
-                    value={filterTheme}
-                    onChange={(e) => setFilterTheme(e.target.value)}
-                    style={{ border: '1px solid var(--notion-border)', background: 'var(--notion-bg)', color: 'var(--notion-text)' }}
-                  >
-                    <option value="all">All Themes</option>
-                    {globalThemes.map(t => (
-                      <option key={t.id} value={t.label}>{t.label}</option>
-                    ))}
-                  </Form.Select>
+                  <ThemeMultiSelect
+                    selectedIds={filterThemeIds}
+                    onChange={setFilterThemeIds}
+                    style={{ width: '100%' }}
+                  />
                 </Form.Group>
               </Col>
               <Col md={2}>
                 <Form.Group>
                   <Form.Label style={{ fontWeight: '500', marginBottom: '2px', fontSize: '11px' }}>Year</Form.Label>
-                  <Form.Select
-                    size="sm"
-                    value={filterYear}
-                    onChange={(e) => setFilterYear(e.target.value)}
-                    style={{ border: '1px solid var(--notion-border)', background: 'var(--notion-bg)', color: 'var(--notion-text)' }}
-                  >
-                    <option value="current">Current Year</option>
-                    <option value="all">All Years</option>
-                    {availableYears.map((y) => (
-                      <option key={y} value={y}>{y}</option>
-                    ))}
-                  </Form.Select>
+                  <YearMultiSelect
+                    availableYears={availableYears.map(Number)}
+                    selectedYears={selectedYears}
+                    onChange={setSelectedYears}
+                    allYears={allYears}
+                    onAllYearsChange={setAllYears}
+                    style={{ width: '100%' }}
+                  />
                 </Form.Group>
               </Col>
               <Col md={2}>
@@ -905,7 +888,7 @@ const GoalsManagement: React.FC = () => {
                     variant="outline-secondary"
                     onClick={() => {
                       setFilterStatus('all');
-                      setFilterTheme('all');
+                      setFilterThemeIds([]);
                       setSearchTerm('');
                       setGoalKpiScope('sprint');
                       setShowNoPotOnly(false);
