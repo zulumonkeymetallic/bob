@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Container, Row, Col, Button, Card, Alert, Spinner, ListGroup } from 'react-bootstrap';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { collection, query, where, onSnapshot, getDocs, getDoc, doc, updateDoc, serverTimestamp } from 'firebase/firestore';
@@ -48,6 +49,8 @@ const toMillis = (value: any): number => {
 export const FocusGoalsPage: React.FC = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
+  const navigate = useNavigate();
+  const location = useLocation();
   const { focusGoals, activeFocusGoals, loading } = useFocusGoals(currentUser?.uid);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [stories, setStories] = useState<Story[]>([]);
@@ -305,6 +308,10 @@ export const FocusGoalsPage: React.FC = () => {
       });
 
       closeWizard();
+      // If opened from the AI Coach setup page, return there so the user can activate the coach
+      if (new URLSearchParams(location.search).get('from') === 'coach') {
+        navigate('/ai-coach');
+      }
     } catch (error) {
       console.error('Failed to save focus goal:', error);
       alert(`Failed to save focus goal: ${(error as any)?.message || 'Unknown error'}`);

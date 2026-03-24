@@ -14,6 +14,7 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   collection,
   doc,
@@ -28,6 +29,7 @@ import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { httpsCallable } from 'firebase/functions';
 import { db, storage, functions } from '../../firebase';
 import { useAuth } from '../../contexts/AuthContext';
+import { saveFocusWizardPrefill } from '../../services/focusGoalsService';
 import { CoachVerdictBanner } from './CoachVerdictBanner';
 import { AiCoachPhotoGallery } from './AiCoachPhotoGallery';
 import type { CoachDaily } from '../../types/CoachTypes';
@@ -254,17 +256,19 @@ const PhaseCard: React.FC<{
 const SetupScreen: React.FC<{ onComplete: () => void }> = ({ onComplete }) => {
   const { currentUser } = useAuth();
   const uid = currentUser?.uid;
+  const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const [linking, setLinking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [focusGoalEnd, setFocusGoalEnd] = useState<string | null>(null);
+  const [focusGoalEndMs, setFocusGoalEndMs] = useState<number | null>(null);
   const [umbrellaGoals, setUmbrellaGoals] = useState<any[]>([]);
   const [selectedGoalId, setSelectedGoalId] = useState('');
+  const [showManualDate, setShowManualDate] = useState(false);
   const [raceDate, setRaceDate] = useState('');
 
   useEffect(() => {
     if (!uid) return;
-    // Race date from active FocusGoal
     getDocs(query(
       collection(db, 'focusGoals'),
       where('ownerUid', '==', uid),
@@ -274,13 +278,13 @@ const SetupScreen: React.FC<{ onComplete: () => void }> = ({ onComplete }) => {
         const fg = snap.docs[0].data();
         const endMs = fg.endDate?.toMillis?.() ?? (typeof fg.endDate === 'number' ? fg.endDate : null);
         if (endMs) {
+          setFocusGoalEndMs(endMs);
           setFocusGoalEnd(new Date(endMs).toLocaleDateString('en-GB', {
             day: 'numeric', month: 'long', year: 'numeric',
           }));
         }
       }
     });
-    // Existing umbrella health goals the user may have created
     getDocs(query(
       collection(db, 'goals'),
       where('ownerUid', '==', uid),
@@ -321,124 +325,138 @@ const SetupScreen: React.FC<{ onComplete: () => void }> = ({ onComplete }) => {
     }
   };
 
+  const openFocusWizard = () => {
+    saveFocusWizardPrefill({
+      visionText: 'Complete Ironman training programme',
+      timeframe: 'year',
+      source: 'coach_setup',
+    });
+    navigate('/focus-goals?from=coach');
+  };
+
   return (
     <div className="container-fluid py-4" style={{ maxWidth: 640 }}>
       <div className="text-center mb-4">
         <div style={{ fontSize: '3rem' }}>🏊‍♂️</div>
         <h4 className="fw-bold mt-2 mb-1">Ironman Coach</h4>
         <p className="text-muted small mb-0">
-          The coach works on top of your existing Goals — no separate system.
+          The coach works on top of your Focus Goals — no separate system to learn.
         </p>
       </div>
 
-      {/* Explainer */}
       <div className="alert alert-info small mb-4">
-        <strong>How it works:</strong> The coach reads your umbrella Ironman goal and its phase
-        child goals, watches your HealthKit + Strava data each morning, and takes action —
-        adapting workouts, scaling macros, and sending Telegram alerts. No extra dashboards.
+        <strong>How it works:</strong> The coach reads your active Focus Goal's end date as your
+        race date, then creates a 4-phase training structure (Base → Build → Peak → Taper) in your
+        Goals. Each morning at 05:00 it reads your HealthKit + Strava data and takes action —
+        adapting workouts, scaling macros, and sending your Telegram briefing.
       </div>
-
-      {focusGoalEnd && (
-        <div className="alert alert-success small mb-3">
-          📅 Race date from your active Focus Goal: <strong>{focusGoalEnd}</strong>
-        </div>
-      )}
-      {!focusGoalEnd && (
-        <div className="alert alert-warning small mb-3">
-          <div className="fw-medium mb-2">
-            ⚠️ No active Focus Goal detected. Please enter your race date to set the programme window.
-          </div>
-          <label className="form-label small mb-1">Race Date</label>
-          <input
-            type="date"
-            className="form-control form-control-sm"
-            value={raceDate}
-            min={new Date().toISOString().split('T')[0]}
-            onChange={e => setRaceDate(e.target.value)}
-          />
-          <div className="form-text small mt-1">
-            Or create a Focus Goal with an end date and come back here.
-          </div>
-        </div>
-      )}
 
       {error && <div className="alert alert-danger small">{error}</div>}
 
-      <div className="row g-3">
-        {/* Option A — Quick provision */}
-        <div className="col-12">
-          <div className="card border-primary border-2">
-            <div className="card-body">
-              <h6 className="fw-semibold mb-1">
-                🚀 Quick setup — create the 4-phase Ironman structure
-              </h6>
-              <p className="text-muted small mb-3">
-                Automatically creates: <em>Ironman Programme</em> umbrella goal with Phase 0
-                (Base), Phase 1 (Build), Phase 2 (Peak) and Phase 3 (Taper). Each phase has
-                fitness KPIs that sync nightly from Strava. Takes 5 seconds.
-              </p>
-              <button
-                className="btn btn-primary btn-sm"
-                onClick={handleQuickProvision}
-                disabled={loading || (!focusGoalEnd && !raceDate)}
-              >
-                {loading ? (
-                  <><span className="spinner-border spinner-border-sm me-2" />Setting up…</>
-                ) : '🚀 Create 4-phase structure'}
-              </button>
+      <div className="vstack gap-3">
+        {/* Step 1 — Focus Goal */}
+        <div className={`card ${focusGoalEnd ? 'border-success' : 'border-primary border-2'}`}>
+          <div className="card-body">
+            <div className="d-flex align-items-center gap-2 mb-2">
+              <span className={`badge ${focusGoalEnd ? 'bg-success' : 'bg-primary'}`}>Step 1</span>
+              <h6 className="fw-semibold mb-0">Set your race date via Focus Goal Wizard</h6>
             </div>
+            {focusGoalEnd ? (
+              <div className="d-flex align-items-center gap-2 small">
+                <span className="text-success">✓</span>
+                <span>Race date: <strong>{focusGoalEnd}</strong> (from your active Focus Goal)</span>
+              </div>
+            ) : (
+              <>
+                <p className="text-muted small mb-3">
+                  The wizard creates a year-long focus period ending on your race date. The coach
+                  reads this end date to set up your 18-month training window.
+                </p>
+                <div className="d-flex gap-2 flex-wrap">
+                  <button className="btn btn-primary btn-sm" onClick={openFocusWizard}>
+                    Open Focus Goal Wizard →
+                  </button>
+                  <button
+                    className="btn btn-link btn-sm text-muted p-0"
+                    onClick={() => setShowManualDate(v => !v)}
+                  >
+                    Enter date manually instead
+                  </button>
+                </div>
+                {showManualDate && (
+                  <div className="mt-3">
+                    <label className="form-label small fw-medium mb-1">Race Date</label>
+                    <input
+                      type="date"
+                      className="form-control form-control-sm"
+                      value={raceDate}
+                      min={new Date().toISOString().split('T')[0]}
+                      onChange={e => setRaceDate(e.target.value)}
+                      style={{ maxWidth: 200 }}
+                    />
+                  </div>
+                )}
+              </>
+            )}
           </div>
         </div>
 
-        {/* Option B — Link existing goal */}
+        {/* Step 2 — Provision */}
+        <div className={`card ${!focusGoalEnd && !raceDate ? 'opacity-50' : 'border-primary border-2'}`}>
+          <div className="card-body">
+            <div className="d-flex align-items-center gap-2 mb-2">
+              <span className="badge bg-primary">Step 2</span>
+              <h6 className="fw-semibold mb-0">Create your 4-phase training structure</h6>
+            </div>
+            <p className="text-muted small mb-3">
+              Creates <em>Ironman Programme</em> in your Goals with four phase milestones —
+              Base, Build, Peak, and Taper — each with fitness KPIs that sync nightly from Strava.
+              Takes 5 seconds.
+            </p>
+            <button
+              className="btn btn-primary btn-sm"
+              onClick={handleQuickProvision}
+              disabled={loading || (!focusGoalEnd && !raceDate)}
+            >
+              {loading ? (
+                <><span className="spinner-border spinner-border-sm me-2" />Setting up…</>
+              ) : '🚀 Create 4-phase structure'}
+            </button>
+          </div>
+        </div>
+
+        {/* Link existing goal */}
         {umbrellaGoals.length > 0 && (
-          <div className="col-12">
-            <div className="card">
-              <div className="card-body">
-                <h6 className="fw-semibold mb-1">
-                  🔗 Link an existing umbrella goal
-                </h6>
-                <p className="text-muted small mb-3">
-                  You already have umbrella goals — pick the one that represents your
-                  Ironman project and the coach will use its phase children.
-                </p>
-                <div className="d-flex gap-2">
-                  <select
-                    className="form-select form-select-sm"
-                    value={selectedGoalId}
-                    onChange={e => setSelectedGoalId(e.target.value)}
-                  >
-                    <option value="">Select a goal…</option>
-                    {umbrellaGoals.map((g: any) => (
-                      <option key={g.id} value={g.id}>{g.title}</option>
-                    ))}
-                  </select>
-                  <button
-                    className="btn btn-outline-primary btn-sm text-nowrap"
-                    onClick={handleLinkExisting}
-                    disabled={!selectedGoalId || linking}
-                  >
-                    {linking ? <span className="spinner-border spinner-border-sm" /> : 'Link'}
-                  </button>
-                </div>
+          <div className="card">
+            <div className="card-body">
+              <h6 className="fw-semibold mb-1 small">
+                🔗 Or link an existing umbrella goal
+              </h6>
+              <p className="text-muted small mb-2">
+                You already have an umbrella goal — link it instead of creating a new one.
+              </p>
+              <div className="d-flex gap-2">
+                <select
+                  className="form-select form-select-sm"
+                  value={selectedGoalId}
+                  onChange={e => setSelectedGoalId(e.target.value)}
+                >
+                  <option value="">Select a goal…</option>
+                  {umbrellaGoals.map((g: any) => (
+                    <option key={g.id} value={g.id}>{g.title}</option>
+                  ))}
+                </select>
+                <button
+                  className="btn btn-outline-primary btn-sm text-nowrap"
+                  onClick={handleLinkExisting}
+                  disabled={!selectedGoalId || linking}
+                >
+                  {linking ? <span className="spinner-border spinner-border-sm" /> : 'Link'}
+                </button>
               </div>
             </div>
           </div>
         )}
-
-        {/* Option C — Go create a goal first */}
-        <div className="col-12">
-          <div className="card bg-light border-0">
-            <div className="card-body py-2 px-3 small text-muted">
-              Prefer to build the goal structure yourself?{' '}
-              <a href="/goals" className="text-decoration-none fw-medium">
-                Create a new Goal in Goals
-              </a>{' '}
-              — set the type to <strong>Umbrella</strong> and add milestone child goals for each
-              training phase. Then come back here to link it.
-            </div>
-          </div>
-        </div>
       </div>
     </div>
   );
