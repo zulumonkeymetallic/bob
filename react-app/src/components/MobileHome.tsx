@@ -2118,8 +2118,17 @@ const MobileHome: React.FC = () => {
               const themeColor = resolveThemeColor(goal?.theme ?? story.theme);
               const dueLabel = (story as any).dueDate
                 ? new Date((story as any).dueDate as any).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
-                : 'No date';
-              const meta = [story.ref, goal?.title || 'No goal', `Due ${dueLabel}`].filter(Boolean).join(' · ');
+                : null;
+              const meta = [story.ref, goal?.title || 'No goal', dueLabel ? `Due ${dueLabel}` : null].filter(Boolean).join(' · ');
+              const storyStatusNum = typeof story.status === 'number' ? story.status : 0;
+              const statusChip = ({
+                0: { bg: 'secondary', text: 'Backlog' },
+                1: { bg: 'info',      text: 'Planned' },
+                2: { bg: 'primary',   text: 'In progress' },
+                3: { bg: 'warning',   text: 'Testing' },
+                4: { bg: 'success',   text: 'Done' },
+              } as Record<number, { bg: string; text: string }>)[storyStatusNum >= 4 ? 4 : storyStatusNum]
+                ?? { bg: 'secondary', text: 'Backlog' };
               const iconBtnStyle: React.CSSProperties = {
                 color: 'var(--bs-secondary-color)', padding: 4, borderRadius: 4,
                 border: 'none', background: 'transparent', cursor: 'pointer', lineHeight: 0, flexShrink: 0,
@@ -2134,6 +2143,16 @@ const MobileHome: React.FC = () => {
                     <div className="fw-semibold text-truncate" style={{ lineHeight: 1.2 }}>{story.title}</div>
                     <div className="text-muted small">{meta}</div>
                   </div>
+                  <Badge
+                    bg={statusChip.bg}
+                    style={{
+                      flexShrink: 0,
+                      fontSize: 10,
+                      color: statusChip.bg === 'warning' ? '#000' : '#fff',
+                    }}
+                  >
+                    {statusChip.text}
+                  </Badge>
                   <div className="d-flex gap-1 flex-shrink-0">
                     <button type="button" style={iconBtnStyle} title="Move due date"
                       onClick={() => setDeferTarget({ type: 'story', id: story.id, title: story.title, listView: true })}>
