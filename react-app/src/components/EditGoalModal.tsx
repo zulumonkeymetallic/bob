@@ -20,7 +20,10 @@ import { cascadeGoalPersona } from '../utils/personaCascade';
 import { parsePointsValue, TASK_DEFAULT_POINTS } from '../utils/points';
 import { normalizeGoalCostType } from '../utils/goalCost';
 import { Wand2 } from 'lucide-react';
+import DrivePickerButton from './shared/DrivePickerButton';
 import { resolveLeafGoalSelection } from '../utils/goalHierarchy';
+import { buildGoalTimelineImpactPlan } from './visualization/goalTimelineImpact';
+import { applyGoalTimelineChanges } from '../utils/goalTimelineChanges';
 
 interface EditGoalModalProps {
   goal: Goal | null;
@@ -69,6 +72,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
     title: '',
     description: '',
     url: '',
+    documentLink: '' as string,
     theme: 1, // Default to Health & Fitness theme ID
     size: 'M',
     timeToMasterHours: 40,
@@ -462,6 +466,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
           title: goal.title || '',
           description: goal.description || '',
           url: String((goal as any).url || ''),
+          documentLink: String((goal as any).documentLink || ''),
           theme: canonicalThemeId ?? 1,
           size: sizeMap[goal.size as keyof typeof sizeMap] || 'M',
           timeToMasterHours: goal.timeToMasterHours || 40,
@@ -498,6 +503,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
           title: '',
           description: '',
           url: '',
+          documentLink: '',
           theme: 1,
           size: 'M',
           timeToMasterHours: 40,
@@ -648,6 +654,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         title: formData.title.trim(),
         description: formData.description.trim(),
         url: formData.url.trim() || null,
+        documentLink: formData.documentLink.trim() || null,
         theme: themeId,
         theme_id: themeId,
         themeId: themeId,
@@ -703,7 +710,43 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
       if (goal) {
         // UPDATE existing goal
         console.log('🚀 EditGoalModal: Starting GOAL update', { goalId: goal.id });
+        const prevStartDateMs = typeof (goal as any).startDate === 'number' ? (goal as any).startDate : null;
+        const prevEndDateMs = typeof (goal as any).endDate === 'number' ? (goal as any).endDate : null;
         await updateDoc(doc(db, 'goals', goal.id), goalData);
+        // Auto-move stories when goal start/end date changes (same logic as roadmap drag)
+        const newStartDateMs = goalData.startDate as number | null;
+        const newEndDateMs = goalData.endDate as number | null;
+        const datesMoved = (newStartDateMs != null && newStartDateMs !== prevStartDateMs)
+          || (newEndDateMs != null && newEndDateMs !== prevEndDateMs);
+        if (datesMoved && newStartDateMs != null && newEndDateMs != null && linkedStories.length > 0 && sprints.length > 0) {
+          try {
+            const impactPlan = buildGoalTimelineImpactPlan({
+              goalId: goal.id,
+              newStartDate: new Date(newStartDateMs),
+              newEndDate: new Date(newEndDateMs),
+              stories: linkedStories,
+              tasks: linkedTasks,
+              sprints,
+            });
+            const movable = impactPlan.affectedStories.filter((s) => s.recommendationKind === 'move');
+            if (movable.length > 0) {
+              const persona = (goalData.persona || currentPersona || 'personal') as 'personal' | 'work';
+              const result = await applyGoalTimelineChanges({
+                goalId: goal.id,
+                startDateMs: newStartDateMs,
+                endDateMs: newEndDateMs,
+                ownerUid: currentUserId,
+                persona,
+                affectedStories: impactPlan.affectedStories,
+              });
+              if (result.movedStoryCount > 0) {
+                setToastMsg(`Goal updated — ${result.movedStoryCount} stor${result.movedStoryCount === 1 ? 'y' : 'ies'} moved to nearest sprint`);
+              }
+            }
+          } catch (err) {
+            console.warn('[EditGoalModal] Failed to auto-move stories after date change:', err);
+          }
+        }
         const prevPersona = ((goal as any).persona || currentPersona || 'personal') as 'personal' | 'work';
         const nextPersona = (goalData.persona || prevPersona) as 'personal' | 'work';
         if (prevPersona !== nextPersona) {
@@ -1029,6 +1072,27 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
                   onChange={(e) => setFormData({ ...formData, url: e.target.value })}
                   placeholder="https://..."
                 />
+              </Form.Group>
+              <Form.Group className="mb-3">
+                <Form.Label>Document</Form.Label>
+                <div className="d-flex gap-2 align-items-center">
+                  <Form.Control
+                    type="url"
+                    value={formData.documentLink}
+                    onChange={(e) => setFormData({ ...formData, documentLink: e.target.value })}
+                    placeholder="Google Docs / Drive link..."
+                  />
+                  <DrivePickerButton
+                    onSelect={(file) => setFormData({ ...formData, documentLink: file.url })}
+                  />
+                </div>
+                {formData.documentLink && (
+                  <div className="mt-1">
+                    <a href={formData.documentLink} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12 }}>
+                      {formData.documentLink.length > 60 ? formData.documentLink.slice(0, 57) + '…' : formData.documentLink}
+                    </a>
+                  </div>
+                )}
               </Form.Group>
 
               <Form.Group className="mb-3">

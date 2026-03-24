@@ -26,6 +26,7 @@ import EditStoryModal from './EditStoryModal';
 import NewCalendarEventModal, { buildCalendarComposerInitialValues } from './planner/NewCalendarEventModal';
 import DeferItemModal from './DeferItemModal';
 import { Activity, CalendarPlus, Clock3, Trash2, Wand2 } from 'lucide-react';
+import DrivePickerButton from './shared/DrivePickerButton';
 
 interface EditTaskModalProps {
   show: boolean;
@@ -96,6 +97,7 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
     title: '',
     description: '',
     url: '',
+    documentLink: '' as string,
     status: 0 as number | string,
     priority: 2 as number | string,
     sprintId: '' as string,
@@ -185,6 +187,7 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
         title: '',
         description: '',
         url: '',
+        documentLink: '',
         status: 0,
         priority: 2,
         sprintId: '',
@@ -219,6 +222,7 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
       title: task.title || '',
       description: (task as any).description || '',
       url: String((task as any).url || ''),
+      documentLink: String((task as any).documentLink || ''),
       status: normalizeTaskStatus((task as any).status),
       priority: normalizePriorityValue((task as any).priority),
       sprintId: (task as any).sprintId || '',
@@ -312,6 +316,7 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
         title: form.title.trim(),
         description: form.description,
         url: form.url.trim() || null,
+        documentLink: form.documentLink.trim() || null,
         status: typeof form.status === 'string' ? Number(form.status) || form.status : form.status,
         priority: typeof form.priority === 'string' ? Number(form.priority) || form.priority : form.priority,
         points: parsePointsValue(form.points) ?? TASK_DEFAULT_POINTS,
@@ -583,6 +588,27 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
                   onChange={(e) => setForm({ ...form, url: e.target.value })}
                   placeholder="https://..."
                 />
+              </Form.Group>
+              <Form.Group className="mb-3">
+                <Form.Label>Document</Form.Label>
+                <div className="d-flex gap-2 align-items-center">
+                  <Form.Control
+                    type="url"
+                    value={form.documentLink}
+                    onChange={(e) => setForm({ ...form, documentLink: e.target.value })}
+                    placeholder="Google Docs / Drive link..."
+                  />
+                  <DrivePickerButton
+                    onSelect={(file) => setForm({ ...form, documentLink: file.url })}
+                  />
+                </div>
+                {form.documentLink && (
+                  <div className="mt-1">
+                    <a href={form.documentLink} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12 }}>
+                      {form.documentLink.length > 60 ? form.documentLink.slice(0, 57) + '…' : form.documentLink}
+                    </a>
+                  </div>
+                )}
               </Form.Group>
               <Form.Group className="mb-3">
                 <Form.Label>Tags</Form.Label>

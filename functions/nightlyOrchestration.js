@@ -4116,6 +4116,7 @@ exports.replanCalendarNow = onCall({
   timeoutSeconds: 120,
   region: 'europe-west2',
   invoker: 'public',
+  enforceAppCheck: true,
 }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new https.HttpsError('unauthenticated', 'Sign in required');
@@ -4703,6 +4704,7 @@ exports.seedNextWeekPlannerOverridesNow = onCall({
   timeoutSeconds: 120,
   region: 'europe-west2',
   invoker: 'public',
+  enforceAppCheck: true,
 }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new https.HttpsError('unauthenticated', 'Sign in required');
@@ -4721,6 +4723,7 @@ exports.seedNextWeekPlannerOverridesNow = onCall({
 exports.applyEveningPullForward = onCall({
   memory: '256MiB',
   region: 'europe-west2',
+  enforceAppCheck: true,
 }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new https.HttpsError('unauthenticated', 'Login required');
@@ -4768,6 +4771,7 @@ exports.applyEveningPullForward = onCall({
 exports.deltaPriorityRescore = onCall({
   memory: '256MiB',
   region: 'europe-west2',
+  enforceAppCheck: true,
 }, async (request) => {
   const uid = request.auth?.uid;
   if (!uid) throw new https.HttpsError('unauthenticated', 'Login required');

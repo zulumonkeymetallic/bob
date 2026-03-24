@@ -5,10 +5,15 @@ import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { useSprint } from '../../contexts/SprintContext';
 import WeeklyPlannerSurface from './WeeklyPlannerSurface';
 import PlanActionBar from './PlanActionBar';
+import { useDetailLevel } from '../../contexts/DetailLevelContext';
 
 const WeeklyPlannerPage: React.FC = () => {
   const { sprints, selectedSprintId } = useSprint();
+  const { setDetailLevel } = useDetailLevel();
   const [weekStart, setWeekStart] = useState<Date>(() => startOfWeek(addDays(new Date(), 7), { weekStartsOn: 1 }));
+
+  // Default to minimal card detail on the weekly planner (dense grid)
+  useEffect(() => { setDetailLevel('minimal'); }, [setDetailLevel]);
   const isPlanningPromptWeek = useMemo(() => {
     const day = new Date().getDay();
     return day === 0 || day === 1;

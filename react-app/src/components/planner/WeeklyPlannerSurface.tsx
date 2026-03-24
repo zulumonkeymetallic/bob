@@ -616,52 +616,36 @@ const WeeklyPlannerSurface: React.FC<WeeklyPlannerSurfaceProps> = ({
             : `${item.title} moved to ${new Date(targetDateMs).toLocaleDateString()} ${bucketLabel(targetBucket).toLowerCase()}.`,
         });
       } else if (item.rawTask) {
-        const result = await schedulePlannerItemMutation({
-          itemType: 'task',
-          itemId: item.rawTask.id,
-          targetDateMs,
-          targetBucket,
-          intent: recommendation?.action === 'next_sprint' ? 'defer' : 'move',
-          source: 'weekly_planner',
-          rationale: recommendation?.rationale || null,
-          linkedBlockId: item.scheduledBlockId || null,
-          targetSprintId: recommendation?.action === 'next_sprint' ? (nextSprint?.id || null) : null,
-          durationMinutes: Math.max(
-            15,
-            Math.round((((item.scheduledBlockEnd || 0) - (item.scheduledBlockStart || 0)) / 60000) || Number((item.rawTask as any)?.estimateMin || 0) || 30),
-          ),
+        // Direct canonical write — user is explicitly placing this item, skip scheduling engine
+        const dayMs = dayStartMs(targetDateMs);
+        await updateDoc(doc(db, 'tasks', item.rawTask.id), {
+          dueDate: dayMs,
+          timeOfDay: targetBucket,
+          updatedAt: Date.now(),
         });
         const acceptedMoves = planningSummary.acceptedMoves + 1;
         await persistPlanningSummary({ acceptedMoves });
         setFeedback({
           variant: 'success',
           text: recommendation?.rationale
-            ? `${item.title} moved to ${new Date(result.appliedStartMs).toLocaleDateString()} ${bucketLabel((result.appliedBucket || targetBucket) as TimelineBucket).toLowerCase()}. ${recommendation.rationale}`
-            : `${item.title} moved to ${new Date(result.appliedStartMs).toLocaleDateString()} ${bucketLabel((result.appliedBucket || targetBucket) as TimelineBucket).toLowerCase()}.`,
+            ? `${item.title} moved to ${new Date(dayMs).toLocaleDateString()} ${bucketLabel(targetBucket).toLowerCase()}. ${recommendation.rationale}`
+            : `${item.title} moved to ${new Date(dayMs).toLocaleDateString()} ${bucketLabel(targetBucket).toLowerCase()}.`,
         });
       } else if (item.rawStory) {
-        const result = await schedulePlannerItemMutation({
-          itemType: 'story',
-          itemId: item.rawStory.id,
-          targetDateMs,
-          targetBucket,
-          intent: recommendation?.action === 'next_sprint' ? 'defer' : 'move',
-          source: 'weekly_planner',
-          rationale: recommendation?.rationale || null,
-          linkedBlockId: item.scheduledBlockId || null,
-          targetSprintId: recommendation?.action === 'next_sprint' ? (nextSprint?.id || null) : null,
-          durationMinutes: Math.max(
-            15,
-            Math.round((((item.scheduledBlockEnd || 0) - (item.scheduledBlockStart || 0)) / 60000) || Number((item.rawStory as any)?.estimateMin || 0) || 60),
-          ),
+        // Direct canonical write — user is explicitly placing this item, skip scheduling engine
+        const dayMs = dayStartMs(targetDateMs);
+        await updateDoc(doc(db, 'stories', item.rawStory.id), {
+          dueDate: dayMs,
+          timeOfDay: targetBucket,
+          updatedAt: Date.now(),
         });
         const acceptedMoves = planningSummary.acceptedMoves + 1;
         await persistPlanningSummary({ acceptedMoves });
         setFeedback({
           variant: 'success',
           text: recommendation?.rationale
-            ? `${item.title} moved to ${new Date(result.appliedStartMs).toLocaleDateString()} ${bucketLabel((result.appliedBucket || targetBucket) as TimelineBucket).toLowerCase()}. ${recommendation.rationale}`
-            : `${item.title} moved to ${new Date(result.appliedStartMs).toLocaleDateString()} ${bucketLabel((result.appliedBucket || targetBucket) as TimelineBucket).toLowerCase()}.`,
+            ? `${item.title} moved to ${new Date(dayMs).toLocaleDateString()} ${bucketLabel(targetBucket).toLowerCase()}. ${recommendation.rationale}`
+            : `${item.title} moved to ${new Date(dayMs).toLocaleDateString()} ${bucketLabel(targetBucket).toLowerCase()}.`,
         });
       } else {
         const acceptedMoves = planningSummary.acceptedMoves + 1;

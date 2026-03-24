@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { draggable } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
 import { Button, Modal, Spinner } from 'react-bootstrap';
-import { GripVertical, Activity, Wand2, Edit3, Trash2, Target, BookOpen, Shuffle, CalendarClock, Clock3, CalendarPlus } from 'lucide-react';
+import { GripVertical, Activity, Wand2, Edit3, Trash2, Target, BookOpen, Shuffle, CalendarClock, Clock3, CalendarPlus, FileText } from 'lucide-react';
 import { httpsCallable } from 'firebase/functions';
 import { functions, db } from '../firebase';
 import { Story, Task, Goal } from '../types';
@@ -789,8 +789,23 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                     </div>
                 </div>
 
-                <div className="kanban-card__title" title={item.title || `Untitled ${type}`}>
-                    {item.title || `Untitled ${type}`}
+                <div className="kanban-card__title" style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
+                    <span style={{ flex: 1 }} title={item.title || `Untitled ${type}`}>
+                        {item.title || `Untitled ${type}`}
+                    </span>
+                    {(item as any).documentLink && (
+                        <a
+                            href={(item as any).documentLink}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title="Open document"
+                            style={{ flexShrink: 0, color: themeVars.muted, lineHeight: 1 }}
+                            onClick={(e) => e.stopPropagation()}
+                            onPointerDown={(e) => e.stopPropagation()}
+                        >
+                            <FileText size={13} />
+                        </a>
+                    )}
                 </div>
 
                 {detailLevel !== 'minimal' && showDescription && item.description && item.description.trim().length > 0 && (

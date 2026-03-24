@@ -7,7 +7,7 @@ import { usePersona } from '../contexts/PersonaContext';
 import { Story, Task, Goal } from '../types';
 import KanbanBoardV2 from './KanbanBoardV2';
 import { useNavigate } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Maximize2, Minimize2, RefreshCw, Sparkles, Calendar as CalendarIcon } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Maximize2, Minimize2, RefreshCw, Sparkles } from 'lucide-react';
 import { displayRefForEntity } from '../utils/referenceGenerator';
 import { useSprint } from '../contexts/SprintContext';
 import { isStatus } from '../utils/statusHelpers';
@@ -333,7 +333,7 @@ const SprintKanbanPageV2: React.FC = () => {
                     </div>
 
                     {/* Right-side controls */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                         <Button
                             variant="outline-secondary"
                                 size="sm"
@@ -355,23 +355,6 @@ const SprintKanbanPageV2: React.FC = () => {
                                 onChange={setGoalFilterIds}
                                 style={{ minWidth: 160 }}
                             />
-
-                            <Button
-                                variant="outline-secondary"
-                                size="sm"
-                                onClick={() => navigate('/dashboard')}
-                            >
-                                View overview
-                            </Button>
-
-                            <Button
-                                variant="outline-secondary"
-                                size="sm"
-                                onClick={() => navigate('/calendar')}
-                            >
-                                <CalendarIcon size={14} className="me-1" />
-                                View calendar
-                            </Button>
 
                             <Form.Check
                                 type="switch"
@@ -475,10 +458,12 @@ const SprintKanbanPageV2: React.FC = () => {
                                     </span>
                                 )}
                             </div>
-                            <div className="d-flex gap-2">
+                            <div className="d-flex align-items-center gap-1">
                                 <PlanActionBar />
+                                {/* Thin separator */}
+                                <span style={{ width: 1, height: 20, background: 'var(--bs-border-color)', marginLeft: 4, marginRight: 4, flexShrink: 0 }} />
                                 <Button
-                                    variant="outline-primary"
+                                    variant="outline-secondary"
                                     size="sm"
                                     onClick={handleDeltaReplan}
                                     disabled={replanLoading || fullReplanLoading}
@@ -488,7 +473,7 @@ const SprintKanbanPageV2: React.FC = () => {
                                     Delta replan
                                 </Button>
                                 <Button
-                                    variant="primary"
+                                    variant="outline-secondary"
                                     size="sm"
                                     onClick={handleFullReplan}
                                     disabled={fullReplanLoading || replanLoading}
@@ -586,7 +571,7 @@ const SprintKanbanPageV2: React.FC = () => {
             <Row style={{ flex: 1, minHeight: 0 }} ref={boardContainerRef as any}>
                 <Col style={{ height: '100%' }}>
                     <Card style={{ border: 'none', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', height: '100%', borderRadius: isFullscreen ? 0 : undefined }}>
-                        <Card.Body style={{ padding: '24px', height: '100%', overflow: 'hidden', backgroundColor: isFullscreen ? 'var(--bg)' : undefined }}>
+                        <Card.Body style={{ padding: '24px', height: '100%', overflow: 'auto', backgroundColor: isFullscreen ? 'var(--bg)' : undefined }}>
                                 <KanbanBoardV2
                                     sprintId={filterSprintId}
                                     themeFilter={themeFilterIds.length > 0 ? themeFilterIds : null}

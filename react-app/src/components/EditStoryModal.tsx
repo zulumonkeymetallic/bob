@@ -23,6 +23,7 @@ import { getGoalDisplayPath, getLeafGoalOptions, resolveLeafGoalSelection } from
 import NewCalendarEventModal, { buildCalendarComposerInitialValues } from './planner/NewCalendarEventModal';
 import DeferItemModal from './DeferItemModal';
 import { findItemWithManualPriorityRank, getManualPriorityLabel, getManualPriorityRank, getNextManualPriorityRank } from '../utils/manualPriority';
+import DrivePickerButton from './shared/DrivePickerButton';
 import {
   buildStoryProgressUpdate,
   computePointsRemaining,
@@ -56,6 +57,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
     title: '',
     description: '',
     url: '',
+    documentLink: '' as string,
     goalId: '',
     priority: 2,
     status: 0,
@@ -151,6 +153,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
         title: story.title || '',
         description: story.description || '',
         url: String((story as any).url || ''),
+        documentLink: String((story as any).documentLink || ''),
         goalId: story.goalId || '',
         priority: normalizedPriority > 0 ? normalizedPriority : 2,
         status: (typeof story.status === 'number' ? (story.status >= 4 ? 4 : story.status >= 2 ? 2 : 0) : 0),
@@ -287,6 +290,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
         title: editedStory.title.trim(),
         description: editedStory.description.trim(),
         url: editedStory.url.trim() || null,
+        documentLink: editedStory.documentLink.trim() || null,
         goalId: resolvedGoalSelection.goalId || null,
         priority: normalizedPriority > 0 ? normalizedPriority : 2,
         status: editedStory.status,
@@ -828,6 +832,27 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
                   onChange={(e) => handleInputChange('url', e.target.value)}
                   placeholder="https://..."
                 />
+              </Form.Group>
+              <Form.Group className="mb-3">
+                <Form.Label>Document</Form.Label>
+                <div className="d-flex gap-2 align-items-center">
+                  <Form.Control
+                    type="url"
+                    value={editedStory.documentLink}
+                    onChange={(e) => handleInputChange('documentLink', e.target.value)}
+                    placeholder="Google Docs / Drive link..."
+                  />
+                  <DrivePickerButton
+                    onSelect={(file) => handleInputChange('documentLink', file.url)}
+                  />
+                </div>
+                {editedStory.documentLink && (
+                  <div className="mt-1">
+                    <a href={editedStory.documentLink} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12 }}>
+                      {editedStory.documentLink.length > 60 ? editedStory.documentLink.slice(0, 57) + '…' : editedStory.documentLink}
+                    </a>
+                  </div>
+                )}
               </Form.Group>
 
               <Form.Group className="mb-3">

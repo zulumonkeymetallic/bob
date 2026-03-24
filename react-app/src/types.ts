@@ -77,6 +77,7 @@ export interface Goal {
   createdAt: any; // Firebase Timestamp
   updatedAt: any; // Firebase Timestamp
   url?: string | null;
+  documentLink?: string | null; // Google Drive / Docs link
   orderIndex?: number; // Stable ordering for modern tables
   // Relationships
   parentGoalId?: string | null; // Optional parent goal relationship
@@ -117,6 +118,7 @@ export interface Story {
   createdAt: any; // Firebase Timestamp
   updatedAt: any; // Firebase Timestamp
   url?: string | null;
+  documentLink?: string | null; // Google Drive / Docs link
   dueDate?: number; // Legacy compatibility
   dueTime?: string; // HH:mm format
   timeOfDay?: 'morning' | 'afternoon' | 'evening';
@@ -333,6 +335,7 @@ export interface Task {
   projectId?: string;
   deepLink?: string; // Optional deep link for navigation
   url?: string | null;
+  documentLink?: string | null; // Google Drive / Docs link
   // Legacy fields for backward compatibility
   reference?: string;
   storyId?: string;

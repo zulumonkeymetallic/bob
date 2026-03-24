@@ -12,8 +12,9 @@ const DetailLevelContext = createContext<DetailLevelContextValue>({
   setDetailLevel: () => {},
 });
 
+// Treat anything narrower than iPad Pro landscape (1366px) as compact/mobile
 const getInitialLevel = (): DetailLevel =>
-  typeof window !== 'undefined' && window.innerWidth < 1200 ? 'minimal' : 'full';
+  typeof window !== 'undefined' && window.innerWidth < 1366 ? 'minimal' : 'full';
 
 export const DetailLevelProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [detailLevel, setDetailLevel] = useState<DetailLevel>(getInitialLevel);

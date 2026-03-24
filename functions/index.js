@@ -796,6 +796,7 @@ const { checkAndIncrementQuota } = require('./utils/perUserQuota');
 const { verifyAppCheckToken, checkOnCallAppCheck } = require('./utils/appCheckVerifier');
 
 exports.buildPlan = httpsV2.onCall(
+  { enforceAppCheck: true },
   secureFunction(async (req) => {
     const uid = req?.auth?.uid;
     if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
@@ -7445,7 +7446,7 @@ exports.syncMonzoHourly = schedulerV2.onSchedule({
 });
 
 // ===== AI Planning Function
-exports.planCalendar = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (request) => {
+exports.planCalendar = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY], enforceAppCheck: true }, async (request) => {
   const uid = request.auth?.uid;
   if (!uid) {
     throw new functionsV2.https.HttpsError("unauthenticated", "Must be authenticated");

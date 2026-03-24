@@ -24,10 +24,14 @@ service cloud.firestore {
     function isPublishedGoal() {
       return resource.data.isPublished == true && resource.data.shareCode != null;
     }
+    // Canvas/roadmap public sharing — canvasCode is a separate field from shareCode
+    function isCanvasPublished() {
+      return resource.data.canvasCode != null;
+    }
 
     match /goals/{id} {
       allow create: if isOwnerForCreate();
-      allow read: if isOwner() || isPublishedGoal();
+      allow read: if isOwner() || isPublishedGoal() || isCanvasPublished();
       allow update, delete: if isOwner();
     }
     match /okrs/{id}      { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }

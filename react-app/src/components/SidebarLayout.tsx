@@ -747,7 +747,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
           </div>
         </div>
 
-        <main className="sidebar-layout-page" style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+        <main className="sidebar-layout-page" style={{ flex: 1, overflowY: 'auto', overflowX: 'auto', minHeight: 0 }}>
           <div className="sidebar-layout-banners">
             <CheckInBanner />
             <CoachVerdictBanner />
