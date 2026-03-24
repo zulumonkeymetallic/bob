@@ -430,12 +430,12 @@ const SetupScreen: React.FC<{ onComplete: () => void }> = ({ onComplete }) => {
         <div className="col-12">
           <div className="card bg-light border-0">
             <div className="card-body py-2 px-3 small text-muted">
-              Or{' '}
+              Prefer to build the goal structure yourself?{' '}
               <a href="/goals" className="text-decoration-none fw-medium">
-                create your Ironman goal in Goals
+                Create a new Goal in Goals
               </a>{' '}
-              first (set <code>goalKind = umbrella</code> and add phase child goals), then
-              come back here to link it.
+              — set the type to <strong>Umbrella</strong> and add milestone child goals for each
+              training phase. Then come back here to link it.
             </div>
           </div>
         </div>
@@ -596,6 +596,8 @@ export const AiCoachPage: React.FC = () => {
   const { currentUser } = useAuth();
   const uid = currentUser?.uid;
   const [hasUmbrella, setHasUmbrella] = useState<boolean | null>(null);
+  const [umbrellaGoalId, setUmbrellaGoalId] = useState<string | null>(null);
+  const [phaseGoals, setPhaseGoals] = useState<any[]>([]);
   const [coachData, setCoachData] = useState<CoachDaily | null>(null);
   const [weeklyPromptActive, setWeeklyPromptActive] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -610,16 +612,35 @@ export const AiCoachPage: React.FC = () => {
       const profile = snap.data();
       if (profile?.ironmanUmbrellaGoalId) {
         setHasUmbrella(true);
+        setUmbrellaGoalId(profile.ironmanUmbrellaGoalId);
       } else {
         // Fallback: any umbrella health goal
         getDocs(query(
           collection(db, 'goals'),
           where('ownerUid', '==', uid),
           where('goalKind', '==', 'umbrella'),
-        )).then(gs => setHasUmbrella(!gs.empty));
+        )).then(gs => {
+          setHasUmbrella(!gs.empty);
+          if (!gs.empty) setUmbrellaGoalId(gs.docs[0].id);
+        });
       }
     });
   }, [uid]);
+
+  // Load phase goals directly so they show immediately (not gated on coachData)
+  useEffect(() => {
+    if (!uid || !umbrellaGoalId) return;
+    getDocs(query(
+      collection(db, 'goals'),
+      where('ownerUid', '==', uid),
+      where('parentGoalId', '==', umbrellaGoalId),
+    )).then(snap => {
+      const sorted = snap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .sort((a: any, b: any) => (a.startDate ?? 0) - (b.startDate ?? 0));
+      setPhaseGoals(sorted);
+    });
+  }, [uid, umbrellaGoalId]);
 
   // Subscribe to today's coach_daily doc
   useEffect(() => {
@@ -757,9 +778,38 @@ export const AiCoachPage: React.FC = () => {
           />
         ) : (
           <div className="card border-0 shadow-sm">
-            <div className="card-body text-center text-muted small py-4">
-              <div className="spinner-border spinner-border-sm me-2" />
-              Fetching today's coach data — runs at 05:00 each morning
+            <div className="card-body py-3">
+              <div className="d-flex align-items-center gap-3 mb-3">
+                <div style={{ fontSize: '2rem' }}>✅</div>
+                <div>
+                  <div className="fw-semibold">Coach is set up</div>
+                  <div className="text-muted small">Daily briefing runs at 05:00 — today's data will appear here tomorrow morning.</div>
+                </div>
+              </div>
+              {phaseGoals.length > 0 && (
+                <div className="border rounded p-2 small">
+                  <div className="text-muted fw-semibold mb-2" style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    Training phases created
+                  </div>
+                  {phaseGoals.map((g: any, i: number) => {
+                    const start = g.startDate ? new Date(g.startDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
+                    const end = g.endDate ? new Date(g.endDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
+                    const isActive = g.startDate && g.endDate && g.startDate <= Date.now() && g.endDate >= Date.now();
+                    return (
+                      <div key={g.id} className={`d-flex align-items-center gap-2 py-1 ${i < phaseGoals.length - 1 ? 'border-bottom' : ''}`}>
+                        <span className={`badge ${isActive ? 'bg-success' : 'bg-secondary'}`} style={{ fontSize: '0.6rem', minWidth: 48 }}>
+                          {isActive ? 'Active' : `Phase ${i}`}
+                        </span>
+                        <span className="fw-medium">{g.title}</span>
+                        <span className="text-muted ms-auto">{start} – {end}</span>
+                      </div>
+                    );
+                  })}
+                  <div className="mt-2">
+                    <a href="/goals" className="text-decoration-none small">View in Goals →</a>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}
