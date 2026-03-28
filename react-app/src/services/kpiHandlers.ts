@@ -3,7 +3,7 @@
  * Each KPI type has its own handler for sync/calculation logic
  */
 
-import { Kpi, KpiStatus, BaseKpi, ProgressKpi, FinancialKpi, TimeKpi, FitnessKpi } from '../types/KpiTypes';
+import { Kpi, KpiStatus, BaseKpi, ProgressKpi, FinancialKpi, TimeKpi, FitnessKpi, HrvKpi, SleepKpi } from '../types/KpiTypes';
 
 export interface KpiHandlerResult {
   current: number;
@@ -469,6 +469,129 @@ export class ContentProductionHandler extends KpiHandler {
 }
 
 /**
+ * HRV Handler
+ * Reads Heart Rate Variability from the metrics_hrv Firestore collection.
+ * context.data.hrvReadings should contain raw docs from that collection.
+ */
+export class HrvHandler extends KpiHandler {
+  type = 'fitness_hrv';
+
+  async sync(kpi: HrvKpi, context: KpiContext): Promise<KpiHandlerResult> {
+    try {
+      const readings: Array<{ date: string; value: number }> = context.data?.hrvReadings || [];
+      if (readings.length === 0) return { current: 0, progress: 0, status: 'no-data' };
+
+      const lookback = kpi.lookbackDays ?? 7;
+      const cutoff = Date.now() - lookback * 86_400_000;
+      const recent = readings
+        .filter(r => {
+          const ms = r.date ? Date.parse(r.date + 'T00:00:00') : 0;
+          return ms >= cutoff;
+        })
+        .map(r => r.value)
+        .filter(v => Number.isFinite(v) && v > 0);
+
+      if (recent.length === 0) return { current: 0, progress: 0, status: 'no-data' };
+
+      const avg = recent.reduce((s, v) => s + v, 0) / recent.length;
+      const latest = recent[recent.length - 1];
+
+      // Progress: compare current avg against target (default 60ms if not set)
+      const target = kpi.target > 0 ? kpi.target : 60;
+      const progress = Math.round((avg / target) * 100);
+
+      return {
+        current: Math.round(avg),
+        progress: Math.min(150, progress),  // cap at 150% — higher HRV is good
+        status: avg >= target ? 'on-target' : avg >= target * 0.8 ? 'good' : avg >= target * 0.6 ? 'ok' : 'behind',
+        metadata: {
+          averageHrv: Math.round(avg),
+          latestHrv: Math.round(latest),
+          readingCount: recent.length,
+          lookbackDays: lookback,
+          trendData: readings.slice(-30),  // return last 30 readings for sparkline
+        },
+      };
+    } catch (err) {
+      console.error('HRV sync error:', err);
+      return { current: 0, progress: 0, status: 'no-data' };
+    }
+  }
+}
+
+/**
+ * Sleep Handler
+ * Reads nightly sleep duration from the healthkitSleepMinutes field in profiles,
+ * or from dedicated sleep entries in context.data.sleepReadings when available.
+ */
+export class SleepHandler extends KpiHandler {
+  type = 'fitness_sleep';
+
+  async sync(kpi: SleepKpi, context: KpiContext): Promise<KpiHandlerResult> {
+    try {
+      // Prefer dedicated sleep readings array; fall back to profile snapshot
+      const readings: Array<{ date: string; minutes: number }> = context.data?.sleepReadings || [];
+      const profileSleepMinutes: number | null = context.data?.profileSleepMinutes ?? null;
+
+      let recentHours: number[] = [];
+
+      if (readings.length > 0) {
+        const lookback = kpi.lookbackDays ?? 7;
+        const cutoff = Date.now() - lookback * 86_400_000;
+        recentHours = readings
+          .filter(r => Date.parse(r.date + 'T00:00:00') >= cutoff)
+          .map(r => r.minutes / 60)
+          .filter(h => h > 0 && h < 24);
+      } else if (profileSleepMinutes != null && profileSleepMinutes > 0) {
+        recentHours = [profileSleepMinutes / 60];
+      }
+
+      if (recentHours.length === 0) return { current: 0, progress: 0, status: 'no-data' };
+
+      const avg = recentHours.reduce((s, v) => s + v, 0) / recentHours.length;
+      const target = kpi.targetHours ?? kpi.target ?? 8;
+      const progress = Math.round((avg / target) * 100);
+
+      // Sleep stage breakdowns from iOS HealthKit (written by iOS sync as healthkit* profile fields)
+      const deepSleepMinutes: number | null = context.data?.profileDeepSleepMinutes ?? null;
+      const remSleepMinutes: number | null  = context.data?.profileRemSleepMinutes  ?? null;
+      const coreSleepMinutes: number | null = context.data?.profileCoreSleepMinutes ?? null;
+      const totalSleepMinutes = (profileSleepMinutes ?? 0) || (avg * 60);
+
+      const stageMetadata: Record<string, number | null> = {};
+      if (deepSleepMinutes != null) {
+        stageMetadata.deepSleepMinutes = deepSleepMinutes;
+        stageMetadata.deepSleepPct     = totalSleepMinutes > 0 ? Math.round((deepSleepMinutes / totalSleepMinutes) * 100) : null!;
+      }
+      if (remSleepMinutes != null) {
+        stageMetadata.remSleepMinutes = remSleepMinutes;
+        stageMetadata.remSleepPct     = totalSleepMinutes > 0 ? Math.round((remSleepMinutes / totalSleepMinutes) * 100) : null!;
+      }
+      if (coreSleepMinutes != null) {
+        stageMetadata.coreSleepMinutes = coreSleepMinutes;
+        stageMetadata.coreSleepPct     = totalSleepMinutes > 0 ? Math.round((coreSleepMinutes / totalSleepMinutes) * 100) : null!;
+      }
+
+      return {
+        current: Math.round(avg * 10) / 10,  // 1 dp
+        progress: Math.min(120, progress),
+        status: this.calculateStatus(progress),
+        metadata: {
+          averageHours: Math.round(avg * 10) / 10,
+          latestHours: Math.round(recentHours[recentHours.length - 1] * 10) / 10,
+          readingCount: recentHours.length,
+          targetHours: target,
+          ...stageMetadata,
+        },
+      };
+    } catch (err) {
+      console.error('Sleep sync error:', err);
+      return { current: 0, progress: 0, status: 'no-data' };
+    }
+  }
+}
+
+/**
  * KPI Handler Registry
  * Maps KPI types to their handlers
  */
@@ -486,6 +609,8 @@ export class KpiHandlerRegistry {
     this.register(new HabitStreakHandler());
     this.register(new RoutineComplianceHandler());
     this.register(new ContentProductionHandler());
+    this.register(new HrvHandler());
+    this.register(new SleepHandler());
   }
 
   register(handler: KpiHandler) {

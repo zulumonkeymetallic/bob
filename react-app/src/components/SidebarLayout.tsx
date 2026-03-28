@@ -104,6 +104,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         { label: 'Kanban Board', path: '/sprints/kanban', icon: 'kanban' },
         { label: 'Calendar', path: '/calendar', icon: 'calendar' },
         { label: 'Metrics', path: '/metrics', icon: 'tachometer-alt' },
+        { label: '⚡ Overview', path: '/metrics/overview', icon: 'chart-area' },
       ]
     },
     // Health
@@ -111,8 +112,10 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       label: 'Health',
       icon: 'heartbeat',
       items: [
+        { label: '⚡ Metrics Overview', path: '/metrics/overview', icon: 'chart-area' },
         { label: 'AI Coach', path: '/ai-coach', icon: 'dumbbell' },
         { label: 'Fitness Results', path: '/fitness', icon: 'running' },
+        { label: 'Habit Tracking', path: '/dashboard/habit-tracking', icon: 'check-square' },
         { label: 'Parkrun Results', path: '/parkrun-results', icon: 'flag-checkered' }
       ]
     },

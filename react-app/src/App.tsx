@@ -115,6 +115,7 @@ import DeepLinkGoal from './components/routes/DeepLinkGoal';
 import DeepLinkTask from './components/routes/DeepLinkTask';
 import QueryDeepLinkGate from './components/routes/QueryDeepLinkGate';
 import AdvancedOverview from './components/AdvancedOverview';
+import MetricsOverview from './components/MetricsOverview';
 import FinanceDashboardAdvanced from './components/finance/FinanceDashboardAdvanced';
 import CapacityDashboard from './components/CapacityDashboard';
 import FocusGoalsPage from './components/FocusGoalsPage';
@@ -361,6 +362,7 @@ function AppContent() {
             <Route path="/dashboard/theme-progress" element={<Navigate to="/metrics/progress" replace />} />
             <Route path="/dashboard/finance" element={<Navigate to="/finance/dashboard" replace />} />
             <Route path="/metrics/progress" element={<ThemeProgressDashboard />} />
+            <Route path="/metrics/overview" element={<MetricsOverview />} />
             <Route path="/focus-goals" element={<FocusGoalsPage />} />
             <Route path="/metrics" element={<AdvancedOverview />} />
             <Route path="/overview/advanced" element={<Navigate to="/metrics" replace />} />

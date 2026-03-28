@@ -3,13 +3,15 @@
  * Supports multiple KPI categories per goal: fitness, progress, financial, time, custom
  */
 
-export type KpiType = 
+export type KpiType =
   | 'fitness_steps'
   | 'fitness_running'
   | 'fitness_cycling'
   | 'fitness_swimming'
   | 'fitness_walking'
   | 'fitness_workouts'
+  | 'fitness_hrv'          // Heart Rate Variability (ms) — from metrics_hrv collection
+  | 'fitness_sleep'        // Sleep duration (hours) — from healthkitSleepMinutes in profiles
   | 'story_points'         // Story point completion
   | 'tasks_completed'      // Task completion %
   | 'savings_target'       // Savings pot progress
@@ -106,6 +108,31 @@ export interface FitnessKpi extends BaseKpi {
 }
 
 /**
+ * HRV KPI — daily Heart Rate Variability from metrics_hrv Firestore collection
+ */
+export interface HrvKpi extends BaseKpi {
+  type: 'fitness_hrv';
+  source?: 'healthkit' | 'garmin' | 'whoop' | 'manual';
+  lookbackDays?: number;         // How many days to average (default: 7)
+  trendData?: Array<{ date: string; value: number }>; // Populated at runtime
+  averageHrv?: number;           // 7-day average
+  latestHrv?: number;            // Most recent reading
+}
+
+/**
+ * Sleep KPI — nightly sleep duration from HealthKit
+ */
+export interface SleepKpi extends BaseKpi {
+  type: 'fitness_sleep';
+  source?: 'healthkit' | 'manual';
+  targetHours?: number;          // Nightly target (default: 8)
+  lookbackDays?: number;         // Days to average (default: 7)
+  averageHours?: number;         // Populated at runtime
+  deepSleepPct?: number;         // % deep sleep (when available)
+  remSleepPct?: number;          // % REM sleep (when available)
+}
+
+/**
  * Progress KPI - tracks story points or task completion
  */
 export interface ProgressKpi extends BaseKpi {
@@ -187,11 +214,13 @@ export interface ContentProductionKpi extends BaseKpi {
 /**
  * Union type for all KPI variants
  */
-export type Kpi = 
-  | FitnessKpi 
-  | ProgressKpi 
-  | FinancialKpi 
-  | TimeKpi 
+export type Kpi =
+  | FitnessKpi
+  | HrvKpi
+  | SleepKpi
+  | ProgressKpi
+  | FinancialKpi
+  | TimeKpi
   | HabitKpi
   | RoutineComplianceKpi
   | ContentProductionKpi
