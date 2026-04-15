@@ -408,6 +408,8 @@ try {
   if (transcriptIngestionModule) {
     exports.ingestTranscript = transcriptIngestionModule.ingestTranscript;
     exports.ingestTranscriptHttp = transcriptIngestionModule.ingestTranscriptHttp;
+    exports.editJournalEntry = transcriptIngestionModule.editJournalEntry;
+    exports.deleteJournalEntry = transcriptIngestionModule.deleteJournalEntry;
   }
 } catch (e) {
   console.warn('[init] transcriptIngestion not loaded', e?.message || e);

@@ -181,9 +181,9 @@ const NodeCard: React.FC<{
   linkSource: boolean;
   linkTarget: boolean;
   linkMode: boolean;
-  showDescriptions: boolean;
+  detailLevel: 'minimal' | 'compact' | 'full';
   onClick: () => void;
-}> = ({ node, nodeW, selected, linkSource, linkTarget, linkMode, showDescriptions, onClick }) => {
+}> = ({ node, nodeW, selected, linkSource, linkTarget, linkMode, detailLevel, onClick }) => {
   const col  = node.col;
   const data = node.data as any;
 
@@ -222,26 +222,33 @@ const NodeCard: React.FC<{
         <div style={{ fontWeight: 600, fontSize: 13, lineHeight: 1.3, color: 'var(--notion-text, #1a1a1a)' }}>
           {data.title || data.ref || 'Untitled'}
         </div>
+        {/* Theme badge always; remaining badges on compact/full */}
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 2 }}>
           {(col === 'focus' || col === 'umbrella' || col === 'phase') && data.theme && (
             <span className="kanban-card__meta-badge">{getThemeName(data.theme)}</span>
           )}
-          {statusLabel && <span className="kanban-card__meta-badge">{statusLabel}</span>}
-          {data.goalKind && (
-            <span className="kanban-card__meta-badge" style={{ textTransform: 'capitalize' }}>{data.goalKind}</span>
-          )}
-          {data.priority && (col === 'story' || col === 'task') && (
-            <span className="kanban-card__meta-badge">{String(data.priority)}</span>
+          {detailLevel !== 'minimal' && (
+            <>
+              {statusLabel && <span className="kanban-card__meta-badge">{statusLabel}</span>}
+              {data.goalKind && (
+                <span className="kanban-card__meta-badge" style={{ textTransform: 'capitalize' }}>{data.goalKind}</span>
+              )}
+              {data.priority && (col === 'story' || col === 'task') && (
+                <span className="kanban-card__meta-badge">{String(data.priority)}</span>
+              )}
+            </>
           )}
         </div>
-        {showDescriptions && data.description && (
-          <div style={{ fontSize: 11, color: 'var(--notion-text-muted, #666)', lineHeight: 1.4, marginTop: 2 }}>
-            {String(data.description).slice(0, 80)}{data.description.length > 80 ? '…' : ''}
-          </div>
-        )}
-        {(col === 'umbrella' || col === 'phase') && Array.isArray(data.kpis) && data.kpis.length > 0 && (
+        {/* KPIs — compact and full */}
+        {detailLevel !== 'minimal' && (col === 'umbrella' || col === 'phase') && Array.isArray(data.kpis) && data.kpis.length > 0 && (
           <div style={{ fontSize: 10, color: 'var(--notion-text-muted, #888)', marginTop: 2 }}>
             {data.kpis.slice(0, 2).map((k: any) => `${k.name}: ${k.target}${k.unit}`).join(' · ')}
+          </div>
+        )}
+        {/* Description — full only */}
+        {detailLevel === 'full' && data.description && (
+          <div style={{ fontSize: 11, color: 'var(--notion-text-muted, #666)', lineHeight: 1.4, marginTop: 2 }}>
+            {String(data.description).slice(0, 120)}{data.description.length > 120 ? '…' : ''}
           </div>
         )}
       </div>
@@ -270,7 +277,7 @@ const VisualCanvas: React.FC = () => {
   const [focusOnly,        setFocusOnly]        = useState(false);
   const [showStories,      setShowStories]      = useState(true);
   const [showTasks,        setShowTasks]        = useState(false);
-  const [showDescriptions, setShowDescriptions] = useState(false);
+  const [canvasDetailLevel, setCanvasDetailLevel] = useState<'minimal' | 'compact' | 'full'>('minimal');
 
   // ── Layout ───────────────────────────────────────────────────────────────────
   const [viewLayout, setViewLayout] = useState<ViewLayout>('tree');
@@ -681,9 +688,17 @@ const VisualCanvas: React.FC = () => {
         <Button size="sm" variant={focusOnly ? 'info' : 'outline-secondary'} onClick={() => setFocusOnly(f => !f)}>
           Focus only
         </Button>
-        <Button size="sm" variant={showDescriptions ? 'secondary' : 'outline-secondary'} onClick={() => setShowDescriptions(d => !d)}>
-          Descriptions
-        </Button>
+        <Form.Select
+          size="sm"
+          value={canvasDetailLevel}
+          onChange={(e) => setCanvasDetailLevel(e.target.value as any)}
+          title="Card detail level"
+          style={{ width: 'auto' }}
+        >
+          <option value="minimal">Detail: Minimal</option>
+          <option value="compact">Detail: Compact</option>
+          <option value="full">Detail: Full</option>
+        </Form.Select>
 
         <div className="vr" />
 
@@ -852,7 +867,7 @@ const VisualCanvas: React.FC = () => {
                       linkSource={linkSource === node.id}
                       linkTarget={linkMode && !!linkSource && linkSource !== node.id}
                       linkMode={linkMode}
-                      showDescriptions={showDescriptions}
+                      detailLevel={canvasDetailLevel}
                       onClick={() => handleNodeClick(node)}
                     />
                   </div>
@@ -889,7 +904,7 @@ const VisualCanvas: React.FC = () => {
                       linkSource={linkSource === node.id}
                       linkTarget={linkMode && !!linkSource && linkSource !== node.id}
                       linkMode={linkMode}
-                      showDescriptions={showDescriptions}
+                      detailLevel={canvasDetailLevel}
                       onClick={() => handleNodeClick(node)}
                     />
                   </div>

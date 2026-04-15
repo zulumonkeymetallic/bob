@@ -35,7 +35,7 @@ interface GoalYearColumnProps {
   pots: Record<string, { name: string; balance: number }>;
   themePalette: any[];
   droppableId: string;
-  showDescriptions: boolean;
+  detailLevel: 'minimal' | 'compact' | 'full';
   onEdit: (goal: Goal) => void;
   onOpenWorkspace: (goal: Goal) => void;
   onOpenActivity: (goal: Goal) => void;
@@ -166,7 +166,7 @@ function withAlphaColor(color: string, alpha: number) {
 const GoalYearCard: React.FC<{
   goal: Goal;
   themePalette: any[];
-  showDescription: boolean;
+  detailLevel: 'minimal' | 'compact' | 'full';
   onEdit: (goal: Goal) => void;
   onOpenWorkspace: (goal: Goal) => void;
   onOpenActivity: (goal: Goal) => void;
@@ -177,7 +177,7 @@ const GoalYearCard: React.FC<{
 }> = ({
   goal,
   themePalette,
-  showDescription,
+  detailLevel,
   onEdit,
   onOpenWorkspace,
   onOpenActivity,
@@ -251,7 +251,7 @@ const GoalYearCard: React.FC<{
       {/* Theme bar */}
       <div style={{ height: 5, background: themeColor }} />
       <Card.Body style={{ padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 6 }}>
-        {/* Title + action icons */}
+        {/* Title + action icons (always visible) */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
           <div style={{ fontWeight: 600, fontSize: 14, color: 'var(--notion-text)', lineHeight: 1.25, flex: 1, minWidth: 0 }}>
             {goal.title || 'Untitled goal'}
@@ -272,23 +272,27 @@ const GoalYearCard: React.FC<{
           </div>
         </div>
 
-        {/* Theme-colored badges: theme, status, year, kind */}
+        {/* Theme badge always; remaining badges only on compact/full */}
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
           <span style={badgeStyle}>{themeLabel || 'General'}</span>
-          <span style={badgeStyle}>{statusLabel}</span>
-          {targetYear && <span style={yearBadgeStyle}>{targetYear}</span>}
-          {(goal as any).goalKind && (
-            <span style={{ ...badgeStyle, textTransform: 'capitalize' }}>{String((goal as any).goalKind)}</span>
-          )}
-          {(goal as any).confidence != null && (
-            <span style={badgeStyle}>
-              {(goal as any).confidence === 3 ? 'High' : (goal as any).confidence === 2 ? 'Med' : 'Low'} confidence
-            </span>
+          {detailLevel !== 'minimal' && (
+            <>
+              <span style={badgeStyle}>{statusLabel}</span>
+              {targetYear && <span style={yearBadgeStyle}>{targetYear}</span>}
+              {(goal as any).goalKind && (
+                <span style={{ ...badgeStyle, textTransform: 'capitalize' }}>{String((goal as any).goalKind)}</span>
+              )}
+              {(goal as any).confidence != null && (
+                <span style={badgeStyle}>
+                  {(goal as any).confidence === 3 ? 'High' : (goal as any).confidence === 2 ? 'Med' : 'Low'} confidence
+                </span>
+              )}
+            </>
           )}
         </div>
 
-        {/* Target date */}
-        {(goal.targetDate || (goal as any).endDate) && (
+        {/* Target date — compact and full only */}
+        {detailLevel !== 'minimal' && (goal.targetDate || (goal as any).endDate) && (
           <div style={{ fontSize: 11, color: themeColor, display: 'flex', alignItems: 'center', gap: 4, fontWeight: 500 }}>
             <span>🎯</span>
             <span>
@@ -299,7 +303,8 @@ const GoalYearCard: React.FC<{
           </div>
         )}
 
-        {showDescription && goal.description && (
+        {/* Description — full only */}
+        {detailLevel === 'full' && goal.description && (
           <div style={{
             fontSize: 11,
             color: 'var(--notion-text-secondary)',
@@ -313,14 +318,17 @@ const GoalYearCard: React.FC<{
           </div>
         )}
 
-        <div style={{ display: 'flex', gap: 8, marginTop: 2 }}>
-          <Button size="sm" style={{ background: withAlphaColor(themeColor, 0.15), border: `1px solid ${withAlphaColor(themeColor, 0.4)}`, color: themeColor, fontSize: 12 }} onClick={e => { e.stopPropagation(); onOpenWorkspace(goal); }}>
-            Planner
-          </Button>
-          <Button size="sm" variant="outline-secondary" style={{ fontSize: 12 }} onClick={e => { e.stopPropagation(); onEdit(goal); }}>
-            Edit
-          </Button>
-        </div>
+        {/* Planner/Edit buttons — full only */}
+        {detailLevel === 'full' && (
+          <div style={{ display: 'flex', gap: 8, marginTop: 2 }}>
+            <Button size="sm" style={{ background: withAlphaColor(themeColor, 0.15), border: `1px solid ${withAlphaColor(themeColor, 0.4)}`, color: themeColor, fontSize: 12 }} onClick={e => { e.stopPropagation(); onOpenWorkspace(goal); }}>
+              Planner
+            </Button>
+            <Button size="sm" variant="outline-secondary" style={{ fontSize: 12 }} onClick={e => { e.stopPropagation(); onEdit(goal); }}>
+              Edit
+            </Button>
+          </div>
+        )}
       </Card.Body>
     </Card>
   );
@@ -332,7 +340,7 @@ const GoalYearColumn: React.FC<GoalYearColumnProps> = ({
   pots,
   themePalette,
   droppableId,
-  showDescriptions,
+  detailLevel,
   onEdit,
   onOpenWorkspace,
   onOpenActivity,
@@ -418,7 +426,7 @@ const GoalYearColumn: React.FC<GoalYearColumnProps> = ({
             key={goal.id}
             goal={goal}
             themePalette={themePalette}
-            showDescription={showDescriptions}
+            detailLevel={detailLevel}
             onEdit={onEdit}
             onOpenWorkspace={onOpenWorkspace}
             onOpenActivity={onOpenActivity}
@@ -606,7 +614,7 @@ const GoalsYearPlanner: React.FC = () => {
   const [selectedYears, setSelectedYears] = useState<number[]>(defaultSelectedYears);
   const [showNoYear, setShowNoYear] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
-  const [showGoalDescriptions, setShowGoalDescriptions] = useState(false);
+  const [goalDetailLevel, setGoalDetailLevel] = useState<'minimal' | 'compact' | 'full'>('minimal');
   const [showNoPotOnly, setShowNoPotOnly] = useState(false);
   const [showFocusGoalsOnly, setShowFocusGoalsOnly] = useState(queryFocusOnly);
   const [focusToggleTouched, setFocusToggleTouched] = useState(false);
@@ -1300,14 +1308,17 @@ const GoalsYearPlanner: React.FC = () => {
                   disabled={activeFocusGoalIds.size === 0}
                   className="text-muted"
                 />
-                <Form.Check
-                  type="switch"
-                  id="toggle-goal-descriptions"
-                  label="Show goal descriptions"
-                  checked={showGoalDescriptions}
-                  onChange={(e) => setShowGoalDescriptions(e.target.checked)}
-                  className="text-muted"
-                />
+                <Form.Select
+                  size="sm"
+                  value={goalDetailLevel}
+                  onChange={(e) => setGoalDetailLevel(e.target.value as any)}
+                  title="Card detail level"
+                  style={{ width: 'auto' }}
+                >
+                  <option value="minimal">Detail: Minimal</option>
+                  <option value="compact">Detail: Compact</option>
+                  <option value="full">Detail: Full</option>
+                </Form.Select>
                 <Form.Check
                   type="switch"
                   id="toggle-goals-no-pots"
@@ -1331,7 +1342,7 @@ const GoalsYearPlanner: React.FC = () => {
             pots={pots}
             themePalette={themes}
             droppableId={`year-${year}`}
-            showDescriptions={showGoalDescriptions}
+            detailLevel={goalDetailLevel}
             onEdit={(g) => setEditGoal(g)}
             onOpenWorkspace={(g) => setWorkspaceGoal(g)}
             onOpenActivity={handleOpenGoalActivity}

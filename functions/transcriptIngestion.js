@@ -1430,6 +1430,7 @@ function buildDocAppendPlan(sections, options = {}) {
   const includeDateHeading = options?.includeDateHeading !== false;
   const textParts = [];
   const headingRanges = [];
+  const bulletRanges = [];
   let cursor = 0;
 
   const pushText = (value) => {
@@ -1456,7 +1457,9 @@ function buildDocAppendPlan(sections, options = {}) {
 
   if (Array.isArray(sections.aiSummaryBullets) && sections.aiSummaryBullets.length) {
     pushHeading('AI Summary of the Entry', 'HEADING_2');
-    pushText(`${sections.aiSummaryBullets.map((bullet) => `- ${bullet}`).join('\n')}\n\n`);
+    const bulletStart = cursor;
+    pushText(`${sections.aiSummaryBullets.join('\n')}\n\n`);
+    bulletRanges.push({ start: bulletStart, end: cursor - 2 });
   }
 
   pushHeading('The Entry', 'HEADING_2');
@@ -1510,6 +1513,7 @@ function buildDocAppendPlan(sections, options = {}) {
     text: textParts.join(''),
     includeDateHeading,
     headingRanges,
+    bulletRanges,
   };
 }
 
@@ -1644,7 +1648,7 @@ async function callTranscriptModel({ transcript, persona, timezone, urlPreviews,
       'Fix punctuation, capitalization, and obvious dictation errors only.',
     ].join(' '),
     'Do not invent facts, commitments, or emotions that are not present.',
-    'The oneLineSummary must be a single line under 140 characters.',
+    'The oneLineSummary must be 2–3 sentences under 280 characters — a rich summary, not just a title.',
     'For journal or mixed entries, aiSummaryBullets must contain 4 to 8 concise bullets covering key events, emotional themes, context, and notable thinking patterns.',
     'For task_list or url_only entries, set aiSummaryBullets to an empty array, mindsetAnalysis to null, and entryMetadata to null.',
     'For journal or mixed entries, mindsetAnalysis must stay analytical and observational. Do not make medical diagnoses.',
@@ -1994,7 +1998,7 @@ function sanitizeAnalysis(raw, transcript, sourceUrls = [], timezone = DEFAULT_T
   const analysis = raw && typeof raw === 'object' ? raw : {};
   const diagnosticLog = looksLikeDiagnosticLogDump(transcript);
   const explicitDiagnosticAction = looksLikeExplicitDiagnosticAction(transcript);
-  const oneLineSummary = String(analysis.oneLineSummary || '').trim().replace(/\s+/g, ' ').slice(0, 140);
+  const oneLineSummary = String(analysis.oneLineSummary || '').trim().replace(/\s+/g, ' ').slice(0, 280);
   const aiSummaryBulletsSource = sanitizeAiSummaryBullets(analysis.aiSummaryBullets, 8);
   const structuredEntrySource = String(analysis.structuredEntry || '').trim() || String(transcript || '').trim();
   const adviceSource = String(analysis.advice || '').trim() || 'No additional advice generated.';
@@ -2797,6 +2801,17 @@ async function appendJournalToGoogleDoc({ uid, docUrl, sections, includeDateHead
           },
           paragraphStyle: { namedStyleType: headingRange.namedStyleType },
           fields: 'namedStyleType',
+        },
+      });
+    }
+    for (const bulletRange of Array.isArray(plan.bulletRanges) ? plan.bulletRanges : []) {
+      requests.push({
+        createParagraphBullets: {
+          range: {
+            startIndex: insertAt + bulletRange.start,
+            endIndex: insertAt + bulletRange.end,
+          },
+          bulletPreset: 'BULLET_DISC_CIRCLE_SQUARE',
         },
       });
     }
@@ -3806,13 +3821,13 @@ function buildWriteSpokenResponse(response) {
     : '';
   const parts = [];
 
+  const journalSummary = String(response.oneLineSummary || '').trim();
   if (hasJournal && tasks === 0 && stories === 0) {
-    return firstWarning
-      ? `I created a journal entry. ${firstWarning}`
-      : 'I created a journal entry.';
+    const base = journalSummary ? `I created a journal entry. ${journalSummary}` : 'I created a journal entry.';
+    return firstWarning ? `${base} ${firstWarning}` : base;
   }
   if (hasJournal) {
-    parts.push('I created a journal entry.');
+    parts.push(journalSummary ? `I created a journal entry. ${journalSummary}` : 'I created a journal entry.');
   }
   if (newTasks.length) {
     const taskRefs = summarizeEntityRefs(newTasks, 'task');

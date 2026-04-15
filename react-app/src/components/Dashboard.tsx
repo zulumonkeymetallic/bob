@@ -4664,13 +4664,13 @@ const Dashboard: React.FC = () => {
                   boxShadow: '0 6px 18px rgba(13, 110, 253, 0.18)'
                 }}
               >
-                <Card.Body style={{ padding: '10px 14px' }}>
+                <Card.Body style={{ padding: '8px 12px' }}>
                   <div className="d-flex align-items-center gap-2 flex-wrap">
                     <div
                       style={{
-                        width: 34,
-                        height: 34,
-                        borderRadius: 8,
+                        width: 28,
+                        height: 28,
+                        borderRadius: 6,
                         backgroundColor: 'rgba(255, 255, 255, 0.18)',
                         display: 'flex',
                         alignItems: 'center',
@@ -4679,13 +4679,13 @@ const Dashboard: React.FC = () => {
                         flexShrink: 0,
                       }}
                     >
-                      <Heart size={18} />
+                      <Heart size={14} />
                     </div>
                     <div style={{ flex: 1, minWidth: 220 }}>
-                      <div style={{ margin: 0, fontSize: 13, fontWeight: 700 }}>
+                      <div style={{ margin: 0, fontSize: 11, fontWeight: 700 }}>
                         Daily Health Progress
                       </div>
-                      <div style={{ marginTop: 2, fontSize: 10.5, opacity: 0.9 }}>
+                      <div style={{ marginTop: 2, fontSize: 9, opacity: 0.9 }}>
                         {healthBannerData.weightKg != null ? `${healthBannerData.weightKg.toFixed(1)} kg` : 'weight missing'}
                         {' • '}
                         {healthBannerData.bodyFatPct != null ? `${healthBannerData.bodyFatPct.toFixed(1)}% body fat` : 'body fat missing'}
@@ -4697,11 +4697,11 @@ const Dashboard: React.FC = () => {
                         {healthBannerData.weeksToTargetBodyFat != null ? `${Math.round(healthBannerData.weeksToTargetBodyFat)}w ETA` : 'ETA n/a'}
                       </div>
                     </div>
-                    <div style={{ textAlign: 'right', minWidth: 64 }}>
-                      <div style={{ fontSize: 18, fontWeight: 800, lineHeight: 1 }}>
+                    <div style={{ textAlign: 'right', minWidth: 52 }}>
+                      <div style={{ fontSize: 15, fontWeight: 800, lineHeight: 1 }}>
                         {healthBannerData.primaryProgressPct != null ? `${healthBannerData.primaryProgressPct}%` : '—'}
                       </div>
-                      <div style={{ fontSize: 10, opacity: 0.85 }}>
+                      <div style={{ fontSize: 9, opacity: 0.85 }}>
                         {healthBannerData.primaryProgressLabel}
                       </div>
                     </div>
@@ -4725,7 +4725,7 @@ const Dashboard: React.FC = () => {
                     </button>
                   </div>
 
-                  <div className="d-flex align-items-center justify-content-between gap-2 flex-wrap" style={{ marginTop: 8, fontSize: 10.5, opacity: 0.9 }}>
+                  <div className="d-flex align-items-center justify-content-between gap-2 flex-wrap" style={{ marginTop: 5, fontSize: 9, opacity: 0.9 }}>
                     <div>
                       Source {healthBannerData.sourceLabel}
                       {' • '}
@@ -4751,109 +4751,54 @@ const Dashboard: React.FC = () => {
             )}
 
             {showPersistentDashboardBanners && showMonzoReconnectBanner && (
-              <Alert variant="warning" className="d-flex align-items-center justify-content-between flex-wrap gap-2">
+              <Alert variant="warning" className="d-flex align-items-center justify-content-between flex-wrap gap-1 py-1 px-2 mb-1" style={{ fontSize: 11 }}>
                 <div>
-                  <div className="fw-semibold">Monzo sync is stale</div>
-                  <div className="text-muted small">
-                    Last sync {monzoSyncAgeDays} days ago
-                    {monzoLastSyncDate ? ` (${monzoLastSyncDate.toLocaleString()})` : ''}.
-                  </div>
-                  {monzoReconnectMsg && <div className="text-muted small mt-1">{monzoReconnectMsg}</div>}
+                  <span className="fw-semibold">Monzo sync stale</span>
+                  <span className="text-muted ms-1">— {monzoSyncAgeDays}d ago{monzoReconnectMsg ? ` · ${monzoReconnectMsg}` : ''}</span>
                 </div>
-                <Button
-                  variant="outline-dark"
-                  size="sm"
-                  onClick={handleMonzoReconnect}
-                  disabled={monzoReconnectBusy}
-                >
-                  {monzoReconnectBusy ? <Spinner size="sm" animation="border" className="me-2" /> : null}
-                  Reconnect Monzo
+                <Button variant="outline-dark" size="sm" style={{ fontSize: 10, padding: '1px 8px' }} onClick={handleMonzoReconnect} disabled={monzoReconnectBusy}>
+                  {monzoReconnectBusy ? <Spinner size="sm" animation="border" className="me-1" /> : null}
+                  Reconnect
                 </Button>
               </Alert>
             )}
 
             {showPersistentDashboardBanners && showStravaReconnectBanner && (
-              <Alert variant="warning" className="d-flex align-items-center justify-content-between flex-wrap gap-2">
+              <Alert variant="warning" className="d-flex align-items-center justify-content-between flex-wrap gap-1 py-1 px-2 mb-1" style={{ fontSize: 11 }}>
                 <div>
-                  <div className="fw-semibold">Strava sync is stale</div>
-                  <div className="text-muted small">
-                    Last sync {stravaSyncAgeDays} days ago
-                    {stravaLastSyncDate ? ` (${stravaLastSyncDate.toLocaleString()})` : ''}.
-                  </div>
-                  {profileSnapshot?.stravaLastErrorMessage && (
-                    <div className="text-muted small mt-1">{String(profileSnapshot.stravaLastErrorMessage)}</div>
-                  )}
+                  <span className="fw-semibold">Strava sync stale</span>
+                  <span className="text-muted ms-1">— {stravaSyncAgeDays}d ago</span>
                 </div>
-                <div className="d-flex align-items-center gap-2">
-                  <Button
-                    variant="outline-dark"
-                    size="sm"
-                    onClick={() => navigate('/settings/integrations/strava')}
-                  >
-                    Reconnect Strava
-                  </Button>
-                </div>
+                <Button variant="outline-dark" size="sm" style={{ fontSize: 10, padding: '1px 8px' }} onClick={() => navigate('/settings/integrations/strava')}>
+                  Reconnect
+                </Button>
               </Alert>
             )}
 
             {showPersistentDashboardBanners && showTraktReconnectBanner && (
-              <Alert variant="warning" className="d-flex align-items-center justify-content-between flex-wrap gap-2">
+              <Alert variant="warning" className="d-flex align-items-center justify-content-between flex-wrap gap-1 py-1 px-2 mb-1" style={{ fontSize: 11 }}>
                 <div>
-                  <div className="fw-semibold">Trakt sync is stale</div>
-                  <div className="text-muted small">
-                    Last sync {traktSyncAgeDays} days ago
-                    {traktLastSyncDate ? ` (${traktLastSyncDate.toLocaleString()})` : ''}.
-                  </div>
+                  <span className="fw-semibold">Trakt sync stale</span>
+                  <span className="text-muted ms-1">— {traktSyncAgeDays}d ago</span>
                 </div>
-                <Button
-                  variant="outline-dark"
-                  size="sm"
-                  onClick={() => navigate('/settings/integrations/trakt')}
-                >
-                  Open Trakt settings
+                <Button variant="outline-dark" size="sm" style={{ fontSize: 10, padding: '1px 8px' }} onClick={() => navigate('/settings/integrations/trakt')}>
+                  Settings
                 </Button>
               </Alert>
             )}
 
             {showPersistentDashboardBanners && showHardcoverReconnectBanner && (
-              <Alert variant="warning" className="d-flex align-items-center justify-content-between flex-wrap gap-2">
+              <Alert variant="warning" className="d-flex align-items-center justify-content-between flex-wrap gap-1 py-1 px-2 mb-1" style={{ fontSize: 11 }}>
                 <div>
-                  <div className="fw-semibold">Hardcover sync is stale</div>
-                  <div className="text-muted small">
-                    Last sync {hardcoverSyncAgeDays} days ago
-                    {hardcoverLastSyncDate ? ` (${hardcoverLastSyncDate.toLocaleString()})` : ''}.
-                  </div>
+                  <span className="fw-semibold">Hardcover sync stale</span>
+                  <span className="text-muted ms-1">— {hardcoverSyncAgeDays}d ago</span>
                 </div>
-                <Button
-                  variant="outline-dark"
-                  size="sm"
-                  onClick={() => navigate('/settings/integrations/hardcover')}
-                >
-                  Open Hardcover settings
+                <Button variant="outline-dark" size="sm" style={{ fontSize: 10, padding: '1px 8px' }} onClick={() => navigate('/settings/integrations/hardcover')}>
+                  Settings
                 </Button>
               </Alert>
             )}
 
-            {showPersistentDashboardBanners && showYouTubeTakeoutBanner && (
-              <Alert variant="warning" className="d-flex align-items-center justify-content-between flex-wrap gap-2">
-                <div>
-                  <div className="fw-semibold">YouTube watch history import is due</div>
-                  <div className="text-muted small">
-                    {youtubeTakeoutLastImportDate
-                      ? `Last import ${youtubeTakeoutAgeDays ?? 0} days ago (${youtubeTakeoutLastImportDate.toLocaleString()}).`
-                      : 'No Google Takeout import detected yet.'}
-                    {' '}Upload <code>watch-history.json</code> every 60 days to keep your 7-day YouTube metric accurate.
-                  </div>
-                </div>
-                <Button
-                  variant="outline-dark"
-                  size="sm"
-                  onClick={() => navigate('/settings/integrations/youtube')}
-                >
-                  Import YouTube data
-                </Button>
-              </Alert>
-            )}
 
             <Row className="g-2 mb-1">
               <Col xl={12}>
