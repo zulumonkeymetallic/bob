@@ -331,7 +331,7 @@ const PlannerCapacityBanner: React.FC = () => {
         if (nextSprint) {
           setRecommendationStatus(`Suggested to move into ${nextSprint.name}: ${next.length} items (about ${Math.round(covered * 10) / 10}h) based on lower priority and larger size.`);
         } else {
-          setRecommendationStatus(`Found ${next.length} move candidates (about ${Math.round(covered * 10) / 10}h), but there is no next sprint yet to move them into.`);
+          setRecommendationStatus(`Found ${next.length} move candidates (about ${Math.round(covered * 10) / 10}h). Create a next sprint to enable moves.`);
         }
       }
     } catch (error: any) {
@@ -516,14 +516,24 @@ const PlannerCapacityBanner: React.FC = () => {
             >
               {loadingRecommendations ? 'Refreshing…' : 'Refresh'}
             </Button>
-            <Button
-              size="sm"
-              variant="dark"
-              onClick={moveAllRecommendations}
-              disabled={!recommendations.length || !nextSprint}
-            >
-              Move all suggested
-            </Button>
+            {!nextSprint ? (
+              <Button
+                size="sm"
+                variant="outline-warning"
+                onClick={() => navigate('/sprints')}
+              >
+                Create next sprint to enable moves
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="dark"
+                onClick={moveAllRecommendations}
+                disabled={!recommendations.length}
+              >
+                Move all suggested
+              </Button>
+            )}
           </div>
         </div>
         {showRecommendations && recommendationStatus && (

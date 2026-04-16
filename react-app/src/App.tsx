@@ -362,7 +362,7 @@ function AppContent() {
             <Route path="/dashboard/theme-progress" element={<Navigate to="/metrics/progress" replace />} />
             <Route path="/dashboard/finance" element={<Navigate to="/finance/dashboard" replace />} />
             <Route path="/metrics/progress" element={<ThemeProgressDashboard />} />
-            <Route path="/metrics/overview" element={<MetricsOverview />} />
+            <Route path="/metrics/overview" element={<Navigate to="/dashboard" replace />} />
             <Route path="/focus-goals" element={<FocusGoalsPage />} />
             <Route path="/metrics" element={<AdvancedOverview />} />
             <Route path="/overview/advanced" element={<Navigate to="/metrics" replace />} />

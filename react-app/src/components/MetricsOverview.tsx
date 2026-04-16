@@ -87,7 +87,7 @@ function shortDate(dateStr: string): string {
   return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 }
 
-function trendIcon(data: number[], className = '') {
+export function trendIcon(data: number[], className = '') {
   if (data.length < 3) return <Minus size={14} className={`text-muted ${className}`} />;
   const recent = data.slice(-3).reduce((a, b) => a + b, 0) / 3;
   const prev = data.slice(-6, -3).reduce((a, b) => a + b, 0) / Math.max(data.slice(-6, -3).length, 1);
@@ -106,7 +106,7 @@ type RangeKey = typeof RANGE_OPTIONS[number]['days'];
 
 // ─── MetricCard ──────────────────────────────────────────────────────────────
 
-interface MetricCardProps {
+export interface MetricCardProps {
   icon: React.ReactNode;
   title: string;
   value: string | number | null;
@@ -120,7 +120,7 @@ interface MetricCardProps {
   fullWidth?: boolean;
 }
 
-const MetricCard: React.FC<MetricCardProps> = ({
+export const MetricCard: React.FC<MetricCardProps> = ({
   icon, title, value, unit, subtitle, trend, trendColor = '#3b82f6', badge, isDark, action, fullWidth,
 }) => {
   const bg = isDark ? '#1e2433' : '#ffffff';

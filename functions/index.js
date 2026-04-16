@@ -7636,9 +7636,10 @@ exports.generateStoriesForGoal = functionsV2.https.onCall({ secrets: [GOOGLE_AI_
     for (const s of stories) {
       if (!s?.title) continue;
       const ref = db.collection('stories').doc();
+      const storyRef = await generateStoryRef(db, uid);
       batch.set(ref, {
         id: ref.id,
-        ref: `STY-${now}-${Math.floor(Math.random() * 10000)}`,
+        ref: storyRef,
         persona: goalPersona,
         title: String(s.title).slice(0, 140),
         description: String(s.description || ''),

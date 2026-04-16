@@ -40,6 +40,8 @@ import { goalNeedsLinkedPot } from '../utils/goalCost';
 import { ResponsiveContainer, LineChart, Line, CartesianGrid, XAxis, YAxis, Tooltip as RechartsTooltip, Legend } from 'recharts';
 import { Calendar as RBC, Views, dateFnsLocalizer } from 'react-big-calendar';
 import 'react-big-calendar/lib/css/react-big-calendar.css';
+import HealthMetricsDashboardWidget from './HealthMetricsDashboardWidget';
+import MetricsOverview from './MetricsOverview';
 import { isGoalInHierarchySet } from '../utils/goalHierarchy';
 import {
   callDeltaReplan,
@@ -262,14 +264,16 @@ type DashboardWidgetKey =
   | 'unifiedTimeline'
   | 'tasksDueToday'
   | 'choresHabits'
-  | 'calendar';
+  | 'calendar'
+  | 'healthMetrics'
+  | 'metricsOverview';
 type DashboardWidgetVisibility = Record<DashboardWidgetKey, boolean>;
 interface DashboardWidgetSize {
   width: number;
   height: number;
 }
 type DashboardWidgetSizes = Partial<Record<DashboardWidgetKey, DashboardWidgetSize>>;
-const SUMMARY_WIDGET_KEYS: DashboardWidgetKey[] = ['unifiedTimeline', 'top3', 'dailySummary', 'kpiStudio', 'choresHabits', 'lowHangingFruit', 'themeProgress', 'tasksDueToday', 'calendar'];
+const SUMMARY_WIDGET_KEYS: DashboardWidgetKey[] = ['unifiedTimeline', 'top3', 'dailySummary', 'kpiStudio', 'choresHabits', 'lowHangingFruit', 'themeProgress', 'tasksDueToday', 'calendar', 'healthMetrics', 'metricsOverview'];
 const dashboardWidgetOrderStorageKey = (deviceType: DashboardDeviceType) => `${DASHBOARD_WIDGET_ORDER_STORAGE_PREFIX}_${deviceType}`;
 const readDashboardWidgetOrder = (deviceType: DashboardDeviceType): DashboardWidgetKey[] => {
   try {
@@ -511,6 +515,8 @@ const DASHBOARD_WIDGET_CONFIG: Array<{ key: DashboardWidgetKey; label: string }>
   { key: 'tasksDueToday', label: 'Tasks due today' },
   { key: 'choresHabits', label: 'Chores & habits' },
   { key: 'calendar', label: 'Calendar (mini)' },
+  { key: 'healthMetrics', label: 'Health & Recovery (compact)' },
+  { key: 'metricsOverview', label: 'Metrics overview (full)' },
 ];
 
 const DASHBOARD_WIDGET_DEFAULT_VISIBILITY: DashboardWidgetVisibility = {
@@ -523,6 +529,8 @@ const DASHBOARD_WIDGET_DEFAULT_VISIBILITY: DashboardWidgetVisibility = {
   tasksDueToday: false,
   choresHabits: true,
   calendar: false,
+  healthMetrics: false,
+  metricsOverview: false,
 };
 
 const getDashboardDeviceType = (): DashboardDeviceType => {
@@ -6437,6 +6445,34 @@ const Dashboard: React.FC = () => {
                               </Card.Body>
                             </Card>
                             {renderWidgetEdgeHandles('calendar')}
+                          </div>
+                        )}
+                                    {widgetKey === 'healthMetrics' && widgetVisibility.healthMetrics && (
+                          <div
+                            ref={setWidgetResizeContainer('healthMetrics')}
+                            className="dashboard-widget-shell"
+                            style={getWidgetSizeStyle('healthMetrics', 300)}
+                          >
+                            <Card className="shadow-sm border-0 mb-3">
+                              <Card.Body>
+                                <HealthMetricsDashboardWidget />
+                              </Card.Body>
+                            </Card>
+                            {renderWidgetEdgeHandles('healthMetrics')}
+                          </div>
+                        )}
+                                    {widgetKey === 'metricsOverview' && widgetVisibility.metricsOverview && (
+                          <div
+                            ref={setWidgetResizeContainer('metricsOverview')}
+                            className="dashboard-widget-shell"
+                            style={getWidgetSizeStyle('metricsOverview', 600)}
+                          >
+                            <Card className="shadow-sm border-0 mb-3">
+                              <Card.Body className="p-0">
+                                <MetricsOverview />
+                              </Card.Body>
+                            </Card>
+                            {renderWidgetEdgeHandles('metricsOverview')}
                           </div>
                         )}
                                   </SortableDashboardWidget>

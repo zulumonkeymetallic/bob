@@ -1020,8 +1020,9 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
         const storySnap = await admin.firestore().collection('stories').doc(String(block.storyId)).get();
         const story = storySnap.exists ? storySnap.data() : null;
         const storyStatus = String(story?.status ?? '').toLowerCase();
+        const storyStatusNum = typeof story?.status === 'number' ? story.status : null;
         const storyClosed = !storySnap.exists
-          || isDoneStatus(story?.status)
+          || (storyStatusNum !== null ? storyStatusNum >= 4 : isDoneStatus(story?.status))
           || ['archived', 'cancelled', 'canceled'].includes(storyStatus);
         if (storyClosed) {
           staleReason = storySnap.exists ? 'linked_story_closed' : 'linked_story_missing';
@@ -2076,7 +2077,7 @@ exports.syncCalendarBlock = functions.https.onCall(async (data, context) => {
 });
 
 // Trigger to auto-sync changes to Google Calendar
-exports.onCalendarBlockWrite = functions.firestore.document('calendar_blocks/{blockId}').onWrite(async (change, context) => {
+exports.onCalendarBlockWrite = functions.region('europe-west2').firestore.document('calendar_blocks/{blockId}').onWrite(async (change, context) => {
   const blockId = context.params.blockId;
   const before = change.before.exists ? change.before.data() : null;
   const after = change.after.exists ? change.after.data() : null;
@@ -2155,7 +2156,7 @@ exports.onCalendarBlockWrite = functions.firestore.document('calendar_blocks/{bl
   // If googleEventId changed, it's a sync update, skip
   if (before.googleEventId !== after.googleEventId) return;
 
-  if (hasChanges) {
+  if (hasChanges || !after.googleEventId) {
     if (after.googleEventId) {
       await syncBlockToGoogle(blockId, 'update', uid, after);
     } else {
