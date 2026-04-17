@@ -1253,6 +1253,8 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
           persona: currentPersona,
           ownerUid: currentUser.uid,
           ref: x.ref || `TASK-${String(d.id).slice(-4).toUpperCase()}`,
+          type: x.type || 'task',
+          repeatFrequency: x.repeatFrequency ?? null,
         };
         return t as Task;
       });
