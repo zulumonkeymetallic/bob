@@ -40,8 +40,10 @@ import { goalNeedsLinkedPot } from '../utils/goalCost';
 import { ResponsiveContainer, LineChart, Line, CartesianGrid, XAxis, YAxis, Tooltip as RechartsTooltip, Legend } from 'recharts';
 import { Calendar as RBC, Views, dateFnsLocalizer } from 'react-big-calendar';
 import 'react-big-calendar/lib/css/react-big-calendar.css';
-import HealthMetricsDashboardWidget from './HealthMetricsDashboardWidget';
-import MetricsOverview from './MetricsOverview';
+import RecoveryWidget from './metrics/RecoveryWidget';
+import ActivityWidget from './metrics/ActivityWidget';
+import FitnessWidget from './metrics/FitnessWidget';
+import SprintVelocityWidget from './metrics/SprintVelocityWidget';
 import { isGoalInHierarchySet } from '../utils/goalHierarchy';
 import {
   callDeltaReplan,
@@ -265,15 +267,17 @@ type DashboardWidgetKey =
   | 'tasksDueToday'
   | 'choresHabits'
   | 'calendar'
-  | 'healthMetrics'
-  | 'metricsOverview';
+  | 'recoveryMetrics'
+  | 'activityMetrics'
+  | 'fitnessMetrics'
+  | 'sprintVelocity';
 type DashboardWidgetVisibility = Record<DashboardWidgetKey, boolean>;
 interface DashboardWidgetSize {
   width: number;
   height: number;
 }
 type DashboardWidgetSizes = Partial<Record<DashboardWidgetKey, DashboardWidgetSize>>;
-const SUMMARY_WIDGET_KEYS: DashboardWidgetKey[] = ['unifiedTimeline', 'top3', 'dailySummary', 'kpiStudio', 'choresHabits', 'lowHangingFruit', 'themeProgress', 'tasksDueToday', 'calendar', 'healthMetrics', 'metricsOverview'];
+const SUMMARY_WIDGET_KEYS: DashboardWidgetKey[] = ['unifiedTimeline', 'top3', 'dailySummary', 'kpiStudio', 'choresHabits', 'lowHangingFruit', 'themeProgress', 'tasksDueToday', 'calendar', 'recoveryMetrics', 'activityMetrics', 'fitnessMetrics', 'sprintVelocity'];
 const dashboardWidgetOrderStorageKey = (deviceType: DashboardDeviceType) => `${DASHBOARD_WIDGET_ORDER_STORAGE_PREFIX}_${deviceType}`;
 const readDashboardWidgetOrder = (deviceType: DashboardDeviceType): DashboardWidgetKey[] => {
   try {
@@ -515,8 +519,10 @@ const DASHBOARD_WIDGET_CONFIG: Array<{ key: DashboardWidgetKey; label: string }>
   { key: 'tasksDueToday', label: 'Tasks due today' },
   { key: 'choresHabits', label: 'Chores & habits' },
   { key: 'calendar', label: 'Calendar (mini)' },
-  { key: 'healthMetrics', label: 'Health & Recovery (compact)' },
-  { key: 'metricsOverview', label: 'Metrics overview (full)' },
+  { key: 'recoveryMetrics', label: 'Recovery (HRV, Sleep, Calories)' },
+  { key: 'activityMetrics', label: 'Activity (Steps + HRV trend)' },
+  { key: 'fitnessMetrics', label: 'Fitness (Run / Swim / Bike)' },
+  { key: 'sprintVelocity', label: 'Sprint velocity + Theme rings' },
 ];
 
 const DASHBOARD_WIDGET_DEFAULT_VISIBILITY: DashboardWidgetVisibility = {
@@ -529,8 +535,10 @@ const DASHBOARD_WIDGET_DEFAULT_VISIBILITY: DashboardWidgetVisibility = {
   tasksDueToday: false,
   choresHabits: true,
   calendar: false,
-  healthMetrics: false,
-  metricsOverview: false,
+  recoveryMetrics: false,
+  activityMetrics: false,
+  fitnessMetrics: false,
+  sprintVelocity: false,
 };
 
 const getDashboardDeviceType = (): DashboardDeviceType => {
@@ -6447,32 +6455,60 @@ const Dashboard: React.FC = () => {
                             {renderWidgetEdgeHandles('calendar')}
                           </div>
                         )}
-                                    {widgetKey === 'healthMetrics' && widgetVisibility.healthMetrics && (
+                                    {widgetKey === 'recoveryMetrics' && widgetVisibility.recoveryMetrics && (
                           <div
-                            ref={setWidgetResizeContainer('healthMetrics')}
+                            ref={setWidgetResizeContainer('recoveryMetrics')}
                             className="dashboard-widget-shell"
-                            style={getWidgetSizeStyle('healthMetrics', 300)}
+                            style={getWidgetSizeStyle('recoveryMetrics', 300)}
                           >
                             <Card className="shadow-sm border-0 mb-3">
                               <Card.Body>
-                                <HealthMetricsDashboardWidget />
+                                <RecoveryWidget />
                               </Card.Body>
                             </Card>
-                            {renderWidgetEdgeHandles('healthMetrics')}
+                            {renderWidgetEdgeHandles('recoveryMetrics')}
                           </div>
                         )}
-                                    {widgetKey === 'metricsOverview' && widgetVisibility.metricsOverview && (
+                        {widgetKey === 'activityMetrics' && widgetVisibility.activityMetrics && (
                           <div
-                            ref={setWidgetResizeContainer('metricsOverview')}
+                            ref={setWidgetResizeContainer('activityMetrics')}
                             className="dashboard-widget-shell"
-                            style={getWidgetSizeStyle('metricsOverview', 600)}
+                            style={getWidgetSizeStyle('activityMetrics', 240)}
                           >
                             <Card className="shadow-sm border-0 mb-3">
-                              <Card.Body className="p-0">
-                                <MetricsOverview />
+                              <Card.Body>
+                                <ActivityWidget />
                               </Card.Body>
                             </Card>
-                            {renderWidgetEdgeHandles('metricsOverview')}
+                            {renderWidgetEdgeHandles('activityMetrics')}
+                          </div>
+                        )}
+                        {widgetKey === 'fitnessMetrics' && widgetVisibility.fitnessMetrics && (
+                          <div
+                            ref={setWidgetResizeContainer('fitnessMetrics')}
+                            className="dashboard-widget-shell"
+                            style={getWidgetSizeStyle('fitnessMetrics', 280)}
+                          >
+                            <Card className="shadow-sm border-0 mb-3">
+                              <Card.Body>
+                                <FitnessWidget />
+                              </Card.Body>
+                            </Card>
+                            {renderWidgetEdgeHandles('fitnessMetrics')}
+                          </div>
+                        )}
+                        {widgetKey === 'sprintVelocity' && widgetVisibility.sprintVelocity && (
+                          <div
+                            ref={setWidgetResizeContainer('sprintVelocity')}
+                            className="dashboard-widget-shell"
+                            style={getWidgetSizeStyle('sprintVelocity', 220)}
+                          >
+                            <Card className="shadow-sm border-0 mb-3">
+                              <Card.Body>
+                                <SprintVelocityWidget />
+                              </Card.Body>
+                            </Card>
+                            {renderWidgetEdgeHandles('sprintVelocity')}
                           </div>
                         )}
                                   </SortableDashboardWidget>

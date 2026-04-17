@@ -1,9 +1,12 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Draggable } from 'react-beautiful-dnd';
 import '../styles/TaskCard.css';
 import { Task } from '../types';
 import { httpsCallable } from 'firebase/functions';
-import { functions } from '../firebase';
+import { functions, db } from '../firebase';
+import { updateDoc, doc, serverTimestamp } from 'firebase/firestore';
+import { Clock3 } from 'lucide-react';
+import DeferItemModal from './DeferItemModal';
 
 interface TaskCardProps {
   task: Task;
