@@ -1033,7 +1033,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
   });
 
   const filteredTasks = tasksInScope.filter((task) => {
-    const taskType = normalizeBoardTaskType((task as any).type);
+    const taskType = normalizeBoardTaskType((task as any).type || (task as any).task_type);
     if (!showChoreTasks && ['chore', 'routine', 'habit'].includes(taskType)) return false;
     if (filterTop3Only && !isTop3Task(task)) return false;
     if (filterCriticalOnly && !(isCriticalPriority(task.priority) || isTop3Task(task))) return false;
@@ -1102,9 +1102,9 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
     const lane = (status as LaneStatus) || 'backlog';
     return sortedTasks.filter((task) => {
       if (taskLaneForStatus(task) !== lane) return false;
-      if (normalizeBoardTaskType((task as any).type) !== 'task' && !showChoreTasks) return false;
+      if (normalizeBoardTaskType((task as any).type || (task as any).task_type) !== 'task' && !showChoreTasks) return false;
       if (lane === 'done' && resolvedSprintId) {
-        return isDueDateInSprint(task) && normalizeBoardTaskType((task as any).type) === 'task';
+        return isDueDateInSprint(task) && normalizeBoardTaskType((task as any).type || (task as any).task_type) === 'task';
       }
       return true;
     });
