@@ -1,0 +1,15 @@
+name: Deploy Web
+on:
+  push:
+    branches: [main]
+jobs:
+  deploy:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy Web
+        run: |
+          cd react-app && npm install && npm run build
+          firebase deploy --only hosting --project bob20250810
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
