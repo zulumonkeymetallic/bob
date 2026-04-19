@@ -1,0 +1,14 @@
+{
+  "applinks": {
+    "apps": [
+      {
+        "appID": "TeamID.com.bob.ios",
+        "paths": [
+          "/tasks/*",
+          "/stories/*",
+          "/goals/*"
+        ]
+      }
+    ]
+  }
+}
