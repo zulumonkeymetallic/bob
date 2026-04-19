@@ -20,6 +20,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { useActivityTracking } from '../hooks/useActivityTracking';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
+import { useFocusGoals } from '../hooks/useFocusGoals';
 import { collection, query, where, onSnapshot, orderBy, addDoc, updateDoc, deleteDoc, doc, serverTimestamp } from 'firebase/firestore';
 import { db, functions } from '../firebase';
 import { httpsCallable } from 'firebase/functions';
@@ -404,6 +405,7 @@ interface SortableRowProps {
   onToggleExpand?: (storyId: string) => void;
   isExpanded?: boolean;
   isHighlighted?: boolean;
+  isNotFocusAligned?: boolean;
 }
 
 const SortableRow: React.FC<SortableRowProps> = ({
@@ -419,7 +421,8 @@ const SortableRow: React.FC<SortableRowProps> = ({
   onPriorityFlag,
   onToggleExpand,
   isExpanded,
-  isHighlighted
+  isHighlighted,
+  isNotFocusAligned = false,
 }) => {
   const { isDark, colors, backgrounds } = useThemeAwareColors();
   const { showSidebar } = useSidebar();
@@ -446,6 +449,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
 
   const baseRowColor = isHighlighted ? '#eff6ff' : themeVars.card as string;
   const hoverRowColor = isHighlighted ? '#dbeafe' : rgbaCard(0.08);
+  const focusAlignmentBoxShadow = isNotFocusAligned ? 'inset 0 0 0 2px rgba(220, 53, 69, 0.55)' : undefined;
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
@@ -871,7 +875,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
         ...style,
         backgroundColor: baseRowColor,
         borderBottom: `1px solid ${themeVars.border}`,
-        boxShadow: isHighlighted ? 'inset 0 0 0 2px #2563eb' : undefined,
+        boxShadow: isHighlighted ? 'inset 0 0 0 2px #2563eb' : focusAlignmentBoxShadow,
         transition: 'background-color 0.15s ease',
         cursor: onStorySelect ? 'pointer' : 'default',
       }}
@@ -1105,6 +1109,12 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
   const { currentPersona } = usePersona();
   const { isDark, colors, backgrounds } = useThemeAwareColors();
   const { selectedSprintId, sprints } = useSprint();
+  const { activeFocusGoals } = useFocusGoals(currentUser?.uid);
+  const focusGoalIdSet = useMemo(
+    () => new Set(activeFocusGoals.flatMap(fg => fg.goalIds || [])),
+    [activeFocusGoals]
+  );
+  const [alignmentMode, setAlignmentMode] = useState<'all' | 'focus-only' | 'warn'>('all');
   const planningSprintList = useMemo(() => planningSprints(sprints), [sprints]);
   const navigate = useNavigate();
   const [columns, setColumns] = useState<Column[]>(defaultColumns);
@@ -1351,6 +1361,11 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
       if (filters.dataQuality === 'missing_goal' && !missingGoal) return false;
       if (filters.dataQuality === 'missing_points' && !missingPoints) return false;
       if (filters.dataQuality === 'missing_description' && !missingDescription) return false;
+    }
+
+    if (alignmentMode === 'focus-only' && focusGoalIdSet.size > 0) {
+      const aligned = !!(story.goalId && focusGoalIdSet.has(story.goalId));
+      if (!aligned) return false;
     }
 
     return true;
@@ -1696,6 +1711,37 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
           </select>
         </div>
 
+        {/* Focus Alignment Filter */}
+        {focusGoalIdSet.size > 0 && (
+          <div>
+            <label style={{
+              display: 'block',
+              fontSize: '12px',
+              fontWeight: '500',
+              color: 'var(--text)',
+              marginBottom: '4px'
+            }}>
+              Focus Alignment
+            </label>
+            <select
+              value={alignmentMode}
+              onChange={(e) => setAlignmentMode(e.target.value as any)}
+              style={{
+                width: '100%',
+                padding: '6px 10px',
+                fontSize: '14px',
+                border: '1px solid var(--line)',
+                borderRadius: '4px',
+                backgroundColor: 'var(--panel)'
+              }}
+            >
+              <option value="all">All stories</option>
+              <option value="warn">Warn non-aligned</option>
+              <option value="focus-only">Focus only</option>
+            </select>
+          </div>
+        )}
+
         {/* Reset Filters Button */}
         <div>
           <button
@@ -1846,6 +1892,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
                         onToggleExpand={handleToggleExpand}
                         isExpanded={expandedStoryId === story.id}
                         isHighlighted={highlightStoryId === story.id}
+                        isNotFocusAligned={alignmentMode === 'warn' && focusGoalIdSet.size > 0 && !(story.goalId && focusGoalIdSet.has(story.goalId))}
                       />
                       {enableInlineTasks && expandedStoryId === story.id && (
                         <tr>

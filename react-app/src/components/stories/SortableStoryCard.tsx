@@ -38,6 +38,7 @@ interface SortableStoryCardProps {
   onManualSchedule?: (story: Story) => void;
   onDefer?: (story: Story) => void;
   showTags?: boolean;
+  isNotFocusAligned?: boolean;
 }
 
 const readKanbanTagPreference = (): boolean => {
@@ -63,6 +64,7 @@ const SortableStoryCard: React.FC<SortableStoryCardProps> = ({
   onManualSchedule,
   onDefer,
   showTags,
+  isNotFocusAligned = false,
 }) => {
   const { showSidebar } = useSidebar();
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: story.id });
@@ -165,7 +167,10 @@ const SortableStoryCard: React.FC<SortableStoryCardProps> = ({
     <div ref={setNodeRef} style={style}>
       <div
         className={`kanban-card kanban-card--story kanban-card__clickable${isDragging ? ' dragging' : ''}`}
-        style={{ borderLeft: `3px solid ${((story as any).blocked ? 'var(--bs-danger, #dc3545)' : resolvedThemeColor)}` }}
+        style={{
+          borderLeft: `3px solid ${((story as any).blocked ? 'var(--bs-danger, #dc3545)' : resolvedThemeColor)}`,
+          ...(isNotFocusAligned ? { outline: '2px solid rgba(220, 53, 69, 0.65)', outlineOffset: '-1px' } : {}),
+        }}
         role="button"
         tabIndex={0}
         onClick={handleCardClick}
@@ -354,9 +359,15 @@ const SortableStoryCard: React.FC<SortableStoryCardProps> = ({
             <span title={goal?.title || 'No goal linked'}>
               {goal?.title || 'No goal'}
             </span>
-            <span className="kanban-card__meta-text" style={{ marginLeft: 'auto' }}>
-              {safeTaskCount} task{safeTaskCount === 1 ? '' : 's'}
-            </span>
+            {isNotFocusAligned ? (
+              <span style={{ marginLeft: 'auto', fontSize: '10px', color: 'var(--bs-danger, #dc3545)', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                Not focus aligned
+              </span>
+            ) : (
+              <span className="kanban-card__meta-text" style={{ marginLeft: 'auto' }}>
+                {safeTaskCount} task{safeTaskCount === 1 ? '' : 's'}
+              </span>
+            )}
           </div>
         </div>
       </div>
