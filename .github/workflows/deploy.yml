@@ -1,0 +1,30 @@
+name: Deploy BOB System
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Target to build (web, ios, mac, all)'
+        required: true
+        default: 'all'
+      version:
+        description: 'Optional explicit version'
+        required: false
+      beta:
+        description: 'Mark as beta'
+        type: boolean
+        default: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Build Orchestrator
+        run: |
+          # This assumes the orchestrator is in the repo.
+          # Note: Firebase/Xcode steps may need specific runner configuration
+          # or service account secrets in GitHub Settings.
+          ./orchestrate-build.sh --${{ inputs.target }} ${{ inputs.version != '' && format('--version {0}', inputs.version) || '' }} ${{ inputs.beta == 'true' && '--beta' || '' }}
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
