@@ -23,6 +23,9 @@ jobs:
           npm install -g firebase-tools
           cd react-app && npm ci
 
+      - name: Generate Firebase client config
+        run: node scripts/generate-firebase-config.js
+
       - name: Build Web App
         run: |
           cd react-app && npm run build

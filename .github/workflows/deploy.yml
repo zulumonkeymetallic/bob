@@ -54,6 +54,7 @@ permissions:
 
 jobs:
   deploy:
+    if: false  # disabled: superseded by auto-deploy.yml and deploy-prod.yml
     runs-on: ubuntu-latest
     env:
       FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
