@@ -1,108 +1,28 @@
-name: Deploy
-
+name: Deploy BOB System
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
-      bump:
-        description: "Version bump (patch/minor/major/explicit)"
+      target:
+        description: 'Target: web, ios, all'
         required: true
-        default: patch
-        type: choice
-        options: [patch, minor, major, explicit]
-      version:
-        description: "Explicit version (when bump=explicit), e.g., 4.3.0"
-        required: false
-        default: ""
-        type: string
-      push_tags:
-        description: "Push version commit and tag back to repo"
-        required: true
-        default: true
-        type: boolean
-      no_deploy:
-        description: "Build only (skip Firebase deploy)"
-        required: false
-        default: false
-        type: boolean
-      skip_functions:
-        description: "Skip Functions deploy"
-        required: false
-        default: false
-        type: boolean
-      skip_rules:
-        description: "Skip Firestore rules/indexes deploy"
-        required: false
-        default: false
-        type: boolean
-      skip_hosting:
-        description: "Skip Hosting deploy"
-        required: false
-        default: false
-        type: boolean
-      firebase_deploy_flags:
-        description: "Extra flags for firebase deploy (e.g., --force or --project xxx)"
-        required: false
-        default: ""
-        type: string
-
-concurrency:
-  group: deploy-${{ github.ref }}
-  cancel-in-progress: false
-
-permissions:
-  contents: write
+        default: 'all'
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
-    env:
-      FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
-      FIREBASE_DEPLOY_FLAGS: ${{ inputs.firebase_deploy_flags }}
-      SKIP_FUNCTIONS: ${{ inputs.skip_functions }}
-      SKIP_RULES: ${{ inputs.skip_rules }}
-      SKIP_HOSTING: ${{ inputs.skip_hosting }}
+    runs-on: self-hosted
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0  # required to push tags
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Install Firebase CLI
-        run: npm i -g firebase-tools@latest
-
-      - name: Configure Git author
+      - uses: actions/checkout@v4
+      - name: Full System Build & Deploy
+        env:
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_KEY_FILEPATH: ${{ secrets.APP_STORE_CONNECT_KEY_FILEPATH }}
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-      - name: Ensure deploy script executable
-        run: chmod +x ./deploy
-
-      - name: Run deploy
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ "${{ inputs.bump }}" == "explicit" && -n "${{ inputs.version }}" ]]; then
-            ARG_VER="${{ inputs.version }}"
-          else
-            ARG_VER="${{ inputs.bump }}"
-          fi
-
-          PUSH_FLAG=""
-          if [[ "${{ inputs.push_tags }}" == "true" ]]; then
-            PUSH_FLAG="--push"
-          fi
-
-          NO_DEPLOY_FLAG=""
-          if [[ "${{ inputs.no_deploy }}" == "true" ]]; then
-            NO_DEPLOY_FLAG="--no-deploy"
-          fi
-
-          echo "Running: ./deploy ${ARG_VER} ${PUSH_FLAG} ${NO_DEPLOY_FLAG}"
-          ./deploy "${ARG_VER}" ${PUSH_FLAG} ${NO_DEPLOY_FLAG}
-
+          # Web
+          cd react-app && npm install && npm run build
+          firebase deploy --only hosting --project bob20250810
+          # iOS/Catalyst
+          cd ../bob-ios && bundle install && bundle exec fastlane ios release_all
