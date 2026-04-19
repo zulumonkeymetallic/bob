@@ -52,6 +52,7 @@ import { themeVars, rgbaCard } from '../utils/themeVars';
 import { getGoalLinkedPotId, normalizeGoalCostType } from '../utils/goalCost';
 import { MISSING_INFO_CELL_BG, MISSING_INFO_CELL_BG_HOVER } from '../utils/dataQuality';
 import { resolveLeafGoalSelection } from '../utils/goalHierarchy';
+import { useFocusGoals } from '../hooks/useFocusGoals';
 
 interface GoalTableRow extends Goal {
   storiesCount?: number;
@@ -270,6 +271,7 @@ interface SortableRowProps {
   habitAdherenceData: Record<string, { planned: number; completed: number; progress: number }>;
   goalKpiStatusByGoalId?: Record<string, GoalKpiStatusRow>;
   highlightStoryId?: string;
+  isNotFocusAligned?: boolean;
 }
 
 const formatExternalUrlLabel = (value: unknown): string => {
@@ -340,7 +342,8 @@ const SortableRow: React.FC<SortableRowProps> = ({
   storyPointsData,
   habitAdherenceData,
   goalKpiStatusByGoalId,
-  highlightStoryId
+  highlightStoryId,
+  isNotFocusAligned = false,
 }) => {
   const { isDark, colors, backgrounds } = useThemeAwareColors();
   const {
@@ -978,6 +981,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
           borderBottom: `1px solid ${themeVars.border}`,
           transition: 'background-color 0.15s ease',
           cursor: 'pointer',
+          boxShadow: isNotFocusAligned ? 'inset 0 0 0 2px rgba(220, 53, 69, 0.55)' : undefined,
         }}
         {...attributes}
         onClick={(e) => {
@@ -1245,6 +1249,12 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
   const { showSidebar } = useSidebar();
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
+  const { activeFocusGoals } = useFocusGoals(currentUser?.uid);
+  const focusGoalIdSet = useMemo(
+    () => new Set(activeFocusGoals.flatMap(fg => fg.goalIds || [])),
+    [activeFocusGoals]
+  );
+  const [alignmentMode, setAlignmentMode] = useState<'all' | 'focus-only' | 'warn'>('all');
   const [globalThemes, setGlobalThemes] = useState<GlobalTheme[]>(GLOBAL_THEMES);
   const [monzoPots, setMonzoPots] = useState<Array<{ id: string; name: string }>>([]);
   const [storyCounts, setStoryCounts] = useState<Record<string, number>>({});
@@ -1616,6 +1626,9 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
     if (costDataFilter === 'missing_estimated_cost') {
       return isGoalMissingEstimatedCost(goal);
     }
+    if (alignmentMode === 'focus-only' && focusGoalIdSet.size > 0) {
+      if (!focusGoalIdSet.has(goal.id)) return false;
+    }
     return true;
   });
 
@@ -1807,6 +1820,31 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
             <option value="missing_estimated_cost">Missing Est Cost</option>
           </select>
         </label>
+        {focusGoalIdSet.size > 0 && (
+          <label style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+          }}>
+            Focus Alignment
+            <select
+              value={alignmentMode}
+              onChange={(e) => setAlignmentMode(e.target.value as any)}
+              style={{
+                padding: '4px 8px',
+                borderRadius: '6px',
+                border: `1px solid ${themeVars.border}`,
+                backgroundColor: themeVars.panel as string,
+                color: themeVars.text as string,
+                fontSize: '12px',
+              }}
+            >
+              <option value="all">All goals</option>
+              <option value="warn">Warn non-aligned</option>
+              <option value="focus-only">Focus only</option>
+            </select>
+          </label>
+        )}
       </div>
 
       <div style={{ display: 'flex' }}>
@@ -1927,6 +1965,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
                       onStoryPriorityChange={handleStoryPriorityChange}
                       onStoryAdd={handleStoryAdd}
                       highlightStoryId={highlightStoryId}
+                      isNotFocusAligned={alignmentMode === 'warn' && focusGoalIdSet.size > 0 && !focusGoalIdSet.has(goal.id)}
                     />
                   ))}
                 </SortableContext>

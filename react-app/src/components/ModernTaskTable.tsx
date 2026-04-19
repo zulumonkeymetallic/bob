@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   DndContext,
   closestCenter,
@@ -53,6 +53,8 @@ import { parsePointsValue } from '../utils/points';
 import EditTaskModal from './EditTaskModal';
 import EditStoryModal from './EditStoryModal';
 import { MISSING_INFO_CELL_BG, MISSING_INFO_CELL_BG_HOVER, hasLinkedId, isBlankText, isMissingPoints } from '../utils/dataQuality';
+import { useAuth } from '../contexts/AuthContext';
+import { useFocusGoals } from '../hooks/useFocusGoals';
 
 interface TaskTableRow extends Task {
   storyTitle?: string;
@@ -360,6 +362,7 @@ interface SortableRowProps {
   onSprintAssign: (taskId: string, sprintId: string | null) => Promise<void>;
   onConvertToStory: (task: TaskTableRow) => Promise<void>;
   convertLoadingId: string | null;
+  isNotFocusAligned?: boolean;
 }
 
 const SortableRow: React.FC<SortableRowProps> = ({
@@ -375,6 +378,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
   onSprintAssign,
   onConvertToStory,
   convertLoadingId,
+  isNotFocusAligned = false,
 }) => {
   const { showSidebar } = useSidebar();
   const { trackCRUD, trackFieldChange, addNote } = useActivityTracking();
@@ -818,6 +822,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
         backgroundColor: backgrounds.surface,
         borderBottom: `1px solid ${themeVars.border}`,
         transition: 'background-color 0.15s ease',
+        boxShadow: isNotFocusAligned ? 'inset 0 0 0 2px rgba(220, 53, 69, 0.55)' : undefined,
       }}
       {...attributes}
       onMouseEnter={(e) => {
@@ -992,6 +997,12 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
   const { isDark, colors, backgrounds } = useThemeAwareColors();
   const { currentPersona } = usePersona();
   const { themes: globalThemes } = useGlobalThemes();
+  const { currentUser } = useAuth();
+  const { activeFocusGoals } = useFocusGoals(currentUser?.uid);
+  const focusGoalIdSet = useMemo(
+    () => new Set(activeFocusGoals.flatMap(fg => fg.goalIds || [])),
+    [activeFocusGoals]
+  );
 
   // Initialize columns based on defaultColumns prop or use all columns
   const initializeColumns = () => {
@@ -1029,6 +1040,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [dataQualityFilter, setDataQualityFilter] = useState<string>('all');
   const [deferFilter, setDeferFilter] = useState<string>('all');
+  const [alignmentMode, setAlignmentMode] = useState<'all' | 'focus-only' | 'warn'>('all');
   const [convertLoadingId, setConvertLoadingId] = useState<string | null>(null);
   const [toastState, setToastState] = useState<{ show: boolean; message: string; variant: 'danger' | 'info' | 'success' }>({ show: false, message: '', variant: 'danger' });
 
@@ -1255,6 +1267,12 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
       const taskIsDeferred = typeof deferMs === 'number' && deferMs > Date.now();
       if (deferFilter === 'deferred' && !taskIsDeferred) return false;
       if (deferFilter === 'not_deferred' && taskIsDeferred) return false;
+    }
+    if (alignmentMode === 'focus-only' && focusGoalIdSet.size > 0) {
+      const parentStory = stories.find(s => s.id === task.storyId);
+      const aligned = (parentStory?.goalId && focusGoalIdSet.has(parentStory.goalId)) ||
+        ((task as any).goalId && focusGoalIdSet.has((task as any).goalId));
+      if (!aligned) return false;
     }
     return true;
   });
@@ -1570,6 +1588,29 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                 </select>
               </label>
             </div>
+            {focusGoalIdSet.size > 0 && (
+              <div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: themeVars.text as string }}>
+                  Focus:
+                  <select
+                    value={alignmentMode}
+                    onChange={(e) => setAlignmentMode(e.target.value as any)}
+                    style={{
+                      padding: '4px 8px',
+                      borderRadius: 6,
+                      border: `1px solid ${themeVars.border}`,
+                      backgroundColor: themeVars.panel as string,
+                      color: themeVars.text as string,
+                      fontSize: '12px'
+                    }}
+                  >
+                    <option value="all">All tasks</option>
+                    <option value="warn">Warn non-aligned</option>
+                    <option value="focus-only">Focus only</option>
+                  </select>
+                </label>
+              </div>
+            )}
           </div>
           <button
             onClick={() => setShowConfig(!showConfig)}
@@ -1701,6 +1742,11 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                         onSprintAssign={handleSprintAssign}
                         onConvertToStory={handleConvertToStory}
                         convertLoadingId={convertLoadingId}
+                        isNotFocusAligned={(() => {
+                          if (alignmentMode !== 'warn' || focusGoalIdSet.size === 0) return false;
+                          const parentStory = stories.find(s => s.id === task.storyId);
+                          return !((parentStory?.goalId && focusGoalIdSet.has(parentStory.goalId)) || ((task as any).goalId && focusGoalIdSet.has((task as any).goalId)));
+                        })()}
                       />
                     ))}
                   </SortableContext>

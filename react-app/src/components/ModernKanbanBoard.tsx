@@ -35,6 +35,7 @@ import { useSprint } from '../contexts/SprintContext';
 import { isStatus } from '../utils/statusHelpers';
 import { deriveTaskSprint, findSprintForDate, sprintNameForId } from '../utils/taskSprintHelpers';
 import { useActivityTracking } from '../hooks/useActivityTracking';
+import { useFocusGoals } from '../hooks/useFocusGoals';
 import { generateRef, displayRefForEntity, validateRef } from '../utils/referenceGenerator';
 import EditStoryModal from './EditStoryModal';
 import AddStoryModal from './AddStoryModal';
@@ -195,7 +196,8 @@ const SortableTaskCard: React.FC<{
   onDefer?: (task: Task) => void;
   showTags?: boolean;
   formatTag?: (tag: string) => string;
-}> = ({ task, story, themeColor, scheduledBlock, onEdit, onItemClick, onDefer, showTags = false, formatTag }) => {
+  isNotFocusAligned?: boolean;
+}> = ({ task, story, themeColor, scheduledBlock, onEdit, onItemClick, onDefer, showTags = false, formatTag, isNotFocusAligned = false }) => {
   const { showSidebar } = useSidebar();
   const {
     attributes,
@@ -254,6 +256,9 @@ const SortableTaskCard: React.FC<{
       border: '1px solid rgba(251, 191, 36, 0.8)',
     }
     : {};
+  const focusAlignmentAccent = isNotFocusAligned
+    ? { outline: '2px solid rgba(220, 53, 69, 0.65)', outlineOffset: '-1px' }
+    : {};
 
   const [converting, setConverting] = useState(false);
 
@@ -287,6 +292,7 @@ const SortableTaskCard: React.FC<{
           borderLeft: `3px solid ${isStatus((task as any).status, 'blocked') ? 'var(--bs-danger, #dc3545)' : (themeColor || '#2563eb')}`,
           marginBottom: '10px',
           ...criticalAccent,
+          ...focusAlignmentAccent,
         }}
         role="button"
         tabIndex={0}
@@ -483,6 +489,11 @@ const SortableTaskCard: React.FC<{
             <span title={story?.title || 'No parent story'}>
               {story?.title || 'No parent story'}
             </span>
+            {isNotFocusAligned && (
+              <span style={{ marginLeft: 'auto', fontSize: '10px', color: 'var(--bs-danger, #dc3545)', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                Not focus aligned
+              </span>
+            )}
           </div>
         </div>
       </div>
@@ -496,6 +507,11 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
   const { showSidebar, setUpdateHandler } = useSidebar();
   const { selectedSprintId } = useSprint();
   const { themes: globalThemes } = useGlobalThemes();
+  const { activeFocusGoals } = useFocusGoals(currentUser?.uid);
+  const focusGoalIdSet = useMemo(
+    () => new Set(activeFocusGoals.flatMap(fg => fg.goalIds || [])),
+    [activeFocusGoals]
+  );
   const navigate = useNavigate();
   const boardContainerRef = useRef<HTMLDivElement | null>(null);
   const [boardHeight, setBoardHeight] = useState<number | null>(null);
@@ -561,6 +577,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
     }
   });
   const [sortMode, setSortMode] = useState<'default' | 'ai' | 'overdue' | 'priority' | 'due'>('ai');
+  const [filterAlignmentMode, setFilterAlignmentMode] = useState<'all' | 'focus-only' | 'warn'>('all');
   const [showTags, setShowTags] = useState(() => {
     if (typeof window === 'undefined') return true;
     try {
@@ -1024,11 +1041,25 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
     })
     : tasks;
 
+  const isStoryFocusAligned = useCallback((story: Story): boolean => {
+    if (focusGoalIdSet.size === 0) return true;
+    return !!(story.goalId && focusGoalIdSet.has(story.goalId));
+  }, [focusGoalIdSet]);
+
+  const isTaskFocusAligned = useCallback((task: Task): boolean => {
+    if (focusGoalIdSet.size === 0) return true;
+    const parentStory = stories.find(s => s.id === task.storyId);
+    if (parentStory?.goalId && focusGoalIdSet.has(parentStory.goalId)) return true;
+    if ((task as any).goalId && focusGoalIdSet.has((task as any).goalId)) return true;
+    return false;
+  }, [focusGoalIdSet, stories]);
+
   const filteredStories = storiesInScope.filter((story) => {
     if (filterTop3Only && !isTop3Story(story)) return false;
     if (filterCriticalOnly && !(isCriticalPriority(story.priority) || isTop3Story(story))) return false;
     if (filterCriticalAiOnly && !matchesCriticalOrHighAi(story)) return false;
     if (filterUnlinkedStoriesOnly && isStoryLinkedToGoal(story)) return false;
+    if (filterAlignmentMode === 'focus-only' && !isStoryFocusAligned(story)) return false;
     return true;
   });
 
@@ -1040,6 +1071,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
     if (filterCriticalAiOnly && !matchesCriticalOrHighAi(task)) return false;
     if (filterOverdueOnly && !isTaskOverdue(task)) return false;
     if (filterUnlinkedTasksOnly && isTaskLinkedToStory(task)) return false;
+    if (filterAlignmentMode === 'focus-only' && !isTaskFocusAligned(task)) return false;
     return true;
   });
 
@@ -1651,6 +1683,20 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
             <option value="ai">AI score</option>
           </Form.Select>
         </Form.Group>
+        {focusGoalIdSet.size > 0 && (
+          <Form.Group className="d-flex align-items-center mb-0">
+            <Form.Label className="me-2 mb-0" style={{ whiteSpace: 'nowrap' }}>Focus</Form.Label>
+            <Form.Select
+              size="sm"
+              value={filterAlignmentMode}
+              onChange={(e) => setFilterAlignmentMode(e.currentTarget.value as any)}
+            >
+              <option value="all">All items</option>
+              <option value="warn">Warn non-aligned</option>
+              <option value="focus-only">Focus only</option>
+            </Form.Select>
+          </Form.Group>
+        )}
       </div>
 
       <div
@@ -1748,6 +1794,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
                                       onManualSchedule={(story) => openScheduleModal(story)}
                                       onDefer={(story) => setDeferTarget({ type: 'story', id: story.id, title: story.title || 'Untitled story' })}
                                       showTags={showTags}
+                                      isNotFocusAligned={filterAlignmentMode === 'warn' && !isStoryFocusAligned(story)}
                                     />
                                   );
                                 })}
@@ -1782,6 +1829,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
                                       onDefer={(task) => setDeferTarget({ type: 'task', id: task.id, title: task.title || 'Untitled task' })}
                                       showTags={showTags}
                                       formatTag={formatTaskTag}
+                                      isNotFocusAligned={filterAlignmentMode === 'warn' && !isTaskFocusAligned(task)}
                                     />
                                   );
                                 })}
