@@ -1,0 +1,134 @@
+{
+  "test_suite": "BOB v3.5.0 - Selenium Comprehensive Test",
+  "timestamp": "2025-09-01T17:06:04.365703",
+  "test_duration_seconds": 25,
+  "test_environment": {
+    "url": "https://bob20250810.web.app?test-login=ai-agent-token&test-mode=true",
+    "browser": "Firefox (Headless)",
+    "selenium_version": "4.x",
+    "viewport": "1920x1080"
+  },
+  "test_results": {
+    "start_time": "2025-09-01T17:05:39.060483",
+    "end_time": "2025-09-01T17:06:04.365673",
+    "tests_run": 7,
+    "tests_pass": 2,
+    "tests_fail": 5,
+    "browser": "firefox",
+    "headless": true
+  },
+  "summary": {
+    "total_defects": 9,
+    "critical": 2,
+    "high": 1,
+    "medium": 5,
+    "low": 1
+  },
+  "defects": [
+    {
+      "type": "CRITICAL",
+      "category": "AUTHENTICATION_FAILURE",
+      "message": "No authenticated user found - side door authentication failed",
+      "timestamp": "2025-09-01T17:05:47.060768",
+      "url": "https://bob20250810.web.app/",
+      "screenshot_path": "./test-results/screenshots/AUTHENTICATION_FAILURE_1756742747.png",
+      "console_logs": [],
+      "stack_trace": "",
+      "details": {
+        "currentUrl": "https://bob20250810.web.app/",
+        "hasAccessToken": false,
+        "hasIdTokenMethod": false,
+        "userExists": false,
+        "userId": null
+      }
+    },
+    {
+      "type": "CRITICAL",
+      "category": "STORIES_CREATION_ERROR",
+      "message": "Stories creation test failed: Message: Element <a class=\"w-100 btn btn-primary\" href=\"/kanban\"> could not be scrolled into view\nStacktrace:\nRemoteError@chrome://remote/content/shared/RemoteError.sys.mjs:8:8\nWebDriverError@chrome://remote/content/shared/webdriver/Errors.sys.mjs:199:5\nElementNotInteractableError@chrome://remote/content/shared/webdriver/Errors.sys.mjs:368:5\nwebdriverClickElement@chrome://remote/content/marionette/interaction.sys.mjs:165:11\ninteraction.clickElement@chrome://remote/content/marionette/interaction.sys.mjs:134:11\nclickElement@chrome://remote/content/marionette/actors/MarionetteCommandsChild.sys.mjs:327:29\nreceiveMessage@chrome://remote/content/marionette/actors/MarionetteCommandsChild.sys.mjs:210:31\n",
+      "timestamp": "2025-09-01T17:05:50.229587",
+      "url": "https://bob20250810.web.app/dashboard",
+      "screenshot_path": "./test-results/screenshots/STORIES_CREATION_ERROR_1756742750.png",
+      "console_logs": [],
+      "stack_trace": "Message: Element <a class=\"w-100 btn btn-primary\" href=\"/kanban\"> could not be scrolled into view\nStacktrace:\nRemoteError@chrome://remote/content/shared/RemoteError.sys.mjs:8:8\nWebDriverError@chrome://remote/content/shared/webdriver/Errors.sys.mjs:199:5\nElementNotInteractableError@chrome://remote/content/shared/webdriver/Errors.sys.mjs:368:5\nwebdriverClickElement@chrome://remote/content/marionette/interaction.sys.mjs:165:11\ninteraction.clickElement@chrome://remote/content/marionette/interaction.sys.mjs:134:11\nclickElement@chrome://remote/content/marionette/actors/MarionetteCommandsChild.sys.mjs:327:29\nreceiveMessage@chrome://remote/content/marionette/actors/MarionetteCommandsChild.sys.mjs:210:31\n",
+      "details": null
+    },
+    {
+      "type": "HIGH",
+      "category": "QUICK_ACTIONS_MISSING",
+      "message": "QuickActionsPanel \"Create Goal\" button not found on Dashboard",
+      "timestamp": "2025-09-01T17:05:50.200629",
+      "url": "https://bob20250810.web.app/dashboard",
+      "screenshot_path": "./test-results/screenshots/QUICK_ACTIONS_MISSING_1756742750.png",
+      "console_logs": [],
+      "stack_trace": "",
+      "details": null
+    },
+    {
+      "type": "MEDIUM",
+      "category": "TASKS_BUTTON_MISSING",
+      "message": "Create Task button not found in QuickActionsPanel",
+      "timestamp": "2025-09-01T17:05:53.329026",
+      "url": "https://bob20250810.web.app/dashboard",
+      "screenshot_path": "./test-results/screenshots/TASKS_BUTTON_MISSING_1756742753.png",
+      "console_logs": [],
+      "stack_trace": "",
+      "details": null
+    },
+    {
+      "type": "MEDIUM",
+      "category": "NAVIGATION_MISSING",
+      "message": "Navigation link for Stories not found",
+      "timestamp": "2025-09-01T17:05:57.290647",
+      "url": "https://bob20250810.web.app/goals",
+      "screenshot_path": "./test-results/screenshots/NAVIGATION_MISSING_1756742757.png",
+      "console_logs": [],
+      "stack_trace": "",
+      "details": null
+    },
+    {
+      "type": "MEDIUM",
+      "category": "NAVIGATION_MISSING",
+      "message": "Navigation link for Tasks not found",
+      "timestamp": "2025-09-01T17:05:57.319165",
+      "url": "https://bob20250810.web.app/goals",
+      "screenshot_path": "./test-results/screenshots/NAVIGATION_MISSING_1756742757.png",
+      "console_logs": [],
+      "stack_trace": "",
+      "details": null
+    },
+    {
+      "type": "MEDIUM",
+      "category": "QUICKACTIONS_INCOMPLETE",
+      "message": "QuickActionsPanel has only 0 buttons, expected 4",
+      "timestamp": "2025-09-01T17:06:04.342615",
+      "url": "https://bob20250810.web.app/",
+      "screenshot_path": "./test-results/screenshots/QUICKACTIONS_INCOMPLETE_1756742764.png",
+      "console_logs": [],
+      "stack_trace": "",
+      "details": null
+    },
+    {
+      "type": "MEDIUM",
+      "category": "NEW_FEATURE_MISSING_GOALVIZ",
+      "message": "Goal Visualization link not found in navigation",
+      "timestamp": "2025-09-01T17:06:04.364942",
+      "url": "https://bob20250810.web.app/",
+      "screenshot_path": "./test-results/screenshots/NEW_FEATURE_MISSING_GOALVIZ_1756742764.png",
+      "console_logs": [],
+      "stack_trace": "",
+      "details": null
+    },
+    {
+      "type": "LOW",
+      "category": "CONSOLE_ACCESS_ERROR",
+      "message": "Could not access console logs: Message: HTTP method not allowed\n",
+      "timestamp": "2025-09-01T17:05:47.037289",
+      "url": "https://bob20250810.web.app/",
+      "screenshot_path": "./test-results/screenshots/CONSOLE_ACCESS_ERROR_1756742746.png",
+      "console_logs": [],
+      "stack_trace": "",
+      "details": null
+    }
+  ]
+}

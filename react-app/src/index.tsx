@@ -1,0 +1,74 @@
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import './index.css';
+import App from './App';
+import reportWebVitals from './reportWebVitals';
+import 'bootstrap/dist/css/bootstrap.min.css';
+import './styles/themeConsistency.css';
+import './styles/responsive-density.css';
+import { ThemeProvider } from './contexts/ThemeContext';
+import { AuthProvider } from './contexts/AuthContext';
+import { installGlobalErrorHandlers } from './utils/globalErrorHandlers';
+import logger from './utils/logger';
+import { startLagMonitor } from './utils/lagMonitor';
+
+// Temporarily disable service worker for debugging
+/*
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js', { scope: '/' })
+      .then((registration) => {
+        console.log('✅ SW registered: ', registration);
+        
+        // Check for updates every 30 seconds during development
+        setInterval(() => {
+          registration.update();
+        }, 30000);
+      })
+      .catch((registrationError) => {
+        console.log('❌ SW registration failed: ', registrationError);
+      });
+  });
+}
+*/
+
+// Install global error handlers and log startup
+installGlobalErrorHandlers();
+logger.info('global', 'BOB app booting...');
+
+// Keep deployment behavior deterministic: remove any stale service workers
+// so clients do not keep serving outdated bundles after hosting deploys.
+try {
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.getRegistrations()
+      .then((registrations) => Promise.all(registrations.map((registration) => registration.unregister())))
+      .catch(() => {});
+  }
+} catch {}
+
+try {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('perf') === '1' || params.get('log') === '1') {
+    startLagMonitor(1000, 200);
+  }
+} catch {}
+
+const root = ReactDOM.createRoot(
+  document.getElementById('root') as HTMLElement
+);
+root.render(
+  // Temporarily disable StrictMode for react-beautiful-dnd compatibility
+  // <React.StrictMode>
+    <ThemeProvider>
+      <AuthProvider>
+        <App />
+      </AuthProvider>
+    </ThemeProvider>
+  // </React.StrictMode>
+);
+
+// If you want to start measuring performance in your app, pass a function
+// to log results (for example: reportWebVitals(console.log))
+// or send to an analytics endpoint. Learn more: https://bit.ly/CRA-vitals
+reportWebVitals();
+reportWebVitals();

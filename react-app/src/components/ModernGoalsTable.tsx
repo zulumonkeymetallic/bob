@@ -1,0 +1,2201 @@
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { startOfWeek, endOfWeek, format } from 'date-fns';
+import { Card, Button, Badge, Form, Modal, Alert, Dropdown } from 'react-bootstrap';
+import { useThemeAwareColors, getContrastTextColor } from '../hooks/useThemeAwareColors';
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import {
+  useSortable,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+import { useActivityTracking } from '../hooks/useActivityTracking';
+import { useSprint } from '../contexts/SprintContext';
+import { useSidebar } from '../contexts/SidebarContext';
+import { useAuth } from '../contexts/AuthContext';
+import { usePersona } from '../contexts/PersonaContext';
+import { ActivityStreamService } from '../services/ActivityStreamService';
+import { collection, query, where, onSnapshot, doc, getDoc, addDoc, getDocs, serverTimestamp } from 'firebase/firestore';
+import { db, functions } from '../firebase';
+import { httpsCallable } from 'firebase/functions';
+import { GLOBAL_THEMES, GlobalTheme } from '../constants/globalThemes';
+import {
+  Settings,
+  GripVertical,
+  Eye,
+  EyeOff,
+  ChevronRight,
+  ChevronDown,
+  Plus,
+  Activity,
+  Wand2,
+  Pencil,
+  Trash2,
+  CalendarDays
+} from 'lucide-react';
+import { Goal, Story } from '../types';
+import { ChoiceHelper } from '../config/choices';
+import { getStatusName, getThemeName } from '../utils/statusHelpers';
+import ModernStoriesTable from './ModernStoriesTable';
+import { themeVars, rgbaCard } from '../utils/themeVars';
+import { getGoalLinkedPotId, normalizeGoalCostType } from '../utils/goalCost';
+import { MISSING_INFO_CELL_BG, MISSING_INFO_CELL_BG_HOVER } from '../utils/dataQuality';
+import { resolveLeafGoalSelection } from '../utils/goalHierarchy';
+
+interface GoalTableRow extends Goal {
+  storiesCount?: number;
+  sprintStoriesCount?: number;
+  kpiStatus?: string;
+  kpiProgress?: string;
+  kpiSummary?: string;
+}
+
+interface GoalKpiStatusRow {
+  goalId: string;
+  goalTitle: string;
+  kpiSummary: string;
+  progressPct: number | null;
+  expectedProgressPct: number | null;
+  statusLabel: 'On target' | 'Behind' | 'No KPI';
+  statusTone: 'success' | 'danger' | 'muted';
+  reason: string;
+}
+
+interface Column {
+  key: string;
+  label: string;
+  width?: string;
+  visible: boolean;
+  editable: boolean;
+  type: 'text' | 'select' | 'date' | 'number';
+  options?: string[];
+}
+
+interface ModernGoalsTableProps {
+  goals: Goal[];
+  onGoalUpdate: (goalId: string, updates: Partial<Goal>) => Promise<void>;
+  onGoalDelete: (goalId: string) => Promise<void>;
+  onGoalPriorityChange: (goalId: string, newPriority: number) => Promise<void>;
+  onEditModal?: (goal: Goal) => void;
+  onOpenWorkspace?: (goal: Goal) => void;
+  onGoalReorder?: (activeId: string, overId: string) => Promise<void>;
+  highlightStoryId?: string;
+  highlightGoalId?: string;
+  goalKpiStatusByGoalId?: Record<string, GoalKpiStatusRow>;
+}
+
+const defaultColumns: Column[] = [
+  {
+    key: 'ref',
+    label: 'Ref',
+    width: '10%',
+    visible: true,
+    editable: false,
+    type: 'text'
+  },
+  {
+    key: 'title',
+    label: 'Goal Title',
+    width: '25%',
+    visible: true,
+    editable: true,
+    type: 'text'
+  },
+  {
+    key: 'description',
+    label: 'Description',
+    width: '35%',
+    visible: false,
+    editable: true,
+    type: 'text'
+  },
+  {
+    key: 'url',
+    label: 'URL',
+    width: '20%',
+    visible: false,
+    editable: true,
+    type: 'text'
+  },
+  {
+    key: 'costType',
+    label: 'Cost Type',
+    width: '12%',
+    visible: true,
+    editable: true,
+    type: 'select',
+    options: ['Not set', 'None', 'One-off', 'Recurring']
+  },
+  {
+    key: 'estimatedCost',
+    label: 'Est Cost (£)',
+    width: '12%',
+    visible: true,
+    editable: true,
+    type: 'number'
+  },
+  {
+    key: 'linkedPotId',
+    label: 'Linked Pot',
+    width: '16%',
+    visible: true,
+    editable: true,
+    type: 'text'
+  },
+  {
+    key: 'theme',
+    label: 'Theme',
+    width: '12%',
+    visible: true,
+    editable: true,
+    type: 'select',
+    options: ChoiceHelper.getChoices('goal', 'theme').map(choice => choice.label)
+  },
+  {
+    key: 'status',
+    label: 'Status',
+    width: '10%',
+    visible: true,
+    editable: true,
+    type: 'select',
+    options: ChoiceHelper.getChoices('goal', 'status').map(choice => choice.label)
+  },
+  {
+    key: 'storiesCount',
+    label: 'Stories',
+    width: '8%',
+    visible: true,
+    editable: false,
+    type: 'text'
+  },
+  {
+    key: 'sprintStoriesCount',
+    label: 'In Sprint',
+    width: '8%',
+    visible: true,
+    editable: false,
+    type: 'text'
+  },
+  {
+    key: 'progress',
+    label: 'Progress',
+    width: '8%',
+    visible: false,
+    editable: false,
+    type: 'number'
+  },
+  {
+    key: 'kpiStatus',
+    label: 'KPI Status',
+    width: '10%',
+    visible: true,
+    editable: false,
+    type: 'text'
+  },
+  {
+    key: 'kpiProgress',
+    label: 'KPI Progress',
+    width: '12%',
+    visible: true,
+    editable: false,
+    type: 'text'
+  },
+  {
+    key: 'kpiSummary',
+    label: 'KPI Metric',
+    width: '22%',
+    visible: false,
+    editable: false,
+    type: 'text'
+  },
+  {
+    key: 'startDate',
+    label: 'Start Date',
+    width: '14%',
+    visible: true,
+    editable: true,
+    type: 'date'
+  },
+  {
+    key: 'endDate',
+    label: 'End Date',
+    width: '14%',
+    visible: true,
+    editable: true,
+    type: 'date'
+  },
+  {
+    key: 'targetYear',
+    label: 'Target Year',
+    width: '10%',
+    visible: true,
+    editable: true,
+    type: 'number'
+  },
+];
+
+interface SortableRowProps {
+  goal: Goal;
+  columns: Column[];
+  index: number;
+  onGoalUpdate: (goalId: string, updates: Partial<Goal>) => void;
+  onGoalDelete: (goalId: string) => void;
+  onEditModal: (goal: Goal) => void;
+  onOpenWorkspace?: (goal: Goal) => void;
+  onRowClick: (goal: Goal) => void;
+  expandedGoalId: string | null;
+  goalStories: { [goalId: string]: Story[] };
+  onGoalExpand: (goalId: string) => void;
+  onStoryUpdate: (storyId: string, updates: Partial<Story>) => Promise<void>;
+  onStoryDelete: (storyId: string) => Promise<void>;
+  onStoryPriorityChange: (storyId: string, newPriority: number) => Promise<void>;
+  onStoryAdd: (goalId: string) => (storyData: Omit<Story, 'ref' | 'id' | 'updatedAt' | 'createdAt'>) => Promise<void>;
+  globalThemes: GlobalTheme[];
+  monzoPots: Array<{ id: string; name: string }>;
+  availableGoals: Goal[];
+  storyCounts: Record<string, number>;
+  sprintStoryCounts: Record<string, number>;
+  storyPointsData: Record<string, { total: number; completed: number; progress: number }>;
+  habitAdherenceData: Record<string, { planned: number; completed: number; progress: number }>;
+  goalKpiStatusByGoalId?: Record<string, GoalKpiStatusRow>;
+  highlightStoryId?: string;
+}
+
+const formatExternalUrlLabel = (value: unknown): string => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    const parsed = new URL(raw);
+    const host = parsed.hostname.replace(/^www\./i, '');
+    const path = parsed.pathname === '/' ? '' : parsed.pathname.replace(/\/+$/, '');
+    return `${host}${path}`.slice(0, 64);
+  } catch {
+    return raw.slice(0, 64);
+  }
+};
+
+const COST_TYPE_LABEL_TO_VALUE: Record<string, 'none' | 'one_off' | 'recurring'> = {
+  'none': 'none',
+  'one-off': 'one_off',
+  'one off': 'one_off',
+  'one_off': 'one_off',
+  'oneoff': 'one_off',
+  'recurring': 'recurring',
+};
+
+const COST_TYPE_VALUE_TO_LABEL: Record<string, string> = {
+  none: 'None',
+  one_off: 'One-off',
+  recurring: 'Recurring',
+};
+
+const hasEstimatedCostValue = (value: unknown): boolean => {
+  if (value == null) return false;
+  if (typeof value === 'string') {
+    if (!value.trim()) return false;
+    return Number.isFinite(Number(value));
+  }
+  return Number.isFinite(Number(value));
+};
+
+const isGoalMissingCostType = (goal: Goal): boolean => !normalizeGoalCostType((goal as any).costType);
+const isGoalMissingEstimatedCost = (goal: Goal): boolean => {
+  const normalizedCostType = normalizeGoalCostType((goal as any).costType);
+  if (normalizedCostType === 'none') return false;
+  return !hasEstimatedCostValue((goal as any).estimatedCost);
+};
+
+const SortableRow: React.FC<SortableRowProps> = ({
+  goal,
+  columns,
+  index,
+  expandedGoalId,
+  goalStories,
+  onGoalUpdate,
+  onGoalDelete,
+  onEditModal,
+  onOpenWorkspace,
+  onRowClick,
+  onGoalExpand,
+  onStoryUpdate,
+  onStoryDelete,
+  onStoryPriorityChange,
+  onStoryAdd,
+  globalThemes,
+  monzoPots,
+  availableGoals,
+  storyCounts,
+  sprintStoryCounts,
+  storyPointsData,
+  habitAdherenceData,
+  goalKpiStatusByGoalId,
+  highlightStoryId
+}) => {
+  const { isDark, colors, backgrounds } = useThemeAwareColors();
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: goal.id });
+
+  const [editingCell, setEditingCell] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState<string>('');
+  const { trackCRUD, trackClick, trackFieldChange } = useActivityTracking();
+  const { currentUser } = useAuth();
+  const { showSidebar } = useSidebar();
+  const [generating, setGenerating] = useState<boolean>(false);
+
+  const formatDateForInput = (val: any): string => {
+    if (!val && val !== 0) return '';
+    const millis = (() => {
+      if (typeof val === 'number') return val;
+      if (typeof val === 'string') {
+        const parsed = Date.parse(val);
+        return Number.isNaN(parsed) ? null : parsed;
+      }
+      if (typeof val === 'object') {
+        if (typeof (val as any).toDate === 'function') return (val as any).toDate().getTime();
+        if (typeof (val as any).seconds === 'number') return (val as any).seconds * 1000 + Math.floor(((val as any).nanoseconds || 0) / 1e6);
+      }
+      return null;
+    })();
+    if (millis === null) return '';
+    const d = new Date(millis);
+    return isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
+  };
+
+  const formatDateForDisplay = (val: any): string => {
+    const iso = formatDateForInput(val);
+    if (!iso) return '';
+    const d = new Date(iso);
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const year = String(d.getFullYear()).slice(-2);
+    return `${day}/${month}/${year}`;
+  };
+
+  // Note: Removed view tracking to focus activity stream on meaningful changes only
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
+
+  const handleCellEdit = (key: string, value: string) => {
+    trackClick({
+      elementId: `goal-cell-edit-${key}`,
+      elementType: 'edit',
+      entityId: goal.id,
+      entityType: 'goal',
+      entityTitle: goal.title,
+      additionalData: { field: key, originalValue: value }
+    });
+    setEditingCell(key);
+    const col = columns.find(c => c.key === key) || defaultColumns.find(c => c.key === key);
+    const preparedValue =
+      col?.type === 'date'
+        ? formatDateForInput(value)
+        : (value || '');
+    setEditValue(preparedValue);
+  };
+
+  const handleEditClick = () => {
+    console.log('✏️ ModernGoalsTable: Edit button clicked');
+    console.log('✏️ Goal:', goal.id, goal.title);
+    console.log('✏️ Has onEditModal prop:', !!onEditModal);
+    if (onEditModal) {
+      console.log('✏️ Calling onEditModal handler');
+      onEditModal(goal);
+    } else {
+      console.log('✏️ No onEditModal handler - this is an issue');
+    }
+  };
+
+  const handleGenerateStories = async () => {
+    if (!currentUser) return;
+    try {
+      setGenerating(true);
+      const callable = httpsCallable(functions, 'generateStoriesForGoal');
+      const resp: any = await callable({ goalId: goal.id });
+      const created = resp?.data?.created ?? 0;
+      alert(created > 0 ? `Generated ${created} stories for "${goal.title}"` : 'No stories generated');
+      trackClick({ elementId: 'goal-generate-stories', elementType: 'button', entityId: goal.id, entityType: 'goal', entityTitle: goal.title, additionalData: { created } });
+    } catch (e: any) {
+      console.error('generateStoriesForGoal failed', e);
+      alert('Failed to generate stories: ' + (e?.message || 'Unknown error'));
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const handleCellSave = async (key: string, rawValue?: string) => {
+    try {
+      const sourceValue = rawValue ?? editValue;
+      let valueToSave: string | number | null = sourceValue;
+      const oldValue = key === 'linkedPotId'
+        ? getGoalLinkedPotId(goal)
+        : (goal as any)[key]; // Store the original value
+
+      // Convert choice labels back to integer values for ServiceNow choice system
+      if (key === 'status') {
+        const statusChoice = ChoiceHelper.getChoices('goal', 'status').find(choice => choice.label === sourceValue);
+        valueToSave = statusChoice ? statusChoice.value : sourceValue;
+        console.log(`🎯 Status conversion: "${sourceValue}" -> ${valueToSave} (oldValue: ${oldValue})`);
+      } else if (key === 'theme') {
+        // Prefer user-configured global themes over static choices
+        const themeFromSettings = globalThemes.find(t => t.label === sourceValue || t.name === sourceValue);
+        if (themeFromSettings) {
+          valueToSave = themeFromSettings.id;
+        } else {
+          // Fallback: try static ChoiceHelper mapping or numeric parse
+          const themeChoice = ChoiceHelper.getChoices('goal', 'theme').find(choice => choice.label === sourceValue);
+          valueToSave = themeChoice ? themeChoice.value : (isNaN(Number(sourceValue)) ? oldValue : Number(sourceValue));
+        }
+        console.log(`🎯 Theme conversion (dynamic): "${sourceValue}" -> ${valueToSave} (oldValue: ${oldValue})`);
+      } else if (key === 'costType') {
+        const mapped = COST_TYPE_LABEL_TO_VALUE[String(sourceValue || '').trim().toLowerCase()];
+        valueToSave = mapped || normalizeGoalCostType(sourceValue) || null;
+      } else if (key === 'estimatedCost') {
+        const trimmed = String(sourceValue || '').trim();
+        valueToSave = trimmed === '' ? null : Number(trimmed);
+      } else if (key === 'linkedPotId') {
+        const trimmed = String(sourceValue || '').trim();
+        if (!trimmed) {
+          valueToSave = null;
+        } else {
+          const matched = monzoPots.find((pot) =>
+            pot.id.toLowerCase() === trimmed.toLowerCase() ||
+            pot.name.toLowerCase() === trimmed.toLowerCase()
+          );
+          valueToSave = matched?.id || null;
+        }
+      }
+      if (defaultColumns.find(c => c.key === key)?.type === 'date') {
+        const d = new Date(String(sourceValue));
+        if (!isNaN(d.getTime())) {
+          valueToSave = d.getTime();
+        }
+      }
+      if (key === 'targetYear') {
+        valueToSave = Number(sourceValue);
+      }
+      if (key === 'estimatedCost' && valueToSave != null && Number.isNaN(Number(valueToSave))) {
+        valueToSave = oldValue ?? null;
+      }
+
+      const oldComparable = key === 'linkedPotId'
+        ? (oldValue ? String(oldValue) : '')
+        : (oldValue == null ? '' : String(oldValue));
+      const newComparable = valueToSave == null ? '' : String(valueToSave);
+
+      // Only proceed if the value actually changed
+      if (oldComparable !== newComparable) {
+        const updates: Partial<Goal> = { [key]: valueToSave };
+        if (key === 'linkedPotId') {
+          (updates as any).linkedPotId = valueToSave || null;
+          (updates as any).potId = valueToSave || null;
+        }
+        if (key === 'costType' && valueToSave === 'none') {
+          (updates as any).estimatedCost = null;
+          (updates as any).linkedPotId = null;
+          (updates as any).potId = null;
+        }
+        if (key === 'endDate' || key === 'targetDate') {
+          const d = new Date(String(sourceValue));
+          if (!isNaN(d.getTime())) {
+            updates.targetYear = d.getFullYear();
+          }
+        }
+        console.log(`🎯 Goal update for ${goal.id}:`, updates);
+
+        await onGoalUpdate(goal.id, updates);
+
+        // Track the field change for activity stream
+        trackFieldChange(
+          goal.id,
+          'goal',
+          key,
+          oldValue,
+          valueToSave,
+          goal.title // This is the referenceNumber parameter
+        );
+
+        trackClick({
+          elementId: `goal-cell-save-${key}`,
+          elementType: 'button',
+          entityId: goal.id,
+          entityType: 'goal',
+          entityTitle: goal.title,
+          additionalData: {
+            field: key,
+            oldValue: oldValue,
+            newValue: valueToSave,
+            action: 'inline_edit_save'
+          }
+        });
+
+        console.log(`✅ Goal field changed: ${key} from "${oldValue}" to "${valueToSave}" for goal ${goal.id}`);
+      } else {
+        console.log(`🔄 No change detected for ${key}: ${oldValue} === ${valueToSave}`);
+      }
+
+      setEditingCell(null);
+    } catch (error) {
+      console.error('❌ Error saving goal cell edit:', error);
+      setEditingCell(null); // Clear editing state even on error
+    }
+  };
+
+  const formatValue = (key: string, value: any): string => {
+    const goalKpi = goalKpiStatusByGoalId?.[goal.id];
+    if (key === 'startDate' || key === 'endDate' || key === 'targetDate') {
+      return formatDateForDisplay(value);
+    }
+    if (key === 'storiesCount') {
+      return `${storyCounts[goal.id] || 0}`;
+    }
+    if (key === 'sprintStoriesCount') {
+      return `${sprintStoryCounts[goal.id] || 0}`;
+    }
+    if (key === 'progress') {
+      const storyData = storyPointsData[goal.id];
+      const habitData = habitAdherenceData[goal.id];
+      const parts: string[] = [];
+      const components: number[] = [];
+      if (storyData && storyData.total > 0) {
+        components.push(storyData.progress);
+        parts.push(`Story ${storyData.completed}/${storyData.total} pts`);
+      }
+      if (habitData && habitData.planned > 0) {
+        components.push(habitData.progress);
+        parts.push(`Habits ${habitData.completed}/${habitData.planned}`);
+      }
+      if (!components.length) return '0%';
+      const combined = Math.round(components.reduce((a, b) => a + b, 0) / components.length);
+      return `${combined}% (${parts.join(' · ')})`;
+    }
+    if (key === 'kpiStatus') {
+      return goalKpi?.statusLabel || 'No KPI';
+    }
+    if (key === 'kpiProgress') {
+      if (!goalKpi || goalKpi.progressPct == null) return 'n/a';
+      return `${Math.round(goalKpi.progressPct)}%${goalKpi.expectedProgressPct != null ? ` (exp ${Math.round(goalKpi.expectedProgressPct)}%)` : ''}`;
+    }
+    if (key === 'kpiSummary') {
+      return goalKpi?.kpiSummary || 'No KPI attached';
+    }
+    if (key === 'status') {
+      return getStatusName(value);
+    }
+    if (key === 'costType') {
+      const normalized = normalizeGoalCostType(value);
+      return normalized ? COST_TYPE_VALUE_TO_LABEL[normalized] : 'Not set';
+    }
+    if (key === 'estimatedCost') {
+      const cost = Number(value);
+      if (!Number.isFinite(cost)) return '';
+      return `£${cost.toLocaleString('en-GB', { maximumFractionDigits: 2 })}`;
+    }
+    if (key === 'linkedPotId') {
+      const linkedPotId = getGoalLinkedPotId(goal);
+      if (!linkedPotId) return '';
+      const pot = monzoPots.find((item) => item.id === linkedPotId);
+      return pot?.name || linkedPotId;
+    }
+    if (key === 'url') {
+      return formatExternalUrlLabel(value);
+    }
+    // theme formatting will be overridden in parent where global themes are known
+    return value || '';
+  };
+
+  const renderCell = (column: Column) => {
+    const value = goal[column.key as keyof GoalTableRow];
+    const isEditing = editingCell === column.key;
+    const isMissingDataCell =
+      (column.key === 'costType' && isGoalMissingCostType(goal))
+      || (column.key === 'estimatedCost' && isGoalMissingEstimatedCost(goal));
+    const cellBaseBackground = isMissingDataCell ? MISSING_INFO_CELL_BG : 'transparent';
+
+    if (isEditing && column.editable) {
+      // Special handling for theme: use searchable input tied to global themes
+      if (column.key === 'theme') {
+        const datalistId = `theme-options-${goal.id}`;
+        return (
+          <td key={column.key} style={{ width: column.width }}>
+            <div className="relative">
+              <input
+                list={datalistId}
+                value={editValue}
+                onChange={(e) => setEditValue(e.target.value)}
+                onBlur={(e) => handleCellSave(column.key, e.currentTarget.value)}
+                onKeyPress={(e) => e.key === 'Enter' && handleCellSave(column.key, (e.currentTarget as HTMLInputElement).value)}
+                style={{
+                  width: '100%',
+                  padding: '6px 8px',
+                  border: `2px solid ${themeVars.brand}`,
+                  borderRadius: '4px',
+                  fontSize: '14px',
+                  backgroundColor: themeVars.panel as string,
+                  color: themeVars.text as string,
+                  outline: 'none',
+                  boxShadow: 'none'
+                }}
+                placeholder="Search themes..."
+                autoFocus
+              />
+              <datalist id={datalistId}>
+                {globalThemes.map((t) => (
+                  <option key={t.id} value={t.label} />
+                ))}
+              </datalist>
+            </div>
+          </td>
+        );
+      }
+      if (column.key === 'linkedPotId') {
+        const datalistId = `pot-options-${goal.id}`;
+        return (
+          <td key={column.key} style={{ width: column.width }}>
+            <div className="relative">
+              <input
+                list={datalistId}
+                value={editValue}
+                onChange={(e) => setEditValue(e.target.value)}
+                onBlur={(e) => handleCellSave(column.key, e.currentTarget.value)}
+                onKeyPress={(e) => e.key === 'Enter' && handleCellSave(column.key, (e.currentTarget as HTMLInputElement).value)}
+                style={{
+                  width: '100%',
+                  padding: '6px 8px',
+                  border: `2px solid ${themeVars.brand}`,
+                  borderRadius: '4px',
+                  fontSize: '14px',
+                  backgroundColor: themeVars.panel as string,
+                  color: themeVars.text as string,
+                  outline: 'none',
+                  boxShadow: 'none'
+                }}
+                placeholder="Search pots..."
+                autoFocus
+              />
+              <datalist id={datalistId}>
+                {monzoPots.map((pot) => (
+                  <option key={`pot-name-${goal.id}-${pot.id}`} value={pot.name} label={pot.id} />
+                ))}
+                {monzoPots.map((pot) => (
+                  <option key={`pot-id-${goal.id}-${pot.id}`} value={pot.id} />
+                ))}
+              </datalist>
+            </div>
+          </td>
+        );
+      }
+      if (column.key === 'costType') {
+        return (
+          <td key={column.key} style={{ width: column.width }}>
+            <div className="relative">
+              <select
+                value={editValue}
+                onChange={(e) => {
+                  const newValue = e.target.value;
+                  setEditValue(newValue);
+                  trackClick({
+                    elementId: `goal-dropdown-${column.key}`,
+                    elementType: 'dropdown',
+                    entityId: goal.id,
+                    entityType: 'goal',
+                    entityTitle: goal.title,
+                    additionalData: {
+                      field: column.key,
+                      newValue: newValue,
+                      action: 'dropdown_change'
+                    }
+                  });
+                  handleCellSave(column.key, newValue);
+                }}
+                onBlur={(e) => handleCellSave(column.key, e.currentTarget.value)}
+                style={{
+                  width: '100%',
+                  padding: '6px 8px',
+                  border: `2px solid ${themeVars.brand}`,
+                  borderRadius: '4px',
+                  fontSize: '14px',
+                  backgroundColor: themeVars.panel as string,
+                  color: themeVars.text as string,
+                  outline: 'none',
+                }}
+                autoFocus
+              >
+                <option value="">Not set</option>
+                <option value="none">None (no cost)</option>
+                <option value="one_off">One-off</option>
+                <option value="recurring">Recurring</option>
+              </select>
+            </div>
+          </td>
+        );
+      }
+
+      if (column.type === 'select' && column.options) {
+        return (
+          <td key={column.key} style={{ width: column.width }}>
+            <div className="relative">
+              <select
+                value={editValue}
+                onChange={(e) => {
+                  const newValue = e.target.value;
+                  setEditValue(newValue);
+                  trackClick({
+                    elementId: `goal-dropdown-${column.key}`,
+                    elementType: 'dropdown',
+                    entityId: goal.id,
+                    entityType: 'goal',
+                    entityTitle: goal.title,
+                    additionalData: {
+                      field: column.key,
+                      newValue: newValue,
+                      action: 'dropdown_change'
+                    }
+                  });
+                  handleCellSave(column.key, newValue);
+                }}
+                onBlur={(e) => handleCellSave(column.key, e.currentTarget.value)}
+                style={{
+                  width: '100%',
+                  padding: '6px 8px',
+                  border: `2px solid ${themeVars.brand}`,
+                  borderRadius: '4px',
+                  fontSize: '14px',
+                  backgroundColor: themeVars.panel as string,
+                  color: themeVars.text as string,
+                  outline: 'none',
+                }}
+                autoFocus
+              >
+                {column.options.map(option => (
+                  <option key={option} value={option}>{option}</option>
+                ))}
+              </select>
+            </div>
+          </td>
+        );
+      }
+
+      return (
+        <td key={column.key} style={{ width: column.width }}>
+          <div className="relative">
+            <input
+              type={column.type === 'date' ? 'date' : (column.type === 'number' ? 'number' : 'text')}
+              value={editValue}
+              onChange={(e) => setEditValue(e.target.value)}
+              onBlur={(e) => handleCellSave(column.key, e.currentTarget.value)}
+              onKeyPress={(e) => e.key === 'Enter' && handleCellSave(column.key, (e.currentTarget as HTMLInputElement).value)}
+              style={{
+                width: '100%',
+                padding: '6px 8px',
+                border: `1px solid ${themeVars.brand}`,
+                borderRadius: '4px',
+                fontSize: '14px',
+                backgroundColor: themeVars.panel,
+                color: themeVars.text,
+                outline: 'none',
+                boxShadow: `0 0 0 2px ${rgbaCard(0.2)}`,
+              }}
+              autoFocus
+            />
+          </div>
+        </td>
+      );
+    }
+
+    return (
+      <td
+        key={column.key}
+        style={{
+          width: column.width,
+          padding: '12px 8px',
+          borderRight: `1px solid ${themeVars.border}`,
+          cursor: column.editable ? 'pointer' : 'default',
+          transition: 'background-color 0.15s ease',
+          backgroundColor: cellBaseBackground,
+        }}
+        onMouseEnter={(e) => {
+          if (column.editable) {
+            e.currentTarget.style.backgroundColor = isMissingDataCell ? MISSING_INFO_CELL_BG_HOVER : rgbaCard(0.08);
+          }
+        }}
+        onMouseLeave={(e) => {
+          if (column.editable) {
+            e.currentTarget.style.backgroundColor = cellBaseBackground;
+          }
+        }}
+        onClick={() => {
+          if (column.editable) {
+            // For dropdown fields, we need to use the formatted (label) value for editing
+            const editValueToUse = (() => {
+              if (column.key === 'theme') {
+                const themeId = value as unknown as number;
+                const t = globalThemes.find(gt => gt.id === themeId);
+                return t ? t.label : '';
+              }
+              if (column.key === 'costType') {
+                return normalizeGoalCostType(value) || '';
+              }
+              if (column.key === 'linkedPotId') {
+                return formatValue(column.key, value);
+              }
+              if (column.key === 'estimatedCost') {
+                const rawCost = Number((goal as any).estimatedCost);
+                return Number.isFinite(rawCost) && rawCost > 0 ? String(rawCost) : '';
+              }
+              if (column.key === 'url') {
+                return String(value || '');
+              }
+              return (column.type === 'select') ? formatValue(column.key, value) : formatValue(column.key, value);
+            })();
+            handleCellEdit(column.key, editValueToUse);
+          }
+        }}
+      >
+        <div style={{
+          minHeight: '20px',
+          fontSize: '14px',
+          color: (() => {
+            if (column.key === 'ref') return 'var(--green)';
+            if (column.key === 'kpiStatus') {
+              const tone = goalKpiStatusByGoalId?.[goal.id]?.statusTone;
+              if (tone === 'success') return '#059669';
+              if (tone === 'danger') return '#dc2626';
+              return themeVars.muted as string;
+            }
+            return themeVars.text as string;
+          })(),
+          fontWeight: column.key === 'ref' ? '600' : 'normal',
+          fontFamily: column.key === 'ref' ? 'monospace' : 'inherit',
+          wordBreak: 'break-word',
+          whiteSpace: 'normal',
+          lineHeight: '1.4',
+        }}>
+          {(() => {
+            if (column.key === 'kpiStatus' || column.key === 'kpiProgress' || column.key === 'kpiSummary') {
+              const goalKpi = goalKpiStatusByGoalId?.[goal.id];
+              return (
+                <span title={goalKpi?.reason || 'No KPI attached'}>
+                  {formatValue(column.key, value)}
+                </span>
+              );
+            }
+            if (column.key === 'theme') {
+              const themeId = value as unknown as number;
+              const theme = globalThemes.find(t => t.id === themeId);
+              if (theme) {
+                return (
+                  <span style={{
+                    display: 'inline-block',
+                    padding: '2px 8px',
+                    borderRadius: '12px',
+                    backgroundColor: theme.color,
+                    color: getContrastTextColor(theme.color),
+                    fontSize: '12px',
+                  }}>
+                    {theme.label}
+                  </span>
+                );
+              }
+            }
+            if (column.key === 'url' && value) {
+              return (
+                <a
+                  href={String(value)}
+                  target="_blank"
+                  rel="noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  title={String(value)}
+                >
+                  {formatExternalUrlLabel(value)}
+                </a>
+              );
+            }
+            if (column.key === 'title') {
+              const kind = (goal as any).goalKind as string | undefined;
+              const kindBadge =
+                kind === 'umbrella' ? { label: '📁 Project', style: { background: 'var(--bs-primary)', color: '#fff' } } :
+                kind === 'milestone' ? { label: '🎯 Phase', style: { background: 'var(--bs-info)', color: '#fff' } } :
+                null;
+              const hasParent = !!(goal as any).parentGoalId;
+              return (
+                <span style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                  {hasParent && (
+                    <span style={{ color: 'var(--bs-secondary)', fontSize: '11px', marginRight: '2px' }}>└─</span>
+                  )}
+                  {kindBadge && (
+                    <span style={{
+                      fontSize: '10px',
+                      padding: '1px 6px',
+                      borderRadius: '10px',
+                      fontWeight: 600,
+                      whiteSpace: 'nowrap',
+                      ...kindBadge.style,
+                    }}>
+                      {kindBadge.label}
+                    </span>
+                  )}
+                  <span>{formatValue(column.key, value)}</span>
+                </span>
+              );
+            }
+            return (
+              <span>{formatValue(column.key, value)}</span>
+            );
+          })()}
+        </div>
+      </td>
+    );
+  };
+
+  return (
+    <>
+      <tr
+        ref={setNodeRef}
+        style={{
+          ...style,
+          backgroundColor: backgrounds.surface,
+          borderBottom: `1px solid ${themeVars.border}`,
+          transition: 'background-color 0.15s ease',
+          cursor: 'pointer',
+        }}
+        {...attributes}
+        onClick={(e) => {
+          // Only handle row click if not clicking on editable cells or buttons
+          const target = e.target as HTMLElement;
+          if (!target.closest('button') && !target.closest('input') && !target.closest('select')) {
+            onRowClick(goal);
+          }
+        }}
+        onMouseEnter={(e) => {
+          if (!isDragging) {
+            e.currentTarget.style.backgroundColor = rgbaCard(0.08);
+          }
+        }}
+        onMouseLeave={(e) => {
+          if (!isDragging) {
+            e.currentTarget.style.backgroundColor = backgrounds.surface;
+          }
+        }}
+      >
+        <td style={{
+          padding: '12px 8px',
+          textAlign: 'center',
+          borderRight: `1px solid ${themeVars.border}`,
+          width: '48px',
+        }}>
+          <button
+            {...listeners}
+            style={{
+              color: themeVars.muted as string,
+              padding: '4px',
+              borderRadius: '4px',
+              border: 'none',
+              background: 'none',
+              cursor: 'grab',
+              transition: 'color 0.15s ease',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.color = themeVars.text as string;
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.color = themeVars.muted as string;
+            }}
+            title="Drag to reorder"
+          >
+            <GripVertical size={16} />
+          </button>
+        </td>
+        {columns.filter(col => col.visible).map(renderCell)}
+        <td style={{
+          padding: '12px 8px',
+          textAlign: 'center',
+          width: '96px',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
+            <button
+              onClick={() => showSidebar(goal, 'goal')}
+              style={{
+                color: themeVars.muted as string,
+                padding: '4px',
+                borderRadius: '4px',
+                border: 'none',
+                backgroundColor: 'transparent',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = rgbaCard(0.08);
+                e.currentTarget.style.color = themeVars.text as string;
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = 'transparent';
+                e.currentTarget.style.color = themeVars.muted as string;
+              }}
+              title="Activity stream"
+            >
+              <Activity size={14} />
+            </button>
+            <button
+              onClick={() => onGoalExpand(goal.id)}
+              style={{
+                color: 'var(--green)',
+                padding: '4px',
+                borderRadius: '4px',
+                border: 'none',
+                backgroundColor: 'transparent',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease',
+                fontSize: '12px',
+                fontWeight: '500',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = rgbaCard(0.08);
+                e.currentTarget.style.color = 'var(--green)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = 'transparent';
+                e.currentTarget.style.color = 'var(--green)';
+              }}
+              title="View stories"
+            >
+              {expandedGoalId === goal.id ? '▼' : '▶'}
+            </button>
+            <button
+              onClick={handleGenerateStories}
+              style={{
+                color: themeVars.brand as string,
+                padding: '4px',
+                borderRadius: '4px',
+                border: 'none',
+                backgroundColor: 'transparent',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = rgbaCard(0.08);
+                e.currentTarget.style.color = themeVars.brand as string;
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = 'transparent';
+                e.currentTarget.style.color = themeVars.brand as string;
+              }}
+              disabled={generating}
+              title={generating ? 'Generating…' : 'Auto-generate stories'}
+            >
+              <Wand2 size={14} />
+            </button>
+            <button
+              onClick={() => onOpenWorkspace?.(goal)}
+              style={{
+                color: themeVars.brand as string,
+                padding: '4px',
+                borderRadius: '4px',
+                border: 'none',
+                backgroundColor: 'transparent',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = rgbaCard(0.08);
+                e.currentTarget.style.color = themeVars.brand as string;
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = 'transparent';
+                e.currentTarget.style.color = themeVars.brand as string;
+              }}
+              title="Open planning workspace"
+            >
+              <CalendarDays size={14} />
+            </button>
+            <button
+              onClick={() => handleEditClick()}
+              style={{
+                color: themeVars.brand as string,
+                padding: '4px',
+                borderRadius: '4px',
+                border: 'none',
+                backgroundColor: 'transparent',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = rgbaCard(0.08);
+                e.currentTarget.style.color = themeVars.brand as string;
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = 'transparent';
+                e.currentTarget.style.color = themeVars.brand as string;
+              }}
+              title="Edit goal"
+            >
+              <Pencil size={14} />
+            </button>
+            <button
+              onClick={() => onGoalDelete(goal.id)}
+              style={{
+                color: 'var(--red)',
+                padding: '4px',
+                borderRadius: '4px',
+                border: 'none',
+                backgroundColor: 'transparent',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = rgbaCard(0.08);
+                e.currentTarget.style.color = 'var(--red)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = 'transparent';
+                e.currentTarget.style.color = 'var(--red)';
+              }}
+              title="Delete goal"
+            >
+              <Trash2 size={14} />
+            </button>
+          </div>
+        </td>
+      </tr>
+      {/* Expanded row for stories */}
+      {expandedGoalId === goal.id && (
+        <tr>
+          <td colSpan={columns.filter(col => col.visible).length + 2} style={{ padding: 0, borderTop: 'none' }}>
+            <div style={{
+              backgroundColor: themeVars.card as string,
+              padding: '16px',
+              borderLeft: `4px solid var(--green)`,
+              borderBottom: `1px solid ${themeVars.border}`
+            }}>
+              <h4 style={{
+                margin: '0 0 12px 0',
+                fontSize: '14px',
+                fontWeight: '600',
+                color: themeVars.text as string,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px'
+              }}>
+                📚 Stories for: {goal.title}
+              </h4>
+              <ModernStoriesTable
+                stories={goalStories[goal.id] || []}
+                goals={availableGoals}
+                goalId={goal.id}
+                onStoryUpdate={onStoryUpdate}
+                onStoryDelete={onStoryDelete}
+                onStoryPriorityChange={onStoryPriorityChange}
+                onStoryAdd={onStoryAdd(goal.id)}
+                highlightStoryId={highlightStoryId}
+              />
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
+  );
+};
+
+const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
+  goals,
+  onGoalUpdate,
+  onGoalDelete,
+  onGoalPriorityChange,
+  onEditModal,
+  onOpenWorkspace,
+  onGoalReorder,
+  highlightStoryId,
+  highlightGoalId,
+  goalKpiStatusByGoalId,
+}) => {
+  const { isDark, colors, backgrounds } = useThemeAwareColors();
+  const [columns, setColumns] = useState<Column[]>(defaultColumns);
+  const [showConfig, setShowConfig] = useState(false);
+  const [configExpanded, setConfigExpanded] = useState({
+    columns: true,
+    filters: false,
+    display: false,
+  });
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editingGoal, setEditingGoal] = useState<Goal | null>(null);
+  const [expandedGoalId, setExpandedGoalId] = useState<string | null>(null);
+  const [goalStories, setGoalStories] = useState<{ [goalId: string]: Story[] }>({});
+  const [allGoals, setAllGoals] = useState<Goal[]>([]);
+  const { trackClick } = useActivityTracking();
+  const { showSidebar } = useSidebar();
+  const { currentUser } = useAuth();
+  const { currentPersona } = usePersona();
+  const [globalThemes, setGlobalThemes] = useState<GlobalTheme[]>(GLOBAL_THEMES);
+  const [monzoPots, setMonzoPots] = useState<Array<{ id: string; name: string }>>([]);
+  const [storyCounts, setStoryCounts] = useState<Record<string, number>>({});
+  const [sprintStoryCounts, setSprintStoryCounts] = useState<Record<string, number>>({});
+  const [storyPointsData, setStoryPointsData] = useState<Record<string, { total: number; completed: number; progress: number }>>({});
+  const [habitAdherenceData, setHabitAdherenceData] = useState<Record<string, { planned: number; completed: number; progress: number }>>({});
+  const [costDataFilter, setCostDataFilter] = useState<'all' | 'missing_any' | 'missing_cost_type' | 'missing_estimated_cost'>('all');
+  const { selectedSprintId } = useSprint();
+  const [sortConfig, setSortConfig] = useState<{ key: 'orderIndex' | 'startDate' | 'endDate' | 'targetYear'; direction: 'asc' | 'desc' }>({
+    key: 'startDate',
+    direction: 'asc'
+  });
+
+  useEffect(() => {
+    if (!highlightGoalId) return;
+    setExpandedGoalId(highlightGoalId);
+  }, [highlightGoalId]);
+
+  // Load user-defined global themes
+  useEffect(() => {
+    const load = async () => {
+      if (!currentUser) return;
+      try {
+        const ref = doc(db, 'global_themes', currentUser.uid);
+        const snap = await getDoc(ref);
+        if (snap.exists()) {
+          const data = snap.data() as any;
+          if (Array.isArray(data.themes) && data.themes.length) {
+            setGlobalThemes(data.themes as GlobalTheme[]);
+          }
+        }
+      } catch (e) {
+        console.warn('ModernGoalsTable: failed to load global themes', e);
+      }
+    };
+    load();
+  }, [currentUser]);
+
+  useEffect(() => {
+    if (!currentUser) {
+      setMonzoPots([]);
+      return;
+    }
+    const potsQuery = query(
+      collection(db, 'monzo_pots'),
+      where('ownerUid', '==', currentUser.uid)
+    );
+    const unsubscribe = onSnapshot(potsQuery, (snapshot) => {
+      const pots = snapshot.docs
+        .map((docSnap) => {
+          const data = docSnap.data() as any;
+          return {
+            id: String(data.potId || docSnap.id),
+            name: String(data.name || data.potName || 'Pot'),
+            deleted: !!data.deleted,
+            closed: !!data.closed,
+            archived: !!data.archived,
+            isArchived: !!data.isArchived,
+          };
+        })
+        .filter((pot) => !pot.deleted && !pot.closed && !pot.archived && !pot.isArchived)
+        .map(({ id, name }) => ({ id, name }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      setMonzoPots(pots);
+    }, (error) => {
+      console.warn('[ModernGoalsTable] monzo pots subscribe failed', error);
+      setMonzoPots([]);
+    });
+    return unsubscribe;
+  }, [currentUser]);
+
+  // Sync theme column options with loaded themes
+  useEffect(() => {
+    setColumns(prev => prev.map(col => (
+      col.key === 'theme' && col.type === 'select'
+        ? { ...col, options: globalThemes.map(t => t.label) }
+        : col
+    )));
+  }, [globalThemes]);
+
+  // Load stories for expanded goals
+  useEffect(() => {
+    if (!currentUser || !expandedGoalId) {
+      console.log('📚 ModernGoalsTable: Story loading skipped', {
+        hasUser: !!currentUser,
+        expandedGoalId,
+        reason: !currentUser ? 'No user' : 'No expanded goal'
+      });
+      return;
+    }
+
+    console.log('📚 ModernGoalsTable: Starting story load');
+    console.log('📚 Goal ID:', expandedGoalId);
+    console.log('📚 User:', currentUser.email);
+    console.log('📚 Persona:', currentPersona);
+
+    // Avoid composite index requirement: filter only, then sort in memory
+    const storiesQuery = query(
+      collection(db, 'stories'),
+      where('goalId', '==', expandedGoalId),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona)
+    );
+
+    console.log('📚 ModernGoalsTable: Query created, setting up listener');
+
+    const unsubscribe = onSnapshot(storiesQuery, (snapshot) => {
+      const storiesData = snapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          ...data,
+          // Convert Firestore timestamps to JavaScript Date objects to prevent React error #31
+          createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : data.createdAt,
+          updatedAt: data.updatedAt?.toDate ? data.updatedAt.toDate() : data.updatedAt,
+        };
+      }) as Story[];
+
+      console.log(`📚 ModernGoalsTable: Query result received`);
+      console.log(`📚 Stories found: ${storiesData.length}`);
+      console.log(`📚 Goal: ${expandedGoalId}`);
+      if (storiesData.length > 0) {
+        console.log(`📚 First story:`, storiesData[0]);
+      }
+
+      // Sort newest first (desc) in memory
+      storiesData.sort((a, b) => {
+        const ad = a.createdAt instanceof Date ? a.createdAt : new Date(0);
+        const bd = b.createdAt instanceof Date ? b.createdAt : new Date(0);
+        return bd.getTime() - ad.getTime();
+      });
+
+      setGoalStories(prev => ({
+        ...prev,
+        [expandedGoalId]: storiesData
+      }));
+    }, (error) => {
+      console.error('📚 ModernGoalsTable: Query error:', error);
+    });
+
+    return unsubscribe;
+  }, [currentUser, expandedGoalId, currentPersona]);
+
+  // Load all goals for searchable goal lists in expanded stories tables
+  useEffect(() => {
+    if (!currentUser) return;
+    const q = query(
+      collection(db, 'goals'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona)
+    );
+    const unsub = onSnapshot(q, (snap) => {
+      const list = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Goal[];
+      setAllGoals(list);
+    }, (err) => console.warn('ModernGoalsTable: goals load failed', err));
+    return unsub;
+  }, [currentUser, currentPersona]);
+
+  // Aggregate story counts AND story points per goal and per selected sprint
+  useEffect(() => {
+    if (!currentUser) return;
+    const q = query(
+      collection(db, 'stories'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona)
+    );
+    const unsub = onSnapshot(q, (snap) => {
+      const counts: Record<string, number> = {};
+      const sprintCounts: Record<string, number> = {};
+      const pointsData: Record<string, { total: number; completed: number; progress: number }> = {};
+
+      snap.docs.forEach(d => {
+        const s = d.data() as any;
+        const gid = s.goalId;
+        if (!gid) return;
+
+        // Story count (existing logic)
+        counts[gid] = (counts[gid] || 0) + 1;
+        if (selectedSprintId && s.sprintId === selectedSprintId) {
+          sprintCounts[gid] = (sprintCounts[gid] || 0) + 1;
+        }
+
+        // Story points aggregation (NEW)
+        if (!pointsData[gid]) {
+          pointsData[gid] = { total: 0, completed: 0, progress: 0 };
+        }
+
+        const points = Number.isFinite(Number(s.points)) ? Number(s.points) : 0;
+        pointsData[gid].total += points;
+
+        // Story status 4 = Done
+        if (s.status === 4) {
+          pointsData[gid].completed += points;
+        }
+      });
+
+      // Calculate progress percentages
+      Object.keys(pointsData).forEach(gid => {
+        const data = pointsData[gid];
+        data.progress = data.total > 0 ? (data.completed / data.total) * 100 : 0;
+      });
+
+      setStoryCounts(counts);
+      setSprintStoryCounts(sprintCounts);
+      setStoryPointsData(pointsData);
+    });
+    return unsub;
+  }, [currentUser, currentPersona, selectedSprintId]);
+
+  // Aggregate habit/chore/routine adherence per goal for the current week
+  useEffect(() => {
+    if (!currentUser) return;
+    const weekStart = startOfWeek(new Date(), { weekStartsOn: 1 });
+    const weekEnd = endOfWeek(weekStart, { weekStartsOn: 1 });
+    const startKey = format(weekStart, 'yyyyMMdd');
+    const endKey = format(weekEnd, 'yyyyMMdd');
+    const q = query(
+      collection(db, 'daily_checkins'),
+      where('ownerUid', '==', currentUser.uid),
+      where('dateKey', '>=', startKey),
+      where('dateKey', '<=', endKey),
+    );
+    const unsub = onSnapshot(q, (snap) => {
+      const adherence: Record<string, { planned: number; completed: number; progress: number }> = {};
+      snap.docs.forEach((docSnap) => {
+        const data = docSnap.data() as any;
+        (data.items || []).forEach((item: any) => {
+          const goalId = item.goalId;
+          if (!goalId) return;
+          const type = String(item.type || '').toLowerCase();
+          const taskType = String(item.taskType || '').toLowerCase();
+          const isHabitLike = ['habit', 'chore', 'routine'].includes(type)
+            || (type === 'task' && ['habit', 'chore', 'routine', 'habitual'].includes(taskType));
+          if (!isHabitLike) return;
+          if (!adherence[goalId]) adherence[goalId] = { planned: 0, completed: 0, progress: 0 };
+          adherence[goalId].planned += 1;
+          if (item.completed) adherence[goalId].completed += 1;
+        });
+      });
+      Object.keys(adherence).forEach((gid) => {
+        const row = adherence[gid];
+        row.progress = row.planned > 0 ? (row.completed / row.planned) * 100 : 0;
+      });
+      setHabitAdherenceData(adherence);
+    }, (err) => {
+      console.warn('ModernGoalsTable: habit adherence load failed', err);
+    });
+    return unsub;
+  }, [currentUser]);
+
+  const handleEditModal = (goal: Goal) => {
+    trackClick({
+      elementId: 'goal-edit-modal-open',
+      elementType: 'button',
+      entityId: goal.id,
+      entityType: 'goal',
+      entityTitle: goal.title,
+      additionalData: { action: 'open_edit_modal' }
+    });
+    setEditingGoal(goal);
+    setShowEditModal(true);
+  };
+
+  const handleRowClick = (goal: Goal) => {
+    trackClick({
+      elementId: 'goal-row-click',
+      elementType: 'button',
+      entityId: goal.id,
+      entityType: 'goal',
+      entityTitle: goal.title,
+      additionalData: { action: 'row_click', source: 'goals_table' }
+    });
+    // Row click no longer auto-opens activity stream; use activity icon instead.
+  };
+
+  // Story management handlers
+  const handleStoryUpdate = async (storyId: string, updates: Partial<Story>) => {
+    // Implementation will be passed from parent component or handled here
+    console.log('Story update:', storyId, updates);
+  };
+
+  const handleStoryDelete = async (storyId: string) => {
+    // Implementation will be passed from parent component or handled here
+    console.log('Story delete:', storyId);
+  };
+
+  const handleStoryPriorityChange = async (storyId: string, newPriority: number) => {
+    // Implementation will be passed from parent component or handled here
+    console.log('Story priority change:', storyId, newPriority);
+  };
+
+  const handleStoryAdd = (goalId: string) => async (storyData: Omit<Story, 'ref' | 'id' | 'updatedAt' | 'createdAt'>) => {
+    try {
+      if (!currentUser) throw new Error('No user');
+      const resolvedGoalSelection = resolveLeafGoalSelection(goalId, goals);
+      if (!resolvedGoalSelection.goalId) {
+        throw new Error(
+          resolvedGoalSelection.reason === 'ambiguous_parent'
+            ? 'Stories must link to a specific leaf goal. Choose a child milestone goal instead of the parent goal.'
+            : 'Please select a valid leaf goal before creating a story.'
+        );
+      }
+
+      // Generate unique reference number for story for this owner
+      const existing = await getDocs(query(collection(db, 'stories'), where('ownerUid', '==', currentUser.uid)));
+      const existingRefs = existing.docs.map(d => (d.data() as any).ref).filter(Boolean) as string[];
+      const { generateRef } = await import('../utils/referenceGenerator');
+      const ref = generateRef('story', existingRefs);
+
+      // Get goal theme to inherit if available
+      let themeToUse = (storyData as any).theme ?? 1;
+      try {
+        const gSnap = await getDoc(doc(db, 'goals', resolvedGoalSelection.goalId));
+        const gData: any = gSnap.exists() ? gSnap.data() : null;
+        if (gData && typeof gData.theme !== 'undefined') themeToUse = gData.theme;
+      } catch { }
+
+      const payload: any = {
+        ...storyData,
+        ref,
+        goalId: resolvedGoalSelection.goalId,
+        theme: themeToUse,
+        ownerUid: currentUser.uid,
+        persona: currentPersona,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      };
+
+      await addDoc(collection(db, 'stories'), payload);
+      console.log('✅ ModernGoalsTable: Inline story created', { goalId: resolvedGoalSelection.goalId, ref });
+    } catch (e) {
+      console.error('❌ ModernGoalsTable: Failed to add story inline', e);
+      throw e;
+    }
+  };
+
+  const handleGoalExpand = (goalId: string) => {
+    const isExpanding = expandedGoalId !== goalId;
+    console.log('🎯 ModernGoalsTable: Goal expansion click');
+    console.log('🎯 Goal ID:', goalId);
+    console.log('🎯 Action:', isExpanding ? 'EXPANDING' : 'COLLAPSING');
+    console.log('🎯 Current expanded goal:', expandedGoalId);
+    console.log('🎯 User:', currentUser?.email);
+    console.log('🎯 Persona:', currentPersona);
+
+    setExpandedGoalId(expandedGoalId === goalId ? null : goalId);
+  };
+
+  const sensors = useSensors(
+    useSensor(PointerSensor),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
+
+  // Convert goals to table rows with sort order
+  const tableRows: GoalTableRow[] = goals.map((goal, index) => ({
+    ...goal,
+    sortOrder: goal.orderIndex ?? index,
+  }));
+
+  const qualityFilteredRows = tableRows.filter((goal) => {
+    if (costDataFilter === 'missing_any') {
+      return isGoalMissingCostType(goal) || isGoalMissingEstimatedCost(goal);
+    }
+    if (costDataFilter === 'missing_cost_type') {
+      return isGoalMissingCostType(goal);
+    }
+    if (costDataFilter === 'missing_estimated_cost') {
+      return isGoalMissingEstimatedCost(goal);
+    }
+    return true;
+  });
+
+  const handleSort = (key: 'orderIndex' | 'startDate' | 'endDate' | 'targetYear') => {
+    setSortConfig(prev => ({
+      key,
+      direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc'
+    }));
+  };
+
+  const renderHeaderLabel = (column: Column) => {
+    const sortable = column.key === 'startDate' || column.key === 'endDate' || column.key === 'targetYear' || column.key === 'storiesCount' || column.key === 'sprintStoriesCount';
+    if (!sortable) return column.label;
+    const isActive = sortConfig.key === column.key;
+    return (
+      <button
+        type="button"
+        onClick={() => handleSort(column.key as any)}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '4px',
+          background: 'none',
+          border: 'none',
+          padding: 0,
+          color: 'inherit',
+          cursor: 'pointer',
+        }}
+      >
+        {column.label}
+        <span style={{ fontSize: '10px' }}>
+          {isActive ? (sortConfig.direction === 'asc' ? '↑' : '↓') : '⇅'}
+        </span>
+      </button>
+    );
+  };
+
+  const sortedRows = useMemo(() => {
+    const { key, direction } = sortConfig;
+    const list = [...qualityFilteredRows];
+    const directionFactor = direction === 'asc' ? 1 : -1;
+    list.sort((a, b) => {
+      const valA = key === 'orderIndex' ? (a as any).sortOrder ?? 0 : (a as any)[key] ?? null;
+      const valB = key === 'orderIndex' ? (b as any).sortOrder ?? 0 : (b as any)[key] ?? null;
+      const numA = typeof valA === 'number' ? valA : (valA ? Number(valA) : null);
+      const numB = typeof valB === 'number' ? valB : (valB ? Number(valB) : null);
+      if (numA === null && numB === null) return 0;
+      if (numA === null) return 1;
+      if (numB === null) return -1;
+      if (numA === numB) return 0;
+      return numA > numB ? directionFactor : -directionFactor;
+    });
+    return list;
+  }, [qualityFilteredRows, sortConfig]);
+
+  const handleDragEnd = async (event: DragEndEvent) => {
+    const { active, over } = event;
+
+    if (!over || active.id === over.id) return;
+
+    if (onGoalReorder) {
+      try {
+        await onGoalReorder(active.id as string, over.id as string);
+      } catch (error) {
+        console.error('Error reordering goals:', error);
+      }
+      return;
+    }
+
+    const newIndex = sortedRows.findIndex(item => item.id === over.id);
+    if (newIndex >= 0) {
+      await onGoalPriorityChange(active.id as string, newIndex + 1);
+    }
+  };
+
+  const toggleColumn = (key: string) => {
+    setColumns(prev =>
+      prev.map(col =>
+        col.key === key ? { ...col, visible: !col.visible } : col
+      )
+    );
+  };
+
+  const visibleColumnsCount = columns.filter(col => col.visible).length;
+
+  return (
+    <div
+      data-component="ModernGoalsTable"
+      style={{
+        position: 'relative',
+        backgroundColor: themeVars.panel as string,
+        borderRadius: '8px',
+        border: `1px solid ${themeVars.border}`,
+        boxShadow: '0 1px 3px 0 var(--glass-shadow-color)',
+        overflow: 'hidden'
+      }}
+    >
+      {/* Header with controls */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: '16px',
+        borderBottom: `1px solid ${themeVars.border}`,
+        backgroundColor: themeVars.card as string,
+      }}>
+        <div>
+          <h3 style={{
+            fontSize: '18px',
+            fontWeight: '600',
+            color: themeVars.text as string,
+            margin: 0,
+            marginBottom: '4px'
+          }}>
+            Goals
+          </h3>
+          <p style={{
+            fontSize: '14px',
+            color: themeVars.muted as string,
+            margin: 0
+          }}>
+            {sortedRows.length} of {goals.length} goals • {visibleColumnsCount} columns visible
+          </p>
+        </div>
+        <button
+          onClick={() => setShowConfig(!showConfig)}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '8px 12px',
+            borderRadius: '6px',
+            fontSize: '14px',
+            fontWeight: '500',
+            transition: 'all 0.15s ease',
+            cursor: 'pointer',
+            border: showConfig ? `1px solid ${themeVars.brand}` : `1px solid ${themeVars.border}`,
+            backgroundColor: showConfig ? rgbaCard(0.2) : (themeVars.panel as string),
+            color: themeVars.text as string,
+          }}
+          onMouseEnter={(e) => {
+            if (!showConfig) {
+              e.currentTarget.style.backgroundColor = themeVars.card as string;
+            }
+          }}
+          onMouseLeave={(e) => {
+            if (!showConfig) {
+              e.currentTarget.style.backgroundColor = themeVars.panel as string;
+            }
+          }}
+        >
+          <Settings size={16} />
+          {showConfig ? 'Hide Configuration' : 'Configure Table'}
+        </button>
+      </div>
+
+      <div style={{
+        padding: '12px 16px',
+        borderBottom: `1px solid ${themeVars.border}`,
+        backgroundColor: themeVars.card as string,
+        display: 'flex',
+        alignItems: 'center',
+        gap: '8px',
+        flexWrap: 'wrap',
+      }}>
+        <label style={{
+          fontSize: '12px',
+          color: themeVars.muted as string,
+          display: 'flex',
+          alignItems: 'center',
+          gap: '6px',
+        }}>
+          Cost Completeness
+          <select
+            value={costDataFilter}
+            onChange={(e) => setCostDataFilter(e.target.value as 'all' | 'missing_any' | 'missing_cost_type' | 'missing_estimated_cost')}
+            style={{
+              padding: '4px 8px',
+              borderRadius: '6px',
+              border: `1px solid ${themeVars.border}`,
+              backgroundColor: themeVars.panel as string,
+              color: themeVars.text as string,
+              fontSize: '12px',
+            }}
+          >
+            <option value="all">All Goals</option>
+            <option value="missing_any">Missing Cost Type or Est Cost</option>
+            <option value="missing_cost_type">Missing Cost Type</option>
+            <option value="missing_estimated_cost">Missing Est Cost</option>
+          </select>
+        </label>
+      </div>
+
+      <div style={{ display: 'flex' }}>
+        {/* Main Table */}
+        <div style={{
+          flex: 1,
+          overflowX: 'auto',
+          overflowY: 'auto',
+          maxHeight: '70vh',
+          transition: 'margin-right 0.3s ease',
+          marginRight: showConfig ? '320px' : '0',
+        }}>
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragEnd={handleDragEnd}
+          >
+            <table style={{
+              width: '100%',
+              borderCollapse: 'collapse',
+            }}>
+              <thead style={{
+                backgroundColor: themeVars.card as string,
+                borderBottom: `1px solid ${themeVars.border}`,
+                position: 'sticky',
+                top: 0,
+                zIndex: 6
+              }}>
+                <tr>
+                  <th style={{
+                    padding: '12px 8px',
+                    textAlign: 'left',
+                    fontSize: '12px',
+                    fontWeight: '500',
+                    color: themeVars.muted as string,
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.05em',
+                    borderRight: `1px solid ${themeVars.border}`,
+                    width: '48px',
+                    position: 'sticky',
+                    top: 0,
+                    backgroundColor: themeVars.card as string,
+                    zIndex: 6
+                  }}>
+                    Order
+                  </th>
+                  {columns.filter(col => col.visible).map(column => {
+                    const sortable = column.key === 'startDate' || column.key === 'endDate' || column.key === 'targetYear' || column.key === 'storiesCount' || column.key === 'sprintStoriesCount';
+                    return (
+                      <th
+                        key={column.key}
+                        style={{
+                          padding: '12px 8px',
+                          textAlign: 'left',
+                          fontSize: '12px',
+                          fontWeight: '500',
+                          color: themeVars.muted as string,
+                          textTransform: 'uppercase',
+                          letterSpacing: '0.05em',
+                          borderRight: `1px solid ${themeVars.border}`,
+                          width: column.width,
+                          cursor: sortable ? 'pointer' : 'default',
+                          userSelect: sortable ? 'none' : 'auto',
+                          position: 'sticky',
+                          top: 0,
+                          backgroundColor: themeVars.card as string,
+                          zIndex: 5
+                        }}
+                        onClick={sortable ? () => handleSort(column.key as any) : undefined}
+                      >
+                        {renderHeaderLabel(column)}
+                      </th>
+                    );
+                  })}
+                  <th style={{
+                    padding: '12px 8px',
+                    textAlign: 'center',
+                    fontSize: '12px',
+                    fontWeight: '500',
+                    color: themeVars.muted as string,
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.05em',
+                    width: '96px',
+                  }}>
+                    Actions
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <SortableContext
+                  items={sortedRows.map(row => row.id)}
+                  strategy={verticalListSortingStrategy}
+                >
+                  {sortedRows.map((goal, index) => (
+                    <SortableRow
+                      key={goal.id}
+                      goal={goal}
+                      columns={columns}
+                      index={index}
+                      storyCounts={storyCounts}
+                      sprintStoryCounts={sprintStoryCounts}
+                      storyPointsData={storyPointsData}
+                      habitAdherenceData={habitAdherenceData}
+                      goalKpiStatusByGoalId={goalKpiStatusByGoalId}
+                      globalThemes={globalThemes}
+                      monzoPots={monzoPots}
+                      availableGoals={allGoals}
+                      expandedGoalId={expandedGoalId}
+                      goalStories={goalStories}
+                      onGoalUpdate={onGoalUpdate}
+                      onGoalDelete={onGoalDelete}
+                      onEditModal={onEditModal ? onEditModal : handleEditModal}
+                      onOpenWorkspace={onOpenWorkspace}
+                      onRowClick={handleRowClick}
+                      onGoalExpand={handleGoalExpand}
+                      onStoryUpdate={handleStoryUpdate}
+                      onStoryDelete={handleStoryDelete}
+                      onStoryPriorityChange={handleStoryPriorityChange}
+                      onStoryAdd={handleStoryAdd}
+                      highlightStoryId={highlightStoryId}
+                    />
+                  ))}
+                </SortableContext>
+              </tbody>
+            </table>
+          </DndContext>
+        </div>
+
+        {/* Configuration Panel */}
+        <div style={{
+          position: 'absolute',
+          top: 0,
+          right: 0,
+          height: '100%',
+          width: '320px',
+          backgroundColor: themeVars.card as string,
+          borderLeft: `1px solid ${themeVars.border}`,
+          transition: 'transform 0.3s ease',
+          boxShadow: '-4px 0 16px 0 var(--glass-shadow-color)',
+          transform: showConfig ? 'translateX(0)' : 'translateX(100%)',
+        }}>
+          <div style={{
+            padding: '16px',
+            height: '100%',
+            overflowY: 'auto'
+          }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+              {/* Column Configuration */}
+              <div>
+                <button
+                  onClick={() => setConfigExpanded(prev => ({ ...prev, columns: !prev.columns }))}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    width: '100%',
+                    padding: '8px',
+                    textAlign: 'left',
+                    fontSize: '14px',
+                    fontWeight: '500',
+                    color: themeVars.text as string,
+                    backgroundColor: 'transparent',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    transition: 'background-color 0.15s ease',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = rgbaCard(0.08);
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = 'transparent';
+                  }}
+                >
+                  <span>Column Visibility</span>
+                  {configExpanded.columns ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                </button>
+
+                {configExpanded.columns && (
+                  <div style={{
+                    marginTop: '12px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '8px'
+                  }}>
+                    {columns.map(column => (
+                      <div key={column.key} style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '8px',
+                        borderRadius: '4px',
+                        transition: 'background-color 0.15s ease',
+                        cursor: 'pointer',
+                      }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.backgroundColor = rgbaCard(0.08);
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = 'transparent';
+                        }}
+                        onClick={() => toggleColumn(column.key)}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                          <div style={{
+                            width: '20px',
+                            height: '20px',
+                            borderRadius: '4px',
+                            border: '2px solid',
+                            borderColor: column.visible ? (themeVars.brand as string) : (themeVars.border as string),
+                            backgroundColor: column.visible ? (themeVars.brand as string) : 'transparent',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            transition: 'all 0.15s ease',
+                          }}>
+                            {column.visible && (
+                              <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+                                <path d="M10 3L4.5 8.5L2 6" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                              </svg>
+                            )}
+                          </div>
+                          <span style={{ fontSize: '14px', color: themeVars.text as string }}>{column.label}</span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          {column.visible ? (
+                            <Eye size={14} style={{ color: themeVars.muted as string }} />
+                          ) : (
+                            <EyeOff size={14} style={{ color: themeVars.muted as string }} />
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Display Options */}
+              <div>
+                <button
+                  onClick={() => setConfigExpanded(prev => ({ ...prev, display: !prev.display }))}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    width: '100%',
+                    padding: '8px',
+                    textAlign: 'left',
+                    fontSize: '14px',
+                    fontWeight: '500',
+                    color: themeVars.text as string,
+                    backgroundColor: 'transparent',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    transition: 'background-color 0.15s ease',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = rgbaCard(0.08);
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = 'transparent';
+                  }}
+                >
+                  <span>Display Options</span>
+                  {configExpanded.display ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                </button>
+
+                {configExpanded.display && (
+                  <div style={{
+                    marginTop: '12px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '12px'
+                  }}>
+                    <div style={{
+                      padding: '12px',
+                      backgroundColor: themeVars.card as string,
+                      borderRadius: '8px',
+                    }}>
+                      <h4 style={{
+                        fontSize: '14px',
+                        fontWeight: '500',
+                        color: themeVars.text as string,
+                        margin: '0 0 8px 0'
+                      }}>
+                        Goals Management
+                      </h4>
+                      <p style={{
+                        fontSize: '12px',
+                        color: themeVars.muted as string,
+                        margin: 0,
+                        lineHeight: '1.4',
+                      }}>
+                        Drag to reorder goals by priority. Click any cell to edit. Use theme categories to organize your objectives.
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Edit Goal Modal */}
+      <Modal show={showEditModal} onHide={() => setShowEditModal(false)} size="lg">
+        <Modal.Header closeButton>
+          <Modal.Title>Edit Goal</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          {editingGoal && (
+            <Form>
+              <Form.Group className="mb-3">
+                <Form.Label>Goal Title</Form.Label>
+                <Form.Control
+                  type="text"
+                  defaultValue={editingGoal.title}
+                  onChange={(e) => setEditingGoal({ ...editingGoal, title: e.target.value })}
+                />
+              </Form.Group>
+              <Form.Group className="mb-3">
+                <Form.Label>Description</Form.Label>
+                <Form.Control
+                  as="textarea"
+                  rows={3}
+                  defaultValue={editingGoal.description}
+                  onChange={(e) => setEditingGoal({ ...editingGoal, description: e.target.value })}
+                />
+              </Form.Group>
+              <Form.Group className="mb-3">
+                <Form.Label>Theme</Form.Label>
+                <Form.Control
+                  list="modal-theme-options"
+                  defaultValue={(globalThemes.find(t => t.id === (editingGoal.theme as any))?.label) || ''}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    const match = globalThemes.find(t => t.label === val || t.name === val);
+                    setEditingGoal({ ...editingGoal, theme: match ? match.id : (parseInt(val) || 0) });
+                  }}
+                  placeholder="Search themes..."
+                />
+                <datalist id="modal-theme-options">
+                  {globalThemes.map(t => (
+                    <option key={t.id} value={t.label} />
+                  ))}
+                </datalist>
+              </Form.Group>
+              <Form.Group className="mb-3">
+                <Form.Label>Status</Form.Label>
+                <Form.Select
+                  defaultValue={editingGoal.status}
+                  onChange={(e) => setEditingGoal({ ...editingGoal, status: e.target.value as any })}
+                >
+                  <option value="New">New</option>
+                  <option value="Work in Progress">Work in Progress</option>
+                  <option value="Complete">Complete</option>
+                  <option value="Blocked">Blocked</option>
+                  <option value="Deferred">Deferred</option>
+                </Form.Select>
+              </Form.Group>
+            </Form>
+          )}
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setShowEditModal(false)}>
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            onClick={() => {
+              if (editingGoal) {
+                onGoalUpdate(editingGoal.id, {
+                  title: editingGoal.title,
+                  description: editingGoal.description,
+                  theme: editingGoal.theme,
+                  status: editingGoal.status
+                });
+                setShowEditModal(false);
+                setEditingGoal(null);
+              }
+            }}
+          >
+            Save Changes
+          </Button>
+        </Modal.Footer>
+      </Modal>
+    </div>
+  );
+};
+
+export default ModernGoalsTable;

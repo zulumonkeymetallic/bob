@@ -1,0 +1,220 @@
+/*
+ * THEME SYSTEM — CSS load order and precedence
+ * -----------------------------------------------
+ * 1. index.css          — Core System A tokens (light + dark). Global resets. [THIS FILE]
+ * 2. ThemeColors.css    — System B: 16 domain colour palettes (Health, Wealth, etc.)
+ * 3. theme-aware.css    — System C: component-level dark mode overrides (Notion-style)
+ * 4. themeConsistency.css — System C continued: must not conflict with 1-3
+ * 5. Bootstrap CSS      — loaded by React entry point
+ * 6. Dashboard.css      — calendar-specific overrides
+ * 7. KanbanCards.css    — pill/badge CSS
+ * 8. GlobalEditButton.css, unified-planner.css — component-specific
+ *
+ * Active theme system: index.css (System A) + ThemeColors.css (System B)
+ * ModernThemeContext sets: data-theme, data-bs-theme, and .dark class atomically
+ * No component may set theme attributes directly
+ */
+
+/* Temporarily disable Tailwind CSS until configuration is resolved */
+/* @import url('https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css'); */
+
+:root {
+  /* Light Theme (Default - will be overridden by data-theme="dark" if active) */
+  --bg: #f0f2f5; /* Light background */
+  --panel: #ffffff; /* White panel */
+  --card: #ffffff; /* White card */
+  --line: #e0e0e0; /* Light line */
+  --text: #333333; /* Dark text */
+  --muted: #666666; /* Muted text */
+  --brand: #007bff; /* Blue brand color */
+  --blue: #007bff;
+  --purple: #6f42c1;
+  --green: #28a745;
+  --red: #dc3545;
+  --orange: #fd7e14;
+  --bs-orange: var(--orange);
+  /* Text color for content drawn on top of accent/brand backgrounds */
+  --on-accent: #ffffff;
+
+  /* Glassmorphism base for light theme (adjust as needed) */
+  --glass-bg-opacity: 0.7;
+  --glass-border-color: rgba(255, 255, 255, 0.3);
+  --glass-shadow-color: rgba(0, 0, 0, 0.1);
+  --glass-blur: 10px;
+  --card-rgb: 255, 255, 255; /* RGB for #ffffff */
+
+  /* Semantic Status & Urgency Tokens
+   * Use these everywhere status/priority/urgency colour is needed.
+   * Never use hex values directly in feature components — reference these vars.
+   */
+  --color-urgency-critical: #dc3545;
+  --color-urgency-high: #fd7e14;
+  --color-urgency-medium: #e5a400;
+  --color-urgency-low: #6c757d;
+
+  --color-status-done: #198754;
+  --color-status-inprogress: #0d6efd;
+  --color-status-backlog: #6c757d;
+  --color-status-blocked: #dc3545;
+  --color-status-review: #fd7e14;
+
+  --color-gradient-accent-start: #fd7e14;
+  --color-gradient-accent-end: #b35c00;
+}
+
+[data-theme="dark"] {
+  --bg: #0b0d11; /* Deep dark background */
+  --panel: #12141a; /* Slightly lighter dark panel */
+  --card: #171a21; /* Card background */
+  --line: #232632; /* Border/line color */
+  --text: #e8e9ed; /* Light text */
+  --muted: #a0a5b1; /* Muted light text */
+  --brand: #6aa5ff; /* Vibrant blue brand */
+  --blue: #4A86E8;
+  --purple: #674EA7;
+  --green: #93C47D;
+  --red: #E06666;
+  --orange: #F6B26B;
+  --bs-orange: var(--orange);
+  --on-accent: #ffffff;
+
+  /* Glassmorphism for dark theme */
+  --glass-bg-opacity: 0.15; /* More transparent for dark glass */
+  --glass-border-color: rgba(255, 255, 255, 0.1); /* Subtle white border */
+  --glass-shadow-color: rgba(0, 0, 0, 0.3); /* Darker shadow */
+  --glass-blur: 20px; /* Stronger blur for dark glass */
+  --card-rgb: 23, 26, 33; /* RGB for #171a21 */
+
+  /* Semantic Status & Urgency Tokens — dark mode overrides
+   * Lightened/shifted to maintain readability on dark surfaces.
+   */
+  --color-urgency-critical: #e87d87;
+  --color-urgency-high: #f4a45a;
+  --color-urgency-medium: #f0c040;
+  --color-urgency-low: #a0a5b1;
+
+  --color-status-done: #5dba85;
+  --color-status-inprogress: #6aa5ff;
+  --color-status-backlog: #a0a5b1;
+  --color-status-blocked: #e87d87;
+  --color-status-review: #f4a45a;
+
+  --color-gradient-accent-start: #c46a0a;
+  --color-gradient-accent-end: #8a4200;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  min-height: 100vh;
+  transition: background-color 0.3s ease, color 0.3s ease; /* Smooth theme transition */
+}
+
+code {
+  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
+    monospace;
+}
+
+/* Glassmorphism Effect */
+.glass-effect {
+  background-color: rgba(var(--card-rgb), var(--glass-bg-opacity)); /* Use RGB for transparency */
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur)); /* For Safari */
+  border: 1px solid var(--glass-border-color);
+  border-radius: 15px; /* Rounded corners for glass effect */
+  box-shadow: 0 8px 32px 0 var(--glass-shadow-color);
+  transition: background-color 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+/* Calendar dark mode tweaks */
+.rbc-calendar {
+  background: var(--bg);
+  color: var(--text);
+}
+.rbc-time-header, .rbc-time-content, .rbc-time-view, .rbc-day-bg, .rbc-timeslot-group, .rbc-header {
+  border-color: var(--line) !important;
+}
+.rbc-toolbar button {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--text);
+}
+.rbc-toolbar button.rbc-active {
+  background: var(--brand);
+  color: var(--on-accent);
+}
+.rbc-event {
+  border: none;
+  box-shadow: none;
+}
+.rbc-event-label, .rbc-event-content {
+  color: inherit;
+}
+
+/* Tablet font scale: shave ~6% off all rem-based sizing globally on iPad viewports */
+@media (min-width: 768px) and (max-width: 1199px) {
+  html {
+    font-size: 87.5%; /* 14px base — keeps all content within viewport on iPad */
+  }
+}
+
+/* Mobile fit: keep summaries/widgets within viewport on small screens */
+@media (max-width: 768px) {
+  html {
+    font-size: 94%;
+  }
+
+  body,
+  #root {
+    width: 100%;
+    max-width: 100vw;
+    overflow-x: hidden;
+  }
+
+  .container,
+  .container-fluid {
+    max-width: 100vw;
+  }
+
+  img,
+  svg,
+  canvas,
+  video {
+    max-width: 100%;
+    height: auto;
+  }
+
+  .card,
+  .alert,
+  .list-group-item,
+  .badge,
+  .btn,
+  .navbar,
+  .navbar-brand,
+  .dropdown-item,
+  .form-control,
+  .form-select,
+  .table,
+  .modal-body {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .d-flex > * {
+    min-width: 0;
+  }
+
+  .btn,
+  .badge,
+  .form-control,
+  .form-select {
+    font-size: 0.94rem;
+  }
+}

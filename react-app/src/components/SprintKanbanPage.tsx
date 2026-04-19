@@ -1,0 +1,589 @@
+import React, { useState, useEffect } from 'react';
+import { useLocation, useMatch } from 'react-router-dom';
+import { Card, Container, Row, Col, Button, Dropdown, Badge, Spinner } from 'react-bootstrap';
+import { db } from '../firebase';
+import { collection, query, where, onSnapshot, updateDoc, doc, serverTimestamp, orderBy, deleteDoc, limit } from 'firebase/firestore';
+import { useAuth } from '../contexts/AuthContext';
+import { usePersona } from '../contexts/PersonaContext';
+import { Story, Sprint, Task, Goal } from '../types';
+import ModernKanbanBoard from './ModernKanbanBoard';
+import StoryTasksPanel from './StoryTasksPanel';
+import ModernTaskTable from './ModernTaskTable';
+import { ChevronLeft, ChevronRight, Calendar, Target, BarChart3 } from 'lucide-react';
+import { displayRefForEntity } from '../utils/referenceGenerator';
+import { useSprint } from '../contexts/SprintContext';
+import { isStatus } from '../utils/statusHelpers';
+import { useSidebar } from '../contexts/SidebarContext';
+
+interface SprintKanbanPageProps {
+  showSidebar?: boolean;
+  selectedSprintId?: string;
+  showInlineTasks?: boolean; // show inline tasks panel under board when selecting a story
+}
+
+const SprintKanbanContent: React.FC<SprintKanbanPageProps> = ({
+  showSidebar = false,
+  selectedSprintId: propSelectedSprintId,
+  showInlineTasks = true,
+}) => {
+  console.log('[SprintKanbanPage] Component RENDERING', {
+    pathname: window.location.pathname,
+    routerLocation: useLocation().pathname
+  });
+  const location = useLocation();
+  const matchKanban = useMatch('/sprints/kanban');
+  const matchKanbanShort = useMatch('/kanban');
+  const matchSprintKanban = useMatch('/sprint-kanban');
+  const isOnKanbanRoute = matchKanban || matchKanbanShort || matchSprintKanban;
+  const { currentUser } = useAuth();
+  const { currentPersona } = usePersona();
+
+  // State
+  const [stories, setStories] = useState<Story[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [goals, setGoals] = useState<Goal[]>([]);
+  const { selectedSprintId, setSelectedSprintId, sprints } = useSprint();
+  const [loading, setLoading] = useState(true);
+  const [selectedStory, setSelectedStory] = useState<Story | null>(null);
+  const { isCollapsed, toggleCollapse } = useSidebar();
+
+  // Update selected sprint when prop changes
+  useEffect(() => {
+    // Safety check: if we're not on a kanban route, don't run this effect logic
+    // This prevents infinite loops if the component is inadvertently mounted on wrong routes
+    const path = window.location.pathname;
+    const isKanban = path.includes('/kanban') || path.includes('/sprint-kanban');
+
+    if (!isKanban && !propSelectedSprintId) {
+      return;
+    }
+
+    console.log('[SprintKanbanPage] useEffect[1] MOUNTED or updated', {
+      propSelectedSprintId,
+      selectedSprintId,
+      pathname: path
+    });
+
+    if (propSelectedSprintId && propSelectedSprintId !== selectedSprintId) {
+      setSelectedSprintId(propSelectedSprintId);
+    }
+    return () => {
+      console.log('[SprintKanbanPage] useEffect[1] CLEANUP - Component UNMOUNTING');
+    };
+  }, [propSelectedSprintId, selectedSprintId, setSelectedSprintId]);
+
+  // Resolve filter: explicit "All" (empty string) disables filtering entirely
+  const filterSprintId: string | null = selectedSprintId === ''
+    ? null
+    : (selectedSprintId || propSelectedSprintId || null);
+
+  // Get current sprint only when a specific ID is chosen (do not auto-pick active for "All")
+  const currentSprint = filterSprintId
+    ? sprints.find(s => s.id === filterSprintId)
+    : null;
+
+  // Match stories by sprint id OR legacy sprint name for backwards compatibility
+  const selectedMatchValues = new Set<string | undefined>([
+    filterSprintId || undefined,
+    currentSprint?.id,
+    (currentSprint as any)?.name,
+  ]);
+
+  // Filter stories and tasks for current selection
+  const sprintStories = stories.filter((story) => {
+    const storySprint = (story as any).sprintId as string | undefined;
+    // No filter when "All Sprints": include all stories
+    if (!filterSprintId && !currentSprint) return true;
+    return storySprint ? selectedMatchValues.has(storySprint) : false;
+  });
+
+  const sprintTasks = tasks.filter(task => {
+    if (!filterSprintId && !currentSprint) return true;
+    return task.sprintId ? selectedMatchValues.has(task.sprintId as any) : false;
+  });
+
+  useEffect(() => {
+    console.log('[SprintKanbanPage] useEffect[2] Setting up data subscriptions');
+    if (!currentUser) return;
+
+    const setupSubscriptions = () => {
+      // Stories subscription
+      const storiesQuery = query(
+        collection(db, 'stories'),
+        where('ownerUid', '==', currentUser.uid),
+        where('persona', '==', currentPersona),
+        orderBy('orderIndex', 'asc')
+      );
+
+      const unsubscribeStories = onSnapshot(storiesQuery, (snapshot) => {
+        const storiesData = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        })) as Story[];
+        setStories(storiesData);
+      });
+
+      // Tasks subscription: use materialized sprint_task_index to avoid full collection reads
+      const tasksQuery = currentSprint
+        ? query(
+          collection(db, 'sprint_task_index'),
+          where('ownerUid', '==', currentUser.uid),
+          where('persona', '==', currentPersona),
+          where('sprintId', '==', (currentSprint as any).id),
+          where('isOpen', '==', true),
+          orderBy('dueDate', 'asc'),
+          limit(1000)
+        )
+        : query(
+          collection(db, 'sprint_task_index'),
+          where('ownerUid', '==', currentUser.uid),
+          where('persona', '==', currentPersona),
+          where('sprintId', '==', '__none__'),
+          where('isOpen', '==', true),
+          orderBy('dueDate', 'asc'),
+          limit(1000)
+        );
+
+      const unsubscribeTasks = onSnapshot(tasksQuery, (snapshot) => {
+        const tasksData = snapshot.docs.map(docSnap => {
+          const x = docSnap.data() as any;
+          const t: any = {
+            id: docSnap.id,
+            title: x.title,
+            description: x.description || '',
+            status: x.status,
+            priority: x.priority ?? 2,
+            effort: x.effort ?? 'M',
+            estimateMin: x.estimateMin ?? 0,
+            dueDate: x.dueDate || null,
+            parentType: x.parentType || 'story',
+            parentId: x.parentId || x.storyId || '',
+            storyId: x.storyId || null,
+            sprintId: x.sprintId && x.sprintId !== '__none__' ? x.sprintId : null,
+            persona: currentPersona,
+            ownerUid: currentUser.uid,
+            ref: x.ref || `TASK-${String(docSnap.id).slice(-4).toUpperCase()}`,
+          };
+
+          return t as Task;
+        });
+        setTasks(tasksData);
+      });
+
+      // Goals subscription
+      const goalsQuery = query(
+        collection(db, 'goals'),
+        where('ownerUid', '==', currentUser.uid),
+        where('persona', '==', currentPersona),
+        orderBy('createdAt', 'desc')
+      );
+
+      const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
+        const goalsData = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        })) as Goal[];
+        setGoals(goalsData);
+      });
+
+      setLoading(false);
+
+      return () => {
+        console.log('[SprintKanbanPage] Cleaning up data subscriptions');
+        unsubscribeStories();
+        unsubscribeTasks();
+        unsubscribeGoals();
+      };
+    };
+
+    return setupSubscriptions();
+  }, [currentUser, currentPersona, selectedSprintId]);
+
+  // Sprint navigation
+  const handleSprintChange = (sprintId: string | null) => {
+    setSelectedSprintId(sprintId || '');
+  };
+
+  const handlePreviousSprint = () => {
+    const currentIndex = sprints.findIndex(s => s.id === selectedSprintId);
+    if (currentIndex < sprints.length - 1) {
+      setSelectedSprintId(sprints[currentIndex + 1].id);
+    }
+  };
+
+  const handleNextSprint = () => {
+    const currentIndex = sprints.findIndex(s => s.id === selectedSprintId);
+    if (currentIndex > 0) {
+      setSelectedSprintId(sprints[currentIndex - 1].id);
+    }
+  };
+
+  // Sprint metrics
+  const getSprintMetrics = () => {
+    const storyCompleted = (story: Story) => {
+      const status = (story as any).status;
+      return isStatus(status, 'done') || isStatus(status, 'Complete');
+    };
+    const taskCompleted = (task: Task) => {
+      const status = (task as any).status;
+      return isStatus(status, 'done') || isStatus(status, 'Complete');
+    };
+
+    const totalStories = sprintStories.length;
+    const completedStories = sprintStories.filter(storyCompleted).length;
+    const totalTasks = sprintTasks.length;
+    const completedTasks = sprintTasks.filter(taskCompleted).length;
+    const totalPoints = sprintStories.reduce((sum, story) => sum + (Number.isFinite(Number(story.points)) ? Number(story.points) : 0), 0);
+    const completedPoints = sprintStories
+      .filter(storyCompleted)
+      .reduce((sum, story) => sum + (Number.isFinite(Number(story.points)) ? Number(story.points) : 0), 0);
+
+    return {
+      totalStories,
+      completedStories,
+      totalTasks,
+      completedTasks,
+      totalPoints,
+      completedPoints,
+      storyProgress: totalStories > 0 ? Math.round((completedStories / totalStories) * 100) : 0,
+      taskProgress: totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0,
+      pointsProgress: totalPoints > 0 ? Math.round((completedPoints / totalPoints) * 100) : 0
+    };
+  };
+
+  const metrics = getSprintMetrics();
+
+  if (loading) {
+    return (
+      <Container fluid className="p-4">
+        <div style={{ textAlign: 'center', padding: '60px 20px' }}>
+          <Spinner animation="border" variant="primary" />
+          <p style={{ marginTop: '16px', color: 'var(--muted)' }}>Loading sprint data...</p>
+        </div>
+      </Container>
+    );
+  }
+
+  // GUARD: Only render if we're actually on a kanban route
+  if (!isOnKanbanRoute) {
+    console.log('[SprintKanbanPage] GUARD: Not on kanban route, returning null', {
+      pathname: location.pathname,
+      isOnKanbanRoute: !!isOnKanbanRoute
+    });
+    return null;
+  }
+
+  return (
+    <Container fluid style={{ padding: '24px', backgroundColor: 'var(--bg)', minHeight: '100vh' }}>
+      {/* Header */}
+      <Row className="mb-4">
+        <Col>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+              <h2 style={{ margin: 0, fontSize: '28px', fontWeight: '700', color: 'var(--text)' }}>
+                Sprint Kanban
+              </h2>
+              <Badge bg="primary" style={{ fontSize: '12px', padding: '6px 12px' }}>
+                {currentPersona.charAt(0).toUpperCase() + currentPersona.slice(1)} Persona
+              </Badge>
+            </div>
+
+            {/* Sprint Selector + Sidebar collapse */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <Button
+                variant="outline-secondary"
+                size="sm"
+                title={isCollapsed ? 'Expand details panel' : 'Collapse details panel'}
+                onClick={toggleCollapse}
+              >
+                {isCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
+              </Button>
+              <Button
+                variant="outline-secondary"
+                size="sm"
+                onClick={handlePreviousSprint}
+                disabled={!selectedSprintId || sprints.findIndex(s => s.id === selectedSprintId) >= sprints.length - 1}
+                style={{ padding: '6px 12px' }}
+              >
+                <ChevronLeft size={16} />
+              </Button>
+
+              <Dropdown>
+                <Dropdown.Toggle
+                  variant="outline-primary"
+                  style={{ minWidth: '200px', textAlign: 'left' }}
+                >
+                  {currentSprint ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <Calendar size={16} />
+                      {currentSprint.name}
+                      {currentSprint.status === 1 && (
+                        <Badge bg="success" style={{ fontSize: '10px', marginLeft: 'auto' }}>
+                          ACTIVE
+                        </Badge>
+                      )}
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <Calendar size={16} />
+                      Backlog (No Sprint)
+                    </div>
+                  )}
+                </Dropdown.Toggle>
+
+                <Dropdown.Menu style={{ maxHeight: '300px', overflowY: 'auto' }}>
+                  <Dropdown.Item
+                    onClick={() => handleSprintChange(null)}
+                    active={!selectedSprintId}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <Target size={16} />
+                      Backlog (No Sprint)
+                    </div>
+                  </Dropdown.Item>
+                  <Dropdown.Divider />
+                  {sprints.map(sprint => (
+                    <Dropdown.Item
+                      key={sprint.id}
+                      onClick={() => handleSprintChange(sprint.id)}
+                      active={sprint.id === selectedSprintId}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <Calendar size={16} />
+                        <div>
+                          <div>{sprint.name}</div>
+                          <small style={{ color: 'var(--muted)' }}>
+                            {new Date(sprint.startDate).toLocaleDateString()} - {new Date(sprint.endDate).toLocaleDateString()}
+                          </small>
+                        </div>
+                        {sprint.status === 1 && (
+                          <Badge bg="success" style={{ fontSize: '10px', marginLeft: 'auto' }}>
+                            ACTIVE
+                          </Badge>
+                        )}
+                      </div>
+                    </Dropdown.Item>
+                  ))}
+                </Dropdown.Menu>
+              </Dropdown>
+
+              <Button
+                variant="outline-secondary"
+                size="sm"
+                onClick={handleNextSprint}
+                disabled={!selectedSprintId || sprints.findIndex(s => s.id === selectedSprintId) <= 0}
+                style={{ padding: '6px 12px' }}
+              >
+                <ChevronRight size={16} />
+              </Button>
+            </div>
+          </div>
+        </Col>
+      </Row>
+
+      {/* Helper: Assign unassigned stories to the selected sprint */}
+      {currentSprint && (
+        <Row className="mb-3">
+          <Col>
+            <div className="d-flex align-items-center justify-content-between p-2 border rounded" style={{ background: 'var(--notion-hover)' }}>
+              <div>
+                <strong>Selected sprint:</strong> {currentSprint.name || currentSprint.id}
+                {currentSprint.id && (
+                  <span className="ms-2">
+                    <span className="badge bg-light text-dark">
+                      {displayRefForEntity('sprint', currentSprint.id)}
+                    </span>
+                  </span>
+                )}
+              </div>
+              <div className="d-flex gap-2">
+                <Button
+                  variant="outline-primary"
+                  size="sm"
+                  onClick={async () => {
+                    try {
+                      const unassigned = stories.filter(s => !('sprintId' in s) || !(s as any).sprintId);
+                      const toAssign = unassigned.slice(0, 10);
+                      if (toAssign.length === 0) {
+                        alert('No unassigned stories found.');
+                        return;
+                      }
+                      const ops = toAssign.map(s => updateDoc(doc(db, 'stories', s.id), { sprintId: currentSprint.id, updatedAt: serverTimestamp() } as any));
+                      await Promise.all(ops);
+                    } catch (e) {
+                      console.error('Failed to assign stories to sprint', e);
+                      alert('Failed to assign stories.');
+                    }
+                  }}
+                >
+                  Assign unassigned stories to this sprint
+                </Button>
+              </div>
+            </div>
+          </Col>
+        </Row>
+      )}
+
+      {/* Sprint Metrics */}
+      {currentSprint && (
+        <Row className="mb-4">
+          <Col>
+            <Card style={{ border: 'none', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+              <Card.Body>
+                <Row>
+                  <Col md={3}>
+                    <div style={{ textAlign: 'center' }}>
+                      <div style={{ fontSize: '24px', fontWeight: '700', color: 'var(--green)' }}>
+                        {metrics.completedStories}/{metrics.totalStories}
+                      </div>
+                      <div style={{ fontSize: '12px', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                        Stories Done
+                      </div>
+                      <div style={{ marginTop: '4px' }}>
+                        <Badge bg="success" style={{ fontSize: '11px' }}>
+                          {metrics.storyProgress}%
+                        </Badge>
+                      </div>
+                    </div>
+                  </Col>
+                  <Col md={3}>
+                    <div style={{ textAlign: 'center' }}>
+                      <div style={{ fontSize: '24px', fontWeight: '700', color: 'var(--brand)' }}>
+                        {metrics.completedTasks}/{metrics.totalTasks}
+                      </div>
+                      <div style={{ fontSize: '12px', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                        Tasks Completed
+                      </div>
+                      <div style={{ marginTop: '4px' }}>
+                        <Badge bg="primary" style={{ fontSize: '11px' }}>
+                          {metrics.taskProgress}%
+                        </Badge>
+                      </div>
+                    </div>
+                  </Col>
+                  <Col md={3}>
+                    <div style={{ textAlign: 'center' }}>
+                      <div style={{ fontSize: '24px', fontWeight: '700', color: 'var(--purple)' }}>
+                        {metrics.completedPoints}/{metrics.totalPoints}
+                      </div>
+                      <div style={{ fontSize: '12px', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                        Story Points
+                      </div>
+                      <div style={{ marginTop: '4px' }}>
+                        <Badge bg="secondary" style={{ fontSize: '11px' }}>
+                          {metrics.pointsProgress}%
+                        </Badge>
+                      </div>
+                    </div>
+                  </Col>
+                  <Col md={3}>
+                    <div style={{ textAlign: 'center' }}>
+                      <div style={{ fontSize: '20px', fontWeight: '700', color: 'var(--text)' }}>
+                        {currentSprint.name}
+                      </div>
+                      <div style={{ fontSize: '12px', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                        Sprint Duration
+                      </div>
+                      <div style={{ marginTop: '4px', fontSize: '11px', color: 'var(--muted)' }}>
+                        {Math.ceil((currentSprint.endDate - currentSprint.startDate) / (1000 * 60 * 60 * 24))} days
+                      </div>
+                    </div>
+                  </Col>
+                </Row>
+              </Card.Body>
+            </Card>
+          </Col>
+        </Row>
+      )}
+
+      {/* Kanban Board */}
+      <Row>
+        <Col>
+          <Card style={{ border: 'none', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+            <Card.Body style={{ padding: '24px' }}>
+              <ModernKanbanBoard
+                sprintDueDateRange={currentSprint ? { start: (currentSprint as any).startDate, end: (currentSprint as any).endDate } : null}
+                statusFilter={[0, 1, 3]}
+                onItemSelect={(item, type) => {
+                  if (type === 'story') {
+                    setSelectedStory(item as Story);
+                  }
+                }}
+              />
+            </Card.Body>
+          </Card>
+        </Col>
+      </Row>
+
+      {/* Inline tasks for selected story (only on this page) */}
+      {showInlineTasks && selectedStory && (
+        <Row className="mt-3">
+          <Col>
+            <Card style={{ border: 'none', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+              <Card.Header style={{ backgroundColor: 'var(--card)', borderBottom: '1px solid var(--line)' }}>
+                <h5 className="mb-0">Tasks for: {selectedStory.title}</h5>
+              </Card.Header>
+              <Card.Body style={{ padding: 0 }}>
+                <ModernTaskTable
+                  tasks={tasks.filter(t => t.parentType === 'story' && t.parentId === selectedStory.id)}
+                  stories={stories}
+                  goals={goals}
+                  sprints={sprints}
+                  onTaskUpdate={async (taskId, updates) => {
+                    await updateDoc(doc(db, 'tasks', taskId), { ...updates, updatedAt: serverTimestamp() });
+                  }}
+                  onTaskDelete={async (taskId) => {
+                    await deleteDoc(doc(db, 'tasks', taskId));
+                  }}
+                  onTaskPriorityChange={async (taskId, newPriority) => {
+                    await updateDoc(doc(db, 'tasks', taskId), { priority: newPriority, updatedAt: serverTimestamp() });
+                  }}
+                />
+              </Card.Body>
+            </Card>
+          </Col>
+        </Row>
+      )}
+
+      {/* Empty State */}
+      {sprintStories.length === 0 && sprintTasks.length === 0 && (
+        <Row className="mt-4">
+          <Col>
+            <Card style={{ border: 'none', textAlign: 'center', padding: '60px 20px' }}>
+              <Card.Body>
+                <BarChart3 size={48} style={{ color: 'var(--muted)', marginBottom: '16px' }} />
+                <h5 style={{ color: 'var(--text)', marginBottom: '8px' }}>
+                  {currentSprint ? `No items in ${currentSprint.name}` : 'No items in backlog'}
+                </h5>
+                <p style={{ color: 'var(--muted)', marginBottom: '24px' }}>
+                  {currentSprint
+                    ? 'Add stories and tasks to this sprint to start planning your work.'
+                    : 'Create stories and tasks, then assign them to a sprint when ready.'
+                  }
+                </p>
+                <Button variant="primary" href="/stories">
+                  Manage Stories
+                </Button>
+              </Card.Body>
+            </Card>
+          </Col>
+        </Row>
+      )}
+    </Container>
+  );
+};
+
+const SprintKanbanPage: React.FC<SprintKanbanPageProps> = (props) => {
+  const matchKanban = useMatch('/sprints/kanban');
+  const matchKanbanShort = useMatch('/kanban');
+  const matchSprintKanban = useMatch('/sprint-kanban');
+  const isOnKanbanRoute = matchKanban || matchKanbanShort || matchSprintKanban;
+
+  if (!isOnKanbanRoute) {
+    return null;
+  }
+
+  return <SprintKanbanContent {...props} />;
+};
+
+export default SprintKanbanPage;

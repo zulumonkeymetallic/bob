@@ -1,0 +1,286 @@
+[
+  {
+    "version": "3.8.6",
+    "deploymentDate": "2025-09-07T13:17:55Z",
+    "deploymentBy": "zulumonkeymetallic",
+    "buildHash": "acdef4759d678593391fb11293d9b1dca24a5a25",
+    "releaseNotes": "## BOB Productivity Platform 3.8.6\n\n### 🚀 Features & Improvements\n- CI/Deploy: add workflows; version alignment gate; update deploy script for build version; no app code changes\n- 🔧 v3.8.8: Goals Page Timestamp Fix - ModernGoalsTable Story Loading\n- ✨ v3.8.7: Enhanced TaskListView - Route Redirect, Sprint Selector, Card/Table Views\n- 🚨 URGENT FIX: Issue #92 - Critical Firestore Index + React Timestamp Error Resolution\n- 🔧 v3.8.6 Goals Page React Error #31 Fix - DEPLOYED\n- 🔧 Fix React Error #31 in Goals Components - Restore Working State\n- ✅ v3.8.6 Comprehensive React Error #31 & Cache Busting Resolution\n- ✅ v3.8.6 Dashboard Timestamp Fixes - React Error #31 Resolution\n- 🔧 Clean up Firebase indexes - Remove duplicates and conflicts\n- 📦 Update version to v3.8.6 and add Firebase composite indexes\n\n### 🐛 Issues Resolved\n- #85: 🐛 Fix React Error #31: Firestore Timestamp Serialization Issues\n- #78: Critical: Sign Out Button Disappears in Dark Mode - Theme Consistency Issue\n- #39: Crisis management\n- #38: Situational awareness\n- #37: Strategic planning\n\n### 📈 Technical Details\n- Version: 3.8.6\n- Build Date: 2025-09-07T13:17:55Z\n- Deployment: Firebase Hosting\n- Repository: zulumonkeymetallic/bob\n",
+    "githubIssues": [
+      "#Cache Loop - Fixed infinite cache clearing preventing login",
+      "#Login Issues - Resolved cache busting loop conflicts",
+      "#Production Stability - Enhanced cache management safety"
+    ],
+    "features": [
+      "Cache Loop Prevention System",
+      "Safe Cache Management",
+      "Login Issue Resolution",
+      "Enhanced Error Recovery",
+      "Production Stability Improvements",
+      "Version Synchronization"
+    ],
+    "environment": "production",
+    "firebaseProject": "bob20250810"
+  },
+  {
+    "version": "3.8.6",
+    "deploymentDate": "2025-09-07T14:43:12Z",
+    "deploymentBy": "zulumonkeymetallic",
+    "buildHash": "fe7de902ef985fd5bb614a39e498e7fffb4304f0",
+    "releaseNotes": "## BOB Productivity Platform 3.8.6\n\n### 🚀 Features & Improvements\n- chore(version): align public/version.json to 3.8.6 for deployment\n- v3.8.6: Comprehensive Goals debugging with extensive timestamp handling\n- CI/CD: add GitHub Actions (CI + Deploy) using FIREBASE_SERVICE_ACCOUNT; version alignment check; version sync hooks; Goals timestamp fix; version badge (#101)\n- 🔧 v3.8.8: Goals Page Timestamp Fix - ModernGoalsTable Story Loading\n\n### 🐛 Issues Resolved\n- #85: 🐛 Fix React Error #31: Firestore Timestamp Serialization Issues\n- #78: Critical: Sign Out Button Disappears in Dark Mode - Theme Consistency Issue\n- #39: Crisis management\n- #38: Situational awareness\n- #37: Strategic planning\n\n### 📈 Technical Details\n- Version: 3.8.6\n- Build Date: 2025-09-07T14:43:12Z\n- Deployment: Firebase Hosting\n- Repository: zulumonkeymetallic/bob\n",
+    "githubIssues": [
+      "#Cache Loop - Fixed infinite cache clearing preventing login",
+      "#Login Issues - Resolved cache busting loop conflicts",
+      "#Production Stability - Enhanced cache management safety"
+    ],
+    "features": [
+      "Cache Loop Prevention System",
+      "Safe Cache Management",
+      "Login Issue Resolution",
+      "Enhanced Error Recovery",
+      "Production Stability Improvements",
+      "Version Synchronization"
+    ],
+    "environment": "production",
+    "firebaseProject": "bob20250810"
+  },
+  {
+    "version": "3.8.6",
+    "deploymentDate": "2025-09-07T14:44:06Z",
+    "deploymentBy": "zulumonkeymetallic",
+    "buildHash": "fe7de902ef985fd5bb614a39e498e7fffb4304f0",
+    "releaseNotes": "## BOB Productivity Platform 3.8.6\n\n### 🚀 Features & Improvements\n- chore(version): align public/version.json to 3.8.6 for deployment\n- v3.8.6: Comprehensive Goals debugging with extensive timestamp handling\n- CI/CD: add GitHub Actions (CI + Deploy) using FIREBASE_SERVICE_ACCOUNT; version alignment check; version sync hooks; Goals timestamp fix; version badge (#101)\n- 🔧 v3.8.8: Goals Page Timestamp Fix - ModernGoalsTable Story Loading\n\n### 🐛 Issues Resolved\n- #85: 🐛 Fix React Error #31: Firestore Timestamp Serialization Issues\n- #78: Critical: Sign Out Button Disappears in Dark Mode - Theme Consistency Issue\n- #39: Crisis management\n- #38: Situational awareness\n- #37: Strategic planning\n\n### 📈 Technical Details\n- Version: 3.8.6\n- Build Date: 2025-09-07T14:44:06Z\n- Deployment: Firebase Hosting\n- Repository: zulumonkeymetallic/bob\n",
+    "githubIssues": [
+      "#Cache Loop - Fixed infinite cache clearing preventing login",
+      "#Login Issues - Resolved cache busting loop conflicts",
+      "#Production Stability - Enhanced cache management safety"
+    ],
+    "features": [
+      "Cache Loop Prevention System",
+      "Safe Cache Management",
+      "Login Issue Resolution",
+      "Enhanced Error Recovery",
+      "Production Stability Improvements",
+      "Version Synchronization"
+    ],
+    "environment": "production",
+    "firebaseProject": "bob20250810"
+  },
+  {
+    "version": "3.8.6",
+    "deploymentDate": "2025-09-07T14:45:52Z",
+    "deploymentBy": "zulumonkeymetallic",
+    "buildHash": "fe7de902ef985fd5bb614a39e498e7fffb4304f0",
+    "releaseNotes": "## BOB Productivity Platform 3.8.6\n\n### 🚀 Features & Improvements\n- chore(version): align public/version.json to 3.8.6 for deployment\n- v3.8.6: Comprehensive Goals debugging with extensive timestamp handling\n- CI/CD: add GitHub Actions (CI + Deploy) using FIREBASE_SERVICE_ACCOUNT; version alignment check; version sync hooks; Goals timestamp fix; version badge (#101)\n- 🔧 v3.8.8: Goals Page Timestamp Fix - ModernGoalsTable Story Loading\n\n### 🐛 Issues Resolved\n- #85: 🐛 Fix React Error #31: Firestore Timestamp Serialization Issues\n- #78: Critical: Sign Out Button Disappears in Dark Mode - Theme Consistency Issue\n- #39: Crisis management\n- #38: Situational awareness\n- #37: Strategic planning\n\n### 📈 Technical Details\n- Version: 3.8.6\n- Build Date: 2025-09-07T14:45:52Z\n- Deployment: Firebase Hosting\n- Repository: zulumonkeymetallic/bob\n",
+    "githubIssues": [
+      "#Cache Loop - Fixed infinite cache clearing preventing login",
+      "#Login Issues - Resolved cache busting loop conflicts",
+      "#Production Stability - Enhanced cache management safety"
+    ],
+    "features": [
+      "Cache Loop Prevention System",
+      "Safe Cache Management",
+      "Login Issue Resolution",
+      "Enhanced Error Recovery",
+      "Production Stability Improvements",
+      "Version Synchronization"
+    ],
+    "environment": "production",
+    "firebaseProject": "bob20250810"
+  },
+  {
+    "version": "3.8.6",
+    "deploymentDate": "2025-09-07T14:46:41Z",
+    "deploymentBy": "zulumonkeymetallic",
+    "buildHash": "aade28d3886e4cdb286a58384c324cabe33ce2ab",
+    "releaseNotes": "## BOB Productivity Platform 3.8.6\n\n### 🚀 Features & Improvements\n- chore(build): fix isolatedModules by marking placeholder files as modules; add SKIP_TESTS support to deploy script\n- chore(version): align public/version.json to 3.8.6 for deployment\n- v3.8.6: Comprehensive Goals debugging with extensive timestamp handling\n- CI/CD: add GitHub Actions (CI + Deploy) using FIREBASE_SERVICE_ACCOUNT; version alignment check; version sync hooks; Goals timestamp fix; version badge (#101)\n- 🔧 v3.8.8: Goals Page Timestamp Fix - ModernGoalsTable Story Loading\n\n### 🐛 Issues Resolved\n- #85: 🐛 Fix React Error #31: Firestore Timestamp Serialization Issues\n- #78: Critical: Sign Out Button Disappears in Dark Mode - Theme Consistency Issue\n- #39: Crisis management\n- #38: Situational awareness\n- #37: Strategic planning\n\n### 📈 Technical Details\n- Version: 3.8.6\n- Build Date: 2025-09-07T14:46:41Z\n- Deployment: Firebase Hosting\n- Repository: zulumonkeymetallic/bob\n",
+    "githubIssues": [
+      "#Cache Loop - Fixed infinite cache clearing preventing login",
+      "#Login Issues - Resolved cache busting loop conflicts",
+      "#Production Stability - Enhanced cache management safety"
+    ],
+    "features": [
+      "Cache Loop Prevention System",
+      "Safe Cache Management",
+      "Login Issue Resolution",
+      "Enhanced Error Recovery",
+      "Production Stability Improvements",
+      "Version Synchronization"
+    ],
+    "environment": "production",
+    "firebaseProject": "bob20250810"
+  },
+  {
+    "version": "3.8.6",
+    "deploymentDate": "2025-09-07T14:52:13Z",
+    "deploymentBy": "zulumonkeymetallic",
+    "buildHash": "3603e3556b1096eb3484defae30949d0b84be860",
+    "releaseNotes": "## BOB Productivity Platform 3.8.6\n\n### 🚀 Features & Improvements\n- style(sidebar): use theme gray for theme chain text in light mode via var(--notion-text-gray)\n- chore(build): fix isolatedModules by marking placeholder files as modules; add SKIP_TESTS support to deploy script\n- chore(version): align public/version.json to 3.8.6 for deployment\n- v3.8.6: Comprehensive Goals debugging with extensive timestamp handling\n- CI/CD: add GitHub Actions (CI + Deploy) using FIREBASE_SERVICE_ACCOUNT; version alignment check; version sync hooks; Goals timestamp fix; version badge (#101)\n- 🔧 v3.8.8: Goals Page Timestamp Fix - ModernGoalsTable Story Loading\n\n### 🐛 Issues Resolved\n- #85: 🐛 Fix React Error #31: Firestore Timestamp Serialization Issues\n- #78: Critical: Sign Out Button Disappears in Dark Mode - Theme Consistency Issue\n- #39: Crisis management\n- #38: Situational awareness\n- #37: Strategic planning\n\n### 📈 Technical Details\n- Version: 3.8.6\n- Build Date: 2025-09-07T14:52:13Z\n- Deployment: Firebase Hosting\n- Repository: zulumonkeymetallic/bob\n",
+    "githubIssues": [
+      "#Cache Loop - Fixed infinite cache clearing preventing login",
+      "#Login Issues - Resolved cache busting loop conflicts",
+      "#Production Stability - Enhanced cache management safety"
+    ],
+    "features": [
+      "Cache Loop Prevention System",
+      "Safe Cache Management",
+      "Login Issue Resolution",
+      "Enhanced Error Recovery",
+      "Production Stability Improvements",
+      "Version Synchronization"
+    ],
+    "environment": "production",
+    "firebaseProject": "bob20250810"
+  },
+  {
+    "version": "3.8.6",
+    "deploymentDate": "2025-09-07T15:00:14Z",
+    "deploymentBy": "zulumonkeymetallic",
+    "buildHash": "5ceefa081e69e9db1a983f2bef31f5d1f7d5d1c5",
+    "releaseNotes": "## BOB Productivity Platform 3.8.6\n\n### 🚀 Features & Improvements\n- feat(ui): add global SprintSelector to mobile header and desktop toolbar; switch goals timeline/roadmap to EnhancedGanttChart\n- style(sidebar): use theme gray for theme chain text in light mode via var(--notion-text-gray)\n- chore(build): fix isolatedModules by marking placeholder files as modules; add SKIP_TESTS support to deploy script\n- chore(version): align public/version.json to 3.8.6 for deployment\n- v3.8.6: Comprehensive Goals debugging with extensive timestamp handling\n- CI/CD: add GitHub Actions (CI + Deploy) using FIREBASE_SERVICE_ACCOUNT; version alignment check; version sync hooks; Goals timestamp fix; version badge (#101)\n- 🔧 v3.8.8: Goals Page Timestamp Fix - ModernGoalsTable Story Loading\n\n### 🐛 Issues Resolved\n- #85: 🐛 Fix React Error #31: Firestore Timestamp Serialization Issues\n- #78: Critical: Sign Out Button Disappears in Dark Mode - Theme Consistency Issue\n- #39: Crisis management\n- #38: Situational awareness\n- #37: Strategic planning\n\n### 📈 Technical Details\n- Version: 3.8.6\n- Build Date: 2025-09-07T15:00:14Z\n- Deployment: Firebase Hosting\n- Repository: zulumonkeymetallic/bob\n",
+    "githubIssues": [
+      "#Cache Loop - Fixed infinite cache clearing preventing login",
+      "#Login Issues - Resolved cache busting loop conflicts",
+      "#Production Stability - Enhanced cache management safety"
+    ],
+    "features": [
+      "Cache Loop Prevention System",
+      "Safe Cache Management",
+      "Login Issue Resolution",
+      "Enhanced Error Recovery",
+      "Production Stability Improvements",
+      "Version Synchronization"
+    ],
+    "environment": "production",
+    "firebaseProject": "bob20250810"
+  },
+  {
+    "version": "3.8.6",
+    "deploymentDate": "2025-09-07T15:07:55Z",
+    "deploymentBy": "zulumonkeymetallic",
+    "buildHash": "7c12beb245833f4410752a87bec470b8c1b11f10",
+    "releaseNotes": "## BOB Productivity Platform 3.8.6\n\n### 🚀 Features & Improvements\n- feat(goals): unify editing via EditGoalModal for cards and ModernGoalsTable; add start/end dates for planning; feat(context): add SprintContext and global SprintSelector wiring\n- feat(ui): add global SprintSelector to mobile header and desktop toolbar; switch goals timeline/roadmap to EnhancedGanttChart\n- style(sidebar): use theme gray for theme chain text in light mode via var(--notion-text-gray)\n- chore(build): fix isolatedModules by marking placeholder files as modules; add SKIP_TESTS support to deploy script\n- chore(version): align public/version.json to 3.8.6 for deployment\n- v3.8.6: Comprehensive Goals debugging with extensive timestamp handling\n- CI/CD: add GitHub Actions (CI + Deploy) using FIREBASE_SERVICE_ACCOUNT; version alignment check; version sync hooks; Goals timestamp fix; version badge (#101)\n- 🔧 v3.8.8: Goals Page Timestamp Fix - ModernGoalsTable Story Loading\n\n### 🐛 Issues Resolved\n- #85: 🐛 Fix React Error #31: Firestore Timestamp Serialization Issues\n- #78: Critical: Sign Out Button Disappears in Dark Mode - Theme Consistency Issue\n- #39: Crisis management\n- #38: Situational awareness\n- #37: Strategic planning\n\n### 📈 Technical Details\n- Version: 3.8.6\n- Build Date: 2025-09-07T15:07:55Z\n- Deployment: Firebase Hosting\n- Repository: zulumonkeymetallic/bob\n",
+    "githubIssues": [
+      "#Cache Loop - Fixed infinite cache clearing preventing login",
+      "#Login Issues - Resolved cache busting loop conflicts",
+      "#Production Stability - Enhanced cache management safety"
+    ],
+    "features": [
+      "Cache Loop Prevention System",
+      "Safe Cache Management",
+      "Login Issue Resolution",
+      "Enhanced Error Recovery",
+      "Production Stability Improvements",
+      "Version Synchronization"
+    ],
+    "environment": "production",
+    "firebaseProject": "bob20250810"
+  },
+  {
+    "version": "3.8.6",
+    "deploymentDate": "2025-09-07T15:29:07Z",
+    "deploymentBy": "zulumonkeymetallic",
+    "buildHash": "07bae19bc61b5e03d0fc892128c50731059b21f4",
+    "releaseNotes": "y\n",
+    "githubIssues": [
+      "#Cache Loop - Fixed infinite cache clearing preventing login",
+      "#Login Issues - Resolved cache busting loop conflicts",
+      "#Production Stability - Enhanced cache management safety"
+    ],
+    "features": [
+      "Cache Loop Prevention System",
+      "Safe Cache Management",
+      "Login Issue Resolution",
+      "Enhanced Error Recovery",
+      "Production Stability Improvements",
+      "Version Synchronization"
+    ],
+    "environment": "production",
+    "firebaseProject": "bob20250810"
+  },
+  {
+    "version": "3.8.6",
+    "deploymentDate": "2025-09-07T15:44:06Z",
+    "deploymentBy": "zulumonkeymetallic",
+    "buildHash": "b41272a31de8b815b85fbde4c0189de3cf7cacb0",
+    "releaseNotes": "y\n",
+    "githubIssues": [
+      "#Cache Loop - Fixed infinite cache clearing preventing login",
+      "#Login Issues - Resolved cache busting loop conflicts",
+      "#Production Stability - Enhanced cache management safety"
+    ],
+    "features": [
+      "Cache Loop Prevention System",
+      "Safe Cache Management",
+      "Login Issue Resolution",
+      "Enhanced Error Recovery",
+      "Production Stability Improvements",
+      "Version Synchronization"
+    ],
+    "environment": "production",
+    "firebaseProject": "bob20250810"
+  },
+  {
+    "version": "3.8.7",
+    "deploymentDate": "2025-09-08T13:28:48Z",
+    "deploymentBy": "zulumonkeymetallic",
+    "buildHash": "b41272a31de8b815b85fbde4c0189de3cf7cacb0",
+    "releaseNotes": "## BOB Productivity Platform 3.8.7\n\n### 🚀 Features & Improvements\n- chore(gantt): remove legacy mobile goals visualizer; ensure /goals/timeline and /goals/viz use EnhancedGanttChart; drop ThemeBasedGanttChart\n- feat(gantt): enhance /goals/timeline with scroll-to-today, wheel zoom, inline goal edit button, selected goal stories panel; wire EditGoalModal; keep sprint overlays\n- feat(goals): unify editing via EditGoalModal for cards and ModernGoalsTable; add start/end dates for planning; feat(context): add SprintContext and global SprintSelector wiring\n- feat(ui): add global SprintSelector to mobile header and desktop toolbar; switch goals timeline/roadmap to EnhancedGanttChart\n- style(sidebar): use theme gray for theme chain text in light mode via var(--notion-text-gray)\n- chore(build): fix isolatedModules by marking placeholder files as modules; add SKIP_TESTS support to deploy script\n- chore(version): align public/version.json to 3.8.6 for deployment\n- v3.8.6: Comprehensive Goals debugging with extensive timestamp handling\n- CI/CD: add GitHub Actions (CI + Deploy) using FIREBASE_SERVICE_ACCOUNT; version alignment check; version sync hooks; Goals timestamp fix; version badge (#101)\n- 🔧 v3.8.8: Goals Page Timestamp Fix - ModernGoalsTable Story Loading\n\n### 🐛 Issues Resolved\n- #85: 🐛 Fix React Error #31: Firestore Timestamp Serialization Issues\n- #78: Critical: Sign Out Button Disappears in Dark Mode - Theme Consistency Issue\n- #39: Crisis management\n- #38: Situational awareness\n- #37: Strategic planning\n\n### 📈 Technical Details\n- Version: 3.8.7\n- Build Date: 2025-09-08T13:28:48Z\n- Deployment: Firebase Hosting\n- Repository: zulumonkeymetallic/bob\n",
+    "githubIssues": [],
+    "features": [
+      "Unified Activity Pane for Goals/Stories/Tasks",
+      "Gantt: External Controls + Card View",
+      "Always-on Right Sidebar Integration",
+      "Today Centering + Sprint Fit"
+    ],
+    "environment": "production",
+    "firebaseProject": "bob20250810"
+  },
+  {
+    "version": "3.8.8",
+    "deploymentDate": "2025-09-08T14:20:16Z",
+    "deploymentBy": "zulumonkeymetallic",
+    "buildHash": "b41272a31de8b815b85fbde4c0189de3cf7cacb0",
+    "releaseNotes": "## BOB Productivity Platform 3.8.8\n\n### 🚀 Features & Improvements\n- chore(gantt): remove legacy mobile goals visualizer; ensure /goals/timeline and /goals/viz use EnhancedGanttChart; drop ThemeBasedGanttChart\n- feat(gantt): enhance /goals/timeline with scroll-to-today, wheel zoom, inline goal edit button, selected goal stories panel; wire EditGoalModal; keep sprint overlays\n- feat(goals): unify editing via EditGoalModal for cards and ModernGoalsTable; add start/end dates for planning; feat(context): add SprintContext and global SprintSelector wiring\n- feat(ui): add global SprintSelector to mobile header and desktop toolbar; switch goals timeline/roadmap to EnhancedGanttChart\n- style(sidebar): use theme gray for theme chain text in light mode via var(--notion-text-gray)\n- chore(build): fix isolatedModules by marking placeholder files as modules; add SKIP_TESTS support to deploy script\n- chore(version): align public/version.json to 3.8.6 for deployment\n- v3.8.6: Comprehensive Goals debugging with extensive timestamp handling\n- CI/CD: add GitHub Actions (CI + Deploy) using FIREBASE_SERVICE_ACCOUNT; version alignment check; version sync hooks; Goals timestamp fix; version badge (#101)\n- 🔧 v3.8.8: Goals Page Timestamp Fix - ModernGoalsTable Story Loading\n\n### 🐛 Issues Resolved\n- #85: 🐛 Fix React Error #31: Firestore Timestamp Serialization Issues\n- #78: Critical: Sign Out Button Disappears in Dark Mode - Theme Consistency Issue\n- #39: Crisis management\n- #38: Situational awareness\n- #37: Strategic planning\n\n### 📈 Technical Details\n- Version: 3.8.8\n- Build Date: 2025-09-08T14:20:16Z\n- Deployment: Firebase Hosting\n- Repository: zulumonkeymetallic/bob\n",
+    "githubIssues": [],
+    "features": [
+      "Gantt: Weekend shading + Today line",
+      "Gantt: Card resizing + duration width",
+      "Sprint selector global sync",
+      "Reference format unified (ST/GR-XXXXXX)"
+    ],
+    "environment": "production",
+    "firebaseProject": "bob20250810"
+  },
+  {
+    "version": "3.8.8",
+    "deploymentDate": "2025-09-08T15:02:46Z",
+    "deploymentBy": "zulumonkeymetallic",
+    "buildHash": "b41272a31de8b815b85fbde4c0189de3cf7cacb0",
+    "releaseNotes": "## BOB Productivity Platform 3.8.8\n\n### 🚀 Features & Improvements\n- chore(gantt): remove legacy mobile goals visualizer; ensure /goals/timeline and /goals/viz use EnhancedGanttChart; drop ThemeBasedGanttChart\n- feat(gantt): enhance /goals/timeline with scroll-to-today, wheel zoom, inline goal edit button, selected goal stories panel; wire EditGoalModal; keep sprint overlays\n- feat(goals): unify editing via EditGoalModal for cards and ModernGoalsTable; add start/end dates for planning; feat(context): add SprintContext and global SprintSelector wiring\n- feat(ui): add global SprintSelector to mobile header and desktop toolbar; switch goals timeline/roadmap to EnhancedGanttChart\n- style(sidebar): use theme gray for theme chain text in light mode via var(--notion-text-gray)\n- chore(build): fix isolatedModules by marking placeholder files as modules; add SKIP_TESTS support to deploy script\n- chore(version): align public/version.json to 3.8.6 for deployment\n- v3.8.6: Comprehensive Goals debugging with extensive timestamp handling\n- CI/CD: add GitHub Actions (CI + Deploy) using FIREBASE_SERVICE_ACCOUNT; version alignment check; version sync hooks; Goals timestamp fix; version badge (#101)\n- 🔧 v3.8.8: Goals Page Timestamp Fix - ModernGoalsTable Story Loading\n\n### 🐛 Issues Resolved\n- #85: 🐛 Fix React Error #31: Firestore Timestamp Serialization Issues\n- #78: Critical: Sign Out Button Disappears in Dark Mode - Theme Consistency Issue\n- #39: Crisis management\n- #38: Situational awareness\n- #37: Strategic planning\n\n### 📈 Technical Details\n- Version: 3.8.8\n- Build Date: 2025-09-08T15:02:46Z\n- Deployment: Firebase Hosting\n- Repository: zulumonkeymetallic/bob\n",
+    "githubIssues": [],
+    "features": [
+      "Gantt: Weekend shading + Today line",
+      "Gantt: Card resizing + duration width",
+      "Sprint selector global sync",
+      "Reference format unified (ST/GR-XXXXXX)"
+    ],
+    "environment": "production",
+    "firebaseProject": "bob20250810"
+  },
+  {
+    "version": "3.8.9",
+    "deploymentDate": "2025-09-08T15:14:51Z",
+    "deploymentBy": "zulumonkeymetallic",
+    "buildHash": "b41272a31de8b815b85fbde4c0189de3cf7cacb0",
+    "releaseNotes": "## BOB Productivity Platform 3.8.9\n\n### 🚀 Features & Improvements\n- chore(gantt): remove legacy mobile goals visualizer; ensure /goals/timeline and /goals/viz use EnhancedGanttChart; drop ThemeBasedGanttChart\n- feat(gantt): enhance /goals/timeline with scroll-to-today, wheel zoom, inline goal edit button, selected goal stories panel; wire EditGoalModal; keep sprint overlays\n- feat(goals): unify editing via EditGoalModal for cards and ModernGoalsTable; add start/end dates for planning; feat(context): add SprintContext and global SprintSelector wiring\n- feat(ui): add global SprintSelector to mobile header and desktop toolbar; switch goals timeline/roadmap to EnhancedGanttChart\n- style(sidebar): use theme gray for theme chain text in light mode via var(--notion-text-gray)\n- chore(build): fix isolatedModules by marking placeholder files as modules; add SKIP_TESTS support to deploy script\n- chore(version): align public/version.json to 3.8.6 for deployment\n- v3.8.6: Comprehensive Goals debugging with extensive timestamp handling\n- CI/CD: add GitHub Actions (CI + Deploy) using FIREBASE_SERVICE_ACCOUNT; version alignment check; version sync hooks; Goals timestamp fix; version badge (#101)\n- 🔧 v3.8.8: Goals Page Timestamp Fix - ModernGoalsTable Story Loading\n\n### 🐛 Issues Resolved\n- #85: 🐛 Fix React Error #31: Firestore Timestamp Serialization Issues\n- #78: Critical: Sign Out Button Disappears in Dark Mode - Theme Consistency Issue\n- #39: Crisis management\n- #38: Situational awareness\n- #37: Strategic planning\n\n### 📈 Technical Details\n- Version: 3.8.9\n- Build Date: 2025-09-08T15:14:51Z\n- Deployment: Firebase Hosting\n- Repository: zulumonkeymetallic/bob\n",
+    "githubIssues": [],
+    "features": [
+      "Gantt: Weekend shading + Today line",
+      "Gantt: Card resizing + duration width",
+      "Sprint selector global sync",
+      "Reference format unified (ST/GR-XXXXXX)"
+    ],
+    "environment": "production",
+    "firebaseProject": "bob20250810"
+  }
+]

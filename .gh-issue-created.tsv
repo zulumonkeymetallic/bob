@@ -1,0 +1,14 @@
+reminders_sync	215	Backlog Integration with iOS Reminders (Two-Way Sync)	https://github.com/zulumonkeymetallic/bob/issues/215
+travel_map	216	Travel Display Map Integration (Visited Countries → Stories)	https://github.com/zulumonkeymetallic/bob/issues/216
+theme_calendar_blocks_v1	217	Theme Integration and Automated Calendar Blocks	https://github.com/zulumonkeymetallic/bob/issues/217
+daily_priority_summary	218	Daily Priority Summary (Email + Telegram)	https://github.com/zulumonkeymetallic/bob/issues/218
+clipboard_to_tasks	219	Clipboard-to-Tasks Import (Quick Paste → Tasks/Stories)	https://github.com/zulumonkeymetallic/bob/issues/219
+monzo_oauth_pipeline	220	Monzo OAuth & Data Ingestion Pipeline	https://github.com/zulumonkeymetallic/bob/issues/220
+goal_cost_model	221	Goal Cost Model & Theme Rollups	https://github.com/zulumonkeymetallic/bob/issues/221
+budget_engine_projections	222	Budget Engine & Year-on-Year Projections	https://github.com/zulumonkeymetallic/bob/issues/222
+finance_dashboards	223	Finance Dashboards (Spend vs Budget, Pots, Readiness)	https://github.com/zulumonkeymetallic/bob/issues/223
+roadmap_budget_signals	224	Roadmap Integration & On-Track Signals (Budget)	https://github.com/zulumonkeymetallic/bob/issues/224
+finance_settings_privacy	225	Finance Settings, Security & Privacy (Monzo)	https://github.com/zulumonkeymetallic/bob/issues/225
+theme_blocks_auto_scheduler	226	Theme Blocks Auto-Scheduler (Two-Way with Google Calendar)	https://github.com/zulumonkeymetallic/bob/issues/226
+daily_chores_routines	227	Daily Chores & Routines (Calendar + Optional Reminders)	https://github.com/zulumonkeymetallic/bob/issues/227
+mfp_integration_macros	228	MyFitnessPal Integration & Macros Dashboard	https://github.com/zulumonkeymetallic/bob/issues/228

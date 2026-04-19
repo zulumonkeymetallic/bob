@@ -1,0 +1,729 @@
+import React, { useEffect, useState, useMemo } from 'react';
+import { monitorForElements } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
+import { collection, query, where, onSnapshot, orderBy, limit, updateDoc, doc, serverTimestamp } from 'firebase/firestore';
+import { db } from '../firebase';
+import { useAuth } from '../contexts/AuthContext';
+import { usePersona } from '../contexts/PersonaContext';
+import { useSprint } from '../contexts/SprintContext';
+import { Story, Task, Goal, Sprint, CalendarBlock } from '../types';
+import type { GlobalTheme } from '../constants/globalThemes';
+import KanbanColumnV2 from './KanbanColumnV2';
+import KanbanCardV2 from './KanbanCardV2';
+import { themeVars } from '../utils/themeVars';
+import { isStatus } from '../utils/statusHelpers';
+import { isCriticalPriority } from '../utils/priorityUtils';
+import { getManualPriorityRank } from '../utils/manualPriority';
+import { useActivityTracking } from '../hooks/useActivityTracking';
+import { formatTaskTagLabel } from '../utils/tagDisplay';
+import { isGoalInHierarchySet } from '../utils/goalHierarchy';
+import '../styles/KanbanCards.css';
+import '../styles/KanbanFixes.css';
+
+interface KanbanBoardV2Props {
+    sprintId?: string | null;
+    themeFilter?: number | number[] | null;
+    goalFilter?: string | string[] | null;
+    onItemSelect?: (item: Story | Task, type: 'story' | 'task') => void;
+    onEdit?: (item: Story | Task, type: 'story' | 'task') => void;
+    showDescriptions?: boolean;
+    showLatestNotes?: boolean;
+    dueFilter?: 'all' | 'today' | 'overdue' | 'top3' | 'critical';
+    sortBy?: 'ai' | 'due' | 'priority' | 'default';
+    themes?: GlobalTheme[];
+    focusOnly?: boolean;
+    focusGoalIds?: Set<string>;
+    detailLevel?: 'full' | 'compact' | 'minimal';
+}
+
+interface ScheduledBlockInfo {
+    id: string;
+    start: number;
+    end: number;
+    title?: string;
+    sourceNote?: string;
+    matchConfidence?: number;
+    matchConfidenceTier?: string;
+}
+
+const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
+    sprintId,
+    themeFilter,
+    goalFilter,
+    onItemSelect,
+    onEdit,
+    showDescriptions = false,
+    showLatestNotes = false,
+    dueFilter = 'all',
+    sortBy = 'ai',
+    themes,
+    focusOnly = false,
+    focusGoalIds = new Set(),
+    detailLevel = 'full',
+    }) => {
+    const { currentUser } = useAuth();
+    const { currentPersona } = usePersona();
+    const { sprints } = useSprint();
+    const { trackFieldChange } = useActivityTracking();
+
+    const [stories, setStories] = useState<Story[]>([]);
+    const [tasks, setTasks] = useState<Task[]>([]);
+    const [goals, setGoals] = useState<Goal[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [latestNotesById, setLatestNotesById] = useState<Record<string, string>>({});
+    const [steamByAppId, setSteamByAppId] = useState<Record<string, any>>({});
+    const [steamLastSyncAt, setSteamLastSyncAt] = useState<any>(null);
+    const [scheduledBlocksByEntity, setScheduledBlocksByEntity] = useState<Record<string, ScheduledBlockInfo>>({});
+    const formatTag = (tag: string) => formatTaskTagLabel(tag, goals, sprints);
+
+    // Data fetching
+    useEffect(() => {
+        if (!currentUser || !currentPersona) return;
+
+        setLoading(true);
+
+        // Goals
+        const goalsQuery = query(
+            collection(db, 'goals'),
+            where('ownerUid', '==', currentUser.uid),
+            where('persona', '==', currentPersona),
+            orderBy('createdAt', 'desc'),
+            limit(1000)
+        );
+
+        // Stories (respect active sprint filter when provided)
+        const storiesQuery = sprintId
+            ? query(
+                collection(db, 'stories'),
+                where('ownerUid', '==', currentUser.uid),
+                where('persona', '==', currentPersona),
+                where('sprintId', '==', sprintId),
+                orderBy('createdAt', 'desc'),
+                limit(1000)
+            )
+            : query(
+                collection(db, 'stories'),
+                where('ownerUid', '==', currentUser.uid),
+                where('persona', '==', currentPersona),
+                orderBy('createdAt', 'desc'),
+                limit(1000)
+            );
+
+        // Tasks (using sprint_task_index)
+        // Include completed tasks so Done column shows accurately; keep sprint filter when provided.
+        let tasksQuery;
+        if (sprintId) {
+            tasksQuery = query(
+                collection(db, 'sprint_task_index'),
+                where('ownerUid', '==', currentUser.uid),
+                where('persona', '==', currentPersona),
+                where('sprintId', '==', sprintId),
+                orderBy('dueDate', 'asc'),
+                limit(1000)
+            );
+        } else {
+            tasksQuery = query(
+                collection(db, 'sprint_task_index'),
+                where('ownerUid', '==', currentUser.uid),
+                where('persona', '==', currentPersona),
+                orderBy('dueDate', 'asc'),
+                limit(1000)
+            );
+        }
+
+        const unsubGoals = onSnapshot(goalsQuery, (snap) => {
+            setGoals(snap.docs.map(d => ({ id: d.id, ...d.data() } as Goal)));
+        });
+
+        const unsubStories = onSnapshot(storiesQuery, (snap) => {
+            setStories(snap.docs.map(d => ({ id: d.id, ...d.data() } as Story)));
+        });
+
+        const unsubTasks = onSnapshot(tasksQuery, (snap) => {
+            setTasks(snap.docs.map(d => {
+                const data = d.data();
+                return {
+                    id: d.id,
+                    ...data,
+                    // Ensure required fields for Task type
+                    ref: data.ref || `TASK-${d.id.slice(-4).toUpperCase()}`,
+                } as Task;
+            }));
+            setLoading(false);
+        });
+
+        return () => {
+            unsubGoals();
+            unsubStories();
+            unsubTasks();
+        };
+    }, [currentUser, currentPersona, sprintId]);
+
+    useEffect(() => {
+        if (!currentUser) {
+            setSteamByAppId({});
+            setSteamLastSyncAt(null);
+            return;
+        }
+
+        const steamQuery = query(
+            collection(db, 'steam'),
+            where('ownerUid', '==', currentUser.uid)
+        );
+
+        const unsubSteam = onSnapshot(steamQuery, (snap) => {
+            const map: Record<string, any> = {};
+            snap.docs.forEach((docSnap) => {
+                const data = docSnap.data() as any;
+                const appId = data.appid ?? data.steamAppId ?? data.externalId;
+                if (appId != null) {
+                    map[String(appId)] = { id: docSnap.id, ...data };
+                }
+            });
+            setSteamByAppId(map);
+        });
+
+        const profileRef = doc(db, 'profiles', currentUser.uid);
+        const unsubProfile = onSnapshot(profileRef, (snap) => {
+            const data = snap.data() as any;
+            setSteamLastSyncAt(data?.steamLastSyncAt ?? null);
+        });
+
+        return () => {
+            unsubSteam();
+            unsubProfile();
+        };
+    }, [currentUser]);
+
+    useEffect(() => {
+        if (!currentUser?.uid) {
+            setScheduledBlocksByEntity({});
+            return undefined;
+        }
+
+        const blocksQuery = query(
+            collection(db, 'calendar_blocks'),
+            where('ownerUid', '==', currentUser.uid),
+            limit(2000)
+        );
+
+        return onSnapshot(
+            blocksQuery,
+            (snapshot) => {
+                const now = Date.now();
+                const windowEnd = now + (30 * 24 * 60 * 60 * 1000);
+                const blocks = snapshot.docs
+                    .map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) }) as CalendarBlock)
+                    .filter((block) => {
+                        const start = Number(block.start);
+                        const end = Number(block.end);
+                        if (!Number.isFinite(start) || !Number.isFinite(end)) return false;
+                        if (end < now - 5 * 60 * 1000) return false;
+                        if (start > windowEnd) return false;
+                        const persona = String((block as any).persona || '').toLowerCase();
+                        if (currentPersona && persona && persona !== String(currentPersona).toLowerCase()) return false;
+                        return Boolean(block.storyId || block.taskId);
+                    })
+                    .sort((a, b) => Number(a.start) - Number(b.start));
+
+                const nextMap: Record<string, ScheduledBlockInfo> = {};
+                blocks.forEach((block) => {
+                    const key = block.taskId
+                        ? `task:${block.taskId}`
+                        : (block.storyId ? `story:${block.storyId}` : null);
+                    if (!key) return;
+                    if (nextMap[key]) return;
+                    const sourceRaw = String((block as any).calendarMatchSource || '').toLowerCase();
+                    const sourceNote = (block as any).calendarMatchNote
+                        || (sourceRaw === 'matched_user_created_calendar_event'
+                            ? 'Matched user created calendar event'
+                            : (sourceRaw === 'calendar_event_created_via_planner'
+                                ? 'Calendar event created via planner'
+                                : null));
+                    nextMap[key] = {
+                        id: block.id,
+                        start: Number(block.start),
+                        end: Number(block.end),
+                        title: block.title,
+                        sourceNote: sourceNote || undefined,
+                        matchConfidence: Number((block as any).calendarMatchConfidence || 0) || undefined,
+                        matchConfidenceTier: (block as any).calendarMatchConfidenceTier || undefined,
+                    };
+                });
+                setScheduledBlocksByEntity(nextMap);
+            },
+            (error) => {
+                console.warn('[KanbanBoardV2] scheduled blocks query error', error?.message || error);
+                setScheduledBlocksByEntity({});
+            }
+        );
+    }, [currentUser?.uid, currentPersona]);
+
+    // Drag and Drop Monitor
+    useEffect(() => {
+        return monitorForElements({
+            onDrop: async ({ source, location }) => {
+                const destination = location.current.dropTargets[0];
+                if (!destination) return;
+
+                const itemId = source.data.id as string;
+                const type = source.data.type as 'story' | 'task';
+                const newStatus = destination.data.status as string;
+                const boardSprintId = sprintId ?? null;
+
+                // Optimistic update could go here, but for now we rely on Firestore listener
+
+                try {
+                    const collectionName = type === 'story' ? 'stories' : 'tasks';
+                    const item = type === 'story' ? stories.find(s => s.id === itemId) : tasks.find(t => t.id === itemId);
+
+                    if (!item) return;
+                    const itemSprintId = (item as any).sprintId ?? null;
+                    // If a sprint is selected, ignore drops for items outside that sprint
+                    if (boardSprintId && itemSprintId && itemSprintId !== boardSprintId) {
+                        return;
+                    }
+
+                    // Map column status to actual status value
+                    let actualStatus: string | number = newStatus;
+
+                    // If the item uses numeric status, map it
+                    if (typeof (item as any).status === 'number') {
+                        if (newStatus === 'backlog') actualStatus = 0;
+                        else if (newStatus === 'in-progress') actualStatus = type === 'story' ? 2 : 1;
+                        else if (newStatus === 'done') actualStatus = type === 'story' ? 4 : 2;
+                    } else {
+                        // String status
+                        actualStatus = newStatus;
+                    }
+
+                    if ((item as any).status === actualStatus) return;
+
+                    const updatePayload: any = {
+                        status: actualStatus,
+                        updatedAt: serverTimestamp()
+                    };
+                    if (boardSprintId) {
+                        updatePayload.sprintId = boardSprintId;
+                    }
+
+                    await updateDoc(doc(db, collectionName, itemId), updatePayload);
+
+                    // Track change
+                    const oldLabel = String((item as any).status ?? '');
+                    const newLabel = String(actualStatus);
+                    await trackFieldChange(itemId, type, 'status', oldLabel, newLabel, (item as any).ref);
+
+                } catch (error) {
+                    console.error('Failed to update item status', error);
+                    alert('Failed to move item');
+                }
+            },
+        });
+    }, [stories, tasks, trackFieldChange, sprintId]);
+
+    const getSteamAppId = (story: Story) => {
+        const meta = (story as any)?.metadata || {};
+        return meta.steamAppId ?? meta.appId ?? meta.steamId ?? (story as any).externalId ?? null;
+    };
+
+    const isSteamStory = (story: Story) => {
+        const source = String((story as any).source || '').toLowerCase();
+        const entry = String((story as any).entry_method || '').toLowerCase();
+        return source === 'steam' || entry.includes('steam') || !!getSteamAppId(story);
+    };
+
+    // Filtering and Grouping
+
+    const isCurrentTop3 = (item: any): boolean => {
+        if (item?.aiTop3ForDay !== true) return false;
+        const top3Date = item?.aiTop3Date;
+        if (!top3Date) return true;
+        return String(top3Date).slice(0, 10) === new Date().toISOString().slice(0, 10);
+    };
+
+    const getTaskManualRank = (task: Task): number | null => {
+        const directRank = getManualPriorityRank(task);
+        if (directRank) return directRank;
+        const parentStoryId = String(task.storyId || (task.parentType === 'story' ? task.parentId || '' : '')).trim();
+        if (!parentStoryId) return null;
+        return getManualPriorityRank(stories.find((story) => story.id === parentStoryId));
+    };
+
+    const isTop3Task = (task: Task): boolean => Boolean(getTaskManualRank(task)) || isCurrentTop3(task);
+
+    const isTop3Story = (story: Story): boolean => Boolean(getManualPriorityRank(story)) || isCurrentTop3(story);
+
+    const getItemDueMs = (item: any): number | null => {
+        const raw = item?.dueDate ?? item?.targetDate ?? item?.endDate ?? item?.dueDateMs ?? null;
+        if (!raw) return null;
+        if (typeof raw === 'number') return Number.isFinite(raw) ? raw : null;
+        if (typeof raw === 'object' && typeof raw?.toDate === 'function') {
+            const d = raw.toDate();
+            return d instanceof Date ? d.getTime() : null;
+        }
+        const parsed = Date.parse(String(raw));
+        return Number.isNaN(parsed) ? null : parsed;
+    };
+
+    const matchesDueFilter = (item: any, isTop3: boolean): boolean => {
+        if (dueFilter === 'all') return true;
+        if (dueFilter === 'top3') return isTop3;
+        if (dueFilter === 'critical') return isCriticalPriority(item?.priority);
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+        const todayEnd = new Date(todayStart);
+        todayEnd.setHours(23, 59, 59, 999);
+        const dueMs = getItemDueMs(item);
+        if (!dueMs) return false;
+        if (dueFilter === 'today') return dueMs >= todayStart.getTime() && dueMs <= todayEnd.getTime();
+        if (dueFilter === 'overdue') return dueMs < todayStart.getTime();
+        return true;
+    };
+
+    const filteredTasks = useMemo(() => {
+        let result = tasks;
+        // Tasks are already filtered by query if sprintId is present, 
+        // but if sprintId changed rapidly, safety check:
+        if (sprintId) {
+            result = result.filter(t => t.sprintId === sprintId);
+        }
+
+        if (focusOnly && focusGoalIds.size > 0) {
+            result = result.filter((t) => {
+                const directGoalId = String((t as any).goalId || '').trim();
+                if (directGoalId && isGoalInHierarchySet(directGoalId, goals, focusGoalIds)) return true;
+                const parentStoryId = String(t.storyId || (t.parentType === 'story' ? t.parentId || '' : '')).trim();
+                if (!parentStoryId) return false;
+                const parentStory = stories.find((s) => s.id === parentStoryId);
+                const parentGoalId = String((parentStory as any)?.goalId || '').trim();
+                return !!parentGoalId && isGoalInHierarchySet(parentGoalId, goals, focusGoalIds);
+            });
+        }
+
+        const goalIds = Array.isArray(goalFilter) ? goalFilter : goalFilter ? [goalFilter] : [];
+        if (goalIds.length > 0) {
+            // Filter tasks by goal. Tasks might have goalId or be linked to a story with goalId.
+            result = result.filter(t => {
+                if (goalIds.includes((t as any).goalId)) return true;
+                if (t.parentType === 'story' && t.parentId) {
+                    const s = stories.find(s => s.id === t.parentId);
+                    return !!(s?.goalId && goalIds.includes(s.goalId));
+                }
+                return false;
+            });
+        }
+
+        const themeIds = Array.isArray(themeFilter) ? themeFilter : themeFilter != null ? [themeFilter] : [];
+        if (themeIds.length > 0) {
+            const matchTheme = (v: any) => themeIds.includes(Number(v));
+            result = result.filter(t => {
+                if (matchTheme(t.theme)) return true;
+                if (t.parentType === 'story' && t.parentId) {
+                    const s = stories.find(s => s.id === t.parentId);
+                    if (matchTheme(s?.theme)) return true;
+                    const g = goals.find(g => g.id === s?.goalId);
+                    return matchTheme(g?.theme);
+                }
+                if ((t as any).goalId) {
+                    const g = goals.find(g => g.id === (t as any).goalId);
+                    return matchTheme(g?.theme);
+                }
+                return false;
+            });
+        }
+
+        result = result.filter((t) => matchesDueFilter(t, isTop3Task(t)));
+        return result;
+    }, [tasks, stories, goals, sprintId, goalFilter, themeFilter, dueFilter, focusOnly, focusGoalIds]);
+
+    const filteredStories = useMemo(() => {
+        let result = stories;
+        if (sprintId) {
+            result = result.filter(s => (s as any).sprintId === sprintId);
+        }
+        if (focusOnly && focusGoalIds.size > 0) {
+            result = result.filter((s) => {
+                const goalId = String((s as any).goalId || '').trim();
+                return !!goalId && isGoalInHierarchySet(goalId, goals, focusGoalIds);
+            });
+        }
+
+        const storyGoalIds = Array.isArray(goalFilter) ? goalFilter : goalFilter ? [goalFilter] : [];
+        if (storyGoalIds.length > 0) {
+            result = result.filter(s => !!(s as any).goalId && storyGoalIds.includes((s as any).goalId));
+        }
+        const storyThemeIds = Array.isArray(themeFilter) ? themeFilter : themeFilter != null ? [themeFilter] : [];
+        if (storyThemeIds.length > 0) {
+            const matchTheme = (v: any) => storyThemeIds.includes(Number(v));
+            result = result.filter(s => {
+                if (matchTheme((s as any).theme)) return true;
+                if ((s as any).goalId) {
+                    const g = goals.find(g => g.id === (s as any).goalId);
+                    return matchTheme(g?.theme);
+                }
+                return false;
+            });
+        }
+        result = result.filter((s) => matchesDueFilter(s, isTop3Story(s)));
+        return result;
+    }, [stories, goals, sprintId, goalFilter, themeFilter, dueFilter, focusOnly, focusGoalIds]);
+
+    const visibleEntityIds = useMemo(() => {
+        const ids = new Set<string>();
+        filteredStories.forEach((story) => ids.add(story.id));
+        filteredTasks.forEach((task) => ids.add(task.id));
+        return ids;
+    }, [filteredStories, filteredTasks]);
+
+    useEffect(() => {
+        if (!showLatestNotes) {
+            setLatestNotesById({});
+            return;
+        }
+        const uid = currentUser?.uid;
+        if (!uid || visibleEntityIds.size === 0) {
+            setLatestNotesById({});
+            return;
+        }
+
+        const queryLimit = Math.min(500, Math.max(50, visibleEntityIds.size * 3));
+        const notesQuery = query(
+            collection(db, 'activity_stream'),
+            where('ownerUid', '==', uid),
+            where('activityType', '==', 'note_added'),
+            orderBy('timestamp', 'desc'),
+            limit(queryLimit)
+        );
+
+        return onSnapshot(
+            notesQuery,
+            (snapshot) => {
+                const next: Record<string, string> = {};
+                snapshot.docs.forEach((docSnap) => {
+                    const data = docSnap.data() as any;
+                    const entityId = data.entityId || data.storyId || data.taskId;
+                    if (!entityId || !visibleEntityIds.has(entityId)) return;
+                    if (data.userId && data.userId !== uid) return;
+                    const noteContent = typeof data.noteContent === 'string' ? data.noteContent.trim() : '';
+                    if (!noteContent) return;
+                    if (!next[entityId]) next[entityId] = noteContent;
+                });
+                setLatestNotesById(next);
+            },
+            (error) => {
+                console.warn('[KanbanBoardV2] latest notes query error', error?.message || error);
+                setLatestNotesById({});
+            }
+        );
+    }, [showLatestNotes, currentUser?.uid, visibleEntityIds]);
+
+    // Helper to determine column for an item
+    const getColumnForStatus = (status: string | number): 'backlog' | 'in-progress' | 'done' => {
+        if (typeof status === 'number') {
+            if (status >= 4) return 'done'; // Story done
+            if (status === 2 || status === 3) return 'in-progress'; // Story active/testing or Task done(2) wait.. task done is 2?
+            // Let's check ModernKanbanBoard logic
+            // Story: 0=backlog, 1=ready, 2=active, 3=testing, 4=done
+            // Task: 0=backlog, 1=active, 2=done, 3=blocked
+
+            // Wait, if I pass a task with status 2 (done), it should go to done.
+            // If I pass a story with status 2 (active), it goes to in-progress.
+
+            // I need to know the type to be precise, but let's try to infer or pass type.
+            // Actually, I process stories and tasks separately below.
+            return 'backlog';
+        }
+
+        const s = String(status).toLowerCase();
+        if (['done', 'complete', 'completed', 'finished'].includes(s)) return 'done';
+        if (['in-progress', 'active', 'doing', 'testing', 'qa', 'review', 'blocked'].includes(s)) return 'in-progress';
+        return 'backlog';
+    };
+
+    const getStoryColumn = (s: Story) => {
+        const raw = (s as any).status;
+        const status = (typeof raw === 'string' && /^\d+$/.test(raw)) ? Number(raw) : raw;
+        if (typeof status === 'number') {
+            if (status >= 4) return 'done';
+            if (status >= 1) return 'in-progress'; // 1=ready, 2=active, 3=testing.
+            return 'backlog';
+        }
+        return getColumnForStatus(status);
+    };
+
+    const getTaskColumn = (t: Task) => {
+        const raw = (t as any).status;
+        const status = (typeof raw === 'string' && /^\d+$/.test(raw)) ? Number(raw) : raw;
+        if (typeof status === 'number') {
+            if (status === 2 || status === 4) return 'done';
+            if (status === 1 || status === 3) return 'in-progress'; // 1=active, 3=blocked
+            return 'backlog';
+        }
+        return getColumnForStatus(status);
+    };
+
+    const columns = {
+        backlog: {
+            title: 'Backlog',
+            color: themeVars.muted,
+            items: [] as (Story | Task)[]
+        },
+        'in-progress': {
+            title: 'In Progress',
+            color: themeVars.brand,
+            items: [] as (Story | Task)[]
+        },
+        done: {
+            title: 'Done',
+            color: 'var(--green)',
+            items: [] as (Story | Task)[]
+        }
+    };
+
+    filteredStories.forEach(s => {
+        const col = getStoryColumn(s);
+        columns[col].items.push(s);
+    });
+
+    filteredTasks.forEach(t => {
+        const col = getTaskColumn(t);
+        columns[col].items.push(t);
+    });
+
+    const applySorting = () => {
+        const scoreOf = (item: any) => {
+            const score = Number(item.aiCriticalityScore ?? 0);
+            return Number.isFinite(score) ? score : 0;
+        };
+        const dueMs = (item: any) => {
+            const d = item.dueDate || item.targetDate || item.endDate || null;
+            if (!d) return Number.MAX_SAFE_INTEGER;
+            if (typeof d === 'number') return d;
+            const parsed = Date.parse(d);
+            return Number.isNaN(parsed) ? Number.MAX_SAFE_INTEGER : parsed;
+        };
+        const priorityVal = (item: any) => {
+            const p = Number(item.priority);
+            return Number.isFinite(p) ? p : 0;
+        };
+
+        const sorter = (a: any, b: any) => {
+            const manualA = (a?.storyId || a?.parentId) ? getTaskManualRank(a as Task) : getManualPriorityRank(a);
+            const manualB = (b?.storyId || b?.parentId) ? getTaskManualRank(b as Task) : getManualPriorityRank(b);
+            if ((manualA || 99) !== (manualB || 99)) return (manualA || 99) - (manualB || 99);
+            if (sortBy === 'ai') {
+                const sa = scoreOf(a);
+                const sb = scoreOf(b);
+                if (sa !== sb) return sb - sa;
+                return dueMs(a) - dueMs(b);
+            }
+            if (sortBy === 'due') {
+                const da = dueMs(a);
+                const db = dueMs(b);
+                if (da !== db) return da - db;
+                return scoreOf(b) - scoreOf(a);
+            }
+            if (sortBy === 'priority') {
+                const pa = priorityVal(a);
+                const pb = priorityVal(b);
+                if (pa !== pb) return pb - pa;
+                return dueMs(a) - dueMs(b);
+            }
+            return 0;
+        };
+
+        (Object.values(columns) as any[]).forEach(col => {
+            col.items.sort(sorter);
+        });
+    };
+
+    applySorting();
+
+    if (loading) {
+        return <div>Loading board...</div>;
+    }
+
+    return (
+        <div className="kanban-board-v2" style={{ display: 'flex', gap: '16px', height: '100%', overflowX: 'auto', paddingBottom: '16px' }}>
+            {Object.entries(columns).map(([key, col]) => (
+                <KanbanColumnV2 key={key} status={key} title={col.title} color={col.color as string}>
+                    {col.items.map(item => {
+                        const isStory = 'points' in item || (item as any).storyId === undefined; // Rough check, better to check ID or something
+                        // Actually, my Task type has storyId, Story doesn't (usually). 
+                        // Better: check if it's in the stories array
+                        const type = stories.some(s => s.id === item.id) ? 'story' : 'task';
+
+                        let itemGoal: Goal | undefined;
+                        let parentStory: Story | undefined;
+                        let isFocusAligned = false;
+
+                        if (type === 'story') {
+                            itemGoal = goals.find(g => g.id === (item as any).goalId);
+                            const sGoalId = String((item as any).goalId || '').trim();
+                            if (sGoalId && focusGoalIds.size > 0) {
+                                isFocusAligned = isGoalInHierarchySet(sGoalId, goals, focusGoalIds);
+                            }
+                        } else {
+                            // Task
+                            parentStory = stories.find(s => s.id === (item as any).parentId);
+                            if (parentStory) {
+                                itemGoal = goals.find(g => g.id === parentStory.goalId);
+                                const pgId = String((parentStory as any).goalId || '').trim();
+                                if (pgId && focusGoalIds.size > 0) isFocusAligned = isGoalInHierarchySet(pgId, goals, focusGoalIds);
+                            } else if ((item as any).goalId) {
+                                itemGoal = goals.find(g => g.id === (item as any).goalId);
+                                const tgId = String((item as any).goalId || '').trim();
+                                if (tgId && focusGoalIds.size > 0) isFocusAligned = isGoalInHierarchySet(tgId, goals, focusGoalIds);
+                            }
+                        }
+
+                        let steamMeta: { playtimeMinutes?: number; lastPlayedAt?: number; lastSyncAt?: any; appId?: string | number } | undefined;
+                        if (type === 'story' && isSteamStory(item as Story)) {
+                            const appId = getSteamAppId(item as Story);
+                            if (appId != null) {
+                                const steamEntry = steamByAppId[String(appId)];
+                                if (steamEntry) {
+                                    steamMeta = {
+                                        appId,
+                                        playtimeMinutes: steamEntry.playtime_forever ?? steamEntry.playtimeForever ?? steamEntry.playtime ?? null,
+                                        lastPlayedAt: steamEntry.rtime_last_played ? steamEntry.rtime_last_played * 1000 : (steamEntry.last_played ? steamEntry.last_played * 1000 : null),
+                                        lastSyncAt: steamLastSyncAt ?? steamEntry.updatedAt ?? null
+                                    };
+                                } else {
+                                    steamMeta = {
+                                        appId,
+                                        lastSyncAt: steamLastSyncAt ?? null
+                                    };
+                                }
+                            }
+                        }
+
+                        return (
+                            <KanbanCardV2
+                                key={item.id}
+                                item={item}
+                                type={type}
+                                goal={itemGoal}
+                                story={parentStory}
+                                taskCount={type === 'story' ? tasks.filter(t => t.parentId === item.id).length : 0}
+                                onItemSelect={onItemSelect}
+                                showDescription={showDescriptions}
+                                showLatestNote={showLatestNotes}
+                                latestNote={latestNotesById[item.id]}
+                                scheduledBlock={scheduledBlocksByEntity[`${type}:${item.id}`]}
+                                steamMeta={steamMeta}
+                                onEdit={() => onEdit?.(item, type)}
+                                formatTag={formatTag}
+                                themes={themes}
+                                isFocusAligned={isFocusAligned}
+                                detailLevel={detailLevel}
+                            />
+                        );
+                    })}
+                </KanbanColumnV2>
+            ))}
+        </div>
+    );
+};
+
+export default KanbanBoardV2;

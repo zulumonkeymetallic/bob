@@ -1,0 +1,261 @@
+/*
+ * responsive-density.css
+ * iPad no-scroll layout + density overrides for 768–1199px viewports.
+ *
+ * Strategy:
+ *   1. Lock the entire shell to 100vh — no browser-level scrolling ever.
+ *   2. Compact the toolbar so all controls fit in the available width.
+ *   3. Make the page content area fill remaining height with overflow-x: hidden
+ *      so nothing bleeds horizontally; individual panels scroll vertically inside.
+ *   4. Compress Bootstrap spacing utilities to pack more content per screen.
+ *
+ * Desktop (≥1200px) and mobile (<768px) are completely unaffected.
+ */
+
+@media (min-width: 768px) and (max-width: 1199px) {
+
+  /* ═══════════════════════════════════════════════════════
+     1. NO-SCROLL SHELL — lock everything to 100vh
+     ═══════════════════════════════════════════════════════ */
+
+  html, body, #root {
+    height: 100% !important;
+    overflow: hidden !important;
+    max-width: 100vw !important;
+  }
+
+  /* Outer flex row: sidebar + main */
+  .sidebar-layout-outer {
+    height: 100vh !important;
+    overflow: hidden !important;
+  }
+
+  /* Left sidebar: fixed height, no overflow */
+  .sidebar-desktop {
+    width: 180px !important;
+    height: 100vh !important;
+    overflow: hidden !important;
+    flex-shrink: 0 !important;
+  }
+
+  /* Right column: flex-column so toolbar + page stack cleanly */
+  .sidebar-layout-main {
+    height: 100vh !important;
+    overflow: hidden !important;
+    display: flex !important;
+    flex-direction: column !important;
+    min-width: 0 !important;   /* prevents flex child from blowing out width */
+  }
+
+  /* Toolbar: fixed height at top, never grows */
+  .sidebar-layout-toolbar {
+    flex-shrink: 0 !important;
+    overflow: hidden !important;     /* toolbar itself never scrolls */
+  }
+
+  /* Banners strip: shrink to fit content, collapse when empty */
+  .sidebar-layout-banners {
+    flex-shrink: 0 !important;
+    padding: 0 0.5rem !important;
+  }
+  .sidebar-layout-banners:empty {
+    display: none !important;
+    padding: 0 !important;
+  }
+
+  /* Page content: fills remaining space, no horizontal overflow */
+  .sidebar-layout-page {
+    flex: 1 !important;
+    min-height: 0 !important;
+    overflow-x: hidden !important;   /* nothing bleeds horizontally */
+    overflow-y: auto !important;     /* page panels scroll within this frame */
+    display: flex !important;
+    flex-direction: column !important;
+  }
+
+  /* Every direct child of the page (the route component) fills height */
+  .sidebar-layout-page > * {
+    flex: 1 !important;
+    min-height: 0 !important;
+    overflow-x: hidden !important;
+  }
+
+  /* ═══════════════════════════════════════════════════════
+     2. TOOLBAR COMPACTION — fit all controls in available width
+     ═══════════════════════════════════════════════════════ */
+
+  /* Tighten the toolbar's own container padding */
+  .sidebar-layout-toolbar .container-fluid {
+    padding: 3px 8px !important;
+  }
+
+  /* Reduce gaps between toolbar items */
+  .sidebar-layout-toolbar .d-flex.gap-3 {
+    gap: 0.25rem !important;
+    flex-wrap: nowrap !important;
+    overflow: hidden !important;
+  }
+
+  /* Shrink every button in the toolbar */
+  .sidebar-layout-toolbar .btn {
+    padding: 0.15rem 0.4rem !important;
+    font-size: 0.7rem !important;
+    white-space: nowrap !important;
+  }
+
+  /* Shrink sprint metric badges */
+  .sidebar-layout-toolbar .badge,
+  .sidebar-layout-toolbar [class*="badge"] {
+    font-size: 0.6rem !important;
+    padding: 0.1rem 0.3rem !important;
+  }
+
+  /* Constrain global search bar width on tablet */
+  .sidebar-layout-toolbar input[type="text"],
+  .sidebar-layout-toolbar input[type="search"],
+  .sidebar-layout-toolbar .form-control {
+    max-width: 110px !important;
+    font-size: 0.75rem !important;
+    padding: 0.15rem 0.4rem !important;
+  }
+
+  /* Hide verbose labels that waste horizontal space */
+  .sidebar-layout-toolbar .d-none.d-xl-inline,
+  .sidebar-layout-toolbar .d-none.d-xl-flex,
+  .sidebar-layout-toolbar .d-none.d-xl-block {
+    display: none !important;
+  }
+
+  /* ═══════════════════════════════════════════════════════
+     3. CONTAINER / GRID — fill height, clip horizontal
+     ═══════════════════════════════════════════════════════ */
+
+  /* Bootstrap containers inside the page fill the pane */
+  .sidebar-layout-page .container-fluid,
+  .sidebar-layout-page .container {
+    padding-left: 0.5rem !important;
+    padding-right: 0.5rem !important;
+    padding-top: 0.5rem !important;
+    padding-bottom: 0.5rem !important;
+    max-width: 100% !important;
+    overflow-x: hidden !important;
+  }
+
+  /* Row gutters */
+  .sidebar-layout-page .row {
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+    overflow-x: hidden !important;
+  }
+
+  /* Cards: fill column height, scroll body */
+  .sidebar-layout-page .card {
+    overflow: hidden !important;
+  }
+
+  /* ═══════════════════════════════════════════════════════
+     4. SPACING COMPRESSION — ~30% more vertical real-estate
+     ═══════════════════════════════════════════════════════ */
+
+  .py-4  { padding-top: 0.625rem !important; padding-bottom: 0.625rem !important; }
+  .py-3  { padding-top: 0.4rem !important;   padding-bottom: 0.4rem !important; }
+  .pt-4  { padding-top: 0.625rem !important; }
+  .pb-4  { padding-bottom: 0.625rem !important; }
+  .mb-4  { margin-bottom: 0.625rem !important; }
+  .mb-3  { margin-bottom: 0.375rem !important; }
+  .mt-4  { margin-top: 0.625rem !important; }
+  .mt-3  { margin-top: 0.375rem !important; }
+
+  .g-3  { --bs-gutter-x: 0.5rem;  --bs-gutter-y: 0.5rem; }
+  .g-4  { --bs-gutter-x: 0.625rem; --bs-gutter-y: 0.625rem; }
+  .gap-3 { gap: 0.375rem !important; }
+  .gap-4 { gap: 0.5rem !important; }
+
+  .card-body   { padding: 0.5rem !important; }
+  .card-header { padding: 0.3rem 0.5rem !important; }
+  .card-footer { padding: 0.3rem 0.5rem !important; }
+
+  main > .container-fluid,
+  main > .container {
+    padding-top: 0.5rem !important;
+    padding-bottom: 0.5rem !important;
+  }
+
+  .alert { padding: 0.4rem 0.625rem !important; margin-bottom: 0.375rem !important; }
+
+  /* Banners padding compression */
+  .sidebar-layout-banners .p-3 { padding: 0.25rem 0.5rem !important; }
+
+  /* ═══════════════════════════════════════════════════════
+     5. KANBAN BOARD — 3 columns visible without scrolling
+     ═══════════════════════════════════════════════════════ */
+
+  /* Allow the kanban board to use its own internal layout */
+  .sidebar-layout-page .kanban-board-v2 {
+    overflow-x: visible !important; /* columns distribute within the flex parent */
+    gap: 8px !important;
+    padding-bottom: 4px !important;
+  }
+
+  /* Each column shrinks to fit — overrides minWidth: 300px inline style */
+  .sidebar-layout-page .kanban-column {
+    min-width: 0 !important;  /* allow column to shrink below 300px */
+    flex: 1 1 0 !important;   /* equal width, no minimum enforced */
+  }
+
+  /* Tighten card chrome inside columns */
+  .sidebar-layout-page .kanban-column-header {
+    padding: 6px 8px !important;
+  }
+
+  /* ═══════════════════════════════════════════════════════
+     6. TODAY-PLAN 2-COLUMN GRID (dashboard widget)
+     ═══════════════════════════════════════════════════════ */
+
+  .today-plan-layout {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr !important;
+    gap: 8px !important;
+  }
+
+  .today-plan-layout > .today-plan-col-calendar {
+    grid-column: 1 / -1;
+  }
+
+  .today-plan-layout > .today-plan-col {
+    width: 100% !important;
+    flex: none !important;
+  }
+
+  /* ═══════════════════════════════════════════════════════
+     7. TYPOGRAPHY — slightly smaller base prevents overflow
+     ═══════════════════════════════════════════════════════ */
+
+  h1 { font-size: 1.4rem !important; }
+  h2 { font-size: 1.2rem !important; }
+  h3 { font-size: 1.05rem !important; }
+  h4 { font-size: 0.95rem !important; }
+  h5 { font-size: 0.875rem !important; }
+  h6 { font-size: 0.8rem !important; }
+
+  /* Sidebar nav text smaller to fit 180px */
+  .sidebar-desktop .nav-link {
+    font-size: 0.8rem !important;
+    padding: 0.25rem 0.5rem !important;
+  }
+
+  .sidebar-desktop h4 {
+    font-size: 0.8rem !important;
+    line-height: 1.2 !important;
+  }
+
+  .sidebar-desktop .small,
+  .sidebar-desktop small {
+    font-size: 0.7rem !important;
+  }
+
+  /* User info section in sidebar — tighter */
+  .sidebar-desktop .p-3 {
+    padding: 0.4rem 0.5rem !important;
+  }
+}

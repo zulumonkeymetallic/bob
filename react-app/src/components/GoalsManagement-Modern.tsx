@@ -1,0 +1,351 @@
+import React, { useState, useEffect } from 'react';
+import { Container, Card, Row, Col, Button, Form, InputGroup } from 'react-bootstrap';
+import { useSearchParams } from 'react-router-dom';
+import { Target, TrendingUp, CheckCircle, PauseCircle, FolderOpen } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
+import { usePersona } from '../contexts/PersonaContext';
+import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, deleteDoc, serverTimestamp } from 'firebase/firestore';
+import { db } from '../firebase';
+import { Goal } from '../types';
+import ModernGoalsTable from './ModernGoalsTable';
+import EditGoalModal from './EditGoalModal';
+import StatCard from './common/StatCard';
+import PageHeader from './common/PageHeader';
+import { SkeletonStatCard } from './common/SkeletonLoader';
+import EmptyState from './common/EmptyState';
+import { colors } from '../utils/colors';
+import { useGlobalThemes } from '../hooks/useGlobalThemes';
+import { goalNeedsLinkedPot } from '../utils/goalCost';
+
+const GoalsManagement: React.FC = () => {
+  const { currentUser } = useAuth();
+  const { currentPersona } = usePersona();
+  const [searchParams] = useSearchParams();
+  const [goals, setGoals] = useState<Goal[]>([]);
+  const [filterStatus, setFilterStatus] = useState<string>('all');
+  const [filterTheme, setFilterTheme] = useState<string>('all');
+  const [filterMissingPotCost, setFilterMissingPotCost] = useState<boolean>(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [editGoal, setEditGoal] = useState<Goal | null>(null);
+  const [showAddModal, setShowAddModal] = useState(false);
+  const { themes: globalThemes } = useGlobalThemes();
+
+  // Handle query parameters from Dashboard
+  useEffect(() => {
+    const filter = searchParams.get('filter');
+    if (filter === 'active') {
+      setFilterStatus('active');
+      setFilterMissingPotCost(false);
+    } else if (filter === 'cost_without_pot') {
+      setFilterStatus('all');
+      setFilterMissingPotCost(true);
+    }
+  }, [searchParams]);
+
+  const statusFilterMatches = (goal: Goal, statusFilter: string): boolean => {
+    if (statusFilter === 'all') return true;
+    const statusMap: Record<string, number> = {
+      new: 0,
+      active: 1,
+      done: 2,
+      paused: 3,
+      dropped: 4,
+    };
+    const mapped = statusMap[statusFilter.toLowerCase()];
+    if (Number.isFinite(mapped)) return goal.status === mapped;
+    const numeric = Number(statusFilter);
+    return Number.isFinite(numeric) ? goal.status === numeric : true;
+  };
+
+  useEffect(() => {
+    if (!currentUser) return;
+    loadGoalsData();
+  }, [currentUser, currentPersona]);
+
+  const loadGoalsData = async () => {
+    if (!currentUser) return;
+
+    setLoading(true);
+
+    // Load goals data
+    const goalsQuery = query(
+      collection(db, 'goals'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+      orderBy('createdAt', 'desc')
+    );
+
+    // Subscribe to real-time updates
+    const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
+      const goalsData = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Goal[];
+      setGoals(goalsData);
+    });
+
+    setLoading(false);
+
+    return () => {
+      unsubscribeGoals();
+    };
+  };
+
+  // Handler functions for ModernGoalsTable
+  const handleGoalUpdate = async (goalId: string, updates: Partial<Goal>) => {
+    try {
+      await updateDoc(doc(db, 'goals', goalId), {
+        ...updates,
+        updatedAt: serverTimestamp()
+      });
+    } catch (error) {
+      console.error('Error updating goal:', error);
+    }
+  };
+
+  const handleGoalDelete = async (goalId: string) => {
+    try {
+      await deleteDoc(doc(db, 'goals', goalId));
+    } catch (error) {
+      console.error('Error deleting goal:', error);
+    }
+  };
+
+  const handleGoalPriorityChange = async (goalId: string, newPriority: number) => {
+    try {
+      await updateDoc(doc(db, 'goals', goalId), {
+        priority: newPriority,
+        updatedAt: serverTimestamp()
+      });
+    } catch (error) {
+      console.error('Error updating goal priority:', error);
+    }
+  };
+
+  // Apply filters to goals
+  const filteredGoals = goals.filter(goal => {
+    if (!statusFilterMatches(goal, filterStatus)) return false;
+    if (filterTheme !== 'all' && goal.theme !== parseInt(filterTheme)) return false;
+    if (filterMissingPotCost && !goalNeedsLinkedPot(goal)) return false;
+    if (searchTerm && !goal.title.toLowerCase().includes(searchTerm.toLowerCase())) return false;
+    return true;
+  });
+
+  // Get counts for dashboard cards
+  const goalCounts = {
+    total: filteredGoals.length,
+    active: filteredGoals.filter(g => g.status === 1).length, // Work in Progress
+    done: filteredGoals.filter(g => g.status === 2).length, // Complete
+    paused: filteredGoals.filter(g => g.status === 3).length // Blocked
+  };
+
+  return (
+    <>
+      <Container fluid className="py-4">
+        <PageHeader
+          title="Goals Management"
+          subtitle="Manage your life goals across different themes"
+          breadcrumbs={[
+            { label: 'Home', href: '/' },
+            { label: 'Goals' }
+          ]}
+          actions={
+            <Button variant="primary" onClick={() => setShowAddModal(true)}>
+              Add Goal
+            </Button>
+          }
+        />
+
+        {/* Dashboard Cards */}
+        <Row className="mb-2">
+          {loading ? (
+            <>
+              <Col lg={3} md={6} className="mb-3">
+                <SkeletonStatCard compact />
+              </Col>
+              <Col lg={3} md={6} className="mb-3">
+                <SkeletonStatCard compact />
+              </Col>
+              <Col lg={3} md={6} className="mb-3">
+                <SkeletonStatCard compact />
+              </Col>
+              <Col lg={3} md={6} className="mb-3">
+                <SkeletonStatCard compact />
+              </Col>
+            </>
+          ) : (
+            <>
+              <Col lg={3} md={6} className="mb-3">
+                <StatCard
+                  label="Total Goals"
+                  value={goalCounts.total}
+                  icon={Target}
+                  iconColor={colors.brand.primary}
+                  compact
+                />
+              </Col>
+              <Col lg={3} md={6} className="mb-3">
+                <StatCard
+                  label="Active"
+                  value={goalCounts.active}
+                  icon={TrendingUp}
+                  iconColor={colors.info.primary}
+                  compact
+                />
+              </Col>
+              <Col lg={3} md={6} className="mb-3">
+                <StatCard
+                  label="Done"
+                  value={goalCounts.done}
+                  icon={CheckCircle}
+                  iconColor={colors.success.primary}
+                  compact
+                />
+              </Col>
+              <Col lg={3} md={6} className="mb-3">
+                <StatCard
+                  label="Paused"
+                  value={goalCounts.paused}
+                  icon={PauseCircle}
+                  iconColor={colors.warning.primary}
+                  compact
+                />
+              </Col>
+            </>
+          )}
+        </Row>
+
+        {/* Filters */}
+        <Card className="mb-3">
+          <Card.Body style={{ padding: '8px' }}>
+            <Row>
+              <Col md={4}>
+                <Form.Group>
+                  <Form.Label className="small mb-0">Search Goals</Form.Label>
+                  <InputGroup>
+                    <Form.Control
+                      size="sm"
+                      type="text"
+                      placeholder="Search by title..."
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                    />
+                  </InputGroup>
+                </Form.Group>
+              </Col>
+              <Col md={4}>
+                <Form.Group>
+                  <Form.Label className="small mb-0">Status</Form.Label>
+                  <Form.Select
+                    size="sm"
+                    value={filterStatus}
+                    onChange={(e) => setFilterStatus(e.target.value)}
+                  >
+                    <option value="all">All Status</option>
+                    <option value="new">New</option>
+                    <option value="active">Active</option>
+                    <option value="done">Done</option>
+                    <option value="paused">Paused</option>
+                    <option value="dropped">Dropped</option>
+                  </Form.Select>
+                </Form.Group>
+              </Col>
+              <Col md={4}>
+                <Form.Group>
+                  <Form.Label className="small mb-0">Theme</Form.Label>
+                  <Form.Select
+                    size="sm"
+                    value={filterTheme}
+                    onChange={(e) => setFilterTheme(e.target.value)}
+                  >
+                    <option value="all">All Themes</option>
+                    {globalThemes.map((theme) => (
+                      <option key={theme.id} value={String(theme.id)}>
+                        {theme.label}
+                      </option>
+                    ))}
+                  </Form.Select>
+                </Form.Group>
+              </Col>
+            </Row>
+            <Row className="mt-1">
+              <Col md={4}>
+                <Form.Check
+                  id="toggle-cost-without-pot"
+                  type="switch"
+                  label="Only goals with cost but no pot"
+                  checked={filterMissingPotCost}
+                  onChange={(e) => setFilterMissingPotCost(e.target.checked)}
+                />
+              </Col>
+            </Row>
+            <Row className="mt-1">
+              <Col>
+                <Button
+                  size="sm"
+                  variant="outline-secondary"
+                  onClick={() => {
+                    setFilterStatus('all');
+                    setFilterTheme('all');
+                    setFilterMissingPotCost(false);
+                    setSearchTerm('');
+                  }}
+                >
+                  Clear Filters
+                </Button>
+              </Col>
+            </Row>
+          </Card.Body>
+        </Card>
+
+        {/* Modern Goals Table */}
+        <Card>
+          <Card.Header>
+            <h5 className="mb-0">Goals ({filteredGoals.length})</h5>
+          </Card.Header>
+          <Card.Body className="p-0">
+            {loading ? (
+              <div className="text-center p-4">
+                <div className="spinner-border" />
+                <p className="mt-2">Loading goals...</p>
+              </div>
+            ) : filteredGoals.length === 0 ? (
+              <EmptyState
+                icon={FolderOpen}
+                title="No goals found"
+                description="Get started by creating your first goal or adjust your filters to see more results."
+                action={{
+                  label: 'Add Goal',
+                  onClick: () => setShowAddModal(true),
+                  variant: 'primary'
+                }}
+              />
+            ) : (
+              <ModernGoalsTable
+                goals={filteredGoals}
+                onGoalUpdate={handleGoalUpdate}
+                onGoalDelete={handleGoalDelete}
+                onGoalPriorityChange={handleGoalPriorityChange}
+                onEditModal={(goal) => setEditGoal(goal)}
+              />
+            )}
+          </Card.Body>
+        </Card>
+      </Container>
+      {/* Shared Edit Goal Modal for consistency across views */}
+      <EditGoalModal
+        goal={editGoal}
+        show={!!editGoal || showAddModal}
+        onClose={() => {
+          setEditGoal(null);
+          setShowAddModal(false);
+        }}
+        currentUserId={currentUser?.uid || ''}
+        allGoals={goals}
+      />
+    </>
+  );
+};
+
+export default GoalsManagement;

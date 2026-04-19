@@ -1,0 +1,20819 @@
+// Cloud Functions: server-side Google Calendar OAuth + helpers + stubs
+const functionsV2 = require("firebase-functions/v2");
+const httpsV2 = require("firebase-functions/v2/https");
+const schedulerV2 = require("firebase-functions/v2/scheduler");
+const { loadThemesForUser, mapThemeLabelToId } = require('./services/themeManager');
+const { defineSecret } = require("firebase-functions/params");
+const firestoreV2 = require("firebase-functions/v2/firestore");
+const admin = require("firebase-admin");
+// Google Generative AI SDK
+const { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } = require('@google/generative-ai');
+// OpenAI removed (Gemini-only)
+const aiUsageLogger = require("./utils/aiUsageLogger");
+const { rrulestr } = require('rrule');
+const { DateTime } = require('luxon');
+const { planSchedule, makeInstanceId: schedulerMakeInstanceId } = require('./scheduler/engine');
+const { computeMonzoAnalytics } = require('./monzo/analytics');
+const {
+  inferDefaultCategoryType,
+  inferDefaultCategoryLabel,
+  toMonthKey,
+  normaliseMerchantName,
+} = require('./monzo/shared');
+const { DEFAULT_FINANCE_CATEGORIES, mergeFinanceCategories } = require('./finance/categories');
+const DEFAULT_TIMEZONE = 'Europe/London';
+const {
+  buildDailySummaryData,
+  buildDataQualitySnapshot,
+  buildFinanceSummary,
+  loadSchedulerInputs,
+  ensureFirestore,
+  resolveTimezone,
+  loadProfile,
+} = require('./lib/reporting');
+// Nightly orchestration helpers (auto-pointing, conversion, priority, calendar)
+const nightlyOrchestration = require('./nightlyOrchestration');
+const { renderDailySummaryEmail, renderWeeklyFinanceSummaryEmail, renderSpendAnomalyEmail, renderDataQualityEmail } = require('./lib/templates');
+const { importFromSteam, importFromTrakt, importFromGoodreadsLike } = require('./services/mediaImportController');
+const { aggregateTransactions } = require('./finance/dashboard');
+const { buildAbsoluteUrl, buildEntityPath, buildEntityUrl } = require('./utils/urlHelpers');
+const { ensureTaskPoints, clampTaskPoints, deriveTaskPoints } = require('./utils/taskPoints');
+const { mondayRequest, ensureBoardForGoal, upsertMondayItemForStory, mapStatusToBob } = require('./mondaySync');
+// Expose advanced LLM-powered daily digest from separate module
+try {
+  const digestModule = require('./dailyDigestGenerator');
+  if (digestModule && digestModule.generateDailyDigest) {
+    exports.generateDailyDigest = digestModule.generateDailyDigest;
+    if (digestModule.runDailyDigestNow) {
+      exports.runDailyDigestNow = digestModule.runDailyDigestNow;
+    }
+  }
+} catch (e) {
+  console.warn('[init] dailyDigestGenerator not loaded', e?.message || e);
+}
+
+try {
+  const coachModule = require('./coach');
+  if (coachModule) {
+    exports.runCoachOrchestratorNightly = coachModule.runCoachOrchestratorNightly;
+    exports.logHealthMetric            = coachModule.logHealthMetric;
+    exports.getCoachToday              = coachModule.getCoachToday;
+    exports.provisionIronmanGoals      = coachModule.provisionIronmanGoals;
+    exports.analyzeBodyPhoto           = coachModule.analyzeBodyPhoto;
+    exports.sendCoachNudgesNoon        = coachModule.sendCoachNudgesNoon;
+    exports.sendCoachNudgesEvening     = coachModule.sendCoachNudgesEvening;
+    exports.sendCoachMorningBriefing   = coachModule.sendCoachMorningBriefing;
+    exports.sendWeeklyPhaseProgress    = coachModule.sendWeeklyPhaseProgress;
+    exports.checkKpiOffTrack           = coachModule.checkKpiOffTrack;
+    exports.triggerCoachBriefingNow           = coachModule.triggerCoachBriefingNow;
+    exports.pollFitnessProgrammes             = coachModule.pollFitnessProgrammes;
+    exports.scheduleCoachFitnessBlocks        = coachModule.scheduleCoachFitnessBlocks;
+    exports.triggerPollFitnessProgrammes      = coachModule.triggerPollFitnessProgrammes;
+    exports.triggerScheduleCoachFitnessBlocks = coachModule.triggerScheduleCoachFitnessBlocks;
+  }
+} catch (e) {
+  console.warn('[init] coachModule not loaded', e?.message || e);
+}
+
+try {
+  const financeEnhancements = require('./finance/enhancements');
+  if (financeEnhancements) {
+    exports.importExternalFinanceTransactions = financeEnhancements.importExternalFinanceTransactions;
+    exports.importMonzoTransactionsCsv = financeEnhancements.importMonzoTransactionsCsv;
+    exports.matchExternalToMonzoTransactions = financeEnhancements.matchExternalToMonzoTransactions;
+    exports.recomputeDebtServiceBreakdown = financeEnhancements.recomputeDebtServiceBreakdown;
+    exports.generateFinanceActionInsights = financeEnhancements.generateFinanceActionInsights;
+    exports.convertFinanceActionToStory = financeEnhancements.convertFinanceActionToStory;
+    exports.upsertManualFinanceAccount = financeEnhancements.upsertManualFinanceAccount;
+    exports.deleteManualFinanceAccount = financeEnhancements.deleteManualFinanceAccount;
+    exports.fetchFinanceEnhancementData = financeEnhancements.fetchFinanceEnhancementData;
+  }
+} catch (e) {
+  console.warn('[init] financeEnhancements not loaded', e?.message || e);
+}
+const { sendEmail } = require('./lib/email');
+const { coerceZone, toDateTime, computeDayWindow } = require('./lib/time');
+const { resolveThemeAllocationsForDate } = require('./lib/themeAllocations');
+const crypto = require('crypto');
+const { KeyManagementServiceClient } = require('@google-cloud/kms');
+const MS_IN_DAY = 24 * 60 * 60 * 1000;
+const MS_IN_WEEK = 7 * MS_IN_DAY;
+const TASK_TTL_DAYS = Number(process.env.TASK_TTL_DAYS || 7);
+const SPRINT_NONE = '__none__';
+const DEFAULT_TASK_POINTS = 0.25;
+
+function clampStoryPoints(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) return null;
+  return numeric;
+}
+
+// Import the daily digest generator
+const { generateDailyDigest } = require("./dailyDigestGenerator");
+
+// Import calendar sync functions
+try {
+  const calendarSync = require('./calendarSync');
+  if (calendarSync) {
+    exports.syncCalendarBlock = calendarSync.syncCalendarBlock;
+    exports.onCalendarBlockWrite = calendarSync.onCalendarBlockWrite;
+    exports.syncFromGoogleCalendar = calendarSync.syncFromGoogleCalendar;
+    exports.syncCalendarNow = calendarSync.syncCalendarNow;
+    exports.scheduledCalendarSync = calendarSync.scheduledCalendarSync;
+    exports.gcalLinkUnlinkedEvents = calendarSync.gcalLinkUnlinkedEvents;
+    exports.repairDuplicateCalendarEvents = calendarSync.repairDuplicateCalendarEvents;
+  }
+} catch (e) {
+  console.warn('[init] calendarSync not loaded', e?.message || e);
+}
+
+// Import reference backfill utility
+try {
+  const referenceBackfill = require('./utils/referenceBackfill');
+  if (referenceBackfill) {
+    exports.backfillReferenceNumbers = functionsV2.https.onCall(
+      async (request) => {
+        if (!request.auth) {
+          throw new Error('Authentication required');
+        }
+        // Only allow backfill for admin-like operations
+        const result = await referenceBackfill.backfillAllReferences();
+        return result;
+      }
+    );
+  }
+} catch (e) {
+  console.warn('[init] referenceBackfill not loaded', e?.message || e);
+}
+
+// Import time-of-day population service
+const { parseTimeStringToTimeOfDay, populateBlankTimeOfDay, inferTimeOfDayFromContent } = require('./services/timeOfDayPopulator');
+
+// Import Fitness KPI Sync service
+const { syncAllUsersFitnessKpis, syncUserFitnessKpis } = require('./services/fitnessKpiSync');
+
+// Import Focus Goals functions
+try {
+  const focusGoalsModule = require('./focusGoals');
+  if (focusGoalsModule) {
+    exports.createMonzoPotForGoal = focusGoalsModule.createMonzoPotForGoal;
+    exports.syncFocusGoalsNightly = focusGoalsModule.syncFocusGoalsNightly;
+    exports.syncAllFocusGoalsNightly = focusGoalsModule.syncAllFocusGoalsNightly;
+    exports.getFocusGoalsForUser = focusGoalsModule.getFocusGoalsForUser;
+  }
+} catch (e) {
+  console.warn('[init] focusGoals not loaded', e?.message || e);
+}
+
+// Import Global Hierarchy Snapshot functions
+try {
+  const globalSnapshotModule = require('./globalSnapshot');
+  if (globalSnapshotModule) {
+    exports.generateGlobalHierarchySnapshots = globalSnapshotModule.generateGlobalHierarchySnapshots;
+    exports.exportGlobalHierarchySnapshot = globalSnapshotModule.exportGlobalHierarchySnapshot;
+  }
+} catch (e) {
+  console.warn('[init] globalSnapshot not loaded', e?.message || e);
+}
+
+// Import Intent Broker functions
+try {
+  const intentBrokerModule = require('./intentBroker');
+  if (intentBrokerModule) {
+    exports.getIntentBrokerPrompts = intentBrokerModule.getIntentBrokerPrompts;
+    exports.intentBrokerSuggestFocus = intentBrokerModule.intentBrokerSuggestFocus;
+    exports.recordIntentFocusConversion = intentBrokerModule.recordIntentFocusConversion;
+  }
+} catch (e) {
+  console.warn('[init] intentBroker not loaded', e?.message || e);
+}
+
+// Import Capacity Deferral functions
+try {
+  const capacityDeferralModule = require('./capacityDeferral');
+  if (capacityDeferralModule) {
+    exports.applyCapacityDeferrals = capacityDeferralModule.applyCapacityDeferrals;
+  }
+} catch (e) {
+  console.warn('[init] capacityDeferral not loaded', e?.message || e);
+}
+
+// Import intelligent deferral suggestion functions
+try {
+  const deferralSuggestionsModule = require('./deferralSuggestions');
+  if (deferralSuggestionsModule) {
+    exports.suggestDeferralOptions = deferralSuggestionsModule.suggestDeferralOptions;
+  }
+} catch (e) {
+  console.warn('[init] deferralSuggestions not loaded', e?.message || e);
+}
+
+// Import Feature Flags
+try {
+  const featureFlagsModule = require('./featureFlags');
+  if (featureFlagsModule) {
+    exports.getFeatureFlags = featureFlagsModule.getFeatureFlags;
+    exports.setFeatureFlag = featureFlagsModule.setFeatureFlag;
+  }
+} catch (e) {
+  console.warn('[init] featureFlags not loaded', e?.message || e);
+}
+
+// Import Fuzzy Task Linking functions
+try {
+  const fuzzyTaskLinking = require('./fuzzyTaskLinking');
+  if (fuzzyTaskLinking) {
+    exports.nightlyTaskLinking = fuzzyTaskLinking.nightlyTaskLinking;
+    exports.nightlyStoryGoalLinking = fuzzyTaskLinking.nightlyStoryGoalLinking;
+    exports.triggerTaskLinking = fuzzyTaskLinking.triggerTaskLinking;
+    exports.triggerStoryGoalLinking = fuzzyTaskLinking.triggerStoryGoalLinking;
+    exports.respondToTaskSuggestion = fuzzyTaskLinking.respondToTaskSuggestion;
+    exports.respondToStoryGoalSuggestion = fuzzyTaskLinking.respondToStoryGoalSuggestion;
+  }
+} catch (e) {
+  console.warn('[init] fuzzyTaskLinking not loaded', e?.message || e);
+}
+
+// Import AI Planning functions
+try {
+  const aiPlanning = require('./aiPlanning');
+  if (aiPlanning) {
+    exports.runNightlyScheduler = aiPlanning.runNightlyScheduler;
+    exports.runMorningPlanner = aiPlanning.runMorningPlanner;
+    exports.onStoryWrite = aiPlanning.onStoryWrite;
+    exports.onTaskWrite = aiPlanning.onTaskWrite; // New Trigger
+    exports.convertTasksToStories = aiPlanning.convertTasksToStories; // New Scheduled Function
+
+    // Capacity Planning
+    const capacityPlanning = require('./capacityPlanning');
+    exports.calculateSprintCapacity = capacityPlanning.calculateSprintCapacity;
+    exports.calculateNextWeekCapacity = capacityPlanning.calculateNextWeekCapacity;
+    exports.updateStoryPriorities = capacityPlanning.updateStoryPriorities; // New Scheduled Function
+  }
+} catch (e) {
+  console.warn('[init] aiPlanning not loaded', e?.message || e);
+}
+
+// New orchestration exports (sizing, conversions, priority scoring, calendar planner)
+try {
+  if (nightlyOrchestration) {
+    exports.runAutoPointing = nightlyOrchestration.runAutoPointing;
+    exports.runAutoConversions = nightlyOrchestration.runAutoConversions;
+    exports.runPriorityScoring = nightlyOrchestration.runPriorityScoring;
+    exports.runCalendarPlanner = nightlyOrchestration.runCalendarPlanner;
+    exports.materializeFitnessBlocksNow = nightlyOrchestration.materializeFitnessBlocksNow;
+    exports.replanCalendarNow = nightlyOrchestration.replanCalendarNow;
+    exports.runNightlyChainNow = nightlyOrchestration.runNightlyChainNow;
+    if (nightlyOrchestration.seedNextWeekPlannerOverridesWeekly) {
+      exports.seedNextWeekPlannerOverridesWeekly = nightlyOrchestration.seedNextWeekPlannerOverridesWeekly;
+    }
+    if (nightlyOrchestration.seedNextWeekPlannerOverridesNow) {
+      exports.seedNextWeekPlannerOverridesNow = nightlyOrchestration.seedNextWeekPlannerOverridesNow;
+    }
+    if (nightlyOrchestration.runNightlyChainNowHttp) {
+      exports.runNightlyChainNowHttp = nightlyOrchestration.runNightlyChainNowHttp;
+    }
+    if (nightlyOrchestration.deltaPriorityRescore) {
+      exports.deltaPriorityRescore = nightlyOrchestration.deltaPriorityRescore;
+    }
+  }
+} catch (e) {
+  console.warn('[init] nightlyOrchestration not loaded', e?.message || e);
+}
+
+// Nightly goal maintenance: ensure targetYear matches end/target date
+const updateGoalTargetYears = async () => {
+  const db = admin.firestore();
+  const goalsSnap = await db.collection('goals').get();
+  let updates = 0;
+  for (const doc of goalsSnap.docs) {
+    const data = doc.data() || {};
+    const end = data.endDate || data.targetDate;
+    if (!end) continue;
+    const dt = new Date(end);
+    if (Number.isNaN(dt.getTime())) continue;
+    const yr = dt.getFullYear();
+    if (data.targetYear === yr) continue;
+    await doc.ref.set({ targetYear: yr, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    updates += 1;
+  }
+  console.log('[goalTargetYear] updated', updates, 'goals');
+  return { updated: updates };
+};
+
+exports.updateGoalTargetYears = schedulerV2.onSchedule(
+  { schedule: '0 3 * * *', timeZone: 'UTC', region: 'europe-west2' },
+  async () => {
+    try {
+      return await updateGoalTargetYears();
+    } catch (e) {
+      console.error('[goalTargetYear] failed', e?.message || e);
+      return null;
+    }
+  });
+
+// Nightly fitness KPI sync: updates goal KPI progress from Strava/HealthKit workouts
+const syncFitnessKpis = async () => {
+  try {
+    const result = await syncAllUsersFitnessKpis();
+    console.log(`✅ Fitness KPI sync completed: ${result.totalSynced} goals updated`);
+    return result;
+  } catch (e) {
+    console.error('[fitnessKpiSync] failed', e?.message || e);
+    throw e;
+  }
+};
+
+exports.syncFitnessKpisNightly = schedulerV2.onSchedule(
+  { schedule: '30 3 * * *', timeZone: 'UTC', region: 'europe-west2' },
+  syncFitnessKpis
+);
+
+// Manual per-user sync endpoint
+exports.syncFitnessKpisNow = httpsV2.onCall({ region: 'europe-west2' }, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) {
+    throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  }
+  try {
+    const result = await syncUserFitnessKpis(uid);
+    return { ok: true, ...result };
+  } catch (e) {
+    console.error('[fitnessKpiSync] user sync failed:', e);
+    throw new httpsV2.HttpsError('internal', e?.message || 'Sync failed');
+  }
+});
+
+// Nightly focus goals sync: update daysRemaining, deactivate expired
+const syncFocusGoalCountdowns = async () => {
+  try {
+    const db = admin.firestore();
+    const users = await db.collection('profiles').get();
+    let totalSynced = 0;
+
+    for (const userDoc of users.docs) {
+      const focusGoals = await db
+        .collection('focusGoals')
+        .where('ownerUid', '==', userDoc.id)
+        .where('isActive', '==', true)
+        .get();
+
+      const now = Date.now();
+
+      for (const focusDoc of focusGoals.docs) {
+        const focusGoal = focusDoc.data();
+        const endDate = new Date(focusGoal.endDate).getTime();
+        const daysRemaining = Math.ceil((endDate - now) / (24 * 60 * 60 * 1000));
+
+        if (daysRemaining <= 0) {
+          await focusDoc.ref.update({
+            isActive: false,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+          });
+        } else {
+          await focusDoc.ref.update({
+            daysRemaining,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+          });
+        }
+
+        totalSynced++;
+      }
+    }
+
+    console.log(`✅ Focus goals sync completed: ${totalSynced} goals updated`);
+    return { totalSynced };
+  } catch (e) {
+    console.error('[focusGoalsSync] failed', e?.message || e);
+    throw e;
+  }
+};
+
+exports.syncFocusGoalCountdownsNightly = schedulerV2.onSchedule(
+  { schedule: '0 4 * * *', timeZone: 'UTC', region: 'europe-west2' },
+  syncFocusGoalCountdowns
+);
+
+// Calendar diagnostics
+// (already exported above with calendarSync bundle)
+
+functionsV2.setGlobalOptions({ region: "europe-west2", maxInstances: 10 });
+if (!admin.apps.length) {
+  admin.initializeApp();
+}
+
+let transcriptIngestionModule = null;
+try {
+  transcriptIngestionModule = require('./transcriptIngestion');
+  if (transcriptIngestionModule) {
+    exports.ingestTranscript = transcriptIngestionModule.ingestTranscript;
+    exports.ingestTranscriptHttp = transcriptIngestionModule.ingestTranscriptHttp;
+    exports.editJournalEntry = transcriptIngestionModule.editJournalEntry;
+    exports.deleteJournalEntry = transcriptIngestionModule.deleteJournalEntry;
+  }
+} catch (e) {
+  console.warn('[init] transcriptIngestion not loaded', e?.message || e);
+}
+
+// Secrets
+// Google AI Studio (Gemini)
+const GOOGLE_AI_STUDIO_API_KEY = defineSecret("GOOGLEAISTUDIOAPIKEY");
+const GOOGLE_OAUTH_CLIENT_ID = defineSecret("GOOGLE_OAUTH_CLIENT_ID");
+const GOOGLE_OAUTH_CLIENT_SECRET = defineSecret("GOOGLE_OAUTH_CLIENT_SECRET");
+const TRAKT_CLIENT_ID = defineSecret("TRAKT_CLIENT_ID");
+const TRAKT_CLIENT_SECRET = defineSecret("TRAKT_CLIENT_SECRET");
+const STEAM_WEB_API_KEY = defineSecret("STEAM_WEB_API_KEY");
+const N8N_WEBHOOK_SECRET = defineSecret("N8N_WEBHOOK_SECRET");
+const N8N_OUTBOUND_WEBHOOK_URL = defineSecret("N8N_OUTBOUND_WEBHOOK_URL");
+const N8N_SCHEDULE_STEAM_URL = defineSecret("N8N_SCHEDULE_STEAM_URL");
+const MONDAY_API_TOKEN = defineSecret("MONDAY_API_TOKEN");
+// Strava integration secrets
+const STRAVA_CLIENT_ID = defineSecret("STRAVA_CLIENT_ID");
+const STRAVA_CLIENT_SECRET = defineSecret("STRAVA_CLIENT_SECRET");
+// Monzo integration secrets
+const MONZO_CLIENT_ID = defineSecret("MONZO_CLIENT_ID");
+const MONZO_CLIENT_SECRET = defineSecret("MONZO_CLIENT_SECRET");
+const MONZO_WEBHOOK_SECRET = defineSecret("MONZO_WEBHOOK_SECRET");
+const STRAVA_WEBHOOK_VERIFY_TOKEN = defineSecret("STRAVA_WEBHOOK_VERIFY_TOKEN");
+// No secrets required for Parkrun
+const REMINDERS_WEBHOOK_SECRET = defineSecret("REMINDERS_WEBHOOK_SECRET");
+const BREVO_API_KEY = defineSecret('BREVO_API_KEY');
+
+// Monday user->Bob ownerUid mapping (hardcoded for now)
+const MONDAY_USER_MAP = {
+  '97788587': '3L3nnXSuTPfr08c8DTXG5zYX37A2', // jdonnelly@jc1.tech
+};
+// Hardcover (Books) API is per-user; tokens stored on profiles.{uid}.hardcoverToken
+
+// Scheduler utils (deterministic id + day key)
+function makePlanId(userId, date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}${m}${d}-${userId}`;
+}
+function toDayKey(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}${m}${d}`;
+}
+// Convert yyyy-MM-dd to yyyyMMdd
+function isoDayKeyToDayKey(isoDateStr) {
+  return isoDateStr.replace(/-/g, '');
+}
+function makeAssignmentId({ planId, itemType, itemId }) {
+  const raw = `${planId}:${itemType}:${itemId}`;
+  let h = 0;
+  for (let i = 0; i < raw.length; i++) h = (h * 31 + raw.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+}
+
+const MS_IN_MINUTE = 60 * 1000;
+const CHORE_LOOKAHEAD_DAYS = 90;
+const CHORE_DUE_ROLLOVER_DAYS = 3;
+const CHORE_DUE_ROLLOVER_MS = CHORE_DUE_ROLLOVER_DAYS * 24 * 60 * 60 * 1000;
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
+const AI_PRIORITY_MODEL = GEMINI_MODEL;
+const PARKRUN_API_BASE = String(process.env.PARKRUN_API_BASE || 'https://api.parkrun.com').trim().replace(/\/+$/, '');
+const PARKRUN_API_CLIENT_ID = String(process.env.PARKRUN_API_CLIENT_ID || 'netdreams-iphone-s01').trim();
+const PARKRUN_API_CLIENT_SECRET = String(process.env.PARKRUN_API_CLIENT_SECRET || 'gfKbDD6NJkYoFmkisR(iVFopQCKWzbQeQgZAZZKK').trim();
+const PARKRUN_API_USER_AGENT = String(process.env.PARKRUN_API_USER_AGENT || 'parkrun/1.2.7 CFNetwork/1121.2.2 Darwin/19.3.0').trim();
+
+function toMillis(value) {
+  if (!value && value !== 0) return null;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value === 'string') {
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? null : parsed;
+  }
+  if (value instanceof Date) return value.getTime();
+  if (value && typeof value.toDate === 'function') {
+    try {
+      const d = value.toDate();
+      return d instanceof Date ? d.getTime() : null;
+    } catch { return null; }
+  }
+  if (value && typeof value === 'object' && typeof value.seconds === 'number') {
+    const seconds = Number(value.seconds);
+    const nanos = Number(value.nanoseconds || value.nanos || 0);
+    return seconds * 1000 + Math.round(nanos / 1e6);
+  }
+  return null;
+}
+
+// === Helpers for chores/routines on tasks
+function inferTaskType(data) {
+  const rawTitle = String(data?.title || '').toLowerCase();
+  const rawList = String(data?.reminderListName || data?.reminderListId || '').toLowerCase();
+  const tags = Array.isArray(data?.tags) ? data.tags.map((t) => String(t || '').toLowerCase().replace(/^#/, '')) : [];
+  const note = String(data?.note || '').toLowerCase();
+  const candidates = [rawTitle, rawList, note, ...tags];
+  if (candidates.some((s) => s.includes('habit'))) return 'habit';
+  if (candidates.some((s) => s.includes('routine'))) return 'routine';
+  if (candidates.some((s) => s.includes('chore'))) return 'chore';
+  return null;
+}
+
+function normaliseRecurrence(data) {
+  // Accepts either already-normalised fields or EventKit-mapped hints
+  const out = {};
+  let changed = false;
+  const freq = data?.repeatFrequency;
+  const interval = Number(data?.repeatInterval || 1) || 1;
+  const days = Array.isArray(data?.daysOfWeek) ? data.daysOfWeek : null;
+  if (!freq && data?.rrule) {
+    const r = String(data.rrule).toUpperCase();
+    if (r.includes('WEEKLY')) {
+      out.repeatFrequency = 'weekly';
+      changed = true;
+      const m = r.match(/BYDAY=([^;]+)/);
+      if (m) {
+        const map = { SU: 'sun', MO: 'mon', TU: 'tue', WE: 'wed', TH: 'thu', FR: 'fri', SA: 'sat' };
+        out.daysOfWeek = m[1].split(',').map((s) => map[s] || null).filter(Boolean);
+      }
+    } else if (r.includes('DAILY')) {
+      out.repeatFrequency = 'daily';
+      changed = true;
+    } else if (r.includes('MONTHLY')) {
+      out.repeatFrequency = 'monthly';
+      changed = true;
+    } else if (r.includes('YEARLY') || r.includes('ANNUAL')) {
+      out.repeatFrequency = 'yearly';
+      changed = true;
+    }
+  }
+  if (!('repeatInterval' in data) && interval !== 1) { out.repeatInterval = interval; changed = true; }
+  if (freq && !['daily', 'weekly', 'monthly', 'yearly'].includes(freq)) {
+    out.repeatFrequency = undefined; // strip invalid
+    changed = true;
+  }
+  if (freq === 'weekly' && days && days.length) {
+    const valid = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+    const cleaned = days.map((d) => String(d || '').toLowerCase()).filter((d) => valid.includes(d));
+    if (JSON.stringify(cleaned) !== JSON.stringify(days)) { out.daysOfWeek = cleaned; changed = true; }
+  }
+  return { changed, patch: out };
+}
+
+function isRecurringChoreTask(task) {
+  const type = String(task?.type || '').toLowerCase();
+  if (!['chore', 'routine', 'habit'].includes(type)) return false;
+  const freq = task?.repeatFrequency || task?.repeatInterval || task?.recurrence?.frequency || task?.recurrence?.freq || null;
+  const days = Array.isArray(task?.daysOfWeek) && task.daysOfWeek.length;
+  const recurDays = Array.isArray(task?.repeatDaysOfWeek) && task.repeatDaysOfWeek.length;
+  const recurMeta = Array.isArray(task?.recurrence?.daysOfWeek) && task.recurrence.daysOfWeek.length;
+  return !!(freq || days || recurDays || recurMeta);
+}
+
+function* iterateNextDays(startDate, count) {
+  const d = new Date(startDate);
+  for (let i = 0; i < count; i++) {
+    const nd = new Date(d.getTime() + i * 24 * 60 * 60 * 1000);
+    yield nd;
+  }
+}
+
+// Simple wrapper so frontends can trigger a full Monzo refresh + analytics
+async function refreshMonzoData(uid) {
+  const summary = await syncMonzoDataForUser(uid, { fullRefresh: true });
+  try {
+    await runMonzoAnalytics(uid, { reason: 'manual_refresh' });
+  } catch (err) {
+    console.warn('[refreshMonzoData] analytics failed', err?.message || err);
+  }
+  return summary;
+}
+
+function dayOfWeekKey(date) {
+  return ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][date.getDay()];
+}
+
+function toISODate(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function isSameDay(a, b) {
+  return startOfDay(new Date(a)).getTime() === startOfDay(new Date(b)).getTime();
+}
+
+function shouldScheduleOnDay(task, date) {
+  const freq = task?.repeatFrequency;
+  const interval = Number(task?.repeatInterval || 1) || 1;
+  if (!freq) {
+    const dueMs = toMillis(task?.dueDate || task?.dueDateMs || task?.targetDate);
+    if (!dueMs) return false;
+    return isSameDay(date, dueMs);
+  }
+  if (freq === 'daily') {
+    // If we have a baseline, respect interval
+    const base = toMillis(task?.lastDoneAt) || toMillis(task?.createdAt) || Date.now();
+    const daysDiff = Math.floor((startOfDay(date).getTime() - startOfDay(new Date(base)).getTime()) / (24 * 60 * 60 * 1000));
+    return daysDiff % interval === 0;
+  }
+  if (freq === 'weekly') {
+    const normalizeDayToken = (value) => {
+      if (value === null || value === undefined) return null;
+      if (typeof value === 'number') {
+        const map = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+        if (value >= 1 && value <= 7) return map[value - 1] || null;
+        if (value >= 0 && value <= 6) return map[value] || null;
+        return null;
+      }
+      const raw = String(value).toLowerCase().trim();
+      if (!raw) return null;
+      if (['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'].includes(raw)) return raw;
+      if (raw.startsWith('su')) return 'sun';
+      if (raw.startsWith('mo')) return 'mon';
+      if (raw.startsWith('tu')) return 'tue';
+      if (raw.startsWith('we')) return 'wed';
+      if (raw.startsWith('th')) return 'thu';
+      if (raw.startsWith('fr')) return 'fri';
+      if (raw.startsWith('sa')) return 'sat';
+      return null;
+    };
+    const allowedRaw = []
+      .concat(task?.daysOfWeek || [])
+      .concat(task?.repeatDaysOfWeek || [])
+      .concat(task?.recurrence?.daysOfWeek || []);
+    const allowed = Array.from(new Set(allowedRaw.map(normalizeDayToken).filter(Boolean)));
+    const base = new Date(toMillis(task?.lastDoneAt) || toMillis(task?.createdAt) || Date.now());
+    const fallback = dayOfWeekKey(base);
+    const days = allowed.length ? allowed : [fallback];
+    if (!days.includes(dayOfWeekKey(date))) return false;
+    const weeksDiff = Math.floor((startOfWeek(date).getTime() - startOfWeek(base).getTime()) / MS_IN_WEEK);
+    return weeksDiff % interval === 0;
+  }
+  if (freq === 'monthly') {
+    const base = new Date(toMillis(task?.createdAt) || Date.now());
+    if (date.getDate() !== base.getDate()) return false;
+    const monthsDiff = (date.getFullYear() - base.getFullYear()) * 12 + (date.getMonth() - base.getMonth());
+    return monthsDiff % interval === 0;
+  }
+  if (freq === 'yearly') {
+    const base = new Date(toMillis(task?.createdAt) || Date.now());
+    if (date.getMonth() !== base.getMonth() || date.getDate() !== base.getDate()) return false;
+    const yearsDiff = date.getFullYear() - base.getFullYear();
+    return yearsDiff % interval === 0;
+  }
+  return false;
+}
+
+function startOfDay(d) {
+  const nd = new Date(d);
+  nd.setHours(0, 0, 0, 0);
+  return nd;
+}
+
+function startOfWeek(d) {
+  const nd = startOfDay(d);
+  const day = nd.getDay(); // 0 = Sunday
+  nd.setDate(nd.getDate() - day);
+  return nd;
+}
+
+function hasTimeComponent(ms) {
+  if (!ms) return false;
+  const d = new Date(ms);
+  return d.getHours() !== 0 || d.getMinutes() !== 0 || d.getSeconds() !== 0;
+}
+
+function applyTimeOfDay(day, timeMs) {
+  const base = new Date(timeMs);
+  const d = new Date(day.getTime());
+  d.setHours(base.getHours(), base.getMinutes(), 0, 0);
+  return d.getTime();
+}
+
+function durationMinutesFromTask(task) {
+  const points = Number(task?.points || 0);
+  const estimateMin = Number(task?.estimateMin || 0);
+  const type = String(task?.type || '').toLowerCase();
+  const isChoreLike = ['chore', 'routine', 'habit'].includes(type);
+  const choreMin = 10;
+  if (estimateMin > 0) return Math.min(180, Math.max(isChoreLike ? choreMin : 15, Math.round(estimateMin)));
+  if (points > 0) return Math.min(480, Math.max(isChoreLike ? choreMin : 30, Math.round(points * 60)));
+  return isChoreLike ? choreMin : 30;
+}
+
+async function resolveSprintIdForDate(db, ownerUid, persona, dueDateMs, cache) {
+  if (!dueDateMs || !ownerUid) return null;
+  const key = `${ownerUid}:${persona || ''}`;
+  let sprints = cache?.get(key);
+  if (!sprints) {
+    let qs = db.collection('sprints').where('ownerUid', '==', ownerUid);
+    if (persona) qs = qs.where('persona', '==', persona);
+    const snap = await qs.get().catch(() => ({ docs: [] }));
+    sprints = (snap.docs || []).map((doc) => {
+      const data = doc.data() || {};
+      return {
+        id: doc.id,
+        start: toMillis(data.startDate),
+        end: toMillis(data.endDate),
+      };
+    }).filter((s) => s.start && s.end);
+    cache?.set(key, sprints);
+  }
+  const match = sprints.find((s) => dueDateMs >= s.start && dueDateMs <= s.end);
+  return match?.id ?? null;
+}
+
+async function findSlotForDay(db, ownerUid, dayStartMs, dayEndMs, durationMs) {
+  const busy = [];
+  const snap = await db.collection('calendar_blocks')
+    .where('ownerUid', '==', ownerUid)
+    .where('start', '>=', dayStartMs)
+    .where('start', '<=', dayEndMs)
+    .get()
+    .catch(() => ({ docs: [] }));
+  snap.docs.forEach((doc) => {
+    const data = doc.data() || {};
+    const start = toMillis(data.start);
+    const end = toMillis(data.end) || (start ? start + durationMs : null);
+    if (start && end) busy.push([start, end]);
+  });
+  busy.sort((a, b) => a[0] - b[0]);
+  let cursor = dayStartMs + (8 * 60 * 60 * 1000);
+  const windowEnd = dayEndMs - durationMs;
+  for (let i = 0; i <= busy.length; i++) {
+    const nextBusyStart = i < busy.length ? busy[i][0] : dayEndMs;
+    if (cursor + durationMs <= nextBusyStart) {
+      if (cursor <= windowEnd) return cursor;
+      return null;
+    }
+    if (i < busy.length) {
+      cursor = Math.max(cursor, busy[i][1] || cursor);
+    }
+  }
+  return null;
+}
+
+async function upsertChoreBlocksForTask(db, task, lookaheadDays = 14) {
+  return { created: 0, updated: 0, disabled: true };
+}
+
+function makeRef(type) {
+  const prefixMap = { story: 'ST', task: 'TK', goal: 'GR', sprint: 'SP' };
+  const prefix = prefixMap[type] || 'ID';
+  const timestampPart = Date.now().toString(36).toUpperCase().slice(-4);
+  const randomPart = Math.random().toString(36).toUpperCase().slice(2, 6);
+  return `${prefix}-${timestampPart}${randomPart}`;
+}
+
+// --- Redaction helper for safe audit metadata
+function redact(obj) {
+  try {
+    const text = JSON.stringify(obj);
+    // remove emails, bearer tokens, long free text
+    const scrubbed = text
+      .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '[redacted-email]')
+      .replace(/Bearer\s+[A-Za-z0-9\-_.~+/=]+/gi, 'Bearer [redacted]')
+      .replace(/https?:\/\/[^\s"']+/gi, '[redacted-url]');
+    const parsed = JSON.parse(scrubbed);
+    return parsed;
+  } catch {
+    return {};
+  }
+}
+
+async function generateStoryRef(db, ownerUid) {
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const candidate = makeRef('story');
+    const snap = await db.collection('stories')
+      .where('ownerUid', '==', ownerUid)
+      .where('ref', '==', candidate)
+      .limit(1)
+      .get();
+    if (snap.empty) return candidate;
+  }
+  return `ST-${Date.now().toString(36).toUpperCase()}`;
+}
+
+// ===== Deterministic Scheduler (Issue #152 - Phase 1)
+const { secureFunction } = require('./security/recaptchaSecurityHandler');
+const { checkAndIncrementQuota } = require('./utils/perUserQuota');
+const { verifyAppCheckToken, checkOnCallAppCheck } = require('./utils/appCheckVerifier');
+
+exports.buildPlan = httpsV2.onCall(
+  { enforceAppCheck: true },
+  secureFunction(async (req) => {
+    const uid = req?.auth?.uid;
+    if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+
+  const day = req?.data?.day || new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  const useLLM = !!req?.data?.useLLM;
+  const date = new Date(day);
+  if (isNaN(date.getTime())) throw new httpsV2.HttpsError('invalid-argument', 'Invalid day');
+
+  const db = admin.firestore();
+  const dayKey = toDayKey(date);
+  const planId = makePlanId(uid, date);
+
+  // Load blocks for the day (calendar_blocks)
+  const start = new Date(date); start.setHours(0, 0, 0, 0);
+  const end = new Date(date); end.setHours(23, 59, 59, 999);
+  const blocksSnap = await db.collection('calendar_blocks')
+    .where('ownerUid', '==', uid)
+    .where('start', '>=', start.getTime())
+    .where('start', '<=', end.getTime())
+    .get();
+  const blocks = blocksSnap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }))
+    .sort((a, b) => a.start - b.start);
+
+  // Load candidate tasks (status not done)
+  const tasksSnap = await db.collection('tasks')
+    .where('ownerUid', '==', uid)
+    .get();
+  const tasks = tasksSnap.docs
+    .map(d => ({ id: d.id, ...(d.data() || {}) }))
+    .filter(t => t && t.status !== 2 && t.status !== 'done');
+
+  // Load chores due for the selected day
+  const choresSnap = await db.collection('chores')
+    .where('ownerUid', '==', uid)
+    .get();
+  const sod = new Date(date); sod.setHours(0, 0, 0, 0);
+  const eod = new Date(date); eod.setHours(23, 59, 59, 999);
+  function nextDue(rruleText, dtstartMs, fromMs) {
+    try {
+      const hasDt = /DTSTART/i.test(String(rruleText || ''));
+      const text = !hasDt && dtstartMs
+        ? `DTSTART:${new Date(dtstartMs).toISOString().replace(/[-:]/g, '').split('.')[0]}Z\n${rruleText}`
+        : rruleText;
+      const rule = rrulestr(text);
+      const next = rule.after(new Date(fromMs), true);
+      return next ? next.getTime() : null;
+    } catch { return null; }
+  }
+  const chores = choresSnap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }))
+    .map(c => {
+      const due = nextDue(c.rrule, c.dtstart || c.createdAt || undefined, sod.getTime() - 1);
+      return { ...c, _due: due };
+    })
+    .filter(c => c._due && c._due >= sod.getTime() && c._due <= eod.getTime());
+
+  // Load habits (daily, active) and derive preferred start time
+  const habitsSnap = await db.collection('habits')
+    .where('ownerUid', '==', uid)
+    .where('isActive', '==', true)
+    .get();
+  function toTimeMs(hhmm) {
+    const [hh, mm] = String(hhmm || '07:00').split(':').map(x => Number(x));
+    const t = new Date(sod);
+    t.setHours(hh || 7, mm || 0, 0, 0);
+    return t.getTime();
+  }
+  const habits = habitsSnap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }))
+    .filter(h => (h.frequency || 'daily') === 'daily' || ((h.frequency || '') === 'weekly' && Array.isArray(h.daysOfWeek) && h.daysOfWeek.includes(new Date(sod).getDay())))
+    .map(h => ({ ...h, _preferredStart: toTimeMs(h.scheduleTime || '07:00') }));
+
+  // Score deterministically
+  const dayStart = new Date(date); dayStart.setHours(0, 0, 0, 0);
+  const startOfDayMs = dayStart.getTime();
+  const endOfDayMs = startOfDayMs + MS_IN_DAY - 1;
+  const nowMs = Date.now();
+
+  function scoreTask(t) {
+    let score = 0;
+
+    const dueMs = toMillis(t.dueDate);
+    if (dueMs) {
+      if (dueMs < startOfDayMs) {
+        score += 45; // overdue
+      } else if (dueMs <= endOfDayMs) {
+        score += 38; // due today
+      } else {
+        const daysUntil = Math.floor((dueMs - endOfDayMs) / MS_IN_DAY) + 1;
+        if (daysUntil <= 2) score += 28;
+        else if (daysUntil <= 7) score += 18;
+        else if (daysUntil <= 14) score += 10;
+        else score += 4;
+      }
+    } else {
+      score += 6; // no due date, keep on radar
+    }
+
+    const priority = String(t.priority ?? '').toLowerCase();
+    if (priority === '1' || priority === 'p1' || priority === 'high' || t.priority === 1) score += 22;
+    else if (priority === '2' || priority === 'p2' || priority === 'medium' || t.priority === 2) score += 14;
+    else score += 7;
+
+    if (t.effort === 'S') score += 10;
+    else if (t.effort === 'M') score += 6;
+    else score += 2;
+
+    const createdMs = toMillis(t.reminderCreatedAt) ?? toMillis(t.createdAt) ?? toMillis(t.serverUpdatedAt);
+    if (createdMs) {
+      const ageDays = Math.floor((nowMs - createdMs) / MS_IN_DAY);
+      if (ageDays >= 60) score += 22;
+      else if (ageDays >= 30) score += 18;
+      else if (ageDays >= 14) score += 14;
+      else if (ageDays >= 7) score += 10;
+      else if (ageDays >= 3) score += 6;
+      else if (ageDays >= 1) score += 3;
+    }
+
+    if (t.storyId || (t.parentType === 'story' && t.parentId)) score += 12;
+    else if (t.goalId || t.hasGoal) score += 8;
+    else score += 3;
+
+    if (t.sprintId) score += 6;
+    if (t.source === 'ios_reminder' || t.source === 'MacApp' || t.source === 'mac_app') score += 4;
+
+    return Math.max(0, Math.min(100, Math.round(score)));
+  }
+
+  let ranked = tasks.map(t => ({ ...t, _score: scoreTask(t) }))
+    .sort((a, b) => b._score - a._score);
+
+  const importantSet = new Set();
+  const importanceLimit = Number(req?.data?.importantLimit || 12);
+
+  const enriched = ranked.map(t => {
+    const dueMs = toMillis(t.dueDate);
+    const isOverdue = dueMs ? dueMs < startOfDayMs : false;
+    const isDueToday = dueMs ? (dueMs >= startOfDayMs && dueMs <= endOfDayMs) : false;
+    const createdMs = toMillis(t.reminderCreatedAt) ?? toMillis(t.createdAt) ?? toMillis(t.serverUpdatedAt);
+    const ageDays = createdMs ? Math.floor((nowMs - createdMs) / MS_IN_DAY) : 0;
+    const storyLinked = !!(t.storyId || (t.parentType === 'story' && t.parentId));
+    const shouldFlag = (
+      isOverdue ||
+      isDueToday ||
+      t._score >= 72 ||
+      (storyLinked && t._score >= 58) ||
+      (ageDays >= 14 && t._score >= 55)
+    );
+    if (shouldFlag && importantSet.size < importanceLimit) importantSet.add(t.id);
+    return { ...t, _isOverdue: isOverdue, _isDueToday: isDueToday, _ageDays: ageDays, _storyLinked: storyLinked };
+  });
+
+  // Ensure at least top 5 tasks are surfaced
+  for (const t of enriched.slice(0, 5)) importantSet.add(t.id);
+
+  ranked = enriched;
+
+  const importanceUpdates = [];
+  for (const t of ranked) {
+    const desiredScore = t._score;
+    const desiredImportant = importantSet.has(t.id);
+    const existingScore = typeof t.importanceScore === 'number' ? Math.round(t.importanceScore) : null;
+    const existingImportant = !!t.isImportant;
+    if (existingScore !== desiredScore || existingImportant !== desiredImportant) {
+      importanceUpdates.push({
+        id: t.id,
+        data: {
+          importanceScore: desiredScore,
+          isImportant: desiredImportant,
+          importanceUpdatedAt: admin.firestore.FieldValue.serverTimestamp()
+        }
+      });
+    }
+  }
+
+  if (importanceUpdates.length && !req?.data?.skipImportanceWrite) {
+    const bulk = db.bulkWriter();
+    for (const update of importanceUpdates) {
+      const ref = db.collection('tasks').doc(update.id);
+      bulk.set(ref, update.data, { merge: true });
+    }
+    await bulk.close();
+  }
+
+  // Optional: soft LLM re-rank within a 20% band – omitted in Phase 1 to keep deterministic behavior
+
+  // Pack into blocks greedily
+  const items = [
+    ...ranked.map(t => ({
+      type: 'task',
+      id: t.id,
+      title: t.title || 'Task',
+      minutes: Number(t.estimateMin) || (t.effort === 'S' ? 20 : t.effort === 'M' ? 45 : 90),
+    })),
+    ...chores.map(c => ({
+      type: 'chore',
+      id: c.id,
+      title: c.title || 'Chore',
+      minutes: Number(c.estimatedMinutes) || 15
+    })),
+    ...habits.map(h => ({
+      type: 'habit',
+      id: h.id,
+      title: h.name || 'Habit',
+      minutes: 15,
+      preferredStart: h._preferredStart
+    }))
+  ];
+
+  const assignments = [];
+  const blockFree = new Map();
+  for (const b of blocks) {
+    const free = Math.max(0, Math.floor((Number(b.end) - Number(b.start)) / 60000));
+    blockFree.set(b.id, { free, cursor: Number(b.start) });
+  }
+
+  for (const it of items) {
+    // Find earliest block with enough remaining minutes
+    let placed = false;
+    // Try to respect preferredStart if provided (habits)
+    if (it.preferredStart) {
+      for (const b of blocks) {
+        const state = blockFree.get(b.id);
+        if (!state) continue;
+        if (it.preferredStart >= b.start && (it.preferredStart + it.minutes * 60000) <= b.end) {
+          // place at max(cursor, preferredStart)
+          const startMs = Math.max(state.cursor, it.preferredStart);
+          const endMs = startMs + it.minutes * 60000;
+          if (endMs <= b.end && (endMs - startMs) / 60000 <= state.free) {
+            assignments.push({
+              id: makeAssignmentId({ planId, itemType: it.type, itemId: it.id }),
+              planId, dayKey, userId: uid, ownerUid: uid,
+              itemType: it.type, itemId: it.id, title: it.title,
+              estimatedMinutes: it.minutes, blockId: b.id, start: startMs, end: endMs,
+              status: 'planned', createdAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp()
+            });
+            state.free -= Math.floor((endMs - startMs) / 60000);
+            state.cursor = endMs;
+            placed = true;
+            break;
+          }
+        }
+      }
+      if (!placed) {
+        // schedule without a block at preferredStart
+        const startMs = it.preferredStart;
+        const endMs = startMs + it.minutes * 60000;
+        assignments.push({
+          id: makeAssignmentId({ planId, itemType: it.type, itemId: it.id }),
+          planId, dayKey, userId: uid, ownerUid: uid,
+          itemType: it.type, itemId: it.id, title: it.title,
+          estimatedMinutes: it.minutes, start: startMs, end: endMs,
+          status: 'planned', createdAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+        placed = true;
+      }
+    }
+    if (placed) continue;
+    for (const b of blocks) {
+      const state = blockFree.get(b.id);
+      if (!state) continue;
+      if (state.free >= it.minutes) {
+        const startMs = state.cursor;
+        const endMs = startMs + it.minutes * 60000;
+        assignments.push({
+          id: makeAssignmentId({ planId, itemType: it.type, itemId: it.id }),
+          planId,
+          dayKey,
+          userId: uid,
+          ownerUid: uid,
+          itemType: it.type,
+          itemId: it.id,
+          title: it.title,
+          estimatedMinutes: it.minutes,
+          blockId: b.id,
+          start: startMs,
+          end: endMs,
+          status: 'planned',
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+        state.free -= it.minutes;
+        state.cursor = endMs;
+        placed = true;
+        break;
+      }
+    }
+    if (!placed) {
+      // Defer (overflow)
+      assignments.push({
+        id: makeAssignmentId({ planId, itemType: it.type, itemId: it.id }),
+        planId,
+        dayKey,
+        userId: uid,
+        ownerUid: uid,
+        itemType: it.type,
+        itemId: it.id,
+        title: it.title,
+        estimatedMinutes: it.minutes,
+        status: 'deferred',
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+    }
+  }
+
+  // Persist plan assignments idempotently
+  const batch = db.batch();
+  for (const a of assignments) {
+    const ref = db.collection('plans').doc(dayKey).collection('assignments').doc(a.id);
+    batch.set(ref, a, { merge: true });
+  }
+  await batch.commit();
+
+  // Audit trail
+  const activityRef = db.collection('activity_stream').doc();
+  await activityRef.set({
+    id: activityRef.id,
+    entityId: planId,
+    entityType: 'plan',
+    activityType: 'scheduler_plan_built',
+    userId: uid,
+    ownerUid: uid,
+    description: `Built plan with ${assignments.length} assignments for ${dayKey}`,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp()
+  });
+
+  const importantTasks = ranked
+    .filter(t => importantSet.has(t.id))
+    .map(t => ({
+      id: t.id,
+      title: t.title || 'Task',
+      score: t._score,
+      dueDate: toMillis(t.dueDate),
+      ageDays: t._ageDays,
+      storyId: t.storyId || null
+    }));
+
+  return {
+    planId,
+    dayKey,
+    assignments: assignments.map(a => ({ id: a.id, blockId: a.blockId, status: a.status })),
+    importantTasks
+  };
+  }, {
+    requireAuth: true,
+    minRecaptchaScore: 0.5,
+  })
+);
+
+// ===== Spec wrappers: syncCalendarAndTasks, autoEnrichTasks, taskStoryConversion, plannerLLM
+exports.syncCalendarAndTasks = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] },
+  secureFunction(async (req) => {
+    const uid = req?.auth?.uid;
+    if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+
+  const direction = String(req?.data?.direction || 'both').toLowerCase();
+  const doPull = direction === 'both' || direction === 'gcal->firestore' || direction === 'pull';
+  const doPush = direction === 'both' || direction === 'firestore->gcal' || direction === 'push';
+  let reconciled = 0;
+  let pushed = 0;
+  let blocksSynced = 0;
+  try {
+    // Two-way sync for calendar_blocks within a default window
+    if (exports.syncCalendarBlocksBidirectional?.run) {
+      try {
+        const res0 = await exports.syncCalendarBlocksBidirectional.run({ auth: { uid }, data: { direction } });
+        blocksSynced = Number(res0?.result?.synced || res0?.synced || 0);
+      } catch (e) {
+        console.warn('[syncCalendarAndTasks] blocks sync failed', e?.message || e);
+      }
+    }
+    if (doPull && exports.reconcilePlanFromGoogleCalendar?.run) {
+      const res = await exports.reconcilePlanFromGoogleCalendar.run({ auth: { uid }, data: {} });
+      reconciled = Number(res?.result?.reconciled || res?.reconciled || 0);
+    }
+    if (doPush && exports.syncPlanToGoogleCalendar?.run) {
+      const res2 = await exports.syncPlanToGoogleCalendar.run({ auth: { uid }, data: {} });
+      pushed = Number(res2?.result?.pushed || res2?.pushed || 0);
+    }
+  } catch (e) {
+    console.warn('[syncCalendarAndTasks] failed', e?.message || e);
+    throw new httpsV2.HttpsError('internal', 'Calendar sync failed');
+  } finally {
+    try {
+      const db = ensureFirestore();
+      const ref = db.collection('activity_stream').doc();
+      await ref.set({
+        id: ref.id,
+        entityType: 'calendar',
+        entityId: `calendar_${uid}`,
+        activityType: 'calendar_sync',
+        userId: uid,
+        ownerUid: uid,
+        description: `Calendar sync completed: blocks ${blocksSynced}, pulled ${reconciled}, pushed ${pushed}`,
+        metadata: redact({ direction, blocksSynced, reconciled, pushed }),
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    } catch { }
+  }
+  return { ok: true, blocksSynced, reconciled, pushed };
+  }, {
+    requireAuth: true,
+    minRecaptchaScore: 0.5,
+  })
+);
+
+exports.autoEnrichTasks = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY], maxInstances: 5, enforceAppCheck: true }, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+
+  const appCheckResult = checkOnCallAppCheck(req, 'autoEnrichTasks');
+  if (!appCheckResult.valid) throw new httpsV2.HttpsError('unauthenticated', appCheckResult.reason || 'App Check required');
+
+  const quotaCheck = await checkAndIncrementQuota(uid, 'auto_enrich_tasks');
+  if (!quotaCheck.allowed) throw new httpsV2.HttpsError('resource-exhausted', quotaCheck.message || 'Daily AI quota exceeded');
+
+  const estimateMissing = req?.data?.estimateMissing !== false;
+  const linkSuggestions = !!req?.data?.linkSuggestions;
+  const limit = Math.max(1, Math.min(Number(req?.data?.limit || 20), 100));
+
+  const db = ensureFirestore();
+  const snap = await db.collection('tasks').where('ownerUid', '==', uid).get();
+  const all = snap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }));
+  const candidates = all.filter(t => {
+    const done = String(t.status || '').toLowerCase();
+    const isDone = done === 'done' || done === 'complete' || Number(t.status) === 2;
+    const needsEstimate = estimateMissing && !(Number(t.estimateMin) > 0) && !t.estimatedHours;
+    const needsLink = linkSuggestions && !(t.goalId || t.storyId || (t.parentType && t.parentId));
+    return !isDone && (needsEstimate || needsLink);
+  }).slice(0, limit);
+
+  let updated = 0, estimatesAdded = 0, linksSuggested = 0;
+  const batch = db.batch();
+  for (const t of candidates) {
+    let est = Number(t.estimateMin || 0);
+    let suggestion = null;
+    try {
+      const system = 'Return compact JSON for a single task enrichment.';
+      const user = [
+        'Task:',
+        JSON.stringify({ title: t.title || 'Task', description: (t.description || '').slice(0, 400) }),
+        'Respond as {"estimateMin": number, "suggestedGoalId"?: string}',
+      ].join('\n');
+      const text = await callLLMJson({ system, user, purpose: 'taskEnrich', userId: uid, expectJson: true, temperature: 0.1 });
+      const obj = JSON.parse(text || '{}');
+      if (estimateMissing && Number(obj.estimateMin || 0) > 0) {
+        est = Math.max(10, Math.min(480, Math.round(Number(obj.estimateMin))));
+      }
+      if (linkSuggestions && obj.suggestedGoalId && typeof obj.suggestedGoalId === 'string') {
+        suggestion = String(obj.suggestedGoalId);
+      }
+    } catch { }
+    const ref = db.collection('tasks').doc(t.id);
+    const patch = { updatedAt: admin.firestore.FieldValue.serverTimestamp() };
+    if (estimateMissing && est > 0) { patch.estimateMin = est; estimatesAdded++; }
+    if (linkSuggestions && suggestion) { patch.suggestedGoalId = suggestion; linksSuggested++; }
+    if (patch.estimateMin || patch.suggestedGoalId) { batch.set(ref, patch, { merge: true }); updated++; }
+  }
+  if (updated) await batch.commit();
+
+  try {
+    const ref = db.collection('activity_stream').doc();
+    await ref.set({
+      id: ref.id,
+      entityType: 'task',
+      entityId: `tasks_${uid}`,
+      activityType: 'auto_enrich_tasks',
+      userId: uid,
+      ownerUid: uid,
+      description: `Auto-enriched ${updated} tasks (estimates: ${estimatesAdded}, links: ${linksSuggested})`,
+      metadata: redact({ updated, estimatesAdded, linksSuggested, limit }),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  } catch { }
+
+  // Optional: immediately trigger a short planning backfill after enrichment
+  try {
+    const settingsSnap = await db.collection('user_settings').doc(uid).get();
+    const enabled = settingsSnap.exists && settingsSnap.data() && settingsSnap.data().backfillAfterEnrichment === true;
+    if (enabled && updated > 0 && exports.plannerLLM?.run) {
+      try {
+        await exports.plannerLLM.run({ auth: { uid }, data: { horizonDays: 2 } });
+      } catch (e) {
+        console.warn('[autoEnrichTasks] backfill trigger failed', e?.message || e);
+      }
+    }
+  } catch { }
+
+  return { processed: candidates.length, updated, estimatesAdded, linksSuggested };
+});
+
+// ===== enhanceNewTask: spell-check title, estimate points, score on new task creation
+exports.enhanceNewTask = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY], memory: '512MiB' },
+  secureFunction(async (req) => {
+    const uid = req?.auth?.uid;
+    if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const { taskId } = req?.data || {};
+  if (!taskId) throw new httpsV2.HttpsError('invalid-argument', 'taskId required');
+
+  const db = ensureFirestore();
+  const taskDoc = await db.collection('tasks').doc(taskId).get();
+  if (!taskDoc.exists) return { ok: false, reason: 'not_found' };
+  const task = taskDoc.data();
+  if (task.ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Not your task');
+
+  const patch = { updatedAt: admin.firestore.FieldValue.serverTimestamp() };
+  let correctedTitle = task.title || '';
+  let estimatedPoints = null;
+
+  try {
+    const system = 'You are a task management assistant. Return compact JSON only.';
+    const user = [
+      'Given this task title and description, do two things:',
+      '1. Fix any spelling/grammar errors in the title (keep it concise)',
+      '2. Estimate effort points as a number (decimals allowed in 0.25 increments, range 0.25-8)',
+      '',
+      `Title: "${task.title || ''}"`,
+      `Description: "${(task.description || '').slice(0, 400)}"`,
+      '',
+      'Respond as: {"correctedTitle": "string", "points": number, "reason": "string"}',
+    ].join('\n');
+    const text = await callLLMJson({ system, user, purpose: 'enhanceNewTask', userId: uid, expectJson: true, temperature: 0.1 });
+    const obj = JSON.parse(text || '{}');
+
+    if (obj.correctedTitle && typeof obj.correctedTitle === 'string' && obj.correctedTitle.trim() !== (task.title || '').trim()) {
+      correctedTitle = obj.correctedTitle.trim().slice(0, 200);
+      patch.title = correctedTitle;
+      patch.titleCorrectedByAi = true;
+    }
+    const normalizedEstimatePoints = clampTaskPoints(obj.points);
+    if (normalizedEstimatePoints != null && !(Number(task.points) > 0)) {
+      estimatedPoints = normalizedEstimatePoints;
+      patch.points = estimatedPoints;
+      patch.pointsEstimatedByAi = true;
+    }
+  } catch (e) {
+    console.warn('[enhanceNewTask] LLM call failed', e?.message || e);
+  }
+
+  const hasChanges = patch.title || patch.points;
+  if (hasChanges) {
+    await taskDoc.ref.set(patch, { merge: true });
+  }
+
+  // Run delta rescore to compute criticality and update top3
+  try {
+    const persona = String(task.persona || 'personal').toLowerCase() === 'work' ? 'work' : 'personal';
+    const { computeCriticalityScore, buildCriticalityReason, priorityBoostFor, normalizeUserPriority, normalizeTheme, _deltaTop3ForPersona } = require('./nightlyOrchestration');
+    if (typeof _deltaTop3ForPersona === 'function') {
+      await _deltaTop3ForPersona(db, uid, persona);
+    }
+  } catch (e) {
+    console.warn('[enhanceNewTask] delta rescore failed', e?.message || e);
+  }
+
+  return { ok: true, correctedTitle, estimatedPoints };
+  }, {
+    requireAuth: true,
+    minRecaptchaScore: 0.6,
+  })
+);
+
+
+exports.taskStoryConversion = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY], maxInstances: 5, enforceAppCheck: true }, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+
+  const appCheckResult = checkOnCallAppCheck(req, 'taskStoryConversion');
+  if (!appCheckResult.valid) throw new httpsV2.HttpsError('unauthenticated', appCheckResult.reason || 'App Check required');
+
+  const quotaCheck = await checkAndIncrementQuota(uid, 'task_story_conversion');
+  if (!quotaCheck.allowed) throw new httpsV2.HttpsError('resource-exhausted', quotaCheck.message || 'Daily AI quota exceeded');
+
+  const autoApply = !!req?.data?.autoApply;
+  const taskIds = Array.isArray(req?.data?.taskIds) ? req.data.taskIds.map(String) : [];
+
+  let suggestions = [];
+  try {
+    if (exports.suggestTaskStoryConversions?.run) {
+      const res = await exports.suggestTaskStoryConversions.run({ auth: { uid }, data: { taskIds, limit: 12 } });
+      suggestions = res?.suggestions || res?.result?.suggestions || [];
+    }
+  } catch (e) {
+    console.warn('[taskStoryConversion] suggest failed', e?.message || e);
+  }
+
+  let converted = [];
+  if (autoApply) {
+    const conversions = suggestions
+      .filter(s => s.taskId && s.storyTitle && s.convert === true)
+      .map(s => ({ taskId: s.taskId, storyTitle: s.storyTitle, storyDescription: s.storyDescription || '', points: s.points }));
+    if (conversions.length && exports.convertTasksToStories?.run) {
+      try {
+        const res2 = await exports.convertTasksToStories.run({ auth: { uid }, data: { conversions: conversions.slice(0, 10) } });
+        converted = res2?.results || res2?.result?.results || [];
+      } catch (e2) {
+        console.warn('[taskStoryConversion] convert failed', e2?.message || e2);
+      }
+    }
+  }
+
+  try {
+    const db = ensureFirestore();
+    const ref = db.collection('activity_stream').doc();
+    await ref.set({
+      id: ref.id,
+      entityType: 'task',
+      entityId: `tasks_${uid}`,
+      activityType: 'task_story_conversion',
+      userId: uid,
+      ownerUid: uid,
+      description: `Suggested ${suggestions.length}, converted ${converted.filter(r => r.status === 'converted').length}`,
+      metadata: redact({ suggested: suggestions.length, converted: converted.length }),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  } catch { }
+
+  return { suggestions, converted };
+});
+
+exports.plannerLLM = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY], maxInstances: 3, enforceAppCheck: true }, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+
+  const appCheckResult = checkOnCallAppCheck(req, 'plannerLLM');
+  if (!appCheckResult.valid) throw new httpsV2.HttpsError('unauthenticated', appCheckResult.reason || 'App Check required');
+
+  const quotaCheck = await checkAndIncrementQuota(uid, 'planner_llm');
+  if (!quotaCheck.allowed) throw new httpsV2.HttpsError('resource-exhausted', quotaCheck.message || 'Daily AI quota exceeded');
+
+  const day = req?.data?.day || new Date().toISOString().slice(0, 10);
+  const persona = String(req?.data?.persona || 'personal');
+  const horizonDays = Math.max(1, Math.min(Number(req?.data?.horizonDays || 1), 14));
+  if (!exports.planCalendar?.run) throw new httpsV2.HttpsError('failed-precondition', 'planner not available');
+  const res = await exports.planCalendar.run({ auth: { uid }, data: { startDate: day, persona, horizonDays } });
+  return res?.result || res;
+});
+
+async function fetchGoogleBusy(uid, start, end) {
+  try {
+    const accessToken = await getAccessToken(uid);
+    if (!accessToken) return [];
+    const res = await fetch('https://www.googleapis.com/calendar/v3/freeBusy', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        timeMin: start.toUTC().toISO(),
+        timeMax: end.toUTC().toISO(),
+        items: [{ id: 'primary' }],
+      }),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`freeBusy ${res.status}: ${text}`);
+    }
+    const payload = await res.json();
+    return payload?.calendars?.primary?.busy || [];
+  } catch (err) {
+    console.warn('[planBlocksV2] busy fetch failed', err.message || err);
+    return [];
+  }
+}
+
+function coercePersonaTimezone(entity) {
+  return entity?.timezone || entity?.recurrence?.timezone || DEFAULT_TIMEZONE;
+}
+
+function computeNextDueAt(recurrence = null, dtstart, fromMillis, lookAheadDays = 60) {
+  if (!recurrence || !recurrence.rrule) return null;
+  const zone = coerceZone(recurrence.timezone);
+  const start = DateTime.fromMillis(fromMillis, { zone }).startOf('day');
+  const end = start.plus({ days: lookAheadDays }).endOf('day');
+  const occurrences = expandRecurrence({ ...recurrence, dtstart }, start, end);
+  if (!occurrences.length) return null;
+  const next = occurrences.find((occ) => occ.toMillis() >= fromMillis);
+  return (next || occurrences[0]).toMillis();
+}
+
+function calculateStreakMetrics(entity, completionMillis) {
+  const zone = coercePersonaTimezone(entity);
+  const last = entity?.lastCompletedAt || null;
+  let streak = Number(entity?.completedStreak || 0);
+  let longest = Number(entity?.longestStreak || 0);
+  if (!last) {
+    streak = 1;
+    return { streak, longest: Math.max(longest, streak) };
+  }
+  const lastDay = DateTime.fromMillis(last, { zone }).startOf('day');
+  const currentDay = DateTime.fromMillis(completionMillis, { zone }).startOf('day');
+  const diff = currentDay.diff(lastDay, 'days').days;
+  if (diff <= 0) {
+    streak = Number(entity?.completedStreak || 1);
+  } else if (diff === 1) {
+    streak = Number(entity?.completedStreak || 0) + 1;
+  } else {
+    streak = 1;
+  }
+  longest = Math.max(longest, streak);
+  return { streak, longest };
+}
+
+async function getChoresCollection(uid) {
+  const db = admin.firestore();
+  const snap = await db.collection('chores').where('ownerUid', '==', uid).get();
+  return snap.docs.map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() || {}) }));
+}
+
+async function getRoutinesCollection(uid) {
+  const db = admin.firestore();
+  const snap = await db.collection('routines').where('ownerUid', '==', uid).get();
+  return snap.docs.map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() || {}) }));
+}
+
+exports.planBlocksV2 = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+
+  const timezone = req?.data?.timezone || DEFAULT_TIMEZONE;
+  const persona = req?.data?.persona || 'personal';
+  const startDate = req?.data?.startDate || DateTime.now().setZone(timezone).toISODate();
+  const days = Math.min(Math.max(Number(req?.data?.days || 7), 1), 30);
+  const start = DateTime.fromISO(startDate, { zone: timezone }).startOf('day');
+  if (!start.isValid) {
+    throw new httpsV2.HttpsError('invalid-argument', 'Invalid startDate');
+  }
+  const end = start.plus({ days: days - 1 }).endOf('day');
+
+  const db = admin.firestore();
+  let busy = req?.data?.includeBusy === false ? [] : await fetchGoogleBusy(uid, start, end);
+
+  // Apply quiet hours from profile as synthetic busy windows
+  try {
+    const db = ensureFirestore();
+    const profileSnap = await db.collection('profiles').doc(uid).get();
+    const profile = profileSnap.exists ? (profileSnap.data() || {}) : {};
+    const qhStart = Number(profile.quietHoursStart); // 0-23
+    const qhEnd = Number(profile.quietHoursEnd);     // 0-23
+    if (Number.isFinite(qhStart) && Number.isFinite(qhEnd)) {
+      const daysSpan = Math.max(1, Math.round(end.diff(start, 'days').days) + 1);
+      const extras = [];
+      for (let i = 0; i < daysSpan; i++) {
+        const d0 = start.plus({ days: i }).startOf('day');
+        const d1 = d0.plus({ days: 1 });
+        // We allow scheduling between qhStart..qhEnd; all other hours are busy
+        if (qhStart === qhEnd) {
+          // If equal, treat as fully available (no quiet hours)
+          continue;
+        }
+        const allowedStart = d0.plus({ hours: qhStart });
+        const allowedEnd = d0.plus({ hours: qhEnd });
+        if (qhStart < qhEnd) {
+          // Busy from 00:00->allowedStart and allowedEnd->24:00
+          extras.push({ start: d0.toISO(), end: allowedStart.toISO() });
+          extras.push({ start: allowedEnd.toISO(), end: d1.toISO() });
+        } else {
+          // Overnight allowed window (e.g., 22..6) => busy during allowedEnd..allowedStart
+          extras.push({ start: allowedEnd.toISO(), end: allowedStart.toISO() });
+        }
+      }
+      busy = [...busy, ...extras];
+    }
+  } catch (e) {
+    console.warn('[planBlocksV2] quiet hours application failed', e?.message || e);
+  }
+
+  const isMainGigLabel = (value) => {
+    const raw = String(value || '').toLowerCase();
+    if (!raw) return false;
+    if (raw.includes('workout')) return false;
+    if (raw.includes('main gig') || raw.includes('work shift')) return true;
+    return /\bwork\b/.test(raw);
+  };
+
+  const isMainGigBlock = (block) => {
+    if (!block) return false;
+    if (block.entityType === 'work_shift' || block.sourceType === 'work_shift_allocation') return true;
+    const label = block.theme || block.category || block.title || '';
+    return isMainGigLabel(label);
+  };
+
+  // Apply calendar blocks as busy windows (persona-aware for work shift blocks)
+  try {
+    const blocksSnap = await db.collection('calendar_blocks')
+      .where('ownerUid', '==', uid)
+      .where('start', '>=', start.toMillis())
+      .where('start', '<=', end.toMillis())
+      .get()
+      .catch(() => ({ docs: [] }));
+    const blocks = blocksSnap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+
+    const busyPersonal = [...busy];
+    const busyWork = [...busy];
+    const mainGigBlocks = blocks.filter((b) => isMainGigBlock(b) && b.start && b.end);
+
+    for (const b of blocks) {
+      if (!b.start || !b.end) continue;
+      const interval = {
+        start: DateTime.fromMillis(b.start, { zone: timezone }).toISO(),
+        end: DateTime.fromMillis(b.end, { zone: timezone }).toISO(),
+      };
+      if (isMainGigBlock(b)) {
+        busyPersonal.push(interval);
+      } else {
+        busyPersonal.push(interval);
+        busyWork.push(interval);
+      }
+    }
+
+    if (persona === 'work') {
+      // Block any time outside main gig blocks to keep work scheduling within work windows
+      const daysSpan = Math.max(1, Math.round(end.diff(start, 'days').days) + 1);
+      for (let i = 0; i < daysSpan; i++) {
+        const dayStart = start.plus({ days: i }).startOf('day');
+        const dayEnd = dayStart.endOf('day');
+        const dayBlocks = mainGigBlocks
+          .filter((b) => b.start && b.end)
+          .filter((b) => {
+            const blockStart = DateTime.fromMillis(b.start, { zone: timezone });
+            const blockEnd = DateTime.fromMillis(b.end, { zone: timezone });
+            return blockEnd > dayStart && blockStart < dayEnd;
+          })
+          .map((b) => ({
+            start: DateTime.fromMillis(b.start, { zone: timezone }),
+            end: DateTime.fromMillis(b.end, { zone: timezone }),
+          }))
+          .sort((a, b) => a.start.toMillis() - b.start.toMillis());
+
+        if (!dayBlocks.length) {
+          busyWork.push({ start: dayStart.toISO(), end: dayEnd.toISO() });
+          continue;
+        }
+
+        let cursor = dayStart;
+        for (const block of dayBlocks) {
+          if (block.start > cursor) {
+            busyWork.push({ start: cursor.toISO(), end: block.start.toISO() });
+          }
+          cursor = block.end > cursor ? block.end : cursor;
+        }
+        if (cursor < dayEnd) {
+          busyWork.push({ start: cursor.toISO(), end: dayEnd.toISO() });
+        }
+      }
+    }
+
+    busy = persona === 'work' ? busyWork : busyPersonal;
+  } catch (err) {
+    console.warn('[planBlocksV2] calendar block busy merge failed', err?.message || err);
+  }
+
+  // Fetch Theme Allocations
+  let themeAllocationPlan = [];
+  try {
+    const taDoc = await db.collection('theme_allocations').doc(uid).get();
+    if (taDoc.exists) themeAllocationPlan = taDoc.data() || {};
+  } catch (e) { console.warn('Failed to fetch theme allocations', e); }
+  const themeAllocations = resolveThemeAllocationsForDate(themeAllocationPlan, start, timezone);
+
+  const plan = await planSchedule({
+    db,
+    userId: uid,
+    windowStart: start,
+    windowEnd: end,
+    busy,
+    themeAllocations,
+    includeChores: true, // allow routines/chores/habits to populate scheduled_instances
+    persona,
+  });
+
+  const existingIds = new Set(plan.existingIds || []);
+  const batch = db.batch();
+  const nowMs = Date.now();
+
+  const plannedFiltered = plan.planned.filter(p => !['story', 'task'].includes(String(p.sourceType || '').toLowerCase()));
+  for (const instance of plannedFiltered) {
+    const ref = db.collection('scheduled_instances').doc(instance.id);
+    const isExisting = existingIds.has(instance.id);
+    const payload = {
+      ...instance,
+      status: instance.status || 'planned',
+      userId: uid,
+      ownerUid: uid,
+      updatedAt: nowMs,
+    };
+    if (!isExisting) {
+      payload.createdAt = nowMs;
+    }
+    batch.set(ref, payload, { merge: true });
+
+    // Mirror routines/chores/habits into calendar_blocks for internal tracking
+    const blockId = `sched_${instance.id}`;
+    const blockRef = db.collection('calendar_blocks').doc(blockId);
+    const startMs = instance.plannedStart ? new Date(instance.plannedStart).getTime() : null;
+    const endMs = instance.plannedEnd ? new Date(instance.plannedEnd).getTime() : null;
+    if (startMs && endMs) {
+      const sourceType = String(instance.sourceType || 'routine').toLowerCase();
+      const syncRoutineLikeToGoogle = sourceType === 'chore';
+      batch.set(blockRef, {
+        ownerUid: uid,
+        title: instance.title || 'Routine',
+        start: startMs,
+        end: endMs,
+        category: instance.sourceType || 'routine',
+        entityType: instance.sourceType || 'routine',
+        status: 'planned',
+        aiGenerated: true,
+        deepLink: instance.deepLink || null,
+        placementReason: (instance.schedulingContext && instance.schedulingContext.policyMode) || 'routine',
+        theme: instance.theme || null,
+        goalId: instance.goalId || null,
+        choreId: sourceType === 'chore' ? instance.sourceId || null : null,
+        routineId: sourceType === 'routine' ? instance.sourceId || null : null,
+        habitId: sourceType === 'habit' ? instance.sourceId || null : null,
+        updatedAt: nowMs,
+        createdAt: nowMs,
+        syncToGoogle: syncRoutineLikeToGoogle,
+      }, { merge: true });
+    }
+  }
+
+  const unscheduledFiltered = plan.unscheduled.filter(p => !['story', 'task'].includes(String(p.sourceType || p.itemType || '').toLowerCase()));
+  for (const unscheduled of unscheduledFiltered) {
+    const id = schedulerMakeInstanceId({
+      userId: uid,
+      sourceType: unscheduled.sourceType,
+      sourceId: unscheduled.sourceId,
+      occurrenceDate: isoDayKeyToDayKey(unscheduled.dayKey),
+    });
+    const ref = db.collection('scheduled_instances').doc(id);
+    const isExisting = existingIds.has(id);
+    const schedulingContext = {
+      solverRunId: plan.solverRunId,
+      policyMode: 'policyMode' in unscheduled ? unscheduled.policyMode || null : null,
+    };
+    if (unscheduled.deepLink) {
+      schedulingContext.deepLink = unscheduled.deepLink;
+    }
+    const payload = {
+      id,
+      userId: uid,
+      ownerUid: uid,
+      sourceType: unscheduled.sourceType,
+      sourceId: unscheduled.sourceId,
+      title: unscheduled.title || null,
+      occurrenceDate: isoDayKeyToDayKey(unscheduled.dayKey),
+      status: 'unscheduled',
+      statusReason: unscheduled.reason,
+      durationMinutes: 0,
+      priority: 5,
+      requiredBlockId: unscheduled.requiredBlockId || null,
+      candidateBlockIds: unscheduled.candidateBlockIds || [],
+      deepLink: unscheduled.deepLink || null,
+      mobileCheckinUrl: unscheduled.mobileCheckinUrl || null,
+      schedulingContext,
+      updatedAt: nowMs,
+    };
+    if (!isExisting) {
+      payload.createdAt = nowMs;
+    }
+    batch.set(ref, payload, { merge: true });
+  }
+
+  await batch.commit();
+
+  const jobDocId = `${uid}__${start.toISODate()}`;
+  await db.collection('planning_jobs').doc(jobDocId).set({
+    id: jobDocId,
+    userId: uid,
+    ownerUid: uid,
+    planningDate: start.toISODate(),
+    windowStart: start.toISODate(),
+    windowEnd: end.toISODate(),
+    solverRunId: plan.solverRunId,
+    status: 'succeeded',
+    startedAt: nowMs,
+    completedAt: nowMs,
+    plannedCount: plan.planned.length,
+    unscheduledCount: plan.unscheduled.length,
+    createdAt: nowMs,
+    updatedAt: nowMs,
+  }, { merge: true });
+
+  return {
+    solverRunId: plan.solverRunId,
+    planned: plan.planned,
+    unscheduled: plan.unscheduled,
+    conflicts: plan.conflicts,
+  };
+});
+
+// Optional HTTP wrapper for cross-origin fetch from trusted frontends
+exports.planBlocksV2Http = httpsV2.onRequest({ invoker: 'public' }, async (req, res) => {
+  const allowedOrigins = new Set([
+    'https://bob.jc1.tech',
+    'https://bob20250810.web.app',
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+  ]);
+  const origin = String(req.get('origin') || '');
+  if (allowedOrigins.has(origin)) {
+    res.set('Access-Control-Allow-Origin', origin);
+    res.set('Vary', 'Origin');
+  }
+  res.set('Access-Control-Allow-Credentials', 'true');
+  res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+
+  if (req.method === 'OPTIONS') {
+    res.status(204).send('');
+    return;
+  }
+
+  try {
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: 'Method not allowed' });
+      return;
+    }
+    const authHeader = String(req.get('Authorization') || '');
+    const idToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+    if (!idToken) {
+      res.status(401).json({ error: 'Missing Authorization: Bearer <Firebase ID token>' });
+      return;
+    }
+    let decoded;
+    try {
+      decoded = await admin.auth().verifyIdToken(idToken);
+    } catch (e) {
+      res.status(401).json({ error: 'Invalid or expired ID token' });
+      return;
+    }
+
+    const uid = decoded.uid;
+    const timezone = req.body?.timezone || DEFAULT_TIMEZONE;
+    const persona = req.body?.persona || 'personal';
+    const startDate = req.body?.startDate || DateTime.now().setZone(timezone).toISODate();
+    const days = Math.min(Math.max(Number(req.body?.days || 7), 1), 30);
+    const start = DateTime.fromISO(startDate, { zone: timezone }).startOf('day');
+    if (!start.isValid) {
+      res.status(400).json({ error: 'Invalid startDate' });
+      return;
+    }
+    const end = start.plus({ days: days - 1 }).endOf('day');
+
+    const db = admin.firestore();
+    let busy = req.body?.includeBusy === false ? [] : await fetchGoogleBusy(uid, start, end);
+
+    try {
+      const fdb = ensureFirestore();
+      const profileSnap = await fdb.collection('profiles').doc(uid).get();
+      const profile = profileSnap.exists ? (profileSnap.data() || {}) : {};
+      const qhStart = Number(profile.quietHoursStart);
+      const qhEnd = Number(profile.quietHoursEnd);
+      if (Number.isFinite(qhStart) && Number.isFinite(qhEnd)) {
+        const daysSpan = Math.max(1, Math.round(end.diff(start, 'days').days) + 1);
+        const extras = [];
+        for (let i = 0; i < daysSpan; i++) {
+          const d0 = start.plus({ days: i }).startOf('day');
+          const d1 = d0.plus({ days: 1 });
+          if (qhStart === qhEnd) continue;
+          const allowedStart = d0.plus({ hours: qhStart });
+          const allowedEnd = d0.plus({ hours: qhEnd });
+          if (qhStart < qhEnd) {
+            extras.push({ start: d0.toISO(), end: allowedStart.toISO() });
+            extras.push({ start: allowedEnd.toISO(), end: d1.toISO() });
+          } else {
+            extras.push({ start: allowedEnd.toISO(), end: allowedStart.toISO() });
+          }
+        }
+        busy = [...busy, ...extras];
+      }
+    } catch (e) {
+      console.warn('[planBlocksV2Http] quiet hours apply failed', e?.message || e);
+    }
+
+    const isMainGigLabel = (value) => {
+      const raw = String(value || '').toLowerCase();
+      if (!raw) return false;
+      if (raw.includes('workout')) return false;
+      if (raw.includes('main gig') || raw.includes('work shift')) return true;
+      return /\bwork\b/.test(raw);
+    };
+
+    const isMainGigBlock = (block) => {
+      if (!block) return false;
+      if (block.entityType === 'work_shift' || block.sourceType === 'work_shift_allocation') return true;
+      const label = block.theme || block.category || block.title || '';
+      return isMainGigLabel(label);
+    };
+
+    try {
+      const blocksSnap = await db.collection('calendar_blocks')
+        .where('ownerUid', '==', uid)
+        .where('start', '>=', start.toMillis())
+        .where('start', '<=', end.toMillis())
+        .get()
+        .catch(() => ({ docs: [] }));
+      const blocks = blocksSnap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+
+      const busyPersonal = [...busy];
+      const busyWork = [...busy];
+      const mainGigBlocks = blocks.filter((b) => isMainGigBlock(b) && b.start && b.end);
+
+      for (const b of blocks) {
+        if (!b.start || !b.end) continue;
+        const interval = {
+          start: DateTime.fromMillis(b.start, { zone: timezone }).toISO(),
+          end: DateTime.fromMillis(b.end, { zone: timezone }).toISO(),
+        };
+        if (isMainGigBlock(b)) {
+          busyPersonal.push(interval);
+        } else {
+          busyPersonal.push(interval);
+          busyWork.push(interval);
+        }
+      }
+
+      if (persona === 'work') {
+        const daysSpan = Math.max(1, Math.round(end.diff(start, 'days').days) + 1);
+        for (let i = 0; i < daysSpan; i++) {
+          const dayStart = start.plus({ days: i }).startOf('day');
+          const dayEnd = dayStart.endOf('day');
+          const dayBlocks = mainGigBlocks
+            .filter((b) => b.start && b.end)
+            .filter((b) => {
+              const blockStart = DateTime.fromMillis(b.start, { zone: timezone });
+              const blockEnd = DateTime.fromMillis(b.end, { zone: timezone });
+              return blockEnd > dayStart && blockStart < dayEnd;
+            })
+            .map((b) => ({
+              start: DateTime.fromMillis(b.start, { zone: timezone }),
+              end: DateTime.fromMillis(b.end, { zone: timezone }),
+            }))
+            .sort((a, b) => a.start.toMillis() - b.start.toMillis());
+
+          if (!dayBlocks.length) {
+            busyWork.push({ start: dayStart.toISO(), end: dayEnd.toISO() });
+            continue;
+          }
+
+          let cursor = dayStart;
+          for (const block of dayBlocks) {
+            if (block.start > cursor) {
+              busyWork.push({ start: cursor.toISO(), end: block.start.toISO() });
+            }
+            cursor = block.end > cursor ? block.end : cursor;
+          }
+          if (cursor < dayEnd) {
+            busyWork.push({ start: cursor.toISO(), end: dayEnd.toISO() });
+          }
+        }
+      }
+
+      busy = persona === 'work' ? busyWork : busyPersonal;
+    } catch (err) {
+      console.warn('[planBlocksV2Http] calendar block busy merge failed', err?.message || err);
+    }
+
+    const plan = await planSchedule({ db, userId: uid, windowStart: start, windowEnd: end, busy, includeChores: true, persona });
+    const existingIds = new Set(plan.existingIds || []);
+    const batch = db.batch();
+    const nowMs = Date.now();
+
+    const plannedFiltered = plan.planned.filter(p => !['story', 'task'].includes(String(p.sourceType || '').toLowerCase()));
+    for (const instance of plannedFiltered) {
+      const ref = db.collection('scheduled_instances').doc(instance.id);
+      const isExisting = existingIds.has(instance.id);
+      const payload = {
+        ...instance,
+        status: instance.status || 'planned',
+        userId: uid,
+        ownerUid: uid,
+        updatedAt: nowMs,
+      };
+      if (!isExisting) payload.createdAt = nowMs;
+      batch.set(ref, payload, { merge: true });
+
+      // Mirror routines/chores/habits into calendar_blocks for internal tracking.
+      // Only live chores are eligible for Google sync.
+      const blockId = `sched_${instance.id}`;
+      const blockRef = db.collection('calendar_blocks').doc(blockId);
+      const startMs = instance.plannedStart ? new Date(instance.plannedStart).getTime() : null;
+      const endMs = instance.plannedEnd ? new Date(instance.plannedEnd).getTime() : null;
+      if (startMs && endMs) {
+        const sourceType = String(instance.sourceType || 'routine').toLowerCase();
+        batch.set(blockRef, {
+          ownerUid: uid,
+          title: instance.title || 'Routine',
+          start: startMs,
+          end: endMs,
+          category: instance.sourceType || 'routine',
+          entityType: instance.sourceType || 'routine',
+          status: 'planned',
+          aiGenerated: true,
+          deepLink: instance.deepLink || null,
+          placementReason: (instance.schedulingContext && instance.schedulingContext.policyMode) || 'routine',
+          theme: instance.theme || null,
+          goalId: instance.goalId || null,
+          choreId: sourceType === 'chore' ? instance.sourceId || null : null,
+          routineId: sourceType === 'routine' ? instance.sourceId || null : null,
+          habitId: sourceType === 'habit' ? instance.sourceId || null : null,
+          updatedAt: nowMs,
+          createdAt: nowMs,
+          syncToGoogle: sourceType === 'chore',
+        }, { merge: true });
+      }
+    }
+    const unscheduledFiltered = plan.unscheduled.filter(p => !['story', 'task'].includes(String(p.sourceType || p.itemType || '').toLowerCase()));
+    for (const unscheduled of unscheduledFiltered) {
+      const id = schedulerMakeInstanceId({
+        planId: makePlanId(uid, start.toJSDate()),
+        itemType: String(unscheduled.itemType || 'unknown'),
+        itemId: String(unscheduled.itemId || 'unknown'),
+      });
+      const ref = db.collection('scheduled_instances').doc(id);
+      batch.set(ref, {
+        id,
+        userId: uid,
+        ownerUid: uid,
+        status: 'unscheduled',
+        updatedAt: nowMs,
+        createdAt: nowMs,
+      }, { merge: true });
+    }
+    await batch.commit();
+    res.status(200).json({ ok: true, planned: plan.planned.length, existing: existingIds.size });
+  } catch (e) {
+    console.error('planBlocksV2Http error', e);
+    res.status(500).json({ error: String(e?.message || e) });
+  }
+});
+
+const PRIORITY_TASK_CONTEXT_LIMIT = 6;
+const PRIORITY_STORY_CONTEXT_LIMIT = 5;
+const PRIORITY_CALENDAR_CONTEXT_LIMIT = 5;
+const PRIORITY_COLLECTION = 'daily_priority_runs';
+const PRIORITY_EVENT_MAP_COLLECTION = 'priority_calendar_events';
+const REPLAN_RUNS_COLLECTION = 'replan_runs';
+const PRIORITY_KEY_PREFIX = 'bobPriority';
+
+const TASK_DONE_STATUS_VALUES = new Set(['done', 'completed', 'complete', 'archived', '2', '3']);
+const STORY_DONE_STATUS_VALUES = new Set(['done', 'complete', 'archived', '3']);
+
+const PRIORITY_ALLOWED_ORIGINS = new Set([
+  'https://bob.jc1.tech',
+  'https://bob20250810.web.app',
+  'https://bob20250810.firebaseapp.com',
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
+]);
+function applyPriorityCors(res, req) {
+  const origin = req ? String(req.get('origin') || '') : '';
+  if (PRIORITY_ALLOWED_ORIGINS.has(origin)) {
+    res.set('Access-Control-Allow-Origin', origin);
+    res.set('Vary', 'Origin');
+  }
+  res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Firebase-AppCheck');
+  res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.set('Access-Control-Allow-Credentials', 'true');
+}
+
+async function extractUidFromRequest(req) {
+  const authHeader = String(req.get('Authorization') || '');
+  if (!authHeader.startsWith('Bearer ')) {
+    throw new httpsV2.HttpsError('unauthenticated', 'Missing Authorization header');
+  }
+  const token = authHeader.slice(7).trim();
+  if (!token) {
+    throw new httpsV2.HttpsError('unauthenticated', 'Missing ID token');
+  }
+  const decoded = await admin.auth().verifyIdToken(token);
+  if (!decoded?.uid) {
+    throw new httpsV2.HttpsError('unauthenticated', 'Invalid ID token');
+  }
+  return decoded.uid;
+}
+
+function normalizeStatus(value) {
+  if (value == null) return '';
+  if (typeof value === 'number') return String(value);
+  return String(value).toLowerCase();
+}
+
+function isDoneStatusInSet(value, set) {
+  return set.has(normalizeStatus(value));
+}
+
+function normalizeSprintStatusValue(value) {
+  if (typeof value === 'number') return value;
+  const str = String(value || '').toLowerCase();
+  if (!str) return 0;
+  if (str.includes('active')) return 1;
+  if (str.includes('plan')) return 0;
+  if (str.includes('done') || str.includes('complete')) return 2;
+  if (str.includes('cancel')) return 3;
+  return 0;
+}
+
+function resolveActiveSprint(sprints, now, zone) {
+  if (!Array.isArray(sprints) || !sprints.length) return null;
+  const enriched = sprints.map((s) => {
+    const start = toDateTimeFromValue(s.startDate || s.start, zone);
+    const end = toDateTimeFromValue(s.endDate || s.end, zone);
+    return {
+      ...s,
+      _status: normalizeSprintStatusValue(s.status),
+      _start: start,
+      _end: end,
+    };
+  });
+  const byStatus = enriched.find((s) => s._status === 1);
+  if (byStatus) return byStatus;
+  const inWindow = enriched.find((s) => s._start && s._end && now >= s._start && now <= s._end);
+  if (inWindow) return inWindow;
+  return enriched.find((s) => s._status === 0) || null;
+}
+
+function toDateTimeFromValue(raw, zone) {
+  if (!raw) return null;
+  if (DateTime.isDateTime(raw)) return raw.setZone(zone);
+  if (typeof raw === 'number') {
+    if (!Number.isFinite(raw)) return null;
+    return DateTime.fromMillis(raw, { zone });
+  }
+  if (raw?.seconds != null) {
+    const seconds = Number(raw.seconds);
+    if (Number.isFinite(seconds)) {
+      const millis = seconds * 1000 + Number(raw.nanoseconds || raw.nanos || 0) / 1e6;
+      return DateTime.fromMillis(millis, { zone });
+    }
+  }
+  if (typeof raw?.toDate === 'function') {
+    return DateTime.fromJSDate(raw.toDate(), { zone });
+  }
+  if (typeof raw === 'string') {
+    const parsed = DateTime.fromISO(raw, { zone });
+    if (parsed.isValid) return parsed;
+    const numeric = Number(raw);
+    if (Number.isFinite(numeric)) return DateTime.fromMillis(numeric, { zone });
+  }
+  return null;
+}
+
+function resolveDateFromFields(entity, zone, fields = []) {
+  for (const field of fields) {
+    const candidate = toDateTimeFromValue(entity?.[field], zone);
+    if (candidate) return candidate;
+  }
+  return null;
+}
+
+function getTaskContext(task, zone) {
+  const due = resolveDateFromFields(task, zone, ['dueDate', 'dueDateMs', 'dueAt', 'targetDate', 'dueDateIso']);
+  const created = resolveDateFromFields(task, zone, ['createdAt', 'createdAtMs', 'createdAtIso']);
+  const estimate = Number(task.estimateMin || task.estimatedMinutes || task.estimateMinutes || task.effort) || null;
+  return {
+    id: task.id,
+    title: String(task.title || task.description || 'Task').trim(),
+    dueIso: due ? due.toISO() : null,
+    dueDisplay: due ? due.toLocaleString(DateTime.DATE_MED) : null,
+    createdIso: created ? created.toISO() : null,
+    storyId: task.storyId || null,
+    goalId: task.goalId || null,
+    estimateMinutes: estimate,
+    persona: task.persona || null,
+    status: task.status || null,
+  };
+}
+
+function getStoryContext(story, zone) {
+  const due = resolveDateFromFields(story, zone, ['sprintDueDate', 'targetDate', 'plannedStartDate']);
+  return {
+    id: story.id,
+    title: String(story.title || 'Story').trim(),
+    dueIso: due ? due.toISO() : null,
+    status: story.status || null,
+    goalId: story.goalId || null,
+    sprintId: story.sprintId || null,
+    description: String(story.description || '').trim() || null,
+  };
+}
+
+function getCalendarContext(block, zone) {
+  const start = toDateTimeFromValue(block.start || block.startAt, zone);
+  const end = toDateTimeFromValue(block.end || block.endAt, zone);
+  return {
+    id: block.id,
+    title: String(block.title || block.note || block.category || 'Block').trim(),
+    startIso: start ? start.toISO() : null,
+    endIso: end ? end.toISO() : null,
+    source: block.source || block.sourceType || block.entryMethod || null,
+    theme: block.theme || null,
+    linkedTask: block.taskId || null,
+    linkedStory: block.storyId || null,
+    googleEventId: block.googleEventId || null,
+    immovable: Boolean(block.immovable || block.locked || block.entryMethod === 'calendar'),
+  };
+}
+
+function take(items, limit) {
+  if (!Array.isArray(items)) return [];
+  return items.slice(0, limit);
+}
+
+function buildPriorityKey(dayIso, type, itemId) {
+  return `${PRIORITY_KEY_PREFIX}:${dayIso}:${type}:${itemId}`;
+}
+
+async function fetchLatestDailySummary(db, uid) {
+  try {
+    const snap = await db.collection('daily_summaries')
+      .where('ownerUid', '==', uid)
+      .orderBy('generatedAt', 'desc')
+      .limit(1)
+      .get();
+    if (snap.empty) return null;
+    return snap.docs[0].data();
+  } catch (error) {
+    console.warn('[priority] daily summary lookup failed', error?.message || error);
+    return null;
+  }
+}
+
+function buildPriorityInputPayload({ dayIso, timezone, now, tasks, stories, calendar, summary, sprint }) {
+  return {
+    dayIso,
+    timezone,
+    now: now.toISO(),
+    sprint: sprint
+      ? {
+        id: sprint.id || null,
+        title: sprint.title || sprint.name || 'Sprint',
+        status: sprint.status || null,
+        start: sprint._start ? sprint._start.toISO() : null,
+        end: sprint._end ? sprint._end.toISO() : null,
+      }
+      : null,
+    tasks: {
+      dueToday: take(tasks.dueToday.map((t) => getTaskContext(t, timezone)), PRIORITY_TASK_CONTEXT_LIMIT),
+      createdToday: take(tasks.createdToday.map((t) => getTaskContext(t, timezone)), PRIORITY_TASK_CONTEXT_LIMIT),
+      overdue: take(tasks.overdue.map((t) => getTaskContext(t, timezone)), PRIORITY_TASK_CONTEXT_LIMIT),
+    },
+    stories: take(stories.map((s) => getStoryContext(s, timezone)), PRIORITY_STORY_CONTEXT_LIMIT),
+    storyTasks: take(tasks.activeStoryTasks.map((t) => getTaskContext(t, timezone)), PRIORITY_TASK_CONTEXT_LIMIT),
+    calendar: take(calendar.map((c) => getCalendarContext(c, timezone)), PRIORITY_CALENDAR_CONTEXT_LIMIT),
+    dailySummary: summary
+      ? {
+        dayIso: summary.dayIso || dayIso,
+        highlights: summary.summary?.dailyChecklist || summary.summary?.dailyBriefing || summary.summary?.summary || null,
+      }
+      : null,
+  };
+}
+
+function buildFallbackPriorities({ dueToday, overdue, createdToday, timezone }) {
+  const candidates = [...dueToday, ...overdue, ...createdToday]
+    .map((task) => getTaskContext(task, timezone))
+    .filter(Boolean);
+  const picks = [];
+  const used = new Set();
+  for (const candidate of candidates) {
+    if (picks.length >= 3) break;
+    if (used.has(candidate.id)) continue;
+    picks.push({
+      type: 'task',
+      id: candidate.id,
+      title: candidate.title,
+      whyNow: candidate.dueDisplay ? `Due ${candidate.dueDisplay}` : 'Recently created',
+      estMinutes: candidate.estimateMinutes || 30,
+      nextAction: 'Open BOB and make progress',
+    });
+    used.add(candidate.id);
+  }
+  if (picks.length < 3) {
+    while (picks.length < 3) {
+      picks.push({
+        type: 'calendar',
+        id: `calendar-review-${picks.length}`,
+        title: 'Review today\'s events and choose a focus',
+        whyNow: 'Use remaining time to vision your day.',
+        estMinutes: 15,
+        nextAction: 'Scan the calendar and pick one story or task',
+      });
+    }
+  }
+  return picks;
+}
+
+function normalizePriorityItems(items) {
+  if (!Array.isArray(items)) return [];
+  return items.slice(0, 3).map((item, index) => ({
+    type: (item?.type || 'task').toString(),
+    id: String(item?.id || `priority-${index + 1}`),
+    title: String(item?.title || `Priority ${index + 1}`).trim(),
+    whyNow: String(item?.whyNow || item?.reason || 'No reason provided').trim(),
+    estMinutes: Number(item?.estMinutes || item?.estimateMinutes || 0) || 30,
+    nextAction: String(item?.nextAction || item?.nextSteps || item?.next || 'Take action').trim(),
+  }));
+}
+
+async function persistPriorityRun(db, data) {
+  try {
+    const ref = db.collection(PRIORITY_COLLECTION).doc();
+    await ref.set({
+      id: ref.id,
+      ownerUid: data.ownerUid,
+      userId: data.ownerUid,
+      dayIso: data.dayIso,
+      timezone: data.timezone,
+      correlationId: data.correlationId,
+      generatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      inputs: data.inputs,
+      llmRaw: data.llmRaw,
+      priorities: data.priorities,
+    });
+  } catch (error) {
+    console.warn('[priority] persist run failed', error?.message || error);
+  }
+}
+
+async function logPriorityActivity(db, { ownerUid, correlationId, priorities, metadata = {} }) {
+  try {
+    const ref = db.collection('activity_stream').doc();
+    await ref.set({
+      id: ref.id,
+      entityType: 'priority',
+      entityId: `priority:${ownerUid}:${correlationId}`,
+      activityType: 'PRIORITIES_GENERATED',
+      actor: 'AI_Agent',
+      userId: ownerUid,
+      ownerUid,
+      description: 'Siri "What\'s next" priorities generated',
+      metadata: {
+        correlationId,
+        priorities: priorities.map((p) => ({ type: p.type, id: p.id, title: p.title })),
+        ...metadata,
+      },
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  } catch (error) {
+    console.warn('[priority] activity log failed', error?.message || error);
+  }
+}
+
+exports.priorityNow = httpsV2.onRequest({ invoker: 'public', secrets: [GOOGLE_AI_STUDIO_API_KEY], maxInstances: 5 }, async (req, res) => {
+  applyPriorityCors(res, req);
+  if (req.method === 'OPTIONS') {
+    res.status(204).send('');
+    return;
+  }
+  if (req.method !== 'GET') {
+    res.status(405).json({ error: 'Method not allowed' });
+    return;
+  }
+
+  let uid;
+  try {
+    uid = await extractUidFromRequest(req);
+  } catch (error) {
+    const message = error?.message || 'Authentication failed';
+    console.warn('[priorityNow] auth failed', message);
+    res.status(401).json({ error: message });
+    return;
+  }
+
+  // App Check verification (enforced when ENFORCE_APP_CHECK=true)
+  const priorityAppCheck = await verifyAppCheckToken(req, 'priorityNow');
+  if (!priorityAppCheck.valid) {
+    res.status(401).json({ error: priorityAppCheck.reason || 'App Check required' });
+    return;
+  }
+
+  // Per-user daily AI quota
+  const priorityQuota = await checkAndIncrementQuota(uid, 'priority_now');
+  if (!priorityQuota.allowed) {
+    res.status(429).json({ error: priorityQuota.message || 'Daily AI quota exceeded' });
+    return;
+  }
+
+  try {
+    const db = ensureFirestore();
+    const profile = await loadProfile(db, uid);
+    const timezone = resolveTimezone(profile, DEFAULT_TIMEZONE);
+    const now = DateTime.now().setZone(timezone);
+    const { start, end } = computeDayWindow({ day: now, timezone });
+    const startMs = start.toMillis();
+    const endMs = end.toMillis();
+
+    const [tasksSnap, storiesSnap, sprintsSnap, calendarSnap, latestSummary] = await Promise.all([
+      db.collection('tasks').where('ownerUid', '==', uid).limit(400).get(),
+      db.collection('stories').where('ownerUid', '==', uid).get(),
+      db.collection('sprints').where('ownerUid', '==', uid).get(),
+      db.collection('calendar_blocks')
+        .where('ownerUid', '==', uid)
+        .where('start', '>=', startMs)
+        .where('start', '<=', endMs)
+        .orderBy('start', 'asc')
+        .get(),
+      fetchLatestDailySummary(db, uid),
+    ]);
+
+    const tasks = tasksSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    const stories = storiesSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    const sprints = sprintsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    const calendarBlocks = calendarSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    const filteredTasks = tasks.filter((task) => !task.deleted && !isDoneStatusInSet(task.status, TASK_DONE_STATUS_VALUES));
+
+    const dueToday = filteredTasks.filter((task) => {
+      const due = resolveDateFromFields(task, timezone, ['dueDate', 'dueDateMs', 'dueAt', 'targetDate', 'dueDateIso']);
+      return due && due >= start && due <= end;
+    });
+    const createdToday = filteredTasks.filter((task) => {
+      const created = resolveDateFromFields(task, timezone, ['createdAt', 'createdAtMs', 'createdAtIso']);
+      return created && created >= start && created <= end;
+    });
+    const overdue = filteredTasks.filter((task) => {
+      const due = resolveDateFromFields(task, timezone, ['dueDate', 'dueDateMs', 'dueAt', 'targetDate', 'dueDateIso']);
+      return due && due < now;
+    });
+
+    const activeSprint = resolveActiveSprint(sprints, now, timezone);
+    const activeStoryIds = new Set(
+      activeSprint
+        ? stories.filter((story) => story.sprintId === activeSprint.id).map((story) => story.id)
+        : []
+    );
+    const activeStories = activeSprint
+      ? stories.filter((story) => activeStoryIds.has(story.id) && !isDoneStatusInSet(story.status, STORY_DONE_STATUS_VALUES))
+      : stories.filter((story) => !isDoneStatusInSet(story.status, STORY_DONE_STATUS_VALUES)).slice(0, PRIORITY_STORY_CONTEXT_LIMIT);
+    const activeStoryTasks = filteredTasks.filter((task) => task.storyId && activeStoryIds.has(task.storyId));
+
+    const contextPayload = buildPriorityInputPayload({
+      dayIso: start.toISODate(),
+      timezone,
+      now,
+      tasks: { dueToday, createdToday, overdue, activeStoryTasks },
+      stories: activeStories,
+      calendar: calendarBlocks,
+      summary: latestSummary,
+      sprint: activeSprint,
+    });
+
+    const systemPrompt = [
+      'You are BOB, the personal productivity assistant.',
+      'The user triggered Siri/Watch with "What\'s next?" for today.',
+      'Return JSON only; do not wrap in markdown or prose.',
+    ].join(' ');
+
+    const userPrompt = [
+      `Context: ${JSON.stringify(contextPayload)}`,
+      'Return EXACT JSON with keys: topPriorities, remainingCalendar, risks, displayText, speakText, debug.',
+      'Top priorities must be an array of exactly 3 objects with fields: type (task|story|calendar), id, title, whyNow, estMinutes, nextAction.',
+      'remainingCalendar should be a short list of upcoming events with title, start, and end.',
+      'risks should call out blockers, overdue work, or missing resources.',
+      'displayText should be 2-3 bullet lines summarizing the priorities.',
+      'speakText should be a short spoken summary (20-40 seconds).',
+      'debug should include counts referencing tasks/stories/calendar IDs from the context.',
+      'Priority selection should favor due/overdue work and items already scheduled soon.',
+    ].join('\n');
+
+    const priorityTraceId = crypto.randomUUID ? crypto.randomUUID() : crypto.randomBytes(12).toString('hex');
+    const priorityTraceBase = {
+      traceId: priorityTraceId,
+      promptTemplateId: 'priorityNow.v2',
+      promptTemplateVersion: 2,
+      model: AI_PRIORITY_MODEL,
+      provider: process.env.AI_PROVIDER || 'gemini',
+      purpose: 'priority_now',
+      parseExpected: 'json',
+      temperature: 0.2,
+      promptText: userPrompt,
+      inputPayload: contextPayload,
+    };
+    const priorityStartedAtMs = Date.now();
+
+    let llmText = '';
+    let parsed = {};
+    try {
+      llmText = await callLLMJson({
+        system: systemPrompt,
+        user: userPrompt,
+        purpose: 'priority_now',
+        userId: uid,
+        expectJson: true,
+        temperature: 0.2,
+      });
+      parsed = llmText ? JSON.parse(llmText) : {};
+
+      await recordAiLog(uid, 'priority_now_trace', 'success', 'Priority now response generated', {
+        ...priorityTraceBase,
+        parseStatus: llmText ? 'ok' : 'ok_empty',
+        rawOutputText: String(llmText || '').slice(0, 12000),
+        rawOutputLength: String(llmText || '').length,
+        latencyMs: Date.now() - priorityStartedAtMs,
+      });
+    } catch (error) {
+      console.warn('[priorityNow] LLM failed or returned invalid JSON', error?.message || error);
+      parsed = {};
+
+      await recordAiLog(uid, 'priority_now_trace', 'warning', 'Priority now LLM parse/runtime failure', {
+        ...priorityTraceBase,
+        parseStatus: 'failed',
+        rawOutputText: String(llmText || '').slice(0, 12000),
+        rawOutputLength: String(llmText || '').length,
+        error: String(error?.message || error || 'unknown'),
+        latencyMs: Date.now() - priorityStartedAtMs,
+      });
+    }
+
+    let priorities = normalizePriorityItems(parsed.topPriorities);
+    if (priorities.length !== 3) {
+      priorities = normalizePriorityItems(buildFallbackPriorities({ dueToday, overdue, createdToday, timezone }));
+    }
+
+    const calendarFallback = take(calendarBlocks, PRIORITY_CALENDAR_CONTEXT_LIMIT).map((block) => getCalendarContext(block, timezone));
+    const remainingCalendar =
+      Array.isArray(parsed.remainingCalendar) && parsed.remainingCalendar.length
+        ? parsed.remainingCalendar.slice(0, PRIORITY_CALENDAR_CONTEXT_LIMIT).map((item) => ({
+          title: String(item?.title || 'Block').trim(),
+          startIso: item?.start || null,
+          endIso: item?.end || null,
+        }))
+        : calendarFallback.map((block) => ({ title: block.title, startIso: block.startIso, endIso: block.endIso }));
+
+    const risks =
+      Array.isArray(parsed.risks) && parsed.risks.length
+        ? parsed.risks.map((risk) => String(risk).trim()).filter(Boolean)
+        : overdue.length
+          ? [`${overdue.length} overdue task${overdue.length === 1 ? '' : 's'} need attention`]
+          : [];
+
+    const displayText =
+      parsed.displayText ||
+      priorities.map((p) => `• ${p.title}: ${p.whyNow}`).join('\n') ||
+      'No urgent priorities detected.';
+
+    const speakText =
+      parsed.speakText ||
+      priorities.map((p) => `${p.title}, ${p.nextAction}`).join('. ') ||
+      'Nothing urgent on the agenda.';
+
+    const debug = {
+      llmRaw: llmText ? llmText.slice(0, 2000) : '',
+      counts: {
+        dueToday: dueToday.length,
+        createdToday: createdToday.length,
+        overdue: overdue.length,
+        activeStories: activeStories.length,
+        calendarEvents: calendarBlocks.length,
+      },
+      contextIds: {
+        taskIds: [...new Set([...dueToday, ...overdue].map((task) => task.id || '').filter(Boolean))],
+        storyIds: activeStories.map((story) => story.id || '').filter(Boolean),
+      },
+    };
+
+    const correlationId = crypto.randomUUID();
+    await persistPriorityRun(db, {
+      ownerUid: uid,
+      dayIso: start.toISODate(),
+      timezone,
+      correlationId,
+      inputs: {
+        dueToday: dueToday.length,
+        createdToday: createdToday.length,
+        overdue: overdue.length,
+        activeStories: activeStories.length,
+        calendarEvents: calendarBlocks.length,
+      },
+      llmRaw: llmText,
+      priorities,
+    });
+
+    await logPriorityActivity(db, {
+      ownerUid: uid,
+      correlationId,
+      priorities,
+      metadata: {
+        dayIso: start.toISODate(),
+        timezone,
+      },
+    });
+
+    res.status(200).json({
+      displayText,
+      speakText,
+      priorities,
+      remainingCalendar,
+      risks,
+      debug,
+    });
+  } catch (error) {
+    console.error('[priorityNow] failed', error);
+    res.status(500).json({ error: error?.message || 'Failed to generate priorities' });
+  }
+});
+
+function mergeIntervals(intervals) {
+  if (!intervals.length) return [];
+  const sorted = [...intervals].sort((a, b) => a.start.valueOf() - b.start.valueOf());
+  const merged = [sorted[0]];
+  for (let i = 1; i < sorted.length; i += 1) {
+    const current = sorted[i];
+    const last = merged[merged.length - 1];
+    if (current.start <= last.end) {
+      last.end = last.end > current.end ? last.end : current.end;
+    } else {
+      merged.push({ start: current.start, end: current.end });
+    }
+  }
+  return merged;
+}
+
+function computeBusyIntervals(blocks, zone, windowStart, windowEnd) {
+  const intervals = [];
+  for (const block of blocks) {
+    const start = toDateTimeFromValue(block.start || block.startAt, zone);
+    const end = toDateTimeFromValue(block.end || block.endAt, zone);
+    if (!start || !end) continue;
+    if (end <= windowStart || start >= windowEnd) continue;
+    intervals.push({
+      start: start < windowStart ? windowStart : start,
+      end: end > windowEnd ? windowEnd : end,
+      immovable: Boolean(block.immovable),
+      sourceId: block.id,
+    });
+  }
+  return mergeIntervals(intervals);
+}
+
+function computeFreeSlots(busyIntervals, windowStart, windowEnd) {
+  const slots = [];
+  let cursor = windowStart;
+  for (const interval of busyIntervals) {
+    if (interval.start > cursor) {
+      slots.push({ start: cursor, end: interval.start });
+    }
+    if (interval.end > cursor) {
+      cursor = interval.end;
+    }
+    if (cursor >= windowEnd) break;
+  }
+  if (cursor < windowEnd) {
+    slots.push({ start: cursor, end: windowEnd });
+  }
+  return slots.filter((slot) => slot.end > slot.start);
+}
+
+function formatSlotForContext(slot) {
+  if (!slot) return null;
+  const duration = Math.round(slot.end.diff(slot.start, 'minutes').minutes || 0);
+  return {
+    startIso: slot.start.toISO(),
+    endIso: slot.end.toISO(),
+    durationMinutes: duration,
+  };
+}
+
+function intervalsOverlap(startA, endA, interval) {
+  if (!startA || !endA || !interval) return false;
+  return startA < interval.end && endA > interval.start;
+}
+
+async function ensurePriorityEvent({ db, uid, priority, dayIso, timezone, schedule, reason }) {
+  const priorityKey = buildPriorityKey(dayIso, priority.type || 'task', priority.id || priority.title || 'unknown');
+  const mapping = await getPriorityEventMapping(db, uid, priorityKey);
+  const descriptionParts = [`BOB priority: ${priority.title}`, reason].filter(Boolean);
+  const description = descriptionParts.join(' • ');
+  const extendedProperties = {
+    bobPriorityKey: priorityKey,
+    linkedType: priority.linkedType || priority.type || null,
+    linkedId: priority.linkedId || priority.id || null,
+  };
+  if (mapping?.googleEventId) {
+    const event = await updateGoogleCalendarEvent(uid, mapping.googleEventId, {
+      summary: priority.title,
+      startIso: schedule.start,
+      endIso: schedule.end,
+      description,
+      extendedProperties,
+    });
+    await upsertPriorityEventMapping(db, uid, priorityKey, event.id, { startIso: schedule.start, endIso: schedule.end });
+    return { priorityKey, eventId: event.id, status: 'updated' };
+  }
+  const event = await createGoogleCalendarEvent(uid, {
+    summary: priority.title,
+    startIso: schedule.start,
+    endIso: schedule.end,
+    description,
+    extendedProperties,
+  });
+  await upsertPriorityEventMapping(db, uid, priorityKey, event.id, { startIso: schedule.start, endIso: schedule.end });
+  return { priorityKey, eventId: event.id, status: 'created' };
+}
+
+async function getPriorityEventMapping(db, ownerUid, priorityKey) {
+  const snap = await db.collection(PRIORITY_EVENT_MAP_COLLECTION).doc(priorityKey).get();
+  if (!snap.exists) return null;
+  const data = snap.data() || {};
+  if (data.ownerUid !== ownerUid) return null;
+  return data;
+}
+
+async function upsertPriorityEventMapping(db, ownerUid, priorityKey, eventId, schedule) {
+  const ref = db.collection(PRIORITY_EVENT_MAP_COLLECTION).doc(priorityKey);
+  await ref.set({
+    id: priorityKey,
+    ownerUid,
+    priorityKey,
+    googleEventId: eventId,
+    lastSchedule: schedule,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+}
+
+async function createGoogleCalendarEvent(uid, { summary, startIso, endIso, description, extendedProperties = {} }) {
+  const access = await getAccessToken(uid);
+  const payload = {
+    summary,
+    start: { dateTime: startIso },
+    end: { dateTime: endIso },
+    ...(description ? { description } : {}),
+    extendedProperties: {
+      private: extendedProperties,
+    },
+  };
+  const event = await fetchJson('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + access },
+    body: JSON.stringify(payload),
+  });
+  return event;
+}
+
+async function updateGoogleCalendarEvent(uid, eventId, { summary, startIso, endIso, description, extendedProperties = {} }) {
+  const access = await getAccessToken(uid);
+  const body = {};
+  if (summary) body.summary = summary;
+  if (description) body.description = description;
+  if (startIso) body.start = { dateTime: startIso };
+  if (endIso) body.end = { dateTime: endIso };
+  if (Object.keys(extendedProperties).length) {
+    body.extendedProperties = { private: extendedProperties };
+  }
+  const event = await fetchJson(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(eventId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + access },
+    body: JSON.stringify(body),
+  });
+  return event;
+}
+
+async function deleteGoogleCalendarEvent(uid, eventId) {
+  const access = await getAccessToken(uid);
+  await fetchJson(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(eventId)}`, {
+    method: 'DELETE',
+    headers: { Authorization: 'Bearer ' + access },
+  });
+}
+
+async function applyCalendarOps(uid, db, ops = []) {
+  const applied = [];
+  for (const op of ops || []) {
+    try {
+      if (!op || !op.op) continue;
+      if (op.op === 'create') {
+        const event = await createGoogleCalendarEvent(uid, {
+          summary: op.title || op.summary || 'BOB Priority',
+          startIso: op.start,
+          endIso: op.end,
+          description: op.notes || null,
+          extendedProperties: {
+            linkedType: op.linkedType || null,
+            linkedId: op.linkedId || null,
+          },
+        });
+        applied.push({ ...op, status: 'created', eventId: event.id });
+      } else if (op.op === 'move' && op.eventId) {
+        await updateGoogleCalendarEvent(uid, op.eventId, {
+          summary: op.title || op.summary || null,
+          startIso: op.start,
+          endIso: op.end,
+          description: op.notes || null,
+        });
+        applied.push({ ...op, status: 'moved' });
+      } else if (op.op === 'delete' && op.eventId) {
+        await deleteGoogleCalendarEvent(uid, op.eventId);
+        applied.push({ ...op, status: 'deleted' });
+      }
+    } catch (error) {
+      console.warn('[replan] calendar op failed', error?.message || error, op);
+    }
+  }
+  return applied;
+}
+
+async function applyTaskOps(db, uid, ops = []) {
+  const applied = [];
+  for (const op of ops || []) {
+    if (!op || op.op !== 'update' || !op.taskId) continue;
+    const ref = db.collection('tasks').doc(op.taskId);
+    const snap = await ref.get();
+    if (!snap.exists) continue;
+    const data = snap.data() || {};
+    if (data.ownerUid !== uid) continue;
+    const fields = op.fields || {};
+    await ref.set(fields, { merge: true });
+    applied.push({ taskId: op.taskId, fields });
+  }
+  return applied;
+}
+
+async function applyStoryOps(db, uid, ops = []) {
+  const applied = [];
+  for (const op of ops || []) {
+    if (!op || op.op !== 'update' || !op.storyId) continue;
+    const ref = db.collection('stories').doc(op.storyId);
+    const snap = await ref.get();
+    if (!snap.exists) continue;
+    const data = snap.data() || {};
+    if (data.ownerUid !== uid) continue;
+    const fields = op.fields || {};
+    await ref.set(fields, { merge: true });
+    applied.push({ storyId: op.storyId, fields });
+  }
+  return applied;
+}
+
+async function persistReplanRun(db, payload) {
+  try {
+    const ref = db.collection(REPLAN_RUNS_COLLECTION).doc();
+    await ref.set({
+      id: ref.id,
+      ownerUid: payload.ownerUid,
+      correlationId: payload.correlationId,
+      reason: payload.reason || null,
+      constraints: payload.constraints || {},
+      inputs: payload.inputs || {},
+      plan: payload.plan || {},
+      appliedOps: payload.appliedOps || {},
+      status: payload.status || 'unknown',
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  } catch (error) {
+    console.warn('[replan] persist run failed', error?.message || error);
+  }
+}
+
+async function logReplanActivity(db, { ownerUid, correlationId, activityType, status, metadata = {} }) {
+  try {
+    const ref = db.collection('activity_stream').doc();
+    await ref.set({
+      id: ref.id,
+      entityType: 'replan',
+      entityId: `replan:${ownerUid}:${correlationId}`,
+      activityType,
+      actor: 'AI_Agent',
+      userId: ownerUid,
+      ownerUid,
+      description: `Replan ${status}`,
+      metadata: {
+        correlationId,
+        status,
+        ...metadata,
+      },
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  } catch (error) {
+    console.warn('[replan] activity log failed', error?.message || error);
+  }
+}
+
+async function fetchLatestPriorityRun(db, uid) {
+  try {
+    const snap = await db.collection(PRIORITY_COLLECTION)
+      .where('ownerUid', '==', uid)
+      .orderBy('generatedAt', 'desc')
+      .limit(1)
+      .get();
+    if (snap.empty) return null;
+    return snap.docs[0].data();
+  } catch (error) {
+    console.warn('[replan] latest priority fetch failed', error?.message || error);
+    return null;
+  }
+}
+
+exports.replanDay = httpsV2.onRequest({ invoker: 'public', secrets: [GOOGLE_AI_STUDIO_API_KEY], maxInstances: 3 }, async (req, res) => {
+  applyPriorityCors(res, req);
+  if (req.method === 'OPTIONS') {
+    res.status(204).send('');
+    return;
+  }
+  if (req.method !== 'POST') {
+    res.status(405).json({ error: 'Method not allowed' });
+    return;
+  }
+
+  let uid;
+  try {
+    uid = await extractUidFromRequest(req);
+  } catch (error) {
+    const message = error?.message || 'Authentication failed';
+    console.warn('[replanDay] auth failed', message);
+    res.status(401).json({ error: message });
+    return;
+  }
+
+  // App Check verification (enforced when ENFORCE_APP_CHECK=true)
+  const replanAppCheck = await verifyAppCheckToken(req, 'replanDay');
+  if (!replanAppCheck.valid) {
+    res.status(401).json({ error: replanAppCheck.reason || 'App Check required' });
+    return;
+  }
+
+  // Per-user daily AI quota
+  const replanQuota = await checkAndIncrementQuota(uid, 'replan_day');
+  if (!replanQuota.allowed) {
+    res.status(429).json({ error: replanQuota.message || 'Daily AI quota exceeded' });
+    return;
+  }
+
+  const body = typeof req.body === 'object' && req.body ? req.body : {};
+  const reason = typeof body.reason === 'string' ? body.reason.trim() : null;
+  const constraints = typeof body.constraints === 'object' && body.constraints ? body.constraints : {};
+  const availableUntilInput = constraints.availableUntil || body.availableUntil || null;
+  const focusBlockMinutes = Math.min(240, Math.max(15, Number(constraints.focusBlockMinutes || body.focusBlockMinutes || 60) || 60));
+  const correlationId = crypto.randomUUID();
+
+  try {
+    const db = ensureFirestore();
+    const profile = await loadProfile(db, uid);
+    const timezone = resolveTimezone(profile, DEFAULT_TIMEZONE);
+    const now = DateTime.now().setZone(timezone);
+    const { start, end } = computeDayWindow({ day: now, timezone });
+    const windowStart = now > start ? now : start;
+    let availableUntil = toDateTimeFromValue(availableUntilInput, timezone);
+    if (!availableUntil || availableUntil <= windowStart) availableUntil = end;
+    if (availableUntil > end) availableUntil = end;
+
+    const [tasksSnap, storiesSnap, sprintsSnap, calendarSnap, latestPriorityRun] = await Promise.all([
+      db.collection('tasks').where('ownerUid', '==', uid).limit(400).get(),
+      db.collection('stories').where('ownerUid', '==', uid).get(),
+      db.collection('sprints').where('ownerUid', '==', uid).get(),
+      db.collection('calendar_blocks')
+        .where('ownerUid', '==', uid)
+        .where('start', '>=', start.toMillis())
+        .where('start', '<=', end.toMillis())
+        .orderBy('start', 'asc')
+        .get(),
+      fetchLatestPriorityRun(db, uid),
+    ]);
+
+    const tasks = tasksSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    const stories = storiesSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    const sprints = sprintsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    const calendarBlocks = calendarSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    const filteredTasks = tasks.filter((task) => !task.deleted && !isDoneStatusInSet(task.status, TASK_DONE_STATUS_VALUES));
+
+    const dueToday = filteredTasks.filter((task) => {
+      const due = resolveDateFromFields(task, timezone, ['dueDate', 'dueDateMs', 'dueAt', 'targetDate', 'dueDateIso']);
+      return due && due >= start && due <= end;
+    });
+    const createdToday = filteredTasks.filter((task) => {
+      const created = resolveDateFromFields(task, timezone, ['createdAt', 'createdAtMs', 'createdAtIso']);
+      return created && created >= start && created <= end;
+    });
+    const overdue = filteredTasks.filter((task) => {
+      const due = resolveDateFromFields(task, timezone, ['dueDate', 'dueDateMs', 'dueAt', 'targetDate', 'dueDateIso']);
+      return due && due < now;
+    });
+
+    const activeSprint = resolveActiveSprint(sprints, windowStart, timezone);
+    const activeStoryIds = new Set(
+      activeSprint
+        ? stories.filter((story) => story.sprintId === activeSprint.id).map((story) => story.id)
+        : []
+    );
+    const activeStories = activeSprint
+      ? stories.filter((story) => activeStoryIds.has(story.id) && !isDoneStatusInSet(story.status, STORY_DONE_STATUS_VALUES))
+      : stories.filter((story) => !isDoneStatusInSet(story.status, STORY_DONE_STATUS_VALUES)).slice(0, PRIORITY_STORY_CONTEXT_LIMIT);
+
+    const busyIntervals = computeBusyIntervals(calendarBlocks, timezone, windowStart, availableUntil);
+    const freeSlots = computeFreeSlots(busyIntervals, windowStart, availableUntil);
+    const slotContext = freeSlots.map(formatSlotForContext).filter(Boolean);
+
+    const previousPriorities = Array.isArray(latestPriorityRun?.priorities)
+      ? latestPriorityRun.priorities.slice(0, 3).map((item) => ({
+        id: item.id,
+        title: item.title,
+        type: item.type,
+      }))
+      : [];
+
+    const contextPayload = {
+      dayIso: windowStart.toISODate(),
+      timezone,
+      now: windowStart.toISO(),
+      reason,
+      focusBlockMinutes,
+      availableUntil: availableUntil.toISO(),
+      freeSlots: slotContext,
+      tasks: {
+        dueToday: take(dueToday, 6).map((task) => getTaskContext(task, timezone)),
+        overdue: take(overdue, 6).map((task) => getTaskContext(task, timezone)),
+        createdToday: take(createdToday, 6).map((task) => getTaskContext(task, timezone)),
+      },
+      stories: take(activeStories, 5).map((story) => getStoryContext(story, timezone)),
+      calendarBusy: take(calendarBlocks, 5).map((block) => getCalendarContext(block, timezone)),
+      previousPriorities,
+    };
+
+    const systemPrompt = [
+      'You are BOB, the day replanner for the remainder of today.',
+      'Produce a deterministic JSON plan that reselects three priorities and assigns calendar blocks.',
+      'Do not include any text outside the JSON object.',
+    ].join(' ');
+
+    const userPrompt = [
+      `Context: ${JSON.stringify(contextPayload)}`,
+      'Return JSON matching schema: {"priorities":[{"type":"task|story|calendar","id":"...","title":"...","estMinutes":number,"rationale":"...","schedule":{"start":"ISO","end":"ISO"},"changes":{"taskDueDate?":"ISO","storyDueDate?":"ISO"}}],"calendarOps":[{"op":"create|move|delete","eventId?":"...","title":"...","start":"ISO","end":"ISO","notes":"...","linkedType":"task|story","linkedId":"..."}],"taskOps":[{"op":"update","taskId":"...","fields":{...}}],"storyOps":[{"op":"update","storyId":"...","fields":{...}}],"displayText":"...","speakText":"..."}',
+      'Priorities must be exactly three entries covering free slots without conflicting existing immovable events.',
+      'Calendar operations must align with those priorities when possible; schedule durations should align with remaining time.',
+      'Return JSON only.',
+    ].join('\n');
+
+    let planRaw = '';
+    let plan = {};
+    try {
+      planRaw = await callLLMJson({
+        system: systemPrompt,
+        user: userPrompt,
+        purpose: 'replan_day',
+        userId: uid,
+        expectJson: true,
+        temperature: 0.2,
+      });
+      plan = planRaw ? JSON.parse(planRaw) : {};
+    } catch (error) {
+      console.error('[replanDay] LLM failed', error);
+      await logReplanActivity(db, {
+        ownerUid: uid,
+        correlationId,
+        activityType: 'REPLAN_FAILED',
+        status: 'error',
+        metadata: { error: error?.message || 'LLM failure', reason, focusBlockMinutes },
+      });
+      await persistReplanRun(db, {
+        ownerUid: uid,
+        correlationId,
+        reason,
+        constraints: { availableUntil: availableUntil.toISO(), focusBlockMinutes },
+        inputs: {
+          dueToday: dueToday.length,
+          overdue: overdue.length,
+          createdToday: createdToday.length,
+          freeSlots: slotContext.length,
+        },
+        plan: { error: 'LLM failed' },
+        appliedOps: {},
+        status: 'failed',
+      });
+      res.status(500).json({ error: 'Replan LLM failed' });
+      return;
+    }
+
+    const priorities = Array.isArray(plan.priorities) ? plan.priorities.slice(0, 3) : [];
+    if (priorities.length !== 3) {
+      throw new Error('LLM did not return three priorities');
+    }
+
+    const calendarOps = Array.isArray(plan.calendarOps) ? plan.calendarOps : [];
+    const taskOps = Array.isArray(plan.taskOps) ? plan.taskOps : [];
+    const storyOps = Array.isArray(plan.storyOps) ? plan.storyOps : [];
+
+    logReplanActivity(db, {
+      ownerUid: uid,
+      correlationId,
+      activityType: 'REPLAN_STARTED',
+      status: 'started',
+      metadata: { reason, focusBlockMinutes },
+    });
+
+    const validatedBlocks = [];
+    for (const priority of priorities) {
+      const schedule = priority.schedule || {};
+      if (!schedule.start || !schedule.end) {
+        throw new Error(`Missing schedule for priority ${priority.title}`);
+      }
+      const startDt = DateTime.fromISO(schedule.start, { zone: timezone });
+      const endDt = DateTime.fromISO(schedule.end, { zone: timezone });
+      if (!startDt.isValid || !endDt.isValid || endDt <= startDt) {
+        throw new Error(`Invalid schedule for priority ${priority.title}`);
+      }
+      if (startDt < windowStart || endDt > availableUntil) {
+        throw new Error(`Schedule for ${priority.title} falls outside the available window`);
+      }
+      const conflict = busyIntervals.some((interval) => intervalsOverlap(startDt, endDt, interval));
+      if (conflict) {
+        throw new Error(`Schedule for ${priority.title} conflicts with an existing event`);
+      }
+      validatedBlocks.push({ priority, schedule: { start: startDt, end: endDt } });
+    }
+
+    const appliedCalendarOps = await applyCalendarOps(uid, db, calendarOps);
+    const priorityEventResults = [];
+    for (const block of validatedBlocks) {
+      const schedulePayload = {
+        start: block.schedule.start.toISO(),
+        end: block.schedule.end.toISO(),
+      };
+      const priorityResult = await ensurePriorityEvent({
+        db,
+        uid,
+        priority: block.priority,
+        dayIso: windowStart.toISODate(),
+        timezone,
+        schedule: schedulePayload,
+        reason,
+      });
+      priorityEventResults.push(priorityResult);
+    }
+
+    const appliedTaskOps = await applyTaskOps(db, uid, taskOps);
+    const appliedStoryOps = await applyStoryOps(db, uid, storyOps);
+
+    await logReplanActivity(db, {
+      ownerUid: uid,
+      correlationId,
+      activityType: 'REPLAN_APPLIED',
+      status: 'applied',
+      metadata: {
+        reason,
+        focusBlockMinutes,
+        priorities: priorities.map((p) => ({ id: p.id, title: p.title })),
+      },
+    });
+
+    await persistReplanRun(db, {
+      ownerUid: uid,
+      correlationId,
+      reason,
+      constraints: { availableUntil: availableUntil.toISO(), focusBlockMinutes },
+      inputs: {
+        dueToday: dueToday.length,
+        overdue: overdue.length,
+        createdToday: createdToday.length,
+        freeSlots: slotContext.length,
+      },
+      plan: {
+        priorities,
+        calendarOps,
+        taskOps,
+        storyOps,
+        displayText: plan.displayText || '',
+        speakText: plan.speakText || '',
+      },
+      appliedOps: {
+        calendar: appliedCalendarOps,
+        tasks: appliedTaskOps,
+        stories: appliedStoryOps,
+        priorityEvents: priorityEventResults,
+      },
+      status: 'applied',
+    });
+
+    res.status(200).json({
+      displayText: plan.displayText || '',
+      speakText: plan.speakText || '',
+      scheduledBlocks: validatedBlocks.map((block) => ({
+        id: block.priority.id,
+        type: block.priority.type,
+        title: block.priority.title,
+        schedule: {
+          start: block.schedule.start.toISO(),
+          end: block.schedule.end.toISO(),
+        },
+      })),
+      calendarOps: appliedCalendarOps,
+    });
+  } catch (error) {
+    console.error('[replanDay] failed', error);
+    const db = ensureFirestore();
+    await logReplanActivity(db, {
+      ownerUid: uid,
+      correlationId,
+      activityType: 'REPLAN_FAILED',
+      status: 'failed',
+      metadata: { error: error?.message || 'Unknown failure', reason },
+    });
+    await persistReplanRun(db, {
+      ownerUid: uid,
+      correlationId,
+      reason,
+      constraints: { availableUntil: null, focusBlockMinutes },
+      inputs: {},
+      plan: { error: error?.message || 'Error' },
+      appliedOps: {},
+      status: 'failed',
+    });
+    res.status(500).json({ error: error?.message || 'Replan failed' });
+  }
+});
+
+// ===== Chores & Routines Helpers
+exports.listChoresWithStats = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const db = admin.firestore();
+  const [chores, trackerSnap] = await Promise.all([
+    getChoresCollection(uid),
+    db.collection('users').doc(uid).collection('tracker').doc('choreStats').get().catch(() => null),
+  ]);
+  const trackerData = trackerSnap?.exists ? trackerSnap.data() || {} : {};
+  const now = Date.now();
+  const items = chores.map((chore) => {
+    const dtstart = toMillis(chore.recurrence?.dtstart || chore.dtstart || chore.createdAt);
+    const nextComputed = computeNextDueAt(chore.recurrence, dtstart, Math.max(now, Number(chore.nextDueAt || now)), CHORE_LOOKAHEAD_DAYS);
+    const stats = {
+      completedStreak: Number(chore.completedStreak || 0),
+      longestStreak: Number(chore.longestStreak || 0),
+      completedCount: Number(chore.completedCount || 0),
+      missedCount: Number(chore.missedCount || 0),
+      lastCompletedAt: chore.lastCompletedAt || null,
+      nextDueAt: chore.nextDueAt || nextComputed || null,
+    };
+    return {
+      id: chore.id,
+      title: chore.title || 'Chore',
+      cadence: chore.recurrence?.rrule || null,
+      durationMinutes: Number(chore.durationMinutes || 10),
+      priority: chore.priority || 3,
+      tags: chore.tags || [],
+      requiredBlockId: chore.requiredBlockId || null,
+      eligibleBlockIds: chore.eligibleBlockIds || [],
+      policy: chore.policy || null,
+      timezone: coercePersonaTimezone(chore),
+      stats,
+      tracker: trackerData?.[chore.id] || null,
+    };
+  });
+  return { items };
+});
+
+exports.listRoutinesWithStats = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const [routines, trackerSnap] = await Promise.all([
+    getRoutinesCollection(uid),
+    admin.firestore().collection('users').doc(uid).collection('tracker').doc('routineStats').get().catch(() => null),
+  ]);
+  const trackerData = trackerSnap?.exists ? trackerSnap.data() || {} : {};
+  const now = Date.now();
+  const items = routines.map((routine) => {
+    const dtstart = toMillis(routine.recurrence?.dtstart || routine.dtstart || routine.createdAt);
+    const nextComputed = computeNextDueAt(routine.recurrence, dtstart, Math.max(now, Number(routine.nextDueAt || now)), CHORE_LOOKAHEAD_DAYS);
+    const stats = {
+      completedStreak: Number(routine.completedStreak || 0),
+      longestStreak: Number(routine.longestStreak || 0),
+      completedCount: Number(routine.completedCount || 0),
+      missedCount: Number(routine.missedCount || 0),
+      lastCompletedAt: routine.lastCompletedAt || null,
+      nextDueAt: routine.nextDueAt || nextComputed || null,
+    };
+    return {
+      id: routine.id,
+      name: routine.name || 'Routine',
+      cadence: routine.recurrence?.rrule || null,
+      durationMinutes: Number(routine.durationMinutes || 30),
+      priority: routine.priority || 3,
+      theme: routine.theme || null,
+      goalId: routine.goalId || null,
+      tags: routine.tags || [],
+      policy: routine.policy || null,
+      timezone: coercePersonaTimezone(routine),
+      stats,
+      tracker: trackerData?.[routine.id] || null,
+    };
+  });
+  return { items };
+});
+
+exports.completeChore = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const choreId = String(req?.data?.choreId || '').trim();
+  if (!choreId) throw new httpsV2.HttpsError('invalid-argument', 'choreId is required');
+  const db = admin.firestore();
+  const choreRef = db.collection('chores').doc(choreId);
+  const now = Date.now();
+  const result = await db.runTransaction(async (tx) => {
+    const snap = await tx.get(choreRef);
+    if (!snap.exists) throw new httpsV2.HttpsError('not-found', 'Chore not found');
+    const data = snap.data() || {};
+    if (data.ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Cannot modify this chore');
+    const { streak, longest } = calculateStreakMetrics(data, now);
+    const dtstart = toMillis(data.recurrence?.dtstart || data.dtstart || data.createdAt || now);
+    const nextDue = computeNextDueAt(data.recurrence, dtstart, now + MS_IN_MINUTE, CHORE_LOOKAHEAD_DAYS);
+    const stats = {
+      lastCompletedAt: now,
+      nextDueAt: nextDue || null,
+      completedStreak: streak,
+      longestStreak: longest,
+      completedCount: Number(data.completedCount || 0) + 1,
+      missedCount: Number(data.missedCount || 0),
+    };
+    tx.update(choreRef, { ...stats, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+    return stats;
+  });
+  return { ok: true, stats: result };
+});
+
+exports.completeRoutine = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const routineId = String(req?.data?.routineId || '').trim();
+  if (!routineId) throw new httpsV2.HttpsError('invalid-argument', 'routineId is required');
+  const db = admin.firestore();
+  const routineRef = db.collection('routines').doc(routineId);
+  const now = Date.now();
+  let goalKpiUpdated = false;
+  const result = await db.runTransaction(async (tx) => {
+    const snap = await tx.get(routineRef);
+    if (!snap.exists) throw new httpsV2.HttpsError('not-found', 'Routine not found');
+    const data = snap.data() || {};
+    if (data.ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Cannot modify this routine');
+    const { streak, longest } = calculateStreakMetrics(data, now);
+    const dtstart = toMillis(data.recurrence?.dtstart || data.dtstart || data.createdAt || now);
+    const nextDue = computeNextDueAt(data.recurrence, dtstart, now + MS_IN_MINUTE, CHORE_LOOKAHEAD_DAYS);
+    const stats = {
+      lastCompletedAt: now,
+      nextDueAt: nextDue || null,
+      completedStreak: streak,
+      longestStreak: longest,
+      completedCount: Number(data.completedCount || 0) + 1,
+      missedCount: Number(data.missedCount || 0),
+    };
+    tx.update(routineRef, { ...stats, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+    
+    // Track goal KPI if routine has goalId
+    if (data.goalId) {
+      const goalRef = db.collection('goals').doc(data.goalId);
+      const goalSnap = await tx.get(goalRef);
+      if (goalSnap.exists) {
+        const goalData = goalSnap.data() || {};
+        // Infer metric type from routine title + goal KPI names
+        const routineTitle = String(data.title || '').toLowerCase();
+        const kpiNames = Array.isArray(goalData.kpiNames) ? goalData.kpiNames : [];
+        const matchedKpi = kpiNames.find((kpi) => {
+          const kpiLower = String(kpi || '').toLowerCase();
+          // Running: match on distance (5k, 10k, half-marathon, etc.)
+          if (routineTitle.includes('run')) {
+            if (kpiLower.includes('10k') || kpiLower.includes('5k') || kpiLower.includes('marathon')) return true;
+            if (kpiLower.includes('run') || kpiLower.includes('running')) return true;
+          }
+          // Swimming: match on distance or swim keyword
+          if (routineTitle.includes('swim')) {
+            if (kpiLower.includes('swim') || kpiLower.includes('800m') || kpiLower.includes('400m')) return true;
+          }
+          // Walking: match on steps or distance
+          if (routineTitle.includes('walk')) {
+            if (kpiLower.includes('walk') || kpiLower.includes('step') || kpiLower.includes('distance')) return true;
+          }
+          // Cycling: match on distance or cycling
+          if (routineTitle.includes('cycle') || routineTitle.includes('bike')) {
+            if (kpiLower.includes('cycle') || kpiLower.includes('bike') || kpiLower.includes('distance')) return true;
+          }
+          // Meditation/mindfulness
+          if (routineTitle.includes('meditate') && kpiLower.includes('meditate')) return true;
+          // Exercise/fitness (generic)
+          if (routineTitle.includes('exercise') && (kpiLower.includes('exercise') || kpiLower.includes('workout'))) return true;
+          // Reading
+          if (routineTitle.includes('read') && kpiLower.includes('read')) return true;
+          // Triathlon or multi-sport: match any relevant discipline
+          if (routineTitle.includes('triathlon')) {
+            if (kpiLower.includes('swim') || kpiLower.includes('run') || kpiLower.includes('bike') || kpiLower.includes('cycle')) return true;
+            if (kpiLower.includes('triathlon') || kpiLower.includes('time')) return true;
+          }
+          // Fallback: match routine title keywords to KPI name keywords
+          const routineWords = routineTitle.split(/\s+/).filter(w => w.length > 3);
+          return routineWords.some(word => kpiLower.includes(word));
+        });
+        
+        // Log routine completion to goal KPI tracking
+        const kpiMetricsRef = db.collection('goal_kpi_metrics').doc(`${data.goalId}_${matchedKpi || 'completion'}`);
+        const kpiMetricsSnap = await tx.get(kpiMetricsRef);
+        const kpiMetrics = kpiMetricsSnap.data() || { goalId: data.goalId, kpiName: matchedKpi || 'completion', completions: [] };
+        const completions = Array.isArray(kpiMetrics.completions) ? kpiMetrics.completions : [];
+        completions.push({
+          routineId: routineId,
+          routineTitle: data.title,
+          completedAt: now,
+          durationMinutes: data.estimateMin || data.estimatedMinutes || 60,
+        });
+        // Keep only last 90 days of completions
+        const ninetyDaysAgo = now - (90 * 24 * 60 * 60 * 1000);
+        const recentCompletions = completions.filter((c) => (c.completedAt || 0) > ninetyDaysAgo);
+        tx.set(kpiMetricsRef, {
+          ...kpiMetrics,
+          completions: recentCompletions,
+          lastCompletedAt: now,
+          completionCount: recentCompletions.length,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+        goalKpiUpdated = true;
+      }
+    }
+    
+    return stats;
+  });
+  return { ok: true, stats: result, goalKpiUpdated };
+});
+
+// Update task time and auto-populate time_of_day bucket
+exports.updateTaskTime = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const taskId = String(req?.data?.taskId || '').trim();
+  const timeStr = String(req?.data?.time || '').trim(); // HH:MM format
+  if (!taskId) throw new httpsV2.HttpsError('invalid-argument', 'taskId required');
+  if (!timeStr) throw new httpsV2.HttpsError('invalid-argument', 'time required (HH:MM format)');
+
+  const db = admin.firestore();
+  const taskRef = db.collection('tasks').doc(taskId);
+
+  try {
+    const snap = await taskRef.get();
+    if (!snap.exists) throw new httpsV2.HttpsError('not-found', 'Task not found');
+    const data = snap.data() || {};
+    if (data.ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Cannot modify this task');
+
+    // Auto-populate time_of_day from the time string
+    const autoTimeOfDay = parseTimeStringToTimeOfDay(timeStr);
+
+    const updatePayload = {
+      scheduledTime: timeStr,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+    if (autoTimeOfDay) {
+      updatePayload.timeOfDay = autoTimeOfDay;
+    }
+
+    await taskRef.update(updatePayload);
+    return { ok: true, timeOfDay: autoTimeOfDay || null };
+  } catch (error) {
+    if (error instanceof httpsV2.HttpsError) throw error;
+    throw new httpsV2.HttpsError('internal', error?.message || 'Failed to update task time');
+  }
+});
+
+// Update story time and auto-populate time_of_day bucket
+exports.updateStoryTime = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const storyId = String(req?.data?.storyId || '').trim();
+  const timeStr = String(req?.data?.time || '').trim(); // HH:MM format
+  if (!storyId) throw new httpsV2.HttpsError('invalid-argument', 'storyId required');
+  if (!timeStr) throw new httpsV2.HttpsError('invalid-argument', 'time required (HH:MM format)');
+
+  const db = admin.firestore();
+  const storyRef = db.collection('stories').doc(storyId);
+
+  try {
+    const snap = await storyRef.get();
+    if (!snap.exists) throw new httpsV2.HttpsError('not-found', 'Story not found');
+    const data = snap.data() || {};
+    if (data.ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Cannot modify this story');
+
+    // Auto-populate time_of_day from the time string
+    const autoTimeOfDay = parseTimeStringToTimeOfDay(timeStr);
+
+    const updatePayload = {
+      plannedTime: timeStr,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+    if (autoTimeOfDay) {
+      updatePayload.timeOfDay = autoTimeOfDay;
+    }
+
+    await storyRef.update(updatePayload);
+    return { ok: true, timeOfDay: autoTimeOfDay || null };
+  } catch (error) {
+    if (error instanceof httpsV2.HttpsError) throw error;
+    throw new httpsV2.HttpsError('internal', error?.message || 'Failed to update story time');
+  }
+});
+
+// Nightly job to populate blank time_of_day fields via LLM inference
+exports.populateTimeOfDayNightly = schedulerV2.onSchedule('0 2 * * *', async (context) => {
+  console.log('[populateTimeOfDayNightly] Starting time-of-day population job');
+  const db = admin.firestore();
+
+  try {
+    // Get all users
+    const usersSnap = await db.collection('users').limit(1000).get();
+    let totalProcessed = 0;
+    let totalUpdated = 0;
+    let totalErrors = 0;
+
+    for (const userDoc of usersSnap.docs) {
+      const userId = userDoc.id;
+      try {
+        const result = await populateBlankTimeOfDay(db, userId, {
+          limit: 30,
+          entityTypes: ['story', 'task'],
+        });
+        totalProcessed += result.processed;
+        totalUpdated += result.updated;
+        totalErrors += result.errors;
+      } catch (userErr) {
+        console.warn(`[populateTimeOfDayNightly] Failed for user ${userId}:`, userErr?.message);
+        totalErrors++;
+      }
+    }
+
+    console.log(`[populateTimeOfDayNightly] Completed: processed=${totalProcessed}, updated=${totalUpdated}, errors=${totalErrors}`);
+    return {
+      processed: totalProcessed,
+      updated: totalUpdated,
+      errors: totalErrors,
+    };
+  } catch (error) {
+    console.error('[populateTimeOfDayNightly] Job failed:', error?.message);
+    throw error;
+  }
+});
+
+/**
+ * Toggle immovable flag on tasks, chores, or routines
+ * Used for items that must always be completed (e.g., "wear retainer", "take medication")
+ */
+exports.toggleImmovableFlag = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  
+  const entityType = String(req?.data?.entityType || '').trim(); // 'task', 'chore', 'routine'
+  const entityId = String(req?.data?.entityId || '').trim();
+  const immovable = Boolean(req?.data?.immovable); // explicit toggle value
+  
+  if (!entityType) throw new httpsV2.HttpsError('invalid-argument', 'entityType is required');
+  if (!entityId) throw new httpsV2.HttpsError('invalid-argument', 'entityId is required');
+  if (!['task', 'chore', 'routine'].includes(entityType)) {
+    throw new httpsV2.HttpsError('invalid-argument', 'entityType must be task, chore, or routine');
+  }
+  
+  const db = admin.firestore();
+  const collection = entityType === 'task' ? 'tasks' : entityType === 'chore' ? 'chores' : 'routines';
+  const docRef = db.collection(collection).doc(entityId);
+  
+  try {
+    const snap = await docRef.get();
+    if (!snap.exists) {
+      throw new httpsV2.HttpsError('not-found', `${entityType} not found`);
+    }
+    
+    const data = snap.data() || {};
+    if (data.ownerUid !== uid) {
+      throw new httpsV2.HttpsError('permission-denied', `Cannot modify this ${entityType}`);
+    }
+    
+    await docRef.update({
+      immovable,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    
+    console.log(`[toggleImmovableFlag] ${entityType} ${entityId} immovable=${immovable}`);
+    
+    return {
+      ok: true,
+      entityType,
+      entityId,
+      immovable,
+      title: data.title,
+    };
+  } catch (error) {
+    console.error(`[toggleImmovableFlag] Error:`, error?.message);
+    throw error instanceof httpsV2.HttpsError
+      ? error
+      : new httpsV2.HttpsError('internal', 'Failed to toggle immovable flag');
+  }
+});
+
+exports.skipRoutine = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const routineId = String(req?.data?.routineId || '').trim();
+  if (!routineId) throw new httpsV2.HttpsError('invalid-argument', 'routineId is required');
+  const db = admin.firestore();
+  const routineRef = db.collection('routines').doc(routineId);
+  const now = Date.now();
+  const result = await db.runTransaction(async (tx) => {
+    const snap = await tx.get(routineRef);
+    if (!snap.exists) throw new httpsV2.HttpsError('not-found', 'Routine not found');
+    const data = snap.data() || {};
+    if (data.ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Cannot modify this routine');
+    const dtstart = toMillis(data.recurrence?.dtstart || data.dtstart || data.createdAt || now);
+    const nextDue = computeNextDueAt(data.recurrence, dtstart, now + MS_IN_MINUTE, CHORE_LOOKAHEAD_DAYS);
+    const stats = {
+      nextDueAt: nextDue || null,
+      completedStreak: 0,
+      missedCount: Number(data.missedCount || 0) + 1,
+    };
+    tx.update(routineRef, { ...stats, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+    return stats;
+  });
+  return { ok: true, stats: result };
+});
+
+exports.rolloverChoresAndRoutines = schedulerV2.onSchedule('every day 05:00', async () => {
+  const db = admin.firestore();
+  const [choresSnap, routinesSnap] = await Promise.all([
+    db.collection('chores').get(),
+    db.collection('routines').get(),
+  ]);
+  const now = Date.now();
+  const updates = [];
+  for (const snap of choresSnap.docs) {
+    const data = snap.data() || {};
+    const dtstart = toMillis(data.recurrence?.dtstart || data.dtstart || data.createdAt || now);
+    const nextDue = computeNextDueAt(data.recurrence, dtstart, Math.max(now, Number(data.nextDueAt || now)), CHORE_LOOKAHEAD_DAYS);
+    const needsReset = data.nextDueAt && data.nextDueAt < now && (!data.policy || data.policy.mode !== 'hold');
+    const update = {
+      nextDueAt: nextDue || null,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+    if (needsReset) {
+      update.completedStreak = 0;
+      update.missedCount = Number(data.missedCount || 0) + 1;
+    }
+    updates.push({ ref: snap.ref, update });
+  }
+  for (const snap of routinesSnap.docs) {
+    const data = snap.data() || {};
+    const dtstart = toMillis(data.recurrence?.dtstart || data.dtstart || data.createdAt || now);
+    const nextDue = computeNextDueAt(data.recurrence, dtstart, Math.max(now, Number(data.nextDueAt || now)), CHORE_LOOKAHEAD_DAYS);
+    const needsReset = data.nextDueAt && data.nextDueAt < now && (!data.policy || data.policy.mode !== 'hold');
+    const update = {
+      nextDueAt: nextDue || null,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+    if (needsReset) {
+      update.completedStreak = 0;
+      update.missedCount = Number(data.missedCount || 0) + 1;
+    }
+    updates.push({ ref: snap.ref, update });
+  }
+  const batch = db.batch();
+  updates.forEach(({ ref, update }) => batch.set(ref, update, { merge: true }));
+  await batch.commit();
+  return { ok: true, processed: updates.length };
+});
+
+// Reconcile assignments with Google Calendar: if child events were deleted externally,
+// mark assignments as deferred and clear the external.googleEventId
+exports.reconcilePlanFromGoogleCalendar = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const uid = req.auth.uid;
+  const day = req?.data?.day || new Date().toISOString().slice(0, 10);
+  const date = new Date(day);
+  if (isNaN(date.getTime())) throw new httpsV2.HttpsError('invalid-argument', 'Invalid day');
+  const db = admin.firestore();
+  const dayKey = toDayKey(date);
+  const access = await getAccessToken(uid);
+  const asSnap = await db.collection('plans').doc(dayKey).collection('assignments').where('ownerUid', '==', uid).get();
+  const toCheck = asSnap.docs.map(d => ({ id: d.id, ...(d.data() || {}) })).filter(a => a?.external?.googleEventId);
+  let cleared = 0;
+  for (const a of toCheck) {
+    const eid = a.external.googleEventId;
+    try {
+      // GET returns 404 if deleted
+      await fetchJson(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(eid)}`, {
+        headers: { 'Authorization': 'Bearer ' + access }
+      });
+    } catch (e) {
+      // Treat as deleted -> clear and mark deferred
+      await db.collection('plans').doc(dayKey).collection('assignments').doc(a.id)
+        .set({ status: 'deferred', external: { googleEventId: null }, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      cleared++;
+    }
+  }
+  return { ok: true, checked: toCheck.length, cleared };
+});
+
+// ===== Utilities
+async function fetchJson(url, opts = {}) {
+  const res = await fetch(url, opts);
+  const text = await res.text();
+  let parsed = null;
+  if (text) {
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = null;
+    }
+  }
+  if (!res.ok) {
+    const detail = parsed?.message || parsed?.error || text || `HTTP ${res.status}`;
+    const err = new Error(`HTTP ${res.status}: ${detail}`);
+    err.status = res.status;
+    err.body = text;
+    err.parsed = parsed;
+    throw err;
+  }
+  if (!text) return null;
+  if (parsed != null) return parsed;
+  return JSON.parse(text);
+}
+
+function stateEncode(obj) {
+  return Buffer.from(JSON.stringify(obj)).toString("base64url");
+}
+function stateDecode(s) {
+  try { return JSON.parse(Buffer.from(String(s || ""), "base64url").toString("utf8")); } catch { return {}; }
+}
+
+function envTrim(name, fallback = '') {
+  const raw = process.env?.[name];
+  if (raw == null) return String(fallback || '').trim();
+  return String(raw).trim();
+}
+
+const MONZO_KMS_ENV_KEYS = ['MONZO_KMS_KEY', 'MONZO_TOKEN_KMS_KEY'];
+let monzoKmsClient = null;
+function getMonzoKmsClient() {
+  if (!monzoKmsClient) {
+    monzoKmsClient = new KeyManagementServiceClient();
+  }
+  return monzoKmsClient;
+}
+function getMonzoKmsKeyName() {
+  for (const keyName of MONZO_KMS_ENV_KEYS) {
+    const value = process.env[keyName];
+    if (value) return value.trim();
+  }
+  return null;
+}
+async function encryptMonzoSecret(plainText) {
+  if (!plainText) return null;
+  const keyName = getMonzoKmsKeyName();
+  if (!keyName) {
+    throw new Error('MONZO_KMS_KEY not configured. Set MONZO_KMS_KEY to the full KMS resource path.');
+  }
+  const client = getMonzoKmsClient();
+  const [result] = await client.encrypt({
+    name: keyName,
+    plaintext: Buffer.from(String(plainText), 'utf8'),
+  });
+  if (!result.ciphertext) {
+    throw new Error('Monzo token encryption failed (no ciphertext)');
+  }
+  return Buffer.from(result.ciphertext).toString('base64');
+}
+async function decryptMonzoSecret(cipherText) {
+  if (!cipherText) return null;
+  const keyName = getMonzoKmsKeyName();
+  if (!keyName) {
+    throw new Error('MONZO_KMS_KEY not configured. Set MONZO_KMS_KEY to the full KMS resource path.');
+  }
+  const client = getMonzoKmsClient();
+  const [result] = await client.decrypt({
+    name: keyName,
+    ciphertext: Buffer.from(String(cipherText), 'base64'),
+  });
+  return result.plaintext ? Buffer.from(result.plaintext).toString('utf8') : null;
+}
+async function resolveMonzoRefreshToken(tokenRef, data) {
+  if (!tokenRef) return null;
+  if (data?.encryptedRefreshToken) {
+    return decryptMonzoSecret(data.encryptedRefreshToken);
+  }
+  if (data?.refresh_token) {
+    const legacy = data.refresh_token;
+    try {
+      const encrypted = await encryptMonzoSecret(legacy);
+      await tokenRef.set({
+        encryptedRefreshToken: encrypted,
+        refresh_token: admin.firestore.FieldValue.delete(),
+        encryption: {
+          method: 'gcp-kms',
+          kmsKeyName: getMonzoKmsKeyName(),
+          migratedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+      }, { merge: true });
+    } catch (error) {
+      console.warn('[monzo] failed to migrate refresh token to KMS', error?.message || error);
+    }
+    return legacy;
+  }
+  return null;
+}
+
+function constantTimeEqualsBuffer(a, b) {
+  if (!(a instanceof Buffer)) a = Buffer.from(a);
+  if (!(b instanceof Buffer)) b = Buffer.from(b);
+  if (a.length !== b.length) return false;
+  try {
+    return crypto.timingSafeEqual(a, b);
+  } catch {
+    return false;
+  }
+}
+
+function verifyMonzoSignature(headerValue, digestBuffer) {
+  if (!headerValue || !digestBuffer) return false;
+  const rawHeader = String(headerValue).trim();
+  if (!rawHeader) return false;
+  const stripped = rawHeader.startsWith('sha256=') ? rawHeader.slice(7) : rawHeader;
+  try {
+    const candidateHex = Buffer.from(stripped, 'hex');
+    if (candidateHex.length === digestBuffer.length && constantTimeEqualsBuffer(candidateHex, digestBuffer)) {
+      return true;
+    }
+  } catch {
+    // Ignore parse errors
+  }
+  try {
+    const candidateBase64 = Buffer.from(stripped, 'base64');
+    if (candidateBase64.length === digestBuffer.length && constantTimeEqualsBuffer(candidateBase64, digestBuffer)) {
+      return true;
+    }
+  } catch {
+    // Ignore parse errors
+  }
+  return false;
+}
+
+const MONZO_OAUTH_SESSION_TTL_MS = 10 * 60 * 1000;
+function sanitizeOrigin(origin) {
+  if (!origin) return null;
+  try {
+    const url = new URL(origin);
+    return `${url.protocol}//${url.host}`;
+  } catch {
+    return null;
+  }
+}
+function defaultMonzoOrigin() {
+  const explicit = sanitizeOrigin(process.env.MONZO_PUBLIC_BASE_URL || process.env.MONZO_HOSTING_ORIGIN);
+  if (explicit) return explicit;
+  const projectId = process.env.GCLOUD_PROJECT;
+  if (projectId) return `https://${projectId}.web.app`;
+  return null;
+}
+function resolveMonzoOriginFromRequest(req) {
+  if (!req) return defaultMonzoOrigin();
+  const forwardedHost = req.get('x-forwarded-host') || req.get('host');
+  if (forwardedHost) {
+    const proto = req.get('x-forwarded-proto') || 'https';
+    return `${proto}://${forwardedHost}`;
+  }
+  return defaultMonzoOrigin();
+}
+function buildMonzoRedirectUri(req) {
+  if (process.env.MONZO_REDIRECT_URI) return process.env.MONZO_REDIRECT_URI.trim();
+  const origin = resolveMonzoOriginFromRequest(req);
+  if (!origin) throw new Error('Unable to resolve Monzo redirect origin');
+  return `${origin.replace(/\/$/, '')}/api/monzo/callback`;
+}
+function buildTimestampPatch(field) {
+  if (!field) return {};
+  return {
+    [field]: admin.firestore.FieldValue.serverTimestamp(),
+    [`${field}EpochMs`]: Date.now(),
+  };
+}
+
+async function updateMonzoIntegrationStatus(uid, patch = {}) {
+  if (!uid) return;
+  const db = admin.firestore();
+  const ref = db.collection('integration_status').doc(`monzo_${uid}`);
+  const payload = {
+    ownerUid: uid,
+    provider: 'monzo',
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedEpochMs: Date.now(),
+    ...patch,
+  };
+  await ref.set(payload, { merge: true });
+}
+
+async function recordMonzoAutomationStatus({ uid, status, message, source }) {
+  if (!uid) return;
+  try {
+    const db = admin.firestore();
+    await recordAutomationStatus(db, {
+      userId: uid,
+      automation: 'monzo_sync',
+      status,
+      message: source ? `[${source}] ${message || ''}`.trim() : message,
+      dayIso: DateTime.utc().toISODate(),
+    });
+  } catch (error) {
+    console.warn('[monzo] failed to record automation status', error?.message || error);
+  }
+}
+
+async function markMonzoAnalyticsRun(uid, analyticsSummary, context = {}) {
+  await updateMonzoIntegrationStatus(uid, {
+    ...buildTimestampPatch('lastAnalyticsAt'),
+    analyticsSummary: analyticsSummary || null,
+    lastAnalyticsContext: context || null,
+  });
+}
+
+async function runMonzoAnalytics(uid, context = {}) {
+  const analytics = await computeMonzoAnalytics(uid);
+  await markMonzoAnalyticsRun(uid, analytics?.summarySnapshot || null, context);
+  return analytics;
+}
+
+async function enqueueMonzoSyncJob(uid, payload = {}) {
+  if (!uid) return null;
+  const db = admin.firestore();
+  const jobRef = db.collection('monzo_sync_jobs').doc();
+  const base = {
+    ownerUid: uid,
+    state: 'pending',
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    attemptCount: 0,
+  };
+  await jobRef.set({ ...base, ...payload });
+  return jobRef.id;
+}
+
+// ===== OAuth: start
+function getGoogleRedirectUri() {
+  try {
+    if (process.env.GOOGLE_OAUTH_REDIRECT_URI) return process.env.GOOGLE_OAUTH_REDIRECT_URI;
+  } catch { }
+  const projectId = process.env.GCLOUD_PROJECT;
+  if (!projectId) return null;
+  return `https://europe-west2-${projectId}.cloudfunctions.net/oauthCallback`;
+}
+
+function getYouTubeRedirectUri() {
+  try {
+    if (process.env.GOOGLE_OAUTH_YOUTUBE_REDIRECT_URI) return process.env.GOOGLE_OAUTH_YOUTUBE_REDIRECT_URI;
+  } catch { }
+  const projectId = process.env.GCLOUD_PROJECT;
+  if (!projectId) return null;
+  return `https://europe-west2-${projectId}.cloudfunctions.net/youtubeOAuthCallback`;
+}
+
+exports.oauthStart = httpsV2.onRequest({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET], invoker: 'public' }, async (req, res) => {
+  try {
+    const uid = String(req.query.uid || "");
+    const nonce = String(req.query.nonce || "");
+    if (!uid || !nonce) return res.status(400).send("Missing uid/nonce");
+
+    const redirectUri = getGoogleRedirectUri();
+    if (!redirectUri) return res.status(500).send("Missing redirect URI configuration (GCLOUD_PROJECT or GOOGLE_OAUTH_REDIRECT_URI)");
+    const clientId = (process.env.GOOGLE_OAUTH_CLIENT_ID || '').trim();
+    const clientSecret = (process.env.GOOGLE_OAUTH_CLIENT_SECRET || '').trim();
+
+    if (!clientId || !/\.apps\.googleusercontent\.com$/.test(String(clientId))) {
+      // Helpful message without leaking the client id value
+      return res.status(500).send(
+        [
+          'Google OAuth is not configured. Please set GOOGLE_OAUTH_CLIENT_ID (Web application client) and GOOGLE_OAUTH_CLIENT_SECRET as Functions secrets.',
+          'Also add this Redirect URI in the Google Cloud Console:',
+          redirectUri
+        ].join('\n')
+      );
+    }
+
+    const state = stateEncode({ uid, nonce });
+    const scope = encodeURIComponent([
+      'https://www.googleapis.com/auth/calendar',
+      'https://www.googleapis.com/auth/documents',
+    ].join(' '));
+    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&access_type=offline&include_granted_scopes=true&prompt=consent&scope=${scope}&state=${state}`;
+    res.redirect(authUrl);
+  } catch (e) {
+    res.status(500).send("OAuth start error: " + e.message);
+  }
+});
+
+// ===== YouTube OAuth: start
+exports.youtubeOAuthStart = httpsV2.onRequest({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET], invoker: 'public' }, async (req, res) => {
+  try {
+    const uid = String(req.query.uid || "");
+    const nonce = String(req.query.nonce || "");
+    if (!uid || !nonce) return res.status(400).send("Missing uid/nonce");
+
+    const redirectUri = getYouTubeRedirectUri();
+    if (!redirectUri) return res.status(500).send("Missing redirect URI configuration (GCLOUD_PROJECT or GOOGLE_OAUTH_YOUTUBE_REDIRECT_URI)");
+    const clientId = (process.env.GOOGLE_OAUTH_CLIENT_ID || '').trim();
+    const clientSecret = (process.env.GOOGLE_OAUTH_CLIENT_SECRET || '').trim();
+
+    if (!clientId || !/\.apps\.googleusercontent\.com$/.test(String(clientId))) {
+      return res.status(500).send(
+        [
+          'Google OAuth is not configured. Please set GOOGLE_OAUTH_CLIENT_ID (Web application client) and GOOGLE_OAUTH_CLIENT_SECRET as Functions secrets.',
+          'Also add this Redirect URI in the Google Cloud Console:',
+          redirectUri
+        ].join('\n')
+      );
+    }
+
+    const state = stateEncode({ uid, nonce });
+    const scope = encodeURIComponent("https://www.googleapis.com/auth/youtube.readonly");
+    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&access_type=offline&include_granted_scopes=true&prompt=consent%20select_account&scope=${scope}&state=${state}`;
+    res.redirect(authUrl);
+  } catch (e) {
+    res.status(500).send("YouTube OAuth start error: " + e.message);
+  }
+});
+
+// Public approval endpoint for planning jobs (email CTA)
+exports.approvePlanningJob = httpsV2.onRequest({ invoker: 'public' }, async (req, res) => {
+  res.set('Access-Control-Allow-Origin', '*');
+  res.set('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.set('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') {
+    res.status(204).send('');
+    return;
+  }
+
+  try {
+    const db = ensureFirestore();
+    const jobId = String(req.query.jobId || '');
+    const uid = String(req.query.uid || '');
+    const token = String(req.query.token || '');
+    if (!jobId || !uid || !token) return res.status(400).json({ error: 'Missing parameters' });
+
+    const ref = db.collection('planning_jobs').doc(jobId);
+    const snap = await ref.get();
+    if (!snap.exists) return res.status(404).json({ error: 'Job not found' });
+    const job = snap.data() || {};
+    if (job.userId !== uid) return res.status(403).json({ error: 'Forbidden' });
+    if (!job.approvalToken || job.approvalToken !== token) return res.status(403).json({ error: 'Invalid token' });
+
+    const profileSnap = await db.collection('profiles').doc(uid).get();
+    const profile = profileSnap.exists ? (profileSnap.data() || {}) : {};
+    const timezone = job?.preview?.timezone || profile.timezone || 'UTC';
+    const proposedBlocks = Array.isArray(job.proposedBlocks) ? job.proposedBlocks : [];
+    let previewBlocks = Array.isArray(job?.preview?.blocks) ? job.preview.blocks : null;
+    if (!previewBlocks || previewBlocks.length === 0) {
+      previewBlocks = await buildBlockPreviews(uid, proposedBlocks, { timezone });
+    }
+
+    const validator = job.validator || null;
+
+    const sendPreview = (statusCode = 200) => {
+      return res.status(statusCode).json({
+        status: job.status || 'unknown',
+        jobId,
+        timezone,
+        proposedCount: proposedBlocks.length,
+        validator,
+        preview: {
+          timezone,
+          blocks: previewBlocks,
+        },
+        appliedBlocks: job.appliedBlocks || 0,
+        approvedAt: job.approvedAt || null,
+      });
+    };
+
+    const queryApprove = String(req.query.approve || '').toLowerCase();
+    const queryAction = String(req.query.action || '').toLowerCase();
+    const approveRequested = req.method === 'POST' || queryApprove === '1' || queryApprove === 'true' || queryAction === 'approve';
+    const previewRequested = req.method === 'GET' && !approveRequested;
+
+    if (!approveRequested || previewRequested || String(req.query.preview || '').toLowerCase() === 'true') {
+      return sendPreview();
+    }
+
+    if (job.status !== 'proposed') {
+      return sendPreview();
+    }
+
+    const applied = await applyCalendarBlocks(
+      uid,
+      'personal',
+      proposedBlocks.map((b) => ({
+        ...b,
+        entry_method: 'calendar_ai',
+        confidence_score: (validator?.score || 0.8),
+      })),
+    );
+    await ref.set(
+      {
+        status: 'approved',
+        appliedBlocks: applied,
+        approvedAt: admin.firestore.FieldValue.serverTimestamp(),
+        preview: {
+          timezone,
+          blocks: previewBlocks,
+        },
+      },
+      { merge: true },
+    );
+
+    if (req.method === 'GET') {
+      const origin = process.env.APP_BASE_URL || 'https://bob20250810.web.app';
+      const html = `
+        <html>
+          <head><title>Plan Applied</title></head>
+          <body style="font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; margin: 32px;">
+            <h2>✅ Plan Applied</h2>
+            <p>${applied} block${applied === 1 ? '' : 's'} were added to your calendar.</p>
+            <p><a href="${origin}/calendar/integration">Open calendar view in BOB</a></p>
+          </body>
+        </html>`;
+      return res.status(200).send(html);
+    }
+
+    return res.status(200).json({ ok: true, status: 'approved', appliedBlocks: applied });
+  } catch (e) {
+    console.error('[approvePlanningJob] failed', e);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Optional: callable to create a tracking GitHub issue for this feature
+exports.createTrackingIssue = httpsV2.onCall({}, async (req) => {
+  const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const repo = process.env.GITHUB_REPO || null; if (!repo) throw new httpsV2.HttpsError('failed-precondition', 'GITHUB_REPO not configured');
+  const title = String(req?.data?.title || 'BOB: Goal Orchestration & Nightly Planning Approvals');
+  const body = String(req?.data?.body || `
+## Summary
+- Goal-level orchestration (research → stories/tasks → schedule)
+- Nightly plan email proposals with approval link
+- Roadmap V3 icon+text actions
+- Deep-link read-only sidebar with mobile overlay
+
+## Server
+- functions/index.js: orchestrateGoalPlanning, sendGoalChatMessage, dailyPlanningJob (approval flow), approvePlanningJob
+- functions/services/mediaImportController.js: Trakt/Goodreads-like imports
+- functions/services/themeManager.js: dynamic themes
+
+## Client
+- GoalRoadmapV3: icon+text quick actions + AI Orchestrate menu
+- GlobalSidebar: AI Goal Chat modal, mobile overlay
+
+## Follow-ups
+- Add UI badges for pending plan approvals
+- Optional: audio interface for goal chat
+`);
+  const token = process.env.GITHUB_TOKEN;
+  if (!token) throw new httpsV2.HttpsError('failed-precondition', 'GITHUB_TOKEN not configured');
+  const resApi = await createGithubIssue({ token, repo, title, body });
+  return { ok: true, issue: { number: resApi.number, url: resApi.html_url } };
+});
+
+// Diagnostics (no secrets required): report environment flags only
+exports.diagnosticsStatus = httpsV2.onCall({}, async (req) => {
+  const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  return {
+    hasGemini: !!process.env.GOOGLEAISTUDIOAPIKEY,
+    hasBrevo: !!process.env.BREVO_API_KEY,
+    hasOpenAI: !!process.env.OPENAI_API_KEY,
+    appBaseUrl: process.env.APP_BASE_URL || null,
+  };
+});
+
+// Diagnostics: test LLM (Gemini) round-trip
+exports.matchTravelGoal = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+
+  const placeInput = (req?.data?.place && typeof req.data.place === 'object') ? req.data.place : {};
+  const goalsInput = Array.isArray(req?.data?.goals) ? req.data.goals : [];
+  const placeId = req?.data?.placeId ? String(req.data.placeId) : null;
+
+  const placeName = String(placeInput?.name || placeInput?.title || '').trim();
+  const placeType = String(placeInput?.type || placeInput?.placeType || '').trim() || 'unknown';
+  const hierarchyInput = (placeInput?.hierarchy && typeof placeInput.hierarchy === 'object') ? placeInput.hierarchy : {};
+  const placeHierarchy = {
+    city: String(hierarchyInput?.city || hierarchyInput?.cityName || '').trim(),
+    country: String(hierarchyInput?.country || hierarchyInput?.countryName || '').trim(),
+    continent: String(hierarchyInput?.continent || hierarchyInput?.continentName || '').trim(),
+  };
+  const notes = placeInput?.notes ? String(placeInput.notes).trim().slice(0, 280) : '';
+
+  const candidates = goalsInput.map((goal) => {
+    const goalId = String(goal?.goalId || goal?.id || '').trim();
+    const title = String(goal?.title || '').trim();
+    const description = String(goal?.description || '').trim().slice(0, 600);
+    const tags = Array.isArray(goal?.tags)
+      ? goal.tags.map((tag) => String(tag || '').trim()).filter(Boolean).slice(0, 6)
+      : [];
+    const themeRaw = Number(goal?.theme);
+    const theme = Number.isFinite(themeRaw) ? themeRaw : null;
+    return { goalId, title, description, tags, theme };
+  }).filter((goal) => goal.goalId && goal.title).slice(0, 40);
+
+  const db = ensureFirestore();
+  const logActivity = async (payload) => {
+    try {
+      const ref = db.collection('activity_stream').doc();
+      await ref.set({
+        id: ref.id,
+        entityType: 'travel',
+        entityId: placeId ? `travel_${placeId}` : `travel_${uid}`,
+        activityType: 'travel_goal_match',
+        userId: uid,
+        ownerUid: uid,
+        description: payload?.description || 'Travel goal match evaluated',
+        metadata: redact(payload?.metadata || {}),
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    } catch { }
+  };
+
+  const defaultSuggestion = placeName ? `Trip to ${placeName}` : null;
+
+  if (!candidates.length) {
+    await logActivity({
+      description: 'Travel goal match skipped (no candidates)',
+      metadata: {
+        promptVersion: TRAVEL_GOAL_MATCH_PROMPT_VERSION,
+        placeId,
+        placeName,
+        placeType,
+        hierarchy: placeHierarchy,
+        candidateCount: 0,
+        matchedGoalId: null,
+        confidence: 0,
+        llmCalled: false,
+        reason: 'no_candidates',
+      }
+    });
+    return {
+      matchedGoalId: null,
+      confidence: 0,
+      rationale: 'No candidate travel goals provided.',
+      suggestNewGoalTitle: defaultSuggestion,
+      promptVersion: TRAVEL_GOAL_MATCH_PROMPT_VERSION,
+    };
+  }
+
+  const system = [
+    'You are a travel goal matching assistant.',
+    'Select the single best goal for the provided place OR return null if none fit.',
+    'Only return a goalId that exists in the provided list.',
+    'Return STRICT JSON only with keys:',
+    '{"matchedGoalId": string|null, "confidence": number, "rationale": string, "suggestNewGoalTitle": string|null}',
+    'confidence must be 0..1; rationale <= 200 chars.',
+  ].join('\n');
+
+  const user = [
+    'Place:',
+    JSON.stringify({
+      name: placeName || 'Unknown place',
+      type: placeType,
+      hierarchy: placeHierarchy,
+      notes: notes || null,
+    }, null, 2),
+    'Goals:',
+    JSON.stringify(candidates, null, 2),
+  ].join('\n');
+
+  let matchedGoalId = null;
+  let confidence = 0;
+  let rationale = '';
+  let suggestNewGoalTitle = defaultSuggestion;
+  let llmError = null;
+
+  try {
+    const raw = await callLLMJson({
+      system,
+      user,
+      purpose: 'travelGoalMatch',
+      userId: uid,
+      expectJson: true,
+      temperature: 0.1,
+    });
+    let parsed = {};
+    try {
+      parsed = raw ? JSON.parse(raw) : {};
+    } catch (parseError) {
+      console.warn('[travelGoalMatch] JSON parse failed', parseError);
+      parsed = {};
+    }
+
+    const candidateIds = new Set(candidates.map((goal) => goal.goalId));
+    const rawMatchId = parsed?.matchedGoalId;
+    const matchCandidate = (rawMatchId === null || rawMatchId === undefined || rawMatchId === '')
+      ? null
+      : String(rawMatchId);
+    matchedGoalId = (matchCandidate && candidateIds.has(matchCandidate)) ? matchCandidate : null;
+
+    const confidenceRaw = Number(parsed?.confidence);
+    confidence = Number.isFinite(confidenceRaw) ? Math.max(0, Math.min(1, confidenceRaw)) : 0;
+    if (!matchedGoalId) confidence = 0;
+
+    rationale = String(parsed?.rationale || '').trim().slice(0, 200);
+    const suggestionRaw = String(parsed?.suggestNewGoalTitle || '').trim();
+    suggestNewGoalTitle = matchedGoalId ? null : (suggestionRaw || defaultSuggestion);
+  } catch (error) {
+    llmError = error?.message || String(error);
+    console.warn('[travelGoalMatch] LLM call failed', { uid, error: llmError });
+  }
+
+  await logActivity({
+    description: matchedGoalId ? 'Travel goal match found' : 'No travel goal match found',
+    metadata: {
+      promptVersion: TRAVEL_GOAL_MATCH_PROMPT_VERSION,
+      placeId,
+      placeName,
+      placeType,
+      hierarchy: placeHierarchy,
+      candidateCount: candidates.length,
+      matchedGoalId,
+      confidence,
+      rationale,
+      llmCalled: true,
+      llmError,
+    }
+  });
+
+  return {
+    matchedGoalId,
+    confidence,
+    rationale,
+    suggestNewGoalTitle,
+    promptVersion: TRAVEL_GOAL_MATCH_PROMPT_VERSION,
+  };
+});
+
+// Admin: fetch sanitized email settings from Firestore
+exports.getEmailSettings = httpsV2.onCall({}, async (req) => {
+  const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const db = ensureFirestore();
+  const profileSnap = await db.collection('profiles').doc(uid).get();
+  const profile = profileSnap.exists ? (profileSnap.data() || {}) : {};
+  const isAdmin = Boolean(profile.isAdmin || profile.admin || (profile.role && String(profile.role).toLowerCase() === 'admin'));
+  if (!isAdmin) throw new httpsV2.HttpsError('permission-denied', 'Admins only');
+  const snap = await db.collection('system_settings').doc('email').get();
+  const data = snap.exists ? (snap.data() || {}) : {};
+  // Remove secrets
+  delete data.password;
+  delete data.user;
+  return { ok: true, settings: data };
+});
+
+// Data migration: normalize story/task statuses to {backlog, in-progress, blocked, done}
+exports.normalizeStatuses = httpsV2.onCall({}, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+
+  const db = ensureFirestore();
+
+  const normalize = (value, kind /* 'story' | 'task' */) => {
+    if (value === undefined || value === null) return 'backlog';
+    // Do NOT change numeric values to avoid breaking legacy metrics elsewhere
+    if (typeof value === 'number') return null; // signal: no update
+    const v = String(value || '').trim().toLowerCase().replace(/_/g, '-');
+    if (!v) return 'backlog';
+    if (['blocked', 'paused'].includes(v)) return 'blocked';
+    if (['done', 'complete', 'completed', 'closed'].includes(v)) return 'done';
+    if (['in-progress', 'in progress', 'active', 'wip', 'testing'].includes(v)) return 'in-progress';
+    if (['backlog', 'todo', 'planned', 'new'].includes(v)) return 'backlog';
+    return 'backlog';
+  };
+
+  const stats = { storiesChecked: 0, storiesUpdated: 0, tasksChecked: 0, tasksUpdated: 0, changes: [] };
+  const now = admin.firestore.FieldValue.serverTimestamp();
+
+  // Stories
+  const storySnap = await db.collection('stories').where('ownerUid', '==', uid).get();
+  for (const docSnap of storySnap.docs) {
+    stats.storiesChecked++;
+    const data = docSnap.data() || {};
+    const current = data.status;
+    const next = normalize(current, 'story');
+    // Only update string statuses that differ; skip numerics
+    if (next && (typeof current !== 'string' || current !== next)) {
+      await docSnap.ref.set({ status: next, updatedAt: now }, { merge: true });
+      stats.storiesUpdated++;
+      stats.changes.push({ type: 'story', id: docSnap.id, from: current ?? null, to: next });
+    }
+  }
+
+  // Tasks
+  const taskSnap = await db.collection('tasks').where('ownerUid', '==', uid).get();
+  for (const docSnap of taskSnap.docs) {
+    stats.tasksChecked++;
+    const data = docSnap.data() || {};
+    const current = data.status;
+    const next = normalize(current, 'task');
+    if (next && (typeof current !== 'string' || current !== next)) {
+      await docSnap.ref.set({ status: next, updatedAt: now }, { merge: true });
+      stats.tasksUpdated++;
+      stats.changes.push({ type: 'task', id: docSnap.id, from: current ?? null, to: next });
+    }
+  }
+
+  try {
+    await recordIntegrationLog(uid, 'migration', 'success', 'Normalized story/task statuses', {
+      storiesChecked: stats.storiesChecked,
+      storiesUpdated: stats.storiesUpdated,
+      tasksChecked: stats.tasksChecked,
+      tasksUpdated: stats.tasksUpdated,
+    });
+  } catch { }
+
+  return { ok: true, ...stats, changeCount: stats.changes.length };
+});
+
+// Diagnostics: quick check that sprints are readable for the current user
+exports.sendAssistantMessage = httpsV2.onCall({
+  memory: '512MiB',
+  timeoutSeconds: 180,
+  secrets: [GOOGLE_AI_STUDIO_API_KEY, BREVO_API_KEY, GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET],
+}, async (req) => {
+  const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const message = String(req?.data?.message || '').trim();
+  const persona = String(req?.data?.persona || 'personal');
+  if (!message) throw new httpsV2.HttpsError('invalid-argument', 'message is required');
+
+  const db = ensureFirestore();
+  const threadRef = db.collection('assistant_chats').doc(uid);
+  if (isUnsafeMessage(message)) {
+    await threadRef.collection('messages').add({ ownerUid: uid, role: 'assistant', content: 'Sorry — I can\'t assist with that request.', createdAt: admin.firestore.FieldValue.serverTimestamp() });
+    return { ok: false, reply: 'Content blocked by safety policy', insights: { priorities: [], warnings: [] }, suggested_actions: [] };
+  }
+  await threadRef.collection('messages').add({ id: undefined, ownerUid: uid, role: 'user', content: message, createdAt: admin.firestore.FieldValue.serverTimestamp() });
+
+  if (!transcriptIngestionModule?.processAgentRequestInternal) {
+    throw new httpsV2.HttpsError('failed-precondition', 'Shared assistant agent is not available.');
+  }
+
+  const result = await transcriptIngestionModule.processAgentRequestInternal({
+    uid,
+    transcript: message,
+    persona,
+    source: 'assistant_ui',
+    sourceUrl: '',
+    sourceProvidedId: String(req?.data?.sourceProvidedId || ''),
+    channel: 'callable',
+    authMode: 'firebase',
+  });
+
+  const reply = String(result?.spokenResponse || result?.message || 'Done.').slice(0, 1200);
+  await threadRef.collection('messages').add({
+    ownerUid: uid,
+    role: 'assistant',
+    content: reply,
+    intent: result?.intent || null,
+    mode: result?.mode || null,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  try { await maybeSummarizeThread(threadRef, uid); } catch { }
+
+  const topPriorityTitles = Array.isArray(result?.topPriorities)
+    ? result.topPriorities.map((item) => String(item?.title || '').trim()).filter(Boolean).slice(0, 3)
+    : [];
+
+  return {
+    ok: true,
+    reply,
+    insights: {
+      priorities: topPriorityTitles,
+      warnings: [],
+    },
+    suggested_actions: [],
+    ...result,
+  };
+});
+
+function isUnsafeMessage(text) {
+  const s = String(text || '').toLowerCase();
+  const banned = [/suicide/, /self\-harm/, /bomb/, /kill\b/, /abuse/, /terror/];
+  return banned.some(re => re.test(s));
+}
+
+async function getLatestSummary(threadRef) {
+  try {
+    const snap = await threadRef.collection('summaries').orderBy('createdAt', 'desc').limit(1).get();
+    if (!snap.empty) {
+      return String((snap.docs[0].data() || {}).content || '');
+    }
+  } catch { }
+  return null;
+}
+
+async function getRecentMessages(threadRef, n = 10) {
+  try {
+    const snap = await threadRef.collection('messages').orderBy('createdAt', 'desc').limit(n).get();
+    const rows = snap.docs.map(d => d.data());
+    return rows.reverse().map(r => ({ role: r.role, content: String(r.content || '').slice(0, 500) }));
+  } catch {
+    return [];
+  }
+}
+
+async function maybeSummarizeThread(threadRef, uid) {
+  try {
+    const recent = await getRecentMessages(threadRef, 40);
+    if (recent.length < 20) return; // only summarize when long enough
+    // Check last summary age
+    const latest = await threadRef.collection('summaries').orderBy('createdAt', 'desc').limit(1).get();
+    const shouldSummarize = latest.empty;
+    if (!shouldSummarize) return;
+    const convo = recent.map(m => `${m.role}: ${m.content}`).join('\n');
+    const system = 'Summarize the following conversation into 5-8 bullets capturing decisions, open questions, and next steps. Keep under 120 words.';
+    const user = convo;
+    const summary = await callLLMJson({ system, user, purpose: 'chatSummary', userId: uid, expectJson: false, temperature: 0.2 });
+    await threadRef.collection('summaries').add({ content: String(summary).slice(0, 2000), createdAt: admin.firestore.FieldValue.serverTimestamp() });
+  } catch { }
+}
+
+// ===== OAuth: callback
+exports.oauthCallback = httpsV2.onRequest({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET], invoker: 'public' }, async (req, res) => {
+  try {
+    const code = String(req.query.code || "");
+    const state = stateDecode(req.query.state);
+    const uid = state.uid;
+    if (!code || !uid) return res.status(400).send("Missing code/uid");
+
+    const redirectUri = getGoogleRedirectUri();
+    if (!redirectUri) return res.status(500).send("Missing redirect URI configuration (GCLOUD_PROJECT or GOOGLE_OAUTH_REDIRECT_URI)");
+
+    let tokenData;
+    try {
+      tokenData = await fetchJson("https://oauth2.googleapis.com/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          code,
+          client_id: (process.env.GOOGLE_OAUTH_CLIENT_ID || '').trim(),
+          client_secret: (process.env.GOOGLE_OAUTH_CLIENT_SECRET || '').trim(),
+          redirect_uri: redirectUri,
+          grant_type: "authorization_code",
+        }).toString(),
+      });
+    } catch (tokenError) {
+      console.error('Google OAuth token exchange failed:', tokenError);
+      return res.status(401).send(
+        `OAuth token error: ${tokenError?.message || String(tokenError)}. ` +
+        'This usually means the Google OAuth client credentials are invalid or the redirect URI doesn\'t match. ' +
+        'Verify GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET secrets are set correctly.'
+      );
+    }
+
+    const refresh = tokenData.refresh_token;
+    const access = tokenData.access_token;
+    const expiresIn = tokenData.expires_in || 3600;
+    if (!refresh) {
+      return res.status(400).send("No refresh_token returned. Ensure prompt=consent and access_type=offline.");
+    }
+
+    const db = admin.firestore();
+    await db.collection("tokens").doc(uid).set({
+      provider: "google",
+      refresh_token: refresh,
+      access_token: access || null,
+      access_at: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    res.status(200).send("<script>window.close();</script>Connected. You can close this window.");
+  } catch (e) {
+    try { console.error('OAuth callback error:', e?.message || e); } catch { }
+    res.status(500).send("OAuth callback error: " + (e?.message || String(e)));
+  }
+});
+
+// ===== YouTube OAuth: callback
+exports.youtubeOAuthCallback = httpsV2.onRequest({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET], invoker: 'public' }, async (req, res) => {
+  try {
+    const code = String(req.query.code || "");
+    const state = stateDecode(req.query.state);
+    const uid = state.uid;
+    if (!code || !uid) return res.status(400).send("Missing code/uid");
+
+    const redirectUri = getYouTubeRedirectUri();
+    if (!redirectUri) return res.status(500).send("Missing redirect URI configuration (GCLOUD_PROJECT or GOOGLE_OAUTH_YOUTUBE_REDIRECT_URI)");
+
+    let tokenData;
+    try {
+      tokenData = await fetchJson("https://oauth2.googleapis.com/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          code,
+          client_id: (process.env.GOOGLE_OAUTH_CLIENT_ID || '').trim(),
+          client_secret: (process.env.GOOGLE_OAUTH_CLIENT_SECRET || '').trim(),
+          redirect_uri: redirectUri,
+          grant_type: "authorization_code",
+        }).toString(),
+      });
+    } catch (tokenError) {
+      console.error('YouTube OAuth token exchange failed:', tokenError);
+      return res.status(401).send(
+        `OAuth token error: ${tokenError?.message || String(tokenError)}. ` +
+        'This usually means the Google OAuth client credentials are invalid or the redirect URI doesn\'t match. ' +
+        'Verify GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET secrets are set correctly.'
+      );
+    }
+
+    const refresh = tokenData.refresh_token;
+    const access = tokenData.access_token;
+    const expiresIn = tokenData.expires_in || 3600;
+    if (!refresh) {
+      return res.status(400).send("No refresh_token returned. Ensure prompt=consent and access_type=offline.");
+    }
+
+    const db = admin.firestore();
+    const expiresAt = Math.floor(Date.now() / 1000) + Number(expiresIn || 0);
+    await db.collection("tokens").doc(`${uid}_youtube`).set({
+      provider: "google_youtube",
+      ownerUid: uid,
+      refresh_token: refresh,
+      access_token: access || null,
+      expires_at: expiresAt,
+      scope: tokenData.scope || null,
+      access_at: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    await db.collection('profiles').doc(uid).set({
+      youtubeConnected: true,
+    }, { merge: true });
+
+    res.status(200).send("<script>window.close();</script>Connected to YouTube. You can close this window.");
+  } catch (e) {
+    try { console.error('YouTube OAuth callback error:', e?.message || e); } catch { }
+    res.status(500).send("YouTube OAuth callback error: " + (e?.message || String(e)));
+  }
+});
+
+exports.createMonzoOAuthSession = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID] }, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const db = admin.firestore();
+  const sessionId = crypto.randomUUID ? crypto.randomUUID() : crypto.randomBytes(16).toString('hex');
+  const nonce = crypto.randomBytes(16).toString('hex');
+  const expiresAtMs = Date.now() + MONZO_OAUTH_SESSION_TTL_MS;
+  const sessionDoc = {
+    ownerUid: uid,
+    status: 'pending',
+    nonce,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    expiresAt: admin.firestore.Timestamp.fromMillis(expiresAtMs),
+    expiresAtMs,
+  };
+  const requestedOrigin = sanitizeOrigin(req?.data?.origin);
+  if (requestedOrigin) sessionDoc.origin = requestedOrigin;
+  await db.collection('monzo_oauth_sessions').doc(sessionId).set(sessionDoc);
+  const hostingOrigin = requestedOrigin || defaultMonzoOrigin();
+  const startBase = hostingOrigin || defaultMonzoOrigin();
+  const startUrl = startBase ? `${startBase.replace(/\/$/, '')}/api/monzo/start?session=${sessionId}` : null;
+  return {
+    sessionId,
+    nonce,
+    startUrl,
+    expiresAt: new Date(expiresAtMs).toISOString(),
+  };
+});
+
+// (Removed older Monzo OAuth start/callback – consolidated below with hosting rewrite support)
+
+async function getMonzoAccessToken(uid) {
+  const db = admin.firestore();
+  const tokenRef = db.collection('tokens').doc(`${uid}_monzo`);
+  const snap = await tokenRef.get();
+  if (!snap.exists) throw new Error('Monzo not connected');
+  const data = snap.data() || {};
+  const now = Math.floor(Date.now() / 1000) + 60; // 60s skew
+  if (data.access_token && data.expires_at && data.expires_at > now) {
+    return data.access_token;
+  }
+  // refresh
+  const refresh = await resolveMonzoRefreshToken(tokenRef, data);
+  if (!refresh) throw new Error('Missing refresh_token');
+  const tokenData = await fetchJson("https://api.monzo.com/oauth2/token", {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'refresh_token',
+      refresh_token: refresh,
+      client_id: process.env.MONZO_CLIENT_ID,
+      client_secret: process.env.MONZO_CLIENT_SECRET,
+    }).toString(),
+  });
+  const access = tokenData.access_token;
+  const expiresIn = tokenData.expires_in;
+  const newRefresh = tokenData.refresh_token || refresh;
+  const expires_at = Math.floor(Date.now() / 1000) + (Number(expiresIn) || 0);
+  const encryptedRefreshToken = await encryptMonzoSecret(newRefresh);
+  await tokenRef.set({
+    access_token: access,
+    encryptedRefreshToken,
+    refresh_token: admin.firestore.FieldValue.delete(),
+    expires_at,
+    scope: tokenData.scope || data.scope || null,
+    token_type: tokenData.token_type || data.token_type || null,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+  return access;
+}
+
+// ===== Monzo: list accounts and store basics
+exports.monzoListAccounts = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+  const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const access = await getMonzoAccessToken(uid);
+  const res = await fetch('https://api.monzo.com/accounts', { headers: { Authorization: `Bearer ${access}` } });
+  if (!res.ok) throw new httpsV2.HttpsError('internal', 'Monzo accounts fetch failed: ' + res.status);
+  const data = await res.json();
+  const accounts = Array.isArray(data?.accounts) ? data.accounts : [];
+  const db = admin.firestore();
+  const batch = db.batch();
+  for (const acc of accounts) {
+    const ref = db.collection('finance_accounts').doc(`${uid}_${acc.id}`);
+    batch.set(ref, { ownerUid: uid, provider: 'monzo', account: acc, updatedAt: Date.now() }, { merge: true });
+  }
+  await batch.commit();
+  return { ok: true, count: accounts.length, accounts };
+});
+
+// ===== Monzo: create pot (callable)
+exports.monzoCreatePot = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const name = String(req?.data?.name || '').trim();
+  const goalId = String(req?.data?.goalId || '').trim();
+  if (!name) throw new httpsV2.HttpsError('invalid-argument', 'Pot name required');
+
+  const { accessToken } = await ensureMonzoAccessToken(uid);
+  const db = admin.firestore();
+  const accountsSnap = await db.collection('monzo_accounts').where('ownerUid', '==', uid).limit(1).get();
+  if (accountsSnap.empty) {
+    throw new httpsV2.HttpsError('failed-precondition', 'Monzo account not found. Connect Monzo and sync accounts.');
+  }
+  const account = accountsSnap.docs[0].data() || {};
+  const accountId = account.accountId || account.account?.id || account.id;
+  if (!accountId) {
+    throw new httpsV2.HttpsError('failed-precondition', 'Monzo account missing accountId');
+  }
+
+  let pot;
+  try {
+    pot = await fetchJson('https://api.monzo.com/pots', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, account_id: accountId }),
+    });
+  } catch (error) {
+    const message = error?.message || String(error);
+    await recordIntegrationLog(uid, 'monzo', 'error', 'Create pot failed', { name, error: message });
+    throw new httpsV2.HttpsError('internal', `Create pot failed: ${message}`);
+  }
+
+  const potId = pot?.id || pot?.pot_id || null;
+  if (!potId) {
+    throw new httpsV2.HttpsError('internal', 'Create pot failed: missing pot id');
+  }
+
+  const docRef = db.collection('monzo_pots').doc(`${uid}_${potId}`);
+  const docData = {
+    ownerUid: uid,
+    potId,
+    name: pot.name || name,
+    balance: pot.balance || 0,
+    currency: pot.currency || 'GBP',
+    accountId: pot.current_account_id || accountId,
+    goalAmount: pot.goal_amount || null,
+    goalCurrency: pot.goal_currency || pot.currency || null,
+    roundUpEnabled: pot.round_up?.enabled || false,
+    deleted: !!pot.deleted,
+    raw: pot,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+  if (pot.created) {
+    docData.potCreatedAt = admin.firestore.Timestamp.fromDate(new Date(pot.created));
+    docData.potCreatedISO = pot.created;
+  }
+  await docRef.set(docData, { merge: true });
+
+  if (goalId) {
+    await db.collection('goals').doc(goalId).set({
+      potId,
+      linkedPotId: potId,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+  }
+
+  return { ok: true, pot: { id: potId, potId, name: docData.name, balance: docData.balance, currency: docData.currency } };
+});
+
+// ===== Monzo: sync transactions for account
+exports.monzoSyncTransactions = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+  const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const accountId = String(req?.data?.accountId || '');
+  const since = req?.data?.since ? new Date(req.data.since).toISOString() : undefined;
+  if (!accountId) throw new httpsV2.HttpsError('invalid-argument', 'accountId required');
+
+  const { accessToken } = await ensureMonzoAccessToken(uid);
+
+  const txSummary = await syncMonzoTransactionsForAccount({ uid, accountId, accessToken, since });
+
+  // Update sync state
+  const db = admin.firestore();
+  const syncStateRef = db.collection('monzo_sync_state').doc(`${uid}_${accountId}`);
+  const update = {
+    ownerUid: uid,
+    accountId,
+    lastSyncedAt: admin.firestore.FieldValue.serverTimestamp(),
+    lastSyncCount: txSummary.count,
+    lastSyncSince: since || null,
+  };
+  if (txSummary.lastCreated) {
+    update.lastTransactionCreated = txSummary.lastCreated;
+    update.lastTransactionTs = admin.firestore.Timestamp.fromDate(new Date(txSummary.lastCreated));
+  }
+  await syncStateRef.set(update, { merge: true });
+
+  // Update profile last sync
+  await db.collection('profiles').doc(uid).set({ monzoLastSyncAt: Date.now() }, { merge: true });
+
+  return { ok: true, count: txSummary.count };
+});
+
+// ===== Strava OAuth Start
+exports.stravaOAuthStart = httpsV2.onRequest({ secrets: [STRAVA_CLIENT_ID], invoker: 'public' }, async (req, res) => {
+  try {
+    const uid = String(req.query.uid || "");
+    const nonce = String(req.query.nonce || "");
+    if (!uid || !nonce) return res.status(400).send("Missing uid/nonce");
+    const projectId = process.env.GCLOUD_PROJECT;
+    const region = "europe-west2";
+    const configuredHost = envTrim('STRAVA_REDIRECT_HOST'); // optional override, e.g., bob.jc1.tech
+    const host = String(req.get('host') || '');
+    const baseHost = configuredHost || host || `${region}-${projectId}.cloudfunctions.net`;
+    const redirectUri = `https://${baseHost}/stravaOAuthCallback`;
+    const clientId = envTrim('STRAVA_CLIENT_ID');
+    if (!clientId) return res.status(500).send('Missing STRAVA_CLIENT_ID secret');
+    const state = stateEncode({ uid, nonce });
+    const scope = encodeURIComponent("read,activity:read");
+    const authUrl = `https://www.strava.com/oauth/authorize?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${scope}&state=${state}`;
+    res.redirect(authUrl);
+  } catch (e) {
+    res.status(500).send("Strava OAuth start error: " + e.message);
+  }
+});
+
+// ===== Strava OAuth Callback
+exports.stravaOAuthCallback = httpsV2.onRequest({ secrets: [STRAVA_CLIENT_ID, STRAVA_CLIENT_SECRET], invoker: 'public' }, async (req, res) => {
+  try {
+    const code = String(req.query.code || "");
+    const state = stateDecode(req.query.state);
+    const uid = state.uid;
+    if (!code || !uid) return res.status(400).send("Missing code/uid");
+
+    const projectId = process.env.GCLOUD_PROJECT;
+    const region = "europe-west2";
+    const configuredHost = envTrim('STRAVA_REDIRECT_HOST'); // optional override, e.g., bob.jc1.tech
+    const host = String(req.get('host') || '');
+    const baseHost = configuredHost || host || `${region}-${projectId}.cloudfunctions.net`;
+    const redirectUri = `https://${baseHost}/stravaOAuthCallback`;
+
+    const clientId = envTrim('STRAVA_CLIENT_ID');
+    const clientSecret = envTrim('STRAVA_CLIENT_SECRET');
+    if (!clientId || !clientSecret) return res.status(500).send('Missing STRAVA_CLIENT_ID/STRAVA_CLIENT_SECRET secret');
+
+    const tokenData = await fetchJson("https://www.strava.com/oauth/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        code,
+        client_id: clientId,
+        client_secret: clientSecret,
+        redirect_uri: redirectUri,
+        grant_type: "authorization_code",
+      }).toString(),
+    });
+
+    const refresh = tokenData.refresh_token;
+    const access = tokenData.access_token;
+    const expiresAt = tokenData.expires_at; // seconds epoch
+    const athlete = tokenData.athlete || {};
+    if (!refresh) {
+      return res.status(400).send("No refresh_token from Strava. Ensure correct scopes and app settings.");
+    }
+
+    const db = admin.firestore();
+    const tokenRef = db.collection("tokens").doc(`${uid}_strava`);
+    await tokenRef.set({
+      provider: "strava",
+      ownerUid: uid,
+      athleteId: athlete.id || null,
+      athlete: athlete || null,
+      refresh_token: refresh,
+      access_token: access || null,
+      expires_at: expiresAt || null,
+      scope: tokenData.scope || null,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    // Mark profile integration flag
+    await db.collection('profiles').doc(uid).set({
+      stravaConnected: true,
+      stravaAthleteId: athlete.id || null,
+      stravaLastSyncAt: null,
+      stravaLastSyncStatus: 'connected',
+      stravaNeedsReconnect: false,
+      stravaLastErrorAt: admin.firestore.FieldValue.delete(),
+      stravaLastErrorMessage: admin.firestore.FieldValue.delete(),
+    }, { merge: true });
+
+    res.status(200).send("<script>window.close();</script>Strava connected. You can close this window.");
+  } catch (e) {
+    console.error('Strava OAuth callback error:', e);
+    res.status(500).send("Strava OAuth callback error: " + e.message);
+  }
+});
+
+// ===== Monzo OAuth Start
+exports.monzoOAuthStart = httpsV2.onRequest({ secrets: [MONZO_CLIENT_ID], invoker: 'public' }, async (req, res) => {
+  try {
+    const sessionId = String(req.query.session || "").trim();
+    if (!sessionId) return res.status(400).send("Missing session");
+
+    const db = admin.firestore();
+    const sessionRef = db.collection('monzo_oauth_sessions').doc(sessionId);
+    const sessionSnap = await sessionRef.get();
+    if (!sessionSnap.exists) return res.status(404).send("Session expired");
+    const session = sessionSnap.data() || {};
+    if (!session.ownerUid || !session.nonce) return res.status(400).send("Invalid session");
+    if (session.status && session.status !== 'pending') return res.status(409).send("Session already used");
+    if (session.expiresAtMs && session.expiresAtMs < Date.now()) {
+      await sessionRef.set({ status: 'expired', expiredAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      return res.status(410).send("Session expired");
+    }
+
+    const clientId = (process.env.MONZO_CLIENT_ID || "").trim();
+    if (!clientId) return res.status(500).send("Monzo client ID not configured");
+
+    const redirectUri = buildMonzoRedirectUri(req);
+    const state = stateEncode({ uid: session.ownerUid, sessionId, nonce: session.nonce });
+    const scope = encodeURIComponent("openid profile accounts:read balance:read transactions:read pots:read");
+    // Force a new consent screen to maximise chance of receiving a refresh_token
+    const authUrl = `https://auth.monzo.com/?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${scope}&state=${state}&prompt=consent`;
+    await sessionRef.set({
+      redirectUri,
+      redirectedAt: admin.firestore.FieldValue.serverTimestamp(),
+      lastStartHost: req.get('x-forwarded-host') || req.get('host') || null,
+    }, { merge: true });
+    res.redirect(authUrl);
+  } catch (e) {
+    console.error('Monzo OAuth start error:', e);
+    res.status(500).send("Monzo OAuth start error: " + e.message);
+  }
+});
+
+// ===== Monzo OAuth Callback
+exports.monzoOAuthCallback = httpsV2.onRequest({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET], invoker: 'public' }, async (req, res) => {
+  try {
+    const code = String(req.query.code || "");
+    const state = stateDecode(req.query.state);
+    const uid = String(state.uid || '');
+    const sessionId = String(state.sessionId || '');
+    const nonce = String(state.nonce || '');
+    if (!code || !uid || !sessionId || !nonce) return res.status(400).send("Missing code/session");
+
+    const db = admin.firestore();
+    const sessionRef = db.collection('monzo_oauth_sessions').doc(sessionId);
+    const sessionSnap = await sessionRef.get();
+    if (!sessionSnap.exists) return res.status(400).send("Session not found");
+    const session = sessionSnap.data() || {};
+    if ((session.status && session.status !== 'pending') || session.ownerUid !== uid) return res.status(409).send("Session invalid");
+    if (session.nonce !== nonce) {
+      await sessionRef.set({ status: 'error', error: 'nonce_mismatch', completedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      return res.status(400).send("Nonce mismatch");
+    }
+    if (session.expiresAtMs && session.expiresAtMs < Date.now()) {
+      await sessionRef.set({ status: 'expired', expiredAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      return res.status(410).send("Session expired");
+    }
+    await sessionRef.set({ status: 'exchanging', exchangeStartedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+
+    const redirectUri = (session.redirectUri || buildMonzoRedirectUri(req)).trim();
+    const clientId = (process.env.MONZO_CLIENT_ID || "").trim();
+    const clientSecret = (process.env.MONZO_CLIENT_SECRET || "").trim();
+
+    console.log('[Monzo OAuth] Attempting token exchange', {
+      sessionId,
+      redirectUri,
+      hasClientId: !!clientId,
+      hasClientSecret: !!clientSecret
+    });
+
+    let tokenData;
+    try {
+      tokenData = await fetchJson("https://api.monzo.com/oauth2/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          code,
+          client_id: clientId,
+          client_secret: clientSecret,
+          redirect_uri: redirectUri,
+          grant_type: "authorization_code",
+        }).toString(),
+      });
+    } catch (fetchError) {
+      console.error('[Monzo OAuth] Token exchange failed', fetchError);
+      // Try to parse error body if available
+      const errorBody = await fetchError.response?.text?.().catch(() => null);
+      console.error('[Monzo OAuth] Error body:', errorBody);
+      return res.status(400).send(`Monzo exchange failed: ${fetchError.message}`);
+    }
+
+    const refresh = tokenData.refresh_token;
+    const access = tokenData.access_token;
+    const expiresIn = Number(tokenData.expires_in || 0);
+    const expiresAt = expiresIn ? Math.floor(Date.now() / 1000) + expiresIn : null;
+    const monzoUserId = tokenData.user_id || null;
+
+    if (!access) {
+      console.error('[Monzo OAuth] Missing access_token in response', tokenData);
+      try { await recordIntegrationLog(uid, 'monzo', 'error', 'Token exchange missing access_token', { keys: Object.keys(tokenData || {}) }); } catch { }
+      return res.status(400).send("Monzo tokens missing from response: access_token");
+    }
+
+    if (!refresh) {
+      console.warn('[Monzo OAuth] No refresh_token received. Session will expire in ~30 hours.', tokenData);
+      try { await recordIntegrationLog(uid, 'monzo', 'warning', 'No refresh_token received', { scope: tokenData.scope }); } catch { }
+    }
+
+    const tokenRef = db.collection('tokens').doc(`${uid}_monzo`);
+    let encryptedRefreshToken = null;
+    if (refresh) {
+      encryptedRefreshToken = await encryptMonzoSecret(refresh);
+    }
+
+    await tokenRef.set({
+      provider: 'monzo',
+      ownerUid: uid,
+      monzoUserId,
+      encryptedRefreshToken,
+      refresh_token: admin.firestore.FieldValue.delete(),
+      access_token: access,
+      expires_at: expiresAt,
+      scope: tokenData.scope || null,
+      token_type: tokenData.token_type || null,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    await db.collection('profiles').doc(uid).set({
+      monzoConnected: true,
+      monzoUserId,
+      monzoLastSyncAt: null,
+    }, { merge: true });
+
+    await updateMonzoIntegrationStatus(uid, {
+      connected: true,
+      monzoUserId,
+      ...buildTimestampPatch('lastConnectedAt'),
+      lastSyncError: admin.firestore.FieldValue.delete(),
+      lastErrorMessage: admin.firestore.FieldValue.delete(),
+    });
+
+    await enqueueMonzoSyncJob(uid, {
+      type: 'initial-sync',
+      source: 'oauth',
+      sessionId,
+    });
+
+    await sessionRef.set({ status: 'completed', completedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+
+    res.status(200).send("<script>window.close();</script>Monzo connected. You can close this window.");
+  } catch (e) {
+    try {
+      const state = stateDecode(req.query.state);
+      const sessionId = state?.sessionId;
+      if (sessionId) {
+        await admin.firestore().collection('monzo_oauth_sessions').doc(sessionId).set({
+          status: 'error',
+          error: e?.message || String(e),
+          completedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+      }
+    } catch { /* noop */ }
+    console.error('Monzo OAuth callback error:', e);
+    res.status(500).send("Monzo OAuth callback error: " + e.message);
+  }
+});
+
+async function ensureMonzoAccessToken(uid) {
+  const db = admin.firestore();
+  const tokenRef = db.collection('tokens').doc(`${uid}_monzo`);
+  const snap = await tokenRef.get();
+  if (!snap.exists) {
+    throw new httpsV2.HttpsError('failed-precondition', 'Monzo is not connected for this user');
+  }
+
+  const data = snap.data() || {};
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  let accessToken = data.access_token || null;
+  let expiresAt = Number(data.expires_at || 0);
+
+  const needsRefresh = !accessToken || !expiresAt || expiresAt <= nowSeconds + 90;
+  if (!needsRefresh) {
+    return { accessToken, tokenRef, tokenData: data };
+  }
+
+  const refreshToken = await resolveMonzoRefreshToken(tokenRef, data);
+  if (!refreshToken) {
+    throw new httpsV2.HttpsError('failed-precondition', 'Missing Monzo refresh token');
+  }
+  if (!process.env.MONZO_CLIENT_ID || !process.env.MONZO_CLIENT_SECRET) {
+    throw new httpsV2.HttpsError('failed-precondition', 'Monzo API credentials not configured');
+  }
+
+  const refreshed = await fetchJson('https://api.monzo.com/oauth2/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'refresh_token',
+      client_id: process.env.MONZO_CLIENT_ID,
+      client_secret: process.env.MONZO_CLIENT_SECRET,
+      refresh_token: refreshToken,
+    }).toString(),
+  });
+
+  accessToken = refreshed.access_token;
+  const newRefresh = refreshed.refresh_token || refreshToken;
+  const expiresIn = Number(refreshed.expires_in || 0);
+  expiresAt = expiresIn ? nowSeconds + expiresIn : null;
+  const encryptedRefreshToken = await encryptMonzoSecret(newRefresh);
+
+  await tokenRef.set({
+    access_token: accessToken,
+    encryptedRefreshToken,
+    refresh_token: admin.firestore.FieldValue.delete(),
+    expires_at: expiresAt,
+    scope: refreshed.scope || data.scope || null,
+    token_type: refreshed.token_type || data.token_type || null,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  return {
+    accessToken,
+    tokenRef,
+    tokenData: { ...data, access_token: accessToken, encryptedRefreshToken, refresh_token: undefined, expires_at: expiresAt },
+  };
+}
+
+async function monzoApi(accessToken, path, query = {}) {
+  const url = new URL(`https://api.monzo.com${path}`);
+  if (query instanceof URLSearchParams) {
+    for (const [key, value] of query.entries()) {
+      url.searchParams.append(key, value);
+    }
+  } else {
+    for (const [key, value] of Object.entries(query)) {
+      if (value === undefined || value === null || value === '') continue;
+      if (Array.isArray(value)) {
+        value.forEach((v) => url.searchParams.append(key, String(v)));
+      } else {
+        url.searchParams.append(key, String(value));
+      }
+    }
+  }
+
+  return fetchJson(url.toString(), {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+// Register a Monzo webhook for an account (callable)
+exports.monzoRegisterWebhook = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const accountId = String(req.data?.accountId || '').trim();
+  const targetUrl = String(req.data?.url || '').trim();
+  if (!accountId || !targetUrl) throw new httpsV2.HttpsError('invalid-argument', 'accountId and url are required');
+  const { accessToken } = await ensureMonzoAccessToken(uid);
+  const res = await fetch('https://api.monzo.com/webhooks', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ account_id: accountId, url: targetUrl })
+  });
+  if (!res.ok) throw new httpsV2.HttpsError('internal', `Webhook register failed: ${res.status}`);
+  const data = await res.json();
+  await admin.firestore().collection('monzo_webhooks').doc(`${uid}_${accountId}`).set({ ownerUid: uid, accountId, webhook: data, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+  return { ok: true, webhook: data };
+});
+
+// Webhook receiver (hosting rewrite supported)
+exports.monzoWebhook = httpsV2.onRequest({ secrets: [MONZO_WEBHOOK_SECRET], invoker: 'public' }, async (req, res) => {
+  try {
+    if (req.method !== 'POST') return res.status(405).send('Method not allowed');
+    const secret = MONZO_WEBHOOK_SECRET.value?.() || process.env.MONZO_WEBHOOK_SECRET || '';
+    const rawBodyBuffer = req.rawBody instanceof Buffer
+      ? req.rawBody
+      : Buffer.from(typeof req.body === 'string' ? req.body : JSON.stringify(req.body || {}));
+    if (secret) {
+      const signatureHeader = req.get('x-monzo-signature') || req.get('X-Monzo-Signature') || '';
+      const digest = crypto.createHmac('sha256', secret).update(rawBodyBuffer).digest();
+      if (!verifyMonzoSignature(signatureHeader, digest)) {
+        try { await admin.firestore().collection('webhook_logs').add({ source: 'monzo', direction: 'in', ts: Date.now(), warn: 'signature mismatch' }); } catch { }
+        return res.status(401).send('invalid signature');
+      }
+    }
+
+    let body = null;
+    if (typeof req.body === 'object' && req.body !== null) {
+      body = req.body;
+    } else {
+      const rawText = rawBodyBuffer ? rawBodyBuffer.toString('utf8') : '';
+      try {
+        body = rawText ? JSON.parse(rawText) : {};
+      } catch (parseError) {
+        try { await admin.firestore().collection('webhook_logs').add({ source: 'monzo', direction: 'in', ts: Date.now(), warn: 'invalid_payload', error: parseError?.message || String(parseError) }); } catch { }
+        return res.status(400).send('invalid payload');
+      }
+    }
+
+    const accountId = String(body?.data?.account_id || body?.account_id || '').trim();
+    if (!accountId) return res.status(400).send('Missing account_id');
+    const db = admin.firestore();
+    const snap = await db.collection('monzo_accounts').where('accountId', '==', accountId).limit(1).get();
+    if (snap.empty) { await db.collection('webhook_logs').add({ source: 'monzo', direction: 'in', ts: Date.now(), warn: 'account not found', accountId }); return res.json({ ok: true }); }
+    const docRef = snap.docs[0];
+    const uid = (docRef.data() || {}).ownerUid;
+    if (!uid) { await db.collection('webhook_logs').add({ source: 'monzo', direction: 'in', ts: Date.now(), warn: 'ownerUid missing', accountId }); return res.json({ ok: true }); }
+
+    const eventType = body?.type || body?.data?.type || 'transaction.created';
+    const payload = {
+      accountId,
+      eventType,
+      eventId: body?.id || body?.data?.id || null,
+      created: body?.created || body?.data?.created || null,
+      amount: body?.data?.amount || null,
+      raw: body,
+    };
+
+    await updateMonzoIntegrationStatus(uid, {
+      ...buildTimestampPatch('lastWebhookAt'),
+      lastWebhookEvent: {
+        eventType,
+        eventId: payload.eventId,
+        created: payload.created || null,
+      },
+    });
+
+    await enqueueMonzoSyncJob(uid, {
+      type: 'webhook',
+      source: 'webhook',
+      webhookPayload: payload,
+      webhookReceivedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    await db.collection('webhook_logs').add({ source: 'monzo', direction: 'in', ts: Date.now(), event: eventType, accountId, uid });
+    return res.json({ ok: true });
+  } catch (e) {
+    try { await admin.firestore().collection('webhook_logs').add({ source: 'monzo', direction: 'in', ts: Date.now(), error: String(e?.message || e) }); } catch { }
+    return res.status(500).send('error');
+  }
+});
+
+// Callable: revoke Monzo access (delete tokens, attempt token revocation)
+exports.revokeMonzoAccess = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const db = admin.firestore();
+  const tokenRef = db.collection('tokens').doc(`${uid}_monzo`);
+  let refreshToken = null;
+  try {
+    const tokenSnap = await tokenRef.get();
+    if (tokenSnap.exists) {
+      const data = tokenSnap.data() || {};
+      refreshToken = await resolveMonzoRefreshToken(tokenRef, data);
+    }
+  } catch (error) {
+    console.warn('[monzo] failed to load token for revoke', error?.message || error);
+  }
+
+  if (refreshToken) {
+    try {
+      await fetch('https://api.monzo.com/oauth2/token/revoke', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          token: refreshToken,
+          client_id: process.env.MONZO_CLIENT_ID,
+          client_secret: process.env.MONZO_CLIENT_SECRET,
+        }).toString(),
+      });
+      await db.collection('webhook_logs').add({ source: 'monzo', direction: 'internal', ts: Date.now(), event: 'revoked_upstream', uid });
+    } catch (error) {
+      console.warn('[monzo] token revoke failed', error?.message || error);
+      await db.collection('webhook_logs').add({ source: 'monzo', direction: 'internal', ts: Date.now(), event: 'revoke_failed', uid, error: error?.message || String(error) });
+    }
+  }
+
+  try {
+    await tokenRef.delete();
+  } catch (error) {
+    console.warn('[monzo] failed to delete local token', error?.message || error);
+  }
+
+  await db.collection('profiles').doc(uid).set({ monzoConnected: false, monzoUserId: null }, { merge: true });
+  await updateMonzoIntegrationStatus(uid, {
+    connected: false,
+    monzoUserId: null,
+    lastSyncAt: admin.firestore.FieldValue.delete(),
+    lastSyncEpochMs: admin.firestore.FieldValue.delete(),
+    lastErrorMessage: admin.firestore.FieldValue.delete(),
+    lastSyncStatus: 'disconnected',
+  });
+  await db.collection('webhook_logs').add({ source: 'monzo', direction: 'internal', ts: Date.now(), event: 'revoked', uid });
+  await recordMonzoAutomationStatus({ uid, status: 'success', source: 'manual_revoke', message: 'Access revoked' });
+  return { ok: true };
+});
+
+// Callable: delete finance data (accounts, pots, transactions, analytics)
+exports.deleteFinanceData = httpsV2.onCall(async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const db = admin.firestore();
+  const cols = ['monzo_accounts', 'monzo_pots', 'monzo_transactions', 'monzo_budget_summary', 'monzo_goal_alignment'];
+  for (const col of cols) {
+    const snap = await db.collection(col).where('ownerUid', '==', uid).get();
+    const batch = db.batch();
+    snap.docs.forEach(d => batch.delete(d.ref));
+    await batch.commit();
+  }
+  await db.collection('webhook_logs').add({ source: 'finance', direction: 'internal', ts: Date.now(), event: 'deleted_finance_data', uid });
+  return { ok: true };
+});
+
+// GDPR Export: return a JSON bundle of finance docs (small export)
+exports.exportFinanceData = httpsV2.onCall(async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const db = admin.firestore();
+  const result = {};
+  const cols = ['monzo_accounts', 'monzo_pots', 'monzo_transactions', 'monzo_budget_summary', 'monzo_goal_alignment'];
+  for (const col of cols) {
+    const snap = await db.collection(col).where('ownerUid', '==', uid).get();
+    result[col] = snap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }));
+  }
+  return { ok: true, data: result };
+});
+
+// Callable to list Monzo pots for the authenticated user
+exports.listUserPots = httpsV2.onCall({ secrets: [] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const db = admin.firestore();
+  const potsSnap = await db.collection('monzo_pots').where('ownerUid', '==', uid).get();
+  const pots = potsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+  return { ok: true, pots };
+});
+
+// Callable to set or update linked pot on a goal document
+exports.setGoalPotLink = httpsV2.onCall({ secrets: [] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const { goalId, linkedPotId } = req.data || {};
+  if (!goalId) throw new httpsV2.HttpsError('invalid-argument', 'goalId is required');
+  const db = admin.firestore();
+  const goalRef = db.collection('goals').doc(goalId);
+  const goalSnap = await goalRef.get();
+  if (!goalSnap.exists) throw new httpsV2.HttpsError('not-found', 'Goal not found');
+  if (goalSnap.data().ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', "Cannot modify another user's goal");
+  await goalRef.update({ linkedPotId: linkedPotId || null, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+  return { ok: true, goalId, linkedPotId: linkedPotId || null };
+});
+
+// Callable to fetch aggregated dashboard data
+exports.fetchDashboardData = httpsV2.onCall(async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const { startDate, endDate } = req.data || {};
+  const db = admin.firestore();
+
+  // Fetch transactions, goals, pots, and budget settings in parallel
+  const [txSnap, goalsSnap, potsSnap, budgetSnap] = await Promise.all([
+    db.collection('monzo_transactions')
+      .where('ownerUid', '==', uid)
+      .get(),
+    db.collection('goals')
+      .where('ownerUid', '==', uid)
+      .get(),
+    db.collection('monzo_pots')
+      .where('ownerUid', '==', uid)
+      .get(),
+    db.collection('finance_budgets_v2').doc(uid).get()
+  ]);
+
+  const transactions = txSnap.docs.map(d => d.data());
+  const goals = goalsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  const pots = potsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  const budgetSettings = budgetSnap.exists ? budgetSnap.data() : null;
+
+  const { buildDashboardData } = require('./finance/dashboard');
+  const agg = buildDashboardData(transactions, goals, pots, budgetSettings, { startDate, endDate });
+
+  return { ok: true, data: agg };
+});
+
+
+// 15-min backstop transaction sync
+exports.monzoBackstopSync = schedulerV2.onSchedule('every 15 minutes', async () => {
+  const db = admin.firestore();
+  const tokens = await db.collection('tokens').where('provider', '==', 'monzo').get();
+  for (const t of tokens.docs) {
+    const data = t.data() || {};
+    const uid = data.ownerUid || String(t.id).replace(/_monzo$/, '');
+    if (!uid) continue;
+    try {
+      const summary = await syncMonzoDataForUser(uid);
+      await updateMonzoIntegrationStatus(uid, {
+        ...buildTimestampPatch('lastSyncAt'),
+        lastSyncStatus: 'success',
+        lastSyncSource: 'backstop',
+        lastSyncSummary: summary || null,
+        lastErrorMessage: admin.firestore.FieldValue.delete(),
+        lastErrorAt: admin.firestore.FieldValue.delete(),
+      });
+      await recordMonzoAutomationStatus({ uid, status: 'success', source: 'backstop', message: 'Backstop sync completed' });
+    } catch (e) {
+      await updateMonzoIntegrationStatus(uid, {
+        lastSyncStatus: 'error',
+        lastErrorMessage: e?.message || String(e),
+        ...buildTimestampPatch('lastErrorAt'),
+      });
+      await recordMonzoAutomationStatus({ uid, status: 'error', source: 'backstop', message: e?.message || 'Backstop sync failed' });
+      await db.collection('webhook_logs').add({ source: 'monzo', direction: 'internal', ts: Date.now(), error: String(e?.message || e) });
+    }
+  }
+  return { ok: true, users: tokens.size };
+});
+
+// Budget transfer plan/execute (test mode caps amounts to £0.01 and can be dry-run)
+exports.monzoTransferPlan = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const dryRun = !!req.data?.dryRun;
+  const testMode = !!req.data?.testMode;
+
+  const db = admin.firestore();
+  const [legacySnap, v2Snap, alignmentSnap, potsSnap, accountsSnap] = await Promise.all([
+    db.collection('finance_budgets').doc(uid).get(),
+    db.collection('finance_budgets_v2').doc(uid).get(),
+    db.collection('monzo_goal_alignment').doc(uid).get(),
+    db.collection('monzo_pots').where('ownerUid', '==', uid).get(),
+    db.collection('monzo_accounts').where('ownerUid', '==', uid).limit(1).get(),
+  ]);
+
+  const legacy = legacySnap.exists ? legacySnap.data() : {};
+  const v2 = v2Snap.exists ? v2Snap.data() : {};
+  const byCategory = legacy.byCategory || {};
+  const bucketPotMap = v2.bucketPotMap || {};
+  const monthlyIncome = Number(v2.monthlyIncome || legacy.monthlyIncome || 0);
+  const goalAllocations = v2.goalAllocations || {};
+  const globalGoalPercent = Number(v2.goalAllocation || 0);
+  const transferDay = v2.transferDay ?? null;
+  const autoTransferEnabled = !!v2.autoTransferEnabled;
+
+  const potIndex = new Map();
+  potsSnap.docs.forEach((d) => {
+    const data = d.data();
+    const id = data.potId || d.id;
+    if (!id) return;
+    potIndex.set(id, data);
+  });
+
+  const goals = alignmentSnap.exists ? (alignmentSnap.data().goals || []) : [];
+  const linkedGoals = goals.filter((g) => g.potId);
+  const linkedGoalsCount = linkedGoals.length || 1;
+
+  const calcAmountPence = (percent) => Math.round((Number(percent || 0) / 100) * monthlyIncome * 100);
+
+  const transfers = [];
+
+  // Bucket → pot from legacy budgets
+  Object.entries(bucketPotMap || {}).forEach(([bucket, potId]) => {
+    const amountPounds = Number(byCategory[String(bucket).toLowerCase()] || 0);
+    const pot = potIndex.get(potId);
+    const baseAmount = Math.max(0, Math.round(amountPounds * 100));
+    if (!baseAmount || !pot) return;
+    const amount = testMode ? 1 : baseAmount;
+    transfers.push({
+      label: `Bucket: ${bucket}`,
+      potId,
+      potName: pot.name || potId,
+      amount,
+      source: 'bucket',
+      bucket,
+    });
+  });
+
+  // Goal allocations (% of net salary) → pot
+  linkedGoals.forEach((g) => {
+    const potId = g.potId;
+    const pot = potIndex.get(potId);
+    if (!pot) return;
+    const explicitPercent = goalAllocations[g.goalId] != null ? Number(goalAllocations[g.goalId]) : null;
+    const percent = explicitPercent != null ? explicitPercent : (globalGoalPercent ? (globalGoalPercent / linkedGoalsCount) : 0);
+    if (!percent || percent <= 0) return;
+    const baseAmount = calcAmountPence(percent);
+    if (!baseAmount) return;
+    const amount = testMode ? 1 : baseAmount;
+    transfers.push({
+      label: `Goal: ${g.title || g.goalId}`,
+      potId,
+      potName: pot.name || potId,
+      amount,
+      source: 'goal',
+      percent,
+    });
+  });
+
+  const plan = {
+    count: transfers.length,
+    totalPence: transfers.reduce((sum, t) => sum + t.amount, 0),
+    transferDay,
+    autoTransferEnabled,
+    testMode,
+    dryRun,
+  };
+
+  if (!transfers.length) return { ok: true, plan, transfers, executed: 0 };
+  if (dryRun || testMode) {
+    await db.collection('monzo_transfer_runs').add({
+      ownerUid: uid,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      dryRun,
+      testMode,
+      plan,
+      transfers,
+      executed: 0,
+      status: 'simulated',
+    });
+    return { ok: true, plan, transfers, executed: 0, note: 'Dry run / test mode (no live transfers). Amounts capped to £0.01 in test mode.' };
+  }
+  if (!autoTransferEnabled) return { ok: false, error: 'autoTransferEnabled is false; enable in budgets to run transfers', plan, transfers };
+
+  const account = accountsSnap.empty ? null : accountsSnap.docs[0].data();
+  const accountId = account?.accountId || account?.account?.id || null;
+  if (!accountId) {
+    throw new httpsV2.HttpsError('failed-precondition', 'No Monzo account found for transfers');
+  }
+  const { accessToken } = await ensureMonzoAccessToken(uid);
+
+  let executed = 0;
+  for (const t of transfers) {
+    try {
+      const dedupeId = `budget-${uid}-${t.potId}-${Date.now()}-${executed}`;
+      const body = new URLSearchParams({
+        source_account_id: accountId,
+        amount: String(t.amount),
+        dedupe_id: dedupeId,
+      });
+      const res = await fetch(`https://api.monzo.com/pots/${t.potId}/deposit`, {
+        method: 'PUT',
+        headers: { 'Authorization': `Bearer ${accessToken}` },
+        body,
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`Monzo deposit failed: ${res.status} ${text}`);
+      }
+      executed += 1;
+    } catch (err) {
+      await recordIntegrationLog(uid, 'monzo', 'error', 'Transfer failed', { potId: t.potId, error: err?.message || String(err) });
+    }
+  }
+
+  await db.collection('monzo_transfer_runs').add({
+    ownerUid: uid,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    dryRun,
+    testMode,
+    plan,
+    transfers,
+    executed,
+    status: 'completed',
+  });
+
+  return { ok: true, plan, transfers, executed };
+});
+
+exports.processMonzoSyncJob = firestoreV2.onDocumentCreated('monzo_sync_jobs/{jobId}', { secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (event) => {
+  const jobRef = event?.data?.ref;
+  const initialData = event?.data?.data() || {};
+  const uid = initialData.ownerUid;
+  if (!jobRef || !uid) return;
+
+  const snap = await jobRef.get();
+  const job = snap.exists ? (snap.data() || {}) : initialData;
+  if (!job || job.state !== 'pending') return;
+
+  await jobRef.set({
+    state: 'in-progress',
+    startedAt: admin.firestore.FieldValue.serverTimestamp(),
+    attemptCount: Number(job.attemptCount || 0) + 1,
+  }, { merge: true });
+
+  const source = job.source || job.type || 'job';
+  const since = job.since || job.sinceIso || null;
+  try {
+    const summary = await syncMonzoDataForUser(uid, { since });
+    await jobRef.set({
+      state: 'completed',
+      completedAt: admin.firestore.FieldValue.serverTimestamp(),
+      lastResult: summary || null,
+    }, { merge: true });
+    await updateMonzoIntegrationStatus(uid, {
+      ...buildTimestampPatch('lastSyncAt'),
+      lastSyncStatus: 'success',
+      lastSyncSource: source,
+      lastSyncJobId: jobRef.id,
+      lastSyncSummary: summary || null,
+      lastErrorMessage: admin.firestore.FieldValue.delete(),
+      lastErrorAt: admin.firestore.FieldValue.delete(),
+    });
+    await recordMonzoAutomationStatus({ uid, status: 'success', source, message: `Job ${jobRef.id} completed` });
+  } catch (error) {
+    await jobRef.set({
+      state: 'failed',
+      failedAt: admin.firestore.FieldValue.serverTimestamp(),
+      error: error?.message || String(error),
+    }, { merge: true });
+    await updateMonzoIntegrationStatus(uid, {
+      lastSyncStatus: 'error',
+      lastErrorMessage: error?.message || String(error),
+      ...buildTimestampPatch('lastErrorAt'),
+    });
+    await recordMonzoAutomationStatus({ uid, status: 'error', source, message: error?.message || 'Job failed' });
+    await admin.firestore().collection('webhook_logs').add({
+      source: 'monzo',
+      direction: 'internal',
+      ts: Date.now(),
+      event: 'job_failed',
+      uid,
+      jobId: jobRef.id,
+      error: error?.message || String(error),
+    });
+  }
+});
+
+exports.syncMonzo = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+
+  const sinceInput = req.data?.since || null;
+  let sinceIso = null;
+  if (sinceInput) {
+    const sinceDate = new Date(sinceInput);
+    if (isNaN(sinceDate.getTime())) {
+      throw new httpsV2.HttpsError('invalid-argument', 'since must be a valid date or ISO string');
+    }
+    sinceIso = sinceDate.toISOString();
+  }
+
+  const jobId = req.data?.jobId ? String(req.data.jobId) : null;
+  const db = admin.firestore();
+  let jobRef = null;
+  if (jobId) {
+    jobRef = db.collection('monzo_sync_jobs').doc(jobId);
+    const jobSnap = await jobRef.get();
+    if (!jobSnap.exists) {
+      throw new httpsV2.HttpsError('not-found', 'Monzo sync job not found');
+    }
+    const jobData = jobSnap.data() || {};
+    if (jobData.ownerUid && jobData.ownerUid !== uid) {
+      throw new httpsV2.HttpsError('permission-denied', 'Cannot run a Monzo sync job for another user');
+    }
+    await jobRef.set({
+      state: 'in-progress',
+      startedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+  }
+
+  try {
+    const summary = await syncMonzoDataForUser(uid, { since: sinceIso });
+    await recordIntegrationLog(uid, 'monzo', 'success', 'Monzo sync completed', {
+      accounts: summary?.accounts || 0,
+      transactions: summary?.transactions || 0,
+      since: sinceIso,
+      jobId,
+    });
+    await updateMonzoIntegrationStatus(uid, {
+      ...buildTimestampPatch('lastSyncAt'),
+      lastSyncStatus: 'success',
+      lastSyncSource: jobId ? 'job' : 'manual',
+      lastSyncSummary: summary || null,
+      lastErrorMessage: admin.firestore.FieldValue.delete(),
+      lastErrorAt: admin.firestore.FieldValue.delete(),
+    });
+    await recordMonzoAutomationStatus({ uid, status: 'success', source: jobId ? 'job' : 'manual', message: 'Sync completed' });
+    if (jobRef) {
+      await jobRef.set({
+        state: 'completed',
+        completedAt: admin.firestore.FieldValue.serverTimestamp(),
+        lastResult: summary,
+      }, { merge: true });
+    }
+    return { ok: true, ...summary };
+  } catch (error) {
+    await recordIntegrationLog(uid, 'monzo', 'error', error?.message || 'Monzo sync failed', {
+      since: sinceIso,
+      jobId,
+    });
+    await updateMonzoIntegrationStatus(uid, {
+      lastSyncStatus: 'error',
+      lastErrorMessage: error?.message || String(error),
+      ...buildTimestampPatch('lastErrorAt'),
+    });
+    await recordMonzoAutomationStatus({ uid, status: 'error', source: jobId ? 'job' : 'manual', message: error?.message || 'Sync failed' });
+    if (jobRef) {
+      await jobRef.set({
+        state: 'failed',
+        error: String(error?.message || error),
+        failedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+    }
+    if (error instanceof httpsV2.HttpsError) throw error;
+    throw new httpsV2.HttpsError('internal', error.message || 'Monzo sync failed');
+  }
+});
+
+exports.updateMonzoTransactionCategory = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const transactionId = String(req.data?.transactionId || '').trim();
+  const categoryType = String(req.data?.categoryType || '').trim().toLowerCase();
+  const label = req.data?.label ? String(req.data.label).trim() : null;
+
+  const allowed = new Set(['mandatory', 'optional', 'savings', 'income']);
+  if (!transactionId) throw new httpsV2.HttpsError('invalid-argument', 'transactionId is required');
+  if (!allowed.has(categoryType)) throw new httpsV2.HttpsError('invalid-argument', 'categoryType must be mandatory, optional, savings, or income');
+
+  const db = admin.firestore();
+  const docRef = db.collection('monzo_transactions').doc(`${uid}_${transactionId}`);
+  const snap = await docRef.get();
+  if (!snap.exists) {
+    throw new httpsV2.HttpsError('not-found', 'Transaction not found');
+  }
+
+  await docRef.set({
+    ownerUid: uid,
+    userCategoryType: categoryType,
+    userCategoryLabel: label,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  await runMonzoAnalytics(uid, { reason: 'update_transaction_category' });
+
+  return { ok: true };
+});
+
+exports.recomputeMonzoAnalytics = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const analytics = await runMonzoAnalytics(uid, { reason: 'manual_recompute' });
+  return { ok: true, analytics };
+});
+
+// Helper to apply a single merchant mapping across existing transactions
+async function applyMappingToExisting(uid, merchantKey, categoryType, categoryKey, categoryLabel, label, isSubscription) {
+  const db = admin.firestore();
+  const col = db.collection('monzo_transactions');
+  const q = col.where('ownerUid', '==', uid).where('merchantKey', '==', merchantKey);
+  const snap = await q.get();
+  let updated = 0;
+  const MAX_BATCH = 400;
+  let batch = db.batch();
+  let ops = 0;
+  for (const doc of snap.docs) {
+    const data = doc.data();
+    if (data.manualCategory) continue; // Skip manually overridden transactions
+
+    const update = {
+      userCategoryType: categoryType,
+      userCategoryKey: categoryKey || null,
+      userCategoryLabel: categoryLabel || label || null,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+    if (isSubscription !== undefined) update.isSubscription = isSubscription;
+
+    batch.update(doc.ref, update);
+    ops++; updated++;
+    if (ops >= MAX_BATCH) { await batch.commit(); batch = db.batch(); ops = 0; }
+  }
+  if (ops > 0) await batch.commit();
+  return updated;
+}
+
+// Upsert a mapping for a merchant (auto-categorise going forward)
+exports.setMerchantMapping = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const merchantName = String(req.data?.merchantName || req.data?.merchant || req.data?.name || '').trim();
+  const merchantKeyRaw = String(req.data?.merchantKey || '').trim();
+  const categoryType = String(req.data?.categoryType || req.data?.type || '').trim().toLowerCase();
+  const categoryKey = String(req.data?.categoryKey || '').trim();
+  const categoryLabel = req.data?.categoryLabel ? String(req.data.categoryLabel).trim() : null;
+  const label = req.data?.label ? String(req.data.label).trim() : null;
+  const isSubscription = req.data?.isSubscription !== undefined ? !!req.data.isSubscription : undefined;
+  const applyToExisting = !!req.data?.apply || !!req.data?.applyToExisting;
+
+  const allowed = new Set(['mandatory', 'optional', 'savings', 'income', 'discretionary']);
+  if (!merchantName && !merchantKeyRaw) throw new httpsV2.HttpsError('invalid-argument', 'merchantName or merchantKey is required');
+  if (!allowed.has(categoryType)) throw new httpsV2.HttpsError('invalid-argument', 'categoryType must be mandatory, optional, savings, discretionary, or income');
+
+  const merchantKey = merchantKeyRaw || normaliseMerchantName(merchantName);
+  if (!merchantKey) throw new httpsV2.HttpsError('invalid-argument', 'merchantKey resolved empty');
+
+  const db = admin.firestore();
+  const docRef = db.collection('merchant_mappings').doc(`${uid}_${merchantKey}`);
+
+  const updateData = {
+    ownerUid: uid,
+    merchantKey,
+    label: label || merchantName || merchantKey,
+    categoryType,
+    categoryKey: categoryKey || null,
+    categoryLabel: categoryLabel || null,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+
+  if (isSubscription !== undefined) {
+    updateData.isSubscription = isSubscription;
+  }
+
+  await docRef.set(updateData, { merge: true });
+
+  try { await recordIntegrationLog(uid, 'monzo', 'success', 'Set merchant mapping', { merchantKey, categoryType, categoryKey, categoryLabel, label, isSubscription }); } catch { }
+
+  let updated = 0;
+  if (applyToExisting) {
+    updated = await applyMappingToExisting(uid, merchantKey, categoryType, categoryKey, categoryLabel, label, isSubscription);
+    try { await runMonzoAnalytics(uid, { reason: 'merchant_mapping_apply' }); } catch { }
+  }
+
+  return { ok: true, merchantKey, updated };
+});
+
+exports.setMonzoSubscriptionOverride = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const merchantKey = String(req.data?.merchantKey || '').trim();
+  const decision = String(req.data?.decision || 'keep').trim();
+  const note = String(req.data?.note || '').trim();
+
+  if (!merchantKey) throw new httpsV2.HttpsError('invalid-argument', 'merchantKey is required');
+
+  const db = admin.firestore();
+  const docRef = db.collection('merchant_mappings').doc(`${uid}_${merchantKey}`);
+
+  await docRef.set({
+    ownerUid: uid,
+    merchantKey,
+    subscriptionDecision: decision,
+    subscriptionNote: note || null,
+    isSubscription: true, // Implicitly mark as subscription if overriding
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  try { await recordIntegrationLog(uid, 'monzo', 'success', 'Set subscription override', { merchantKey, decision }); } catch { }
+  try { await runMonzoAnalytics(uid, { reason: 'subscription_override' }); } catch { }
+
+  return { ok: true, merchantKey };
+});
+
+exports.setTransactionCategoryOverride = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const transactionId = String(req.data?.transactionId || '').trim();
+  const docIdOverride = String(req.data?.docId || '').trim();
+  const categoryKey = String(req.data?.categoryKey || '').trim();
+  const categoryLabel = req.data?.categoryLabel ? String(req.data.categoryLabel).trim() : null;
+  const categoryType = req.data?.categoryType ? String(req.data.categoryType).trim().toLowerCase() : null;
+  const allowedTypes = new Set(['mandatory', 'optional', 'savings', 'income']);
+
+  if (!transactionId || !categoryKey) throw new httpsV2.HttpsError('invalid-argument', 'transactionId and categoryKey are required');
+  if (categoryType && !allowedTypes.has(categoryType)) {
+    throw new httpsV2.HttpsError('invalid-argument', 'categoryType must be mandatory, optional, savings, or income');
+  }
+
+  const db = admin.firestore();
+  const col = db.collection('monzo_transactions');
+  const candidateIds = [];
+  if (docIdOverride) candidateIds.push(docIdOverride);
+  candidateIds.push(`${uid}_${transactionId}`);
+  candidateIds.push(transactionId);
+
+  let docRef = null;
+  let snap = null;
+  for (const id of candidateIds) {
+    const ref = col.doc(id);
+    const attempt = await ref.get();
+    if (attempt.exists) { docRef = ref; snap = attempt; break; }
+  }
+
+  if (!snap || !snap.exists) throw new httpsV2.HttpsError('not-found', 'Transaction not found');
+  if (snap.data().ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Not your transaction');
+
+  const updatePayload = {
+    userCategoryKey: categoryKey,
+    userCategoryLabel: categoryLabel,
+    manualCategory: true,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+  if (categoryType) updatePayload.userCategoryType = categoryType;
+  await docRef.update(updatePayload);
+
+  return { ok: true };
+});
+
+// Bulk upsert merchant mappings from CSV or UI array
+exports.bulkUpsertMerchantMappings = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const rows = Array.isArray(req.data?.rows) ? req.data.rows : [];
+  const apply = !!req.data?.apply;
+  if (!rows.length) return { ok: true, upserts: 0, updated: 0 };
+
+  const db = admin.firestore();
+  const batch = db.batch();
+  let upserts = 0, updated = 0;
+  const allowed = new Set(['mandatory', 'optional', 'savings', 'income']);
+  for (const r of rows) {
+    const name = String(r.merchantName || r.merchant || r.name || '').trim();
+    const keyRaw = String(r.merchantKey || '').trim();
+    const key = keyRaw || normaliseMerchantName(name);
+    if (!key) continue;
+    const type = String(r.categoryType || r.type || '').trim().toLowerCase();
+    if (!allowed.has(type)) continue;
+    const label = r.label ? String(r.label).trim() : (name || key);
+    const isSubscription = r.isSubscription !== undefined ? !!r.isSubscription : undefined;
+    const ref = db.collection('merchant_mappings').doc(`${uid}_${key}`);
+
+    const updateData = {
+      ownerUid: uid,
+      merchantKey: key,
+      label,
+      categoryType: type,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+    if (isSubscription !== undefined) updateData.isSubscription = isSubscription;
+
+    batch.set(ref, updateData, { merge: true });
+    upserts++;
+  }
+  if (upserts) await batch.commit();
+  if (apply) {
+    // Apply each mapping
+    const snaps = await db.collection('merchant_mappings').where('ownerUid', '==', uid).get();
+    for (const d of snaps.docs) {
+      const m = d.data() || {};
+      if (!m.merchantKey || !m.categoryType) continue;
+      updated += await applyMappingToExisting(uid, m.merchantKey, m.categoryType, m.categoryKey || null, m.categoryLabel || null, m.label || null, m.isSubscription);
+    }
+    try { await runMonzoAnalytics(uid, { reason: 'merchant_mapping_apply' }); } catch { }
+  }
+  try { await recordIntegrationLog(uid, 'monzo', 'success', 'Bulk upsert merchant mappings', { upserts, applied: apply }); } catch { }
+  return { ok: true, upserts, updated };
+});
+
+exports.importMerchantMappingsCsv = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const csvText = String(req.data?.csv || '').trim();
+  const apply = !!req.data?.apply;
+  if (!csvText) throw new httpsV2.HttpsError('invalid-argument', 'csv content required');
+
+  const rows = [];
+  const lines = csvText.split(/\r?\n/);
+  // Detect separator (tab or comma)
+  const firstLine = lines[0] || '';
+  const isTab = firstLine.includes('\t');
+  const separator = isTab ? '\t' : ',';
+
+  // Skip header if it looks like one
+  let startIndex = 0;
+  if (firstLine.toLowerCase().includes('category') && firstLine.toLowerCase().includes('bucket')) {
+    startIndex = 1;
+  }
+
+  const BUCKET_MAP = {
+    'mandatory expenses': 'mandatory',
+    'discretionary expenses': 'optional',
+    'net salary': 'income',
+    'savings': 'savings',
+    'unknown': 'optional',
+  };
+
+  for (let i = startIndex; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    const parts = line.split(separator).map(s => s.trim());
+    if (parts.length < 2) continue;
+
+    const merchantName = parts[0];
+    const categoryLabel = parts[1];
+    const bucketRaw = parts[2] || '';
+
+    const categoryType = BUCKET_MAP[bucketRaw.toLowerCase()] || 'optional';
+
+    rows.push({
+      merchantName,
+      label: categoryLabel,
+      categoryType,
+    });
+  }
+
+  // Reuse bulkUpsert logic
+  // We can't easily call the other export directly if it's an https function, so we duplicate the logic or extract a shared function.
+  // For now, duplicating the core logic is safer/easier than refactoring everything.
+
+  const db = admin.firestore();
+  const batch = db.batch();
+  let upserts = 0, updated = 0;
+  const allowed = new Set(['mandatory', 'optional', 'savings', 'income']);
+
+  for (const r of rows) {
+    const name = String(r.merchantName || '').trim();
+    const key = normaliseMerchantName(name);
+    if (!key) continue;
+    const type = r.categoryType;
+    if (!allowed.has(type)) continue;
+
+    const ref = db.collection('merchant_mappings').doc(`${uid}_${key}`);
+    batch.set(ref, {
+      ownerUid: uid,
+      merchantKey: key,
+      label: r.label || name,
+      categoryType: type,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+    upserts++;
+  }
+
+  if (upserts) await batch.commit();
+
+  if (apply) {
+    const snaps = await db.collection('merchant_mappings').where('ownerUid', '==', uid).get();
+    for (const d of snaps.docs) {
+      const m = d.data() || {};
+      if (!m.merchantKey || !m.categoryType) continue;
+      updated += await applyMappingToExisting(uid, m.merchantKey, m.categoryType, m.label || null);
+    }
+    try { await runMonzoAnalytics(uid, { reason: 'merchant_mapping_apply' }); } catch { }
+  }
+
+  try { await recordIntegrationLog(uid, 'monzo', 'success', 'Imported merchant mappings CSV', { upserts, updated }); } catch { }
+  return { ok: true, upserts, updated };
+});
+
+// Explicit apply (all or one merchant)
+exports.applyMerchantMappings = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const merchantKeyIn = String(req.data?.merchantKey || '').trim();
+  const db = admin.firestore();
+  let updated = 0;
+  if (merchantKeyIn) {
+    const snap = await db.collection('merchant_mappings').doc(`${uid}_${merchantKeyIn}`).get();
+    if (!snap.exists) throw new httpsV2.HttpsError('not-found', 'Mapping not found');
+    const m = snap.data() || {};
+    updated += await applyMappingToExisting(uid, merchantKeyIn, m.categoryType, m.label || null);
+  } else {
+    const snaps = await db.collection('merchant_mappings').where('ownerUid', '==', uid).get();
+    for (const d of snaps.docs) {
+      const m = d.data() || {};
+      if (!m.merchantKey || !m.categoryType) continue;
+      updated += await applyMappingToExisting(uid, m.merchantKey, m.categoryType, m.label || null);
+    }
+  }
+  try { await runMonzoAnalytics(uid, { reason: 'merchant_mapping_apply' }); } catch { }
+  try { await recordIntegrationLog(uid, 'monzo', 'success', 'Applied merchant mappings', { updated }); } catch { }
+  return { ok: true, updated };
+});
+
+// Backfill merchantKey for older transactions (run once per user if needed)
+exports.backfillMerchantKeys = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const db = admin.firestore();
+  const col = db.collection('monzo_transactions');
+  const snap = await col.where('ownerUid', '==', uid).get();
+  let updated = 0;
+  let batch = db.batch();
+  let ops = 0;
+  const MAX = 400;
+  for (const d of snap.docs) {
+    const data = d.data() || {};
+    if (data.merchantKey) continue;
+    const name = data?.merchant?.name || data?.counterparty?.name || data?.description || null;
+    const key = name ? normaliseMerchantName(name) : null;
+    if (!key) continue;
+    batch.update(d.ref, { merchantKey: key, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+    ops++; updated++;
+    if (ops >= MAX) { await batch.commit(); batch = db.batch(); ops = 0; }
+  }
+  if (ops > 0) await batch.commit();
+  try { await recordIntegrationLog(uid, 'monzo', 'success', 'Backfilled merchant keys', { updated }); } catch { }
+  return { ok: true, updated };
+});
+
+exports.generateMonzoAuditReport = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const analytics = await runMonzoAnalytics(uid, { reason: 'audit_report' });
+  const summary = analytics.summarySnapshot || {};
+  const alignment = analytics.alignmentDoc || {};
+
+  const recommendations = [];
+  const pendingCount = Number(summary.pendingCount || 0);
+  if (pendingCount > 0) {
+    recommendations.push(`Categorise ${pendingCount} pending transaction${pendingCount === 1 ? '' : 's'} to improve budget accuracy.`);
+  }
+
+  const budgetAlerts = (summary.budgetProgress || []).filter((entry) => Number(entry.variance) < 0);
+  if (budgetAlerts.length) {
+    const labels = budgetAlerts.map((entry) => entry.key).slice(0, 5).join(', ');
+    recommendations.push(`Over-budget categories detected: ${labels}. Review allocations or reclassify upcoming spends.`);
+  }
+
+  const themeShortfalls = (alignment.themes || []).filter((theme) => Number(theme.totalShortfall) > 0);
+  if (themeShortfalls.length) {
+    const labels = themeShortfalls.map((theme) => `${theme.themeName}: £${Number(theme.totalShortfall || 0).toFixed(2)}`).slice(0, 5).join('; ');
+    recommendations.push(`Theme funding gaps identified — prioritise transfers: ${labels}.`);
+  }
+
+  const merchantGaps = (summary.pendingClassification || []).slice(0, 10);
+
+  const audit = {
+    totals: summary.totals || {},
+    netCashflow: summary.netCashflow || 0,
+    pendingCount,
+    pendingClassification: merchantGaps,
+    budgetAlerts,
+    themeProgress: alignment.themes || [],
+    recommendations,
+  };
+
+  const db = admin.firestore();
+  await db.collection('monzo_audit_reports').doc(uid).set({
+    ownerUid: uid,
+    generatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    audit,
+  }, { merge: true });
+
+  return {
+    ok: true,
+    audit: {
+      ...audit,
+      generatedAt: new Date().toISOString(),
+    },
+  };
+});
+
+// Nightly analytics refresh for all users with Monzo connected
+exports.nightlyMonzoAnalytics = schedulerV2.onSchedule('every day 02:30', async () => {
+  const db = admin.firestore();
+  const tokens = await db.collection('tokens').where('provider', '==', 'monzo').get();
+  let ok = 0, fail = 0;
+  for (const t of tokens.docs) {
+    try {
+      const data = t.data() || {};
+      const uid = data.ownerUid || String(t.id).replace(/_monzo$/, '');
+      if (!uid) continue;
+      await runMonzoAnalytics(uid, { reason: 'nightly' });
+      ok++;
+    } catch (e) {
+      fail++;
+      try { await db.collection('webhook_logs').add({ source: 'monzo', direction: 'internal', ts: Date.now(), error: String(e?.message || e) }); } catch { }
+    }
+  }
+  return { ok, fail, scanned: tokens.size };
+});
+
+exports.monzoIntegrationMonitor = schedulerV2.onSchedule('every 60 minutes', async () => {
+  const db = admin.firestore();
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+  const snap = await db.collection('integration_status')
+    .where('provider', '==', 'monzo')
+    .where('connected', '==', true)
+    .where('lastAnalyticsEpochMs', '<', cutoff)
+    .limit(25)
+    .get();
+
+  for (const doc of snap.docs) {
+    const data = doc.data() || {};
+    const uid = data.ownerUid || doc.id.replace(/^monzo_/, '');
+    if (!uid) continue;
+    const lastAlertEpochMs = Number(data.lastAlertEpochMs || 0);
+    if (lastAlertEpochMs && lastAlertEpochMs > cutoff) continue;
+
+    const profileSnap = await db.collection('profiles').doc(uid).get();
+    const profile = profileSnap.exists ? (profileSnap.data() || {}) : {};
+    const email = profile.email || null;
+    const description = 'Monzo analytics have not refreshed in the past 24 hours. Please trigger a manual sync or reconnect.';
+
+    try {
+      const activityRef = db.collection('activity_stream').doc();
+      await activityRef.set({
+        id: activityRef.id,
+        entityId: `monzo_${uid}`,
+        entityType: 'integration',
+        activityType: 'monzo_sync_alert',
+        actor: 'System',
+        userId: uid,
+        ownerUid: uid,
+        description,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    } catch (error) {
+      console.warn('[monzo-monitor] failed to log activity', error?.message || error);
+    }
+
+    if (email) {
+      const subject = 'BOB · Monzo sync requires attention';
+      const html = `
+        <p>Hi ${profile.displayName || ''},</p>
+        <p>Your Monzo analytics haven't refreshed in over 24 hours. Please open BOB → Finance settings and run a manual sync or reconnect Monzo to restore daily budgeting insights.</p>
+        <p>– BOB Automations</p>
+      `;
+      try { await sendEmail({ to: email, subject, html }); } catch (error) { console.warn('[monzo-monitor] email failed', error?.message || error); }
+    }
+
+    await updateMonzoIntegrationStatus(uid, {
+      ...buildTimestampPatch('lastAlertAt'),
+      lastAlertMessage: 'Monzo analytics stale >24h',
+      lastAlertEpochMs: Date.now(),
+    });
+  }
+
+  return { stale: snap.size };
+});
+
+async function syncMonzoTransactionsForAccount({ uid, accountId, accessToken, since, fullRefresh = false, historyStart = null }) {
+  const db = admin.firestore();
+  const transactionsCol = db.collection('monzo_transactions');
+  const limit = 200;
+  let sinceCursor = since || null;
+  let refreshSinceCursor = fullRefresh ? (historyStart || null) : null;
+  let beforeCursor = null;
+  let fullRefreshDirection = null; // asc | desc
+  let total = 0;
+  let lastCreated = since || null;
+  let firstCreated = null;
+  const historyFloorMs = historyStart ? Date.parse(historyStart) : null;
+
+  // Preload merchant mappings for this user to auto-apply categorisation
+  const merchantMappingsSnap = await db.collection('merchant_mappings')
+    .where('ownerUid', '==', uid)
+    .get();
+  const merchantMap = new Map();
+  merchantMappingsSnap.forEach((d) => {
+    const data = d.data() || {};
+    const key = String(data.merchantKey || '').trim();
+    if (!key) return;
+    merchantMap.set(key, {
+      type: data.categoryType || data.type || 'optional',
+      label: data.label || data.categoryLabel || null,
+    });
+  });
+
+  const aiMappingsSnap = await db.collection('monzo_ai_merchant_categories')
+    .where('ownerUid', '==', uid)
+    .get();
+  const aiMerchantMap = new Map();
+  aiMappingsSnap.forEach((d) => {
+    const data = d.data() || {};
+    const key = String(data.merchantKey || '').trim();
+    if (!key) return;
+    if (!data.aiCategoryKey) return;
+    aiMerchantMap.set(key, {
+      key: data.aiCategoryKey,
+      label: data.aiCategoryLabel || null,
+      bucket: data.aiBucket || null,
+      reduceSuggestion: data.aiReduceSuggestion || null,
+      model: data.aiModel || null,
+    });
+  });
+
+  while (true) {
+    const params = new URLSearchParams();
+    params.set('account_id', accountId);
+    params.set('limit', String(limit));
+    if (fullRefresh) {
+      if (refreshSinceCursor) params.set('since', refreshSinceCursor);
+      if (beforeCursor) params.set('before', beforeCursor);
+    } else if (sinceCursor) {
+      params.set('since', sinceCursor);
+    }
+    params.append('expand[]', 'merchant');
+
+    const data = await monzoApi(accessToken, '/transactions', params);
+    const transactions = data.transactions || [];
+    if (!transactions.length) break;
+
+    const batch = db.batch();
+    let pageNewestCreated = null;
+    let pageOldestCreated = null;
+
+    for (const tx of transactions) {
+      const docRef = transactionsCol.doc(`${uid}_${tx.id}`);
+      const defaultCategoryType = inferDefaultCategoryType(tx);
+      const defaultCategoryLabel = inferDefaultCategoryLabel(tx);
+      const amountMinorRaw = typeof tx.amount === 'number' ? tx.amount : Number(tx.amount || 0);
+      if (!Number.isFinite(amountMinorRaw)) continue;
+      const amountMinor = Math.trunc(amountMinorRaw);
+      const amount = amountMinor / 100;
+      const metadataRaw = tx.metadata && typeof tx.metadata === 'object' ? tx.metadata : null;
+      const metadataSanitised = {};
+      if (metadataRaw) {
+        for (const [rawKey, rawValue] of Object.entries(metadataRaw)) {
+          const safeKey = rawKey.replace(/[.$\[\]]/g, '_');
+          metadataSanitised[safeKey] = typeof rawValue === 'string' || typeof rawValue === 'number' || typeof rawValue === 'boolean'
+            ? rawValue
+            : JSON.stringify(rawValue);
+        }
+      }
+      // Merchant key for mapping and analytics
+      const merchantName = tx?.merchant?.name || tx?.counterparty?.name || tx?.description || null;
+      const merchantKey = merchantName ? normaliseMerchantName(merchantName) : (tx?.merchant?.id ? normaliseMerchantName(tx.merchant.id) : null);
+
+      const docData = {
+        ownerUid: uid,
+        accountId,
+        transactionId: tx.id,
+        amountMinor,
+        amount,
+        currency: tx.currency,
+        description: tx.description || null,
+        category: tx.category || null,
+        notes: tx.notes || null,
+        isLoad: !!tx.is_load,
+        isSettled: !!tx.settled,
+        settledISO: tx.settled || null,
+        createdISO: tx.created || null,
+        scheme: tx.scheme || null,
+        declineReason: tx.decline_reason || null,
+        counterparty: tx.counterparty || null,
+        metadata: Object.keys(metadataSanitised).length ? metadataSanitised : null,
+        defaultCategoryType,
+        defaultCategoryLabel,
+        merchantKey: merchantKey || null,
+        monthKey: tx.created ? toMonthKey(tx.created) : null,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        raw: tx,
+      };
+      if (tx.created) {
+        docData.createdAt = admin.firestore.Timestamp.fromDate(new Date(tx.created));
+      }
+      if (tx.settled) {
+        docData.settledAt = admin.firestore.Timestamp.fromDate(new Date(tx.settled));
+      }
+      if (tx.merchant && typeof tx.merchant === 'object') {
+        docData.merchant = {
+          id: tx.merchant.id || null,
+          name: tx.merchant.name || null,
+          emoji: tx.merchant.emoji || null,
+          logo: tx.merchant.logo || null,
+          category: tx.merchant.category || null,
+        };
+        docData.merchantRaw = tx.merchant;
+      } else {
+        docData.merchant = {
+          id: null,
+          name: null,
+          emoji: null,
+          logo: null,
+        };
+      }
+
+      // Apply merchant mapping if available
+      if (merchantKey && merchantMap.has(merchantKey)) {
+        const m = merchantMap.get(merchantKey);
+        docData.userCategoryType = m.type;
+        if (m.label) docData.userCategoryLabel = m.label;
+      }
+
+      // Apply AI merchant mapping if available
+      if (merchantKey && aiMerchantMap.has(merchantKey)) {
+        const m = aiMerchantMap.get(merchantKey);
+        docData.aiCategoryKey = m.key || null;
+        docData.aiCategoryLabel = m.label || null;
+        docData.aiBucket = m.bucket || null;
+        docData.aiReduceSuggestion = m.reduceSuggestion || null;
+        docData.aiModel = m.model || null;
+        docData.aiLastCategorizedAt = admin.firestore.FieldValue.serverTimestamp();
+      } else if (merchantName && amount < 0 && !docData.aiCategoryKey) {
+        docData.needsAiCategorization = true;
+      }
+
+      batch.set(docRef, docData, { merge: true });
+
+      if (tx.created) {
+        if (!pageNewestCreated || tx.created > pageNewestCreated) pageNewestCreated = tx.created;
+        if (!pageOldestCreated || tx.created < pageOldestCreated) pageOldestCreated = tx.created;
+      }
+    }
+
+    await batch.commit();
+
+    total += transactions.length;
+    if (pageNewestCreated && (!lastCreated || pageNewestCreated > lastCreated)) lastCreated = pageNewestCreated;
+    if (pageOldestCreated && (!firstCreated || pageOldestCreated < firstCreated)) firstCreated = pageOldestCreated;
+
+    if (fullRefresh) {
+      if (!fullRefreshDirection && transactions.length >= 2) {
+        const firstMs = Date.parse(transactions[0]?.created || '');
+        const lastMs = Date.parse(transactions[transactions.length - 1]?.created || '');
+        if (Number.isFinite(firstMs) && Number.isFinite(lastMs)) {
+          fullRefreshDirection = firstMs >= lastMs ? 'desc' : 'asc';
+        }
+      }
+      if (transactions.length < limit) break;
+
+      if (fullRefreshDirection === 'asc') {
+        if (!pageNewestCreated) break;
+        const nextSince = new Date(new Date(pageNewestCreated).getTime() + 1).toISOString();
+        if (nextSince === refreshSinceCursor) break;
+        refreshSinceCursor = nextSince;
+      } else {
+        if (!pageOldestCreated) break;
+        const oldestMs = Date.parse(pageOldestCreated);
+        if (Number.isFinite(historyFloorMs) && Number.isFinite(oldestMs) && oldestMs <= historyFloorMs) break;
+        const nextBefore = new Date(oldestMs - 1).toISOString();
+        if (nextBefore === beforeCursor) break;
+        beforeCursor = nextBefore;
+      }
+      continue;
+    }
+
+    const lastTx = transactions[transactions.length - 1];
+    if (lastTx?.created) {
+      const nextDate = new Date(lastTx.created);
+      const nextSince = new Date(nextDate.getTime() + 1).toISOString();
+      if (nextSince === sinceCursor) break;
+      sinceCursor = nextSince;
+    } else {
+      break;
+    }
+
+    if (transactions.length < limit) break;
+  }
+
+  return { count: total, lastCreated, firstCreated };
+}
+
+const loadFinanceCategoriesForUser = async (db, uid) => {
+  try {
+    const snap = await db.collection('finance_categories').doc(uid).get();
+    const custom = snap.exists ? (snap.data()?.categories || []) : [];
+    return mergeFinanceCategories(custom);
+  } catch {
+    return DEFAULT_FINANCE_CATEGORIES;
+  }
+};
+
+const buildCategoryLookup = (categories) => {
+  const map = new Map();
+  categories.forEach((c) => {
+    if (!c || !c.key) return;
+    map.set(String(c.key), c);
+  });
+  return map;
+};
+
+const buildCategoryListForPrompt = (categories) => {
+  return categories
+    .map((c) => `${c.key} | ${c.label} | ${c.bucket}`)
+    .join('\n');
+};
+
+const normalizeAiCategoryResult = (result, categoriesMap) => {
+  if (!result || typeof result !== 'object') return null;
+  let key = String(result.categoryKey || result.key || '').trim();
+  if (!key || !categoriesMap.has(key)) {
+    key = categoriesMap.has('uncategorized') ? 'uncategorized' : '';
+  }
+  if (!key || !categoriesMap.has(key)) return null;
+  const category = categoriesMap.get(key);
+  return {
+    key,
+    label: category.label,
+    bucket: category.bucket,
+    reduceSuggestion: result.reduceSuggestion ? String(result.reduceSuggestion).trim() : null,
+    confidence: Number(result.confidence || 0) || null,
+  };
+};
+
+const extractAmountPence = (tx) => {
+  if (Number.isFinite(tx.amountMinor)) return Number(tx.amountMinor);
+  const raw = Number(tx.amount || 0);
+  if (!Number.isFinite(raw)) return 0;
+  if (Math.abs(raw) < 10) return Math.round(raw * 100);
+  return Math.round(raw);
+};
+
+const computePercentile = (values, percentile) => {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const idx = Math.min(sorted.length - 1, Math.max(0, Math.floor(percentile * (sorted.length - 1))));
+  return sorted[idx];
+};
+
+const detectSpendAnomaliesForUser = async (uid, { windowDays = 90, percentile = 0.95 } = {}) => {
+  const db = admin.firestore();
+  const start = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
+  const startTs = admin.firestore.Timestamp.fromDate(start);
+  const snap = await db.collection('monzo_transactions')
+    .where('ownerUid', '==', uid)
+    .where('createdAt', '>=', startTs)
+    .get();
+
+  if (snap.empty) return { ok: true, threshold: null, updated: 0, count: 0, newAnomalies: [] };
+
+  const docs = snap.docs.map((d) => ({ ref: d.ref, data: d.data() || {} }));
+  const spendValues = docs
+    .map(({ data }) => extractAmountPence(data))
+    .filter((val) => val < 0)
+    .map((val) => Math.abs(val));
+
+  const threshold = computePercentile(spendValues, percentile);
+  if (!threshold) return { ok: true, threshold: null, updated: 0, count: 0, newAnomalies: [] };
+
+  let updated = 0;
+  const newAnomalies = [];
+  const MAX_BATCH = 400;
+  let batch = db.batch();
+  let ops = 0;
+
+  for (const { ref, data } of docs) {
+    const amt = extractAmountPence(data);
+    const isSpend = amt < 0;
+    const abs = Math.abs(amt);
+    const flag = isSpend && abs >= threshold;
+    const prevFlag = !!data.aiAnomalyFlag;
+    if (flag === prevFlag && (flag ? data.aiAnomalyScore : true)) continue;
+    const update = {
+      aiAnomalyFlag: flag,
+      aiAnomalyScore: flag ? Number((abs / threshold).toFixed(2)) : admin.firestore.FieldValue.delete(),
+      aiAnomalyReason: flag ? `Above 95th percentile spend in last ${windowDays} days` : admin.firestore.FieldValue.delete(),
+      aiAnomalyDetectedAt: flag ? admin.firestore.FieldValue.serverTimestamp() : admin.firestore.FieldValue.delete(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+    batch.update(ref, update);
+    ops += 1;
+    updated += 1;
+    if (flag && !prevFlag && newAnomalies.length < 10) {
+      newAnomalies.push({
+        id: ref.id,
+        merchant: data.merchant?.name || data.counterparty?.name || data.description || 'Unknown',
+        amountPence: abs,
+        createdAt: data.createdAt || null,
+        reason: update.aiAnomalyReason,
+      });
+    }
+    if (ops >= MAX_BATCH) {
+      await batch.commit();
+      batch = db.batch();
+      ops = 0;
+    }
+  }
+
+  if (ops > 0) await batch.commit();
+
+  await db.collection('monzo_ai_anomaly_summary').doc(uid).set({
+    ownerUid: uid,
+    windowDays,
+    percentile,
+    thresholdPence: threshold,
+    updatedCount: updated,
+    lastNewAnomalies: newAnomalies.length,
+    computedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  return { ok: true, threshold, updated, count: spendValues.length, newAnomalies };
+};
+
+// Background Trigger: mark or apply AI categorisation for Monzo transactions
+exports.classifyMonzoTransactions = functionsV2.firestore.onDocumentWritten('monzo_transactions/{docId}', async (event) => {
+  const after = event.data?.after?.data();
+  if (!after) return;
+  if (!after.needsAiCategorization) return;
+  if (after.aiCategoryKey) {
+    await event.data.after.ref.update({ needsAiCategorization: admin.firestore.FieldValue.delete(), needsClassification: admin.firestore.FieldValue.delete() });
+    return;
+  }
+
+  const uid = after.ownerUid;
+  const merchantName = after.merchant?.name || after.counterparty?.name || after.description;
+  const amount = Number(after.amount || 0);
+
+  if (!uid || !merchantName || !event.data?.after?.ref) return;
+
+  const db = admin.firestore();
+  const merchantKey = normaliseMerchantName(merchantName);
+  const mappingRef = db.collection('monzo_ai_merchant_categories').doc(`${uid}_${merchantKey}`);
+  const mappingSnap = await mappingRef.get();
+  if (mappingSnap.exists) {
+    const m = mappingSnap.data() || {};
+    if (m.aiCategoryKey) {
+      await event.data.after.ref.update({
+        aiCategoryKey: m.aiCategoryKey,
+        aiCategoryLabel: m.aiCategoryLabel || null,
+        aiBucket: m.aiBucket || null,
+        aiReduceSuggestion: m.aiReduceSuggestion || null,
+        aiModel: m.aiModel || null,
+        aiLastCategorizedAt: admin.firestore.FieldValue.serverTimestamp(),
+        needsAiCategorization: admin.firestore.FieldValue.delete(),
+        needsClassification: admin.firestore.FieldValue.delete(),
+      });
+    }
+    return;
+  }
+
+  // Defer LLM heavy lifting to scheduled job unless this is a small, recent batch
+  const isRecent = after.createdAt?.toMillis ? (Date.now() - after.createdAt.toMillis() < 3 * 24 * 60 * 60 * 1000) : false;
+  if (!isRecent) return;
+
+  try {
+    const categories = await loadFinanceCategoriesForUser(db, uid);
+    const categoriesMap = buildCategoryLookup(categories);
+    const categoryList = buildCategoryListForPrompt(categories);
+
+    const system = 'You are a financial categorization assistant. Only choose from the provided categories. Respond with JSON only.';
+    const user = `
+Categorise this transaction using one of the category keys listed below. Return JSON only.
+
+Merchant: "${merchantName}"
+Description: "${after.description || ''}"
+Amount: ${amount} GBP
+Is subscription: ${after.isSubscription ? 'yes' : 'no'}
+
+Categories (key | label | bucket):
+${categoryList}
+
+Rules:
+- Pick exactly one categoryKey from the list.
+- If it is a discretionary purchase, include a short reduceSuggestion (one sentence).
+- If it is mandatory, savings, or income, reduceSuggestion should be null.
+- JSON format: {"categoryKey":"...", "reduceSuggestion":"...", "confidence":0-1}
+`;
+
+    const raw = await callLLMJson({ system, user, purpose: 'monzo_ai_category', userId: uid, expectJson: true, temperature: 0.2 });
+    let parsed = null;
+    try { parsed = JSON.parse(raw); } catch { parsed = null; }
+    const normalized = normalizeAiCategoryResult(parsed, categoriesMap);
+    if (!normalized) {
+      await event.data.after.ref.update({ needsAiCategorization: admin.firestore.FieldValue.delete() });
+      return;
+    }
+
+    await event.data.after.ref.update({
+      aiCategoryKey: normalized.key,
+      aiCategoryLabel: normalized.label,
+      aiBucket: normalized.bucket,
+      aiReduceSuggestion: normalized.reduceSuggestion || null,
+      aiLastCategorizedAt: admin.firestore.FieldValue.serverTimestamp(),
+      aiModel: 'llm',
+      needsAiCategorization: admin.firestore.FieldValue.delete(),
+      needsClassification: admin.firestore.FieldValue.delete(),
+    });
+
+    await mappingRef.set({
+      ownerUid: uid,
+      merchantKey,
+      aiCategoryKey: normalized.key,
+      aiCategoryLabel: normalized.label,
+      aiBucket: normalized.bucket,
+      aiReduceSuggestion: normalized.reduceSuggestion || null,
+      aiModel: 'llm',
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      source: 'llm_auto',
+    }, { merge: true });
+  } catch (e) {
+    console.error('[classifyMonzoTransactions] failed', e);
+    await event.data.after.ref.update({ needsAiCategorization: admin.firestore.FieldValue.delete() });
+  }
+});
+
+const categorizeMerchantWithLLM = async ({ uid, merchantName, description, amount, isSubscription, categories, categoriesMap }) => {
+  const categoryList = buildCategoryListForPrompt(categories);
+  const system = 'You are a financial categorization assistant. Only choose from the provided categories. Respond with JSON only.';
+  const user = `
+Categorise this transaction using one of the category keys listed below. Return JSON only.
+
+Merchant: "${merchantName}"
+Description: "${description || ''}"
+Amount: ${amount} GBP
+Is subscription: ${isSubscription ? 'yes' : 'no'}
+
+Categories (key | label | bucket):
+${categoryList}
+
+Rules:
+- Pick exactly one categoryKey from the list.
+- If it is a discretionary purchase, include a short reduceSuggestion (one sentence).
+- If it is mandatory, savings, or income, reduceSuggestion should be null.
+- JSON format: {"categoryKey":"...", "reduceSuggestion":"...", "confidence":0-1}
+`;
+
+  const raw = await callLLMJson({ system, user, purpose: 'monzo_ai_category', userId: uid, expectJson: true, temperature: 0.2 });
+  let parsed = null;
+  try { parsed = JSON.parse(raw); } catch { parsed = null; }
+  return normalizeAiCategoryResult(parsed, categoriesMap);
+};
+
+const applyAiMappingToTransaction = async (ref, mapping) => {
+  const update = {
+    aiCategoryKey: mapping.key,
+    aiCategoryLabel: mapping.label || null,
+    aiBucket: mapping.bucket || null,
+    aiReduceSuggestion: mapping.reduceSuggestion || null,
+    aiLastCategorizedAt: admin.firestore.FieldValue.serverTimestamp(),
+    aiModel: mapping.model || 'llm',
+    needsAiCategorization: admin.firestore.FieldValue.delete(),
+    needsClassification: admin.firestore.FieldValue.delete(),
+  };
+  await ref.update(update);
+};
+
+exports.monzoAiCategorizationSweep = schedulerV2.onSchedule({
+  schedule: 'every 30 minutes',
+  timeZone: 'UTC',
+  memory: '512MiB',
+  secrets: [GOOGLE_AI_STUDIO_API_KEY],
+}, async () => {
+  const db = ensureFirestore();
+  const pendingSnap = await db.collection('monzo_transactions')
+    .where('needsAiCategorization', '==', true)
+    .limit(200)
+    .get();
+  if (pendingSnap.empty) return;
+
+  const byUser = new Map();
+  pendingSnap.docs.forEach((doc) => {
+    const data = doc.data() || {};
+    const uid = data.ownerUid;
+    if (!uid) return;
+    if (!byUser.has(uid)) byUser.set(uid, []);
+    byUser.get(uid).push({ ref: doc.ref, data });
+  });
+
+  for (const [uid, items] of byUser.entries()) {
+    const categories = await loadFinanceCategoriesForUser(db, uid);
+    const categoriesMap = buildCategoryLookup(categories);
+    const merchantCache = new Map();
+
+    for (const item of items) {
+      const data = item.data || {};
+      const merchantName = data.merchant?.name || data.counterparty?.name || data.description;
+      const merchantKey = merchantName ? normaliseMerchantName(merchantName) : null;
+      if (!merchantName || !merchantKey) {
+        await item.ref.update({ needsAiCategorization: admin.firestore.FieldValue.delete() });
+        continue;
+      }
+
+      if (merchantCache.has(merchantKey)) {
+        const cached = merchantCache.get(merchantKey);
+        if (cached) {
+          await applyAiMappingToTransaction(item.ref, cached);
+        } else {
+          await item.ref.update({ needsAiCategorization: admin.firestore.FieldValue.delete() });
+        }
+        continue;
+      }
+
+      const mappingRef = db.collection('monzo_ai_merchant_categories').doc(`${uid}_${merchantKey}`);
+      const mappingSnap = await mappingRef.get();
+      if (mappingSnap.exists) {
+        const m = mappingSnap.data() || {};
+        if (m.aiCategoryKey) {
+          const mapping = {
+            key: m.aiCategoryKey,
+            label: m.aiCategoryLabel,
+            bucket: m.aiBucket,
+            reduceSuggestion: m.aiReduceSuggestion,
+            model: m.aiModel || 'llm',
+          };
+          merchantCache.set(merchantKey, mapping);
+          await applyAiMappingToTransaction(item.ref, mapping);
+          continue;
+        }
+      }
+
+      try {
+        const normalized = await categorizeMerchantWithLLM({
+          uid,
+          merchantName,
+          description: data.description || '',
+          amount: Number(data.amount || 0),
+          isSubscription: !!data.isSubscription,
+          categories,
+          categoriesMap,
+        });
+        if (!normalized) {
+          merchantCache.set(merchantKey, null);
+          await item.ref.update({ needsAiCategorization: admin.firestore.FieldValue.delete() });
+          continue;
+        }
+        const mapping = {
+          key: normalized.key,
+          label: normalized.label,
+          bucket: normalized.bucket,
+          reduceSuggestion: normalized.reduceSuggestion || null,
+          model: 'llm',
+        };
+        merchantCache.set(merchantKey, mapping);
+        await applyAiMappingToTransaction(item.ref, mapping);
+        await mappingRef.set({
+          ownerUid: uid,
+          merchantKey,
+          aiCategoryKey: mapping.key,
+          aiCategoryLabel: mapping.label,
+          aiBucket: mapping.bucket,
+          aiReduceSuggestion: mapping.reduceSuggestion || null,
+          aiModel: 'llm',
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          source: 'llm_auto',
+        }, { merge: true });
+      } catch (err) {
+        console.warn('[monzoAiCategorizationSweep] failed', err?.message || err);
+        await item.ref.update({ needsAiCategorization: admin.firestore.FieldValue.delete() });
+      }
+    }
+  }
+});
+
+exports.backfillMonzoAiCategorization = httpsV2.onCall(async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const days = Math.max(7, Math.min(Number(req.data?.days || 365), 3650));
+  const maxDocs = Math.max(50, Math.min(Number(req.data?.limit || 1000), 5000));
+  const db = admin.firestore();
+  const start = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  const startTs = admin.firestore.Timestamp.fromDate(start);
+  const snap = await db.collection('monzo_transactions')
+    .where('ownerUid', '==', uid)
+    .where('createdAt', '>=', startTs)
+    .limit(maxDocs)
+    .get();
+
+  let updated = 0;
+  const batch = db.batch();
+  snap.docs.forEach((doc) => {
+    const data = doc.data() || {};
+    if (data.aiCategoryKey || data.needsAiCategorization) return;
+    batch.update(doc.ref, { needsAiCategorization: true });
+    updated += 1;
+  });
+  if (updated > 0) await batch.commit();
+  return { ok: true, updated };
+});
+
+exports.monzoSpendAnomalySweep = schedulerV2.onSchedule({
+  schedule: 'every day 02:15',
+  timeZone: 'UTC',
+  memory: '512MiB',
+  secrets: [defineSecret('BREVO_API_KEY')],
+}, async () => {
+  const db = ensureFirestore();
+  const tokens = await db.collection('tokens').where('provider', '==', 'monzo').get();
+  for (const doc of tokens.docs) {
+    const data = doc.data() || {};
+    const uid = data.ownerUid || String(doc.id).replace(/_monzo$/, '');
+    if (!uid) continue;
+    try {
+      const result = await detectSpendAnomaliesForUser(uid, { windowDays: 90, percentile: 0.95 });
+      if (result?.newAnomalies && result.newAnomalies.length) {
+        const profileSnap = await db.collection('profiles').doc(uid).get();
+        const profile = profileSnap.exists ? profileSnap.data() || {} : {};
+        if (profile.email && profile.monzoAnomalyEmailEnabled !== false) {
+          let currency = profile.currency || 'GBP';
+          try {
+            const budgetSnap = await db.collection('monzo_budget_summary').doc(uid).get();
+            if (budgetSnap.exists) {
+              const budget = budgetSnap.data() || {};
+              currency = budget.currency || currency;
+            }
+          } catch { }
+          const html = renderSpendAnomalyEmail({
+            profile,
+            anomalies: result.newAnomalies,
+            currency,
+            metadata: {
+              windowLabel: 'the last 90 days',
+              generatedAt: new Date().toISOString(),
+              timezone: profile.timezone || DEFAULT_TIMEZONE,
+            },
+          });
+          await sendEmail({
+            to: profile.email,
+            subject: 'BOB · Spend Anomaly Alert',
+            html,
+          });
+          await db.collection('monzo_ai_anomaly_summary').doc(uid).set({
+            lastNotifiedAt: admin.firestore.FieldValue.serverTimestamp(),
+            lastNotifiedCount: result.newAnomalies.length,
+          }, { merge: true });
+        }
+      }
+    } catch (err) {
+      console.warn('[monzoSpendAnomalySweep] failed', { uid, error: err?.message || err });
+    }
+  }
+});
+
+
+async function findEarliestMonzoTransactionCreated(db, uid, accountId) {
+  const snap = await db.collection('monzo_transactions')
+    .where('ownerUid', '==', uid)
+    .where('accountId', '==', accountId)
+    .select('createdISO', 'createdAt')
+    .get();
+
+  let earliestMs = null;
+  snap.forEach((docSnap) => {
+    const data = docSnap.data() || {};
+    let candidateMs = NaN;
+    if (data.createdAt?.toDate) {
+      candidateMs = data.createdAt.toDate().getTime();
+    } else if (data.createdAt?._seconds) {
+      candidateMs = Number(data.createdAt._seconds) * 1_000;
+    } else if (typeof data.createdISO === 'string' && data.createdISO) {
+      candidateMs = Date.parse(data.createdISO);
+    }
+    if (!Number.isFinite(candidateMs)) return;
+    earliestMs = earliestMs === null ? candidateMs : Math.min(earliestMs, candidateMs);
+  });
+
+  return earliestMs === null ? null : new Date(earliestMs).toISOString();
+}
+
+const MONZO_GOAL_REF_TIMEOUT_MS = 24 * 60 * 60 * 1000;
+
+function toMillisSafe(value) {
+  if (!value) return null;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (value?.toMillis) {
+    try { return value.toMillis(); } catch { }
+  }
+  if (value?._seconds != null) {
+    const seconds = Number(value._seconds);
+    const nanos = Number(value._nanoseconds || 0);
+    if (Number.isFinite(seconds)) return (seconds * 1000) + Math.floor(nanos / 1_000_000);
+  }
+  const parsed = Date.parse(String(value));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizeMonzoGoalRef(ref) {
+  return String(ref || '').trim().toLowerCase();
+}
+
+function matchPotForGoalRef(pots, goalRef) {
+  const normalizedRef = normalizeMonzoGoalRef(goalRef);
+  if (!normalizedRef) return null;
+  for (const pot of pots) {
+    const potId = String(pot?.potId || pot?.id || '').trim();
+    const potName = String(pot?.name || pot?.raw?.name || '').trim();
+    if (normalizeMonzoGoalRef(potId) === normalizedRef) return pot;
+    if (normalizeMonzoGoalRef(potName).includes(normalizedRef)) return pot;
+  }
+  return null;
+}
+
+async function linkMonzoGoalRefsForUser(uid, { source = 'sync' } = {}) {
+  const db = admin.firestore();
+  const [goalsSnap, potsSnap] = await Promise.all([
+    db.collection('goals').where('ownerUid', '==', uid).get(),
+    db.collection('monzo_pots').where('ownerUid', '==', uid).get(),
+  ]);
+
+  const pots = potsSnap.docs
+    .map((d) => d.data() || {})
+    .filter((pot) => !pot.deleted);
+
+  const pending = goalsSnap.docs.filter((docSnap) => {
+    const goal = docSnap.data() || {};
+    const hasRef = !!String(goal.monzoPotGoalRef || '').trim();
+    const alreadyLinked = !!String(goal.monzoPotId || goal.linkedPotId || goal.potId || '').trim();
+    return hasRef && !alreadyLinked;
+  });
+
+  if (!pending.length) {
+    return {
+      checked: 0,
+      linked: 0,
+      timedOut: 0,
+      pending: 0,
+    };
+  }
+
+  const nowMs = Date.now();
+  const batch = db.batch();
+  let linked = 0;
+  let timedOut = 0;
+  let stillPending = 0;
+
+  for (const goalSnap of pending) {
+    const goal = goalSnap.data() || {};
+    const goalRef = String(goal.monzoPotGoalRef || '').trim();
+    const matchedPot = matchPotForGoalRef(pots, goalRef);
+    const goalRefMs =
+      toMillisSafe(goal.monzoPotRefRequestedAt) ||
+      toMillisSafe(goal.updatedAt) ||
+      toMillisSafe(goal.createdAt) ||
+      toMillisSafe(goalSnap.updateTime) ||
+      toMillisSafe(goalSnap.createTime);
+
+    if (matchedPot) {
+      const linkedPotId = String(matchedPot.potId || matchedPot.id || '').trim();
+      if (!linkedPotId) {
+        stillPending += 1;
+        continue;
+      }
+      batch.set(goalSnap.ref, {
+        monzoPotId: linkedPotId,
+        linkedPotId,
+        potId: linkedPotId,
+        monzoPotLinkedAt: admin.firestore.FieldValue.serverTimestamp(),
+        monzoPotLinkStatus: 'linked',
+        monzoPotLinkError: admin.firestore.FieldValue.delete(),
+        monzoPotLinkTimedOutAt: admin.firestore.FieldValue.delete(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+      linked += 1;
+      continue;
+    }
+
+    if (goalRefMs && (nowMs - goalRefMs) >= MONZO_GOAL_REF_TIMEOUT_MS) {
+      batch.set(goalSnap.ref, {
+        monzoPotLinkStatus: 'timeout',
+        monzoPotLinkTimedOutAt: admin.firestore.FieldValue.serverTimestamp(),
+        monzoPotLinkError: 'No Monzo pot found with matching reference within 24 hours.',
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+      timedOut += 1;
+    } else {
+      stillPending += 1;
+    }
+  }
+
+  if (linked || timedOut) {
+    await batch.commit();
+  }
+
+  if (linked || timedOut) {
+    await db.collection('integration_logs').add({
+      integration: 'monzo',
+      type: 'goal_pot_ref_linker',
+      status: timedOut > 0 ? 'warning' : 'success',
+      userId: uid,
+      source,
+      linked,
+      timedOut,
+      pending: stillPending,
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  }
+
+  return {
+    checked: pending.length,
+    linked,
+    timedOut,
+    pending: stillPending,
+  };
+}
+
+async function syncMonzoDataForUser(uid, { since, fullRefresh } = {}) {
+  const { accessToken } = await ensureMonzoAccessToken(uid);
+  const db = admin.firestore();
+  const summary = { accounts: 0, pots: 0, transactions: 0, accountsSynced: [] };
+
+  // Fetch all accounts (personal + joint). Monzo supports types like 'uk_retail' and 'uk_retail_joint'.
+  // We previously limited to 'uk_retail' which excluded joint accounts; include all to avoid missing data.
+  const accountsResp = await monzoApi(accessToken, '/accounts');
+  const accounts = (accountsResp.accounts || []).filter(a => !a.closed);
+  summary.accounts = accounts.length;
+
+  if (accounts.length) {
+    const batch = db.batch();
+    for (const account of accounts) {
+      const docRef = db.collection('monzo_accounts').doc(`${uid}_${account.id}`);
+      const docData = {
+        ownerUid: uid,
+        accountId: account.id,
+        name: account.description || account.name || null,
+        type: account.type || null,
+        accountNumber: account.account_number || null,
+        sortCode: account.sort_code || null,
+        closed: !!account.closed,
+        raw: account,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+      if (account.created) {
+        docData.accountCreatedAt = admin.firestore.Timestamp.fromDate(new Date(account.created));
+        docData.accountCreatedISO = account.created;
+      }
+      batch.set(docRef, docData, { merge: true });
+    }
+    await batch.commit();
+  }
+
+  let allPots = [];
+  for (const account of accounts) {
+    try {
+      const potsResp = await monzoApi(accessToken, '/pots', { current_account_id: account.id });
+      if (potsResp.pots) {
+        allPots = allPots.concat(potsResp.pots);
+      }
+    } catch (err) {
+      console.warn(`Failed to fetch pots for account ${account.id}`, err);
+    }
+  }
+  const pots = allPots;
+  summary.pots = pots.length;
+  if (pots.length) {
+    const batch = db.batch();
+    for (const pot of pots) {
+      const docRef = db.collection('monzo_pots').doc(`${uid}_${pot.id}`);
+      const docData = {
+        ownerUid: uid,
+        potId: pot.id,
+        name: pot.name || null,
+        balance: pot.balance,
+        currency: pot.currency || null,
+        accountId: pot.current_account_id || null,
+        goalAmount: pot.goal_amount || null,
+        goalCurrency: pot.goal_currency || pot.currency || null,
+        roundUpEnabled: pot.round_up?.enabled || false,
+        deleted: !!pot.deleted,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        raw: pot,
+      };
+      if (pot.created) {
+        docData.potCreatedAt = admin.firestore.Timestamp.fromDate(new Date(pot.created));
+        docData.potCreatedISO = pot.created;
+      }
+      batch.set(docRef, docData, { merge: true });
+    }
+    await batch.commit();
+  }
+
+  for (const account of accounts) {
+    const accountId = account.id;
+    const syncStateRef = db.collection('monzo_sync_state').doc(`${uid}_${accountId}`);
+    const syncSnap = await syncStateRef.get();
+    const stateData = syncSnap.data() || {};
+    const sinceCursor = fullRefresh ? null : (since || stateData.lastTransactionCreated || null);
+    const historyFloorISO = '2018-01-01T00:00:00.000Z';
+    const parsedAccountCreatedMs = Date.parse(String(account?.created || ''));
+    const accountCreatedISO = Number.isNaN(parsedAccountCreatedMs)
+      ? null
+      : new Date(parsedAccountCreatedMs).toISOString();
+    const historyStart = fullRefresh
+      ? (accountCreatedISO && accountCreatedISO > historyFloorISO ? accountCreatedISO : historyFloorISO)
+      : null;
+
+    const txSummary = await syncMonzoTransactionsForAccount({
+      uid,
+      accountId,
+      accessToken,
+      since: sinceCursor,
+      fullRefresh: !!fullRefresh,
+      historyStart,
+    });
+    let firstCreated = txSummary.firstCreated || null;
+    if (fullRefresh && !firstCreated) {
+      firstCreated = await findEarliestMonzoTransactionCreated(db, uid, accountId);
+    }
+    summary.transactions += txSummary.count;
+    summary.accountsSynced.push({
+      accountId,
+      transactions: txSummary.count,
+      lastCreated: txSummary.lastCreated || null,
+      firstCreated,
+    });
+
+    const update = {
+      ownerUid: uid,
+      accountId,
+      lastSyncedAt: admin.firestore.FieldValue.serverTimestamp(),
+      lastSyncCount: txSummary.count,
+      lastSyncSince: sinceCursor || null,
+    };
+    if (txSummary.lastCreated) {
+      update.lastTransactionCreated = txSummary.lastCreated;
+      update.lastTransactionTs = admin.firestore.Timestamp.fromDate(new Date(txSummary.lastCreated));
+    }
+    if (firstCreated) {
+      update.firstTransactionCreated = firstCreated;
+      update.firstTransactionTs = admin.firestore.Timestamp.fromDate(new Date(firstCreated));
+    }
+
+    await syncStateRef.set(update, { merge: true });
+  }
+
+  await db.collection('profiles').doc(uid).set({
+    monzoLastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  try {
+    const analytics = await runMonzoAnalytics(uid, { reason: 'sync' });
+    summary.analytics = analytics.summarySnapshot || null;
+  } catch (error) {
+    console.error(`Failed to compute Monzo analytics for user ${uid}`, error);
+  }
+
+  try {
+    summary.goalPotLinking = await linkMonzoGoalRefsForUser(uid, { source: 'sync' });
+  } catch (error) {
+    console.error(`Failed to link Monzo goal refs for user ${uid}`, error);
+  }
+
+  return summary;
+}
+
+// ===== Manual Monzo Sync (User-triggered)
+exports.syncMonzoNow = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+  const uid = req.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Must be signed in');
+
+  try {
+    const db = admin.firestore();
+    await db.collection('integration_logs').add({
+      integration: 'monzo',
+      type: 'manual_sync',
+      status: 'started',
+      userId: uid,
+      timestamp: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    const result = await refreshMonzoData(uid);
+
+    await db.collection('integration_logs').add({
+      integration: 'monzo',
+      type: 'manual_sync',
+      status: 'success',
+      userId: uid,
+      summary: result,
+      timestamp: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    return { success: true, summary: result };
+  } catch (error) {
+    const normalizedError = error instanceof httpsV2.HttpsError ? error : null;
+    const errorCode = normalizedError?.code || 'internal';
+    const errorMessage = normalizedError?.message || error?.message || String(error);
+    const reconnectRequired =
+      errorCode === 'failed-precondition' &&
+      /missing monzo refresh token|refresh token/i.test(errorMessage);
+    const userMessage = reconnectRequired
+      ? 'Monzo connection expired. Reconnect Monzo in Integrations, then run sync again.'
+      : errorMessage;
+    console.error('[syncMonzoNow] manual sync failed', {
+      uid,
+      errorCode,
+      errorMessage,
+      stack: error?.stack || null,
+    });
+
+    const db = admin.firestore();
+    await db.collection('integration_logs').add({
+      integration: 'monzo',
+      type: 'manual_sync',
+      status: 'error',
+      userId: uid,
+      errorCode,
+      error: userMessage,
+      timestamp: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    // Email admin only for unexpected server-side failures when Brevo is configured on this revision.
+    if (errorCode === 'internal' || errorCode === 'unknown') {
+      if (process.env.BREVO_API_KEY) {
+        try {
+          await sendEmail({
+            to: 'support@jc1.tech',
+            subject: `Monzo Manual Sync Failed - ${uid}`,
+            html: `<h3>Monzo manual sync failed</h3>
+                 <p><strong>User:</strong> ${uid}</p>
+                 <p><strong>Error:</strong> ${errorMessage}</p>
+                 <pre>${JSON.stringify(error, null, 2)}</pre>`
+          });
+        } catch (emailError) {
+          console.error('Failed to send alert email:', emailError);
+        }
+      } else {
+        console.warn('[syncMonzoNow] Brevo not configured, skipping alert email');
+      }
+    }
+
+    if (normalizedError) {
+      if (userMessage !== normalizedError.message) {
+        throw new httpsV2.HttpsError(errorCode, userMessage);
+      }
+      throw normalizedError;
+    }
+
+    throw new httpsV2.HttpsError('internal', `Sync failed: ${userMessage}`);
+  }
+});
+
+// ===== Scheduled Monzo Sync (twice daily, full history)
+exports.syncMonzoTwiceDaily = schedulerV2.onSchedule("every 12 hours", async (event) => {
+  const db = admin.firestore();
+  const connected = await db.collection('profiles').where('monzoConnected', '==', true).get();
+  console.log(`[syncMonzoTwiceDaily] found ${connected.size} connected profiles`);
+
+  for (const docSnap of connected.docs) {
+    const uid = docSnap.id;
+    try {
+      console.log(`[syncMonzoTwiceDaily] syncing ${uid}`);
+      await refreshMonzoData(uid);
+      await db.collection('integration_logs').add({
+        integration: 'monzo',
+        type: 'scheduled_sync',
+        status: 'success',
+        userId: uid,
+        timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    } catch (err) {
+      console.error(`[syncMonzoTwiceDaily] failed for ${uid}`, err?.message || err);
+      await db.collection('integration_logs').add({
+        integration: 'monzo',
+        type: 'scheduled_sync',
+        status: 'error',
+        userId: uid,
+        error: err?.message || String(err),
+        timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    }
+  }
+});
+
+// ===== Hourly Monzo Sync (Scheduled)
+exports.syncMonzoHourly = schedulerV2.onSchedule({
+  schedule: 'every 1 hours',
+  timeZone: 'UTC',
+  secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET]
+}, async () => {
+  const db = admin.firestore();
+  console.log('Starting hourly Monzo sync...');
+
+  // Get all users with Monzo connected
+  const tokensSnap = await db.collection('tokens')
+    .where('provider', '==', 'monzo')
+    .get();
+
+  let successCount = 0;
+  let failCount = 0;
+  const errors = [];
+
+  for (const tokenDoc of tokensSnap.docs) {
+    const tokenData = tokenDoc.data();
+    const uid = tokenDoc.id;
+
+    // Check if token is valid
+    if (!tokenData.access_token) {
+      console.log(`Skipping ${uid} - no access token`);
+      continue;
+    }
+
+    try {
+      console.log(`Syncing Monzo for user ${uid}...`);
+      await refreshMonzoData(uid);
+      successCount++;
+
+      // Log success
+      await db.collection('integration_logs').add({
+        integration: 'monzo',
+        type: 'scheduled_sync',
+        status: 'success',
+        userId: uid,
+        timestamp: admin.firestore.FieldValue.serverTimestamp()
+      });
+
+    } catch (error) {
+      failCount++;
+      errors.push({ uid, error: error.message });
+      console.error(`Monzo sync failed for ${uid}:`, error);
+
+      // Log failure
+      await db.collection('integration_logs').add({
+        integration: 'monzo',
+        type: 'scheduled_sync',
+        status: 'error',
+        userId: uid,
+        error: error.message,
+        timestamp: admin.firestore.FieldValue.serverTimestamp()
+      });
+
+      // Email admin on failure
+      try {
+        await sendEmail({
+          to: 'support@jc1.tech',
+          subject: `Monzo Hourly Sync Failed - ${uid}`,
+          html: `<h3>Monzo hourly sync failed</h3>
+                 <p><strong>User:</strong> ${uid}</p>
+                 <p><strong>Time:</strong> ${new Date().toISOString()}</p>
+                 <p><strong>Error:</strong> ${error.message}</p>
+                 <pre>${JSON.stringify(error.stack || error, null, 2)}</pre>`
+        });
+      } catch (emailError) {
+        console.error('Failed to send alert email:', emailError);
+      }
+    }
+  }
+
+  console.log(`Monzo hourly sync complete: ${successCount} success, ${failCount} failed`);
+
+  // Send summary email if there were failures
+  if (failCount > 0) {
+    try {
+      await sendEmail({
+        to: 'support@jc1.tech',
+        subject: `Monzo Hourly Sync Summary - ${failCount} Failures`,
+        html: `<h3>Monzo Hourly Sync Summary</h3>
+               <p><strong>Success:</strong> ${successCount}</p>
+               <p><strong>Failed:</strong> ${failCount}</p>
+               <h4>Failures:</h4>
+               <ul>
+                 ${errors.map(e => `<li>${e.uid}: ${e.error}</li>`).join('')}
+               </ul>`
+      });
+    } catch (emailError) {
+      console.error('Failed to send summary email:', emailError);
+    }
+  }
+
+  return { success: successCount, failed: failCount, total: tokensSnap.size };
+});
+
+// ===== AI Planning Function
+exports.planCalendar = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY], enforceAppCheck: true }, async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) {
+    throw new functionsV2.https.HttpsError("unauthenticated", "Must be authenticated");
+  }
+
+  const {
+    persona = "personal",
+    horizonDays = 7,
+    applyIfScoreGe = 0.8,
+    focusGoalId = null,
+    goalTimeRequest = null
+  } = request.data;
+
+  try {
+    const db = admin.firestore();
+
+    // 1. Assemble context for planning
+    const context = await assemblePlanningContext(uid, persona, horizonDays);
+    context.userId = uid; // Add userId to context for logging
+    try { await recordAiLog(uid, 'planCalendar', 'info', 'Planning started', { persona, horizonDays, focusGoalId, goalTimeRequest }); } catch { }
+
+    // 2. Generate AI plan
+    const aiResponse = await generateAIPlan(context, { focusGoalId, goalTimeRequest });
+
+    // 3. Validate proposed blocks
+    const validationResult = await validateCalendarBlocks(aiResponse.blocks, context);
+
+    // 4. Apply if score is high enough
+    let applied = false;
+    let blocksCreated = 0;
+    if (validationResult.score >= applyIfScoreGe && validationResult.errors.length === 0) {
+      blocksCreated = await applyCalendarBlocks(uid, persona, aiResponse.blocks);
+      applied = true;
+    }
+
+    const resultPayload = {
+      proposedBlocks: aiResponse.blocks,
+      rationale: aiResponse.rationale,
+      validator: validationResult,
+      applied,
+      blocksCreated,
+      score: validationResult.score,
+      focusGoalId: focusGoalId || null
+    };
+    try { await recordAiLog(uid, 'planCalendar', applied ? 'success' : 'warning', applied ? 'AI plan applied' : 'AI plan proposed (not applied)', { blocksProposed: aiResponse.blocks?.length || 0, blocksCreated, score: validationResult.score, focusGoalId }); } catch { }
+    return resultPayload;
+
+  } catch (error) {
+    console.error('Calendar planning error:', error);
+    try { await recordAiLog(uid, 'planCalendar', 'error', 'Planning failed', { error: String(error?.message || error) }); } catch { }
+    throw new functionsV2.https.HttpsError("internal", error.message);
+  }
+});
+
+// Unified planner entry point for UI. Normalizes callers to a single function.
+// Behavior:
+// - If focusGoalId/goalTimeRequest provided: invoke planCalendar (LLM blocks) then run planBlocksV2 to rebalance instances.
+// - Else: invoke planBlocksV2 (deterministic scheduling) for the requested window.
+exports.runPlanner = functionsV2.https.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+
+  const timezone = req?.data?.timezone || DEFAULT_TIMEZONE;
+  const startDate = req?.data?.startDate || DateTime.now().setZone(timezone).toISODate();
+  const days = Math.min(Math.max(Number(req?.data?.days || 3), 1), 30);
+  const focusGoalId = req?.data?.focusGoalId || null;
+  const goalTimeRequest = req?.data?.goalTimeRequest || null;
+  const persona = req?.data?.persona || 'personal';
+
+  const results = { llm: null, schedule: null, pushed: null };
+  // If focused goal scheduling requested, call LLM planner first.
+  if (focusGoalId || goalTimeRequest) {
+    try {
+      if (!exports.planCalendar?.run) throw new Error('planCalendar unavailable');
+      const llmRes = await exports.planCalendar.run({ auth: { uid }, data: { persona, focusGoalId, goalTimeRequest, horizonDays: days } });
+      results.llm = llmRes?.data || llmRes || null;
+    } catch (e) {
+      console.warn('[runPlanner] planCalendar failed', e?.message || e);
+    }
+  }
+
+  try {
+    if (!exports.planBlocksV2?.run) throw new Error('planBlocksV2 unavailable');
+    const schedRes = await exports.planBlocksV2.run({ auth: { uid }, data: { timezone, startDate, days, includeBusy: true, persona } });
+    results.schedule = schedRes?.data || schedRes || null;
+  } catch (e) {
+    console.warn('[runPlanner] planBlocksV2 failed', e?.message || e);
+  }
+
+  // Optional push to Google Calendar; default from user_settings.pushOnPlan (true if missing)
+  let push = true;
+  if (typeof req?.data?.pushToGoogle === 'boolean') {
+    push = !!req.data.pushToGoogle;
+  } else {
+    try {
+      const db = ensureFirestore();
+      const us = await db.collection('user_settings').doc(uid).get();
+      if (us.exists && typeof us.data().pushOnPlan === 'boolean') push = !!us.data().pushOnPlan;
+    } catch { }
+  }
+  if (push && exports.syncPlanToGoogleCalendar?.run) {
+    try {
+      const p = await exports.syncPlanToGoogleCalendar.run({ auth: { uid }, data: {} });
+      results.pushed = p?.data || p || null;
+    } catch (e) {
+      console.warn('[runPlanner] syncPlanToGoogleCalendar failed', e?.message || e);
+    }
+  }
+
+  return { ok: true, ...results };
+});
+
+// ===== Story Generation for Goal (AI)
+exports.generateStoriesForGoal = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) {
+    throw new functionsV2.https.HttpsError("unauthenticated", "Must be authenticated");
+  }
+  const { goalId, promptOverride } = request.data || {};
+  if (!goalId) {
+    throw new functionsV2.https.HttpsError('invalid-argument', 'goalId is required');
+  }
+
+  try {
+    const db = admin.firestore();
+    const goalSnap = await db.collection('goals').doc(goalId).get();
+    if (!goalSnap.exists) {
+      throw new Error('Goal not found');
+    }
+    const goal = goalSnap.data();
+    if (goal.ownerUid !== uid) {
+      throw new functionsV2.https.HttpsError('permission-denied', 'Not your goal');
+    }
+
+    // Optional per-user prompt/model
+    let basePrompt = null;
+    let configuredModel = null;
+    try {
+      const settingsDoc = await db.collection('user_settings').doc(uid).get();
+      if (settingsDoc.exists) {
+        const settingsData = settingsDoc.data() || {};
+        basePrompt = settingsData.storyGenPrompt || null;
+        configuredModel = settingsData.storyGenModel || null;
+      }
+    } catch { }
+
+    const goalPersona = goal?.persona || 'personal';
+    const personaLabel = goalPersona === 'work' ? 'work' : 'personal';
+    const requestedModel = String(configuredModel || '').trim();
+    const wantsOpenAIModel = /^(gpt|o\d)/i.test(requestedModel);
+    const canUseOpenAI = wantsOpenAIModel && !!process.env.OPENAI_API_KEY;
+    const llmProvider = canUseOpenAI ? 'openai' : 'gemini';
+    const llmModel = requestedModel
+      ? (canUseOpenAI ? requestedModel : (wantsOpenAIModel ? GEMINI_MODEL : requestedModel))
+      : GEMINI_MODEL;
+    const prompt = promptOverride || basePrompt || (
+      `Generate between 3 and 6 user stories for the following ${personaLabel} goal. ` +
+      `Each story must include a clear title and a 1-2 sentence description. ` +
+      `Return STRICT JSON: {"stories":[{"title":"...","description":"..."}, ...]}. ` +
+      `Do not include markdown or prose, JSON only.`
+    );
+
+    const userContent = `Goal Title: ${goal.title}\nGoal Description: ${goal.description || ''}\nTheme: ${goal.theme}\nPriority: ${goal.priority || ''}`;
+    const text = await callLLMJson({
+      system: prompt,
+      user: userContent,
+      purpose: 'generateStoriesForGoal',
+      userId: uid,
+      expectJson: true,
+      provider: llmProvider,
+      model: llmModel
+    });
+
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch (e) {
+      throw new Error('AI did not return valid JSON');
+    }
+    const stories = Array.isArray(parsed?.stories) ? parsed.stories : [];
+
+    const batch = db.batch();
+    const now = Date.now();
+    let created = 0;
+    for (const s of stories) {
+      if (!s?.title) continue;
+      const ref = db.collection('stories').doc();
+      const storyRef = await generateStoryRef(db, uid);
+      batch.set(ref, {
+        id: ref.id,
+        ref: storyRef,
+        persona: goalPersona,
+        title: String(s.title).slice(0, 140),
+        description: String(s.description || ''),
+        goalId: goalId,
+        theme: goal.theme,
+        status: 0, // backlog
+        priority: 2,
+        points: 1,
+        wipLimit: 10,
+        orderIndex: now + created,
+        ownerUid: uid,
+        createdAt: now,
+        updatedAt: now,
+        taskCount: 0,
+        doneTaskCount: 0,
+        aiGenerated: true
+      });
+      created += 1;
+    }
+    if (created > 0) {
+      await batch.commit();
+    }
+
+    return { created };
+  } catch (error) {
+    console.error('generateStoriesForGoal error:', error);
+    throw new functionsV2.https.HttpsError('internal', error.message);
+  }
+});
+
+// ===== Story Acceptance Criteria Generation (AI)
+exports.generateStoryAcceptanceCriteria = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) {
+    throw new functionsV2.https.HttpsError('unauthenticated', 'Must be authenticated');
+  }
+
+  const {
+    title,
+    description = '',
+    persona = 'personal',
+    maxItems = 4
+  } = request.data || {};
+
+  if (!title || typeof title !== 'string') {
+    throw new functionsV2.https.HttpsError('invalid-argument', 'title is required');
+  }
+
+  try {
+    const safeTitle = String(title).trim().slice(0, 200);
+    const safeDescription = String(description || '').trim().slice(0, 1200);
+    const count = Math.min(Math.max(Number(maxItems) || 4, 1), 8);
+
+    const systemPrompt = `You are an agile coach creating crisp acceptance criteria for a user story. ` +
+      `Return JSON with an "acceptanceCriteria" array of ${count} or fewer clear Given/When/Then statements. ` +
+      `Keep each item under 140 characters and avoid markdown bullets.`;
+
+    const userPrompt = `Story Title: ${safeTitle}\n` +
+      `Story Description: ${safeDescription || 'N/A'}\n` +
+      `Persona: ${persona}`;
+
+    const text = await callLLMJson({
+      system: systemPrompt,
+      user: userPrompt,
+      purpose: 'generateStoryAcceptanceCriteria',
+      userId: uid,
+      expectJson: true,
+      temperature: 0.2
+    });
+
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch (parseError) {
+      console.warn('generateStoryAcceptanceCriteria: JSON parse failed', parseError);
+      parsed = {};
+    }
+
+    const criteriaRaw = Array.isArray(parsed?.acceptanceCriteria) ? parsed.acceptanceCriteria : [];
+    const acceptanceCriteria = criteriaRaw
+      .map(item => String(item || '').trim())
+      .filter(item => item.length > 0)
+      .slice(0, count);
+
+    return { acceptanceCriteria };
+
+  } catch (error) {
+    console.error('generateStoryAcceptanceCriteria error:', error);
+    throw new functionsV2.https.HttpsError('internal', error.message);
+  }
+});
+
+// ===== Task Description Enhancement (AI)
+exports.enhanceTaskDescription = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) {
+    throw new functionsV2.https.HttpsError('unauthenticated', 'Must be authenticated');
+  }
+
+  const {
+    title,
+    description = '',
+    persona = 'personal',
+    context = ''
+  } = request.data || {};
+
+  if (!title || typeof title !== 'string') {
+    throw new functionsV2.https.HttpsError('invalid-argument', 'title is required');
+  }
+
+  try {
+    const safeTitle = String(title).trim().slice(0, 200);
+    const safeDescription = String(description || '').trim().slice(0, 1200);
+    const safeContext = String(context || '').trim().slice(0, 600);
+
+    const systemPrompt = `You are a productivity coach helping refine task descriptions. ` +
+      `Return JSON with a concise "description" summarising the key steps and, if useful, a "checklist" array of action items. ` +
+      `Keep each checklist item to under 100 characters.`;
+
+    const userPrompt = `Task Title: ${safeTitle}\n` +
+      `Existing Description: ${safeDescription || 'N/A'}\n` +
+      `Persona: ${persona}\n` +
+      `Additional Context: ${safeContext || 'None'}\n` +
+      `Deadline: tomorrow`;
+
+    const text = await callLLMJson({
+      system: systemPrompt,
+      user: userPrompt,
+      purpose: 'enhanceTaskDescription',
+      userId: uid,
+      expectJson: true,
+      temperature: 0.3
+    });
+
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch (parseError) {
+      console.warn('enhanceTaskDescription: JSON parse failed', parseError);
+      parsed = {};
+    }
+
+    const enhancedDescription = String(parsed?.description || safeDescription || safeTitle).trim();
+    const checklist = Array.isArray(parsed?.checklist)
+      ? parsed.checklist.map(item => String(item || '').trim()).filter(item => item.length > 0).slice(0, 7)
+      : [];
+
+    return { description: enhancedDescription, checklist };
+
+  } catch (error) {
+    console.error('enhanceTaskDescription error:', error);
+    throw new functionsV2.https.HttpsError('internal', error.message);
+  }
+});
+
+async function assemblePlanningContext(uid, persona, horizonDays) {
+  const db = admin.firestore();
+  const startDate = new Date();
+  const endDate = new Date(Date.now() + (horizonDays * 24 * 60 * 60 * 1000));
+
+  // Get user's planning preferences
+  const prefsDoc = await db.collection('planning_prefs').doc(uid).get();
+  const prefs = prefsDoc.exists ? prefsDoc.data() : getDefaultPlanningPrefs();
+
+  // Get tasks for this persona
+  const tasksQuery = await db.collection('tasks')
+    .where('ownerUid', '==', uid)
+    .where('persona', '==', persona)
+    .where('status', 'in', ['planned', 'in_progress'])
+    .get();
+
+  const tasks = tasksQuery.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+  // Get goals for this persona
+  const goalsQuery = await db.collection('goals')
+    .where('ownerUid', '==', uid)
+    .where('persona', '==', persona)
+    .where('status', 'in', ['new', 'active'])
+    .get();
+  const goals = goalsQuery.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+  // Get existing calendar blocks
+  const blocksQuery = await db.collection('calendar_blocks')
+    .where('ownerUid', '==', uid)
+    .where('start', '>=', startDate.getTime())
+    .where('start', '<=', endDate.getTime())
+    .get();
+
+  const existingBlocks = blocksQuery.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+  // Get Google Calendar events (if connected)
+  let gcalEvents = [];
+  try {
+    gcalEvents = await fetchGoogleCalendarEvents(uid, startDate, endDate);
+  } catch (error) {
+    console.log('No Google Calendar access:', error.message);
+  }
+
+  return {
+    uid,
+    persona,
+    prefs,
+    tasks,
+    goals,
+    existingBlocks,
+    gcalEvents,
+    timeWindow: { start: startDate.getTime(), end: endDate.getTime() }
+  };
+}
+
+async function generateAIPlan(context, options = {}) {
+  const { focusGoalId, goalTimeRequest, llmProvider = 'gemini', llmModel = GEMINI_MODEL } = options;
+
+  let systemPrompt = `You are an AI planning assistant for BOB, a personal productivity system.
+
+SCHEDULING RULES:
+- Place chores and routines in morning or pre-evening slots.
+- Avoid scheduling hobbies on weekdays during work hours; prefer weekends or leisure evenings.
+- Prefer learning and study blocks on weeknights ("school night" logic).
+- Insert routines at their habit times when known; otherwise, prefer consistency by time of day.
+- Cluster tasks with similar effort or aligned to the same goal to reduce context switching.
+- Respect existing calendar events and quiet hours; schedule only between wake and sleep times.
+- Do not overbook: keep reasonable buffers; prioritize high-impact items.
+
+CONTEXT:
+- Persona: ${context.persona}
+- Tasks: ${context.tasks.length} pending
+- Goals: ${context.goals.length} active
+- Time window: ${Math.ceil((context.timeWindow.end - context.timeWindow.start) / (1000 * 60 * 60 * 24))} days`;
+
+  if (focusGoalId) {
+    const focusGoal = context.goals.find(g => g.id === focusGoalId);
+    if (focusGoal) {
+      systemPrompt += `
+
+🎯 FOCUS MODE: GOAL-SPECIFIC SCHEDULING
+Primary Goal: "${focusGoal.title}"
+- Theme: ${focusGoal.theme}
+- Status: ${focusGoal.status}
+- Priority: ${focusGoal.priority}
+- Time to Master: ${focusGoal.timeToMasterHours || 'Not specified'} hours
+- Requested Weekly Time: ${goalTimeRequest || 120} minutes
+
+PRIORITY: Create time blocks specifically for this goal and related tasks.`;
+    }
+  }
+
+  systemPrompt += `
+
+PLANNING PREFERENCES:
+- Wake time: ${context.prefs.wakeTime || '07:00'}
+- Sleep time: ${context.prefs.sleepTime || '23:00'}
+- Quiet hours: ${JSON.stringify(context.prefs.quietHours || [])}
+- Weekly theme targets: ${JSON.stringify(context.prefs.weeklyThemeTargets || {})}
+
+GOALS TO CONSIDER:
+${context.goals.map(goal => `- ${goal.title} (${goal.theme}, ${goal.status}, ${goal.priority}${goal.id === focusGoalId ? ' ⭐ FOCUS GOAL' : ''})`).join('\n')}
+
+TASKS TO SCHEDULE:
+${context.tasks.map(task => `- ${task.title} (${task.effort}, ${task.priority}, ${task.theme || 'No theme'}${task.goalId === focusGoalId ? ' ⭐ FOCUS TASK' : ''})`).join('\n')}
+
+CONSTRAINTS:
+1. Only schedule between wake and sleep times
+2. Avoid quiet hours
+3. Respect existing calendar events
+4. Balance weekly theme targets
+5. Consider task effort and priority`;
+
+  if (focusGoalId) {
+    systemPrompt += `
+6. 🎯 PRIORITIZE blocks for the focus goal and its related tasks
+7. Create dedicated goal work sessions of 25-90 minutes
+8. Include goal-themed activities (reading, planning, skill building)`;
+  }
+
+  systemPrompt += `
+
+Generate a plan as JSON with:
+{
+  "blocks": [
+    {
+      "taskId": "task_id_or_null",
+      "goalId": "${focusGoalId || 'goal_id_or_null'}",
+      "theme": "General|Health & Fitness|Career & Professional|Finance & Wealth|Learning & Education|Family & Relationships|Hobbies & Interests|Travel & Adventure|Home & Living|Spiritual & Personal Growth|Chores|Work (Main Gig)|Side Gig|Sleep|Random|Routine|Dev Tasks",
+      "category": "Task Work|Goal Focus|Skill Building|Planning",
+      "title": "Block title",
+      "start": timestamp,
+      "end": timestamp,
+      "rationale": "Why this time slot"
+    }
+  ],
+  "rationale": "Overall planning rationale"
+}`;
+
+  const userMsg = focusGoalId ?
+    `Please generate an optimal schedule focused on the goal "${context.goals.find(g => g.id === focusGoalId)?.title}". Create specific time blocks for goal work, skill building, and related tasks.` :
+    "Please generate an optimal schedule for these tasks and goals.";
+
+  const text = await callLLMJson({
+    system: systemPrompt,
+    user: userMsg,
+    purpose: 'planCalendar',
+    userId: context.userId,
+    expectJson: true,
+    temperature: 0.3,
+    provider: llmProvider,
+    model: llmModel
+  });
+
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    throw new Error(`Failed to parse AI response: ${error.message}`);
+  }
+}
+
+// Orchestrated Goal Planning: research → stories/tasks → schedule → (optional) GitHub issues
+exports.orchestrateGoalPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, BREVO_API_KEY] }, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const goalId = String(req?.data?.goalId || '').trim();
+  const researchOnly = req?.data?.researchOnly === true;
+  if (!goalId) throw new httpsV2.HttpsError('invalid-argument', 'goalId is required');
+
+  const db = ensureFirestore();
+  const goalSnap = await db.collection('goals').doc(goalId).get();
+  if (!goalSnap.exists) throw new httpsV2.HttpsError('not-found', 'Goal not found');
+  const goal = goalSnap.data() || {};
+  if (goal.ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Not your goal');
+
+  // Apply LLM preferences (optional overrides)
+  const researchProvider = String(req?.data?.researchProvider || 'gemini');
+  const researchModel = String(req?.data?.researchModel || GEMINI_MODEL);
+  const generationProvider = String(req?.data?.generationProvider || researchProvider);
+  const generationModel = String(req?.data?.generationModel || researchModel);
+  const planningProvider = String(req?.data?.planningProvider || researchProvider);
+  const planningModel = String(req?.data?.planningModel || researchModel);
+
+  // 1) Generate research package (prompt, questions, outline, next actions, doc)
+  const researchPlanJson = await callLLMJson({
+    system: 'You are a research planning agent. Return strict JSON only. Design a short research plan for the provided goal, including a research_prompt to dig deep, key_questions (max 5), a concise outline list, and initial_next_actions (3-7 items) each with title and estimated_minutes. Do not add prose or Markdown outside the JSON.',
+    user: `Goal: ${goal.title}\nDescription: ${goal.description || ''}\nTheme: ${goal.theme}`,
+    purpose: 'goalResearchPlan',
+    userId: uid,
+    expectJson: true,
+    provider: researchProvider,
+    model: researchModel,
+  });
+  let researchPlan;
+  try { researchPlan = JSON.parse(researchPlanJson); } catch (e) { throw new httpsV2.HttpsError('internal', 'AI failed to produce research plan JSON'); }
+  const researchPrompt = String(researchPlan?.research_prompt || '').slice(0, 4000);
+  const questions = Array.isArray(researchPlan?.key_questions) ? researchPlan.key_questions : [];
+  const outline = Array.isArray(researchPlan?.outline) ? researchPlan.outline : [];
+  const nextActions = Array.isArray(researchPlan?.initial_next_actions) ? researchPlan.initial_next_actions : [];
+
+  const researchDocMd = await callLLMJson({
+    system: 'You are an expert researcher. Compose a crisp, actionable research brief in Markdown. Begin with a 3-5 bullet executive summary, then key findings (placeholders allowed), then recommended next actions. Keep it under 800 words.',
+    user: `Goal: ${goal.title}\nResearch Prompt: ${researchPrompt}\nOutline: ${JSON.stringify(outline)}\nKnown Context: ${goal.description || ''}`,
+    purpose: 'goalResearchDoc',
+    userId: uid,
+    expectJson: false,
+    temperature: 0.3,
+    provider: researchProvider,
+    model: researchModel,
+  });
+
+  // 2) Persist research doc and email it
+  const researchRef = db.collection('research_docs').doc();
+  const now = admin.firestore.FieldValue.serverTimestamp();
+  await researchRef.set({
+    id: researchRef.id,
+    ownerUid: uid,
+    goalId,
+    title: `Research: ${goal.title}`,
+    researchPrompt,
+    questions,
+    outline,
+    docMd: researchDocMd,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  // Email to user
+  try {
+    const profileSnap = await db.collection('profiles').doc(uid).get();
+    const email = profileSnap.exists ? (profileSnap.data() || {}).email : null;
+    if (email) {
+      const html = `<h2>Research Brief: ${escapeHtml(goal.title)}</h2>` +
+        `<p><strong>Questions:</strong></p><ul>` +
+        questions.map((q) => `<li>${escapeHtml(String(q))}</li>`).join('') +
+        `</ul><hr/><div style="white-space:pre-wrap;font-family:system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;">${escapeHtml(researchDocMd)}</div>` +
+        `<p style="margin-top:16px;">Open in BOB: <a href="/goals/${goal.ref || goalId}">/goals/${goal.ref || goalId}</a></p>`;
+      await sendEmail({ to: email, subject: `Research Brief · ${goal.title}`, html });
+    }
+  } catch (e) {
+    console.warn('[orchestrateGoalPlanning] email send failed', e?.message || e);
+  }
+
+  if (researchOnly) {
+    return { ok: true, researchDocId: researchRef.id };
+  }
+
+  // 3) Create a primary Research story and tasks
+  const storyRef = db.collection('stories').doc();
+  const baseTheme = goal.theme || 'Learning & Education';
+  const goalPersona = goal.persona || 'personal';
+  await storyRef.set({
+    id: storyRef.id,
+    ownerUid: uid,
+    persona: goalPersona,
+    title: `Deep Research: ${goal.title}`,
+    description: `Auto-generated research package for goal. Research Doc: /research/${researchRef.id}`,
+    goalId,
+    theme: baseTheme,
+    status: 1,
+    priority: 2,
+    orderIndex: Date.now(),
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  const createdTasks = [];
+  for (const a of nextActions.slice(0, 12)) {
+    const tRef = db.collection('tasks').doc();
+    await tRef.set(ensureTaskPoints({
+      id: tRef.id,
+      ownerUid: uid,
+      persona: goalPersona,
+      title: String(a?.title || 'Next step'),
+      description: 'Auto-generated from research plan',
+      storyId: storyRef.id,
+      status: 0,
+      priority: 2,
+      effort: 'S',
+      estimated_duration: Number(a?.estimated_minutes || 30),
+      entry_method: 'ai_research',
+      task_type: 'task',
+      theme: baseTheme,
+      goalId,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    }), { merge: true });
+    createdTasks.push(tRef.id);
+  }
+
+  // 3b) Optional: auto-assign to active sprint if profile flag enabled
+  try {
+    const profileSnap = await db.collection('profiles').doc(uid).get();
+    const flags = profileSnap.exists ? (profileSnap.data() || {}) : {};
+    if (flags.autoAssignAiWorkToSprint === true) {
+      const sprintId = await getPreferredSprintId(uid);
+      if (sprintId) {
+        await storyRef.set({ sprintId, entry_method: 'ai_orchestration' }, { merge: true });
+        for (const taskId of createdTasks) {
+          await db.collection('tasks').doc(taskId).set({ sprintId, entry_method: 'ai_orchestration' }, { merge: true });
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[orchestrateGoalPlanning] sprint auto-assign failed', e?.message || e);
+  }
+
+  // (GitHub issue creation disabled per configuration)
+
+  // 4) Schedule into calendar/backlog via AI plan (short horizon, high score)
+  const context = await assemblePlanningContext(uid, 'personal', 2);
+  const aiBlocks = await generateAIPlan(context, { llmProvider: planningProvider, llmModel: planningModel });
+  const validation = await validateCalendarBlocks(aiBlocks.blocks || [], context);
+  let appliedBlocks = 0;
+  if (validation.errors.length === 0) {
+    appliedBlocks = await applyCalendarBlocks(uid, 'personal', (aiBlocks.blocks || []).map(b => ({ ...b, entry_method: 'calendar_ai', confidence_score: validation.score })));
+  }
+
+  await recordAiLog(uid, 'orchestrateGoalPlanning', 'success', 'Goal research, stories, tasks generated and scheduled', {
+    goalId,
+    researchDocId: researchRef.id,
+    storyId: storyRef.id,
+    tasks: createdTasks.length,
+    appliedBlocks,
+    githubCreated: 0,
+  });
+
+  return { ok: true, researchDocId: researchRef.id, storyId: storyRef.id, tasksCreated: createdTasks.length, appliedBlocks };
+});
+
+// Orchestrated Story Planning: (optional) brief research → tasks → schedule
+exports.orchestrateStoryPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, BREVO_API_KEY] }, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const storyId = String(req?.data?.storyId || '').trim();
+  const research = req?.data?.research === true; // optional lightweight research
+  const researchOnly = req?.data?.researchOnly === true; // generate/update research doc only
+  const researchProvider = String(req?.data?.researchProvider || 'gemini');
+  const researchModel = String(req?.data?.researchModel || GEMINI_MODEL);
+  const generationProvider = String(req?.data?.generationProvider || researchProvider);
+  const generationModel = String(req?.data?.generationModel || researchModel);
+  const planningProvider = String(req?.data?.planningProvider || researchProvider);
+  const planningModel = String(req?.data?.planningModel || researchModel);
+  if (!storyId) throw new httpsV2.HttpsError('invalid-argument', 'storyId is required');
+
+  const db = ensureFirestore();
+  const storySnap = await db.collection('stories').doc(storyId).get();
+  if (!storySnap.exists) throw new httpsV2.HttpsError('not-found', 'Story not found');
+  const story = storySnap.data() || {};
+  if (story.ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Not your story');
+  const goalId = story.goalId || null;
+
+  // 1) Optional: Lightweight research brief for the story
+  let researchDocId = null;
+  if (research || researchOnly) {
+    const systemR = 'You are an expert assistant. Compose a short research brief in Markdown (<= 500 words) for the given story with: context, assumptions, quick sources to check, and next actions (3–6 bullets).';
+    const userR = `Story: ${story.title}\nDescription: ${story.description || ''}\nGoal: ${goalId || '(none)'}`;
+    const docMd = await callLLMJson({ system: systemR, user: userR, purpose: 'storyResearchDoc', userId: uid, expectJson: false, temperature: 0.3, provider: researchProvider, model: researchModel });
+    const ref = db.collection('research_docs').doc();
+    const now = admin.firestore.FieldValue.serverTimestamp();
+    await ref.set({
+      id: ref.id,
+      ownerUid: uid,
+      storyId,
+      goalId: goalId || null,
+      title: `Research: ${story.title}`,
+      docMd,
+      createdAt: now,
+      updatedAt: now,
+    });
+    researchDocId = ref.id;
+    // Email optional
+    try {
+      const profileSnap = await db.collection('profiles').doc(uid).get();
+      const email = profileSnap.exists ? (profileSnap.data() || {}).email : null;
+      if (email) {
+        const storyUrl = buildEntityUrl('story', storyId, story.ref || null);
+        const html = `<h2>Research Brief: ${escapeHtml(story.title)}</h2>` +
+          `<div style="white-space:pre-wrap;font-family:system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;">${escapeHtml(docMd)}</div>` +
+          `<p style="margin-top:16px;">Open in BOB: <a href="${storyUrl}">${storyUrl}</a></p>`;
+        await sendEmail({ to: email, subject: `Research Brief · ${story.title}`, html });
+      }
+    } catch (e) { console.warn('[orchestrateStoryPlanning] email send failed', e?.message || e); }
+  }
+  if (researchOnly) {
+    return { ok: true, researchDocId };
+  }
+
+  // 2) Generate tasks for this story
+  const system = [
+    'You are a planning assistant. Return STRICT JSON only.',
+    '{',
+    '  "tasks": [{',
+    '     "title": string,',
+    '     "estimated_minutes": number,',
+    '     "priority": "P1"|"P2"|"P3",',
+    '     "acceptance_criteria"?: string[]',
+    '  }],',
+    '  "notes"?: string',
+    '}',
+    'Acceptance criteria should be testable bullet points.',
+  ].join('\n');
+  const user = `Story: ${story.title}\nDescription: ${story.description || ''}\nTheme: ${story.theme || ''}\nGoal: ${goalId || ''}\nPlease propose 3–8 concrete tasks.`;
+  const raw = await callLLMJson({ system, user, purpose: 'storyTasks', userId: uid, expectJson: true, temperature: 0.2, provider: generationProvider, model: generationModel });
+  let parsed; try { parsed = JSON.parse(raw); } catch { parsed = { tasks: [] }; }
+  const tasks = Array.isArray(parsed?.tasks) ? parsed.tasks : [];
+
+  const createdTasks = [];
+  for (const t of tasks.slice(0, 12)) {
+    const tref = db.collection('tasks').doc();
+    const ac = Array.isArray(t?.acceptance_criteria) ? t.acceptance_criteria.map((x) => String(x)).slice(0, 12) : [];
+    const desc = 'AI-generated from story orchestration' + (ac.length ? ('\n\nAcceptance Criteria:\n- ' + ac.join('\n- ')) : '');
+    await tref.set(ensureTaskPoints({
+      id: tref.id,
+      ownerUid: uid,
+      persona: story.persona || 'personal',
+      title: String(t?.title || 'Next step'),
+      description: desc,
+      storyId,
+      status: 0,
+      priority: (String(t?.priority || 'P2')), // safe as string; UI maps variants
+      effort: 'S',
+      estimated_duration: Number(t?.estimated_minutes || 30),
+      entry_method: 'ai_story_orchestration',
+      task_type: 'task',
+      theme: story.theme || 'Growth',
+      goalId: goalId || null,
+      acceptanceCriteria: ac,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    }), { merge: true });
+    createdTasks.push(tref.id);
+  }
+
+  // Auto-assign tasks (and story) to active sprint if enabled
+  try {
+    const profileSnap = await db.collection('profiles').doc(uid).get();
+    const flags = profileSnap.exists ? (profileSnap.data() || {}) : {};
+    if (flags.autoAssignAiWorkToSprint === true) {
+      const sprintId = await getPreferredSprintId(uid);
+      if (sprintId) {
+        await storySnap.ref.set({ sprintId, entry_method: 'ai_story_orchestration' }, { merge: true });
+        for (const taskId of createdTasks) {
+          await db.collection('tasks').doc(taskId).set({ sprintId, entry_method: 'ai_story_orchestration' }, { merge: true });
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[orchestrateStoryPlanning] sprint auto-assign failed', e?.message || e);
+  }
+
+  // 3) Schedule blocks with focus on the parent goal (if available)
+  // Use a short horizon and requested minutes from tasks
+  const context = await assemblePlanningContext(uid, story.persona || 'personal', 2);
+  context.userId = uid;
+  let goalTimeRequest = 0;
+  for (const t of tasks) { goalTimeRequest += Number(t?.estimated_minutes || 30); }
+  if (!goalTimeRequest) goalTimeRequest = 120;
+  const aiPlan = await generateAIPlan(context, { focusGoalId: goalId || null, goalTimeRequest, llmProvider: planningProvider, llmModel: planningModel });
+  const validation = await validateCalendarBlocks(aiPlan.blocks || [], context);
+  let appliedBlocks = 0;
+  if (validation.errors.length === 0) {
+    appliedBlocks = await applyCalendarBlocks(uid, story.persona || 'personal', (aiPlan.blocks || []).map(b => ({ ...b, storyId, entry_method: 'calendar_ai', confidence_score: validation.score })));
+  }
+
+  await recordAiLog(uid, 'orchestrateStoryPlanning', 'success', 'Story tasks generated and schedule applied', {
+    storyId,
+    tasks: createdTasks.length,
+    researchDocId,
+    appliedBlocks,
+  });
+
+  return { ok: true, storyId, tasksCreated: createdTasks.length, appliedBlocks, researchDocId };
+});
+
+function escapeHtml(s) {
+  return String(s || '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\'': '&#39;' }[c]));
+}
+
+// (GitHub helper removed)
+
+// Generate stories/tasks from an existing research doc using a chosen model
+exports.generateStoriesFromResearch = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
+  const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const goalId = String(req?.data?.goalId || '').trim() || null;
+  const storyId = String(req?.data?.storyId || '').trim() || null;
+  const researchDocId = String(req?.data?.researchDocId || '').trim();
+  const generationProvider = String(req?.data?.generationProvider || 'gemini');
+  const generationModel = String(req?.data?.generationModel || GEMINI_MODEL);
+  if (!researchDocId) throw new httpsV2.HttpsError('invalid-argument', 'researchDocId required');
+
+  const db = ensureFirestore();
+  const docSnap = await db.collection('research_docs').doc(researchDocId).get();
+  if (!docSnap.exists) throw new httpsV2.HttpsError('not-found', 'Research doc not found');
+  const r = docSnap.data() || {};
+  if (r.ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Not your doc');
+
+  const baseTitle = r.title || 'Research';
+  const brief = r.docMd || '';
+  const scope = goalId ? 'goal' : 'story';
+
+  // Ask model to derive story/tasks from the brief
+  const system = [
+    'You are a planning assistant. Return STRICT JSON only with this shape:',
+    '{',
+    '  "story": {',
+    '     "title": string,',
+    '     "description": string,',
+    '     "acceptance_criteria"?: string[]',
+    '  },',
+    '  "tasks": [',
+    '     {',
+    '       "title": string,',
+    '       "estimated_minutes": number,',
+    '       "priority": "P1"|"P2"|"P3",',
+    '       "acceptance_criteria"?: string[]',
+    '     }',
+    '  ]',
+    '}',
+    'Acceptance criteria should be testable bullet points (Given/When/Then or equivalent).',
+  ].join('\n');
+  const user = `Brief: ${brief}\nContext: ${scope.toUpperCase()} ${goalId || storyId || ''}`;
+  let parsed = { story: { title: baseTitle, description: 'Derived from research' }, tasks: [] };
+  try {
+    const raw = await callLLMJson({ system, user, purpose: 'deriveFromResearch', userId: uid, expectJson: true, temperature: 0.2, provider: generationProvider, model: generationModel });
+    parsed = JSON.parse(raw);
+  } catch { }
+
+  const persona = 'personal';
+  let newStoryId = storyId;
+  if (!newStoryId) {
+    const sref = db.collection('stories').doc();
+    await sref.set({
+      id: sref.id,
+      ownerUid: uid,
+      persona,
+      goalId: goalId || null,
+      title: parsed?.story?.title || baseTitle,
+      description: parsed?.story?.description || 'Derived from research',
+      status: 'backlog',
+      priority: 'P2',
+      theme: r.theme || 'Growth',
+      entry_method: 'ai_research_derive',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    }, { merge: true });
+    newStoryId = sref.id;
+  }
+
+  let created = 0;
+  for (const t of (parsed?.tasks || []).slice(0, 12)) {
+    const tref = db.collection('tasks').doc();
+    const ac = Array.isArray(t?.acceptance_criteria) ? t.acceptance_criteria.map((x) => String(x)).slice(0, 12) : [];
+    const desc = 'Derived from research' + (ac.length ? ('\n\nAcceptance Criteria:\n- ' + ac.join('\n- ')) : '');
+    await tref.set(ensureTaskPoints({
+      id: tref.id,
+      ownerUid: uid,
+      persona,
+      goalId: goalId || null,
+      storyId: newStoryId,
+      title: String(t?.title || 'Next step'),
+      description: desc,
+      status: 0,
+      priority: String(t?.priority || 'P2'),
+      effort: 'S',
+      estimated_duration: Number(t?.estimated_minutes || 30),
+      entry_method: 'ai_research_derive',
+      acceptanceCriteria: ac,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    }), { merge: true });
+    created += 1;
+  }
+
+  return { ok: true, storyId: newStoryId, tasksCreated: created };
+});
+
+// Minimal goal chat: store message and respond with clarifying Q/A
+exports.sendGoalChatMessage = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
+  const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const goalId = String(req?.data?.goalId || '');
+  const message = String(req?.data?.message || '').trim();
+  if (!goalId || !message) throw new httpsV2.HttpsError('invalid-argument', 'goalId and message required');
+  const db = ensureFirestore();
+  const goalSnap = await db.collection('goals').doc(goalId).get();
+  if (!goalSnap.exists) throw new httpsV2.HttpsError('not-found', 'Goal not found');
+  if (goalSnap.data().ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Not your goal');
+  const goalPersona = goalSnap.data().persona || 'personal';
+
+  const threadRef = db.collection('goal_chats').doc(goalId);
+  if (isUnsafeMessage(message)) {
+    await threadRef.collection('messages').add({ ownerUid: uid, role: 'assistant', content: 'Sorry — I can\'t assist with that request.', createdAt: admin.firestore.FieldValue.serverTimestamp() });
+    return { ok: false, reply: 'Content blocked by safety policy', tasksCreated: 0, actions: {} };
+  }
+  const msgRef = threadRef.collection('messages').doc();
+  await msgRef.set({ id: msgRef.id, ownerUid: uid, role: 'user', content: message, createdAt: admin.firestore.FieldValue.serverTimestamp() });
+
+  const latestSummary = await getLatestSummary(threadRef);
+  const recent = await getRecentMessages(threadRef, 10);
+  const system = [
+    'You are a goal planning assistant. Keep answers under 120 words.',
+    'Return STRICT JSON with this shape only:',
+    '{',
+    '  "reply": string,',
+    '  "suggested_tasks": [{"title": string, "estimateMin": number}] ,',
+    '  "actions": {',
+    '     "orchestrate": boolean,',
+    '     "create_story"?: {"title": string, "description"?: string},',
+    '     "plan_minutes"?: number',
+    '  }',
+    '}',
+  ].join('\n');
+  const user = [
+    `Goal: ${goalSnap.data().title}`,
+    latestSummary ? `Conversation summary: ${latestSummary}` : null,
+    recent.length ? `Recent exchanges:\n${recent.map(m => `${m.role}: ${m.content}`).join('\n')}` : null,
+    `Known theme: ${goalSnap.data().theme || 'Growth'}`,
+    `User: ${message}`
+  ].filter(Boolean).join('\n');
+  const raw = await callLLMJson({ system, user, purpose: 'goalChat', userId: uid, expectJson: true, temperature: 0.2 });
+  let parsed; try { parsed = JSON.parse(raw); } catch { parsed = { reply: raw, suggested_tasks: [], actions: {} }; }
+  const reply = String(parsed?.reply || '').slice(0, 1200);
+  await threadRef.collection('messages').add({ ownerUid: uid, role: 'assistant', content: reply, createdAt: admin.firestore.FieldValue.serverTimestamp() });
+
+  // Create any suggested tasks quickly under this goal
+  const tasks = Array.isArray(parsed?.suggested_tasks) ? parsed.suggested_tasks : [];
+  const created = [];
+  for (const t of tasks.slice(0, 5)) {
+    const taskRef = db.collection('tasks').doc();
+    const est = Number(t?.estimateMin || 30);
+    await taskRef.set(ensureTaskPoints({
+      id: taskRef.id,
+      ownerUid: uid,
+      persona: goalPersona,
+      title: String(t?.title || 'Follow-up'),
+      description: 'AI-suggested from goal chat',
+      status: 0,
+      priority: 2,
+      effort: 'S',
+      estimated_duration: est,
+      entry_method: 'ai_chat',
+      task_type: 'task',
+      theme: goalSnap.data().theme || 'Growth',
+      goalId,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      ...(est <= 240 ? {
+        reminderSyncDirective: 'upsert',
+        reminderTitle: `[${goalSnap.data().theme || 'Growth'}] – ${String(t?.title || 'Follow-up')}`,
+        reminderNote: `Goal: ${goalSnap.data().title || goalId}`
+      } : {}),
+    }), { merge: true });
+    created.push(taskRef.id);
+  }
+  try { await maybeSummarizeThread(threadRef, uid); } catch { }
+  const actions = parsed?.actions && typeof parsed.actions === 'object' ? parsed.actions : {};
+  return { ok: true, reply, tasksCreated: created.length, actions };
+});
+
+async function validateCalendarBlocks(blocks, context) {
+  const errors = [];
+  const warnings = [];
+  const blockAnnotations = (blocks || []).map(() => ({ errors: [], warnings: [] }));
+  let score = 1.0;
+  const isMainGigLabel = (value) => {
+    const raw = String(value || '').toLowerCase();
+    if (!raw) return false;
+    if (raw.includes('workout')) return false;
+    if (raw.includes('main gig') || raw.includes('work shift')) return true;
+    return /\bwork\b/.test(raw);
+  };
+  const isMainGigBlock = (block) => {
+    if (!block) return false;
+    if (block.entityType === 'work_shift' || block.sourceType === 'work_shift_allocation') return true;
+    const label = block.theme || block.category || block.title || '';
+    return isMainGigLabel(label);
+  };
+
+  for (let i = 0; i < (blocks || []).length; i++) {
+    const block = blocks[i];
+    if (!block) continue;
+    // Conflicts with Google Calendar events
+    for (const event of context.gcalEvents) {
+      if (isTimeOverlap(block.start, block.end, event.start.getTime(), event.end.getTime())) {
+        const msg = `Block conflicts with Google Calendar event: ${event.summary}`;
+        errors.push(msg);
+        blockAnnotations[i].errors.push(msg);
+        score -= 0.2;
+      }
+    }
+
+    // Conflicts with existing AI calendar blocks
+    for (const existing of context.existingBlocks) {
+      if (context.persona === 'work' && isMainGigBlock(existing)) continue;
+      if (isTimeOverlap(block.start, block.end, existing.start, existing.end)) {
+        const msg = `Block conflicts with existing calendar block`;
+        errors.push(msg);
+        blockAnnotations[i].errors.push(msg);
+        score -= 0.1;
+      }
+    }
+
+    // Time constraints: wake/sleep
+    const blockDate = new Date(block.start);
+    const hour = blockDate.getHours();
+    const minute = blockDate.getMinutes();
+    const timeStr = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
+
+    const wakeTime = context.prefs.wakeTime || '07:00';
+    const sleepTime = context.prefs.sleepTime || '23:00';
+
+    if (timeStr < wakeTime || timeStr > sleepTime) {
+      const msg = `Outside wake/sleep hours: ${timeStr}`;
+      errors.push(`Block ${msg}`);
+      blockAnnotations[i].errors.push(msg);
+      score -= 0.1;
+    }
+
+    // Quiet hours warnings
+    for (const quietPeriod of context.prefs.quietHours || []) {
+      if (timeStr >= quietPeriod.start && timeStr <= quietPeriod.end) {
+        const msg = `During quiet hours: ${timeStr}`;
+        warnings.push(`Block ${msg}`);
+        blockAnnotations[i].warnings.push(msg);
+        score -= 0.05;
+      }
+    }
+  }
+
+  return { errors, warnings, score: Math.max(0, score), blockAnnotations };
+}
+
+// Map numeric theme to canonical label
+function themeLabelFromNumber(n) {
+  switch (Number(n)) {
+    case 0: return 'General';
+    case 1: return 'Health & Fitness';
+    case 2: return 'Career & Professional';
+    case 3: return 'Finance & Wealth';
+    case 4: return 'Learning & Education';
+    case 5: return 'Family & Relationships';
+    case 6: return 'Hobbies & Interests';
+    case 7: return 'Travel & Adventure';
+    case 8: return 'Home & Living';
+    case 9: return 'Spiritual & Personal Growth';
+    case 10: return 'Chores';
+    case 11: return 'Rest & Recovery';
+    case 12: return 'Work (Main Gig)';
+    case 13: return 'Sleep';
+    case 14: return 'Random';
+    case 15: return 'Side Gig';
+    default: return 'General';
+  }
+}
+
+async function applyCalendarBlocks(uid, persona, blocks) {
+  const db = admin.firestore();
+  const batch = db.batch();
+  const userThemes = await loadThemesForUser(uid);
+
+  // Helper: derive title, theme, goal link for a proposed block
+  async function enrichBlock(proposed) {
+    let title = proposed.title || null;
+    let theme = proposed.theme || null; // may be string already
+    let goalId = proposed.goalId || null;
+    let goalRef = null;
+    let storyId = proposed.storyId || null;
+    let taskId = proposed.taskId || null;
+    let habitId = proposed.habitId || null;
+    let linkUrl = null;
+    let storyRef = null;
+    let storyDescription = '';
+    let taskDescription = '';
+
+    // Preferred order: task → story → habit
+    if (taskId) {
+      try {
+        const t = await db.collection('tasks').doc(String(taskId)).get();
+        if (t.exists) {
+          const td = t.data();
+          const ref = td.ref || td.reference || '';
+          const tTitle = td.title || 'Task';
+          title = `${ref ? ref + ' · ' : ''}${tTitle}`;
+          // Derive story/goal from task parent
+          if (td.parentType === 'story' && td.parentId) storyId = td.parentId;
+          if (!goalId && (td.goalId || td.alignedToGoal)) {
+            goalId = td.goalId || null;
+          }
+          linkUrl = buildEntityPath('task', t.id, ref || null);
+          taskDescription = td.description || '';
+        }
+      } catch { }
+    }
+
+    if (!title && storyId) {
+      try {
+        const s = await db.collection('stories').doc(String(storyId)).get();
+        if (s.exists) {
+          const sd = s.data();
+          const ref = sd.ref || '';
+          const sTitle = sd.title || 'Story';
+          title = `${ref ? ref + ' · ' : ''}${sTitle}`;
+          if (!goalId && sd.goalId) goalId = sd.goalId;
+          linkUrl = buildEntityPath('story', s.id, ref || null);
+          storyRef = ref || null;
+          storyDescription = sd.description || '';
+        }
+      } catch { }
+    }
+
+    if (!title && habitId) {
+      try {
+        const h = await db.collection('habits').doc(String(habitId)).get();
+        if (h.exists) {
+          const hd = h.data();
+          const hTitle = hd.name || hd.title || 'Habit';
+          title = hTitle;
+          if (!goalId && hd.linkedGoalId) goalId = hd.linkedGoalId;
+          linkUrl = `/habits?habitId=${h.id}`;
+        }
+      } catch { }
+    }
+
+    // Resolve theme from goal if needed
+    if (!theme && goalId) {
+      try {
+        const g = await db.collection('goals').doc(String(goalId)).get();
+        if (g.exists) {
+          const gd = g.data();
+          theme = themeLabelFromNumber(gd.theme);
+          goalRef = gd.ref || gd.reference || null;
+        }
+      } catch { }
+    }
+    // Ensure string theme label
+    if (typeof theme === 'number') theme = themeLabelFromNumber(theme);
+    if (!theme) theme = 'Growth';
+
+    // If we have a goal but no more granular entity, provide a deep link to the goal
+    if (!linkUrl && goalId) {
+      linkUrl = buildEntityPath('goal', goalId, goalRef);
+    }
+
+    return {
+      title,
+      theme,
+      goalId,
+      storyId,
+      taskId,
+      habitId,
+      linkUrl,
+      storyRef,
+      storyDescription,
+      taskDescription,
+      goalRef,
+    };
+  }
+
+  async function buildCalendarNarrative(ownerUid, enriched, proposed) {
+    const descriptionSource = enriched.taskDescription || enriched.storyDescription || proposed.description || '';
+    if (!descriptionSource || descriptionSource.length < 12) return null;
+    try {
+      const summary = await callLLMJson({
+        system: 'You help summarise calendar focus blocks. Reply with <=2 sentences describing the concrete outcome and next steps for the provided work item. Plain text only.',
+        user: `Title: ${enriched.title || proposed.title || 'Focus Block'}\nDetails: ${descriptionSource}`,
+        purpose: 'calendarBlockSummary',
+        userId: ownerUid,
+        expectJson: false,
+        temperature: 0.2,
+      });
+      const text = String(summary || '').trim();
+      return text ? text.slice(0, 400) : descriptionSource.slice(0, 280);
+    } catch (error) {
+      console.warn('[calendar-ai] narrative generation failed', error?.message || error);
+      return descriptionSource.slice(0, 280);
+    }
+  }
+
+  // We will also log to activity_stream once
+  const activityRef = db.collection('activity_stream').doc();
+  const now = admin.firestore.FieldValue.serverTimestamp();
+
+  let createdCount = 0;
+  for (const proposed of blocks) {
+    const enriched = await enrichBlock(proposed);
+    const narrative = await buildCalendarNarrative(uid, enriched, proposed);
+    const blockRef = db.collection('calendar_blocks').doc();
+    const theme_id = mapThemeLabelToId(enriched.theme, userThemes);
+    const startMs = Number(proposed.start || 0);
+    const endMs = Number(proposed.end || 0);
+    const titleForHash = (enriched.title || proposed.title || '').slice(0, 48);
+    const rawKey = `${uid}:${Math.round(startMs / 60000)}:${Math.round(endMs / 60000)}:${titleForHash}`;
+    let h = 0; for (let i = 0; i < rawKey.length; i++) h = (h * 33 + rawKey.charCodeAt(i)) >>> 0;
+    const dedupeKey = h.toString(36);
+
+    batch.set(blockRef, {
+      ...proposed,
+      id: blockRef.id,
+      persona,
+      ownerUid: uid,
+      status: 'applied',
+      createdBy: 'ai',
+      version: 1,
+      title: enriched.title || proposed.title || `${proposed.category || 'Block'} (${enriched.theme})`,
+      linkUrl: enriched.linkUrl || null,
+      note: narrative || proposed.note || null,
+      theme: enriched.theme,
+      theme_id,
+      dedupeKey,
+      entry_method: proposed.entry_method || 'calendar_ai',
+      confidence_score: typeof proposed.confidence_score === 'number' ? proposed.confidence_score : 0.85,
+      goalId: enriched.goalId || proposed.goalId || null,
+      storyId: enriched.storyId || proposed.storyId || null,
+      taskId: enriched.taskId || proposed.taskId || null,
+      habitId: enriched.habitId || proposed.habitId || null,
+      updatedAt: now,
+      createdAt: now
+    });
+
+    // Write per-story daily allocation for dashboard rollups
+    try {
+      if (enriched.storyId && proposed.start && proposed.end) {
+        const startDate = new Date(proposed.start);
+        const endDate = new Date(proposed.end);
+        const mins = Math.max(0, Math.round((endDate.getTime() - startDate.getTime()) / 60000));
+        const dayKey = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate()).toISOString().slice(0, 10);
+        const storyRef = db.collection('stories').doc(String(enriched.storyId));
+        batch.set(storyRef, {
+          allocation: {
+            daily: {
+              [dayKey]: admin.firestore.FieldValue.increment(mins)
+            }
+          },
+          updatedAt: now
+        }, { merge: true });
+      }
+    } catch { }
+
+    // Create scheduled_items doc if a linked entity exists
+    let linkType = null, refId = null, linkTitle = null, linkUrl = enriched.linkUrl || null;
+    if (enriched.taskId) { linkType = 'task'; refId = enriched.taskId; }
+    else if (enriched.storyId) { linkType = 'story'; refId = enriched.storyId; }
+    else if (enriched.habitId) { linkType = 'habit'; refId = enriched.habitId; }
+    else if (enriched.goalId) { linkType = 'goal'; refId = enriched.goalId; }
+
+    if (linkType && refId) {
+      linkTitle = enriched.title || null;
+      const schedRef = db.collection('scheduled_items').doc();
+      batch.set(schedRef, {
+        id: schedRef.id,
+        ownerUid: uid,
+        blockId: blockRef.id,
+        type: linkType,
+        refId: String(refId),
+        title: linkTitle,
+        linkUrl: linkUrl,
+        entry_method: 'calendar_ai',
+        theme_id,
+        note: narrative || null,
+        createdAt: now,
+        updatedAt: now
+      });
+    }
+
+    // If linked to a task, update due date and set reminders sync directive
+    if (enriched.taskId) {
+      const tRef = db.collection('tasks').doc(String(enriched.taskId));
+      batch.set(tRef, {
+        dueDate: proposed.start || null,
+        entry_method: 'calendar_ai',
+        confidence_score: typeof proposed.confidence_score === 'number' ? proposed.confidence_score : 0.85,
+        theme_id,
+        reminderSyncDirective: 'upsert',
+        reminderTitle: `[${enriched.theme}] – ${linkTitle || enriched.taskId}`,
+        reminderNote: [narrative, `Deep link: ${linkUrl || ''}`.trim()].filter(Boolean).join('\n'),
+        updatedAt: now,
+      }, { merge: true });
+    }
+    createdCount += 1;
+  }
+
+  // Activity summary entry for this AI application
+  batch.set(activityRef, {
+    id: activityRef.id,
+    entityId: 'calendar',
+    entityType: 'calendar_block',
+    activityType: 'calendar_ai_applied',
+    userId: uid,
+    description: `AI applied ${createdCount} calendar blocks`,
+    source: 'ai',
+    createdAt: now,
+    updatedAt: now
+  });
+
+  await batch.commit();
+  return createdCount;
+}
+
+async function getPreferredSprintId(uid) {
+  try {
+    const db = admin.firestore();
+    // Try active sprint first
+    let snap = await db.collection('sprints')
+      .where('ownerUid', '==', uid)
+      .where('status', 'in', ['active', 1])
+      .orderBy('startDate', 'desc')
+      .limit(1)
+      .get();
+    if (!snap.empty) return snap.docs[0].id;
+    // Then planned
+    snap = await db.collection('sprints')
+      .where('ownerUid', '==', uid)
+      .where('status', 'in', ['planned', 0])
+      .orderBy('startDate', 'desc')
+      .limit(1)
+      .get();
+    if (!snap.empty) return snap.docs[0].id;
+  } catch (e) {
+    console.warn('[getPreferredSprintId] failed', e?.message || e);
+  }
+  return null;
+}
+
+async function buildBlockPreviews(uid, blocks, { timezone = 'UTC' } = {}) {
+  if (!Array.isArray(blocks) || blocks.length === 0) return [];
+  const db = ensureFirestore();
+  const taskIds = new Set();
+  const storyIds = new Set();
+  const goalIds = new Set();
+
+  for (const block of blocks) {
+    if (block?.taskId) taskIds.add(String(block.taskId));
+    if (block?.storyId) storyIds.add(String(block.storyId));
+    if (block?.goalId) goalIds.add(String(block.goalId));
+  }
+
+  const fetchDocs = async (collectionName, ids) => {
+    if (ids.size === 0) return new Map();
+    const snapshots = await Promise.all(
+      Array.from(ids).map(async (id) => {
+        try {
+          return await db.collection(collectionName).doc(id).get();
+        } catch (err) {
+          console.warn(`[buildBlockPreviews] failed to load ${collectionName}/${id}`, err?.message || err);
+          return null;
+        }
+      })
+    );
+    const map = new Map();
+    snapshots.forEach((snap) => {
+      if (snap && snap.exists) {
+        map.set(snap.id, snap.data());
+      }
+    });
+    return map;
+  };
+
+  const [taskMap, storyMap, goalMap] = await Promise.all([
+    fetchDocs('tasks', taskIds),
+    fetchDocs('stories', storyIds),
+    fetchDocs('goals', goalIds),
+  ]);
+
+  const makeDeepLink = ({ taskId, storyId, goalId, taskRef, storyRef, goalRef }) => {
+    if (taskId) return buildEntityPath('task', taskId, taskRef);
+    if (storyId) return buildEntityPath('story', storyId, storyRef);
+    if (goalId) return buildEntityPath('goal', goalId, goalRef);
+    return null;
+  };
+
+  const zone = coerceZone(timezone || 'UTC');
+  return blocks.map((block) => {
+    const task = block?.taskId ? taskMap.get(String(block.taskId)) : null;
+    const story = block?.storyId ? storyMap.get(String(block.storyId)) : null;
+    const goal = block?.goalId ? goalMap.get(String(block.goalId)) : null;
+    const theme = block?.theme || goal?.theme || story?.theme || task?.theme || 'Growth';
+
+    const start = typeof block?.start === 'number' ? DateTime.fromMillis(block.start, { zone }) : null;
+    const end = typeof block?.end === 'number' ? DateTime.fromMillis(block.end, { zone }) : null;
+    const durationMinutes = start && end ? Math.max(15, Math.round(end.diff(start, 'minutes').minutes)) : null;
+
+    return {
+      title: block?.title || task?.title || story?.title || (goal ? `Goal: ${goal.title}` : 'Scheduled Block'),
+      theme,
+      start: block?.start || null,
+      end: block?.end || null,
+      displayStart: start && start.isValid ? start.toLocaleString(DateTime.DATETIME_MED) : null,
+      displayEnd: end && end.isValid ? end.toLocaleString(DateTime.DATETIME_MED) : null,
+      durationMinutes,
+      goal: goal
+        ? {
+          id: String(block.goalId),
+          title: goal.title || goal.name || 'Goal',
+          ref: goal.ref || null,
+        }
+        : null,
+      story: story
+        ? {
+          id: String(block.storyId),
+          title: story.title || 'Story',
+          ref: story.ref || null,
+        }
+        : null,
+      task: task
+        ? {
+          id: String(block.taskId),
+          title: task.title || 'Task',
+          ref: task.ref || null,
+        }
+        : null,
+      deepLink: makeDeepLink({
+        taskId: block?.taskId ? String(block.taskId) : null,
+        storyId: block?.storyId ? String(block.storyId) : null,
+        goalId: block?.goalId ? String(block.goalId) : null,
+        taskRef: task?.ref || task?.reference || null,
+        storyRef: story?.ref || null,
+        goalRef: goal?.ref || null,
+      }),
+    };
+  });
+}
+
+function getDefaultPlanningPrefs() {
+  return {
+    wakeTime: '07:00',
+    sleepTime: '23:00',
+    quietHours: [{ start: '22:00', end: '07:00' }],
+    maxHiSessionsPerWeek: 3,
+    minRecoveryGapHours: 24,
+    weeklyThemeTargets: {
+      Health: 300,
+      Growth: 240,
+      Wealth: 300,
+      Tribe: 180,
+      Home: 120
+    },
+    autoApplyThreshold: 0.8
+  };
+}
+
+function isTimeOverlap(start1, end1, start2, end2) {
+  return start1 < end2 && start2 < end1;
+}
+
+async function fetchGoogleCalendarEvents(uid, startDate, endDate) {
+  try {
+    const accessToken = await getAccessToken(uid);
+    const timeMin = startDate.toISOString();
+    const timeMax = endDate.toISOString();
+
+    const eventsResponse = await fetchJson(`https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${timeMin}&timeMax=${timeMax}&singleEvents=true&orderBy=startTime`, {
+      headers: { 'Authorization': `Bearer ${accessToken}` }
+    });
+
+    return eventsResponse.items.map(event => ({
+      id: event.id,
+      summary: event.summary || 'Untitled Event',
+      start: new Date(event.start.dateTime || event.start.date),
+      end: new Date(event.end.dateTime || event.end.date)
+    }));
+  } catch (error) {
+    try { await recordIntegrationLog(uid, 'google', 'error', 'Failed to fetch Google Calendar events', { start: startDate?.toISOString?.(), end: endDate?.toISOString?.(), error: String(error?.message || error) }); } catch { }
+    return [];
+  }
+}
+
+async function importGoogleCalendarEvents(uid, { startDate, endDate }) {
+  const db = admin.firestore();
+
+  const events = await fetchGoogleCalendarEvents(uid, startDate, endDate);
+  const seenDocIds = new Set();
+  const seenEventIds = new Set();
+
+  for (const event of events) {
+    if (!event || !event.id) continue;
+    const eventId = String(event.id);
+    // Align doc id format with calendarSync to avoid duplicate gcal mirror blocks.
+    const docId = `gcal_${uid}_${eventId}`;
+    const docRef = db.collection('calendar_blocks').doc(docId);
+
+    const startMs = event.start instanceof Date ? event.start.getTime() : null;
+    const endMs = event.end instanceof Date ? event.end.getTime() : startMs;
+    const startIso = startMs ? new Date(startMs).toISOString() : null;
+    const endIso = endMs ? new Date(endMs).toISOString() : null;
+
+    const payload = {
+      ownerUid: uid,
+      persona: null,
+      title: event.summary || 'Calendar Event',
+      description: event.description || null,
+      theme: 'Growth',
+      category: 'Calendar',
+      source: 'gcal',
+      status: 'synced',
+      createdBy: 'google',
+      syncToGoogle: false,
+      googleEventId: eventId,
+      start: startMs,
+      end: endMs,
+      startISO: startIso,
+      endISO: endIso,
+      startTime: startIso,
+      endTime: endIso,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      isAiGenerated: false,
+      externalLink: event.htmlLink || null,
+    };
+
+    await docRef.set(payload, { merge: true });
+    seenDocIds.add(docId);
+    seenEventIds.add(eventId);
+
+    // Deduplicate any stray blocks pointing to the same Google event
+    try {
+      const dupSnap = await db.collection('calendar_blocks')
+        .where('ownerUid', '==', uid)
+        .where('googleEventId', '==', eventId)
+        .get();
+
+      for (const dup of dupSnap.docs) {
+        if (dup.id === docId) continue;
+        const dupData = dup.data() || {};
+        const isExternal = dupData.source === 'gcal'
+          || dupData.entry_method === 'google_calendar'
+          || dupData.createdBy === 'google';
+        const isAi = dupData.aiGenerated === true || dupData.isAiGenerated === true;
+        if (isExternal && !isAi) {
+          await dup.ref.delete();
+        }
+      }
+    } catch (error) {
+      console.warn(`[gcal-sync] failed duplicate cleanup for ${uid}/${eventId}`, error.message);
+    }
+  }
+
+  // Remove stale Google-synced blocks that were not returned this run
+  try {
+    const existingSnap = await db.collection('calendar_blocks')
+      .where('ownerUid', '==', uid)
+      .where('source', '==', 'gcal')
+      .get();
+
+    const deletions = [];
+    existingSnap.forEach((doc) => {
+      if (seenDocIds.has(doc.id)) return;
+      const data = doc.data() || {};
+      const isExternal = data.source === 'gcal'
+        || data.entry_method === 'google_calendar'
+        || data.createdBy === 'google';
+      const isAi = data.aiGenerated === true || data.isAiGenerated === true;
+      if (isExternal && !isAi) {
+        deletions.push(doc.ref.delete());
+      }
+    });
+    if (deletions.length) await Promise.allSettled(deletions);
+  } catch (error) {
+    console.warn(`[gcal-sync] failed stale cleanup for ${uid}`, error.message);
+  }
+
+  await db.collection('profiles').doc(uid).set({
+    googleCalendarLastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
+    googleCalendarEventCount: seenDocIds.size,
+  }, { merge: true });
+
+  try {
+    const level = events.length === 0 ? 'warning' : 'success';
+    await recordIntegrationLog(uid, 'google', level, 'Imported Google Calendar events', { requestedStart: startDate?.toISOString?.(), requestedEnd: endDate?.toISOString?.(), eventsFetched: events.length, blocksStored: seenDocIds.size });
+  } catch { }
+
+  return { events: events.length, stored: seenDocIds.size };
+}
+
+// Scheduled: reconcile Google Calendar deletions for all users every 15 minutes
+exports.reconcileAllCalendars = schedulerV2.onSchedule({ schedule: 'every 15 minutes', timeZone: 'UTC', secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (event) => {
+  const db = admin.firestore();
+  // Find users with Google tokens
+  const snap = await db.collection('tokens').where('provider', '==', 'google').get().catch(() => null);
+  if (!snap || snap.empty) return;
+  const today = new Date();
+  const work = [];
+  for (const d of snap.docs) {
+    const uid = d.id.split('_')[0] || d.id; // tokens doc is uid
+    work.push((async () => {
+      try {
+        const dayKey = toDayKey(today);
+        // Perform reconciliation similar to reconcilePlanFromGoogleCalendar
+        const access = await getAccessToken(uid);
+        const asSnap = await db.collection('plans').doc(dayKey).collection('assignments').where('ownerUid', '==', uid).get();
+        const toCheck = asSnap.docs.map(x => ({ id: x.id, ...(x.data() || {}) })).filter(a => a?.external?.googleEventId);
+        for (const a of toCheck) {
+          try {
+            await fetchJson(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(a.external.googleEventId)}`, { headers: { 'Authorization': 'Bearer ' + access } });
+          } catch {
+            await db.collection('plans').doc(dayKey).collection('assignments').doc(a.id)
+              .set({ status: 'deferred', external: { googleEventId: null }, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+          }
+        }
+      } catch { }
+    })());
+  }
+  await Promise.allSettled(work);
+});
+
+exports.syncGoogleCalendarsHourly = schedulerV2.onSchedule({ schedule: 'every 60 minutes', timeZone: 'UTC', secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async () => {
+  const db = admin.firestore();
+  const tokensSnap = await db.collection('tokens').where('provider', '==', 'google').get().catch(() => null);
+  if (!tokensSnap || tokensSnap.empty) return;
+
+  const legacyImportEnabled = process.env.LEGACY_GCAL_IMPORT === 'true';
+  if (!legacyImportEnabled) {
+    console.log('[gcal-sync] legacy import disabled; calendarSync handles pull/push.');
+  }
+
+  const startDate = new Date(Date.now() - 6 * 60 * 60 * 1000); // past 6 hours to pick updates
+  const endDate = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000); // next two weeks
+  const todayStr = new Date().toISOString().slice(0, 10);
+
+  for (const doc of tokensSnap.docs) {
+    const tokenId = doc.id;
+    const uid = tokenId.includes('_') ? tokenId.split('_')[0] : tokenId;
+    try {
+      if (legacyImportEnabled) {
+        await importGoogleCalendarEvents(uid, { startDate, endDate });
+      }
+
+      // Push today's plan to Google Calendar
+      try {
+        await syncPlanToGoogleForUser(uid, todayStr);
+        console.log(`[gcal-sync] pushed plan for ${uid} for ${todayStr}`);
+      } catch (e) {
+        console.warn(`[gcal-sync] push plan failed for ${uid}`, e.message);
+      }
+
+      try { await recordIntegrationLog(uid, 'google', 'success', 'Hourly Google Calendar sync ran', { start: startDate.toISOString(), end: endDate.toISOString() }); } catch { }
+    } catch (error) {
+      console.warn(`[gcal-sync] hourly sync failed for ${uid}`, error.message);
+      try { await recordIntegrationLog(uid, 'google', 'error', 'Hourly Google Calendar sync failed', { error: String(error?.message || error) }); } catch { }
+    }
+  }
+});
+
+// ===== Duplicate Detection for iOS Reminders (AC11 - Issue #124)
+exports.generateWeeklySummaries = schedulerV2.onSchedule({ schedule: 'every monday 08:00', timeZone: 'Europe/London' }, async (event) => {
+  const db = ensureFirestore();
+  try { await ensureBudgetDefault(db, 'generateWeeklySummaries', { reads: 3000, writes: 500 }); } catch (e) { console.warn('[weekly summaries] budget exceeded, skipping run'); return { ok: false, skipped: true }; }
+  const now = new Date();
+  const periodStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7).getTime();
+  const profiles = await db.collection('profiles').get().catch(() => ({ empty: true, docs: [] }));
+  for (const doc of profiles.docs) {
+    const uid = doc.id;
+    try {
+      const q = await db.collection('activity_stream')
+        .where('ownerUid', '==', uid)
+        .where('timestamp', '>=', admin.firestore.Timestamp.fromMillis(periodStart))
+        .get();
+      const counts = {};
+      let total = 0;
+      q.docs.forEach(d => {
+        const t = String(d.data()?.activityType || 'unknown');
+        counts[t] = (counts[t] || 0) + 1;
+        total += 1;
+      });
+      const weekKey = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (now.getDay() || 7)).toISOString().slice(0, 10);
+      const summaryRef = db.collection('weekly_summaries').doc(`${uid}_${weekKey}`);
+      await summaryRef.set({
+        id: summaryRef.id,
+        userId: uid,
+        week: weekKey,
+        total,
+        byType: counts,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+    } catch (e) {
+      console.warn('[weekly summaries] failed for user', uid, e?.message || e);
+    }
+  }
+  return { ok: true, users: profiles.docs.length };
+});
+
+async function detectDuplicateRemindersForUser({ db, userId }) {
+  const snap = await db.collection('tasks').where('ownerUid', '==', userId).get();
+  const tasks = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+  const reminderTasks = tasks.filter((t) => t.source === 'ios_reminder');
+  const norm = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  const hash = (s) => crypto.createHash('sha1').update(String(s || '')).digest('hex');
+  const groups = new Map();
+
+  for (const task of reminderTasks) {
+    const key1 = task.reminderId ? `rid:${task.reminderId}` : null;
+    const key2 = `title:${norm(task.title)}|src:${norm(task.sourceRef || '')}`;
+    const key3 = `title:${norm(task.title)}|hash:${hash((task.description || '') + '|' + JSON.stringify(task.checklist || []))}`;
+    for (const key of [key1, key2, key3].filter(Boolean)) {
+      if (!groups.has(key)) groups.set(key, new Set());
+      groups.get(key).add(task.id);
+    }
+  }
+
+  let created = 0;
+  for (const [key, idSet] of groups.entries()) {
+    const ids = Array.from(idSet);
+    if (ids.length < 2) continue;
+    const docId = `dup_${userId}_${hash(key)}`;
+    await db.collection('potential_duplicates').doc(docId).set({
+      id: docId,
+      ownerUid: userId,
+      key,
+      method: key.startsWith('rid:') ? 'reminderId' : (key.includes('|src:') ? 'title+sourceRef' : 'title+hash'),
+      taskIds: ids,
+      count: ids.length,
+      status: 'open',
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+    created += 1;
+  }
+
+  return { groupsCreated: created, reminderTasks: reminderTasks.length };
+}
+
+function normalizeTitleHardened(s) {
+  if (!s) return '';
+  let str = String(s);
+  try { str = str.normalize('NFKD'); } catch { }
+  str = str.replace(/[\u0300-\u036f]/g, '');
+  str = str.replace(/[\u200B-\u200D\uFEFF\u00AD\u061C\u2060-\u206F\uFE0E\uFE0F]/g, '');
+  str = str.toLowerCase();
+  str = str.replace(/https?:\/\/\S+/g, ' ');
+  str = str.replace(/www\.[^\s]+/g, ' ');
+  str = str.replace(/[\[\]{}()\"'`\u201C\u201D\u2018\u2019.,!?;:<>_~*^#%\\/\\|+\-=]/g, ' ');
+  return str.replace(/\s+/g, ' ').trim();
+}
+
+function textHasUrl(s) {
+  if (!s) return false;
+  const str = String(s);
+  return /https?:\/\/\S+/.test(str) || /www\.[^\s]+/.test(str);
+}
+
+async function deduplicateUserTasks({ db, userId, dryRun = false, hardDelete = false, logActivity = true, activityActor = 'AI_Agent', runId = null, includeTitleDedupe = true }) {
+  const tasksSnap = await db.collection('tasks').where('ownerUid', '==', userId).get();
+  const taskDocs = tasksSnap.docs.map(doc => ({ id: doc.id, ref: doc.ref, data: doc.data() || {} }));
+  if (!taskDocs.length) {
+    return { ok: true, processed: 0, duplicatesResolved: 0, dryRun, groups: [] };
+  }
+
+  const taskById = new Map(taskDocs.map(doc => [doc.id, { id: doc.id, ...doc.data }]));
+  const keyMap = new Map();
+
+  const addKey = (key, taskId) => {
+    if (!key || !taskId) return;
+    const normalized = key.toLowerCase();
+    if (!keyMap.has(normalized)) keyMap.set(normalized, new Set());
+    keyMap.get(normalized).add(taskId);
+  };
+
+  for (const doc of taskDocs) {
+    const data = doc.data;
+    const id = doc.id;
+    const reminderKey = data.reminderId ? `reminder:${String(data.reminderId).trim().toLowerCase()}` : null;
+    const refValue = data.ref || data.reference || null;
+    const refKey = refValue ? `ref:${String(refValue).trim().toLowerCase()}` : null;
+    const sourceRefKey = data.sourceRef ? `sourceref:${String(data.sourceRef).trim().toLowerCase()}` : null;
+    const externalKey = data.taskId ? `external:${String(data.taskId).trim().toLowerCase()}` : null;
+    const iosKey = data.iosReminderId ? `ios:${String(data.iosReminderId).trim().toLowerCase()}` : null;
+
+    const comboParts = [];
+    if (reminderKey) comboParts.push(reminderKey.split(':')[1]);
+    if (refKey) comboParts.push(refKey.split(':')[1]);
+    if (sourceRefKey) comboParts.push(sourceRefKey.split(':')[1]);
+    if (comboParts.length >= 2) addKey(`combo:${comboParts.join('|')}`, id);
+
+    for (const key of [reminderKey, refKey, sourceRefKey, externalKey, iosKey]) {
+      addKey(key, id);
+    }
+  }
+
+  const signatureMap = new Map();
+  for (const [key, idSet] of keyMap.entries()) {
+    const ids = Array.from(idSet);
+    if (ids.length < 2) continue;
+    const sorted = ids.slice().sort();
+    const signature = sorted.join('|');
+    if (!signatureMap.has(signature)) {
+      signatureMap.set(signature, { ids: sorted, keys: new Set([key]) });
+    } else {
+      signatureMap.get(signature).keys.add(key);
+    }
+  }
+
+  const groups = Array.from(signatureMap.values());
+  // Track strong-key claimed IDs so title-based pass can skip them
+  const strongClaimedIds = new Set();
+  for (const g of groups) { if (Array.isArray(g.ids)) g.ids.forEach(id => strongClaimedIds.add(id)); }
+
+  const canonicalNotes = new Map();
+  const duplicateUpdates = [];
+  const summary = [];
+  const duplicateReminderMappings = [];
+
+  for (const group of groups) {
+    const ids = group.ids.map(id => id);
+    const tasks = ids.map(id => taskById.get(id)).filter(Boolean);
+    if (tasks.length < 2) continue;
+
+    const canonical = tasks.slice().sort((a, b) => {
+      const deletedDiff = (a.deleted ? 1 : 0) - (b.deleted ? 1 : 0);
+      if (deletedDiff !== 0) return deletedDiff;
+      const statusA = String(a.status ?? '').toLowerCase();
+      const statusB = String(b.status ?? '').toLowerCase();
+      const doneA = statusA === 'done' || statusA === 'complete' || Number(a.status) === 2;
+      const doneB = statusB === 'done' || statusB === 'complete' || Number(b.status) === 2;
+      if (doneA !== doneB) return doneA - doneB;
+      const createdA = toMillis(a.reminderCreatedAt) ?? toMillis(a.createdAt) ?? toMillis(a.serverUpdatedAt) ?? Number.MAX_SAFE_INTEGER;
+      const createdB = toMillis(b.reminderCreatedAt) ?? toMillis(b.createdAt) ?? toMillis(b.serverUpdatedAt) ?? Number.MAX_SAFE_INTEGER;
+      if (createdA !== createdB) return createdA - createdB;
+      return a.id.localeCompare(b.id);
+    })[0];
+
+    const duplicates = tasks.filter(t => t.id !== canonical.id);
+    if (!duplicates.length) continue;
+
+    summary.push({ kept: canonical.id, removed: duplicates.map(d => d.id), keys: Array.from(group.keys) });
+
+    const canonicalRefValue = canonical.ref || canonical.reference || canonical.displayId || canonical.id;
+
+    duplicates.forEach(dup => {
+      duplicateUpdates.push({
+        id: dup.id,
+        data: {
+          duplicateOf: canonical.id,
+          duplicateKey: Array.from(group.keys).join(','),
+          duplicateResolvedAt: admin.firestore.FieldValue.serverTimestamp(),
+          reminderSyncDirective: 'complete',
+          syncState: 'dirty',
+          status: 2,
+          deleted: true,
+          serverUpdatedAt: Date.now()
+        }
+      });
+      duplicateReminderMappings.push({
+        duplicateId: dup.id,
+        canonicalId: canonical.id,
+        canonicalRef: canonicalRefValue,
+        canonicalTitle: canonical.title || canonicalRefValue,
+      });
+    });
+
+    if (!canonicalNotes.has(canonical.id)) {
+      canonicalNotes.set(canonical.id, { children: new Set(), keys: new Set() });
+    }
+    const note = canonicalNotes.get(canonical.id);
+    duplicates.forEach(dup => note.children.add(dup.id));
+    Array.from(group.keys).forEach(k => note.keys.add(k));
+  }
+
+  // Secondary pass: title-based grouping for tasks not in strong groups (global uniqueness by title)
+  const titleSummary = [];
+  const titleCanonicalNotes = new Map();
+  if (includeTitleDedupe) {
+    const titleBuckets = new Map();
+    for (const doc of taskDocs) {
+      const t = { id: doc.id, ...(doc.data || {}) };
+      if (strongClaimedIds.has(t.id)) continue;
+      const norm = normalizeTitleHardened(t.title || t.name || t.task || '');
+      if (!norm) continue;
+      if (textHasUrl(t.title || t.name || t.task || '')) continue;
+      // Global uniqueness: key by normalized title only
+      const bucketKey = norm;
+      if (!titleBuckets.has(bucketKey)) titleBuckets.set(bucketKey, []);
+      titleBuckets.get(bucketKey).push(t);
+    }
+    for (const [bucketKey, items] of titleBuckets.entries()) {
+      if (!Array.isArray(items) || items.length < 2) continue;
+      const tasks = items;
+      const canonical = tasks.slice().sort((a, b) => {
+        const deletedDiff = (a.deleted ? 1 : 0) - (b.deleted ? 1 : 0);
+        if (deletedDiff !== 0) return deletedDiff;
+        const statusA = String(a.status ?? '').toLowerCase();
+        const statusB = String(b.status ?? '').toLowerCase();
+        const doneA = statusA === 'done' || statusA === 'complete' || Number(a.status) === 2;
+        const doneB = statusB === 'done' || statusB === 'complete' || Number(b.status) === 2;
+        if (doneA !== doneB) return doneA - doneB;
+        const createdA = toMillis(a.reminderCreatedAt) ?? toMillis(a.createdAt) ?? toMillis(a.serverUpdatedAt) ?? Number.MAX_SAFE_INTEGER;
+        const createdB = toMillis(b.reminderCreatedAt) ?? toMillis(b.createdAt) ?? toMillis(b.serverUpdatedAt) ?? Number.MAX_SAFE_INTEGER;
+        if (createdA !== createdB) return createdA - createdB;
+        return String(a.id).localeCompare(String(b.id));
+      })[0];
+      const duplicates = tasks.filter(t => t.id !== canonical.id);
+      if (!duplicates.length) continue;
+      const normTitle = bucketKey;
+      const dupKeyStable = `title:${normTitle}`;
+      titleSummary.push({ kept: canonical.id, removed: duplicates.map(d => d.id), keys: [dupKeyStable], reason: 'duplicateTitleGlobal' });
+      const canonicalRefValue = canonical.ref || canonical.reference || canonical.displayId || canonical.id;
+      duplicates.forEach(dup => {
+        duplicateUpdates.push({
+          id: dup.id,
+          data: {
+            duplicateOf: canonical.id,
+            duplicateKey: dupKeyStable,
+            duplicateReason: 'duplicateTitleGlobal',
+            duplicateResolvedAt: admin.firestore.FieldValue.serverTimestamp(),
+            reminderSyncDirective: 'complete',
+            syncState: 'dirty',
+            status: 2,
+            deleted: true,
+            serverUpdatedAt: Date.now()
+          }
+        });
+        duplicateReminderMappings.push({
+          duplicateId: dup.id,
+          canonicalId: canonical.id,
+          canonicalRef: canonicalRefValue,
+          canonicalTitle: canonical.title || canonicalRefValue,
+        });
+      });
+      if (!titleCanonicalNotes.has(canonical.id)) titleCanonicalNotes.set(canonical.id, { children: new Set(), keys: new Set() });
+      const note = titleCanonicalNotes.get(canonical.id);
+      duplicates.forEach(dup => note.children.add(dup.id));
+      note.keys.add(dupKeyStable);
+    }
+  }
+
+  // Merge title notes into canonical notes
+  for (const [cid, info] of titleCanonicalNotes.entries()) {
+    if (!canonicalNotes.has(cid)) canonicalNotes.set(cid, { children: new Set(), keys: new Set() });
+    const dest = canonicalNotes.get(cid);
+    info.children.forEach(v => dest.children.add(v));
+    info.keys.forEach(v => dest.keys.add(v));
+  }
+
+  const allSummaries = summary.concat(titleSummary);
+
+  if (dryRun) {
+    const reasonCounts = allSummaries.reduce((acc, g) => { const r = g.reason || 'strongKey'; acc[r] = (acc[r] || 0) + 1; return acc; }, {});
+    return { ok: true, dryRun: true, processed: taskDocs.length, duplicatesResolved: duplicateUpdates.length, groups: allSummaries, reasonCounts };
+  }
+
+  if (!duplicateUpdates.length) {
+    return { ok: true, processed: taskDocs.length, duplicatesResolved: 0, groups: allSummaries, hardDelete };
+  }
+
+  const bulk = db.bulkWriter();
+  for (const update of duplicateUpdates) {
+    const ref = db.collection('tasks').doc(update.id);
+    if (hardDelete) {
+      bulk.delete(ref);
+    } else {
+      bulk.set(ref, update.data, { merge: true });
+    }
+  }
+
+  for (const [canonicalId, info] of canonicalNotes.entries()) {
+    if (!info.children.size) continue;
+    const ref = db.collection('tasks').doc(canonicalId);
+    const payload = {
+      duplicateChildren: admin.firestore.FieldValue.arrayUnion(...Array.from(info.children)),
+      duplicateResolvedAt: admin.firestore.FieldValue.serverTimestamp(),
+      duplicateKey: Array.from(info.keys).join(','),
+      duplicateOf: admin.firestore.FieldValue.delete(),
+      deleted: false
+    };
+    bulk.set(ref, payload, { merge: true });
+  }
+
+  await bulk.close();
+
+  if (duplicateReminderMappings.length) {
+    const reminderUpdates = [];
+    for (const mapping of duplicateReminderMappings) {
+      try {
+        const remindersSnap = await db.collection('reminders').where('taskId', '==', mapping.duplicateId).get();
+        remindersSnap.forEach((reminderDoc) => {
+          const reminderData = reminderDoc.data() || {};
+          const existingNote = reminderData.note || '';
+          const mergeNote = `Merged into ${mapping.canonicalRef || mapping.canonicalId}`;
+          const note = existingNote.includes(mergeNote)
+            ? existingNote
+            : `${existingNote}\n${mergeNote}`.trim();
+          reminderUpdates.push(reminderDoc.ref.set({
+            status: 'completed',
+            completedAt: admin.firestore.FieldValue.serverTimestamp(),
+            note,
+            syncState: 'dirty',
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          }, { merge: true }));
+        });
+      } catch (error) {
+        console.warn('[dedupe] reminder sync failed', { taskId: mapping.duplicateId, error: error?.message || error });
+      }
+    }
+    if (reminderUpdates.length) {
+      await Promise.all(reminderUpdates);
+    }
+  }
+
+  if (logActivity) {
+    const activityRef = db.collection('activity_stream').doc();
+    const reasonCounts = allSummaries.reduce((acc, g) => { const r = g.reason || 'strongKey'; acc[r] = (acc[r] || 0) + 1; return acc; }, {});
+    await activityRef.set({
+      id: activityRef.id,
+      entityId: `tasks_${userId}`,
+      entityType: 'task',
+      activityType: 'deduplicate_tasks',
+      userId,
+      actor: activityActor,
+      description: `Resolved ${duplicateUpdates.length} duplicate tasks across ${allSummaries.length} groups`,
+      metadata: { groups: allSummaries, hardDelete, runId, reasonCounts },
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+  }
+
+  return {
+    ok: true,
+    processed: taskDocs.length,
+    duplicatesResolved: duplicateUpdates.length,
+    groups: allSummaries,
+    reasonCounts: allSummaries.reduce((acc, g) => { const r = g.reason || 'strongKey'; acc[r] = (acc[r] || 0) + 1; return acc; }, {}),
+    hardDelete,
+    dryRun,
+  };
+}
+
+async function prioritizeTasksForUser({ db, userId, runId = null }) {
+  const [tasksSnap, sprintsSnap] = await Promise.all([
+    db.collection('tasks').where('ownerUid', '==', userId).get(),
+    db.collection('sprints').where('ownerUid', '==', userId).get().catch(() => ({ docs: [] })),
+  ]);
+
+  const nowMs = Date.now();
+  const activeSprintIds = new Set();
+  sprintsSnap.docs.forEach((doc) => {
+    const data = doc.data() || {};
+    const status = String(data.status || '').toLowerCase();
+    const startMs = toMillis(data.startDate || data.start);
+    const endMs = toMillis(data.endDate || data.end);
+    const inWindow = startMs && endMs ? (nowMs >= startMs && nowMs <= endMs) : false;
+    const isActive = ['active', 'current', 'in-progress', 'inprogress', '1', 'true'].includes(status) || inWindow;
+    if (isActive) activeSprintIds.add(doc.id);
+  });
+
+  if (!activeSprintIds.size) {
+    return { ok: true, considered: 0, updated: 0, items: [] };
+  }
+
+  const activeStoryIds = new Set();
+  const sprintChunks = Array.from(activeSprintIds);
+  for (let i = 0; i < sprintChunks.length; i += 10) {
+    const chunk = sprintChunks.slice(i, i + 10);
+    const storiesSnap = await db.collection('stories')
+      .where('ownerUid', '==', userId)
+      .where('sprintId', 'in', chunk)
+      .get()
+      .catch(() => ({ docs: [] }));
+    storiesSnap.docs.forEach((doc) => {
+      const data = doc.data() || {};
+      const status = String(data.status ?? '').toLowerCase();
+      const done = status === 'done' || status === 'complete' || status === 'completed' || Number(data.status) >= 4;
+      if (!done) activeStoryIds.add(doc.id);
+    });
+  }
+
+  const tasks = tasksSnap.docs
+    .map((doc) => ({ id: doc.id, ...(doc.data() || {}) }))
+    .filter((task) => {
+      const status = String(task.status ?? '').toLowerCase();
+      const done = status === 'done' || status === 'complete' || Number(task.status) === 2 || task.deleted === true;
+      if (done) return false;
+      const inSprint = task.sprintId && activeSprintIds.has(task.sprintId);
+      const inStory = task.storyId && activeStoryIds.has(task.storyId);
+      return inSprint || inStory;
+    });
+
+  if (!tasks.length) {
+    return { ok: true, considered: 0, updated: 0, items: [] };
+  }
+
+  const sorted = tasks
+    .slice()
+    .sort((a, b) => {
+      const aDue = toMillis(a.dueDate || a.dueDateMs || a.targetDate) || Number.MAX_SAFE_INTEGER;
+      const bDue = toMillis(b.dueDate || b.dueDateMs || b.targetDate) || Number.MAX_SAFE_INTEGER;
+      return aDue - bDue;
+    });
+
+  const payload = sorted.slice(0, 50).map((task) => ({
+    id: task.id,
+    ref: task.ref || task.reference || null,
+    title: task.title || task.description || 'Task',
+    dueDate: task.dueDate || task.targetDate || null,
+    priority: task.priority ?? null,
+    status: task.status || 'todo',
+    theme: task.theme || null,
+    goalId: task.goalId || null,
+    storyId: task.storyId || null,
+    persona: task.persona || null,
+  }));
+
+  const idMap = new Map();
+  const detailById = new Map();
+  payload.forEach((task) => {
+    idMap.set(task.id, task.id);
+    if (task.ref) idMap.set(task.ref.toUpperCase(), task.id);
+    detailById.set(task.id, task);
+  });
+
+  const prompt = 'Score tasks 0-100 and bucket TODAY/NEXT/LATER. Return JSON {items:[{id,score,bucket}]}.\nTasks: ' + JSON.stringify(payload);
+
+  let parsed = {};
+  try {
+    const raw = await callLLMJson({
+      system: 'You prioritise tasks for the day. Respond with concise JSON only.',
+      user: prompt,
+      purpose: 'nightlyTaskPrioritization',
+      userId,
+      expectJson: true,
+      temperature: 0.1,
+    });
+    parsed = raw ? JSON.parse(raw) : {};
+  } catch (error) {
+    console.warn('[priority] LLM prioritisation failed', { userId, error: error?.message || error });
+    return { ok: false, considered: payload.length, updated: 0, error: error?.message || String(error) };
+  }
+
+  const items = Array.isArray(parsed.items) ? parsed.items : [];
+  if (!items.length) {
+    return { ok: true, considered: payload.length, updated: 0, items: [] };
+  }
+
+  const updates = [];
+  const bulk = db.bulkWriter();
+  items.slice(0, 20).forEach((item, index) => {
+    const key = (item?.id || item?.ref || '').toString().trim();
+    if (!key) return;
+    const matchedId = idMap.get(key) || idMap.get(key.toUpperCase());
+    if (!matchedId) return;
+    const score = Number(item.score ?? item.priority ?? item.value ?? 0);
+    const bucketRaw = (item.bucket || item.category || '').toString().trim();
+    const bucket = bucketRaw ? bucketRaw.toUpperCase() : 'NEXT';
+    const docRef = db.collection('tasks').doc(matchedId);
+    bulk.set(docRef, {
+      aiCriticalityScore: Number.isFinite(score) ? Math.max(0, Math.min(100, score)) : null,
+      aiPriorityBucket: bucket,
+      aiDailyRank: index + 1,
+      aiPriorityUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      aiPriorityRunId: runId || null,
+      aiPriorityScore: admin.firestore.FieldValue.delete(),
+      aiTop3Reason: admin.firestore.FieldValue.delete(),
+      aiPriorityReason: admin.firestore.FieldValue.delete(),
+    }, { merge: true });
+    const base = detailById.get(matchedId) || {};
+    updates.push({
+      taskId: matchedId,
+      score,
+      bucket,
+      rank: index + 1,
+      title: base.title || null,
+      ref: base.ref || null,
+      dueDate: base.dueDate || null,
+      persona: base.persona || null,
+    });
+  });
+  await bulk.close();
+
+  await db.collection('task_priority_runs').add({
+    userId,
+    runId: runId || null,
+    considered: payload.length,
+    updated: updates.length,
+    items: updates,
+    model: AI_PRIORITY_MODEL,
+    raw: items.slice(0, 20),
+    generatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  if (updates.length) {
+    try {
+      const activityRef = db.collection('activity_stream').doc();
+      await activityRef.set({
+        id: activityRef.id,
+        entityId: `tasks_${userId}`,
+        entityType: 'task',
+        activityType: 'ai_priority_update',
+        actor: 'AI_Agent',
+        userId,
+        ownerUid: userId,
+        description: `AI reprioritised ${updates.length} tasks`,
+        metadata: {
+          runId,
+          model: AI_PRIORITY_MODEL,
+          top: updates.slice(0, 5),
+        },
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    } catch (error) {
+      console.warn('[priority] activity stream log failed', { userId, error: error?.message || error });
+    }
+  }
+
+  return { ok: true, considered: payload.length, updated: updates.length, items: updates };
+}
+
+async function adjustTopTaskDueDates({ db, userId, profile, priorityResult, runId }) {
+  const zone = resolveTimezone(profile, DEFAULT_TIMEZONE);
+  const nowLocal = DateTime.now().setZone(coerceZone(zone)).startOf('day');
+
+  const topLimit = Math.max(1, Math.min(Number(profile.aiFocusTopCount || 5), 10));
+  const list = Array.isArray(priorityResult?.items) ? priorityResult.items : [];
+
+  // Maintain an ascending list of top N items by rank without sorting the whole array
+  const topItems = [];
+  for (const it of list) {
+    const rank = it && typeof it.rank === 'number' ? it.rank : Number.MAX_SAFE_INTEGER;
+    // Insert into the correct position (small N so O(N^2) is acceptable)
+    let inserted = false;
+    for (let i = 0; i < topItems.length; i++) {
+      const curRank = topItems[i] && typeof topItems[i].rank === 'number' ? topItems[i].rank : Number.MAX_SAFE_INTEGER;
+      if (rank < curRank) {
+        topItems.splice(i, 0, it);
+        inserted = true;
+        break;
+      }
+    }
+    if (!inserted) topItems.push(it);
+    if (topItems.length > topLimit) topItems.pop();
+  }
+  if (!topItems.length) {
+    return { adjustedTop: 0, deferred: 0, locked: 0 };
+  }
+
+  const tasksSnap = await db.collection('tasks').where('ownerUid', '==', userId).get();
+  const tasks = new Map();
+  tasksSnap.forEach((doc) => {
+    const data = doc.data() || {};
+    tasks.set(doc.id, { id: doc.id, ...data });
+  });
+
+  const topTaskIds = new Set();
+  let adjustedTop = 0;
+  let lockedTop = 0;
+
+  for (let index = 0; index < topItems.length; index += 1) {
+    const entry = topItems[index];
+    const taskId = entry?.taskId || entry?.id || entry?.ref;
+    if (!taskId) continue;
+    const task = tasks.get(taskId);
+    if (!task || isTaskLocked(task)) {
+      if (task && isTaskLocked(task)) lockedTop += 1;
+      continue;
+    }
+
+    const desired = nowLocal.endOf('day');
+    const newDueDateMs = desired.toMillis();
+
+    await updateTaskDueDate(db, task.id, {
+      newDueDateMs,
+      reason: 'ai_focus_top',
+      userId,
+      runId,
+      itemRef: task.ref || task.id,
+    });
+
+    topTaskIds.add(task.id);
+    adjustedTop += 1;
+  }
+
+  const demoteCutoff = nowLocal.plus({ days: 1 }).endOf('day').toMillis();
+  const deferTarget = nowLocal.plus({ days: 4 }).endOf('day').toMillis();
+  let deferred = 0;
+
+  for (const task of tasks.values()) {
+    if (topTaskIds.has(task.id)) continue;
+    if (isTaskLocked(task)) continue;
+    const dueMs = toMillis(task.dueDate || task.dueDateMs || task.targetDate);
+    if (!dueMs) continue;
+    if (dueMs > demoteCutoff) continue;
+
+    await updateTaskDueDate(db, task.id, {
+      newDueDateMs: deferTarget,
+      reason: 'ai_focus_defer',
+      userId,
+      runId,
+      itemRef: task.ref || task.id,
+    });
+
+    deferred += 1;
+  }
+
+  return { adjustedTop, deferred, locked: lockedTop };
+}
+
+async function detectDuplicateRemindersForUser({ db, userId }) {
+  const snap = await db.collection('tasks').where('ownerUid', '==', userId).get();
+  const tasks = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+  const reminderTasks = tasks.filter((t) => t.source === 'ios_reminder');
+  const norm = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  const hash = (s) => crypto.createHash('sha1').update(String(s || '')).digest('hex');
+  const groups = new Map();
+
+  for (const task of reminderTasks) {
+    const key1 = task.reminderId ? `rid:${task.reminderId}` : null;
+    const key2 = `title:${norm(task.title)}|src:${norm(task.sourceRef || '')}`;
+    const key3 = `title:${norm(task.title)}|hash:${hash((task.description || '') + '|' + JSON.stringify(task.checklist || []))}`;
+    for (const key of [key1, key2, key3].filter(Boolean)) {
+      if (!groups.has(key)) groups.set(key, new Set());
+      groups.get(key).add(task.id);
+    }
+  }
+
+  let created = 0;
+  for (const [key, idSet] of groups.entries()) {
+    const ids = Array.from(idSet);
+    if (ids.length < 2) continue;
+    const docId = `dup_${userId}_${hash(key)}`;
+    await db.collection('potential_duplicates').doc(docId).set({
+      id: docId,
+      ownerUid: userId,
+      key,
+      method: key.startsWith('rid:') ? 'reminderId' : (key.includes('|src:') ? 'title+sourceRef' : 'title+hash'),
+      taskIds: ids,
+      count: ids.length,
+      status: 'open',
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+    created += 1;
+  }
+
+  return { groupsCreated: created, reminderTasks: reminderTasks.length };
+}
+
+function normalizeAcceptanceCriteriaForSizing(entity = {}) {
+  const raw = entity.acceptanceCriteria
+    ?? entity.acceptance_criteria
+    ?? entity.criteria
+    ?? entity.acceptance
+    ?? null;
+  let values = [];
+  if (Array.isArray(raw)) {
+    values = raw;
+  } else if (raw && typeof raw === 'object') {
+    values = Object.values(raw);
+  } else if (typeof raw === 'string') {
+    values = raw.split('\n').map((line) => line.replace(/^[-*]\s*/, ''));
+  }
+  return values
+    .map((value) => String(value || '').replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .slice(0, 8);
+}
+
+function isActiveSprintStatus(value) {
+  const status = String(value || '').toLowerCase();
+  return ['active', 'current', 'planning', 'in-progress', 'inprogress', '1', '0', 'true'].includes(status);
+}
+
+async function requestWorkEstimateFromLLM({ userId, entityType, title, description, acceptanceCriteria = [] }) {
+  const cleanTitle = String(title || 'Work Item').slice(0, 200);
+  const cleanDescription = String(description || '').slice(0, 800);
+  const criteria = Array.isArray(acceptanceCriteria)
+    ? acceptanceCriteria
+      .map((item) => String(item || '').replace(/\s+/g, ' ').trim())
+      .filter(Boolean)
+      .slice(0, 8)
+    : [];
+  const systemPrompt = [
+    'You are an expert agile estimator. Provide realistic sizing for the supplied item.',
+    'Express effort where 1 point equals roughly one hour of focused work.',
+    'Use acceptance criteria as primary scope signals when available.',
+    'Return ONLY JSON with shape {"hours": number, "points": number, "rationale": string}.',
+    'Do not include markdown or prose outside the JSON.',
+  ].join('\n');
+  const userPrompt = [
+    `Type: ${entityType}`,
+    `Title: ${cleanTitle}`,
+    cleanDescription ? `Description: ${cleanDescription}` : null,
+    criteria.length ? `Acceptance Criteria:\n${criteria.map((item, index) => `${index + 1}. ${item}`).join('\n')}` : null,
+    'Estimate the focused hours required. Use decimals if needed.',
+    'Use point values in 0.25 increments.',
+    'Cap points at 8 even if hours exceed that; still include real hours.'
+  ].filter(Boolean).join('\n');
+
+  const raw = await callLLMJson({
+    system: systemPrompt,
+    user: userPrompt,
+    purpose: `${entityType}Sizing`,
+    userId,
+    expectJson: true,
+    temperature: 0.1
+  });
+
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    console.warn('[llm-sizing] parse failed', { userId, entityType, error: error?.message || error });
+    return null;
+  }
+
+  const hours = Number(parsed?.hours ?? parsed?.estimated_hours ?? parsed?.estimateHours);
+  const pointsRaw = Number(parsed?.points);
+  const rationale = String(parsed?.rationale || parsed?.reason || '').slice(0, 280);
+  if (!Number.isFinite(hours) || hours <= 0) return null;
+  const estimatedPoints = clampTaskPoints(pointsRaw) ?? clampTaskPoints(hours) ?? 1;
+  return {
+    hours,
+    points: estimatedPoints,
+    rationale,
+  };
+}
+
+async function ensureLlmSizingForUser({
+  db,
+  userId,
+  runId,
+  taskLimit = Number.POSITIVE_INFINITY,
+  storyLimit = Number.POSITIVE_INFINITY,
+}) {
+  const serverNow = admin.firestore.FieldValue.serverTimestamp();
+  const sprintsSnap = await db.collection('sprints')
+    .where('ownerUid', '==', userId)
+    .get()
+    .catch(() => ({ docs: [] }));
+  const activeSprintIds = new Set(
+    sprintsSnap.docs
+      .filter((doc) => isActiveSprintStatus(doc.data()?.status))
+      .map((doc) => doc.id),
+  );
+
+  const tasksSnap = await db.collection('tasks')
+    .where('ownerUid', '==', userId)
+    .get()
+    .catch(() => ({ empty: true, docs: [] }));
+
+  const taskCandidates = tasksSnap.docs
+    .filter((doc) => {
+      const data = doc.data() || {};
+      const done = Number(data.status) === 2 || String(data.status).toLowerCase() === 'done';
+      if (done || data.deleted) return false;
+      const hasPoints = Number.isFinite(Number(data.points)) && Number(data.points) > 0;
+      return !hasPoints;
+    })
+    .slice(0, Number.isFinite(taskLimit) ? taskLimit : undefined);
+
+  const sizedTasks = [];
+  for (const docSnap of taskCandidates) {
+    const data = docSnap.data() || {};
+    const estimate = await requestWorkEstimateFromLLM({
+      userId,
+      entityType: 'task',
+      title: data.title || data.ref || 'Task',
+      description: data.description || '',
+      acceptanceCriteria: normalizeAcceptanceCriteriaForSizing(data),
+    });
+    if (!estimate) continue;
+    const estimateMinutes = Math.max(60, Math.round(estimate.hours * 60));
+    await docSnap.ref.set({
+      points: estimate.points,
+      estimatedHours: Number(estimate.hours.toFixed(2)),
+      estimateMin: estimateMinutes,
+      llmSizing: {
+        method: 'llm',
+        rationale: estimate.rationale,
+        runId,
+        updatedAt: serverNow,
+      },
+      updatedAt: serverNow,
+    }, { merge: true });
+    sizedTasks.push(docSnap.id);
+  }
+
+  const storiesSnap = await db.collection('stories')
+    .where('ownerUid', '==', userId)
+    .get()
+    .catch(() => ({ empty: true, docs: [] }));
+
+  const storyCandidates = storiesSnap.docs
+    .filter((doc) => {
+      const data = doc.data() || {};
+      const done = Number(data.status) === 4 || String(data.status).toLowerCase() === 'done';
+      if (done || data.deleted) return false;
+      if (!data.sprintId || !activeSprintIds.has(data.sprintId)) return false;
+      const hasPoints = Number.isFinite(Number(data.points)) && Number(data.points) > 0;
+      return !hasPoints;
+    })
+    .slice(0, Number.isFinite(storyLimit) ? storyLimit : undefined);
+
+  const sizedStories = [];
+  for (const docSnap of storyCandidates) {
+    const data = docSnap.data() || {};
+    const estimate = await requestWorkEstimateFromLLM({
+      userId,
+      entityType: 'story',
+      title: data.title || data.ref || 'Story',
+      description: data.description || '',
+      acceptanceCriteria: normalizeAcceptanceCriteriaForSizing(data),
+    });
+    if (!estimate) continue;
+    await docSnap.ref.set({
+      points: estimate.points,
+      estimatedHours: Number(estimate.hours.toFixed(2)),
+      llmSizing: {
+        method: 'llm',
+        rationale: estimate.rationale,
+        runId,
+        updatedAt: serverNow,
+      },
+      updatedAt: serverNow,
+    }, { merge: true });
+    sizedStories.push(docSnap.id);
+  }
+
+  return {
+    tasksSized: sizedTasks.length,
+    storiesSized: sizedStories.length,
+    sizedTaskIds: sizedTasks,
+    sizedStoryIds: sizedStories,
+  };
+}
+
+async function autoConvertOversizedTasksForUser({ db, userId, profile, runId, maxConversions = 5 }) {
+  if (profile.autoConversionEnabled === false) {
+    return { processed: 0, converted: 0, conversions: [] };
+  }
+  const thresholdMinutes = Number(profile.autoConversionThresholdMinutes || 240);
+  const pointsThreshold = Number.isFinite(profile.autoConversionThresholdPoints)
+    ? Number(profile.autoConversionThresholdPoints)
+    : 4;
+
+  const tasksSnap = await db.collection('tasks').where('ownerUid', '==', userId).get();
+  const candidates = tasksSnap.docs.filter((taskDoc) => {
+    const data = taskDoc.data() || {};
+    if (data.autoConverted || data.convertedToStoryId) return false;
+    if (data.autoConversionSkip === true) return false;
+    const status = data.status;
+    if (status === 2 || status === 3 || status === 'done' || status === 'completed') return false;
+    const estMinutes = Number(data.estimateMin || 0);
+    const estHours = Number(data.estimatedHours || 0);
+    const points = Number(data.points || 0);
+    if (estMinutes >= thresholdMinutes) return true;
+    if (estHours >= 4) return true;
+    if (points > pointsThreshold) return true;
+    return false;
+  });
+
+  const conversions = [];
+  const profileSnapshot = profile || {};
+
+  for (const taskDoc of candidates.slice(0, maxConversions)) {
+    try {
+      const conversion = await autoConvertTask({ db, taskDoc, profile: profileSnapshot, runId });
+      if (conversion) conversions.push(conversion);
+    } catch (error) {
+      console.error('[auto-convert] nightly task failed', { userId, taskId: taskDoc.id, error });
+    }
+  }
+
+  return {
+    processed: candidates.length,
+    converted: conversions.length,
+    conversions,
+  };
+}
+
+async function generateCalendarPlanForUser({ db, userId, profile, runId }) {
+  const zone = resolveTimezone(profile, DEFAULT_TIMEZONE);
+  const windowStart = DateTime.now().setZone(coerceZone(zone)).startOf('day');
+  const windowEnd = windowStart.plus({ days: 6 }).endOf('day');
+
+  let busy = [];
+  try {
+    busy = await fetchGoogleBusy(userId, windowStart.toJSDate(), windowEnd.toJSDate());
+  } catch (error) {
+    console.warn('[calendar-plan] busy lookup failed', { userId, error: error?.message || error });
+  }
+
+  const plan = await planSchedule({
+    db,
+    userId,
+    windowStart,
+    windowEnd,
+    busy,
+    includeChores: true,
+  });
+
+  const existingIds = new Set(plan.existingIds || []);
+  const batch = db.batch();
+  const nowMs = Date.now();
+
+  const plannedFiltered = plan.planned.filter(p => !['story', 'task'].includes(String(p.sourceType || '').toLowerCase()));
+  for (const instance of plannedFiltered) {
+    const ref = db.collection('scheduled_instances').doc(instance.id);
+    const isExisting = existingIds.has(instance.id);
+    const payload = {
+      ...instance,
+      status: instance.status || 'planned',
+      userId,
+      ownerUid: userId,
+      updatedAt: nowMs,
+      runId,
+    };
+    if (!isExisting) {
+      payload.createdAt = nowMs;
+    }
+    batch.set(ref, payload, { merge: true });
+
+    // Mirror routines/chores/habits into calendar_blocks for internal tracking
+    const blockId = `sched_${instance.id}`;
+    const blockRef = db.collection('calendar_blocks').doc(blockId);
+    const startMs = instance.plannedStart ? new Date(instance.plannedStart).getTime() : null;
+    const endMs = instance.plannedEnd ? new Date(instance.plannedEnd).getTime() : null;
+    if (startMs && endMs) {
+      const sourceType = String(instance.sourceType || 'routine').toLowerCase();
+      const syncRoutineLikeToGoogle = sourceType === 'chore';
+      batch.set(blockRef, {
+        ownerUid: userId,
+        title: instance.title || 'Routine',
+        start: startMs,
+        end: endMs,
+        category: instance.sourceType || 'routine',
+        entityType: instance.sourceType || 'routine',
+        status: 'planned',
+        aiGenerated: true,
+        deepLink: instance.deepLink || null,
+        placementReason: (instance.schedulingContext && instance.schedulingContext.policyMode) || 'routine',
+        theme: instance.theme || null,
+        goalId: instance.goalId || null,
+        choreId: sourceType === 'chore' ? instance.sourceId || null : null,
+        routineId: sourceType === 'routine' ? instance.sourceId || null : null,
+        habitId: sourceType === 'habit' ? instance.sourceId || null : null,
+        updatedAt: nowMs,
+        createdAt: nowMs,
+        syncToGoogle: syncRoutineLikeToGoogle,
+      }, { merge: true });
+    }
+  }
+
+  for (const unscheduled of plan.unscheduled) {
+    const id = schedulerMakeInstanceId({
+      userId,
+      sourceType: unscheduled.sourceType,
+      sourceId: unscheduled.sourceId,
+      occurrenceDate: unscheduled.dayKey,
+    });
+    const ref = db.collection('scheduled_instances').doc(id);
+    const isExisting = existingIds.has(id);
+    const schedulingContext = {
+      solverRunId: plan.solverRunId,
+      policyMode: unscheduled.policyMode || null,
+      deepLink: unscheduled.deepLink || null,
+    };
+    const payload = {
+      id,
+      userId,
+      ownerUid: userId,
+      sourceType: unscheduled.sourceType,
+      sourceId: unscheduled.sourceId,
+      title: unscheduled.title || null,
+      occurrenceDate: unscheduled.dayKey,
+      status: 'unscheduled',
+      statusReason: unscheduled.reason,
+      durationMinutes: 0,
+      priority: unscheduled.priority || 5,
+      requiredBlockId: unscheduled.requiredBlockId || null,
+      candidateBlockIds: unscheduled.candidateBlockIds || [],
+      deepLink: unscheduled.deepLink || null,
+      mobileCheckinUrl: unscheduled.mobileCheckinUrl || null,
+      schedulingContext,
+      updatedAt: nowMs,
+      runId,
+    };
+    if (!isExisting) payload.createdAt = nowMs;
+    batch.set(ref, payload, { merge: true });
+  }
+
+  await batch.commit();
+
+  const jobDocId = `${userId}__${windowStart.toISODate()}`;
+  await db.collection('planning_jobs').doc(jobDocId).set({
+    id: jobDocId,
+    userId,
+    planningDate: windowStart.toISODate(),
+    windowStart: windowStart.toISODate(),
+    windowEnd: windowEnd.toISODate(),
+    solverRunId: plan.solverRunId,
+    status: 'succeeded',
+    startedAt: nowMs,
+    completedAt: nowMs,
+    plannedCount: plan.planned.length,
+    unscheduledCount: plan.unscheduled.length,
+    conflicts: plan.conflicts || [],
+    createdAt: nowMs,
+    updatedAt: nowMs,
+    runId,
+  }, { merge: true });
+
+  return {
+    planned: plan.planned.length,
+    unscheduled: plan.unscheduled.length,
+    conflicts: Array.isArray(plan.conflicts) ? plan.conflicts.length : 0,
+  };
+}
+
+async function applyDailySprintCalendarPlanForUser({ db, userId, profile, runId }) {
+  const persona = profile?.defaultPersona || 'personal';
+  const sprintId = await getPreferredSprintId(userId);
+  const horizonDays = Number(profile?.aiPlanningHorizonDays || 3);
+  const context = await assemblePlanningContext(userId, persona, Math.max(1, Math.min(horizonDays, 7)));
+  context.userId = userId;
+
+  if (sprintId) {
+    context.tasks = context.tasks.filter((task) => {
+      const taskSprint = task.sprintId || task.parentId || null;
+      return taskSprint === sprintId;
+    });
+  }
+
+  if (!context.tasks.length) {
+    return { applied: 0, reason: 'no_tasks', sprintId };
+  }
+
+  let aiPlan;
+  try {
+    aiPlan = await generateAIPlan(context, {
+      llmProvider: profile?.planningProvider || 'gemini',
+      llmModel: profile?.planningModel || GEMINI_MODEL,
+    });
+  } catch (error) {
+    console.warn('[calendar-ai] planning failed', { userId, error: error?.message || error });
+    return { applied: 0, reason: 'plan_failed', sprintId, error: error?.message || String(error) };
+  }
+
+  const blocks = Array.isArray(aiPlan?.blocks) ? aiPlan.blocks : [];
+  if (!blocks.length) {
+    return { applied: 0, reason: 'no_blocks', sprintId };
+  }
+
+  const validation = await validateCalendarBlocks(blocks, context);
+  if (validation.errors.length) {
+    console.warn('[calendar-ai] validation failed', { userId, errors: validation.errors });
+    return { applied: 0, reason: 'validation_failed', sprintId, errors: validation.errors };
+  }
+
+  const applied = await applyCalendarBlocks(userId, persona, blocks);
+  return {
+    applied,
+    sprintId,
+    llmBlocks: blocks.length,
+    runId,
+  };
+}
+
+async function getLatestMaintenanceSummary({ db, userId }) {
+  try {
+    const statusDoc = await db.collection('automation_status').doc(`nightly_task_maintenance_${userId}`).get();
+    if (!statusDoc.exists) return null;
+    const lastRunId = statusDoc.data()?.lastRunId || statusDoc.data()?.lastRunIdIso || null;
+    if (!lastRunId) return null;
+    const runDoc = await db.collection('automation_runs').doc(lastRunId).get();
+    if (!runDoc.exists) return null;
+    const data = runDoc.data() || {};
+    return data.maintenanceSummary || data.summary || null;
+  } catch (error) {
+    console.warn('[maintenance] failed to load maintenance summary', { userId, error: error?.message || error });
+    return null;
+  }
+}
+
+// ===== Weekly summaries (AUD-3)
+const { ensureBudget: ensureBudgetDefault } = require('./utils/usageGuard');
+
+exports.generateWeeklySummaries = schedulerV2.onSchedule({ schedule: 'every monday 08:00', timeZone: 'Europe/London' }, async (event) => {
+  const db = ensureFirestore();
+  try { await ensureBudgetDefault(db, 'generateWeeklySummaries', { reads: 3000, writes: 500 }); } catch (e) { console.warn('[weekly summaries] budget exceeded, skipping run'); return { ok: false, skipped: true }; }
+  const now = new Date();
+  const periodStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7).getTime();
+  const profiles = await db.collection('profiles').get().catch(() => ({ empty: true, docs: [] }));
+  for (const doc of profiles.docs) {
+    const uid = doc.id;
+    try {
+      const q = await db.collection('activity_stream')
+        .where('ownerUid', '==', uid)
+        .where('timestamp', '>=', admin.firestore.Timestamp.fromMillis(periodStart))
+        .get();
+      const counts = {};
+      let total = 0;
+      q.docs.forEach(d => {
+        const t = String(d.data()?.activityType || 'unknown');
+        counts[t] = (counts[t] || 0) + 1;
+        total += 1;
+      });
+      const weekKey = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (now.getDay() || 7)).toISOString().slice(0, 10);
+      const summaryRef = db.collection('weekly_summaries').doc(`${uid}_${weekKey}`);
+      await summaryRef.set({
+        id: summaryRef.id,
+        userId: uid,
+        week: weekKey,
+        total,
+        byType: counts,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+    } catch (e) {
+      console.warn('[weekly summaries] failed for user', uid, e?.message || e);
+    }
+  }
+  return { ok: true, users: profiles.docs.length };
+});
+async function runNightlyMaintenanceForUser({ db, userId, profile, nowUtc, runId }) {
+  const duplicateReminders = await detectDuplicateRemindersForUser({ db, userId });
+
+  const dedupeResult = await deduplicateUserTasks({
+    db,
+    userId,
+    dryRun: false,
+    hardDelete: false,
+    logActivity: true,
+    activityActor: 'NightlyMaintenance',
+    runId,
+    // Always include title-based dedupe by default
+    includeTitleDedupe: true,
+  });
+
+  const priorityResult = await prioritizeTasksForUser({ db, userId, runId });
+
+  const dueDateAdjustments = await adjustTopTaskDueDates({ db, userId, profile, priorityResult, runId });
+
+  const sizingResult = await ensureLlmSizingForUser({ db, userId, runId });
+
+  const conversionResult = await autoConvertOversizedTasksForUser({ db, userId, profile, runId });
+
+  const calendarPlan = await generateCalendarPlanForUser({ db, userId, profile, runId });
+
+  const aiCalendarBlocks = await applyDailySprintCalendarPlanForUser({ db, userId, profile, runId });
+
+  if (profile?.monzoConnected) {
+    try {
+      await runMonzoAnalytics(userId, { reason: 'nightly_maintenance', runId });
+    } catch (error) {
+      console.warn('[maintenance] failed to refresh Monzo analytics', { userId, error: error?.message || error });
+    }
+  }
+
+  const topLimit = Math.max(1, Math.min(Number(profile.aiFocusTopCount || 5), 10));
+  const maintenanceSummary = {
+    reminders: duplicateReminders,
+    dedupe: {
+      processed: dedupeResult.processed,
+      resolved: dedupeResult.duplicatesResolved,
+      groups: Array.isArray(dedupeResult.groups) ? dedupeResult.groups.length : 0,
+    },
+    priority: {
+      considered: priorityResult.considered,
+      updated: priorityResult.updated,
+      top: priorityResult.items ? priorityResult.items.slice(0, topLimit) : [],
+    },
+    dueDates: dueDateAdjustments,
+    sizing: sizingResult,
+    conversions: conversionResult,
+    calendar: calendarPlan,
+    aiCalendarBlocks,
+    runId,
+    completedAt: nowUtc.toISO(),
+  };
+
+  try {
+    const activityRef = db.collection('activity_stream').doc();
+    await activityRef.set({
+      id: activityRef.id,
+      entityId: `tasks_${userId}`,
+      entityType: 'task',
+      activityType: 'nightly_task_maintenance',
+      actor: 'AI_Agent',
+      userId,
+      ownerUid: userId,
+      description: `Nightly maintenance reprioritised ${priorityResult.updated} tasks and adjusted ${dueDateAdjustments.adjustedTop} due dates.`,
+      metadata: maintenanceSummary,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  } catch (error) {
+    console.warn('[maintenance] failed to log activity stream', { userId, error: error?.message || error });
+  }
+
+  return {
+    summary: maintenanceSummary,
+    duplicateReminders,
+    dedupeResult,
+    priorityResult,
+    dueDateAdjustments,
+    conversionResult,
+    calendarPlan,
+  };
+}
+
+exports.deduplicateTasks = httpsV2.onCall(async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+
+  const dryRun = !!request?.data?.dryRun;
+  const hardDelete = !!request?.data?.hardDelete;
+  const includeTitleDedupe = request?.data?.includeTitleDedupe !== false; // default true
+
+  const db = admin.firestore();
+  try {
+    return await deduplicateUserTasks({ db, userId: uid, dryRun, hardDelete, logActivity: true, activityActor: uid, includeTitleDedupe });
+  } catch (e) {
+    console.error('[deduplicateTasks] failed', { uid, error: e?.message || String(e), stack: e?.stack });
+    throw new httpsV2.HttpsError('internal', e?.message || 'deduplicateTasks failed');
+  }
+});
+
+exports.suggestTaskStoryConversions = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+
+  const limitInput = Number(req?.data?.limit || 8);
+  const limit = Math.max(1, Math.min(Number.isFinite(limitInput) ? limitInput : 8, 15));
+  const persona = req?.data?.persona ? String(req.data.persona) : null;
+  const singleTaskId = req?.data?.taskId ? String(req.data.taskId) : null;
+  const explicitTaskIds = Array.isArray(req?.data?.taskIds)
+    ? req.data.taskIds.map((id) => String(id)).filter(Boolean)
+    : [];
+  const targetTaskIds = new Set([
+    ...explicitTaskIds,
+    ...(singleTaskId ? [singleTaskId] : [])
+  ]);
+
+  const db = admin.firestore();
+  let queryRef = db.collection('tasks').where('ownerUid', '==', uid);
+  if (persona) queryRef = queryRef.where('persona', '==', persona);
+
+  const tasksSnap = await queryRef.get();
+  const allTasks = tasksSnap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }));
+  const candidates = allTasks
+    .filter(t => {
+      const status = String(t.status ?? '').toLowerCase();
+      const isDone = status === 'done' || status === 'complete' || Number(t.status) === 2;
+      const alreadyConverted = !!t.convertedToStoryId;
+      const hasStory = !!(t.storyId || (t.parentType === 'story' && t.parentId));
+      return !isDone && !alreadyConverted && !hasStory;
+    })
+    .filter(t => (targetTaskIds.size ? targetTaskIds.has(t.id) : true))
+    .sort((a, b) => (Number(b.estimateMin || 0) - Number(a.estimateMin || 0)))
+    .filter((_, index) => targetTaskIds.size ? true : index < limit);
+
+  if (!candidates.length) {
+    return { suggestions: [], evaluatedCount: allTasks.length };
+  }
+
+  const goalIds = Array.from(new Set(candidates.map(t => t.goalId).filter(Boolean))).slice(0, 10);
+  const goalTitleById = {};
+  await Promise.all(goalIds.map(async (goalId) => {
+    try {
+      const snap = await db.collection('goals').doc(goalId).get();
+      if (snap.exists) goalTitleById[goalId] = snap.data().title || '';
+    } catch { /* noop */ }
+  }));
+
+  const taskSummaries = candidates.map(task => {
+    const dueMs = toMillis(task.dueDate);
+    const createdMs = toMillis(task.reminderCreatedAt) ?? toMillis(task.createdAt) ?? toMillis(task.serverUpdatedAt);
+    const ageDays = createdMs ? Math.floor((Date.now() - createdMs) / MS_IN_DAY) : null;
+    return {
+      id: task.id,
+      title: task.title || 'Task',
+      description: (task.description || '').slice(0, 400),
+      estimateMin: task.estimateMin || null,
+      estimatedHours: task.estimatedHours || (task.estimateMin ? Number((task.estimateMin / 60).toFixed(2)) : null),
+      dueDate: dueMs ? new Date(dueMs).toISOString().split('T')[0] : null,
+      ageDays,
+      goal: task.goalId ? { id: task.goalId, title: goalTitleById[task.goalId] || '' } : null,
+      persona: task.persona || 'personal',
+      source: task.source || 'web',
+      checklistCount: Array.isArray(task.checklist) ? task.checklist.length : 0
+    };
+  });
+
+  const systemPrompt = `You are an agile coach helping a user convert oversized tasks into well-formed user stories. ` +
+    `Only recommend conversion when a task represents a multi-step deliverable.`;
+
+  const userPrompt = [
+    `Persona: ${persona || (candidates[0]?.persona || 'personal')}`,
+    `Tasks:`,
+    JSON.stringify(taskSummaries, null, 2),
+    `Guidelines:`,
+    `- Recommend conversion only when the task outcome requires multiple steps or coordinated work`,
+    `- Skip tasks that are atomic check-list items`,
+    `- Provide a concise story title (<100 chars) and a 1-2 sentence description`,
+    `- Also include an estimated storyPoints (1..8) using typical agile sizing (1=trivial, 8=large)`,
+    `- Respond with JSON: {"suggestions":[{"taskId":string,"convert":boolean,"confidence":0-1,"storyTitle":string,"storyDescription":string,"storyPoints"?:number,"rationale":string,"goalId"?:string}]}`
+  ].join('\n');
+
+  const raw = await callLLMJson({
+    system: systemPrompt,
+    user: userPrompt,
+    purpose: 'suggestTaskStoryConversions',
+    userId: uid,
+    expectJson: true,
+    temperature: 0.2
+  });
+
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    console.warn('suggestTaskStoryConversions parse error', error);
+    parsed = {};
+  }
+
+  const suggestionsRaw = Array.isArray(parsed?.suggestions) ? parsed.suggestions : [];
+  const candidateById = new Map(taskSummaries.map(t => [t.id, t]));
+
+  const sanitizeConfidence = (value) => {
+    const num = Number(value);
+    if (Number.isNaN(num)) return 0.5;
+    return Math.max(0, Math.min(1, num));
+  };
+
+  const suggestions = suggestionsRaw
+    .filter(item => {
+      if (!item) return false;
+      const convert = item.convert ?? item.shouldConvert;
+      return convert === true || convert === 'true' || convert === 'yes';
+    })
+    .map(item => {
+      const summary = candidateById.get(item.taskId);
+      const taskTitle = summary?.title || item.taskTitle || 'Task';
+      const storyTitle = (item.storyTitle || taskTitle).slice(0, 140);
+      const storyDescription = (item.storyDescription || summary?.description || '').slice(0, 600);
+      const goalId = item.goalId || (summary?.goal?.id || null);
+      const points = Number(item.storyPoints || item.points);
+      return {
+        taskId: item.taskId,
+        taskTitle,
+        storyTitle,
+        storyDescription,
+        confidence: sanitizeConfidence(item.confidence),
+        rationale: item.rationale || '',
+        goalId,
+        goalTitle: goalId ? (goalTitleById[goalId] || summary?.goal?.title || '') : null,
+        points: Number.isFinite(points) ? (clampTaskPoints(points) ?? undefined) : undefined,
+      };
+    })
+    .filter(s => s.taskId);
+
+  return {
+    suggestions,
+    evaluatedCount: candidates.length,
+    totalOpen: allTasks.length
+  };
+});
+
+exports.monzoGoalPotRefLinker = schedulerV2.onSchedule('every 30 minutes', async () => {
+  const db = admin.firestore();
+  const tokens = await db.collection('tokens').where('provider', '==', 'monzo').get();
+  let usersChecked = 0;
+  let totalLinked = 0;
+  let totalTimedOut = 0;
+  let totalPending = 0;
+
+  for (const tokenSnap of tokens.docs) {
+    const token = tokenSnap.data() || {};
+    const uid = token.ownerUid || String(tokenSnap.id).replace(/_monzo$/, '');
+    if (!uid) continue;
+    usersChecked += 1;
+    try {
+      const result = await linkMonzoGoalRefsForUser(uid, { source: 'scheduled_linker' });
+      totalLinked += Number(result?.linked || 0);
+      totalTimedOut += Number(result?.timedOut || 0);
+      totalPending += Number(result?.pending || 0);
+    } catch (error) {
+      console.warn('[monzoGoalPotRefLinker] failed', { uid, error: error?.message || error });
+      await db.collection('integration_logs').add({
+        integration: 'monzo',
+        type: 'goal_pot_ref_linker',
+        status: 'error',
+        userId: uid,
+        source: 'scheduled_linker',
+        error: error?.message || String(error),
+        timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    }
+  }
+
+  console.log('[monzoGoalPotRefLinker] summary', {
+    usersChecked,
+    totalLinked,
+    totalTimedOut,
+    totalPending,
+  });
+
+  return {
+    ok: true,
+    usersChecked,
+    totalLinked,
+    totalTimedOut,
+    totalPending,
+  };
+});
+
+exports.convertTasksToStories = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+
+  const conversions = Array.isArray(req?.data?.conversions) ? req.data.conversions : [];
+  if (!conversions.length) throw new httpsV2.HttpsError('invalid-argument', 'conversions array required');
+  if (conversions.length > 10) throw new httpsV2.HttpsError('invalid-argument', 'conversion limit exceeded (max 10)');
+
+  const db = admin.firestore();
+  const batch = db.batch();
+  const results = [];
+
+  for (const conversion of conversions) {
+    const taskId = String(conversion?.taskId || '').trim();
+    const storyTitle = String(conversion?.storyTitle || '').trim().slice(0, 140);
+    const storyDescription = String(conversion?.storyDescription || '').trim().slice(0, 1200);
+    if (!taskId || !storyTitle) {
+      results.push({ taskId, status: 'skipped', reason: 'invalid_payload' });
+      continue;
+    }
+
+    const taskRef = db.collection('tasks').doc(taskId);
+    const taskSnap = await taskRef.get();
+    if (!taskSnap.exists) {
+      results.push({ taskId, status: 'skipped', reason: 'task_missing' });
+      continue;
+    }
+
+    const taskData = taskSnap.data() || {};
+    if (taskData.ownerUid !== uid) {
+      results.push({ taskId, status: 'skipped', reason: 'not_owner' });
+      continue;
+    }
+    if (taskData.convertedToStoryId) {
+      results.push({ taskId, status: 'skipped', reason: 'already_converted', storyId: taskData.convertedToStoryId });
+      continue;
+    }
+
+    const persona = taskData.persona || 'personal';
+    let goalId = conversion?.goalId || taskData.goalId || null;
+    let sprintId = conversion?.sprintId || taskData.sprintId || null;
+    let theme = taskData.theme || null;
+
+    if (!goalId && taskData.storyId) {
+      try {
+        const storySnap = await db.collection('stories').doc(taskData.storyId).get();
+        if (storySnap.exists) {
+          const storyData = storySnap.data() || {};
+          goalId = storyData.goalId || goalId;
+          theme = theme || storyData.theme || null;
+          sprintId = sprintId || storyData.sprintId || null;
+        }
+      } catch { /* ignore */ }
+    }
+
+    if (goalId && !theme) {
+      try {
+        const goalSnap = await db.collection('goals').doc(goalId).get();
+        if (goalSnap.exists) {
+          theme = goalSnap.data().theme || theme;
+        }
+      } catch { /* ignore */ }
+    }
+
+    const storyRef = db.collection('stories').doc();
+    const storyRefValue = await generateStoryRef(db, uid);
+
+    const storyPayload = {
+      ref: storyRefValue,
+      title: storyTitle,
+      description: storyDescription || taskData.description || '',
+      goalId: goalId || null,
+      sprintId: sprintId || null,
+      url: taskData.url || null,
+      priority: conversion?.priority ? Number(conversion.priority) : 2,
+      points: clampTaskPoints(conversion?.points)
+        ?? clampTaskPoints((Number(taskData.estimateMin || 60) || 60) / 60)
+        ?? 1,
+      status: 0,
+      theme: theme || taskData.theme || 1,
+      persona,
+      ownerUid: uid,
+      orderIndex: Date.now(),
+      tags: Array.isArray(conversion?.tags) ? conversion.tags.slice(0, 10) : [],
+      acceptanceCriteria: Array.isArray(conversion?.acceptanceCriteria) ? conversion.acceptanceCriteria.slice(0, 10) : [],
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    };
+
+    batch.set(storyRef, storyPayload);
+
+    batch.set(taskRef, {
+      status: 2,
+      convertedToStoryId: storyRef.id,
+      reminderSyncDirective: 'complete',
+      syncState: 'dirty',
+      deleted: true,
+      duplicateOf: admin.firestore.FieldValue.delete(),
+      duplicateKey: admin.firestore.FieldValue.delete(),
+      duplicateResolvedAt: admin.firestore.FieldValue.serverTimestamp(),
+      serverUpdatedAt: Date.now(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+
+    results.push({ taskId, storyId: storyRef.id, storyRef: storyRefValue, status: 'converted' });
+  }
+
+  await batch.commit();
+
+  const convertedCount = results.filter(r => r.status === 'converted').length;
+  const activityRef = db.collection('activity_stream').doc();
+  await activityRef.set({
+    id: activityRef.id,
+    entityId: `tasks_${uid}`,
+    entityType: 'task',
+    activityType: 'task_to_story_conversion',
+    userId: uid,
+    ownerUid: uid,
+    description: `Converted ${convertedCount} tasks into stories`,
+    metadata: { results },
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp()
+  });
+
+  return { ok: true, results };
+});
+
+// ===== LLM Provider Helpers (Gemini-only)
+// Build a communication-style instruction paragraph from an aiPersonality object.
+// Each dimension is 0–10; values at 5 are neutral and produce no instruction.
+function buildPersonalityInstruction(personality) {
+  if (!personality || typeof personality !== 'object') return '';
+  const {
+    intelligence = 5,
+    humour = 5,
+    sarcasm = 5,
+    directness = 7,
+    warmth = 5,
+    verbosity = 5,
+  } = personality;
+  const parts = [];
+  if (directness >= 8) parts.push('Be extremely direct and blunt – omit all preamble and filler.');
+  else if (directness >= 6) parts.push('Be direct and concise.');
+  else if (directness <= 3) parts.push('Explain your reasoning fully with supporting context.');
+  if (verbosity <= 3) parts.push('Use the fewest words possible; prefer bullet points over prose.');
+  else if (verbosity >= 8) parts.push('Provide thorough, detailed explanations.');
+  if (intelligence >= 8) parts.push('Assume expert-level domain knowledge; use advanced vocabulary freely.');
+  else if (intelligence <= 3) parts.push('Use plain language and avoid jargon.');
+  if (humour >= 7) parts.push('Incorporate light humour and wit where it fits naturally.');
+  if (sarcasm >= 7) parts.push('A dry, sarcastic tone is acceptable when contextually appropriate.');
+  if (warmth >= 8) parts.push('Be warm, encouraging, and supportive in tone.');
+  else if (warmth <= 2) parts.push('Maintain a neutral, professional tone without personal warmth.');
+  if (!parts.length) return '';
+  return `Communication style:\n${parts.map((p) => `- ${p}`).join('\n')}`;
+}
+
+// Maps purpose strings → feature config keys in aiFeatureConfig.
+// Purposes not listed here use the user's global provider/model.
+const PURPOSE_TO_FEATURE = {
+  // Telegram / agent
+  agent_query:                    'telegram',
+  agent_briefing:                 'digest',
+  agent_propose_plan:             'telegram',
+  agent_weekly_review:            'digest',
+
+  // Journal / transcripts
+  journalProcess:                 'journal',
+  transcriptProcess:              'journal',
+  journalEnrich:                  'journal',
+
+  // Morning / weekly digest
+  sendMorningBriefing:            'digest',
+  sendWeeklyReview:               'digest',
+  dailySummaryFocus:              'digest',
+  dailyChecklistBriefing:        'digest',
+
+  // Story & KPI generation
+  storyTasks:                     'story',
+  storyResearchDoc:               'story',
+  deriveFromResearch:             'story',
+  goalChat:                       'story',
+  generateStoriesForGoal:         'story',
+  generateStoryAcceptanceCriteria:'story',
+  autoAcceptanceCriteria:         'story',
+  chatSummary:                    'story',
+
+  // Task enrichment & sizing
+  taskEnrich:                     'taskEnrich',
+  enhanceNewTask:                 'taskEnrich',
+  enhanceTaskDescription:         'taskEnrich',
+  taskSizing:                     'taskEnrich',
+  storySizing:                    'taskEnrich',
+  suggestTaskStoryConversions:    'taskEnrich',
+
+  // Planning & prioritisation
+  priority_now:                   'planning',
+  replan_day:                     'planning',
+  nightlyTaskPrioritization:      'planning',
+  prioritizeBacklog:              'planning',
+  planCalendar:                   'planning',
+  calendarBlockSummary:          'planning',
+  goalResearchPlan:               'planning',
+  goalResearchDoc:                'planning',
+
+  // Finance
+  monzo_ai_category:              'finance',
+  finance_commentary:             'finance',
+};
+
+async function callLLMJson({ system, user, purpose, userId, expectJson = false, temperature = 0.2, provider = 'gemini', model = GEMINI_MODEL, personality = null, userApiKey = null }) {
+  // ── Resolve provider / model / API key from user profile ───────────────────
+  let resolvedProvider = provider;
+  let resolvedModel    = model;
+  let resolvedApiKey   = userApiKey;
+
+  if (userId && !userApiKey) {
+    try {
+      const db = admin.firestore();
+      const profileSnap = await db.collection('profiles').doc(userId).get();
+      if (profileSnap.exists) {
+        const profileData = profileSnap.data() || {};
+
+        // 1. Start with global default provider + model
+        if (profileData.aiProvider) resolvedProvider = profileData.aiProvider;
+        if (profileData.aiModel)    resolvedModel    = profileData.aiModel;
+
+        // 2. Check for a per-feature override (e.g. telegram uses Claude, journal uses GPT-4o)
+        const featureKey = PURPOSE_TO_FEATURE[purpose];
+        const featureConfig = featureKey && profileData.aiFeatureConfig?.[featureKey];
+        if (featureConfig) {
+          if (featureConfig.provider) resolvedProvider = featureConfig.provider;
+          if (featureConfig.model)    resolvedModel    = featureConfig.model;
+        }
+
+        // 3. Resolve API key for the effective provider
+        //    New schema: aiApiKeys.{provider}   Legacy: aiApiKey (single key)
+        const perProviderKeys = profileData.aiApiKeys || {};
+        resolvedApiKey =
+          perProviderKeys[resolvedProvider] ||  // per-provider key
+          profileData.aiApiKey              ||  // legacy single key
+          null;
+
+        // 4. Auto-load personality if caller didn't supply one explicitly
+        if (!personality && profileData.aiPersonality) {
+          personality = profileData.aiPersonality;
+        }
+
+        // 5. Merge global system-prompt override
+        if (profileData.aiSystemPromptOverride) {
+          system = `${profileData.aiSystemPromptOverride}\n\n${system}`;
+        }
+      }
+    } catch (e) {
+      // Non-fatal — fall back to server defaults
+      console.warn('[callLLMJson] Profile lookup failed:', e?.message);
+    }
+  }
+
+  const effectiveSystem = personality ? `${buildPersonalityInstruction(personality)}\n\n${system}` : system;
+  const attempts = 3; // initial + 2 retries
+  let lastErr = null;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      let text;
+      if (resolvedProvider === 'openai') {
+        text = await callOpenAIChat({ system: effectiveSystem, user, model: resolvedModel, expectJson, temperature, apiKey: resolvedApiKey });
+      } else if (resolvedProvider === 'anthropic') {
+        text = await callAnthropic({ system: effectiveSystem, user, model: resolvedModel, expectJson, temperature, apiKey: resolvedApiKey });
+      } else {
+        text = await callGemini({ system: effectiveSystem, user, model: resolvedModel, expectJson, temperature, apiKey: resolvedApiKey });
+      }
+      // lightweight usage log
+      const wrapped = aiUsageLogger.wrapAICall('google-ai-studio', GEMINI_MODEL);
+      await wrapped(async () => ({ ok: true }), { userId, functionName: purpose, purpose });
+      return text;
+    } catch (e) {
+      lastErr = e;
+      await new Promise(r => setTimeout(r, Math.pow(2, i) * 500));
+    }
+  }
+  if (expectJson) return '{}';
+  throw lastErr || new Error('LLM unavailable');
+}
+
+async function callGemini({ system, user, model = GEMINI_MODEL, expectJson, temperature, apiKey: userApiKey = null }) {
+  const apiKey = (userApiKey || process.env.GOOGLEAISTUDIOAPIKEY || '').trim();
+  if (!apiKey) throw new Error('GOOGLEAISTUDIOAPIKEY not configured');
+
+  try {
+    // Initialize SDK
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const mdl = model || GEMINI_MODEL;
+
+    // Configure safety settings (block only high-risk content)
+    const safetySettings = [
+      {
+        category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+      },
+      {
+        category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+      },
+      {
+        category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+      },
+      {
+        category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+      },
+    ];
+
+    // Configure generation parameters
+    const generationConfig = {
+      temperature: temperature ?? 0.2,
+      topP: 0.95,
+      topK: 40,
+      maxOutputTokens: 8192,
+    };
+
+    // Add JSON mode if requested
+    if (expectJson) {
+      generationConfig.responseMimeType = 'application/json';
+    }
+
+    // Get model instance
+    const modelInstance = genAI.getGenerativeModel({
+      model: mdl,
+      safetySettings,
+      generationConfig,
+    });
+
+    // Combine system and user prompts
+    const prompt = `${system}\n\n${user}`;
+
+    // Generate content
+    const result = await modelInstance.generateContent(prompt);
+    const response = result.response;
+    const text = response.text();
+
+    if (!text) throw new Error('Empty response from Gemini');
+    return text;
+
+  } catch (error) {
+    console.error('Gemini API Error:', error);
+    // Enhanced error handling
+    if (error.message?.includes('SAFETY')) {
+      throw new Error(`Gemini blocked response due to safety concerns: ${error.message}`);
+    }
+    if (error.message?.includes('RECITATION')) {
+      throw new Error(`Gemini blocked response due to recitation: ${error.message}`);
+    }
+    throw new Error(`Gemini API error: ${error.message || String(error)}`);
+  }
+}
+
+async function callAnthropic({ system, user, model = 'claude-haiku-3-5', expectJson, temperature, apiKey: userApiKey = null }) {
+  const apiKey = (userApiKey || process.env.ANTHROPIC_API_KEY || '').trim();
+  if (!apiKey) throw new Error('ANTHROPIC_API_KEY not configured');
+  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+    body: JSON.stringify({
+      model,
+      max_tokens: 8192,
+      system,
+      messages: [{ role: 'user', content: user }],
+      temperature: temperature ?? 0.2,
+    }),
+  });
+  if (!resp.ok) throw new Error(`Anthropic HTTP ${resp.status}: ${await resp.text()}`);
+  const data = await resp.json();
+  const text = data?.content?.[0]?.text || '';
+  if (!text) throw new Error('Empty response from Anthropic');
+  return text;
+}
+
+async function callOpenAIChat({ system, user, model = 'gpt-4o-mini', expectJson, temperature, apiKey: userApiKey = null }) {
+  const apiKey = (userApiKey || process.env.OPENAI_API_KEY || '').trim();
+  if (!apiKey) throw new Error('OPENAI_API_KEY not configured');
+  const url = 'https://api.openai.com/v1/chat/completions';
+  const body = {
+    model,
+    temperature: temperature ?? 0.2,
+    messages: [
+      { role: 'system', content: system },
+      { role: 'user', content: user },
+    ],
+    ...(expectJson ? { response_format: { type: 'json_object' } } : {}),
+  };
+  const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` }, body: JSON.stringify(body) });
+  if (!res.ok) throw new Error(`OpenAI HTTP ${res.status}: ${await res.text()}`);
+  const data = await res.json();
+  const text = data?.choices?.[0]?.message?.content || '';
+  if (!text) throw new Error('Empty response from OpenAI');
+  return text;
+}
+
+// OpenAI fallback removed: Gemini is required.
+
+function flattenHierarchyTasks(hierarchy) {
+  const tasks = [];
+  (hierarchy || []).forEach((themeNode) => {
+    const theme = themeNode?.theme || 'General';
+    (themeNode?.goals || []).forEach((goalNode) => {
+      const goalTitle = goalNode?.goalTitle || 'Goal';
+      (goalNode?.stories || []).forEach((storyNode) => {
+        const storyTitle = storyNode?.storyTitle || 'Story';
+        (storyNode?.tasks || []).forEach((task) => {
+          if (!task?.ref) return;
+          const statusRaw = task.status;
+          const status = String(statusRaw || '').toLowerCase();
+          const tags = Array.isArray(task.tags) ? task.tags : [];
+          tasks.push({
+            ref: task.ref,
+            title: task.description || task.title || 'Task',
+            dueIso: task.dueDateIso || null,
+            dueDisplay: task.dueDateDisplay || null,
+            status,
+            statusRaw,
+            deepLink: task.deepLink || null,
+            theme,
+            goalTitle,
+            storyTitle,
+            type: task.type || task.category || inferTaskType(task) || null,
+            tags,
+          });
+        });
+      });
+    });
+  });
+  return tasks;
+}
+
+function isRoutineLikeTask(task) {
+  const type = String(task?.type || task?.category || '').toLowerCase();
+  if (['routine', 'chore', 'habit', 'habitual'].some((k) => type.includes(k))) return true;
+  const tags = Array.isArray(task?.tags) ? task.tags.map((t) => String(t || '').toLowerCase()) : [];
+  if (tags.some((t) => ['routine', 'chore', 'habit', 'habitual'].includes(t))) return true;
+  return false;
+}
+
+function isDoneStatus(task) {
+  const raw = task?.statusRaw ?? task?.status;
+  const statusStr = String(raw || '').toLowerCase();
+  const statusNum = Number(raw);
+  if (['done', 'completed', 'complete', 'archived'].includes(statusStr)) return true;
+  if (Number.isFinite(statusNum) && statusNum >= 2) return true;
+  return false;
+}
+
+function isDueTodayOrPast(iso, zone = 'UTC') {
+  if (!iso) return false;
+  const dt = DateTime.fromISO(iso, { zone, setZone: true });
+  if (!dt.isValid) return false;
+  const today = DateTime.now().setZone(zone);
+  return dt <= today.endOf('day');
+}
+
+function buildHeuristicFocus(summaryData, note) {
+  const nowIso = new Date().toISOString();
+  const zone = summaryData?.metadata?.timezone || 'UTC';
+  const items = [];
+  if (Array.isArray(summaryData?.activeWorkItems) && summaryData.activeWorkItems.length) {
+    summaryData.activeWorkItems
+      .slice()
+      .sort((a, b) => {
+        const scoreDiff = Number(b.aiScore || 0) - Number(a.aiScore || 0);
+        if (scoreDiff !== 0) return scoreDiff;
+        const aDue = a.dueIso ? DateTime.fromISO(a.dueIso, { zone, setZone: true }).toMillis() : Number.MAX_SAFE_INTEGER;
+        const bDue = b.dueIso ? DateTime.fromISO(b.dueIso, { zone, setZone: true }).toMillis() : Number.MAX_SAFE_INTEGER;
+        return aDue - bDue;
+      })
+      .slice(0, 3)
+      .forEach((item) => {
+        if (!item?.ref) return;
+        items.push({
+          ref: item.ref,
+          title: item.title || 'Item',
+          bucket: 'Today',
+          reason: item.aiReason || (item.dueDisplay ? `Due ${item.dueDisplay}` : 'Active sprint focus'),
+          nextStep: null,
+          confidence: null,
+          dueDisplay: item.dueDisplay || null,
+          deepLink: item.deepLink || null,
+        });
+      });
+  }
+
+  if (!items.length) {
+    const flattened = flattenHierarchyTasks(summaryData?.hierarchy || [])
+      .filter((task) => {
+        if (!task?.ref) return false;
+        if (isDoneStatus(task)) return false;
+        if (isRoutineLikeTask(task) && !isDueTodayOrPast(task.dueIso, zone)) return false;
+        return true;
+      });
+
+    flattened
+      .sort((a, b) => {
+        const aMs = a.dueIso ? DateTime.fromISO(a.dueIso, { zone, setZone: true }).toMillis() : Number.MAX_SAFE_INTEGER;
+        const bMs = b.dueIso ? DateTime.fromISO(b.dueIso, { zone, setZone: true }).toMillis() : Number.MAX_SAFE_INTEGER;
+        return aMs - bMs;
+      })
+      .slice(0, 3)
+      .forEach((task) => {
+        items.push({
+          ref: task.ref,
+          title: task.title,
+          bucket: 'Today',
+          reason: task.dueDisplay ? `Due ${task.dueDisplay}` : `Theme ${task.theme}`,
+          nextStep: null,
+          confidence: null,
+          dueDisplay: task.dueDisplay || null,
+          deepLink: task.deepLink || null,
+        });
+      });
+  }
+
+  const weatherContext = summaryData?.worldSummary?.weather || summaryData?.weather || null;
+
+  return {
+    mode: 'fallback',
+    model: 'heuristic',
+    generatedAt: nowIso,
+    summary: note || 'AI focus unavailable; showing heuristic priorities.',
+    ask: items.length ? 'Tackle these priorities first to stay on track.' : 'No urgent work detected—use the time for strategic planning.',
+    items,
+    briefing: {
+      lines: [note || 'Maintain momentum and review strategic goals today.'],
+      news: [],
+      weather: weatherContext
+        ? {
+          summary: String(weatherContext.summary || weatherContext.description || ''),
+          temp: String(weatherContext.temp || weatherContext.temperature || ''),
+        }
+        : null,
+    },
+  };
+}
+
+function normalizeRecommendationPersona(value) {
+  return String(value || '').toLowerCase() === 'work' ? 'work' : 'personal';
+}
+
+function isRecommendationTaskDone(status) {
+  if (status == null) return false;
+  if (typeof status === 'number') return status >= 2;
+  const normalized = String(status).trim().toLowerCase();
+  return ['done', 'complete', 'completed', 'finished', 'closed', 'archived'].includes(normalized);
+}
+
+function isRecommendationStoryDone(status) {
+  if (status == null) return false;
+  if (typeof status === 'number') return status >= 4;
+  const normalized = String(status).trim().toLowerCase();
+  return ['done', 'complete', 'completed', 'finished', 'closed', 'archived'].includes(normalized);
+}
+
+function getRecommendationEntityScore(entity) {
+  const score = Number(entity?.aiCriticalityScore ?? entity?.aiPriorityScore ?? entity?.aiScore ?? 0);
+  return Number.isFinite(score) ? score : 0;
+}
+
+function getRecommendationTaskDueMs(task) {
+  return toMillis(task?.dueDate || task?.dueDateMs || task?.targetDate || task?.plannedStartDate || null);
+}
+
+function getRecommendationStoryDueMs(story) {
+  return toMillis(story?.sprintDueDate || story?.targetDate || story?.dueDate || story?.plannedStartDate || null);
+}
+
+function buildRecommendationLabel(title, ref) {
+  const safeTitle = String(title || '').trim() || 'Untitled item';
+  const safeRef = String(ref || '').trim();
+  return safeRef ? `${safeTitle} (${safeRef})` : safeTitle;
+}
+
+function getRecommendationTaskKind(task) {
+  const rawType = String(task?.type || task?.taskType || '').trim().toLowerCase();
+  const normalizedType = rawType === 'habitual' ? 'habit' : rawType;
+  if (['chore', 'routine', 'habit'].includes(normalizedType)) return normalizedType;
+  if (normalizedType) return null;
+  const tags = Array.isArray(task?.tags)
+    ? task.tags.map((tag) => String(tag || '').trim().toLowerCase().replace(/^#/, ''))
+    : [];
+  if (tags.includes('chore')) return 'chore';
+  if (tags.includes('routine')) return 'routine';
+  if (tags.includes('habit') || tags.includes('habitual')) return 'habit';
+  return null;
+}
+
+function buildRecommendationCandidate({
+  type,
+  id,
+  data,
+  source,
+  reason,
+  plannedStartMs = null,
+  plannedEndMs = null,
+  calendarTitle = null,
+  top3 = false,
+}) {
+  if (!type || !id || !data) return null;
+  const ref = String(data?.ref || data?.reference || '').trim() || null;
+  const title = String(data?.title || calendarTitle || (type === 'story' ? 'Story' : 'Task')).trim() || (type === 'story' ? 'Story' : 'Task');
+  const dueMs = type === 'story' ? getRecommendationStoryDueMs(data) : getRecommendationTaskDueMs(data);
+  const taskKind = type === 'task' ? getRecommendationTaskKind(data) : null;
+  const checklistPath = (type === 'task' && taskKind)
+    ? `/chores/checklist?taskId=${encodeURIComponent(String(id))}`
+    : null;
+  const path = checklistPath || buildEntityPath(type, id, ref || id);
+  const deepLink = path ? buildAbsoluteUrl(path) : null;
+  return {
+    type,
+    id,
+    ref,
+    title,
+    label: buildRecommendationLabel(title, ref),
+    path,
+    deepLink,
+    taskKind,
+    score: getRecommendationEntityScore(data),
+    sprintId: data?.sprintId || null,
+    dueMs,
+    plannedStartMs: Number.isFinite(plannedStartMs) ? plannedStartMs : null,
+    plannedEndMs: Number.isFinite(plannedEndMs) ? plannedEndMs : null,
+    source,
+    reason: reason || null,
+    calendarTitle: calendarTitle || null,
+    top3: Boolean(top3 || data?.aiTop3ForDay),
+  };
+}
+
+function scoreRecommendationCandidate(candidate, { selectedSprintId = null, endOfDayMs = null } = {}) {
+  if (!candidate) return -Infinity;
+  let score = Number(candidate.score || 0);
+  if (candidate.top3) score += 18;
+  if (selectedSprintId && candidate.sprintId === selectedSprintId) score += 14;
+  if (candidate.dueMs && Number.isFinite(candidate.dueMs) && endOfDayMs && candidate.dueMs <= endOfDayMs) score += 10;
+  if (candidate.source === 'due_open_task') score += 4;
+  if (candidate.source === 'current_block') score += 1000;
+  if (candidate.source === 'upcoming_block') score += 250;
+  return score;
+}
+
+function formatRecommendationCalendarTime(millis, zone) {
+  if (!Number.isFinite(millis)) return null;
+  const dt = DateTime.fromMillis(millis, { zone: coerceZone(zone) });
+  return dt.isValid ? dt.toFormat('HH:mm') : null;
+}
+
+async function computeNextWorkRecommendation({
+  db,
+  uid,
+  persona,
+  selectedSprintId = null,
+}) {
+  const profileSnap = await db.collection('profiles').doc(uid).get().catch(() => null);
+  const profile = profileSnap && profileSnap.exists ? (profileSnap.data() || {}) : {};
+  const zone = resolveTimezone(profile, DEFAULT_TIMEZONE);
+  const now = DateTime.now().setZone(coerceZone(zone));
+  const dayStartMs = now.startOf('day').toMillis();
+  const dayEndMs = now.endOf('day').toMillis();
+  const nowMs = now.toMillis();
+  const personaValue = normalizeRecommendationPersona(persona);
+  const sprintFilter = selectedSprintId && selectedSprintId !== SPRINT_NONE ? String(selectedSprintId) : null;
+
+  const blocksQuery = db.collection('calendar_blocks')
+    .where('ownerUid', '==', uid)
+    .where('start', '>=', dayStartMs)
+    .where('start', '<=', dayEndMs)
+    .get()
+    .catch(() => ({ docs: [] }));
+
+  const top3TasksQuery = db.collection('tasks')
+    .where('ownerUid', '==', uid)
+    .where('persona', '==', personaValue)
+    .where('aiTop3ForDay', '==', true)
+    .get()
+    .catch(() => ({ docs: [] }));
+
+  const top3StoriesQuery = db.collection('stories')
+    .where('ownerUid', '==', uid)
+    .where('persona', '==', personaValue)
+    .where('aiTop3ForDay', '==', true)
+    .get()
+    .catch(() => ({ docs: [] }));
+
+  const dueOpenTasksQuery = db.collection('sprint_task_index')
+    .where('ownerUid', '==', uid)
+    .where('persona', '==', personaValue)
+    .where('isOpen', '==', true)
+    .orderBy('dueDate', 'asc')
+    .limit(24)
+    .get()
+    .catch(() => ({ docs: [] }));
+
+  const recentStoriesQuery = db.collection('stories')
+    .where('ownerUid', '==', uid)
+    .where('persona', '==', personaValue)
+    .orderBy('updatedAt', 'desc')
+    .limit(18)
+    .get()
+    .catch(() => ({ docs: [] }));
+
+  const [blocksSnap, top3TasksSnap, top3StoriesSnap, dueOpenTasksSnap, recentStoriesSnap] = await Promise.all([
+    blocksQuery,
+    top3TasksQuery,
+    top3StoriesQuery,
+    dueOpenTasksQuery,
+    recentStoriesQuery,
+  ]);
+
+  const dayBlocks = blocksSnap.docs
+    .map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() || {}) }))
+    .filter((block) => Number.isFinite(Number(block?.start)) && Number.isFinite(Number(block?.end)))
+    .sort((a, b) => Number(a.start || 0) - Number(b.start || 0));
+
+  const relevantBlocks = dayBlocks.filter((block) => Number(block.end || 0) >= nowMs - (5 * MS_IN_MINUTE));
+  const taskIds = [...new Set(relevantBlocks.map((block) => String(block?.taskId || '').trim()).filter(Boolean))];
+  const storyIds = [...new Set(relevantBlocks.map((block) => String(block?.storyId || '').trim()).filter(Boolean))];
+
+  const [linkedTaskSnaps, linkedStorySnaps] = await Promise.all([
+    taskIds.length ? db.getAll(...taskIds.map((id) => db.collection('tasks').doc(id))).catch(() => []) : Promise.resolve([]),
+    storyIds.length ? db.getAll(...storyIds.map((id) => db.collection('stories').doc(id))).catch(() => []) : Promise.resolve([]),
+  ]);
+
+  const linkedTasks = new Map();
+  linkedTaskSnaps.forEach((snap) => {
+    if (!snap?.exists) return;
+    linkedTasks.set(snap.id, snap.data() || {});
+  });
+  const linkedStories = new Map();
+  linkedStorySnaps.forEach((snap) => {
+    if (!snap?.exists) return;
+    linkedStories.set(snap.id, snap.data() || {});
+  });
+
+  const blockCandidates = relevantBlocks.map((block) => {
+    const startMs = Number(block.start || 0);
+    const endMs = Number(block.end || 0);
+    if (block.taskId) {
+      const task = linkedTasks.get(String(block.taskId));
+      if (!task || task.ownerUid !== uid || normalizeRecommendationPersona(task.persona) !== personaValue || task.deleted || isRecommendationTaskDone(task.status)) {
+        return { block, candidate: null };
+      }
+      return {
+        block,
+        candidate: buildRecommendationCandidate({
+          type: 'task',
+          id: String(block.taskId),
+          data: task,
+          source: startMs <= nowMs && endMs >= nowMs ? 'current_block' : 'upcoming_block',
+          reason: startMs <= nowMs && endMs >= nowMs
+            ? `Planned now until ${formatRecommendationCalendarTime(endMs, zone)}`
+            : `Planned at ${formatRecommendationCalendarTime(startMs, zone)}`,
+          plannedStartMs: startMs,
+          plannedEndMs: endMs,
+          calendarTitle: block.title || null,
+        }),
+      };
+    }
+    if (block.storyId) {
+      const story = linkedStories.get(String(block.storyId));
+      if (!story || story.ownerUid !== uid || normalizeRecommendationPersona(story.persona) !== personaValue || isRecommendationStoryDone(story.status)) {
+        return { block, candidate: null };
+      }
+      return {
+        block,
+        candidate: buildRecommendationCandidate({
+          type: 'story',
+          id: String(block.storyId),
+          data: story,
+          source: startMs <= nowMs && endMs >= nowMs ? 'current_block' : 'upcoming_block',
+          reason: startMs <= nowMs && endMs >= nowMs
+            ? `Planned now until ${formatRecommendationCalendarTime(endMs, zone)}`
+            : `Planned at ${formatRecommendationCalendarTime(startMs, zone)}`,
+          plannedStartMs: startMs,
+          plannedEndMs: endMs,
+          calendarTitle: block.title || null,
+        }),
+      };
+    }
+    return { block, candidate: null };
+  });
+
+  const currentLinked = blockCandidates.find(({ block, candidate }) => candidate && Number(block.start || 0) <= nowMs && Number(block.end || 0) >= nowMs)?.candidate || null;
+  if (currentLinked) {
+    return {
+      ok: true,
+      computedAt: now.toISO(),
+      timezone: zone,
+      persona: personaValue,
+      selectedSprintId: sprintFilter,
+      status: 'current_block',
+      reasonCode: 'current_block',
+      currentCalendarBlock: {
+        title: currentLinked.calendarTitle || currentLinked.title,
+        start: currentLinked.plannedStartMs ? new Date(currentLinked.plannedStartMs).toISOString() : null,
+        end: currentLinked.plannedEndMs ? new Date(currentLinked.plannedEndMs).toISOString() : null,
+      },
+      recommendedItem: {
+        type: currentLinked.type,
+        id: currentLinked.id,
+        ref: currentLinked.ref,
+        title: currentLinked.title,
+        label: currentLinked.label,
+        path: currentLinked.path,
+        deepLink: currentLinked.deepLink,
+        taskKind: currentLinked.taskKind || null,
+        score: currentLinked.score,
+        source: currentLinked.source,
+        reason: currentLinked.reason,
+        plannedStart: currentLinked.plannedStartMs ? new Date(currentLinked.plannedStartMs).toISOString() : null,
+        plannedEnd: currentLinked.plannedEndMs ? new Date(currentLinked.plannedEndMs).toISOString() : null,
+        dueDate: currentLinked.dueMs ? new Date(currentLinked.dueMs).toISOString() : null,
+      },
+      spokenResponse: `Work on ${currentLinked.label} now.`,
+    };
+  }
+
+  const activeBusyBlock = dayBlocks.find((block) => Number(block.start || 0) <= nowMs && Number(block.end || 0) >= nowMs) || null;
+  const upcomingLinked = blockCandidates.find(({ block, candidate }) => candidate && Number(block.start || 0) > nowMs)?.candidate || null;
+
+  const top3Tasks = top3TasksSnap.docs
+    .map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() || {}) }))
+    .filter((task) => !task.deleted)
+    .filter((task) => !isRecommendationTaskDone(task.status))
+    .filter((task) => {
+      if (!task.aiTop3Date) return true;
+      return String(task.aiTop3Date).slice(0, 10) === now.toISODate();
+    })
+    .map((task) => buildRecommendationCandidate({
+      type: 'task',
+      id: task.id,
+      data: task,
+      source: 'top3',
+      reason: 'Top 3 priority for today',
+      top3: true,
+    }))
+    .filter(Boolean);
+
+  const top3Stories = top3StoriesSnap.docs
+    .map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() || {}) }))
+    .filter((story) => !isRecommendationStoryDone(story.status))
+    .filter((story) => {
+      if (!story.aiTop3Date) return true;
+      return String(story.aiTop3Date).slice(0, 10) === now.toISODate();
+    })
+    .map((story) => buildRecommendationCandidate({
+      type: 'story',
+      id: story.id,
+      data: story,
+      source: 'top3',
+      reason: 'Top 3 priority for today',
+      top3: true,
+    }))
+    .filter(Boolean);
+
+  const dueOpenTasks = dueOpenTasksSnap.docs
+    .map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() || {}) }))
+    .filter((task) => !isRecommendationTaskDone(task.status))
+    .map((task) => buildRecommendationCandidate({
+      type: 'task',
+      id: task.id,
+      data: task,
+      source: 'due_open_task',
+      reason: task.dueDate && Number(task.dueDate) <= dayEndMs ? 'Due today or overdue' : 'Open task',
+      top3: Boolean(task.aiTop3ForDay),
+    }))
+    .filter(Boolean);
+
+  const recentStories = recentStoriesSnap.docs
+    .map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() || {}) }))
+    .filter((story) => !isRecommendationStoryDone(story.status))
+    .map((story) => buildRecommendationCandidate({
+      type: 'story',
+      id: story.id,
+      data: story,
+      source: 'recent_story',
+      reason: 'Open story',
+      top3: Boolean(story.aiTop3ForDay),
+    }))
+    .filter(Boolean);
+
+  const fallbackPool = [];
+  const seenKeys = new Set();
+  [top3Tasks, top3Stories, dueOpenTasks, recentStories].forEach((collection) => {
+    collection.forEach((candidate) => {
+      const key = `${candidate.type}:${candidate.id}`;
+      if (seenKeys.has(key)) return;
+      seenKeys.add(key);
+      fallbackPool.push(candidate);
+    });
+  });
+
+  const sortedFallback = fallbackPool
+    .filter((candidate) => !sprintFilter || !candidate.sprintId || candidate.sprintId === sprintFilter || candidate.top3)
+    .sort((a, b) => {
+      const scoreDiff = scoreRecommendationCandidate(b, { selectedSprintId: sprintFilter, endOfDayMs: dayEndMs })
+        - scoreRecommendationCandidate(a, { selectedSprintId: sprintFilter, endOfDayMs: dayEndMs });
+      if (scoreDiff !== 0) return scoreDiff;
+      const aDue = a.dueMs ?? Number.MAX_SAFE_INTEGER;
+      const bDue = b.dueMs ?? Number.MAX_SAFE_INTEGER;
+      if (aDue !== bDue) return aDue - bDue;
+      return a.label.localeCompare(b.label);
+    });
+
+  let selected = null;
+  let status = 'fallback';
+  let reasonCode = 'fallback';
+  let spokenResponse = 'No clear next item found.';
+  let currentCalendarBlock = null;
+
+  if (activeBusyBlock) {
+    const busyTitle = String(activeBusyBlock.title || activeBusyBlock.summary || 'calendar event').trim();
+    const busyEndLabel = formatRecommendationCalendarTime(Number(activeBusyBlock.end || 0), zone);
+    currentCalendarBlock = {
+      title: busyTitle,
+      start: Number.isFinite(Number(activeBusyBlock.start)) ? new Date(Number(activeBusyBlock.start)).toISOString() : null,
+      end: Number.isFinite(Number(activeBusyBlock.end)) ? new Date(Number(activeBusyBlock.end)).toISOString() : null,
+    };
+    if (upcomingLinked) {
+      selected = {
+        ...upcomingLinked,
+        reason: busyEndLabel ? `After ${busyTitle} ends at ${busyEndLabel}` : `After ${busyTitle}`,
+      };
+      status = 'after_busy_event';
+      reasonCode = 'after_busy_event';
+      spokenResponse = `After ${busyTitle}, work on ${selected.label}.`;
+    } else if (sortedFallback[0]) {
+      selected = {
+        ...sortedFallback[0],
+        reason: busyEndLabel ? `After ${busyTitle} ends at ${busyEndLabel}` : `After ${busyTitle}`,
+      };
+      status = 'after_busy_event';
+      reasonCode = 'after_busy_event';
+      spokenResponse = `After ${busyTitle}, work on ${selected.label}.`;
+    }
+  }
+
+  if (!selected && upcomingLinked && Number(upcomingLinked.plannedStartMs || 0) <= nowMs + (2 * 60 * MS_IN_MINUTE)) {
+    selected = upcomingLinked;
+    status = 'upcoming_block';
+    reasonCode = 'upcoming_block';
+    spokenResponse = `Next up is ${selected.label} at ${formatRecommendationCalendarTime(Number(selected.plannedStartMs || 0), zone)}.`;
+  }
+
+  if (!selected && sortedFallback[0]) {
+    selected = sortedFallback[0];
+    status = selected.source === 'top3' ? 'top3' : 'ai_score';
+    reasonCode = status;
+    spokenResponse = `Next up is ${selected.label}.`;
+  }
+
+  if (!selected) {
+    return {
+      ok: true,
+      computedAt: now.toISO(),
+      timezone: zone,
+      persona: personaValue,
+      selectedSprintId: sprintFilter,
+      status: 'none',
+      reasonCode: 'none',
+      currentCalendarBlock,
+      recommendedItem: null,
+      spokenResponse: activeBusyBlock
+        ? `You are blocked by calendar until ${formatRecommendationCalendarTime(Number(activeBusyBlock.end || 0), zone) || 'later'}.`
+        : 'You have no open task or story to work on next.',
+    };
+  }
+
+  return {
+    ok: true,
+    computedAt: now.toISO(),
+    timezone: zone,
+    persona: personaValue,
+    selectedSprintId: sprintFilter,
+    status,
+    reasonCode,
+    currentCalendarBlock,
+    recommendedItem: {
+      type: selected.type,
+      id: selected.id,
+      ref: selected.ref,
+      title: selected.title,
+      label: selected.label,
+      path: selected.path,
+      deepLink: selected.deepLink,
+      taskKind: selected.taskKind || null,
+      score: selected.score,
+      source: selected.source,
+      reason: selected.reason,
+      plannedStart: selected.plannedStartMs ? new Date(selected.plannedStartMs).toISOString() : null,
+      plannedEnd: selected.plannedEndMs ? new Date(selected.plannedEndMs).toISOString() : null,
+      dueDate: selected.dueMs ? new Date(selected.dueMs).toISOString() : null,
+    },
+    spokenResponse,
+  };
+}
+
+async function buildDailySummaryAiFocus({ summaryData, userId }) {
+  const traceId = crypto.randomUUID ? crypto.randomUUID() : crypto.randomBytes(12).toString('hex');
+  const promptTemplateId = 'dailySummaryFocus.v2';
+  const startedAtMs = Date.now();
+
+  try {
+    const zone = summaryData?.metadata?.timezone || 'UTC';
+    const candidates = Array.isArray(summaryData?.activeWorkItems) ? summaryData.activeWorkItems : [];
+    const filtered = candidates.filter((item) => item && item.ref);
+    if (!filtered.length) return null;
+
+    const sorted = filtered
+      .slice()
+      .sort((a, b) => {
+        const scoreDiff = Number(b.aiScore || 0) - Number(a.aiScore || 0);
+        if (scoreDiff !== 0) return scoreDiff;
+        const aDue = a.dueIso ? DateTime.fromISO(a.dueIso, { zone, setZone: true }).toMillis() : Number.MAX_SAFE_INTEGER;
+        const bDue = b.dueIso ? DateTime.fromISO(b.dueIso, { zone, setZone: true }).toMillis() : Number.MAX_SAFE_INTEGER;
+        return aDue - bDue;
+      });
+
+    const context = sorted.slice(0, 12).map((item) => ({
+      ref: item.ref,
+      type: item.type,
+      title: item.title,
+      description: item.description || '',
+      acceptanceCriteria: item.acceptanceCriteria || [],
+      theme: item.theme || null,
+      due: item.dueIso || item.dueDisplay || 'none',
+      score: item.aiScore ?? null,
+      scoreReason: item.aiReason || null,
+    }));
+
+    const calendarContext = Array.isArray(summaryData?.calendarBlocks)
+      ? summaryData.calendarBlocks.slice(0, 6).map((block) => ({
+        time: block.startDisplay || block.startIso || '',
+        title: block.title || 'Block',
+        theme: block.theme || null,
+      }))
+      : [];
+
+    const system = 'You are a sprint planning assistant. Use the active sprint items and calendar to craft a concise priority narrative. Respond in JSON only.';
+    const prompt = [
+      `Today is ${summaryData?.metadata?.dayIso || DateTime.now().toISODate()} in timezone ${zone}.`,
+      'Focus only on the provided active sprint items. Use the provided scores/reasons as anchors but also read the text.',
+      'Return JSON {"items":[{"ref":string,"bucket":"Today"|"Watch"|"Defer","rationale":string,"nextStep":string,"confidence":number}],"ask":string,"summary":string}.',
+      'Constraints: use only provided refs; limit items to 3-5; rationale <=120 chars; nextStep <=80 chars; confidence 0-1.',
+      'Active sprint items:',
+      JSON.stringify(context),
+      calendarContext.length ? `Today calendar: ${JSON.stringify(calendarContext)}` : 'Today calendar: []',
+    ].join('\n');
+
+    const llmTraceBase = {
+      traceId,
+      promptTemplateId,
+      promptTemplateVersion: 2,
+      model: AI_PRIORITY_MODEL,
+      provider: process.env.AI_PROVIDER || 'gemini',
+      purpose: 'dailySummaryFocus',
+      parseExpected: 'json',
+      temperature: 0.2,
+      promptText: prompt,
+      inputPayload: {
+        dayIso: summaryData?.metadata?.dayIso || null,
+        timezone: zone,
+        activeWorkContext: context,
+        calendarContext,
+      },
+    };
+
+    const raw = await callLLMJson({
+      system,
+      user: prompt,
+      purpose: 'dailySummaryFocus',
+      userId,
+      expectJson: true,
+      temperature: 0.2,
+    });
+
+    let parsed = {};
+    try {
+      parsed = raw ? JSON.parse(raw) : {};
+    } catch (error) {
+      console.warn('[daily-summary-ai] JSON parse failed', error?.message || error);
+      await recordAiLog(userId, 'daily_summary_focus_trace', 'warning', 'Daily summary focus parse failure', {
+        ...llmTraceBase,
+        parseStatus: 'failed',
+        rawOutputText: String(raw || '').slice(0, 12000),
+        rawOutputLength: String(raw || '').length,
+        parseError: String(error?.message || error || 'unknown'),
+        latencyMs: Date.now() - startedAtMs,
+      });
+      return buildHeuristicFocus(summaryData, 'AI response could not be parsed.');
+    }
+
+    const candidateMap = new Map();
+    sorted.slice(0, 12).forEach((item) => {
+      candidateMap.set(String(item.ref).toUpperCase(), item);
+    });
+
+    const aiItems = Array.isArray(parsed.items)
+      ? parsed.items
+      : Array.isArray(parsed.focus)
+        ? parsed.focus
+        : [];
+
+    const normalisedTasks = aiItems
+      .map((item) => {
+        const key = (item?.ref || item?.id || '').toString().trim();
+        if (!key) return null;
+        const base = candidateMap.get(key.toUpperCase());
+        if (!base) return null;
+        const rationale = (item.rationale || item.reason || item.explanation || '').toString().trim();
+        const nextStep = (item.nextStep || item.action || '').toString().trim();
+        let confidence = null;
+        if (item.confidence != null) confidence = Number(item.confidence);
+        else if (item.score != null) confidence = Number(item.score);
+        if (Number.isFinite(confidence)) {
+          confidence = Math.min(1, Math.max(0, confidence));
+        } else {
+          confidence = null;
+        }
+        const bucket = (item.bucket || item.category || 'Today').toString().trim() || 'Today';
+        return {
+          ref: base.ref,
+          title: base.title,
+          bucket,
+          reason: rationale || (base.aiReason ? String(base.aiReason) : (base.dueDisplay ? `Due ${base.dueDisplay}` : `Theme ${base.theme}`)),
+          nextStep: nextStep || null,
+          confidence,
+          dueDisplay: base.dueDisplay || null,
+          deepLink: base.deepLink || null,
+        };
+      })
+      .filter(Boolean)
+      .slice(0, 3);
+
+    // Pick top 3 stories for balance (use storiesToStart when present)
+    const storyPool = Array.isArray(summaryData?.storiesToStart) ? summaryData.storiesToStart : [];
+    const normalisedStories = storyPool.slice(0, 3).map((story) => ({
+      ref: story.ref || story.id,
+      title: story.title || 'Story',
+      bucket: 'Today',
+      reason: story.goal ? `Goal ${story.goal}` : 'Progress sprint story',
+      nextStep: story.nextStep || null,
+      confidence: null,
+      dueDisplay: story.sprintDueDateDisplay || null,
+      deepLink: story.deepLink || (story.id ? `/stories/${story.id}` : null),
+    }));
+
+    const normalised = [...normalisedTasks, ...normalisedStories].slice(0, 6);
+
+    if (!normalised.length) {
+      await recordAiLog(userId, 'daily_summary_focus_trace', 'warning', 'Daily summary focus returned no actionable items', {
+        ...llmTraceBase,
+        parseStatus: 'ok_empty',
+        rawOutputText: String(raw || '').slice(0, 12000),
+        rawOutputLength: String(raw || '').length,
+        latencyMs: Date.now() - startedAtMs,
+      });
+      return buildHeuristicFocus(summaryData, 'AI produced no actionable items; fallback applied.');
+    }
+
+    const askText = parsed.ask || parsed.callToAction || (normalised.length ? 'Commit to finishing these active sprint items today.' : null);
+    const summaryText = parsed.summary || parsed.note || null;
+
+    const result = {
+      mode: 'ai',
+      model: AI_PRIORITY_MODEL,
+      generatedAt: new Date().toISOString(),
+      summary: summaryText,
+      ask: askText,
+      items: normalised,
+    };
+
+    await recordAiLog(userId, 'daily_summary_focus_trace', 'success', 'Daily summary focus generated', {
+      ...llmTraceBase,
+      parseStatus: 'ok',
+      rawOutputText: String(raw || '').slice(0, 12000),
+      rawOutputLength: String(raw || '').length,
+      resultItemCount: result.items.length,
+      latencyMs: Date.now() - startedAtMs,
+    });
+
+    return result;
+  } catch (error) {
+    console.warn('[daily-summary-ai] focus generation failed', error?.message || error);
+    await recordAiLog(userId, 'daily_summary_focus_trace', 'error', 'Daily summary focus generation failed', {
+      traceId,
+      promptTemplateId,
+      parseStatus: 'runtime_error',
+      error: String(error?.message || error || 'unknown'),
+      latencyMs: Date.now() - startedAtMs,
+    });
+    return buildHeuristicFocus(summaryData, 'AI focus generation failed; showing heuristic priorities.');
+  }
+}
+
+function assembleDailyChecklist(summaryData) {
+  const timezone = summaryData?.metadata?.timezone || DEFAULT_TIMEZONE;
+  const zone = coerceZone(timezone);
+  const nowIso = new Date().toISOString();
+
+  const tasksDue = Array.isArray(summaryData?.tasksDue) ? summaryData.tasksDue : [];
+  const choresDue = Array.isArray(summaryData?.choresDue) ? summaryData.choresDue : [];
+  const routinesDue = Array.isArray(summaryData?.routinesDue) ? summaryData.routinesDue : [];
+  const reminders = Array.isArray(summaryData?.reminders) ? summaryData.reminders : [];
+  const storiesToStart = Array.isArray(summaryData?.storiesToStart) ? summaryData.storiesToStart : [];
+
+  const items = [];
+  const usedKeys = new Set();
+
+  const focusLimitRaw = Number(summaryData?.profile?.aiFocusTopCount || 5);
+  const focusLimit = Math.max(1, Math.min(Number.isFinite(focusLimitRaw) ? focusLimitRaw : 5, 7));
+
+  const tasksById = new Map();
+  const tasksByRef = new Map();
+  tasksDue.forEach((task) => {
+    if (!task?.id) return;
+    tasksById.set(task.id, task);
+    if (task.ref) tasksByRef.set(String(task.ref).toUpperCase(), task);
+  });
+
+  const aiFocusItems = Array.isArray(summaryData?.aiFocus?.items) ? summaryData.aiFocus.items : [];
+  const focusByRef = new Map();
+  aiFocusItems.forEach((focus) => {
+    if (!focus?.ref) return;
+    focusByRef.set(String(focus.ref).toUpperCase(), focus);
+  });
+
+  const maintenanceTop = Array.isArray(summaryData?.maintenance?.priority?.top)
+    ? summaryData.maintenance.priority.top
+    : [];
+
+  const focusCandidates = [];
+  maintenanceTop.forEach((entry, index) => {
+    const task = entry?.taskId ? tasksById.get(entry.taskId) : null;
+    const refUpper = entry?.ref ? String(entry.ref).toUpperCase() : null;
+    const fallback = refUpper ? tasksByRef.get(refUpper) : null;
+    const target = task || fallback;
+    if (!target) return;
+    focusCandidates.push({ target, meta: entry, origin: 'maintenance', order: index });
+  });
+
+  aiFocusItems.forEach((entry, index) => {
+    const refUpper = entry?.ref ? String(entry.ref).toUpperCase() : null;
+    if (!refUpper) return;
+    if (focusCandidates.some((candidate) => candidate.target?.ref && candidate.target.ref.toUpperCase() === refUpper)) {
+      return;
+    }
+    const target = tasksByRef.get(refUpper);
+    if (!target) return;
+    focusCandidates.push({ target, meta: entry, origin: 'ai', order: maintenanceTop.length + index });
+  });
+
+  const pushItem = (payload) => {
+    if (!payload || !payload.key || usedKeys.has(payload.key)) return;
+    payload.order = items.length;
+    items.push(payload);
+    usedKeys.add(payload.key);
+  };
+
+  const buildTaskPayload = (task, meta = {}, origin = 'manual') => {
+    if (!task?.id) return null;
+    const refUpper = task.ref ? String(task.ref).toUpperCase() : null;
+    const focusMeta = refUpper ? focusByRef.get(refUpper) : null;
+    const bucket = focusMeta?.bucket || meta?.bucket || 'Today';
+    const reason = focusMeta?.reason || meta?.reason || (task.dueDisplay ? `Due ${task.dueDisplay}` : `Bucket ${bucket}`);
+    return {
+      key: `task:${task.id}`,
+      type: 'task',
+      category: 'Focus',
+      title: task.title || 'Task',
+      ref: task.ref || null,
+      sourceId: task.id,
+      dueMs: task.dueMs || null,
+      dueDisplay: task.dueDisplay || null,
+      reason,
+      nextStep: focusMeta?.nextStep || meta?.nextStep || null,
+      bucket,
+      deepLink: task.deepLink || null,
+      persona: task.persona || null,
+      highlight: origin === 'maintenance',
+      checkable: true,
+      meta: { origin },
+    };
+  };
+
+  focusCandidates
+    .sort((a, b) => a.order - b.order)
+    .forEach((candidate) => {
+      if (items.filter((item) => item.category === 'Focus').length >= focusLimit) return;
+      pushItem(buildTaskPayload(candidate.target, candidate.meta, candidate.origin));
+    });
+
+  if (items.filter((item) => item.category === 'Focus').length < focusLimit) {
+    tasksDue
+      .filter((task) => !usedKeys.has(`task:${task.id}`))
+      .sort((a, b) => (a.dueMs || Number.MAX_SAFE_INTEGER) - (b.dueMs || Number.MAX_SAFE_INTEGER))
+      .forEach((task) => {
+        if (items.filter((item) => item.category === 'Focus').length >= focusLimit) return;
+        pushItem(buildTaskPayload(task, {}, 'fallback'));
+      });
+  }
+
+  const formatDueTime = (millis) => {
+    if (!millis) return null;
+    const dt = DateTime.fromMillis(millis, { zone });
+    return dt.isValid ? dt.toLocaleString(DateTime.TIME_SIMPLE) : null;
+  };
+
+  const pushCollection = (collection, { category, type, checkable = true, reasonBuilder }) => {
+    (collection || []).forEach((entry) => {
+      if (!entry?.id) return;
+      const key = `${type}:${entry.id}`;
+      if (usedKeys.has(key)) return;
+      const dueMs = entry.dueMs || (entry.dueIso ? DateTime.fromISO(entry.dueIso, { zone }).toMillis() : null);
+      const dueDisplay = entry.dueDisplay || formatDueTime(dueMs);
+      pushItem({
+        key,
+        type,
+        category,
+        title: entry.title || entry.name || 'Item',
+        sourceId: entry.id,
+        dueMs: dueMs || null,
+        dueDisplay,
+        reason: reasonBuilder ? reasonBuilder(entry, dueDisplay) : null,
+        deepLink: entry.deepLink || null,
+        checkable,
+      });
+    });
+  };
+
+  pushCollection(choresDue.slice(0, 4), {
+    category: 'Chores',
+    type: 'chore',
+    reasonBuilder: (entry, dueDisplay) => (dueDisplay ? `Due ${dueDisplay}` : (entry.cadence || null)),
+  });
+
+  pushCollection(routinesDue.slice(0, 4), {
+    category: 'Routines',
+    type: 'routine',
+    reasonBuilder: (entry, dueDisplay) => (dueDisplay ? `Run ${dueDisplay}` : (entry.cadence || null)),
+  });
+
+  const reminderEntries = reminders
+    .filter((rem) => !rem.relatedTaskId || !usedKeys.has(`task:${rem.relatedTaskId}`))
+    .slice(0, 4)
+    .map((rem) => {
+      const dueDt = toDateTime(rem.dueDate || rem.dueAt, { zone, defaultValue: null });
+      return {
+        id: rem.id,
+        title: rem.title || 'Reminder',
+        dueMs: dueDt ? dueDt.toMillis() : null,
+        dueDisplay: dueDt ? dueDt.toLocaleString(DateTime.TIME_SIMPLE) : null,
+        reason: rem.relatedTaskId ? 'Linked to task' : null,
+      };
+    });
+
+  pushCollection(reminderEntries, { category: 'Reminders', type: 'reminder', checkable: true });
+
+  storiesToStart.slice(0, 3).forEach((story) => {
+    if (!story?.id) return;
+    const key = `story:${story.id}`;
+    if (usedKeys.has(key)) return;
+    const dueDt = story.sprintDueDateIso ? DateTime.fromISO(story.sprintDueDateIso, { zone }) : null;
+    pushItem({
+      key,
+      type: 'story',
+      category: 'Stories',
+      title: story.title || 'Story',
+      sourceId: story.id,
+      dueMs: dueDt && dueDt.isValid ? dueDt.toMillis() : null,
+      dueDisplay: story.sprintDueDateDisplay || (dueDt && dueDt.isValid ? dueDt.toLocaleString(DateTime.DATE_MED) : null),
+      reason: story.goal ? `Goal ${story.goal}` : null,
+      deepLink: story.deepLink || null,
+      checkable: false,
+    });
+  });
+
+  // ===== Tasks normalizer + chore/routine calendar materializer
+  exports.onTaskWriteNormalize = firestoreV2.onDocumentWritten('tasks/{id}', async (event) => {
+    const db = admin.firestore();
+    const id = event?.params?.id;
+    const before = event?.data?.before?.data() || null;
+    const after = event?.data?.after?.data() || null;
+    if (!after) return; // deleted
+
+    const ref = event.data.after.ref;
+    const patch = {};
+    let needsPatch = false;
+
+    // Ensure updatedAt
+    patch.updatedAt = admin.firestore.FieldValue.serverTimestamp();
+    needsPatch = true;
+
+    // completedAt when transitioning to done (status=2)
+    const beforeStatus = Number(before?.status ?? null);
+    const afterStatus = Number(after?.status ?? null);
+
+    // Canonicalize explicit task type values (e.g., "Habit" -> "habit")
+    const rawType = String(after?.type ?? patch?.type ?? '').trim().toLowerCase();
+    const canonicalType = rawType === 'habitual' ? 'habit' : rawType;
+    const supportedTaskTypes = new Set(['task', 'read', 'watch', 'chore', 'routine', 'habit']);
+    if (canonicalType && supportedTaskTypes.has(canonicalType)) {
+      if (String(after?.type || '').trim() !== canonicalType) {
+        patch.type = canonicalType;
+        needsPatch = true;
+      }
+    }
+
+    // One-time type inference if missing
+    if (!canonicalType) {
+      const inferred = inferTaskType(after);
+      if (inferred) { patch.type = inferred; patch.typeInferredAt = admin.firestore.FieldValue.serverTimestamp(); needsPatch = true; }
+    }
+
+    // Recurrence normalization
+    const { changed, patch: norm } = normaliseRecurrence(after);
+    if (changed) { Object.assign(patch, norm); needsPatch = true; }
+
+    // Enforce chores theme for chore-type tasks
+    const effectiveType = String(patch?.type || after?.type || '').toLowerCase();
+    const isChoreLike = effectiveType === 'chore' || effectiveType === 'routine' || effectiveType === 'habit';
+    const effectiveTask = { ...(after || {}), ...(patch || {}), type: effectiveType };
+    const isRecurringChore = isRecurringChoreTask(effectiveTask);
+    if (effectiveType === 'chore') {
+      const currentTheme = after?.theme ?? patch?.theme ?? null;
+      const currentLabel = themeLabelFromValue(currentTheme);
+      if (String(currentLabel || '').toLowerCase() !== 'chores') {
+        patch.theme = 'Chores';
+        needsPatch = true;
+      }
+    }
+
+    if ((beforeStatus !== 2) && (afterStatus === 2)) {
+      if (isRecurringChore) {
+        patch.status = 0;
+        patch.completedAt = admin.firestore.FieldValue.delete();
+        patch.deleteAfter = admin.firestore.FieldValue.delete();
+        patch.lastDoneAt = admin.firestore.FieldValue.serverTimestamp();
+        needsPatch = true;
+      } else if (!after?.completedAt) {
+        patch.completedAt = admin.firestore.FieldValue.serverTimestamp();
+        needsPatch = true;
+      }
+    }
+
+    // Time of Day normalization — keep timeOfDay in sync with dueTime and content
+    const beforeDueTime = before?.dueTime ? String(before.dueTime).trim() : null;
+    const afterDueTime = after?.dueTime ? String(after.dueTime).trim() : null;
+    if (afterDueTime && afterDueTime !== beforeDueTime) {
+      // dueTime changed — derive timeOfDay from it (aligned with timeOfDayPopulator buckets)
+      const hour = parseInt(afterDueTime.split(':')[0] || '0', 10);
+      let newTod;
+      if (hour >= 5 && hour < 13) newTod = 'morning';
+      else if (hour >= 13 && hour < 19) newTod = 'afternoon';
+      else newTod = 'evening'; // 19:00–04:59
+
+      if (after?.timeOfDay !== newTod) {
+        patch.timeOfDay = newTod;
+        needsPatch = true;
+      }
+    } else if (!afterDueTime && !after?.timeOfDay) {
+      // No dueTime and no timeOfDay — infer from title/description via keywords
+      const inferred = inferTimeOfDayFromContent(after?.title || '', after?.description || '');
+      if (inferred) {
+        patch.timeOfDay = inferred;
+        needsPatch = true;
+      }
+    }
+
+    if (needsPatch) {
+      // Avoid infinite loops: keep patch minimal and idempotent
+      await ref.set(patch, { merge: true });
+    }
+
+    // If just completed, mark nearest block done and update lastDoneAt
+    if ((beforeStatus !== 2) && (afterStatus === 2) && isChoreLike) {
+      const today = startOfDay(new Date());
+      const todayKey = toDayKey(today);
+      const blockId = `chore_${id}_${todayKey}`;
+      const blockRef = db.collection('calendar_blocks').doc(blockId);
+      const snap = await blockRef.get();
+      if (snap.exists) {
+        await blockRef.set({ status: 'done', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      }
+      await ref.set({ lastDoneAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    }
+
+    // Auto-enhance new tasks: spell-check title, estimate points, score
+    if (!before && after && !isChoreLike && after.ownerUid) {
+      try {
+        const uid = after.ownerUid;
+        const enhanceTask = async () => {
+          const system = 'You are a task management assistant. Return compact JSON only.';
+          const user = [
+            'Given this task title and description, do three things:',
+            '1. Fix any spelling/grammar errors in the title (keep it concise)',
+            '2. Estimate effort points as a number (decimals allowed in 0.25 increments, range 0.25-8)',
+            '3. Infer a good time of day to do this. Return "morning", "afternoon", "evening", or null.',
+            '',
+            `Title: "${after.title || ''}"`,
+            `Description: "${(after.description || '').slice(0, 400)}"`,
+            '',
+            'Respond as: {"correctedTitle": "string", "points": number, "timeOfDay": "string|null"}',
+          ].join('\n');
+          const text = await callLLMJson({ system, user, purpose: 'enhanceNewTask', userId: uid, expectJson: true, temperature: 0.1 });
+          const obj = JSON.parse(text || '{}');
+          const enhancePatch = {};
+
+          if (obj.correctedTitle && typeof obj.correctedTitle === 'string' && obj.correctedTitle.trim() !== (after.title || '').trim()) {
+            enhancePatch.title = obj.correctedTitle.trim().slice(0, 200);
+            enhancePatch.titleCorrectedByAi = true;
+          }
+          const normalizedEnhancePoints = clampTaskPoints(obj.points);
+          if (normalizedEnhancePoints != null && !(Number(after.points) > 0)) {
+            enhancePatch.points = normalizedEnhancePoints;
+            enhancePatch.pointsEstimatedByAi = true;
+          }
+
+          if (obj.timeOfDay && !after.timeOfDay && !after.dueTime && ['morning', 'afternoon', 'evening'].includes(obj.timeOfDay)) {
+            enhancePatch.timeOfDay = obj.timeOfDay;
+            enhancePatch.timeOfDayInferredByAi = true;
+            try {
+              const activityRef = admin.firestore().collection('activity_stream').doc();
+              await activityRef.set({
+                id: activityRef.id,
+                entityType: 'task',
+                entityId: id,
+                activityType: 'ai_time_inference',
+                description: `AI inferred time of day: ${obj.timeOfDay}`,
+                timestamp: admin.firestore.FieldValue.serverTimestamp(),
+                ownerUid: uid,
+              });
+            } catch (e) {
+              console.warn('[onTaskWriteNormalize] could not add activity log', e?.message);
+            }
+          }
+
+          if (Object.keys(enhancePatch).length > 0) {
+            enhancePatch.updatedAt = admin.firestore.FieldValue.serverTimestamp();
+            await ref.set(enhancePatch, { merge: true });
+          }
+        };
+        // Fire and don't await to avoid slowing down the trigger
+        enhanceTask().catch((e) => console.warn('[onTaskWriteNormalize] auto-enhance failed', e?.message || e));
+      } catch (e) {
+        console.warn('[onTaskWriteNormalize] auto-enhance setup failed', e?.message || e);
+      }
+    }
+  });
+
+  // ===== Nightly archiver: tasks -> tasks_archive after 30d completed
+  exports.archiveCompletedTasksNightly = schedulerV2.onSchedule('every day 02:30', async () => {
+    const db = admin.firestore();
+    const cutoff = admin.firestore.Timestamp.fromMillis(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const snap = await db.collection('tasks')
+      .where('status', '==', 2)
+      .where('completedAt', '<=', cutoff)
+      .get();
+
+    let archived = 0, errors = 0;
+    for (const doc of snap.docs) {
+      try {
+        const data = doc.data() || {};
+        const archiveRef = db.collection('tasks_archive').doc(doc.id);
+        const ttl = admin.firestore.Timestamp.fromMillis(Date.now() + 90 * 24 * 60 * 60 * 1000);
+        await archiveRef.set({
+          ...data,
+          sourceTaskId: doc.id,
+          archivedAt: admin.firestore.FieldValue.serverTimestamp(),
+          deleteAt: ttl,
+        }, { merge: true });
+        await doc.ref.delete();
+        archived++;
+      } catch (err) {
+        console.error('[archiver] failed', { id: doc.id, error: err?.message || String(err) });
+        errors++;
+      }
+    }
+    try {
+      const activityRef = db.collection('activity_stream').doc();
+      await activityRef.set({
+        id: activityRef.id,
+        entityType: 'archiver',
+        activityType: 'tasks_archived',
+        description: `Archived ${archived} tasks (errors: ${errors})`,
+        timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    } catch { }
+  });
+
+  // ===== Hourly: legacy chore block materialization retired in favor of canonical scheduler
+  exports.ensureChoreBlocksHourly = schedulerV2.onSchedule('every 1 hours', async () => {
+    const scanned = 0;
+    const created = 0;
+    const updated = 0;
+    try {
+      const activityRef = admin.firestore().collection('activity_stream').doc();
+      await activityRef.set({
+        id: activityRef.id,
+        entityType: 'chore_blocks',
+        activityType: 'ensure_blocks',
+        description: `Legacy chore block materialization skipped: scanned=${scanned}, created=${created}, updated=${updated}`,
+        timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    } catch { }
+  });
+
+  // ===== Callables: complete/snooze chore task
+  exports.completeChoreTask = httpsV2.onCall(async (req) => {
+    const uid = req?.auth?.uid;
+    if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+    const taskId = String(req?.data?.taskId || '').trim();
+    if (!taskId) throw new httpsV2.HttpsError('invalid-argument', 'taskId required');
+    const db = admin.firestore();
+    const taskRef = db.collection('tasks').doc(taskId);
+    const snap = await taskRef.get();
+    if (!snap.exists) throw new httpsV2.HttpsError('not-found', 'Task not found');
+    const task = snap.data() || {};
+    if (task.ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Cannot modify this task');
+    const type = String(task?.type || '').toLowerCase();
+    if (type !== 'chore' && type !== 'routine' && type !== 'habit') throw new httpsV2.HttpsError('failed-precondition', 'Not a chore/routine/habit');
+    const today = new Date();
+    const todayKey = toDayKey(today);
+    const todayIso = today.toISOString().slice(0, 10);
+    const blockId = `chore_${taskId}_${todayKey}`;
+    await db.collection('calendar_blocks').doc(blockId)
+      .set({
+        ownerUid: uid,
+        taskId,
+        entityType: 'chore',
+        status: 'done',
+        source: 'chore',
+        syncToGoogle: false,
+        deepLink: `/chores/checklist?date=${encodeURIComponent(todayIso)}&taskId=${encodeURIComponent(taskId)}`,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+    await taskRef.set({ lastDoneAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    return { ok: true };
+  });
+
+  exports.snoozeChoreTask = httpsV2.onCall(async (req) => {
+    const uid = req?.auth?.uid;
+    if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+    const taskId = String(req?.data?.taskId || '').trim();
+    const days = Math.max(1, Math.min(14, Number(req?.data?.days || 1)));
+    if (!taskId) throw new httpsV2.HttpsError('invalid-argument', 'taskId required');
+    const db = admin.firestore();
+    const taskRef = db.collection('tasks').doc(taskId);
+    const snap = await taskRef.get();
+    if (!snap.exists) throw new httpsV2.HttpsError('not-found', 'Task not found');
+    const task = snap.data() || {};
+    if (task.ownerUid !== uid) throw new httpsV2.HttpsError('permission-denied', 'Cannot modify this task');
+    const until = startOfDay(new Date(Date.now() + days * 24 * 60 * 60 * 1000)).getTime();
+    await taskRef.set({ snoozedUntil: until, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    return { ok: true, snoozedUntil: until };
+  });
+
+  return {
+    generatedAt: nowIso,
+    timezone,
+    items,
+    stats: {
+      total: items.length,
+      focus: items.filter((entry) => entry.category === 'Focus').length,
+      chores: items.filter((entry) => entry.type === 'chore').length,
+      routines: items.filter((entry) => entry.type === 'routine').length,
+      reminders: items.filter((entry) => entry.type === 'reminder').length,
+      stories: items.filter((entry) => entry.type === 'story').length,
+    },
+  };
+}
+
+async function buildDailyChecklistBriefing({ summaryData, checklist, userId }) {
+  try {
+    if (!checklist || !Array.isArray(checklist.items) || !checklist.items.length) {
+      return null;
+    }
+
+    const timezone = summaryData?.metadata?.timezone || DEFAULT_TIMEZONE;
+    const focusItems = checklist.items.filter((item) => item.category === 'Focus').slice(0, 5);
+    const choreItems = checklist.items.filter((item) => item.type === 'chore').slice(0, 3);
+    const routineItems = checklist.items.filter((item) => item.type === 'routine').slice(0, 3);
+    const storyItems = checklist.items.filter((item) => item.type === 'story').slice(0, 2);
+
+    const agenda = Array.isArray(summaryData?.calendarBlocks)
+      ? summaryData.calendarBlocks.slice(0, 4).map((block) => ({
+        title: block.title || 'Block',
+        start: block.startDisplay || block.startIso || null,
+        end: block.endDisplay || block.endIso || null,
+        theme: block.theme || null,
+      }))
+      : [];
+
+    const financeTotals = summaryData?.monzo?.totals
+      ? {
+        spent: summaryData.monzo.totals.spent || null,
+        budget: summaryData.monzo.totals.budget || null,
+        remaining: summaryData.monzo.totals.remaining || null,
+      }
+      : null;
+
+    const payload = {
+      date: summaryData?.metadata?.dayIso || DateTime.now().setZone(coerceZone(timezone)).toISODate(),
+      timezone,
+      focus: focusItems.map((item) => ({ title: item.title, reason: item.reason, due: item.dueDisplay })),
+      chores: choreItems.map((item) => ({ title: item.title, due: item.dueDisplay })),
+      routines: routineItems.map((item) => ({ title: item.title, due: item.dueDisplay })),
+      stories: storyItems.map((item) => ({ title: item.title, due: item.dueDisplay })),
+      agenda,
+      finance: financeTotals,
+      stats: checklist.stats || null,
+    };
+
+    const systemPrompt = 'You are an encouraging executive assistant. Write a concise morning briefing (<=80 words). Respond with JSON {"headline":string,"body":string,"checklist":string}.';
+    const userPrompt = `Context: ${JSON.stringify(payload)}`;
+
+    const raw = await callLLMJson({
+      system: systemPrompt,
+      user: userPrompt,
+      purpose: 'dailyChecklistBriefing',
+      userId,
+      expectJson: true,
+      temperature: 0.3,
+    });
+
+    let parsed = {};
+    try {
+      parsed = raw ? JSON.parse(raw) : {};
+    } catch (error) {
+      console.warn('[daily-briefing] JSON parse failed', error?.message || error);
+      parsed = {};
+    }
+
+    const headline = parsed.headline || parsed.title || null;
+    const body = parsed.body || parsed.summary || null;
+    const checklistNote = parsed.checklist || parsed.actions || null;
+
+    return {
+      mode: 'ai',
+      model: process.env.GOOGLEAISTUDIOAPIKEY ? GEMINI_MODEL : 'gpt-4o-mini',
+      generatedAt: new Date().toISOString(),
+      headline: headline || 'Stay on target today',
+      body: body || 'Lead with your focus items, then clear the supporting chores and routines to keep momentum.',
+      checklist: checklistNote || 'Work the focus list top to bottom and tick items the moment they are done so sync stays tight.',
+    };
+  } catch (error) {
+    console.warn('[daily-briefing] generation failed', error?.message || error);
+    const stats = checklist?.stats || {};
+    const focusCount = Number(stats.focus || 0);
+    const upkeepCount = Number((stats.chores || 0) + (stats.routines || 0));
+    const bodyParts = [];
+    if (focusCount) bodyParts.push(`You have ${focusCount} focus ${focusCount === 1 ? 'task' : 'tasks'} to ship—knock those out before midday.`);
+    if (upkeepCount) bodyParts.push(`There are ${upkeepCount} upkeep items queued; clear them in one sweep to keep automations happy.`);
+    if (!bodyParts.length) bodyParts.push('Use the open space for planning or recovery; no urgent items detected.');
+    return {
+      mode: 'fallback',
+      model: 'heuristic',
+      generatedAt: new Date().toISOString(),
+      headline: focusCount ? 'Focus, then upkeep' : 'A light agenda',
+      body: bodyParts.join(' '),
+      checklist: 'Review the list once an hour and tick items so iOS Reminders stays mirrored.',
+    };
+  }
+}
+
+// ===== Strava Helpers
+const STRAVA_RETRYABLE_STATUS = new Set([408, 409, 425, 429, 500, 502, 503, 504]);
+const sleepMs = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function isStravaAuthError(error) {
+  const msg = String(error?.message || '').toLowerCase();
+  const body = String(error?.body || '').toLowerCase();
+  const status = Number(error?.status || 0);
+  if (status === 401 || status === 403) return true;
+  if (msg.includes('invalid_grant')) return true;
+  if (body.includes('invalid_grant')) return true;
+  if (msg.includes('authorization error')) return true;
+  if (msg.includes('unauthorized')) return true;
+  return false;
+}
+
+function toMillisSafe(value) {
+  if (!value) return null;
+  if (typeof value === 'number') return value > 1e12 ? value : value * 1000;
+  if (typeof value?.toMillis === 'function') return value.toMillis();
+  if (typeof value?.toDate === 'function') {
+    try { return value.toDate().getTime(); } catch { return null; }
+  }
+  const parsed = Date.parse(String(value));
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+async function updateStravaSyncState(uid, patch = {}) {
+  if (!uid) return;
+  const db = admin.firestore();
+  await db.collection('profiles').doc(uid).set({
+    ...patch,
+    stravaUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+}
+
+async function fetchStravaJson(url, opts = {}, {
+  retries = 2,
+  baseDelayMs = 550,
+} = {}) {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await fetchJson(url, opts);
+    } catch (error) {
+      const status = Number(error?.status || 0);
+      const msg = String(error?.message || '').toLowerCase();
+      const networkish = msg.includes('fetch failed') || msg.includes('network') || msg.includes('econn') || msg.includes('etimedout');
+      const retryable = STRAVA_RETRYABLE_STATUS.has(status) || networkish;
+      if (!retryable || attempt >= retries) throw error;
+      const jitter = Math.floor(Math.random() * 250);
+      const delay = Math.min(8000, Math.round(baseDelayMs * (2 ** attempt)) + jitter);
+      await sleepMs(delay);
+      attempt += 1;
+    }
+  }
+}
+
+async function getStravaTokenDoc(uid) {
+  const db = admin.firestore();
+  const snap = await db.collection('tokens').doc(`${uid}_strava`).get();
+  return snap.exists ? { id: snap.id, ...snap.data() } : null;
+}
+
+async function refreshStravaAccessToken(uid, tokenDoc = null) {
+  const db = admin.firestore();
+  const doc = tokenDoc || await getStravaTokenDoc(uid);
+  if (!doc) throw new Error('Strava not connected for this user');
+  if (!doc.refresh_token) {
+    await updateStravaSyncState(uid, {
+      stravaLastSyncStatus: 'error',
+      stravaNeedsReconnect: true,
+      stravaLastErrorAt: admin.firestore.FieldValue.serverTimestamp(),
+      stravaLastErrorMessage: 'Missing Strava refresh token. Reconnect Strava.',
+    });
+    throw new Error('Missing Strava refresh token. Reconnect Strava in Integrations.');
+  }
+  // Refresh token
+  let refreshed;
+  try {
+    const clientId = envTrim('STRAVA_CLIENT_ID');
+    const clientSecret = envTrim('STRAVA_CLIENT_SECRET');
+    if (!clientId || !clientSecret) {
+      throw new Error('Missing STRAVA_CLIENT_ID/STRAVA_CLIENT_SECRET secret');
+    }
+    refreshed = await fetchStravaJson("https://www.strava.com/oauth/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: clientId,
+        client_secret: clientSecret,
+        grant_type: "refresh_token",
+        refresh_token: doc.refresh_token,
+      }).toString(),
+    }, { retries: 1 });
+  } catch (error) {
+    const authError = isStravaAuthError(error);
+    await updateStravaSyncState(uid, {
+      stravaLastSyncStatus: 'error',
+      stravaNeedsReconnect: authError || !!doc.refresh_token,
+      stravaLastErrorAt: admin.firestore.FieldValue.serverTimestamp(),
+      stravaLastErrorMessage: authError
+        ? 'Strava authorization expired. Reconnect Strava.'
+        : (error?.message || 'Failed to refresh Strava token'),
+    });
+    throw error;
+  }
+  const tokenRef = db.collection('tokens').doc(`${uid}_strava`);
+  await tokenRef.set({
+    access_token: refreshed.access_token,
+    refresh_token: refreshed.refresh_token || doc.refresh_token,
+    expires_at: refreshed.expires_at,
+    scope: refreshed.scope || doc.scope || null,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+  return refreshed.access_token;
+}
+
+async function getStravaAccessToken(uid, { forceRefresh = false } = {}) {
+  const doc = await getStravaTokenDoc(uid);
+  if (!doc) throw new Error('Strava not connected for this user');
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (!forceRefresh && doc.access_token && doc.expires_at && doc.expires_at > nowSec + 60) {
+    return doc.access_token;
+  }
+  return refreshStravaAccessToken(uid, doc);
+}
+
+async function upsertWorkout(uid, activity) {
+  const db = admin.firestore();
+  const activityId = String(activity.id);
+  const docId = `${uid}_${activityId}`;
+  const ref = db.collection('metrics_workouts').doc(docId);
+  const startIsoRaw = activity.start_date || activity.start_date_local || null;
+  const startDateMs = startIsoRaw ? Date.parse(startIsoRaw) : Date.now();
+  const activityType = String(activity.type || activity.sport_type || '').trim();
+  const lowerType = activityType.toLowerCase();
+  const isRun = ['run', 'virtualrun', 'trailrun'].includes(lowerType)
+    || ['run', 'virtualrun', 'trailrun'].includes(String(activity.sport_type || '').toLowerCase());
+  const perceivedExertion = activity.perceived_exertion ?? activity.perceivedExertion ?? activity.rpe ?? null;
+  const payload = {
+    id: docId,
+    ownerUid: uid,
+    provider: 'strava',
+    stravaActivityId: activityId,
+    name: activity.name,
+    type: activity.type || null,
+    sportType: activity.sport_type || null,
+    run: isRun,
+    startDate: Number.isFinite(startDateMs) ? startDateMs : Date.now(),
+    utcStartDate: startIsoRaw ? new Date(startDateMs).toISOString() : null,
+    distance_m: activity.distance || null,
+    movingTime_s: activity.moving_time || null,
+    elapsedTime_s: activity.elapsed_time || null,
+    elevationGain_m: activity.total_elevation_gain || null,
+    averageSpeed_mps: activity.average_speed || null,
+    maxSpeed_mps: activity.max_speed || null,
+    averageCadence: activity.average_cadence || null,
+    averageWatts: activity.average_watts || null,
+    weightedAverageWatts: activity.weighted_average_watts || null,
+    kilojoules: activity.kilojoules || null,
+    avgHeartrate: activity.average_heartrate || null,
+    maxHeartrate: activity.max_heartrate || null,
+    hasHeartrate: !!(activity.has_heartrate || activity.average_heartrate || activity.max_heartrate),
+    perceivedExertion: perceivedExertion != null ? Number(perceivedExertion) : null,
+    sufferScore: activity.suffer_score != null ? Number(activity.suffer_score) : null,
+    calories: activity.calories || null,
+    commute: activity.commute || false,
+    gearId: activity.gear_id || null,
+    isTrainer: activity.trainer || false,
+    isCommute: activity.commute || false,
+    isManual: activity.manual || false,
+    visibility: activity.visibility || null,
+    source: 'strava',
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+  await ref.set(payload, { merge: true });
+  return docId;
+}
+
+function normalizeEpochSec(value) {
+  if (value == null || value === '') return null;
+  const raw = Number(value);
+  if (!Number.isFinite(raw) || raw <= 0) return null;
+  return raw > 1e12 ? Math.floor(raw / 1000) : Math.floor(raw);
+}
+
+async function fetchStravaActivities(uid, {
+  afterSec = null,
+  beforeSec = null,
+  perPage = 100,
+  maxPages = 3,
+} = {}) {
+  const db = admin.firestore();
+  const normalizedBeforeSec = normalizeEpochSec(beforeSec);
+  let resolvedAfterSec = normalizeEpochSec(afterSec);
+  if (!resolvedAfterSec && !normalizedBeforeSec) {
+    try {
+      const profileSnap = await db.collection('profiles').doc(uid).get();
+      const profile = profileSnap.exists ? (profileSnap.data() || {}) : {};
+      const lastSyncMs = toMillisSafe(profile.stravaLastSyncAt);
+      if (lastSyncMs) {
+        // Back off two days to avoid gaps caused by timezone conversions / delayed webhooks.
+        resolvedAfterSec = Math.floor((lastSyncMs - (2 * 24 * 60 * 60 * 1000)) / 1000);
+      }
+    } catch {
+      resolvedAfterSec = afterSec;
+    }
+  }
+
+  let accessToken = await getStravaAccessToken(uid);
+  let page = 1;
+  let total = 0;
+  let requests = 0;
+  let lastDocId = null;
+  let oldestStartSec = null;
+  let newestStartSec = null;
+  let nextBeforeSec = normalizedBeforeSec;
+  let hasMore = false;
+  let refreshedAfterAuthFailure = false;
+  try {
+    while (requests < maxPages) {
+      const params = new URLSearchParams({ per_page: String(perPage) });
+      if (normalizedBeforeSec) {
+        params.append('page', '1');
+      } else {
+        params.append('page', String(page));
+      }
+      if (resolvedAfterSec) params.append('after', String(resolvedAfterSec));
+      if (nextBeforeSec) params.append('before', String(nextBeforeSec));
+      const url = `https://www.strava.com/api/v3/athlete/activities?${params.toString()}`;
+      let rows = null;
+      try {
+        rows = await fetchStravaJson(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+      } catch (error) {
+        if (isStravaAuthError(error) && !refreshedAfterAuthFailure) {
+          accessToken = await getStravaAccessToken(uid, { forceRefresh: true });
+          refreshedAfterAuthFailure = true;
+          continue;
+        }
+        throw error;
+      }
+      refreshedAfterAuthFailure = false;
+      if (!Array.isArray(rows) || rows.length === 0) break;
+      requests += 1;
+      let pageOldestSec = null;
+      let pageNewestSec = null;
+      for (const act of rows) {
+        lastDocId = await upsertWorkout(uid, act);
+        total += 1;
+        const startSec = normalizeEpochSec(act?.start_date ? Date.parse(act.start_date) : null);
+        if (startSec != null) {
+          if (pageOldestSec == null || startSec < pageOldestSec) pageOldestSec = startSec;
+          if (pageNewestSec == null || startSec > pageNewestSec) pageNewestSec = startSec;
+        }
+      }
+      if (pageOldestSec != null && (oldestStartSec == null || pageOldestSec < oldestStartSec)) oldestStartSec = pageOldestSec;
+      if (pageNewestSec != null && (newestStartSec == null || pageNewestSec > newestStartSec)) newestStartSec = pageNewestSec;
+      if (rows.length < perPage) {
+        hasMore = false;
+        break;
+      }
+      hasMore = true;
+      if (normalizedBeforeSec) {
+        if (pageOldestSec == null) {
+          hasMore = false;
+          break;
+        }
+        const candidateBefore = Math.max(1, pageOldestSec - 1);
+        if (nextBeforeSec != null && candidateBefore >= nextBeforeSec) {
+          hasMore = false;
+          break;
+        }
+        nextBeforeSec = candidateBefore;
+      } else {
+        page += 1;
+      }
+    }
+  } catch (error) {
+    const authError = isStravaAuthError(error);
+    await updateStravaSyncState(uid, {
+      stravaLastSyncStatus: 'error',
+      stravaNeedsReconnect: authError,
+      stravaLastErrorAt: admin.firestore.FieldValue.serverTimestamp(),
+      stravaLastErrorMessage: authError
+        ? 'Strava authorization expired. Reconnect Strava.'
+        : (error?.message || 'Strava sync failed'),
+    });
+    throw error;
+  }
+
+  await updateStravaSyncState(uid, {
+    stravaLastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
+    stravaLastSyncStatus: 'success',
+    stravaNeedsReconnect: false,
+    stravaLastImportCount: total,
+    stravaLastAfterSec: resolvedAfterSec || null,
+    stravaLastBeforeSec: normalizedBeforeSec || null,
+    stravaLastOldestStartSec: oldestStartSec || null,
+    stravaLastNewestStartSec: newestStartSec || null,
+    stravaLastHasMore: hasMore,
+    stravaLastNextBeforeSec: hasMore ? nextBeforeSec : null,
+    stravaLastErrorAt: admin.firestore.FieldValue.delete(),
+    stravaLastErrorMessage: admin.firestore.FieldValue.delete(),
+  });
+
+  return {
+    ok: true,
+    imported: total,
+    lastDocId,
+    afterSec: resolvedAfterSec || null,
+    beforeSec: normalizedBeforeSec || null,
+    oldestStartSec: oldestStartSec || null,
+    newestStartSec: newestStartSec || null,
+    hasMore,
+    nextBeforeSec: hasMore ? nextBeforeSec : null,
+    requests,
+  };
+}
+
+// Callable to sync Strava activities
+exports.syncStrava = httpsV2.onCall({ secrets: [STRAVA_CLIENT_ID, STRAVA_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
+  const uid = req.auth.uid;
+  const after = req.data?.after || null; // ms or sec accepted
+  const before = req.data?.before || null; // ms or sec accepted
+  const fullHistory = req.data?.fullHistory === true;
+  const perPage = Math.max(1, Math.min(Number(req.data?.perPage || (fullHistory ? 200 : 100)), 200));
+  const maxPages = Math.max(1, Math.min(Number(req.data?.maxPages || (fullHistory ? 12 : 5)), fullHistory ? 30 : 20));
+  let afterSec = normalizeEpochSec(after);
+  let beforeSec = normalizeEpochSec(before);
+
+  const profileRef = admin.firestore().collection('profiles').doc(uid);
+  const profileSnap = await profileRef.get().catch(() => null);
+  const profile = profileSnap?.exists ? (profileSnap.data() || {}) : {};
+  if (fullHistory) {
+    afterSec = null;
+    if (!beforeSec) {
+      const persisted = normalizeEpochSec(profile.stravaBackfillBeforeSec);
+      beforeSec = persisted || Math.floor(Date.now() / 1000);
+    }
+  }
+
+  console.log('[syncStrava] uid', uid, 'after', after, 'afterSec', afterSec, 'before', before, 'beforeSec', beforeSec, 'fullHistory', fullHistory, 'perPage', perPage, 'maxPages', maxPages);
+  try {
+    const result = await fetchStravaActivities(uid, { afterSec, beforeSec, perPage, maxPages });
+    const hasMoreHistory = fullHistory && !!result?.hasMore && !!result?.nextBeforeSec;
+    const backfillStatePatch = fullHistory
+      ? {
+        stravaBackfillActive: hasMoreHistory,
+        stravaBackfillCompleted: !hasMoreHistory,
+        stravaBackfillBeforeSec: hasMoreHistory ? result.nextBeforeSec : admin.firestore.FieldValue.delete(),
+        stravaBackfillCompletedAt: hasMoreHistory
+          ? admin.firestore.FieldValue.delete()
+          : admin.firestore.FieldValue.serverTimestamp(),
+        stravaBackfillLastImported: Number(result?.imported || 0),
+        stravaBackfillUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }
+      : null;
+    if (backfillStatePatch) {
+      await profileRef.set(backfillStatePatch, { merge: true });
+    }
+
+    let matchedParkruns = 0;
+    if (!fullHistory || !hasMoreHistory) {
+      try {
+        const matched = await reconcileParkrunToStrava(uid, { maxStrava: 600 });
+        matchedParkruns = Number(matched?.matched || 0);
+      } catch (error) {
+        console.warn('[syncStrava] Parkrun reconciliation failed (non-fatal):', error?.message || error);
+      }
+    }
+
+    if (!fullHistory || !hasMoreHistory) {
+      try {
+        if (profile.autoComputeFitnessMetrics !== false) {
+          const overview = await _getFitnessOverview(uid, 90);
+          await admin.firestore().collection('fitness_overview').doc(uid)
+            .set({ ...overview, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+          const analysis = await _getRunFitnessAnalysis(uid, 365);
+          await admin.firestore().collection('run_analysis').doc(uid)
+            .set({ ...analysis, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+          await computeGoalFitnessKpisForUser(uid, { persist: true });
+        }
+      } catch (error) {
+        console.warn('[syncStrava] Post-sync fitness aggregation failed (non-fatal):', error?.message || error);
+      }
+    }
+    await recordIntegrationLog(uid, 'strava', 'success', 'Strava sync completed', {
+      imported: result?.imported || 0,
+      after: afterSec,
+      before: beforeSec,
+      fullHistory,
+      hasMoreHistory,
+      nextBeforeSec: result?.nextBeforeSec || null,
+      matchedParkruns,
+    });
+    return {
+      ...result,
+      matchedParkruns,
+      fullHistory,
+      hasMoreHistory,
+      nextBeforeSec: result?.nextBeforeSec || null,
+      backfillComplete: fullHistory ? !hasMoreHistory : null,
+    };
+  } catch (error) {
+    const authError = isStravaAuthError(error);
+    await updateStravaSyncState(uid, {
+      stravaLastSyncStatus: 'error',
+      stravaNeedsReconnect: authError,
+      stravaLastErrorAt: admin.firestore.FieldValue.serverTimestamp(),
+      stravaLastErrorMessage: authError
+        ? 'Strava authorization expired. Reconnect Strava.'
+        : (error?.message || 'Strava sync failed'),
+    });
+    await recordIntegrationLog(uid, 'strava', 'error', error?.message || 'Strava sync failed', {
+      after: afterSec,
+      before: beforeSec,
+      fullHistory,
+    });
+    if (authError) {
+      throw new httpsV2.HttpsError('failed-precondition', 'Strava authorization expired. Reconnect Strava in Integrations.');
+    }
+    if (error instanceof httpsV2.HttpsError) throw error;
+    throw new httpsV2.HttpsError('internal', error?.message || 'Failed to sync Strava');
+  }
+});
+
+// Retrieve HR stream for an activity and compute zone times; store on metrics_workouts doc
+async function getUserMaxHr(uid) {
+  const prof = await admin.firestore().collection('profiles').doc(uid).get();
+  const d = prof.exists ? prof.data() : {};
+  const maxHr = Number(d?.maxHr) || null;
+  if (maxHr) return maxHr;
+  const age = Number(d?.age || (d?.birthYear ? (new Date().getFullYear() - Number(d.birthYear)) : null)) || null;
+  return age ? Math.round(220 - age) : 190; // fallback
+}
+
+function hrZonesFromMax(maxHr) {
+  return [
+    { name: 'Z1', min: 0.50 * maxHr, max: 0.60 * maxHr },
+    { name: 'Z2', min: 0.60 * maxHr, max: 0.70 * maxHr },
+    { name: 'Z3', min: 0.70 * maxHr, max: 0.80 * maxHr },
+    { name: 'Z4', min: 0.80 * maxHr, max: 0.90 * maxHr },
+    { name: 'Z5', min: 0.90 * maxHr, max: 1.00 * maxHr + 1 },
+  ];
+}
+
+async function enrichActivityHr(uid, activityId) {
+  const db = admin.firestore();
+  const docId = `${uid}_${activityId}`;
+  const ref = db.collection('metrics_workouts').doc(docId);
+  const snap = await ref.get();
+  if (!snap.exists) return { ok: false, reason: 'not_found' };
+  const data = snap.data();
+  if (data.hrZones && data.hrZones.z1Time_s != null) return { ok: true, reason: 'already_enriched' };
+
+  const accessToken = await getStravaAccessToken(uid);
+  let streams;
+  try {
+    const url = `https://www.strava.com/api/v3/activities/${activityId}/streams?keys=time,heartrate&key_by_type=true`;
+    streams = await fetchStravaJson(url, { headers: { Authorization: `Bearer ${accessToken}` } }, { retries: 1 });
+  } catch (e) {
+    // If stream fetch fails (permissions/private activity), mark once and skip future retries.
+    await ref.set({
+      hrZonesUnavailable: true,
+      hrZonesUnavailableReason: 'no_streams',
+      hrZonesUnavailableAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+    return { ok: false, reason: 'no_streams' };
+  }
+  const hr = Array.isArray(streams?.heartrate?.data) ? streams.heartrate.data : null;
+  const tm = Array.isArray(streams?.time?.data) ? streams.time.data : null;
+  if (!hr || !tm || hr.length === 0) {
+    await ref.set({
+      hrZonesUnavailable: true,
+      hrZonesUnavailableReason: 'empty_stream',
+      hrZonesUnavailableAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+    return { ok: false, reason: 'empty_stream' };
+  }
+
+  const maxHr = await getUserMaxHr(uid);
+  const zones = hrZonesFromMax(maxHr);
+  const totals = { z1Time_s: 0, z2Time_s: 0, z3Time_s: 0, z4Time_s: 0, z5Time_s: 0 };
+  for (let i = 1; i < tm.length; i++) {
+    const dt = Math.max(1, (tm[i] - tm[i - 1]));
+    const h = hr[Math.min(i, hr.length - 1)];
+    const zIdx = zones.findIndex(z => h >= z.min && h < z.max);
+    if (zIdx === 0) totals.z1Time_s += dt;
+    else if (zIdx === 1) totals.z2Time_s += dt;
+    else if (zIdx === 2) totals.z3Time_s += dt;
+    else if (zIdx === 3) totals.z4Time_s += dt;
+    else totals.z5Time_s += dt;
+  }
+  const patch = {
+    hrZones: totals,
+    maxHrUsed: maxHr,
+    hrZonesUnavailable: admin.firestore.FieldValue.delete(),
+    hrZonesUnavailableReason: admin.firestore.FieldValue.delete(),
+    hrZonesUnavailableAt: admin.firestore.FieldValue.delete(),
+  };
+  if (data.perceivedExertion == null || data.sufferScore == null) {
+    try {
+      const detail = await fetchStravaJson(`https://www.strava.com/api/v3/activities/${activityId}`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      }, { retries: 1 });
+      const perceived = detail?.perceived_exertion ?? detail?.perceivedExertion ?? null;
+      if (patch.perceivedExertion == null && perceived != null) patch.perceivedExertion = Number(perceived);
+      if (patch.sufferScore == null && detail?.suffer_score != null) patch.sufferScore = Number(detail.suffer_score);
+    } catch {
+      // Non-fatal: details endpoint can be unavailable for some activities.
+    }
+  }
+  await ref.set(patch, { merge: true });
+  return { ok: true, hrZones: totals };
+}
+
+async function enrichRecentStravaHr(uid, days = 30, options = {}) {
+  const force = options?.force === true;
+  const maxActivities = Math.min(Math.max(Number(options?.maxActivities || 120), 1), 500);
+  const safeDays = Math.min(Number(days || 30), 3650);
+  console.log('[enrichStravaHR] uid', uid, 'days', safeDays, 'force', force, 'maxActivities', maxActivities);
+  const since = Date.now() - safeDays * 24 * 60 * 60 * 1000;
+  const db = admin.firestore();
+  const q = await db.collection('metrics_workouts')
+    .where('ownerUid', '==', uid)
+    .where('provider', '==', 'strava')
+    .get();
+  const docs = q.docs.slice().sort((a, b) => {
+    const ad = Number(a.data()?.startDate || 0);
+    const bd = Number(b.data()?.startDate || 0);
+    return bd - ad;
+  });
+  let enriched = 0;
+  let scanned = 0;
+  let eligible = 0;
+  let skippedExisting = 0;
+  for (const d of docs) {
+    const w = d.data();
+    if ((w.startDate || 0) < since) continue;
+    if (!w.hasHeartrate && !w.avgHeartrate) continue;
+    eligible++;
+    if (!force && (w.hrZones || w.hrZonesUnavailable === true)) {
+      skippedExisting++;
+      continue;
+    }
+    if (scanned >= maxActivities) break;
+    scanned++;
+    const actId = String(w.stravaActivityId || '').trim();
+    if (!actId) continue;
+    const r = await enrichActivityHr(uid, actId).catch(() => null);
+    if (r?.ok) enriched++;
+  }
+  const remaining = Math.max(0, eligible - skippedExisting - scanned);
+  return { ok: true, enriched, scanned, eligible, skippedExisting, remaining };
+}
+
+// Enrich recent Strava runs with HR zone breakdown
+exports.enrichStravaHR = httpsV2.onCall({ secrets: [STRAVA_CLIENT_ID, STRAVA_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const days = Math.min(Number(req.data?.days || 30), 3650);
+  const force = req.data?.force === true;
+  const maxActivities = Math.min(Math.max(Number(req.data?.maxActivities || 120), 1), 500);
+  return enrichRecentStravaHr(uid, days, { force, maxActivities });
+});
+
+// Strava Webhook endpoint (verification + events)
+exports.stravaWebhook = httpsV2.onRequest({ secrets: [STRAVA_WEBHOOK_VERIFY_TOKEN, STRAVA_CLIENT_ID, STRAVA_CLIENT_SECRET], invoker: 'public' }, async (req, res) => {
+  try {
+    if (req.method === 'GET') {
+      const mode = req.query['hub.mode'];
+      const token = req.query['hub.verify_token'];
+      const challenge = req.query['hub.challenge'];
+      if (mode !== 'subscribe') return res.status(400).send('Invalid mode');
+      if (String(token) !== envTrim('STRAVA_WEBHOOK_VERIFY_TOKEN')) return res.status(403).send('Invalid verify token');
+      return res.status(200).json({ 'hub.challenge': challenge });
+    }
+    if (req.method === 'POST') {
+      const body = req.body || {};
+      if (body.object_type === 'activity') {
+        const athleteId = String(body.owner_id);
+        const aspect = String(body.aspect_type);
+        // Find user by athleteId
+        const db = admin.firestore();
+        const q = await db.collection('tokens').where('provider', '==', 'strava').where('athleteId', '==', Number(athleteId)).limit(1).get();
+        if (!q.empty) {
+          const uid = q.docs[0].data().ownerUid;
+          if (aspect === 'create' || aspect === 'update') {
+            // Fetch single activity details
+            try {
+              const accessToken = await getStravaAccessToken(uid);
+              const act = await fetchStravaJson(`https://www.strava.com/api/v3/activities/${body.object_id}`, { headers: { Authorization: `Bearer ${accessToken}` } }, { retries: 1 });
+              await upsertWorkout(uid, act);
+            } catch (e) {
+              console.error('Failed to upsert Strava activity from webhook:', e);
+            }
+          } else if (aspect === 'delete') {
+            const docId = `${uid}_${body.object_id}`;
+            await db.collection('metrics_workouts').doc(docId).delete().catch(() => { });
+          }
+        } else {
+          console.warn('Webhook for unknown Strava athlete:', athleteId);
+        }
+      }
+      return res.status(200).json({ received: true });
+    }
+    return res.status(405).send('Method not allowed');
+  } catch (e) {
+    console.error('Strava webhook error:', e);
+    return res.status(500).send('Server error');
+  }
+});
+async function getAccessToken(uid) {
+  const db = admin.firestore();
+  const doc = await db.collection("tokens").doc(uid).get();
+  if (!doc.exists) throw new Error("No token for user");
+  const refresh = doc.data().refresh_token;
+  if (!refresh) throw new Error("No refresh token");
+
+  const token = await fetchJson("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: (process.env.GOOGLE_OAUTH_CLIENT_ID || '').trim(),
+      client_secret: (process.env.GOOGLE_OAUTH_CLIENT_SECRET || '').trim(),
+      refresh_token: refresh,
+      grant_type: "refresh_token",
+    }).toString(),
+  });
+  return token.access_token;
+}
+
+function parseGoogleDocIdFromUrl(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const match = raw.match(/\/document\/d\/([a-zA-Z0-9_-]+)/);
+  return match ? match[1] : null;
+}
+
+async function getYouTubeTokenDoc(uid) {
+  const db = admin.firestore();
+  const snap = await db.collection('tokens').doc(`${uid}_youtube`).get();
+  return snap.exists ? { id: snap.id, ...snap.data() } : null;
+}
+
+async function getYouTubeAccessToken(uid) {
+  const doc = await getYouTubeTokenDoc(uid);
+  if (!doc) throw new Error('YouTube not connected. Connect via Settings > Integrations > YouTube.');
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (doc.access_token && doc.expires_at && doc.expires_at > nowSec + 60) {
+    return doc.access_token;
+  }
+  const refresh = doc.refresh_token;
+  if (!refresh) throw new Error('Missing refresh_token for YouTube');
+  const tokenData = await fetchJson("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: (process.env.GOOGLE_OAUTH_CLIENT_ID || '').trim(),
+      client_secret: (process.env.GOOGLE_OAUTH_CLIENT_SECRET || '').trim(),
+      refresh_token: refresh,
+      grant_type: "refresh_token",
+    }).toString(),
+  });
+  const access = tokenData.access_token;
+  const expiresAt = tokenData.expires_at || (Math.floor(Date.now() / 1000) + Number(tokenData.expires_in || 0));
+  const newRefresh = tokenData.refresh_token || refresh;
+  const db = admin.firestore();
+  await db.collection('tokens').doc(`${uid}_youtube`).set({
+    provider: 'google_youtube',
+    ownerUid: uid,
+    access_token: access,
+    refresh_token: newRefresh,
+    expires_at: expiresAt,
+    scope: tokenData.scope || doc.scope || null,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+  return access;
+}
+
+// ===== Calendar callables
+exports.calendarStatus = httpsV2.onCall(async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
+  const uid = req.auth.uid;
+  const [legacyDoc, userDoc] = await Promise.all([
+    admin.firestore().collection("tokens").doc(uid).get().catch(() => null),
+    admin.firestore().collection("users").doc(uid).get().catch(() => null),
+  ]);
+  const legacy = legacyDoc && legacyDoc.exists ? legacyDoc.data() : {};
+  const user = userDoc && userDoc.exists ? userDoc.data() : {};
+  const connected = !!(user.googleCalendarTokens || legacy.refresh_token);
+  return {
+    connected,
+    hasUserTokens: !!user.googleCalendarTokens,
+    hasLegacyTokens: !!legacy.refresh_token,
+  };
+});
+
+// Callable: disconnect Google Calendar by removing stored refresh token
+exports.disconnectGoogle = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const uid = req.auth.uid;
+  const db = admin.firestore();
+  try {
+    await db.collection('tokens').doc(uid).delete();
+  } catch (e) {
+    // fallback: clear refresh_token if delete fails due to rules
+    try { await db.collection('tokens').doc(uid).set({ refresh_token: admin.firestore.FieldValue.delete(), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }); } catch { }
+  }
+  try {
+    const ref = db.collection('activity_stream').doc();
+    await ref.set({
+      id: ref.id,
+      entityType: 'calendar',
+      entityId: `calendar_${uid}`,
+      activityType: 'calendar_disconnect',
+      userId: uid,
+      ownerUid: uid,
+      description: 'Disconnected Google Calendar',
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  } catch { }
+  return { ok: true };
+});
+
+function getParkrunTokenDocId(uid) {
+  return `${uid}_parkrun`;
+}
+
+function formatFormBody(payload = {}) {
+  const params = new URLSearchParams();
+  Object.entries(payload || {}).forEach(([key, value]) => {
+    if (value == null) return;
+    const text = String(value).trim();
+    if (!text) return;
+    params.set(key, text);
+  });
+  return params.toString();
+}
+
+async function fetchParkrunApiJson(path, {
+  method = 'GET',
+  query = {},
+  form = null,
+  useBasicAuth = false,
+} = {}) {
+  const qs = new URLSearchParams();
+  Object.entries(query || {}).forEach(([key, value]) => {
+    if (value == null) return;
+    const text = String(value).trim();
+    if (!text) return;
+    qs.set(key, text);
+  });
+  const url = `${PARKRUN_API_BASE}${path}${qs.toString() ? `?${qs.toString()}` : ''}`;
+  const headers = {
+    'Accept': 'application/json',
+    'User-Agent': PARKRUN_API_USER_AGENT,
+  };
+  if (useBasicAuth) {
+    const basic = Buffer.from(`${PARKRUN_API_CLIENT_ID}:${PARKRUN_API_CLIENT_SECRET}`, 'utf8').toString('base64');
+    headers['Authorization'] = `Basic ${basic}`;
+  }
+  let body = undefined;
+  if (form) {
+    headers['Content-Type'] = 'application/x-www-form-urlencoded';
+    body = formatFormBody(form);
+  }
+
+  const res = await fetch(url, {
+    method,
+    headers,
+    body,
+    redirect: 'follow',
+  });
+  const raw = await res.text();
+  let parsed = null;
+  if (raw) {
+    try { parsed = JSON.parse(raw); } catch { parsed = null; }
+  }
+  if (!res.ok) {
+    const detail = parsed?.error?.human_message
+      || parsed?.error?.message
+      || parsed?.error_description
+      || parsed?.message
+      || raw
+      || `HTTP ${res.status}`;
+    const error = new Error(`Parkrun API ${path} failed (HTTP ${res.status}): ${detail}`);
+    error.status = res.status;
+    error.body = raw;
+    error.parsed = parsed;
+    throw error;
+  }
+  return parsed;
+}
+
+function parseParkrunTokenResponse(payload = {}) {
+  const accessToken = String(payload?.access_token || '').trim();
+  const refreshToken = String(payload?.refresh_token || '').trim();
+  const expiresIn = Number(payload?.expires_in || 0) || 0;
+  const scope = String(payload?.scope || 'app').trim() || 'app';
+  const tokenType = String(payload?.token_type || 'bearer').trim() || 'bearer';
+  if (!accessToken) throw new Error('Parkrun API auth missing access_token');
+  return {
+    accessToken,
+    refreshToken: refreshToken || null,
+    scope,
+    tokenType,
+    expiresAt: Math.floor(Date.now() / 1000) + Math.max(0, expiresIn),
+    expiresIn,
+  };
+}
+
+async function authenticateParkrunApiUser(username, password) {
+  const id = String(username || '').trim();
+  const secret = String(password || '');
+  if (!id || !secret) throw new Error('Parkrun username/password required');
+  const payload = await fetchParkrunApiJson('/user_auth.php', {
+    method: 'POST',
+    useBasicAuth: true,
+    form: {
+      username: id,
+      password: secret,
+      scope: 'app',
+      grant_type: 'password',
+    },
+  });
+  return parseParkrunTokenResponse(payload || {});
+}
+
+async function refreshParkrunApiToken(refreshToken) {
+  const token = String(refreshToken || '').trim();
+  if (!token) throw new Error('Parkrun refresh token missing');
+  const payload = await fetchParkrunApiJson('/auth/refresh', {
+    method: 'POST',
+    useBasicAuth: true,
+    form: {
+      refresh_token: token,
+      grant_type: 'refresh_token',
+    },
+  });
+  const parsed = parseParkrunTokenResponse(payload || {});
+  if (!parsed.refreshToken) parsed.refreshToken = token;
+  return parsed;
+}
+
+async function resolveParkrunAthleteIdFromApi(accessToken) {
+  if (!accessToken) return null;
+  try {
+    const me = await fetchParkrunApiJson('/v1/me', {
+      query: {
+        access_token: accessToken,
+        scope: 'app',
+        expandedDetails: true,
+      },
+    });
+    const athleteRaw = me?.data?.Athletes?.[0]?.AthleteID ?? me?.data?.AthleteID ?? null;
+    const athleteId = Number(athleteRaw || 0);
+    return Number.isFinite(athleteId) && athleteId > 0 ? athleteId : null;
+  } catch {
+    return null;
+  }
+}
+
+async function saveParkrunApiToken(uid, tokenData, extras = {}) {
+  if (!uid) return;
+  const patch = {
+    provider: 'parkrun_api',
+    ownerUid: uid,
+    access_token: tokenData?.accessToken || null,
+    refresh_token: tokenData?.refreshToken || null,
+    expires_at: tokenData?.expiresAt || null,
+    scope: tokenData?.scope || 'app',
+    token_type: tokenData?.tokenType || 'bearer',
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    ...extras,
+  };
+  await admin.firestore().collection('tokens').doc(getParkrunTokenDocId(uid)).set(patch, { merge: true });
+}
+
+async function connectParkrunApiForUser(uid, { username, password, athleteIdHint = null } = {}) {
+  if (!uid) throw new Error('uid required');
+  const tokenData = await authenticateParkrunApiUser(username, password);
+  let resolvedAthleteId = Number(athleteIdHint || 0) || null;
+  if (!resolvedAthleteId) {
+    resolvedAthleteId = await resolveParkrunAthleteIdFromApi(tokenData.accessToken);
+  }
+  await saveParkrunApiToken(uid, tokenData, { username: String(username || '').trim() || null });
+
+  const profilePatch = {
+    parkrunApiConnected: true,
+    parkrunApiUsername: String(username || '').trim() || null,
+    parkrunLastErrorAt: admin.firestore.FieldValue.delete(),
+    parkrunLastErrorMessage: admin.firestore.FieldValue.delete(),
+  };
+  if (resolvedAthleteId) profilePatch.parkrunAthleteId = String(resolvedAthleteId);
+  await admin.firestore().collection('profiles').doc(uid).set(profilePatch, { merge: true });
+
+  return { tokenData, athleteId: resolvedAthleteId };
+}
+
+async function getParkrunAccessToken(uid) {
+  const tokenRef = admin.firestore().collection('tokens').doc(getParkrunTokenDocId(uid));
+  const snap = await tokenRef.get();
+  if (!snap.exists) throw new Error('Parkrun API token not found. Connect Parkrun API first.');
+  const data = snap.data() || {};
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (data.access_token && data.expires_at && Number(data.expires_at) > nowSec + 60) {
+    return String(data.access_token);
+  }
+  const refresh = String(data.refresh_token || '').trim();
+  if (!refresh) throw new Error('Parkrun refresh token missing. Reconnect Parkrun API.');
+  const refreshed = await refreshParkrunApiToken(refresh);
+  await saveParkrunApiToken(uid, refreshed, { username: data.username || null });
+  return refreshed.accessToken;
+}
+
+async function fetchParkrunAthleteResultsFromApi(uid, athleteId, { limit = 100, maxPages = 20 } = {}) {
+  const athleteIdSafe = Number(athleteId || 0);
+  if (!Number.isFinite(athleteIdSafe) || athleteIdSafe <= 0) {
+    throw new Error('Valid Parkrun athleteId is required for API sync');
+  }
+
+  let accessToken = await getParkrunAccessToken(uid);
+  const results = [];
+  let offset = 0;
+  let page = 0;
+  let refreshedOnce = false;
+
+  while (page < maxPages) {
+    let payload = null;
+    try {
+      payload = await fetchParkrunApiJson('/v1/results', {
+        query: {
+          access_token: accessToken,
+          scope: 'app',
+          expandedDetails: true,
+          athleteId: String(athleteIdSafe),
+          limit: String(limit),
+          offset: String(offset),
+        },
+      });
+    } catch (error) {
+      const status = Number(error?.status || 0);
+      if (status === 401 && !refreshedOnce) {
+        accessToken = await getParkrunAccessToken(uid);
+        refreshedOnce = true;
+        continue;
+      }
+      throw error;
+    }
+
+    const rows = Array.isArray(payload?.data?.Results) ? payload.data.Results : [];
+    if (!rows.length) break;
+    results.push(...rows);
+
+    offset += rows.length;
+    page += 1;
+    if (rows.length < limit) break;
+  }
+
+  return results;
+}
+
+exports.connectParkrunApi = httpsV2.onCall(async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const username = String(req.data?.username || '').trim();
+  const password = String(req.data?.password || '');
+  const athleteIdHint = Number(req.data?.athleteId || 0) || null;
+  if (!username || !password) {
+    throw new httpsV2.HttpsError('invalid-argument', 'username and password are required');
+  }
+  try {
+    const connected = await connectParkrunApiForUser(uid, { username, password, athleteIdHint });
+    return {
+      ok: true,
+      athleteId: connected?.athleteId || null,
+      expiresAt: connected?.tokenData?.expiresAt || null,
+    };
+  } catch (error) {
+    if (error instanceof httpsV2.HttpsError) throw error;
+    throw new httpsV2.HttpsError('internal', error?.message || 'Failed to connect Parkrun API');
+  }
+});
+
+async function _syncParkrunInternal(uid, athleteId, countryBaseUrl, options = {}) {
+  const base = String(countryBaseUrl || 'https://www.parkrun.org.uk').replace(/\/$/, '');
+  const requestHeaderCandidates = [
+    {
+      // Browser-like profile first.
+      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      'Accept-Language': 'en-GB,en;q=0.9',
+      'Cache-Control': 'no-cache',
+      'Pragma': 'no-cache',
+      'Upgrade-Insecure-Requests': '1',
+    },
+    {
+      // App-like profile as fallback when browser UA gets blocked.
+      'User-Agent': PARKRUN_API_USER_AGENT,
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'en-GB,en;q=0.9',
+      'Cache-Control': 'no-cache',
+      'Pragma': 'no-cache',
+    },
+  ];
+  const cheerio = require('cheerio');
+  const db = admin.firestore();
+  const profileSnap = await db.collection('profiles').doc(uid).get().catch(() => null);
+  const profileData = profileSnap?.exists ? (profileSnap.data() || {}) : {};
+  let imported = 0;
+
+  const slugify = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  const normalizeText = (v) => String(v || '').replace(/\s+/g, ' ').trim();
+
+  const parseNumberLoose = (value) => {
+    const n = Number(String(value || '').replace(/[^0-9.-]/g, ''));
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const parseIntLoose = (value) => {
+    const n = parseNumberLoose(value);
+    if (n == null) return null;
+    const rounded = Math.round(n);
+    return rounded > 0 ? rounded : null;
+  };
+
+  const parseBoolLoose = (value) => {
+    if (typeof value === 'boolean') return value;
+    const text = normalizeText(value).toLowerCase();
+    if (!text) return false;
+    if (['1', 'true', 'yes', 'y', 'pb'].includes(text)) return true;
+    if (['0', 'false', 'no', 'n'].includes(text)) return false;
+    const num = Number(text);
+    if (Number.isFinite(num)) return num > 0;
+    return false;
+  };
+
+  const parseDurationSeconds = (value) => {
+    const text = normalizeText(value);
+    if (!/^\d{1,2}:\d{2}(?::\d{2})?$/.test(text)) return null;
+    const parts = text.split(':').map((x) => Number(x));
+    if (parts.some((x) => !Number.isFinite(x))) return null;
+    if (parts.length === 3) return (parts[0] * 3600) + (parts[1] * 60) + parts[2];
+    if (parts.length === 2) return (parts[0] * 60) + parts[1];
+    return null;
+  };
+
+  const parseDateMs = (value) => {
+    const text = normalizeText(value);
+    if (!text) return null;
+
+    let m = text.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{2,4})$/);
+    if (m) {
+      const day = Number(m[1]);
+      const month = Number(m[2]);
+      let year = Number(m[3]);
+      if (year < 100) year += 2000;
+      if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
+        return Date.UTC(year, month - 1, day);
+      }
+    }
+
+    m = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    if (m) {
+      const year = Number(m[1]);
+      const month = Number(m[2]);
+      const day = Number(m[3]);
+      if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
+        return Date.UTC(year, month - 1, day);
+      }
+    }
+
+    const parsed = Date.parse(text);
+    if (Number.isNaN(parsed)) return null;
+    const d = new Date(parsed);
+    return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+  };
+
+  const toDateKey = (ms) => (ms ? new Date(ms).toISOString().slice(0, 10) : null);
+
+  const normalizeParkrunUrl = (href, sourceUrl = base) => {
+    const raw = normalizeText(href);
+    if (!raw) return null;
+    try {
+      return new URL(raw, sourceUrl).toString();
+    } catch {
+      return null;
+    }
+  };
+
+  const parseRunSeqFromUrl = (value) => {
+    const raw = normalizeText(value);
+    if (!raw) return null;
+    let m = raw.match(/\/results\/(\d+)\/?$/i);
+    if (m) return Number(m[1]);
+    m = raw.match(/\/(\d+)\/?$/);
+    if (m) return Number(m[1]);
+    return null;
+  };
+
+  const extractEventSlugFromBaseUrl = (value) => {
+    const raw = normalizeText(value);
+    if (!raw) return null;
+    const m = raw.match(/^https?:\/\/[^/]+\/([^/]+)\/results\/?$/i);
+    return m?.[1] ? String(m[1]).toLowerCase() : null;
+  };
+
+  const toEventBaseUrl = (href, sourceUrl = base) => {
+    const full = normalizeParkrunUrl(href, sourceUrl);
+    if (!full) return null;
+    const m = full.match(/^(https?:\/\/[^/]+\/[^/]+\/results\/)(?:\d+\/?)?/i);
+    return m?.[1] || null;
+  };
+
+  const fetchHtml = async (url, label) => {
+    for (let i = 0; i < requestHeaderCandidates.length; i++) {
+      const headers = requestHeaderCandidates[i];
+      const res = await fetch(url, { headers, redirect: 'follow' });
+      if (res.ok) return await res.text();
+      const err = new Error(`${label || 'Parkrun page'} fetch failed (HTTP ${res.status}) for ${url}`);
+      err.status = res.status;
+      const retryableStatus = new Set([403, 405, 406, 429]);
+      if (i < requestHeaderCandidates.length - 1 && retryableStatus.has(Number(res.status || 0))) continue;
+      throw err;
+    }
+    throw new Error(`${label || 'Parkrun page'} fetch failed for ${url}`);
+  };
+
+  function parseTableRows($, tableEl, sourceUrl) {
+    const headers = $(tableEl).find('thead th').map((_, th) => normalizeText($(th).text()).toLowerCase()).get();
+    const rows = [];
+    const findIdx = (patterns) => headers.findIndex((h) => patterns.some((re) => re.test(h)));
+    const eventIdx = findIdx([/^event$/, /parkrun/]);
+    const dateIdx = findIdx([/^date$/, /run\s*date/]);
+    const runIdx = findIdx([/run\s*number/, /event\s*#/, /^#$/]);
+    const posIdx = findIdx([/^pos$/, /overall position/, /^position$/]);
+    const timeIdx = findIdx([/^time$/, /finish time/]);
+    const ageIdx = findIdx([/age\s*grade/, /agegrade/]);
+    const pbIdx = findIdx([/^pb\??$/, /pb\?/]);
+
+    $(tableEl).find('tbody tr').each((_, tr) => {
+      const tds = $(tr).find('td');
+      if (tds.length < 4) return;
+
+      const cellText = (idx) => (idx >= 0 && idx < tds.length ? normalizeText($(tds[idx]).text()) : '');
+      const cellHtml = (idx) => (idx >= 0 && idx < tds.length ? String($(tds[idx]).html() || '') : '');
+      const cellHref = (idx) => (idx >= 0 && idx < tds.length ? normalizeText($(tds[idx]).find('a').first().attr('href') || '') : '');
+
+      let dateText = cellText(dateIdx);
+      if (!dateText) {
+        tds.each((_, td) => {
+          const txt = normalizeText($(td).text());
+          if (!dateText && (/^\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4}$/.test(txt) || /^\d{4}-\d{2}-\d{2}$/.test(txt))) {
+            dateText = txt;
+          }
+        });
+      }
+
+      let timeText = cellText(timeIdx);
+      if (!timeText) {
+        tds.each((_, td) => {
+          const txt = normalizeText($(td).text());
+          if (!timeText && /^\d{1,2}:\d{2}(?::\d{2})?$/.test(txt)) timeText = txt;
+        });
+      }
+
+      const dateMs = parseDateMs(dateText);
+      const timeSec = parseDurationSeconds(timeText);
+      if (!dateMs || !timeSec) return;
+
+      const eventText = cellText(eventIdx >= 0 ? eventIdx : 0);
+      const eventHref = cellHref(eventIdx);
+      const dateHref = cellHref(dateIdx);
+      const runHref = cellHref(runIdx);
+      const runSeq = parseIntLoose(cellText(runIdx)) || parseRunSeqFromUrl(runHref) || parseRunSeqFromUrl(dateHref);
+      const eventBaseUrl = toEventBaseUrl(eventHref || runHref || dateHref, sourceUrl);
+      const runResultHref = dateHref || runHref;
+      const runResultFull = normalizeParkrunUrl(runResultHref, sourceUrl);
+      const eventResultUrl = runResultFull && /\/results\/\d+\/?$/i.test(runResultFull)
+        ? runResultFull
+        : (eventBaseUrl && runSeq ? `${eventBaseUrl.replace(/\/+$/, '')}/${runSeq}/` : null);
+
+      const position = parseIntLoose(cellText(posIdx));
+      const ageGradeText = cellText(ageIdx) || null;
+      const pbText = normalizeText(cellText(pbIdx));
+      const pbHtml = cellHtml(pbIdx).replace(/<[^>]+>/g, ' ');
+      const hasPbFlag = /\bPB\b/i.test(pbText) || /new\s*pb/i.test(pbText) || /\bPB\b/i.test(pbHtml);
+      const canonicalEventSlug = extractEventSlugFromBaseUrl(eventBaseUrl) || slugify(String(eventText || '').replace(/\bparkrun\b.*$/i, '').trim());
+      const docEventName = eventText && /parkrun/i.test(eventText) ? eventText : (eventText ? `${eventText} parkrun` : '');
+      const docSlug = slugify(docEventName || canonicalEventSlug);
+
+      rows.push({
+        eventText: normalizeText(eventText || canonicalEventSlug || 'parkrun'),
+        eventSlug: canonicalEventSlug || null,
+        docSlug: docSlug || null,
+        eventBaseUrl: eventBaseUrl || null,
+        eventResultUrl: eventResultUrl || null,
+        dateMs,
+        timeSec,
+        position,
+        ageGradeText,
+        runSeq: runSeq || null,
+        isPb: !!hasPbFlag,
+        pbText: pbText || null,
+      });
+    });
+
+    return rows;
+  }
+
+  function parseHeuristicRows($, sourceUrl) {
+    const parsed = [];
+    let rows = [];
+    $('table#results tbody tr').each((_, el) => rows.push(el));
+    if (!rows.length) $('table tbody tr').each((_, el) => rows.push(el));
+
+    for (const el of rows) {
+      const tds = $(el).find('td');
+      if (tds.length < 5) continue;
+      const cells = [];
+      tds.each((_, td) => cells.push(normalizeText($(td).text())));
+      const dateIdx = cells.findIndex((text) => (
+        /^\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4}$/.test(text)
+        || /^\d{1,2}\s+[A-Za-z]+\s+\d{4}$/.test(text)
+        || /^\d{4}-\d{2}-\d{2}$/.test(text)
+      ));
+      const timeIdx = cells.findIndex((text) => /^\d{1,2}:\d{2}(?::\d{2})?$/.test(text));
+      if (dateIdx < 0 || timeIdx < 0) continue;
+
+      let eventIdx = dateIdx === 0 ? 1 : dateIdx - 1;
+      if (eventIdx < 0 || !cells[eventIdx]) eventIdx = 0;
+
+      const eventText = cells[eventIdx];
+      const dateMs = parseDateMs(cells[dateIdx]);
+      const timeSec = parseDurationSeconds(cells[timeIdx]);
+      if (!eventText || !dateMs || !timeSec) continue;
+
+      const numericBeforeTime = cells
+        .slice(0, timeIdx)
+        .map((value) => parseIntLoose(value))
+        .filter((value) => Number.isFinite(value) && value > 0);
+
+      const position = numericBeforeTime.length ? numericBeforeTime[numericBeforeTime.length - 1] : null;
+      const ageGradeText = cells.find((text) => /%$/.test(text)) || null;
+      const eventHref = normalizeText($(tds[dateIdx]).find('a').attr('href') || $(tds[eventIdx]).find('a').attr('href') || '');
+      const eventBaseUrl = toEventBaseUrl(eventHref, sourceUrl);
+      const runSeq = parseRunSeqFromUrl(eventHref);
+      const eventResultUrl = runSeq && eventBaseUrl ? `${eventBaseUrl.replace(/\/+$/, '')}/${runSeq}/` : (normalizeParkrunUrl(eventHref, sourceUrl) || null);
+      const canonicalEventSlug = extractEventSlugFromBaseUrl(eventBaseUrl) || slugify(String(eventText).replace(/\bparkrun\b.*$/i, '').trim());
+      const docEventName = /parkrun/i.test(eventText) ? eventText : `${eventText} parkrun`;
+      const docSlug = slugify(docEventName || canonicalEventSlug);
+
+      parsed.push({
+        eventText,
+        eventSlug: canonicalEventSlug || null,
+        docSlug: docSlug || null,
+        eventBaseUrl: eventBaseUrl || null,
+        eventResultUrl,
+        dateMs,
+        timeSec,
+        position,
+        ageGradeText,
+        runSeq: runSeq || null,
+        isPb: false,
+        pbText: null,
+      });
+    }
+
+    return parsed;
+  }
+
+  function parseAthleteRowsFromHtml(html, sourceUrl) {
+    const $ = cheerio.load(html);
+    const candidates = [];
+    $('table').each((_, tableEl) => {
+      const rows = $(tableEl).find('tbody tr').length;
+      if (!rows) return;
+      const headers = $(tableEl).find('thead th').map((_, th) => normalizeText($(th).text()).toLowerCase()).get();
+      let score = 0;
+      if (headers.some((h) => /run\s*date|^date$/.test(h))) score += 5;
+      if (headers.some((h) => /run\s*number|event\s*#|^#$/.test(h))) score += 4;
+      if (headers.some((h) => /overall position|^pos$|^position$/.test(h))) score += 3;
+      if (headers.some((h) => /^time$|finish time/.test(h))) score += 3;
+      if (headers.some((h) => /^event$|parkrun/.test(h))) score += 3;
+      if (headers.some((h) => /^pb\??$|pb\?/.test(h))) score += 2;
+      candidates.push({ tableEl, rows, score });
+    });
+
+    candidates.sort((a, b) => (b.score - a.score) || (b.rows - a.rows));
+    const best = candidates[0];
+    if (best && best.score >= 6) {
+      const parsed = parseTableRows($, best.tableEl, sourceUrl);
+      if (parsed.length) return parsed;
+    }
+
+    return parseHeuristicRows($, sourceUrl);
+  }
+
+  const athleteIdSafe = String(athleteId || '').trim();
+  const optionEventSlug = slugify(String(options?.eventSlug || '').toLowerCase());
+  const optionStartRun = parseIntLoose(options?.startRun);
+  const optionMaxBack = parseIntLoose(options?.maxBack);
+  const athleteHistoryCandidates = [
+    `${base}/parkrunner/${encodeURIComponent(athleteIdSafe)}/all/`,
+    `${base}/parkrunner/${encodeURIComponent(athleteIdSafe)}/`,
+    `${base}/results/athleteeventresultshistory/?athleteNumber=${encodeURIComponent(athleteIdSafe)}&eventNumber=0`,
+  ];
+
+  let athleteRows = [];
+  let sourceUrlUsed = null;
+  let lastHistoryError = null;
+
+  for (const candidateUrl of athleteHistoryCandidates) {
+    try {
+      const html = await fetchHtml(candidateUrl, 'Parkrun athlete history');
+      const parsed = parseAthleteRowsFromHtml(html, candidateUrl);
+      if (parsed.length) {
+        athleteRows = parsed;
+        sourceUrlUsed = candidateUrl;
+        break;
+      }
+      lastHistoryError = new Error(`No parsable rows at ${candidateUrl}`);
+    } catch (error) {
+      lastHistoryError = error;
+      console.warn('[syncParkrun] athlete history candidate failed:', candidateUrl, error?.message || error);
+    }
+  }
+
+  const eventHistoryCache = new Map();
+  const eventResultCache = new Map();
+  const athleteLinkNeedle = `/parkrunner/${athleteIdSafe}/`;
+
+  async function getEventHistoryIndex(eventBaseUrl) {
+    if (!eventBaseUrl) return null;
+    const key = String(eventBaseUrl).toLowerCase();
+    if (eventHistoryCache.has(key)) return eventHistoryCache.get(key);
+
+    const empty = {
+      byDate: new Map(),
+      byRun: new Map(),
+      eventName: null,
+      eventSlug: extractEventSlugFromBaseUrl(eventBaseUrl),
+      eventHistoryUrl: `${eventBaseUrl.replace(/\/+$/, '')}/eventhistory/`,
+    };
+    try {
+      const eventHistoryUrl = `${eventBaseUrl.replace(/\/+$/, '')}/eventhistory/`;
+      const html = await fetchHtml(eventHistoryUrl, 'Parkrun event history');
+      const $ = cheerio.load(html);
+      const byDate = new Map();
+      const byRun = new Map();
+
+      $('tr.Results-table-row').each((_, tr) => {
+        const row = $(tr);
+        const dateMs = parseDateMs(row.attr('data-date') || row.find('.format-date').first().text());
+        const dateKey = toDateKey(dateMs);
+        const runSeq = parseIntLoose(row.attr('data-parkrun')) || parseRunSeqFromUrl(row.find('td a').first().attr('href'));
+        const participants = parseIntLoose(row.attr('data-finishers'));
+        const href = row.find('td a').first().attr('href') || '';
+        const resultUrl = normalizeParkrunUrl(href, eventHistoryUrl) || (runSeq ? `${eventBaseUrl.replace(/\/+$/, '')}/${runSeq}/` : null);
+        if (!dateKey && !runSeq) return;
+        const entry = {
+          dateMs,
+          dateKey,
+          runSeq: runSeq || null,
+          participants: participants || null,
+          resultUrl: resultUrl || null,
+        };
+        if (dateKey && !byDate.has(dateKey)) byDate.set(dateKey, entry);
+        if (runSeq && !byRun.has(runSeq)) byRun.set(runSeq, entry);
+      });
+
+      if (!byDate.size && !byRun.size) {
+        $('table').each((_, tableEl) => {
+          const table = $(tableEl);
+          const bodyRows = table.find('tbody tr');
+          if (!bodyRows.length) return;
+
+          const headers = table.find('thead th').map((__, th) => normalizeText($(th).text()).toLowerCase()).get();
+          const findIdx = (patterns) => headers.findIndex((h) => patterns.some((re) => re.test(h)));
+          const dateIdx = findIdx([/^date$/, /event\s*date/, /run\s*date/]);
+          const runIdx = findIdx([/run\s*number/, /event\s*#/, /^#$/]);
+          const finishersIdx = findIdx([/finishers/, /participants/, /runners/]);
+
+          bodyRows.each((__, tr) => {
+            const row = $(tr);
+            const tds = row.find('td');
+            if (!tds.length) return;
+            const cells = tds.map((___, td) => normalizeText($(td).text())).get();
+            const pick = (idx) => (idx >= 0 && idx < cells.length ? cells[idx] : '');
+
+            let dateMs = parseDateMs(pick(dateIdx));
+            if (!dateMs) {
+              for (const cellText of cells) {
+                const parsed = parseDateMs(cellText);
+                if (parsed) {
+                  dateMs = parsed;
+                  break;
+                }
+              }
+            }
+            const dateKey = toDateKey(dateMs);
+
+            let runSeq = parseIntLoose(pick(runIdx));
+            const href = row.find('a[href]').first().attr('href') || '';
+            if (!runSeq) runSeq = parseRunSeqFromUrl(href);
+
+            let participants = parseIntLoose(pick(finishersIdx));
+            if (!participants) {
+              const ints = cells
+                .map((value) => parseIntLoose(value))
+                .filter((value) => Number.isFinite(value) && value > 10);
+              participants = ints.length ? ints[ints.length - 1] : null;
+            }
+
+            if (!dateKey && !runSeq) return;
+            const resultUrl = normalizeParkrunUrl(href, eventHistoryUrl) || (runSeq ? `${eventBaseUrl.replace(/\/+$/, '')}/${runSeq}/` : null);
+            const entry = {
+              dateMs,
+              dateKey,
+              runSeq: runSeq || null,
+              participants: participants || null,
+              resultUrl: resultUrl || null,
+            };
+            if (dateKey && !byDate.has(dateKey)) byDate.set(dateKey, entry);
+            if (runSeq && !byRun.has(runSeq)) byRun.set(runSeq, entry);
+          });
+
+          if (byDate.size || byRun.size) return false;
+        });
+      }
+
+      const eventTitleRaw = normalizeText($('.Results-header h1').first().text() || $('h1').first().text());
+      const eventName = normalizeText(eventTitleRaw.replace(/\s*Event History\s*$/i, ''));
+      const indexed = {
+        byDate,
+        byRun,
+        eventName: eventName || null,
+        eventSlug: extractEventSlugFromBaseUrl(eventBaseUrl),
+        eventHistoryUrl,
+      };
+      eventHistoryCache.set(key, indexed);
+      return indexed;
+    } catch (error) {
+      console.warn('[syncParkrun] event history fetch failed:', eventBaseUrl, error?.message || error);
+      eventHistoryCache.set(key, empty);
+      return empty;
+    }
+  }
+
+  async function getEventResultMeta(eventResultUrl) {
+    if (!eventResultUrl) return null;
+    const key = String(eventResultUrl);
+    if (eventResultCache.has(key)) return eventResultCache.get(key);
+
+    const empty = {
+      fetchStatus: null,
+      participants: null,
+      runSeq: parseRunSeqFromUrl(eventResultUrl),
+      athleteFound: false,
+      athletePosition: null,
+      athleteTimeText: null,
+      athleteAgeGrade: null,
+      athleteAchievement: null,
+      eventDateMs: null,
+    };
+
+    try {
+      const html = await fetchHtml(eventResultUrl, 'Parkrun event result');
+      const $ = cheerio.load(html);
+      const rowsPrimary = $('table.Results-table tbody tr');
+      const rowsLegacy = $('table#results tbody tr');
+      const rows = rowsPrimary.length
+        ? rowsPrimary
+        : (rowsLegacy.length ? rowsLegacy : $('table tbody tr'));
+      const participants = rows.length || null;
+      const headerText = normalizeText($('.Results-header h3').first().text() || '');
+      const headerRunSeq = (() => {
+        const m = headerText.match(/#\s*(\d+)/);
+        return m ? Number(m[1]) : null;
+      })();
+      let eventDateMs = null;
+      const dateCandidates = [
+        normalizeText($('time').first().attr('datetime') || $('time').first().text()),
+        normalizeText($('.Results-header h3').first().text()),
+        normalizeText($('.Results-header').first().text()),
+        normalizeText($('h1').first().text()),
+      ].filter(Boolean);
+      for (const candidate of dateCandidates) {
+        const direct = parseDateMs(candidate);
+        if (direct) {
+          eventDateMs = direct;
+          break;
+        }
+        const m = candidate.match(/(\d{1,2}\s+[A-Za-z]+\s+\d{4})/);
+        if (m) {
+          const parsed = parseDateMs(m[1]);
+          if (parsed) {
+            eventDateMs = parsed;
+            break;
+          }
+        }
+      }
+
+      let athleteFound = false;
+      let athletePosition = null;
+      let athleteTimeText = null;
+      let athleteAgeGrade = null;
+      let athleteAchievement = null;
+
+      rows.each((_, tr) => {
+        const row = $(tr);
+        const links = row.find('a[href*="/parkrunner/"]').toArray();
+        const found = links.some((a) => {
+          const href = normalizeText($(a).attr('href'));
+          return href && (href.includes(athleteLinkNeedle) || href.endsWith(athleteLinkNeedle.slice(0, -1)));
+        });
+        if (!found) return;
+        athleteFound = true;
+
+        athletePosition = parseIntLoose(row.attr('data-position')) || parseIntLoose(row.find('td').first().text());
+        athleteTimeText = normalizeText(row.find('.Results-table-td--time .compact').first().text())
+          || normalizeText(row.find('td').last().text());
+        athleteAgeGrade = parseNumberLoose(row.attr('data-agegrade'));
+        athleteAchievement = normalizeText(row.attr('data-achievement') || row.find('.Results-table-td--time .detailed').first().text());
+        if (!athleteTimeText) {
+          const rowTimes = row.find('td').map((__, td) => normalizeText($(td).text())).get();
+          const detected = rowTimes.find((text) => /^\d{1,2}:\d{2}(?::\d{2})?$/.test(text));
+          if (detected) athleteTimeText = detected;
+        }
+        if (athleteAgeGrade == null) {
+          const rowVals = row.find('td').map((__, td) => normalizeText($(td).text())).get();
+          const ageCell = rowVals.find((value) => /%$/.test(value));
+          if (ageCell) athleteAgeGrade = parseNumberLoose(ageCell);
+        }
+        return false;
+      });
+
+      const meta = {
+        fetchStatus: 200,
+        participants: participants || null,
+        runSeq: headerRunSeq || parseRunSeqFromUrl(eventResultUrl),
+        athleteFound,
+        athletePosition: athletePosition || null,
+        athleteTimeText: athleteTimeText || null,
+        athleteAgeGrade: athleteAgeGrade != null ? Number(athleteAgeGrade) : null,
+        athleteAchievement: athleteAchievement || null,
+        eventDateMs: eventDateMs || null,
+      };
+      eventResultCache.set(key, meta);
+      return meta;
+    } catch (error) {
+      console.warn('[syncParkrun] event result fetch failed:', eventResultUrl, error?.message || error);
+      const failed = {
+        ...empty,
+        fetchStatus: Number(error?.status || 0) || null,
+      };
+      eventResultCache.set(key, failed);
+      return failed;
+    }
+  }
+
+  async function buildAthleteRowsFromEventFallback() {
+    const profileEventSlug = slugify(String(profileData?.parkrunDefaultEventSlug || '').toLowerCase());
+    const profileStartRun = parseIntLoose(profileData?.parkrunDefaultStartRun);
+    const profileMaxBack = parseIntLoose(profileData?.parkrunFallbackMaxBack);
+    const maxBack = Math.min(Math.max(optionMaxBack || profileMaxBack || 180, 20), 600);
+
+    const inferSlugFromText = (value) => {
+      const text = normalizeText(value || '');
+      if (!text) return null;
+      let m = text.match(/([A-Za-z][A-Za-z0-9' -]{2,}?)\s+parkrun\b/i);
+      if (m?.[1]) {
+        const candidate = slugify(m[1]);
+        if (candidate && !['pre', 'post', 'warmup', 'warm-up', 'cooldown', 'cool-down'].includes(candidate)) return candidate;
+      }
+      m = text.match(/\bparkrun\s+([A-Za-z][A-Za-z0-9' -]{2,})/i);
+      if (m?.[1]) {
+        const candidate = slugify(m[1]);
+        if (candidate && !['pre', 'post', 'warmup', 'warm-up', 'cooldown', 'cool-down'].includes(candidate)) return candidate;
+      }
+      return null;
+    };
+
+    let eventSlug = optionEventSlug || profileEventSlug;
+    if (!eventSlug) {
+      try {
+        const prSnap = await db.collection('metrics_workouts')
+          .where('ownerUid', '==', uid)
+          .where('provider', '==', 'parkrun')
+          .orderBy('startDate', 'desc')
+          .limit(30)
+          .get();
+        for (const docSnap of prSnap.docs) {
+          const data = docSnap.data() || {};
+          const inferred = slugify(String(data.eventSlug || '').toLowerCase()) || inferSlugFromText(data.event || data.name);
+          if (inferred) {
+            eventSlug = inferred;
+            break;
+          }
+        }
+      } catch { }
+    }
+    if (!eventSlug) {
+      try {
+        const stravaSnap = await db.collection('metrics_workouts')
+          .where('ownerUid', '==', uid)
+          .where('provider', '==', 'strava')
+          .orderBy('startDate', 'desc')
+          .limit(300)
+          .get();
+        for (const docSnap of stravaSnap.docs) {
+          const data = docSnap.data() || {};
+          const inferred = inferSlugFromText(data.name);
+          if (inferred) {
+            eventSlug = inferred;
+            break;
+          }
+        }
+      } catch { }
+    }
+
+    if (!eventSlug) {
+      return {
+        rows: [],
+        sourceUrl: null,
+        error: new Error('Fallback requires a Parkrun event slug. Set parkrunDefaultEventSlug or run a Strava activity named like "<event> parkrun".'),
+      };
+    }
+
+    const eventBaseUrl = `${base}/${eventSlug}/results/`;
+    const historyIndex = await getEventHistoryIndex(eventBaseUrl);
+    const maxRunFromHistory = (() => {
+      const nums = Array.from(historyIndex?.byRun?.keys?.() || [])
+        .map((value) => Number(value))
+        .filter((value) => Number.isFinite(value) && value > 0);
+      if (!nums.length) return null;
+      return Math.max(...nums);
+    })();
+    const startRun = optionStartRun || maxRunFromHistory || profileStartRun;
+    if (!startRun) {
+      return {
+        rows: [],
+        sourceUrl: historyIndex?.eventHistoryUrl || `${eventBaseUrl}eventhistory/`,
+        error: new Error('Fallback requires a start run number. Set parkrunDefaultStartRun or ensure event history is reachable.'),
+      };
+    }
+
+    const rows = [];
+    let lastError = null;
+    let consecutiveBlockedPages = 0;
+
+    for (let i = 0; i < maxBack; i++) {
+      const runSeq = startRun - i;
+      if (runSeq <= 0) break;
+      const historyRow = historyIndex?.byRun?.get(runSeq) || null;
+      const eventResultUrl = historyRow?.resultUrl || `${eventBaseUrl}${runSeq}/`;
+
+      let meta = null;
+      try {
+        meta = await getEventResultMeta(eventResultUrl);
+      } catch (error) {
+        lastError = error;
+        continue;
+      }
+      if (!meta?.athleteFound) {
+        const fetchStatus = Number(meta?.fetchStatus || 0);
+        if (fetchStatus >= 400) {
+          lastError = new Error(`Parkrun event result fetch failed (HTTP ${fetchStatus}) for ${eventResultUrl}`);
+        }
+        if (fetchStatus === 403 || fetchStatus === 405) {
+          consecutiveBlockedPages += 1;
+          if (consecutiveBlockedPages >= 8) break;
+        } else {
+          consecutiveBlockedPages = 0;
+        }
+        continue;
+      }
+      consecutiveBlockedPages = 0;
+
+      const dateMs = historyRow?.dateMs || meta?.eventDateMs || null;
+      const timeSec = parseDurationSeconds(meta?.athleteTimeText || '');
+      if (!dateMs || !timeSec) continue;
+
+      const eventNameRaw = normalizeText(historyIndex?.eventName || `${eventSlug} parkrun`);
+      const eventName = /parkrun/i.test(eventNameRaw) ? eventNameRaw : `${eventNameRaw} parkrun`;
+      const ageGradeText = meta?.athleteAgeGrade != null ? `${Number(meta.athleteAgeGrade).toFixed(2)}%` : null;
+      const achievement = normalizeText(meta?.athleteAchievement || '');
+      const pbFlag = /pb/i.test(achievement);
+      rows.push({
+        eventText: eventName,
+        eventSlug,
+        docSlug: slugify(eventName) || `${eventSlug}-parkrun`,
+        eventBaseUrl,
+        eventResultUrl,
+        dateMs,
+        timeSec,
+        position: meta?.athletePosition || null,
+        ageGradeText,
+        runSeq,
+        participantsCount: historyRow?.participants || meta?.participants || null,
+        isPb: pbFlag,
+        pbText: achievement || null,
+      });
+    }
+
+    if (rows.length && (!profileEventSlug || !profileStartRun)) {
+      await db.collection('profiles').doc(uid).set({
+        parkrunDefaultEventSlug: eventSlug,
+        parkrunDefaultStartRun: startRun,
+      }, { merge: true }).catch(() => { });
+    }
+
+    return {
+      rows,
+      sourceUrl: historyIndex?.eventHistoryUrl || `${eventBaseUrl}eventhistory/`,
+      error: lastError,
+    };
+  }
+
+  async function buildAthleteRowsFromApiFallback() {
+    try {
+      const apiRows = await fetchParkrunAthleteResultsFromApi(uid, athleteIdSafe, { limit: 100, maxPages: 25 });
+      if (!apiRows.length) {
+        return {
+          rows: [],
+          sourceUrl: 'parkrun_api:/v1/results',
+          error: new Error('Parkrun API returned no results'),
+        };
+      }
+
+      const rows = [];
+      for (const raw of apiRows) {
+        const eventNameRaw = normalizeText(raw?.EventLongName || raw?.EventName || raw?.EventShortName || raw?.HomeRunName || '');
+        const eventName = eventNameRaw ? (/parkrun/i.test(eventNameRaw) ? eventNameRaw : `${eventNameRaw} parkrun`) : 'parkrun';
+        const eventSlug = slugify(String(raw?.EventName || raw?.EventShortName || eventNameRaw).replace(/\bparkrun\b.*$/i, '').trim()) || null;
+        const dateMs = parseDateMs(raw?.EventDate || raw?.RunDate || raw?.Date || null);
+        const timeText = normalizeText(raw?.RunTime || raw?.FinishTime || raw?.Time || '');
+        const timeSec = parseDurationSeconds(timeText);
+        if (!dateMs || !timeSec) continue;
+
+        const runSeq = parseIntLoose(raw?.EventNumber || raw?.EventNo || raw?.EventID);
+        const position = parseIntLoose(raw?.FinishPosition || raw?.Position || raw?.Pos);
+        const participantsCount = parseIntLoose(raw?.TotalFinishers || raw?.Finishers || raw?.Participants || raw?.TotalRunners || raw?.FieldSize);
+        const ageGradeNum = parseNumberLoose(raw?.AgeGrading || raw?.AgeGrade || raw?.AgeGradePercent);
+        const ageGradeText = ageGradeNum != null ? `${Number(ageGradeNum).toFixed(2)}%` : null;
+        const isPb = parseBoolLoose(raw?.GenuinePB) || parseBoolLoose(raw?.WasPbRun) || parseBoolLoose(raw?.PB);
+        const pbText = isPb ? (parseBoolLoose(raw?.GenuinePB) ? 'Genuine PB' : 'PB') : null;
+        const eventBaseUrl = eventSlug ? `${base}/${eventSlug}/results/` : null;
+        const eventResultUrl = runSeq && eventBaseUrl ? `${eventBaseUrl}${runSeq}/` : null;
+        const docSlug = slugify(eventName || eventSlug || 'parkrun');
+
+        rows.push({
+          eventText: eventName,
+          eventSlug: eventSlug || null,
+          docSlug: docSlug || null,
+          eventBaseUrl,
+          eventResultUrl,
+          dateMs,
+          timeSec,
+          position: position || null,
+          ageGradeText,
+          runSeq: runSeq || null,
+          participantsCount: participantsCount || null,
+          isPb,
+          pbText,
+          skipHtmlEnrichment: true,
+        });
+      }
+
+      rows.sort((a, b) => (b.dateMs || 0) - (a.dateMs || 0));
+      return {
+        rows,
+        sourceUrl: 'parkrun_api:/v1/results',
+        error: null,
+      };
+    } catch (error) {
+      return {
+        rows: [],
+        sourceUrl: 'parkrun_api:/v1/results',
+        error,
+      };
+    }
+  }
+
+  if (!athleteRows.length) {
+    const fallback = await buildAthleteRowsFromEventFallback();
+    if (fallback?.rows?.length) {
+      athleteRows = fallback.rows;
+      sourceUrlUsed = fallback.sourceUrl || sourceUrlUsed;
+    } else {
+      const apiFallback = await buildAthleteRowsFromApiFallback();
+      if (apiFallback?.rows?.length) {
+        athleteRows = apiFallback.rows;
+        sourceUrlUsed = apiFallback.sourceUrl || sourceUrlUsed;
+      } else {
+        const details = [];
+        if (lastHistoryError?.message) details.push(`athlete history: ${lastHistoryError.message}`);
+        if (fallback?.error?.message) details.push(`fallback: ${fallback.error.message}`);
+        if (apiFallback?.error?.message) details.push(`api fallback: ${apiFallback.error.message}`);
+        const suffix = details.length ? ` Last error: ${details.join(' | ')}` : '';
+        throw new Error(`Parkrun page returned no parsable result rows. Check athlete ID, country base URL, or anti-bot response.${suffix}`);
+      }
+    }
+  }
+
+  for (const row of athleteRows) {
+    const dateMs = row.dateMs;
+    const timeSec = row.timeSec;
+    if (!dateMs || !timeSec) continue;
+
+    let eventName = normalizeText(row.eventText || '');
+    let canonicalEventSlug = row.eventSlug || null;
+    let docSlug = row.docSlug || null;
+    let eventRunSeqNumber = row.runSeq || null;
+    let eventResultUrl = row.eventResultUrl || null;
+    let participantsCount = row.participantsCount || null;
+    let position = row.position || null;
+    let ageGradeText = row.ageGradeText || null;
+    let pbFlag = !!row.isPb;
+    let pbText = row.pbText || null;
+
+    if (row.eventBaseUrl && !row.skipHtmlEnrichment) {
+      const historyIndex = await getEventHistoryIndex(row.eventBaseUrl);
+      const historyMatch = historyIndex?.byDate?.get(toDateKey(dateMs)) || null;
+      if (historyIndex?.eventName) eventName = historyIndex.eventName;
+      if (historyIndex?.eventSlug) canonicalEventSlug = historyIndex.eventSlug;
+      if (historyMatch) {
+        if (!eventRunSeqNumber && historyMatch.runSeq) eventRunSeqNumber = historyMatch.runSeq;
+        if (!participantsCount && historyMatch.participants) participantsCount = historyMatch.participants;
+        if (!eventResultUrl && historyMatch.resultUrl) eventResultUrl = historyMatch.resultUrl;
+      }
+      if (!eventResultUrl && eventRunSeqNumber) {
+        eventResultUrl = `${row.eventBaseUrl.replace(/\/+$/, '')}/${eventRunSeqNumber}/`;
+      }
+    }
+
+    if (eventResultUrl && !row.skipHtmlEnrichment) {
+      const meta = await getEventResultMeta(eventResultUrl);
+      if (!participantsCount && meta?.participants) participantsCount = meta.participants;
+      if (!eventRunSeqNumber && meta?.runSeq) eventRunSeqNumber = meta.runSeq;
+      if (!position && meta?.athletePosition) position = meta.athletePosition;
+      if (!ageGradeText && meta?.athleteAgeGrade != null) ageGradeText = `${Number(meta.athleteAgeGrade).toFixed(2)}%`;
+      if (!pbText && meta?.athleteAchievement) pbText = meta.athleteAchievement;
+      if (!pbFlag && /pb/i.test(String(meta?.athleteAchievement || ''))) pbFlag = true;
+    }
+
+    if (!eventName) eventName = canonicalEventSlug ? `${canonicalEventSlug} parkrun` : 'parkrun';
+    if (!docSlug) {
+      const withParkrun = /parkrun/i.test(eventName) ? eventName : `${eventName} parkrun`;
+      docSlug = slugify(withParkrun) || slugify(canonicalEventSlug || eventName) || 'unknown-parkrun';
+    }
+    if (!canonicalEventSlug) {
+      canonicalEventSlug = slugify(String(eventName).replace(/\bparkrun\b.*$/i, '').trim()) || slugify(docSlug.replace(/-parkrun.*$/, ''));
+    }
+
+    const dateKey = toDateKey(dateMs);
+    const docId = `${uid}_parkrun_${dateKey}_${docSlug}`;
+    const participantsInt = parseIntLoose(participantsCount);
+    const positionInt = parseIntLoose(position);
+    const percentileTop = (participantsInt && positionInt && participantsInt >= positionInt)
+      ? Number((((participantsInt - positionInt + 1) / participantsInt) * 100).toFixed(2))
+      : null;
+
+    const payload = {
+      id: docId,
+      ownerUid: uid,
+      provider: 'parkrun',
+      parkrunAthleteId: athleteIdSafe,
+      event: eventName,
+      eventSlug: canonicalEventSlug || null,
+      eventResultUrl: eventResultUrl || null,
+      eventRunSeqNumber: eventRunSeqNumber || null,
+      name: `parkrun ${eventName}`,
+      type: 'Run',
+      startDate: dateMs,
+      utcStartDate: new Date(dateMs).toISOString(),
+      elapsedTime_s: row.timeSec || timeSec,
+      movingTime_s: row.timeSec || timeSec,
+      distance_m: 5000,
+      position: positionInt || null,
+      ageGrade: ageGradeText || null,
+      participantsCount: participantsInt || null,
+      percentileTop,
+      parkrunPb: pbFlag,
+      parkrunAchievement: pbText || null,
+      source: 'parkrun',
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+    await db.collection('metrics_workouts').doc(docId).set(payload, { merge: true });
+    imported += 1;
+  }
+
+  await db.collection('profiles').doc(uid).set({
+    parkrunAthleteId: athleteIdSafe,
+    parkrunLastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
+    parkrunLastSyncStatus: 'success',
+    parkrunLastSyncImported: imported,
+    parkrunLastSyncSourceUrl: sourceUrlUsed || null,
+    parkrunLastErrorAt: admin.firestore.FieldValue.delete(),
+    parkrunLastErrorMessage: admin.firestore.FieldValue.delete(),
+  }, { merge: true });
+  return { ok: true, imported, sourceUrl: sourceUrlUsed || null };
+}
+
+// Match Parkrun entries to Strava runs to backfill HR and links
+async function reconcileParkrunToStrava(uid, { maxStrava = 500 } = {}) {
+  const db = admin.firestore();
+  const prSnap = await db.collection('metrics_workouts')
+    .where('ownerUid', '==', uid)
+    .where('provider', '==', 'parkrun')
+    .orderBy('startDate', 'desc')
+    .limit(300)
+    .get();
+
+  const parkruns = prSnap.docs
+    .map((d) => ({ id: d.id, ...d.data() }))
+    .filter((p) => !p.stravaActivityId && p.startDate);
+
+  if (!parkruns.length) return { matched: 0 };
+
+  const stravaSnap = await db.collection('metrics_workouts')
+    .where('ownerUid', '==', uid)
+    .where('provider', '==', 'strava')
+    .orderBy('startDate', 'desc')
+    .limit(maxStrava)
+    .get();
+
+  const stravaRuns = stravaSnap.docs.map((d) => ({ id: d.id, ...d.data() }))
+    .filter((s) => (s.startDate || s.utcStartDate) && (s.distance_m || 0) > 1000);
+
+  let matched = 0;
+  const maxTimeDiffMs = 18 * 60 * 60 * 1000; // same-day with timezone drift
+  const maxDistanceDiffM = 2000; // user requirement: allow +/-1-2km
+
+  const toMs = (v) => {
+    if (!v) return null;
+    if (typeof v === 'number') return v;
+    const n = Date.parse(v);
+    return Number.isNaN(n) ? null : n;
+  };
+
+  for (const pr of parkruns) {
+    const prDate = toMs(pr.startDate) || toMs(pr.utcStartDate);
+    if (!prDate) continue;
+    const slug = String(pr.eventSlug || pr.event || '').toLowerCase();
+
+    const candidates = stravaRuns
+      .map((s) => {
+        const sd = toMs(s.startDate) || toMs(s.utcStartDate);
+        if (!sd) return null;
+        const timeDiff = Math.abs(sd - prDate); // ms
+        if (timeDiff > maxTimeDiffMs) return null;
+        const dist = Number(s.distance_m || 0);
+        const distancePenalty = dist ? Math.abs(dist - 5000) : 1200;
+        if (dist && distancePenalty > maxDistanceDiffM) return null;
+        const name = String(s.name || '').toLowerCase();
+        const nameMatch = slug && name.includes(slug);
+        const score = timeDiff / (1000 * 60) + distancePenalty / 25 - (nameMatch ? 45 : 0);
+        return { s, score, timeDiff, distancePenalty, nameMatch };
+      })
+      .filter(Boolean)
+      .sort((a, b) => (a.score - b.score));
+
+    const best = candidates[0];
+    if (!best) continue;
+
+    // Apply match if reasonably close
+    if (best.timeDiff <= maxTimeDiffMs && best.distancePenalty <= maxDistanceDiffM) {
+      const ref = db.collection('metrics_workouts').doc(pr.id);
+      await ref.set({
+        stravaActivityId: best.s.stravaActivityId || String(best.s.stravaActivityId || '').replace(`${uid}_`, '') || null,
+        avgHeartrate: best.s.avgHeartrate || pr.avgHeartrate || null,
+        maxHeartrate: best.s.maxHeartrate || pr.maxHeartrate || null,
+        matchedDistanceDelta_m: Math.round(best.distancePenalty),
+        matchedTimeDiffMin: Math.round(best.timeDiff / (60 * 1000)),
+        matchedVia: 'strava_matcher',
+        matchedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+      matched += 1;
+    }
+  }
+
+  return { matched };
+}
+
+// ===== Parkrun Sync (HTML parse)
+exports.syncParkrun = httpsV2.onCall(async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
+  const uid = req.auth.uid;
+  let { athleteId, profileUrl, countryBaseUrl, eventSlug, startRun, maxBack, username, password } = req.data || {};
+  console.log('[syncParkrun] uid', uid, 'athleteId', athleteId, 'profileUrl?', !!profileUrl, 'base?', countryBaseUrl);
+  athleteId = (athleteId || '').toString().trim();
+  profileUrl = (profileUrl || '').toString().trim();
+  countryBaseUrl = (countryBaseUrl || '').toString().trim();
+  eventSlug = (eventSlug || '').toString().trim();
+  username = (username || '').toString().trim();
+  password = (password || '').toString();
+  startRun = Number(startRun || 0) || null;
+  maxBack = Number(maxBack || 0) || null;
+
+  if (username && password) {
+    try {
+      const connected = await connectParkrunApiForUser(uid, {
+        username,
+        password,
+        athleteIdHint: athleteId ? Number(athleteId) : null,
+      });
+      if (!athleteId && connected?.athleteId) athleteId = String(connected.athleteId);
+    } catch (error) {
+      throw new httpsV2.HttpsError('failed-precondition', `Parkrun API authentication failed: ${error?.message || error}`);
+    }
+  }
+
+  if (!athleteId && profileUrl) {
+    const match1 = profileUrl.match(/athleteNumber=(\d+)/i);
+    const match2 = profileUrl.match(/parkrunner\/(\d+)/i);
+    athleteId = match1?.[1] || match2?.[1] || '';
+  }
+  if (!athleteId) {
+    throw new httpsV2.HttpsError('invalid-argument', 'Provide Parkrun athleteId or profileUrl containing athleteNumber.');
+  }
+  try {
+    const result = await _syncParkrunInternal(uid, athleteId, countryBaseUrl, { eventSlug, startRun, maxBack });
+    await recordIntegrationLog(uid, 'parkrun', 'success', 'Parkrun results synced', {
+      imported: result?.imported || 0,
+      athleteId,
+      countryBaseUrl,
+      eventSlug: eventSlug || null,
+      startRun: startRun || null,
+    });
+    return result;
+  } catch (error) {
+    await admin.firestore().collection('profiles').doc(uid).set({
+      parkrunLastSyncStatus: 'error',
+      parkrunLastErrorAt: admin.firestore.FieldValue.serverTimestamp(),
+      parkrunLastErrorMessage: error?.message || 'Parkrun sync failed',
+    }, { merge: true });
+    await recordIntegrationLog(uid, 'parkrun', 'error', error?.message || 'Parkrun sync failed', {
+      athleteId,
+      countryBaseUrl,
+      eventSlug: eventSlug || null,
+      startRun: startRun || null,
+    });
+    if (error instanceof httpsV2.HttpsError) throw error;
+    throw new httpsV2.HttpsError('internal', error?.message || 'Failed to sync Parkrun results');
+  }
+});
+
+// Manually trigger Parkrun ↔ Strava reconciliation
+exports.reconcileParkrunStrava = httpsV2.onCall(async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
+  const uid = req.auth.uid;
+  const maxStrava = Number(req.data?.maxStrava || 500);
+  try {
+    return await reconcileParkrunToStrava(uid, { maxStrava });
+  } catch (error) {
+    if (error instanceof httpsV2.HttpsError) throw error;
+    throw new httpsV2.HttpsError('internal', error?.message || 'Failed to reconcile Parkrun to Strava');
+  }
+});
+
+// Fitness Overview aggregator
+exports.getFitnessOverview = httpsV2.onCall(async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const days = Math.min(Number(req.data?.days || 90), 365);
+  return await _getFitnessOverview(uid, days);
+});
+
+function workoutHasDadMarker(workout) {
+  const text = `${String(workout?.title || '')} ${String(workout?.name || '')} ${String(workout?.event || '')}`.toLowerCase();
+  return /\bdad\b/i.test(text);
+}
+
+async function shouldExcludeDadTaggedWorkouts(uid) {
+  const db = admin.firestore();
+  return db.collection('profiles').doc(uid).get()
+    .then((snap) => {
+      const data = snap.exists ? (snap.data() || {}) : {};
+      return data.excludeWithDadFromMetrics !== false;
+    })
+    .catch(() => true);
+}
+
+async function _getFitnessOverview(uid, days) {
+  const nowMs = Date.now();
+  const sinceMs = nowMs - days * 24 * 60 * 60 * 1000;
+  const db = admin.firestore();
+  const excludeWithDadFromMetrics = await shouldExcludeDadTaggedWorkouts(uid);
+  const workoutsSnap = await db.collection('metrics_workouts').where('ownerUid', '==', uid).limit(1000).get();
+  const rawWorkouts = workoutsSnap.docs
+    .map(d => ({ id: d.id, ...d.data() }))
+    .filter((w) => {
+      if (!(w.provider === 'strava' || w.provider === 'parkrun')) return false;
+      if (excludeWithDadFromMetrics && workoutHasDadMarker(w)) return false;
+      return true;
+    });
+  const workouts = rawWorkouts
+    .filter(w => (w.startDate || 0) >= sinceMs && (w.provider === 'strava' || w.provider === 'parkrun'))
+    .sort((a, b) => (a.startDate || 0) - (b.startDate || 0));
+  const hrvSnap = await db.collection('metrics_hrv').where('ownerUid', '==', uid).limit(1000).get();
+  const hrv = hrvSnap.docs
+    .map(d => ({ id: d.id, ...d.data() }))
+    .filter(x => {
+      const t = x.timestamp || x.date || x.day || x.measuredAt || null;
+      const ms = typeof t === 'number' ? (t > 1e12 ? t : t * 1000) : (t?.toMillis ? t.toMillis() : (Date.parse(t) || null));
+      x._ms = ms;
+      return ms && ms >= sinceMs;
+    })
+    .sort((a, b) => a._ms - b._ms);
+  const km = (m) => (typeof m === 'number' ? m / 1000 : 0);
+  const sec = (s) => (typeof s === 'number' ? s : 0);
+  const avg = (arr) => arr.length ? (arr.reduce((a, b) => a + b, 0) / arr.length) : null;
+  const clamp01 = (value) => Math.max(0, Math.min(1, value));
+  const fmtSecs = (value) => {
+    if (!value || !Number.isFinite(value)) return null;
+    const total = Math.max(0, Math.round(value));
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    return `${m}:${String(s).padStart(2, '0')}`;
+  };
+  const readRpe = (workout) => {
+    const explicit = Number(workout.perceivedExertion ?? workout.rpe ?? workout.stravaRpe ?? null);
+    if (Number.isFinite(explicit) && explicit > 0) return Math.min(10, Math.max(1, explicit));
+    const suffer = Number(workout.sufferScore ?? null);
+    if (Number.isFinite(suffer) && suffer > 0) return Math.min(10, Math.max(1, suffer / 10));
+    return null;
+  };
+  const classifySport = (workout) => {
+    if (!workout) return 'other';
+    if (String(workout.provider || '').toLowerCase() === 'parkrun') return 'run';
+    if (workout.run === true) return 'run';
+    const type = String(workout.sportType || workout.type || '').toLowerCase();
+    if (type.includes('swim')) return 'swim';
+    if (type.includes('ride') || type.includes('bike') || type.includes('cycling')) return 'bike';
+    if (type.includes('run') || type.includes('walk') || type.includes('hike')) return 'run';
+    return 'other';
+  };
+  const buildNormalizedPredictions = (sport, targetKm, {
+    minKm = 0.2,
+    maxKm = 200,
+    exponent = 1.06,
+  } = {}) => {
+    return workouts
+      .map((w) => {
+        if (classifySport(w) !== sport) return null;
+        const distanceKm = km(w.distance_m);
+        const timeSec = sec(w.elapsedTime_s || w.movingTime_s);
+        if (!distanceKm || !timeSec) return null;
+        if (distanceKm < minKm || distanceKm > maxKm) return null;
+        const normalizedSec = timeSec * Math.pow(targetKm / distanceKm, exponent);
+        return {
+          id: w.id,
+          provider: w.provider || null,
+          startDate: Number(w.startDate || 0),
+          distanceKm,
+          timeSec,
+          normalizedSec,
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.startDate - b.startDate);
+  };
+  const bestNormalized = (items) => {
+    if (!Array.isArray(items) || !items.length) return null;
+    return items.reduce((winner, item) => (!winner || item.normalizedSec < winner.normalizedSec ? item : winner), null);
+  };
+  const yearStartMs = Date.UTC(new Date().getUTCFullYear(), 0, 1);
+
+  const weekly = new Map();
+  let totalKm = 0, totalSec = 0, sessions = 0;
+  for (const w of workouts) {
+    const d = new Date(w.startDate || Date.now());
+    const ws = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+    ws.setUTCDate(ws.getUTCDate() - ws.getUTCDay());
+    const key = ws.toISOString().slice(0, 10);
+    const dist = km(w.distance_m);
+    const time = sec(w.movingTime_s || w.elapsedTime_s);
+    const agg = weekly.get(key) || { distanceKm: 0, timeSec: 0, sessions: 0 };
+    agg.distanceKm += dist; agg.timeSec += time; agg.sessions += 1;
+    weekly.set(key, agg); totalKm += dist; totalSec += time; sessions += 1;
+  }
+  const since30 = nowMs - 30 * 24 * 60 * 60 * 1000;
+  const last30 = workouts.filter(w => (w.startDate || 0) >= since30);
+  const dist30 = last30.reduce((s, w) => s + km(w.distance_m), 0);
+  const time30 = last30.reduce((s, w) => s + sec(w.movingTime_s || w.elapsedTime_s), 0);
+  const avgPaceMinPerKm = dist30 > 0 ? (time30 / 60) / dist30 : null;
+  const sportDistanceLast30 = { runKm: 0, swimKm: 0, bikeKm: 0 };
+  const sportDistanceRange = { runKm: 0, swimKm: 0, bikeKm: 0 };
+  const sportDistanceYtd = { runKm: 0, swimKm: 0, bikeKm: 0 };
+  for (const w of workouts) {
+    const sport = classifySport(w);
+    const distKmVal = km(w.distance_m);
+    if (sport === 'run') sportDistanceRange.runKm += distKmVal;
+    else if (sport === 'swim') sportDistanceRange.swimKm += distKmVal;
+    else if (sport === 'bike') sportDistanceRange.bikeKm += distKmVal;
+  }
+  for (const w of last30) {
+    const sport = classifySport(w);
+    const distKmVal = km(w.distance_m);
+    if (sport === 'run') sportDistanceLast30.runKm += distKmVal;
+    else if (sport === 'swim') sportDistanceLast30.swimKm += distKmVal;
+    else if (sport === 'bike') sportDistanceLast30.bikeKm += distKmVal;
+  }
+  for (const w of rawWorkouts) {
+    const startMs = Number(w.startDate || 0);
+    if (!startMs || startMs < yearStartMs) continue;
+    const sport = classifySport(w);
+    const distKmVal = km(w.distance_m);
+    if (sport === 'run') sportDistanceYtd.runKm += distKmVal;
+    else if (sport === 'swim') sportDistanceYtd.swimKm += distKmVal;
+    else if (sport === 'bike') sportDistanceYtd.bikeKm += distKmVal;
+  }
+  const toVal = (x) => Number(x?.value ?? x?.rMSSD ?? x?.hrv ?? null) || null;
+  const last7Ms = nowMs - 7 * 24 * 60 * 60 * 1000;
+  const last30Ms = since30;
+  const hrvLast7 = hrv.filter(x => x._ms >= last7Ms).map(toVal).filter(Boolean);
+  const hrvLast30 = hrv.filter(x => x._ms >= last30Ms).map(toVal).filter(Boolean);
+  const hrv7 = avg(hrvLast7);
+  const hrv30 = avg(hrvLast30);
+  const hrvTrendPct = (hrv7 && hrv30) ? ((hrv7 - hrv30) / hrv30) * 100 : null;
+  const weeks = Array.from(weekly.values());
+  const recentWeeks = weeks.slice(-4);
+  const volKm = recentWeeks.reduce((s, x) => s + x.distanceKm, 0) / Math.max(recentWeeks.length, 1);
+  const volScore = clamp01(volKm / 50);
+  const hrvScore = (hrvTrendPct == null) ? 0.5 : clamp01((hrvTrendPct + 10) / 20);
+  const zoneTotals = { z1Time_s: 0, z2Time_s: 0, z3Time_s: 0, z4Time_s: 0, z5Time_s: 0 };
+  const zoneTotals30 = { z1Time_s: 0, z2Time_s: 0, z3Time_s: 0, z4Time_s: 0, z5Time_s: 0 };
+  const zoneWeights = { z1Time_s: 1, z2Time_s: 2, z3Time_s: 3, z4Time_s: 4, z5Time_s: 5 };
+  for (const w of workouts) {
+    if (w.hrZones) {
+      zoneTotals.z1Time_s += Number(w.hrZones.z1Time_s || 0);
+      zoneTotals.z2Time_s += Number(w.hrZones.z2Time_s || 0);
+      zoneTotals.z3Time_s += Number(w.hrZones.z3Time_s || 0);
+      zoneTotals.z4Time_s += Number(w.hrZones.z4Time_s || 0);
+      zoneTotals.z5Time_s += Number(w.hrZones.z5Time_s || 0);
+      if ((w.startDate || 0) >= since30) {
+        zoneTotals30.z1Time_s += Number(w.hrZones.z1Time_s || 0);
+        zoneTotals30.z2Time_s += Number(w.hrZones.z2Time_s || 0);
+        zoneTotals30.z3Time_s += Number(w.hrZones.z3Time_s || 0);
+        zoneTotals30.z4Time_s += Number(w.hrZones.z4Time_s || 0);
+        zoneTotals30.z5Time_s += Number(w.hrZones.z5Time_s || 0);
+      }
+    }
+  }
+
+  const zoneTotalMinutes30 = Object.values(zoneTotals30).reduce((sum, value) => sum + (Number(value || 0) / 60), 0);
+  const zoneWeightedMinutes30 = Object.entries(zoneWeights).reduce((sum, [key, weight]) => {
+    return sum + (Number(zoneTotals30[key] || 0) / 60) * weight;
+  }, 0);
+  const intensityIndex30 = zoneTotalMinutes30 > 0 ? zoneWeightedMinutes30 / zoneTotalMinutes30 : null;
+  const intensityScore = intensityIndex30 == null ? 0.5 : clamp01((intensityIndex30 - 1) / 4);
+
+  const rpeSamples = workouts
+    .map((w) => ({ startDate: Number(w.startDate || 0), rpe: readRpe(w), durationMin: sec(w.movingTime_s || w.elapsedTime_s) / 60 }))
+    .filter((item) => item.rpe != null);
+  const rpeLast7 = rpeSamples.filter((item) => item.startDate >= last7Ms).map((item) => Number(item.rpe));
+  const rpeLast30 = rpeSamples.filter((item) => item.startDate >= last30Ms).map((item) => Number(item.rpe));
+  const avgRpe7 = avg(rpeLast7);
+  const avgRpe30 = avg(rpeLast30);
+  const rpeLoad30 = rpeSamples
+    .filter((item) => item.startDate >= last30Ms)
+    .reduce((sum, item) => sum + (Number(item.durationMin || 0) * Number(item.rpe || 0)), 0);
+  const rpeScore = avgRpe30 == null ? 0.5 : clamp01((10 - Math.abs(avgRpe30 - 6)) / 10);
+
+  const normalizedFiveKRuns = buildNormalizedPredictions('run', 5, { minKm: 3, maxKm: 21.2, exponent: 1.06 });
+  const best5k = bestNormalized(normalizedFiveKRuns);
+  const predicted5kSec = best5k ? Number(best5k.normalizedSec) : null;
+  const predictionSource = best5k?.provider || null;
+  const predicted10kSec = predicted5kSec ? predicted5kSec * Math.pow(2, 1.06) : null;
+  const HALF_MARATHON_KM = 21.0975;
+  const normalizedHalfMarathon = buildNormalizedPredictions('run', HALF_MARATHON_KM, { minKm: 3, maxKm: 42.2, exponent: 1.06 });
+  const bestHalfMarathon = bestNormalized(normalizedHalfMarathon);
+  const predictedHalfMarathonSec = bestHalfMarathon ? Number(bestHalfMarathon.normalizedSec) : null;
+
+  const normalizedSwim800 = buildNormalizedPredictions('swim', 0.8, { minKm: 0.2, maxKm: 5, exponent: 1.04 });
+  const bestSwim800 = bestNormalized(normalizedSwim800);
+  const predictedSwim800mSec = bestSwim800 ? Number(bestSwim800.normalizedSec) : null;
+  const predictedSwimSource = bestSwim800?.provider || null;
+
+  const FIFTY_KM = 50;
+  const normalizedBike50k = buildNormalizedPredictions('bike', FIFTY_KM, { minKm: 10, maxKm: 250, exponent: 1.06 });
+  const bestBike50k = bestNormalized(normalizedBike50k);
+  const predictedBike50kSec = bestBike50k ? Number(bestBike50k.normalizedSec) : null;
+  const THIRTY_MILES_KM = 48.28032;
+  const normalizedBike30mi = buildNormalizedPredictions('bike', THIRTY_MILES_KM, { minKm: 10, maxKm: 250, exponent: 1.06 });
+  const bestBike30mi = bestNormalized(normalizedBike30mi);
+  const predictedBike30miSec = bestBike30mi ? Number(bestBike30mi.normalizedSec) : null;
+  const predictedBikeSource = (bestBike50k?.provider || bestBike30mi?.provider || null);
+
+  let trendDirection = 'flat';
+  let trendSec = null;
+  let trendPct = null;
+  if (normalizedFiveKRuns.length >= 4) {
+    const recent = normalizedFiveKRuns.slice(-3).map((item) => item.normalizedSec);
+    const baseline = normalizedFiveKRuns.slice(-6, -3).map((item) => item.normalizedSec);
+    const recentAvg = avg(recent);
+    const baselineAvg = avg(baseline.length ? baseline : normalizedFiveKRuns.slice(0, Math.max(1, normalizedFiveKRuns.length - 3)).map((item) => item.normalizedSec));
+    if (recentAvg != null && baselineAvg != null) {
+      trendSec = Number((recentAvg - baselineAvg).toFixed(1));
+      trendPct = baselineAvg > 0 ? Number((((baselineAvg - recentAvg) / baselineAvg) * 100).toFixed(1)) : null;
+      if (trendSec <= -20) trendDirection = 'up';
+      else if (trendSec >= 20) trendDirection = 'down';
+      else trendDirection = 'flat';
+    }
+  }
+
+  const fitnessScore = Math.round((volScore * 0.4 + hrvScore * 0.2 + intensityScore * 0.25 + rpeScore * 0.15) * 100);
+  const normalizedFitnessScore = Math.max(0, Math.min(100, Number.isFinite(fitnessScore) ? fitnessScore : 0));
+  const fitnessLevel = normalizedFitnessScore >= 85
+    ? 'Peak'
+    : normalizedFitnessScore >= 70
+      ? 'Sharp'
+      : normalizedFitnessScore >= 55
+        ? 'Building'
+        : normalizedFitnessScore >= 40
+          ? 'Base'
+          : 'Rebuild';
+
+  const latestWorkout = workouts.length ? workouts[workouts.length - 1] : null;
+  return {
+    rangeDays: days,
+    filters: {
+      excludeWithDadFromMetrics,
+    },
+    totals: { distanceKm: Number(totalKm.toFixed(2)), timeHours: Number((totalSec / 3600).toFixed(2)), sessions },
+    last30: { distanceKm: Number(dist30.toFixed(2)), avgPaceMinPerKm: avgPaceMinPerKm ? Number(avgPaceMinPerKm.toFixed(2)) : null, workouts: last30.length },
+    sportTotals: {
+      range: {
+        runKm: Number(sportDistanceRange.runKm.toFixed(2)),
+        swimKm: Number(sportDistanceRange.swimKm.toFixed(2)),
+        bikeKm: Number(sportDistanceRange.bikeKm.toFixed(2)),
+      },
+      last30: {
+        runKm: Number(sportDistanceLast30.runKm.toFixed(2)),
+        swimKm: Number(sportDistanceLast30.swimKm.toFixed(2)),
+        bikeKm: Number(sportDistanceLast30.bikeKm.toFixed(2)),
+      },
+      ytd: {
+        runKm: Number(sportDistanceYtd.runKm.toFixed(2)),
+        swimKm: Number(sportDistanceYtd.swimKm.toFixed(2)),
+        bikeKm: Number(sportDistanceYtd.bikeKm.toFixed(2)),
+      },
+    },
+    hrv: { last7Avg: hrv7 ? Number(hrv7.toFixed(1)) : null, last30Avg: hrv30 ? Number(hrv30.toFixed(1)) : null, trendPct: hrvTrendPct != null ? Number(hrvTrendPct.toFixed(1)) : null },
+    hrZones: zoneTotals,
+    hrLoad: {
+      weightedMinutes30: Number(zoneWeightedMinutes30.toFixed(1)),
+      intensityIndex30: intensityIndex30 != null ? Number(intensityIndex30.toFixed(2)) : null,
+    },
+    rpe: {
+      samples: rpeSamples.length,
+      avg7: avgRpe7 != null ? Number(avgRpe7.toFixed(2)) : null,
+      avg30: avgRpe30 != null ? Number(avgRpe30.toFixed(2)) : null,
+      load30: Number(rpeLoad30.toFixed(1)),
+    },
+    predictions: {
+      fiveKSec: predicted5kSec != null ? Math.round(predicted5kSec) : null,
+      tenKSec: predicted10kSec != null ? Math.round(predicted10kSec) : null,
+      halfMarathonSec: predictedHalfMarathonSec != null ? Math.round(predictedHalfMarathonSec) : null,
+      fiveKDisplay: fmtSecs(predicted5kSec),
+      tenKDisplay: fmtSecs(predicted10kSec),
+      halfMarathonDisplay: fmtSecs(predictedHalfMarathonSec),
+      swim800mSec: predictedSwim800mSec != null ? Math.round(predictedSwim800mSec) : null,
+      swim800mDisplay: fmtSecs(predictedSwim800mSec),
+      bike50kSec: predictedBike50kSec != null ? Math.round(predictedBike50kSec) : null,
+      bike50kDisplay: fmtSecs(predictedBike50kSec),
+      bike30miSec: predictedBike30miSec != null ? Math.round(predictedBike30miSec) : null,
+      bike30miDisplay: fmtSecs(predictedBike30miSec),
+      trendDirection,
+      trendSec,
+      trendPct,
+      source: predictionSource,
+      swimSource: predictedSwimSource,
+      bikeSource: predictedBikeSource,
+    },
+    lastWorkout: latestWorkout ? {
+      id: latestWorkout.id || null,
+      provider: latestWorkout.provider || null,
+      title: latestWorkout.title || latestWorkout.name || null,
+      type: latestWorkout.type || latestWorkout.sportType || null,
+      startDate: latestWorkout.startDate || null,
+      distance_m: latestWorkout.distance_m || null,
+      duration_s: latestWorkout.movingTime_s || latestWorkout.elapsedTime_s || null,
+      avgHeartrate: latestWorkout.avgHeartrate || null,
+      perceivedExertion: latestWorkout.perceivedExertion ?? latestWorkout.rpe ?? null,
+      sufferScore: latestWorkout.sufferScore ?? null,
+    } : null,
+    weekly: Array.from(weekly.entries()).map(([weekStart, w]) => ({ weekStart, ...w, paceMinPerKm: w.distanceKm > 0 ? Number(((w.timeSec / 60) / w.distanceKm).toFixed(2)) : null })),
+    fitnessScore: normalizedFitnessScore,
+    fitnessLevel,
+  };
+}
+
+// Correlate Parkrun 5k times with Strava HR data to estimate fitness/effort relationship
+exports.getRunFitnessAnalysis = httpsV2.onCall(async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const days = Math.min(Number(req.data?.days || 180), 730);
+  return await _getRunFitnessAnalysis(uid, days);
+});
+
+// Enable automation defaults for the authenticated user
+exports.enableFitnessAutomationDefaults = httpsV2.onCall(async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const db = admin.firestore();
+
+  // Try to infer defaults from existing Parkrun docs
+  let defaultSlug = null;
+  let defaultRunSeq = null;
+  try {
+    const snap = await db.collection('metrics_workouts')
+      .where('ownerUid', '==', uid)
+      .where('provider', '==', 'parkrun')
+      .orderBy('startDate', 'desc')
+      .limit(1)
+      .get();
+    if (!snap.empty) {
+      const d = snap.docs[0].data();
+      defaultSlug = d.eventSlug || null;
+      defaultRunSeq = d.eventRunSeqNumber || null;
+    }
+  } catch { }
+
+  const payload = {
+    stravaAutoSync: true,
+    parkrunAutoSync: true,
+    parkrunAutoComputePercentiles: true,
+    autoEnrichStravaHR: true,
+    autoComputeFitnessMetrics: true,
+    excludeWithDadFromMetrics: true,
+  };
+  if (defaultSlug && defaultRunSeq) {
+    payload['parkrunDefaultEventSlug'] = defaultSlug;
+    payload['parkrunDefaultStartRun'] = defaultRunSeq;
+  }
+
+  await db.collection('profiles').doc(uid).set(payload, { merge: true });
+  return { ok: true, defaults: payload };
+});
+
+// Backward-compatibility stub for legacy function present in project
+exports.generateGoalStoriesAndKPIs = httpsV2.onCall(async (req) => {
+  return { ok: true, message: 'Legacy stub active' };
+});
+
+async function _getRunFitnessAnalysis(uid, days) {
+  const sinceMs = Date.now() - days * 24 * 60 * 60 * 1000;
+  const db = admin.firestore();
+  const excludeWithDadFromMetrics = await shouldExcludeDadTaggedWorkouts(uid);
+  const wSnap = await db.collection('metrics_workouts').where('ownerUid', '==', uid).get();
+  const all = wSnap.docs
+    .map(d => ({ id: d.id, ...d.data() }))
+    .filter((workout) => !(excludeWithDadFromMetrics && workoutHasDadMarker(workout)));
+  const parkruns = all.filter(x => x.provider === 'parkrun' && (x.startDate || 0) >= sinceMs);
+  const runs = all.filter(x => x.provider === 'strava' && (x.startDate || 0) >= sinceMs && (x.type === 'Run' || x.run === true));
+  const pairs = [];
+  for (const p of parkruns) {
+    const pStart = p.startDate || 0;
+    const rCandidates = runs.filter(r => Math.abs((r.startDate || 0) - pStart) <= 18 * 3600 * 1000);
+    let best = null, bestScore = 1e12;
+    for (const r of rCandidates) {
+      const dist = Number(r.distance_m || 0);
+      if (dist && Math.abs(dist - 5000) > 2000) continue;
+      const dScore = Math.abs(dist - 5000) + Math.abs((r.startDate || 0) - pStart) / 1000;
+      if (dScore < bestScore) { best = r; bestScore = dScore; }
+    }
+    if (best) pairs.push({ parkrun: p, strava: best });
+  }
+  const xs = [], ys = [];
+  let zoneAgg = { z1Time_s: 0, z2Time_s: 0, z3Time_s: 0, z4Time_s: 0, z5Time_s: 0 };
+  for (const pair of pairs) {
+    const timeSec = Number(pair.parkrun.elapsedTime_s || pair.parkrun.movingTime_s || 0);
+    const avgHr = Number(pair.strava.avgHeartrate || 0);
+    if (timeSec > 0 && avgHr > 0) { xs.push(timeSec); ys.push(avgHr); }
+    if (pair.strava.hrZones) {
+      zoneAgg.z1Time_s += Number(pair.strava.hrZones.z1Time_s || 0);
+      zoneAgg.z2Time_s += Number(pair.strava.hrZones.z2Time_s || 0);
+      zoneAgg.z3Time_s += Number(pair.strava.hrZones.z3Time_s || 0);
+      zoneAgg.z4Time_s += Number(pair.strava.hrZones.z4Time_s || 0);
+      zoneAgg.z5Time_s += Number(pair.strava.hrZones.z5Time_s || 0);
+    }
+  }
+  function pearson(x, y) {
+    const n = Math.min(x.length, y.length);
+    if (!n) return null;
+    const mx = x.reduce((a, b) => a + b, 0) / n;
+    const my = y.reduce((a, b) => a + b, 0) / n;
+    let num = 0, dx = 0, dy = 0;
+    for (let i = 0; i < n; i++) { const a = x[i] - mx, b = y[i] - my; num += a * b; dx += a * a; dy += b * b; }
+    const den = Math.sqrt(dx * dy);
+    return den ? num / den : null;
+  }
+  const corr = pearson(xs, ys);
+  const toSec = (entry) => Number(entry?.elapsedTime_s || entry?.movingTime_s || 0) || 0;
+  const formatSec = (value) => {
+    if (!value || !Number.isFinite(value)) return null;
+    const total = Math.max(0, Math.round(value));
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    return `${m}:${String(s).padStart(2, '0')}`;
+  };
+  const parkrunTimes = parkruns.map(toSec).filter((v) => v > 0).sort((a, b) => a - b);
+  const pbSec = parkrunTimes.length ? parkrunTimes[0] : null;
+  const predicted5kSec = pbSec;
+  const predicted10kSec = predicted5kSec ? predicted5kSec * Math.pow(2, 1.06) : null;
+  const avgPairRpe = (() => {
+    const vals = pairs
+      .map((pair) => Number(pair?.strava?.perceivedExertion ?? pair?.strava?.rpe ?? null))
+      .filter((n) => Number.isFinite(n) && n > 0);
+    if (!vals.length) return null;
+    return Number((vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(2));
+  })();
+  const byMonth = new Map();
+  for (const p of parkruns) {
+    const d = new Date(p.startDate || Date.now());
+    const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+    const arr = byMonth.get(key) || [];
+    arr.push(Number(p.elapsedTime_s || p.movingTime_s || 0));
+    byMonth.set(key, arr);
+  }
+  const monthly = Array.from(byMonth.entries()).map(([month, arr]) => {
+    const sorted = arr.filter(Boolean).sort((a, b) => a - b);
+    const med = sorted.length ? sorted[Math.floor(sorted.length / 2)] : null;
+    return { month, parkrunMedianSec: med };
+  }).sort((a, b) => a.month.localeCompare(b.month));
+
+  const trend = (() => {
+    if (monthly.length < 2) return { direction: 'flat', deltaSec: null, deltaPct: null };
+    const latest = monthly[monthly.length - 1]?.parkrunMedianSec || null;
+    const previous = monthly[monthly.length - 2]?.parkrunMedianSec || null;
+    if (!latest || !previous) return { direction: 'flat', deltaSec: null, deltaPct: null };
+    const deltaSec = Number((latest - previous).toFixed(1));
+    const deltaPct = previous > 0 ? Number((((previous - latest) / previous) * 100).toFixed(1)) : null;
+    const direction = deltaSec <= -10 ? 'up' : deltaSec >= 10 ? 'down' : 'flat';
+    return { direction, deltaSec, deltaPct };
+  })();
+
+  return {
+    pairs: pairs.map(p => ({
+      parkrun: {
+        date: new Date(p.parkrun.startDate).toISOString(),
+        timeSec: p.parkrun.elapsedTime_s || p.parkrun.movingTime_s,
+        position: p.parkrun.position || null,
+        participants: p.parkrun.participantsCount || null,
+        percentileTop: p.parkrun.percentileTop || null,
+        ageGrade: p.parkrun.ageGrade || null,
+        isPb: pbSec != null && Math.abs(toSec(p.parkrun) - pbSec) < 0.5,
+      },
+      strava: {
+        activityId: p.strava.stravaActivityId,
+        avgHeartrate: p.strava.avgHeartrate || null,
+        perceivedExertion: p.strava.perceivedExertion ?? p.strava.rpe ?? null,
+        sufferScore: p.strava.sufferScore ?? null,
+        hrZones: p.strava.hrZones || null,
+      }
+    })),
+    correlationTimeVsAvgHR: corr,
+    hrZonesAggregate: zoneAgg,
+    monthly,
+    parkrunPbSec: pbSec,
+    parkrunPbDisplay: formatSec(pbSec),
+    predicted5kSec: predicted5kSec ? Math.round(predicted5kSec) : null,
+    predicted5kDisplay: formatSec(predicted5kSec),
+    predicted10kSec: predicted10kSec ? Math.round(predicted10kSec) : null,
+    predicted10kDisplay: formatSec(predicted10kSec),
+    trend,
+    averagePairRpe: avgPairRpe,
+  };
+}
+
+function detectFitnessMetricFromKpi(name, unit) {
+  const text = `${String(name || '').toLowerCase()} ${String(unit || '').toLowerCase()}`;
+  if (!text.trim()) return null;
+  if ((text.includes('half marathon') || text.includes('half-marathon') || text.includes('21k') || text.includes('21.1')) && (text.includes('time') || text.includes('pace') || text.includes('min') || text.includes('sec') || text.includes('hour') || text.includes('hr'))) {
+    return { key: 'predictedHalfMarathonSec', lowerIsBetter: true, source: 'strava+parkrun' };
+  }
+  if (text.includes('10k') && (text.includes('time') || text.includes('pace') || text.includes('min') || text.includes('sec'))) {
+    return { key: 'predicted10kSec', lowerIsBetter: true, source: 'strava+parkrun' };
+  }
+  if (text.includes('5k') && (text.includes('time') || text.includes('pace') || text.includes('min') || text.includes('sec'))) {
+    return { key: 'predicted5kSec', lowerIsBetter: true, source: 'strava+parkrun' };
+  }
+  if ((text.includes('800m') || text.includes('0.8k')) && (text.includes('time') || text.includes('pace') || text.includes('min') || text.includes('sec'))) {
+    return { key: 'predictedSwim800mSec', lowerIsBetter: true, source: 'strava' };
+  }
+  if ((text.includes('bike') || text.includes('cycle') || text.includes('ride') || text.includes('cycling')) && (text.includes('50k') || text.includes('50km') || text.includes('50 km')) && (text.includes('time') || text.includes('pace') || text.includes('min') || text.includes('sec') || text.includes('hour') || text.includes('hr'))) {
+    return { key: 'predictedBike50kSec', lowerIsBetter: true, source: 'strava' };
+  }
+  if ((text.includes('30 mile') || text.includes('30mi') || text.includes('30-mile')) && (text.includes('time') || text.includes('pace') || text.includes('min') || text.includes('sec') || text.includes('hour') || text.includes('hr'))) {
+    return { key: 'predictedBike30miSec', lowerIsBetter: true, source: 'strava' };
+  }
+  if (text.includes('fitness')) return { key: 'fitnessScore', lowerIsBetter: false, source: 'strava' };
+  if (text.includes('rpe')) return { key: 'avgRpe30', lowerIsBetter: false, source: 'strava' };
+  if (text.includes('step')) return { key: 'estimatedSteps7d', lowerIsBetter: false, source: 'strava' };
+  if (text.includes('position') && text.includes('park')) return { key: 'latestParkrunPosition', lowerIsBetter: true, source: 'parkrun' };
+  if (text.includes('percentile') || text.includes('top %')) return { key: 'latestParkrunPercentile', lowerIsBetter: false, source: 'parkrun' };
+  if ((text.includes('zone') && text.includes('5')) || text.includes('z5')) return { key: 'zone5Minutes30', lowerIsBetter: false, source: 'strava' };
+  if ((text.includes('zone') && text.includes('4')) || text.includes('z4')) return { key: 'zone4Minutes30', lowerIsBetter: false, source: 'strava' };
+  if ((text.includes('swim') || text.includes('pool') || text.includes('open water')) && (text.includes('distance') || text.includes('km') || text.includes('meter') || text.includes('metre') || text.includes('m'))) {
+    return { key: 'swimDistanceKm30', lowerIsBetter: false, source: 'strava' };
+  }
+  if ((text.includes('bike') || text.includes('cycle') || text.includes('ride') || text.includes('cycling')) && (text.includes('distance') || text.includes('km') || text.includes('mile') || text.includes('mi'))) {
+    return { key: 'bikeDistanceKm30', lowerIsBetter: false, source: 'strava' };
+  }
+  if ((text.includes('run') || text.includes('jog') || text.includes('parkrun')) && (text.includes('distance') || text.includes('km') || text.includes('mile') || text.includes('mi'))) {
+    return { key: 'runDistanceKm30', lowerIsBetter: false, source: 'strava' };
+  }
+  if (text.includes('distance') || text.includes('km')) return { key: 'distanceKm30', lowerIsBetter: false, source: 'strava' };
+  return null;
+}
+
+function toGoalTargetNumber(target, unit, metricKey) {
+  const raw = Number(target);
+  if (!Number.isFinite(raw) || raw <= 0) return null;
+  const u = String(unit || '').toLowerCase();
+  if (metricKey === 'predicted10kSec' || metricKey === 'predicted5kSec' || metricKey === 'predictedHalfMarathonSec' || metricKey === 'predictedSwim800mSec' || metricKey === 'predictedBike30miSec' || metricKey === 'predictedBike50kSec') {
+    if (u.includes('hour') || u.includes('hr')) return raw * 3600;
+    if (u.includes('min')) return raw * 60;
+    if (u.includes('sec')) return raw;
+    // Default to minutes for run-time goals.
+    return raw * 60;
+  }
+  if (metricKey === 'distanceKm30' || metricKey === 'runDistanceKm30' || metricKey === 'swimDistanceKm30' || metricKey === 'bikeDistanceKm30') {
+    if (u.includes('mile') || u.includes('mi')) return raw * 1.60934;
+    if ((u.includes('meter') || u.includes('metre') || u === 'm') && !u.includes('km')) return raw / 1000;
+    return raw;
+  }
+  return raw;
+}
+
+function computeKpiProgressPct(metricKey, currentValue, targetValue, lowerIsBetter) {
+  if (!Number.isFinite(currentValue) || !Number.isFinite(targetValue) || targetValue <= 0) return null;
+  if (lowerIsBetter) {
+    return Number(Math.max(0, Math.min(200, (targetValue / currentValue) * 100)).toFixed(1));
+  }
+  return Number(Math.max(0, Math.min(200, (currentValue / targetValue) * 100)).toFixed(1));
+}
+
+function formatMetricValue(metricKey, value) {
+  if (!Number.isFinite(value)) return null;
+  if (metricKey === 'predicted10kSec' || metricKey === 'predicted5kSec' || metricKey === 'predictedHalfMarathonSec' || metricKey === 'predictedSwim800mSec' || metricKey === 'predictedBike30miSec' || metricKey === 'predictedBike50kSec') {
+    const secVal = Math.max(0, Math.round(value));
+    const h = Math.floor(secVal / 3600);
+    const m = Math.floor((secVal % 3600) / 60);
+    const s = secVal % 60;
+    if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    return `${m}:${String(s).padStart(2, '0')}`;
+  }
+  return String(Number(value.toFixed(2)));
+}
+
+async function computeGoalFitnessKpisForUser(uid, { goalId = null, persist = true } = {}) {
+  const db = admin.firestore();
+  const excludeWithDadFromMetrics = await shouldExcludeDadTaggedWorkouts(uid);
+  let goals = [];
+  if (goalId) {
+    const snap = await db.collection('goals').doc(goalId).get();
+    if (!snap.exists) return [];
+    const data = snap.data() || {};
+    if (data.ownerUid !== uid) return [];
+    goals = [{ id: snap.id, ...data }];
+  } else {
+    const snap = await db.collection('goals').where('ownerUid', '==', uid).limit(300).get();
+    goals = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  }
+
+  if (!goals.length) return [];
+
+  const [overview, analysis, workoutsSnap] = await Promise.all([
+    _getFitnessOverview(uid, 90).catch(() => null),
+    _getRunFitnessAnalysis(uid, 365).catch(() => null),
+    db.collection('metrics_workouts')
+      .where('ownerUid', '==', uid)
+      .where('provider', '==', 'strava')
+      .limit(120)
+      .get()
+      .catch(() => null),
+  ]);
+
+  const stravaRuns = workoutsSnap
+    ? workoutsSnap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }))
+    : [];
+  const filteredStravaRuns = stravaRuns.filter((workout) => !(excludeWithDadFromMetrics && workoutHasDadMarker(workout)));
+  filteredStravaRuns.sort((a, b) => Number(b.startDate || 0) - Number(a.startDate || 0));
+  const classifyStravaSport = (workout) => {
+    if (!workout) return 'other';
+    if (workout.run === true) return 'run';
+    const type = String(workout.sportType || workout.type || '').toLowerCase();
+    if (type.includes('swim')) return 'swim';
+    if (type.includes('ride') || type.includes('bike') || type.includes('cycling')) return 'bike';
+    if (type.includes('run') || type.includes('walk') || type.includes('hike')) return 'run';
+    return 'other';
+  };
+  const since7Ms = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const since30Ms = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  const estimatedSteps7d = filteredStravaRuns
+    .filter((w) => Number(w.startDate || 0) >= since7Ms)
+    .reduce((sum, w) => {
+      const type = classifyStravaSport(w);
+      if (type !== 'run') return sum;
+      const kmVal = Number(w.distance_m || 0) / 1000;
+      // Rough stride conversion; keeps KPI directional without requiring step streams.
+      return sum + Math.round(kmVal * 1312);
+    }, 0);
+  const stravaDistance30 = filteredStravaRuns
+    .filter((w) => Number(w.startDate || 0) >= since30Ms)
+    .reduce((sum, w) => {
+      const bucket = classifyStravaSport(w);
+      const kmVal = Number(w.distance_m || 0) / 1000;
+      if (!Number.isFinite(kmVal) || kmVal <= 0) return sum;
+      if (bucket === 'run') sum.runKm += kmVal;
+      else if (bucket === 'swim') sum.swimKm += kmVal;
+      else if (bucket === 'bike') sum.bikeKm += kmVal;
+      return sum;
+    }, { runKm: 0, swimKm: 0, bikeKm: 0 });
+  const runDistanceKm30 = Number(
+    overview?.sportTotals?.last30?.runKm
+    ?? stravaDistance30.runKm
+    ?? overview?.last30?.distanceKm
+    ?? 0
+  ) || 0;
+  const swimDistanceKm30 = Number(
+    overview?.sportTotals?.last30?.swimKm
+    ?? stravaDistance30.swimKm
+    ?? 0
+  ) || 0;
+  const bikeDistanceKm30 = Number(
+    overview?.sportTotals?.last30?.bikeKm
+    ?? stravaDistance30.bikeKm
+    ?? 0
+  ) || 0;
+
+  const latestParkrun = analysis?.pairs?.length
+    ? analysis.pairs[analysis.pairs.length - 1]?.parkrun
+    : null;
+
+  const derived = {
+    predicted5kSec: Number(analysis?.predicted5kSec || overview?.predictions?.fiveKSec || 0) || null,
+    predicted10kSec: Number(analysis?.predicted10kSec || overview?.predictions?.tenKSec || 0) || null,
+    predictedHalfMarathonSec: Number(overview?.predictions?.halfMarathonSec || 0) || null,
+    predictedSwim800mSec: Number(overview?.predictions?.swim800mSec || 0) || null,
+    predictedBike50kSec: Number(overview?.predictions?.bike50kSec || 0) || null,
+    predictedBike30miSec: Number(overview?.predictions?.bike30miSec || 0) || null,
+    fitnessScore: Number(overview?.fitnessScore || 0) || null,
+    avgRpe30: Number(overview?.rpe?.avg30 || 0) || null,
+    estimatedSteps7d: estimatedSteps7d || null,
+    latestParkrunPosition: Number(latestParkrun?.position || 0) || null,
+    latestParkrunPercentile: Number(latestParkrun?.percentileTop || 0) || null,
+    zone4Minutes30: Number(((overview?.hrZones?.z4Time_s || 0) / 60).toFixed(1)) || 0,
+    zone5Minutes30: Number(((overview?.hrZones?.z5Time_s || 0) / 60).toFixed(1)) || 0,
+    runDistanceKm30,
+    swimDistanceKm30,
+    bikeDistanceKm30,
+    distanceKm30: runDistanceKm30,
+  };
+
+  const results = goals.map((goal) => {
+    const sourceKpis = Array.isArray(goal.kpis) ? goal.kpis : [];
+    const resolved = sourceKpis.map((kpi, idx) => {
+      const metric = detectFitnessMetricFromKpi(kpi?.name, kpi?.unit);
+      if (!metric) return null;
+      const currentValue = Number(derived[metric.key]);
+      if (!Number.isFinite(currentValue) || currentValue <= 0) return null;
+      const targetValue = toGoalTargetNumber(kpi?.target, kpi?.unit, metric.key);
+      const progressPct = targetValue
+        ? computeKpiProgressPct(metric.key, currentValue, targetValue, metric.lowerIsBetter)
+        : null;
+      return {
+        index: idx,
+        name: kpi?.name || '',
+        unit: kpi?.unit || '',
+        source: metric.source,
+        metricKey: metric.key,
+        lowerIsBetter: metric.lowerIsBetter,
+        currentValue,
+        currentDisplay: formatMetricValue(metric.key, currentValue),
+        target: Number.isFinite(Number(kpi?.target)) ? Number(kpi.target) : null,
+        targetNormalized: targetValue,
+        progressPct,
+      };
+    }).filter(Boolean);
+    return {
+      goalId: goal.id,
+      goalRef: goal.ref || null,
+      goalTitle: goal.title || null,
+      updatedAt: new Date().toISOString(),
+      resolvedKpis: resolved,
+    };
+  });
+
+  if (persist) {
+    const batch = db.batch();
+    results.forEach((entry) => {
+      const ref = db.collection('goal_kpi_metrics').doc(`${uid}_${entry.goalId}`);
+      batch.set(ref, {
+        ownerUid: uid,
+        goalId: entry.goalId,
+        goalRef: entry.goalRef || null,
+        goalTitle: entry.goalTitle || null,
+        resolvedKpis: entry.resolvedKpis,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+    });
+    await batch.commit();
+  }
+
+  return results;
+}
+
+exports.resolveGoalFitnessKpis = httpsV2.onCall(async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const goalId = String(req.data?.goalId || '').trim() || null;
+  const persist = req.data?.persist !== false;
+  const rows = await computeGoalFitnessKpisForUser(uid, { goalId, persist });
+  if (goalId) return rows[0] || null;
+  return { goals: rows };
+});
+
+// Compute participants and percentile by scanning event results pages backwards
+exports.computeParkrunPercentiles = httpsV2.onCall(async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const eventSlug = String(req.data?.eventSlug || '').trim().toLowerCase();
+  const startRun = Number(req.data?.startRun || 0);
+  const base = String(req.data?.baseUrl || 'https://www.parkrun.org.uk').trim().replace(/\/$/, '');
+  const maxBack = Math.min(Number(req.data?.maxBack || 120), 500);
+  const onlyMissing = !!req.data?.onlyMissing;
+  console.log('[computeParkrunPercentiles] uid', uid, 'eventSlug', eventSlug, 'startRun', startRun, 'maxBack', maxBack);
+  if (!eventSlug || !startRun) {
+    throw new httpsV2.HttpsError('invalid-argument', 'eventSlug and startRun are required');
+  }
+  return await _computeParkrunPercentilesInternal(uid, { eventSlug, startRun, base, maxBack, onlyMissing });
+});
+
+async function _computeParkrunPercentilesInternal(uid, { eventSlug, startRun, base = 'https://www.parkrun.org.uk', maxBack = 120, onlyMissing = false }) {
+  const cheerio = require('cheerio');
+  const requestHeaderCandidates = [
+    {
+      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      'Accept-Language': 'en-GB,en;q=0.9',
+      'Cache-Control': 'no-cache',
+      'Pragma': 'no-cache',
+      'Upgrade-Insecure-Requests': '1',
+    },
+    {
+      'User-Agent': PARKRUN_API_USER_AGENT,
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'en-GB,en;q=0.9',
+      'Cache-Control': 'no-cache',
+      'Pragma': 'no-cache',
+    },
+  ];
+  function dateOnly(ms) {
+    const d = new Date(ms);
+    return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  }
+  function sameDay(aMs, bMs) { return dateOnly(aMs).getTime() === dateOnly(bMs).getTime(); }
+
+  async function fetchRun(runNum) {
+    const url = `${String(base).replace(/\/$/, '')}/${eventSlug}/results/${runNum}`;
+    let res = null;
+    for (let i = 0; i < requestHeaderCandidates.length; i++) {
+      const candidate = await fetch(url, { headers: requestHeaderCandidates[i], redirect: 'follow' });
+      if (candidate.ok) {
+        res = candidate;
+        break;
+      }
+      const retryableStatus = new Set([403, 405, 406, 429]);
+      if (i < requestHeaderCandidates.length - 1 && retryableStatus.has(Number(candidate.status || 0))) continue;
+      throw new Error(`HTTP ${candidate.status}`);
+    }
+    if (!res) throw new Error('HTTP 0');
+    const html = await res.text();
+    const $ = cheerio.load(html);
+    const contentText = $('#content').text() || $('body').text();
+    let dateMs = null;
+    const m = contentText.match(/(\d{1,2}\s+[A-Za-z]+\s+\d{4})/);
+    if (m) { const parsed = Date.parse(m[1]); if (!isNaN(parsed)) dateMs = parsed; }
+    if (!dateMs) {
+      const t = $('time').first().attr('datetime') || $('time').first().text();
+      const parsed = Date.parse(t || '');
+      if (!isNaN(parsed)) dateMs = parsed;
+    }
+    const participants = $('table#results tbody tr').length || $('table tbody tr').length || null;
+    return { runNum, url, dateMs, participants };
+  }
+
+  const db = admin.firestore();
+  const snap = await db.collection('metrics_workouts').where('ownerUid', '==', uid).where('provider', '==', 'parkrun').get();
+  const items = snap.docs.map(d => ({ id: d.id, ref: d.ref, ...d.data() }));
+  const slugify = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  const targets = items.filter(x => (x.eventSlug ? x.eventSlug === eventSlug : slugify(x.event) === eventSlug));
+
+  let updated = 0, examined = 0;
+  for (const w of targets) {
+    examined++;
+    if (onlyMissing && w.participantsCount) continue;
+    const targetMs = w.startDate || 0;
+    let found = null;
+    for (let i = 0; i < maxBack; i++) {
+      const runNum = startRun - i;
+      if (runNum <= 0) break;
+      let info;
+      try { info = await fetchRun(runNum); } catch { continue; }
+      if (info.dateMs && sameDay(info.dateMs, targetMs)) { found = info; break; }
+      if (info.dateMs && info.dateMs < (targetMs - 14 * 24 * 60 * 60 * 1000)) break;
+    }
+    if (found && found.participants && w.position) {
+      const percentileTop = Number((((found.participants - (Number(w.position) || 0) + 1) / found.participants) * 100).toFixed(2));
+      await w.ref.set({
+        participantsCount: found.participants,
+        percentileTop,
+        eventResultUrl: found.url,
+        eventRunSeqNumber: found.runNum,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+      updated++;
+    }
+  }
+  return { ok: true, examined, updated };
+}
+
+exports.createCalendarEvent = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
+  const { summary, start, end, description, recurrence, extendedProperties } = req.data || {};
+  if (!summary || !start || !end) throw new httpsV2.HttpsError("invalid-argument", "summary/start/end required");
+  const access = await getAccessToken(req.auth.uid);
+  const ev = await fetchJson("https://www.googleapis.com/calendar/v3/calendars/primary/events", {
+    method: "POST",
+    headers: { "Authorization": "Bearer " + access, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      summary,
+      start: { dateTime: start },
+      end: { dateTime: end },
+      ...(description ? { description } : {}),
+      ...(Array.isArray(recurrence) && recurrence.length ? { recurrence } : {}),
+      ...(extendedProperties ? { extendedProperties } : {}),
+    }),
+  });
+  // Audit (sanitized)
+  try {
+    const db = ensureFirestore();
+    const ref = db.collection('activity_stream').doc();
+    await ref.set({
+      id: ref.id,
+      entityType: 'calendar',
+      activityType: 'calendar_event_created',
+      description: 'Created Google event',
+      userId: req.auth.uid,
+      ownerUid: req.auth.uid,
+      metadata: redact({ id: ev?.id, start, end }),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  } catch { }
+  return { ok: true, event: ev };
+});
+
+// Update an existing Google Calendar event (summary/start/end minimal patch)
+exports.updateCalendarEvent = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
+  const { eventId, summary, start, end } = req.data || {};
+  if (!eventId) throw new httpsV2.HttpsError("invalid-argument", "eventId required");
+  const access = await getAccessToken(req.auth.uid);
+  const body = {};
+  if (summary) body.summary = summary;
+  if (start) body.start = { dateTime: start };
+  if (end) body.end = { dateTime: end };
+  const ev = await fetchJson(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(eventId)}`, {
+    method: "PATCH",
+    headers: { "Authorization": "Bearer " + access, "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  try {
+    const db = ensureFirestore();
+    const ref = db.collection('activity_stream').doc();
+    await ref.set({
+      id: ref.id,
+      entityType: 'calendar',
+      activityType: 'calendar_event_updated',
+      description: 'Updated Google event',
+      userId: req.auth.uid,
+      ownerUid: req.auth.uid,
+      metadata: redact({ id: eventId, hasSummary: !!summary, hasStart: !!start, hasEnd: !!end }),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  } catch { }
+  return { ok: true, event: ev };
+});
+
+exports.listUpcomingEvents = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
+  const maxResults = Math.min(Number(req.data?.maxResults || 20), 250);
+  const access = await getAccessToken(req.auth.uid);
+  const timeMin = String(req.data?.timeMin || new Date().toISOString());
+  const timeMax = req.data?.timeMax ? String(req.data.timeMax) : '';
+  const base = `https://www.googleapis.com/calendar/v3/calendars/primary/events?singleEvents=true&orderBy=startTime&timeMin=${encodeURIComponent(timeMin)}&maxResults=${maxResults}`;
+  const url = timeMax ? `${base}&timeMax=${encodeURIComponent(timeMax)}` : base;
+  const data = await fetchJson(url, {
+    headers: { "Authorization": "Bearer " + access },
+  });
+  return { ok: true, items: data.items || [] };
+});
+
+exports.checkGoogleDocsAccess = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
+  const uid = req.auth.uid;
+  const db = admin.firestore();
+  const profileSnap = await db.collection('profiles').doc(uid).get();
+  const profile = profileSnap.exists ? (profileSnap.data() || {}) : {};
+  const docUrl = String(req.data?.docUrl || profile.defaultJournalDocUrl || '').trim();
+
+  if (!docUrl) {
+    return {
+      ok: false,
+      code: 'missing_doc_url',
+      message: 'No default journal Google Doc URL is saved.',
+      steps: [
+        'Paste a Google Docs URL into Default Journal Google Doc URL in Settings.',
+        'Save the document URL.',
+      ],
+    };
+  }
+
+  const docId = parseGoogleDocIdFromUrl(docUrl);
+  if (!docId) {
+    return {
+      ok: false,
+      code: 'invalid_doc_url',
+      message: 'The saved Google Doc URL is not in the expected Google Docs format.',
+      docUrl,
+      steps: [
+        'Open the target Google Doc in your browser.',
+        'Copy the full https://docs.google.com/document/d/... URL.',
+        'Paste it into Default Journal Google Doc URL and save it again.',
+      ],
+    };
+  }
+
+  let access;
+  try {
+    access = await getAccessToken(uid);
+  } catch (error) {
+    return {
+      ok: false,
+      code: 'google_not_connected',
+      message: 'Google is not connected or no usable refresh token is stored.',
+      docUrl,
+      docId,
+      steps: [
+        'Open Settings -> Integrations -> Google Calendar & Docs.',
+        'Click Reconnect.',
+        'Complete the Google consent screen.',
+      ],
+      details: error?.message || String(error),
+    };
+  }
+
+  try {
+    const data = await fetchJson(`https://docs.googleapis.com/v1/documents/${encodeURIComponent(docId)}`, {
+      headers: { Authorization: `Bearer ${access}` },
+    });
+    return {
+      ok: true,
+      code: 'ok',
+      message: 'Google Docs access is working.',
+      docUrl,
+      docId,
+      title: data?.title || null,
+    };
+  } catch (error) {
+    const message = error?.message || String(error);
+    const statusMatch = String(message).match(/HTTP\s+(\d{3})/i);
+    const status = statusMatch ? Number(statusMatch[1]) : Number(error?.status || error?.code || 0);
+    const scopeOrAccess = status === 401 || status === 403 || status === 404;
+    return {
+      ok: false,
+      code: scopeOrAccess ? 'docs_scope_or_access' : 'docs_probe_failed',
+      message: scopeOrAccess
+        ? 'Google Docs access failed. The connected Google account either lacks the Docs scope or does not have access to this document.'
+        : `Google Docs probe failed: ${message}`,
+      docUrl,
+      docId,
+      status: Number.isFinite(status) && status > 0 ? status : null,
+      steps: scopeOrAccess
+        ? [
+          'Click Reconnect in Google Calendar & Docs.',
+          'Approve the Google consent screen again so the token includes Google Docs access.',
+          'Make sure the same Google account is the owner of the document or has edit access to it.',
+          'Run Test Doc Access again.',
+        ]
+        : [
+          'Retry the test.',
+          'If it still fails, inspect the function logs for checkGoogleDocsAccess.',
+        ],
+      details: message,
+    };
+  }
+});
+
+// Full two-way sync for calendar_blocks within a window (bidirectional)
+exports.syncCalendarBlocksBidirectional = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const uid = req.auth.uid;
+  const direction = String(req?.data?.direction || 'both').toLowerCase();
+  const doPull = direction === 'both' || direction === 'gcal->firestore' || direction === 'pull';
+  const doPush = direction === 'both' || direction === 'firestore->gcal' || direction === 'push';
+
+  const db = admin.firestore();
+  const access = await getAccessToken(uid);
+  const now = new Date();
+  const backDays = Math.max(1, Math.min(Number(req?.data?.backDays || 7), 60));
+  const fwdDays = Math.max(1, Math.min(Number(req?.data?.forwardDays || 30), 180));
+  const start = new Date(now.getTime() - backDays * 24 * 3600 * 1000);
+  const end = new Date(now.getTime() + fwdDays * 24 * 3600 * 1000);
+  const timeMin = start.toISOString();
+  const timeMax = end.toISOString();
+
+  // 1) Pull: read Google events for window
+  let events = [];
+  if (doPull) {
+    try {
+      const data = await fetchJson(`https://www.googleapis.com/calendar/v3/calendars/primary/events?singleEvents=true&orderBy=startTime&maxResults=250&timeMin=${encodeURIComponent(timeMin)}&timeMax=${encodeURIComponent(timeMax)}`, {
+        headers: { 'Authorization': 'Bearer ' + access },
+      });
+      events = Array.isArray(data?.items) ? data.items : [];
+    } catch (e) {
+      console.warn('[syncBlocks] list events failed', e?.message || e);
+    }
+  }
+
+  const eventsById = new Map();
+  for (const ev of events) eventsById.set(ev.id, ev);
+
+  // 2) Load Firestore blocks for window
+  const startMs = start.getTime();
+  const endMs = end.getTime();
+  let blocksSnap;
+  try {
+    blocksSnap = await db.collection('calendar_blocks')
+      .where('ownerUid', '==', uid)
+      .where('start', '>=', startMs)
+      .where('start', '<=', endMs)
+      .get();
+  } catch (e) {
+    // Fallback to broader fetch if index missing
+    blocksSnap = await db.collection('calendar_blocks')
+      .where('ownerUid', '==', uid)
+      .get();
+  }
+  const blocks = blocksSnap.docs
+    .map(d => ({ id: d.id, ...(d.data() || {}) }))
+    .filter(b => typeof b.start === 'number' && b.start >= startMs && b.start <= endMs);
+
+  const blocksByEventId = new Map();
+  blocks.forEach(b => { if (b.googleEventId) blocksByEventId.set(String(b.googleEventId), b); });
+
+  let created = 0, updated = 0, imported = 0, cleared = 0;
+  let batchWrites = 0;
+  const batch = db.batch();
+
+  // 3) Pull/import from Google → Firestore
+  if (doPull) {
+    for (const ev of events) {
+      const startStr = ev.start?.dateTime || ev.start?.date; if (!startStr) continue;
+      const endStr = ev.end?.dateTime || ev.end?.date; if (!endStr) continue;
+      const evStart = new Date(startStr).getTime();
+      const evEnd = new Date(endStr).getTime();
+      const priv = ev.extendedProperties?.private || {};
+      const linkedId = priv['bob-block-id'] || priv['bobBlockId'] || null;
+      if (linkedId) {
+        // Existing linked block
+        let blockDoc = blocks.find(b => b.id === linkedId) || null;
+        // If block missing, recreate a stub
+        if (!blockDoc) {
+          const ref = db.collection('calendar_blocks').doc(String(linkedId));
+          batch.set(ref, {
+            id: String(linkedId), ownerUid: uid, persona: priv['bob-persona'] || null,
+            title: ev.summary || 'Event', rationale: ev.description || null,
+            theme: priv['bob-theme'] || 'Growth', theme_id: priv['bob-theme-id'] ? Number(priv['bob-theme-id']) : null,
+            category: priv['bob-category'] || 'General', flexibility: priv['bob-flexibility'] || 'soft',
+            start: evStart, end: evEnd, googleEventId: ev.id, source: 'gcal', status: 'applied',
+            createdAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          }, { merge: true });
+          batchWrites += 1;
+          imported++;
+          continue;
+        }
+        // If event updated more recently than block, update block
+        const evUpdated = ev.updated ? new Date(ev.updated).getTime() : null;
+        const blockUpdated = typeof blockDoc.updatedAt === 'number' ? blockDoc.updatedAt : (blockDoc.updatedAt?.toMillis ? blockDoc.updatedAt.toMillis() : 0);
+        if (evUpdated && evUpdated > blockUpdated) {
+          const ref = db.collection('calendar_blocks').doc(blockDoc.id);
+          batch.set(ref, {
+            start: evStart, end: evEnd,
+            title: ev.summary || blockDoc.title || 'Event',
+            rationale: ev.description || blockDoc.rationale || null,
+            googleEventId: ev.id,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          }, { merge: true });
+          batchWrites += 1;
+          updated++;
+        }
+      } else {
+        // Unlinked external event → import as block if not already imported
+        const existing = blocksByEventId.get(ev.id);
+        if (!existing) {
+          const ref = db.collection('calendar_blocks').doc();
+          batch.set(ref, {
+            id: ref.id, ownerUid: uid, persona: null,
+            title: ev.summary || 'Event', rationale: ev.description || null,
+            theme: 'Growth', category: 'External', flexibility: 'soft',
+            start: evStart, end: evEnd, googleEventId: ev.id, source: 'gcal', status: 'applied',
+            createdAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+          batchWrites += 1;
+          imported++;
+        }
+      }
+    }
+  }
+
+  // 4) Push Firestore → Google for blocks in window
+  if (doPush) {
+    const calendarSync = require('./calendarSync');
+    for (const b of blocks) {
+      const source = String(b.source || b.entry_method || '').toLowerCase();
+      if (source === 'gcal' || source === 'google_calendar') continue;
+      try {
+        const action = b.googleEventId ? 'update' : 'create';
+        await calendarSync._syncBlockToGoogle(b.id, action, uid, b);
+        if (action === 'create') created++;
+        else updated++;
+      } catch (e) {
+        console.warn('[syncBlocks] push failed for block', b.id, e?.message || e);
+      }
+    }
+  }
+
+  // 5) Cleanup: if block has googleEventId but no corresponding event in current window, and block is within window, clear link
+  if (doPull) {
+    for (const b of blocks) {
+      const eid = b.googleEventId ? String(b.googleEventId) : null;
+      if (eid && !eventsById.has(eid)) {
+        // If we fetched events for the full window and event missing, unlink (might be deleted or outside window due to move)
+        const ref = db.collection('calendar_blocks').doc(b.id);
+        batch.set(ref, { googleEventId: null, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        batchWrites += 1;
+        cleared++;
+      }
+    }
+  }
+
+  if (batchWrites > 0) await batch.commit();
+  return { ok: true, synced: created + updated + imported + cleared, created, updated, imported, cleared };
+});
+
+// Delete a Google Calendar event
+exports.deleteCalendarEvent = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
+  const { eventId } = req.data || {};
+  if (!eventId) throw new httpsV2.HttpsError("invalid-argument", "eventId required");
+  const access = await getAccessToken(req.auth.uid);
+  await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(eventId)}`, {
+    method: 'DELETE',
+    headers: { 'Authorization': 'Bearer ' + access }
+  });
+  try {
+    const db = ensureFirestore();
+    const ref = db.collection('activity_stream').doc();
+    await ref.set({
+      id: ref.id,
+      entityType: 'calendar',
+      activityType: 'calendar_event_deleted',
+      description: 'Deleted Google event',
+      userId: req.auth.uid,
+      ownerUid: req.auth.uid,
+      metadata: redact({ id: eventId }),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  } catch { }
+  return { ok: true };
+});
+
+// ---------------------------------------------------------------------------
+// Auto-schedule due-today tasks into Google Calendar (no planner block)
+// ---------------------------------------------------------------------------
+exports.scheduleDueTasksToday = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const uid = req.auth.uid;
+  const db = ensureFirestore();
+  const day = req?.data?.day || new Date().toISOString().slice(0, 10); // yyyy-mm-dd
+  const workStart = req?.data?.workStart || '08:00';
+  const workEnd = req?.data?.workEnd || '18:00';
+
+  const profileSnap = await db.collection('profiles').doc(uid).get();
+  const tz = (profileSnap.data() || {}).timezone || 'UTC';
+  const startDay = DateTime.fromISO(`${day}T${workStart}`, { zone: tz });
+  const endDay = DateTime.fromISO(`${day}T${workEnd}`, { zone: tz });
+  if (!startDay.isValid || !endDay.isValid) throw new httpsV2.HttpsError('invalid-argument', 'Invalid work window');
+
+  const access = await getAccessToken(uid);
+
+  // Pull existing GCal events to avoid overlaps
+  const existing = await fetchJson(`https://www.googleapis.com/calendar/v3/calendars/primary/events?singleEvents=true&orderBy=startTime&timeMin=${startDay.toUTC().toISO()}&timeMax=${endDay.toUTC().toISO()}`, {
+    headers: { Authorization: 'Bearer ' + access }
+  });
+  const busy = [];
+  (existing.items || []).forEach(ev => {
+    const s = ev.start?.dateTime || ev.start?.date;
+    const e = ev.end?.dateTime || ev.end?.date;
+    if (s && e) {
+      const ss = DateTime.fromISO(s, { zone: tz }).toMillis();
+      const ee = DateTime.fromISO(e, { zone: tz }).toMillis();
+      if (ss && ee) busy.push([ss, ee]);
+    }
+  });
+  busy.sort((a, b) => a[0] - b[0]);
+
+  // Tasks due today
+  const startMs = startDay.startOf('day').toMillis();
+  const endMs = startDay.endOf('day').toMillis();
+  const taskSnap = await db.collection('tasks')
+    .where('ownerUid', '==', uid)
+    .where('dueDate', '>=', startMs)
+    .where('dueDate', '<=', endMs)
+    .get();
+  const isDone = (s) => {
+    if (typeof s === 'number') return s === 2 || s === 4;
+    const v = String(s || '').toLowerCase();
+    return v === 'done' || v === 'complete' || v === 'completed' || v === '4';
+  };
+  const tasks = taskSnap.docs
+    .map(d => ({ id: d.id, ref: d.ref, ...(d.data() || {}) }))
+    .filter(t => !isDone(t.status) && !t.deleted);
+
+  // Sort by due then AI score desc
+  tasks.sort((a, b) => {
+    const da = Number(a.dueDate || 0); const dbv = Number(b.dueDate || 0);
+    if (da !== dbv) return da - dbv;
+    const sa = Number(a.aiCriticalityScore || 0); const sb = Number(b.aiCriticalityScore || 0);
+    return sb - sa;
+  });
+
+  const placed = [];
+
+  const findSlot = (durMinutes) => {
+    const durMs = durMinutes * 60000;
+    let cursor = startDay.toMillis();
+    for (let i = 0; i <= busy.length; i++) {
+      const nextBusyStart = i < busy.length ? busy[i][0] : endDay.toMillis();
+      if (cursor + durMs <= nextBusyStart) {
+        const slot = cursor;
+        busy.splice(i, 0, [slot, slot + durMs]);
+        return slot;
+      }
+      if (i < busy.length) {
+        cursor = Math.max(cursor, busy[i][1] || cursor);
+      }
+    }
+    return null;
+  };
+
+  for (const t of tasks) {
+    const points = (Number.isFinite(Number(t.points)) && Number(t.points) > 0)
+      ? Number(t.points)
+      : (Number.isFinite(Number(t.estimateMin)) && Number(t.estimateMin) > 0 ? Number(t.estimateMin) / 60 : 0);
+    const dur = Math.min(240, Math.max(30, points > 0 ? points * 60 : 30));
+    const slotStart = findSlot(dur);
+    if (!slotStart) continue;
+    const slotEnd = slotStart + dur * 60000;
+
+    const summary = (t.ref ? `${t.ref} — ` : '') + (t.title || 'Task');
+    const dedupeKey = `task:${t.id}:${day}`;
+
+    const ev = await fetchJson("https://www.googleapis.com/calendar/v3/calendars/primary/events", {
+      method: "POST",
+      headers: { "Authorization": "Bearer " + access, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        summary,
+        start: { dateTime: DateTime.fromMillis(slotStart, { zone: tz }).toUTC().toISO() },
+        end: { dateTime: DateTime.fromMillis(slotEnd, { zone: tz }).toUTC().toISO() },
+        description: t.description || '',
+        extendedProperties: {
+          private: {
+            taskId: t.id,
+            dedupeKey,
+            aiScore: t.aiCriticalityScore || null,
+            aiReason: t.aiCriticalityReason || null
+          }
+        }
+      })
+    });
+
+    const evId = ev?.id || ev?.event?.id || ev?.data?.event?.id;
+    if (evId) {
+      await t.ref.update({ gcalEventId: evId, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+      placed.push({ taskId: t.id, eventId: evId, start: slotStart, end: slotEnd });
+    }
+  }
+
+  return { ok: true, placed: placed.length, details: placed };
+});
+
+// ---------------------------------------------------------------------------
+// Firestore trigger: when task completed, delete linked GCal event
+// ---------------------------------------------------------------------------
+exports.cleanupTaskCalendarEvent = firestoreV2.onDocumentUpdated('tasks/{taskId}', async (event) => {
+  const before = event.data?.before?.data() || {};
+  const after = event.data?.after?.data() || {};
+  const ref = event.data?.after?.ref || event.data?.before?.ref;
+  const uid = after.ownerUid || before.ownerUid;
+  if (!uid || !ref) return;
+  const toDone = (() => {
+    const s = after.status;
+    if (typeof s === 'number') return s === 2 || s === 4;
+    const v = String(s || '').toLowerCase();
+    return v === 'done' || v === 'complete' || v === 'completed' || v === '4';
+  })();
+  if (!toDone) return;
+  const evId = after.gcalEventId || before.gcalEventId;
+  if (!evId) return;
+  try {
+    const access = await getAccessToken(uid);
+    await fetchJson(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(evId)}`, {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer ' + access }
+    });
+  } catch (err) {
+    console.warn('[cleanupTaskCalendarEvent] failed delete', err?.message || err);
+  }
+  try {
+    await ref.update({ gcalEventId: admin.firestore.FieldValue.delete() });
+  } catch { }
+});
+// Sync plan assignments for a day to Google Calendar as child events under parent block events
+/**
+ * Syncs the BOB plan for a specific day to Google Calendar (Push).
+ * Creates or updates Google Calendar events for each block in the plan.
+ */
+async function syncPlanToGoogleForUser(uid, dayStr) {
+  const date = new Date(dayStr);
+  if (isNaN(date.getTime())) throw new Error('Invalid day');
+  const dayKey = toDayKey(date);
+  const access = await getAccessToken(uid);
+  const db = admin.firestore();
+
+  // Load scheduled instances for the day (from new scheduler)
+  const instancesSnap = await db.collection('scheduled_instances')
+    .where('ownerUid', '==', uid)
+    .where('occurrenceDate', '==', dayKey)
+    .where('status', '==', 'planned')
+    .get();
+  const assignments = instancesSnap.docs.map(d => {
+    const data = d.data();
+    return {
+      id: d.id,
+      ...data,
+      // Map new field names to old expected names
+      start: data.plannedStart,
+      end: data.plannedEnd,
+      itemType: data.sourceType,
+      itemId: data.sourceId,
+      external: { googleEventId: data.googleEventId || null }
+    };
+  });
+  if (assignments.length === 0) return { ok: true, created: 0, updated: 0, parentsCreated: 0 };
+
+  // Group by blockId
+  const byBlock = new Map();
+  for (const a of assignments) {
+    const key = a.blockId || 'none';
+    if (!byBlock.has(key)) byBlock.set(key, []);
+    byBlock.get(key).push(a);
+  }
+
+  let parentsCreated = 0, created = 0, updated = 0;
+  for (const [blockId, list] of byBlock.entries()) {
+    let parentEventId = null;
+    let blockDoc = null;
+    if (blockId && blockId !== 'none') {
+      const bSnap = await db.collection('calendar_blocks').doc(blockId).get();
+      if (bSnap.exists) {
+        blockDoc = { id: bSnap.id, ...(bSnap.data() || {}) };
+        parentEventId = blockDoc.googleEventId || null;
+      }
+      // Create parent block event if missing
+      if (!parentEventId && blockDoc) {
+        // Build optional story context
+        let storyCtx = null;
+        if (blockDoc.storyId) {
+          try {
+            const s = await db.collection('stories').doc(String(blockDoc.storyId)).get();
+            if (s.exists) {
+              const sd = s.data() || {};
+              const acArr = Array.isArray(sd.acceptanceCriteria)
+                ? sd.acceptanceCriteria.filter(Boolean).map((x) => String(x)).slice(0, 3)
+                : (Array.isArray(sd.acceptance_criteria) ? sd.acceptance_criteria.filter(Boolean).map((x) => String(x)).slice(0, 3) : []);
+              const storyRef = sd.ref || s.id;
+              storyCtx = {
+                ref: storyRef,
+                title: sd.title || 'Story',
+                link: buildEntityUrl('story', s.id, storyRef),
+                ac: acArr,
+              };
+            }
+          } catch { }
+        }
+        const priv = {
+          'bob-block-id': blockId,
+          bobBlockId: blockId,
+        };
+        if (blockDoc.goalId) priv['bob-goal-id'] = String(blockDoc.goalId);
+        if (blockDoc.storyId) priv['bob-story-id'] = String(blockDoc.storyId);
+        if (blockDoc.taskId) priv['bob-task-id'] = String(blockDoc.taskId);
+        if (blockDoc.habitId) priv['bob-habit-id'] = String(blockDoc.habitId);
+        if (blockDoc.persona) priv['bob-persona'] = String(blockDoc.persona);
+        if (blockDoc.theme) priv['bob-theme'] = String(blockDoc.theme);
+        if (blockDoc.theme_id != null) priv['bob-theme-id'] = String(blockDoc.theme_id);
+        if (storyCtx) {
+          priv['bob-story-ref'] = String(storyCtx.ref);
+          priv['bob-deep-link'] = String(storyCtx.link);
+        }
+        const themeLabel = blockDoc.theme ? themeLabelFromValue(blockDoc.theme) : undefined;
+        const baseTitle = blockDoc.title || `${blockDoc.theme || 'Block'}: ${blockDoc.category || ''}`.trim();
+        const summary = `${themeLabel ? `[${themeLabel}] – ` : ''}${baseTitle}`;
+        const descLines = [];
+        if (blockDoc.rationale) descLines.push(String(blockDoc.rationale));
+        if (storyCtx) {
+          descLines.push(`Story: ${storyCtx.ref} – ${storyCtx.title}`);
+          descLines.push(`BOB: ${storyCtx.link}`);
+          if (storyCtx.ac && storyCtx.ac.length) {
+            descLines.push('', 'Acceptance criteria:');
+            for (const item of storyCtx.ac) descLines.push(`- ${item}`);
+          }
+        }
+        descLines.push(`Calendar: ${buildAbsoluteUrl('/calendar')}`);
+        descLines.push(`Overview: ${buildAbsoluteUrl('/dashboard')}`);
+        const body = {
+          summary,
+          description: descLines.join('\n') || 'BOB block',
+          start: { dateTime: new Date(blockDoc.start).toISOString() },
+          end: { dateTime: new Date(blockDoc.end).toISOString() },
+          extendedProperties: { private: priv }
+        };
+        const parent = await fetchJson('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
+          method: 'POST', headers: { 'Authorization': 'Bearer ' + access, 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+        });
+        parentEventId = parent.id;
+        parentsCreated++;
+        await db.collection('calendar_blocks').doc(blockId).set({ googleEventId: parentEventId, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      }
+      // If parent exists, ensure metadata stays in sync
+      if (parentEventId && blockDoc) {
+        const priv2 = {
+          'bob-block-id': blockId,
+          bobBlockId: blockId,
+        };
+        if (blockDoc.goalId) priv2['bob-goal-id'] = String(blockDoc.goalId);
+        if (blockDoc.storyId) priv2['bob-story-id'] = String(blockDoc.storyId);
+        if (blockDoc.taskId) priv2['bob-task-id'] = String(blockDoc.taskId);
+        if (blockDoc.habitId) priv2['bob-habit-id'] = String(blockDoc.habitId);
+        if (blockDoc.persona) priv2['bob-persona'] = String(blockDoc.persona);
+        if (blockDoc.theme) priv2['bob-theme'] = String(blockDoc.theme);
+        if (blockDoc.theme_id != null) priv2['bob-theme-id'] = String(blockDoc.theme_id);
+        // Build optional story context
+        let storyCtx2 = null;
+        if (blockDoc.storyId) {
+          try {
+            const s = await db.collection('stories').doc(String(blockDoc.storyId)).get();
+            if (s.exists) {
+              const sd = s.data() || {};
+              const acArr = Array.isArray(sd.acceptanceCriteria)
+                ? sd.acceptanceCriteria.filter(Boolean).map((x) => String(x)).slice(0, 3)
+                : (Array.isArray(sd.acceptance_criteria) ? sd.acceptance_criteria.filter(Boolean).map((x) => String(x)).slice(0, 3) : []);
+              const storyRef = sd.ref || s.id;
+              storyCtx2 = {
+                ref: storyRef,
+                title: sd.title || 'Story',
+                link: buildEntityUrl('story', s.id, storyRef),
+                ac: acArr,
+              };
+            }
+          } catch { }
+        }
+        if (storyCtx2) {
+          priv2['bob-story-ref'] = String(storyCtx2.ref);
+          priv2['bob-deep-link'] = String(storyCtx2.link);
+        }
+        const themeLabel2 = blockDoc.theme ? themeLabelFromValue(blockDoc.theme) : undefined;
+        const baseTitle2 = blockDoc.title || `${blockDoc.theme || 'Block'}: ${blockDoc.category || ''}`.trim();
+        const summary2 = `${themeLabel2 ? `[${themeLabel2}] – ` : ''}${baseTitle2}`;
+        const descLines2 = [];
+        if (blockDoc.rationale) descLines2.push(String(blockDoc.rationale));
+        if (storyCtx2) {
+          descLines2.push(`Story: ${storyCtx2.ref} – ${storyCtx2.title}`);
+          descLines2.push(`BOB: ${storyCtx2.link}`);
+          if (storyCtx2.ac && storyCtx2.ac.length) {
+            descLines2.push('', 'Acceptance criteria:');
+            for (const item of storyCtx2.ac) descLines2.push(`- ${item}`);
+          }
+        }
+        descLines2.push(`Calendar: ${buildAbsoluteUrl('/calendar')}`);
+        descLines2.push(`Overview: ${buildAbsoluteUrl('/dashboard')}`);
+        const body2 = {
+          summary: summary2,
+          description: descLines2.join('\n') || 'BOB block',
+          extendedProperties: { private: priv2 }
+        };
+        // Patch to ensure metadata is up to date
+        try {
+          await fetchJson(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(parentEventId)}`, {
+            method: 'PATCH', headers: { 'Authorization': 'Bearer ' + access, 'Content-Type': 'application/json' }, body: JSON.stringify(body2)
+          });
+          updated++;
+        } catch (e) {
+          console.warn(`Failed to patch parent event ${parentEventId}`, e.message);
+        }
+      }
+    }
+
+    for (const a of list) {
+      if (!a.start || !a.end) continue; // skip deferred/unscheduled
+      const ext = a.external || {};
+      const eid = ext.googleEventId || null;
+      const evPriv = { bobAssignmentId: a.id, 'bob-assignment-id': a.id, bobBlockId: blockId || '', 'bob-block-id': blockId || '' };
+      if (a.itemType) evPriv['bob-assignment-type'] = String(a.itemType);
+      if (a.itemId) evPriv['bob-assignment-item-id'] = String(a.itemId);
+      const evBody = {
+        summary: a.title || 'Assignment',
+        start: { dateTime: new Date(a.start).toISOString() },
+        end: { dateTime: new Date(a.end).toISOString() },
+        description: 'BOB assignment',
+        extendedProperties: { private: evPriv }
+      };
+      if (eid) {
+        try {
+          await fetchJson(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(eid)}`, {
+            method: 'PATCH', headers: { 'Authorization': 'Bearer ' + access, 'Content-Type': 'application/json' }, body: JSON.stringify(evBody)
+          });
+          updated++;
+        } catch {
+          // If patch fails (deleted externally), recreate
+          const createdEv = await fetchJson('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
+            method: 'POST', headers: { 'Authorization': 'Bearer ' + access, 'Content-Type': 'application/json' }, body: JSON.stringify(evBody)
+          });
+          created++;
+          await db.collection('scheduled_instances').doc(a.id).update({ googleEventId: createdEv.id });
+        }
+      } else {
+        const createdEv = await fetchJson('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
+          method: 'POST', headers: { 'Authorization': 'Bearer ' + access, 'Content-Type': 'application/json' }, body: JSON.stringify(evBody)
+        });
+        created++;
+        await db.collection('scheduled_instances').doc(a.id).update({ googleEventId: createdEv.id });
+      }
+    }
+  }
+  return { ok: true, parentsCreated, created, updated };
+}
+
+exports.syncPlanToGoogleCalendar = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const uid = req.auth.uid;
+  const day = req?.data?.day || new Date().toISOString().slice(0, 10);
+  return await syncPlanToGoogleForUser(uid, day);
+});
+
+function matchLevenshteinDistance(str1, str2) {
+  const a = String(str1 || '').toLowerCase().trim();
+  const b = String(str2 || '').toLowerCase().trim();
+  const track = Array(b.length + 1)
+    .fill(null)
+    .map(() => Array(a.length + 1).fill(0));
+
+  for (let i = 0; i <= a.length; i += 1) track[0][i] = i;
+  for (let j = 0; j <= b.length; j += 1) track[j][0] = j;
+
+  for (let j = 1; j <= b.length; j += 1) {
+    for (let i = 1; i <= a.length; i += 1) {
+      const indicator = a[i - 1] === b[j - 1] ? 0 : 1;
+      track[j][i] = Math.min(
+        track[j][i - 1] + 1,
+        track[j - 1][i] + 1,
+        track[j - 1][i - 1] + indicator
+      );
+    }
+  }
+
+  return track[b.length][a.length];
+}
+
+function matchSimilarity(str1, str2) {
+  const maxLen = Math.max(String(str1 || '').length, String(str2 || '').length);
+  if (maxLen === 0) return 1;
+  const distance = matchLevenshteinDistance(str1, str2);
+  return Math.max(0, 1 - distance / maxLen);
+}
+
+function matchKeywordOverlap(taskTitle, targetTitle) {
+  const taskWords = String(taskTitle || '').toLowerCase().split(/\s+/).filter((w) => w.length > 3);
+  const targetWords = String(targetTitle || '').toLowerCase().split(/\s+/).filter((w) => w.length > 3);
+  const overlap = taskWords.filter((w) => targetWords.includes(w)).length;
+  return overlap > 0 ? (overlap / Math.max(taskWords.length, targetWords.length)) * 0.3 : 0;
+}
+
+function matchCombinedScore(taskTitle, targetTitle) {
+  const similarity = matchSimilarity(taskTitle, targetTitle);
+  const keywords = matchKeywordOverlap(taskTitle, targetTitle);
+  return Math.min(1, similarity + keywords);
+}
+
+async function rerankMacSyncMatchWithLLM({ userId, task, candidates }) {
+  if (!Array.isArray(candidates) || !candidates.length) return null;
+
+  const shortlist = candidates
+    .slice()
+    .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
+    .slice(0, 6)
+    .map((candidate) => ({
+      id: candidate.id,
+      type: candidate.type,
+      title: candidate.title || candidate.name || '',
+      score: Number(Number(candidate.score || 0).toFixed(3)),
+      linkedGoal: candidate.linkedGoal || null,
+      ref: candidate.ref || null,
+    }));
+
+  if (!shortlist.length) return null;
+
+  const system = 'You are a task linking assistant. Choose the single best match for a task from candidate goals/stories. Reply JSON only.';
+  const user = [
+    'Return JSON exactly as:',
+    '{"pickId":"<candidate id or empty>","pickType":"goal|story|none","confidence":0-1,"reason":"short"}',
+    '',
+    `Task title: ${String(task?.title || '')}`,
+    `Task description: ${String(task?.description || '').slice(0, 300)}`,
+    `Candidates: ${JSON.stringify(shortlist)}`,
+    'Rules:',
+    '- Choose none if confidence is low or ambiguous.',
+    '- Prefer exact ref/title semantics over loose similarity.',
+  ].join('\n');
+
+  try {
+    const raw = await callLLMJson({
+      system,
+      user,
+      purpose: 'macSyncLinkMatch',
+      userId,
+      expectJson: true,
+      temperature: 0.1,
+    });
+    const parsed = raw ? JSON.parse(raw) : {};
+    const pickId = String(parsed?.pickId || '').trim();
+    const pickType = String(parsed?.pickType || '').trim().toLowerCase();
+    const confidence = Number(parsed?.confidence || 0);
+    if (!pickId || !['goal', 'story'].includes(pickType)) return null;
+    if (!Number.isFinite(confidence) || confidence < 0.75) return null;
+    return shortlist.find((candidate) => candidate.id === pickId && candidate.type === pickType) || null;
+  } catch (error) {
+    console.warn('[mac-sync] LLM rerank failed', { userId, taskId: task?.id, error: error?.message || error });
+    return null;
+  }
+}
+
+function nextDayDueDateMs() {
+  return DateTime.now().plus({ days: 1 }).endOf('day').toMillis();
+}
+
+async function ensureLinkConfirmationTask({ db, userId, type, task, story, goal }) {
+  if (!goal?.id) return null;
+
+  const goalTitle = goal.title || goal.name || goal.ref || goal.id;
+  const dueDate = nextDayDueDateMs();
+
+  let sourceEntityId = null;
+  let sourceEntityRef = null;
+  let sourceEntityTitle = null;
+  let storyId = null;
+
+  if (type === 'story') {
+    sourceEntityId = story.id;
+    sourceEntityRef = story.ref || `ST-${String(story.id).slice(-6).toUpperCase()}`;
+    sourceEntityTitle = story.title || sourceEntityRef;
+    storyId = story.id;
+  } else {
+    sourceEntityId = task.id;
+    sourceEntityRef = task.ref || `TK-${String(task.id).slice(-6).padStart(6, '0').toUpperCase()}`;
+    sourceEntityTitle = task.title || sourceEntityRef;
+  }
+
+  const duplicateKey = `linkconfirm:${type}:${sourceEntityId}:goal:${goal.id}`;
+  const existing = await db.collection('tasks')
+    .where('ownerUid', '==', userId)
+    .where('duplicateKey', '==', duplicateKey)
+    .limit(1)
+    .get();
+
+  if (!existing.empty) return existing.docs[0].id;
+
+  const newRef = db.collection('tasks').doc();
+  const title = `${sourceEntityTitle} (REF ${sourceEntityRef}) has been matched to Goal ${goalTitle} (confirm)`;
+  const nowMs = Date.now();
+  const payload = ensureTaskPoints({
+    id: newRef.id,
+    ownerUid: userId,
+    persona: task.persona || 'personal',
+    title,
+    description: type === 'story'
+      ? `Please confirm the story-to-goal link for ${sourceEntityRef}.`
+      : `Please confirm the task-to-goal link for ${sourceEntityRef}.`,
+    status: 0,
+    task_type: 'reminder',
+    entry_method: 'auto:mac_sync_link_confirmation',
+    source: 'mac_sync_automation',
+    duplicateKey,
+    goalId: goal.id,
+    storyId,
+    dueDate,
+    createdAt: nowMs,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    syncState: 'dirty',
+    parentType: type === 'story' ? 'story' : 'goal',
+    parentId: type === 'story' ? story.id : goal.id,
+  });
+
+  await newRef.set(payload, { merge: true });
+  return newRef.id;
+}
+
+async function runMacSyncPostProcessing({ db, userId, touchedTaskIds }) {
+  const touchedIds = Array.from(touchedTaskIds || []).filter(Boolean);
+  const result = {
+    touched: touchedIds.length,
+    dedupeResolved: 0,
+    autoLinked: 0,
+    confirmationTasksCreated: 0,
+  };
+
+  try {
+    const dedupeResult = await deduplicateUserTasks({
+      db,
+      userId,
+      dryRun: false,
+      hardDelete: false,
+      logActivity: true,
+      activityActor: 'MacSyncPull',
+      includeTitleDedupe: true,
+    });
+    result.dedupeResolved = Number(dedupeResult?.duplicatesResolved || 0);
+  } catch (error) {
+    console.warn('[mac-sync] post dedupe failed', { userId, error: error?.message || error });
+  }
+
+  if (!touchedIds.length) return result;
+
+  const [goalsSnap, storiesSnap] = await Promise.all([
+    db.collection('goals').where('ownerUid', '==', userId).get().catch(() => ({ docs: [] })),
+    db.collection('stories').where('ownerUid', '==', userId).get().catch(() => ({ docs: [] })),
+  ]);
+
+  const goals = goalsSnap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+  const stories = storiesSnap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+  if (!goals.length && !stories.length) return result;
+
+  const goalById = new Map(goals.map((g) => [g.id, g]));
+  const storyById = new Map(stories.map((s) => [s.id, s]));
+
+  for (const taskId of touchedIds) {
+    let taskSnap = null;
+    try {
+      taskSnap = await db.collection('tasks').doc(taskId).get();
+    } catch {
+      continue;
+    }
+    if (!taskSnap?.exists) continue;
+
+    const task = { id: taskSnap.id, ...(taskSnap.data() || {}) };
+    const status = String(task.status ?? '').toLowerCase();
+    const isDone = status === 'done' || status === 'complete' || status === 'completed' || Number(task.status) === 2;
+    if (isDone || task.deleted) continue;
+    if (task.goalId || task.storyId || (task.parentType === 'story' && task.parentId)) continue;
+
+    let bestGoal = null;
+    for (const goal of goals) {
+      const score = matchCombinedScore(task.title || '', goal.title || goal.name || '');
+      if (score > 0.5 && (!bestGoal || score > bestGoal.score)) {
+        bestGoal = { ...goal, score, type: 'goal' };
+      }
+    }
+
+    let bestStory = null;
+    for (const story of stories) {
+      const score = matchCombinedScore(task.title || '', story.title || '');
+      if (score > 0.5 && (!bestStory || score > bestStory.score)) {
+        bestStory = { ...story, score, type: 'story' };
+      }
+    }
+
+    const ranked = [bestGoal, bestStory].filter(Boolean).sort((a, b) => (b.score || 0) - (a.score || 0));
+    let best = ranked[0] || null;
+
+    // High-confidence fuzzy match is accepted immediately.
+    if (!best) continue;
+    if (best.score <= 0.85) {
+      // Option 3: LLM re-ranks ambiguous but plausible fuzzy candidates.
+      const llmCandidate = await rerankMacSyncMatchWithLLM({
+        userId,
+        task,
+        candidates: ranked,
+      });
+      if (llmCandidate) {
+        best = {
+          ...(llmCandidate.type === 'goal' ? (goalById.get(llmCandidate.id) || {}) : (storyById.get(llmCandidate.id) || {})),
+          ...llmCandidate,
+          score: Number(llmCandidate.score || best.score || 0),
+        };
+      } else {
+        continue;
+      }
+    }
+
+    const patch = {
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      syncState: 'dirty',
+      linkMatchSource: 'mac_sync_fuzzy',
+      linkMatchScore: Number(best.score.toFixed(3)),
+    };
+
+    let confirmationTaskId = null;
+
+    if (best.type === 'goal') {
+      patch.goalId = best.id;
+      await db.collection('tasks').doc(task.id).set(patch, { merge: true });
+      confirmationTaskId = await ensureLinkConfirmationTask({
+        db,
+        userId,
+        type: 'task',
+        task,
+        story: null,
+        goal: best,
+      });
+    } else {
+      const story = storyById.get(best.id) || best;
+      const linkedGoalId = story.goalId || null;
+      patch.storyId = story.id;
+      if (linkedGoalId) patch.goalId = linkedGoalId;
+      await db.collection('tasks').doc(task.id).set(patch, { merge: true });
+      if (linkedGoalId && goalById.has(linkedGoalId)) {
+        confirmationTaskId = await ensureLinkConfirmationTask({
+          db,
+          userId,
+          type: 'story',
+          task,
+          story,
+          goal: goalById.get(linkedGoalId),
+        });
+      }
+    }
+
+    result.autoLinked += 1;
+    if (confirmationTaskId) result.confirmationTasksCreated += 1;
+  }
+
+  return result;
+}
+
+// iOS Reminders bridge (public HTTPS): Shortcuts can call these endpoints
+exports.remindersPush = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET], invoker: 'public' }, async (req, res) => {
+  try {
+    if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).send('Method not allowed');
+    const uid = String(req.query.uid || req.body?.uid || '');
+    const secret = process.env.REMINDERS_WEBHOOK_SECRET;
+    const provided = String(req.headers['x-reminders-secret'] || req.query.secret || req.body?.secret || '');
+    if (!uid) return res.status(400).json({ error: 'uid required' });
+    if (secret && provided !== secret) return res.status(403).json({ error: 'forbidden' });
+    const db = admin.firestore();
+    const now = Date.now();
+    const start = new Date(); start.setHours(0, 0, 0, 0);
+
+    // Sprint metadata for tagging/selection
+    const sprintMeta = new Map();
+    const activeSprintIds = new Set();
+    try {
+      const sprintSnap = await db.collection('sprints').where('ownerUid', '==', uid).limit(25).get();
+      sprintSnap.docs.forEach((d) => {
+        const data = d.data() || {};
+        const status = String(data.status || '').toLowerCase();
+        const startMs = toMillis(data.startDate || data.start);
+        const endMs = toMillis(data.endDate || data.end);
+        const inWindow = startMs && endMs ? (now >= startMs && now <= endMs) : false;
+        const isActive = ['active', 'current', 'in-progress', 'inprogress', '1', 'true'].includes(status) || inWindow;
+        const name = data.name || data.title || data.ref || `Sprint ${d.id.slice(-2)}`;
+        sprintMeta.set(d.id, { name, startMs, endMs, status });
+        if (isActive) activeSprintIds.add(d.id);
+      });
+    } catch { /* ignore */ }
+
+    // Return tasks that need pushing: unlinked, flagged, or completion updates
+    const tasksSnap = await db.collection('tasks').where('ownerUid', '==', uid).get();
+    const tasks = tasksSnap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }));
+    const isDone = (status) => {
+      if (status === undefined || status === null) return false;
+      if (typeof status === 'number') return status === 2 || status >= 2;
+      const norm = String(status).toLowerCase();
+      return norm === 'done' || norm === 'completed' || norm === 'complete';
+    };
+    const shouldSkip = (t) => {
+      const delMs = toMillis(t.deleteAfter);
+      return delMs && delMs <= now;
+    };
+    const dueWindow = start.getTime() + 24 * 3600 * 1000;
+    const needsReminderUpdate = (t) => {
+      if (shouldSkip(t)) return false;
+      if (t.aiFlaggedTop === true) return true;
+      if (isDone(t.status)) return true;
+      return (t.dueDate || 0) <= dueWindow;
+    };
+    const taskSet = new Map();
+    // Create new reminders for due-soon or flagged items
+    tasks.filter(t => !shouldSkip(t) && !isDone(t.status) && (!t.reminderId || t.aiFlaggedTop) && ((t.dueDate || 0) <= dueWindow || t.aiFlaggedTop === true))
+      .forEach((t) => taskSet.set(t.id, t));
+    // Push status/priority updates to existing reminders
+    tasks.filter(t => t.reminderId && needsReminderUpdate(t)).forEach((t) => taskSet.set(t.id, t));
+
+    const toPush = Array.from(taskSet.values());
+    const flaggedTaskIds = [];
+    const payload = toPush.map(t => {
+      const themeLabel = themeLabelFromValue(t.theme || t.theme_id || 'General');
+      const title = `[${themeLabel}] – ${t.title || 'Task'}`;
+      const sprintLabel = t.sprintId && sprintMeta.has(t.sprintId) ? sprintMeta.get(t.sprintId).name : null;
+      const isFlagged = t.aiFlaggedTop === true;
+      if (isFlagged) flaggedTaskIds.push(t.id);
+      // Prefer canonical /tasks/:ref deep link; fall back to id
+      const rel = t.ref ? `/tasks/${encodeURIComponent(t.ref)}` : `/tasks/${encodeURIComponent(t.id)}`;
+      const url = buildAbsoluteUrl(t.deepLink || rel);
+      const noteLines = [
+        t.reminderNote || '',
+        `BOB: ${url}`,
+        t.storyId ? `Story: ${t.storyId}` : '',
+        t.goalId ? `Goal: ${t.goalId}` : '',
+        sprintLabel ? `Sprint: ${sprintLabel}` : '',
+      ].filter(Boolean);
+      return ({
+        id: t.id,
+        type: 'task',
+        title,
+        dueDate: t.dueDate || null,
+        dueTime: t.dueTime || null,
+        timeOfDay: t.timeOfDay || null,
+        // Use canonical task ref style: TK-<last6 of id, zero-padded>
+        ref: t.ref || `TK-${String(t.id || '').slice(-6).padStart(6, '0').toUpperCase()}`,
+        createdAt: t.createdAt || null,
+        storyId: t.storyId || null,
+        goalId: t.goalId || null,
+        reminderId: t.reminderId || null,
+        tags: sprintLabel ? [sprintLabel] : undefined,
+        note: noteLines.join('\n'),
+        completed: isDone(t.status),
+        priority: isFlagged ? 1 : undefined,
+        flaggedTop: isFlagged,
+        aiPriorityRank: t.aiPriorityRank || undefined,
+        url,
+      });
+    });
+    // Stories in active sprint → Reminders (tagged with sprint)
+    const storyPayload = [];
+    if (activeSprintIds.size) {
+      const activeSprintIdList = Array.from(activeSprintIds);
+      const chunks = [];
+      for (let i = 0; i < activeSprintIdList.length; i += 10) {
+        chunks.push(activeSprintIdList.slice(i, i + 10));
+      }
+      for (const chunk of chunks) {
+        const storySnap = await db.collection('stories')
+          .where('ownerUid', '==', uid)
+          .where('sprintId', 'in', chunk)
+          .get()
+          .catch(() => ({ docs: [] }));
+        for (const d of storySnap.docs) {
+          const data = d.data() || {};
+          const stStatus = String(data.status || '').toLowerCase();
+          const done = stStatus === 'done' || stStatus === 'completed' || stStatus === 'complete' || Number(data.status || 0) >= 4;
+          const sprintLabel = data.sprintId && sprintMeta.has(data.sprintId) ? sprintMeta.get(data.sprintId).name : null;
+          const ref = data.ref || `ST-${String(d.id).slice(-6).toUpperCase()}`;
+          const url = buildEntityUrl('story', d.id, ref);
+          const noteLines = [
+            data.description ? String(data.description).slice(0, 280) : '',
+            `BOB: ${url}`,
+            sprintLabel ? `Sprint: ${sprintLabel}` : '',
+          ].filter(Boolean);
+          storyPayload.push({
+            id: d.id,
+            type: 'story',
+            title: data.title || ref,
+            ref,
+            sprintId: data.sprintId || null,
+            sprintName: sprintLabel,
+            reminderId: data.reminderId || null,
+            status: data.status || null,
+            completed: done,
+            dueDate: sprintMeta.get(data.sprintId || '')?.endMs || null,
+            dueTime: data.dueTime || null,
+            timeOfDay: data.timeOfDay || null,
+            tags: sprintLabel ? [sprintLabel] : undefined,
+            url,
+            note: noteLines.join('\n'),
+            aiFocusStoryRank: data.aiFocusStoryRank || null,
+          });
+        }
+      }
+    }
+
+    return res.json({ ok: true, tasks: payload, stories: storyPayload, flaggedTaskIds });
+  } catch (e) {
+    console.error('remindersPush error', e);
+    return res.status(500).json({ error: 'server_error' });
+  }
+});
+
+exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET, GOOGLE_AI_STUDIO_API_KEY], invoker: 'public' }, async (req, res) => {
+  try {
+    if (req.method !== 'POST') return res.status(405).send('Method not allowed');
+    const uid = String(req.query.uid || req.body?.uid || '');
+    const secret = process.env.REMINDERS_WEBHOOK_SECRET;
+    const provided = String(req.headers['x-reminders-secret'] || req.query.secret || req.body?.secret || '');
+    if (!uid) return res.status(400).json({ error: 'uid required' });
+    if (secret && provided !== secret) return res.status(403).json({ error: 'forbidden' });
+    const updates = Array.isArray(req.body?.tasks) ? req.body.tasks : [];
+    const db = admin.firestore();
+    let updated = 0;
+    const touchedTaskIds = new Set();
+    const classifyType = (title) => {
+      const t = String(title || '').toLowerCase();
+      const choreHints = ['laundry', 'trash', 'garbage', 'recycling', 'clean', 'dishes', 'vacuum', 'mop', 'tidy'];
+      const routineHints = ['routine', 'meditate', 'journal', 'stretch', 'hydrate', 'water plants'];
+      if (choreHints.some(k => t.includes(k))) return 'chore';
+      if (routineHints.some(k => t.includes(k))) return 'routine';
+      return 'reminder';
+    };
+    const hasWorkToken = (value) => {
+      const lowered = String(value || '').toLowerCase();
+      if (lowered.includes('workout')) return false;
+      const tokens = lowered.split(/[^a-z0-9]+/).filter(Boolean);
+      if (tokens.includes('work')) return true;
+      return lowered.includes('work');
+    };
+    const resolvePersona = (list, tags) => {
+      if (Array.isArray(tags) && tags.some((t) => hasWorkToken(t))) return 'work';
+      if (hasWorkToken(list)) return 'work';
+      return 'personal';
+    };
+
+    // Sprint metadata (used to tag new stories to current sprint)
+    const sprintMeta = new Map();
+    let defaultSprintId = null;
+    try {
+      const sprintSnap = await db.collection('sprints').where('ownerUid', '==', uid).limit(25).get();
+      const nowMs = Date.now();
+      sprintSnap.docs.forEach((d) => {
+        const data = d.data() || {};
+        const startMs = toMillis(data.startDate || data.start);
+        const endMs = toMillis(data.endDate || data.end);
+        const status = String(data.status || '').toLowerCase();
+        const inWindow = startMs && endMs ? (nowMs >= startMs && nowMs <= endMs) : false;
+        const isActive = ['active', 'current', 'in-progress', 'inprogress', '1', 'true'].includes(status) || inWindow;
+        const name = data.name || data.title || data.ref || `Sprint ${d.id.slice(-2)}`;
+        sprintMeta.set(d.id, { name, startMs, endMs, isActive });
+        if (!defaultSprintId && isActive) defaultSprintId = d.id;
+      });
+    } catch { /* ignore */ }
+
+    // Load global hierarchy snapshot once for fast pre-write deduplication — reduces per-task
+    // Firestore queries and prevents duplicate task creation when the same reminder is pushed again.
+    const snapshotReminderIds = new Set();
+    const snapshotDocIds = new Set();
+    const snapshotNormalizedTitles = new Map(); // normalizedTitle -> taskId
+    const normalizeForDedup = (s) =>
+      String(s || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
+    try {
+      const snapshotDoc = await db.collection('global_hierarchy_snapshots').doc(uid).get();
+      if (snapshotDoc.exists) {
+        const snapshotTasks = snapshotDoc.data()?.flat?.tasks || [];
+        for (const t of snapshotTasks) {
+          if (t.id) snapshotDocIds.add(String(t.id));
+          if (t.reminderId) snapshotReminderIds.add(String(t.reminderId));
+          if (t.title) snapshotNormalizedTitles.set(normalizeForDedup(t.title), t.id);
+        }
+      }
+    } catch { /* non-fatal; fall through to per-task Firestore queries */ }
+
+    for (const u of updates) {
+      const id = String(u.id || '');
+      const reminderId = u.reminderId ? String(u.reminderId) : null;
+      const completed = !!u.completed;
+      const title = String(u.title || '');
+      const iosTagsRaw = Array.isArray(u.tags) ? u.tags.filter(x => typeof x === 'string').slice(0, 12) : [];
+      const iosTags = iosTagsRaw.filter((tag) => {
+        const key = String(tag || '').trim().replace(/^#/, '').toLowerCase();
+        if (!key) return false;
+        if (key.startsWith('goal-') || key.startsWith('story-')) return false;
+        return true;
+      });
+      if (!id && !reminderId && !title) continue;
+
+      const listName = String(u.list || u.reminderListName || '').toLowerCase();
+      const kind = String(u.type || u.entityType || '').toLowerCase();
+      const titleLower = title.toLowerCase();
+      const tagsLower = iosTags.map((t) => String(t || '').toLowerCase());
+      const personaValue = resolvePersona(listName, tagsLower);
+      const isStoryCandidate = kind === 'story'
+        || titleLower.includes('#story')
+        || tagsLower.some((t) => t.includes('story'))
+        || listName.includes('story');
+
+      if (isStoryCandidate) {
+        const nowMs = Date.now();
+        let storyRef = null;
+        let storySnap = null;
+
+        if (id) {
+          const snap = await db.collection('stories').doc(id).get().catch(() => null);
+          if (snap && snap.exists) { storyRef = snap.ref; storySnap = snap; }
+        }
+        if (!storyRef && reminderId) {
+          const snap = await db.collection('stories').where('ownerUid', '==', uid).where('reminderId', '==', reminderId).limit(1).get();
+          if (!snap.empty) { storyRef = snap.docs[0].ref; storySnap = snap.docs[0]; }
+        }
+
+        if (storyRef) {
+          const existing = storySnap?.data() || {};
+          const patch = {
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            syncState: 'dirty',
+            persona: personaValue,
+          };
+          if (reminderId) patch['reminderId'] = reminderId;
+          if (completed) {
+            patch['status'] = 4;
+            patch['completedAt'] = nowMs;
+          }
+          if (u.dueTime !== undefined) {
+            patch['dueTime'] = u.dueTime;
+          }
+          if (u.timeOfDay !== undefined) {
+            patch['timeOfDay'] = u.timeOfDay;
+          }
+          if (iosTags.length) {
+            patch['tags'] = mergeTags(existing.tags || [], iosTags);
+          }
+          await storyRef.set(patch, { merge: true });
+          updated++;
+        } else {
+          const newRef = db.collection('stories').doc();
+          let refVal = null;
+          try { refVal = await generateStoryRef(db, uid); } catch { refVal = `ST-${String(newRef.id).slice(-6).toUpperCase()}`; }
+          const sprintId = defaultSprintId || null;
+          const sprintTag = sprintId && sprintMeta.get(sprintId)?.name ? sprintMeta.get(sprintId).name : null;
+          const base = {
+            id: newRef.id,
+            ownerUid: uid,
+            persona: personaValue,
+            title: title || 'Story (Reminders)',
+            status: completed ? 4 : 0,
+            reminderId: reminderId || null,
+            sprintId,
+            tags: sprintTag ? mergeTags(iosTags, [sprintTag]) : (iosTags.length ? iosTags : undefined),
+            entry_method: 'import:reminders',
+            source: 'ios_reminder',
+            createdAt: nowMs,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            ref: refVal,
+            syncState: 'dirty',
+          };
+          if (u.dueTime !== undefined) base['dueTime'] = u.dueTime;
+          if (u.timeOfDay !== undefined) base['timeOfDay'] = u.timeOfDay;
+          if (completed) base['completedAt'] = nowMs;
+          await newRef.set(base, { merge: true });
+          updated++;
+        }
+        continue;
+      }
+
+      let ref = null;
+      if (id) ref = db.collection('tasks').doc(id);
+      else {
+        // prefer reminderId; also check duplicateKey convention
+        let snap = await db.collection('tasks').where('ownerUid', '==', uid).where('reminderId', '==', reminderId).limit(1).get();
+        if (!snap.empty) ref = snap.docs[0].ref;
+        if (!ref && reminderId) {
+          const dupKey = `reminder:${String(reminderId).toLowerCase()}`;
+          snap = await db.collection('tasks').where('ownerUid', '==', uid).where('duplicateKey', '==', dupKey).limit(1).get();
+          if (!snap.empty) ref = snap.docs[0].ref;
+        }
+      }
+      if (ref) {
+        const task_type = classifyType(title);
+        const data = { updatedAt: admin.firestore.FieldValue.serverTimestamp(), task_type, syncState: 'dirty', persona: personaValue };
+        if (reminderId) data['reminderId'] = reminderId;
+        if (reminderId) data['duplicateKey'] = `reminder:${String(reminderId).toLowerCase()}`;
+        if (completed) {
+          data['status'] = 2;
+          data['completedAt'] = Date.now();
+          data['deleteAfter'] = Date.now() + TASK_TTL_DAYS * MS_IN_DAY;
+        }
+        if (u.dueTime !== undefined) {
+          data['dueTime'] = u.dueTime;
+        }
+        if (u.timeOfDay !== undefined) {
+          data['timeOfDay'] = u.timeOfDay;
+        }
+        if (iosTags.length) {
+          try {
+            const snap = await ref.get();
+            const existing = (snap.exists && Array.isArray((snap.data() || {}).tags)) ? (snap.data().tags) : [];
+            const merged = Array.from(new Set([...(existing || []), ...iosTags])).slice(0, 12);
+            data['tags'] = merged;
+          } catch { }
+        }
+        await ref.set(data, { merge: true });
+        updated++;
+        touchedTaskIds.add(ref.id);
+      } else if (reminderId || title) {
+        // Auto-import new task from Reminders
+        const task_type = classifyType(title);
+        const nowMs = Date.now();
+        const dupKey = reminderId ? `reminder:${String(reminderId).toLowerCase()}` : null;
+
+        // --- Snapshot pre-write deduplication ---
+        // Fast check against the cached snapshot before hitting Firestore with per-task queries.
+        if (reminderId && snapshotReminderIds.has(reminderId)) {
+          // Already exists in snapshot — skip creation, treat as no-op for this push.
+          continue;
+        }
+        const normIncomingTitle = normalizeForDedup(title);
+        if (normIncomingTitle && snapshotNormalizedTitles.has(normIncomingTitle)) {
+          // Title match in snapshot — update the existing task instead of creating a duplicate.
+          const existingId = snapshotNormalizedTitles.get(normIncomingTitle);
+          if (existingId) {
+            const patch = {
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              syncState: 'dirty',
+              ...(reminderId ? { reminderId, duplicateKey: dupKey } : {}),
+              ...(u.dueTime !== undefined ? { dueTime: u.dueTime } : {}),
+              ...(u.timeOfDay !== undefined ? { timeOfDay: u.timeOfDay } : {}),
+              ...(completed ? { status: 2, completedAt: nowMs, deleteAfter: nowMs + TASK_TTL_DAYS * MS_IN_DAY } : {}),
+            };
+            try {
+              await db.collection('tasks').doc(existingId).set(patch, { merge: true });
+              updated++;
+              touchedTaskIds.add(existingId);
+            } catch { /* ignore */ }
+            continue;
+          }
+        }
+        // ----------------------------------------
+
+        // Check again for duplicates by duplicateKey to avoid creating a new one
+        if (dupKey) {
+          const snap = await db.collection('tasks').where('ownerUid', '==', uid).where('duplicateKey', '==', dupKey).limit(1).get();
+          if (!snap.empty) {
+            const existingRef = snap.docs[0].ref;
+            const data = {
+              title: title || 'Reminder',
+              task_type,
+              source: 'ios_reminder',
+              reminderId: reminderId,
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              syncState: 'dirty',
+              ...(u.dueTime !== undefined ? { dueTime: u.dueTime } : {}),
+              ...(u.timeOfDay !== undefined ? { timeOfDay: u.timeOfDay } : {}),
+              ...(completed ? { status: 2, completedAt: nowMs, deleteAfter: nowMs + TASK_TTL_DAYS * MS_IN_DAY } : {}),
+              ...(iosTags.length ? { tags: Array.from(new Set([...(snap.docs[0].data()?.tags || []), ...iosTags])).slice(0, 12) } : {}),
+            };
+            await existingRef.set(data, { merge: true });
+            updated++;
+            touchedTaskIds.add(existingRef.id);
+          } else {
+            const newRef = db.collection('tasks').doc();
+            await newRef.set(ensureTaskPoints({
+              id: newRef.id,
+              ownerUid: uid,
+              persona: personaValue,
+              title: title || 'Reminder',
+              status: completed ? 2 : 0,
+              task_type,
+              entry_method: 'import:reminders',
+              source: 'ios_reminder',
+              reminderId: reminderId || null,
+              duplicateKey: dupKey,
+              reminderCreatedAt: nowMs,
+              createdAt: nowMs,
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              syncState: 'dirty',
+              ...(u.dueTime !== undefined ? { dueTime: u.dueTime } : {}),
+              ...(u.timeOfDay !== undefined ? { timeOfDay: u.timeOfDay } : {}),
+              ...(completed ? { completedAt: nowMs, deleteAfter: nowMs + TASK_TTL_DAYS * MS_IN_DAY } : {}),
+              ...(iosTags.length ? { tags: iosTags } : {}),
+            }), { merge: true });
+            updated++;
+            touchedTaskIds.add(newRef.id);
+          }
+        } else {
+          const newRef = db.collection('tasks').doc();
+          await newRef.set(ensureTaskPoints({
+            id: newRef.id,
+            ownerUid: uid,
+            persona: personaValue,
+            title: title || 'Reminder',
+            status: completed ? 2 : 0,
+            task_type,
+            entry_method: 'import:reminders',
+            source: 'ios_reminder',
+            reminderId: reminderId || null,
+            reminderCreatedAt: nowMs,
+            createdAt: nowMs,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            syncState: 'dirty',
+            ...(u.dueTime !== undefined ? { dueTime: u.dueTime } : {}),
+            ...(u.timeOfDay !== undefined ? { timeOfDay: u.timeOfDay } : {}),
+            ...(completed ? { completedAt: nowMs, deleteAfter: nowMs + TASK_TTL_DAYS * MS_IN_DAY } : {}),
+            ...(iosTags.length ? { tags: iosTags } : {}),
+          }), { merge: true });
+          updated++;
+          touchedTaskIds.add(newRef.id);
+        }
+      }
+    }
+    const postProcessing = await runMacSyncPostProcessing({
+      db,
+      userId: uid,
+      touchedTaskIds,
+    });
+    return res.json({ ok: true, updated, postProcessing });
+  } catch (e) {
+    console.error('remindersPull error', e);
+    return res.status(500).json({ error: 'server_error' });
+  }
+});
+
+exports.onStorySprintChange = functionsV2.firestore.onDocumentUpdated("stories/{storyId}", async (event) => {
+  const storyId = event.params.storyId;
+  const beforeData = event.data.before.data();
+  const afterData = event.data.after.data();
+
+  if (beforeData.sprintId !== afterData.sprintId) {
+    const db = admin.firestore();
+    const newSprintId = afterData.sprintId;
+
+    let newDueDate = null;
+    if (newSprintId) {
+      const sprintDoc = await db.collection("sprints").doc(newSprintId).get();
+      if (sprintDoc.exists) {
+        newDueDate = sprintDoc.data().endDate;
+      }
+    }
+
+    const tasksRef = db.collection("tasks").where("storyId", "==", storyId);
+    const tasksSnapshot = await tasksRef.get();
+
+    if (!tasksSnapshot.empty) {
+      const batch = db.batch();
+      tasksSnapshot.docs.forEach(doc => {
+        const task = doc.data() || {};
+        const hasDue = task.dueDate || task.dueDateMs || task.targetDate;
+        const isLocked = task.dueDateLocked || task.lockDueDate || task.immovable === true || task.status === 'immovable';
+        const patch = { sprintId: newSprintId };
+        if (!hasDue && newDueDate && !isLocked) {
+          patch.dueDate = newDueDate;
+        }
+        batch.update(doc.ref, patch);
+      });
+      await batch.commit();
+    }
+  }
+});
+
+// Auto-map story sprintId from due date updates
+exports.onStoryDueDateAutoSprint = functionsV2.firestore.onDocumentUpdated("stories/{storyId}", async (event) => {
+  const storyId = event.params.storyId;
+  const beforeData = event.data.before.data() || {};
+  const afterData = event.data.after.data() || {};
+  const beforeDue = toMillis(beforeData.dueDate || beforeData.targetDate);
+  const afterDue = toMillis(afterData.dueDate || afterData.targetDate);
+  if ((beforeDue ?? null) === (afterDue ?? null)) return;
+
+  const ownerUid = afterData.ownerUid || beforeData.ownerUid;
+  if (!ownerUid) return;
+  const persona = afterData.persona || beforeData.persona || null;
+  const db = admin.firestore();
+  const sprintId = afterDue
+    ? await resolveSprintIdForDate(db, ownerUid, persona, afterDue, new Map())
+    : null;
+  if ((afterData.sprintId || null) === (sprintId ?? null)) return;
+  await db.collection('stories').doc(storyId).set({ sprintId: sprintId ?? null }, { merge: true });
+});
+
+// Ensure story points are numeric and normalized (supports decimal points).
+exports.onStoryWritten = firestoreV2.onDocumentWritten('stories/{storyId}', async (event) => {
+  const before = event.data?.before?.data() || null;
+  const after = event.data?.after?.data() || null;
+  if (!after) return;
+
+  const ref = event.data?.after?.ref || null;
+  if (!ref) return;
+
+  const patch = {};
+
+  // Points normalization
+  try {
+    const rawPoints = Number(after.points);
+    if (Number.isFinite(rawPoints) && rawPoints === 0) {
+      if (!(typeof after.points === 'number' && Number.isFinite(after.points))) {
+        patch.points = 0;
+      }
+    } else {
+      const existingPoints = Number(after.points);
+      const normalizedPoints = clampStoryPoints(after.points);
+      const estimateFallback = clampStoryPoints((Number(after.estimateMin || 0) || 0) / 60);
+      const desiredPoints = normalizedPoints ?? estimateFallback ?? 1;
+      const pointsStoredAsNumber = typeof after.points === 'number' && Number.isFinite(after.points);
+      if (!pointsStoredAsNumber || !Number.isFinite(existingPoints) || existingPoints !== desiredPoints) {
+        patch.points = desiredPoints;
+      }
+    }
+  } catch (e) {
+    console.warn('[onStoryWritten] points normalization skipped', e?.message || e);
+  }
+
+  // timeOfDay sync — aligned with timeOfDayPopulator buckets (morning 05–13, afternoon 13–19, evening 19–05)
+  try {
+    const beforeDueTime = before?.dueTime ? String(before.dueTime).trim() : null;
+    const afterDueTime = after?.dueTime ? String(after.dueTime).trim() : null;
+    const beforePlannedTime = before?.plannedTime ? String(before.plannedTime).trim() : null;
+    const afterPlannedTime = after?.plannedTime ? String(after.plannedTime).trim() : null;
+    const timeStr = afterDueTime || afterPlannedTime || null;
+    const prevTimeStr = beforeDueTime || beforePlannedTime || null;
+
+    if (timeStr && timeStr !== prevTimeStr) {
+      // Explicit time set/changed — derive timeOfDay from it
+      const hour = parseInt(timeStr.split(':')[0] || '0', 10);
+      let newTod;
+      if (hour >= 5 && hour < 13) newTod = 'morning';
+      else if (hour >= 13 && hour < 19) newTod = 'afternoon';
+      else newTod = 'evening';
+      if (after.timeOfDay !== newTod) patch.timeOfDay = newTod;
+    } else if (!timeStr && !after.timeOfDay) {
+      // No time and no timeOfDay — infer from title/description via keywords
+      const inferred = inferTimeOfDayFromContent(after.title || '', after.description || '');
+      if (inferred) patch.timeOfDay = inferred;
+    }
+  } catch (e) {
+    console.warn('[onStoryWritten] timeOfDay sync skipped', e?.message || e);
+  }
+
+  if (Object.keys(patch).length > 0) {
+    patch.updatedAt = admin.firestore.FieldValue.serverTimestamp();
+    await ref.set(patch, { merge: true });
+  }
+});
+
+// ===== Task lifecycle maintenance (completed/duplicates TTL and flags)
+exports.onTaskWritten = firestoreV2.onDocumentWritten('tasks/{taskId}', async (event) => {
+  const before = event.data?.before?.data() || null;
+  const after = event.data?.after?.data() || null;
+  const db = ensureFirestore();
+  const id = event.params.taskId;
+  const ref = db.collection('tasks').doc(id);
+  // If the task document was deleted, proactively remove any stale index row
+  if (!after) {
+    try { await db.collection('sprint_task_index').doc(id).delete(); } catch { }
+    return;
+  }
+
+  const now = Date.now();
+  const isDone = (v) => {
+    if (v == null) return false;
+    if (typeof v === 'number') return v === 2 || v >= 2;
+    const s = String(v).toLowerCase();
+    return s === 'done' || s === 'complete' || s === 'completed';
+  };
+
+  const wasDone = before ? isDone(before.status) : false;
+  const nowDone = isDone(after.status);
+  const patch = {};
+
+  // Ensure server-owned, canonical task references are always present
+  const hasRef = typeof after.ref === 'string' && after.ref.trim() !== '';
+  if (!hasRef) {
+    patch.ref = `TK-${String(id).slice(-6).padStart(6, '0').toUpperCase()}`;
+  }
+
+  // Track completedAt and TTL deleteAfter on status change
+  if (!wasDone && nowDone) {
+    const completedAt = after.completedAt || now;
+    patch.completedAt = completedAt;
+    // set deleteAfter only if not already set
+    if (!after.deleteAfter) patch.deleteAfter = completedAt + TASK_TTL_DAYS * MS_IN_DAY;
+  } else if (wasDone && !nowDone) {
+    // Clear when moved out of done
+    patch.completedAt = null;
+    patch.deleteAfter = null;
+  }
+
+  // Ensure effort has a sensible default if missing
+  if (!after.effort) {
+    const est = Number(after.estimateMin || 0) || (Number(after.estimatedHours || 0) * 60);
+    let eff = 'S';
+    if (est >= 240) eff = 'L';
+    else if (est >= 60) eff = 'M';
+    patch.effort = eff;
+  }
+
+  // Duplicate detection by reminderId/duplicateKey; also persist duplicateKey when available
+  try {
+    const ownerUid = after.ownerUid || before?.ownerUid || null;
+    let key = after.duplicateKey || null;
+    if (!key && after.reminderId) key = `reminder:${String(after.reminderId).toLowerCase()}`;
+    if (key && ownerUid) {
+      // Always store duplicateKey for consistency, even if no duplicates found
+      if (!after.duplicateKey) {
+        patch.duplicateKey = key;
+      }
+      const dupSnap = await db.collection('tasks')
+        .where('ownerUid', '==', ownerUid)
+        .where('duplicateKey', '==', key)
+        .limit(2)
+        .get();
+      const others = dupSnap.docs.filter(d => d.id !== id);
+      if (others.length) {
+        // Flag both as duplicates. Prefer keeping the oldest.
+        if (!after.duplicateFlag) patch.duplicateFlag = true;
+        if (!nowDone && !after.deleteAfter) {
+          patch.deleteAfter = (after.completedAt || now) + TASK_TTL_DAYS * MS_IN_DAY;
+        }
+        // Best-effort: mark counterpart as duplicateFlag too
+        try {
+          const otherRef = others[0].ref;
+          const other = others[0].data() || {};
+          const otherPatch = {};
+          if (!other.duplicateFlag) otherPatch.duplicateFlag = true;
+          if (!other.duplicateKey) otherPatch.duplicateKey = key;
+          if (Object.keys(otherPatch).length) await otherRef.set(otherPatch, { merge: true });
+        } catch { }
+      }
+    }
+  } catch (e) {
+    console.warn('[onTaskWritten] duplicate detection skipped:', e?.message || e);
+  }
+
+  // Ensure points are always populated and clamped
+  try {
+    const rawPoints = Number(after.points);
+    if (Number.isFinite(rawPoints) && rawPoints === 0) {
+      // Keep explicit zero as a "needs sizing" signal for nightly LLM passes.
+      if (!(typeof after.points === 'number' && Number.isFinite(after.points))) {
+        patch.points = 0;
+      }
+    } else {
+      const normalizedPoints = clampTaskPoints(after.points);
+      const desiredPoints = (normalizedPoints != null
+        ? normalizedPoints
+        : (!before ? DEFAULT_TASK_POINTS : deriveTaskPoints(after)));
+      if (typeof desiredPoints === 'number') {
+        const existingPoints = Number(after.points);
+        const pointsStoredAsNumber = typeof after.points === 'number' && Number.isFinite(after.points);
+        if (!pointsStoredAsNumber || !Number.isFinite(existingPoints) || existingPoints !== desiredPoints) {
+          patch.points = desiredPoints;
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[onTaskWritten] points normalization skipped', e?.message || e);
+  }
+
+  // Snap overdue/undated tasks into the active sprint and align due date to sprint end
+  try {
+    const ownerUidTask = after.ownerUid || before?.ownerUid || null;
+    const persona = after.persona || before?.persona || null;
+    const hasSprint = !!after.sprintId && after.sprintId !== '__none__';
+    const isOpen = !nowDone;
+    const dueMs = Number(after.dueDate) || null;
+    const nowMs = Date.now();
+    const needsSnap = isOpen && ownerUidTask && (!hasSprint) && (!dueMs || dueMs < nowMs);
+    if (needsSnap) {
+      let qs = db.collection('sprints')
+        .where('ownerUid', '==', ownerUidTask)
+        .where('status', '==', 'active')
+        .orderBy('startDate', 'desc')
+        .limit(1);
+      if (persona) qs = qs.where('persona', '==', persona);
+      const ss = await qs.get();
+      if (!ss.empty) {
+        const sprintDoc = ss.docs[0];
+        const sdata = sprintDoc.data() || {};
+        const sprintEnd = sdata.endDate || null;
+        patch.sprintId = sprintDoc.id;
+        if (sprintEnd) {
+          // If no due date or overdue, move due date to sprint end
+          patch.dueDate = sprintEnd;
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[onTaskWritten] sprint snap skipped', e?.message || e);
+  }
+
+  // Auto-map sprintId from due date changes (non-story tasks)
+  try {
+    const ownerUidTask = after.ownerUid || before?.ownerUid || null;
+    const persona = after.persona || before?.persona || null;
+    const hasStory = !!(after.storyId || (after.parentType === 'story' && after.parentId));
+    const beforeDueMs = toMillis(before?.dueDate || before?.dueDateMs || before?.targetDate);
+    const afterDueMs = toMillis(after?.dueDate || after?.dueDateMs || after?.targetDate);
+    const dueDateChanged = (beforeDueMs ?? null) !== (afterDueMs ?? null);
+    if (ownerUidTask && !hasStory && dueDateChanged && afterDueMs) {
+      const sprintId = await resolveSprintIdForDate(db, ownerUidTask, persona, afterDueMs, new Map());
+      if ((after.sprintId || null) !== (sprintId ?? null)) {
+        patch.sprintId = sprintId ?? null;
+      }
+    }
+    if (ownerUidTask && !hasStory && dueDateChanged && !afterDueMs) {
+      if (after.sprintId) {
+        patch.sprintId = null;
+      }
+    }
+  } catch (e) {
+    console.warn('[onTaskWritten] sprint auto-map skipped', e?.message || e);
+  }
+
+  if (Object.keys(patch).length) {
+    try { await ref.set(patch, { merge: true }); } catch (e) { console.warn('[onTaskWritten] patch failed', id, e?.message || e); }
+  }
+
+  const ownerUidForAuto = after.ownerUid || before?.ownerUid || null;
+  if (
+    ownerUidForAuto &&
+    !after.convertedToStoryId &&
+    after.autoConverted !== true &&
+    after.autoConversionSkip !== true
+  ) {
+    if (shouldAutoConvertTaskData(after)) {
+      try {
+        const profileSnap = await db.collection('profiles').doc(ownerUidForAuto).get();
+        const profileData = profileSnap.exists ? (profileSnap.data() || {}) : {};
+        await autoConvertTask({
+          db,
+          taskDoc: event.data.after,
+          profile: profileData,
+          runId: `trigger_${Date.now()}`,
+        });
+        if (forceStory) {
+          await ref.set({ forceStoryConversion: admin.firestore.FieldValue.delete() }, { merge: true });
+        }
+        return;
+      } catch (error) {
+        console.warn('[onTaskWritten] immediate auto-convert failed', { id, error: error?.message || error });
+      }
+    }
+  }
+
+  // Maintain sprint task index (materialized view)
+  try {
+    const ownerUid = after.ownerUid || before?.ownerUid || null;
+    const persona = after.persona || before?.persona || null;
+    if (!ownerUid) return;
+    const isDone = (v) => {
+      if (v == null) return false;
+      if (typeof v === 'number') return v === 2 || v >= 2;
+      const s = String(v).toLowerCase();
+      return s === 'done' || s === 'complete' || s === 'completed';
+    };
+    const isOpen = !isDone(after.status);
+
+    // Resolve effective sprint
+    let effectiveSprintId = after.sprintId || null;
+    let storyId = after.storyId || (after.parentType === 'story' ? after.parentId : null) || null;
+    if (!effectiveSprintId && storyId) {
+      try {
+        const storySnap = await db.collection('stories').doc(String(storyId)).get();
+        const story = storySnap.exists ? (storySnap.data() || {}) : {};
+        if (story && story.sprintId) effectiveSprintId = story.sprintId;
+      } catch { }
+    }
+    if (!effectiveSprintId && after.dueDate) {
+      try {
+        // Load sprints for this owner (persona optional)
+        let qs = db.collection('sprints').where('ownerUid', '==', ownerUid);
+        if (persona) qs = qs.where('persona', '==', persona);
+        const ss = await qs.get();
+        const due = Number(after.dueDate) || null;
+        if (due) {
+          for (const d of ss.docs) {
+            const s = d.data() || {};
+            if (typeof s.startDate === 'number' && typeof s.endDate === 'number') {
+              if (due >= s.startDate && due <= s.endDate) { effectiveSprintId = d.id; break; }
+            }
+          }
+        }
+      } catch { }
+    }
+
+    const indexRef = db.collection('sprint_task_index').doc(id);
+
+    // If still no sprint, index as backlog sentinel
+    const sprintKey = effectiveSprintId || SPRINT_NONE;
+    const indexDoc = {
+      id,
+      ownerUid,
+      persona: persona || null,
+      sprintId: sprintKey,
+      status: after.status,
+      isOpen,
+      dueDate: after.dueDate || null,
+      priority: after.priority ?? null,
+      aiCriticalityScore: after.aiCriticalityScore ?? null,
+      aiCriticalityReason: after.aiCriticalityReason ?? null,
+      aiFlaggedTop: after.aiFlaggedTop ?? false,
+      aiPriorityRank: after.aiPriorityRank ?? null,
+      aiTop3ForDay: after.aiTop3ForDay ?? false,
+      aiTop3Date: after.aiTop3Date ?? null,
+      aiPriorityLabel: after.aiPriorityLabel ?? null,
+      aiTop3Reason: after.aiTop3Reason ?? after.aiPriorityReason ?? null,
+      effort: after.effort ?? null,
+      estimateMin: after.estimateMin ?? null,
+      type: after.type ?? null,
+      repeatFrequency: after.repeatFrequency ?? null,
+      repeatInterval: after.repeatInterval ?? null,
+      daysOfWeek: Array.isArray(after.daysOfWeek) ? after.daysOfWeek : [],
+      lastDoneAt: after.lastDoneAt || null,
+      snoozedUntil: after.snoozedUntil || null,
+      title: after.title || 'Task',
+      description: after.description || null,
+      theme: after.theme ?? null,
+      goalId: after.goalId ?? null,
+      syncState: after.syncState ?? null,
+      deviceUpdatedAt: after.deviceUpdatedAt ?? null,
+      serverUpdatedAt: after.serverUpdatedAt ?? null,
+      macSyncedAt: after.macSyncedAt ?? null,
+      tags: Array.isArray(after.tags) ? after.tags : [],
+      parentType: after.parentType || null,
+      parentId: after.parentId || null,
+      storyId: storyId,
+      ref: after.ref || after.reference || null,
+      completedAt: after.completedAt || null,
+      updatedAt: Date.now(),
+    };
+    await indexRef.set(indexDoc, { merge: true });
+  } catch (e) {
+    console.warn('[onTaskWritten] sprint_task_index maintenance failed', id, e?.message || e);
+  }
+});
+
+// ===== AI helpers (as before, simplified)
+exports.prioritizeBacklog = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
+  let tasks = (req.data && Array.isArray(req.data.tasks)) ? req.data.tasks : [];
+  if (tasks.length > 50) tasks = tasks.slice(0, 50);
+
+  const systemPrompt = 'You prioritise tasks using weighted scoring and return strict JSON only.';
+  const userPrompt = [
+    'Score the following tasks with an integer score 0-100 and bucket into TODAY, NEXT, or LATER based on urgency and importance. Return JSON {"items":[{"id":string,"score":number,"bucket":"TODAY|NEXT|LATER"}]}',
+    'Tasks:',
+    JSON.stringify(tasks)
+  ].join('\n');
+
+  const raw = await callLLMJson({
+    system: systemPrompt,
+    user: userPrompt,
+    purpose: 'prioritizeBacklog',
+    userId: req.auth.uid,
+    expectJson: true,
+    temperature: 0.2,
+  });
+
+  let out = { items: [] };
+  try {
+    out = JSON.parse(raw);
+  } catch (parseError) {
+    console.error('Failed to parse AI response:', parseError);
+  }
+  return out;
+});
+
+exports.whatToWorkOnNext = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const db = ensureFirestore();
+  const persona = normalizeRecommendationPersona(req?.data?.persona);
+  const selectedSprintId = String(req?.data?.selectedSprintId || '').trim() || null;
+  return computeNextWorkRecommendation({
+    db,
+    uid,
+    persona,
+    selectedSprintId,
+  });
+});
+
+// ===== Import items (goals, okrs, tasks, resources, trips) – same schema as earlier
+exports.importItems = httpsV2.onCall(async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
+  const type = String(req.data?.type || ""); let items = req.data?.items || [];
+  if (!type || !Array.isArray(items) || items.length === 0) return { ok: true, written: 0 };
+  if (items.length > 500) items = items.slice(0, 500);
+  const db = admin.firestore();
+  const batch = db.batch();
+  const now = admin.firestore.FieldValue.serverTimestamp();
+  const S = (v) => (v == null ? '' : String(v)); const N = (v) => { const n = Number(v); return isNaN(n) ? null : n; };
+  const D = (v) => { if (!v) return null; const d = new Date(v); return isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10); };
+
+  const norm = {
+    goals: x => ({ ownerUid: req.auth.uid, text: S(x.text || x.goal || x.title), area: S(x.area || x.category || ''), confidence: N(x.confidence) || 0, createdAt: now, source: S(x.source || 'import') }),
+    okrs: x => ({ ownerUid: req.auth.uid, title: S(x.title || x.objective || x.okr || x.name), goalId: S(x.goalId || ''), goalTitle: S(x.goalTitle || x.goal || ''), kr1: S(x.kr1 || x.keyResult1 || ''), kr2: S(x.kr2 || x.keyResult2 || ''), kr3: S(x.kr3 || x.keyResult3 || ''), sprint: S(x.sprint || ''), priority: N(x.priority) || null, createdAt: now, source: S(x.source || 'import') }),
+    tasks: x => { let st = S(x.status).toLowerCase(); if (st !== 'doing' && st !== 'done') st = 'backlog'; return ({ ownerUid: req.auth.uid, title: S(x.title || x.task || x.name), storyId: S(x.storyId || ''), goalId: S(x.goalId || ''), goalArea: S(x.goalArea || x.area || ''), status: st, effort: N(x.effort) || 1, dueDate: D(x.dueDate || x.due || x.when), createdAt: now, source: S(x.source || 'import') }); },
+    resources: x => ({ ownerUid: req.auth.uid, type: (S(x.type || x.kind).toLowerCase() || 'reading'), title: S(x.title || x.name), url: S(x.url || x.link || x.href), source: S(x.source || 'import'), createdAt: now }),
+    trips: x => ({ ownerUid: req.auth.uid, title: S(x.title || x.trip || x.name), startDate: D(x.start || x.startDate), endDate: D(x.end || x.endDate), notes: S(x.notes || ''), createdAt: now, source: S(x.source || 'import') }),
+  };
+
+  for (const row of items) {
+    const doc = norm[type] ? norm[type](row) : null;
+    if (!doc) throw new httpsV2.HttpsError("invalid-argument", "Unknown type: " + type);
+    batch.set(db.collection(type).doc(), doc);
+  }
+  await batch.commit();
+  return { ok: true, written: items.length, type };
+});
+
+exports.importDevelopmentFeatures = httpsV2.onCall(async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
+  const items = req.data?.items || [];
+  if (!Array.isArray(items) || items.length === 0) return { ok: true, written: 0 };
+  if (items.length > 500) items = items.slice(0, 500);
+
+  const db = admin.firestore();
+  const batch = db.batch();
+  const now = admin.firestore.FieldValue.serverTimestamp();
+
+  for (const item of items) {
+    const doc = {
+      feature: item.feature || null,
+      description: item.description || null,
+      implemented: item.implemented || false,
+      uatStatus: item.uatStatus || 'In Progress',
+      version: item.version || null,
+      createdAt: now,
+      ownerUid: req.auth.uid,
+    };
+    batch.set(db.collection("development_features").doc(), doc);
+  }
+
+  await batch.commit();
+  return { ok: true, written: items.length };
+});
+
+// ===== Trakt and Steam Sync
+const TRAKT_API_BASE = 'https://api.trakt.tv';
+
+function traktHeaders(accessToken) {
+  const headers = {
+    'Content-Type': 'application/json',
+    'trakt-api-version': '2',
+    'trakt-api-key': process.env.TRAKT_CLIENT_ID,
+    'User-Agent': 'BOB/1.0 (bob20250810)',
+  };
+  if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+  return headers;
+}
+
+async function getTraktTokenDoc(uid) {
+  const snap = await admin.firestore().collection('tokens').doc(`${uid}_trakt`).get();
+  return snap.exists ? { id: snap.id, ...snap.data() } : null;
+}
+
+async function fetchTraktJson(url, opts = {}) {
+  const merged = { ...opts };
+  merged.headers = { ...(opts.headers || {}), ...traktHeaders(opts.headers?.Authorization ? undefined : null) };
+  const res = await fetch(url, merged);
+  const text = await res.text();
+  let data;
+  try { data = JSON.parse(text); } catch (e) { throw new Error(`Trakt response parse failed (status ${res.status}): ${text.slice(0, 160)}`); }
+  if (!res.ok || data?.error) {
+    const msg = data?.error_description || data?.error || `HTTP ${res.status}`;
+    throw new Error(`Trakt error: ${msg}`);
+  }
+  return data;
+}
+
+async function fetchTraktProfile(accessToken) {
+  if (!accessToken) return null;
+  try {
+    return await fetchJson(`${TRAKT_API_BASE}/users/me`, { headers: traktHeaders(accessToken) });
+  } catch (e) {
+    console.warn('[trakt] fetch profile failed', e?.message || e);
+    return null;
+  }
+}
+
+async function saveTraktTokens(uid, tokenData, opts = {}) {
+  const db = admin.firestore();
+  const createdAt = tokenData?.created_at || Math.floor(Date.now() / 1000);
+  const expiresIn = tokenData?.expires_in || 0;
+  const expiresAt = tokenData?.expires_at || (createdAt + expiresIn);
+  await db.collection('tokens').doc(`${uid}_trakt`).set({
+    provider: 'trakt',
+    access_token: tokenData?.access_token,
+    refresh_token: tokenData?.refresh_token,
+    scope: tokenData?.scope || null,
+    created_at: createdAt,
+    expires_in: expiresIn,
+    expires_at: expiresAt,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+  if (opts?.skipProfileLookup) return {};
+  const profile = await fetchTraktProfile(tokenData?.access_token);
+  const username = profile?.username || profile?.ids?.slug || null;
+  await db.collection('profiles').doc(uid).set({
+    traktUser: username || null,
+    traktConnected: true,
+  }, { merge: true });
+  return { username };
+}
+
+function mapTraktRating(rating) {
+  if (rating == null) return null;
+  const num = Number(rating);
+  if (!Number.isFinite(num)) return null;
+  if (num > 0 && num <= 10) return Math.max(1, Math.min(10, Math.round(num)));
+  return Math.max(1, Math.min(10, Math.round(num * 2)));
+}
+
+async function getTraktAccessToken(uid) {
+  const doc = await getTraktTokenDoc(uid);
+  if (!doc) throw new Error('Trakt not connected for this user. Connect via Settings > Integrations > Trakt.');
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (doc.access_token && doc.expires_at && doc.expires_at > nowSec + 60) {
+    return doc.access_token;
+  }
+  const refreshed = await fetchJson(`${TRAKT_API_BASE}/oauth/token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      grant_type: 'refresh_token',
+      refresh_token: doc.refresh_token,
+      client_id: process.env.TRAKT_CLIENT_ID,
+      client_secret: process.env.TRAKT_CLIENT_SECRET,
+    })
+  });
+  const data = {
+    ...refreshed,
+    refresh_token: refreshed?.refresh_token || doc.refresh_token,
+    expires_at: refreshed?.created_at ? refreshed.created_at + refreshed.expires_in : nowSec + 90 * 24 * 60 * 60,
+  };
+  await saveTraktTokens(uid, data, { skipProfileLookup: true });
+  return data.access_token;
+}
+
+function buildTraktShowDocId(uid, show) {
+  const ids = show?.ids || {};
+  const key = ids.trakt || ids.slug || ids.tvdb || ids.tmdb || ids.imdb || show?.id || Math.random().toString(36).slice(2);
+  return `${uid}_show_${key}`;
+}
+
+async function markTraktShowWatched(uid, ids, opts = {}) {
+  const accessToken = await getTraktAccessToken(uid);
+  const headers = traktHeaders(accessToken);
+  const watchedIso = (() => {
+    const raw = opts?.watchedAt || Date.now();
+    const d = new Date(raw);
+    return Number.isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
+  })();
+  const payloadIds = {};
+  if (ids?.trakt) payloadIds.trakt = Number(ids.trakt);
+  if (ids?.slug) payloadIds.slug = ids.slug;
+  if (ids?.tmdb) payloadIds.tmdb = ids.tmdb;
+  if (ids?.imdb) payloadIds.imdb = ids.imdb;
+  await fetchJson(`${TRAKT_API_BASE}/sync/history`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ shows: [{ ids: payloadIds, watched_at: watchedIso }] }),
+  });
+  const mappedRating = mapTraktRating(opts?.rating);
+  if (mappedRating) {
+    await fetchJson(`${TRAKT_API_BASE}/sync/ratings`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ shows: [{ ids: payloadIds, rating: mappedRating, rated_at: watchedIso }] }),
+    });
+  }
+  const docId = buildTraktShowDocId(uid, { ids });
+  await admin.firestore().collection('trakt').doc(docId).set({
+    lastWatchedAt: new Date(watchedIso).getTime(),
+    rating: opts?.rating ?? null,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    category: 'watchlist',
+    ownerUid: uid,
+  }, { merge: true });
+  return { watchedAt: watchedIso, rating: opts?.rating ?? null };
+}
+
+async function _syncTrakt(uid) {
+  const db = admin.firestore();
+  const startedAt = Date.now();
+  let accessToken = null;
+  let traktUser = null;
+
+  try {
+    accessToken = await getTraktAccessToken(uid);
+  } catch (e) {
+    console.warn('[trakt] no token, falling back to username-only mode', e?.message || e);
+  }
+
+  if (accessToken) {
+    const prof = await fetchTraktProfile(accessToken);
+    traktUser = prof?.username || prof?.ids?.slug || traktUser;
+    if (traktUser) {
+      await db.collection('profiles').doc(uid).set({ traktUser, traktConnected: true }, { merge: true });
+    }
+  }
+  if (!traktUser) {
+    const profileSnap = await db.collection('profiles').doc(uid).get();
+    traktUser = profileSnap.exists ? profileSnap.data()?.traktUser : null;
+  }
+  if (!traktUser && !accessToken) {
+    throw new Error("Trakt is not connected. Add your device code in Settings > Integrations > Trakt.");
+  }
+
+  const headers = traktHeaders(accessToken);
+  let watchlist = [];
+  let watchedShows = [];
+  let history = [];
+
+  if (accessToken) {
+    try { watchlist = await fetchJson(`${TRAKT_API_BASE}/sync/watchlist/shows`, { headers }); } catch (e) { console.warn('[trakt] watchlist fetch failed', e?.message || e); }
+    try { watchedShows = await fetchJson(`${TRAKT_API_BASE}/sync/watched/shows`, { headers }); } catch (e) { console.warn('[trakt] watched shows fetch failed', e?.message || e); }
+  }
+
+  try {
+    const histUrl = accessToken ? `${TRAKT_API_BASE}/sync/history?limit=50` : `${TRAKT_API_BASE}/users/${traktUser}/history`;
+    history = await fetchJson(histUrl, { headers });
+  } catch (e) {
+    console.warn('[trakt] history fetch failed', e?.message || e);
+    history = [];
+  }
+
+  const watchedMap = new Map();
+  for (const entry of Array.isArray(watchedShows) ? watchedShows : []) {
+    const ids = entry?.show?.ids || {};
+    const key = ids.trakt || ids.slug;
+    if (!key) continue;
+    watchedMap.set(key, {
+      lastWatchedAt: toMillis(entry.last_watched_at) || null,
+      plays: entry.plays || null,
+    });
+  }
+
+  let watchlistCount = 0;
+  if (Array.isArray(watchlist) && watchlist.length) {
+    for (let i = 0; i < watchlist.length; i += 400) {
+      const batch = db.batch();
+      const slice = watchlist.slice(i, i + 400);
+      for (const item of slice) {
+        const show = item?.show || {};
+        const ids = show?.ids || {};
+        const docId = buildTraktShowDocId(uid, show);
+        const watched = watchedMap.get(ids.trakt || ids.slug || null) || {};
+        batch.set(db.collection('trakt').doc(docId), {
+          id: docId,
+          ownerUid: uid,
+          category: 'watchlist',
+          type: 'show',
+          title: show?.title || 'Show',
+          year: show?.year || null,
+          ids,
+          slug: ids.slug || null,
+          traktId: ids.trakt || null,
+          tmdbId: ids.tmdb || null,
+          imdbId: ids.imdb || null,
+          overview: show?.overview || null,
+          runtime: show?.runtime || null,
+          network: show?.network || null,
+          listedAt: toMillis(item?.listed_at) || null,
+          lastWatchedAt: watched.lastWatchedAt || null,
+          plays: watched.plays || null,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+      }
+      await batch.commit();
+    }
+    watchlistCount = watchlist.length;
+  }
+
+  if (Array.isArray(history) && history.length) {
+    for (let i = 0; i < history.length; i += 400) {
+      const batch = db.batch();
+      const slice = history.slice(i, i + 400);
+      for (const item of slice) {
+        const docRef = db.collection('trakt').doc(`${uid}_hist_${item.id}`);
+        batch.set(docRef, {
+          ...item,
+          ownerUid: uid,
+          category: 'history',
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+      }
+      await batch.commit();
+    }
+  }
+
+  await db.collection('profiles').doc(uid).set({
+    traktLastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
+    traktSyncCount: Array.isArray(history) ? history.length : 0,
+    traktWatchlistSize: watchlistCount,
+    traktConnected: !!accessToken,
+  }, { merge: true });
+
+  return { ok: true, written: Array.isArray(history) ? history.length : 0, watchlist: watchlistCount, durationMs: Date.now() - startedAt };
+}
+
+const LOG_RETENTION_DAYS = 30;
+
+const createExpiryTimestamp = (days = LOG_RETENTION_DAYS) => {
+  const expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+  return admin.firestore.Timestamp.fromDate(expiresAt);
+};
+
+async function recordIntegrationLog(uid, integration, status, message, metadata = {}) {
+  try {
+    const db = admin.firestore();
+    const ref = db.collection('integration_logs').doc();
+    const level = status === 'error' ? 'error' : (status === 'warning' ? 'warning' : 'info');
+    const expiresAt = createExpiryTimestamp();
+    const now = admin.firestore.FieldValue.serverTimestamp();
+    await ref.set({
+      id: ref.id,
+      ownerUid: uid,
+      integration,
+      status,
+      level,
+      source: integration,
+      message,
+      metadata,
+      createdAt: now,
+      ts: now,
+      expiresAt,
+    });
+  } catch (error) {
+    console.error('Failed to write integration log', { integration, status, message, metadata, error });
+  }
+}
+
+async function recordAiLog(uid, event, status, message, metadata = {}) {
+  try {
+    const db = admin.firestore();
+    const ref = db.collection('ai_logs').doc();
+    const level = status === 'error' ? 'error' : (status === 'warning' ? 'warning' : 'info');
+    const expiresAt = createExpiryTimestamp();
+    const now = admin.firestore.FieldValue.serverTimestamp();
+    await ref.set({
+      id: ref.id,
+      ownerUid: uid,
+      event,
+      status,
+      level,
+      message,
+      metadata,
+      createdAt: now,
+      ts: now,
+      expiresAt,
+    });
+  } catch (error) {
+    console.error('Failed to write AI log', { event, status, message, metadata, error });
+  }
+}
+
+const YOUTUBE_API_BASE = 'https://www.googleapis.com/youtube/v3';
+const YOUTUBE_LONGFORM_THRESHOLD_SEC = 30 * 60;
+
+function parseIsoDurationToSeconds(value) {
+  if (!value || typeof value !== 'string') return null;
+  const match = value.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+  if (!match) return null;
+  const hours = Number(match[1] || 0);
+  const minutes = Number(match[2] || 0);
+  const seconds = Number(match[3] || 0);
+  if (![hours, minutes, seconds].every((n) => Number.isFinite(n))) return null;
+  return hours * 3600 + minutes * 60 + seconds;
+}
+
+function pickThumbnail(thumbnails = {}) {
+  return thumbnails.maxres?.url || thumbnails.standard?.url || thumbnails.high?.url || thumbnails.medium?.url || thumbnails.default?.url || null;
+}
+
+async function fetchYouTubeWatchLater(accessToken, opts = {}) {
+  const maxPages = Math.max(1, Math.min(10, Number(opts?.maxPages || 6)));
+  let pageToken = null;
+  const items = [];
+  for (let page = 0; page < maxPages; page += 1) {
+    const params = new URLSearchParams({
+      part: 'snippet,contentDetails',
+      maxResults: '50',
+      playlistId: 'WL',
+    });
+    if (pageToken) params.append('pageToken', pageToken);
+    const data = await fetchJson(`${YOUTUBE_API_BASE}/playlistItems?${params.toString()}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    const batch = Array.isArray(data?.items) ? data.items : [];
+    items.push(...batch);
+    pageToken = data?.nextPageToken || null;
+    if (!pageToken) break;
+  }
+  return items;
+}
+
+async function fetchYouTubeDurations(accessToken, videoIds = []) {
+  const map = new Map();
+  for (let i = 0; i < videoIds.length; i += 50) {
+    const chunk = videoIds.slice(i, i + 50);
+    if (!chunk.length) continue;
+    const params = new URLSearchParams({
+      part: 'contentDetails',
+      id: chunk.join(','),
+      maxResults: '50',
+    });
+    const data = await fetchJson(`${YOUTUBE_API_BASE}/videos?${params.toString()}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    const rows = Array.isArray(data?.items) ? data.items : [];
+    rows.forEach((row) => {
+      const vid = row?.id;
+      const dur = parseIsoDurationToSeconds(row?.contentDetails?.duration);
+      if (vid) map.set(vid, dur);
+    });
+  }
+  return map;
+}
+
+exports.syncYouTubeWatchLater = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const startedAt = Date.now();
+  const accessToken = await getYouTubeAccessToken(uid);
+  const items = await fetchYouTubeWatchLater(accessToken, { maxPages: req?.data?.maxPages || 6 });
+  const videoIds = Array.from(new Set(items.map((item) => item?.contentDetails?.videoId).filter(Boolean)));
+  const durations = await fetchYouTubeDurations(accessToken, videoIds);
+
+  const db = admin.firestore();
+  let written = 0;
+  let longformCount = 0;
+
+  for (let i = 0; i < items.length; i += 400) {
+    const batch = db.batch();
+    const slice = items.slice(i, i + 400);
+    for (const item of slice) {
+      const videoId = item?.contentDetails?.videoId;
+      if (!videoId) continue;
+      const durationSec = durations.get(videoId);
+      const hasDuration = Number.isFinite(durationSec);
+      const isLongform = hasDuration && durationSec >= YOUTUBE_LONGFORM_THRESHOLD_SEC;
+      if (isLongform) longformCount += 1;
+      const snippet = item?.snippet || {};
+      const publishedAt = toMillis(snippet?.publishedAt) || null;
+      const docId = `${uid}_yt_${videoId}`;
+      const ref = db.collection('youtube_history').doc(docId);
+      batch.set(ref, {
+        id: docId,
+        ownerUid: uid,
+        videoId,
+        title: snippet?.title || 'YouTube video',
+        channelTitle: snippet?.videoOwnerChannelTitle || snippet?.channelTitle || null,
+        publishedAt,
+        thumbnailUrl: pickThumbnail(snippet?.thumbnails || {}),
+        durationSec: hasDuration ? durationSec : null,
+        durationMinutes: hasDuration ? Math.round(durationSec / 60) : null,
+        watchLater: true,
+        list: 'watch-later',
+        longformCandidate: isLongform,
+        persona: 'personal',
+        source: 'youtube',
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+      written += 1;
+    }
+    await batch.commit();
+  }
+
+  await db.collection('profiles').doc(uid).set({
+    youtubeLastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
+    youtubeWatchLaterCount: items.length,
+    youtubeLongformCount: longformCount,
+    youtubeConnected: true,
+  }, { merge: true });
+
+  await recordIntegrationLog(uid, 'youtube', 'success', `Synced ${written} watch-later videos`, {
+    totalItems: items.length,
+    longformCount,
+    durationMs: Date.now() - startedAt,
+  });
+
+  return { ok: true, written, total: items.length, longform: longformCount };
+});
+
+exports.traktDeviceCodeStart = httpsV2.onCall({ secrets: [TRAKT_CLIENT_ID] }, async (req) => {
+  if (!req?.auth?.uid) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
+  const uid = req.auth.uid;
+  let data;
+  try {
+    data = await fetchTraktJson(`${TRAKT_API_BASE}/oauth/device/code`, {
+      method: 'POST',
+      headers: traktHeaders(),
+      body: JSON.stringify({ client_id: process.env.TRAKT_CLIENT_ID }),
+    });
+  } catch (e) {
+    throw new httpsV2.HttpsError('internal', e?.message || 'Trakt device code failed');
+  }
+  await admin.firestore().collection('trakt_device_codes').doc(uid).set({
+    deviceCode: data.device_code,
+    userCode: data.user_code,
+    verificationUrl: data.verification_url,
+    expiresIn: data.expires_in,
+    interval: data.interval,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+  return {
+    deviceCode: data.device_code,
+    userCode: data.user_code,
+    verificationUrl: data.verification_url,
+    expiresIn: data.expires_in,
+    interval: data.interval,
+  };
+});
+
+exports.traktDeviceCodePoll = httpsV2.onCall({ secrets: [TRAKT_CLIENT_ID, TRAKT_CLIENT_SECRET] }, async (req) => {
+  if (!req?.auth?.uid) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
+  const uid = req.auth.uid;
+  const provided = String(req?.data?.deviceCode || '').trim();
+  const stored = await admin.firestore().collection('trakt_device_codes').doc(uid).get();
+  const deviceCode = provided || (stored.exists ? stored.data()?.deviceCode : '');
+  if (!deviceCode) throw new httpsV2.HttpsError('invalid-argument', 'deviceCode is required');
+
+  let data;
+  try {
+    data = await fetchTraktJson(`${TRAKT_API_BASE}/oauth/device/token`, {
+      method: 'POST',
+      headers: traktHeaders(),
+      body: JSON.stringify({
+        code: deviceCode,
+        client_id: process.env.TRAKT_CLIENT_ID,
+        client_secret: process.env.TRAKT_CLIENT_SECRET,
+      })
+    });
+  } catch (e) {
+    const msg = e?.message || '';
+    if (msg.includes('authorization_pending') || msg.includes('slow_down')) return { pending: true, message: msg };
+    if (msg.includes('expired_token')) throw new httpsV2.HttpsError('deadline-exceeded', 'Device code expired. Start again.');
+    throw new httpsV2.HttpsError('internal', msg || 'Trakt token exchange failed');
+  }
+  const saved = await saveTraktTokens(uid, data);
+  await admin.firestore().collection('trakt_device_codes').doc(uid).set({ lastUsedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+  return { connected: true, username: saved?.username || null };
+});
+
+// ===== Trakt OAuth (Browser flow)
+exports.traktOAuthStart = httpsV2.onRequest({ secrets: [TRAKT_CLIENT_ID], invoker: 'public' }, async (req, res) => {
+  try {
+    const uid = String(req.query.uid || '');
+    const nonce = String(req.query.nonce || '');
+    if (!uid || !nonce) return res.status(400).send('Missing uid/nonce');
+    const projectId = process.env.GCLOUD_PROJECT;
+    const region = 'europe-west2';
+    const host = String(req.get('host') || '');
+    const callbackHost = host.includes('traktoauthstart') ? host.replace('traktoauthstart', 'traktoauthcallback') : `${region}-${projectId}.cloudfunctions.net/traktOAuthCallback`;
+    const redirectUri = callbackHost.startsWith('http') ? callbackHost : `https://${callbackHost}`;
+    const state = stateEncode({ uid, nonce });
+    const authUrl = `https://trakt.tv/oauth/authorize?response_type=code&client_id=${encodeURIComponent(process.env.TRAKT_CLIENT_ID)}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${encodeURIComponent(state)}`;
+    return res.redirect(authUrl);
+  } catch (e) {
+    return res.status(500).send('Trakt OAuth start error: ' + (e?.message || e));
+  }
+});
+
+exports.traktOAuthCallback = httpsV2.onRequest({ secrets: [TRAKT_CLIENT_ID, TRAKT_CLIENT_SECRET], invoker: 'public' }, async (req, res) => {
+  try {
+    const code = String(req.query.code || '');
+    const state = stateDecode(req.query.state);
+    const uid = state.uid;
+    const nonce = state.nonce;
+    if (!code || !uid || !nonce) return res.status(400).send('Missing code/state');
+
+    const projectId = process.env.GCLOUD_PROJECT;
+    const region = 'europe-west2';
+    const host = String(req.get('host') || '');
+    const callbackHost = host.includes('traktoauthcallback') ? host : `${region}-${projectId}.cloudfunctions.net/traktOAuthCallback`;
+    const redirectUri = callbackHost.startsWith('http') ? callbackHost : `https://${callbackHost}`;
+
+    const tokenData = await fetchTraktJson(`${TRAKT_API_BASE}/oauth/token`, {
+      method: 'POST',
+      headers: traktHeaders(),
+      body: JSON.stringify({
+        code,
+        client_id: process.env.TRAKT_CLIENT_ID,
+        client_secret: process.env.TRAKT_CLIENT_SECRET,
+        redirect_uri: redirectUri,
+        grant_type: 'authorization_code',
+      }),
+    });
+
+    await saveTraktTokens(uid, tokenData);
+    return res.status(200).send('<script>window.close();</script> Connected to Trakt. You can close this window.');
+  } catch (e) {
+    return res.status(500).send('Trakt OAuth callback error: ' + (e?.message || e));
+  }
+});
+
+async function _syncSteam(uid) {
+  const db = admin.firestore();
+  const profile = await db.collection('profiles').doc(uid).get();
+  const steamId = profile.data()?.steamId;
+
+  if (!steamId) {
+    throw new Error("SteamID not found in profile.");
+  }
+
+  const url = `https://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/?key=${process.env.STEAM_WEB_API_KEY}&steamid=${steamId}&include_appinfo=1&include_played_free_games=1&format=json`;
+
+  const startedAt = Date.now();
+  try {
+    const data = await fetchJson(url);
+
+    const games = data?.response?.games || [];
+
+    const batch = db.batch();
+    for (const item of games) {
+      const docRef = db.collection('steam').doc(`${uid}_${item.appid}`);
+      batch.set(docRef, {
+        ...item,
+        ownerUid: uid,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+    }
+    await batch.commit();
+
+    await db.collection('profiles').doc(uid).set({
+      steamLastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
+      steamLibrarySize: games.length,
+    }, { merge: true });
+
+    await recordIntegrationLog(uid, 'steam', 'success', `Synced ${games.length} Steam games`, {
+      durationMs: Date.now() - startedAt,
+      librarySize: games.length,
+    });
+
+    return { ok: true, written: games.length };
+  } catch (error) {
+    await recordIntegrationLog(uid, 'steam', 'error', error.message || 'Steam sync failed', {
+      durationMs: Date.now() - startedAt,
+    });
+    throw error;
+  }
+}
+
+exports.syncTrakt = httpsV2.onCall({ secrets: [TRAKT_CLIENT_ID, TRAKT_CLIENT_SECRET] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
+  const uid = req.auth.uid;
+  try {
+    const result = await _syncTrakt(uid);
+    await recordIntegrationLog(uid, 'trakt', 'success', 'Trakt sync completed', {
+      imported: result?.written || 0,
+      watchlist: result?.watchlist || 0,
+      durationMs: result?.durationMs || null,
+    });
+    return result;
+  } catch (error) {
+    await recordIntegrationLog(uid, 'trakt', 'error', error?.message || 'Trakt sync failed', {});
+    if (error instanceof httpsV2.HttpsError) throw error;
+    throw new httpsV2.HttpsError('internal', error?.message || 'Failed to sync Trakt');
+  }
+});
+
+exports.traktMarkWatched = httpsV2.onCall({ secrets: [TRAKT_CLIENT_ID, TRAKT_CLIENT_SECRET] }, async (req) => {
+  if (!req?.auth?.uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const showIdRaw = req?.data?.showId;
+  const slug = String(req?.data?.slug || '').trim();
+  const ids = {};
+  if (showIdRaw != null && showIdRaw !== '') ids.trakt = Number(showIdRaw);
+  if (slug) ids.slug = slug;
+  if (!ids.trakt && !ids.slug) throw new httpsV2.HttpsError('invalid-argument', 'showId or slug is required');
+  const watchedAt = req?.data?.watchedAt || Date.now();
+  const rating = req?.data?.rating ?? null;
+  try {
+    const result = await markTraktShowWatched(uid, ids, { watchedAt, rating });
+    await recordIntegrationLog(uid, 'trakt', 'success', 'Trakt watch pushed', { watchedAt: result?.watchedAt || null, rating: rating ?? null });
+    return { ok: true, ...result };
+  } catch (error) {
+    await recordIntegrationLog(uid, 'trakt', 'error', error?.message || 'Failed to push Trakt watch', { rating: rating ?? null });
+    if (error instanceof httpsV2.HttpsError) throw error;
+    throw new httpsV2.HttpsError('internal', error?.message || 'Failed to update Trakt');
+  }
+});
+
+exports.onStoryTraktStatusSync = functionsV2.firestore.onDocumentUpdated('stories/{storyId}', async (event) => {
+  try {
+    const before = event?.data?.before?.data();
+    const after = event?.data?.after?.data();
+    if (!before || !after) return;
+    if (before.status === after.status) return;
+    const isDone = (v) => v === 4 || String(v).toLowerCase() === 'done' || String(v).toLowerCase() === 'completed' || String(v).toLowerCase() === 'complete';
+    if (!isDone(after.status)) return;
+    const uid = after.ownerUid || after.userId;
+    if (!uid) return;
+    const meta = after.metadata || {};
+    const ids = meta.traktIds || {};
+    const traktId = meta.traktShowId || meta.traktId || ids.trakt || null;
+    const slug = meta.traktSlug || ids.slug || null;
+    if (!traktId && !slug) return;
+    const watchedAt = after.completedAt || after.dueDate || Date.now();
+    const rating = meta.rating ?? meta.traktRating ?? null;
+    await markTraktShowWatched(uid, { trakt: traktId, slug, tmdb: ids.tmdb || meta.tmdbId, imdb: ids.imdb || meta.imdbId }, { watchedAt, rating });
+  } catch (e) {
+    console.error('onStoryTraktStatusSync error', e);
+  }
+});
+
+exports.syncSteam = httpsV2.onCall({ secrets: [STEAM_WEB_API_KEY] }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
+  return await _syncSteam(req.auth.uid);
+});
+
+exports.getSteamAppDetails = httpsV2.onCall(async (req) => {
+  if (!req?.auth?.uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const appIdRaw = req?.data?.appId;
+  const appId = String(appIdRaw || '').trim();
+  if (!appId) {
+    throw new httpsV2.HttpsError('invalid-argument', 'appId is required');
+  }
+
+  const url = `https://store.steampowered.com/api/appdetails?appids=${encodeURIComponent(appId)}&cc=us&l=en`;
+  const data = await fetchJson(url);
+  const entry = data?.[appId];
+  if (!entry || !entry.success || !entry.data) {
+    throw new httpsV2.HttpsError('not-found', `No Steam app found for ${appId}`);
+  }
+
+  const payload = entry.data;
+  return {
+    appId,
+    name: payload.name,
+    headerImage: payload.header_image,
+    capsuleImage: payload.capsule_image,
+    shortDescription: payload.short_description,
+    genres: payload.genres || [],
+    releaseDate: payload.release_date || null,
+    website: payload.website || null,
+  };
+});
+
+// ===== Hardcover (Books) — Sync + Status Updates
+const HARDCOVER_ALLOWED_USERNAME = 'greenboxyellowmoon';
+async function hardcoverApiBaseFor(uid) {
+  try {
+    const db = admin.firestore();
+    const p = (await db.collection('profiles').doc(uid).get()).data() || {};
+    const base = String(p.hardcoverApiBase || '').trim();
+    if (base) return base.replace(/\/$/, '');
+  } catch { }
+  // Hardcover API v1 lives under /v1
+  return 'https://api.hardcover.app/v1';
+}
+
+async function getHardcoverToken(uid) {
+  const db = admin.firestore();
+  const prof = await db.collection('profiles').doc(uid).get();
+  const tokenFromProfile = prof.exists ? String(prof.data()?.hardcoverToken || '').trim() : '';
+  if (tokenFromProfile) return tokenFromProfile;
+  throw new Error('Hardcover API token not configured for this user. Add it in Settings > Integrations > Hardcover.');
+}
+
+async function callHardcoverGraphQL(uid, query, variables, attempt = 1) {
+  const token = await getHardcoverToken(uid);
+  const base = await hardcoverApiBaseFor(uid);
+  const url = `${base}/graphql`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    },
+    body: JSON.stringify({ query, variables })
+  });
+  const text = await res.text();
+  let json;
+  try {
+    json = JSON.parse(text);
+  } catch (e) {
+    throw new Error(`Hardcover GraphQL parse error (status ${res.status}): ${text.slice(0, 120)}`);
+  }
+  if (json?.error === 'Throttled' && attempt < 4) {
+    await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+    return callHardcoverGraphQL(uid, query, variables, attempt + 1);
+  }
+  if (!res.ok || json.errors || json.error) {
+    const msg = json?.errors?.map((e) => e.message).join('; ') || json?.error || `HTTP ${res.status}`;
+    throw new Error(`Hardcover GraphQL error: ${msg}`);
+  }
+  return json.data;
+}
+
+const normalizeHardcoverUsername = (value) => String(value || '').replace(/^@/, '').trim().toLowerCase();
+
+async function getHardcoverMe(uid) {
+  const q = `
+    query Me($limit: Int) {
+      me(limit: $limit) { id username }
+    }
+  `;
+  const data = await callHardcoverGraphQL(uid, q, { limit: 1 });
+  const me = Array.isArray(data?.me) ? data.me[0] : null;
+  if (!me?.id) throw new Error('Unable to resolve Hardcover account for this token.');
+  return {
+    id: Number(me.id),
+    username: normalizeHardcoverUsername(me.username),
+  };
+}
+
+const uniqList = (values) => Array.from(new Set(values.filter(Boolean)));
+
+const DEFAULT_HARDCOVER_STATUSES = [
+  'want-to-read',
+  'currently-reading',
+  'reading',
+  'read',
+  'paused',
+  'did-not-finish',
+];
+
+async function fetchHardcoverStatusSlugs(uid) {
+  const q = `
+    query HardcoverStatuses {
+      user_book_statuses { slug }
+    }
+  `;
+  const data = await callHardcoverGraphQL(uid, q, {});
+  const rows = Array.isArray(data?.user_book_statuses) ? data.user_book_statuses : [];
+  const slugs = rows.map((row) => String(row?.slug || '').trim()).filter(Boolean);
+  return uniqList(slugs);
+}
+
+const extractBookAuthors = (book) => {
+  const authors = [];
+  const contributions = Array.isArray(book?.contributions) ? book.contributions : [];
+  contributions.forEach((c) => {
+    const name = c?.author?.name;
+    if (name) authors.push(String(name).trim());
+  });
+  const cached = book?.cached_contributors;
+  if (cached) {
+    if (Array.isArray(cached)) {
+      cached.forEach((item) => {
+        if (typeof item === 'string') authors.push(item.trim());
+        if (item?.name) authors.push(String(item.name).trim());
+      });
+    } else if (Array.isArray(cached?.authors)) {
+      cached.authors.forEach((item) => {
+        if (typeof item === 'string') authors.push(item.trim());
+        if (item?.name) authors.push(String(item.name).trim());
+      });
+    }
+  }
+  return uniqList(authors).slice(0, 6);
+};
+
+const extractBookGenres = (book) => {
+  const genres = [];
+  const taggings = Array.isArray(book?.taggings) ? book.taggings : [];
+  taggings.forEach((t) => {
+    const tag = t?.tag?.tag;
+    const category = t?.tag?.tag_category?.category || '';
+    if (tag && String(category).toLowerCase().includes('genre')) {
+      genres.push(String(tag).trim());
+    }
+  });
+  const cached = book?.cached_tags;
+  if (cached) {
+    if (Array.isArray(cached)) {
+      cached.forEach((item) => {
+        if (typeof item === 'string') genres.push(item.trim());
+        if (item?.tag) genres.push(String(item.tag).trim());
+        if (item?.name) genres.push(String(item.name).trim());
+      });
+    } else if (Array.isArray(cached?.genres)) {
+      cached.genres.forEach((item) => {
+        if (typeof item === 'string') genres.push(item.trim());
+        if (item?.tag) genres.push(String(item.tag).trim());
+        if (item?.name) genres.push(String(item.name).trim());
+      });
+    } else if (Array.isArray(cached?.tags)) {
+      cached.tags.forEach((item) => {
+        if (typeof item === 'string') genres.push(item.trim());
+        if (item?.tag) genres.push(String(item.tag).trim());
+        if (item?.name) genres.push(String(item.name).trim());
+      });
+    }
+  }
+  return uniqList(genres).slice(0, 8);
+};
+
+async function fetchHardcoverByStatus(uid, statusSlug, offset, userId) {
+  const q = `
+    query BooksByStatus($offset: Int, $status: String!, $userId: Int!) {
+      user_books(limit: 100, offset: $offset, where: { user_id: { _eq: $userId }, user_book_status: { slug: { _eq: $status } } }) {
+        id
+        date_added
+        updated_at
+        book {
+          id
+          title
+          subtitle
+          description
+          release_year
+          cached_tags
+          contributions(limit: 5) { author { name } }
+          taggings(limit: 10) { tag { tag tag_category { category } } }
+        }
+        user_book_status { slug status }
+        edition { cached_image }
+      }
+    }
+  `;
+  const data = await callHardcoverGraphQL(uid, q, { status: statusSlug, offset: offset || 0, userId });
+  const rows = Array.isArray(data?.user_books) ? data.user_books : [];
+  const items = rows.map((row) => {
+    const book = row?.book || null;
+    const edition = row?.edition || {};
+    const cover = edition?.cached_image?.url || null;
+    const authors = extractBookAuthors(book);
+    const genres = extractBookGenres(book);
+    return {
+      status: row?.user_book_status?.slug || statusSlug,
+      addedAt: row?.date_added || row?.updated_at || null,
+      book: book ? {
+        id: book.id,
+        title: book.title,
+        subtitle: book.subtitle,
+        coverUrl: cover,
+        description: book.description || null,
+        releaseYear: book.release_year ?? null,
+        authors,
+        genres,
+      } : null,
+    };
+  }).filter((x) => x.book && x.book.id);
+  const nextOffset = rows.length === 100 ? (offset || 0) + 100 : null;
+  return { items, next: nextOffset };
+}
+
+async function _syncHardcover(uid) {
+  const db = admin.firestore();
+  const startedAt = Date.now();
+  let statuses = DEFAULT_HARDCOVER_STATUSES;
+  try {
+    const apiStatuses = await fetchHardcoverStatusSlugs(uid);
+    if (apiStatuses.length) statuses = apiStatuses;
+  } catch (e) {
+    console.warn('Hardcover status lookup failed; using defaults.', e?.message || e);
+  }
+  let total = 0;
+  try {
+    const me = await getHardcoverMe(uid);
+    if (!me.username) throw new Error('Hardcover username not found for token.');
+    if (me.username !== HARDCOVER_ALLOWED_USERNAME) {
+      throw new Error(`Hardcover token must belong to @${HARDCOVER_ALLOWED_USERNAME}.`);
+    }
+    for (const status of statuses) {
+      let cursor = 0;
+      do {
+        const { items, next } = await fetchHardcoverByStatus(uid, status, cursor, me.id);
+        cursor = next;
+        if (!items.length) continue;
+        const batch = db.batch();
+        for (const entry of items) {
+          const b = entry.book;
+          const id = `${uid}_${b.id}`;
+          const ref = db.collection('hardcover').doc(id);
+          const cover = b?.coverUrl || null;
+          const authors = Array.isArray(b?.authors) ? b.authors : [];
+          const genres = Array.isArray(b?.genres) ? b.genres : [];
+          const addedAtMs = toMillis(entry.addedAt) || null;
+          batch.set(ref, {
+            id,
+            ownerUid: uid,
+            hardcoverId: String(b.id),
+            title: b.title || 'Book',
+            subtitle: b.subtitle || null,
+            authors,
+            description: b.description || null,
+            publicationYear: b.releaseYear ?? null,
+            genres,
+            coverImage: cover,
+            status: String(entry.status || status),
+            addedAt: addedAtMs,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          }, { merge: true });
+        }
+        await batch.commit();
+        total += items.length;
+        if (cursor) await new Promise((resolve) => setTimeout(resolve, 200));
+      } while (cursor);
+    }
+
+    await db.collection('profiles').doc(uid).set({
+      hardcoverLastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
+      hardcoverLibrarySize: total,
+    }, { merge: true });
+
+    await recordIntegrationLog(uid, 'hardcover', 'success', `Synced ${total} books`, { durationMs: Date.now() - startedAt });
+    return { ok: true, written: total };
+  } catch (error) {
+    await recordIntegrationLog(uid, 'hardcover', 'error', error?.message || 'Hardcover sync failed', { durationMs: Date.now() - startedAt });
+    if (error instanceof httpsV2.HttpsError) throw error;
+    throw new httpsV2.HttpsError('internal', error?.message || 'Failed to sync Hardcover');
+  }
+}
+
+exports.syncHardcover = httpsV2.onCall(async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  return await _syncHardcover(req.auth.uid);
+});
+
+async function hardcoverSetStatus(uid, bookId, status, opts = {}) {
+  const normalise = (v) => String(v || '').trim().toLowerCase().replace(/[_\\s]+/g, '-');
+  const slug = normalise(status);
+  const STATUS_MAP = {
+    'want-to-read': 1,
+    'to-read': 1,
+    'backlog': 1,
+    'currently-reading': 2,
+    'reading': 2,
+    'in-progress': 2,
+    'read': 3,
+    'done': 3,
+    'completed': 3,
+    'paused': 4,
+    'on-hold': 4,
+    'did-not-finish': 5,
+    'dnf': 5,
+    'ignored': 6,
+  };
+  const statusId = STATUS_MAP[slug];
+  if (!statusId) throw new Error(`Unsupported Hardcover status: ${status}`);
+
+  const m = `
+    mutation UpdateUserBookStatus($bookId: Int!, $statusId: Int!, $lastRead: date, $rating: numeric) {
+      update_user_book(where: { book_id: { _eq: $bookId } }, _set: { status_id: $statusId, last_read_date: $lastRead, rating: $rating }) {
+        affected_rows
+      }
+    }
+  `;
+  const variables = {
+    bookId: Number(bookId),
+    statusId,
+    lastRead: opts.completedDate || null,
+    rating: opts.rating ?? null,
+  };
+  const res = await callHardcoverGraphQL(uid, m, variables);
+  const affected = res?.update_user_book?.affected_rows || 0;
+  if (!affected) throw new Error('No Hardcover rows updated; ensure the book exists in your library');
+}
+
+exports.hardcoverUpdateStatus = httpsV2.onCall(async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const bookId = String(req?.data?.bookId || '').trim();
+  const status = String(req?.data?.status || '').trim();
+  if (!bookId || !status) throw new httpsV2.HttpsError('invalid-argument', 'bookId and status are required');
+  const bookIdNum = Number(bookId);
+  if (!Number.isFinite(bookIdNum)) throw new httpsV2.HttpsError('invalid-argument', 'bookId must be numeric');
+  const completedAt = req?.data?.completedAt || null;
+  const rating = req?.data?.rating;
+  const completedDate = (() => {
+    if (!completedAt) return null;
+    const d = new Date(completedAt);
+    if (Number.isNaN(d.getTime())) return null;
+    return d.toISOString().slice(0, 10); // yyyy-mm-dd
+  })();
+  try {
+    await hardcoverSetStatus(uid, bookIdNum, status, { completedDate, rating: rating ?? null });
+    const db = admin.firestore();
+    const ref = db.collection('hardcover').doc(`${uid}_${bookId}`);
+    await ref.set({ status, updatedAt: admin.firestore.FieldValue.serverTimestamp(), completedAt: status === 'read' ? Date.now() : null }, { merge: true });
+    return { ok: true };
+  } catch (e) {
+    throw new httpsV2.HttpsError('internal', e?.message || 'Failed to update Hardcover status');
+  }
+});
+
+// When a Story linked to a Hardcover book is marked Done, reflect that in Hardcover
+exports.onStoryHardcoverStatusSync = functionsV2.firestore.onDocumentUpdated('stories/{storyId}', async (event) => {
+  try {
+    const before = event.data.before.data();
+    const after = event.data.after.data();
+    if (!before || !after) return;
+    const beforeStatus = before.status;
+    const afterStatus = after.status;
+    if (beforeStatus === afterStatus) return;
+    // consider numeric 4 or string 'done' as completion
+    const isDone = (v) => v === 4 || String(v).toLowerCase() === 'done' || String(v).toLowerCase() === 'completed';
+    if (!isDone(afterStatus)) return;
+    const uid = after.ownerUid || after.userId;
+    if (!uid) return;
+    const bookId = after?.metadata?.hardcoverBookId || after?.hardcoverBookId;
+    const bookIdNum = Number(bookId);
+    if (!bookId || !Number.isFinite(bookIdNum)) return;
+    const completedDate = (() => {
+      const ts = after?.completedAt || after?.dueDate || Date.now();
+      const d = new Date(ts);
+      return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+    })();
+    const rating = after?.metadata?.rating ?? null;
+    await hardcoverSetStatus(uid, bookIdNum, 'read', { completedDate, rating });
+    // Also mark the local doc
+    const db = admin.firestore();
+    await db.collection('hardcover').doc(`${uid}_${bookId}`).set({ status: 'read', completedAt: Date.now(), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+  } catch (e) {
+    console.error('onStoryHardcoverStatusSync error', e);
+  }
+});
+
+// Import a Hardcover list (by slug or URL) into stories linked to a goal
+exports.importHardcoverListToStories = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const rawSlug = String(req?.data?.listSlug || req?.data?.list || '').trim();
+  const goalIdRaw = String(req?.data?.goalId || '').trim();
+  const goalId = goalIdRaw || '';
+  const priority = Number(req?.data?.priority ?? 1);
+  const persona = String(req?.data?.persona || 'personal');
+  if (!rawSlug) throw new httpsV2.HttpsError('invalid-argument', 'listSlug is required');
+
+  const db = admin.firestore();
+  if (goalId) {
+    const goalDoc = await db.collection('goals').doc(goalId).get();
+    if (!goalDoc.exists || goalDoc.data()?.ownerUid !== uid) {
+      throw new httpsV2.HttpsError('permission-denied', 'Goal not found or not owned by user');
+    }
+  }
+
+  const slug = (() => {
+    // Accept full URL like https://hardcover.app/@user/lists/2026
+    try {
+      const m = rawSlug.match(/lists\/([^/?]+)/i);
+      if (m && m[1]) return m[1];
+    } catch { }
+    return rawSlug.replace(/^\//, '');
+  })();
+
+  const fetchListPage = async (offset) => {
+    const q = `
+      query ListBooks($slug: String!, $offset: Int) {
+        lists(where: { slug: { _eq: $slug } }, limit: 1) {
+          id
+          name
+          list_books(order_by: { position: asc }, limit: 100, offset: $offset) {
+            position
+            book {
+              id
+              title
+              subtitle
+              description
+              release_year
+              cached_tags
+              contributions(limit: 5) { author { name } }
+              taggings(limit: 10) { tag { tag tag_category { category } } }
+            }
+            edition { cached_image }
+          }
+        }
+      }
+    `;
+    const data = await callHardcoverGraphQL(uid, q, { slug, offset });
+    const list = Array.isArray(data?.lists) ? data.lists[0] : null;
+    if (!list) throw new httpsV2.HttpsError('not-found', `Hardcover list not found: ${slug}`);
+    return list;
+  };
+
+  let offset = 0;
+  let created = 0;
+  let skipped = 0;
+  let totalBooks = 0;
+  const now = Date.now();
+
+  while (true) {
+    const list = await fetchListPage(offset);
+    const items = Array.isArray(list.list_books) ? list.list_books : [];
+    if (!items.length) break;
+    for (const item of items) {
+      const b = item?.book;
+      if (!b || !b.id) { skipped += 1; continue; }
+      const bookId = String(b.id);
+      const cover = item?.edition?.cached_image?.url || null;
+      const authors = extractBookAuthors(b);
+      const genres = extractBookGenres(b);
+      const publicationYear = b?.release_year ?? null;
+      const description = b?.description || null;
+      const hcRef = db.collection('hardcover').doc(`${uid}_${bookId}`);
+      const hcSnap = await hcRef.get();
+      const hcData = hcSnap.exists ? hcSnap.data() : null;
+      const alreadyConverted = hcData?.lastConvertedStoryId;
+
+      // Upsert cached Hardcover doc
+      await hcRef.set({
+        id: `${uid}_${bookId}`,
+        ownerUid: uid,
+        hardcoverId: bookId,
+        title: b.title || 'Book',
+        subtitle: b.subtitle || null,
+        authors: authors.length ? authors : (hcData?.authors || []),
+        description: description || hcData?.description || null,
+        publicationYear: publicationYear ?? hcData?.publicationYear ?? null,
+        genres: genres.length ? genres : (hcData?.genres || []),
+        coverImage: cover,
+        status: hcData?.status || 'want-to-read',
+        addedAt: hcData?.addedAt || now,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+
+      if (alreadyConverted) { skipped += 1; continue; }
+
+      const storyRef = db.collection('stories').doc();
+      await storyRef.set(ensureTaskPoints({
+        id: storyRef.id,
+        ownerUid: uid,
+        persona,
+        personaKey: persona,
+        ownerPersona: persona,
+        title: b.title || 'Book',
+        description: `Read ${b.title || 'this book'}${b.subtitle ? ': ' + b.subtitle : ''}. Imported from Hardcover list ${slug}.`,
+        goalId: goalId || '',
+        sprintId: null,
+        status: 0,
+        priority: Number.isFinite(priority) ? priority : 1,
+        points: 3,
+        tags: ['books', 'reading'],
+        orderIndex: now + totalBooks,
+        entry_method: 'import:hardcover-list',
+        source: 'hardcover',
+        metadata: {
+          hardcoverBookId: bookId,
+          hardcoverCover: cover,
+          hardcoverList: slug,
+        },
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }), { merge: true });
+
+      await hcRef.set({
+        lastConvertedStoryId: storyRef.id,
+        lastConvertedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+
+      created += 1;
+      totalBooks += 1;
+    }
+    if (items.length < 100) break;
+    offset += 100;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+
+  await recordIntegrationLog(uid, 'hardcover', 'success', `Imported list ${slug}: created ${created}, skipped ${skipped}`, { created, skipped });
+  return { ok: true, created, skipped, listSlug: slug };
+});
+
+// Media Import Controller: Generate Stories + Tasks from connected sources
+exports.mediaImportGenerateStories = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const sources = Array.isArray(req?.data?.sources) ? req.data.sources : ['steam'];
+  const goodreadsItems = Array.isArray(req?.data?.goodreadsItems) ? req.data.goodreadsItems : [];
+  const results = {};
+  if (sources.includes('steam')) {
+    results.steam = await importFromSteam(uid, {});
+  }
+  if (sources.includes('trakt')) {
+    results.trakt = await importFromTrakt(uid, {});
+  }
+  if (goodreadsItems.length) {
+    results.goodreads = await importFromGoodreadsLike(uid, goodreadsItems);
+  }
+  return { ok: true, results };
+});
+
+// ===== n8n: inbound webhook for Calendar Blocks
+exports.n8nCalendarWebhook = httpsV2.onRequest({ secrets: [N8N_WEBHOOK_SECRET], invoker: 'public' }, async (req, res) => {
+  try {
+    const provided = String(req.get('x-webhook-secret') || req.query.secret || '');
+    const expected = process.env.N8N_WEBHOOK_SECRET || '';
+    if (!expected || provided !== expected) {
+      return res.status(401).send('Invalid or missing secret');
+    }
+    const body = (typeof req.body === 'string') ? JSON.parse(req.body) : (req.body || {});
+    const action = String(body.action || '').toLowerCase();
+    const ownerUid = String(body.ownerUid || '');
+    const id = String(body.id || body.block?.id || '');
+    const block = body.block || {};
+    if (!ownerUid) return res.status(400).send('Missing ownerUid');
+    const db = admin.firestore();
+    if (action === 'create') {
+      const doc = { ...block, ownerUid, createdAt: Date.now(), updatedAt: Date.now() };
+      const ref = await db.collection('calendar_blocks').add(doc);
+      return res.json({ ok: true, id: ref.id });
+    } else if (action === 'update') {
+      if (!id) return res.status(400).send('Missing id');
+      await db.collection('calendar_blocks').doc(id).set({ ...block, ownerUid, updatedAt: Date.now() }, { merge: true });
+      return res.json({ ok: true, id });
+    } else if (action === 'delete') {
+      if (!id) return res.status(400).send('Missing id');
+      await db.collection('calendar_blocks').doc(id).delete();
+      return res.json({ ok: true, id });
+    } else {
+      return res.status(400).send('Invalid action');
+    }
+  } catch (e) {
+    try {
+      await admin.firestore().collection('webhook_logs').add({ source: 'n8n', direction: 'in', ts: Date.now(), error: String(e?.message || e) });
+    } catch { }
+    return res.status(500).send('Webhook error');
+  }
+});
+
+// Outbound notifications to n8n on calendar_blocks writes (optional)
+exports.onCalendarBlockWritten = firestoreV2.onDocumentWritten('calendar_blocks/{id}', { secrets: [N8N_OUTBOUND_WEBHOOK_URL, N8N_WEBHOOK_SECRET] }, async (event) => {
+  const url = process.env.N8N_OUTBOUND_WEBHOOK_URL;
+  const before = event.data?.before?.data();
+  const after = event.data?.after?.data();
+  const id = event.params.id;
+  const action = !before && after ? 'created' : (before && !after ? 'deleted' : 'updated');
+  const ownerUid = (after?.ownerUid || before?.ownerUid || null);
+
+  // 1. Internal Sync: Update Task Due Date if block moved
+  if (after && before && after.linkedTaskId && after.start !== before.start) {
+    try {
+      const taskRef = admin.firestore().collection('tasks').doc(after.linkedTaskId);
+      const taskSnap = await taskRef.get();
+      if (taskSnap.exists) {
+        await taskRef.update({
+          dueDate: after.start,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+        console.log(`Synced task ${after.linkedTaskId} due date to ${after.start} from block ${id}`);
+      }
+    } catch (e) {
+      console.error(`Failed to sync task due date for block ${id}`, e);
+    }
+  }
+
+  // 2. External Sync: Webhook to n8n (Optional)
+  if (url) {
+    try {
+      await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Webhook-Secret': process.env.N8N_WEBHOOK_SECRET || '' },
+        body: JSON.stringify({ id, action, ownerUid, before, after, ts: Date.now() }),
+      });
+    } catch (e) {
+      try { await admin.firestore().collection('webhook_logs').add({ source: 'n8n', direction: 'out', ts: Date.now(), id, action, error: String(e?.message || e) }); } catch { }
+    }
+  }
+});
+
+// Callable: schedule Steam games via n8n to Calendar Blocks
+exports.scheduleSteamGamesViaN8n = httpsV2.onCall({ secrets: [N8N_SCHEDULE_STEAM_URL, N8N_WEBHOOK_SECRET] }, async (req) => {
+  const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const items = Array.isArray(req?.data?.items) ? req.data.items : [];
+  const settings = req?.data?.settings || { durationMinutes: 120 };
+  if (!items.length) throw new httpsV2.HttpsError('invalid-argument', 'No items provided');
+  const url = process.env.N8N_SCHEDULE_STEAM_URL;
+  if (!url) throw new httpsV2.HttpsError('failed-precondition', 'N8N_SCHEDULE_STEAM_URL not configured');
+  let result;
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Webhook-Secret': process.env.N8N_WEBHOOK_SECRET || '' },
+      body: JSON.stringify({ ownerUid: uid, items, settings })
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+    result = await res.json();
+  } catch (e) {
+    throw new httpsV2.HttpsError('internal', 'n8n scheduling failed: ' + (e?.message || e));
+  }
+  const blocks = Array.isArray(result?.blocks) ? result.blocks : [];
+  const db = admin.firestore();
+  const created = [];
+  for (const b of blocks) {
+    const doc = {
+      ownerUid: uid,
+      persona: 'personal',
+      theme: b.theme || 'Growth',
+      category: b.category || 'Gaming',
+      start: new Date(b.start).getTime(),
+      end: new Date(b.end).getTime(),
+      flexibility: 'soft',
+      status: 'applied',
+      createdBy: 'automation',
+      source: 'steam',
+      note: b.note || b.title || '',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    const ref = await db.collection('calendar_blocks').add(doc);
+    created.push(ref.id);
+  }
+  return { ok: true, created, count: created.length };
+});
+
+
+// ===== Scheduled Syncs
+exports.dailySync = schedulerV2.onSchedule({
+  schedule: '0 3 * * *',
+  timeZone: 'Europe/London',
+  secrets: [
+    TRAKT_CLIENT_ID,
+    TRAKT_CLIENT_SECRET,
+    STEAM_WEB_API_KEY,
+    STRAVA_CLIENT_ID,
+    STRAVA_CLIENT_SECRET,
+    MONZO_CLIENT_ID,
+    MONZO_CLIENT_SECRET,
+  ],
+}, async () => {
+  const db = admin.firestore();
+  const profiles = await db.collection('profiles').get();
+
+  for (const profile of profiles.docs) {
+    const uid = profile.id;
+    const data = profile.data();
+
+    if (data.traktUser) {
+      try {
+        await _syncTrakt(uid);
+      } catch (error) {
+        console.error(`Failed to sync Trakt for user ${uid}`, error);
+      }
+    }
+
+    if (data.steamId) {
+      try {
+        await _syncSteam(uid);
+      } catch (error) {
+        console.error(`Failed to sync Steam for user ${uid}`, error);
+      }
+    }
+
+    if (data.stravaConnected && data.stravaAutoSync !== false) {
+      try {
+        await fetchStravaActivities(uid, { maxPages: 2 });
+      } catch (error) {
+        console.error(`Failed to sync Strava for user ${uid}`, error);
+      }
+
+      try {
+        const backfillCompleted = data.stravaBackfillCompleted === true;
+        if (data.stravaBackfillActive === true || !backfillCompleted) {
+          const beforeSec = normalizeEpochSec(data.stravaBackfillBeforeSec) || Math.floor(Date.now() / 1000);
+          const backfillResult = await fetchStravaActivities(uid, {
+            beforeSec,
+            perPage: 200,
+            maxPages: 8,
+          });
+          const hasMoreHistory = !!backfillResult?.hasMore && !!backfillResult?.nextBeforeSec;
+          await db.collection('profiles').doc(uid).set({
+            stravaBackfillActive: hasMoreHistory,
+            stravaBackfillCompleted: !hasMoreHistory,
+            stravaBackfillBeforeSec: hasMoreHistory
+              ? backfillResult.nextBeforeSec
+              : admin.firestore.FieldValue.delete(),
+            stravaBackfillCompletedAt: hasMoreHistory
+              ? admin.firestore.FieldValue.delete()
+              : admin.firestore.FieldValue.serverTimestamp(),
+            stravaBackfillLastImported: Number(backfillResult?.imported || 0),
+            stravaBackfillUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          }, { merge: true });
+        }
+      } catch (error) {
+        console.error(`Failed to run Strava full-history backfill for user ${uid}`, error);
+      }
+    }
+
+    // Attempt to link Parkrun results to Strava runs for HR/links
+    if (data.stravaConnected && data.stravaAutoSync !== false) {
+      try {
+        await reconcileParkrunToStrava(uid, { maxStrava: 400 });
+      } catch (error) {
+        console.error(`Failed to reconcile Parkrun↔Strava for user ${uid}`, error);
+      }
+    }
+
+    if (data.autoEnrichStravaHR !== false) {
+      try {
+        // Always keep recent activities enriched for dashboard freshness.
+        await enrichRecentStravaHr(uid, 30, { maxActivities: 25 });
+
+        // Continue historical HR zone enrichment daily until all eligible activities are covered.
+        const hrBackfillCompleted = data.stravaHrBackfillCompleted === true;
+        if (data.stravaHrBackfillActive === true || !hrBackfillCompleted) {
+          // Keep batch intentionally small to stay within callable/scheduler memory and timeout limits.
+          const backfillResult = await enrichRecentStravaHr(uid, 3650, { maxActivities: 8 });
+          const remaining = Math.max(0, Number(backfillResult?.remaining || 0));
+          const hasRemaining = remaining > 0;
+          await db.collection('profiles').doc(uid).set({
+            stravaHrBackfillActive: hasRemaining,
+            stravaHrBackfillCompleted: !hasRemaining,
+            stravaHrBackfillRemaining: remaining,
+            stravaHrBackfillLastScanned: Number(backfillResult?.scanned || 0),
+            stravaHrBackfillLastEnriched: Number(backfillResult?.enriched || 0),
+            stravaHrBackfillLastEligible: Number(backfillResult?.eligible || 0),
+            stravaHrBackfillLastSkippedExisting: Number(backfillResult?.skippedExisting || 0),
+            stravaHrBackfillCompletedAt: hasRemaining
+              ? admin.firestore.FieldValue.delete()
+              : admin.firestore.FieldValue.serverTimestamp(),
+            stravaHrBackfillUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          }, { merge: true });
+        }
+      } catch (error) {
+        console.error(`Failed to enrich Strava HR for user ${uid}`, error);
+      }
+    }
+
+    if (data.autoComputeFitnessMetrics !== false) {
+      try {
+        const overview = await _getFitnessOverview(uid, 90);
+        await db.collection('fitness_overview').doc(uid).set({ ...overview, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        const analysis = await _getRunFitnessAnalysis(uid, 365);
+        await db.collection('run_analysis').doc(uid).set({ ...analysis, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        await computeGoalFitnessKpisForUser(uid, { persist: true });
+      } catch (error) {
+        console.error(`Failed to compute fitness metrics for user ${uid}`, error);
+      }
+    }
+
+    if (data.monzoConnected) {
+      try {
+        await syncMonzoDataForUser(uid);
+      } catch (error) {
+        console.error(`Failed to sync Monzo for user ${uid}`, error);
+      }
+    }
+  }
+});
+
+exports.weeklyParkrunSync = schedulerV2.onSchedule({
+  schedule: '0 14 * * 6',
+  timeZone: 'Europe/London',
+}, async () => {
+  const db = admin.firestore();
+  const profiles = await db.collection('profiles').get();
+
+  for (const profile of profiles.docs) {
+    const uid = profile.id;
+    const data = profile.data() || {};
+
+    if (data.parkrunAthleteId && data.parkrunAutoSync !== false) {
+      try {
+        await _syncParkrunInternal(uid, data.parkrunAthleteId, data.parkrunBaseUrl || undefined);
+      } catch (error) {
+        await db.collection('profiles').doc(uid).set({
+          parkrunLastSyncStatus: 'error',
+          parkrunLastErrorAt: admin.firestore.FieldValue.serverTimestamp(),
+          parkrunLastErrorMessage: error?.message || 'Parkrun sync failed',
+        }, { merge: true }).catch(() => { });
+        console.error(`Failed to sync Parkrun for user ${uid}`, error);
+      }
+    }
+
+    if (data.parkrunAutoComputePercentiles !== false && data.parkrunDefaultEventSlug && data.parkrunDefaultStartRun) {
+      try {
+        await _computeParkrunPercentilesInternal(uid, {
+          eventSlug: String(data.parkrunDefaultEventSlug).toLowerCase(),
+          startRun: Number(data.parkrunDefaultStartRun),
+          base: data.parkrunBaseUrl || 'https://www.parkrun.org.uk',
+          onlyMissing: true,
+          maxBack: 200
+        });
+      } catch (error) {
+        console.error(`Failed to compute Parkrun percentiles for user ${uid}`, error);
+      }
+    }
+
+    if (data.stravaConnected && data.stravaAutoSync !== false) {
+      try {
+        await reconcileParkrunToStrava(uid, { maxStrava: 400 });
+      } catch (error) {
+        console.error(`Failed to reconcile Parkrun↔Strava for user ${uid}`, error);
+      }
+    }
+
+    if (data.autoComputeFitnessMetrics !== false) {
+      try {
+        const overview = await _getFitnessOverview(uid, 90);
+        await db.collection('fitness_overview').doc(uid)
+          .set({ ...overview, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        const analysis = await _getRunFitnessAnalysis(uid, 365);
+        await db.collection('run_analysis').doc(uid)
+          .set({ ...analysis, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        await computeGoalFitnessKpisForUser(uid, { persist: true });
+      } catch (error) {
+        console.error(`Failed to compute fitness metrics for user ${uid}`, error);
+      }
+    }
+  }
+});
+
+// Theme-based Calendar Planner (runs daily at 01:00 UTC)
+/*
+exports.dailyPlanningJob = schedulerV2.onSchedule({ schedule: '0 1 * * *', timeZone: 'UTC', secrets: [GOOGLE_AI_STUDIO_API_KEY, BREVO_API_KEY] }, async () => {
+  const db = ensureFirestore();
+  const profilesSnap = await db.collection('profiles').get();
+  const runStartedAt = admin.firestore.FieldValue.serverTimestamp();
+  for (const doc of profilesSnap.docs) {
+    const uid = doc.id;
+    const profile = doc.data() || {};
+    if (profile.calendarPlannerEnabled === false) continue;
+
+    const runId = `${uid}_${Date.now()}_dailyPlanner`;
+    try {
+      const persona = 'personal';
+      // ... (rest of function omitted for brevity in comment) ...
+      // To re-enable, uncomment and ensure content is valid.
+      // This function is deprecated in favor of aiPlanning.runNightlyScheduler
+    } catch (error) {
+       console.error(error);
+    }
+  }
+});
+*/
+/*
+  const db = ensureFirestore();
+  const profilesSnap = await db.collection('profiles').get();
+  // ... (rest of deprecated function body) ...
+  // This code is deprecated and replaced by aiPlanning.js
+*/
+
+// ===== Daily Summary Email Automation (Issue #204)
+
+exports.nightlyTaskMaintenance = schedulerV2.onSchedule({
+  schedule: '0 2 * * *',
+  timeZone: 'UTC',
+  memory: '1GiB',
+  secrets: [GOOGLE_AI_STUDIO_API_KEY],
+}, async () => {
+  const db = ensureFirestore();
+  const nowUtc = DateTime.now().setZone('UTC');
+  const profilesSnap = await db.collection('profiles').get();
+
+  for (const doc of profilesSnap.docs) {
+    const profile = doc.data() || {};
+    if (profile.nightlyMaintenanceEnabled === false) continue;
+    const userId = doc.id;
+
+    const runId = await logAutomationRun(db, {
+      automation: 'nightly_task_maintenance',
+      userId,
+      status: 'started',
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    try {
+      const maintenance = await runNightlyMaintenanceForUser({ db, userId, profile, nowUtc, runId });
+
+      await recordAutomationStatus(db, {
+        userId,
+        automation: 'nightly_task_maintenance',
+        dayIso: nowUtc.toISODate(),
+        status: 'success',
+        runId,
+      });
+
+      await db.collection('automation_runs').doc(runId).set({
+        status: 'success',
+        maintenanceSummary: maintenance.summary,
+        reminderDuplicates: maintenance.duplicateReminders,
+        dedupe: maintenance.dedupeResult,
+        prioritization: maintenance.priorityResult,
+        dueDateAdjustments: maintenance.dueDateAdjustments,
+        conversions: maintenance.conversionResult,
+        calendarPlan: maintenance.calendarPlan,
+        completedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+    } catch (error) {
+      console.error('[nightly-maintenance] failed', { userId, error });
+      await recordAutomationStatus(db, {
+        userId,
+        automation: 'nightly_task_maintenance',
+        dayIso: nowUtc.toISODate(),
+        status: 'error',
+        message: error?.message || String(error),
+        runId,
+      });
+      await db.collection('automation_runs').doc(runId).set({
+        status: 'error',
+        error: error?.message || String(error),
+        completedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+    }
+  }
+});
+
+// ===== Cleanup: delete completed/duplicate tasks past TTL
+exports.cleanupOldTasksNightly = schedulerV2.onSchedule({ schedule: '15 2 * * *', timeZone: 'UTC' }, async () => {
+  const db = ensureFirestore();
+  const now = Date.now();
+  const cutoff = now - TASK_TTL_DAYS * MS_IN_DAY;
+  const doneStatuses = [2, 3, 4, 'done', 'completed', 'complete', 'closed', 'archived'];
+  const isDone = (status) => {
+    if (status === undefined || status === null) return false;
+    if (typeof status === 'number') return doneStatuses.includes(status);
+    const norm = String(status).toLowerCase();
+    return doneStatuses.includes(norm);
+  };
+  const usersSnap = await db.collection('profiles').get();
+  for (const u of usersSnap.docs) {
+    const uid = u.id;
+    const writer = db.bulkWriter();
+    try {
+      const snap1 = await db.collection('tasks')
+        .where('ownerUid', '==', uid)
+        .where('deleteAfter', '<=', now)
+        .limit(500)
+        .get();
+      for (const d of snap1.docs) writer.delete(d.ref);
+
+      const snap2 = await db.collection('tasks')
+        .where('ownerUid', '==', uid)
+        .where('status', 'in', doneStatuses)
+        .limit(800)
+        .get();
+      for (const d of snap2.docs) {
+        const data = d.data() || {};
+        const deleteAfterMs = toMillis(data.deleteAfter);
+        const completedAtMs = toMillis(data.completedAt);
+        if (deleteAfterMs && deleteAfterMs <= now) {
+          writer.delete(d.ref);
+          continue;
+        }
+        if (!isDone(data.status) || !completedAtMs) continue;
+        const plannedDelete = completedAtMs + TASK_TTL_DAYS * MS_IN_DAY;
+        if (plannedDelete <= now) {
+          writer.delete(d.ref);
+        } else if (!deleteAfterMs) {
+          writer.update(d.ref, { deleteAfter: plannedDelete });
+        }
+      }
+    } catch (e) {
+      console.warn('[cleanupOldTasksNightly]', uid, e?.message || e);
+    } finally {
+      try { await writer.close(); } catch { }
+    }
+  }
+});
+
+// ===== On-demand duplicate cleanup for the authenticated user
+// Groups by duplicateKey or reminderId; keeps the oldest, deletes others.
+exports.autoRescheduleMissed = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  return await _autoRescheduleMissedForUser(uid, { limit: 10 });
+});
+
+exports.rescheduleMissedHourly = schedulerV2.onSchedule({ schedule: 'every 60 minutes', timeZone: 'UTC' }, async () => {
+  const db = ensureFirestore();
+  const usersSnap = await db.collection('profiles').get();
+  for (const doc of usersSnap.docs) {
+    const uid = doc.id;
+    try { await _autoRescheduleMissedForUser(uid, { limit: 10 }); } catch (e) { console.warn('[rescheduleMissedHourly]', uid, e?.message || e); }
+  }
+});
+
+async function _autoRescheduleMissedForUser(uid, { limit = 10 } = {}) {
+  const db = ensureFirestore();
+  const now = Date.now();
+  const qSnap = await db.collection('scheduled_instances')
+    .where('ownerUid', '==', uid)
+    .get();
+  const all = qSnap.docs.map(d => ({ id: d.id, ref: d.ref, ...(d.data() || {}) }));
+  const candidates = all
+    .filter(x => x && typeof x === 'object')
+    .filter(x => x.status !== 'completed' && x.status !== 'cancelled')
+    .filter(x => {
+      const endIso = x.plannedEnd || null;
+      const endMs = endIso ? Date.parse(endIso) : null;
+      return endMs != null && endMs < now;
+    })
+    .slice(0, limit);
+
+  let rescheduled = 0;
+  for (const it of candidates) {
+    try {
+      const startIso = it.plannedStart ? new Date(Date.parse(it.plannedStart)) : new Date();
+      startIso.setDate(startIso.getDate() + 1);
+      const endIso = new Date(startIso.getTime() + (Number(it.durationMinutes || 30) * 60000));
+      const patch = {
+        plannedStart: startIso.toISOString(),
+        plannedEnd: endIso.toISOString(),
+        occurrenceDate: toDayKey(new Date(startIso)),
+        status: 'planned',
+        statusReason: null,
+        updatedAt: Date.now(),
+      };
+      await it.ref.set(patch, { merge: true });
+      // If linked google event id exists, try to patch times
+      const eid = it?.external?.gcalEventId || null;
+      if (eid) {
+        try {
+          const updateFn = exports.updateCalendarEvent;
+          if (updateFn?.run) await updateFn.run({ auth: { uid }, data: { eventId: eid, start: patch.plannedStart, end: patch.plannedEnd } });
+        } catch { }
+      }
+      rescheduled++;
+    } catch (e) {
+      console.warn('[autoReschedule] failed', it.id, e?.message || e);
+    }
+  }
+
+  try {
+    const ref = db.collection('activity_stream').doc();
+    await ref.set({
+      id: ref.id,
+      entityType: 'plan',
+      entityId: `plan_${toDayKey(new Date())}_${uid}`,
+      activityType: 'auto_reschedule_missed',
+      description: `Auto-rescheduled ${rescheduled} items`,
+      userId: uid,
+      ownerUid: uid,
+      metadata: redact({ rescheduled, limit }),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  } catch { }
+
+  return { ok: true, rescheduled };
+}
+
+exports.runNightlyMaintenanceNow = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, BREVO_API_KEY] }, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+
+  const sendSummary = req?.data?.sendSummary !== false;
+  const db = ensureFirestore();
+  const nowUtc = DateTime.now().setZone('UTC');
+
+  const profileSnap = await db.collection('profiles').doc(uid).get();
+  const profile = profileSnap.exists ? profileSnap.data() || {} : {};
+
+  const runId = await logAutomationRun(db, {
+    automation: 'nightly_task_maintenance',
+    userId: uid,
+    status: 'started',
+    triggeredBy: 'callable',
+    timestamp: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  try {
+    const maintenance = await runNightlyMaintenanceForUser({ db, userId: uid, profile, nowUtc, runId });
+
+    let summaryResult = null;
+    if (sendSummary) {
+      summaryResult = await dispatchDailySummaryForUser({
+        db,
+        userId: uid,
+        profile,
+        nowUtc,
+        runContext: { trigger: 'manual_maintenance', runId, force: true, maintenanceSummary: maintenance.summary },
+      });
+    }
+
+    await recordAutomationStatus(db, {
+      userId: uid,
+      automation: 'nightly_task_maintenance',
+      dayIso: nowUtc.toISODate(),
+      status: 'success',
+      runId,
+    });
+
+    await db.collection('automation_runs').doc(runId).set({
+      status: 'success',
+      maintenanceSummary: maintenance.summary,
+      reminderDuplicates: maintenance.duplicateReminders,
+      dedupe: maintenance.dedupeResult,
+      prioritization: maintenance.priorityResult,
+      dueDateAdjustments: maintenance.dueDateAdjustments,
+      conversions: maintenance.conversionResult,
+      calendarPlan: maintenance.calendarPlan,
+      manualTrigger: true,
+      dailySummary: summaryResult,
+      completedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    await recordAiLog(uid, 'nightly_maintenance_manual', 'success', 'Manual nightly maintenance completed', {
+      runId,
+      sendSummary,
+      maintenance: maintenance?.summary || null,
+      dailySummary: summaryResult?.dayIso || null,
+    });
+
+    return {
+      ok: true,
+      maintenance,
+      dailySummary: summaryResult,
+      runId,
+    };
+  } catch (error) {
+    console.error('[run-nightly-maintenance-now] failed', error);
+    await recordAiLog(uid, 'nightly_maintenance_manual', 'error', error?.message || 'Manual nightly maintenance failed', {
+      runId,
+      sendSummary,
+    });
+    await recordAutomationStatus(db, {
+      userId: uid,
+      automation: 'nightly_task_maintenance',
+      dayIso: nowUtc.toISODate(),
+      status: 'error',
+      message: error?.message || String(error),
+      runId,
+    });
+    await db.collection('automation_runs').doc(runId).set({
+      status: 'error',
+      error: error?.message || String(error),
+      manualTrigger: true,
+      completedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+    throw new httpsV2.HttpsError('internal', error?.message || 'Failed to run nightly maintenance');
+  }
+});
+
+const DAILY_SUMMARY_TARGET_MINUTES = 5 * 60; // 05:00 local
+const DATA_QUALITY_TARGET_MINUTES = 5 * 60; // 05:00 local
+const WEEKLY_FINANCE_TARGET_MINUTES = 6 * 60; // 06:00 local
+const DISPATCH_WINDOW_MINUTES = 10;
+
+function shouldTriggerWindow(nowLocal, targetMinutes, alreadySentDayIso) {
+  if (!nowLocal) return { shouldSend: false, dayIso: null };
+  const dayIso = nowLocal.toISODate();
+  if (alreadySentDayIso === dayIso) return { shouldSend: false, dayIso };
+  const minutesSinceMidnight = nowLocal.hour * 60 + nowLocal.minute;
+  const diff = Math.abs(minutesSinceMidnight - targetMinutes);
+  return { shouldSend: diff <= DISPATCH_WINDOW_MINUTES, dayIso };
+}
+
+function shouldTriggerWeeklyWindow(nowLocal, targetMinutes, alreadySentWeekIso) {
+  if (!nowLocal) return { shouldSend: false, weekIso: null };
+  const weekIso = nowLocal.startOf('week').toISODate();
+  if (alreadySentWeekIso === weekIso) return { shouldSend: false, weekIso };
+  if (nowLocal.weekday !== 1) return { shouldSend: false, weekIso }; // Monday
+  const minutesSinceMidnight = nowLocal.hour * 60 + nowLocal.minute;
+  const diff = Math.abs(minutesSinceMidnight - targetMinutes);
+  return { shouldSend: diff <= DISPATCH_WINDOW_MINUTES, weekIso };
+}
+
+async function buildFinanceCommentary({ summary, userId, windowLabel }) {
+  if (!summary || !summary.transactionCount) return null;
+  const traceId = crypto.randomUUID ? crypto.randomUUID() : crypto.randomBytes(12).toString('hex');
+  const promptTemplateId = 'financeCommentary.v2';
+  const startedAtMs = Date.now();
+
+  const buckets = Object.entries(summary.buckets || {})
+    .filter(([bucket]) => bucket !== 'bank_transfer' && bucket !== 'unknown')
+    .map(([bucket, amount]) => ({ bucket, amountPence: Math.abs(Number(amount || 0)) }))
+    .sort((a, b) => b.amountPence - a.amountPence)
+    .slice(0, 4);
+  const payload = {
+    window: windowLabel,
+    totalSpendPence: summary.totalSpendPence || 0,
+    totalIncomePence: summary.totalIncomePence || 0,
+    buckets,
+    topMerchants: (summary.topMerchants || []).slice(0, 5),
+    anomalies: (summary.anomalies || []).slice(0, 5),
+  };
+
+  const system = 'You are a budgeting assistant. Provide a short, friendly commentary with up to 3 bullet points. Highlight any anomalies and discretionary opportunities. Keep under 500 characters.';
+  const user = `Summarize the spend data for ${windowLabel}. Data (pence): ${JSON.stringify(payload)}`;
+
+  const llmTraceBase = {
+    traceId,
+    promptTemplateId,
+    promptTemplateVersion: 2,
+    model: AI_PRIORITY_MODEL,
+    provider: process.env.AI_PROVIDER || 'gemini',
+    purpose: 'finance_commentary',
+    parseExpected: 'text',
+    temperature: 0.2,
+    promptText: user,
+    inputPayload: payload,
+  };
+
+  try {
+    const text = await callLLMJson({ system, user, purpose: 'finance_commentary', userId, expectJson: false, temperature: 0.2 });
+    if (!text) {
+      await recordAiLog(userId, 'finance_commentary_trace', 'warning', 'Finance commentary returned empty output', {
+        ...llmTraceBase,
+        parseStatus: 'ok_empty',
+        rawOutputText: '',
+        rawOutputLength: 0,
+        latencyMs: Date.now() - startedAtMs,
+      });
+      return null;
+    }
+
+    const normalised = String(text).trim().slice(0, 600);
+    await recordAiLog(userId, 'finance_commentary_trace', 'success', 'Finance commentary generated', {
+      ...llmTraceBase,
+      parseStatus: 'ok',
+      rawOutputText: String(text).slice(0, 12000),
+      rawOutputLength: String(text).length,
+      outputLength: normalised.length,
+      latencyMs: Date.now() - startedAtMs,
+    });
+    return normalised;
+  } catch (err) {
+    console.warn('[finance-commentary] failed', err?.message || err);
+    await recordAiLog(userId, 'finance_commentary_trace', 'error', 'Finance commentary generation failed', {
+      ...llmTraceBase,
+      parseStatus: 'runtime_error',
+      error: String(err?.message || err || 'unknown'),
+      latencyMs: Date.now() - startedAtMs,
+    });
+    return null;
+  }
+}
+
+async function recordAutomationStatus(db, { userId, automation, dayIso, status, message, runId }) {
+  const statusRef = db.collection('automation_status').doc(`${automation}_${userId}`);
+  const payload = {
+    userId,
+    automation,
+    lastStatus: status,
+    lastMessage: message || null,
+    lastRunId: runId || null,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+  if (status === 'success' && dayIso) payload.lastSentDayIso = dayIso;
+  if (status === 'error') payload.lastErrorAt = admin.firestore.FieldValue.serverTimestamp();
+  if (status === 'skipped') payload.lastSkippedAt = admin.firestore.FieldValue.serverTimestamp();
+  await statusRef.set({
+    ...payload,
+  }, { merge: true });
+}
+
+async function logAutomationRun(db, payload) {
+  const ref = db.collection('automation_runs').doc();
+  await ref.set({
+    id: ref.id,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    ...payload,
+  });
+  return ref.id;
+}
+
+async function dispatchDailySummaryForUser({ db, userId, profile, nowUtc, runContext }) {
+  const zone = resolveTimezone(profile, DEFAULT_TIMEZONE);
+  const nowLocal = nowUtc.setZone(coerceZone(zone));
+  const statusSnap = await db.collection('automation_status').doc(`daily_summary_${userId}`).get();
+  const lastSentDay = statusSnap.exists ? statusSnap.data().lastSentDayIso || null : null;
+  const { shouldSend, dayIso } = shouldTriggerWindow(nowLocal, DAILY_SUMMARY_TARGET_MINUTES, lastSentDay);
+  if (!shouldSend && !runContext?.force) return { skipped: true, reason: 'window_miss' };
+
+  const summaryData = await buildDailySummaryData(db, userId, {
+    day: nowLocal,
+    timezone: zone,
+    locale: profile.locale || profile.language || 'en-GB',
+  });
+
+  const aiFocus = await buildDailySummaryAiFocus({ summaryData, userId });
+  if (aiFocus) {
+    summaryData.aiFocus = aiFocus;
+    summaryData.priorityNarrative = aiFocus;
+  }
+
+  if (summaryData.financeDaily && summaryData.financeDaily.transactionCount) {
+    summaryData.financeCommentary = await buildFinanceCommentary({
+      summary: summaryData.financeDaily,
+      userId,
+      windowLabel: summaryData.metadata.financeWindowLabel || `last ${summaryData.metadata.financeWindowDays || 5} days`,
+    });
+  }
+
+  if (runContext?.maintenanceSummary) {
+    summaryData.maintenance = runContext.maintenanceSummary;
+  } else {
+    const latestMaintenance = await getLatestMaintenanceSummary({ db, userId });
+    if (latestMaintenance) {
+      summaryData.maintenance = latestMaintenance;
+    }
+  }
+
+  summaryData.dailyChecklist = assembleDailyChecklist(summaryData);
+  summaryData.dailyBriefing = null;
+
+  // Fitness programme from iCal cache
+  try {
+    const fpSnap = await db.collection('fitness_programme_cache').doc(userId).get();
+    if (fpSnap.exists) {
+      const fp = fpSnap.data();
+      const dayIso = summaryData.metadata.dayIso;
+      summaryData.fitnessProgramme = {
+        runnerToday: (fp.runnerEvents || []).find(e => e.date === dayIso) || null,
+        crossFitToday: (fp.crossFitEvents || []).find(e => e.date === dayIso) || null,
+        runnerWeek: (fp.runnerEvents || []).filter(e => e.date >= dayIso).slice(0, 5),
+      };
+    }
+  } catch (e) {
+    console.warn('[dailySummary] fitness_programme_cache read failed:', e?.message);
+  }
+
+  const html = renderDailySummaryEmail(summaryData);
+  const subject = `Daily Summary · ${summaryData.metadata.dayIso}`;
+
+  let emailResult = null;
+  if (profile.email) {
+    emailResult = await sendEmail({ to: profile.email, subject, html });
+  }
+
+  await db.collection('daily_summaries').add({
+    userId,
+    ownerUid: userId,
+    dayIso: summaryData.metadata.dayIso,
+    timezone: summaryData.metadata.timezone,
+    locale: summaryData.metadata.locale,
+    summary: summaryData,
+    email: profile.email || null,
+    emailResult: emailResult ? { messageId: emailResult.messageId || null, response: emailResult.response || null } : null,
+    generatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    runContext,
+  });
+
+  return { skipped: false, dayIso: summaryData.metadata.dayIso };
+}
+
+async function dispatchWeeklyFinanceSummaryForUser({ db, userId, profile, nowUtc, force = false }) {
+  const zone = resolveTimezone(profile, DEFAULT_TIMEZONE);
+  const nowLocal = nowUtc.setZone(coerceZone(zone));
+  const statusSnap = await db.collection('automation_status').doc(`weekly_finance_summary_${userId}`).get();
+  const lastSentWeek = statusSnap.exists ? statusSnap.data().lastSentDayIso || null : null;
+  const { shouldSend, weekIso } = shouldTriggerWeeklyWindow(nowLocal, WEEKLY_FINANCE_TARGET_MINUTES, lastSentWeek);
+  if (!shouldSend && !force) return { skipped: true, reason: 'window_miss', weekIso };
+
+  const anchor = nowLocal.minus({ days: 1 });
+  const weekStart = anchor.startOf('week');
+  const weekEnd = anchor.endOf('week');
+  const startTs = admin.firestore.Timestamp.fromDate(weekStart.toJSDate());
+  const endTs = admin.firestore.Timestamp.fromDate(weekEnd.plus({ days: 1 }).startOf('day').toJSDate());
+
+  const txSnap = await db.collection('monzo_transactions')
+    .where('ownerUid', '==', userId)
+    .where('createdAt', '>=', startTs)
+    .where('createdAt', '<', endTs)
+    .orderBy('createdAt', 'desc')
+    .limit(2500)
+    .get()
+    .catch(() => ({ docs: [] }));
+
+  const transactions = txSnap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+  const financeSummary = buildFinanceSummary(transactions);
+
+  let currency = profile?.currency || 'GBP';
+  try {
+    const budgetSnap = await db.collection('monzo_budget_summary').doc(userId).get();
+    if (budgetSnap.exists) {
+      const data = budgetSnap.data() || {};
+      currency = data.currency || currency;
+    }
+  } catch { }
+
+  const windowLabel = `${weekStart.toISODate()} → ${weekEnd.toISODate()}`;
+  const financeCommentary = await buildFinanceCommentary({
+    summary: financeSummary,
+    userId,
+    windowLabel,
+  });
+
+  const payload = {
+    profile,
+    financeSummary,
+    financeCommentary,
+    currency,
+    metadata: {
+      weekIso,
+      windowLabel,
+      timezone: zone,
+      generatedAt: new Date().toISOString(),
+    },
+  };
+
+  const html = renderWeeklyFinanceSummaryEmail(payload);
+  const subject = `Weekly Spend Summary · ${weekStart.toISODate()}`;
+
+  let emailResult = null;
+  if (profile.email) {
+    emailResult = await sendEmail({ to: profile.email, subject, html });
+  }
+
+  await db.collection('weekly_finance_summaries').doc(`${userId}_${weekIso}`).set({
+    userId,
+    ownerUid: userId,
+    weekIso,
+    windowStart: weekStart.toISO(),
+    windowEnd: weekEnd.toISO(),
+    summary: financeSummary,
+    commentary: financeCommentary || null,
+    currency,
+    email: profile.email || null,
+    emailResult: emailResult ? { messageId: emailResult.messageId || null, response: emailResult.response || null } : null,
+    generatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  return { skipped: false, weekIso };
+}
+
+async function dispatchDataQualityForUser({ db, userId, profile, nowUtc, force = false }) {
+  const zone = resolveTimezone(profile, DEFAULT_TIMEZONE);
+  const nowLocal = nowUtc.setZone(coerceZone(zone));
+  const statusSnap = await db.collection('automation_status').doc(`data_quality_${userId}`).get();
+  const lastSentDay = statusSnap.exists ? statusSnap.data().lastSentDayIso || null : null;
+  const { shouldSend, dayIso } = shouldTriggerWindow(nowLocal, DATA_QUALITY_TARGET_MINUTES, lastSentDay);
+  const effectiveDayIso = dayIso || nowUtc.toISODate();
+  if (!shouldSend && !force) return { skipped: true, reason: 'window_miss' };
+
+  const snapshot = await buildDataQualitySnapshot(db, userId, { windowEnd: nowUtc });
+  const html = renderDataQualityEmail({ profile, snapshot });
+  const subject = `Data Quality · ${snapshot.window.endIso?.slice(0, 16) || ''}`;
+
+  let emailResult = null;
+  if (profile.email) {
+    emailResult = await sendEmail({ to: profile.email, subject, html });
+  }
+
+  await db.collection('data_quality_reports').add({
+    userId,
+    ownerUid: userId,
+    window: snapshot.window,
+    summary: snapshot.summaryStats,
+    payload: snapshot,
+    email: profile.email || null,
+    emailResult: emailResult ? { messageId: emailResult.messageId || null } : null,
+    generatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  return { skipped: false, dayIso: effectiveDayIso };
+}
+
+exports.dispatchDailySummaryEmail = schedulerV2.onSchedule({
+  schedule: 'every 15 minutes',
+  timeZone: 'UTC',
+  memory: '512MiB',
+  secrets: [defineSecret('BREVO_API_KEY'), GOOGLE_AI_STUDIO_API_KEY],
+}, async () => {
+  const db = ensureFirestore();
+  const nowUtc = DateTime.now().setZone('UTC');
+  const profilesSnap = await db.collection('profiles').get();
+  for (const doc of profilesSnap.docs) {
+    const profile = doc.data() || {};
+    const userId = doc.id;
+    if (profile.dailySummaryEnabled === false) continue;
+    if (!profile.email && profile.dailySummaryRequireEmail !== false) continue;
+
+    const runId = await logAutomationRun(db, {
+      automation: 'daily_summary',
+      userId,
+      status: 'started',
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    try {
+      const result = await dispatchDailySummaryForUser({ db, userId, profile, nowUtc, runContext: { trigger: 'scheduled', runId } });
+      if (!result.skipped) {
+        await recordAutomationStatus(db, { userId, automation: 'daily_summary', dayIso: result.dayIso, status: 'success', runId });
+      }
+      await db.collection('automation_runs').doc(runId).set({ status: result.skipped ? 'skipped' : 'success', result, completedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    } catch (error) {
+      console.error('[daily-summary] failed', { userId, error });
+      await db.collection('automation_runs').doc(runId).set({ status: 'error', error: error.message || String(error), completedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      await recordAutomationStatus(db, { userId, automation: 'daily_summary', dayIso: nowUtc.toISODate(), status: 'error', message: error.message || String(error), runId });
+    }
+  }
+});
+
+exports.dispatchDataQualityEmail = schedulerV2.onSchedule({
+  schedule: 'every 30 minutes',
+  timeZone: 'UTC',
+  memory: '512MiB',
+  secrets: [defineSecret('BREVO_API_KEY'), GOOGLE_AI_STUDIO_API_KEY],
+}, async () => {
+  const db = ensureFirestore();
+  const nowUtc = DateTime.now().setZone('UTC');
+  const profilesSnap = await db.collection('profiles').get();
+  for (const doc of profilesSnap.docs) {
+    const profile = doc.data() || {};
+    const userId = doc.id;
+    if (profile.dataQualityEmailEnabled === false) continue;
+    if (!profile.email && profile.dataQualityRequireEmail !== false) continue;
+
+    const runId = await logAutomationRun(db, {
+      automation: 'data_quality',
+      userId,
+      status: 'started',
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    try {
+      const result = await dispatchDataQualityForUser({ db, userId, profile, nowUtc });
+      if (!result.skipped) {
+        await recordAutomationStatus(db, { userId, automation: 'data_quality', dayIso: result.dayIso, status: 'success', runId });
+      }
+      await db.collection('automation_runs').doc(runId).set({ status: result.skipped ? 'skipped' : 'success', result, completedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    } catch (error) {
+      console.error('[data-quality] failed', { userId, error });
+      await db.collection('automation_runs').doc(runId).set({ status: 'error', error: error.message || String(error), completedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      await recordAutomationStatus(db, { userId, automation: 'data_quality', dayIso: nowUtc.toISODate(), status: 'error', message: error.message || String(error), runId });
+    }
+  }
+});
+
+exports.dispatchWeeklyFinanceSummaryEmail = schedulerV2.onSchedule({
+  schedule: 'every 30 minutes',
+  timeZone: 'UTC',
+  memory: '512MiB',
+  secrets: [defineSecret('BREVO_API_KEY'), GOOGLE_AI_STUDIO_API_KEY],
+}, async () => {
+  const db = ensureFirestore();
+  const nowUtc = DateTime.now().setZone('UTC');
+  const profilesSnap = await db.collection('profiles').get();
+  for (const doc of profilesSnap.docs) {
+    const profile = doc.data() || {};
+    const userId = doc.id;
+    if (profile.weeklyFinanceSummaryEnabled === false) continue;
+    if (!profile.email && profile.weeklyFinanceRequireEmail !== false) continue;
+
+    const runId = await logAutomationRun(db, {
+      automation: 'weekly_finance_summary',
+      userId,
+      status: 'started',
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    try {
+      const result = await dispatchWeeklyFinanceSummaryForUser({ db, userId, profile, nowUtc });
+      if (!result.skipped) {
+        await recordAutomationStatus(db, { userId, automation: 'weekly_finance_summary', dayIso: result.weekIso, status: 'success', runId });
+      }
+      await db.collection('automation_runs').doc(runId).set({ status: result.skipped ? 'skipped' : 'success', result, completedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    } catch (error) {
+      console.error('[weekly-finance-summary] failed', { userId, error });
+      await db.collection('automation_runs').doc(runId).set({ status: 'error', error: error.message || String(error), completedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      await recordAutomationStatus(db, { userId, automation: 'weekly_finance_summary', dayIso: nowUtc.toISODate(), status: 'error', message: error.message || String(error), runId });
+    }
+  }
+});
+
+exports.sendDailySummaryNow = httpsV2.onCall({ secrets: [defineSecret('BREVO_API_KEY'), GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const db = ensureFirestore();
+  const profileSnap = await db.collection('profiles').doc(uid).get();
+  if (!profileSnap.exists) throw new httpsV2.HttpsError('not-found', 'Profile not found');
+  const profile = profileSnap.data() || {};
+  const nowUtc = DateTime.now().setZone('UTC');
+  let runId = null;
+  try {
+    runId = await logAutomationRun(db, {
+      automation: 'daily_summary',
+      userId: uid,
+      status: 'manual_start',
+      triggeredBy: 'callable',
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    const result = await dispatchDailySummaryForUser({ db, userId: uid, profile, nowUtc, runContext: { trigger: 'manual', runId, force: true } });
+    await recordAutomationStatus(db, { userId: uid, automation: 'daily_summary', dayIso: result.dayIso || nowUtc.toISODate(), status: 'success', runId });
+    await db.collection('automation_runs').doc(runId).set({ status: 'success', result, completedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    await recordAiLog(uid, 'daily_summary_manual', 'success', 'Manual daily summary generated', {
+      runId,
+      dayIso: result.dayIso || nowUtc.toISODate(),
+      skipped: result.skipped || false,
+    });
+    return { ok: true, result };
+  } catch (error) {
+    console.error('[daily-summary-now] failed', error);
+    await recordAiLog(uid, 'daily_summary_manual', 'error', error?.message || 'Failed to send daily summary', {
+      runId,
+    });
+    throw new httpsV2.HttpsError('internal', error.message || 'Failed to send daily summary');
+  }
+});
+
+exports.sendDataQualityNow = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const db = ensureFirestore();
+  const profileSnap = await db.collection('profiles').doc(uid).get();
+  if (!profileSnap.exists) throw new httpsV2.HttpsError('not-found', 'Profile not found');
+  const profile = profileSnap.data() || {};
+  const nowUtc = DateTime.now().setZone('UTC');
+  let runId = null;
+  try {
+    runId = await logAutomationRun(db, {
+      automation: 'data_quality',
+      userId: uid,
+      status: 'manual_start',
+      triggeredBy: 'callable',
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    const result = await dispatchDataQualityForUser({ db, userId: uid, profile, nowUtc, force: true });
+    if (!result.skipped) {
+      await recordAutomationStatus(db, { userId: uid, automation: 'data_quality', dayIso: result.dayIso || nowUtc.toISODate(), status: 'success', runId });
+    }
+    await db.collection('automation_runs').doc(runId).set({ status: result.skipped ? 'skipped' : 'success', result, completedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    await recordAiLog(uid, 'data_quality_manual', result.skipped ? 'warning' : 'success', result.skipped ? 'Manual data quality skipped (window miss)' : 'Manual data quality report generated', {
+      runId,
+      dayIso: result.dayIso || nowUtc.toISODate(),
+      skipped: result.skipped || false,
+    });
+    return { ok: true, result };
+  } catch (error) {
+    console.error('[data-quality-now] failed', error);
+    await recordAiLog(uid, 'data_quality_manual', 'error', error?.message || 'Failed to send data quality report', {
+      runId,
+    });
+    throw new httpsV2.HttpsError('internal', error.message || 'Failed to send data quality report');
+  }
+});
+
+exports.previewDailySummary = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const db = ensureFirestore();
+  const profileSnap = await db.collection('profiles').doc(uid).get();
+  if (!profileSnap.exists) throw new httpsV2.HttpsError('not-found', 'Profile not found');
+  const profile = profileSnap.data() || {};
+  const zone = resolveTimezone(profile, DEFAULT_TIMEZONE);
+  const summary = await buildDailySummaryData(db, uid, {
+    day: DateTime.now().setZone(coerceZone(zone)),
+    timezone: zone,
+    locale: profile.locale || profile.language || 'en-GB',
+  });
+  const html = renderDailySummaryEmail(summary);
+  return { ok: true, summary, html };
+});
+
+exports.previewDataQualityReport = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const db = ensureFirestore();
+  const profileSnap = await db.collection('profiles').doc(uid).get();
+  if (!profileSnap.exists) throw new httpsV2.HttpsError('not-found', 'Profile not found');
+  const profile = profileSnap.data() || {};
+  const snapshot = await buildDataQualitySnapshot(db, uid, { windowEnd: DateTime.now().setZone('UTC') });
+  const html = renderDataQualityEmail({ profile, snapshot });
+  return { ok: true, snapshot, html };
+});
+
+exports.saveEmailSettings = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+
+  const db = ensureFirestore();
+  const profileSnap = await db.collection('profiles').doc(uid).get();
+  const profile = profileSnap.exists ? profileSnap.data() || {} : {};
+  const isAdmin = Boolean(profile.isAdmin || profile.admin || (profile.role && String(profile.role).toLowerCase() === 'admin'));
+  if (!isAdmin) {
+    throw new httpsV2.HttpsError('permission-denied', 'Only admins can update email settings');
+  }
+
+  const body = req?.data || {};
+  const normalizeBool = (v, fallback = true) => {
+    if (v === undefined || v === null || v === '') return fallback;
+    if (typeof v === 'boolean') return v;
+    const s = String(v).toLowerCase();
+    return ['1', 'true', 'yes', 'y', 'on'].includes(s);
+  };
+  const normalizePort = (v) => {
+    if (v === undefined || v === null || v === '') return null;
+    const n = Number(v);
+    if (!Number.isFinite(n)) throw new httpsV2.HttpsError('invalid-argument', 'SMTP port must be a number');
+    return n;
+  };
+
+  const payload = {
+    service: body.service || null,
+    host: body.host || null,
+    port: normalizePort(body.port),
+    secure: normalizeBool(body.secure, true),
+    user: body.user || null,
+    password: body.password || null,
+    from: body.from || body.user || null,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedBy: uid,
+  };
+
+  await db.collection('system_settings').doc('email').set(payload, { merge: true });
+  await recordIntegrationLog(uid, 'email', 'success', 'Updated SMTP configuration', {
+    hasHost: !!payload.host,
+    hasService: !!payload.service,
+    secure: !!payload.secure,
+  });
+  return { ok: true };
+});
+
+exports.cleanupUserLogs = schedulerV2.onSchedule({
+  schedule: '0 4 * * *',
+  timeZone: 'UTC',
+}, async () => {
+  const db = ensureFirestore();
+  const collections = ['integration_logs', 'ai_logs'];
+  const cutoff = admin.firestore.Timestamp.now();
+
+  for (const collectionName of collections) {
+    let hasMore = true;
+    while (hasMore) {
+      const snap = await db.collection(collectionName)
+        .where('expiresAt', '<=', cutoff)
+        .limit(500)
+        .get();
+      if (snap.empty) {
+        hasMore = false;
+        break;
+      }
+      const batch = db.batch();
+      snap.docs.forEach((docRef) => batch.delete(docRef.ref));
+      await batch.commit();
+      hasMore = snap.size === 500;
+    }
+  }
+});
+
+// ===== v3.0.2 Functions =====
+
+// Daily Digest Email Generation (uses Nylas)
+// Legacy simple digest (kept for reference); renamed to avoid clashing with LLM version
+exports.generateDailyDigest = generateDailyDigest;
+
+// ===== Task → Story Conversion Automation (Issue #206)
+
+async function generateAcceptanceCriteria(task, goal, { userId }) {
+  const existing = Array.isArray(task.acceptanceCriteria)
+    ? task.acceptanceCriteria.filter(Boolean)
+    : typeof task.acceptanceCriteria === 'string'
+      ? task.acceptanceCriteria.split('\n').map((line) => line.trim()).filter(Boolean)
+      : [];
+  if (existing.length) return existing.slice(0, 10);
+
+  const prompt = [
+    `Task title: ${task.title || 'Untitled task'}`,
+    task.description ? `Description: ${task.description}` : null,
+    goal?.title ? `Goal: ${goal.title}` : null,
+    `Effort estimate: ${task.estimateMin ? `${Math.round(task.estimateMin / 60)} hours` : task.estimatedHours ? `${task.estimatedHours} hours` : 'unknown'}`,
+    `Persona: ${task.persona || 'personal'}`,
+    `Theme: ${task.theme || goal?.theme || 'General'}`,
+    '',
+    'Create 3-5 acceptance criteria as bullet strings. Keep each under 140 characters.',
+  ].filter(Boolean).join('\n');
+
+  try {
+    const response = await callLLMJson({
+      system: 'You draft crisp, testable acceptance criteria for agile user stories. Return JSON {"criteria":[...]}',
+      user: prompt,
+      purpose: 'autoAcceptanceCriteria',
+      userId,
+      expectJson: true,
+      temperature: 0.1,
+    });
+    const parsed = JSON.parse(response || '{}');
+    const criteria = Array.isArray(parsed.criteria) ? parsed.criteria.map((c) => String(c).trim()).filter(Boolean) : [];
+    if (criteria.length) return criteria.slice(0, 6);
+  } catch (error) {
+    console.warn('[auto-convert] LLM acceptance criteria failed', error?.message || error);
+  }
+  return [
+    'Define clear “done” outcome and validation steps.',
+    'Include success metrics or completion signal.',
+    'Address dependencies and blockers before sign-off.',
+  ];
+}
+
+function deriveStorySize(task) {
+  const hours = task.estimatedHours || (task.estimateMin ? task.estimateMin / 60 : null);
+  if (!hours) return 'medium';
+  if (hours <= 3) return 'small';
+  if (hours <= 8) return 'medium';
+  return 'large';
+}
+
+function shouldAutoConvertTaskData(taskData, profile = {}) {
+  const data = taskData || {};
+  if (data.autoConverted || data.convertedToStoryId) return false;
+  if (data.autoConversionSkip === true) return false;
+  const status = data.status;
+  if (status === 2 || status === 3 || status === 'done' || status === 'completed') return false;
+
+  const thresholdMinutes = Number(profile?.autoConversionThresholdMinutes || 240);
+  const pointsThreshold = Number.isFinite(profile?.autoConversionThresholdPoints)
+    ? Number(profile.autoConversionThresholdPoints)
+    : 4;
+
+  const estMinutes = Number(data.estimateMin || 0);
+  const estHours = Number(data.estimatedHours || 0);
+  const points = Number(data.points || 0);
+  const forceStory = data.forceStoryConversion === true;
+
+  if (forceStory) return true;
+  if (estMinutes >= thresholdMinutes) return true;
+  if (estHours >= 4) return true;
+  if (points > pointsThreshold) return true;
+  return false;
+}
+
+async function autoConvertTask({ db, taskDoc, profile, runId }) {
+  const task = taskDoc.data() || {};
+  const userId = task.ownerUid;
+  if (!userId) return null;
+
+  const now = Date.now();
+  const goalSnap = task.goalId ? await db.collection('goals').doc(task.goalId).get().catch(() => null) : null;
+  const goal = goalSnap && goalSnap.exists ? goalSnap.data() : null;
+  const acceptanceCriteria = await generateAcceptanceCriteria(task, goal, { userId });
+
+  const storyRef = db.collection('stories').doc();
+  const storyRefValue = await generateStoryRef(db, userId);
+  const size = deriveStorySize(task);
+
+  const estimateMinutes = Number(task.estimateMin || 0);
+  const fallbackPoints = estimateMinutes ? clampTaskPoints(estimateMinutes / 60) : null;
+  const computedPoints = clampTaskPoints(task.points) ?? fallbackPoints ?? 1;
+
+  const storyPayload = {
+    ref: storyRefValue,
+    title: task.title || 'Story created from task',
+    description: task.description || '',
+    goalId: task.goalId || null,
+    sprintId: task.sprintId || null,
+    url: task.url || null,
+    priority: task.priority || 2,
+    points: computedPoints,
+    status: 0,
+    theme: task.theme || goal?.theme || 1,
+    persona: task.persona || profile?.persona || 'personal',
+    ownerUid: userId,
+    orderIndex: now,
+    tags: Array.isArray(task.tags) ? task.tags.slice(0, 10) : [],
+    acceptanceCriteria,
+    storySize: size,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    automation: {
+      source: 'task_auto_conversion',
+      taskId: taskDoc.id,
+      runId,
+    },
+  };
+
+  if (task.dueDate) storyPayload.targetDate = task.dueDate;
+  if (task.attachments) storyPayload.attachments = task.attachments;
+
+  const batch = db.batch();
+  batch.set(storyRef, storyPayload);
+
+  const taskUpdate = {
+    status: 2,
+    convertedToStoryId: storyRef.id,
+    autoConvertedAt: admin.firestore.FieldValue.serverTimestamp(),
+    autoConvertedRunId: runId,
+    autoConverted: true,
+    reminderSyncDirective: 'complete',
+    syncState: 'dirty',
+    deleted: true,
+    serverUpdatedAt: now,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+  batch.set(taskDoc.ref, taskUpdate, { merge: true });
+
+  await batch.commit();
+
+  // Reminders: close and annotate
+  try {
+    const remindersSnap = await db.collection('reminders').where('taskId', '==', taskDoc.id).get();
+    for (const reminder of remindersSnap.docs) {
+      await reminder.ref.set({
+        status: 'completed',
+        completedAt: admin.firestore.FieldValue.serverTimestamp(),
+        note: `${reminder.data().note || ''}\nConverted to Story ${storyRefValue}`.trim(),
+        syncState: 'dirty',
+      }, { merge: true });
+    }
+  } catch (error) {
+    console.warn('[auto-convert] reminder sync failed', { taskId: taskDoc.id, error });
+  }
+
+  const activityRef = db.collection('activity_stream').doc();
+  await activityRef.set({
+    id: activityRef.id,
+    entityId: storyRef.id,
+    entityType: 'story',
+    activityType: 'task_to_story_conversion',
+    actor: 'AI_Agent',
+    userId,
+    ownerUid: userId,
+    description: `Auto-converted task ${task.ref || taskDoc.id} to story ${storyRefValue}`,
+    metadata: {
+      taskId: taskDoc.id,
+      storyId: storyRef.id,
+      runId,
+      url: task.url || null,
+      acceptanceCriteria,
+    },
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  await db.collection('automation_events').add({
+    type: 'task_auto_conversion',
+    userId,
+    taskId: taskDoc.id,
+    storyId: storyRef.id,
+    runId,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  if (!task.goalId) {
+    await db.collection('automation_alerts').add({
+      type: 'missing_goal_link',
+      userId,
+      storyId: storyRef.id,
+      taskId: taskDoc.id,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      resolved: false,
+      message: 'Story created from task without goal linkage',
+    });
+  }
+
+  return { taskId: taskDoc.id, storyId: storyRef.id, storyRef: storyRefValue };
+}
+
+exports.shouldAutoConvertTaskInternal = shouldAutoConvertTaskData;
+exports.runTaskAutoConvertInternal = async ({ db, taskDoc, profile, runId }) =>
+  autoConvertTask({ db, taskDoc, profile, runId });
+
+// Run auto-conversion once per day to reduce churn
+exports.autoConvertOversizedTasks = schedulerV2.onSchedule({
+  schedule: '0 2 * * *', // daily at 02:00 UTC (~every 24 hours)
+  timeZone: 'UTC',
+  memory: '512MiB',
+}, async () => {
+  const db = ensureFirestore();
+  const profilesSnap = await db.collection('profiles').get();
+  for (const doc of profilesSnap.docs) {
+    const profile = doc.data() || {};
+    if (profile.autoConversionEnabled === false) continue;
+    const userId = doc.id;
+
+    const thresholdMinutes = Number(profile.autoConversionThresholdMinutes || 240);
+    const pointsThreshold = Number(profile.autoConversionThresholdPoints || 2);
+
+    const runId = await logAutomationRun(db, {
+      automation: 'task_auto_conversion',
+      userId,
+      status: 'started',
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      thresholdMinutes,
+      pointsThreshold,
+    });
+
+    try {
+      const tasksSnap = await db.collection('tasks')
+        .where('ownerUid', '==', userId)
+        .get();
+
+      const candidates = tasksSnap.docs.filter((taskDoc) => {
+        const data = taskDoc.data() || {};
+        if (data.autoConverted || data.convertedToStoryId) return false;
+        if (data.autoConversionSkip === true) return false;
+        const status = data.status;
+        if (status === 2 || status === 3 || status === 'done' || status === 'completed') return false;
+        const estMinutes = Number(data.estimateMin || 0);
+        const estHours = Number(data.estimatedHours || 0);
+        const points = Number(data.points || 0);
+        if (estMinutes >= thresholdMinutes) return true;
+        if (estHours >= 4) return true;
+        if (points > pointsThreshold) return true;
+        return false;
+      });
+
+      const results = [];
+      for (const taskDoc of candidates.slice(0, 10)) {
+        try {
+          const conversion = await autoConvertTask({ db, taskDoc, profile, runId });
+          if (conversion) results.push(conversion);
+        } catch (error) {
+          console.error('[auto-convert] task failed', { taskId: taskDoc.id, error });
+          await db.collection('automation_exceptions').add({
+            automation: 'task_auto_conversion',
+            userId,
+            taskId: taskDoc.id,
+            message: error.message || String(error),
+            runId,
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+        }
+      }
+
+      await db.collection('automation_runs').doc(runId).set({
+        status: 'success',
+        converted: results,
+        processed: candidates.length,
+        completedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+    } catch (error) {
+      console.error('[auto-convert] run failed', { userId, error });
+      await db.collection('automation_runs').doc(runId).set({
+        status: 'error',
+        error: error.message || String(error),
+        completedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+    }
+  }
+});
+
+// Scheduled: LLM-driven suggestions and auto-conversion (non-interactive)
+// Converts tasks to stories when LLM estimates storyPoints >= minPoints (default 4)
+exports.autoLLMTaskStoryConversion = schedulerV2.onSchedule({
+  schedule: '15 3 * * *', // daily at 03:15 UTC
+  timeZone: 'UTC',
+  memory: '512MiB',
+}, async () => {
+  const db = ensureFirestore();
+  const profilesSnap = await db.collection('profiles').limit(500).get();
+  for (const prof of profilesSnap.docs) {
+    try {
+      const uid = prof.id;
+      const p = prof.data() || {};
+      const enabled = p.enableAutoLLMConversion === true || p.autoLLMConversionMinPoints != null;
+      if (!enabled) continue;
+      const minPoints = Number.isFinite(Number(p.autoLLMConversionMinPoints)) ? Number(p.autoLLMConversionMinPoints) : 4;
+      // Suggest
+      if (!exports.suggestTaskStoryConversions?.run) continue;
+      const res = await exports.suggestTaskStoryConversions.run({ auth: { uid }, data: { limit: 12 } });
+      const suggestions = Array.isArray(res?.suggestions) ? res.suggestions : (Array.isArray(res?.result?.suggestions) ? res.result.suggestions : []);
+      const conversions = suggestions
+        .filter(s => s && s.taskId && s.storyTitle && Number(s.points || 0) >= minPoints && s.convert === true)
+        .map(s => ({ taskId: s.taskId, storyTitle: s.storyTitle, storyDescription: s.storyDescription || '', points: s.points }));
+      if (!conversions.length) continue;
+      if (!exports.convertTasksToStories?.run) continue;
+      await exports.convertTasksToStories.run({ auth: { uid }, data: { conversions: conversions.slice(0, 10) } });
+    } catch (e) {
+      console.warn('[autoLLMTaskStoryConversion] failed for profile', e?.message || e);
+    }
+  }
+  return { ok: true };
+});
+
+// ===== Tasks integrity report (per-user): counts + duplicate diagnostics
+exports.tasksIntegrityReport = httpsV2.onCall(async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const db = ensureFirestore();
+  const now = Date.now();
+
+  let total = 0;
+  let flaggedDuplicates = 0;
+  let missingEffort = 0;
+  let open = 0;
+  let ttlPending = 0;
+  const dupBuckets = new Map(); // duplicateKey -> count
+  const ridBuckets = new Map(); // reminder:<id> -> count
+
+  let cursor = null;
+  const pageSize = 5000;
+  while (true) {
+    let q = db.collection('tasks').where('ownerUid', '==', uid).orderBy('updatedAt', 'desc').limit(pageSize);
+    if (cursor) q = q.startAfter(cursor);
+    const snap = await q.get();
+    if (snap.empty) break;
+    for (const d of snap.docs) {
+      const t = d.data() || {};
+      total++;
+      const st = t.status;
+      const isDone = (typeof st === 'number') ? st === 2 || st >= 2 : String(st).toLowerCase() === 'done' || String(st).toLowerCase() === 'completed';
+      if (!isDone) open++;
+      if (!t.effort) missingEffort++;
+      if (t.duplicateFlag) flaggedDuplicates++;
+      if (t.deleteAfter && Number(t.deleteAfter) <= now) ttlPending++;
+      const key = t.duplicateKey || (t.reminderId ? `reminder:${String(t.reminderId).toLowerCase()}` : null);
+      if (key) dupBuckets.set(key, (dupBuckets.get(key) || 0) + 1);
+      if (t.reminderId) {
+        const ridKey = `reminder:${String(t.reminderId).toLowerCase()}`;
+        ridBuckets.set(ridKey, (ridBuckets.get(ridKey) || 0) + 1);
+      }
+    }
+    cursor = snap.docs[snap.docs.length - 1];
+    if (snap.size < pageSize) break;
+  }
+
+  const duplicateGroups = Array.from(dupBuckets.entries()).filter(([, c]) => c > 1).length;
+  const reminderDuplicateGroups = Array.from(ridBuckets.entries()).filter(([, c]) => c > 1).length;
+
+  return {
+    ok: true,
+    totals: { total, open, missingEffort, flaggedDuplicates, ttlPending },
+    duplicateGroups,
+    reminderDuplicateGroups,
+  };
+});
+
+// Ensure every goal/story/task has a human-readable ref (e.g., GR-26LGIP, ST-XXXX, TK-XXXX)
+exports.ensureEntityRefs = schedulerV2.onSchedule({ schedule: 'every 2 hours', timeZone: 'UTC' }, async () => {
+  const db = ensureFirestore();
+  const prefixFor = (col) => (col === 'goals' ? 'GR' : col === 'stories' ? 'ST' : 'TK');
+  const makeRefLocal = (prefix) => {
+    const ts = Date.now().toString(36).toUpperCase().slice(-4);
+    const rnd = Math.random().toString(36).toUpperCase().slice(2, 4);
+    return `${prefix}-${ts}${rnd}`;
+  };
+
+  const collections = ['goals', 'stories', 'tasks'];
+  for (const col of collections) {
+    const snap = await db.collection(col).limit(1000).get();
+    const missing = snap.docs.filter((d) => {
+      const data = d.data() || {};
+      return !data.ref || typeof data.ref !== 'string' || data.ref.trim() === '';
+    });
+    if (!missing.length) continue;
+
+    const batch = db.batch();
+    const activityBatch = db.batch();
+    const prefix = prefixFor(col);
+    for (const docSnap of missing.slice(0, 200)) { // cap per run
+      const id = docSnap.id;
+      const data = docSnap.data() || {};
+      // For tasks, align with canonical TK-<last6> style; otherwise use time-based local ref.
+      const ref = (col === 'tasks')
+        ? `TK-${String(id).slice(-6).padStart(6, '0').toUpperCase()}`
+        : makeRefLocal(prefix);
+      batch.set(docSnap.ref, { ref, updatedAt: Date.now() }, { merge: true });
+      const actRef = db.collection('activity_stream').doc();
+      activityBatch.set(actRef, {
+        id: actRef.id,
+        entityId: id,
+        entityType: col === 'goals' ? 'goal' : col === 'stories' ? 'story' : 'task',
+        activityType: 'updated',
+        userId: data.ownerUid || 'system',
+        description: `Assigned reference ${ref}`,
+        fieldName: 'ref',
+        oldValue: null,
+        newValue: ref,
+        ownerUid: data.ownerUid || null,
+        timestamp: admin.firestore.FieldValue.serverTimestamp(),
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        source: 'function',
+      });
+    }
+    await batch.commit();
+    await activityBatch.commit();
+  }
+});
+
+// ===== Scheduler Adjustments (Issue #207)
+
+const WORKDAY_MINUTES_DEFAULT = 8 * 60;
+
+function isTaskLocked(task) {
+  return task.dueDateLocked || task.lockDueDate || task.immovable === true || task.status === 'immovable';
+}
+
+function buildBlockedMinutes(calendarBlocks, zone) {
+  const map = new Map();
+  for (const block of calendarBlocks) {
+    const start = toDateTime(block.start || block.startIso || block.startAt, { zone });
+    const end = toDateTime(block.end || block.endIso || block.endAt, { zone });
+    if (!start || !end) continue;
+    const day = start.toISODate();
+    const minutes = Math.max(0, end.diff(start, 'minutes').minutes);
+    const current = map.get(day) || 0;
+    map.set(day, current + minutes);
+  }
+  return map;
+}
+
+function isNonWorkingDay(dt, profile) {
+  if (!dt) return false;
+  const weekendDisabled = profile?.workWeekends === true ? [] : [6, 7];
+  return weekendDisabled.includes(dt.weekday);
+}
+
+function findNextWorkingDate(startDt, context) {
+  const { blockedMinutes, workdayMinutes, profile } = context;
+  let candidate = startDt;
+  for (let i = 0; i < 14; i++) {
+    const day = candidate.toISODate();
+    const blocked = blockedMinutes.get(day) || 0;
+    if (!isNonWorkingDay(candidate, profile) && blocked < workdayMinutes) {
+      return candidate;
+    }
+    candidate = candidate.plus({ days: 1 });
+  }
+  return startDt;
+}
+
+async function updateTaskDueDate(db, taskId, { newDueDateMs, reason, userId, runId, itemRef }) {
+  const taskRef = db.collection('tasks').doc(taskId);
+  const beforeSnap = await taskRef.get();
+  const beforeData = beforeSnap.exists ? beforeSnap.data() || {} : {};
+  const oldDueDateMs = toMillis(beforeData.dueDate || beforeData.dueDateMs || beforeData.targetDate);
+  const formatIso = (ms) => {
+    if (!ms || !Number.isFinite(ms)) return 'unset';
+    try { return new Date(ms).toISOString().slice(0, 10); } catch { return 'invalid'; }
+  };
+  await taskRef.set({
+    dueDate: newDueDateMs,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    serverUpdatedAt: Date.now(),
+    scheduler: {
+      lastRunId: runId,
+      lastReason: reason,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    },
+    syncState: 'dirty',
+  }, { merge: true });
+
+  try {
+    const remindersSnap = await db.collection('reminders').where('taskId', '==', taskId).get();
+    for (const reminder of remindersSnap.docs) {
+      await reminder.ref.set({
+        dueDate: newDueDateMs,
+        dueAt: newDueDateMs,
+        note: `${reminder.data().note || ''}\nDue date adjusted by scheduler (${reason}).`.trim(),
+        syncState: 'dirty',
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+    }
+  } catch (error) {
+    console.warn('[scheduler] reminder update failed', { taskId, error });
+  }
+
+  const activityRef = db.collection('activity_stream').doc();
+  const descSuffix = `(${reason})${oldDueDateMs ? ` from ${formatIso(oldDueDateMs)} to ${formatIso(newDueDateMs)}` : ` to ${formatIso(newDueDateMs)}`}`;
+  await activityRef.set({
+    id: activityRef.id,
+    entityId: taskId,
+    entityType: 'task',
+    activityType: 'scheduler_due_date_adjustment',
+    actor: 'AI_Scheduler',
+    userId,
+    ownerUid: userId,
+    description: `Scheduler moved ${itemRef || taskId} due date ${descSuffix}.`,
+    metadata: { taskId, reason, runId, oldDueDate: oldDueDateMs || null, newDueDate: newDueDateMs },
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+}
+
+exports.runDailySchedulerAdjustments = schedulerV2.onSchedule({
+  schedule: 'every 30 minutes',
+  timeZone: 'UTC',
+  memory: '1GiB',
+}, async () => {
+  const db = ensureFirestore();
+  const nowUtc = DateTime.now().setZone('UTC');
+  const profilesSnap = await db.collection('profiles').get();
+
+  for (const doc of profilesSnap.docs) {
+    const profile = doc.data() || {};
+    const userId = doc.id;
+    if (profile.schedulerEnabled === false) continue;
+
+    const zone = resolveTimezone(profile, DEFAULT_TIMEZONE);
+    const nowLocal = nowUtc.setZone(coerceZone(zone));
+    const statusSnap = await db.collection('automation_status').doc(`scheduler_${userId}`).get();
+    const lastSentDay = statusSnap.exists ? statusSnap.data().lastSentDayIso || null : null;
+    const { shouldSend, dayIso } = shouldTriggerWindow(nowLocal, DAILY_SUMMARY_TARGET_MINUTES, lastSentDay);
+    if (!shouldSend) continue;
+
+    const runId = await logAutomationRun(db, {
+      automation: 'scheduler_adjustments',
+      userId,
+      status: 'started',
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    try {
+      const { tasks, stories, dependencies } = await loadSchedulerInputs(db, userId, { timezone: zone });
+      const calendarSnap = await db.collection('calendar_blocks')
+        .where('ownerUid', '==', userId)
+        .where('start', '>=', nowLocal.minus({ days: 1 }).startOf('day').toMillis())
+        .where('start', '<=', nowLocal.plus({ days: 14 }).endOf('day').toMillis())
+        .get()
+        .catch(() => ({ docs: [] }));
+      const calendarBlocks = calendarSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+
+      const blockedMinutes = buildBlockedMinutes(calendarBlocks, zone);
+      const workdayMinutes = Number(profile.workdayMinutes || WORKDAY_MINUTES_DEFAULT);
+      const context = { blockedMinutes, workdayMinutes, profile };
+
+      const taskDueMap = new Map();
+      const storyDueMap = new Map();
+      tasks.forEach((task) => {
+        const dueMs = toMillis(task.dueDate || task.dueDateMs || task.targetDate);
+        if (dueMs) taskDueMap.set(task.id, DateTime.fromMillis(dueMs, { zone }));
+      });
+      stories.forEach((story) => {
+        const dueMs = toMillis(story.sprintDueDate || story.targetDate || story.plannedStartDate);
+        if (dueMs) storyDueMap.set(story.id, DateTime.fromMillis(dueMs, { zone }));
+      });
+
+      const today = nowLocal.startOf('day');
+      const changes = [];
+
+      for (const task of tasks) {
+        if (isTaskLocked(task)) continue;
+        const dueMs = toMillis(task.dueDate || task.dueDateMs || task.targetDate);
+        const dueDt = dueMs ? DateTime.fromMillis(dueMs, { zone }) : null;
+        let candidate = dueDt || today.plus({ days: 1 });
+        let reason = '';
+
+        if (!dueDt) {
+          reason = 'missing_due_date';
+        } else if (dueDt < today) {
+          candidate = today.plus({ days: 1 });
+          reason = 'overdue_pull_forward';
+        }
+
+        const depKey = dependencies.get(`task:${task.id}`) || [];
+        let latestDependency = null;
+        for (const dep of depKey) {
+          const targetId = dep.dependsOn;
+          const depTask = taskDueMap.get(targetId);
+          const depStory = storyDueMap.get(targetId);
+          const depDate = depTask || depStory || null;
+          if (depDate && (!latestDependency || depDate > latestDependency)) {
+            latestDependency = depDate;
+          }
+        }
+        if (latestDependency && candidate <= latestDependency) {
+          candidate = latestDependency.plus({ days: 1 });
+          reason = reason || 'dependency_alignment';
+        }
+
+        candidate = findNextWorkingDate(candidate, context);
+        const candidateIso = candidate.toISODate();
+        const blocked = blockedMinutes.get(candidateIso) || 0;
+        if (blocked >= workdayMinutes) {
+          candidate = findNextWorkingDate(candidate.plus({ days: 1 }), context);
+          reason = reason || 'capacity_conflict';
+        }
+
+        const newDueMs = candidate.endOf('day').toMillis();
+        if (!dueDt || Math.abs(candidate.toMillis() - dueDt.toMillis()) > 60 * 1000) {
+          await updateTaskDueDate(db, task.id, {
+            newDueDateMs: newDueMs,
+            reason: reason || 'normalized',
+            userId,
+            runId,
+            itemRef: task.ref || task.id,
+          });
+          taskDueMap.set(task.id, candidate);
+          changes.push({
+            itemId: task.id,
+            itemRef: task.ref || task.id,
+            previousDue: dueDt ? dueDt.toISODate() : null,
+            newDue: candidateIso,
+            reason: reason || 'normalized',
+          });
+        }
+      }
+
+      await db.collection('scheduler_runs').add({
+        userId,
+        dayIso,
+        runId,
+        timezone: zone,
+        changes,
+        metrics: {
+          totalTasks: tasks.length,
+          adjustedTasks: changes.length,
+          blockedDays: blockedMinutes.size,
+        },
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      await recordAutomationStatus(db, { userId, automation: 'scheduler', dayIso, status: 'success', runId });
+      await db.collection('automation_runs').doc(runId).set({
+        status: 'success',
+        changes,
+        completedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+    } catch (error) {
+      console.error('[scheduler] run failed', { userId, error });
+      await recordAutomationStatus(db, { userId, automation: 'scheduler', dayIso: nowLocal.toISODate(), status: 'error', message: error.message || String(error) });
+      await db.collection('automation_runs').doc(runId).set({
+        status: 'error',
+        error: error.message || String(error),
+        completedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+    }
+  }
+});
+function themeLabelFromValue(v) {
+  if (typeof v === 'number') {
+    return themeLabelFromNumber(v);
+  }
+  const s = String(v || '').trim();
+  if (!s) return 'General';
+  const lower = s.toLowerCase();
+  if (lower.includes('side gig') || lower.includes('side-gig') || lower.includes('sidegig')) return 'Side Gig';
+  if (lower.includes('work')) return 'Work (Main Gig)';
+  if (lower.includes('sleep')) return 'Sleep';
+  if (lower.includes('random')) return 'Random';
+  if (lower.includes('health')) return 'Health & Fitness';
+  if (lower.includes('career') || lower.includes('professional')) return 'Career & Professional';
+  if (lower.includes('wealth') || lower.includes('finance')) return 'Finance & Wealth';
+  if (lower.includes('learn') || lower.includes('education')) return 'Learning & Education';
+  if (lower.includes('family') || lower.includes('relationship') || lower.includes('tribe')) return 'Family & Relationships';
+  if (lower.includes('hobby') || lower.includes('interest')) return 'Hobbies & Interests';
+  if (lower.includes('travel') || lower.includes('adventure')) return 'Travel & Adventure';
+  if (lower.includes('home')) return 'Home & Living';
+  if (lower.includes('spirit') || lower.includes('growth')) return 'Spiritual & Personal Growth';
+  if (lower.includes('chore')) return 'Chores';
+  if (lower.includes('rest') || lower.includes('recovery')) return 'Rest & Recovery';
+  return s;
+}
+
+async function buildTaskContext(db, task) {
+  const ctx = { themeName: null, sprintRef: null, storyRef: null, goalRef: null };
+  // Theme direct or via story/goal
+  if (task.theme != null) ctx.themeName = themeLabelFromValue(task.theme);
+  let goalId = task.goalId || null;
+  let storyId = task.storyId || task.parentId || null;
+  if (storyId && !goalId) {
+    try {
+      const s = await db.collection('stories').doc(String(storyId)).get();
+      if (s.exists) {
+        const d = s.data() || {};
+        goalId = d.goalId || goalId;
+        ctx.storyRef = d.ref || null;
+        if (d.sprintId) {
+          try {
+            const sp = await db.collection('sprints').doc(String(d.sprintId)).get();
+            if (sp.exists) {
+              const spd = sp.data() || {};
+              ctx.sprintRef = spd.name || spd.title || spd.ref || sp.id;
+            }
+          } catch { }
+        }
+      }
+    } catch { }
+  }
+  if (goalId) {
+    try { const g = await db.collection('goals').doc(String(goalId)).get(); if (g.exists) { const gd = g.data() || {}; ctx.goalRef = gd.ref || g.id; if (!ctx.themeName && gd.theme != null) ctx.themeName = themeLabelFromValue(gd.theme); } } catch { }
+  }
+  // Fallback sprint from task
+  if (!ctx.sprintRef && task.sprintId) {
+    try {
+      const sp = await db.collection('sprints').doc(String(task.sprintId)).get();
+      if (sp.exists) {
+        const spd = sp.data() || {};
+        ctx.sprintRef = spd.name || spd.title || spd.ref || sp.id;
+      }
+    } catch { }
+  }
+  return ctx;
+}
+
+function mergeTags(existing, toAdd) {
+  const set = new Set(Array.isArray(existing) ? existing : []);
+  for (const t of toAdd) {
+    const s = String(t || '').trim();
+    if (s) set.add(s);
+  }
+  // Limit to 12 tags to keep Reminders tidy
+  return Array.from(set).slice(0, 12);
+}
+
+function normalizeTaskTagKey(value) {
+  return String(value || '').trim().replace(/^#/, '').toLowerCase();
+}
+
+function buildSprintTagValue(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return null;
+  const digits = text.match(/\d+/g);
+  if (digits && digits.length) {
+    return `sprint${digits.join('')}`;
+  }
+  const slug = text.toLowerCase().replace(/[^a-z0-9]+/g, '');
+  return slug ? `sprint${slug}` : null;
+}
+
+function normalizeTaskTagsForSystem({
+  tags = [],
+  type,
+  persona,
+  sprintRef,
+  themeLabel,
+  goalRef,
+  storyRef,
+  themeLabels = [],
+}) {
+  const cleaned = [];
+  const seen = new Set();
+  const goalKey = goalRef ? normalizeTaskTagKey(goalRef) : null;
+  const storyKey = storyRef ? normalizeTaskTagKey(storyRef) : null;
+  const themeKeys = new Set(themeLabels.map((label) => normalizeTaskTagKey(label)));
+  const typeKey = normalizeTaskTagKey(type);
+  const personaKey = normalizeTaskTagKey(persona);
+
+  for (const tag of Array.isArray(tags) ? tags : []) {
+    const raw = String(tag || '').trim();
+    if (!raw) continue;
+    const key = normalizeTaskTagKey(raw);
+    if (['task', 'chore', 'habit', 'habitual', 'routine'].includes(key)) continue;
+    if (['work', 'personal'].includes(key)) continue;
+    if (key.startsWith('goal-') || key.startsWith('story-')) continue;
+    if (goalKey && key === goalKey) continue;
+    if (storyKey && key === storyKey) continue;
+    if (key.startsWith('sprint')) continue;
+    if (key.startsWith('theme-')) continue;
+    if (themeKeys.has(key)) continue;
+    if (!seen.has(key)) {
+      seen.add(key);
+      cleaned.push(raw);
+    }
+  }
+
+  const append = (value) => {
+    const raw = String(value || '').trim();
+    if (!raw) return;
+    const key = normalizeTaskTagKey(raw);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    cleaned.push(raw);
+  };
+
+  if (['task', 'chore', 'habit', 'habitual', 'routine'].includes(typeKey)) {
+    append(typeKey === 'habitual' ? 'habit' : typeKey);
+  }
+  if (['work', 'personal'].includes(personaKey)) append(personaKey);
+  append(buildSprintTagValue(sprintRef));
+  append(themeLabel);
+
+  return cleaned;
+}
+
+exports.tagTasksAndBuildDeepLinks = schedulerV2.onSchedule({ schedule: 'every 30 minutes', timeZone: 'UTC' }, async () => {
+  const db = admin.firestore();
+  const now = Date.now();
+  const cutoff = now - 24 * 60 * 60 * 1000; // process tasks touched in last 24h
+  let processed = 0, updated = 0;
+  const themeCache = new Map();
+  try {
+    const snap = await db.collection('tasks').orderBy('updatedAt', 'desc').limit(500).get();
+    const batch = db.batch();
+    for (const docSnap of snap.docs) {
+      const t = docSnap.data() || {};
+      processed += 1;
+      const ownerUid = t.ownerUid || t.userId;
+      if (!ownerUid) continue;
+      // Skip very old if updatedAt is numeric and older than cutoff
+      if (typeof t.updatedAt === 'number' && t.updatedAt < cutoff) continue;
+      if (!themeCache.has(ownerUid)) {
+        try {
+          const themes = await loadThemesForUser(ownerUid);
+          const labels = Array.isArray(themes)
+            ? themes.map((th) => th.label || th.name || String(th.id))
+            : [];
+          themeCache.set(ownerUid, labels);
+        } catch {
+          themeCache.set(ownerUid, []);
+        }
+      }
+      const themeLabels = themeCache.get(ownerUid) || [];
+      const ctx = await buildTaskContext(db, t);
+      const newTags = normalizeTaskTagsForSystem({
+        tags: t.tags || [],
+        type: t.type || t.task_type || t.taskType || null,
+        persona: t.persona || null,
+        sprintRef: ctx.sprintRef || null,
+        themeLabel: ctx.themeName || null,
+        goalRef: ctx.goalRef || null,
+        storyRef: ctx.storyRef || null,
+        themeLabels,
+      });
+
+      // Deep links (absolute) for task + parents
+      const taskRef = t.ref || t.referenceNumber || t.reference || t.id;
+      const taskUrl = buildAbsoluteUrl(`/tasks/${encodeURIComponent(taskRef)}`);
+      const storyUrl = ctx.storyRef ? buildAbsoluteUrl(`/stories/${encodeURIComponent(ctx.storyRef)}`) : null;
+      const goalUrl = ctx.goalRef ? buildAbsoluteUrl(`/goals/${encodeURIComponent(ctx.goalRef)}`) : null;
+      const themeLabel = ctx.themeName || 'Growth';
+      const reminderTitle = `[${themeLabel}] – ${t.title || 'Task'}`;
+      const noteLines = [
+        `Task: ${taskUrl}`,
+        storyUrl ? `Story: ${storyUrl}` : null,
+        goalUrl ? `Goal: ${goalUrl}` : null,
+        '',
+        '-------',
+        `BOB: taskRef=${taskRef}${ctx.storyRef ? ` storyRef=${ctx.storyRef}` : ''}${ctx.goalRef ? ` goalRef=${ctx.goalRef}` : ''} list=${t.list || ''}`,
+        ctx.sprintRef ? `#sprint: ${ctx.sprintRef}` : null,
+        ctx.themeName ? `#theme: ${ctx.themeName}` : null,
+        ctx.storyRef ? `#story: ${ctx.storyRef}` : null,
+        `#task: ${taskRef}`,
+        ctx.goalRef ? `#goal: ${ctx.goalRef}` : null,
+      ].filter(Boolean).join('\n');
+
+      const updates = {
+        tags: newTags,
+        deepLink: taskUrl,
+        reminderTitle,
+        reminderNote: noteLines,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+      batch.set(docSnap.ref, updates, { merge: true });
+      updated += 1;
+    }
+    if (updated) await batch.commit();
+  } catch (e) {
+    console.error('tagTasksAndBuildDeepLinks error', e?.message || e);
+  }
+  return { processed, updated };
+});
+
+// Sprint Retrospective Generation
+exports.generateSprintRetrospective = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (request) => {
+  const { data, auth } = request;
+  if (!auth) throw new httpsV2.HttpsError('unauthenticated', 'User must be authenticated');
+
+  const { sprintId, sprintName, metrics, stories, goals } = data;
+  if (!sprintId || !metrics) throw new httpsV2.HttpsError('invalid-argument', 'Missing required fields');
+
+  try {
+    const { GoogleGenerativeAI } = require('@google/generative-ai');
+    const genAI = new GoogleGenerativeAI(GOOGLE_AI_STUDIO_API_KEY.value());
+    const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
+
+    const prompt = `You are a helpful assistant generating a sprint retrospective summary.
+
+Sprint: ${sprintName}
+
+Metrics:
+- Stories: ${metrics.completedStories}/${metrics.totalStories} completed (${metrics.completionRate}%)
+- Tasks: ${metrics.completedTasks}/${metrics.totalTasks} completed (${metrics.taskCompletionRate}%)
+- Velocity: ${metrics.velocityPoints} story points (${metrics.completedPoints}/${metrics.totalPoints})
+- Goals in scope: ${metrics.goalsInScope.length}
+
+Goals worked on:
+${(metrics.goalsInScope || []).map((g, i) => `${i + 1}. ${g}`).join('\n')}
+
+Completed Stories:
+${(stories || []).filter(s => s.status === 2).map(s => `- ${s.title} (${s.points || 0} pts)`).join('\n') || 'None'}
+
+Generate a concise retrospective summary (3-4 paragraphs) covering:
+1. Overall sprint performance and velocity
+2. Key accomplishments and completed work
+3. Areas for improvement or blockers encountered
+4. Recommendations for the next sprint
+
+Keep it professional, actionable, and encourage the team.`;
+
+    const result = await model.generateContent(prompt);
+    const summary = result.response.text();
+
+    await aiUsageLogger.logAIUsage(auth.uid, 'gemini-retro', GEMINI_MODEL, prompt, summary);
+
+    return { summary };
+  } catch (error) {
+    console.error('Error generating retrospective:', error);
+    throw new httpsV2.HttpsError('internal', 'Failed to generate retrospective summary');
+  }
+});
+
+// ===== Theme Allocations =====
+
+// ===== LLM User Settings =====
+try {
+  const llmSettingsModule = require('./agent/llmSettings');
+  if (llmSettingsModule) {
+    exports.testLLMConnection    = llmSettingsModule.testLLMConnection;
+    exports.getAIModels          = llmSettingsModule.getAIModels;
+    exports.refreshModelRegistry = llmSettingsModule.refreshModelRegistry;
+  }
+} catch (e) {
+  console.warn('[init] agent/llmSettings not loaded', e?.message || e);
+}
+
+// ===== Agent Integration Layer =====
+// Phase 1: audit helpers, context aggregator, and tool dispatcher
+try {
+  const agentToolsModule = require('./agent/agentTools');
+  if (agentToolsModule) {
+    exports.agentTool = agentToolsModule.agentTool;
+  }
+} catch (e) {
+  console.warn('[init] agent/agentTools not loaded', e?.message || e);
+}
+
+// Phase 2: Telegram webhook + account linking
+try {
+  const agentTelegramModule = require('./agent/telegramWebhook');
+  if (agentTelegramModule) {
+    exports.telegramWebhook = agentTelegramModule.telegramWebhook;
+    exports.linkTelegramAccount = agentTelegramModule.linkTelegramAccount;
+    exports.unlinkTelegramAccount = agentTelegramModule.unlinkTelegramAccount;
+  }
+} catch (e) {
+  console.warn('[init] agent/telegramWebhook not loaded', e?.message || e);
+}
+
+// Phase 3: Approval expiry sweep
+try {
+  const approvalWorkerModule = require('./agent/approvalWorker');
+  if (approvalWorkerModule) {
+    exports.sweepExpiredApprovals = approvalWorkerModule.sweepExpiredApprovals;
+  }
+} catch (e) {
+  console.warn('[init] agent/approvalWorker not loaded', e?.message || e);
+}
+
+// Phase 4: Proactive scheduled briefings
+try {
+  const agentBriefingModule = require('./agent/agentBriefing');
+  if (agentBriefingModule) {
+    exports.sendMorningBriefing = agentBriefingModule.sendMorningBriefing;
+    exports.sendWeeklyReview = agentBriefingModule.sendWeeklyReview;
+    exports.triggerBriefingNow = agentBriefingModule.triggerBriefingNow;
+  }
+} catch (e) {
+  console.warn('[init] agent/agentBriefing not loaded', e?.message || e);
+}

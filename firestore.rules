@@ -1,0 +1,599 @@
+// Firestore rules
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() { return request.auth != null; }
+    // Canonical ownership: ownerUid only
+    function isOwner() {
+      return isSignedIn() && (resource.data.ownerUid != null && resource.data.ownerUid == request.auth.uid);
+    }
+    function isOwnerForCreate() {
+      return isSignedIn() && (request.resource.data.ownerUid != null && request.resource.data.ownerUid == request.auth.uid);
+    }
+    function activityOwned() {
+      return isSignedIn() && (
+        (resource.data.ownerUid != null && resource.data.ownerUid == request.auth.uid) ||
+        (resource.data.userId != null && resource.data.userId == request.auth.uid)
+      );
+    }
+    function isGoalOwner(goalId) {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/goals/$(goalId)) &&
+        get(/databases/$(database)/documents/goals/$(goalId)).data.ownerUid == request.auth.uid;
+    }
+    function isPublishedGoal() {
+      return resource.data.isPublished == true && resource.data.shareCode != null;
+    }
+    // Canvas/roadmap public sharing — canvasCode is a separate field from shareCode
+    function isCanvasPublished() {
+      return resource.data.canvasCode != null;
+    }
+
+    match /goals/{id} {
+      allow create: if isOwnerForCreate();
+      allow read: if isOwner() || isPublishedGoal() || isCanvasPublished();
+      allow update, delete: if isOwner();
+    }
+    match /okrs/{id}      { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    // Allow updates when either the existing or incoming doc asserts ownership
+    match /tasks/{id} {
+      allow create: if isOwnerForCreate();
+      allow read, delete: if isOwner();
+      allow update: if isSignedIn() && (
+        (resource.data.ownerUid == request.auth.uid) ||
+        (request.resource.data.ownerUid == request.auth.uid)
+      );
+    }
+    match /stories/{id} {
+      allow create: if isOwnerForCreate();
+      allow read, delete: if isOwner();
+      allow update: if isSignedIn() && (
+        (resource.data.ownerUid == request.auth.uid) ||
+        (request.resource.data.ownerUid == request.auth.uid)
+      );
+    }
+    match /journals/{id} {
+      allow create: if isOwnerForCreate();
+      allow read, delete: if isOwner();
+      allow update: if isSignedIn() && (
+        (resource.data.ownerUid == request.auth.uid) ||
+        (request.resource.data.ownerUid == request.auth.uid)
+      );
+    }
+    // Server-managed ingestion lock/log documents; expose read-only access to the owner.
+    match /transcript_ingestions/{id} {
+      allow read: if isOwner();
+      allow create, update, delete: if false;
+    }
+    match /transcript_ingestions/{id}/events/{eventId} {
+      allow read: if isSignedIn() &&
+        get(/databases/$(database)/documents/transcript_ingestions/$(id)).data.ownerUid == request.auth.uid;
+      allow create, update, delete: if false;
+    }
+    match /resources/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /trips/{id}     { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /theme_colors/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    // Per-user global themes document (settings page)
+    match /global_themes/{uid} {
+      // Allow a user to read/write only their own theme settings doc
+      allow read, write: if isSignedIn() && request.auth.uid == uid;
+    }
+    
+    // Core v3.0.8 collections with enhanced logging
+    match /sprints/{id}   {
+      allow create: if isOwnerForCreate();
+      allow read: if isOwner();
+      allow update, delete: if isOwner();
+    }
+    match /sprint_closures/{id} {
+      allow create: if isOwnerForCreate();
+      allow read, update, delete: if isOwner();
+    }
+    match /calendar_blocks/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    // Per-user planner stats summary (keyed by uid)
+    match /planner_stats/{uid} {
+      allow create: if isSignedIn() && (
+        request.auth.uid == uid ||
+        (request.resource.data.ownerUid == request.auth.uid && request.resource.data.ownerUid == uid)
+      );
+      allow read: if isSignedIn() && (
+        request.auth.uid == uid ||
+        resource.data.ownerUid == request.auth.uid
+      );
+      allow update, delete: if isSignedIn() && (
+        request.auth.uid == uid ||
+        resource.data.ownerUid == request.auth.uid
+      );
+    }
+    match /digests/{id}   { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /focusGoals/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /metrics_hrv/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /metrics_workouts/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /metrics_nutrition/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /taxonomies/{id} { allow read: if isSignedIn(); allow create: if isOwnerForCreate(); allow update, delete: if isOwner(); }
+    match /activity_stream/{id} {
+      // Service/telemetry collection: accept ownerUid or userId for historical compatibility
+      allow create: if isSignedIn() && (
+        request.resource.data.ownerUid == request.auth.uid ||
+        request.resource.data.userId == request.auth.uid
+      );
+      allow read, update, delete: if activityOwned();
+    }
+    // Automation activity feeds (read-only for clients)
+    match /automation_events/{id} {
+      allow read: if activityOwned();
+      allow create, update, delete: if false;
+    }
+    match /automation_alerts/{id} {
+      allow read: if activityOwned();
+      allow create, update, delete: if false;
+    }
+    // Legacy automation activity collection
+    match /activity/{id} {
+      allow read: if activityOwned();
+      allow create, update, delete: if false;
+    }
+    // Materialized view: sprint task index (server-managed)
+    match /sprint_task_index/{id} {
+      allow read: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow create, update, delete: if false; // server-only via Cloud Functions
+    }
+    // Per-user integration logs (e.g., google/strava/monzo)
+    match /integration_logs/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /integration_status/{id} {
+      allow create, update: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+      allow read, delete: if isSignedIn() && (
+        resource.data.ownerUid == request.auth.uid ||
+        id.matches('.*' + request.auth.uid)
+      );
+    }
+    // Daily/weekly check-ins (per-user, id is uid_dateKey / uid_weekKey)
+    match /daily_checkins/{id} {
+      allow create: if isOwnerForCreate();
+      // Allow read by UID-prefixed id even when the doc doesn't exist yet.
+      allow read: if isSignedIn() && (
+        id.matches('^' + request.auth.uid + '_.*') ||
+        (resource.data.ownerUid != null && resource.data.ownerUid == request.auth.uid)
+      );
+      allow update, delete: if isOwner();
+    }
+    match /weekly_checkins/{id} {
+      allow create: if isOwnerForCreate();
+      // Allow read by UID-prefixed id even when the doc doesn't exist yet.
+      allow read: if isSignedIn() && (
+        id.matches('^' + request.auth.uid + '_.*') ||
+        (resource.data.ownerUid != null && resource.data.ownerUid == request.auth.uid)
+      );
+      allow update, delete: if isOwner();
+    }
+    match /ai_usage_logs/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /work_projects/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /personal_lists/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /steam/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /youtube/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /youtube_history/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /youtube_videos/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /ai_logs/{id}        { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    // Hardcover books (per-user library + backlog)
+    match /hardcover/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+
+    // Travel map entries (per-user visits/locations)
+    match /travel/{id} {
+      allow create: if isOwnerForCreate();
+      allow read, update, delete: if isOwner();
+    }
+
+    // Finance collections
+    match /finance_budgets/{uid} {
+      // Per-user finance budget doc keyed by uid
+      allow create: if isSignedIn() && (request.auth.uid == uid || request.resource.data.ownerUid == request.auth.uid);
+      allow read:   if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid);
+      allow update: if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid);
+      allow delete: if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid);
+    }
+    match /finance_budgets_v2/{uid} {
+      // Extended budget settings keyed by uid with ownerUid on the document
+      allow create: if isSignedIn() && (request.auth.uid == uid || request.resource.data.ownerUid == request.auth.uid);
+      allow read:   if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid);
+      allow update: if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid);
+      allow delete: if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid);
+    }
+    match /finance_categories/{uid} {
+      // User-defined finance categories keyed by uid
+      allow create: if isSignedIn() && (request.auth.uid == uid || request.resource.data.ownerUid == request.auth.uid);
+      allow read:   if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid);
+      allow update: if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid);
+      allow delete: if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid);
+    }
+    match /monzo_budget_summary/{uid} {
+      // Per-user Monzo summary doc keyed by uid
+      allow create: if isSignedIn() && (request.auth.uid == uid || request.resource.data.ownerUid == request.auth.uid);
+      allow read:   if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid || resource.data.ownerUid == null);
+      allow update: if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid || resource.data.ownerUid == null);
+      allow delete: if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid || resource.data.ownerUid == null);
+    }
+    // Monzo pots per user
+    match /monzo_pots/{id} {
+      allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+      allow read, update, delete: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+    }
+    match /monzo_transactions/{id} {
+      // Individual transaction rows carry ownerUid
+      // Create: enforce ownerUid equals request.auth.uid
+      allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+      // Read/Delete: owner only
+      allow read, delete: if isSignedIn() && (
+        request.auth.uid == resource.data.ownerUid ||
+        (id.matches('^' + request.auth.uid + '_.*'))
+      );
+      // Update: owner only and ownerUid must be immutable
+      allow update: if isSignedIn() && (
+        request.auth.uid == resource.data.ownerUid ||
+        (id.matches('^' + request.auth.uid + '_.*'))
+      ) && request.resource.data.ownerUid == resource.data.ownerUid;
+    }
+    match /monzo_pots/{id} {
+      // Per-user Monzo pots keyed by uid-prefixed id or potId; ownerUid required
+      allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+      allow read, delete: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow update: if isSignedIn() && request.auth.uid == resource.data.ownerUid &&
+                    request.resource.data.ownerUid == resource.data.ownerUid;
+    }
+    match /monzo_accounts/{id} {
+      // Per-user Monzo accounts keyed by uid-prefixed id; ownerUid required
+      allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+      allow read, delete: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow update: if isSignedIn() && request.auth.uid == resource.data.ownerUid &&
+                    request.resource.data.ownerUid == resource.data.ownerUid;
+    }
+
+    // Per-user goal alignment summary for finance dashboard
+    match /monzo_goal_alignment/{uid} {
+      allow create: if isSignedIn() && (request.auth.uid == uid || request.resource.data.ownerUid == request.auth.uid);
+      allow read:   if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid || resource.data.ownerUid == null);
+      allow update: if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid || resource.data.ownerUid == null);
+      allow delete: if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid || resource.data.ownerUid == null);
+    }
+
+    // Finance enrichment + sync pipeline collections
+    match /merchant_mappings/{id} {
+      allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+      allow read, delete: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow update: if isSignedIn() &&
+                    resource.data.ownerUid == request.auth.uid &&
+                    request.resource.data.ownerUid == resource.data.ownerUid;
+    }
+    match /monzo_ai_merchant_categories/{id} {
+      allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+      allow read, delete: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow update: if isSignedIn() &&
+                    resource.data.ownerUid == request.auth.uid &&
+                    request.resource.data.ownerUid == resource.data.ownerUid;
+    }
+    match /monzo_ai_anomaly_summary/{uid} {
+      allow create: if isSignedIn() && (request.auth.uid == uid || request.resource.data.ownerUid == request.auth.uid);
+      allow read: if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid);
+      allow update: if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid);
+      allow delete: if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid);
+    }
+    match /monzo_sync_state/{id} {
+      allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+      allow read, delete: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow update: if isSignedIn() &&
+                    resource.data.ownerUid == request.auth.uid &&
+                    request.resource.data.ownerUid == resource.data.ownerUid;
+    }
+    match /monzo_sync_jobs/{id} {
+      allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+      allow read, delete: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow update: if isSignedIn() &&
+                    resource.data.ownerUid == request.auth.uid &&
+                    request.resource.data.ownerUid == resource.data.ownerUid;
+    }
+    match /monzo_transfer_runs/{id} {
+      allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+      allow read, delete: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow update: if isSignedIn() &&
+                    resource.data.ownerUid == request.auth.uid &&
+                    request.resource.data.ownerUid == resource.data.ownerUid;
+    }
+    match /finance_external_transactions/{id} {
+      allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+      allow read, delete: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow update: if isSignedIn() &&
+                    resource.data.ownerUid == request.auth.uid &&
+                    request.resource.data.ownerUid == resource.data.ownerUid;
+    }
+    match /finance_transaction_matches/{id} {
+      allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+      allow read, delete: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow update: if isSignedIn() &&
+                    resource.data.ownerUid == request.auth.uid &&
+                    request.resource.data.ownerUid == resource.data.ownerUid;
+    }
+    match /finance_debt_service/{uid} {
+      allow create: if isSignedIn() && (request.auth.uid == uid || request.resource.data.ownerUid == request.auth.uid);
+      allow read: if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid);
+      allow update: if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid);
+      allow delete: if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid);
+    }
+    match /finance_action_insights/{uid} {
+      allow create: if isSignedIn() && (request.auth.uid == uid || request.resource.data.ownerUid == request.auth.uid);
+      allow read: if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid);
+      allow update: if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid);
+      allow delete: if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid);
+    }
+    match /finance_manual_accounts/{id} {
+      allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+      allow read, delete: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow update: if isSignedIn() &&
+                    resource.data.ownerUid == request.auth.uid &&
+                    request.resource.data.ownerUid == resource.data.ownerUid;
+    }
+
+    // New scheduler-related collections
+    match /themes/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /chores/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    match /routines/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    // Alias for blocks in new schema (calendar_blocks already exists separately)
+    match /blocks/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    // Scheduled instances produced by the planner
+    match /scheduled_instances/{id} {
+      allow create: if isOwnerForCreate();
+      allow read, update, delete: if isOwner();
+    }
+    // Planner job coordination (per-user documents keyed by userId)
+    match /planning_jobs/{id} {
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow read: if isSignedIn() && (
+        resource.data.ownerUid == request.auth.uid ||
+        resource.data.userId == request.auth.uid
+      );
+      allow update, delete: if isSignedIn() && (
+        resource.data.ownerUid == request.auth.uid ||
+        resource.data.userId == request.auth.uid ||
+        request.resource.data.userId == request.auth.uid
+      );
+    }
+
+    // Archive of completed tasks (server-managed)
+    match /tasks_archive/{id} {
+      allow create: if isOwnerForCreate();
+      allow read, update, delete: if isOwner();
+    }
+
+    // Temporary compatibility for legacy writers still using /activity
+    // Remove once all clients have migrated to activity_stream.
+    match /activity/{id} {
+      allow create: if isOwnerForCreate();
+      allow read, update, delete: if isOwner();
+    }
+
+    // Daily summary + reports (owner-scoped; accept ownerUid or legacy userId)
+    match /daily_summaries/{id} {
+      allow create: if isSignedIn() && (
+        request.resource.data.ownerUid == request.auth.uid ||
+        request.resource.data.userId == request.auth.uid
+      );
+      allow read, update, delete: if isSignedIn() && (
+        resource.data.ownerUid == request.auth.uid ||
+        resource.data.userId == request.auth.uid
+      );
+    }
+    match /daily_priority_runs/{id} {
+      allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+      allow read: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow update, delete: if false;
+    }
+    match /replan_runs/{id} {
+      allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+      allow read: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow update: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow delete: if false;
+    }
+    match /priority_calendar_events/{id} {
+      allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+      allow read: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow update: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow delete: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+    }
+    match /data_quality_reports/{id} {
+      allow create: if isSignedIn() && (
+        request.resource.data.ownerUid == request.auth.uid ||
+        request.resource.data.userId == request.auth.uid
+      );
+      allow read, update, delete: if isSignedIn() && (
+        resource.data.ownerUid == request.auth.uid ||
+        resource.data.userId == request.auth.uid
+      );
+    }
+
+    // Automation status/runs (owner-scoped by userId; these docs do not carry ownerUid)
+    match /automation_status/{id} {
+      allow create, update: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow read, delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+    }
+    match /automation_runs/{id} {
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow read, update, delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+    }
+    // Automation event/alert logs (ownerUid-scoped)
+    match /automation_events/{id} {
+      allow create: if isOwnerForCreate();
+      allow read, update, delete: if isOwner();
+    }
+    match /automation_alerts/{id} {
+      allow create: if isOwnerForCreate();
+      allow read, update, delete: if isOwner();
+    }
+
+    // Plans -> per-day document with assignments subcollection
+    match /plans/{dayKey} {
+      match /assignments/{assignmentId} {
+        allow create: if isOwnerForCreate();
+        allow read, update, delete: if isOwner();
+      }
+    }
+
+    // Planning jobs (AI calendar proposals + runs)
+    match /planning_jobs/{id} {
+      allow create: if isSignedIn() && (
+        request.resource.data.ownerUid == request.auth.uid ||
+        request.resource.data.userId == request.auth.uid
+      );
+      allow read, update, delete: if isSignedIn() && (
+        resource.data.ownerUid == request.auth.uid ||
+        resource.data.userId == request.auth.uid
+      );
+    }
+
+    // App usage tracking from Android/TV clients
+    match /app_usage_events/{id} {
+      allow create: if isOwnerForCreate();
+      allow read, update, delete: if isOwner();
+    }
+
+    // Per-user application restriction lists (e.g., blocked packages on TV)
+    match /app_restrictions/{uid} {
+      allow read, write: if isSignedIn() && request.auth.uid == uid;
+    }
+
+    // Test login tokens - DENY in production
+    match /test_login_tokens/{id} { allow read, write: if false; }
+
+    // Habits with enhanced logging support
+    match /habits/{id} {
+      allow create: if isOwnerForCreate();
+      allow read, update, delete: if isOwner();
+
+      // Habit Entries as a subcollection
+      match /habitEntries/{entryId} {
+        // FIX: For create, check request.resource since resource doesn't exist yet
+        allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+        // For read/update/delete, check existing resource
+        allow read, update, delete: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      }
+    }
+
+    // Per-user integration profile with v3.0.8 support
+    match /profiles/{uid} {
+      allow read, update, delete: if isSignedIn() && request.auth.uid == uid;
+      allow create: if isSignedIn() && request.auth.uid == uid && request.resource.data.ownerUid == uid;
+    }
+
+    // Per-user app settings
+    match /user_settings/{uid} {
+      allow read, write: if isSignedIn() && request.auth.uid == uid;
+    }
+    // Per-user theme settings (legacy hook)
+    match /theme_settings/{uid} {
+      allow read, write: if isSignedIn() && request.auth.uid == uid;
+    }
+    // Per-user weekly theme allocations
+    match /theme_allocations/{uid} {
+      allow read, write: if isSignedIn() && request.auth.uid == uid;
+    }
+
+    match /goal_chats/{goalId} {
+      match /messages/{messageId} {
+        allow read: if isGoalOwner(goalId);
+        allow create: if isGoalOwner(goalId) && request.resource.data.ownerUid == request.auth.uid;
+        allow update, delete: if false;
+      }
+    }
+
+    // ── Per-user planner alerts subcollection ──────────────────────────────
+    // DayCapacityWarningBanner reads users/{uid}/planner_alerts/capacity-warning
+    match /users/{uid} {
+      match /planner_alerts/{alertId} {
+        allow read, write: if isSignedIn() && request.auth.uid == uid;
+      }
+    }
+
+    // ── Per-user daily AI quota tracking ──────────────────────────────────
+    // Documents keyed as {uid}_{YYYY-MM-DD}. Only the owning user can read
+    // their own quota. Functions write via Admin SDK (no rule needed).
+    match /user_quotas/{docId} {
+      allow read: if isSignedIn() && docId.matches('^' + request.auth.uid + '_.*');
+      allow write: if false; // server-only writes via Admin SDK
+    }
+
+    // No client access to tokens by default (server-only)
+
+    // ── Agent Integration Layer ────────────────────────────────────────────
+    // All agent collections are admin-SDK only. Clients may read their own
+    // action log and context cache but can never write directly.
+
+    match /agent_action_log/{id} {
+      allow read: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow write: if false; // server-only via Admin SDK
+    }
+
+    match /pending_approvals/{id} {
+      allow read: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow write: if false; // server-only via Admin SDK
+    }
+
+    match /telegram_sessions/{chatId} {
+      allow read, write: if false; // server-only via Admin SDK
+    }
+
+    match /agent_idempotency_keys/{key} {
+      allow read, write: if false; // server-only via Admin SDK
+    }
+
+    match /agent_context_cache/{uid} {
+      allow read: if isSignedIn() && request.auth.uid == uid;
+      allow write: if false; // server-only via Admin SDK
+    }
+
+    // ── AI Coach collections ───────────────────────────────────────────────
+    // coach_daily: keyed as {uid}_{YYYY-MM-DD} — daily readiness + macros snapshot
+    match /coach_daily/{docId} {
+      allow read: if isSignedIn() && docId.matches('^' + request.auth.uid + '_.*');
+      allow write: if false; // server-only via Cloud Functions / Admin SDK
+    }
+    // health_metrics: keyed as {uid}_{YYYY-MM-DD} — HRV, sleep, weight logged by iOS
+    match /health_metrics/{docId} {
+      allow read: if isSignedIn() && (
+        docId.matches('^' + request.auth.uid + '_.*') ||
+        (resource.data.ownerUid != null && resource.data.ownerUid == request.auth.uid)
+      );
+      allow create, update: if isSignedIn() && (
+        docId.matches('^' + request.auth.uid + '_.*') ||
+        request.resource.data.ownerUid == request.auth.uid
+      );
+      allow delete: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+    }
+    // fitness_overview: per-user aggregated doc keyed by uid
+    match /fitness_overview/{uid} {
+      allow read: if isSignedIn() && request.auth.uid == uid;
+      allow write: if false; // server-only via Admin SDK
+    }
+    // coach_weekly_prompts: per-user photo prompt state keyed by uid
+    match /coach_weekly_prompts/{uid} {
+      allow read: if isSignedIn() && request.auth.uid == uid;
+      allow write: if false; // server-only via Cloud Functions
+    }
+    // coach_photos: body composition photo gallery per user
+    match /coach_photos/{uid} {
+      allow read: if isSignedIn() && request.auth.uid == uid;
+      allow write: if false;
+      match /photos/{photoId} {
+        allow read: if isSignedIn() && request.auth.uid == uid;
+        allow create: if isSignedIn() && request.auth.uid == uid
+                      && request.resource.data.ownerUid == uid;
+        allow update, delete: if isSignedIn() && request.auth.uid == uid;
+      }
+    }
+
+    // ── LLM Model Registry ─────────────────────────────────────────────────
+    // Refreshed daily by refreshModelRegistry scheduled function.
+    // All authenticated users can read (used by getAIModels fallback chain).
+    // Clients cannot write.
+    match /llm_model_registry/{provider} {
+      allow read: if isSignedIn();
+      allow write: if false; // server-only via Admin SDK
+    }
+  }
+}

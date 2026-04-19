@@ -1,0 +1,30 @@
+{
+  "name": "bob-virtual-browser-testing",
+  "version": "1.0.0",
+  "description": "Virtual browser testing suite for BOB v3.5.0 with automated defect reporting",
+  "main": "virtual-browser-test.js",
+  "scripts": {
+    "test": "node virtual-browser-test.js",
+    "test:visible": "HEADLESS=false node virtual-browser-test.js",
+    "test:firefox": "BROWSER=firefox node virtual-browser-test.js",
+    "test:webkit": "BROWSER=webkit node virtual-browser-test.js",
+    "install-browsers": "npx playwright install"
+  },
+  "dependencies": {
+    "playwright": "^1.40.0"
+  },
+  "devDependencies": {
+    "puppeteer": "^21.0.0",
+    "selenium-webdriver": "^4.15.0"
+  },
+  "keywords": [
+    "testing",
+    "automation",
+    "browser",
+    "BOB",
+    "defect-detection",
+    "virtual-testing"
+  ],
+  "author": "BOB Testing Suite",
+  "license": "MIT"
+}

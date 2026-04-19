@@ -1,0 +1,190 @@
+{
+  "functions": [
+    { "source": "functions", "codebase": "default", "region": "europe-west2" },
+    { "source": "functions-chores", "codebase": "chores", "region": "europe-west2" }
+  ],
+  "hosting": {
+    "site": "bob20250810",
+    "public": "react-app/build",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      {
+        "source": "/api/oauth/start",
+        "function": {
+          "functionId": "oauthStart",
+          "region": "europe-west2"
+        }
+      },
+      {
+        "source": "/api/approve-planning",
+        "function": {
+          "functionId": "approvePlanningJob",
+          "region": "europe-west2"
+        }
+      },
+      {
+        "source": "/api/oauth/callback",
+        "function": {
+          "functionId": "oauthCallback",
+          "region": "europe-west2"
+        }
+      },
+      {
+        "source": "/api/priority/now",
+        "function": {
+          "functionId": "priorityNow",
+          "region": "europe-west2"
+        }
+      },
+      {
+        "source": "/api/plan/replan",
+        "function": {
+          "functionId": "replanDay",
+          "region": "europe-west2"
+        }
+      },
+      {
+        "source": "/reminders/push",
+        "function": {
+          "functionId": "remindersPush",
+          "region": "europe-west2"
+        }
+      },
+      {
+        "source": "/reminders/pull",
+        "function": {
+          "functionId": "remindersPull",
+          "region": "europe-west2"
+        }
+      },
+      {
+        "source": "/api/monzo/start",
+        "function": {
+          "functionId": "monzoOAuthStart",
+          "region": "europe-west2"
+        }
+      },
+      {
+        "source": "/api/monzo/callback",
+        "function": {
+          "functionId": "monzoOAuthCallback",
+          "region": "europe-west2"
+        }
+      },
+      {
+        "source": "/api/monzo/webhook",
+        "function": {
+          "functionId": "monzoWebhook",
+          "region": "europe-west2"
+        }
+      },
+      {
+        "source": "/stravaOAuthStart",
+        "function": {
+          "functionId": "stravaOAuthStart",
+          "region": "europe-west2"
+        }
+      },
+      {
+        "source": "/stravaOAuthCallback",
+        "function": {
+          "functionId": "stravaOAuthCallback",
+          "region": "europe-west2"
+        }
+      },
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ],
+    "headers": [
+      {
+        "source": "/index.html",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-store"
+          }
+        ]
+      },
+      {
+        "source": "/version.json",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-store"
+          }
+        ]
+      },
+      {
+        "source": "/service-worker.js",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-store"
+          }
+        ]
+      },
+      {
+        "source": "/static/js/**",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "public, max-age=31536000, immutable"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/javascript"
+          }
+        ]
+      },
+      {
+        "source": "/static/css/**",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "public, max-age=31536000, immutable"
+          }
+        ]
+      },
+      {
+        "source": "/static/media/**",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "public, max-age=31536000, immutable"
+          }
+        ]
+      },
+      {
+        "source": "/**",
+        "headers": [
+          {
+            "key": "X-Frame-Options",
+            "value": "SAMEORIGIN"
+          },
+          {
+            "key": "X-Content-Type-Options",
+            "value": "nosniff"
+          }
+        ]
+      }
+    ]
+  },
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "storage": {
+    "rules": "storage.rules"
+  },
+  "emulators": {
+    "firestore": { "port": 8080 },
+    "auth": { "port": 9099 },
+    "ui": { "enabled": true }
+  }
+}

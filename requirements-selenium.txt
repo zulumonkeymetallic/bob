@@ -1,0 +1,5 @@
+# BOB v3.5.0 Selenium Virtual Browser Testing Requirements
+selenium>=4.15.0
+webdriver-manager>=4.0.0
+Pillow>=10.0.0
+requests>=2.31.0

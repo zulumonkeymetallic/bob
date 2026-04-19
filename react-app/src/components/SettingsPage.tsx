@@ -1,0 +1,1683 @@
+import React, { useState, useEffect, useCallback } from 'react';
+import { Container, Row, Col, Card, Button, Form, Modal, Alert, Nav, Tab, Badge } from 'react-bootstrap';
+import { db, functions } from '../firebase';
+import { httpsCallable } from 'firebase/functions';
+import { doc, getDoc, setDoc, serverTimestamp, collection, query, where, getDocs, writeBatch } from 'firebase/firestore';
+import { useAuth } from '../contexts/AuthContext';
+import { useTheme } from '../contexts/ThemeContext';
+import { useThemeAwareColors, getContrastTextColor } from '../hooks/useThemeAwareColors';
+import { GLOBAL_THEMES, GlobalTheme } from '../constants/globalThemes';
+import { Settings, Palette, Database, Wand2, KeyRound, Clipboard, FileCode, Plug, User, Bell, Shield, FlaskConical } from 'lucide-react';
+import LLMSettings from './settings/LLMSettings';
+import { useThemeDebugger } from '../utils/themeDebugger';
+import IntegrationSettings from './IntegrationSettings';
+import BudgetSettings from './finance/BudgetSettings';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { useDiagnosticsLog } from '../hooks/useDiagnosticsLog';
+
+const SETTINGS_TABS = [
+  'profile',
+  'ai',
+  'integrations',
+  'finance',
+  'notifications',
+  'privacy',
+  'developer',
+  // Legacy keys kept for backward-compatible URLs
+  'themes',
+  'database',
+  'reminders',
+  'system',
+  'diagnostics',
+] as const;
+type SettingsTab = typeof SETTINGS_TABS[number];
+const DEFAULT_TAB: SettingsTab = 'profile';
+
+type SettingsPaneKey = 'themes' | 'database' | 'integrations' | 'reminders' | 'ai' | 'system' | 'finance' | 'diagnostics';
+
+const TAB_TO_PANE: Record<SettingsTab, SettingsPaneKey> = {
+  profile: 'system',
+  ai: 'ai',
+  integrations: 'integrations',
+  finance: 'finance',
+  notifications: 'reminders',
+  privacy: 'diagnostics',
+  developer: 'database',
+  themes: 'themes',
+  database: 'database',
+  reminders: 'reminders',
+  system: 'system',
+  diagnostics: 'diagnostics',
+};
+
+const normalizeTab = (value: string | null): SettingsTab => {
+  const normalized = String(value || '').trim().toLowerCase();
+  // Alias map for flattened IA routes
+  if (normalized === 'profile') return 'profile';
+  if (normalized === 'ai') return 'ai';
+  if (normalized === 'integrations') return 'integrations';
+  if (normalized === 'finance') return 'finance';
+  if (normalized === 'notifications') return 'notifications';
+  if (normalized === 'privacy' || normalized === 'privacy-security') return 'privacy';
+  if (normalized === 'developer' || normalized === 'experiments') return 'developer';
+  if (normalized && SETTINGS_TABS.includes(normalized as SettingsTab)) {
+    return normalized as SettingsTab;
+  }
+  return DEFAULT_TAB;
+};
+ 
+
+interface GlobalThemeSettings {
+  themes: GlobalTheme[];
+  customizations: Record<string, any>;
+  lastUpdated: any;
+}
+
+const SettingsPage: React.FC = () => {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const { currentUser } = useAuth();
+  const { theme, toggleTheme } = useTheme();
+  const { isDark, colors, backgrounds } = useThemeAwareColors();
+  const { logThemeInfo, scanPageForInconsistencies, createClickHandler } = useThemeDebugger('SettingsPage');
+  const [saveSuccess, setSaveSuccess] = useState(false);
+  const [migrateSuccess, setMigrateSuccess] = useState(false);
+  const [migrationProgress, setMigrationProgress] = useState(0);
+
+  // Global theme management state
+  const [globalThemes, setGlobalThemes] = useState<GlobalTheme[]>(GLOBAL_THEMES);
+  const [editingTheme, setEditingTheme] = useState<GlobalTheme | null>(null);
+  const [showThemeModal, setShowThemeModal] = useState(false);
+
+  // Migration state
+  const [migrationStats, setMigrationStats] = useState({
+    goals: 0,
+    stories: 0, 
+    tasks: 0,
+    needsMigration: false
+  });
+
+  // Fitness & Integrations
+  const [parkrunAthleteId, setParkrunAthleteId] = useState('');
+  const [parkrunAutoSync, setParkrunAutoSync] = useState(false);
+  const [stravaAutoSync, setStravaAutoSync] = useState(false);
+  const [parkrunDefaultEventSlug, setParkrunDefaultEventSlug] = useState('');
+  const [parkrunDefaultStartRun, setParkrunDefaultStartRun] = useState<string>('');
+  const [parkrunAutoComputePercentiles, setParkrunAutoComputePercentiles] = useState(false);
+  const [parkrunApiUsername, setParkrunApiUsername] = useState('');
+  const [parkrunApiPassword, setParkrunApiPassword] = useState('');
+  const [parkrunApiConnecting, setParkrunApiConnecting] = useState(false);
+  const [parkrunApiMsg, setParkrunApiMsg] = useState('');
+  const [parkrunApiError, setParkrunApiError] = useState('');
+  const [autoEnrichStravaHR, setAutoEnrichStravaHR] = useState(false);
+  const [autoComputeFitnessMetrics, setAutoComputeFitnessMetrics] = useState(false);
+  const [excludeWithDadFromMetrics, setExcludeWithDadFromMetrics] = useState(true);
+  const [targetWeightKg, setTargetWeightKg] = useState('');
+  const [targetBodyFatPct, setTargetBodyFatPct] = useState('');
+  const [targetStepsPerDay, setTargetStepsPerDay] = useState('');
+  const [targetDistanceKmPerDay, setTargetDistanceKmPerDay] = useState('');
+  const [targetWorkoutMinutesPerWeek, setTargetWorkoutMinutesPerWeek] = useState('');
+  const [targetAwakeHoursPerDay, setTargetAwakeHoursPerDay] = useState('');
+  const [targetWorkHoursPerDay, setTargetWorkHoursPerDay] = useState('');
+  const [targetWorkoutPctOfFreeTime, setTargetWorkoutPctOfFreeTime] = useState('');
+  const [targetProteinG, setTargetProteinG] = useState('');
+  const [targetFatG, setTargetFatG] = useState('');
+  const [targetCarbsG, setTargetCarbsG] = useState('');
+  const [targetCaloriesKcal, setTargetCaloriesKcal] = useState('');
+  const [locationName, setLocationName] = useState('');
+  const [locationLat, setLocationLat] = useState<string>('');
+  const [locationLon, setLocationLon] = useState<string>('');
+  const [timezone, setTimezone] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [searchingLocation, setSearchingLocation] = useState(false);
+  const [searchError, setSearchError] = useState('');
+  const [saveProfileMsg, setSaveProfileMsg] = useState<string>('');
+  const [saveProfileError, setSaveProfileError] = useState<string>('');
+  const [savingProfile, setSavingProfile] = useState<boolean>(false);
+  const [savingLocation, setSavingLocation] = useState<boolean>(false);
+  const [saveLocationMsg, setSaveLocationMsg] = useState('');
+  const [saveLocationError, setSaveLocationError] = useState('');
+  const timezones = React.useMemo(() => {
+    const anyIntl = Intl as any;
+    if (anyIntl && typeof anyIntl.supportedValuesOf === 'function') {
+      return anyIntl.supportedValuesOf('timeZone') as string[];
+    }
+    // Fallback minimal list
+    return ['Europe/London', 'Europe/Dublin', 'UTC', 'America/New_York', 'America/Los_Angeles'];
+  }, []);
+
+  const [maintenanceStatus, setMaintenanceStatus] = useState('');
+  const [maintenanceError, setMaintenanceError] = useState('');
+  const [maintenanceRunning, setMaintenanceRunning] = useState(false);
+
+  const { entries: diagnosticsEntries, clear: clearDiagnostics, snapshot: snapshotDiagnostics } = useDiagnosticsLog();
+
+  const [activeTab, setActiveTab] = useState<SettingsTab>(normalizeTab(new URLSearchParams(location.search).get('tab')));
+
+  useEffect(() => {
+    const nextTab = normalizeTab(new URLSearchParams(location.search).get('tab'));
+    if (nextTab !== activeTab) {
+      setActiveTab(nextTab);
+    }
+  }, [location.search, activeTab]);
+
+  const handleTabSelect = (key: string | null) => {
+    if (!key) return;
+    const tab = normalizeTab(key);
+    if (tab !== activeTab) {
+      setActiveTab(tab);
+    }
+
+    const params = new URLSearchParams(location.search);
+    if (params.get('tab') === tab) return;
+    params.set('tab', tab);
+    const searchString = params.toString();
+    navigate(`${location.pathname}?${searchString}`, { replace: true });
+  };
+  // Finance (Monzo)
+  const [monzoConnected, setMonzoConnected] = useState(false);
+  const [monzoAccounts, setMonzoAccounts] = useState<Array<{ id: string; description?: string }>>([]);
+  const [monzoAccountId, setMonzoAccountId] = useState<string>('');
+ 
+
+  // Reminders (Shortcuts) helpers
+  const [remindersSecret, setRemindersSecret] = useState<string>('');
+  const userUid = currentUser?.uid || '';
+  const pushUrl = `https://bob20250810.web.app/reminders/push?uid=${userUid}`;
+  const pullUrl = `https://bob20250810.web.app/reminders/pull?uid=${userUid}`;
+  const jellyPush = `shortcut "BOB Reminders – Push" {\n  let base = \"https://bob20250810.web.app\"\n  let uid = ask(\"Enter BOB User ID\")\n  let secret = ask(\"Enter Reminders Secret\")\n  let remindersList = ask(\"Reminders List (default: Personal)\")\n  if (remindersList == null || remindersList == \"\") { remindersList = \"Personal\" }\n  let headers = dictionary { \"x-reminders-secret\": secret }\n  let url = base + \"/reminders/push?uid=\" + uid\n  let response = getContentsOfURL(url: url, method: GET, headers: headers)\n  let payload = getDictionary(response)\n  let tasks = payload[\"tasks\"]\n  repeat task in tasks {\n    let id = task[\"id\"]\n    let title = task[\"title\"]\n    let dueDateMs = task[\"dueDate\"]\n    let ref = task[\"ref\"] ?? id\n    let storyId = task[\"storyId\"]\n    let goalId = task[\"goalId\"]\n    let createdAtMs = task[\"createdAt\"]\n    let createdLine = \"\"\n    if (createdAtMs != null) {\n      let createdDate = date((createdAtMs / 1000))\n      createdLine = \"[Created: \" + formatDate(createdDate, \"yyyy-MM-dd HH:mm\") + \"]\"\n    }\n    let due = null\n    if (dueDateMs != null) { due = date((dueDateMs / 1000)) }\n    let marker = \"BOB: \" + ref\n    let existing = findReminders(inList: remindersList, where: notesContains(marker), limit: 1)\n    if (count(existing) == 0) {\n      let extra = \"\"\n      if (storyId != null && storyId != \"\") { extra = extra + \" | Story: \" + storyId }\n      if (goalId != null && goalId != \"\") { extra = extra + \" | Goal: \" + goalId }\n      let line1 = marker + extra\n      let line2 = \"[\" + formatDate(currentDate(), \"yyyy-MM-dd HH:mm\") + \"] Created via Push\"\n      let line3 = (due != null) ? (\"(due: \" + formatDate(due, \"yyyy-MM-dd\") + \")\") : \"\"\n      let notes = line1 + \"\\n\" + line2 + (line3 == \"\" ? \"\" : (\" \" + line3)) + (createdLine == \"\" ? \"\" : (\"\\n\" + createdLine))\n      let r = createReminder(title: title, inList: remindersList, dueDate: due, notes: notes)\n    } else {\n      let r = first(existing)\n      setReminder(r, title: title, dueDate: due)\n      let prepend = \"[\" + formatDate(currentDate(), \"yyyy-MM-dd HH:mm\") + \"] Updated via Push\"\n      prependReminderNotes(r, prepend)\n    }\n  }\n}\n`;
+  const jellyPull = `shortcut \"BOB Reminders – Pull\" {\n  let base = \"https://bob20250810.web.app\"\n  let uid = ask(\"Enter BOB User ID\")\n  let secret = ask(\"Enter Reminders Secret\")\n  let remindersList = ask(\"Reminders List (default: Personal)\")\n  if (remindersList == null || remindersList == \"\") { remindersList = \"Personal\" }\n  let lookbackMinutes = 120\n  let since = addToDate(currentDate(), minutes: -lookbackMinutes)\n  let candidates = findReminders(inList: remindersList, where: modifiedAfter(since))\n  let changes = []\n  repeat r in candidates {\n    let rid = identifier(r)\n    let notes = getReminderNotes(r)\n    let firstLine = firstLineOf(notes)\n    let id = null\n    if (startsWith(firstLine, \"BOB:\")) { id = trim(replace(firstLine, \"BOB:\", \"\")) }\n    let completed = isReminderCompleted(r)\n    let entry = dictionary { \"id\": id, \"reminderId\": rid, \"completed\": completed }\n    changes = append(changes, entry)\n    let stamp = \"[\" + formatDate(currentDate(), \"yyyy-MM-dd HH:mm\") + \"] \" + (completed ? \"Completed\" : \"Updated\") + \" in Reminders\"\n    prependReminderNotes(r, stamp)\n  }\n  let body = dictionary { \"tasks\": changes, \"uid\": uid }\n  let headers = dictionary { \"x-reminders-secret\": secret, \"Content-Type\": \"application/json\" }\n  let url = base + \"/reminders/pull?uid=\" + uid\n  let result = getContentsOfURL(url: url, method: POST, headers: headers, body: toJSON(body))\n  showResult(result)\n}\n`;
+  const copy = async (text: string) => {
+    try { await navigator.clipboard.writeText(text); alert('Copied'); } catch {}
+  };
+
+  // Generate minimal Apple Shortcuts JSON skeletons for import
+  const makePushShortcutJson = (uid: string, secret: string, base: string) => ({
+    WFWorkflowClientVersion: 900,
+    WFWorkflowIcon: { WFWorkflowIconGlyphNumber: 59513, WFWorkflowIconStartColor: 0 },
+    WFWorkflowName: 'BOB Reminders – Push',
+    WFWorkflowActions: [
+      {
+        WFWorkflowActionIdentifier: 'is.workflow.actions.getcontentsurl',
+        WFWorkflowActionParameters: {
+          WFGetContentsOfURLActionURL: `${base}/reminders/push?uid=${uid}`,
+          WFHTTPMethod: 'GET',
+          WFHTTPHeaders: { 'x-reminders-secret': secret }
+        }
+      }
+    ]
+  });
+
+  const makePullShortcutJson = (uid: string, secret: string, base: string) => ({
+    WFWorkflowClientVersion: 900,
+    WFWorkflowIcon: { WFWorkflowIconGlyphNumber: 59513, WFWorkflowIconStartColor: 0 },
+    WFWorkflowName: 'BOB Reminders – Pull',
+    WFWorkflowActions: [
+      {
+        WFWorkflowActionIdentifier: 'is.workflow.actions.getcontentsurl',
+        WFWorkflowActionParameters: {
+          WFGetContentsOfURLActionURL: `${base}/reminders/pull?uid=${uid}`,
+          WFHTTPMethod: 'POST',
+          WFHTTPHeaders: { 'x-reminders-secret': secret, 'Content-Type': 'application/json' },
+          WFRequestBody: JSON.stringify({ tasks: [] })
+        }
+      }
+    ]
+  });
+
+  const downloadJson = (filename: string, data: any) => {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleDownloadDiagnostics = () => {
+    const payload = snapshotDiagnostics();
+    downloadJson('bob-ai-diagnostics.json', payload);
+  };
+
+  const handleRunMaintenance = async () => {
+    if (!currentUser) return;
+    setMaintenanceRunning(true);
+    setMaintenanceStatus('');
+    setMaintenanceError('');
+    try {
+      const callable = httpsCallable(functions, 'runNightlyMaintenanceNow');
+      const response: any = await callable({ sendSummary: false });
+      const payload = response?.data ?? response;
+      const summary = payload?.maintenance?.summary || payload?.maintenanceSummary;
+      if (summary?.priority && typeof summary.priority.updated === 'number') {
+        setMaintenanceStatus(`AI reprioritised ${summary.priority.updated} tasks and adjusted ${summary.dueDates?.adjustedTop || 0} due dates.`);
+      } else {
+        setMaintenanceStatus('AI reprioritisation completed');
+      }
+    } catch (error: any) {
+      console.error('Failed to run nightly maintenance', error);
+      setMaintenanceError(error?.message || 'Failed to run AI reprioritisation');
+    } finally {
+      setMaintenanceRunning(false);
+    }
+  };
+
+  // Check if database needs migration to new theme system
+  const checkMigrationStatus = useCallback(async () => {
+    if (!currentUser) return;
+
+    try {
+      const collections = ['goals', 'stories', 'tasks'];
+      let needsMigration = false;
+
+      for (const collectionName of collections) {
+        const q = query(collection(db, collectionName), where('ownerUid', '==', currentUser.uid));
+        const snapshot = await getDocs(q);
+        
+        const count = snapshot.size;
+
+        // Check if any items have string-based themes (need migration)
+        snapshot.docs.forEach(doc => {
+          const data = doc.data();
+          if (typeof data.theme === 'string') {
+            needsMigration = true;
+          }
+        });
+
+        setMigrationStats(prev => ({
+          ...prev,
+          [collectionName]: count,
+          needsMigration
+        }));
+      }
+    } catch (error) {
+      console.error('Error checking migration status:', error);
+    }
+  }, [currentUser]);
+
+  // Load global theme settings from Firebase
+  useEffect(() => {
+    const loadGlobalThemes = async () => {
+      if (!currentUser) return;
+      
+      try {
+        const docRef = doc(db, 'global_themes', currentUser.uid);
+        const docSnap = await getDoc(docRef);
+        
+        if (docSnap.exists()) {
+          const data = docSnap.data() as GlobalThemeSettings;
+          setGlobalThemes(data.themes || GLOBAL_THEMES);
+        }
+        // Load fitness profile fields
+        const profileRef = doc(db, 'profiles', currentUser.uid);
+        const profileSnap = await getDoc(profileRef);
+      if (profileSnap.exists()) {
+        const p = profileSnap.data() as any;
+          setParkrunAthleteId(p.parkrunAthleteId || '');
+          setParkrunAutoSync(p.parkrunAutoSync !== false);
+          setStravaAutoSync(p.stravaAutoSync !== false);
+          setParkrunDefaultEventSlug(p.parkrunDefaultEventSlug || '');
+          setParkrunDefaultStartRun(p.parkrunDefaultStartRun ? String(p.parkrunDefaultStartRun) : '');
+          setParkrunAutoComputePercentiles(p.parkrunAutoComputePercentiles !== false);
+          setParkrunApiUsername(p.parkrunApiUsername || '');
+          setAutoEnrichStravaHR(p.autoEnrichStravaHR !== false);
+        setAutoComputeFitnessMetrics(p.autoComputeFitnessMetrics !== false);
+        setExcludeWithDadFromMetrics(p.excludeWithDadFromMetrics !== false);
+          setTargetWeightKg(p.targetWeightKg != null ? String(p.targetWeightKg) : (p.healthTargetWeightKg != null ? String(p.healthTargetWeightKg) : ''));
+          setTargetBodyFatPct(p.targetBodyFatPct != null ? String(p.targetBodyFatPct) : (p.healthTargetBodyFatPct != null ? String(p.healthTargetBodyFatPct) : ''));
+          setTargetStepsPerDay(p.targetStepsPerDay != null ? String(p.targetStepsPerDay) : (p.dailyStepTarget != null ? String(p.dailyStepTarget) : (p.healthTargetStepsPerDay != null ? String(p.healthTargetStepsPerDay) : '')));
+          setTargetDistanceKmPerDay(p.targetDistanceKmPerDay != null ? String(p.targetDistanceKmPerDay) : (p.dailyDistanceTargetKm != null ? String(p.dailyDistanceTargetKm) : (p.healthTargetDistanceKmPerDay != null ? String(p.healthTargetDistanceKmPerDay) : '')));
+          setTargetWorkoutMinutesPerWeek(p.weeklyWorkoutTargetMinutes != null ? String(p.weeklyWorkoutTargetMinutes) : (p.targetWorkoutMinutesPerWeek != null ? String(p.targetWorkoutMinutesPerWeek) : (p.healthTargetWorkoutMinutesWeekly != null ? String(p.healthTargetWorkoutMinutesWeekly) : '')));
+          setTargetAwakeHoursPerDay(p.awakeHoursPerDay != null ? String(p.awakeHoursPerDay) : (p.targetAwakeHoursPerDay != null ? String(p.targetAwakeHoursPerDay) : (p.healthAwakeHoursPerDay != null ? String(p.healthAwakeHoursPerDay) : '')));
+          setTargetWorkHoursPerDay(p.workHoursPerDay != null ? String(p.workHoursPerDay) : (p.targetWorkHoursPerDay != null ? String(p.targetWorkHoursPerDay) : (p.healthWorkHoursPerDay != null ? String(p.healthWorkHoursPerDay) : '')));
+          setTargetWorkoutPctOfFreeTime(p.targetWorkoutPctOfFreeTime != null ? String(p.targetWorkoutPctOfFreeTime) : (p.weeklyWorkoutTargetPercent != null ? String(p.weeklyWorkoutTargetPercent) : (p.trainingTimePercent != null ? String(p.trainingTimePercent) : '')));
+          setTargetProteinG(p.targetProteinG != null ? String(p.targetProteinG) : (p.dailyProteinTargetG != null ? String(p.dailyProteinTargetG) : (p.healthTargetProteinG != null ? String(p.healthTargetProteinG) : '')));
+          setTargetFatG(p.targetFatG != null ? String(p.targetFatG) : (p.dailyFatTargetG != null ? String(p.dailyFatTargetG) : (p.healthTargetFatG != null ? String(p.healthTargetFatG) : '')));
+          setTargetCarbsG(p.targetCarbsG != null ? String(p.targetCarbsG) : (p.dailyCarbsTargetG != null ? String(p.dailyCarbsTargetG) : (p.healthTargetCarbsG != null ? String(p.healthTargetCarbsG) : '')));
+          setTargetCaloriesKcal(p.targetCaloriesKcal != null ? String(p.targetCaloriesKcal) : (p.dailyCaloriesTargetKcal != null ? String(p.dailyCaloriesTargetKcal) : (p.healthTargetCaloriesKcal != null ? String(p.healthTargetCaloriesKcal) : '')));
+        setMonzoConnected(!!p.monzoConnected);
+        setLocationName(p.locationName || '');
+        setLocationLat(p.locationLat != null ? String(p.locationLat) : '');
+        setLocationLon(p.locationLon != null ? String(p.locationLon) : '');
+        setTimezone(p.timezone || '');
+      }
+        
+        // Check migration status
+        await checkMigrationStatus();
+        
+      } catch (error) {
+        console.error('Error loading global themes:', error);
+      }
+    };
+
+    loadGlobalThemes();
+  }, [currentUser, checkMigrationStatus]);
+
+  useEffect(() => {
+    if (!maintenanceStatus) return;
+    const timer = setTimeout(() => setMaintenanceStatus(''), 3000);
+    return () => clearTimeout(timer);
+  }, [maintenanceStatus]);
+
+  useEffect(() => {
+    if (!maintenanceError) return;
+    const timer = setTimeout(() => setMaintenanceError(''), 5000);
+    return () => clearTimeout(timer);
+  }, [maintenanceError]);
+
+  // Initialize theme debugging (only when debug mode is enabled)
+  useEffect(() => {
+    // Theme debugging is now controlled by THEME_DEBUG_ENABLED flag in themeDebugger.ts
+    // This prevents console flooding during normal usage
+  }, [isDark, theme, logThemeInfo, scanPageForInconsistencies]);
+
+  // Migrate database to use numeric theme IDs
+  const migrateDatabase = async () => {
+    if (!currentUser) return;
+
+    try {
+      setMigrationProgress(0);
+      const collections = ['goals', 'stories', 'tasks'];
+      const batch = writeBatch(db);
+      let totalProcessed = 0;
+      let totalItems = 0;
+      
+      // First count total items
+      for (const collectionName of collections) {
+        const q = query(collection(db, collectionName), where('ownerUid', '==', currentUser.uid));
+        const snapshot = await getDocs(q);
+        totalItems += snapshot.size;
+      }
+      
+      for (const collectionName of collections) {
+        const q = query(collection(db, collectionName), where('ownerUid', '==', currentUser.uid));
+        const snapshot = await getDocs(q);
+        
+        snapshot.docs.forEach(docSnapshot => {
+          const data = docSnapshot.data();
+          
+          // Only migrate if theme is still a string
+          if (typeof data.theme === 'string') {
+            const themeMapping: Record<string, number> = {
+              'Health': 1, 'Growth': 2, 'Wealth': 3, 'Tribe': 4, 'Home': 5, 'General': 0
+            };
+            
+            const newThemeId = themeMapping[data.theme] || 0;
+            
+            batch.update(doc(db, collectionName, docSnapshot.id), {
+              theme: newThemeId,
+              migratedAt: serverTimestamp()
+            });
+          }
+          
+          totalProcessed++;
+          setMigrationProgress(Math.round((totalProcessed / totalItems) * 100));
+        });
+      }
+      
+      await batch.commit();
+      setMigrateSuccess(true);
+      await checkMigrationStatus();
+      
+    } catch (error) {
+      console.error('Error migrating database:', error);
+    }
+  };
+
+  // Monzo handlers
+  const handleMonzoConnect = async () => {
+    if (!currentUser) return;
+    try {
+      const nonce = Math.random().toString(36).slice(2);
+      const url = `${window.location.origin}/api/monzo/start?uid=${currentUser.uid}&nonce=${nonce}`;
+      const popup = window.open(url, 'monzo-oauth', 'width=500,height=700');
+      const check = setInterval(() => {
+        if (popup?.closed) { clearInterval(check); setMonzoConnected(true); }
+      }, 800);
+    } catch (e) { console.warn('Monzo connect failed', (e as any)?.message); }
+  };
+
+  const handleMonzoListAccounts = async () => {
+    try {
+      const callable = httpsCallable(functions, 'monzoListAccounts');
+      const res: any = await callable({});
+      const accounts = (res?.data?.accounts || []).map((a: any) => ({ id: a.id, description: a.description || a.type }));
+      setMonzoAccounts(accounts);
+      if (!monzoAccountId && accounts[0]) setMonzoAccountId(accounts[0].id);
+    } catch (e) { console.warn('Monzo list accounts failed', (e as any)?.message); }
+  };
+
+  const handleMonzoSync = async () => {
+    if (!monzoAccountId) { alert('Select a Monzo account first'); return; }
+    try {
+      const callable = httpsCallable(functions, 'monzoSyncTransactions');
+      const res: any = await callable({ accountId: monzoAccountId });
+      alert(`Synced ${res?.data?.count || 0} transactions`);
+    } catch (e) { alert('Monzo sync failed: ' + ((e as any)?.message || 'unknown')); }
+  };
+
+  const handleConnectParkrunApi = async () => {
+    if (!parkrunApiUsername || !parkrunApiPassword) {
+      setParkrunApiError('Enter Parkrun username and password first.');
+      return;
+    }
+    setParkrunApiConnecting(true);
+    setParkrunApiMsg('');
+    setParkrunApiError('');
+    try {
+      const fn = httpsCallable(functions, 'connectParkrunApi');
+      const res: any = await fn({
+        username: parkrunApiUsername.trim(),
+        password: parkrunApiPassword,
+        athleteId: parkrunAthleteId ? Number(parkrunAthleteId) : null,
+      });
+      const connectedAthlete = res?.data?.athleteId ? String(res.data.athleteId) : '';
+      if (!parkrunAthleteId && connectedAthlete) setParkrunAthleteId(connectedAthlete);
+      setParkrunApiPassword('');
+      setParkrunApiMsg(`Connected Parkrun API${connectedAthlete ? ` (athlete ${connectedAthlete})` : ''}.`);
+    } catch (e: any) {
+      setParkrunApiError(e?.message || 'Failed to connect Parkrun API');
+    } finally {
+      setParkrunApiConnecting(false);
+    }
+  };
+
+  // Save global theme configuration
+  const saveGlobalThemes = async () => {
+    if (!currentUser) return;
+
+    try {
+      const globalThemeSettings: GlobalThemeSettings = {
+        themes: globalThemes,
+        customizations: {},
+        lastUpdated: serverTimestamp()
+      };
+
+      await setDoc(doc(db, 'global_themes', currentUser.uid), globalThemeSettings);
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 3000);
+    } catch (error) {
+      console.error('Error saving global themes:', error);
+    }
+  };
+
+  // Edit theme color
+  const handleThemeEdit = (theme: GlobalTheme) => {
+    setEditingTheme({ ...theme });
+    setShowThemeModal(true);
+  };
+
+  // Save edited theme
+  const saveThemeEdit = () => {
+    if (!editingTheme) return;
+
+    setGlobalThemes(prev => 
+      prev.map(theme => 
+        theme.id === editingTheme.id ? editingTheme : theme
+      )
+    );
+    
+    setShowThemeModal(false);
+    setEditingTheme(null);
+  };
+
+  // Reset to default themes
+  const resetToDefaults = () => {
+    setGlobalThemes(GLOBAL_THEMES);
+  };
+
+  return (
+    <Container fluid className="py-4">
+      <Row>
+        <Col>
+          <div className="d-flex justify-content-between align-items-center mb-4">
+            <h2 style={{ color: colors.primary }} className="mb-0">
+              <Settings size={28} className="me-2" />
+              Settings
+            </h2>
+            <Button 
+              variant="outline-info" 
+              size="sm"
+              onClick={(e) => {
+                createClickHandler()(e);
+                scanPageForInconsistencies();
+              }}
+            >
+              🔍 Debug Theme
+            </Button>
+          </div>
+        </Col>
+      </Row>
+
+      <Row className="mb-4">
+        <Col>
+          <Card>
+            <Card.Body>
+              <h5 className="mb-2">Settings Sections</h5>
+              <p className="text-muted small mb-3">Flattened IA: Profile, AI, Integrations, Finance, Notifications, Privacy/Security, and Developer.</p>
+              <div className="d-flex flex-wrap gap-2">
+                <Button variant="outline-primary" size="sm" onClick={() => navigate('/settings/profile')}>Profile</Button>
+                <Button variant="outline-primary" size="sm" onClick={() => navigate('/settings/ai')}>AI</Button>
+                <Button variant="outline-primary" size="sm" onClick={() => navigate('/settings/integrations')}>Integrations</Button>
+                <Button variant="outline-primary" size="sm" onClick={() => navigate('/settings/finance')}>Finance</Button>
+                <Button variant="outline-primary" size="sm" onClick={() => navigate('/settings/notifications')}>Notifications</Button>
+                <Button variant="outline-primary" size="sm" onClick={() => navigate('/settings/privacy-security')}>Privacy/Security</Button>
+                <Button variant="outline-primary" size="sm" onClick={() => navigate('/settings/developer')}>Developer</Button>
+              </div>
+            </Card.Body>
+          </Card>
+        </Col>
+      </Row>
+
+      <Tab.Container activeKey={TAB_TO_PANE[activeTab]} onSelect={handleTabSelect}>
+        <Row>
+          <Col sm={3}>
+            <Nav variant="pills" className="flex-column">
+              <Nav.Item>
+                <Nav.Link 
+                  eventKey="profile" 
+                  style={{ color: colors.primary }}
+                  onClick={createClickHandler()}
+                >
+                  <User size={20} className="me-2" />
+                  Profile
+                </Nav.Link>
+              </Nav.Item>
+              <Nav.Item>
+                <Nav.Link 
+                  eventKey="ai" 
+                  style={{ color: colors.primary }}
+                  onClick={createClickHandler()}
+                >
+                  <Wand2 size={20} className="me-2" />
+                  AI
+                </Nav.Link>
+              </Nav.Item>
+              <Nav.Item>
+                <Nav.Link 
+                  eventKey="integrations" 
+                  style={{ color: colors.primary }}
+                  onClick={createClickHandler()}
+                >
+                  <Plug size={20} className="me-2" />
+                  Integrations
+                </Nav.Link>
+              </Nav.Item>
+              <Nav.Item>
+                <Nav.Link 
+                  eventKey="finance" 
+                  style={{ color: colors.primary }}
+                  onClick={createClickHandler()}
+                >
+                  <Database size={20} className="me-2" />
+                  Finance
+                </Nav.Link>
+              </Nav.Item>
+              <Nav.Item>
+                <Nav.Link 
+                  eventKey="notifications"
+                  style={{ color: colors.primary }}
+                  onClick={createClickHandler()}
+                >
+                  <Bell size={20} className="me-2" />
+                  Notifications
+                </Nav.Link>
+              </Nav.Item>
+              <Nav.Item>
+                <Nav.Link 
+                  eventKey="privacy" 
+                  style={{ color: colors.primary }}
+                  onClick={createClickHandler()}
+                >
+                  <Shield size={20} className="me-2" />
+                  Privacy/Security
+                </Nav.Link>
+              </Nav.Item>
+              <Nav.Item>
+                <Nav.Link
+                  eventKey="developer"
+                  style={{ color: colors.primary }}
+                  onClick={createClickHandler()}
+                >
+                  <FlaskConical size={20} className="me-2" />
+                  Developer
+                  {(diagnosticsEntries.length > 0 || migrationStats.needsMigration) && (
+                    <Badge bg="info" className="ms-2">{diagnosticsEntries.length + (migrationStats.needsMigration ? 1 : 0)}</Badge>
+                  )}
+                </Nav.Link>
+              </Nav.Item>
+            </Nav>
+          </Col>
+          
+          <Col sm={9}>
+            <Tab.Content>
+              {/* Themes & Colors Tab */}
+              <Tab.Pane eventKey="themes">
+                <Card 
+                  style={{ backgroundColor: backgrounds.card, border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}` }}
+                  onClick={createClickHandler()}
+                >
+                  <Card.Header 
+                    style={{ backgroundColor: backgrounds.surface, color: colors.primary }}
+                    onClick={createClickHandler()}
+                  >
+                    <h4 className="mb-0">Global Theme Management</h4>
+                    <small style={{ color: colors.secondary }}>
+                      Customize themes used across all goals, stories, and tasks
+                    </small>
+                  </Card.Header>
+                  <Card.Body>
+                    {saveSuccess && (
+                      <Alert variant="success" className="mb-3">
+                        Global themes saved successfully!
+                      </Alert>
+                    )}
+                    
+                    <div className="d-flex justify-content-between align-items-center mb-3">
+                      <h5 style={{ color: colors.primary }}>Global Themes ({globalThemes.length})</h5>
+                      <div>
+                        <Button 
+                          variant="outline-secondary" 
+                          size="sm" 
+                          onClick={(e) => {
+                            createClickHandler()(e);
+                            resetToDefaults();
+                          }}
+                          className="me-2"
+                        >
+                          Reset to Defaults
+                        </Button>
+                        <Button 
+                          variant="primary" 
+                          onClick={(e) => {
+                            createClickHandler()(e);
+                            saveGlobalThemes();
+                          }}
+                        >
+                          Save Themes
+                        </Button>
+                      </div>
+                    </div>
+
+                    <Row>
+                      {globalThemes.map((theme) => (
+                        <Col md={6} lg={4} key={theme.id} className="mb-3">
+                          <Card 
+                            style={{ 
+                              backgroundColor: theme.color,
+                              color: getContrastTextColor(theme.color),
+                              cursor: 'pointer',
+                              transition: 'transform 0.2s ease'
+                            }}
+                            className="h-100"
+                            onClick={(e) => {
+                              createClickHandler()(e);
+                              handleThemeEdit(theme);
+                            }}
+                          >
+                            <Card.Body className="text-center">
+                              <h6 className="mb-1">{theme.label}</h6>
+                              <small style={{ opacity: 0.8 }}>
+                                ID: {theme.id} | {theme.color}
+                              </small>
+                            </Card.Body>
+                          </Card>
+                        </Col>
+                      ))}
+                    </Row>
+
+                    <Alert variant="info" className="mt-3">
+                      <strong>Note:</strong> Changes to themes will apply to all new goals, stories, and tasks. 
+                      Existing items will retain their current theme assignments unless migrated.
+                    </Alert>
+                  </Card.Body>
+                </Card>
+              </Tab.Pane>
+
+              {/* Finance (Monzo) */}
+              <Tab.Pane eventKey="finance">
+                <Card className="mb-3" style={{ backgroundColor: backgrounds.card }}>
+                  <Card.Body>
+                    <h5 className="mb-3">Monzo Bank</h5>
+                    <div className="d-flex justify-content-between align-items-center p-3 border rounded">
+                      <div>
+                        <div className="mb-1"><strong>Status:</strong> {monzoConnected ? <span className="text-success">Connected</span> : <span className="text-muted">Not connected</span>}</div>
+                        <div className="small text-muted">Connect and import transactions for budgeting and dashboards</div>
+                      </div>
+                      <div className="d-flex flex-column align-items-end gap-2">
+                        <button className={`btn ${monzoConnected ? 'btn-outline-danger' : 'btn-outline-primary'}`} onClick={handleMonzoConnect}>
+                          {monzoConnected ? 'Reconnect' : 'Connect'}
+                        </button>
+                        {monzoConnected && (
+                          <div className="d-flex gap-2 align-items-center">
+                            <select className="form-select form-select-sm" value={monzoAccountId} onChange={(e) => setMonzoAccountId(e.target.value)} style={{ minWidth: 220 }}>
+                              <option value="">Select account…</option>
+                              {monzoAccounts.map(a => (<option key={a.id} value={a.id}>{a.description || a.id}</option>))}
+                            </select>
+                            <button className="btn btn-outline-secondary btn-sm" onClick={handleMonzoListAccounts}>List Accounts</button>
+                            <button className="btn btn-outline-success btn-sm" onClick={handleMonzoSync}>Sync Now</button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </Card.Body>
+                </Card>
+
+                <Card className="mb-3" style={{ backgroundColor: backgrounds.card }}>
+                  <Card.Body>
+                    <h6 className="mb-2">Budgets moved</h6>
+                    <p className="text-muted mb-2">Manage budgets, categories, and merchant mappings in the Finance section.</p>
+                    <div className="d-flex gap-2 flex-wrap">
+                      <a className="btn btn-outline-secondary btn-sm" href="/finance/budgets">Open Budgets</a>
+                      <a className="btn btn-outline-secondary btn-sm" href="/finance/transactions">Open Transactions</a>
+                      <a className="btn btn-outline-secondary btn-sm" href="/finance/merchants">Open Merchants</a>
+                    </div>
+                  </Card.Body>
+                </Card>
+              </Tab.Pane>
+
+              {/* Reminders (Shortcuts) Tab */}
+              <Tab.Pane eventKey="reminders">
+                <Card style={{ backgroundColor: backgrounds.card, border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}` }}>
+                  <Card.Header style={{ backgroundColor: backgrounds.surface, color: colors.primary }}>
+                    <h4 className="mb-0">Apple Reminders (Shortcuts)</h4>
+                    <small className="text-muted">Endpoints, your UID, Jellycuts code, and secret rotation</small>
+                  </Card.Header>
+                  <Card.Body>
+                    <Row className="mb-3">
+                      <Col md={6}>
+                        <Form.Group className="mb-2">
+                          <Form.Label>Your User ID (UID)</Form.Label>
+                          <div className="d-flex gap-2">
+                            <Form.Control readOnly value={userUid} />
+                            <Button variant="outline-secondary" onClick={() => copy(userUid)}><Clipboard size={16} /></Button>
+                          </div>
+                        </Form.Group>
+                        <Form.Group className="mb-2">
+                          <Form.Label>Push URL</Form.Label>
+                          <div className="d-flex gap-2">
+                            <Form.Control readOnly value={pushUrl} />
+                            <Button variant="outline-secondary" onClick={() => copy(pushUrl)}><Clipboard size={16} /></Button>
+                          </div>
+                        </Form.Group>
+                        <Form.Group className="mb-2">
+                          <Form.Label>Pull URL</Form.Label>
+                          <div className="d-flex gap-2">
+                            <Form.Control readOnly value={pullUrl} />
+                            <Button variant="outline-secondary" onClick={() => copy(pullUrl)}><Clipboard size={16} /></Button>
+                          </div>
+                        </Form.Group>
+                        <Form.Group className="mb-2">
+                          <Form.Label>Secret (paste for curl examples)</Form.Label>
+                          <Form.Control type="password" placeholder="REMINDERS_WEBHOOK_SECRET" value={remindersSecret} onChange={(e)=>setRemindersSecret(e.target.value)} />
+                        </Form.Group>
+                      </Col>
+                      <Col md={6}>
+                        <Form.Group className="mb-2">
+                          <Form.Label>curl: Push</Form.Label>
+                          <Form.Control as="textarea" rows={4} readOnly value={`curl -sS -H 'x-reminders-secret: ${remindersSecret||'<SECRET>'}' '${pushUrl}' | jq .`} />
+                          <div className="mt-1"><Button size="sm" variant="outline-secondary" onClick={()=>copy(`curl -sS -H 'x-reminders-secret: ${remindersSecret||'<SECRET>'}' '${pushUrl}' | jq .`)}>Copy</Button></div>
+                        </Form.Group>
+                        <Form.Group className="mb-2">
+                          <Form.Label>curl: Pull (example)</Form.Label>
+                          <Form.Control as="textarea" rows={4} readOnly value={`curl -sS -X POST -H 'x-reminders-secret: ${remindersSecret||'<SECRET>'}' -H 'Content-Type: application/json' -d '{\\"tasks\\":[{\\"id\\":\\"<taskId>\\",\\"reminderId\\":\\"<rid>\\",\\"completed\\":true}]}' '${pullUrl}' | jq .`} />
+                          <div className="mt-1"><Button size="sm" variant="outline-secondary" onClick={()=>copy(`curl -sS -X POST -H 'x-reminders-secret: ${remindersSecret||'<SECRET>'}' -H 'Content-Type: application/json' -d '{\"tasks\":[{\"id\":\"<taskId>\",\"reminderId\":\"<rid>\",\"completed\":true}]}' '${pullUrl}' | jq .`)}>Copy</Button></div>
+                        </Form.Group>
+                      </Col>
+                    </Row>
+                    <Row>
+                      <Col md={6} className="mb-3">
+                        <Card>
+                          <Card.Header><FileCode size={16} className="me-2" /> Jellycuts: Push</Card.Header>
+                          <Card.Body>
+                            <Form.Control as="textarea" rows={12} readOnly value={jellyPush} />
+                            <div className="mt-2"><Button size="sm" variant="outline-secondary" onClick={()=>copy(jellyPush)}>Copy Jelly (Push)</Button></div>
+                            <div className="mt-2"><Button size="sm" variant="outline-primary" onClick={()=>downloadJson('BOB_Reminders_Push.shortcut.json', makePushShortcutJson(userUid, remindersSecret||'<SECRET>', 'https://bob20250810.web.app'))}>Download Apple Shortcut JSON (Push)</Button></div>
+                          </Card.Body>
+                        </Card>
+                      </Col>
+                      <Col md={6} className="mb-3">
+                        <Card>
+                          <Card.Header><FileCode size={16} className="me-2" /> Jellycuts: Pull</Card.Header>
+                          <Card.Body>
+                            <Form.Control as="textarea" rows={12} readOnly value={jellyPull} />
+                            <div className="mt-2"><Button size="sm" variant="outline-secondary" onClick={()=>copy(jellyPull)}>Copy Jelly (Pull)</Button></div>
+                            <div className="mt-2"><Button size="sm" variant="outline-primary" onClick={()=>downloadJson('BOB_Reminders_Pull.shortcut.json', makePullShortcutJson(userUid, remindersSecret||'<SECRET>', 'https://bob20250810.web.app'))}>Download Apple Shortcut JSON (Pull)</Button></div>
+                          </Card.Body>
+                        </Card>
+                      </Col>
+                    </Row>
+                    <Card className="mt-2">
+                      <Card.Header>Rotate Secret</Card.Header>
+                      <Card.Body>
+                        <p className="mb-2">Secret name: <code>REMINDERS_WEBHOOK_SECRET</code> (Google Cloud Secret Manager)</p>
+                        <pre className="p-2 bg-light" style={{whiteSpace:'pre-wrap'}}>
+gcloud secrets versions access latest --secret=REMINDERS_WEBHOOK_SECRET --project=bob20250810
+firebase functions:secrets:set REMINDERS_WEBHOOK_SECRET --project bob20250810
+firebase deploy --only functions:remindersPush,functions:remindersPull --project bob20250810
+                        </pre>
+                        <small className="text-muted">Updating the secret requires redeploying the affected functions.</small>
+                      </Card.Body>
+                    </Card>
+                  </Card.Body>
+                </Card>
+              </Tab.Pane>
+
+              {/* Database Migration Tab */}
+              <Tab.Pane eventKey="database">
+                <Card style={{ backgroundColor: backgrounds.card, border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}` }}>
+                  <Card.Header style={{ backgroundColor: backgrounds.surface, color: colors.primary }}>
+                    <h4 className="mb-0">Database Migration</h4>
+                    <small style={{ color: colors.secondary }}>
+                      Upgrade your data to use the new global theme system
+                    </small>
+                  </Card.Header>
+                  <Card.Body>
+                    {migrateSuccess && (
+                      <Alert variant="success" className="mb-3">
+                        Database migration completed successfully!
+                      </Alert>
+                    )}
+
+                    <Row className="mb-4">
+                      <Col md={4} className="text-center">
+                        <h3 style={{ color: colors.primary }}>{migrationStats.goals}</h3>
+                        <p style={{ color: colors.secondary }}>Goals</p>
+                      </Col>
+                      <Col md={4} className="text-center">
+                        <h3 style={{ color: colors.primary }}>{migrationStats.stories}</h3>
+                        <p style={{ color: colors.secondary }}>Stories</p>
+                      </Col>
+                      <Col md={4} className="text-center">
+                        <h3 style={{ color: colors.primary }}>{migrationStats.tasks}</h3>
+                        <p style={{ color: colors.secondary }}>Tasks</p>
+                      </Col>
+                    </Row>
+
+                    {migrationStats.needsMigration ? (
+                      <div>
+                        <Alert variant="warning">
+                          <strong>Migration Required:</strong> Your database contains items using the old theme format. 
+                          Click below to upgrade them to the new global theme system.
+                        </Alert>
+                        
+                        {migrationProgress > 0 && migrationProgress < 100 && (
+                          <div className="mb-3">
+                            <div className="progress">
+                              <div 
+                                className="progress-bar" 
+                                style={{ width: `${migrationProgress}%` }}
+                              >
+                                {migrationProgress}%
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                        
+                        <Button 
+                          variant="warning" 
+                          onClick={migrateDatabase}
+                          disabled={migrationProgress > 0 && migrationProgress < 100}
+                        >
+                          {migrationProgress > 0 && migrationProgress < 100 ? 'Migrating...' : 'Migrate Database'}
+                        </Button>
+                      </div>
+                    ) : (
+                      <Alert variant="success">
+                        <strong>Up to Date:</strong> Your database is using the latest global theme system.
+                      </Alert>
+                    )}
+                  </Card.Body>
+                </Card>
+              </Tab.Pane>
+
+              <Tab.Pane eventKey="integrations">
+                <IntegrationSettings />
+              </Tab.Pane>
+
+              {/* AI Story/KPI Settings */}
+              <Tab.Pane eventKey="ai">
+                <LLMSettings />
+              </Tab.Pane>
+
+              <Tab.Pane eventKey="diagnostics">
+                <Card style={{ backgroundColor: backgrounds.card, border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}` }}>
+                  <Card.Header style={{ backgroundColor: backgrounds.surface, color: colors.primary }}>
+                    <h4 className="mb-0">AI & Scheduler Diagnostics</h4>
+                    <small className="text-muted">Captured locally whenever planner automation reports an error</small>
+                  </Card.Header>
+                  <Card.Body>
+                    <p className="text-muted small">
+                      These log entries never leave your browser. Share them with the team when reporting planner issues such as
+                      “AI scheduler is unavailable”.
+                    </p>
+
+                    {diagnosticsEntries.length === 0 ? (
+                      <Alert variant="secondary">No diagnostics captured yet. Trigger the planner to populate this log.</Alert>
+                    ) : (
+                      <div className="diagnostics-log border rounded p-3" style={{ maxHeight: 360, overflowY: 'auto', backgroundColor: isDark ? '#1f2937' : '#f8fafc' }}>
+                        {diagnosticsEntries.map((entry) => (
+                          <div key={entry.id} className="mb-3 pb-2 border-bottom">
+                            <div className="d-flex justify-content-between align-items-center mb-1">
+                              <span className="small text-muted">{new Date(entry.timestamp).toLocaleString()}</span>
+                              <div className="d-flex gap-2 align-items-center">
+                                <Badge bg="dark" className="text-uppercase">{entry.level}</Badge>
+                                <Badge bg="secondary">{entry.channel}</Badge>
+                              </div>
+                            </div>
+                            <div className="fw-semibold">{entry.message}</div>
+                            {entry.details && (
+                              <div className="small text-muted">{entry.details}</div>
+                            )}
+                            {entry.context && (
+                              <pre className="bg-transparent border-0 p-0 mt-2 small text-muted" style={{ whiteSpace: 'pre-wrap' }}>
+{JSON.stringify(entry.context, null, 2)}
+                              </pre>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    <div className="d-flex gap-2 mt-3">
+                      <Button
+                        size="sm"
+                        variant="outline-primary"
+                        onClick={handleDownloadDiagnostics}
+                        disabled={diagnosticsEntries.length === 0}
+                      >
+                        Download JSON
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline-danger"
+                        onClick={() => clearDiagnostics()}
+                        disabled={diagnosticsEntries.length === 0}
+                      >
+                        Clear Log
+                      </Button>
+                    </div>
+                  </Card.Body>
+                </Card>
+              </Tab.Pane>
+
+              {/* System Preferences Tab */}
+              <Tab.Pane eventKey="system">
+                <Card style={{ backgroundColor: backgrounds.card, border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}` }}>
+                  <Card.Header style={{ backgroundColor: backgrounds.surface, color: colors.primary }}>
+                    <h4 className="mb-0">System Preferences</h4>
+                  </Card.Header>
+                  <Card.Body>
+                    {/* AI Story Generation Prompt */}
+                    <AISettings />
+
+                    <Card className="mb-3">
+                      <Card.Body>
+                        <h5 className="mb-2">Profile: Location & Timezone</h5>
+                        <Row className="g-3">
+                          <Col md={6}>
+                            <Form.Label style={{ color: colors.primary }}>Location name</Form.Label>
+                            <Form.Control
+                              type="text"
+                              placeholder="e.g., Belfast, UK"
+                              value={locationName}
+                              onChange={(e) => setLocationName(e.target.value)}
+                            />
+                            <Form.Text className="text-muted">Used for weather/news in daily briefings.</Form.Text>
+                          </Col>
+                          <Col md={6}>
+                              <Form.Label style={{ color: colors.primary }}>Timezone</Form.Label>
+                              <Form.Select
+                              value={timezone}
+                              onChange={(e) => setTimezone(e.target.value)}
+                            >
+                              <option value="">Select timezone</option>
+                              {timezones.map((tz) => (
+                                <option key={tz} value={tz}>{tz}</option>
+                              ))}
+                            </Form.Select>
+                          </Col>
+                        </Row>
+                        <Row className="g-3 mt-2">
+                          <Col md={3}>
+                            <Form.Label>Latitude</Form.Label>
+                            <Form.Control
+                              type="number"
+                              step="any"
+                              value={locationLat}
+                              onChange={(e) => setLocationLat(e.target.value)}
+                              placeholder="54.597"
+                            />
+                          </Col>
+                          <Col md={3}>
+                            <Form.Label>Longitude</Form.Label>
+                            <Form.Control
+                              type="number"
+                              step="any"
+                              value={locationLon}
+                              onChange={(e) => setLocationLon(e.target.value)}
+                              placeholder="-5.93"
+                            />
+                          </Col>
+                          <Col md={6}>
+                            <Form.Label>Search location</Form.Label>
+                            <div className="d-flex gap-2">
+                              <Form.Control
+                                type="text"
+                                placeholder="Search e.g., Belfast"
+                                value={searchQuery}
+                                onChange={(e) => setSearchQuery(e.target.value)}
+                              />
+                              <Button
+                                variant="outline-primary"
+                                disabled={searchingLocation || !searchQuery.trim()}
+                                onClick={async () => {
+                                  setSearchingLocation(true);
+                                  setSearchError('');
+                                  try {
+                                    const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchQuery)}&limit=5`, {
+                                      headers: { 'Accept-Language': 'en' },
+                                    });
+                                    const data = await res.json();
+                                    setSearchResults(Array.isArray(data) ? data : []);
+                                  } catch (err: any) {
+                                    setSearchError(err?.message || 'Search failed');
+                                  } finally {
+                                    setSearchingLocation(false);
+                                  }
+                                }}
+                              >
+                                {searchingLocation ? 'Searching…' : 'Search'}
+                              </Button>
+                            </div>
+                            {searchError && <div className="text-danger small mt-1">{searchError}</div>}
+                            {searchResults.length > 0 && (
+                              <div className="border rounded mt-2 p-2" style={{ maxHeight: 180, overflowY: 'auto' }}>
+                                {searchResults.map((r, idx) => (
+                                  <div
+                                    key={idx}
+                                    role="button"
+                                    className="small mb-2"
+                                    onClick={() => {
+                                      setLocationName(r.display_name || '');
+                                      setLocationLat(r.lat || '');
+                                      setLocationLon(r.lon || '');
+                                      setSearchResults([]);
+                                      setSearchQuery(r.display_name || '');
+                                    }}
+                                  >
+                                    <div className="fw-semibold">{r.display_name}</div>
+                                    <div className="text-muted">lat {r.lat}, lon {r.lon}</div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </Col>
+                        </Row>
+                        <div className="mt-3 d-flex align-items-center gap-2">
+                          <Button
+                            variant="primary"
+                            disabled={savingLocation}
+                            onClick={async () => {
+                              if (!currentUser) return;
+                              setSavingLocation(true);
+                              setSaveLocationError('');
+                              try {
+                                await setDoc(doc(db, 'profiles', currentUser.uid), {
+                                  ownerUid: currentUser.uid,
+                                  locationName: locationName || null,
+                                  locationLat: locationLat ? Number(locationLat) : null,
+                                  locationLon: locationLon ? Number(locationLon) : null,
+                                  timezone: timezone || null,
+                                  updatedAt: serverTimestamp(),
+                                }, { merge: true });
+                                setSaveLocationMsg('Location saved');
+                                setTimeout(() => setSaveLocationMsg(''), 2500);
+                              } catch (e: any) {
+                                setSaveLocationError(e?.message || 'Failed to save');
+                              } finally {
+                                setSavingLocation(false);
+                              }
+                            }}
+                          >
+                            {savingLocation ? 'Saving…' : 'Save Location'}
+                          </Button>
+                          {saveLocationMsg && <span className="text-success small">{saveLocationMsg}</span>}
+                          {saveLocationError && <span className="text-danger small">{saveLocationError}</span>}
+                        </div>
+                      </Card.Body>
+                    </Card>
+
+                    <Card className="mb-3">
+                      <Card.Body>
+                        <h5 className="mb-2">Fitness & Integrations</h5>
+                        <Row className="g-3 align-items-end">
+                          <Col md={6}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Parkrun Athlete ID</Form.Label>
+                              <Form.Control
+                                type="text"
+                                placeholder="e.g., 349501"
+                                value={parkrunAthleteId}
+                                onChange={(e) => setParkrunAthleteId(e.target.value)}
+                              />
+                              <Form.Text className="text-muted">Found in your Parkrun profile URL (athleteNumber=...)</Form.Text>
+                            </Form.Group>
+                          </Col>
+                          <Col md={3}>
+                            <Button
+                              variant="primary"
+                              disabled={savingProfile}
+                              onClick={async () => {
+                                if (!currentUser) return;
+                                setSavingProfile(true);
+                                setSaveProfileError('');
+                                try {
+                                  const parsedTargetWeightKg = targetWeightKg.trim() !== '' ? Number(targetWeightKg) : null;
+                                  const parsedTargetBodyFatPct = targetBodyFatPct.trim() !== '' ? Number(targetBodyFatPct) : null;
+                                  const parsedTargetStepsPerDay = targetStepsPerDay.trim() !== '' ? Number(targetStepsPerDay) : null;
+                                  const parsedTargetDistanceKmPerDay = targetDistanceKmPerDay.trim() !== '' ? Number(targetDistanceKmPerDay) : null;
+                                  const parsedTargetWorkoutMinutesPerWeek = targetWorkoutMinutesPerWeek.trim() !== '' ? Number(targetWorkoutMinutesPerWeek) : null;
+                                  const parsedTargetAwakeHoursPerDay = targetAwakeHoursPerDay.trim() !== '' ? Number(targetAwakeHoursPerDay) : null;
+                                  const parsedTargetWorkHoursPerDay = targetWorkHoursPerDay.trim() !== '' ? Number(targetWorkHoursPerDay) : null;
+                                  const parsedTargetWorkoutPctOfFreeTime = targetWorkoutPctOfFreeTime.trim() !== '' ? Number(targetWorkoutPctOfFreeTime) : null;
+                                  const parsedTargetProteinG = targetProteinG.trim() !== '' ? Number(targetProteinG) : null;
+                                  const parsedTargetFatG = targetFatG.trim() !== '' ? Number(targetFatG) : null;
+                                  const parsedTargetCarbsG = targetCarbsG.trim() !== '' ? Number(targetCarbsG) : null;
+                                  const parsedTargetCaloriesKcal = targetCaloriesKcal.trim() !== '' ? Number(targetCaloriesKcal) : null;
+                                  await setDoc(doc(db, 'profiles', currentUser.uid), {
+                                    ownerUid: currentUser.uid,
+                                    parkrunAthleteId,
+                                    parkrunAutoSync,
+                                    stravaAutoSync,
+                                    parkrunDefaultEventSlug,
+                                    parkrunDefaultStartRun: parkrunDefaultStartRun ? Number(parkrunDefaultStartRun) : null,
+                                    parkrunAutoComputePercentiles,
+                                    autoEnrichStravaHR,
+                                    autoComputeFitnessMetrics,
+                                    excludeWithDadFromMetrics,
+                                    targetWeightKg: parsedTargetWeightKg,
+                                    healthTargetWeightKg: parsedTargetWeightKg,
+                                    targetBodyFatPct: parsedTargetBodyFatPct,
+                                    healthTargetBodyFatPct: parsedTargetBodyFatPct,
+                                    targetStepsPerDay: parsedTargetStepsPerDay,
+                                    dailyStepTarget: parsedTargetStepsPerDay,
+                                    healthTargetStepsPerDay: parsedTargetStepsPerDay,
+                                    targetDistanceKmPerDay: parsedTargetDistanceKmPerDay,
+                                    dailyDistanceTargetKm: parsedTargetDistanceKmPerDay,
+                                    healthTargetDistanceKmPerDay: parsedTargetDistanceKmPerDay,
+                                    weeklyWorkoutTargetMinutes: parsedTargetWorkoutMinutesPerWeek,
+                                    targetWorkoutMinutesPerWeek: parsedTargetWorkoutMinutesPerWeek,
+                                    healthTargetWorkoutMinutesWeekly: parsedTargetWorkoutMinutesPerWeek,
+                                    awakeHoursPerDay: parsedTargetAwakeHoursPerDay,
+                                    targetAwakeHoursPerDay: parsedTargetAwakeHoursPerDay,
+                                    healthAwakeHoursPerDay: parsedTargetAwakeHoursPerDay,
+                                    workHoursPerDay: parsedTargetWorkHoursPerDay,
+                                    targetWorkHoursPerDay: parsedTargetWorkHoursPerDay,
+                                    healthWorkHoursPerDay: parsedTargetWorkHoursPerDay,
+                                    targetWorkoutPctOfFreeTime: parsedTargetWorkoutPctOfFreeTime,
+                                    weeklyWorkoutTargetPercent: parsedTargetWorkoutPctOfFreeTime,
+                                    trainingTimePercent: parsedTargetWorkoutPctOfFreeTime,
+                                    targetProteinG: parsedTargetProteinG,
+                                    dailyProteinTargetG: parsedTargetProteinG,
+                                    healthTargetProteinG: parsedTargetProteinG,
+                                    targetFatG: parsedTargetFatG,
+                                    dailyFatTargetG: parsedTargetFatG,
+                                    healthTargetFatG: parsedTargetFatG,
+                                    targetCarbsG: parsedTargetCarbsG,
+                                    dailyCarbsTargetG: parsedTargetCarbsG,
+                                    healthTargetCarbsG: parsedTargetCarbsG,
+                                    targetCaloriesKcal: parsedTargetCaloriesKcal,
+                                    dailyCaloriesTargetKcal: parsedTargetCaloriesKcal,
+                                    healthTargetCaloriesKcal: parsedTargetCaloriesKcal,
+                                  }, { merge: true });
+                                  setSaveProfileMsg('Saved');
+                                  setTimeout(() => setSaveProfileMsg(''), 2500);
+                                } catch (e: any) {
+                                  setSaveProfileError(e?.message || 'Failed to save');
+                                } finally {
+                                  setSavingProfile(false);
+                                }
+                              }}
+                            >
+                              {savingProfile ? 'Saving…' : 'Save'}
+                            </Button>
+                          </Col>
+                          <Col md={3}>
+                            {saveProfileMsg && <span className="text-success">{saveProfileMsg}</span>}
+                            {saveProfileError && <span className="text-danger">{saveProfileError}</span>}
+                          </Col>
+                        </Row>
+                        <Row className="g-3 mt-1">
+                          <Col md={3}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Weight Target (kg)</Form.Label>
+                              <Form.Control
+                                type="number"
+                                step="0.1"
+                                placeholder="e.g., 82.5"
+                                value={targetWeightKg}
+                                onChange={(e) => setTargetWeightKg(e.target.value)}
+                              />
+                            </Form.Group>
+                          </Col>
+                          <Col md={3}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Body Fat Target (%)</Form.Label>
+                              <Form.Control
+                                type="number"
+                                step="0.1"
+                                placeholder="e.g., 15"
+                                value={targetBodyFatPct}
+                                onChange={(e) => setTargetBodyFatPct(e.target.value)}
+                              />
+                            </Form.Group>
+                          </Col>
+                          <Col md={3}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Steps Target</Form.Label>
+                              <Form.Control
+                                type="number"
+                                step="100"
+                                placeholder="e.g., 10000"
+                                value={targetStepsPerDay}
+                                onChange={(e) => setTargetStepsPerDay(e.target.value)}
+                              />
+                            </Form.Group>
+                          </Col>
+                          <Col md={3}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Distance Target (km/day)</Form.Label>
+                              <Form.Control
+                                type="number"
+                                step="0.1"
+                                placeholder="e.g., 5"
+                                value={targetDistanceKmPerDay}
+                                onChange={(e) => setTargetDistanceKmPerDay(e.target.value)}
+                              />
+                            </Form.Group>
+                          </Col>
+                          <Col md={3}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Workout Target Override (min/week)</Form.Label>
+                              <Form.Control
+                                type="number"
+                                step="5"
+                                placeholder="Leave blank to derive"
+                                value={targetWorkoutMinutesPerWeek}
+                                onChange={(e) => setTargetWorkoutMinutesPerWeek(e.target.value)}
+                              />
+                              <Form.Text className="text-muted">Optional explicit override. Leave blank to derive from awake/work hours and training %.</Form.Text>
+                            </Form.Group>
+                          </Col>
+                          <Col md={3}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Awake Hours / Day</Form.Label>
+                              <Form.Control
+                                type="number"
+                                step="0.5"
+                                placeholder="e.g., 16"
+                                value={targetAwakeHoursPerDay}
+                                onChange={(e) => setTargetAwakeHoursPerDay(e.target.value)}
+                              />
+                            </Form.Group>
+                          </Col>
+                          <Col md={3}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Work Hours / Day</Form.Label>
+                              <Form.Control
+                                type="number"
+                                step="0.5"
+                                placeholder="e.g., 8"
+                                value={targetWorkHoursPerDay}
+                                onChange={(e) => setTargetWorkHoursPerDay(e.target.value)}
+                              />
+                            </Form.Group>
+                          </Col>
+                          <Col md={3}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Workout % Of Free Time</Form.Label>
+                              <Form.Control
+                                type="number"
+                                step="1"
+                                placeholder="e.g., 20"
+                                value={targetWorkoutPctOfFreeTime}
+                                onChange={(e) => setTargetWorkoutPctOfFreeTime(e.target.value)}
+                              />
+                            </Form.Group>
+                          </Col>
+                        </Row>
+                        <Row className="g-3 mt-1">
+                          <Col md={3}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Protein Target (g/day)</Form.Label>
+                              <Form.Control
+                                type="number"
+                                step="1"
+                                placeholder="e.g., 180"
+                                value={targetProteinG}
+                                onChange={(e) => setTargetProteinG(e.target.value)}
+                              />
+                            </Form.Group>
+                          </Col>
+                          <Col md={3}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Fat Target (g/day)</Form.Label>
+                              <Form.Control
+                                type="number"
+                                step="1"
+                                placeholder="e.g., 70"
+                                value={targetFatG}
+                                onChange={(e) => setTargetFatG(e.target.value)}
+                              />
+                            </Form.Group>
+                          </Col>
+                          <Col md={3}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Carbs Target (g/day)</Form.Label>
+                              <Form.Control
+                                type="number"
+                                step="1"
+                                placeholder="e.g., 250"
+                                value={targetCarbsG}
+                                onChange={(e) => setTargetCarbsG(e.target.value)}
+                              />
+                            </Form.Group>
+                          </Col>
+                          <Col md={3}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Calories Target (kcal/day)</Form.Label>
+                              <Form.Control
+                                type="number"
+                                step="10"
+                                placeholder="e.g., 2400"
+                                value={targetCaloriesKcal}
+                                onChange={(e) => setTargetCaloriesKcal(e.target.value)}
+                              />
+                            </Form.Group>
+                          </Col>
+                        </Row>
+                        <Row className="g-3 mt-1">
+                          <Col md={6} className="d-flex align-items-end">
+                            <Form.Text className="text-muted">
+                              These targets feed the dashboard health card, the `/fitness` compliance cards, and the health/nutrition trends shown across the app.
+                            </Form.Text>
+                          </Col>
+                        </Row>
+                        <hr />
+                        <Row className="g-3 align-items-end">
+                          <Col md={4}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Parkrun Account Username</Form.Label>
+                              <Form.Control
+                                type="text"
+                                placeholder="Parkrun username/email"
+                                value={parkrunApiUsername}
+                                onChange={(e) => setParkrunApiUsername(e.target.value)}
+                              />
+                            </Form.Group>
+                          </Col>
+                          <Col md={3}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Parkrun Password</Form.Label>
+                              <Form.Control
+                                type="password"
+                                placeholder="••••••••"
+                                value={parkrunApiPassword}
+                                onChange={(e) => setParkrunApiPassword(e.target.value)}
+                              />
+                            </Form.Group>
+                          </Col>
+                          <Col md={5} className="d-flex gap-2">
+                            <Button variant="outline-primary" disabled={parkrunApiConnecting} onClick={handleConnectParkrunApi}>
+                              {parkrunApiConnecting ? 'Connecting…' : 'Connect Parkrun API'}
+                            </Button>
+                          </Col>
+                        </Row>
+                        {(parkrunApiMsg || parkrunApiError) && (
+                          <div className="mt-2">
+                            {parkrunApiMsg && <div className="text-success small">{parkrunApiMsg}</div>}
+                            {parkrunApiError && <div className="text-danger small">{parkrunApiError}</div>}
+                          </div>
+                        )}
+                        <div className="text-muted small mt-2">
+                          Required once because Parkrun blocks direct HTML scraping from Cloud Run. Token refresh and scheduled sync are automatic after connection.
+                        </div>
+                      </Card.Body>
+                    </Card>
+
+                    <Card className="mb-3">
+                      <Card.Body>
+                        <h6 className="mb-2">Automation</h6>
+                        <Row className="g-3">
+                          <Col md={6}>
+                            <Form.Check type="checkbox" label="Auto-sync Parkrun (weekly, Sat 14:00 UK)" checked={parkrunAutoSync} onChange={(e)=>setParkrunAutoSync(e.target.checked)} />
+                          </Col>
+                          <Col md={6}>
+                            <Form.Check type="checkbox" label="Auto-sync Strava (daily, 03:00 UK)" checked={stravaAutoSync} onChange={(e)=>setStravaAutoSync(e.target.checked)} />
+                          </Col>
+                          <Col md={6}>
+                            <Form.Check type="checkbox" label="Auto-compute Parkrun percentiles" checked={parkrunAutoComputePercentiles} onChange={(e)=>setParkrunAutoComputePercentiles(e.target.checked)} />
+                          </Col>
+                          <Col md={6}>
+                            <Form.Check type="checkbox" label="Auto-enrich Strava HR zones" checked={autoEnrichStravaHR} onChange={(e)=>setAutoEnrichStravaHR(e.target.checked)} />
+                          </Col>
+                          <Col md={6}>
+                            <Form.Check type="checkbox" label="Auto-compute Fitness Overview/Analysis" checked={autoComputeFitnessMetrics} onChange={(e)=>setAutoComputeFitnessMetrics(e.target.checked)} />
+                          </Col>
+                          <Col md={6}>
+                            <Form.Check type="checkbox" label="Exclude workouts with 'dad' in title/name/event from fitness metrics (default on)" checked={excludeWithDadFromMetrics} onChange={(e)=>setExcludeWithDadFromMetrics(e.target.checked)} />
+                          </Col>
+                        </Row>
+                        <Row className="g-3 mt-2">
+                          <Col md={6}>
+                            <Form.Label>Default Event Slug</Form.Label>
+                            <Form.Control value={parkrunDefaultEventSlug} onChange={(e)=>setParkrunDefaultEventSlug(e.target.value)} placeholder="e.g., ormeau" />
+                          </Col>
+                          <Col md={6}>
+                            <Form.Label>Default Start Run #</Form.Label>
+                            <Form.Control value={parkrunDefaultStartRun} onChange={(e)=>setParkrunDefaultStartRun(e.target.value)} placeholder="e.g., 552" />
+                          </Col>
+                        </Row>
+                      </Card.Body>
+                    </Card>
+
+                    <Card className="mb-3">
+                      <Card.Body>
+                        <h5 className="mb-2">Automation Controls</h5>
+                        <p className="text-muted small">
+                          Trigger AI maintenance manually when you need an immediate reprioritisation.
+                        </p>
+                        <div className="d-flex flex-wrap gap-2">
+                          <Button
+                            variant="secondary"
+                            onClick={handleRunMaintenance}
+                            disabled={maintenanceRunning}
+                          >
+                            {maintenanceRunning ? 'Reprioritising…' : 'Run AI Reprioritisation Now'}
+                          </Button>
+                        </div>
+                        <div className="mt-2">
+                          {maintenanceStatus && <div className="text-success small">{maintenanceStatus}</div>}
+                          {maintenanceError && <div className="text-danger small">{maintenanceError}</div>}
+                        </div>
+                      </Card.Body>
+                    </Card>
+
+                    <Form.Group className="mb-3">
+                      <Form.Label style={{ color: colors.primary }}>Theme Mode</Form.Label>
+                      <Form.Select 
+                        value={theme} 
+                        onChange={(e) => {
+                          const newTheme = e.target.value as 'light' | 'dark' | 'system';
+                          if (newTheme !== theme) {
+                            toggleTheme();
+                          }
+                        }}
+                        style={{ 
+                          backgroundColor: backgrounds.surface, 
+                          color: colors.onSurface,
+                          border: `1px solid ${isDark ? '#374151' : '#d1d5db'}`
+                        }}
+                      >
+                        <option value="light">Light</option>
+                        <option value="dark">Dark</option>
+                        <option value="system">System</option>
+                      </Form.Select>
+                    </Form.Group>
+
+                    <Alert variant="info">
+                      <strong>Current Theme:</strong> {theme} mode
+                      {theme === 'system' && ` (resolved to ${isDark ? 'dark' : 'light'})`}
+                    </Alert>
+                  </Card.Body>
+                </Card>
+              </Tab.Pane>
+            </Tab.Content>
+          </Col>
+        </Row>
+      </Tab.Container>
+
+      {/* Theme Edit Modal */}
+      <Modal show={showThemeModal} onHide={() => setShowThemeModal(false)}>
+        <Modal.Header closeButton style={{ backgroundColor: backgrounds.surface, color: colors.primary }}>
+          <Modal.Title>Edit Theme</Modal.Title>
+        </Modal.Header>
+        <Modal.Body style={{ backgroundColor: backgrounds.card }}>
+          {editingTheme && (
+            <Form>
+              <Form.Group className="mb-3">
+                <Form.Label style={{ color: colors.primary }}>Theme Name</Form.Label>
+                <Form.Control
+                  type="text"
+                  value={editingTheme.label}
+                  onChange={(e) => setEditingTheme({...editingTheme, label: e.target.value})}
+                  style={{ 
+                    backgroundColor: backgrounds.surface, 
+                    color: colors.onSurface,
+                    border: `1px solid ${isDark ? '#374151' : '#d1d5db'}`
+                  }}
+                />
+              </Form.Group>
+              
+              <Form.Group className="mb-3">
+                <Form.Label style={{ color: colors.primary }}>Color</Form.Label>
+                <Form.Control
+                  type="color"
+                  value={editingTheme.color}
+                  onChange={(e) => setEditingTheme({...editingTheme, color: e.target.value})}
+                  style={{ 
+                    backgroundColor: backgrounds.surface,
+                    border: `1px solid ${isDark ? '#374151' : '#d1d5db'}`
+                  }}
+                />
+              </Form.Group>
+
+              <div className="preview-card p-3 text-center rounded" style={{ 
+                backgroundColor: editingTheme.color,
+                color: getContrastTextColor(editingTheme.color)
+              }}>
+                Preview: {editingTheme.label}
+              </div>
+            </Form>
+          )}
+        </Modal.Body>
+        <Modal.Footer style={{ backgroundColor: backgrounds.surface }}>
+          <Button variant="secondary" onClick={() => setShowThemeModal(false)}>
+            Cancel
+          </Button>
+          <Button variant="primary" onClick={saveThemeEdit}>
+            Save Changes
+          </Button>
+        </Modal.Footer>
+      </Modal>
+    </Container>
+  );
+};
+
+export default SettingsPage;
+
+// --- Inline AI settings component ---
+const AISettings: React.FC = () => {
+  const { currentUser } = useAuth();
+  const [prompt, setPrompt] = useState('');
+  const [saved, setSaved] = useState(false);
+  const [dedupRunning, setDedupRunning] = useState(false);
+  const [dedupResult, setDedupResult] = useState<string | null>(null);
+
+  useEffect(() => {
+    const load = async () => {
+      if (!currentUser) return;
+      try {
+        const snap = await getDoc(doc(db, 'user_settings', currentUser.uid));
+        if (snap.exists()) {
+          setPrompt(snap.data().storyGenPrompt || '');
+        }
+      } catch (e) {
+        console.warn('Failed to load user_settings', e);
+      }
+    };
+    load();
+  }, [currentUser]);
+
+  const save = async () => {
+    if (!currentUser) return;
+    try {
+      await setDoc(doc(db, 'user_settings', currentUser.uid), { storyGenPrompt: prompt, updatedAt: serverTimestamp() }, { merge: true });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      console.error('Failed to save prompt', e);
+    }
+  };
+
+  const runDuplicateDetection = async () => {
+    if (!currentUser) return;
+    try {
+      setDedupRunning(true);
+      setDedupResult(null);
+      const callable = httpsCallable(functions, 'detectDuplicateReminders');
+      const resp: any = await callable({});
+      const count = resp?.data?.groupsCreated ?? 0;
+      setDedupResult(`Potential duplicate groups created: ${count}`);
+    } catch (e: any) {
+      console.error('Duplicate detection failed', e);
+      setDedupResult('Duplicate detection failed: ' + (e?.message || 'Unknown error'));
+    } finally {
+      setDedupRunning(false);
+    }
+  };
+
+  return (
+    <Card className="mb-3">
+      <Card.Body>
+        <div className="d-flex justify-content-between align-items-center mb-2">
+          <div>
+            <h5 className="mb-0">AI Story Generation</h5>
+            <small className="text-muted">Prompt used by the wand button on Gantt goals</small>
+          </div>
+          <Button size="sm" variant="primary" onClick={save}>Save Prompt</Button>
+        </div>
+        <Form.Control as="textarea" rows={4} placeholder="Write a system prompt for story generation..." value={prompt} onChange={(e) => setPrompt(e.target.value)} />
+        {saved && <div className="text-success mt-2">Saved</div>}
+        <hr />
+        <div className="d-flex justify-content-between align-items-center">
+          <div>
+            <h6 className="mb-1">Duplicate Task Detection (iOS Reminders)</h6>
+            <small className="text-muted">Scan for potential duplicates and flag for review</small>
+          </div>
+          <div>
+            <Button size="sm" variant="outline-secondary" onClick={runDuplicateDetection} disabled={dedupRunning}>
+              {dedupRunning ? 'Running…' : 'Run Detection'}
+            </Button>
+          </div>
+        </div>
+        {dedupResult && <div className="mt-2 small">{dedupResult}</div>}
+      </Card.Body>
+    </Card>
+  );
+};

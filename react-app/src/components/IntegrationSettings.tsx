@@ -1,0 +1,1462 @@
+import React, { useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Alert, Badge, Button, Card, Col, Collapse, Form, ListGroup, Nav, Row, Spinner, Tab, Table } from 'react-bootstrap';
+import TelegramSettings from './settings/integrations/TelegramSettings';
+import { useAuth } from '../contexts/AuthContext';
+import { db, functions, firebaseConfig } from '../firebase';
+import { httpsCallable } from 'firebase/functions';
+import { collection, doc, onSnapshot, query, limit, where, updateDoc } from 'firebase/firestore';
+import CalendarSyncManager from './CalendarSyncManager';
+import { formatDistanceToNow } from 'date-fns';
+
+interface ProfileData {
+  googleCalendarLastSyncAt?: any;
+  googleCalendarEventCount?: number;
+  defaultJournalDocUrl?: string;
+  journalEditorPrompt?: string;
+  aiPersonality?: {
+    intelligence?: number;
+    humour?: number;
+    sarcasm?: number;
+    directness?: number;
+    warmth?: number;
+    verbosity?: number;
+  };
+  monzoConnected?: boolean;
+  monzoLastSyncAt?: any;
+  stravaConnected?: boolean;
+  stravaLastSyncAt?: any;
+  stravaAutoSync?: boolean;
+  autoEnrichStravaHR?: boolean;
+  excludeWithDadFromMetrics?: boolean;
+  traktUser?: string;
+  traktLastSyncAt?: any;
+  traktConnected?: boolean;
+  traktWatchlistSize?: number;
+  steamId?: string;
+  steamLastSyncAt?: any;
+  youtubeConnected?: boolean;
+  youtubeLastSyncAt?: any;
+  youtubeWatchLaterCount?: number;
+  youtubeLongformCount?: number;
+  youtubeTakeoutLastImportAt?: any;
+  youtubeWatchHistoryCount?: number;
+}
+
+interface MonzoTransactionPreview {
+  transactionId: string;
+  description: string;
+  amount: number;
+  createdISO: string | null;
+  categoryType?: string | null;
+  merchant?: string | null;
+  potId?: string | null;
+  potName?: string | null;
+}
+
+const defaultTotals = { mandatory: 0, optional: 0, savings: 0, income: 0 };
+
+const formatCurrency = (value: number | undefined | null) => {
+  const amount = Number.isFinite(Number(value)) ? Number(value) : 0;
+  return amount.toLocaleString('en-GB', { style: 'currency', currency: 'GBP' });
+};
+
+const formatTimestamp = (value: any) => {
+  if (!value) return '—';
+  const date = value?.toDate ? value.toDate() : new Date(value);
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return '—';
+  return `${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+};
+
+const relativeTime = (value: any) => {
+  if (!value) return 'never';
+  const date = value?.toDate ? value.toDate() : new Date(value);
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return 'never';
+  return formatDistanceToNow(date, { addSuffix: true });
+};
+
+type IntegrationSection = 'google' | 'youtube' | 'monzo' | 'strava' | 'steam' | 'trakt' | 'hardcover' | 'telegram' | 'all';
+
+interface IntegrationSettingsProps {
+  section?: IntegrationSection;
+}
+
+const INTEGRATION_TABS: { key: IntegrationSection; label: string; emoji: string }[] = [
+  { key: 'google',    label: 'Calendar',   emoji: '📅' },
+  { key: 'monzo',     label: 'Monzo',      emoji: '🏦' },
+  { key: 'strava',    label: 'Strava',     emoji: '🏃' },
+  { key: 'hardcover', label: 'Hardcover',  emoji: '📚' },
+  { key: 'youtube',   label: 'YouTube',    emoji: '▶️' },
+  { key: 'trakt',     label: 'Trakt',      emoji: '🎬' },
+  { key: 'steam',     label: 'Steam',      emoji: '🎮' },
+  { key: 'telegram',  label: 'Telegram',   emoji: '✈️' },
+];
+
+const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'all' }) => {
+  const { currentUser } = useAuth();
+  const navigate = useNavigate();
+  const [profile, setProfile] = useState<ProfileData | null>(null);
+  // Active sub-tab when rendering in "all" mode (the full integrations page)
+  const [activeInteg, setActiveInteg] = useState<IntegrationSection>('google');
+
+  const [googleConnected, setGoogleConnected] = useState<boolean>(false);
+  const [googleEvents, setGoogleEvents] = useState<any[]>([]);
+  const [googleLoading, setGoogleLoading] = useState(false);
+  const [showCalendarManager, setShowCalendarManager] = useState(false);
+  const [defaultJournalDocUrl, setDefaultJournalDocUrl] = useState('');
+  const [journalEditorPrompt, setJournalEditorPrompt] = useState('');
+    const defaultPersonality = { intelligence: 5, humour: 5, sarcasm: 5, directness: 7, warmth: 5, verbosity: 5 };
+    const [aiPersonality, setAiPersonality] = useState({ ...defaultPersonality });
+    const [personalityMessage, setPersonalityMessage] = useState<string | null>(null);
+    const [personalitySaving, setPersonalitySaving] = useState(false);
+  const [googleDocMessage, setGoogleDocMessage] = useState<string | null>(null);
+  const [googleDocsStatus, setGoogleDocsStatus] = useState<any | null>(null);
+  const [googleDocsTesting, setGoogleDocsTesting] = useState(false);
+
+  const [monzoTotals, setMonzoTotals] = useState<typeof defaultTotals>(defaultTotals);
+  const [monzoTransactions, setMonzoTransactions] = useState<MonzoTransactionPreview[]>([]);
+  const [monzoMessage, setMonzoMessage] = useState<string | null>(null);
+  const [monzoLoading, setMonzoLoading] = useState(false);
+  const [monzoWebhookAccountId, setMonzoWebhookAccountId] = useState('');
+  const [monzoIntegrationStatus, setMonzoIntegrationStatus] = useState<any | null>(null);
+  const [monzoPots, setMonzoPots] = useState<Record<string, { name: string }>>({});
+
+  const [stravaActivities, setStravaActivities] = useState<any[]>([]);
+
+  const [steamGames, setSteamGames] = useState<any[]>([]);
+  const [steamMessage, setSteamMessage] = useState<string | null>(null);
+  const [steamLoading, setSteamLoading] = useState(false);
+  const [steamIdInput, setSteamIdInput] = useState('');
+
+  const [youtubeMessage, setYouTubeMessage] = useState<string | null>(null);
+  const [youtubeLoading, setYouTubeLoading] = useState(false);
+  const [youtubeImporting, setYouTubeImporting] = useState(false);
+  const [youtubeTakeoutFile, setYouTubeTakeoutFile] = useState<File | null>(null);
+  const [youtubeTakeoutMsg, setYouTubeTakeoutMsg] = useState<string | null>(null);
+
+  const [traktHistory, setTraktHistory] = useState<any[]>([]);
+  const [traktMessage, setTraktMessage] = useState<string | null>(null);
+  const [traktLoading, setTraktLoading] = useState(false);
+  const [traktUserInput, setTraktUserInput] = useState('');
+  const [traktDeviceCode, setTraktDeviceCode] = useState<string | null>(null);
+  const [traktUserCode, setTraktUserCode] = useState<string | null>(null);
+  const [traktVerificationUrl, setTraktVerificationUrl] = useState<string | null>(null);
+
+  // Hardcover
+  const [hardcoverBooks, setHardcoverBooks] = useState<any[]>([]);
+  const [hardcoverMessage, setHardcoverMessage] = useState<string | null>(null);
+  const [hardcoverLoading, setHardcoverLoading] = useState(false);
+  const [hardcoverTokenInput, setHardcoverTokenInput] = useState('');
+  const popupTimersRef = useRef<number[]>([]);
+  const traktPollTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      popupTimersRef.current.forEach((id) => clearInterval(id));
+      popupTimersRef.current = [];
+      if (traktPollTimerRef.current) {
+        clearInterval(traktPollTimerRef.current);
+        traktPollTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  const trackPopupTimer = (timerId: number) => {
+    popupTimersRef.current.push(timerId);
+  };
+
+  const clearPopupTimer = (timerId: number) => {
+    clearInterval(timerId);
+    popupTimersRef.current = popupTimersRef.current.filter((id) => id !== timerId);
+  };
+
+  const stopTraktPolling = () => {
+    if (traktPollTimerRef.current) {
+      clearInterval(traktPollTimerRef.current);
+      traktPollTimerRef.current = null;
+    }
+  };
+
+
+  useEffect(() => {
+    if (!currentUser) return;
+    const unsub = onSnapshot(doc(db, 'profiles', currentUser.uid), (snap) => {
+      const data = snap.data() as ProfileData | undefined;
+      setProfile(data || null);
+      setDefaultJournalDocUrl(data?.defaultJournalDocUrl || '');
+      setJournalEditorPrompt(data?.journalEditorPrompt || '');
+            if (data?.aiPersonality) {
+              setAiPersonality({ ...defaultPersonality, ...data.aiPersonality });
+            }
+      if (data?.steamId) setSteamIdInput(data.steamId);
+      if (data?.traktUser) setTraktUserInput(data.traktUser);
+      if ((data as any)?.hardcoverToken) setHardcoverTokenInput((data as any).hardcoverToken);
+    });
+    return () => unsub();
+  }, [currentUser]);
+
+  // Derived flags
+  const stravaConnected = !!profile?.stravaConnected;
+  const monzoConnected = !!(monzoIntegrationStatus?.connected ?? profile?.monzoConnected);
+    const monzoLastSync = monzoIntegrationStatus?.lastSyncAt || profile?.monzoLastSyncAt;
+  const monzoLastSyncStatus = monzoIntegrationStatus?.lastSyncStatus || (monzoConnected ? 'connected' : 'not_connected');
+  const displayMonzoStatus = monzoLastSyncStatus
+    ? monzoLastSyncStatus.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+    : '—';
+  const monzoLastSyncSource = monzoIntegrationStatus?.lastSyncSource || null;
+  const monzoLastAnalyticsAt = monzoIntegrationStatus?.lastAnalyticsAt || null;
+  const monzoLastWebhookAt = monzoIntegrationStatus?.lastWebhookAt || null;
+  const monzoLastErrorAt = monzoIntegrationStatus?.lastErrorAt || null;
+  const monzoLastErrorMessage = monzoIntegrationStatus?.lastErrorMessage || null;
+  const steamLastSync = profile?.steamLastSyncAt;
+  const youtubeConnected = !!profile?.youtubeConnected;
+  const youtubeLastSync = profile?.youtubeLastSyncAt;
+  const youtubeTakeoutLastImport = profile?.youtubeTakeoutLastImportAt;
+  const traktLastSync = profile?.traktLastSyncAt;
+  const googleLastSync = profile?.googleCalendarLastSyncAt;
+  const stravaLastSync = profile?.stravaLastSyncAt;
+  const hardcoverLastSync = (profile as any)?.hardcoverLastSyncAt;
+
+  useEffect(() => {
+    if (!currentUser) return;
+
+    const unsubscribeSummary = onSnapshot(doc(db, 'monzo_budget_summary', currentUser.uid), (snap) => {
+      const data = snap.data() as any;
+      if (data?.totals) setMonzoTotals(data.totals);
+      if (Array.isArray(data?.categories)) {
+        // No action – categories handled in Finance hub; keep totals only here.
+      }
+    });
+
+    const txQuery = query(
+      collection(db, 'monzo_transactions'),
+      where('ownerUid', '==', currentUser.uid),
+      limit(15)
+    );
+    const unsubscribeTx = onSnapshot(txQuery, (snap) => {
+        const rows = snap.docs.map((docSnap) => {
+            const data = docSnap.data() as any;
+            const potId = data.metadata?.pot_id || data.metadata?.destination_pot_id || data.metadata?.source_pot_id || null;
+            const rawAmount = Number(data.amount ?? (data.amountMinor || 0) / 100);
+            const amount = Math.abs(rawAmount) < 10 ? rawAmount * 100 : rawAmount;
+            return {
+              transactionId: data.transactionId,
+              description: data.description || data.defaultCategoryLabel || 'Transaction',
+              merchant: data.merchant?.name || data.counterparty?.name || null,
+              amount,
+              createdISO: data.createdISO || null,
+              categoryType: data.userCategoryType || data.defaultCategoryType || 'optional',
+              potId,
+              potName: potId ? monzoPots[potId]?.name || null : null,
+            };
+      });
+      rows.sort((a, b) => {
+        const aTime = a.createdISO ? new Date(a.createdISO).getTime() : 0;
+        const bTime = b.createdISO ? new Date(b.createdISO).getTime() : 0;
+        return bTime - aTime;
+      });
+      setMonzoTransactions(rows.slice(0, 10));
+    });
+
+    const potsQuery = query(
+      collection(db, 'monzo_pots'),
+      where('ownerUid', '==', currentUser.uid)
+    );
+    const unsubscribePots = onSnapshot(potsQuery, (snap) => {
+      const map: Record<string, { name: string }> = {};
+      snap.docs.forEach((d) => {
+        const data = d.data() as any;
+        const id = data.potId || d.id;
+        if (!id) return;
+        map[id] = { name: data.name || id };
+      });
+      setMonzoPots(map);
+    });
+
+    const stravaQuery = query(
+      collection(db, 'metrics_workouts'),
+      where('ownerUid', '==', currentUser.uid),
+      limit(5)
+    );
+    const unsubscribeStrava = onSnapshot(stravaQuery, (snap) => {
+      const rows = snap.docs.map((docSnap) => docSnap.data());
+      rows.sort((a, b) => (b.startDate || 0) - (a.startDate || 0));
+      setStravaActivities(rows.slice(0, 5));
+    });
+
+    const steamQuery = query(
+      collection(db, 'steam'),
+      where('ownerUid', '==', currentUser.uid),
+      limit(5)
+    );
+    const unsubscribeSteam = onSnapshot(steamQuery, (snap) => {
+      const rows = snap.docs.map((docSnap) => docSnap.data());
+      rows.sort((a, b) => (b.playtime_forever || 0) - (a.playtime_forever || 0));
+      setSteamGames(rows.slice(0, 5));
+    });
+
+    const traktQuery = query(
+      collection(db, 'trakt'),
+      where('ownerUid', '==', currentUser.uid),
+      limit(20)
+    );
+    const unsubscribeTrakt = onSnapshot(traktQuery, (snap) => {
+      const rows = snap.docs.map((docSnap) => docSnap.data()) as any[];
+      const historyRows = rows.filter((row: any) => (row.category || 'history') === 'history');
+      historyRows.sort((a, b) => {
+        const aDate = a.watched_at ? new Date(a.watched_at).getTime() : 0;
+        const bDate = b.watched_at ? new Date(b.watched_at).getTime() : 0;
+        return bDate - aDate;
+      });
+      setTraktHistory(historyRows.slice(0, 5));
+    });
+
+    const hardcoverQuery = query(
+      collection(db, 'hardcover'),
+      where('ownerUid', '==', currentUser.uid),
+      limit(5)
+    );
+    const unsubscribeHardcover = onSnapshot(hardcoverQuery, (snap) => {
+      const rows = snap.docs.map((docSnap) => docSnap.data());
+      rows.sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0));
+      setHardcoverBooks(rows.slice(0, 5));
+    });
+    const integrationDoc = doc(db, 'integration_status', `monzo_${currentUser.uid}`);
+    const unsubscribeIntegration = onSnapshot(integrationDoc, (snap) => {
+      setMonzoIntegrationStatus(snap.exists ? snap.data() : null);
+    });
+
+    return () => {
+      unsubscribeSummary();
+      unsubscribeTx();
+      unsubscribePots();
+      unsubscribeStrava();
+      unsubscribeSteam();
+      unsubscribeTrakt();
+      unsubscribeHardcover();
+      unsubscribeIntegration();
+    };
+  }, [currentUser]);
+
+  useEffect(() => {
+    if (!monzoTransactions.length) return;
+    setMonzoTransactions((prev) =>
+      prev.map((tx) => {
+        if (tx.potId && !tx.potName && monzoPots[tx.potId]) {
+          return { ...tx, potName: monzoPots[tx.potId].name };
+        }
+        return tx;
+      })
+    );
+  }, [monzoPots, monzoTransactions.length]);
+
+  useEffect(() => {
+    const loadStatus = async () => {
+      if (!currentUser) return;
+      try {
+        const calendarStatus = httpsCallable(functions, 'calendarStatus');
+        const res = await calendarStatus({});
+        const data = res.data as any;
+        setGoogleConnected(!!data?.connected);
+      } catch (err) {
+        console.error('calendarStatus failed', err);
+        setGoogleConnected(false);
+      }
+    };
+    loadStatus();
+  }, [currentUser]);
+
+  const connectGoogle = () => {
+    if (!currentUser) return;
+    const nonce = Math.random().toString(36).slice(2);
+    const region = 'europe-west2';
+    const projectId = firebaseConfig.projectId;
+    const url = `https://${region}-${projectId}.cloudfunctions.net/oauthStart?uid=${currentUser.uid}&nonce=${nonce}`;
+    const popup = window.open(url, 'google-oauth', 'width=500,height=600');
+    if (popup) {
+      const timer = window.setInterval(() => {
+        if (popup.closed) {
+          clearPopupTimer(timer);
+        }
+      }, 800);
+      trackPopupTimer(timer);
+    }
+  };
+
+  const testGoogle = async () => {
+    if (!currentUser) return;
+    setGoogleLoading(true);
+    try {
+      const fn = httpsCallable(functions, 'listUpcomingEvents');
+      const res = await fn({ maxResults: 5 });
+      const data = (res.data as any)?.items || [];
+      setGoogleEvents(data);
+    } catch (err: any) {
+      console.error('Google test failed', err);
+      setGoogleEvents([]);
+    } finally {
+      setGoogleLoading(false);
+    }
+  };
+
+  const testGoogleDocs = async () => {
+    if (!currentUser) return;
+    setGoogleDocsTesting(true);
+    setGoogleDocsStatus(null);
+    try {
+      const fn = httpsCallable(functions, 'checkGoogleDocsAccess');
+      const res = await fn({ docUrl: defaultJournalDocUrl.trim() || null });
+      setGoogleDocsStatus((res.data as any) || null);
+    } catch (err: any) {
+      console.error('checkGoogleDocsAccess failed', err);
+      setGoogleDocsStatus({
+        ok: false,
+        code: err?.code || 'unknown',
+        message: err?.message || 'Failed to test Google Docs access.',
+        steps: [],
+      });
+    } finally {
+      setGoogleDocsTesting(false);
+    }
+  };
+
+  const connectMonzo = async () => {
+    if (!currentUser) return;
+    setMonzoMessage(null);
+    try {
+      const createSession = httpsCallable(functions, 'createMonzoOAuthSession');
+      const res: any = await createSession({ origin: window.location.origin });
+      const data = res?.data || res;
+      const sessionId = data?.sessionId;
+      const startUrl = data?.startUrl || (sessionId ? `${window.location.origin}/api/monzo/start?session=${sessionId}` : null);
+      if (!startUrl) throw new Error('Unable to resolve Monzo start URL');
+      const popup = window.open(startUrl, 'monzo-oauth', 'width=480,height=720');
+      if (popup) {
+        const timer = window.setInterval(() => {
+          if (popup.closed) {
+            clearPopupTimer(timer);
+          }
+        }, 800);
+        trackPopupTimer(timer);
+      } else {
+        setMonzoMessage('Popup blocked. Please allow popups for Monzo connect.');
+      }
+    } catch (err: any) {
+      console.error('connectMonzo failed', err);
+      setMonzoMessage(err?.message || 'Failed to start Monzo OAuth');
+    }
+  };
+
+  const syncMonzo = async () => {
+    if (!currentUser) return;
+    setMonzoLoading(true);
+    setMonzoMessage(null);
+    try {
+      const fn = httpsCallable(functions, 'syncMonzo');
+      const res = await fn({});
+      const data = res.data as any;
+      setMonzoMessage(`Synced accounts: ${data.accounts || 0}, transactions: ${data.transactions || 0}`);
+    } catch (err: any) {
+      console.error('syncMonzo failed', err);
+      setMonzoMessage(err?.message || 'Monzo sync failed');
+    } finally {
+      setMonzoLoading(false);
+    }
+  };
+
+  const revokeMonzo = async () => {
+    if (!currentUser) return;
+    setMonzoLoading(true);
+    setMonzoMessage(null);
+    try {
+      const fn = httpsCallable(functions, 'revokeMonzoAccess');
+      await fn({});
+      setMonzoMessage('Monzo access revoked.');
+    } catch (err:any) {
+      setMonzoMessage(err?.message || 'Failed to revoke access');
+    } finally {
+      setMonzoLoading(false);
+    }
+  };
+
+  const deleteFinance = async () => {
+    if (!currentUser) return;
+    // eslint-disable-next-line no-restricted-globals
+    if (!confirm('This will delete your synced finance data (accounts, pots, transactions, analytics). Proceed?')) return;
+    setMonzoLoading(true);
+    setMonzoMessage(null);
+    try {
+      const fn = httpsCallable(functions, 'deleteFinanceData');
+      await fn({});
+      setMonzoMessage('Finance data deleted.');
+    } catch (err:any) {
+      setMonzoMessage(err?.message || 'Failed to delete finance data');
+    } finally {
+      setMonzoLoading(false);
+    }
+  };
+
+  const exportFinance = async () => {
+    if (!currentUser) return;
+    setMonzoLoading(true);
+    setMonzoMessage(null);
+    try {
+      const fn = httpsCallable(functions, 'exportFinanceData');
+      const res:any = await fn({});
+      const data = res?.data?.data || {};
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = 'finance-export.json'; a.click(); URL.revokeObjectURL(url);
+      setMonzoMessage('Export generated.');
+    } catch (err:any) {
+      setMonzoMessage(err?.message || 'Export failed');
+    } finally {
+      setMonzoLoading(false);
+    }
+  };
+
+  const connectStrava = () => {
+    if (!currentUser) return;
+    const nonce = Math.random().toString(36).slice(2);
+    const region = 'europe-west2';
+    const projectId = firebaseConfig.projectId;
+    const url = `https://${region}-${projectId}.cloudfunctions.net/stravaOAuthStart?uid=${currentUser.uid}&nonce=${nonce}`;
+    const popup = window.open(url, 'strava-oauth', 'width=480,height=720');
+    if (popup) {
+      const timer = window.setInterval(() => {
+        if (popup.closed) {
+          clearPopupTimer(timer);
+        }
+      }, 800);
+      trackPopupTimer(timer);
+    }
+  };
+
+  const connectTraktBrowser = () => {
+    if (!currentUser) return;
+    const nonce = Math.random().toString(36).slice(2);
+    const region = 'europe-west2';
+    const projectId = firebaseConfig.projectId;
+    const url = `https://${region}-${projectId}.cloudfunctions.net/traktOAuthStart?uid=${currentUser.uid}&nonce=${nonce}`;
+    const popup = window.open(url, 'trakt-oauth', 'width=500,height=700');
+    if (popup) {
+      const timer = window.setInterval(() => {
+        if (popup.closed) {
+          clearPopupTimer(timer);
+        }
+      }, 800);
+      trackPopupTimer(timer);
+    }
+  };
+
+  const connectYouTube = () => {
+    if (!currentUser) return;
+    const nonce = Math.random().toString(36).slice(2);
+    const region = 'europe-west2';
+    const projectId = firebaseConfig.projectId;
+    const url = `https://${region}-${projectId}.cloudfunctions.net/youtubeOAuthStart?uid=${currentUser.uid}&nonce=${nonce}`;
+    const popup = window.open(url, 'youtube-oauth', 'width=520,height=720');
+    if (popup) {
+      const timer = window.setInterval(() => {
+        if (popup.closed) {
+          clearPopupTimer(timer);
+        }
+      }, 800);
+      trackPopupTimer(timer);
+    }
+  };
+
+  const syncYouTube = async () => {
+    if (!currentUser) return;
+    setYouTubeLoading(true);
+    setYouTubeMessage(null);
+    try {
+      const fn = httpsCallable(functions, 'syncYouTubeWatchLater');
+      const res = await fn({});
+      const data = res.data as any;
+      setYouTubeMessage(`Synced ${data?.written || 0} videos (${data?.longform || 0} longform)`);
+    } catch (err: any) {
+      console.error('syncYouTubeWatchLater failed', err);
+      setYouTubeMessage(err?.message || 'YouTube sync failed');
+    } finally {
+      setYouTubeLoading(false);
+    }
+  };
+
+  const parseYouTubeTakeout = async (file: File) => {
+    const text = await file.text();
+    let raw: any = null;
+    try {
+      raw = JSON.parse(text);
+    } catch (e) {
+      throw new Error('Invalid JSON file. Please select watch-history.json from Google Takeout.');
+    }
+    const rows = Array.isArray(raw) ? raw : (raw?.watchHistory || raw?.history || raw?.items || []);
+    if (!Array.isArray(rows)) return [];
+    const normalizeTitle = (title: string) => {
+      const trimmed = String(title || '').trim();
+      return trimmed.replace(/^Watched\s+/i, '').trim();
+    };
+    const extractVideoId = (url: string) => {
+      if (!url) return null;
+      try {
+        const u = new URL(url);
+        const v = u.searchParams.get('v');
+        if (v) return v;
+      } catch { }
+      const match = String(url).match(/v=([a-zA-Z0-9_-]{6,})/);
+      return match ? match[1] : null;
+    };
+    return rows.map((row: any) => {
+      const time = row?.time || row?.timeWatched || row?.timestamp || row?.watched_at || null;
+      const watchedAtMs = time ? Date.parse(time) : null;
+      const titleUrl = row?.titleUrl || row?.title_url || row?.url || null;
+      const videoId = extractVideoId(String(titleUrl || ''));
+      const title = normalizeTitle(row?.title || row?.name || '');
+      const subtitle = Array.isArray(row?.subtitles) ? row.subtitles[0] : null;
+      const channelTitle = subtitle?.name || row?.channelTitle || null;
+      return {
+        videoId,
+        watchedAtMs: watchedAtMs && Number.isFinite(watchedAtMs) ? watchedAtMs : null,
+        title,
+        titleUrl: titleUrl || null,
+        channelTitle: channelTitle || null,
+      };
+    }).filter((row: any) => row.videoId && row.watchedAtMs);
+  };
+
+  const importYouTubeTakeout = async () => {
+    if (!currentUser || !youtubeTakeoutFile) return;
+    setYouTubeImporting(true);
+    setYouTubeTakeoutMsg(null);
+    try {
+      const items = await parseYouTubeTakeout(youtubeTakeoutFile);
+      if (!items.length) {
+        setYouTubeTakeoutMsg('No watch history entries found in this file.');
+        return;
+      }
+      const fn = httpsCallable(functions, 'importYouTubeTakeout');
+      const chunkSize = 350;
+      let written = 0;
+      let skipped = 0;
+      for (let i = 0; i < items.length; i += chunkSize) {
+        const chunk = items.slice(i, i + chunkSize);
+        const res: any = await fn({ items: chunk });
+        const data = res?.data || res;
+        written += Number(data?.written || 0);
+        skipped += Number(data?.skipped || 0);
+      }
+      setYouTubeTakeoutMsg(`Imported ${written} watch history rows${skipped ? ` (${skipped} skipped)` : ''}.`);
+    } catch (err: any) {
+      console.error('importYouTubeTakeout failed', err);
+      setYouTubeTakeoutMsg(err?.message || 'YouTube Takeout import failed');
+    } finally {
+      setYouTubeImporting(false);
+    }
+  };
+
+  const syncSteam = async () => {
+    if (!currentUser) return;
+    setSteamLoading(true);
+    setSteamMessage(null);
+    try {
+      const fn = httpsCallable(functions, 'syncSteam');
+      const res = await fn({});
+      const data = res.data as any;
+      setSteamMessage(`Library updated (${data?.written || 0} games)`);
+    } catch (err: any) {
+      console.error('syncSteam failed', err);
+      setSteamMessage(err?.message || 'Steam sync failed');
+    } finally {
+      setSteamLoading(false);
+    }
+  };
+
+  const pollTraktDevice = async (codeOverride?: string | null) => {
+    if (!currentUser) return;
+    try {
+      const fn = httpsCallable(functions, 'traktDeviceCodePoll');
+      const res:any = await fn({ deviceCode: codeOverride || traktDeviceCode });
+      const data = res?.data || res;
+      if (data?.connected) {
+        stopTraktPolling();
+        setTraktMessage(`Connected${data.username ? ` as ${data.username}` : ''}.`);
+        setTraktDeviceCode(null);
+        setTraktUserCode(null);
+        setTraktVerificationUrl(null);
+      }
+    } catch (err) {
+      console.error('traktDeviceCodePoll failed', err);
+    }
+  };
+
+  const startTraktDeviceFlow = async () => {
+    if (!currentUser) return;
+    setTraktLoading(true);
+    setTraktMessage(null);
+    stopTraktPolling();
+    try {
+      const fn = httpsCallable(functions, 'traktDeviceCodeStart');
+      const res:any = await fn({});
+      const data = res?.data || res;
+      const code = data?.deviceCode || data?.device_code || null;
+      const userCode = data?.userCode || data?.user_code || null;
+      const verificationUrl = data?.verificationUrl || data?.verification_url || null;
+      setTraktDeviceCode(code);
+      setTraktUserCode(userCode);
+      setTraktVerificationUrl(verificationUrl);
+      if (userCode && verificationUrl) {
+        setTraktMessage(`Enter code ${userCode} at ${verificationUrl}`);
+      }
+      const intervalMs = Math.max(((data?.interval || 5) * 1000), 4000);
+      traktPollTimerRef.current = window.setInterval(() => pollTraktDevice(code), intervalMs);
+    } catch (err:any) {
+      console.error('traktDeviceCodeStart failed', err);
+      setTraktMessage(err?.message || 'Trakt device code failed');
+    } finally {
+      setTraktLoading(false);
+    }
+  };
+
+  const syncTrakt = async () => {
+    if (!currentUser) return;
+    setTraktLoading(true);
+    setTraktMessage(null);
+    try {
+      const fn = httpsCallable(functions, 'syncTrakt');
+      const res = await fn({});
+      const data = res.data as any;
+      const parts: string[] = [];
+      if (data?.written !== undefined) parts.push(`${data.written} history`);
+      if (data?.watchlist !== undefined) parts.push(`${data.watchlist} watchlist`);
+      setTraktMessage(parts.length ? `Synced ${parts.join(' / ')}` : 'Trakt sync completed');
+    } catch (err: any) {
+      console.error('syncTrakt failed', err);
+      setTraktMessage(err?.message || 'Trakt sync failed');
+    } finally {
+      setTraktLoading(false);
+    }
+  };
+
+  const syncHardcover = async () => {
+    if (!currentUser) return;
+    setHardcoverLoading(true);
+    setHardcoverMessage(null);
+    try {
+      const fn = httpsCallable(functions, 'syncHardcover');
+      const res:any = await fn({});
+      const data = res?.data || res;
+      setHardcoverMessage(`Imported ${data?.written || 0} books`);
+    } catch (err:any) {
+      console.error('syncHardcover failed', err);
+      setHardcoverMessage(err?.message || 'Hardcover sync failed');
+    } finally {
+      setHardcoverLoading(false);
+    }
+  };
+
+  const updateProfile = async (patch: Record<string, any>) => {
+    if (!currentUser) return;
+    await updateDoc(doc(db, 'profiles', currentUser.uid), patch);
+  };
+
+
+  // In "all" mode: show only the active sub-tab. In filtered mode: show only that section.
+  const show = (name: IntegrationSection) =>
+    section !== 'all' ? section === name : activeInteg === name;
+
+  return (
+    <div className="d-flex flex-column gap-3">
+      {/* Header row */}
+      <div className="d-flex justify-content-between align-items-center">
+        <div>
+          <h3 className="mb-0">Integrations</h3>
+          <small className="text-muted">Connect services and view sync status</small>
+        </div>
+        <div className="d-flex gap-2">
+          <Button variant="outline-secondary" size="sm" onClick={() => navigate('/logs/integrations')}>
+            Integration Logs
+          </Button>
+          <Button variant="outline-secondary" size="sm" onClick={() => navigate('/logs/transcripts')}>
+            Transcript Logs
+          </Button>
+        </div>
+      </div>
+
+      {/* Sub-tab navigation (only when showing all integrations) */}
+      {section === 'all' && (
+        <Nav variant="tabs" activeKey={activeInteg} onSelect={(k) => k && setActiveInteg(k as IntegrationSection)}>
+          {INTEGRATION_TABS.map(({ key, label, emoji }) => (
+            <Nav.Item key={key}>
+              <Nav.Link eventKey={key} className="d-flex align-items-center gap-1">
+                <span>{emoji}</span>
+                <span className="d-none d-sm-inline">{label}</span>
+              </Nav.Link>
+            </Nav.Item>
+          ))}
+        </Nav>
+      )}
+
+      {/* AI Personality — hidden in tabbed mode (it lives in the AI settings tab now) */}
+      {section !== 'all' && <Card>
+        <Card.Header>
+          <h4 className="mb-0">AI Personality</h4>
+          <small className="text-muted">Personalise the tone and style of AI responses across transcripts, daily digest, and all AI features</small>
+        </Card.Header>
+        <Card.Body>
+          {personalityMessage && (
+            <Alert variant={personalityMessage.startsWith('Saved') ? 'success' : 'danger'} dismissible onClose={() => setPersonalityMessage(null)}>
+              {personalityMessage}
+            </Alert>
+          )}
+          <Row className="g-4">
+            {([
+              { key: 'intelligence', label: 'Intelligence', low: 'Plain language', high: 'Expert vocabulary' },
+              { key: 'humour', label: 'Humour', low: 'None', high: 'Witty' },
+              { key: 'sarcasm', label: 'Sarcasm', low: 'None', high: 'Dry & sarcastic' },
+              { key: 'directness', label: 'Directness', low: 'Explanatory', high: 'Blunt' },
+              { key: 'warmth', label: 'Warmth', low: 'Neutral', high: 'Warm & encouraging' },
+              { key: 'verbosity', label: 'Verbosity', low: 'Terse', high: 'Detailed' },
+            ] as const).map(({ key, label, low, high }) => (
+              <Col key={key} md={6}>
+                <Form.Label className="d-flex justify-content-between mb-1">
+                  <span>{label}</span>
+                  <Badge bg="secondary">{aiPersonality[key]}</Badge>
+                </Form.Label>
+                <Form.Range
+                  min={0}
+                  max={10}
+                  step={1}
+                  value={aiPersonality[key]}
+                  onChange={(e) => setAiPersonality((prev) => ({ ...prev, [key]: Number(e.target.value) }))}
+                />
+                <div className="d-flex justify-content-between">
+                  <small className="text-muted">{low}</small>
+                  <small className="text-muted">{high}</small>
+                </div>
+              </Col>
+            ))}
+          </Row>
+          <div className="d-flex gap-2 mt-4 align-items-center">
+            <Button
+              variant="outline-primary"
+              disabled={personalitySaving}
+              onClick={async () => {
+                try {
+                  setPersonalitySaving(true);
+                  setPersonalityMessage(null);
+                  await updateProfile({ aiPersonality });
+                  setPersonalityMessage('Saved. AI responses will reflect your style on the next generation.');
+                } catch (err: any) {
+                  setPersonalityMessage(err?.message || 'Failed to save personality settings.');
+                } finally {
+                  setPersonalitySaving(false);
+                }
+              }}
+            >
+              {personalitySaving ? <><Spinner size="sm" animation="border" className="me-1" />Saving…</> : 'Save Personality'}
+            </Button>
+            <Button
+              variant="link"
+              size="sm"
+              onClick={() => setAiPersonality({ ...defaultPersonality })}
+            >
+              Reset to defaults
+            </Button>
+          </div>
+          <Form.Text className="text-muted d-block mt-2">
+            These settings feed into every AI prompt — transcripts, daily digest, task enrichment, stories, and more. Values at 5 are neutral and produce no change.
+          </Form.Text>
+        </Card.Body>
+      </Card>}
+
+      {show('google') && (
+      <Card>
+        <Card.Header className="d-flex justify-content-between align-items-center">
+          <div>
+            <h4 className="mb-0">Google Calendar & Docs</h4>
+            <small>Calendar sync plus Google Docs journal append</small>
+          </div>
+          <Badge bg={googleConnected ? 'success' : 'secondary'}>
+            {googleConnected ? 'Connected' : 'Not Connected'}
+          </Badge>
+        </Card.Header>
+        <Card.Body>
+          <Row className="mb-3">
+            <Col md={6}>
+              <div><strong>Last sync:</strong> {formatTimestamp(googleLastSync)} ({relativeTime(googleLastSync)})</div>
+              <div><strong>Stored events:</strong> {profile?.googleCalendarEventCount ?? 0}</div>
+            </Col>
+            <Col md={6} className="text-md-end mt-3 mt-md-0">
+              <Button variant="outline-primary" className="me-2" onClick={connectGoogle}>
+                {googleConnected ? 'Reconnect' : 'Connect'}
+              </Button>
+              <Button variant="outline-secondary" className="me-2" onClick={testGoogleDocs} disabled={googleDocsTesting}>
+                {googleDocsTesting ? <Spinner size="sm" animation="border" className="me-2" /> : null}
+                Test Doc Access
+              </Button>
+              <Button variant="primary" onClick={testGoogle} disabled={googleLoading}>
+                {googleLoading ? <Spinner size="sm" animation="border" className="me-2" /> : null}
+                Fetch Upcoming Events
+              </Button>
+            </Col>
+          </Row>
+          {googleEvents.length > 0 && (
+            <Table size="sm" responsive className="mb-3">
+              <thead>
+                <tr>
+                  <th>When</th>
+                  <th>Summary</th>
+                </tr>
+              </thead>
+              <tbody>
+                {googleEvents.map((ev) => (
+                  <tr key={ev.id}>
+                    <td>{ev.start?.dateTime || ev.start?.date || '—'}</td>
+                    <td>{ev.summary || 'Untitled'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </Table>
+          )}
+
+          <hr />
+          <Row className="g-3 align-items-end">
+            <Col md={9}>
+              <Form.Label>Default Journal Google Doc URL</Form.Label>
+              <Form.Control
+                type="url"
+                placeholder="https://docs.google.com/document/d/..."
+                value={defaultJournalDocUrl}
+                onChange={(event) => setDefaultJournalDocUrl(event.target.value)}
+              />
+              <Form.Text className="text-muted">
+                Transcript intake appends to this document. Reconnect Google if you have not yet granted Google Docs access.
+              </Form.Text>
+            </Col>
+            <Col md={3} className="d-grid">
+              <Button
+                variant="outline-secondary"
+                onClick={async () => {
+                  try {
+                    setGoogleDocMessage(null);
+                    await updateProfile({ defaultJournalDocUrl: defaultJournalDocUrl.trim() || null });
+                    setGoogleDocMessage('Default journal doc saved.');
+                  } catch (error: any) {
+                    setGoogleDocMessage(error?.message || 'Failed to save the default journal doc URL.');
+                  }
+                }}
+              >
+                Save Doc URL
+              </Button>
+            </Col>
+          </Row>
+          {googleDocMessage && <Alert variant="info" className="mt-3 mb-0">{googleDocMessage}</Alert>}
+          {googleDocsStatus && (
+            <Alert variant={googleDocsStatus.ok ? 'success' : 'warning'} className="mt-3 mb-0">
+              <div><strong>{googleDocsStatus.ok ? 'Google Docs ready' : 'Google Docs needs attention'}</strong></div>
+              <div>{googleDocsStatus.message}</div>
+              {googleDocsStatus.title && <div className="mt-1"><strong>Document:</strong> {googleDocsStatus.title}</div>}
+              {Array.isArray(googleDocsStatus.steps) && googleDocsStatus.steps.length > 0 && (
+                <ul className="mb-0 mt-2">
+                  {googleDocsStatus.steps.map((step: string, index: number) => (
+                    <li key={`${googleDocsStatus.code || 'step'}_${index}`}>{step}</li>
+                  ))}
+                </ul>
+              )}
+            </Alert>
+          )}
+
+          <hr />
+          <Row className="g-3 align-items-end">
+            <Col md={9}>
+              <Form.Label>Journal Editor Prompt Override</Form.Label>
+              <Form.Control
+                as="textarea"
+                rows={7}
+                placeholder="Optional. Add your own journal editing instructions for transcript processing."
+                value={journalEditorPrompt}
+                onChange={(event) => setJournalEditorPrompt(event.target.value)}
+              />
+              <Form.Text className="text-muted">
+                This is appended to the built-in journal processing prompt. Use it for deltas only, such as house style or extra analytical emphasis, rather than repeating the full base prompt. It only affects journal or mixed transcript entries and does not override the required JSON schema or faithfulness rules.
+              </Form.Text>
+            </Col>
+            <Col md={3} className="d-grid">
+              <Button
+                variant="outline-secondary"
+                onClick={async () => {
+                  try {
+                    setGoogleDocMessage(null);
+                    await updateProfile({ journalEditorPrompt: journalEditorPrompt.trim() || null });
+                    setGoogleDocMessage('Journal editor prompt saved.');
+                  } catch (error: any) {
+                    setGoogleDocMessage(error?.message || 'Failed to save the journal editor prompt.');
+                  }
+                }}
+              >
+                Save Prompt
+              </Button>
+            </Col>
+          </Row>
+          <Form.Text className="text-muted d-block mt-2">
+            Built-in base behavior: classify journal vs task list vs URL, keep journal prose highly faithful, remove filler words and dictation glitches, structure it cleanly, and extract only clearly actionable tasks or stories.
+          </Form.Text>
+
+          <Button variant="link" onClick={() => setShowCalendarManager((v) => !v)}>
+            {showCalendarManager ? 'Hide advanced options' : 'Show advanced options'}
+          </Button>
+          <Collapse in={showCalendarManager}>
+            <div className="mt-3">
+              <CalendarSyncManager />
+            </div>
+          </Collapse>
+        </Card.Body>
+      </Card>
+      )}
+
+      {show('hardcover') && (
+      <Card>
+        <Card.Header className="d-flex justify-content-between align-items-center">
+          <div>
+            <h4 className="mb-0">Hardcover</h4>
+            <small>Two-way sync using personal API token</small>
+          </div>
+          <Badge bg={(profile as any)?.hardcoverToken ? 'success' : 'secondary'}>
+            {(profile as any)?.hardcoverToken ? 'Configured' : 'Not Configured'}
+          </Badge>
+        </Card.Header>
+        <Card.Body>
+          <Row className="mb-3">
+            <Col md={6}>
+              <Form.Label>API Token</Form.Label>
+              <Form.Control type="password" value={hardcoverTokenInput} onChange={(e)=>setHardcoverTokenInput(e.target.value)} placeholder="Paste Hardcover API token" />
+              <Button className="mt-2" variant="outline-secondary" size="sm" onClick={() => updateProfile({ hardcoverToken: hardcoverTokenInput || null })}>Save Token</Button>
+            </Col>
+            <Col md={6} className="text-md-end mt-3 mt-md-0">
+              <div><strong>Last sync:</strong> {formatTimestamp(hardcoverLastSync)} ({relativeTime(hardcoverLastSync)})</div>
+              <Button variant="primary" className="mt-2" onClick={syncHardcover} disabled={hardcoverLoading}>
+                {hardcoverLoading ? <Spinner size="sm" animation="border" className="me-2" /> : null}
+                Sync Now
+              </Button>
+            </Col>
+          </Row>
+
+          {hardcoverMessage && <Alert variant="info">{hardcoverMessage}</Alert>}
+
+          <h6>Recent Books</h6>
+          {hardcoverBooks.length === 0 ? (
+            <Alert variant="light">No books synced yet.</Alert>
+          ) : (
+            <Table size="sm" responsive>
+              <thead>
+                <tr>
+                  <th>Title</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {hardcoverBooks.map((b: any) => (
+                  <tr key={b.hardcoverId}>
+                    <td>{b.title}</td>
+                    <td>{b.status || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </Table>
+          )}
+        </Card.Body>
+      </Card>
+      )}
+
+      {show('monzo') && (
+      <Card>
+        <Card.Header className="d-flex justify-content-between align-items-center">
+          <div>
+            <h4 className="mb-0">Monzo</h4>
+            <small>Auto-refresh nightly + manual sync</small>
+          </div>
+          <Badge bg={monzoConnected ? 'success' : 'secondary'}>
+            {monzoConnected ? 'Connected' : 'Not Connected'}
+          </Badge>
+        </Card.Header>
+        <Card.Body>
+          <Row className="mb-3">
+            <Col md={6}>
+              <div><strong>Status:</strong> {displayMonzoStatus}</div>
+              <div><strong>Last sync:</strong> {formatTimestamp(monzoLastSync)} ({relativeTime(monzoLastSync)})</div>
+              <div><strong>Sync source:</strong> {monzoLastSyncSource || '—'}</div>
+              <div><strong>Analytics refresh:</strong> {formatTimestamp(monzoLastAnalyticsAt)}</div>
+              <div><strong>Last webhook:</strong> {formatTimestamp(monzoLastWebhookAt)}</div>
+            </Col>
+            <Col md={6} className="text-md-end mt-3 mt-md-0">
+              <div><strong>Mandatory spend:</strong> {formatCurrency(monzoTotals.mandatory)}</div>
+              <div><strong>Savings transfers:</strong> {formatCurrency(monzoTotals.savings)}</div>
+              <div className="mt-3">
+                <Button variant="outline-primary" className="me-2" onClick={connectMonzo} disabled={monzoLoading}>
+                  {monzoConnected ? 'Reconnect' : 'Connect'}
+                </Button>
+                <Button variant="primary" onClick={syncMonzo} disabled={monzoLoading}>
+                  {monzoLoading ? <Spinner size="sm" animation="border" className="me-2" /> : null}
+                  Sync Now
+                </Button>
+              </div>
+            </Col>
+          </Row>
+
+          {monzoLastErrorMessage && (
+            <Alert variant="warning">
+              <div><strong>Last error:</strong> {monzoLastErrorMessage}</div>
+              <div className="mb-0"><small>{formatTimestamp(monzoLastErrorAt)} ({relativeTime(monzoLastErrorAt)})</small></div>
+            </Alert>
+          )}
+
+          {monzoMessage && <Alert variant="info">{monzoMessage}</Alert>}
+
+          <h6>Recent Transactions</h6>
+          {monzoTransactions.length === 0 ? (
+            <Alert variant="light">No transactions synced yet.</Alert>
+          ) : (
+            <Table size="sm" responsive>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Description</th>
+                  <th>Merchant</th>
+                  <th>Pot</th>
+                  <th>Category</th>
+                  <th className="text-end">Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                {monzoTransactions.map((tx) => (
+                  <tr key={tx.transactionId}>
+                    <td>{tx.createdISO ? new Date(tx.createdISO).toLocaleDateString() : '—'}</td>
+                    <td>{tx.description}</td>
+                    <td>{tx.merchant || '—'}</td>
+                    <td>{tx.potName || '—'}</td>
+                    <td><Badge bg="light" text="dark">{tx.categoryType}</Badge></td>
+                    <td className="text-end">{formatCurrency(Math.abs(tx.amount))}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </Table>
+          )}
+
+          <hr />
+          <h6>Advanced Actions</h6>
+          <div className="d-flex align-items-center gap-2 flex-wrap">
+            <Form.Control
+              size="sm"
+              placeholder="Account ID for webhook"
+              value={monzoWebhookAccountId}
+              onChange={(e)=>setMonzoWebhookAccountId(e.target.value)}
+              style={{ maxWidth: 280 }}
+            />
+            <Button variant="outline-secondary" size="sm" onClick={async ()=>{
+              setMonzoLoading(true); setMonzoMessage(null);
+              try { const fn = httpsCallable(functions, 'monzoRegisterWebhook'); const target = `${window.location.origin}/api/monzo/webhook`; await fn({ accountId: monzoWebhookAccountId.trim(), url: target }); setMonzoMessage('Webhook registered.'); } catch (e:any) { setMonzoMessage(e?.message || 'Webhook registration failed'); } finally { setMonzoLoading(false); }
+            }} disabled={monzoLoading}>Register Webhook</Button>
+            <Button variant="outline-warning" size="sm" onClick={revokeMonzo} disabled={monzoLoading}>Revoke Access</Button>
+            <Button variant="outline-danger" size="sm" onClick={deleteFinance} disabled={monzoLoading}>Delete Finance Data</Button>
+            <Button variant="outline-success" size="sm" onClick={exportFinance} disabled={monzoLoading}>Export JSON</Button>
+          </div>
+        </Card.Body>
+      </Card>
+      )}
+
+      {show('strava') && (
+      <Card>
+        <Card.Header className="d-flex justify-content-between align-items-center">
+          <div>
+            <h4 className="mb-0">Strava</h4>
+            <small>Auto-refresh daily when auto-sync is enabled</small>
+          </div>
+          <Badge bg={stravaConnected ? 'success' : 'secondary'}>
+            {stravaConnected ? 'Connected' : 'Not Connected'}
+          </Badge>
+        </Card.Header>
+        <Card.Body>
+          <Row className="mb-3">
+            <Col md={6}>
+              <div><strong>Last sync:</strong> {formatTimestamp(stravaLastSync)} ({relativeTime(stravaLastSync)})</div>
+              <Form.Check
+                type="switch"
+                id="strava-auto-sync"
+                label="Enable daily auto-sync"
+                checked={!!profile?.stravaAutoSync}
+                onChange={(e) => updateProfile({ stravaAutoSync: e.target.checked })}
+              />
+              <Form.Check
+                type="switch"
+                id="strava-exclude-dad-metrics"
+                label="Exclude workouts with 'dad' in title/name/event from fitness metrics"
+                checked={profile?.excludeWithDadFromMetrics !== false}
+                onChange={(e) => updateProfile({ excludeWithDadFromMetrics: e.target.checked })}
+              />
+            </Col>
+            <Col md={6} className="text-md-end mt-3 mt-md-0">
+              <Button variant="outline-primary" className="me-2" onClick={connectStrava}>
+                {stravaConnected ? 'Reconnect' : 'Connect'}
+              </Button>
+            </Col>
+          </Row>
+          <Alert variant="light" className="mb-3">
+            Strava data sync is automatic (daily schedule). No manual sync action is required.
+          </Alert>
+
+          <h6>Recent Activities</h6>
+          {stravaActivities.length === 0 ? (
+            <Alert variant="light">No Strava activities synced yet.</Alert>
+          ) : (
+            <Table size="sm" responsive>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Name</th>
+                  <th>Distance (km)</th>
+                  <th>Avg HR</th>
+                </tr>
+              </thead>
+              <tbody>
+                {stravaActivities.map((act: any) => (
+                  <tr key={act.id || act.stravaActivityId}>
+                    <td>{act.utcStartDate ? new Date(act.utcStartDate).toLocaleDateString() : '—'}</td>
+                    <td>{act.name || 'Activity'}</td>
+                    <td>{act.distance_m ? (act.distance_m / 1000).toFixed(2) : '—'}</td>
+                    <td>{act.avgHeartrate || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </Table>
+          )}
+        </Card.Body>
+      </Card>
+      )}
+
+      {show('steam') && (
+      <Card>
+        <Card.Header className="d-flex justify-content-between align-items-center">
+          <div>
+            <h4 className="mb-0">Steam</h4>
+            <small>Auto-refresh daily when SteamID is set</small>
+          </div>
+          <Badge bg={profile?.steamId ? 'success' : 'secondary'}>
+            {profile?.steamId ? 'Configured' : 'Not Configured'}
+          </Badge>
+        </Card.Header>
+        <Card.Body>
+          <Row className="mb-3">
+            <Col md={6}>
+              <Form.Label>SteamID</Form.Label>
+              <Form.Control
+                value={steamIdInput}
+                onChange={(e) => setSteamIdInput(e.target.value)}
+                placeholder="Enter your SteamID64"
+              />
+              <Button
+                className="mt-2"
+                variant="outline-secondary"
+                size="sm"
+                onClick={() => updateProfile({ steamId: steamIdInput || null })}
+              >
+                Save SteamID
+              </Button>
+            </Col>
+            <Col md={6} className="text-md-end mt-3 mt-md-0">
+              <div><strong>Last sync:</strong> {formatTimestamp(steamLastSync)} ({relativeTime(steamLastSync)})</div>
+              <Button variant="primary" className="mt-2" onClick={syncSteam} disabled={steamLoading || !steamIdInput}>
+                {steamLoading ? <Spinner size="sm" animation="border" className="me-2" /> : null}
+                Sync Now
+              </Button>
+            </Col>
+          </Row>
+
+          {steamMessage && <Alert variant="info">{steamMessage}</Alert>}
+
+          <h6>Top Games</h6>
+          {steamGames.length === 0 ? (
+            <Alert variant="light">No games synced yet.</Alert>
+          ) : (
+            <Table size="sm" responsive>
+              <thead>
+                <tr>
+                  <th>Title</th>
+                  <th>Playtime (hrs)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {steamGames.map((game: any) => (
+                  <tr key={game.appid}>
+                    <td>{game.name || `App ${game.appid}`}</td>
+                    <td>{game.playtime_forever ? (game.playtime_forever / 60).toFixed(1) : '0'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </Table>
+          )}
+        </Card.Body>
+      </Card>
+      )}
+
+      {show('youtube') && (
+      <Card>
+        <Card.Header className="d-flex justify-content-between align-items-center">
+          <div>
+            <h4 className="mb-0">YouTube</h4>
+            <small>Sync Watch Later (longform focus)</small>
+          </div>
+          <Badge bg={youtubeConnected ? 'success' : 'secondary'}>
+            {youtubeConnected ? 'Connected' : 'Not Connected'}
+          </Badge>
+        </Card.Header>
+        <Card.Body>
+          <Row className="mb-3">
+            <Col md={6}>
+              <div><strong>Last sync:</strong> {formatTimestamp(youtubeLastSync)} ({relativeTime(youtubeLastSync)})</div>
+              <div><strong>Watch Later:</strong> {profile?.youtubeWatchLaterCount ?? '—'} items</div>
+              <div><strong>Longform:</strong> {profile?.youtubeLongformCount ?? '—'} items</div>
+              <div><strong>Takeout import:</strong> {formatTimestamp(youtubeTakeoutLastImport)} ({relativeTime(youtubeTakeoutLastImport)})</div>
+              <div><strong>History rows:</strong> {profile?.youtubeWatchHistoryCount ?? '—'} items</div>
+            </Col>
+            <Col md={6} className="text-md-end mt-3 mt-md-0">
+              <Button variant="outline-primary" className="me-2" onClick={connectYouTube}>
+                {youtubeConnected ? 'Reconnect' : 'Connect'}
+              </Button>
+              <Button variant="primary" onClick={syncYouTube} disabled={youtubeLoading || !youtubeConnected}>
+                {youtubeLoading ? <Spinner size="sm" animation="border" className="me-2" /> : null}
+                Sync Now
+              </Button>
+              <div className="mt-2">
+                <Button variant="outline-secondary" size="sm" onClick={() => navigate('/videos-backlog')}>
+                  Open Videos Backlog
+                </Button>
+              </div>
+            </Col>
+          </Row>
+
+          {youtubeMessage && <Alert variant="info">{youtubeMessage}</Alert>}
+          <div className="text-muted small">Only Watch Later videos ≥ 30 mins are imported into the backlog.</div>
+          <hr />
+          <div className="d-flex flex-column gap-2">
+            <div className="fw-semibold">Google Takeout (watch history)</div>
+            <div className="text-muted small">
+              Upload the `watch-history.json` file from Google Takeout to populate your 24h YouTube time metric.
+            </div>
+            <Form.Control
+              type="file"
+              accept=".json,application/json"
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setYouTubeTakeoutFile(e.target.files?.[0] || null)}
+            />
+            <div className="d-flex gap-2">
+              <Button variant="primary" size="sm" onClick={importYouTubeTakeout} disabled={youtubeImporting || !youtubeTakeoutFile}>
+                {youtubeImporting ? <Spinner size="sm" animation="border" className="me-2" /> : null}
+                Import Watch History
+              </Button>
+              {youtubeTakeoutFile && <Button variant="outline-secondary" size="sm" onClick={() => setYouTubeTakeoutFile(null)}>Clear</Button>}
+            </div>
+            {youtubeTakeoutMsg && <Alert variant="info" className="mb-0">{youtubeTakeoutMsg}</Alert>}
+          </div>
+        </Card.Body>
+      </Card>
+      )}
+
+      {show('trakt') && (
+      <Card>
+        <Card.Header className="d-flex justify-content-between align-items-center">
+          <div>
+            <h4 className="mb-0">Trakt</h4>
+            <small>Connect via device code to import watchlist + history</small>
+          </div>
+          <Badge bg={(profile?.traktConnected || profile?.traktUser) ? 'success' : 'secondary'}>
+            {profile?.traktConnected ? 'Connected' : (profile?.traktUser ? 'Configured' : 'Not Connected')}
+          </Badge>
+        </Card.Header>
+        <Card.Body>
+          <Row className="mb-3">
+            <Col md={6}>
+              <Form.Label>Trakt Username</Form.Label>
+              <Form.Control
+                value={traktUserInput}
+                onChange={(e) => setTraktUserInput(e.target.value)}
+                placeholder="Enter your trakt.tv username"
+              />
+              <Button
+                className="mt-2"
+                variant="outline-secondary"
+                size="sm"
+                onClick={() => updateProfile({ traktUser: traktUserInput || null })}
+              >
+                Save Username
+              </Button>
+            </Col>
+            <Col md={6} className="text-md-end mt-3 mt-md-0">
+              <div><strong>Last sync:</strong> {formatTimestamp(traktLastSync)} ({relativeTime(traktLastSync)})</div>
+              <div><strong>Watchlist:</strong> {profile?.traktWatchlistSize ?? '—'} items</div>
+              <Button variant="primary" className="mt-2" onClick={syncTrakt} disabled={traktLoading || (!traktUserInput && !profile?.traktConnected)}>
+                {traktLoading ? <Spinner size="sm" animation="border" className="me-2" /> : null}
+                Sync Now
+              </Button>
+              <div className="mt-2">
+                <Button variant="outline-secondary" size="sm" onClick={() => navigate('/shows-backlog')}>
+                  Open Shows Backlog
+                </Button>
+              </div>
+            </Col>
+          </Row>
+
+          <Row className="mb-3">
+            <Col md={6}>
+              <Form.Label>Browser Sign-in</Form.Label>
+              <div className="d-flex flex-column gap-2">
+                <Button
+                  variant="outline-primary"
+                  size="sm"
+                  onClick={connectTraktBrowser}
+                  disabled={traktLoading}
+                >
+                  {traktLoading ? 'Connecting…' : 'Connect via browser'}
+                </Button>
+                <div className="text-muted small">Use the Trakt web flow to connect your account.</div>
+              </div>
+            </Col>
+            <Col md={6} className="text-md-end mt-3 mt-md-0">
+              <div><strong>Status:</strong> {profile?.traktConnected ? 'Connected' : 'Not connected'}</div>
+              <div className="text-muted small">Backlog imports require a connected Trakt session.</div>
+            </Col>
+          </Row>
+
+          {traktMessage && <Alert variant="info">{traktMessage}</Alert>}
+
+          <h6>Recent History</h6>
+          {traktHistory.length === 0 ? (
+            <Alert variant="light">No Trakt history synced yet.</Alert>
+          ) : (
+            <ListGroup>
+              {traktHistory.map((entry: any) => (
+                <ListGroup.Item key={entry.id || entry.watched_at}>
+                  <div className="d-flex justify-content-between">
+                    <div>
+                      <div className="fw-semibold">{entry?.show?.title || entry?.movie?.title || 'Item'}</div>
+                      <small className="text-muted">{entry?.type || 'episode'} · {entry?.show?.year || entry?.movie?.year || ''}</small>
+                    </div>
+                    <div>{entry.watched_at ? new Date(entry.watched_at).toLocaleString() : '—'}</div>
+                  </div>
+                </ListGroup.Item>
+              ))}
+            </ListGroup>
+          )}
+        </Card.Body>
+      </Card>
+      )}
+
+      {/* ── Telegram ──────────────────────────────────────────────────────── */}
+      {show('telegram') && (
+        <TelegramSettings />
+      )}
+
+    </div>
+  );
+};
+
+export default IntegrationSettings;

@@ -1,0 +1,26 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "calendar_blocks",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "goalId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "start",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "__name__",
+          "order": "ASCENDING"
+        }
+      ]
+    }
+  ]
+}

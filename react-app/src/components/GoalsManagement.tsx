@@ -1,0 +1,1019 @@
+import React, { useState, useEffect, useMemo } from 'react';
+import { Container, Card, Row, Col, Button, Form, InputGroup } from 'react-bootstrap';
+import { useSearchParams } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
+import { usePersona } from '../contexts/PersonaContext';
+import { collection, query, where, onSnapshot, orderBy, updateDoc, doc, deleteDoc, serverTimestamp, writeBatch, getDocs } from 'firebase/firestore';
+import { db } from '../firebase';
+import { Goal, Story } from '../types';
+import ModernGoalsTable from './ModernGoalsTable';
+import GoalsCardView from './GoalsCardView';
+import AddGoalModal from './AddGoalModal';
+import EditGoalModal from './EditGoalModal';
+import GoalPlanningWorkspaceModal from './GoalPlanningWorkspaceModal';
+import { useSprint } from '../contexts/SprintContext';
+import SprintSelector from './SprintSelector';
+import ThemeMultiSelect from './shared/ThemeMultiSelect';
+import YearMultiSelect from './shared/YearMultiSelect';
+import { isStatus } from '../utils/statusHelpers';
+import { useGlobalThemes } from '../hooks/useGlobalThemes';
+import ConfirmDialog from './ConfirmDialog';
+import { arrayMove } from '@dnd-kit/sortable';
+import { useSidebar } from '../contexts/SidebarContext';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { computeWindowExpectedProgress, evaluateGoalTargetStatus } from '../utils/goalKpiStatus';
+import { goalNeedsLinkedPot } from '../utils/goalCost';
+
+const GoalsManagement: React.FC = () => {
+  console.log('[GoalsManagement] Component RENDERING');
+  const { currentUser } = useAuth();
+  const { currentPersona } = usePersona();
+  const [searchParams] = useSearchParams();
+  const [goals, setGoals] = useState<Goal[]>([]);
+  const [stories, setStories] = useState<Story[]>([]);
+  const [goalKpiScope, setGoalKpiScope] = useState<'sprint' | 'year' | 'goal'>('sprint');
+  const [filterStatus, setFilterStatus] = useState<string>('all');
+  const [filterThemeIds, setFilterThemeIds] = useState<number[]>([]);
+  const [selectedYears, setSelectedYears] = useState<number[]>([new Date().getFullYear(), new Date().getFullYear() + 1, new Date().getFullYear() + 2]);
+  const [allYears, setAllYears] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [viewMode, setViewMode] = useState<'list' | 'cards'>('cards');
+  const [showAddGoal, setShowAddGoal] = useState(false);
+  const [showGoalDescriptions, setShowGoalDescriptions] = useState<boolean>(() => {
+    try {
+      const stored = localStorage.getItem('bob_goals_show_descriptions');
+      if (stored === null || stored === undefined) return true;
+      return stored === 'true';
+    } catch {
+      return true;
+    }
+  });
+  const [showNoPotOnly, setShowNoPotOnly] = useState(false);
+  const [editGoal, setEditGoal] = useState<Goal | null>(null);
+  const [workspaceGoal, setWorkspaceGoal] = useState<Goal | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<{ id: string; title: string } | null>(null);
+  const [activeSprintGoalIds, setActiveSprintGoalIds] = useState<Set<string>>(new Set());
+  const [activeFocusGoalIds, setActiveFocusGoalIds] = useState<Set<string>>(new Set());
+  const [applyFocusOnlyFilter, setApplyFocusOnlyFilter] = useState(false);
+  const [applyActiveSprintFilter, setApplyActiveSprintFilter] = useState(true); // default on
+  const [pots, setPots] = useState<Record<string, { name: string; balance: number }>>({});
+  const [goalKpiMetrics, setGoalKpiMetrics] = useState<Record<string, { resolvedKpis?: any[]; updatedAt?: any }>>({});
+  const { selectedSprintId, setSelectedSprintId, sprints } = useSprint();
+  const { themes: globalThemes } = useGlobalThemes();
+  const { isCollapsed, toggleCollapse } = useSidebar();
+
+  useEffect(() => {
+    const filter = searchParams.get('filter');
+    if (filter === 'cost_without_pot') {
+      setViewMode('list');
+      setShowNoPotOnly(true);
+      setAllYears(true);
+    }
+  }, [searchParams]);
+
+  const toMillis = (value: any): number | null => {
+    if (value == null) return null;
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (value?.toMillis && typeof value.toMillis === 'function') {
+      try {
+        return Number(value.toMillis());
+      } catch {
+        return null;
+      }
+    }
+    if (value?.seconds != null) return Number(value.seconds) * 1000;
+    const parsed = new Date(value).getTime();
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('bob_goals_show_descriptions', String(showGoalDescriptions));
+    } catch {
+      // noop
+    }
+  }, [showGoalDescriptions]);
+
+  // Load goals from Firestore
+  useEffect(() => {
+    console.log('[GoalsManagement] useEffect MOUNTING - setting up subscriptions');
+    if (!currentUser) return;
+    const loadGoalsData = async () => {
+      if (!currentUser) return;
+
+      setLoading(true);
+
+      // Load goals data
+      const goalsQuery = query(
+        collection(db, 'goals'),
+        where('ownerUid', '==', currentUser.uid),
+        where('persona', '==', currentPersona),
+        orderBy('createdAt', 'desc')
+      );
+
+      // Subscribe to real-time updates
+      const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
+        const rawGoals = snapshot.docs.map(doc => {
+          const data = doc.data();
+          const baseGoal = {
+            id: doc.id,
+            ...data,
+            // Convert Firestore timestamps to JavaScript Date objects to prevent React error #31
+            createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : data.createdAt,
+            updatedAt: data.updatedAt?.toDate ? data.updatedAt.toDate() : data.updatedAt,
+            targetDate: data.targetDate?.toDate
+              ? data.targetDate.toDate().getTime()
+              : (typeof data.targetDate === 'object' && data.targetDate?.seconds != null
+                ? (data.targetDate.seconds * 1000 + Math.floor((data.targetDate.nanoseconds || 0) / 1e6))
+                : data.targetDate)
+          } as Goal;
+          if (typeof (baseGoal as any).orderIndex !== 'number') {
+            (baseGoal as any).orderIndex = data.priority ?? data.rank ?? 0;
+          }
+          return baseGoal;
+        }) as Goal[];
+
+        const normalizedGoals = rawGoals
+          .map((goal, index) => ({
+            ...goal,
+            orderIndex:
+              typeof goal.orderIndex === 'number'
+                ? goal.orderIndex
+                : (goal.priority !== undefined ? Number(goal.priority) * 1000 : index * 1000),
+          }))
+          .sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
+
+        setGoals(normalizedGoals);
+      });
+
+      setLoading(false);
+
+      return () => {
+        console.log('[GoalsManagement] useEffect CLEANUP - unsubscribing');
+        unsubscribeGoals();
+      };
+    };
+    loadGoalsData();
+  }, [currentUser, currentPersona]);
+
+  useEffect(() => {
+    if (!currentUser) {
+      setStories([]);
+      return;
+    }
+    const storiesQuery = query(
+      collection(db, 'stories'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona)
+    );
+    const unsub = onSnapshot(
+      storiesQuery,
+      (snapshot) => {
+        const rows = snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) })) as Story[];
+        setStories(rows);
+      },
+      (error) => {
+        console.warn('[GoalsManagement] stories load failed', error);
+        setStories([]);
+      }
+    );
+    return () => unsub();
+  }, [currentUser, currentPersona]);
+
+  useEffect(() => {
+    if (!currentUser?.uid) {
+      setActiveFocusGoalIds(new Set());
+      return;
+    }
+    const focusQuery = query(
+      collection(db, 'focusGoals'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+      where('isActive', '==', true)
+    );
+    const unsub = onSnapshot(
+      focusQuery,
+      (snapshot) => {
+        const setIds = new Set<string>();
+        snapshot.docs.forEach((docSnap) => {
+          const data = docSnap.data() as any;
+          const ids = Array.isArray(data.goalIds) ? data.goalIds : [];
+          ids.forEach((id) => {
+            const normalized = String(id || '').trim();
+            if (normalized) setIds.add(normalized);
+          });
+        });
+        setActiveFocusGoalIds(setIds);
+      },
+      () => setActiveFocusGoalIds(new Set())
+    );
+    return () => unsub();
+  }, [currentUser?.uid, currentPersona]);
+
+  const activeSprintId = useMemo(() => {
+    const active = sprints.find((s) => s.status === 1);
+    return active?.id || null;
+  }, [sprints]);
+
+  // When viewing past/future years, stop scoping by sprint
+  const currentYear = new Date().getFullYear();
+  useEffect(() => {
+    const isCurrentYearSelected = allYears || selectedYears.includes(currentYear);
+    if (!isCurrentYearSelected) {
+      if (applyActiveSprintFilter) setApplyActiveSprintFilter(false);
+      if (selectedSprintId !== '') setSelectedSprintId('');
+      return;
+    }
+    if (!applyActiveSprintFilter) setApplyActiveSprintFilter(true);
+    const hasSavedPreference = (() => {
+      try { return localStorage.getItem('bob_selected_sprint') !== null; } catch { return false; }
+    })();
+    if (selectedSprintId === '' && activeSprintId && !hasSavedPreference) {
+      setSelectedSprintId(activeSprintId);
+    }
+  }, [selectedYears, allYears, currentYear, applyActiveSprintFilter, selectedSprintId, setSelectedSprintId, activeSprintId]);
+
+  useEffect(() => {
+    const sprintId = selectedSprintId === '' ? null : (selectedSprintId || activeSprintId);
+    if (!sprintId) {
+      setActiveSprintGoalIds(new Set());
+      return;
+    }
+    const setIds = new Set<string>();
+    stories.forEach((story) => {
+      if ((story as any).sprintId === sprintId && story.goalId) setIds.add(story.goalId);
+    });
+    setActiveSprintGoalIds(setIds);
+  }, [stories, selectedSprintId, activeSprintId]);
+
+  useEffect(() => {
+    if (!currentUser?.uid) return;
+    const potQuery = query(collection(db, 'monzo_pots'), where('ownerUid', '==', currentUser.uid));
+    const unsub = onSnapshot(potQuery, (snap) => {
+      const map: Record<string, { name: string; balance: number }> = {};
+      snap.docs.forEach((d) => {
+        const data = d.data() as any;
+        const id = data.potId || d.id;
+        if (!id) return;
+        map[id] = { name: data.name || id, balance: data.balance || 0 };
+      });
+      setPots(map);
+    });
+    return () => unsub();
+  }, [currentUser?.uid]);
+
+  useEffect(() => {
+    if (!currentUser?.uid) {
+      setGoalKpiMetrics({});
+      return;
+    }
+    const metricsQuery = query(
+      collection(db, 'goal_kpi_metrics'),
+      where('ownerUid', '==', currentUser.uid)
+    );
+    const unsub = onSnapshot(
+      metricsQuery,
+      (snap) => {
+        const map: Record<string, { resolvedKpis?: any[]; updatedAt?: any }> = {};
+        snap.docs.forEach((docSnap) => {
+          const data = docSnap.data() as any;
+          const goalId = String(data.goalId || '').trim();
+          if (!goalId) return;
+          map[goalId] = {
+            resolvedKpis: Array.isArray(data.resolvedKpis) ? data.resolvedKpis : [],
+            updatedAt: data.updatedAt || null,
+          };
+        });
+        setGoalKpiMetrics(map);
+      },
+      (error) => {
+        console.warn('[GoalsManagement] goal KPI metrics load failed', error);
+        setGoalKpiMetrics({});
+      }
+    );
+    return () => unsub();
+  }, [currentUser?.uid]);
+
+  // Handler functions for ModernGoalsTable
+  const handleGoalUpdate = async (goalId: string, updates: Partial<Goal>) => {
+    try {
+      const goal = goals.find((g) => g.id === goalId);
+      const updatesToApply: Record<string, any> = {
+        ...updates,
+        updatedAt: serverTimestamp()
+      };
+
+      const maybeTargetYear =
+        (updates as any).endDate ? new Date((updates as any).endDate as any).getFullYear()
+        : (updates as any).targetDate ? new Date((updates as any).targetDate as any).getFullYear()
+        : undefined;
+      if (maybeTargetYear) {
+        updatesToApply.targetYear = maybeTargetYear;
+      }
+
+      const startChanged =
+        updates.startDate !== undefined &&
+        goal?.startDate !== (updates.startDate as any);
+
+      if (startChanged && currentUser) {
+        const newStart =
+          typeof updates.startDate === 'number'
+            ? updates.startDate
+            : new Date(updates.startDate as any).getTime();
+
+        if (Number.isFinite(newStart) && sprints.length > 0) {
+          const nearest = sprints.reduce(
+            (acc, sprint) => {
+              const distance = Math.abs(sprint.startDate - newStart);
+              if (distance < acc.distance) {
+                return { distance, sprint };
+              }
+              return acc;
+            },
+            { distance: Number.POSITIVE_INFINITY, sprint: sprints[0] }
+          ).sprint;
+
+          const storiesSnap = await getDocs(
+            query(
+              collection(db, 'stories'),
+              where('goalId', '==', goalId),
+              where('ownerUid', '==', currentUser.uid),
+              where('persona', '==', currentPersona)
+            )
+          );
+
+          const storyDocs = storiesSnap.docs || [];
+          const storiesToMove = storyDocs.filter(
+            (d) => (d.data() as any).sprintId !== nearest.id
+          );
+
+          if (storiesToMove.length > 0) {
+            const names = storiesToMove
+              .map((d) => (d.data() as any).title || d.id)
+              .slice(0, 3)
+              .join(', ');
+            const confirmed = window.confirm(
+              `Move ${storiesToMove.length} stories for "${goal?.title || goalId}" to sprint "${nearest.name}"?` +
+              (names ? `\nExamples: ${names}${storiesToMove.length > 3 ? '…' : ''}` : '')
+            );
+            if (confirmed) {
+              const batch = writeBatch(db);
+              storiesToMove.forEach((d) => {
+                batch.update(d.ref, {
+                  sprintId: nearest.id,
+                  updatedAt: serverTimestamp(),
+                });
+              });
+              await batch.commit();
+            }
+          }
+        }
+      }
+
+      await updateDoc(doc(db, 'goals', goalId), updatesToApply);
+    } catch (error) {
+      console.error('Error updating goal:', error);
+    }
+  };
+
+  const handleGoalDelete = async (goalId: string) => {
+    const g = goals.find(gl => gl.id === goalId);
+    setConfirmDelete({ id: goalId, title: g?.title || goalId });
+  };
+
+  const performGoalDelete = async () => {
+    if (!confirmDelete) return;
+    try {
+      await deleteDoc(doc(db, 'goals', confirmDelete.id));
+    } catch (error) {
+      console.error('Error deleting goal:', error);
+    } finally {
+      setConfirmDelete(null);
+    }
+  };
+
+  const handleGoalPriorityChange = async (goalId: string, newPriority: number) => {
+    try {
+      await updateDoc(doc(db, 'goals', goalId), {
+        priority: newPriority,
+        updatedAt: serverTimestamp()
+      });
+    } catch (error) {
+      console.error('Error updating goal priority:', error);
+    }
+  };
+
+  const handleGoalReorder = async (activeId: string, overId: string) => {
+    try {
+      const ordered = [...goals].sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
+      const ids = ordered.map(goal => goal.id);
+      const activeIndex = ids.indexOf(activeId);
+      const overIndex = ids.indexOf(overId);
+
+      if (activeIndex === -1 || overIndex === -1) return;
+
+      const newOrder = arrayMove(ids, activeIndex, overIndex);
+      const batch = writeBatch(db);
+
+      newOrder.forEach((id, index) => {
+        batch.update(doc(db, 'goals', id), {
+          orderIndex: index * 1000,
+          updatedAt: serverTimestamp(),
+        });
+      });
+
+      await batch.commit();
+    } catch (error) {
+      console.error('Error reordering goals:', error);
+    }
+  };
+
+  // Apply filters to goals
+  const filteredGoals = goals.filter(goal => {
+    // If 'All Sprints' is selected (empty string), do NOT fall back to activeSprintId
+    const sprintFilterId = selectedSprintId === '' ? null : (selectedSprintId || activeSprintId);
+    if (applyActiveSprintFilter && sprintFilterId) {
+      // Only include goals with stories in active sprint and not complete (status !== 2)
+      if (goal.status === 2) return false;
+      if (!activeSprintGoalIds.has(goal.id)) return false;
+    }
+    if (filterStatus !== 'all' && !isStatus(goal.status, filterStatus)) return false;
+    if (filterThemeIds.length > 0 && !filterThemeIds.includes(Number(goal.theme))) return false;
+    if (showNoPotOnly) {
+      if (!goalNeedsLinkedPot(goal)) return false;
+    }
+    const derivedYear =
+      (goal as any).targetYear ||
+      ((goal as any).endDate ? new Date((goal as any).endDate as any).getFullYear() : undefined) ||
+      ((goal as any).targetDate ? new Date((goal as any).targetDate as any).getFullYear() : undefined);
+    if (!allYears && selectedYears.length > 0) {
+      if (derivedYear && !selectedYears.includes(Number(derivedYear))) return false;
+    }
+    if (searchTerm && !goal.title.toLowerCase().includes(searchTerm.toLowerCase())) return false;
+    if (applyFocusOnlyFilter && activeFocusGoalIds.size > 0 && !activeFocusGoalIds.has(goal.id)) return false;
+    return true;
+  });
+
+  const orderedFilteredGoals = [...filteredGoals].sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
+
+  // Get counts for dashboard cards
+  const goalCounts = {
+    total: orderedFilteredGoals.length,
+    active: orderedFilteredGoals.filter(g => g.status === 1).length, // Work in Progress
+    done: orderedFilteredGoals.filter(g => g.status === 2).length, // Complete
+    paused: orderedFilteredGoals.filter(g => g.status === 3).length // Blocked
+  };
+
+  const formatMoney = (v: number) => v.toLocaleString('en-GB', { style: 'currency', currency: 'GBP' });
+
+  const savingsMetrics = useMemo(() => {
+    let totalEstimated = 0;
+    let totalSavedPence = 0;
+    const seenPotIds = new Set<string>();
+
+    orderedFilteredGoals.forEach((goal) => {
+      const est = Number((goal as any).estimatedCost || 0);
+      totalEstimated += Number.isFinite(est) ? est : 0;
+
+      const rawPotId = (goal as any).linkedPotId || (goal as any).potId;
+      if (!rawPotId) return;
+      const raw = String(rawPotId);
+      const candidates = [raw];
+      if (currentUser?.uid && raw.startsWith(`${currentUser.uid}_`)) {
+        candidates.push(raw.replace(`${currentUser.uid}_`, ''));
+      }
+      const potId = candidates.find((id) => pots[id]);
+      if (!potId || seenPotIds.has(potId)) return;
+      seenPotIds.add(potId);
+      const balance = Number(pots[potId]?.balance || 0);
+      totalSavedPence += Number.isFinite(balance) ? balance : 0;
+    });
+
+    return {
+      totalEstimated,
+      totalSavedPence,
+      linkedPotCount: seenPotIds.size
+    };
+  }, [orderedFilteredGoals, pots, currentUser?.uid]);
+
+  const availableYears = useMemo(() => {
+    const years = new Set<string>();
+    goals.forEach(g => {
+      const yr =
+        (g as any).targetYear ||
+        ((g as any).endDate ? new Date((g as any).endDate as any).getFullYear() : undefined) ||
+        ((g as any).targetDate ? new Date((g as any).targetDate as any).getFullYear() : undefined);
+      if (yr) years.add(String(yr));
+    });
+    return Array.from(years).sort();
+  }, [goals]);
+
+  const kpiYear = useMemo(() => {
+    if (selectedYears.length === 1) return selectedYears[0];
+    return new Date().getFullYear();
+  }, [selectedYears]);
+
+  const yearStartMs = useMemo(() => new Date(kpiYear, 0, 1, 0, 0, 0, 0).getTime(), [kpiYear]);
+  const yearEndMs = useMemo(() => new Date(kpiYear, 11, 31, 23, 59, 59, 999).getTime(), [kpiYear]);
+
+  const kpiSprintId = useMemo(() => {
+    if (selectedSprintId && selectedSprintId !== '') return selectedSprintId;
+    return activeSprintId;
+  }, [selectedSprintId, activeSprintId]);
+
+  const kpiSprint = useMemo(() => {
+    if (!kpiSprintId) return null;
+    return sprints.find((s) => s.id === kpiSprintId) || null;
+  }, [sprints, kpiSprintId]);
+
+  const kpiScopeLabel = useMemo(() => {
+    if (goalKpiScope === 'sprint') return kpiSprint?.name || 'active sprint';
+    if (goalKpiScope === 'year') return String(kpiYear);
+    return 'goal timeline';
+  }, [goalKpiScope, kpiSprint, kpiYear]);
+
+  const filteredGoalIds = useMemo(() => new Set(orderedFilteredGoals.map((goal) => goal.id)), [orderedFilteredGoals]);
+
+  const filteredStories = useMemo(() => {
+    return stories.filter((story) => story.goalId && filteredGoalIds.has(story.goalId));
+  }, [stories, filteredGoalIds]);
+
+  const scopedStories = useMemo(() => {
+    if (goalKpiScope === 'goal') return filteredStories;
+    if (goalKpiScope === 'sprint') {
+      if (!kpiSprintId) return [];
+      return filteredStories.filter((story) => String((story as any).sprintId || '') === kpiSprintId);
+    }
+    return filteredStories.filter((story) => {
+      const candidates = [
+        (story as any).targetDate,
+        (story as any).dueDate,
+        (story as any).plannedStartDate,
+        (story as any).createdAt,
+        (story as any).updatedAt,
+      ].map((value) => toMillis(value));
+      return candidates.some((ms) => ms != null && ms >= yearStartMs && ms <= yearEndMs);
+    });
+  }, [goalKpiScope, filteredStories, kpiSprintId, yearStartMs, yearEndMs]);
+
+  const scopeExpectedProgressPct = useMemo(() => {
+    if (goalKpiScope === 'sprint') {
+      const startMs = toMillis((kpiSprint as any)?.startDate || (kpiSprint as any)?.start || null);
+      const endMs = toMillis((kpiSprint as any)?.endDate || (kpiSprint as any)?.end || null);
+      return computeWindowExpectedProgress(startMs, endMs);
+    }
+    if (goalKpiScope === 'year') {
+      return computeWindowExpectedProgress(yearStartMs, yearEndMs);
+    }
+    return null;
+  }, [goalKpiScope, kpiSprint, yearStartMs, yearEndMs]);
+
+  const getGoalPotBalance = (goal: Goal): number => {
+    const rawPotId = (goal as any).linkedPotId || (goal as any).potId;
+    if (!rawPotId) return 0;
+    const raw = String(rawPotId);
+    const candidates = [raw];
+    if (currentUser?.uid) {
+      if (raw.startsWith(`${currentUser.uid}_`)) candidates.push(raw.replace(`${currentUser.uid}_`, ''));
+      else candidates.push(`${currentUser.uid}_${raw}`);
+    }
+    const found = candidates.find((id) => pots[id]);
+    if (!found) return 0;
+    const balance = Number(pots[found]?.balance || 0);
+    return Number.isFinite(balance) ? balance : 0;
+  };
+
+  const goalKpiStatusByGoalId = useMemo(() => {
+    const storiesByGoal = new Map<string, Story[]>();
+    scopedStories.forEach((story) => {
+      const goalId = String(story.goalId || '').trim();
+      if (!goalId) return;
+      const list = storiesByGoal.get(goalId) || [];
+      list.push(story);
+      storiesByGoal.set(goalId, list);
+    });
+
+    const statusMap: Record<string, {
+      goalId: string;
+      goalTitle: string;
+      kpiSummary: string;
+      progressPct: number | null;
+      expectedProgressPct: number | null;
+      statusLabel: 'On target' | 'Behind' | 'No KPI';
+      statusTone: 'success' | 'danger' | 'muted';
+      reason: string;
+    }> = {};
+
+    orderedFilteredGoals.forEach((goal) => {
+      const goalStories = storiesByGoal.get(goal.id) || [];
+      const totalStoryPoints = goalStories.reduce((sum, story) => sum + (Number((story as any).points || 0) || 0), 0);
+      const doneStoryPoints = goalStories
+        .filter((story) => Number((story as any).status || 0) >= 4)
+        .reduce((sum, story) => sum + (Number((story as any).points || 0) || 0), 0);
+      const doneStoryCount = goalStories.filter((story) => Number((story as any).status || 0) >= 4).length;
+      const storyProgressPct = goalStories.length
+        ? (
+          totalStoryPoints > 0
+            ? Math.round((doneStoryPoints / totalStoryPoints) * 100)
+            : Math.round((doneStoryCount / goalStories.length) * 100)
+        )
+        : null;
+
+      const estimated = Number((goal as any).estimatedCost || 0) || 0;
+      const savedPence = getGoalPotBalance(goal);
+      const savingsPct = estimated > 0 ? Math.min(100, Math.round(((savedPence / 100) / estimated) * 100)) : null;
+      const fallbackParts = [storyProgressPct, savingsPct].filter((value): value is number => value != null);
+      const fallbackProgressPct = fallbackParts.length
+        ? Math.round(fallbackParts.reduce((sum, value) => sum + value, 0) / fallbackParts.length)
+        : null;
+
+      const startMs = toMillis((goal as any).startDate || goal.createdAt || null);
+      const endMs = toMillis((goal as any).endDate || (goal as any).targetDate || null);
+      const expectedProgressPct = goalKpiScope === 'goal'
+        ? computeWindowExpectedProgress(startMs, endMs)
+        : scopeExpectedProgressPct;
+      const resolvedKpis = Array.isArray(goalKpiMetrics[goal.id]?.resolvedKpis)
+        ? goalKpiMetrics[goal.id]?.resolvedKpis || []
+        : [];
+      const status = evaluateGoalTargetStatus({
+        resolvedKpis,
+        fallbackProgressPct,
+        expectedProgressPct,
+        scopeLabel: kpiScopeLabel,
+      });
+      statusMap[goal.id] = {
+        goalId: goal.id,
+        goalTitle: goal.title || goal.id,
+        kpiSummary: status.kpiSummary || 'No KPI attached',
+        progressPct: status.progressPct,
+        expectedProgressPct,
+        statusLabel: status.label,
+        statusTone: status.tone,
+        reason: status.reason,
+      };
+    });
+
+    return statusMap;
+  }, [scopedStories, orderedFilteredGoals, goalKpiMetrics, goalKpiScope, scopeExpectedProgressPct, kpiScopeLabel, currentUser?.uid, pots]);
+
+  return (
+    <div style={{
+      padding: '16px',
+      backgroundColor: 'var(--notion-bg)',
+      color: 'var(--notion-text)',
+      minHeight: '100vh',
+      width: '100%'
+    }}>
+      <div style={{ maxWidth: '100%', margin: '0', display: 'flex', flexDirection: 'column', gap: '10px', height: 'calc(100vh - 32px)' }}>
+        {/* Header */}
+        <div style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          marginBottom: '8px'
+        }}>
+          <div>
+            <h2 style={{ margin: '0 0 4px 0', fontSize: '24px', fontWeight: '600' }}>
+              Goals Management
+            </h2>
+            <p style={{ margin: 0, color: 'var(--notion-text-secondary)', fontSize: '14px' }}>
+              Manage your life goals across different themes
+            </p>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <Button
+              size="sm"
+              variant="outline-secondary"
+              title={isCollapsed ? 'Expand details panel' : 'Collapse details panel'}
+              onClick={toggleCollapse}
+            >
+              {isCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
+            </Button>
+            {/* View Mode Toggle */}
+            <div style={{ display: 'flex', border: '1px solid var(--notion-border)', borderRadius: 6, overflow: 'hidden' }}>
+              <Button
+                size="sm"
+                id="button-list"
+                variant={viewMode === 'list' ? 'primary' : 'outline-secondary'}
+                onClick={() => setViewMode('list')}
+                style={{ borderRadius: 0 }}
+              >
+                List
+              </Button>
+              <Button
+                size="sm"
+                id="button-cards"
+                variant={viewMode === 'cards' ? 'primary' : 'outline-secondary'}
+                onClick={() => setViewMode('cards')}
+                style={{ borderRadius: 0 }}
+              >
+                Cards
+              </Button>
+            </div>
+            <Button variant="primary" onClick={() => setShowAddGoal(true)}>
+              Add Goal
+            </Button>
+          </div>
+        </div>
+
+        {/* Dashboard Cards */}
+        <Row className="mb-1">
+          <Col lg={3} md={6} className="mb-3">
+            <Card style={{ height: '100%', border: '1px solid var(--notion-border)', background: 'var(--notion-bg)' }}>
+              <Card.Body style={{ textAlign: 'center', padding: '6px' }}>
+                <h3 style={{ margin: '0 0 2px 0', fontSize: '18px', fontWeight: '700', color: 'var(--notion-text)' }}>
+                  {goalCounts.total}
+                </h3>
+                <p style={{ margin: 0, color: 'var(--notion-text-secondary)', fontSize: '11px', fontWeight: '500' }}>
+                  Total Goals
+                </p>
+              </Card.Body>
+            </Card>
+          </Col>
+          <Col lg={3} md={6} className="mb-3">
+            <Card style={{ height: '100%', border: '1px solid var(--notion-border)', background: 'var(--notion-bg)' }}>
+              <Card.Body style={{ textAlign: 'center', padding: '6px' }}>
+                <h3 style={{ margin: '0 0 2px 0', fontSize: '18px', fontWeight: '700', color: 'var(--notion-text)' }}>
+                  {goalCounts.active}
+                </h3>
+                <p style={{ margin: 0, color: 'var(--notion-text-secondary)', fontSize: '11px', fontWeight: '500' }}>
+                  Active
+                </p>
+              </Card.Body>
+            </Card>
+          </Col>
+          <Col lg={3} md={6} className="mb-3">
+            <Card style={{ height: '100%', border: '1px solid var(--notion-border)', background: 'var(--notion-bg)' }}>
+              <Card.Body style={{ textAlign: 'center', padding: '6px' }}>
+                <h3 style={{ margin: '0 0 2px 0', fontSize: '18px', fontWeight: '700', color: 'var(--notion-text)' }}>
+                  {goalCounts.done}
+                </h3>
+                <p style={{ margin: 0, color: 'var(--notion-text-secondary)', fontSize: '11px', fontWeight: '500' }}>
+                  Done
+                </p>
+              </Card.Body>
+            </Card>
+          </Col>
+          <Col lg={3} md={6} className="mb-3">
+            <Card style={{ height: '100%', border: '1px solid var(--notion-border)', background: 'var(--notion-bg)' }}>
+              <Card.Body style={{ textAlign: 'center', padding: '6px' }}>
+                <h3 style={{ margin: '0 0 2px 0', fontSize: '18px', fontWeight: '700', color: 'var(--notion-text)' }}>
+                  {goalCounts.paused}
+                </h3>
+                <p style={{ margin: 0, color: 'var(--notion-text-secondary)', fontSize: '11px', fontWeight: '500' }}>
+                  Paused
+                </p>
+              </Card.Body>
+            </Card>
+          </Col>
+        </Row>
+        <Row className="mb-1">
+          <Col lg={6} md={6} className="mb-3">
+            <Card style={{ height: '100%', border: '1px solid var(--notion-border)', background: 'var(--notion-bg)' }}>
+              <Card.Body style={{ textAlign: 'center', padding: '6px' }}>
+                <h3 style={{ margin: '0 0 2px 0', fontSize: '18px', fontWeight: '700', color: 'var(--notion-text)' }}>
+                  {formatMoney(savingsMetrics.totalEstimated)}
+                </h3>
+                <p style={{ margin: 0, color: 'var(--notion-text-secondary)', fontSize: '11px', fontWeight: '500' }}>
+                  Total Estimated Cost (Filtered)
+                </p>
+              </Card.Body>
+            </Card>
+          </Col>
+          <Col lg={6} md={6} className="mb-3">
+            <Card style={{ height: '100%', border: '1px solid var(--notion-border)', background: 'var(--notion-bg)' }}>
+              <Card.Body style={{ textAlign: 'center', padding: '6px' }}>
+                <h3 style={{ margin: '0 0 2px 0', fontSize: '18px', fontWeight: '700', color: 'var(--notion-text)' }}>
+                  {formatMoney(savingsMetrics.totalSavedPence / 100)}
+                </h3>
+                <p style={{ margin: 0, color: 'var(--notion-text-secondary)', fontSize: '11px', fontWeight: '500' }}>
+                  Total Saved (Linked Pots{`${savingsMetrics.linkedPotCount ? ` • ${savingsMetrics.linkedPotCount}` : ''}`})
+                </p>
+              </Card.Body>
+            </Card>
+          </Col>
+        </Row>
+
+        {/* Filters */}
+        <Card style={{ marginBottom: '8px', border: '1px solid var(--notion-border)', background: 'var(--notion-bg)' }}>
+          <Card.Body style={{ padding: '8px', color: 'var(--notion-text)' }}>
+            <Row className="g-2 align-items-end">
+              <Col md={3}>
+                <Form.Group>
+                  <Form.Label style={{ fontWeight: '500', marginBottom: '2px', fontSize: '11px' }}>Search Goals</Form.Label>
+                  <InputGroup>
+                    <Form.Control
+                      size="sm"
+                      type="text"
+                      placeholder="Search by title..."
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                      style={{ border: '1px solid var(--notion-border)', background: 'var(--notion-bg)', color: 'var(--notion-text)' }}
+                    />
+                  </InputGroup>
+                </Form.Group>
+              </Col>
+              <Col md={2}>
+                <Form.Group>
+                  <Form.Label style={{ fontWeight: '500', marginBottom: '2px', fontSize: '11px' }}>Status</Form.Label>
+                  <Form.Select
+                    size="sm"
+                    value={filterStatus}
+                    onChange={(e) => setFilterStatus(e.target.value)}
+                    style={{ border: '1px solid var(--notion-border)', background: 'var(--notion-bg)', color: 'var(--notion-text)' }}
+                  >
+                    <option value="all">All Status</option>
+                    <option value="New">New</option>
+                    <option value="Work in Progress">Work in Progress</option>
+                    <option value="Complete">Complete</option>
+                    <option value="Blocked">Blocked</option>
+                    <option value="Deferred">Deferred</option>
+                  </Form.Select>
+                </Form.Group>
+              </Col>
+              <Col md={2}>
+                <Form.Group>
+                  <Form.Label style={{ fontWeight: '500', marginBottom: '2px', fontSize: '11px' }}>Theme</Form.Label>
+                  <ThemeMultiSelect
+                    selectedIds={filterThemeIds}
+                    onChange={setFilterThemeIds}
+                    style={{ width: '100%' }}
+                  />
+                </Form.Group>
+              </Col>
+              <Col md={2}>
+                <Form.Group>
+                  <Form.Label style={{ fontWeight: '500', marginBottom: '2px', fontSize: '11px' }}>Year</Form.Label>
+                  <YearMultiSelect
+                    availableYears={availableYears.map(Number)}
+                    selectedYears={selectedYears}
+                    onChange={setSelectedYears}
+                    allYears={allYears}
+                    onAllYearsChange={setAllYears}
+                    style={{ width: '100%' }}
+                  />
+                </Form.Group>
+              </Col>
+              <Col md={2}>
+                <Form.Group>
+                  <Form.Label style={{ fontWeight: '500', marginBottom: '2px', fontSize: '11px' }}>Sprint</Form.Label>
+                  <div>
+                    <SprintSelector
+                      selectedSprintId={selectedSprintId}
+                      onSprintChange={(id) => setSelectedSprintId(id)}
+                    />
+                  </div>
+                </Form.Group>
+              </Col>
+              <Col md={1}>
+                <Form.Group>
+                  <Form.Label style={{ fontWeight: '500', marginBottom: '2px', fontSize: '11px' }}>KPI Scope</Form.Label>
+                  <Form.Select
+                    size="sm"
+                    value={goalKpiScope}
+                    onChange={(e) => setGoalKpiScope(e.target.value as 'sprint' | 'year' | 'goal')}
+                    style={{ border: '1px solid var(--notion-border)', background: 'var(--notion-bg)', color: 'var(--notion-text)' }}
+                  >
+                    <option value="sprint">Sprint</option>
+                    <option value="year">Year</option>
+                    <option value="goal">Goal</option>
+                  </Form.Select>
+                </Form.Group>
+              </Col>
+              <Col md="auto">
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <Button
+                    size="sm"
+                    variant="outline-secondary"
+                    onClick={() => {
+                      setFilterStatus('all');
+                      setFilterThemeIds([]);
+                      setSearchTerm('');
+                      setGoalKpiScope('sprint');
+                      setShowNoPotOnly(false);
+                      setApplyFocusOnlyFilter(false);
+                    }}
+                    style={{ borderColor: 'var(--notion-border)', color: 'var(--notion-text)' }}
+                  >
+                    Clear Filters
+                  </Button>
+                  <Form.Check
+                    type="switch"
+                    id="toggle-goal-descriptions"
+                    label="Show goal descriptions"
+                    checked={showGoalDescriptions}
+                    onChange={(e) => setShowGoalDescriptions(e.target.checked)}
+                    className="text-muted"
+                  />
+                  <Form.Check
+                    type="switch"
+                    id="toggle-goals-no-pots"
+                    label="Only goals with cost and no pot"
+                    checked={showNoPotOnly}
+                    onChange={(e) => setShowNoPotOnly(e.target.checked)}
+                    className="text-muted"
+                  />
+                  <Form.Check
+                    type="switch"
+                    id="toggle-goals-focus-only"
+                    label={`Only active focus goals${activeFocusGoalIds.size ? ` (${activeFocusGoalIds.size})` : ''}`}
+                    checked={applyFocusOnlyFilter}
+                    onChange={(e) => setApplyFocusOnlyFilter(e.target.checked)}
+                    className="text-muted"
+                    disabled={activeFocusGoalIds.size === 0}
+                  />
+                </div>
+              </Col>
+            </Row>
+          </Card.Body>
+        </Card>
+
+        {/* Modern Goals Table - Full Width */}
+        <Card style={{ border: '1px solid var(--notion-border)', background: 'var(--notion-bg)', flex: 1, minHeight: '70vh', display: 'flex', flexDirection: 'column' }}>
+          <Card.Header style={{
+            backgroundColor: 'var(--notion-bg)',
+            borderBottom: '1px solid var(--notion-border)',
+            padding: '12px 16px'
+          }}>
+            <h5 style={{ margin: 0, fontSize: '18px', fontWeight: '600', color: 'var(--notion-text)' }}>
+              Goals ({orderedFilteredGoals.length})
+            </h5>
+          </Card.Header>
+          <Card.Body style={{ padding: 0, flex: 1, minHeight: 0 }}>
+            {loading ? (
+              <div style={{
+                textAlign: 'center',
+                padding: '60px 20px',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center'
+              }}>
+                <div className="spinner-border" style={{ marginBottom: '16px' }} />
+                <p style={{ margin: 0, color: 'var(--muted)' }}>Loading goals...</p>
+              </div>
+            ) : (
+              <div style={{ height: '100%', overflow: 'auto' }}>
+                {viewMode === 'list' ? (
+                  <ModernGoalsTable
+                    goals={orderedFilteredGoals}
+                    onGoalUpdate={handleGoalUpdate}
+                    onGoalDelete={handleGoalDelete}
+                    onGoalPriorityChange={handleGoalPriorityChange}
+                    onGoalReorder={handleGoalReorder}
+                    onEditModal={(goal) => setEditGoal(goal)}
+                    onOpenWorkspace={(goal) => setWorkspaceGoal(goal)}
+                    goalKpiStatusByGoalId={goalKpiStatusByGoalId}
+                  />
+                ) : (
+                  <GoalsCardView
+                    goals={orderedFilteredGoals}
+                    onGoalUpdate={handleGoalUpdate}
+                    onGoalDelete={handleGoalDelete}
+                    onGoalPriorityChange={handleGoalPriorityChange}
+                    themes={globalThemes}
+                    cardLayout="grid"
+                    showDescriptions={showGoalDescriptions}
+                    goalKpiStatusByGoalId={goalKpiStatusByGoalId}
+                  />
+                )}
+              </div>
+            )}
+          </Card.Body>
+        </Card>
+
+        {/* Shared Edit Goal Modal */}
+      <EditGoalModal
+        goal={editGoal}
+        show={!!editGoal}
+        onClose={() => setEditGoal(null)}
+        currentUserId={currentUser?.uid || ''}
+      />
+
+      <GoalPlanningWorkspaceModal
+        show={!!workspaceGoal}
+        goal={workspaceGoal}
+        allGoals={goals}
+        onHide={() => setWorkspaceGoal(null)}
+      />
+
+      <AddGoalModal
+        show={showAddGoal}
+        onClose={() => setShowAddGoal(false)}
+      />
+
+        <ConfirmDialog
+          show={!!confirmDelete}
+          title="Delete Goal?"
+          message={<span>Are you sure you want to delete goal <strong>{confirmDelete?.title}</strong>? This cannot be undone.</span>}
+          confirmText="Delete Goal"
+          onConfirm={performGoalDelete}
+          onCancel={() => setConfirmDelete(null)}
+        />
+      </div>
+    </div>
+  );
+};
+
+export default GoalsManagement;

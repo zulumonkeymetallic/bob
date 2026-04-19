@@ -1,0 +1,201 @@
+import React from 'react';
+import { BrowserRouter as Router, Routes, Route, Link, Navigate } from 'react-router-dom';
+import KanbanContainer from './components/KanbanContainer';
+import Admin from './components/Admin';
+import Dashboard from './components/Dashboard';
+import Changelog from './components/Changelog';
+import ThemeToggle from './components/ThemeToggle';
+import { auth } from './firebase';
+import { GoogleAuthProvider, signInWithPopup, signOut } from 'firebase/auth';
+import SprintAdmin from './components/SprintAdmin';
+import DevelopmentTracker from './components/DevelopmentTracker';
+import StoryBacklog from './components/StoryBacklog';
+import { version, lastRelease } from './version';
+import { ThemeProvider } from './contexts/ThemeContext';
+import AuthProvider, { useAuth } from './contexts/AuthContext';
+import GoalsManagement from './components/GoalsManagement';
+
+function App() {
+  return (
+    <AuthProvider>
+      <ThemeProvider>
+        <Router>
+          <AppContent />
+        </Router>
+      </ThemeProvider>
+    </AuthProvider>
+  );
+}
+
+function PrivateRoute({ children }: { children: React.ReactNode }) {
+  const { currentUser, loading } = useAuth();
+
+  if (loading) {
+    return (
+      <div className="loading-screen d-flex justify-content-center align-items-center" style={{ height: '100vh' }}>
+        <div className="spinner-border text-primary" role="status">
+          <span className="visually-hidden">Loading...</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (!currentUser) {
+    return <Navigate to="/" replace />;
+  }
+
+  return <>{children}</>;
+}
+
+function AppContent() {
+  const { currentUser, loading } = useAuth();
+
+  const handleLogin = async () => {
+    const provider = new GoogleAuthProvider();
+    try {
+      await signInWithPopup(auth, provider);
+    } catch (error) {
+      console.error(error);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+    } catch (error) {
+      console.error(error);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="loading-screen d-flex justify-content-center align-items-center" style={{ height: '100vh' }}>
+        <div className="spinner-border text-primary" role="status">
+          <span className="visually-hidden">Loading...</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="App">
+      {currentUser && (
+        <nav className="navbar navbar-expand-lg navbar-dark glass-effect mb-4">
+          <div className="container-fluid">
+            <div className="d-flex align-items-center">
+              <Link className="navbar-brand fw-bold" to="/">Bob</Link>
+              <span className="version-badge">v{version}</span>
+            </div>
+            <button className="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarContent">
+              <span className="navbar-toggler-icon"></span>
+            </button>
+            <div className="collapse navbar-collapse" id="navbarContent">
+              <ul className="navbar-nav me-auto">
+                <li className="nav-item">
+                  <Link className="nav-link" to="/">Kanban</Link>
+                </li>
+                <li className="nav-item">
+                  <Link className="nav-link" to="/story-backlog">Stories</Link>
+                </li>
+                <li className="nav-item">
+                  <Link className="nav-link" to="/dashboard">Dashboard</Link>
+                </li>
+                <li className="nav-item">
+                  <Link className="nav-link" to="/admin">Settings</Link>
+                </li>
+                <li className="nav-item">
+                  <Link className="nav-link" to="/sprint-admin">Sprints</Link>
+                </li>
+                <li className="nav-item">
+                  <Link className="nav-link" to="/development-tracker">Development</Link>
+                </li>
+                <li className="nav-item">
+                  <Link className="nav-link" to="/changelog">Changelog</Link>
+                </li>
+                <li className="nav-item">
+                  <Link className="nav-link" to="/goals">Goals</Link>
+                </li>
+              </ul>
+              <div className="d-flex gap-2 align-items-center">
+                <ThemeToggle />
+                <div className="search-box">
+                  <input 
+                    type="search" 
+                    className="form-control search-input" 
+                    placeholder="Search tasks..."
+                  />
+                </div>
+                <button className="btn btn-outline-danger" onClick={handleLogout}>
+                  Sign Out
+                </button>
+              </div>
+            </div>
+          </div>
+        </nav>
+      )}
+
+      <main className="container">
+        <Routes>
+          <Route path="/" element={
+            currentUser ? (
+              <PrivateRoute>
+                <KanbanContainer />
+              </PrivateRoute>
+            ) : (
+              <div className="welcome-screen glass-effect">
+                <div className="text-center">
+                  <h1>Welcome to Bob</h1>
+                  <p className="lead">Sign in to manage your tasks and goals</p>
+                  <button className="btn btn-primary btn-lg" onClick={handleLogin}>
+                    Sign in with Google
+                  </button>
+                  <div className="mt-4">
+                    <small className="text-muted">Last updated: {lastRelease}</small>
+                  </div>
+                </div>
+              </div>
+            )
+          } />
+          <Route path="/story-backlog" element={
+            <PrivateRoute>
+              <StoryBacklog />
+            </PrivateRoute>
+          } />
+          <Route path="/dashboard" element={
+            <PrivateRoute>
+              <Dashboard />
+            </PrivateRoute>
+          } />
+          <Route path="/admin" element={
+            <PrivateRoute>
+              <Admin />
+            </PrivateRoute>
+          } />
+          <Route path="/sprint-admin" element={
+            <PrivateRoute>
+              <SprintAdmin />
+            </PrivateRoute>
+          } />
+          <Route path="/development-tracker" element={
+            <PrivateRoute>
+              <DevelopmentTracker />
+            </PrivateRoute>
+          } />
+          <Route path="/changelog" element={
+            <PrivateRoute>
+              <Changelog />
+            </PrivateRoute>
+          } />
+          <Route path="/goals" element={
+            <PrivateRoute>
+              <GoalsManagement />
+            </PrivateRoute>
+          } />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </main>
+    </div>
+  );
+}
+
+export default App;

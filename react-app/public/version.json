@@ -1,0 +1,12 @@
+{
+  "version": "4.5.484",
+  "buildTime": "2025-11-03T23:59:00Z",
+  "buildHash": "kanban-roadmap-theming-4.5.0",
+  "features": [
+    "Global audit logging for goals, stories, tasks",
+    "Toolbar/header overlap refinements",
+    "Roadmap spacing + typography polish"
+  ],
+  "description": "Audit logging rollout with roadmap layout improvements",
+  "githubIssues": []
+}

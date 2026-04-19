@@ -1,0 +1,12 @@
+{
+  "name": "bob_daily_summary_v1 (stub)",
+  "nodes": [
+    { "parameters": { "rule": "0 7 * * *" }, "name": "Cron", "type": "n8n-nodes-base.cron" },
+    { "parameters": { "url": "{{ $json.functionsFetchUrl }}", "options": {} }, "name": "Fetch Summary Data (HTTP)", "type": "n8n-nodes-base.httpRequest" },
+    { "parameters": { "fromEmail": "no-reply@bob.app", "toEmail": "{{ $json.userEmail }}", "subject": "BOB Daily Summary", "text": "{{ $json.summaryText }}", "html": "{{ $json.summaryHtml }}" }, "name": "Send Email (SMTP)", "type": "n8n-nodes-base.emailSend" },
+    { "parameters": { "resource": "message", "operation": "sendText", "chatId": "{{ $json.telegramChatId }}", "text": "{{ $json.summaryText }}" }, "name": "Send Telegram", "type": "n8n-nodes-base.telegram" },
+    { "parameters": { "url": "{{ $json.functionsLogUrl }}", "options": {} }, "name": "Log to Firestore (HTTP)", "type": "n8n-nodes-base.httpRequest" }
+  ],
+  "connections": {}
+}
+

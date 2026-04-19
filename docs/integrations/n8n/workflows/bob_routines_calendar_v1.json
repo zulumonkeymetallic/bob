@@ -1,0 +1,10 @@
+{
+  "name": "bob_routines_calendar_v1 (stub)",
+  "nodes": [
+    { "parameters": { "path": "routines/instance" }, "name": "Webhook (new instance)", "type": "n8n-nodes-base.webhook" },
+    { "parameters": { "operation": "create", "calendar": "primary" }, "name": "Google Calendar (create)", "type": "n8n-nodes-base.googleCalendar" },
+    { "parameters": { "url": "{{ $json.functionsAckUrl }}" }, "name": "Ack Instance (HTTP)", "type": "n8n-nodes-base.httpRequest" }
+  ],
+  "connections": {}
+}
+

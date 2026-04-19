@@ -1,0 +1,63 @@
+shortcut "BOB Reminders – Pull" {
+  // Scan a Reminders list for changes and POST them to BOB.
+
+  let base = "https://bob20250810.web.app"
+  let uid = ask("Enter BOB User ID")
+  let secret = ask("Enter Reminders Secret")
+  let remindersList = ask("Reminders List (default: Personal)")
+  if (remindersList == null || remindersList == "") { remindersList = "Personal" }
+
+  // Window to check recent changes (minutes)
+  let lookbackMinutes = 120
+  let since = addToDate(currentDate(), minutes: -lookbackMinutes)
+
+  // Find candidates by modification date or all items in list
+  let candidates = findReminders(
+    inList: remindersList,
+    where: modifiedAfter(since)
+  )
+
+  let changes = []
+  repeat r in candidates {
+    let rid = identifier(r)
+    let notes = getReminderNotes(r)
+    let firstLine = firstLineOf(notes)
+
+    // Parse BOB ID/ref from first line in form "BOB: <ref>"
+    let id = null
+    if (startsWith(firstLine, "BOB:")) {
+      id = trim(replace(firstLine, "BOB:", ""))
+    }
+
+    let completed = isReminderCompleted(r)
+    let entry = dictionary {
+      "id": id,
+      "reminderId": rid,
+      "completed": completed
+    }
+    changes = append(changes, entry)
+
+    // Optional: append a history line to Notes
+    let stamp = "[" + formatDate(currentDate(), "yyyy-MM-dd HH:mm") + "] " + (completed ? "Completed" : "Updated") + " in Reminders"
+    prependReminderNotes(r, stamp)
+  }
+
+  let body = dictionary { "tasks": changes, "uid": uid }
+  let headers = dictionary { "x-reminders-secret": secret, "Content-Type": "application/json" }
+  let url = base + "/reminders/pull?uid=" + uid
+
+  let result = getContentsOfURL(url: url, method: POST, headers: headers, body: toJSON(body))
+  // Optionally show result
+  showResult(result)
+}
+
+// Helper signatures (map in Jellycuts to Shortcuts actions):
+// findReminders(inList: string, where: filter) -> [Reminder]
+// isReminderCompleted(Reminder) -> boolean
+// getReminderNotes(Reminder) -> string
+// firstLineOf(string) -> string
+// prependReminderNotes(Reminder, text: string)
+// identifier(Reminder) -> string
+// getContentsOfURL(url, method, headers, body) -> data
+// toJSON(dictionary|array) -> string
+// showResult(any)

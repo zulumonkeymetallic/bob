@@ -1,0 +1,46 @@
+{
+  "test_suite": "BOB v3.5.0 - Selenium Comprehensive Test",
+  "timestamp": "2025-09-01T15:49:47.752440",
+  "test_duration_seconds": 13,
+  "test_environment": {
+    "url": "https://bob20250810.web.app?test-login=ai-agent-token&test-mode=true",
+    "browser": "Chrome (Visible)",
+    "selenium_version": "4.x",
+    "viewport": "1920x1080"
+  },
+  "test_results": {
+    "start_time": "2025-09-01T15:49:34.413918",
+    "end_time": "2025-09-01T15:49:47.752386",
+    "tests_run": 7,
+    "tests_pass": 0,
+    "tests_fail": 7,
+    "browser": "chrome",
+    "headless": false
+  },
+  "summary": {
+    "total_defects": 1,
+    "critical": 1,
+    "high": 0,
+    "medium": 0,
+    "low": 0
+  },
+  "defects": [
+    {
+      "type": "CRITICAL",
+      "category": "AUTHENTICATION_FAILURE",
+      "message": "No authenticated user found - side door authentication failed",
+      "timestamp": "2025-09-01T15:49:44.683817",
+      "url": "https://bob20250810.web.app/",
+      "screenshot_path": "./test-results/screenshots/AUTHENTICATION_FAILURE_1756738184.png",
+      "console_logs": [],
+      "stack_trace": "",
+      "details": {
+        "currentUrl": "https://bob20250810.web.app/",
+        "hasAccessToken": false,
+        "hasIdTokenMethod": false,
+        "userExists": false,
+        "userId": null
+      }
+    }
+  ]
+}

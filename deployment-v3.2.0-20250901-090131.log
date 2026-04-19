@@ -1,0 +1,311 @@
+[0;34m📦 Step 1: Creating Backup...[0m
+: Can't add archive to itself[0;32m✅ Backup created: bob-v3.2.0-backup-20250901-090131.tar.gz[0m
+[0;34m🔍 Step 2: Pre-Build Validation...[0m
+📍 Node.js version: v24.1.0
+📍 npm version: 11.3.0
+[0;32m✅ Pre-build validation passed[0m
+[0;34m📦 Step 3: Installing Dependencies...[0m
+npm warn deprecated inflight@1.0.6: This module is not supported, and leaks memory. Do not use it. Check out lru-cache if you want a good and tested way to coalesce async requests by a key value, which is much more comprehensive and powerful.
+npm warn deprecated stable@0.1.8: Modern JS already guarantees Array#sort() is a stable sort, so this library is deprecated. See the compatibility table on MDN: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/sort#browser_compatibility
+npm warn deprecated @babel/plugin-proposal-private-methods@7.18.6: This proposal has been merged to the ECMAScript standard and thus this plugin is no longer maintained. Please use @babel/plugin-transform-private-methods instead.
+npm warn deprecated @babel/plugin-proposal-numeric-separator@7.18.6: This proposal has been merged to the ECMAScript standard and thus this plugin is no longer maintained. Please use @babel/plugin-transform-numeric-separator instead.
+npm warn deprecated @babel/plugin-proposal-nullish-coalescing-operator@7.18.6: This proposal has been merged to the ECMAScript standard and thus this plugin is no longer maintained. Please use @babel/plugin-transform-nullish-coalescing-operator instead.
+npm warn deprecated @babel/plugin-proposal-class-properties@7.18.6: This proposal has been merged to the ECMAScript standard and thus this plugin is no longer maintained. Please use @babel/plugin-transform-class-properties instead.
+npm warn deprecated rollup-plugin-terser@7.0.2: This package has been deprecated and is no longer maintained. Please use @rollup/plugin-terser
+npm warn deprecated @humanwhocodes/config-array@0.13.0: Use @eslint/config-array instead
+npm warn deprecated rimraf@3.0.2: Rimraf versions prior to v4 are no longer supported
+npm warn deprecated abab@2.0.6: Use your platform's native atob() and btoa() methods instead
+npm warn deprecated @babel/plugin-proposal-optional-chaining@7.21.0: This proposal has been merged to the ECMAScript standard and thus this plugin is no longer maintained. Please use @babel/plugin-transform-optional-chaining instead.
+npm warn deprecated @babel/plugin-proposal-private-property-in-object@7.21.11: This proposal has been merged to the ECMAScript standard and thus this plugin is no longer maintained. Please use @babel/plugin-transform-private-property-in-object instead.
+npm warn deprecated glob@7.2.3: Glob versions prior to v9 are no longer supported
+npm warn deprecated @humanwhocodes/object-schema@2.0.3: Use @eslint/object-schema instead
+npm warn deprecated domexception@2.0.1: Use your platform's native DOMException instead
+npm warn deprecated w3c-hr-time@1.0.2: Use your platform's native performance.now() and performance.timeOrigin.
+npm warn deprecated q@1.5.1: You or someone you depend on is using Q, the JavaScript Promise library that gave JavaScript developers strong feelings about promises. They can almost certainly migrate to the native JavaScript promise now. Thank you literally everyone for joining me in this bet against the odds. Be excellent to each other.
+npm warn deprecated
+npm warn deprecated (For a CapTP with native promises, see @endo/eventual-send and @endo/captp)
+npm warn deprecated sourcemap-codec@1.4.8: Please use @jridgewell/sourcemap-codec instead
+npm warn deprecated workbox-cacheable-response@6.6.0: workbox-background-sync@6.6.0
+npm warn deprecated workbox-google-analytics@6.6.0: It is not compatible with newer versions of GA starting with v4, as long as you are using GAv3 it should be ok, but the package is not longer being maintained
+npm warn deprecated source-map@0.8.0-beta.0: The work that was done in this beta branch won't be included in future versions
+npm warn deprecated svgo@1.3.2: This SVGO version is no longer supported. Upgrade to v2.x.x.
+npm warn deprecated react-beautiful-dnd@13.1.1: react-beautiful-dnd is now deprecated. Context and options: https://github.com/atlassian/react-beautiful-dnd/issues/2672
+npm warn deprecated eslint@8.57.1: This version is no longer supported. Please see https://eslint.org/version-support for other options.
+
+added 1633 packages, and audited 1634 packages in 15s
+
+284 packages are looking for funding
+  run `npm fund` for details
+
+10 vulnerabilities (3 moderate, 7 high)
+
+To address all issues possible (including breaking changes), run:
+  npm audit fix --force
+
+Some issues need review, and may require choosing
+a different dependency.
+
+Run `npm audit` for details.
+[0;32m✅ Dependencies installed successfully[0m
+[0;34m🔎 Step 4: TypeScript Validation...[0m
+Running TypeScript compilation check...
+[0;32m✅ TypeScript validation passed[0m
+[0;34m🏗️ Step 5: Building Application...[0m
+
+> bob-productivity-platform@3.1.3 build
+> react-scripts build
+
+(node:58455) [DEP0176] DeprecationWarning: fs.F_OK is deprecated, use fs.constants.F_OK instead
+(Use `node --trace-deprecation ...` to show where the warning was created)
+Creating an optimized production build...
+Compiled with warnings.
+
+[eslint] 
+src/App.tsx
+  Line 30:8:   'PersonaSwitcher' is defined but never used            @typescript-eslint/no-unused-vars
+  Line 33:27:  'VERSION' is defined but never used                    @typescript-eslint/no-unused-vars
+  Line 57:18:  'toggleTheme' is assigned a value but never used       @typescript-eslint/no-unused-vars
+  Line 60:9:   'deviceInfo' is assigned a value but never used        @typescript-eslint/no-unused-vars
+  Line 61:10:  'isNavExpanded' is assigned a value but never used     @typescript-eslint/no-unused-vars
+  Line 61:25:  'setIsNavExpanded' is assigned a value but never used  @typescript-eslint/no-unused-vars
+  Line 66:17:  'setGoals' is assigned a value but never used          @typescript-eslint/no-unused-vars
+  Line 67:19:  'setStories' is assigned a value but never used        @typescript-eslint/no-unused-vars
+  Line 68:19:  'setSprints' is assigned a value but never used        @typescript-eslint/no-unused-vars
+
+src/components/BacklogManager.tsx
+  Line 3:34:   'Search' is defined but never used                                                                               @typescript-eslint/no-unused-vars
+  Line 3:42:   'Filter' is defined but never used                                                                               @typescript-eslint/no-unused-vars
+  Line 10:20:  'isTheme' is defined but never used                                                                              @typescript-eslint/no-unused-vars
+  Line 10:41:  'getThemeClass' is defined but never used                                                                        @typescript-eslint/no-unused-vars
+  Line 10:56:  'getPriorityBadge' is defined but never used                                                                     @typescript-eslint/no-unused-vars
+  Line 109:6:  React Hook useEffect has a missing dependency: 'loadBacklogs'. Either include it or remove the dependency array  react-hooks/exhaustive-deps
+  Line 290:9:  'currentItems' is assigned a value but never used                                                                @typescript-eslint/no-unused-vars
+  Line 293:9:  'handleBulkEdit' is assigned a value but never used                                                              @typescript-eslint/no-unused-vars
+  Line 322:9:  'handleBulkDelete' is assigned a value but never used                                                            @typescript-eslint/no-unused-vars
+
+src/components/Calendar.tsx
+  Line 12:11:  'currentPersona' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+src/components/CalendarBlockManagerNew.tsx
+  Line 2:56:   'updateDoc' is defined but never used        @typescript-eslint/no-unused-vars
+  Line 2:67:   'doc' is defined but never used              @typescript-eslint/no-unused-vars
+  Line 2:72:   'serverTimestamp' is defined but never used  @typescript-eslint/no-unused-vars
+  Line 7:10:   'isStatus' is defined but never used         @typescript-eslint/no-unused-vars
+  Line 7:20:   'isTheme' is defined but never used          @typescript-eslint/no-unused-vars
+  Line 9:11:   'CalendarEvent' is defined but never used    @typescript-eslint/no-unused-vars
+  Line 25:12:  'tasks' is assigned a value but never used   @typescript-eslint/no-unused-vars
+
+src/components/CalendarSyncManager.tsx
+  Line 2:52:    'Form' is defined but never used                                                                                                                      @typescript-eslint/no-unused-vars
+  Line 7:10:    'isStatus' is defined but never used                                                                                                                  @typescript-eslint/no-unused-vars
+  Line 7:20:    'isTheme' is defined but never used                                                                                                                   @typescript-eslint/no-unused-vars
+  Line 51:6:    React Hook useEffect has missing dependencies: 'checkConnectionStatus' and 'fetchCalendarBlocks'. Either include them or remove the dependency array  react-hooks/exhaustive-deps
+  Line 196:13:  'result' is assigned a value but never used                                                                                                           @typescript-eslint/no-unused-vars
+
+src/components/ComprehensiveTest.tsx
+  Line 7:36:   'DragOverlay' is defined but never used        @typescript-eslint/no-unused-vars
+  Line 8:27:   'arrayMove' is defined but never used          @typescript-eslint/no-unused-vars
+  Line 9:10:   'ChoiceHelper' is defined but never used       @typescript-eslint/no-unused-vars
+  Line 10:10:  'isStatus' is defined but never used           @typescript-eslint/no-unused-vars
+  Line 10:20:  'isTheme' is defined but never used            @typescript-eslint/no-unused-vars
+  Line 10:29:  'isPriority' is defined but never used         @typescript-eslint/no-unused-vars
+  Line 10:41:  'getThemeClass' is defined but never used      @typescript-eslint/no-unused-vars
+  Line 10:56:  'getPriorityBadge' is defined but never used   @typescript-eslint/no-unused-vars
+  Line 53:10:  'activeId' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+src/components/CurrentSprintKanban.tsx
+  Line 8:10:   'ChoiceHelper' is defined but never used                @typescript-eslint/no-unused-vars
+  Line 9:10:   'isStatus' is defined but never used                    @typescript-eslint/no-unused-vars
+  Line 9:20:   'isTheme' is defined but never used                     @typescript-eslint/no-unused-vars
+  Line 92:11:  'updateStoryStatus' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+src/components/Dashboard.tsx
+  Line 8:20:   'isTheme' is defined but never used                                                                                   @typescript-eslint/no-unused-vars
+  Line 8:29:   'isPriority' is defined but never used                                                                                @typescript-eslint/no-unused-vars
+  Line 8:41:   'getThemeClass' is defined but never used                                                                             @typescript-eslint/no-unused-vars
+  Line 8:56:   'getPriorityBadge' is defined but never used                                                                          @typescript-eslint/no-unused-vars
+  Line 40:6:   React Hook useEffect has a missing dependency: 'loadDashboardData'. Either include it or remove the dependency array  react-hooks/exhaustive-deps
+  Line 123:9:  'getStatusColor' is assigned a value but never used                                                                   @typescript-eslint/no-unused-vars
+  Line 132:9:  'getPriorityColor' is assigned a value but never used                                                                 @typescript-eslint/no-unused-vars
+
+src/components/FloatingActionButton.tsx
+  Line 2:38:  'ButtonGroup' is defined but never used  @typescript-eslint/no-unused-vars
+
+src/components/GlobalSidebar.tsx
+  Line 1:27:   'useEffect' is defined but never used        @typescript-eslint/no-unused-vars
+  Line 2:10:   'Card' is defined but never used             @typescript-eslint/no-unused-vars
+  Line 3:26:   'Calendar' is defined but never used         @typescript-eslint/no-unused-vars
+  Line 3:54:   'Clock' is defined but never used            @typescript-eslint/no-unused-vars
+  Line 3:61:   'Hash' is defined but never used             @typescript-eslint/no-unused-vars
+  Line 11:10:  'ChoiceMigration' is defined but never used  @typescript-eslint/no-unused-vars
+  Line 12:10:  'isStatus' is defined but never used         @typescript-eslint/no-unused-vars
+  Line 12:20:  'isTheme' is defined but never used          @typescript-eslint/no-unused-vars
+
+src/components/GoalsManagement.tsx
+  Line 23:6:  React Hook useEffect has a missing dependency: 'loadGoalsData'. Either include it or remove the dependency array  react-hooks/exhaustive-deps
+
+src/components/ImportExportModal.tsx
+  Line 4:30:  'doc' is defined but never used     @typescript-eslint/no-unused-vars
+  Line 4:35:  'setDoc' is defined but never used  @typescript-eslint/no-unused-vars
+
+src/components/MigrationManager.tsx
+  Line 23:6:  React Hook useEffect has a missing dependency: 'checkAndRunMigration'. Either include it or remove the dependency array  react-hooks/exhaustive-deps
+
+src/components/MobilePriorityDashboard.tsx
+  Line 2:27:   'Form' is defined but never used              @typescript-eslint/no-unused-vars
+  Line 9:20:   'isTheme' is defined but never used           @typescript-eslint/no-unused-vars
+  Line 9:41:   'getThemeClass' is defined but never used     @typescript-eslint/no-unused-vars
+  Line 9:56:   'getPriorityColor' is defined but never used  @typescript-eslint/no-unused-vars
+  Line 9:74:   'getBadgeVariant' is defined but never used   @typescript-eslint/no-unused-vars
+  Line 9:91:   'getThemeName' is defined but never used      @typescript-eslint/no-unused-vars
+  Line 9:105:  'getStatusName' is defined but never used     @typescript-eslint/no-unused-vars
+  Line 9:137:  'getPriorityIcon' is defined but never used   @typescript-eslint/no-unused-vars
+
+src/components/MobileView.tsx
+  Line 6:42:    'ProgressBar' is defined but never used                                                       @typescript-eslint/no-unused-vars
+  Line 7:10:    'isStatus' is defined but never used                                                          @typescript-eslint/no-unused-vars
+  Line 7:20:    'isTheme' is defined but never used                                                           @typescript-eslint/no-unused-vars
+  Line 57:59:   Unexpected mix of '||' and '&&'. Use parentheses to clarify the intended order of operations  no-mixed-operators
+  Line 57:83:   Unexpected mix of '||' and '&&'. Use parentheses to clarify the intended order of operations  no-mixed-operators
+  Line 146:15:  'now' is assigned a value but never used                                                      @typescript-eslint/no-unused-vars
+  Line 157:30:  Unexpected mix of '||' and '&&'. Use parentheses to clarify the intended order of operations  no-mixed-operators
+  Line 157:54:  Unexpected mix of '||' and '&&'. Use parentheses to clarify the intended order of operations  no-mixed-operators
+
+src/components/ModernKanbanPage.tsx
+  Line 9:20:   'isTheme' is defined but never used           @typescript-eslint/no-unused-vars
+  Line 9:41:   'getThemeClass' is defined but never used     @typescript-eslint/no-unused-vars
+  Line 9:56:   'getPriorityColor' is defined but never used  @typescript-eslint/no-unused-vars
+  Line 9:74:   'getBadgeVariant' is defined but never used   @typescript-eslint/no-unused-vars
+  Line 9:91:   'getThemeName' is defined but never used      @typescript-eslint/no-unused-vars
+  Line 9:105:  'getStatusName' is defined but never used     @typescript-eslint/no-unused-vars
+  Line 9:137:  'getPriorityIcon' is defined but never used   @typescript-eslint/no-unused-vars
+
+src/components/ModernTaskTable.tsx
+  Line 427:11:  'trackClick' is assigned a value but never used  @typescript-eslint/no-unused-vars
+  Line 427:23:  'trackView' is assigned a value but never used   @typescript-eslint/no-unused-vars
+
+src/components/PersonalListsManagement.tsx
+  Line 2:10:  'Container' is defined but never used                                                                                 @typescript-eslint/no-unused-vars
+  Line 8:20:  'isTheme' is defined but never used                                                                                   @typescript-eslint/no-unused-vars
+  Line 38:6:  React Hook useEffect has a missing dependency: 'loadPersonalItems'. Either include it or remove the dependency array  react-hooks/exhaustive-deps
+
+src/components/PlanningDashboard.tsx
+  Line 9:10:  'isStatus' is defined but never used         @typescript-eslint/no-unused-vars
+  Line 9:20:  'isTheme' is defined but never used          @typescript-eslint/no-unused-vars
+  Line 9:41:  'getStatusName' is defined but never used    @typescript-eslint/no-unused-vars
+  Line 9:70:  'getPriorityName' is defined but never used  @typescript-eslint/no-unused-vars
+
+src/components/SidebarLayout.tsx
+  Line 2:10:   'Container' is defined but never used               @typescript-eslint/no-unused-vars
+  Line 11:10:  'isStatus' is defined but never used                @typescript-eslint/no-unused-vars
+  Line 11:20:  'isTheme' is defined but never used                 @typescript-eslint/no-unused-vars
+  Line 34:39:  'testModeLabel' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+src/components/SprintDashboard.tsx
+  Line 9:10:   'isStatus' is defined but never used                                                                                  @typescript-eslint/no-unused-vars
+  Line 9:20:   'isTheme' is defined but never used                                                                                   @typescript-eslint/no-unused-vars
+  Line 64:6:   React Hook useEffect has a missing dependency: 'loadDashboardData'. Either include it or remove the dependency array  react-hooks/exhaustive-deps
+  Line 311:9:  'getStatusColor' is assigned a value but never used                                                                   @typescript-eslint/no-unused-vars
+
+src/components/SprintPlannerMatrix.tsx
+  Line 12:24:  'Story' is defined but never used  @typescript-eslint/no-unused-vars
+  Line 12:31:  'Task' is defined but never used   @typescript-eslint/no-unused-vars
+
+src/components/SprintSelector.tsx
+  Line 7:20:  'isTheme' is defined but never used  @typescript-eslint/no-unused-vars
+
+src/components/StoriesManagement.tsx
+  Line 2:10:  'Container' is defined but never used                                                                               @typescript-eslint/no-unused-vars
+  Line 9:20:  'isTheme' is defined but never used                                                                                 @typescript-eslint/no-unused-vars
+  Line 24:6:  React Hook useEffect has a missing dependency: 'loadStoriesData'. Either include it or remove the dependency array  react-hooks/exhaustive-deps
+
+src/components/TaskListView.tsx
+  Line 2:10:   'Container' is defined but never used                                                                            @typescript-eslint/no-unused-vars
+  Line 10:20:  'isTheme' is defined but never used                                                                              @typescript-eslint/no-unused-vars
+  Line 29:6:   React Hook useEffect has a missing dependency: 'loadTaskData'. Either include it or remove the dependency array  react-hooks/exhaustive-deps
+
+src/components/TasksList.tsx
+  Line 9:20:   'isTheme' is defined but never used                                                                                         @typescript-eslint/no-unused-vars
+  Line 9:41:   'getThemeClass' is defined but never used                                                                                   @typescript-eslint/no-unused-vars
+  Line 9:56:   'getPriorityColor' is defined but never used                                                                                @typescript-eslint/no-unused-vars
+  Line 9:74:   'getBadgeVariant' is defined but never used                                                                                 @typescript-eslint/no-unused-vars
+  Line 9:91:   'getThemeName' is defined but never used                                                                                    @typescript-eslint/no-unused-vars
+  Line 9:137:  'getPriorityIcon' is defined but never used                                                                                 @typescript-eslint/no-unused-vars
+  Line 40:10:  'editingTaskId' is assigned a value but never used                                                                          @typescript-eslint/no-unused-vars
+  Line 40:25:  'setEditingTaskId' is assigned a value but never used                                                                       @typescript-eslint/no-unused-vars
+  Line 53:10:  'editingField' is assigned a value but never used                                                                           @typescript-eslint/no-unused-vars
+  Line 53:24:  'setEditingField' is assigned a value but never used                                                                        @typescript-eslint/no-unused-vars
+  Line 147:6:  React Hook useEffect has a missing dependency: 'generateReferenceNumber'. Either include it or remove the dependency array  react-hooks/exhaustive-deps
+
+src/components/ThemeColorManager.tsx
+  Line 2:51:   'Modal' is defined but never used                                                                                                                                                                                                           @typescript-eslint/no-unused-vars
+  Line 27:11:  'theme' is assigned a value but never used                                                                                                                                                                                                  @typescript-eslint/no-unused-vars
+  Line 90:6:   React Hook useEffect has a missing dependency: 'themeColors'. Either include it or remove the dependency array. You can also do a functional update 'setThemeColors(t => ...)' if you only need 'themeColors' in the 'setThemeColors' call  react-hooks/exhaustive-deps
+
+src/components/VisualCanvas.tsx
+  Line 3:43:   'Plus' is defined but never used                                                                                   @typescript-eslint/no-unused-vars
+  Line 3:55:   'Eye' is defined but never used                                                                                    @typescript-eslint/no-unused-vars
+  Line 8:20:   'isTheme' is defined but never used                                                                                @typescript-eslint/no-unused-vars
+  Line 42:10:  'showAddModal' is assigned a value but never used                                                                  @typescript-eslint/no-unused-vars
+  Line 42:24:  'setShowAddModal' is assigned a value but never used                                                               @typescript-eslint/no-unused-vars
+  Line 94:6:   React Hook useEffect has a missing dependency: 'generateCanvas'. Either include it or remove the dependency array  react-hooks/exhaustive-deps
+
+src/contexts/PersonaContext.tsx
+  Line 1:54:  'useEffect' is defined but never used  @typescript-eslint/no-unused-vars
+
+src/contexts/SidebarContext.tsx
+  Line 2:29:  'Sprint' is defined but never used  @typescript-eslint/no-unused-vars
+
+src/contexts/ThemeContext.tsx
+  Line 2:10:  'isStatus' is defined but never used  @typescript-eslint/no-unused-vars
+  Line 2:20:  'isTheme' is defined but never used   @typescript-eslint/no-unused-vars
+
+src/hooks/useThemeColor.ts
+  Line 2:27:  'collection' is defined but never used  @typescript-eslint/no-unused-vars
+  Line 2:39:  'query' is defined but never used       @typescript-eslint/no-unused-vars
+  Line 2:46:  'where' is defined but never used       @typescript-eslint/no-unused-vars
+  Line 6:23:  'Task' is defined but never used        @typescript-eslint/no-unused-vars
+
+src/services/dataService.ts
+  Line 2:50:  'getDoc' is defined but never used    @typescript-eslint/no-unused-vars
+  Line 3:10:  'isStatus' is defined but never used  @typescript-eslint/no-unused-vars
+  Line 3:20:  'isTheme' is defined but never used   @typescript-eslint/no-unused-vars
+
+src/utils/databaseMigration.ts
+  Line 4:10:  'isStatus' is defined but never used          @typescript-eslint/no-unused-vars
+  Line 4:20:  'isTheme' is defined but never used           @typescript-eslint/no-unused-vars
+  Line 4:29:  'isPriority' is defined but never used        @typescript-eslint/no-unused-vars
+  Line 4:41:  'getThemeClass' is defined but never used     @typescript-eslint/no-unused-vars
+  Line 4:56:  'getPriorityBadge' is defined but never used  @typescript-eslint/no-unused-vars
+
+src/version.ts
+  Line 55:1:  Assign object to a variable before exporting as module default  import/no-anonymous-default-export
+
+Search for the keywords to learn more about each warning.
+To ignore, add // eslint-disable-next-line to the line before.
+
+File sizes after gzip:
+
+  445.76 kB  build/static/js/main.38026554.js
+  35.31 kB   build/static/css/main.651de8e8.css
+  1.78 kB    build/static/js/453.a49cc90e.chunk.js
+
+The project was built assuming it is hosted at /.
+You can control this with the homepage field in your package.json.
+
+The build folder is ready to be deployed.
+You may serve it with a static server:
+
+  npm install -g serve
+  serve -s build
+
+Find out more about deployment here:
+
+  https://cra.link/deployment
+
+[0;32m✅ Build completed successfully[0m
+[0;34m📊 Step 6: Build Analysis...[0m
+📦 Total build size: 9.5M
+[0;34m🚀 Step 7: Deploying to Firebase...[0m
+error: unknown option '--confirm'
+[0;31m❌ Firebase deployment failed[0m

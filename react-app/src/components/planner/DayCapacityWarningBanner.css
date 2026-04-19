@@ -1,0 +1,88 @@
+/* Day Capacity Warning Banner Styles */
+
+.day-capacity-warning-banner {
+  border-radius: 4px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+  animation: slideDown 0.3s ease-out;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.day-capacity-warning-banner .btn-close-custom {
+  background: none;
+  border: none;
+  padding: 0;
+  opacity: 0.6;
+  transition: opacity 0.2s;
+}
+
+.day-capacity-warning-banner .btn-close-custom:hover {
+  opacity: 1;
+}
+
+.capacity-progress-bar {
+  border-radius: 3px;
+  background-color: #e9ecef;
+}
+
+.over-capacity-blocks {
+  border-left: 3px solid #ffc107;
+  padding-left: 0.75rem;
+}
+
+.over-capacity-blocks > div {
+  padding: 8px 12px;
+  background-color: #fffaee;
+  border-radius: 3px;
+  border-left: 3px solid #ff6b6b;
+}
+
+.over-capacity-blocks > div small {
+  line-height: 1.4;
+}
+
+.day-capacity-warning-banner .btn-outline-warning:hover {
+  background-color: #ffc107;
+  color: #000;
+}
+
+.day-capacity-warning-banner .btn-outline-danger:hover {
+  background-color: #dc3545;
+  color: #fff;
+}
+
+/* Mobile responsive */
+@media (max-width: 576px) {
+  .day-capacity-warning-banner {
+    gap: 1rem !important;
+  }
+
+  .day-capacity-warning-banner h6 {
+    font-size: 0.9rem;
+  }
+
+  .day-capacity-warning-banner small {
+    font-size: 0.75rem;
+  }
+
+  .day-capacity-warning-banner .d-flex {
+    flex-direction: column !important;
+  }
+
+  .day-capacity-warning-banner .d-flex.gap-2 {
+    gap: 0.5rem !important;
+  }
+
+  .day-capacity-warning-banner .btn {
+    width: 100%;
+  }
+}

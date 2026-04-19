@@ -1,0 +1,3028 @@
+const functions = require('firebase-functions');
+const admin = require('firebase-admin');
+const { google } = require('googleapis');
+const { loadThemesForUser, mapThemeIdToLabel, mapThemeLabelToId, getGoogleColorForThemeId, DEFAULT_THEMES } = require('./services/themeManager');
+const { buildAbsoluteUrl, buildEntityUrl } = require('./utils/urlHelpers');
+
+const MS_IN_DAY = 24 * 60 * 60 * 1000;
+const GCAL_PAST_DAYS = 14;
+const GCAL_FUTURE_DAYS = 90;
+const ALLOWED_ROUTINE_TYPES = new Set(['chore', 'routine', 'habit']);
+const TASK_TABLE_LIMIT = 12;
+const MAX_PRIVATE_TASK_REFS = 6;
+const GOOGLE_EVENT_COLORS_TTL_MS = 6 * 60 * 60 * 1000;
+const SYNC_LEASE_MS = 2 * 60 * 1000;
+
+let cachedGoogleEventColors = null;
+let cachedGoogleEventColorsAt = 0;
+
+function createSyncLeaseId(blockId, action) {
+  return `${action}-${blockId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function getCalendarSyncLeaseRef(blockId) {
+  return admin.firestore().collection('calendar_sync_leases').doc(String(blockId));
+}
+
+async function acquireCalendarSyncLease(blockId, uid, action) {
+  const leaseRef = getCalendarSyncLeaseRef(blockId);
+  const leaseId = createSyncLeaseId(blockId, action);
+  const now = Date.now();
+  const expiresAtMs = now + SYNC_LEASE_MS;
+  try {
+    await admin.firestore().runTransaction(async (tx) => {
+      const snap = await tx.get(leaseRef);
+      const data = snap.exists ? (snap.data() || {}) : {};
+      const currentLeaseId = String(data.leaseId || '').trim();
+      const currentExpiresAtMs = Number(data.expiresAtMs || 0);
+      if (currentLeaseId && currentExpiresAtMs > now) {
+        throw new Error('calendar_sync_lease_busy');
+      }
+      tx.set(leaseRef, {
+        blockId,
+        ownerUid: uid,
+        action,
+        leaseId,
+        acquiredAtMs: now,
+        expiresAtMs,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+    });
+    return { leaseId, leaseRef };
+  } catch (error) {
+    if (String(error?.message || '') === 'calendar_sync_lease_busy') return null;
+    throw error;
+  }
+}
+
+async function releaseCalendarSyncLease(blockId, leaseId) {
+  if (!blockId || !leaseId) return;
+  const leaseRef = getCalendarSyncLeaseRef(blockId);
+  try {
+    await admin.firestore().runTransaction(async (tx) => {
+      const snap = await tx.get(leaseRef);
+      if (!snap.exists) return;
+      const data = snap.data() || {};
+      if (String(data.leaseId || '') !== String(leaseId)) return;
+      tx.delete(leaseRef);
+    });
+  } catch (error) {
+    console.warn('[calendarSync] failed to release sync lease', blockId, error?.message || error);
+  }
+}
+
+// Legacy numeric theme index mapping (1-based order in DEFAULT_THEMES)
+const NUMERIC_THEME_MAP = {
+  1: 'Health & Fitness',
+  2: 'Career & Professional',
+  3: 'Finance & Wealth',
+  4: 'Learning & Education',
+  5: 'Family & Relationships',
+  6: 'Hobbies & Interests',
+  7: 'Travel & Adventure',
+  8: 'Home & Living',
+  9: 'Spiritual & Personal Growth',
+  10: 'Chores',
+  11: 'Routine',
+  12: 'Dev Tasks',
+  13: 'Work (Main Gig)',
+  14: 'Sleep',
+  15: 'Random',
+  16: 'Side Gig',
+};
+
+async function resolveThemeLabelForBlock(block, uid, themes) {
+  const rawThemeId = block.theme_id ?? block.themeId ?? null;
+  let themeLabel = rawThemeId
+    ? mapThemeIdToLabel(rawThemeId, themes)
+    : (block.theme || block.category || null);
+
+  // Parse numeric theme (legacy/numeric scale 1-15)
+  // If mapThemeIdToLabel returns a number or if themeLabel is numeric
+  if (Number.isFinite(Number(themeLabel)) || Number.isFinite(Number(block.theme)) || Number.isFinite(Number(rawThemeId))) {
+    const val = Number(themeLabel) || Number(block.theme) || Number(rawThemeId);
+    const direct = Array.isArray(themes)
+      ? themes.find((t) => String(t.id) === String(val))
+      : null;
+    if (direct) {
+      themeLabel = direct.label || direct.name || direct.id;
+    } else if (NUMERIC_THEME_MAP[val]) {
+      themeLabel = NUMERIC_THEME_MAP[val];
+    }
+  }
+
+  let goalId = block.goalId || null;
+
+  // Try linked story for theme/goal
+  if (!themeLabel && block.storyId) {
+    try {
+      const s = await admin.firestore().collection('stories').doc(String(block.storyId)).get();
+      if (s.exists) {
+        const sd = s.data() || {};
+        themeLabel = sd.theme || themeLabel;
+        goalId = goalId || sd.goalId || null;
+      }
+    } catch { /* ignore */ }
+  }
+
+  // Try linked task for theme/goal
+  if (!themeLabel && block.taskId) {
+    try {
+      const t = await admin.firestore().collection('tasks').doc(String(block.taskId)).get();
+      if (t.exists) {
+        const td = t.data() || {};
+        themeLabel = td.theme || themeLabel;
+        goalId = goalId || td.goalId || null;
+      }
+    } catch { /* ignore */ }
+  }
+
+  // Fallback to goal theme if present
+  if (!themeLabel && goalId) {
+    try {
+      const g = await admin.firestore().collection('goals').doc(String(goalId)).get();
+      if (g.exists) {
+        const gd = g.data() || {};
+        themeLabel = gd.theme || gd.themeLabel || themeLabel;
+        if (!block.theme_id && !block.themeId && gd.themeId) block.theme_id = gd.themeId;
+      }
+    } catch { /* ignore */ }
+  }
+
+  return themeLabel || 'General';
+}
+
+function toMillis(value) {
+  if (value === null || value === undefined) return 0;
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) return 0;
+    // If the value looks like a seconds timestamp (10-digit), scale to ms
+    if (value > 0 && value < 1e11) return value * 1000;
+    return value;
+  }
+  if (typeof value === 'string') {
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? 0 : parsed;
+  }
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === 'object') {
+    if (typeof value.toMillis === 'function') return value.toMillis();
+    if (typeof value.seconds === 'number') {
+      const nanos = Number(value.nanoseconds || value.nanos || 0);
+      return value.seconds * 1000 + Math.round(nanos / 1e6);
+    }
+  }
+  return 0;
+}
+
+function normalizeDayToken(value) {
+  if (value === undefined || value === null) return null;
+  if (typeof value === 'number') {
+    const idx = Math.max(0, Math.min(6, value % 7));
+    return ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][idx];
+  }
+  const raw = String(value).toLowerCase().trim();
+  if (!raw) return null;
+  if (['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'].includes(raw)) return raw;
+  if (raw.startsWith('su')) return 'sun';
+  if (raw.startsWith('mo')) return 'mon';
+  if (raw.startsWith('tu')) return 'tue';
+  if (raw.startsWith('we')) return 'wed';
+  if (raw.startsWith('th')) return 'thu';
+  if (raw.startsWith('fr')) return 'fri';
+  if (raw.startsWith('sa')) return 'sat';
+  return null;
+}
+
+function isDoneStatus(value) {
+  if (value === null || value === undefined || value === '') return false;
+  if (typeof value === 'number') return value === 2;
+  const normalized = String(value).trim().toLowerCase();
+  return ['done', 'complete', 'completed', 'finished', 'closed', '2'].includes(normalized);
+}
+
+function getTaskDueMs(task) {
+  return toMillis(task?.dueDateMs ?? task?.dueDate ?? task?.targetDate ?? task?.dueAt ?? task?.due);
+}
+
+function isRecurringDueOnDay(task, dayMs) {
+  const day = new Date(dayMs);
+  const dayStart = new Date(day);
+  dayStart.setHours(0, 0, 0, 0);
+  const dayEnd = new Date(day);
+  dayEnd.setHours(23, 59, 59, 999);
+  const dueMs = getTaskDueMs(task);
+  if (dueMs) {
+    return dueMs >= dayStart.getTime() && dueMs <= dayEnd.getTime();
+  }
+  const recurrence = task?.recurrence || {};
+  const freq = String(task?.repeatFrequency || recurrence.frequency || recurrence.freq || '').toLowerCase();
+  if (!freq) return false;
+  if (freq === 'daily') return true;
+  const dayToken = normalizeDayToken(day.getDay());
+  const daysRaw = []
+    .concat(task?.daysOfWeek || [])
+    .concat(task?.repeatDaysOfWeek || [])
+    .concat(recurrence?.daysOfWeek || []);
+  const daySet = new Set(daysRaw.map(normalizeDayToken).filter(Boolean));
+  if (freq === 'weekly') {
+    if (dayToken && daySet.size > 0) return daySet.has(dayToken);
+    return false;
+  }
+  if (freq === 'monthly') {
+    const daysOfMonth = []
+      .concat(recurrence?.daysOfMonth || [])
+      .map((value) => Number(value))
+      .filter((value) => Number.isFinite(value));
+    if (!daysOfMonth.length) return false;
+    return daysOfMonth.includes(day.getDate());
+  }
+  return false;
+}
+
+function checklistItemDurationMinutes(task) {
+  const points = Number(task?.points || 0);
+  if (Number.isFinite(points) && points > 0) {
+    return Math.max(3, Math.round(points * 60));
+  }
+  const estimate = Number(task?.estimateMin || task?.estimatedMinutes || task?.estimateMinutes || task?.durationMinutes || 0);
+  if (Number.isFinite(estimate) && estimate > 0) {
+    return Math.max(3, Math.round(estimate));
+  }
+  return 10;
+}
+
+function formatChecklistPoints(points) {
+  const numeric = Number(points);
+  if (!Number.isFinite(numeric) || numeric <= 0) return null;
+  if (Math.abs(numeric - Math.round(numeric)) < 0.001) return String(Math.round(numeric));
+  if (numeric < 1) return numeric.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
+  return numeric.toFixed(1).replace(/0$/, '').replace(/\.$/, '');
+}
+
+async function buildChecklistItemsForDay(uid, dayMs, options = {}) {
+  const dayIso = new Date(dayMs).toISOString().slice(0, 10);
+  const dayStart = new Date(dayMs);
+  dayStart.setHours(0, 0, 0, 0);
+  const dayStartMs = dayStart.getTime();
+  const dayEnd = new Date(dayMs);
+  dayEnd.setHours(23, 59, 59, 999);
+  const dayEndMs = dayEnd.getTime();
+  const capacityMinutesRaw = Number(options?.capacityMinutes);
+  const capacityMinutes = Number.isFinite(capacityMinutesRaw) && capacityMinutesRaw > 0
+    ? Math.max(1, Math.round(capacityMinutesRaw))
+    : null;
+
+  try {
+    const tasksSnap = await admin.firestore().collection('tasks')
+      .where('ownerUid', '==', uid)
+      .get();
+    const allRows = tasksSnap.docs
+      .map((doc) => ({ id: doc.id, ...(doc.data() || {}) }))
+      .filter((task) => {
+        const type = String(task.type || task.task_type || '').toLowerCase();
+        return ['chore', 'routine', 'habit', 'habitual'].includes(type);
+      })
+      .filter((task) => !task.deleted)
+      .filter((task) => !isDoneStatus(task.status))
+      .filter((task) => isRecurringDueOnDay(task, dayMs))
+      .filter((task) => {
+        const lastDoneMs = toMillis(task.lastDoneAt || task.completedAt || 0);
+        if (!lastDoneMs) return true;
+        return lastDoneMs < dayStartMs || lastDoneMs > dayEndMs;
+      })
+      .map((task) => {
+        const type = String(task.type || task.task_type || '').toLowerCase();
+        const kind = type === 'habitual' ? 'habit' : (type || 'chore');
+        return {
+          id: task.id,
+          title: task.title || 'Checklist item',
+          kind,
+          points: Number(task.points || 0),
+          durationMinutes: checklistItemDurationMinutes(task),
+          dueMs: getTaskDueMs(task) || dayStartMs,
+        };
+      })
+      .sort((a, b) => {
+        if ((a.dueMs || dayStartMs) !== (b.dueMs || dayStartMs)) {
+          return (a.dueMs || dayStartMs) - (b.dueMs || dayStartMs);
+        }
+        return (a.durationMinutes || 0) - (b.durationMinutes || 0);
+      });
+
+    let plannedMinutes = 0;
+    const rows = [];
+    for (const item of allRows) {
+      if (rows.length >= 12) break;
+      if (capacityMinutes != null && (plannedMinutes + item.durationMinutes) > capacityMinutes) continue;
+      rows.push(item);
+      plannedMinutes += item.durationMinutes;
+    }
+
+    const lines = rows.map((item) => {
+      const label = item.kind === 'routine' ? 'Routine' : item.kind === 'habit' ? 'Habit' : 'Chore';
+      const pointsLabel = formatChecklistPoints(item.points);
+      const effortLabel = pointsLabel ? `${pointsLabel} pts` : `${item.durationMinutes} min`;
+      return `${item.title} (${label}, ${effortLabel})`;
+    });
+    return { dayIso, lines, capacityMinutes, plannedMinutes };
+  } catch (error) {
+    console.warn('[calendar-sync] failed to build checklist items', error?.message || error);
+    return { dayIso, lines: [], capacityMinutes, plannedMinutes: 0 };
+  }
+}
+
+function isValidUrl(value) {
+  if (!value) return false;
+  try {
+    const parsed = new URL(String(value));
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function toPrivateString(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function buildPrivateProps(values) {
+  const entries = Object.entries(values || {});
+  const out = {};
+  for (const [key, value] of entries) {
+    const asString = toPrivateString(value);
+    if (asString === null) continue;
+    out[key] = asString;
+  }
+  return out;
+}
+
+function isChecklistWindowBlock(block) {
+  if (!block || block.storyId || block.taskId) return false;
+  const routineType = String(block.entityType || block.sourceType || block.category || '').toLowerCase();
+  const themeLower = String(block.theme || block.theme_label || block.themeLabel || '').toLowerCase();
+  return ['chore', 'routine', 'habit'].some((key) => routineType.includes(key) || themeLower.includes(key));
+}
+
+function isExternalCalendarBlock(block) {
+  const source = String(block?.source || block?.entry_method || block?.sourceType || '').toLowerCase();
+  return source === 'gcal' || source === 'google_calendar' || block?.createdBy === 'google';
+}
+
+function getSyncEntityKindFromBlock(block) {
+  const candidates = [
+    block?.entityType,
+    block?.sourceType,
+    block?.source,
+    block?.category,
+  ]
+    .map((value) => String(value || '').trim().toLowerCase())
+    .filter(Boolean);
+  for (const candidate of candidates) {
+    if (candidate === 'task' || candidate === 'story') return candidate;
+  }
+  for (const candidate of candidates) {
+    if (ALLOWED_ROUTINE_TYPES.has(candidate)) return candidate;
+  }
+  if (block?.storyId) return 'story';
+  if (block?.taskId) return 'task';
+  if (block?.choreId) return 'chore';
+  if (block?.routineId) return 'routine';
+  if (block?.habitId) return 'habit';
+  return null;
+}
+
+function isRoutineEntityLive(entity, { kind, collection } = {}) {
+  if (!entity) return false;
+  if (entity.deleted === true || entity.archived === true) return false;
+  const rawStatus = String(entity.status ?? '').trim().toLowerCase();
+  if (collection === 'tasks') {
+    if (isDoneStatus(entity.status)) return false;
+  }
+  if (['done', 'completed', 'complete', 'archived', 'cancelled', 'canceled'].includes(rawStatus)) return false;
+  if (kind && collection === 'tasks') {
+    const taskKind = String(entity.type || entity.entityType || '').trim().toLowerCase();
+    if (taskKind && taskKind !== kind) return false;
+  }
+  return true;
+}
+
+async function loadRoutineEntityForBlock(block) {
+  if (!block) return { kind: null, collection: null, id: null, exists: false, data: null };
+  const db = admin.firestore();
+
+  if (block.storyId) {
+    const snap = await db.collection('stories').doc(String(block.storyId)).get().catch(() => null);
+    const data = snap && snap.exists ? (snap.data() || {}) : null;
+    return {
+      kind: 'story',
+      collection: 'stories',
+      id: String(block.storyId),
+      exists: !!(snap && snap.exists),
+      data,
+    };
+  }
+
+  if (block.taskId) {
+    const snap = await db.collection('tasks').doc(String(block.taskId)).get().catch(() => null);
+    const data = snap && snap.exists ? (snap.data() || {}) : null;
+    const taskKind = String(data?.type || block.entityType || '').trim().toLowerCase();
+    return {
+      kind: ALLOWED_ROUTINE_TYPES.has(taskKind) ? taskKind : 'task',
+      collection: 'tasks',
+      id: String(block.taskId),
+      exists: !!(snap && snap.exists),
+      data,
+    };
+  }
+
+  const refs = [
+    { kind: 'chore', collection: 'chores', id: block.choreId },
+    { kind: 'routine', collection: 'routines', id: block.routineId },
+    { kind: 'habit', collection: 'habits', id: block.habitId },
+  ].filter((entry) => entry.id);
+
+  for (const ref of refs) {
+    const snap = await db.collection(ref.collection).doc(String(ref.id)).get().catch(() => null);
+    if (snap && snap.exists) {
+      return {
+        kind: ref.kind,
+        collection: ref.collection,
+        id: String(ref.id),
+        exists: true,
+        data: snap.data() || {},
+      };
+    }
+  }
+
+  const inferredKind = getSyncEntityKindFromBlock(block);
+  return {
+    kind: inferredKind,
+    collection: refs[0]?.collection || null,
+    id: refs[0]?.id ? String(refs[0].id) : (block.taskId ? String(block.taskId) : null),
+    exists: false,
+    data: null,
+  };
+}
+
+async function evaluateGoogleSyncPolicyForBlock(block) {
+  if (!block) return { eligible: false, reason: 'missing_block', kind: null };
+  if (isExternalCalendarBlock(block)) {
+    return { eligible: false, reason: 'external_gcal_block', kind: null };
+  }
+
+  const entityKind = getSyncEntityKindFromBlock(block);
+  if (!entityKind) {
+    return { eligible: false, reason: 'unsupported_block', kind: null };
+  }
+  if (entityKind === 'routine' || entityKind === 'habit') {
+    return { eligible: false, reason: `${entityKind}_blocks_do_not_sync`, kind: entityKind };
+  }
+  if (entityKind === 'work_shift' || entityKind === 'health') {
+    return { eligible: false, reason: `${entityKind}_blocks_do_not_sync`, kind: entityKind };
+  }
+
+  const linked = await loadRoutineEntityForBlock(block);
+  if (!linked.exists || !linked.data) {
+    return {
+      eligible: false,
+      reason: linked.id ? `linked_${entityKind}_missing` : `linked_${entityKind}_unresolved`,
+      kind: entityKind,
+      linkedCollection: linked.collection || null,
+      linkedId: linked.id || null,
+    };
+  }
+  if (!isRoutineEntityLive(linked.data, linked)) {
+    return {
+      eligible: false,
+      reason: `linked_${entityKind}_closed`,
+      kind: entityKind,
+      linkedCollection: linked.collection || null,
+      linkedId: linked.id || null,
+    };
+  }
+
+  return {
+    eligible: true,
+    reason: `live_${entityKind}`,
+    kind: entityKind,
+    linkedCollection: linked.collection || null,
+    linkedId: linked.id || null,
+  };
+}
+
+function resolveBlockDeepLink(block) {
+  if (!block) return null;
+  const raw = block.deepLink || block.linkUrl || block.url || block.link || null;
+  const entityType = String(block.entityType || '').toLowerCase();
+  const source = String(block.source || '').toLowerCase();
+  const isChoreBlock = entityType === 'chore' || source === 'chore';
+  if (raw && isChoreBlock) return buildAbsoluteUrl(String(raw));
+  if (block.storyId) {
+    return buildEntityUrl('story', String(block.storyId), block.storyRef || block.storyReference || null);
+  }
+  if (block.taskId) {
+    return buildEntityUrl('task', String(block.taskId), block.taskRef || block.taskReference || null);
+  }
+  if (raw) return buildAbsoluteUrl(String(raw));
+  const category = String(block.category || block.title || '').toLowerCase();
+  const themeLabel = String(block.theme_label || block.themeLabel || '').toLowerCase();
+  const isChoreWindow = category.includes('chore') || themeLabel.includes('chore');
+  if (isChoreWindow) {
+    const startMs = toMillis(block.start);
+    if (startMs) {
+      const dayIso = new Date(startMs).toISOString().slice(0, 10);
+      return buildAbsoluteUrl(`/chores/checklist?date=${encodeURIComponent(dayIso)}`);
+    }
+  }
+  if (block.choreId) return buildAbsoluteUrl(`/chores?choreId=${encodeURIComponent(String(block.choreId))}`);
+  if (block.routineId) return buildAbsoluteUrl(`/routines?routineId=${encodeURIComponent(String(block.routineId))}`);
+  if (block.habitId) return buildAbsoluteUrl(`/habits?habitId=${encodeURIComponent(String(block.habitId))}`);
+  return null;
+}
+
+function canonicalizeThemeKey(value) {
+  return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function parseColorToRgb(value) {
+  if (!value) return null;
+  const raw = String(value).trim();
+  if (!raw || raw.startsWith('var(')) return null;
+  if (raw.startsWith('#')) {
+    let hex = raw.slice(1);
+    if (hex.length === 3) {
+      hex = hex.split('').map((c) => c + c).join('');
+    }
+    if (hex.length !== 6) return null;
+    const r = parseInt(hex.slice(0, 2), 16);
+    const g = parseInt(hex.slice(2, 4), 16);
+    const b = parseInt(hex.slice(4, 6), 16);
+    if ([r, g, b].some((c) => Number.isNaN(c))) return null;
+    return { r, g, b };
+  }
+  const rgbMatch = raw.match(/rgba?\((\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
+  if (rgbMatch) {
+    const r = Number(rgbMatch[1]);
+    const g = Number(rgbMatch[2]);
+    const b = Number(rgbMatch[3]);
+    if ([r, g, b].some((c) => Number.isNaN(c))) return null;
+    return { r, g, b };
+  }
+  return null;
+}
+
+function colorDistance(a, b) {
+  if (!a || !b) return Number.POSITIVE_INFINITY;
+  const dr = a.r - b.r;
+  const dg = a.g - b.g;
+  const db = a.b - b.b;
+  return (dr * dr) + (dg * dg) + (db * db);
+}
+
+function pickThemeColor(theme) {
+  if (!theme) return null;
+  return theme.color || theme.primary || theme.lightColor || theme.darkColor || null;
+}
+
+function findThemeMatch(themeId, themeLabel, themes) {
+  if (!Array.isArray(themes)) return null;
+  const direct = themeId != null
+    ? themes.find((t) => String(t.id) === String(themeId))
+    : null;
+  if (direct) return direct;
+  const label = themeLabel || themeId;
+  if (!label) return null;
+  const canonical = canonicalizeThemeKey(label);
+  return themes.find((t) => {
+    const key = canonicalizeThemeKey(t.label || t.name || t.id);
+    return key === canonical;
+  }) || null;
+}
+
+function findClosestGoogleEventColorId(themeRgb, eventColors) {
+  if (!themeRgb || !eventColors) return null;
+  let bestId = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const [id, color] of Object.entries(eventColors)) {
+    const rgb = parseColorToRgb(color?.background);
+    if (!rgb) continue;
+    const distance = colorDistance(themeRgb, rgb);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestId = id;
+    }
+  }
+  return bestId;
+}
+
+function resolveGoogleEventColorId({ themeId, themeLabel, themes, eventColors }) {
+  const theme = findThemeMatch(themeId, themeLabel, themes);
+  const themeColor = pickThemeColor(theme);
+  const themeRgb = parseColorToRgb(themeColor);
+  if (themeRgb && eventColors) {
+    const closest = findClosestGoogleEventColorId(themeRgb, eventColors);
+    if (closest) return closest;
+  }
+
+  if (theme?.colorId) return theme.colorId;
+
+  const themeKey = themeId ?? mapThemeLabelToId(themeLabel, themes);
+  const fallbackFromUser = getGoogleColorForThemeId(themeKey, themes);
+  if (fallbackFromUser) return fallbackFromUser;
+
+  const fallbackFromDefaults = getGoogleColorForThemeId(mapThemeLabelToId(themeLabel, DEFAULT_THEMES), DEFAULT_THEMES);
+  return fallbackFromDefaults || '1';
+}
+
+async function getGoogleEventColors(calendar) {
+  const now = Date.now();
+  if (cachedGoogleEventColors && (now - cachedGoogleEventColorsAt) < GOOGLE_EVENT_COLORS_TTL_MS) {
+    return cachedGoogleEventColors;
+  }
+  try {
+    const res = await calendar.colors.get();
+    const eventColors = res?.data?.event || null;
+    if (eventColors) {
+      cachedGoogleEventColors = eventColors;
+      cachedGoogleEventColorsAt = now;
+    }
+    return eventColors || cachedGoogleEventColors;
+  } catch (err) {
+    return cachedGoogleEventColors;
+  }
+}
+
+function normalizeTaskStatus(status) {
+  if (typeof status === 'number') {
+    if (status === 0) return 'To Do';
+    if (status === 1) return 'In Progress';
+    if (status === 2) return 'Done';
+    if (status === 3) return 'Blocked';
+    return 'Unknown';
+  }
+  const raw = String(status || '').trim().toLowerCase().replace(/_/g, '-');
+  if (!raw) return 'Unknown';
+  if (['todo', 'backlog', 'planned', 'new'].includes(raw)) return 'To Do';
+  if (['in-progress', 'in progress', 'active', 'wip', 'testing', 'review'].includes(raw)) return 'In Progress';
+  if (['blocked', 'paused', 'on-hold', 'stalled'].includes(raw)) return 'Blocked';
+  if (['done', 'complete', 'completed', 'closed', 'finished'].includes(raw)) return 'Done';
+  return raw.replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function normalizeTaskPriority(priority) {
+  if (typeof priority === 'number') {
+    if (priority === 4) return 'Critical';
+    if (priority === 3) return 'High';
+    if (priority === 2) return 'Medium';
+    if (priority === 1) return 'Low';
+    if (priority === 0) return 'None';
+    return 'Unknown';
+  }
+  const raw = String(priority || '').trim().toLowerCase();
+  if (!raw) return 'Unknown';
+  if (raw === 'critical') return 'Critical';
+  if (raw === 'high') return 'High';
+  if (raw === 'medium' || raw === 'med') return 'Medium';
+  if (raw === 'low') return 'Low';
+  if (raw === 'none') return 'None';
+  return raw.replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function resolveTaskDueDate(task) {
+  const candidates = [task.dueDateMs, task.dueDate, task.targetDate, task.startDate];
+  for (const value of candidates) {
+    if (!value) continue;
+    if (typeof value === 'string') {
+      const parsed = Date.parse(value);
+      if (!Number.isNaN(parsed)) return new Date(parsed).toISOString().slice(0, 10);
+      return value;
+    }
+    const ms = toMillis(value);
+    if (ms) return new Date(ms).toISOString().slice(0, 10);
+  }
+  return '';
+}
+
+function safeTableCell(value) {
+  return String(value || '')
+    .replace(/[|\r\n]+/g, ' ')
+    .trim();
+}
+
+function resolveTaskRef(task) {
+  if (!task) return '';
+  return task.ref || task.reference || task.displayId || task.id || '';
+}
+
+function buildLinkedTasksTable(tasks) {
+  if (!tasks.length) return [];
+  const statusRank = (status) => {
+    const label = String(normalizeTaskStatus(status)).toLowerCase();
+    if (label === 'done') return 2;
+    if (label === 'blocked') return 1;
+    return 0;
+  };
+  const priorityRank = (priority) => {
+    if (typeof priority === 'number') {
+      if (priority === 4) return 0;
+      if (priority === 3) return 1;
+      if (priority === 2) return 2;
+      if (priority === 1) return 3;
+      return 4;
+    }
+    const raw = String(priority || '').toLowerCase();
+    if (raw === 'critical') return 0;
+    if (raw === 'high') return 1;
+    if (raw === 'medium' || raw === 'med') return 2;
+    if (raw === 'low') return 3;
+    return 4;
+  };
+  const dueRank = (task) => {
+    const ms = toMillis(task.dueDateMs || task.dueDate || task.targetDate || task.startDate);
+    return ms || Number.MAX_SAFE_INTEGER;
+  };
+
+  const rows = tasks
+    .filter((task) => !task.deleted)
+    .sort((a, b) => {
+      const statusDiff = statusRank(a.status) - statusRank(b.status);
+      if (statusDiff !== 0) return statusDiff;
+      const priorityDiff = priorityRank(a.priority) - priorityRank(b.priority);
+      if (priorityDiff !== 0) return priorityDiff;
+      const dueDiff = dueRank(a) - dueRank(b);
+      if (dueDiff !== 0) return dueDiff;
+      return String(a.title || '').localeCompare(String(b.title || ''));
+    });
+
+  const limited = rows.slice(0, TASK_TABLE_LIMIT);
+  const lines = [
+    'Linked tasks:',
+    '| Ref | Title | Status | Priority | Points | Due |',
+    '| --- | --- | --- | --- | --- | --- |',
+  ];
+  limited.forEach((task) => {
+    const ref = resolveTaskRef(task);
+    const title = task.title || 'Untitled task';
+    const status = normalizeTaskStatus(task.status);
+    const priority = normalizeTaskPriority(task.priority);
+    const points = Number.isFinite(Number(task.points)) ? Number(task.points) : '';
+    const due = resolveTaskDueDate(task);
+    lines.push(`| ${safeTableCell(ref)} | ${safeTableCell(title)} | ${safeTableCell(status)} | ${safeTableCell(priority)} | ${safeTableCell(points)} | ${safeTableCell(due)} |`);
+  });
+
+  if (rows.length > limited.length) {
+    lines.push(`...and ${rows.length - limited.length} more linked tasks`);
+  }
+
+  return lines;
+}
+
+async function fetchLinkedTasksForStory(uid, storyId) {
+  const tasksRef = admin.firestore().collection('tasks');
+  const fetchSnap = (query) => query.get().catch(() => ({ docs: [] }));
+  const [byStory, byParent] = await Promise.all([
+    fetchSnap(
+      tasksRef
+        .where('ownerUid', '==', uid)
+        .where('storyId', '==', String(storyId))
+        .limit(TASK_TABLE_LIMIT * 2),
+    ),
+    fetchSnap(
+      tasksRef
+        .where('ownerUid', '==', uid)
+        .where('parentType', '==', 'story')
+        .where('parentId', '==', String(storyId))
+        .limit(TASK_TABLE_LIMIT * 2),
+    ),
+  ]);
+
+  const map = new Map();
+  [byStory, byParent].forEach((snap) => {
+    (snap.docs || []).forEach((doc) => {
+      map.set(doc.id, { id: doc.id, ...(doc.data() || {}) });
+    });
+  });
+  return Array.from(map.values());
+}
+
+async function logCalendarIntegration(uid, payload) {
+  try {
+    await admin.firestore().collection('integration_logs').add({
+      integration: 'google_calendar',
+      userId: uid,
+      ownerUid: uid,
+      ts: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      ...payload,
+    });
+  } catch (err) {
+    console.warn('[calendarSync] failed to write integration log', err?.message || err);
+  }
+}
+
+async function getCalendarClientForUser(uid) {
+  const userDoc = await admin.firestore().collection('users').doc(uid).get();
+  const userData = userDoc.data() || {};
+  let tokens = userData.googleCalendarTokens || null;
+  if (!tokens) {
+    try {
+      const legacyDoc = await admin.firestore().collection('tokens').doc(uid).get();
+      if (legacyDoc.exists) {
+        const legacyData = legacyDoc.data() || {};
+        tokens = legacyData.googleCalendarTokens || (legacyData.refresh_token ? { refresh_token: legacyData.refresh_token } : null);
+      }
+    } catch { /* ignore */ }
+  }
+  if (!tokens) throw new Error('Google Calendar not connected');
+  const { clientId, clientSecret, redirectUri } = getGoogleOAuthConfig();
+  if (!clientId || !clientSecret || !redirectUri) {
+    throw new Error('Google OAuth not configured');
+  }
+  const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
+  oauth2Client.setCredentials(tokens);
+  const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+  return { calendar, userData };
+}
+
+async function listAllEvents(calendar, { timeMin, timeMax }) {
+  const events = [];
+  let pageToken = undefined;
+  do {
+    const resp = await calendar.events.list({
+      calendarId: 'primary',
+      timeMin,
+      timeMax,
+      singleEvents: true,
+      orderBy: 'startTime',
+      showDeleted: false,
+      maxResults: 250,
+      pageToken,
+    });
+    events.push(...(resp.data.items || []));
+    pageToken = resp.data.nextPageToken;
+  } while (pageToken);
+  return events;
+}
+
+async function findExistingEventByPrivateProp(calendar, { key, value, timeMin, timeMax }) {
+  if (!key || !value) return null;
+  const events = [];
+  let pageToken = undefined;
+  do {
+    const resp = await calendar.events.list({
+      calendarId: 'primary',
+      timeMin,
+      timeMax,
+      singleEvents: true,
+      orderBy: 'startTime',
+      showDeleted: false,
+      maxResults: 250,
+      privateExtendedProperty: `${key}=${value}`,
+      pageToken,
+    });
+    events.push(...(resp.data.items || []));
+    pageToken = resp.data.nextPageToken;
+  } while (pageToken);
+  return events.find((ev) => ev && ev.id) || null;
+}
+
+function getBobPrivateProps(event) {
+  return event?.extendedProperties?.private || {};
+}
+
+function getBobBlockIdFromEvent(event) {
+  const priv = getBobPrivateProps(event);
+  return String(priv['bob-block-id'] || priv['bobBlockId'] || '').trim();
+}
+
+function isConfidentBobCreatedEvent(event) {
+  const priv = getBobPrivateProps(event);
+  return Boolean(
+    getBobBlockIdFromEvent(event)
+      || priv['bob-entity-type']
+      || priv['bob-story-id']
+      || priv['bob-task-id']
+      || priv['bob-deeplink']
+  );
+}
+
+function parseEventTime(timeObj) {
+  if (!timeObj) return null;
+  if (timeObj.dateTime) return new Date(timeObj.dateTime).getTime();
+  if (timeObj.date) return new Date(`${timeObj.date}T00:00:00Z`).getTime();
+  return null;
+}
+
+function getGoogleOAuthConfig() {
+  const projectId = process.env.GCLOUD_PROJECT;
+  const region = 'europe-west2';
+  const env = process.env || {};
+  const clientId = env.GOOGLE_OAUTH_CLIENT_ID || (functions.config().google && functions.config().google.client_id);
+  const clientSecret = env.GOOGLE_OAUTH_CLIENT_SECRET || (functions.config().google && functions.config().google.client_secret);
+  const redirectFromConfig = functions.config().google && functions.config().google.redirect_uri;
+  const redirectUri = redirectFromConfig || (projectId ? `https://${region}-${projectId}.cloudfunctions.net/oauthCallback` : undefined);
+  return { clientId, clientSecret, redirectUri };
+}
+
+async function getActiveSprintId(uid) {
+  try {
+    const snap = await admin.firestore()
+      .collection('sprints')
+      .where('ownerUid', '==', uid)
+      .where('status', 'in', ['active', 1])
+      .orderBy('startDate', 'desc')
+      .limit(1)
+      .get();
+    if (!snap.empty) return snap.docs[0].id;
+  } catch (e) {
+    console.warn('[getActiveSprintId] failed', e?.message || e);
+  }
+  return null;
+}
+
+// Revised helper to accept block data optionally
+async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
+  let block = blockData;
+  let eventId = null;
+  let syncLease = null;
+  const errorContext = {};
+  const debugLogs = [];
+  const testMode = !!process.env.CALENDAR_SYNC_TEST_MODE;
+  try {
+    const { calendar } = await getCalendarClientForUser(uid);
+
+    if (!block && action !== 'delete') {
+      const snap = await admin.firestore().collection('calendar_blocks').doc(blockId).get();
+      if (!snap.exists) throw new Error('Block not found');
+      block = snap.data();
+    }
+
+    if (action === 'create' || action === 'update') {
+      syncLease = await acquireCalendarSyncLease(blockId, uid, action);
+      if (!syncLease) {
+        debugLogs.push({ step: 'sync_skipped', reason: 'sync_lease_busy' });
+        await logCalendarIntegration(uid, {
+          action: 'push',
+          direction: action,
+          status: 'skipped',
+          blockId,
+          blockTitle: block?.title || null,
+          reason: 'sync_lease_busy',
+        });
+        return { skipped: true, reason: 'sync_lease_busy' };
+      }
+      const freshSnap = await admin.firestore().collection('calendar_blocks').doc(blockId).get();
+      if (!freshSnap.exists) {
+        debugLogs.push({ step: 'sync_skipped', reason: 'block_missing_after_lease' });
+        return { skipped: true, reason: 'block_missing_after_lease' };
+      }
+      block = freshSnap.data();
+      if (action === 'create' && block?.googleEventId) {
+        debugLogs.push({ step: 'sync_skipped', reason: 'google_event_already_linked', eventId: block.googleEventId });
+        return { skipped: true, reason: 'google_event_already_linked', eventId: block.googleEventId };
+      }
+    }
+
+    if (block && block.syncToGoogle === false && action !== 'delete') {
+      debugLogs.push({ step: 'sync_skipped', reason: 'syncToGoogle=false' });
+      return { skipped: true, reason: 'syncToGoogle=false' };
+    }
+
+    if (block && action !== 'delete') {
+      const syncPolicy = await evaluateGoogleSyncPolicyForBlock(block);
+      if (!syncPolicy.eligible) {
+        debugLogs.push({ step: 'sync_skipped', reason: syncPolicy.reason, kind: syncPolicy.kind || null });
+        await logCalendarIntegration(uid, {
+          action: 'push',
+          direction: action,
+          status: 'skipped',
+          blockId,
+          blockTitle: block?.title || null,
+          reason: syncPolicy.reason,
+        });
+        return { skipped: true, reason: syncPolicy.reason };
+      }
+    }
+
+    if (block && action === 'create') {
+      const stalePatch = { updatedAt: admin.firestore.FieldValue.serverTimestamp() };
+      let staleReason = null;
+
+      if (block.storyId) {
+        const storySnap = await admin.firestore().collection('stories').doc(String(block.storyId)).get();
+        const story = storySnap.exists ? storySnap.data() : null;
+        const storyStatus = String(story?.status ?? '').toLowerCase();
+        const storyStatusNum = typeof story?.status === 'number' ? story.status : null;
+        const storyClosed = !storySnap.exists
+          || (storyStatusNum !== null ? storyStatusNum >= 4 : isDoneStatus(story?.status))
+          || ['archived', 'cancelled', 'canceled'].includes(storyStatus);
+        if (storyClosed) {
+          staleReason = storySnap.exists ? 'linked_story_closed' : 'linked_story_missing';
+          stalePatch.storyId = admin.firestore.FieldValue.delete();
+          stalePatch.goalId = admin.firestore.FieldValue.delete();
+        }
+      }
+
+      if (!staleReason && block.taskId) {
+        const taskSnap = await admin.firestore().collection('tasks').doc(String(block.taskId)).get();
+        const task = taskSnap.exists ? taskSnap.data() : null;
+        const taskStatus = String(task?.status ?? '').toLowerCase();
+        const taskClosed = !taskSnap.exists
+          || isDoneStatus(task?.status)
+          || ['archived', 'cancelled', 'canceled'].includes(taskStatus)
+          || task?.deleted === true;
+        if (taskClosed) {
+          staleReason = taskSnap.exists ? 'linked_task_closed' : 'linked_task_missing';
+          stalePatch.taskId = admin.firestore.FieldValue.delete();
+          if (!block.storyId) stalePatch.goalId = admin.firestore.FieldValue.delete();
+        }
+      }
+
+      if (staleReason) {
+        stalePatch.staleEntityUnlinkedAt = admin.firestore.FieldValue.serverTimestamp();
+        stalePatch.staleEntityReason = staleReason;
+        await admin.firestore().collection('calendar_blocks').doc(blockId).set(stalePatch, { merge: true });
+        debugLogs.push({ step: 'sync_skipped', reason: staleReason });
+        return { skipped: true, reason: staleReason };
+      }
+    }
+
+    if (action === 'create') {
+      const themes = await loadThemesForUser(uid);
+      const googleEventColors = await getGoogleEventColors(calendar);
+      const themeLabel = await resolveThemeLabelForBlock(block, uid, themes);
+      const themeIdForBlock = block.theme_id ?? block.themeId ?? null;
+      const activityName = block.title || block.category || 'BOB Block';
+      const refPart = block.storyRef || block.taskRef || '';
+      
+      // Format: "Title [REF] [Theme]" for better readability on small screens
+      let summaryText = activityName;
+      if (refPart) {
+        summaryText += ` [${refPart}]`;
+      }
+      summaryText += ` [${themeLabel}]`;
+      
+      const startMs = toMillis(block.start);
+      const endMs = toMillis(block.end);
+      let eventDeepLink = resolveBlockDeepLink(block);
+      const eventContext = {
+        storyRef: block.storyRef || null,
+        taskRef: block.taskRef || null,
+        goalId: null,
+        goalRef: null,
+        storyTitle: null,
+        taskTitle: null,
+        linkedTaskRefs: [],
+      };
+      errorContext.startMs = startMs;
+      errorContext.endMs = endMs;
+      errorContext.themeLabel = themeLabel;
+      errorContext.activityName = activityName;
+      if (!startMs || !endMs || startMs >= endMs) {
+        throw new Error('Invalid start/end on block');
+      }
+      const lookupWindowMs = 30 * 24 * 60 * 60 * 1000;
+      const lookupStart = new Date(startMs - lookupWindowMs).toISOString();
+      const lookupEnd = new Date(endMs + lookupWindowMs).toISOString();
+      let existingEvent = null;
+      try {
+        existingEvent = await findExistingEventByPrivateProp(calendar, {
+          key: 'bob-block-id',
+          value: blockId,
+          timeMin: lookupStart,
+          timeMax: lookupEnd,
+        });
+        if (!existingEvent) {
+          existingEvent = await findExistingEventByPrivateProp(calendar, {
+            key: 'bobBlockId',
+            value: blockId,
+            timeMin: lookupStart,
+            timeMax: lookupEnd,
+          });
+        }
+      } catch (e) {
+        debugLogs.push({ step: 'lookup_existing_error', error: e?.message || String(e) });
+      }
+      if (existingEvent?.id) {
+        eventId = existingEvent.id;
+        debugLogs.push({ step: 'existing_event_found', eventId });
+      }
+      // Use original rationale only; if it contains enriched content from a prior
+      // push→pull feedback loop (URLs, newlines), discard it to avoid duplication.
+      const rawRationale = block.rationale || '';
+      let enrichedDesc = (rawRationale.includes('\n') || rawRationale.includes('http')) ? '' : rawRationale;
+      let aiScoreVal = block.aiScore ?? block.aiCriticalityScore ?? null;
+      const blockTopReason = block.aiTop3ForDay && block.aiTop3Reason ? block.aiTop3Reason : null;
+      let aiReasonVal = block.aiReason || blockTopReason || block.aiCriticalityReason || block.dueDateReason || '';
+      
+      // CONSOLIDATED BLOCK: Only use multi-item summary path for truly multi-item blocks.
+      // Single-item consolidated blocks fall through to the single-item path so they get
+      // full deep links, AI score, sprint/goal links, etc.
+      if (Array.isArray(block.items) && block.items.length > 1) {
+        const lines = [];
+        if (enrichedDesc) lines.push(enrichedDesc);
+
+        lines.push(`${block.title}`);
+        lines.push(`Items: ${block.itemCount}`);
+        lines.push(`Capacity: ${block.totalPoints?.toFixed(2) || 0} / ${block.blockCapacity?.toFixed(2) || 1} points (${block.utilizationPercent || 0}%)`);
+
+        if (block.capacityExceeded) {
+          lines.push('⚠️ OVER CAPACITY - Consider deferring lower-priority items');
+        }
+
+        lines.push('', 'Items in this block:');
+        for (const item of block.items) {
+          const points = item.points ? ` (${item.points} pts)` : '';
+          const immovable = item.immovable ? ' [IMMOVABLE]' : '';
+          lines.push(`- ${item.title}${points}${immovable}`);
+        }
+
+        if (block.itemsToDefer && block.itemsToDefer.length > 0) {
+          lines.push('', 'Items to defer (over capacity):');
+          for (const item of block.itemsToDefer) {
+            const points = item.points ? ` (${item.points} pts)` : '';
+            lines.push(`- ${item.title}${points}`);
+          }
+        }
+
+        const itemsWithLinks = block.items.filter((item) => item.deepLink);
+        if (itemsWithLinks.length) {
+          lines.push('', 'Item Links:');
+          for (const item of itemsWithLinks) {
+            lines.push(`- ${item.title}: ${item.deepLink}`);
+          }
+        }
+
+        lines.push('', `Calendar: ${buildAbsoluteUrl('/calendar')}`);
+        lines.push(`Overview: ${buildAbsoluteUrl('/dashboard')}`);
+
+        enrichedDesc = lines.join('\n');
+      } else {
+        // SINGLE ITEM: Existing logic for single task/story/routine
+        try {
+        if (block.storyId) {
+          const s = await admin.firestore().collection('stories').doc(String(block.storyId)).get();
+          if (s.exists) {
+            const sd = s.data() || {};
+            const storyRef = sd.ref || s.id;
+            const link = buildEntityUrl('story', s.id, storyRef);
+            eventContext.storyRef = storyRef;
+            eventContext.storyTitle = sd.title || null;
+            eventDeepLink = link;
+            if (sd.aiCriticalityScore != null) {
+              aiScoreVal = aiScoreVal ?? sd.aiCriticalityScore;
+            }
+            if (!aiReasonVal) {
+              const sdTopReason = sd.aiTop3ForDay && sd.aiTop3Reason ? sd.aiTop3Reason : null;
+              if (sdTopReason || sd.aiCriticalityReason) {
+                aiReasonVal = sdTopReason || sd.aiCriticalityReason || '';
+              }
+            }
+            const acArr = Array.isArray(sd.acceptanceCriteria)
+              ? sd.acceptanceCriteria.filter(Boolean).map((x) => String(x)).slice(0, 3)
+              : (Array.isArray(sd.acceptance_criteria) ? sd.acceptance_criteria.filter(Boolean).map((x) => String(x)).slice(0, 3) : []);
+            summaryText = `${sd.title || activityName} [${storyRef}] [${themeLabel}]`;
+            const lines = [];
+            if (enrichedDesc) lines.push(enrichedDesc);
+            lines.push(`Story: ${sd.title || 'Story'} – ${storyRef}`);
+            lines.push(`Story Link: ${link}`);
+            if (sd.goalId) {
+              let goalRef = sd.goalId;
+              try {
+                const g = await admin.firestore().collection('goals').doc(String(sd.goalId)).get();
+                if (g.exists) {
+                  const gd = g.data() || {};
+                  goalRef = gd.ref || gd.reference || goalRef;
+                }
+              } catch { }
+              eventContext.goalId = sd.goalId;
+              eventContext.goalRef = goalRef;
+              lines.push(`Goal Link: ${buildEntityUrl('goal', sd.goalId, goalRef)}`);
+            }
+            if (sd.sprintId) lines.push(`Sprint Link: ${buildAbsoluteUrl(`/sprints?sprintId=${sd.sprintId}`)}`);
+            lines.push(`Calendar: ${buildAbsoluteUrl('/calendar')}`);
+            lines.push(`Overview: ${buildAbsoluteUrl('/dashboard')}`);
+
+            const aiLineParts = [];
+            if (aiScoreVal != null) aiLineParts.push(`AI score ${aiScoreVal}/100`);
+            if (aiReasonVal) aiLineParts.push(aiReasonVal);
+            if (aiLineParts.length) lines.push('', aiLineParts.join(' – '));
+            if (block.placementReason) lines.push(`Placement: ${block.placementReason}`);
+
+            const linkedTasks = await fetchLinkedTasksForStory(uid, s.id);
+            eventContext.linkedTaskRefs = linkedTasks.map(resolveTaskRef).filter(Boolean);
+            const taskTable = buildLinkedTasksTable(linkedTasks);
+            if (taskTable.length) {
+              lines.push('', ...taskTable);
+            }
+
+            if (acArr.length) {
+              lines.push('', 'Acceptance criteria:');
+              for (const item of acArr) lines.push(`- ${item}`);
+            }
+            enrichedDesc = lines.join('\n');
+          }
+        } else if (block.taskId) {
+          const t = await admin.firestore().collection('tasks').doc(String(block.taskId)).get();
+          if (t.exists) {
+            const td = t.data() || {};
+            const taskRef = resolveTaskRef(td) || t.id;
+            const taskLink = buildEntityUrl('task', t.id, taskRef);
+            eventContext.taskRef = taskRef;
+            eventContext.taskTitle = td.title || null;
+            eventDeepLink = taskLink;
+            if (td.aiCriticalityScore != null) {
+              aiScoreVal = aiScoreVal ?? td.aiCriticalityScore;
+            }
+            if (!aiReasonVal) {
+              const tdTopReason = td.aiTop3ForDay && td.aiTop3Reason ? td.aiTop3Reason : null;
+              if (tdTopReason || td.aiCriticalityReason) {
+                aiReasonVal = tdTopReason || td.aiCriticalityReason || '';
+              }
+            }
+            summaryText = `${td.title || activityName} [${taskRef}] [${themeLabel}]`;
+            const lines = [];
+            if (enrichedDesc) lines.push(enrichedDesc);
+            lines.push(`Task: ${td.title || 'Task'} – ${taskRef}`);
+            lines.push(`Task Link: ${taskLink}`);
+            const storyId = td.storyId || (td.parentType === 'story' ? td.parentId : null);
+            if (storyId) {
+              try {
+                const s = await admin.firestore().collection('stories').doc(String(storyId)).get();
+                if (s.exists) {
+                  const sd = s.data() || {};
+                  const storyRef = sd.ref || s.id;
+                  const storyLink = buildEntityUrl('story', s.id, storyRef);
+                  eventContext.storyRef = storyRef;
+                  eventContext.storyTitle = sd.title || null;
+                  lines.push(`Story Link: ${storyLink}`);
+                  if (sd.goalId) {
+                    let goalRef = sd.goalId;
+                    try {
+                      const g = await admin.firestore().collection('goals').doc(String(sd.goalId)).get();
+                      if (g.exists) {
+                        const gd = g.data() || {};
+                        goalRef = gd.ref || gd.reference || goalRef;
+                      }
+                    } catch { }
+                    eventContext.goalId = sd.goalId;
+                    eventContext.goalRef = goalRef;
+                    lines.push(`Goal Link: ${buildEntityUrl('goal', sd.goalId, goalRef)}`);
+                  }
+                }
+              } catch { }
+            }
+            if (td.goalId && !eventContext.goalId) {
+              let goalRef = td.goalId;
+              try {
+                const g = await admin.firestore().collection('goals').doc(String(td.goalId)).get();
+                if (g.exists) {
+                  const gd = g.data() || {};
+                  goalRef = gd.ref || gd.reference || goalRef;
+                }
+              } catch { }
+              eventContext.goalId = td.goalId;
+              eventContext.goalRef = goalRef;
+              lines.push(`Goal Link: ${buildEntityUrl('goal', td.goalId, goalRef)}`);
+            }
+            if (td.sprintId) lines.push(`Sprint Link: ${buildAbsoluteUrl(`/sprints?sprintId=${td.sprintId}`)}`);
+            lines.push(`Calendar: ${buildAbsoluteUrl('/calendar')}`);
+            lines.push(`Overview: ${buildAbsoluteUrl('/dashboard')}`);
+
+            const aiLineParts = [];
+            if (aiScoreVal != null) aiLineParts.push(`AI score ${aiScoreVal}/100`);
+            if (aiReasonVal) aiLineParts.push(aiReasonVal);
+            if (aiLineParts.length) lines.push('', aiLineParts.join(' – '));
+            if (block.placementReason) lines.push(`Placement: ${block.placementReason}`);
+
+            enrichedDesc = lines.join('\n');
+          }
+        } else if (block.routineId) {
+          const r = await admin.firestore().collection('routines').doc(String(block.routineId)).get();
+          if (r.exists) {
+            const rd = r.data() || {};
+            const routineRef = rd.ref || rd.reference || rd.displayId || r.id;
+            const routineLink = buildEntityUrl('routine', r.id, routineRef);
+            eventContext.routineRef = routineRef;
+            eventContext.routineTitle = rd.title || null;
+            eventDeepLink = routineLink;
+            const lines = [];
+            if (enrichedDesc) lines.push(enrichedDesc);
+            lines.push(`Routine: ${routineRef} – ${rd.title || 'Routine'}`);
+            lines.push(`Routine Link: ${routineLink}`);
+            // If routine is linked to a story via storyId, add story link
+            if (block.storyId) {
+              try {
+                const s = await admin.firestore().collection('stories').doc(String(block.storyId)).get();
+                if (s.exists) {
+                  const sd = s.data() || {};
+                  const storyRef = sd.ref || s.id;
+                  const storyLink = buildEntityUrl('story', s.id, storyRef);
+                  eventContext.storyRef = storyRef;
+                  eventContext.storyTitle = sd.title || null;
+                  lines.push(`Story Link: ${storyLink}`);
+                  if (sd.goalId) {
+                    let goalRef = sd.goalId;
+                    try {
+                      const g = await admin.firestore().collection('goals').doc(String(sd.goalId)).get();
+                      if (g.exists) {
+                        const gd = g.data() || {};
+                        goalRef = gd.ref || gd.reference || goalRef;
+                      }
+                    } catch { }
+                    eventContext.goalId = sd.goalId;
+                    eventContext.goalRef = goalRef;
+                    lines.push(`Goal Link: ${buildEntityUrl('goal', sd.goalId, goalRef)}`);
+                  }
+                }
+              } catch { }
+            }
+            // Direct goal link from routine
+            if (rd.goalId && !eventContext.goalId) {
+              let goalRef = rd.goalId;
+              try {
+                const g = await admin.firestore().collection('goals').doc(String(rd.goalId)).get();
+                if (g.exists) {
+                  const gd = g.data() || {};
+                  goalRef = gd.ref || gd.reference || goalRef;
+                }
+              } catch { }
+              eventContext.goalId = rd.goalId;
+              eventContext.goalRef = goalRef;
+              lines.push(`Goal Link: ${buildEntityUrl('goal', rd.goalId, goalRef)}`);
+            }
+            lines.push(`Calendar: ${buildAbsoluteUrl('/calendar')}`);
+            lines.push(`Overview: ${buildAbsoluteUrl('/dashboard')}`);
+            const aiLineParts = [];
+            if (aiScoreVal != null) aiLineParts.push(`AI score ${aiScoreVal}/100`);
+            if (aiReasonVal) aiLineParts.push(aiReasonVal);
+            if (aiLineParts.length) lines.push('', aiLineParts.join(' – '));
+            if (block.placementReason) lines.push(`Placement: ${block.placementReason}`);
+            enrichedDesc = lines.join('\n');
+          }
+        }
+      } catch { }
+      if (!block.storyId && !block.taskId && !block.routineId) {
+        const isChecklistWindow = isChecklistWindowBlock(block);
+        const dayMs = toMillis(block.start);
+        const blockDurationMinutes = Math.max(1, Math.round((endMs - startMs) / 60000));
+        if (isChecklistWindow && dayMs) {
+          const dayStartMs = new Date(new Date(dayMs).setHours(0, 0, 0, 0)).getTime();
+          const dayEndMs = new Date(new Date(dayMs).setHours(23, 59, 59, 999)).getTime();
+          let primaryChecklistBlockId = blockId;
+          try {
+            const dayBlocksSnap = await admin.firestore().collection('calendar_blocks')
+              .where('ownerUid', '==', uid)
+              .where('start', '>=', dayStartMs)
+              .where('start', '<=', dayEndMs)
+              .get();
+            const checklistBlocks = (dayBlocksSnap.docs || [])
+              .map((doc) => ({ id: doc.id, ...(doc.data() || {}) }))
+              .filter((candidate) => isChecklistWindowBlock(candidate))
+              .sort((a, b) => {
+                const startDiff = (toMillis(a.start) || 0) - (toMillis(b.start) || 0);
+                if (startDiff !== 0) return startDiff;
+                return String(a.id || '').localeCompare(String(b.id || ''));
+              });
+            if (checklistBlocks.length > 0) {
+              primaryChecklistBlockId = checklistBlocks[0].id;
+            }
+          } catch (checklistErr) {
+            debugLogs.push({ step: 'checklist_primary_lookup_failed', error: checklistErr?.message || String(checklistErr) });
+          }
+
+          if (primaryChecklistBlockId !== blockId) {
+            debugLogs.push({
+              step: 'checklist_duplicate_skipped',
+              blockId,
+              primaryChecklistBlockId,
+            });
+            return {
+              skipped: true,
+              reason: 'duplicate_checklist_window',
+              primaryChecklistBlockId,
+            };
+          }
+
+          const checklist = await buildChecklistItemsForDay(uid, dayMs, { capacityMinutes: blockDurationMinutes });
+          const checklistUrl = buildAbsoluteUrl(`/chores/checklist?date=${encodeURIComponent(checklist.dayIso)}`);
+          const checklistLines = [
+            `Checklist Link: ${checklistUrl}`,
+          ];
+          if (Number.isFinite(Number(checklist.capacityMinutes))) {
+            checklistLines.push(`Planned effort: ${checklist.plannedMinutes || 0}/${checklist.capacityMinutes} min`);
+          }
+          if (checklist.lines.length) {
+            checklistLines.push('', 'Expected items in this block:');
+            checklist.lines.forEach((line) => checklistLines.push(`- ${line}`));
+          }
+          const checklistBlock = checklistLines.join('\n');
+          enrichedDesc = enrichedDesc ? `${enrichedDesc}\n${checklistBlock}` : checklistBlock;
+          eventDeepLink = checklistUrl;
+        }
+        if (eventDeepLink) {
+          const linkLabel = block.taskId
+            ? 'Task Link'
+            : block.choreId
+              ? 'Chore Link'
+              : block.routineId
+                ? 'Routine Link'
+                : block.habitId
+                  ? 'Habit Link'
+                  : 'Link';
+          const linkLine = `${linkLabel}: ${eventDeepLink}`;
+          enrichedDesc = enrichedDesc ? `${enrichedDesc}\n${linkLine}` : linkLine;
+        }
+        const calendarLine = `Calendar: ${buildAbsoluteUrl('/calendar')}`;
+        enrichedDesc = enrichedDesc
+          ? `${enrichedDesc}\n${calendarLine}`
+          : `${calendarLine}`;
+
+        const aiLineParts = [];
+        if (aiScoreVal != null) aiLineParts.push(`AI score ${aiScoreVal}/100`);
+        if (aiReasonVal) aiLineParts.push(aiReasonVal);
+        if (block.placementReason) aiLineParts.push(`Placement: ${block.placementReason}`);
+        if (aiLineParts.length) {
+          const aiBlock = aiLineParts.join(' – ');
+          enrichedDesc = enrichedDesc ? `${enrichedDesc}\n\n${aiBlock}` : aiBlock;
+        }
+      }
+      } // close else (single-item path)
+      const minimalEvent = {
+        summary: summaryText,
+        start: { dateTime: new Date(startMs).toISOString(), timeZone: 'UTC' },
+        end: { dateTime: new Date(endMs).toISOString(), timeZone: 'UTC' },
+      };
+
+      // Step 1: insert minimal to avoid validation edge-cases (no color, no extended props)
+      let gcalHtmlLink = null;
+      if (!eventId) {
+        const createResponse = await calendar.events.insert({ calendarId: 'primary', resource: minimalEvent });
+        const createdEvent = createResponse?.data || {};
+        eventId = createdEvent.id;
+        gcalHtmlLink = createdEvent.htmlLink || null;
+        debugLogs.push({ step: 'insert_minimal_ok', eventId });
+      } else {
+        gcalHtmlLink = existingEvent?.htmlLink || null;
+        debugLogs.push({ step: 'insert_skipped_existing', eventId });
+      }
+
+      // In test mode, stop after minimal insert so we can validate the API path
+      if (testMode) {
+        await logCalendarIntegration(uid, {
+          action: 'push',
+          direction: action,
+          status: 'test_insert_only',
+          blockId,
+          blockTitle: block?.title || null,
+          eventId,
+          errorContext,
+          debug: debugLogs,
+        });
+        return { success: true, eventId };
+      }
+
+      // Step 2: patch with full metadata (rationale, links, acceptance criteria, ext props)
+      const entityType = block.storyId
+        ? 'story'
+        : block.taskId
+          ? 'task'
+          : block.choreId
+            ? 'chore'
+            : block.routineId
+              ? 'routine'
+              : block.habitId
+                ? 'habit'
+                : 'block';
+      const linkedTaskRefs = eventContext.linkedTaskRefs.filter(Boolean);
+      const privateProps = buildPrivateProps({
+        'bob-block-id': blockId,
+        'bob-entity-type': entityType,
+        'bob-persona': block.persona,
+        'bob-theme': themeLabel,
+        'bob-theme-id': themeIdForBlock,
+        'bob-category': block.category,
+        'theme': themeLabel,
+        'themeId': themeIdForBlock,
+        'theme_id': themeIdForBlock,
+        'category': block.category,
+        'bob-story-id': block.storyId,
+        'bob-story-ref': eventContext.storyRef,
+        'bob-story-title': eventContext.storyTitle,
+        'bob-task-id': block.taskId,
+        'bob-task-ref': eventContext.taskRef,
+        'bob-task-title': eventContext.taskTitle,
+        'bob-goal-id': eventContext.goalId,
+        'bob-goal-ref': eventContext.goalRef,
+        'bob-flexibility': block.flexibility,
+        'bob-rationale': block.rationale || '',
+        'bob-deeplink': eventDeepLink || '',
+        'bob-ai-score': aiScoreVal ?? '',
+        'bob-ai-reason': aiReasonVal || '',
+        'bob-placement': block.placementReason || block.rationale || '',
+        'bob-match-source': block.calendarMatchSource || '',
+        'bob-match-note': block.calendarMatchNote || '',
+        'bob-match-score': block.calendarMatchScore ?? '',
+        'bob-match-confidence': block.calendarMatchConfidence ?? '',
+        'bob-match-tier': block.calendarMatchConfidenceTier || '',
+        'bob-linked-task-refs': linkedTaskRefs.length ? linkedTaskRefs.slice(0, MAX_PRIVATE_TASK_REFS).join(',') : null,
+        'bob-linked-task-count': linkedTaskRefs.length ? linkedTaskRefs.length : null,
+      });
+      const eventSource = isValidUrl(eventDeepLink) ? { title: 'BOB', url: eventDeepLink } : undefined;
+      const fullEvent = {
+        summary: summaryText,
+        description: enrichedDesc || 'BOB calendar block',
+        start: { dateTime: new Date(startMs).toISOString(), timeZone: 'UTC' },
+        end: { dateTime: new Date(endMs).toISOString(), timeZone: 'UTC' },
+        colorId: resolveGoogleEventColorId({ themeId: themeIdForBlock, themeLabel, themes, eventColors: googleEventColors }),
+        source: eventSource,
+        extendedProperties: Object.keys(privateProps).length ? { private: privateProps } : undefined
+      };
+      try {
+        const patchResponse = await calendar.events.patch({ calendarId: 'primary', eventId, resource: fullEvent });
+        if (patchResponse?.data?.htmlLink) gcalHtmlLink = patchResponse.data.htmlLink;
+        debugLogs.push({ step: 'patch_full_ok', eventId });
+      } catch (patchErr) {
+        const patchErrDetail = patchErr?.response?.data || patchErr?.errors || patchErr?.message || String(patchErr);
+        debugLogs.push({ step: 'patch_full_error', eventId, patchErr: patchErrDetail });
+        await logCalendarIntegration(uid, {
+          action: 'push',
+          direction: 'patch',
+          status: 'error',
+          blockId,
+          blockTitle: block?.title || null,
+          eventId,
+          error: patchErrDetail,
+          errorPayload: patchErr?.response?.data || null,
+          errorContext,
+        });
+        console.warn('GCal patch failed after insert', patchErrDetail);
+      }
+
+      const updatePayload = {
+        googleEventId: eventId,
+        status: 'applied',
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+      if (gcalHtmlLink) updatePayload.externalLink = gcalHtmlLink;
+      await admin.firestore().collection('calendar_blocks').doc(blockId).update(updatePayload);
+      await logCalendarIntegration(uid, {
+        action: 'push',
+        direction: action,
+        status: 'success',
+        blockId,
+        blockTitle: block?.title || null,
+        storyId: block.storyId || null,
+        taskId: block.taskId || null,
+        eventId,
+      });
+      return { success: true, eventId };
+    }
+    else if (action === 'update') {
+      if (!block.googleEventId) throw new Error('Block not synced to Google');
+      const themes = await loadThemesForUser(uid);
+      const googleEventColors = await getGoogleEventColors(calendar);
+      const themeLabel = await resolveThemeLabelForBlock(block, uid, themes);
+      const themeIdForBlock = block.theme_id ?? block.themeId ?? null;
+      const activityName = block.title || block.category || 'BOB Block';
+      const refPart = block.storyRef || block.taskRef || '';
+      const summaryParts = [];
+      summaryParts.push(activityName);
+      if (refPart) summaryParts.push(refPart);
+      summaryParts.push(`[${themeLabel}]`);
+      let summaryText = summaryParts.filter(Boolean).join(' - ');
+      const rawRationale2 = block.rationale || '';
+      let enrichedDesc2 = (rawRationale2.includes('\n') || rawRationale2.includes('http')) ? '' : rawRationale2;
+      let aiScoreVal2 = block.aiScore ?? block.aiCriticalityScore ?? null;
+      const blockTopReason2 = block.aiTop3ForDay && block.aiTop3Reason ? block.aiTop3Reason : null;
+      let aiReasonVal2 = block.aiReason || blockTopReason2 || block.aiCriticalityReason || block.dueDateReason || '';
+      let eventDeepLink = resolveBlockDeepLink(block);
+      const eventContext = {
+        storyRef: block.storyRef || null,
+        taskRef: block.taskRef || null,
+        goalId: null,
+        goalRef: null,
+        storyTitle: null,
+        taskTitle: null,
+        linkedTaskRefs: [],
+      };
+      try {
+        if (block.storyId) {
+          const s = await admin.firestore().collection('stories').doc(String(block.storyId)).get();
+          if (s.exists) {
+            const sd = s.data() || {};
+            const storyRef = sd.ref || s.id;
+            const link = buildEntityUrl('story', s.id, storyRef);
+            eventContext.storyRef = storyRef;
+            eventContext.storyTitle = sd.title || null;
+            eventDeepLink = link;
+            if (sd.aiCriticalityScore != null) {
+              aiScoreVal2 = aiScoreVal2 ?? sd.aiCriticalityScore;
+            }
+            if (!aiReasonVal2) {
+              const sdTopReason = sd.aiTop3ForDay && sd.aiTop3Reason ? sd.aiTop3Reason : null;
+              if (sdTopReason || sd.aiCriticalityReason) {
+                aiReasonVal2 = sdTopReason || sd.aiCriticalityReason || '';
+              }
+            }
+            const acArr = Array.isArray(sd.acceptanceCriteria)
+              ? sd.acceptanceCriteria.filter(Boolean).map((x) => String(x)).slice(0, 3)
+              : (Array.isArray(sd.acceptance_criteria) ? sd.acceptance_criteria.filter(Boolean).map((x) => String(x)).slice(0, 3) : []);
+            summaryText = `${sd.title || activityName} [${storyRef}] [${themeLabel}]`;
+            const lines = [];
+            if (enrichedDesc2) lines.push(enrichedDesc2);
+            lines.push(`Story: ${sd.title || 'Story'} – ${storyRef}`);
+            lines.push(`Story Link: ${link}`);
+            if (sd.goalId) {
+              let goalRef = sd.goalId;
+              try {
+                const g = await admin.firestore().collection('goals').doc(String(sd.goalId)).get();
+                if (g.exists) {
+                  const gd = g.data() || {};
+                  goalRef = gd.ref || gd.reference || goalRef;
+                }
+              } catch { }
+              eventContext.goalId = sd.goalId;
+              eventContext.goalRef = goalRef;
+              lines.push(`Goal Link: ${buildEntityUrl('goal', sd.goalId, goalRef)}`);
+            }
+            if (sd.sprintId) lines.push(`Sprint Link: ${buildAbsoluteUrl(`/sprints?sprintId=${sd.sprintId}`)}`);
+            lines.push(`Calendar: ${buildAbsoluteUrl('/calendar')}`);
+            lines.push(`Overview: ${buildAbsoluteUrl('/dashboard')}`);
+
+            const aiLineParts = [];
+            if (aiScoreVal2 != null) aiLineParts.push(`AI score ${aiScoreVal2}/100`);
+            if (aiReasonVal2) aiLineParts.push(aiReasonVal2);
+            if (block.placementReason) aiLineParts.push(`Placement: ${block.placementReason}`);
+            if (aiLineParts.length) lines.push('', aiLineParts.join(' – '));
+
+            const linkedTasks = await fetchLinkedTasksForStory(uid, s.id);
+            eventContext.linkedTaskRefs = linkedTasks.map(resolveTaskRef).filter(Boolean);
+            const taskTable = buildLinkedTasksTable(linkedTasks);
+            if (taskTable.length) {
+              lines.push('', ...taskTable);
+            }
+
+            if (acArr.length) {
+              lines.push('', 'Acceptance criteria:');
+              for (const item of acArr) lines.push(`- ${item}`);
+            }
+            enrichedDesc2 = lines.join('\n');
+          }
+        } else if (block.taskId) {
+          const t = await admin.firestore().collection('tasks').doc(String(block.taskId)).get();
+          if (t.exists) {
+            const td = t.data() || {};
+            const taskRef = resolveTaskRef(td) || t.id;
+            const taskLink = buildEntityUrl('task', t.id, taskRef);
+            eventContext.taskRef = taskRef;
+            eventContext.taskTitle = td.title || null;
+            eventDeepLink = taskLink;
+            if (td.aiCriticalityScore != null) {
+              aiScoreVal2 = aiScoreVal2 ?? td.aiCriticalityScore;
+            }
+            if (!aiReasonVal2) {
+              const tdTopReason = td.aiTop3ForDay && td.aiTop3Reason ? td.aiTop3Reason : null;
+              if (tdTopReason || td.aiCriticalityReason) {
+                aiReasonVal2 = tdTopReason || td.aiCriticalityReason || '';
+              }
+            }
+            summaryText = `${td.title || activityName} [${taskRef}] [${themeLabel}]`;
+            const lines = [];
+            if (enrichedDesc2) lines.push(enrichedDesc2);
+            lines.push(`Task: ${td.title || 'Task'} – ${taskRef}`);
+            lines.push(`Task Link: ${taskLink}`);
+            const storyId = td.storyId || (td.parentType === 'story' ? td.parentId : null);
+            if (storyId) {
+              try {
+                const s = await admin.firestore().collection('stories').doc(String(storyId)).get();
+                if (s.exists) {
+                  const sd = s.data() || {};
+                  const storyRef = sd.ref || s.id;
+                  const storyLink = buildEntityUrl('story', s.id, storyRef);
+                  eventContext.storyRef = storyRef;
+                  eventContext.storyTitle = sd.title || null;
+                  lines.push(`Story Link: ${storyLink}`);
+                  if (sd.goalId) {
+                    let goalRef = sd.goalId;
+                    try {
+                      const g = await admin.firestore().collection('goals').doc(String(sd.goalId)).get();
+                      if (g.exists) {
+                        const gd = g.data() || {};
+                        goalRef = gd.ref || gd.reference || goalRef;
+                      }
+                    } catch { }
+                    eventContext.goalId = sd.goalId;
+                    eventContext.goalRef = goalRef;
+                    lines.push(`Goal Link: ${buildEntityUrl('goal', sd.goalId, goalRef)}`);
+                  }
+                }
+              } catch { }
+            }
+            if (td.goalId && !eventContext.goalId) {
+              let goalRef = td.goalId;
+              try {
+                const g = await admin.firestore().collection('goals').doc(String(td.goalId)).get();
+                if (g.exists) {
+                  const gd = g.data() || {};
+                  goalRef = gd.ref || gd.reference || goalRef;
+                }
+              } catch { }
+              eventContext.goalId = td.goalId;
+              eventContext.goalRef = goalRef;
+              lines.push(`Goal Link: ${buildEntityUrl('goal', td.goalId, goalRef)}`);
+            }
+            if (td.sprintId) lines.push(`Sprint Link: ${buildAbsoluteUrl(`/sprints?sprintId=${td.sprintId}`)}`);
+            lines.push(`Calendar: ${buildAbsoluteUrl('/calendar')}`);
+            lines.push(`Overview: ${buildAbsoluteUrl('/dashboard')}`);
+
+            const aiLineParts = [];
+            if (aiScoreVal2 != null) aiLineParts.push(`AI score ${aiScoreVal2}/100`);
+            if (aiReasonVal2) aiLineParts.push(aiReasonVal2);
+            if (aiLineParts.length) lines.push('', aiLineParts.join(' – '));
+            if (block.placementReason) lines.push(`Placement: ${block.placementReason}`);
+
+            enrichedDesc2 = lines.join('\n');
+          }
+        }
+      } catch { }
+      if (!block.storyId && !block.taskId) {
+        if (eventDeepLink) {
+          const linkLabel = block.taskId
+            ? 'Task Link'
+            : block.choreId
+              ? 'Chore Link'
+              : block.routineId
+                ? 'Routine Link'
+                : block.habitId
+                  ? 'Habit Link'
+                  : 'Link';
+          const linkLine = `${linkLabel}: ${eventDeepLink}`;
+          enrichedDesc2 = enrichedDesc2 ? `${enrichedDesc2}\n${linkLine}` : linkLine;
+        }
+        const calendarLine = `Calendar: ${buildAbsoluteUrl('/calendar')}`;
+        enrichedDesc2 = enrichedDesc2
+          ? `${enrichedDesc2}\n${calendarLine}`
+          : `${calendarLine}`;
+
+        const aiLineParts = [];
+        if (aiScoreVal2 != null) aiLineParts.push(`AI score ${aiScoreVal2}/100`);
+        if (aiReasonVal2) aiLineParts.push(aiReasonVal2);
+        if (block.placementReason) aiLineParts.push(`Placement: ${block.placementReason}`);
+        if (aiLineParts.length) {
+          const aiBlock = aiLineParts.join(' – ');
+          enrichedDesc2 = enrichedDesc2 ? `${enrichedDesc2}\n\n${aiBlock}` : aiBlock;
+        }
+      }
+      const startMs = toMillis(block.start);
+      const endMs = toMillis(block.end);
+      errorContext.startMs = startMs;
+      errorContext.endMs = endMs;
+      errorContext.themeLabel = themeLabel;
+      errorContext.activityName = activityName;
+      if (!startMs || !endMs || startMs >= endMs) {
+        throw new Error('Invalid start/end on block');
+      }
+      const entityType = block.storyId
+        ? 'story'
+        : block.taskId
+          ? 'task'
+          : block.choreId
+            ? 'chore'
+            : block.routineId
+              ? 'routine'
+              : block.habitId
+                ? 'habit'
+                : 'block';
+      const linkedTaskRefs = eventContext.linkedTaskRefs.filter(Boolean);
+      const privateProps = buildPrivateProps({
+        'bob-block-id': blockId,
+        'bob-entity-type': entityType,
+        'bob-persona': block.persona,
+        'bob-theme': themeLabel,
+        'bob-theme-id': themeIdForBlock,
+        'bob-category': block.category,
+        'theme': themeLabel,
+        'themeId': themeIdForBlock,
+        'theme_id': themeIdForBlock,
+        'category': block.category,
+        'bob-story-id': block.storyId,
+        'bob-story-ref': eventContext.storyRef,
+        'bob-story-title': eventContext.storyTitle,
+        'bob-task-id': block.taskId,
+        'bob-task-ref': eventContext.taskRef,
+        'bob-task-title': eventContext.taskTitle,
+        'bob-goal-id': eventContext.goalId,
+        'bob-goal-ref': eventContext.goalRef,
+        'bob-flexibility': block.flexibility,
+        'bob-rationale': block.rationale || '',
+        'bob-deeplink': eventDeepLink || '',
+        'bob-ai-score': aiScoreVal2 ?? '',
+        'bob-ai-reason': aiReasonVal2 || '',
+        'bob-placement': block.placementReason || block.rationale || '',
+        'bob-match-source': block.calendarMatchSource || '',
+        'bob-match-note': block.calendarMatchNote || '',
+        'bob-match-score': block.calendarMatchScore ?? '',
+        'bob-match-confidence': block.calendarMatchConfidence ?? '',
+        'bob-match-tier': block.calendarMatchConfidenceTier || '',
+        'bob-linked-task-refs': linkedTaskRefs.length ? linkedTaskRefs.slice(0, MAX_PRIVATE_TASK_REFS).join(',') : null,
+        'bob-linked-task-count': linkedTaskRefs.length ? linkedTaskRefs.length : null,
+      });
+      const eventSource = isValidUrl(eventDeepLink) ? { title: 'BOB', url: eventDeepLink } : undefined;
+      const updateEvent = {
+        summary: summaryText,
+        description: enrichedDesc2 || 'BOB calendar block',
+        start: { dateTime: new Date(startMs).toISOString(), timeZone: 'UTC' },
+        end: { dateTime: new Date(endMs).toISOString(), timeZone: 'UTC' },
+        colorId: resolveGoogleEventColorId({ themeId: themeIdForBlock, themeLabel, themes, eventColors: googleEventColors }),
+        source: eventSource,
+        extendedProperties: Object.keys(privateProps).length ? { private: privateProps } : undefined
+      };
+      const updateResponse = await calendar.events.update({ calendarId: 'primary', eventId: block.googleEventId, resource: updateEvent });
+      const updatePayload = { updatedAt: admin.firestore.FieldValue.serverTimestamp() };
+      if (updateResponse?.data?.htmlLink) updatePayload.externalLink = updateResponse.data.htmlLink;
+      await admin.firestore().collection('calendar_blocks').doc(blockId).update(updatePayload);
+      eventId = block.googleEventId;
+      await logCalendarIntegration(uid, {
+        action: 'push',
+        direction: action,
+        status: 'success',
+        blockId,
+        blockTitle: block?.title || null,
+        storyId: block.storyId || null,
+        taskId: block.taskId || null,
+        eventId,
+      });
+      return { success: true, eventId };
+    }
+    else if (action === 'delete') {
+      // For delete, blockData must be provided or we can't get googleEventId if doc is gone
+      eventId = block?.googleEventId || null;
+      if (eventId) {
+        try {
+          await calendar.events.delete({ calendarId: 'primary', eventId });
+        } catch (e) {
+          console.warn('GCal delete failed (might be already deleted)', e.message);
+        }
+      }
+      await logCalendarIntegration(uid, {
+        action: 'push',
+        direction: action,
+        status: 'success',
+        blockId,
+        blockTitle: block?.title || null,
+        storyId: block?.storyId || null,
+        taskId: block?.taskId || null,
+        eventId,
+      });
+      return { success: true };
+    }
+    return { success: false };
+  } catch (err) {
+    const errorPayload = err?.response?.data || err?.errors || null;
+    const errorDetail = err?.errors?.[0]?.message
+      || err?.response?.data?.error?.message
+      || (typeof err?.response?.data === 'string' ? err.response.data : null)
+      || err?.message
+      || String(err);
+    const rawBody = err?.response?.data || null;
+    const rawStatus = err?.response?.status || null;
+    let rawText = null;
+    try {
+      if (err?.response?.data) rawText = JSON.stringify(err.response.data);
+      else if (typeof err?.response?.text === 'function') rawText = await err.response.text();
+    } catch (_) { /* ignore */ }
+    await logCalendarIntegration(uid, {
+      action: 'push',
+      direction: action,
+      status: 'error',
+      blockId,
+      blockTitle: block?.title || null,
+      storyId: block?.storyId || null,
+      taskId: block?.taskId || null,
+      eventId,
+      error: errorDetail,
+      errorPayload,
+      errorContext,
+      rawStatus,
+      rawBody,
+      rawText,
+      debug: debugLogs,
+    });
+    throw err;
+  } finally {
+    if (syncLease?.leaseId) {
+      await releaseCalendarSyncLease(blockId, syncLease.leaseId);
+    }
+  }
+}
+
+exports.repairDuplicateCalendarEvents = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'Must be authenticated');
+  }
+  const uid = context.auth.uid;
+  const dryRun = data?.dryRun !== false;
+  const lookbackDays = Math.max(1, Math.min(Number(data?.lookbackDays || 21), 180));
+  const forwardDays = Math.max(1, Math.min(Number(data?.forwardDays || 90), 365));
+  const now = Date.now();
+  const timeMin = new Date(now - (lookbackDays * MS_IN_DAY)).toISOString();
+  const timeMax = new Date(now + (forwardDays * MS_IN_DAY)).toISOString();
+
+  await logCalendarIntegration(uid, {
+    action: 'repair_duplicates',
+    status: 'started',
+    dryRun,
+    timeMin,
+    timeMax,
+  });
+
+  try {
+    const { calendar } = await getCalendarClientForUser(uid);
+    const events = await listAllEvents(calendar, { timeMin, timeMax });
+    const duplicateGroups = new Map();
+    events.forEach((event) => {
+      if (!isConfidentBobCreatedEvent(event)) return;
+      const blockId = getBobBlockIdFromEvent(event);
+      if (!blockId) return;
+      const list = duplicateGroups.get(blockId) || [];
+      list.push(event);
+      duplicateGroups.set(blockId, list);
+    });
+
+    let groupsFound = 0;
+    let eventsDeleted = 0;
+    let blocksRelinked = 0;
+    let skipped = 0;
+    const repairs = [];
+
+    for (const [blockId, group] of duplicateGroups.entries()) {
+      if (!Array.isArray(group) || group.length <= 1) continue;
+      groupsFound += 1;
+      const blockRef = admin.firestore().collection('calendar_blocks').doc(String(blockId));
+      const blockSnap = await blockRef.get().catch(() => null);
+      const block = blockSnap && blockSnap.exists ? (blockSnap.data() || {}) : null;
+      const linkedGoogleEventId = String(block?.googleEventId || '').trim();
+      const sortedGroup = [...group].sort((a, b) => {
+        const aUpdated = Date.parse(String(a?.updated || '')) || 0;
+        const bUpdated = Date.parse(String(b?.updated || '')) || 0;
+        return bUpdated - aUpdated;
+      });
+      const survivor = sortedGroup.find((event) => String(event?.id || '') === linkedGoogleEventId) || sortedGroup[0];
+      if (!survivor?.id) {
+        skipped += group.length;
+        continue;
+      }
+      const duplicates = sortedGroup.filter((event) => String(event?.id || '') !== String(survivor.id));
+      repairs.push({
+        blockId,
+        survivorEventId: survivor.id,
+        duplicateEventIds: duplicates.map((event) => event.id).filter(Boolean),
+      });
+
+      if (!dryRun && blockSnap && blockSnap.exists && linkedGoogleEventId !== String(survivor.id)) {
+        await blockRef.set({
+          googleEventId: survivor.id,
+          externalLink: survivor.htmlLink || block?.externalLink || admin.firestore.FieldValue.delete(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+        blocksRelinked += 1;
+      } else if (dryRun && linkedGoogleEventId !== String(survivor.id)) {
+        blocksRelinked += 1;
+      }
+
+      for (const duplicate of duplicates) {
+        if (!duplicate?.id) {
+          skipped += 1;
+          continue;
+        }
+        if (!dryRun) {
+          await calendar.events.delete({ calendarId: 'primary', eventId: duplicate.id });
+        }
+        eventsDeleted += 1;
+      }
+    }
+
+    await logCalendarIntegration(uid, {
+      action: 'repair_duplicates',
+      status: 'success',
+      dryRun,
+      timeMin,
+      timeMax,
+      groupsFound,
+      eventsDeleted,
+      blocksRelinked,
+      skipped,
+      repairs: repairs.slice(0, 50),
+    });
+
+    return {
+      ok: true,
+      dryRun,
+      groupsFound,
+      eventsDeleted,
+      blocksRelinked,
+      skipped,
+      repairs,
+    };
+  } catch (error) {
+    await logCalendarIntegration(uid, {
+      action: 'repair_duplicates',
+      status: 'error',
+      dryRun,
+      timeMin,
+      timeMax,
+      error: error?.message || String(error),
+    });
+    throw new functions.https.HttpsError('internal', error?.message || 'Failed to repair duplicate calendar events');
+  }
+});
+
+exports._syncBlockToGoogle = syncBlockToGoogle;
+exports._evaluateGoogleSyncPolicyForBlock = evaluateGoogleSyncPolicyForBlock;
+
+exports.syncCalendarBlock = functions.https.onCall(async (data, context) => {
+  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Must be authenticated');
+  const { blockId, action } = data;
+  const uid = context.auth.uid;
+  try {
+    // For delete via onCall, we fetch the block first to get googleEventId
+    let blockData = null;
+    if (action === 'delete') {
+      const snap = await admin.firestore().collection('calendar_blocks').doc(blockId).get();
+      if (snap.exists) blockData = snap.data();
+    }
+    const result = await syncBlockToGoogle(blockId, action, uid, blockData);
+
+    // If delete action via onCall, we also update the block status in Firestore
+    if (action === 'delete') {
+      await admin.firestore().collection('calendar_blocks').doc(blockId).update({
+        status: 'superseded',
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+    }
+    return result;
+  } catch (error) {
+    console.error('Error syncing calendar block:', error);
+    throw new functions.https.HttpsError('internal', error.message || 'Failed to sync calendar block');
+  }
+});
+
+// Trigger to auto-sync changes to Google Calendar
+exports.onCalendarBlockWrite = functions.region('europe-west2').firestore.document('calendar_blocks/{blockId}').onWrite(async (change, context) => {
+  const blockId = context.params.blockId;
+  const before = change.before.exists ? change.before.data() : null;
+  const after = change.after.exists ? change.after.data() : null;
+
+  if (!after) {
+    // Delete
+    if (before && before.googleEventId) {
+      // Never delete Google events we didn't originate (imported busy blocks etc)
+      const source = String(before.source || before.entry_method || '').toLowerCase();
+      const isExternal = source === 'gcal' || source === 'google_calendar';
+      if (isExternal) {
+        await logCalendarIntegration(before.ownerUid, {
+          action: 'push',
+          direction: 'delete',
+          status: 'skipped',
+          blockId,
+          blockTitle: before.title || null,
+          eventId: before.googleEventId,
+          reason: 'skip_delete_external_gcal_block',
+        });
+        return;
+      }
+      await syncBlockToGoogle(blockId, 'delete', before.ownerUid, before);
+    }
+    return;
+  }
+
+  const uid = after.ownerUid;
+  if (!uid) return;
+
+  const beforeSync = before ? before.syncToGoogle !== false : true;
+  const afterSync = after.syncToGoogle !== false;
+  if (!afterSync) {
+    if (beforeSync && before && before.googleEventId) {
+      const source = String(before.source || before.entry_method || '').toLowerCase();
+      const isExternal = source === 'gcal' || source === 'google_calendar';
+      if (!isExternal) {
+        await syncBlockToGoogle(blockId, 'delete', before.ownerUid || uid, before);
+      }
+    }
+    return;
+  }
+
+  // Create
+  if (!before) {
+    // If created with googleEventId, it's likely from syncFromGoogleCalendar, so skip
+    if (after.googleEventId) return;
+    await syncBlockToGoogle(blockId, 'create', uid, after);
+    return;
+  }
+
+  // Update
+  // Check if relevant fields changed
+  const relevantFields = [
+    'start',
+    'end',
+    'title',
+    'category',
+    'theme',
+    'theme_id',
+    'rationale',
+    'storyId',
+    'storyRef',
+    'taskId',
+    'taskRef',
+    'deepLink',
+    'aiScore',
+    'aiCriticalityScore',
+    'aiReason',
+    'aiCriticalityReason',
+    'aiTop3Reason',
+    'placementReason',
+  ];
+  const hasChanges = relevantFields.some(f => JSON.stringify(before[f]) !== JSON.stringify(after[f]));
+
+  // If googleEventId changed, it's a sync update, skip
+  if (before.googleEventId !== after.googleEventId) return;
+
+  if (hasChanges || !after.googleEventId) {
+    if (after.googleEventId) {
+      await syncBlockToGoogle(blockId, 'update', uid, after);
+    } else {
+      // If it doesn't have googleEventId yet, treat as create
+      await syncBlockToGoogle(blockId, 'create', uid, after);
+    }
+  }
+});
+
+async function pullGoogleEventsForUser(uid, { windowStart, windowEnd }) {
+  const db = admin.firestore();
+  const timeMin = windowStart.toISOString();
+  const timeMax = windowEnd.toISOString();
+  await logCalendarIntegration(uid, { action: 'pull', status: 'started', windowStart: timeMin, windowEnd: timeMax });
+
+  try {
+    const { calendar } = await getCalendarClientForUser(uid);
+    const events = await listAllEvents(calendar, { timeMin, timeMax });
+    const ownedByEventId = new Map();
+    const windowStartMs = windowStart.getTime();
+    const windowEndMs = windowEnd.getTime();
+    const ownedSnap = await db.collection('calendar_blocks')
+      .where('ownerUid', '==', uid)
+      .where('start', '>=', windowStartMs)
+      .where('start', '<=', windowEndMs)
+      .get()
+      .catch(() => ({ docs: [] }));
+    ownedSnap.docs.forEach((doc) => {
+      const data = doc.data() || {};
+      const eventId = data.googleEventId;
+      if (!eventId) return;
+      const source = String(data.source || data.entry_method || '').toLowerCase();
+      if (source === 'gcal' || source === 'google_calendar') return;
+      ownedByEventId.set(eventId, { id: doc.id, data });
+    });
+    const syncResults = [];
+    const counts = { processed: events.length, created: 0, updated: 0, deleted: 0, skipped: 0 };
+
+    for (const event of events) {
+      try {
+        const priv = event.extendedProperties?.private || {};
+        const bobBlockId = priv['bob-block-id'] || priv['bobBlockId'] || null;
+        const startMs = parseEventTime(event.start);
+        const endMs = parseEventTime(event.end);
+        if (!startMs || !endMs) {
+          counts.skipped += 1;
+          continue;
+        }
+        const calendarId = event.organizer?.email || event.creator?.email || 'primary';
+        const updatedMs = toMillis(event.updated || event.created || Date.now());
+
+        if (bobBlockId) {
+          const ref = db.collection('calendar_blocks').doc(bobBlockId);
+          const snap = await ref.get();
+          if (snap.exists) {
+            const data = snap.data() || {};
+            const blockUpdated = toMillis(data.updatedAt || data.serverUpdatedAt);
+            const needsUpdate = updatedMs > blockUpdated + 500
+              || data.start !== startMs
+              || data.end !== endMs
+              || data.googleEventId !== event.id;
+            if (needsUpdate) {
+              // Don't write event.description back to rationale for BOB-owned blocks
+              // to prevent enrichment feedback loop (push enriches → pull stores → push re-enriches)
+              await ref.set({
+                start: startMs,
+                end: endMs,
+                googleEventId: event.id,
+                calendarId,
+                status: data.status || 'synced',
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              }, { merge: true });
+              counts.updated += 1;
+              syncResults.push({ blockId: bobBlockId, action: 'updated_from_gcal' });
+            } else {
+              counts.skipped += 1;
+            }
+          } else {
+            // Block deleted locally; do NOT delete user Google events. Record and skip.
+            counts.skipped += 1;
+            syncResults.push({ eventId: event.id, action: 'orphan_event_preserved' });
+            await logCalendarIntegration(uid, {
+              action: 'pull',
+              status: 'skipped',
+              eventId: event.id,
+              blockId: bobBlockId,
+              message: 'Orphaned Google event preserved (no matching block)',
+            });
+          }
+          continue;
+        }
+
+        const owned = ownedByEventId.get(event.id);
+        if (owned) {
+          const ref = db.collection('calendar_blocks').doc(owned.id);
+          const data = owned.data || {};
+          const blockUpdated = toMillis(data.updatedAt || data.serverUpdatedAt);
+          const needsUpdate = updatedMs > blockUpdated + 500
+            || data.start !== startMs
+            || data.end !== endMs
+            || data.googleEventId !== event.id;
+          if (needsUpdate) {
+            // Don't write event.description back to rationale for BOB-owned blocks
+            // to prevent enrichment feedback loop
+            await ref.set({
+              start: startMs,
+              end: endMs,
+              googleEventId: event.id,
+              calendarId,
+              status: data.status || 'synced',
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            }, { merge: true });
+            counts.updated += 1;
+            syncResults.push({ blockId: owned.id, action: 'linked_existing_block' });
+          } else {
+            counts.skipped += 1;
+          }
+          continue;
+        }
+
+        // External Google event -> mirror into calendar_blocks to support busy windows
+        const blockId = `gcal_${uid}_${event.id}`;
+        const ref = db.collection('calendar_blocks').doc(blockId);
+        const snap = await ref.get();
+        const payload = {
+          ownerUid: uid,
+          title: event.summary || 'Calendar event',
+          start: startMs,
+          end: endMs,
+          googleEventId: event.id,
+          calendarId,
+          source: 'gcal',
+          entry_method: 'google_calendar',
+          status: 'imported',
+          persona: priv['bob-persona'] || null,
+          theme: priv['bob-theme'] || null,
+          theme_id: priv['bob-theme-id'] || null,
+          storyId: priv['bob-story-id'] || null,
+          taskId: priv['bob-task-id'] || null,
+          rationale: event.description || null,
+          location: event.location || null,
+          allDay: !!event.start?.date,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        };
+
+        if (!snap.exists) {
+          await ref.set({ ...payload, createdAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+          counts.created += 1;
+        } else {
+          const existing = snap.data() || {};
+          const unchanged = existing.start === startMs
+            && existing.end === endMs
+            && existing.title === payload.title
+            && existing.googleEventId === payload.googleEventId
+            && (existing.rationale || null) === (payload.rationale || null);
+          if (unchanged) {
+            counts.skipped += 1;
+          } else {
+            await ref.set(payload, { merge: true });
+            counts.updated += 1;
+          }
+        }
+      } catch (err) {
+        console.warn('[calendarSync] failed to process event', err?.message || err);
+        counts.skipped += 1;
+      }
+    }
+
+    if (syncResults.length > 0) {
+      try {
+        const { planSchedule } = require('./scheduler/engine');
+        const today = new Date();
+        const ws = new Date(today);
+        const we = new Date(today);
+        we.setDate(today.getDate() + 7);
+        await planSchedule({
+          db,
+          userId: uid,
+          windowStart: ws,
+          windowEnd: we,
+          busy: [],
+        });
+      } catch (err) {
+        console.warn('[calendarSync] replan after pull failed', err?.message || err);
+      }
+    }
+
+    await logCalendarIntegration(uid, { action: 'pull', status: 'success', windowStart: timeMin, windowEnd: timeMax, counts, syncResults });
+    return { counts, syncResults };
+  } catch (error) {
+    await logCalendarIntegration(uid, { action: 'pull', status: 'error', windowStart: timeMin, windowEnd: timeMax, error: error?.message || String(error) });
+    throw error;
+  }
+}
+
+async function runLightCalendarReplan(uid, options = {}) {
+  const days = Math.max(1, Math.min(Number(options.days || 7), 14));
+  let replanFn = null;
+  try {
+    const orchestration = require('./nightlyOrchestration');
+    replanFn = orchestration?._replanExistingBlocksForUser;
+  } catch (err) {
+    console.warn('[calendarSync] failed to load replan helper', err?.message || err);
+    return null;
+  }
+  if (typeof replanFn !== 'function') return null;
+
+  const db = admin.firestore();
+  const profileSnap = await db.collection('profiles').doc(uid).get().catch(() => null);
+  const profile = profileSnap && profileSnap.exists ? (profileSnap.data() || {}) : {};
+  const windowStart = new Date();
+  windowStart.setHours(0, 0, 0, 0);
+  const windowEnd = new Date(windowStart);
+  windowEnd.setDate(windowEnd.getDate() + days);
+  windowEnd.setHours(23, 59, 59, 999);
+
+  let themeAllocations = [];
+  try {
+    const allocDoc = await db.collection('theme_allocations').doc(uid).get();
+    if (allocDoc.exists) themeAllocations = allocDoc.data()?.allocations || [];
+  } catch { /* ignore */ }
+
+  const blocksSnap = await db.collection('calendar_blocks')
+    .where('ownerUid', '==', uid)
+    .where('start', '>=', windowStart.getTime())
+    .where('start', '<=', windowEnd.getTime())
+    .get()
+    .catch(() => ({ docs: [] }));
+  const existingBlocks = blocksSnap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+
+  try {
+    const result = await replanFn({
+      db,
+      userId: uid,
+      profile,
+      windowStart,
+      windowEnd,
+      themeAllocations,
+      existingBlocks,
+      reason: options.reason || `calendar_pull_${options.trigger || 'sync'}`,
+      days,
+    });
+    await logCalendarIntegration(uid, {
+      action: 'replan',
+      status: 'success',
+      trigger: options.trigger || 'sync',
+      counts: {
+        rescheduled: result?.rescheduled || 0,
+        blocked: result?.blocked || 0,
+        totalMovable: result?.totalMovable || 0,
+      },
+      windowStart: windowStart.toISOString(),
+      windowEnd: windowEnd.toISOString(),
+    });
+    return result;
+  } catch (err) {
+    console.warn('[calendarSync] replan after pull failed', err?.message || err);
+    await logCalendarIntegration(uid, {
+      action: 'replan',
+      status: 'error',
+      trigger: options.trigger || 'sync',
+      error: err?.message || String(err),
+      windowStart: windowStart.toISOString(),
+      windowEnd: windowEnd.toISOString(),
+    });
+    return null;
+  }
+}
+
+async function pushPendingBlocks(uid, limit = 30) {
+  // Primary fetch: explicit null googleEventId
+  const snap = await admin.firestore()
+    .collection('calendar_blocks')
+    .where('ownerUid', '==', uid)
+    .where('googleEventId', '==', null)
+    .limit(limit)
+    .get();
+
+  // Fallback: capture docs missing googleEventId (field not set) by filtering client-side
+  let docs = [...snap.docs];
+  if (docs.length < limit) {
+    const fallback = await admin.firestore()
+      .collection('calendar_blocks')
+      .where('ownerUid', '==', uid)
+      .where('aiGenerated', '==', true)
+      .limit(limit)
+      .get()
+      .catch(() => ({ docs: [] }));
+    const seen = new Set(docs.map((d) => d.id));
+    fallback.docs.forEach((d) => {
+      const data = d.data() || {};
+      if (seen.has(d.id)) return;
+      if (data.googleEventId) return;
+      docs.push(d);
+      seen.add(d.id);
+    });
+  }
+
+  let pushed = 0;
+  let errors = 0;
+  let skipped = 0;
+  const pushWindowStart = Date.now() - (GCAL_PAST_DAYS * MS_IN_DAY);
+  const activeSprintId = await getActiveSprintId(uid);
+  const candidates = docs.slice(0, limit);
+  await logCalendarIntegration(uid, {
+    action: 'push',
+    direction: 'scan',
+    status: 'started',
+    counts: { primary: snap.size, fallback: docs.length, limit },
+    sample: candidates.slice(0, 5).map((d) => {
+      const data = d.data() || {};
+      return { id: d.id, title: data.title || data.category || null, status: data.status || null };
+    }),
+  });
+  if (candidates.length === 0) {
+    await logCalendarIntegration(uid, {
+      action: 'push',
+      direction: 'scan',
+      status: 'completed',
+      counts: { totalPending: 0, pushed: 0, skipped: 0, errors: 0 },
+    });
+    return { pushed: 0, errors: 0, skipped: 0, totalPending: 0 };
+  }
+
+  for (const doc of candidates) {
+    const data = doc.data() || {};
+    if (data.source === 'gcal') continue;
+    const start = toMillis(data.start);
+    const end = toMillis(data.end);
+    const invalidTime = !start || !end || start >= end;
+    if (invalidTime) {
+      skipped += 1;
+      await logCalendarIntegration(uid, {
+        action: 'push',
+        direction: 'skip',
+        status: 'skipped',
+        blockId: doc.id,
+        blockTitle: data.title || null,
+        reason: 'invalid_time_window',
+        start,
+        end,
+      });
+      continue;
+    }
+    const status = String(data.status || '').toLowerCase();
+    const allowedStatuses = new Set(['planned', 'applied', 'confirmed', 'synced']);
+    if (status && !allowedStatuses.has(status)) {
+      skipped += 1;
+      await logCalendarIntegration(uid, {
+        action: 'push',
+        direction: 'skip',
+        status: 'skipped',
+        blockId: doc.id,
+        blockTitle: data.title || null,
+        reason: 'status_not_planned',
+        statusValue: status,
+      });
+      continue;
+    }
+    const isRoutine = ALLOWED_ROUTINE_TYPES.has(String(data.entityType || '').toLowerCase());
+    if (!isRoutine && data.sprintId && activeSprintId && data.sprintId !== activeSprintId) {
+      skipped += 1;
+      await logCalendarIntegration(uid, {
+        action: 'push',
+        direction: 'skip',
+        status: 'skipped',
+        blockId: doc.id,
+        blockTitle: data.title || null,
+        reason: 'out_of_active_sprint',
+        sprintId: data.sprintId,
+        activeSprintId,
+      });
+      continue;
+    }
+    if (start < pushWindowStart) {
+      skipped += 1;
+      await logCalendarIntegration(uid, {
+        action: 'push',
+        direction: 'skip',
+        status: 'skipped',
+        blockId: doc.id,
+        blockTitle: data.title || null,
+        reason: 'out_of_window',
+        start,
+        end,
+      });
+      continue;
+    }
+    try {
+      await syncBlockToGoogle(doc.id, 'create', uid, data);
+      pushed += 1;
+    } catch (err) {
+      errors += 1;
+      console.warn('[calendarSync] pushPendingBlocks failed', err?.message || err);
+      await logCalendarIntegration(uid, {
+        action: 'push',
+        direction: 'create',
+        status: 'error',
+        blockId: doc.id,
+        blockTitle: data.title || null,
+        error: err?.message || String(err),
+        errorPayload: err?.response?.data || err?.errors || null,
+        rawStatus: err?.response?.status || null,
+        rawBody: err?.response?.data || null,
+        start: start,
+        end: end,
+        statusValue: status,
+        persona: data.persona || null,
+        theme: data.theme || data.theme_id || null,
+      });
+    }
+  }
+  await logCalendarIntegration(uid, {
+    action: 'push',
+    direction: 'scan',
+    status: 'completed',
+    counts: { totalPending: candidates.length, pushed, skipped, errors },
+  });
+  return { pushed, errors, skipped, totalPending: candidates.length };
+}
+
+async function syncUserCalendar(uid, options = {}) {
+  const windowStart = options.windowStart || new Date(Date.now() - GCAL_PAST_DAYS * MS_IN_DAY);
+  const windowEnd = options.windowEnd || new Date(Date.now() + GCAL_FUTURE_DAYS * MS_IN_DAY);
+  const pull = await pullGoogleEventsForUser(uid, { windowStart, windowEnd });
+  let push = { pushed: 0, errors: 0, totalPending: 0 };
+  if (!options.skipPush) {
+    push = await pushPendingBlocks(uid, options.pushLimit || 30);
+    await logCalendarIntegration(uid, {
+      action: 'push',
+      status: 'completed',
+      counts: push,
+      windowStart: windowStart.toISOString(),
+      windowEnd: windowEnd.toISOString(),
+      source: options.trigger || 'sync',
+    });
+  }
+  let replan = null;
+  const shouldReplan = options.replanAlways || (pull?.syncResults?.length > 0);
+  if (shouldReplan) {
+    replan = await runLightCalendarReplan(uid, {
+      trigger: options.trigger,
+      reason: options.replanReason,
+      days: options.replanDays || 7,
+    });
+  }
+  return { pull, push, replan };
+}
+
+// Sync Google Calendar changes back to Firestore (pull-only)
+exports.syncFromGoogleCalendar = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'Must be authenticated');
+  }
+
+  const uid = context.auth.uid;
+  const windowStart = new Date(Date.now() - GCAL_PAST_DAYS * MS_IN_DAY);
+  const windowEnd = new Date(Date.now() + GCAL_FUTURE_DAYS * MS_IN_DAY);
+
+  try {
+    const result = await pullGoogleEventsForUser(uid, { windowStart, windowEnd });
+    return { success: true, ...result };
+  } catch (error) {
+    console.error('Error syncing from Google Calendar:', error);
+    throw new functions.https.HttpsError('internal', 'Failed to sync from Google Calendar');
+  }
+});
+
+// Manual "sync now" callable (push + pull)
+exports.syncCalendarNow = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'Must be authenticated');
+  }
+  const uid = context.auth.uid;
+  const windowStart = new Date(Date.now() - GCAL_PAST_DAYS * MS_IN_DAY);
+  const windowEnd = new Date(Date.now() + GCAL_FUTURE_DAYS * MS_IN_DAY);
+  try {
+    const result = await syncUserCalendar(uid, { windowStart, windowEnd, trigger: 'manual' });
+    return { success: true, ...result };
+  } catch (error) {
+    console.error('Error in syncCalendarNow:', error);
+    await logCalendarIntegration(uid, {
+      action: 'sync_now',
+      status: 'error',
+      windowStart: windowStart.toISOString(),
+      windowEnd: windowEnd.toISOString(),
+      error: error?.message || String(error),
+    });
+    throw new functions.https.HttpsError('internal', error.message || 'Failed to sync calendar');
+  }
+});
+
+// Helper function to get Google Calendar color for themes
+function getColorForTheme(theme, themes, eventColors) {
+  return resolveGoogleEventColorId({ themeLabel: theme, themes, eventColors });
+}
+
+// Scheduled function to sync calendar blocks (runs every hour)
+exports.scheduledCalendarSync = functions.pubsub.schedule('every 1 hours').onRun(async () => {
+  console.log('Running scheduled calendar sync...');
+
+  try {
+    // Get all users who have Google Calendar connected
+    const db = admin.firestore();
+    const usersSnapshot = await db.collection('users')
+      .where('googleCalendarTokens', '!=', null)
+      .get();
+    // Legacy tokens fallback
+    const legacySnapshot = await db.collection('tokens')
+      .where('googleCalendarTokens', '!=', null)
+      .get()
+      .catch(() => ({ docs: [] }));
+    const legacyRefreshSnapshot = await db.collection('tokens')
+      .where('refresh_token', '!=', null)
+      .get()
+      .catch(() => ({ docs: [] }));
+
+    const uids = new Set();
+    usersSnapshot.docs.forEach((doc) => uids.add(doc.id));
+    legacySnapshot.docs.forEach((doc) => uids.add(doc.id));
+    legacyRefreshSnapshot.docs.forEach((doc) => uids.add(doc.id));
+
+    for (const uid of uids) {
+      try {
+        await syncUserCalendar(uid, { trigger: 'scheduled', replanAlways: true });
+      } catch (err) {
+        console.error(`[scheduledCalendarSync] failed for ${uid}`, err?.message || err);
+        await logCalendarIntegration(uid, { action: 'scheduled_sync', status: 'error', error: err?.message || String(err) });
+      }
+    }
+
+    console.log(`Completed scheduled sync for ${uids.size} users`);
+  } catch (error) {
+    console.error('Error in scheduled calendar sync:', error);
+  }
+});
+
+/**
+ * gcalLinkUnlinkedEvents
+ *
+ * Scans calendar_blocks that have a googleEventId but no storyId/taskId and
+ * fuzzy-matches their title against the user's story titles. On a high-confidence
+ * match it writes `linkedStoryId`, `plannedForDate` back to the block and sets
+ * `gcalLinked: true` / increments `gcalEventCount` on the story.
+ *
+ * Supports dryRun: true to preview matches without writing.
+ */
+exports.gcalLinkUnlinkedEvents = functions.https.onCall(async (data, context) => {
+  const uid = context.auth?.uid;
+  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Authentication required');
+
+  const db = admin.firestore();
+  const dryRun = data?.dryRun === true;
+
+  const [blocksSnap, storiesSnap] = await Promise.all([
+    db.collection('calendar_blocks').where('ownerUid', '==', uid).get(),
+    db.collection('stories').where('ownerUid', '==', uid).get(),
+  ]);
+
+  const unlinkedBlocks = blocksSnap.docs.filter((d) => {
+    const b = d.data();
+    return b.googleEventId && !b.storyId && !b.taskId && !b.linkedStoryId;
+  });
+
+  if (unlinkedBlocks.length === 0) return { linked: 0, reviewed: 0, dryRun };
+
+  const stories = storiesSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  if (stories.length === 0) return { linked: 0, reviewed: unlinkedBlocks.length, dryRun };
+
+  function keywordScore(a, b) {
+    const aWords = String(a || '').toLowerCase().split(/\s+/).filter((w) => w.length > 3);
+    const bWords = String(b || '').toLowerCase().split(/\s+/).filter((w) => w.length > 3);
+    if (!aWords.length || !bWords.length) return 0;
+    const overlap = aWords.filter((w) => bWords.includes(w)).length;
+    return overlap / Math.max(aWords.length, bWords.length);
+  }
+
+  function toDateIso(start) {
+    if (!start) return null;
+    if (typeof start === 'number') return new Date(start).toISOString().slice(0, 10);
+    if (typeof start === 'string') return start.slice(0, 10);
+    if (typeof start.toDate === 'function') return start.toDate().toISOString().slice(0, 10);
+    if (start.seconds) return new Date(start.seconds * 1000).toISOString().slice(0, 10);
+    return null;
+  }
+
+  const LINK_THRESHOLD = 0.4;
+  const batch = db.batch();
+  let linked = 0;
+  const links = [];
+
+  for (const blockDoc of unlinkedBlocks) {
+    const block = blockDoc.data();
+    const blockTitle = String(block.title || block.summary || '').trim();
+    if (!blockTitle) continue;
+
+    let bestScore = 0;
+    let bestStory = null;
+    for (const story of stories) {
+      const score = keywordScore(blockTitle, story.title || '');
+      if (score > bestScore) {
+        bestScore = score;
+        bestStory = story;
+      }
+    }
+
+    if (bestScore >= LINK_THRESHOLD && bestStory) {
+      const confidence = Math.max(0, Math.min(100, Math.round(bestScore * 100)));
+      const confidenceTier = confidence >= 75 ? 'high' : confidence >= 50 ? 'medium' : 'low';
+      const plannedForDate = toDateIso(block.start);
+      links.push({
+        blockId: blockDoc.id,
+        blockTitle,
+        storyId: bestStory.id,
+        storyTitle: bestStory.title || '',
+        score: Math.round(bestScore * 100) / 100,
+        confidence,
+        confidenceTier,
+        plannedForDate,
+      });
+
+      if (!dryRun) {
+        const blockUpdate = {
+          storyId: bestStory.id,
+          linkedStoryId: bestStory.id,
+          storyRef: bestStory.ref || null,
+          goalId: bestStory.goalId || admin.firestore.FieldValue.delete(),
+          calendarMatchSource: 'matched_user_created_calendar_event',
+          calendarMatchNote: 'Matched user created calendar event',
+          calendarMatchScore: Math.round(bestScore * 1000) / 1000,
+          calendarMatchConfidence: confidence,
+          calendarMatchConfidenceTier: confidenceTier,
+          gcalLinkedAt: admin.firestore.FieldValue.serverTimestamp(),
+        };
+        if (plannedForDate) {
+          blockUpdate.plannedForDate = plannedForDate;
+        }
+        batch.update(blockDoc.ref, blockUpdate);
+
+        const storyRef = db.collection('stories').doc(bestStory.id);
+        batch.set(
+          storyRef,
+          { gcalLinked: true, gcalEventCount: admin.firestore.FieldValue.increment(1) },
+          { merge: true }
+        );
+      }
+      linked++;
+    }
+  }
+
+  if (!dryRun && linked > 0) {
+    await batch.commit();
+    console.log(`[gcalLink] linked ${linked} events for uid=${uid}`);
+  }
+
+  return { linked, reviewed: unlinkedBlocks.length, dryRun, links };
+});
+
+/**
+ * onStoryCalendarAutoLink
+ *
+ * Automatically links newly created/renamed stories to existing Google-synced
+ * calendar blocks that are still unlinked for the same user.
+ */
+exports.onStoryCalendarAutoLink = functions.firestore.document('stories/{storyId}').onWrite(async (change, context) => {
+  const before = change.before.exists ? (change.before.data() || {}) : null;
+  const after = change.after.exists ? (change.after.data() || {}) : null;
+  if (!after) return;
+
+  const storyId = context.params.storyId;
+  const uid = String(after.ownerUid || '').trim();
+  if (!uid) return;
+
+  const beforeTitle = String(before?.title || '').trim().toLowerCase();
+  const afterTitle = String(after.title || '').trim();
+  if (!afterTitle) return;
+
+  // Only run on create or title changes to avoid repeated scans on unrelated updates.
+  if (before && beforeTitle === afterTitle.toLowerCase()) return;
+
+  const db = admin.firestore();
+  const blocksSnap = await db.collection('calendar_blocks')
+    .where('ownerUid', '==', uid)
+    .limit(500)
+    .get();
+
+  const candidateBlocks = blocksSnap.docs.filter((docSnap) => {
+    const block = docSnap.data() || {};
+    return !!block.googleEventId && !block.storyId && !block.taskId && !block.linkedStoryId;
+  });
+
+  if (!candidateBlocks.length) return;
+
+  const keywordScore = (a, b) => {
+    const aWords = String(a || '').toLowerCase().split(/\s+/).filter((w) => w.length > 3);
+    const bWords = String(b || '').toLowerCase().split(/\s+/).filter((w) => w.length > 3);
+    if (!aWords.length || !bWords.length) return 0;
+    const overlap = aWords.filter((w) => bWords.includes(w)).length;
+    return overlap / Math.max(aWords.length, bWords.length);
+  };
+
+  const toDateIso = (start) => {
+    if (!start) return null;
+    if (typeof start === 'number') return new Date(start).toISOString().slice(0, 10);
+    if (typeof start === 'string') return start.slice(0, 10);
+    if (typeof start.toDate === 'function') return start.toDate().toISOString().slice(0, 10);
+    if (start.seconds) return new Date(start.seconds * 1000).toISOString().slice(0, 10);
+    return null;
+  };
+
+  const LINK_THRESHOLD = 0.55;
+  const updates = [];
+  for (const blockDoc of candidateBlocks) {
+    const block = blockDoc.data() || {};
+    const blockTitle = String(block.title || block.summary || '').trim();
+    if (!blockTitle) continue;
+    const score = keywordScore(blockTitle, afterTitle);
+    if (score < LINK_THRESHOLD) continue;
+
+    const plannedForDate = toDateIso(block.start);
+    const confidence = Math.max(0, Math.min(100, Math.round(score * 100)));
+    updates.push({
+      ref: blockDoc.ref,
+      patch: {
+        storyId,
+        linkedStoryId: storyId,
+        storyRef: after.ref || null,
+        goalId: after.goalId || admin.firestore.FieldValue.delete(),
+        calendarMatchSource: 'matched_story_created_event',
+        calendarMatchNote: 'Auto-linked from story create/update',
+        calendarMatchScore: Math.round(score * 1000) / 1000,
+        calendarMatchConfidence: confidence,
+        calendarMatchConfidenceTier: confidence >= 75 ? 'high' : confidence >= 50 ? 'medium' : 'low',
+        gcalLinkedAt: admin.firestore.FieldValue.serverTimestamp(),
+        ...(plannedForDate ? { plannedForDate } : {}),
+      },
+    });
+  }
+
+  if (!updates.length) return;
+
+  const batch = db.batch();
+  updates.slice(0, 8).forEach((entry) => {
+    batch.set(entry.ref, entry.patch, { merge: true });
+  });
+  batch.set(
+    db.collection('stories').doc(storyId),
+    { gcalLinked: true, gcalEventCount: admin.firestore.FieldValue.increment(Math.min(updates.length, 8)) },
+    { merge: true },
+  );
+  await batch.commit();
+});
+
+/**
+ * gcalOverrideEventLink
+ *
+ * Manual override endpoint for correcting/clearing links between a Google event
+ * and a calendar_block. Supports resolving by `blockId` or `eventId`.
+ */
+exports.gcalOverrideEventLink = functions.https.onCall(async (data, context) => {
+  const uid = context.auth?.uid;
+  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Authentication required');
+
+  const db = admin.firestore();
+  const blockId = String(data?.blockId || '').trim();
+  const eventId = String(data?.eventId || '').trim();
+  if (!blockId && !eventId) {
+    throw new functions.https.HttpsError('invalid-argument', 'Either blockId or eventId is required');
+  }
+
+  const desiredStoryId = data?.storyId ? String(data.storyId).trim() : '';
+  const desiredTaskId = data?.taskId ? String(data.taskId).trim() : '';
+  const desiredGoalId = data?.goalId ? String(data.goalId).trim() : '';
+  const note = String(data?.note || '').trim();
+
+  if (desiredStoryId && desiredTaskId) {
+    throw new functions.https.HttpsError('invalid-argument', 'Provide storyId or taskId, not both');
+  }
+
+  let blockSnap = null;
+  if (blockId) {
+    blockSnap = await db.collection('calendar_blocks').doc(blockId).get();
+    if (!blockSnap.exists) {
+      throw new functions.https.HttpsError('not-found', 'Calendar block not found');
+    }
+  } else {
+    const q = await db.collection('calendar_blocks')
+      .where('ownerUid', '==', uid)
+      .where('googleEventId', '==', eventId)
+      .limit(1)
+      .get();
+    if (q.empty) {
+      throw new functions.https.HttpsError('not-found', 'No calendar block found for eventId');
+    }
+    blockSnap = q.docs[0];
+  }
+
+  const block = blockSnap.data() || {};
+  if (String(block.ownerUid || '') !== uid) {
+    throw new functions.https.HttpsError('permission-denied', 'Not allowed to modify this calendar block');
+  }
+
+  let resolvedGoalId = desiredGoalId || '';
+
+  if (desiredStoryId) {
+    const storySnap = await db.collection('stories').doc(desiredStoryId).get();
+    if (!storySnap.exists) {
+      throw new functions.https.HttpsError('not-found', 'Story not found');
+    }
+    const story = storySnap.data() || {};
+    if (story.ownerUid && story.ownerUid !== uid) {
+      throw new functions.https.HttpsError('permission-denied', 'Story is not owned by current user');
+    }
+    resolvedGoalId = resolvedGoalId || String(story.goalId || '');
+  }
+
+  if (desiredTaskId) {
+    const taskSnap = await db.collection('tasks').doc(desiredTaskId).get();
+    if (!taskSnap.exists) {
+      throw new functions.https.HttpsError('not-found', 'Task not found');
+    }
+    const task = taskSnap.data() || {};
+    if (task.ownerUid && task.ownerUid !== uid) {
+      throw new functions.https.HttpsError('permission-denied', 'Task is not owned by current user');
+    }
+    resolvedGoalId = resolvedGoalId || String(task.goalId || '');
+  }
+
+  const hasLink = Boolean(desiredStoryId || desiredTaskId);
+  const update = {
+    storyId: desiredStoryId || admin.firestore.FieldValue.delete(),
+    linkedStoryId: desiredStoryId || admin.firestore.FieldValue.delete(),
+    taskId: desiredTaskId || admin.firestore.FieldValue.delete(),
+    goalId: resolvedGoalId || admin.firestore.FieldValue.delete(),
+    calendarMatchSource: hasLink ? 'manual_override' : 'manual_override_clear',
+    calendarMatchNote: note || (hasLink ? 'Manual override from calendar integration' : 'Manual link cleared from calendar integration'),
+    calendarMatchScore: hasLink ? 1 : admin.firestore.FieldValue.delete(),
+    calendarMatchConfidence: hasLink ? 100 : admin.firestore.FieldValue.delete(),
+    calendarMatchConfidenceTier: hasLink ? 'high' : admin.firestore.FieldValue.delete(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    overrideUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+
+  await blockSnap.ref.set(update, { merge: true });
+
+  await logCalendarIntegration(uid, {
+    action: 'manual_override_link',
+    status: 'success',
+    blockId: blockSnap.id,
+    eventId: block.googleEventId || eventId || null,
+    linkedStoryId: desiredStoryId || null,
+    linkedTaskId: desiredTaskId || null,
+    linkedGoalId: resolvedGoalId || null,
+    note: update.calendarMatchNote,
+  });
+
+  return {
+    ok: true,
+    blockId: blockSnap.id,
+    eventId: block.googleEventId || eventId || null,
+    storyId: desiredStoryId || null,
+    taskId: desiredTaskId || null,
+    goalId: resolvedGoalId || null,
+    calendarMatchSource: update.calendarMatchSource,
+    calendarMatchNote: update.calendarMatchNote,
+    calendarMatchConfidence: hasLink ? 100 : null,
+    calendarMatchConfidenceTier: hasLink ? 'high' : null,
+  };
+});

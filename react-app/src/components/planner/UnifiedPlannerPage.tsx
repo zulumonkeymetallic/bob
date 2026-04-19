@@ -1,0 +1,2745 @@
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  addDays,
+  addMinutes,
+  differenceInMinutes,
+  format,
+  getDay,
+  isSameDay,
+  parse,
+  startOfWeek,
+  startOfDay,
+  endOfDay,
+} from 'date-fns';
+import { enGB } from 'date-fns/locale';
+import {
+  Alert,
+  Badge,
+  Button,
+  ButtonGroup,
+  Card,
+  Col,
+  Container,
+  Form,
+  Modal,
+  Row,
+  Spinner,
+} from 'react-bootstrap';
+import {
+  Activity,
+  Calendar as CalendarIcon,
+  CheckCircle,
+  Clock,
+  ExternalLink,
+  Link as LinkIcon,
+  ListChecks,
+  RefreshCw,
+  Settings,
+  Smartphone,
+  Sparkles,
+} from 'lucide-react';
+import { Calendar as RBC, Views, dateFnsLocalizer } from 'react-big-calendar';
+import withDragAndDrop from 'react-big-calendar/lib/addons/dragAndDrop';
+import 'react-big-calendar/lib/css/react-big-calendar.css';
+import 'react-big-calendar/lib/addons/dragAndDrop/styles.css';
+import { useUnifiedPlannerData, type PlannerRange } from '../../hooks/useUnifiedPlannerData';
+import type { ExternalCalendarEvent } from '../../hooks/useUnifiedPlannerData';
+import { useAuth } from '../../contexts/AuthContext';
+import { db, functions } from '../../firebase';
+import { httpsCallable } from 'firebase/functions';
+import {
+  addDoc,
+  collection,
+  doc,
+  onSnapshot,
+  query,
+  serverTimestamp,
+  updateDoc,
+  where,
+} from 'firebase/firestore';
+import type { CalendarBlock, Goal, Story, Task } from '../../types';
+import type { ScheduledInstanceModel } from '../../domain/scheduler/repository';
+import { humanizePolicyMode } from '../../utils/schedulerPolicy';
+import '../../styles/unified-planner.css';
+import { useLocation, useNavigate, Link } from 'react-router-dom';
+import { useGlobalThemes } from '../../hooks/useGlobalThemes';
+import { LEGACY_THEME_MAP } from '../../constants/globalThemes';
+import { pushDiagnosticLog } from '../../hooks/useDiagnosticsLog';
+import { usePersona } from '../../contexts/PersonaContext';
+import { getBadgeVariant, getPriorityBadge, getStatusName } from '../../utils/statusHelpers';
+import { isRecurringDueOnDate, resolveRecurringDueMs } from '../../utils/recurringTaskDue';
+import EditTaskModal from '../EditTaskModal';
+import EditStoryModal from '../EditStoryModal';
+import DayCapacityWarningBanner from './DayCapacityWarningBanner';
+import { useSidebar } from '../../contexts/SidebarContext';
+import PlanActionBar from './PlanActionBar';
+
+const locales = { 'en-GB': enGB } as const;
+const localizer = dateFnsLocalizer({
+  format,
+  parse,
+  startOfWeek: (date) => startOfWeek(date, { weekStartsOn: 1 }),
+  getDay,
+  locales,
+});
+
+const DragAndDropCalendar = withDragAndDrop(RBC as any);
+
+const FALLBACK_THEME_COLORS: Record<string, string> = {
+  Health: '#22c55e',
+  Growth: '#3b82f6',
+  Wealth: '#eab308',
+  Tribe: '#8b5cf6',
+  Home: '#f97316',
+  'Work (Main Gig)': '#0f172a',
+  'Side Gig': '#14b8a6',
+  'Work Shift': '#0f172a',
+};
+
+interface PlannerCalendarEvent {
+  id: string;
+  title: string;
+  start: Date;
+  end: Date;
+  type: 'block' | 'instance' | 'external';
+  color?: string;
+  textColor?: string;
+  themeLabel?: string;
+  block?: CalendarBlock;
+  instance?: ScheduledInstanceModel;
+  external?: ExternalCalendarEvent;
+}
+
+type ThemeOption = {
+  id: string | number;
+  value: string;
+  label: string;
+  color: string;
+  textColor: string;
+};
+
+interface BlockFormState {
+  id?: string;
+  title: string;
+  theme?: CalendarBlock['theme'];
+  category?: CalendarBlock['category'];
+  flexibility?: CalendarBlock['flexibility'];
+  rationale: string;
+  start: string;
+  end: string;
+  syncToGoogle: boolean;
+  subTheme: string;
+  persona?: 'personal' | 'work' | null;
+  storyId?: string;
+  taskId?: string;
+  aiScore?: number | null;
+  aiReason?: string | null;
+  storyInput?: string;
+  recurrenceFreq: 'none' | 'daily' | 'weekly';
+  recurrenceDays: string[]; // BYDAY codes e.g. ['MO','WE']
+  recurrenceUntil: string; // date input string
+}
+
+const DEFAULT_BLOCK_FORM: BlockFormState = {
+  title: 'Calendar entry',
+  theme: 'General',
+  category: 'Wellbeing',
+  flexibility: 'soft',
+  rationale: '',
+  start: '',
+  end: '',
+  syncToGoogle: true,
+  subTheme: '',
+  persona: null,
+  storyId: undefined,
+  taskId: undefined,
+  aiScore: null,
+  aiReason: null,
+  storyInput: '',
+  recurrenceFreq: 'none',
+  recurrenceDays: [],
+  recurrenceUntil: '',
+};
+
+type ViewType = 'day' | 'week' | 'month';
+
+type PlanningMode = 'strict' | 'smart';
+
+const PLANNING_MODE_CONFIG: { value: PlanningMode; label: string; description: string }[] = [
+  {
+    value: 'smart',
+    label: 'Smart (default)',
+    description:
+      'Top 3 priorities scheduled first. ALWAYS respects user calendar plus Fitness and Work (Main Gig) blocks as hard constraints. Planned blocks act as theme hints and free time is used for auto-scheduling.',
+  },
+  {
+    value: 'strict',
+    label: 'Strict',
+    description:
+      'Fully respects planned blocks AND user calendar. Events are only inserted into their designated planned block window.',
+  },
+];
+
+const normalizeCallableError = (error: unknown, fallbackMessage: string) => {
+  const err = error as { code?: string; message?: string };
+  const rawCode = String(err?.code || '').toLowerCase();
+  const code = rawCode.includes('/') ? rawCode.split('/').pop() : rawCode;
+  if (code === 'deadline-exceeded') {
+    return 'The planner request timed out. Orchestration may still be busy. Retry shortly and verify planner stats.';
+  }
+  if (code === 'unavailable') {
+    return 'Planner service is temporarily unavailable. Please retry in a moment.';
+  }
+  if (code === 'permission-denied') {
+    return 'Permission denied while calling planner orchestration. Please sign out/in and retry.';
+  }
+  if (code === 'failed-precondition') {
+    return 'Planner preconditions are not met (often missing profile/integration state). Please verify settings and retry.';
+  }
+  return err?.message || fallbackMessage;
+};
+
+const getInitialRange = (): PlannerRange => {
+  const start = startOfWeek(new Date(), { weekStartsOn: 1 });
+  const end = addDays(start, 6);
+  return { start, end };
+};
+
+const toInputValue = (date: Date) => format(date, "yyyy-MM-dd'T'HH:mm");
+
+const isTaskDoneState = (status: any): boolean => {
+  if (typeof status === 'number') {
+    return status === 2 || status >= 4;
+  }
+  const normalized = String(status ?? '').trim().toLowerCase();
+  return ['done', 'complete', 'completed', 'finished', 'closed'].includes(normalized);
+};
+
+const hexToRgba = (hex: string, alpha: number) => {
+  if (!hex) return `rgba(99, 102, 241, ${alpha})`;
+  const normalized = hex.replace('#', '');
+  const full = normalized.length === 3
+    ? normalized.split('').map((char) => char + char).join('')
+    : normalized.padEnd(6, '0');
+  const numeric = Number.parseInt(full, 16);
+  if (Number.isNaN(numeric)) {
+    return `rgba(99, 102, 241, ${alpha})`;
+  }
+  const r = (numeric >> 16) & 255;
+  const g = (numeric >> 8) & 255;
+  const b = numeric & 255;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+};
+
+const UnifiedPlannerPage: React.FC = () => {
+  const { currentUser } = useAuth();
+  const { showSidebar } = useSidebar();
+  const { themes: globalThemes } = useGlobalThemes();
+  const [stories, setStories] = useState<any[]>([]);
+
+  const legacyThemeNameById = useMemo(() => {
+    const map = new Map<number, string>();
+    (Object.entries(LEGACY_THEME_MAP) as Array<[string, number]>).forEach(([legacyName, themeId]) => {
+      if (!map.has(themeId)) {
+        map.set(themeId, legacyName);
+      }
+    });
+    return map;
+  }, []);
+
+  const themeOptions = useMemo(
+    () => {
+      const isLegacyWorkShift = (value?: string | null) => String(value || '').trim().toLowerCase() === 'work shift';
+      const baseOptions: ThemeOption[] = globalThemes.length === 0
+        ? Object.entries(FALLBACK_THEME_COLORS)
+          .filter(([value]) => !isLegacyWorkShift(value))
+          .map(([value, color]) => ({
+            id: value,
+            value,
+            label: value,
+            color,
+            textColor: '#ffffff',
+          }))
+        : globalThemes
+          .filter((theme) => !isLegacyWorkShift(theme.name) && !isLegacyWorkShift(theme.label))
+          .map((theme) => {
+            const legacyName = legacyThemeNameById.get(theme.id);
+            const value = legacyName || theme.name || String(theme.id);
+            return {
+              id: theme.id,
+              value,
+              label: theme.label || theme.name || value,
+              color: theme.color || FALLBACK_THEME_COLORS[legacyName || theme.name] || '#0ea5e9',
+              textColor: theme.textColor || '#ffffff',
+            };
+          });
+
+      return baseOptions;
+    },
+    [globalThemes, legacyThemeNameById],
+  );
+
+  const themePalette = useMemo(() => {
+    const palette = new Map<string, { color: string; textColor: string; label: string }>();
+
+    themeOptions.forEach((option) => {
+      palette.set(option.value, { color: option.color, textColor: option.textColor, label: option.label });
+    });
+
+    globalThemes.forEach((theme) => {
+      const color = theme.color || '#0ea5e9';
+      const textColor = theme.textColor || '#ffffff';
+      const label = theme.label || theme.name || String(theme.id);
+      if (theme.name) palette.set(theme.name, { color, textColor, label });
+      palette.set(label, { color, textColor, label });
+      palette.set(String(theme.id), { color, textColor, label });
+    });
+
+    Object.entries(FALLBACK_THEME_COLORS).forEach(([legacy, color]) => {
+      if (!palette.has(legacy)) {
+        palette.set(legacy, { color, textColor: '#ffffff', label: legacy });
+      }
+    });
+
+    return palette;
+  }, [globalThemes, themeOptions]);
+
+  const blockDefaultTheme = useMemo(
+    () => themeOptions[0]?.value ?? DEFAULT_BLOCK_FORM.theme,
+    [themeOptions],
+  );
+
+  const resolveThemeAppearance = useCallback(
+    (themeValue?: string | number | null) => {
+      if (themeValue == null) return undefined;
+      const direct = themePalette.get(String(themeValue));
+      if (direct) return direct;
+
+      const normalized = String(themeValue).trim().toLowerCase();
+      const legacyEntry = Object.entries(LEGACY_THEME_MAP).find(([key]) => key.toLowerCase() === normalized);
+      if (legacyEntry) {
+        const legacyId = legacyEntry[1];
+        const byId = themePalette.get(String(legacyId));
+        if (byId) return byId;
+      }
+      // Attempt a case-insensitive match
+      for (const [key, appearance] of themePalette.entries()) {
+        if (key.toLowerCase() === normalized) {
+          return appearance;
+        }
+      }
+      return undefined;
+    },
+    [themePalette],
+  );
+
+  const [range, setRange] = useState<PlannerRange>(() => getInitialRange());
+  const [view, setView] = useState<ViewType>(Views.AGENDA as ViewType);
+  // Tracks the navigated date independently so agenda always opens on today
+  const [calendarDate, setCalendarDate] = useState<Date>(() => new Date());
+  const [calendarScrollTime, setCalendarScrollTime] = useState<Date>(() => {
+    const now = new Date();
+    return new Date(1970, 0, 1, now.getHours(), now.getMinutes(), 0);
+  });
+  const [blockForm, setBlockForm] = useState<BlockFormState>(() => ({
+    ...DEFAULT_BLOCK_FORM,
+    theme: blockDefaultTheme as CalendarBlock['theme'],
+  }));
+  const [composerOpen, setComposerOpen] = useState(false);
+  const [composerSaving, setComposerSaving] = useState(false);
+  const [feedback, setFeedback] = useState<{ variant: 'success' | 'danger' | 'info'; message: string } | null>(null);
+  const [activeEvent, setActiveEvent] = useState<PlannerCalendarEvent | null>(null);
+  const [planning, setPlanning] = useState(false);
+  const [replanLoading, setReplanLoading] = useState(false);
+  const [rebalanceLoading, setRebalanceLoading] = useState(false);
+  const [orchestrationLoading, setOrchestrationLoading] = useState(false);
+  const [planningMode, setPlanningMode] = useState<PlanningMode>('smart');
+  const [savingPlanningMode, setSavingPlanningMode] = useState(false);
+  const savingPlanningModeRef = useRef(false);
+  const [showPlanningSettings, setShowPlanningSettings] = useState(false);
+  const [fitnessBlocksAutoCreate, setFitnessBlocksAutoCreate] = useState(true);
+  const [savingFitnessToggle, setSavingFitnessToggle] = useState(false);
+  const [lastActionPatch, setLastActionPatch] = useState<{ id: string; prevStart: Date; prevEnd: Date } | null>(null);
+  const [tasksDueToday, setTasksDueToday] = useState<Task[]>([]);
+  const [tasksLoading, setTasksLoading] = useState(false);
+  const [tasksSortMode, setTasksSortMode] = useState<'due' | 'ai' | 'top3'>('ai');
+  const [top3Collapsed, setTop3Collapsed] = useState(false);
+  const [top3Tasks, setTop3Tasks] = useState<Task[]>([]);
+  const [top3Stories, setTop3Stories] = useState<Story[]>([]);
+  const [top3Loading, setTop3Loading] = useState(false);
+  const [choreCompletionBusy, setChoreCompletionBusy] = useState<Record<string, boolean>>({});
+  const [inlineEditTask, setInlineEditTask] = useState<Task | null>(null);
+  const [inlineEditStory, setInlineEditStory] = useState<Story | null>(null);
+
+  useEffect(() => {
+    setBlockForm((prev) => {
+      if (prev.id) return prev;
+      if (resolveThemeAppearance(prev.theme)) return prev;
+      if (prev.theme === blockDefaultTheme) return prev;
+      return { ...prev, theme: blockDefaultTheme as CalendarBlock['theme'] };
+    });
+  }, [blockDefaultTheme, resolveThemeAppearance]);
+
+  useEffect(() => {
+    const updateScrollTime = () => {
+      const now = new Date();
+      const inRange = now >= startOfDay(range.start) && now <= endOfDay(range.end);
+      if (view === Views.DAY) {
+        setCalendarScrollTime(
+          isSameDay(now, range.start)
+            ? new Date(1970, 0, 1, now.getHours(), now.getMinutes(), 0)
+            : new Date(1970, 0, 1, 6, 0, 0),
+        );
+        return;
+      }
+      if (view === Views.WEEK) {
+        setCalendarScrollTime(
+          inRange
+            ? new Date(1970, 0, 1, now.getHours(), now.getMinutes(), 0)
+            : new Date(1970, 0, 1, 6, 0, 0),
+        );
+        return;
+      }
+      setCalendarScrollTime(new Date(1970, 0, 1, 6, 0, 0));
+    };
+    updateScrollTime();
+    const id = window.setInterval(updateScrollTime, 60000);
+    return () => window.clearInterval(id);
+  }, [range.start, range.end, view]);
+
+  const planner = useUnifiedPlannerData(range);
+  const location = useLocation();
+  const navigate = useNavigate();
+  const { currentPersona } = usePersona();
+
+  // Load stories for linking
+  useEffect(() => {
+    if (!currentUser) return;
+    const q = query(
+      collection(db, 'stories'),
+      where('ownerUid', '==', currentUser.uid),
+    );
+    const unsub = onSnapshot(q, (snap) => {
+      setStories(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })));
+    });
+    return () => unsub();
+  }, [currentUser]);
+
+  useEffect(() => {
+    const state = ((location as unknown) as { state?: { focus?: string } | null }).state ?? null;
+    if (!state?.focus) return;
+
+    if (state.focus === 'today' || state.focus === 'checklist') {
+      const today = new Date();
+      setView('day');
+      setRange({ start: startOfDay(today), end: endOfDay(today) });
+    }
+
+    navigate(location.pathname, { replace: true, state: null });
+  }, [location, navigate]);
+
+  const events: PlannerCalendarEvent[] = useMemo(() => {
+    const displayBlocks = planner.blocks.filter((block) => {
+      const source = String((block as any).source || '').toLowerCase();
+      const entryMethod = String((block as any).entry_method || '').toLowerCase();
+      const isGcal = source === 'gcal' || entryMethod === 'google_calendar';
+      const blockId = String((block as any).id || '');
+      const isMirrorBlock = blockId.startsWith('sched_') || blockId.startsWith('chore_');
+      if (isMirrorBlock) return false;
+      if (isGcal) {
+        const hasLink = Boolean(block.taskId || block.storyId || block.goalId || (block as any).deepLink);
+        return hasLink;
+      }
+      return true;
+    });
+
+    const blockEvents = displayBlocks.map((block) => {
+      const start = new Date(block.start);
+      const end = new Date(block.end);
+      const title = (block as any).title || `${block.category} • ${block.theme}`;
+      const appearance = resolveThemeAppearance(
+        block.theme
+          ?? (block as any).theme_id
+          ?? block.subTheme
+          ?? block.category,
+      );
+      return {
+        id: block.id,
+        title,
+        start,
+        end,
+        type: 'block' as const,
+        color: appearance?.color
+          || FALLBACK_THEME_COLORS[String(block.theme || block.category)] || '#14b8a6',
+        textColor: appearance?.textColor || '#ffffff',
+        themeLabel: appearance?.label,
+        block,
+      } satisfies PlannerCalendarEvent;
+    });
+
+    const instanceEvents = planner.instances
+      .filter((instance) => instance.plannedStart || instance.occurrenceDate)
+      .map((instance) => {
+        const block = instance.blockId ? planner.blocks.find((b) => b.id === instance.blockId) : undefined;
+        const base = instance.occurrenceDate
+          ? parse(instance.occurrenceDate, 'yyyyMMdd', new Date())
+          : new Date(instance.plannedStart || Date.now());
+        const start = instance.plannedStart ? new Date(instance.plannedStart) : addMinutes(base, 8 * 60);
+        const end = instance.plannedEnd
+          ? new Date(instance.plannedEnd)
+          : addMinutes(new Date(start), instance.durationMinutes || 30);
+
+        const enrichedInstance = instance as ScheduledInstanceModel & {
+          theme?: string | number | null;
+          storyTheme?: string | number | null;
+          goalTheme?: string | number | null;
+          sourceTheme?: string | number | null;
+          tags?: string[];
+        };
+
+        const inferredTheme = (() => {
+          if (enrichedInstance.theme) return enrichedInstance.theme;
+          if (enrichedInstance.sourceTheme) return enrichedInstance.sourceTheme;
+          if (enrichedInstance.storyTheme) return enrichedInstance.storyTheme;
+          if (enrichedInstance.goalTheme) return enrichedInstance.goalTheme;
+          if (Array.isArray(enrichedInstance.tags)) {
+            const tagMatch = enrichedInstance.tags.find((tag) => Boolean(resolveThemeAppearance(tag)));
+            if (tagMatch) return tagMatch;
+          }
+          if (block?.theme) return block.theme;
+          if (block?.category) return block.category;
+          return null;
+        })();
+
+        const appearance = resolveThemeAppearance(inferredTheme);
+        const fallbackColor = enrichedInstance.sourceType === 'chore'
+          ? '#f59e0b'
+          : enrichedInstance.sourceType === 'routine'
+            ? '#0ea5e9'
+            : '#38bdf8';
+
+        const title = instance.title
+          || (instance.sourceType === 'chore' ? 'Chore' : instance.sourceType === 'routine' ? 'Routine' : 'Planned work');
+
+        return {
+          id: instance.id,
+          title,
+          start,
+          end,
+          type: 'instance' as const,
+          color: appearance?.color || (block ? resolveThemeAppearance(block.theme)?.color : undefined) || fallbackColor,
+          textColor: appearance?.textColor || '#ffffff',
+          themeLabel: appearance?.label,
+          block,
+          instance,
+        } satisfies PlannerCalendarEvent;
+      });
+
+    const linkedGcalIds = new Set<string>();
+    planner.instances.forEach((i) => {
+      if (i.external?.gcalEventId) linkedGcalIds.add(i.external.gcalEventId);
+    });
+    displayBlocks.forEach((b) => {
+      if (b.googleEventId) linkedGcalIds.add(b.googleEventId);
+    });
+
+    const externalEvents = planner.externalEvents
+      .filter((external) => {
+        if (linkedGcalIds.has(external.id)) return false;
+        const blockIdFromExt = (external.raw as any)?.extendedProperties?.private?.blockId;
+        if (blockIdFromExt && planner.blocks.some(b => b.id === blockIdFromExt)) return false;
+        return true;
+      })
+      .map((external) => {
+        const raw = external.raw as any;
+        const privateMeta = raw?.extendedProperties?.private || {};
+        const themeCandidate =
+          privateMeta.theme
+          ?? privateMeta.themeId
+          ?? privateMeta.theme_id
+          ?? privateMeta['bob-theme']
+          ?? privateMeta['bob-theme-id']
+          ?? privateMeta['bob_theme_id']
+          ?? privateMeta['bob-category']
+          ?? privateMeta.category
+          ?? privateMeta.themeName
+          ?? external.title;
+        const appearance = resolveThemeAppearance(themeCandidate);
+        return {
+          id: external.id,
+          title: external.title,
+          start: external.start,
+          end: external.end,
+          type: 'external' as const,
+          color: appearance?.color,
+          textColor: appearance?.textColor,
+          external,
+        } satisfies PlannerCalendarEvent;
+      });
+
+    return [...externalEvents, ...blockEvents, ...instanceEvents];
+  }, [planner.blocks, planner.externalEvents, planner.instances, resolveThemeAppearance]);
+
+  const storyLabel = useCallback((story: any) => {
+    if (!story) return '';
+    const ref = story.ref || story.referenceNumber || story.reference || story.code || (story.id ? story.id.slice(-6) : '');
+    return ref ? `${ref} — ${story.title}` : story.title || 'Story';
+  }, []);
+
+  const taskRefLabel = useCallback((task: Task) => {
+    if (!task) return '';
+    const ref = (task as any).ref
+      || (task as any).referenceNumber
+      || (task as any).reference
+      || (task as any).code
+      || (task as any).displayId
+      || (task.id ? task.id.slice(-6).toUpperCase() : '');
+    if (typeof ref === 'string') return ref.trim();
+    return ref ? String(ref) : '';
+  }, []);
+
+  const unscheduledItems = useMemo(
+    () => planner.instances.filter((instance) => instance.status === 'unscheduled'),
+    [planner.instances],
+  );
+
+  const getTaskDueMs = useCallback((task: Task): number | null => {
+    const raw: any = (task as any).dueDateMs
+      ?? (task as any).dueDate
+      ?? (task as any).targetDate
+      ?? (task as any).dueAt
+      ?? (task as any).due;
+    if (!raw) return null;
+    if (typeof raw === 'number') return raw;
+    if (typeof raw === 'string') {
+      const parsed = new Date(raw).getTime();
+      return Number.isNaN(parsed) ? null : parsed;
+    }
+    if (raw instanceof Date) return raw.getTime();
+    if (typeof raw.toDate === 'function') {
+      const d = raw.toDate();
+      return d instanceof Date ? d.getTime() : null;
+    }
+    if (typeof raw.toMillis === 'function') return raw.toMillis();
+    if (raw.seconds != null) return (raw.seconds * 1000) + Math.floor((raw.nanoseconds || 0) / 1e6);
+    return null;
+  }, []);
+
+  const getTaskLastDoneMs = useCallback((task: Task): number | null => {
+    const raw: any = (task as any).lastDoneAt ?? (task as any).completedAt;
+    if (!raw) return null;
+    if (typeof raw === 'number') return raw;
+    if (typeof raw === 'string') {
+      const parsed = new Date(raw).getTime();
+      return Number.isNaN(parsed) ? null : parsed;
+    }
+    if (raw instanceof Date) return raw.getTime();
+    if (typeof raw.toDate === 'function') {
+      const d = raw.toDate();
+      return d instanceof Date ? d.getTime() : null;
+    }
+    if (typeof raw.toMillis === 'function') return raw.toMillis();
+    if (raw.seconds != null) return (raw.seconds * 1000) + Math.floor((raw.nanoseconds || 0) / 1e6);
+    return null;
+  }, []);
+
+  const getChoreKind = useCallback((task: Task): 'chore' | 'routine' | 'habit' | null => {
+    const raw = String((task as any)?.type || (task as any)?.task_type || '').trim().toLowerCase();
+    const normalized = raw === 'habitual' ? 'habit' : raw;
+    if (normalized === 'chore' || normalized === 'routine' || normalized === 'habit') return normalized;
+    if (normalized) return null;
+    const tags = Array.isArray((task as any)?.tags) ? (task as any).tags : [];
+    const tagKeys = tags.map((tag) => String(tag || '').toLowerCase().replace(/^#/, ''));
+    if (tagKeys.includes('chore')) return 'chore';
+    if (tagKeys.includes('routine')) return 'routine';
+    if (tagKeys.includes('habit') || tagKeys.includes('habitual')) return 'habit';
+    return null;
+  }, []);
+
+  const formatDueLabel = useCallback((dueMs: number) => {
+    const dueDate = new Date(dueMs);
+    const dateLabel = format(dueDate, 'MMM d, yyyy');
+    const timeLabel = format(dueDate, 'HH:mm');
+    const hasTime = dueDate.getHours() !== 0 || dueDate.getMinutes() !== 0;
+    return hasTime ? `${dateLabel} • ${timeLabel}` : dateLabel;
+  }, []);
+
+  useEffect(() => {
+    if (!currentUser || !currentPersona) {
+      setTasksDueToday([]);
+      setTasksLoading(false);
+      return;
+    }
+
+    setTasksLoading(true);
+    const q = query(
+      collection(db, 'tasks'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+    );
+
+    const unsubscribe = onSnapshot(
+      q,
+      (snap) => {
+        const todayDate = new Date();
+        todayDate.setHours(0, 0, 0, 0);
+        const todayStart = startOfDay(todayDate).getTime();
+        const todayEnd = endOfDay(todayDate).getTime();
+        const rows = snap.docs
+          .map((doc) => ({ id: doc.id, ...(doc.data() as any) } as Task))
+          .filter((task) => !task.deleted)
+          .filter((task) => {
+            const due = getTaskDueMs(task);
+            if (due) return due <= todayEnd;
+            const kind = getChoreKind(task);
+            return !!kind && isRecurringDueOnDate(task, todayDate, due);
+          })
+          .filter((task) => !isTaskDoneState(task.status))
+          .filter((task) => {
+            if (!getChoreKind(task)) return true;
+            const lastDone = getTaskLastDoneMs(task);
+            if (!lastDone) return true;
+            return lastDone < todayStart || lastDone > todayEnd;
+          });
+
+        rows.sort((a, b) => {
+          const aDue = resolveRecurringDueMs(a, todayDate, todayStart) || 0;
+          const bDue = resolveRecurringDueMs(b, todayDate, todayStart) || 0;
+          if (aDue !== bDue) return aDue - bDue;
+          const aScore = Number((a as any).aiCriticalityScore || 0);
+          const bScore = Number((b as any).aiCriticalityScore || 0);
+          return bScore - aScore;
+        });
+
+        setTasksDueToday(rows);
+        setTasksLoading(false);
+      },
+      (err) => {
+        console.error('Failed to load tasks due today', err);
+        setTasksDueToday([]);
+        setTasksLoading(false);
+      },
+    );
+
+    return () => unsubscribe();
+  }, [currentPersona, currentUser, getTaskDueMs, getChoreKind, getTaskLastDoneMs]);
+
+  useEffect(() => {
+    if (!currentUser || !currentPersona) {
+      setTop3Tasks([]);
+      setTop3Stories([]);
+      setTop3Loading(false);
+      return;
+    }
+    setTop3Loading(true);
+    const todayIso = new Date().toISOString().slice(0, 10);
+    let tasksReady = false;
+    let storiesReady = false;
+    const markReady = () => {
+      if (tasksReady && storiesReady) setTop3Loading(false);
+    };
+
+    const isTaskDone = (status: any) => {
+      if (typeof status === 'number') return status >= 2;
+      const s = String(status || '').toLowerCase();
+      return ['done', 'complete', 'completed', 'finished', 'closed'].includes(s);
+    };
+    const isStoryDone = (status: any) => {
+      if (typeof status === 'number') return status >= 4;
+      const s = String(status || '').toLowerCase();
+      return ['done', 'complete', 'completed', 'finished', 'closed'].includes(s);
+    };
+
+    const taskQuery = query(
+      collection(db, 'tasks'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+      where('aiTop3ForDay', '==', true),
+    );
+    const storyQuery = query(
+      collection(db, 'stories'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+      where('aiTop3ForDay', '==', true),
+    );
+
+    const unsubTasks = onSnapshot(
+      taskQuery,
+      (snap) => {
+        const rows = snap.docs
+          .map((doc) => ({ id: doc.id, ...(doc.data() as any) } as Task))
+          .filter((task) => !task.deleted)
+          .filter((task) => !isTaskDone(task.status))
+          .filter((task) => {
+            const aiDate = (task as any).aiTop3Date;
+            if (!aiDate) return true;
+            return String(aiDate).slice(0, 10) === todayIso;
+          })
+          .sort((a, b) => {
+            const ar = Number((a as any).aiPriorityRank || 0) || 99;
+            const br = Number((b as any).aiPriorityRank || 0) || 99;
+            if (ar !== br) return ar - br;
+            const as = Number((a as any).aiCriticalityScore ?? -1);
+            const bs = Number((b as any).aiCriticalityScore ?? -1);
+            if (as !== bs) return bs - as;
+            return String(a.title || '').localeCompare(String(b.title || ''));
+          })
+          .slice(0, 3);
+        setTop3Tasks(rows);
+        tasksReady = true;
+        markReady();
+      },
+      (err) => {
+        console.warn('Failed to load top 3 tasks', err);
+        setTop3Tasks([]);
+        tasksReady = true;
+        markReady();
+      },
+    );
+
+    const unsubStories = onSnapshot(
+      storyQuery,
+      (snap) => {
+        const rows = snap.docs
+          .map((doc) => ({ id: doc.id, ...(doc.data() as any) } as Story))
+          .filter((story) => !isStoryDone(story.status))
+          .filter((story) => {
+            const aiDate = (story as any).aiTop3Date;
+            if (!aiDate) return true;
+            return String(aiDate).slice(0, 10) === todayIso;
+          })
+          .sort((a, b) => {
+            const ar = Number((a as any).aiFocusStoryRank || 0) || 99;
+            const br = Number((b as any).aiFocusStoryRank || 0) || 99;
+            if (ar !== br) return ar - br;
+            const as = Number((a as any).aiCriticalityScore ?? -1);
+            const bs = Number((b as any).aiCriticalityScore ?? -1);
+            if (as !== bs) return bs - as;
+            return String(a.title || '').localeCompare(String(b.title || ''));
+          })
+          .slice(0, 3);
+        setTop3Stories(rows);
+        storiesReady = true;
+        markReady();
+      },
+      (err) => {
+        console.warn('Failed to load top 3 stories', err);
+        setTop3Stories([]);
+        storiesReady = true;
+        markReady();
+      },
+    );
+
+    return () => {
+      unsubTasks();
+      unsubStories();
+    };
+  }, [currentUser, currentPersona]);
+
+  const topChores = useMemo(() => planner.chores.slice(0, 5), [planner.chores]);
+  const topRoutines = useMemo(() => planner.routines.slice(0, 5), [planner.routines]);
+
+  const resetComposer = useCallback(() => {
+    setBlockForm({
+      ...DEFAULT_BLOCK_FORM,
+      theme: blockDefaultTheme as CalendarBlock['theme'],
+    });
+    setComposerOpen(false);
+    setComposerSaving(false);
+  }, [blockDefaultTheme]);
+
+  const handleRangeChange = useCallback(
+    (nextRange: any) => {
+      if (Array.isArray(nextRange) && nextRange.length > 0) {
+        const start = nextRange[0];
+        const end = nextRange[nextRange.length - 1];
+        setRange({ start: new Date(start), end: new Date(end) });
+      } else if (nextRange?.start && nextRange?.end) {
+        setRange({ start: new Date(nextRange.start), end: new Date(nextRange.end) });
+      }
+    },
+    [],
+  );
+
+  const openComposerForSlot = useCallback((start: Date, end: Date) => {
+    setBlockForm({
+      ...DEFAULT_BLOCK_FORM,
+      theme: blockDefaultTheme as CalendarBlock['theme'],
+      start: toInputValue(start),
+      end: toInputValue(end),
+      syncToGoogle: true,
+      persona: currentPersona || 'personal',
+    });
+    setComposerOpen(true);
+  }, [blockDefaultTheme, currentPersona]);
+
+  const openComposerForBlock = useCallback((block: CalendarBlock) => {
+    const mergedTheme = resolveThemeAppearance(block.theme)
+      ? block.theme
+      : blockDefaultTheme;
+    const aiScore = (block as any).aiScore ?? (block as any).aiCriticalityScore ?? null;
+    const aiReason = (block as any).aiReason || (block as any).aiCriticalityReason || null;
+    const recurrence = (block as any).recurrence || {};
+    const untilStr = recurrence?.until ? format(new Date(recurrence.until), 'yyyy-MM-dd') : '';
+    const story = block.storyId ? stories.find((s) => s.id === block.storyId) : undefined;
+    setBlockForm({
+      id: block.id,
+      title: (block as any).title || `${block.category} • ${block.theme}`,
+      theme: mergedTheme as CalendarBlock['theme'],
+      category: block.category || DEFAULT_BLOCK_FORM.category,
+      flexibility: block.flexibility,
+      rationale: block.rationale || '',
+      start: toInputValue(new Date(block.start)),
+      end: toInputValue(new Date(block.end)),
+      syncToGoogle: true,
+      subTheme: block.subTheme || '',
+      persona: (block as any).persona || currentPersona || 'personal',
+      storyId: (block as any).storyId,
+      taskId: (block as any).taskId,
+      aiScore,
+      aiReason,
+      storyInput: story ? storyLabel(story) : '',
+      recurrenceFreq: recurrence?.freq ? recurrence.freq : 'none',
+      recurrenceDays: Array.isArray(recurrence?.byDay) ? recurrence.byDay : [],
+      recurrenceUntil: untilStr,
+    });
+    setComposerOpen(true);
+  }, [blockDefaultTheme, resolveThemeAppearance, stories, storyLabel, currentPersona]);
+
+  const handleSelectSlot = useCallback(
+    ({ start, end }: { start: Date; end: Date }) => {
+      if (!currentUser) return;
+      const safeEnd = end && differenceInMinutes(end, start) > 0 ? end : addMinutes(start, 60);
+      openComposerForSlot(start, safeEnd);
+    },
+    [currentUser, openComposerForSlot],
+  );
+
+  const handleSelectEvent = useCallback((event: PlannerCalendarEvent) => {
+    setActiveEvent(event);
+    if (event.type === 'block' && event.block) {
+      openComposerForBlock(event.block);
+    }
+  }, [openComposerForBlock]);
+
+  const updateBlockTiming = useCallback(
+    async (event: PlannerCalendarEvent, start: Date, end: Date) => {
+      if (!event.block) return;
+      try {
+        const blockRef = doc(db, 'calendar_blocks', event.block.id);
+        await updateDoc(blockRef, {
+          start: start.getTime(),
+          end: end.getTime(),
+          updatedAt: Date.now(),
+        });
+        setFeedback({ variant: 'success', message: 'Calendar entry updated successfully.' });
+      } catch (err) {
+        console.error('Failed to update block timing', err);
+        setFeedback({ variant: 'danger', message: 'Could not update calendar entry timing. Please try again.' });
+      }
+    },
+    [],
+  );
+
+  const updateInstanceTiming = useCallback(
+    async (event: PlannerCalendarEvent, start: Date, end: Date) => {
+      if (!event.instance) return;
+      try {
+        const instanceRef = doc(db, 'scheduled_instances', event.instance.id);
+        await updateDoc(instanceRef, {
+          plannedStart: start.toISOString(),
+          plannedEnd: end.toISOString(),
+          occurrenceDate: format(start, 'yyyyMMdd'),
+          updatedAt: Date.now(),
+        });
+        setFeedback({ variant: 'success', message: 'Scheduled item repositioned.' });
+      } catch (err) {
+        console.error('Failed to update instance timing', err);
+        setFeedback({ variant: 'danger', message: 'Unable to update scheduled item.' });
+      }
+    },
+    [],
+  );
+
+  const updateExternalEventTiming = useCallback(
+    async (event: PlannerCalendarEvent, start: Date, end: Date) => {
+      const external = event.external;
+      const eventId = external?.id || event.id;
+      if (!external || !eventId) {
+        setFeedback({ variant: 'danger', message: 'External event is missing a Google Calendar ID.' });
+        return;
+      }
+      const raw: any = external.raw || {};
+      const isAllDay = Boolean(raw?.start?.date) && !raw?.start?.dateTime;
+      if (isAllDay) {
+        setFeedback({ variant: 'info', message: 'All-day events must be edited in Google Calendar.' });
+        return;
+      }
+      try {
+        const updateEv = httpsCallable(functions, 'updateCalendarEvent');
+        await updateEv({ eventId, start: start.toISOString(), end: end.toISOString() });
+        setActiveEvent((prev) => (prev && prev.id === event.id ? { ...prev, start, end } : prev));
+        setFeedback({ variant: 'success', message: 'Google Calendar event updated.' });
+        await planner.refreshExternalEvents();
+      } catch (err) {
+        console.warn('Failed to update external event', err);
+        setFeedback({ variant: 'danger', message: 'Unable to update Google Calendar event. Edit it in Google Calendar instead.' });
+      }
+    },
+    [functions, planner, setFeedback],
+  );
+
+  const handleEventMove = useCallback(
+    async ({ event, start, end }: { event: PlannerCalendarEvent; start: Date; end: Date }) => {
+      if (event.type === 'external') {
+        await updateExternalEventTiming(event, start, end);
+        return;
+      }
+      if (event.type === 'block') {
+        await updateBlockTiming(event, start, end);
+        // Optional Google Calendar sync for blocks marked to sync
+        try {
+          const block: any = event.block || {};
+          if (block.syncToGoogle !== false) {
+            const startIso = new Date(start).toISOString();
+            const endIso = new Date(end).toISOString();
+            if (block.googleEventId) {
+              const updateEv = httpsCallable(functions, 'updateCalendarEvent');
+              await updateEv({
+                eventId: block.googleEventId,
+                start: startIso,
+                end: endIso,
+                summary: block.title || 'Calendar entry',
+              });
+            }
+            // Ensure extendedProperties and metadata are refreshed via server push for this day
+            try {
+              const syncDay = format(start, 'yyyy-MM-dd');
+              const pushDay = httpsCallable(functions, 'syncPlanToGoogleCalendar');
+              await pushDay({ day: syncDay });
+            } catch { }
+          }
+        } catch (err) {
+          console.warn('Planner: Google sync failed/skipped for block move', err);
+        }
+      } else if (event.type === 'instance') {
+        await updateInstanceTiming(event, start, end);
+        // Try to reflect instance move to Google Calendar if linked
+        try {
+          const startIso = new Date(start).toISOString();
+          const endIso = new Date(end).toISOString();
+          const eid = event.instance?.external?.gcalEventId;
+          if (eid) {
+            const updateEv = httpsCallable(functions, 'updateCalendarEvent');
+            await updateEv({ eventId: eid, start: startIso, end: endIso });
+          } else {
+            // Create event if missing and store id back into scheduled_instances.external.gcalEventId
+            const createEv = httpsCallable(functions, 'createCalendarEvent');
+            const res: any = await createEv({ summary: event.instance?.title || 'Planned Session', start: startIso, end: endIso });
+            const newId = res?.data?.event?.id;
+            if (newId && event.instance?.id) {
+              const ref = doc(db, 'scheduled_instances', event.instance.id);
+              await updateDoc(ref, { external: { ...(event.instance.external || {}), gcalEventId: newId, lastSyncedAt: { ...(event.instance.external?.lastSyncedAt || {}), gcal: Date.now() } } });
+            }
+          }
+          // Also refresh block parent metadata for this day
+          try {
+            const syncDay = format(start, 'yyyy-MM-dd');
+            const pushDay = httpsCallable(functions, 'syncPlanToGoogleCalendar');
+            await pushDay({ day: syncDay });
+          } catch { }
+        } catch (err) {
+          console.warn('Planner: Google sync failed/skipped for instance move', err);
+        }
+      }
+    },
+    [updateBlockTiming, updateExternalEventTiming, updateInstanceTiming],
+  );
+
+  const handleEventResize = useCallback(
+    async ({ event, start, end }: { event: PlannerCalendarEvent; start: Date; end: Date }) => {
+      await handleEventMove({ event, start, end });
+    },
+    [handleEventMove],
+  );
+
+  const handleComposerSubmit = useCallback(async () => {
+    if (!currentUser) return;
+    if (!blockForm.start || !blockForm.end) return;
+
+    const start = new Date(blockForm.start);
+    const end = new Date(blockForm.end);
+
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+      setFeedback({ variant: 'danger', message: 'Please provide valid dates for the calendar entry.' });
+      return;
+    }
+
+    if (end <= start) {
+      setFeedback({ variant: 'danger', message: 'End time must be after start time.' });
+      return;
+    }
+
+    setComposerSaving(true);
+
+    const makeDedupeKey = (title: string, startMs: number, endMs: number) => {
+      const raw = `${currentUser?.uid || ''}:${Math.round(startMs / 60000)}:${Math.round(endMs / 60000)}:${(title || '').slice(0, 24)}`;
+      let h = 0; for (let i = 0; i < raw.length; i++) h = (h * 33 + raw.charCodeAt(i)) >>> 0;
+      return h.toString(36);
+    };
+
+    const recurrence = (() => {
+      if (blockForm.recurrenceFreq === 'none') return null;
+      const ruleParts = [`FREQ=${blockForm.recurrenceFreq.toUpperCase()}`];
+      if (blockForm.recurrenceFreq === 'weekly' && blockForm.recurrenceDays.length) {
+        ruleParts.push(`BYDAY=${blockForm.recurrenceDays.join(',')}`);
+      }
+      if (blockForm.recurrenceUntil) {
+        const untilDate = new Date(blockForm.recurrenceUntil);
+        untilDate.setHours(23, 59, 59, 0);
+        ruleParts.push(`UNTIL=${format(untilDate, "yyyyMMdd'T'HHmmss'Z'")}`);
+      }
+      return {
+        freq: blockForm.recurrenceFreq as 'daily' | 'weekly',
+        byDay: blockForm.recurrenceDays,
+        until: blockForm.recurrenceUntil ? new Date(blockForm.recurrenceUntil).getTime() : null,
+        rrule: `RRULE:${ruleParts.join(';')}`,
+      };
+    })();
+
+    const linkedStory = blockForm.storyId ? stories.find((s) => s.id === blockForm.storyId) : null;
+    const payload: Record<string, unknown> = {
+      googleEventId: null,
+      syncToGoogle: true,
+      taskId: blockForm.taskId || null,
+      goalId: linkedStory?.goalId || null,
+      storyId: blockForm.storyId || null,
+      habitId: null,
+      subTheme: blockForm.subTheme || null,
+      persona: blockForm.persona || currentPersona || 'personal',
+      theme: blockForm.theme,
+      category: blockForm.category,
+      start: start.getTime(),
+      end: end.getTime(),
+      dedupeKey: makeDedupeKey(blockForm.title, start.getTime(), end.getTime()),
+      flexibility: blockForm.flexibility,
+      status: 'proposed',
+      colorId: null,
+      visibility: 'default',
+      createdBy: 'user',
+      rationale: blockForm.rationale || null,
+      version: 1,
+      supersededBy: null,
+      ownerUid: currentUser.uid,
+      title: blockForm.title,
+      updatedAt: Date.now(),
+      recurrence: recurrence
+        ? { freq: recurrence.freq, byDay: recurrence.byDay, until: recurrence.until }
+        : null,
+      aiScore: blockForm.aiScore ?? null,
+      aiReason: blockForm.aiReason ?? null,
+    };
+
+    const extendedProps = {
+      private: {
+        storyId: blockForm.storyId || null,
+        taskId: blockForm.taskId || null,
+        aiScore: blockForm.aiScore ?? null,
+        aiReason: blockForm.aiReason ?? null,
+        blockId: blockForm.id || undefined,
+        dedupeKey: payload.dedupeKey,
+      },
+    };
+
+    try {
+      if (blockForm.id) {
+        const ref = doc(db, 'calendar_blocks', blockForm.id);
+        await updateDoc(ref, payload);
+        setFeedback({ variant: 'success', message: 'Calendar entry updated successfully.' });
+        // Patch Google event if present
+        try {
+          if ((blockForm as any).googleEventId || (payload as any).googleEventId) {
+            const updateEv = httpsCallable(functions, 'updateCalendarEvent');
+            await updateEv({
+              eventId: (blockForm as any).googleEventId,
+              summary: blockForm.title,
+              start: start.toISOString(),
+              end: end.toISOString(),
+            });
+          }
+        } catch (err) {
+          console.warn('Planner: failed to update Google event', err);
+        }
+      } else {
+        const ref = collection(db, 'calendar_blocks');
+        const now = Date.now();
+        const docRef = await addDoc(ref, {
+          ...payload,
+          createdAt: now,
+        });
+        // Create immediately in Google Calendar
+        try {
+          const createEv = httpsCallable(functions, 'createCalendarEvent');
+          const res: any = await createEv({
+            summary: blockForm.title || 'Calendar entry',
+            start: start.toISOString(),
+            end: end.toISOString(),
+            recurrence: recurrence?.rrule ? [recurrence.rrule] : undefined,
+            extendedProperties: {
+              ...extendedProps,
+              private: { ...extendedProps.private, blockId: docRef.id }
+            },
+          });
+          const evId = res?.data?.event?.id;
+          if (evId) {
+            await updateDoc(docRef, { googleEventId: evId, syncToGoogle: true });
+          }
+        } catch (err) {
+          console.warn('Planner: failed to push new entry to Google', err);
+        }
+        setFeedback({ variant: 'success', message: 'New calendar entry created.' });
+      }
+      resetComposer();
+    } catch (err) {
+      console.error('Failed to save calendar entry', err);
+      pushDiagnosticLog({
+        channel: 'ai-planner',
+        level: 'error',
+        timestamp: Date.now(),
+        message: 'Failed to save calendar entry configuration.',
+        details: err instanceof Error ? err.message : String(err),
+      });
+      setFeedback({ variant: 'danger', message: 'Unable to save the calendar entry. Please try again.' });
+    } finally {
+      setComposerSaving(false);
+    }
+  }, [blockForm, currentUser, resetComposer, stories]);
+
+  const handleInstanceStatusChange = useCallback(
+    async (instance: ScheduledInstanceModel, status: ScheduledInstanceModel['status']) => {
+      try {
+        const ref = doc(db, 'scheduled_instances', instance.id);
+        await updateDoc(ref, {
+          status,
+          statusUpdatedAt: Date.now(),
+          updatedAt: Date.now(),
+        });
+      } catch (err) {
+        console.error('Failed to update instance status', err);
+        setFeedback({ variant: 'danger', message: 'Could not update checklist item. Try again.' });
+      }
+    },
+    [],
+  );
+
+  const handleTaskCompletionToggle = useCallback(async (task: Task, done: boolean) => {
+    try {
+      const ref = doc(db, 'tasks', task.id);
+      await updateDoc(ref, {
+        status: done ? 2 : 0,
+        completedAt: done ? serverTimestamp() : null,
+        updatedAt: serverTimestamp(),
+      });
+    } catch (err) {
+      console.error('Failed to update task status', err);
+      setFeedback({ variant: 'danger', message: 'Could not update task status.' });
+    }
+  }, []);
+
+  const triggerDeltaRescore = useCallback((entityId: string, entityType: 'task' | 'story') => {
+    httpsCallable(functions, 'deltaPriorityRescore')({ entityId, entityType })
+      .catch((err) => console.warn('Delta rescore failed (non-blocking)', err));
+  }, []);
+
+  const handleTaskStatusChange = useCallback(async (task: Task, status: number) => {
+    try {
+      const ref = doc(db, 'tasks', task.id);
+      await updateDoc(ref, {
+        status,
+        completedAt: status === 2 ? serverTimestamp() : null,
+        updatedAt: serverTimestamp(),
+      });
+      triggerDeltaRescore(task.id, 'task');
+    } catch (err) {
+      console.error('Failed to update task status', err);
+      setFeedback({ variant: 'danger', message: 'Could not update task status.' });
+    }
+  }, [triggerDeltaRescore]);
+
+  const handleTaskPriorityChange = useCallback(async (task: Task, priority: number) => {
+    try {
+      const ref = doc(db, 'tasks', task.id);
+      await updateDoc(ref, { priority, updatedAt: serverTimestamp() });
+      triggerDeltaRescore(task.id, 'task');
+    } catch (err) {
+      console.error('Failed to update task priority', err);
+    }
+  }, [triggerDeltaRescore]);
+
+  const handleTaskDueDateChange = useCallback(async (task: Task, dueDateMs: number) => {
+    try {
+      const ref = doc(db, 'tasks', task.id);
+      await updateDoc(ref, { dueDate: dueDateMs, dueDateMs, updatedAt: serverTimestamp() });
+      triggerDeltaRescore(task.id, 'task');
+    } catch (err) {
+      console.error('Failed to update task due date', err);
+    }
+  }, [triggerDeltaRescore]);
+
+  const handleStoryStatusChange = useCallback(async (story: Story, status: number) => {
+    try {
+      const ref = doc(db, 'stories', story.id);
+      await updateDoc(ref, { status, updatedAt: serverTimestamp() });
+      triggerDeltaRescore(story.id, 'story');
+    } catch (err) {
+      console.error('Failed to update story status', err);
+    }
+  }, [triggerDeltaRescore]);
+
+  const handleStoryPriorityChange = useCallback(async (story: Story, priority: number) => {
+    try {
+      const ref = doc(db, 'stories', story.id);
+      await updateDoc(ref, { priority, updatedAt: serverTimestamp() });
+      triggerDeltaRescore(story.id, 'story');
+    } catch (err) {
+      console.error('Failed to update story priority', err);
+    }
+  }, [triggerDeltaRescore]);
+
+  const handleStoryDueDateChange = useCallback(async (story: Story, dueDate: number) => {
+    try {
+      const ref = doc(db, 'stories', story.id);
+      await updateDoc(ref, { targetDate: dueDate, dueDate, updatedAt: serverTimestamp() });
+      triggerDeltaRescore(story.id, 'story');
+    } catch (err) {
+      console.error('Failed to update story due date', err);
+    }
+  }, [triggerDeltaRescore]);
+
+  const handleCompleteChoreTask = useCallback(async (task: Task) => {
+    if (!currentUser) return;
+    const taskId = task.id;
+    if (!taskId || choreCompletionBusy[taskId]) return;
+    setChoreCompletionBusy((prev) => ({ ...prev, [taskId]: true }));
+    try {
+      const fn = httpsCallable(functions, 'completeChoreTask');
+      await fn({ taskId });
+    } catch (err) {
+      console.warn('Unified planner: failed to complete chore task', err);
+      setFeedback({ variant: 'danger', message: 'Could not complete chore or habit item.' });
+      setChoreCompletionBusy((prev) => ({ ...prev, [taskId]: false }));
+      return;
+    }
+    setTimeout(() => {
+      setChoreCompletionBusy((prev) => {
+        const next = { ...prev };
+        delete next[taskId];
+        return next;
+      });
+    }, 1500);
+  }, [currentUser, choreCompletionBusy]);
+
+  const sortedTasksDueToday = useMemo(() => {
+    const todayDate = new Date();
+    todayDate.setHours(0, 0, 0, 0);
+    const todayStart = todayDate.getTime();
+    const rows = [...tasksDueToday];
+    if (tasksSortMode === 'ai' || tasksSortMode === 'top3') {
+      rows.sort((a, b) => {
+        const aScore = Number((a as any).aiCriticalityScore ?? (a as any).aiPriorityScore ?? 0);
+        const bScore = Number((b as any).aiCriticalityScore ?? (b as any).aiPriorityScore ?? 0);
+        if (aScore !== bScore) return bScore - aScore;
+        const aDue = resolveRecurringDueMs(a, todayDate, todayStart) || getTaskDueMs(a) || 0;
+        const bDue = resolveRecurringDueMs(b, todayDate, todayStart) || getTaskDueMs(b) || 0;
+        return aDue - bDue;
+      });
+      if (tasksSortMode === 'top3') return rows.slice(0, 3);
+      return rows;
+    }
+    rows.sort((a, b) => {
+      const aDue = resolveRecurringDueMs(a, todayDate, todayStart) || getTaskDueMs(a) || 0;
+      const bDue = resolveRecurringDueMs(b, todayDate, todayStart) || getTaskDueMs(b) || 0;
+      if (aDue !== bDue) return aDue - bDue;
+      const aScore = Number((a as any).aiCriticalityScore ?? (a as any).aiPriorityScore ?? 0);
+      const bScore = Number((b as any).aiCriticalityScore ?? (b as any).aiPriorityScore ?? 0);
+      return bScore - aScore;
+    });
+    return rows;
+  }, [tasksDueToday, tasksSortMode, getTaskDueMs]);
+
+  const sortedTaskItemsDueToday = useMemo(
+    () => sortedTasksDueToday.filter((task) => !getChoreKind(task)),
+    [sortedTasksDueToday, getChoreKind],
+  );
+
+  const sortedChoreItemsDueToday = useMemo(
+    () => sortedTasksDueToday.filter((task) => !!getChoreKind(task)),
+    [sortedTasksDueToday, getChoreKind],
+  );
+
+  const handleAutoPlan = useCallback(async () => {
+    setPlanning(true);
+    try {
+      const solverRunId = await planner.requestPlanningRun({
+        startDate: format(range.start, 'yyyy-MM-dd'),
+        days: 3,
+        includeBusy: true,
+      });
+      if (solverRunId) {
+        setFeedback({ variant: 'success', message: `AI planning queued (run ${solverRunId.slice(0, 8)}…).` });
+      } else {
+        setFeedback({ variant: 'info', message: 'AI planning triggered. Check back in a few moments.' });
+      }
+    } catch (err) {
+      console.error('AI planning failed', err);
+      pushDiagnosticLog({
+        channel: 'ai-planner',
+        level: 'error',
+        timestamp: Date.now(),
+        message: 'AI scheduler returned an error while auto-planning.',
+        details: err instanceof Error ? err.message : String(err),
+        context: {
+          startDate: format(range.start, 'yyyy-MM-dd'),
+          days: 3,
+        },
+      });
+      setFeedback({ variant: 'danger', message: 'AI scheduler is unavailable right now. Please retry shortly.' });
+    } finally {
+      setPlanning(false);
+    }
+  }, [planner, range.start]);
+
+  const handleReplanCalendar = useCallback(async () => {
+    if (!currentUser) {
+      setFeedback({ variant: 'danger', message: 'Please sign in to replan calendar.' });
+      return;
+    }
+    
+    setReplanLoading(true);
+    try {
+      const callable = httpsCallable(functions, 'replanCalendarNow', { timeout: 180000 });
+      const response = await callable({ days: 7, planningMode, fitnessBlocksAutoCreate });
+      const payload = response.data as { rescheduled?: number; blocked?: number };
+      const rescheduled = payload?.rescheduled || 0;
+      const blocked = payload?.blocked || 0;
+      if (rescheduled || blocked) {
+        setFeedback({ variant: 'success', message: `Replan complete: ${rescheduled} moved${blocked ? `, ${blocked} blocked` : ''}.` });
+      } else {
+        setFeedback({ variant: 'info', message: 'Replan complete. No entries needed moving.' });
+      }
+    } catch (err) {
+      console.error('Calendar replan failed', err);
+      pushDiagnosticLog({
+        channel: 'ai-planner',
+        level: 'error',
+        timestamp: Date.now(),
+        message: 'Failed to trigger calendar replan.',
+        details: err instanceof Error ? err.message : String(err),
+      });
+      setFeedback({ variant: 'danger', message: normalizeCallableError(err, 'Replan failed. Please retry in a moment.') });
+    } finally {
+      setReplanLoading(false);
+    }
+  }, [currentUser, planningMode, fitnessBlocksAutoCreate]);
+
+  const eventStyleGetter = useCallback((event: PlannerCalendarEvent) => {
+    const overlaps = (a: PlannerCalendarEvent, b: PlannerCalendarEvent) => {
+      if (!a || !b) return false;
+      const aStart = a.start.getTime();
+      const aEnd = a.end.getTime();
+      const bStart = b.start.getTime();
+      const bEnd = b.end.getTime();
+      return aStart < bEnd && bStart < aEnd;
+    };
+    const hasConflict = events.some(e => e.id !== event.id && overlaps(e, event) && e.type !== 'external' && event.type !== 'external');
+    if (event.type === 'external') {
+      if (event.color) {
+        return {
+          className: 'planner-event-external',
+          style: {
+            backgroundColor: event.color,
+            borderColor: event.color,
+            color: event.textColor || '#1e3a8a',
+          },
+        };
+      }
+      return {
+        className: 'planner-event-external',
+        style: {
+          backgroundColor: 'rgba(191, 219, 254, 0.4)',
+          borderColor: '#60a5fa',
+          color: '#1e3a8a',
+        },
+      };
+    }
+
+    const baseColor = event.color || '#6366f1';
+    const textColor = event.textColor || '#ffffff';
+
+    if (event.type === 'instance') {
+      const status = event.instance?.status;
+      if (status === 'completed') {
+        return {
+          style: {
+            backgroundColor: hexToRgba(baseColor, 0.85),
+            borderColor: baseColor,
+            color: textColor,
+          },
+        };
+      }
+      if (status === 'missed' || status === 'cancelled') {
+        return {
+          style: {
+            backgroundColor: hexToRgba('#ef4444', 0.9),
+            borderColor: '#dc2626',
+            color: '#ffffff',
+          },
+        };
+      }
+      if (status === 'unscheduled') {
+        return {
+          style: {
+            backgroundColor: hexToRgba(baseColor, 0.18),
+            borderColor: baseColor,
+            color: textColor,
+          },
+        };
+      }
+    }
+
+    return {
+      style: {
+        backgroundColor: hexToRgba(baseColor, 0.85),
+        borderColor: hasConflict ? '#dc2626' : baseColor,
+        boxShadow: hasConflict ? '0 0 0 2px rgba(220,38,38,0.3) inset' : undefined,
+        color: textColor,
+      },
+    };
+  }, [events]);
+
+  // Simple overlap/conflict detection for a given event
+  const isConflicting = useCallback((event: PlannerCalendarEvent | null) => {
+    if (!event) return false;
+    const start = event.start.getTime();
+    const end = event.end.getTime();
+    return events.some(e => e.id !== event.id && e.type !== 'external' && event.type !== 'external' && e.start.getTime() < end && start < e.end.getTime());
+  }, [events]);
+
+  const applyEventTiming = useCallback(async (event: PlannerCalendarEvent, start: Date, end: Date) => {
+    setLastActionPatch({ id: event.id, prevStart: event.start, prevEnd: event.end });
+    if (event.type === 'external') {
+      await updateExternalEventTiming(event, start, end);
+      return;
+    }
+    if (event.type === 'block') {
+      await updateBlockTiming(event, start, end);
+      // Attempt Google sync if block configured
+      try {
+        const block: any = event.block || {};
+        if (block.syncToGoogle) {
+          const startIso = start.toISOString();
+          const endIso = end.toISOString();
+          if (block.googleEventId) {
+            const updateEv = httpsCallable(functions, 'updateCalendarEvent');
+            await updateEv({ eventId: block.googleEventId, start: startIso, end: endIso });
+          }
+        }
+      } catch { }
+    } else if (event.type === 'instance') {
+      await updateInstanceTiming(event, start, end);
+      // Attempt Google sync if linked
+      try {
+        const eid = event.instance?.external?.gcalEventId;
+        if (eid) {
+          const updateEv = httpsCallable(functions, 'updateCalendarEvent');
+          await updateEv({ eventId: eid, start: start.toISOString(), end: end.toISOString() });
+        }
+      } catch { }
+    }
+  }, [functions, updateBlockTiming, updateExternalEventTiming, updateInstanceTiming]);
+
+  const findNextFreeSlot = useCallback((event: PlannerCalendarEvent) => {
+    const duration = event.end.getTime() - event.start.getTime();
+    const sorted = events
+      .filter(e => e.id !== event.id && e.type !== 'external')
+      .sort((a, b) => a.start.getTime() - b.start.getTime());
+    // search from current end forward in 15-min increments up to the same day
+    const limit = new Date(event.start);
+    limit.setHours(23, 59, 0, 0);
+    for (let t = new Date(event.end).getTime(); t + duration <= limit.getTime(); t += 15 * 60 * 1000) {
+      const s = t, e = t + duration;
+      const overlaps = sorted.some(x => x.start.getTime() < e && s < x.end.getTime());
+      if (!overlaps) return { start: new Date(s), end: new Date(e) };
+    }
+    return null;
+  }, [events]);
+
+  const handleConflictMoveNext = useCallback(async () => {
+    if (!activeEvent) return;
+    const next = findNextFreeSlot(activeEvent);
+    if (!next) { setFeedback({ variant: 'info', message: 'No free slot found today.' }); return; }
+    await applyEventTiming(activeEvent, next.start, next.end);
+    setFeedback({ variant: 'success', message: 'Moved to next free slot.' });
+  }, [activeEvent, applyEventTiming, findNextFreeSlot]);
+
+  const handleConflictShorten = useCallback(async (minutes: number) => {
+    if (!activeEvent) return;
+    const newEnd = new Date(Math.max(activeEvent.start.getTime() + 5 * 60 * 1000, activeEvent.end.getTime() - minutes * 60 * 1000));
+    await applyEventTiming(activeEvent, activeEvent.start, newEnd);
+    setFeedback({ variant: 'success', message: `Shortened by ${minutes}m.` });
+  }, [activeEvent, applyEventTiming]);
+
+  const handleConflictShift = useCallback(async (minutes: number) => {
+    if (!activeEvent) return;
+    const delta = minutes * 60 * 1000;
+    await applyEventTiming(activeEvent, new Date(activeEvent.start.getTime() + delta), new Date(activeEvent.end.getTime() + delta));
+    setFeedback({ variant: 'success', message: `Shifted by +${minutes}m.` });
+  }, [activeEvent, applyEventTiming]);
+
+  const handleUndoLast = useCallback(async () => {
+    if (!activeEvent || !lastActionPatch || lastActionPatch.id !== activeEvent.id) return;
+    await applyEventTiming(activeEvent, lastActionPatch.prevStart, lastActionPatch.prevEnd);
+    setFeedback({ variant: 'info', message: 'Reverted last change.' });
+    setLastActionPatch(null);
+  }, [activeEvent, lastActionPatch, applyEventTiming]);
+
+  const clearFeedback = useCallback(() => setFeedback(null), []);
+
+  const handleRebalanceNextDay = useCallback(async () => {
+    setRebalanceLoading(true);
+    try {
+      const solverRunId = await planner.requestPlanningRun({ days: 1, includeBusy: true });
+      if (solverRunId) {
+        setFeedback({ variant: 'success', message: `24h rebalance queued (run ${solverRunId.slice(0, 8)}…).` });
+      } else {
+        setFeedback({ variant: 'info', message: 'AI is recalibrating the next 24 hours.' });
+      }
+    } catch (err) {
+      console.error('Failed to rebalance planner window', err);
+      pushDiagnosticLog({
+        channel: 'ai-planner',
+        level: 'warn',
+        timestamp: Date.now(),
+        message: 'Failed to trigger 24h planner rebalance.',
+        details: err instanceof Error ? err.message : String(err),
+      });
+      setFeedback({ variant: 'danger', message: 'Could not trigger the 24h rebalance. Try again shortly.' });
+    } finally {
+      setRebalanceLoading(false);
+    }
+  }, [planner]);
+
+  const handleRunNightlyOrchestration = useCallback(async () => {
+    if (!currentUser) {
+      setFeedback({ variant: 'danger', message: 'Please sign in to run full replan.' });
+      return;
+    }
+    
+    setOrchestrationLoading(true);
+    try {
+      const callable = httpsCallable(functions, 'runNightlyChainNow', { timeout: 540000 });
+      const response = await callable({ planningMode, fitnessBlocksAutoCreate });
+      const payload = response.data as { results?: Array<{ step?: string; status?: string }> };
+      const results = payload?.results || [];
+      const successSteps = results.filter(r => r.status === 'ok').length;
+      const totalSteps = results.length;
+      
+      if (successSteps === totalSteps) {
+        setFeedback({ variant: 'success', message: `Full replan complete: all ${totalSteps} orchestration steps succeeded.` });
+      } else if (successSteps > 0) {
+        setFeedback({ variant: 'info', message: `Full replan partial: ${successSteps}/${totalSteps} orchestration steps completed.` });
+      } else {
+        setFeedback({ variant: 'danger', message: 'Full replan failed. Check logs and try again.' });
+      }
+    } catch (err) {
+      console.error('Nightly orchestration failed', err);
+      pushDiagnosticLog({
+        channel: 'ai-planner',
+        level: 'error',
+        timestamp: Date.now(),
+        message: 'Failed to trigger nightly orchestration.',
+        details: err instanceof Error ? err.message : String(err),
+      });
+      setFeedback({ variant: 'danger', message: normalizeCallableError(err, 'Full replan failed. Please retry in a moment.') });
+    } finally {
+      setOrchestrationLoading(false);
+    }
+  }, [currentUser, planningMode, fitnessBlocksAutoCreate]);
+
+  // Load and save planning mode from user profile
+  useEffect(() => {
+    if (!currentUser) return;
+    const unsub = onSnapshot(doc(db, 'profiles', currentUser.uid), (snap) => {
+      const data = snap.exists() ? (snap.data() as Record<string, unknown>) : null;
+      const stored = data?.plannerMode as string | undefined;
+      if (!savingPlanningModeRef.current && (stored === 'strict' || stored === 'smart')) setPlanningMode(stored);
+        if (typeof data?.fitnessBlocksAutoCreate === 'boolean') {
+          setFitnessBlocksAutoCreate(data.fitnessBlocksAutoCreate);
+        }
+    });
+    return () => unsub();
+  }, [currentUser]);
+
+  const savePlanningMode = useCallback(async (mode: PlanningMode) => {
+    if (!currentUser) return;
+    setPlanningMode(mode);
+    setSavingPlanningMode(true);
+    savingPlanningModeRef.current = true;
+    try {
+      await updateDoc(doc(db, 'profiles', currentUser.uid), { plannerMode: mode });
+    } catch {
+      // ignore
+    } finally {
+      savingPlanningModeRef.current = false;
+      setSavingPlanningMode(false);
+    }
+  }, [currentUser]);
+
+  const saveFitnessToggle = useCallback(async (value: boolean) => {
+    if (!currentUser) return;
+    setSavingFitnessToggle(true);
+    try {
+      await updateDoc(doc(db, 'profiles', currentUser.uid), { fitnessBlocksAutoCreate: value });
+      setFitnessBlocksAutoCreate(value);
+    } finally {
+      setSavingFitnessToggle(false);
+    }
+  }, [currentUser]);
+
+  return (
+    <>
+    <Container fluid className="py-4 unified-planner">
+      <DayCapacityWarningBanner />
+      <Row className="g-4">
+        <Col lg={7} xl={8}>
+          <Card className="shadow-sm border-0 h-100">
+            <Card.Header className="d-flex flex-wrap align-items-center justify-content-between gap-2">
+              <div className="d-flex align-items-center gap-3">
+                <span className="planner-icon-circle">
+                  <CalendarIcon size={18} />
+                </span>
+                <div>
+                  <div className="fw-semibold">Calendar</div>
+                  <small className="text-muted">
+                    Drag, drop, and orchestrate your day across Google Calendar, AI routines, and calendar entries.
+                  </small>
+                </div>
+              </div>
+              {/* Action buttons — moved out of calendar control bar */}
+              <div className="d-flex align-items-center gap-2 flex-wrap ms-auto">
+                <Button
+                  variant="outline-secondary"
+                  size="sm"
+                  onClick={() => planner.refreshExternalEvents()}
+                  disabled={planner.loading}
+                  title="Pull latest events from Google Calendar"
+                >
+                  <RefreshCw size={14} className="me-1" /> Sync Google
+                </Button>
+                <Button
+                  variant="outline-primary"
+                  size="sm"
+                  onClick={handleReplanCalendar}
+                  disabled={planner.loading || replanLoading}
+                  title="Delta replan: quickly rebalance existing calendar blocks using current priorities."
+                >
+                  {replanLoading ? <Spinner size="sm" animation="border" className="me-1" /> : <Clock size={14} className="me-1" />}
+                  Delta replan
+                </Button>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={handleRunNightlyOrchestration}
+                  disabled={planner.loading || orchestrationLoading}
+                  title="Full replan: runs full nightly orchestration (pointing, conversions, priority scoring, and calendar planning)."
+                >
+                  {orchestrationLoading ? <Spinner size="sm" animation="border" className="me-1" /> : <Sparkles size={14} className="me-1" />}
+                  Full replan
+                </Button>
+                <PlanActionBar />
+                <Button size="sm" variant="outline-primary" onClick={() => openComposerForSlot(new Date(), addMinutes(new Date(), 60))} title="Create a new calendar entry">
+                  + New Entry
+                </Button>
+                <Button
+                  size="sm"
+                  variant={showPlanningSettings ? 'secondary' : 'outline-secondary'}
+                  onClick={() => setShowPlanningSettings((v) => !v)}
+                  title="Configure planning aggressiveness mode"
+                >
+                  <Settings size={14} className="me-1" />
+                  {planningMode === 'smart' ? 'Smart' : 'Strict'}
+                </Button>
+              </div>
+            </Card.Header>
+            {showPlanningSettings && (
+              <div className="border-bottom px-3 py-2" style={{ background: 'var(--bs-light, #f8f9fa)' }}>
+                <div className="d-flex align-items-start gap-3 flex-wrap">
+                  <small className="text-muted fw-semibold" style={{ paddingTop: '6px', whiteSpace: 'nowrap' }}>
+                    Planning mode:
+                  </small>
+                  {PLANNING_MODE_CONFIG.map((m) => (
+                    <Button
+                      key={m.value}
+                      size="sm"
+                      variant={planningMode === m.value ? 'primary' : 'outline-secondary'}
+                      onClick={() => savePlanningMode(m.value)}
+                      disabled={savingPlanningMode}
+                    >
+                      {m.label}
+                    </Button>
+                  ))}
+                  <small className="text-muted" style={{ flex: '1 1 240px', paddingTop: '4px' }}>
+                    {PLANNING_MODE_CONFIG.find((m) => m.value === planningMode)?.description}
+                  </small>
+                </div>
+              </div>
+            )}
+            {feedback && (
+              <Alert
+                variant={feedback.variant}
+                onClose={clearFeedback}
+                dismissible
+                className="mb-0 rounded-0"
+              >
+                {feedback.message}
+              </Alert>
+            )}
+            <Card.Body className="p-0">
+              {planner.loading && events.length === 0 ? (
+                <div className="calendar-placeholder d-flex align-items-center justify-content-center text-muted flex-column py-5">
+                  <Spinner animation="border" size="sm" className="mb-2" />
+                  <div>Loading planner data…</div>
+                </div>
+              ) : (
+                <div className="planner-calendar-wrapper">
+                  <DragAndDropCalendar
+                    localizer={localizer}
+                    events={events}
+                    view={view}
+                    defaultView={Views.AGENDA}
+                    date={calendarDate}
+                    onNavigate={(date) => setCalendarDate(date)}
+                    onView={(next) => setView(next as ViewType)}
+                    onRangeChange={handleRangeChange}
+                    selectable
+                    resizable
+                    step={30}
+                    popup
+                    onEventDrop={handleEventMove}
+                    onEventResize={handleEventResize}
+                    onSelectSlot={handleSelectSlot}
+                    onSelectEvent={handleSelectEvent}
+                    eventPropGetter={eventStyleGetter}
+                    scrollToTime={calendarScrollTime}
+                    getNow={() => new Date()}
+                    style={{ height: 'calc(100vh - 220px)' }}
+                    min={new Date(1970, 1, 1, 5, 0)}
+                    max={new Date(1970, 1, 1, 23, 30)}
+                    formats={{
+                      timeGutterFormat: (date) => format(date, 'HH:mm'),
+                      eventTimeRangeFormat: ({ start, end }) => `${format(start, 'HH:mm')} – ${format(end, 'HH:mm')}`,
+                    }}
+                  />
+                  {/* Conflict resolution panel */}
+                  {isConflicting(activeEvent) && (
+                    <div className="d-flex align-items-center gap-2 p-2 border-top" style={{ background: 'var(--bs-warning-bg-subtle, var(--panel))' }}>
+                      <span className="text-danger fw-semibold">Resolve conflict:</span>
+                      <Button size="sm" variant="outline-primary" onClick={handleConflictMoveNext}>Move to next free slot</Button>
+                      <Button size="sm" variant="outline-secondary" onClick={() => handleConflictShorten(15)}>Shorten by 15m</Button>
+                      <Button size="sm" variant="outline-secondary" onClick={() => handleConflictShift(15)}>Shift +15m</Button>
+                      <Button size="sm" variant="outline-secondary" disabled={!lastActionPatch} onClick={handleUndoLast}>Undo</Button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </Card.Body>
+          </Card>
+        </Col>
+        <Col lg={5} xl={4}>
+          <Card className="shadow-sm border-0 mb-4">
+            <Card.Header className="d-flex align-items-center justify-content-between">
+              <div className="fw-semibold d-flex align-items-center gap-2">
+                <ListChecks size={18} /> Top 3 priorities
+              </div>
+              <div className="d-flex align-items-center gap-2">
+                <Badge bg="secondary" pill>{currentPersona === 'work' ? 'Work' : 'Personal'}</Badge>
+                <Button
+                  size="sm"
+                  variant="outline-secondary"
+                  onClick={() => setTop3Collapsed((prev) => !prev)}
+                >
+                  {top3Collapsed ? 'Show' : 'Hide'}
+                </Button>
+              </div>
+            </Card.Header>
+            {!top3Collapsed && (
+              <Card.Body className="p-3 d-flex flex-column gap-3">
+                {top3Loading ? (
+                  <div className="d-flex align-items-center gap-2 text-muted">
+                    <Spinner size="sm" animation="border" /> Loading top 3…
+                  </div>
+                ) : (top3Tasks.length === 0 && top3Stories.length === 0) ? (
+                  <div className="text-muted small">No Top 3 items flagged for this persona yet.</div>
+                ) : (
+                  <>
+                    <div>
+                      <div className="text-uppercase text-muted small fw-semibold mb-1">Stories</div>
+                      {top3Stories.length === 0 ? (
+                        <div className="text-muted small">No stories flagged.</div>
+                      ) : (
+                        top3Stories.map((story) => {
+                          const label = storyLabel(story);
+                          const aiScore = (story as any).aiCriticalityScore ?? (story as any).aiPriorityScore;
+                          const href = `/stories/${(story as any).ref || story.id}`;
+                          const storyPriorityBadge = getPriorityBadge((story as any).priority);
+                          const storyDueMs = (() => {
+                            const raw = (story as any).targetDate ?? (story as any).dueDate ?? null;
+                            if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+                            if (raw?.toDate) return raw.toDate().getTime();
+                            const parsed = raw ? Date.parse(String(raw)) : NaN;
+                            return Number.isNaN(parsed) ? null : parsed;
+                          })();
+                          const storyStatusVal = Number(story.status ?? 0);
+                          const storyStatusMap: Record<number, { bg: string; label: string }> = {
+                            0: { bg: 'light', label: 'Backlog' },
+                            1: { bg: 'info', label: 'Planned' },
+                            2: { bg: 'primary', label: 'In Progress' },
+                            3: { bg: 'warning', label: 'Testing' },
+                            4: { bg: 'success', label: 'Done' },
+                          };
+                          const storyS = storyStatusMap[storyStatusVal] || storyStatusMap[0];
+                          return (
+                            <div key={story.id} className="border rounded p-2 mb-2 dashboard-due-item">
+                              <div className="d-flex align-items-start justify-content-between gap-2">
+                                <div className="fw-semibold small flex-grow-1">
+                                  <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditStory(story); }}>{label}</a>
+                                </div>
+                                <button
+                                  type="button"
+                                  className="d-none d-md-inline-flex align-items-center justify-content-center"
+                                  onClick={() => showSidebar(story as any, 'story')}
+                                  title="Activity stream"
+                                  style={{
+                                    color: 'var(--bs-secondary-color)',
+                                    padding: 4,
+                                    borderRadius: 4,
+                                    border: 'none',
+                                    background: 'transparent',
+                                    cursor: 'pointer',
+                                    lineHeight: 0,
+                                    flexShrink: 0,
+                                  }}
+                                >
+                                  <Activity size={14} />
+                                </button>
+                              </div>
+                              <div className="d-flex align-items-center gap-2 mt-1 flex-wrap">
+                                <span className="text-muted d-inline-flex align-items-center gap-1" style={{ fontSize: 11 }}>
+                                  <Clock size={11} />
+                                  <input
+                                    type="date"
+                                    className="dashboard-due-date-input"
+                                    value={storyDueMs ? format(new Date(storyDueMs), 'yyyy-MM-dd') : ''}
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      if (!val) return;
+                                      const newDue = new Date(val + 'T12:00:00').getTime();
+                                      handleStoryDueDateChange(story, newDue);
+                                    }}
+                                  />
+                                </span>
+                                <span className="dashboard-chip-select-wrap">
+                                  <select
+                                    className="dashboard-chip-select"
+                                    value={Number((story as any).priority ?? 0)}
+                                    onChange={(e) => handleStoryPriorityChange(story, Number(e.target.value))}
+                                    style={{
+                                      backgroundColor: `var(--bs-${storyPriorityBadge.bg})`,
+                                      color: storyPriorityBadge.bg === 'warning' || storyPriorityBadge.bg === 'light' ? '#000' : '#fff',
+                                    }}
+                                  >
+                                    <option value={0}>None</option>
+                                    <option value={1}>Low</option>
+                                    <option value={2}>Medium</option>
+                                    <option value={3}>High</option>
+                                    <option value={4}>Critical</option>
+                                  </select>
+                                </span>
+                                <span className="dashboard-chip-select-wrap">
+                                  <select
+                                    className="dashboard-chip-select"
+                                    value={storyStatusVal}
+                                    onChange={(e) => handleStoryStatusChange(story, Number(e.target.value))}
+                                    style={{
+                                      backgroundColor: `var(--bs-${storyS.bg})`,
+                                      color: storyS.bg === 'light' || storyS.bg === 'warning' ? '#000' : '#fff',
+                                    }}
+                                  >
+                                    <option value={0}>Backlog</option>
+                                    <option value={1}>Planned</option>
+                                    <option value={2}>In Progress</option>
+                                    <option value={3}>Testing</option>
+                                    <option value={4}>Done</option>
+                                  </select>
+                                </span>
+                                <span className="text-muted" style={{ fontSize: 11 }}>
+                                  AI {aiScore != null ? Math.round(aiScore) : '—'}
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                    <div>
+                      <div className="text-uppercase text-muted small fw-semibold mb-1">Tasks</div>
+                      {top3Tasks.length === 0 ? (
+                        <div className="text-muted small">No tasks flagged.</div>
+                      ) : (
+                        top3Tasks.map((task) => {
+                          const refLabel = taskRefLabel(task);
+                          const aiScore = (task as any).aiCriticalityScore ?? (task as any).aiPriorityScore;
+                          const priorityBadge = getPriorityBadge((task as any).priority);
+                          const dueMs = getTaskDueMs(task);
+                          return (
+                            <div key={task.id} className="border rounded p-2 mb-2 dashboard-due-item">
+                              <div className="d-flex align-items-start justify-content-between gap-2">
+                                <div className="fw-semibold small flex-grow-1">
+                                  <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>{task.title}</a>
+                                </div>
+                                <button
+                                  type="button"
+                                  className="d-none d-md-inline-flex align-items-center justify-content-center"
+                                  onClick={() => showSidebar(task as any, 'task')}
+                                  title="Activity stream"
+                                  style={{
+                                    color: 'var(--bs-secondary-color)',
+                                    padding: 4,
+                                    borderRadius: 4,
+                                    border: 'none',
+                                    background: 'transparent',
+                                    cursor: 'pointer',
+                                    lineHeight: 0,
+                                    flexShrink: 0,
+                                  }}
+                                >
+                                  <Activity size={14} />
+                                </button>
+                              </div>
+                              {refLabel && (
+                                <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>
+                                  <code className="text-primary" style={{ fontSize: 11 }}>{refLabel}</code>
+                                </a>
+                              )}
+                              <div className="d-flex align-items-center gap-2 mt-1 flex-wrap">
+                                <span className="text-muted d-inline-flex align-items-center gap-1" style={{ fontSize: 11 }}>
+                                  <Clock size={11} />
+                                  <input
+                                    type="date"
+                                    className="dashboard-due-date-input"
+                                    value={dueMs ? format(new Date(dueMs), 'yyyy-MM-dd') : ''}
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      if (!val) return;
+                                      const newDue = new Date(val + 'T12:00:00').getTime();
+                                      handleTaskDueDateChange(task, newDue);
+                                    }}
+                                  />
+                                </span>
+                                <span className="dashboard-chip-select-wrap">
+                                  <select
+                                    className="dashboard-chip-select"
+                                    value={Number((task as any).priority ?? 0)}
+                                    onChange={(e) => handleTaskPriorityChange(task, Number(e.target.value))}
+                                    style={{
+                                      backgroundColor: `var(--bs-${priorityBadge.bg})`,
+                                      color: priorityBadge.bg === 'warning' || priorityBadge.bg === 'orange' || priorityBadge.bg === 'light' ? '#000' : '#fff',
+                                    }}
+                                  >
+                                    <option value={0}>None</option>
+                                    <option value={1}>Low</option>
+                                    <option value={2}>Medium</option>
+                                    <option value={3}>High</option>
+                                    <option value={4}>Critical</option>
+                                  </select>
+                                </span>
+                                {(() => {
+                                  const statusVal = Number(task.status ?? 0);
+                                  const statusMap: Record<number, { bg: string; label: string }> = {
+                                    0: { bg: 'secondary', label: 'To do' },
+                                    1: { bg: 'primary', label: 'Doing' },
+                                    2: { bg: 'success', label: 'Done' },
+                                  };
+                                  const s = statusMap[statusVal] || statusMap[0];
+                                  return (
+                                    <span className="dashboard-chip-select-wrap">
+                                      <select
+                                        className="dashboard-chip-select"
+                                        value={statusVal}
+                                        onChange={(e) => handleTaskStatusChange(task, Number(e.target.value))}
+                                        style={{
+                                          backgroundColor: `var(--bs-${s.bg})`,
+                                          color: '#fff',
+                                        }}
+                                      >
+                                        <option value={0}>To do</option>
+                                        <option value={1}>Doing</option>
+                                        <option value={2}>Done</option>
+                                      </select>
+                                    </span>
+                                  );
+                                })()}
+                                <span className="text-muted" style={{ fontSize: 11 }}>
+                                  AI {aiScore != null ? Math.round(aiScore) : '—'}
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </>
+                )}
+              </Card.Body>
+            )}
+          </Card>
+
+          <Card className="shadow-sm border-0 mb-4">
+                <Card.Header className="d-flex align-items-center justify-content-between">
+                  <div className="fw-semibold d-flex align-items-center gap-2">
+                    <Clock size={16} /> Tasks due today
+                  </div>
+                  <div className="d-flex align-items-center gap-2">
+                    <Form.Select
+                      size="sm"
+                      value={tasksSortMode}
+                      onChange={(e) => setTasksSortMode(e.target.value as 'due' | 'ai' | 'top3')}
+                    >
+                      <option value="due">Sort: Due time</option>
+                      <option value="ai">Sort: AI score</option>
+                      <option value="top3">Top 3 (AI)</option>
+                    </Form.Select>
+                    <Badge bg={sortedTaskItemsDueToday.length > 0 ? 'info' : 'secondary'} pill>
+                      {sortedTaskItemsDueToday.length}
+                    </Badge>
+                  </div>
+                </Card.Header>
+                <Card.Body className="p-3 d-flex flex-column gap-2">
+                  {tasksLoading ? (
+                    <div className="d-flex align-items-center gap-2 text-muted">
+                      <Spinner size="sm" animation="border" /> Loading tasks…
+                    </div>
+                  ) : sortedTaskItemsDueToday.length === 0 ? (
+                    <div className="text-muted small">No tasks due today.</div>
+                  ) : (
+                    sortedTaskItemsDueToday.map((task) => {
+                      const dueMs = getTaskDueMs(task);
+                      const aiScore = (task as any).aiCriticalityScore ?? (task as any).aiPriorityScore;
+                      const refLabel = taskRefLabel(task);
+                      const priorityBadge = getPriorityBadge((task as any).priority);
+                      const statusVal = Number(task.status ?? 0);
+                      const statusMap: Record<number, { bg: string; label: string }> = {
+                        0: { bg: 'secondary', label: 'To do' },
+                        1: { bg: 'primary', label: 'Doing' },
+                        2: { bg: 'success', label: 'Done' },
+                      };
+                      const s = statusMap[statusVal] || statusMap[0];
+                      return (
+                        <div key={task.id} className="border rounded p-2 dashboard-due-item">
+                          <div className="d-flex align-items-start justify-content-between gap-2">
+                            <div className="fw-semibold small flex-grow-1">
+                              <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>{task.title}</a>
+                            </div>
+                            <button
+                              type="button"
+                              className="d-none d-md-inline-flex align-items-center justify-content-center"
+                              onClick={() => showSidebar(task as any, 'task')}
+                              title="Activity stream"
+                              style={{
+                                color: 'var(--bs-secondary-color)',
+                                padding: 4,
+                                borderRadius: 4,
+                                border: 'none',
+                                background: 'transparent',
+                                cursor: 'pointer',
+                                lineHeight: 0,
+                                flexShrink: 0,
+                              }}
+                            >
+                              <Activity size={14} />
+                            </button>
+                          </div>
+                          {refLabel && (
+                            <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>
+                              <code className="text-primary" style={{ fontSize: 11 }}>{refLabel}</code>
+                            </a>
+                          )}
+                          <div className="d-flex align-items-center gap-2 mt-1 flex-wrap">
+                            <span className="text-muted d-inline-flex align-items-center gap-1" style={{ fontSize: 11 }}>
+                              <Clock size={11} />
+                              <input
+                                type="date"
+                                className="dashboard-due-date-input"
+                                value={dueMs ? format(new Date(dueMs), 'yyyy-MM-dd') : ''}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  if (!val) return;
+                                  const newDue = new Date(val + 'T12:00:00').getTime();
+                                  handleTaskDueDateChange(task, newDue);
+                                }}
+                              />
+                            </span>
+                            <span className="dashboard-chip-select-wrap">
+                              <select
+                                className="dashboard-chip-select"
+                                value={Number((task as any).priority ?? 0)}
+                                onChange={(e) => handleTaskPriorityChange(task, Number(e.target.value))}
+                                style={{
+                                  backgroundColor: `var(--bs-${priorityBadge.bg})`,
+                                  color: priorityBadge.bg === 'warning' || priorityBadge.bg === 'orange' || priorityBadge.bg === 'light' ? '#000' : '#fff',
+                                }}
+                              >
+                                <option value={0}>None</option>
+                                <option value={1}>Low</option>
+                                <option value={2}>Medium</option>
+                                <option value={3}>High</option>
+                                <option value={4}>Critical</option>
+                              </select>
+                            </span>
+                            <span className="dashboard-chip-select-wrap">
+                              <select
+                                className="dashboard-chip-select"
+                                value={statusVal}
+                                onChange={(e) => handleTaskStatusChange(task, Number(e.target.value))}
+                                style={{
+                                  backgroundColor: `var(--bs-${s.bg})`,
+                                  color: '#fff',
+                                }}
+                              >
+                                <option value={0}>To do</option>
+                                <option value={1}>Doing</option>
+                                <option value={2}>Done</option>
+                              </select>
+                            </span>
+                            {aiScore != null && (
+                              <span className="text-muted" style={{ fontSize: 10 }}>AI {Math.round(aiScore)}</span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </Card.Body>
+          </Card>
+          <Card className="shadow-sm border-0 mb-4">
+                <Card.Header className="d-flex align-items-center justify-content-between">
+                  <div className="fw-semibold d-flex align-items-center gap-2">
+                    <ListChecks size={16} /> Chores & Habits
+                  </div>
+                  <div className="d-flex align-items-center gap-2">
+                    <Button size="sm" variant="outline-secondary" href="/chores/checklist">
+                      Checklist
+                    </Button>
+                    <Badge bg={sortedChoreItemsDueToday.length > 0 ? 'info' : 'secondary'} pill>
+                      {sortedChoreItemsDueToday.length}
+                    </Badge>
+                  </div>
+                </Card.Header>
+                <Card.Body className="p-3 d-flex flex-column gap-2">
+                  {tasksLoading ? (
+                    <div className="d-flex align-items-center gap-2 text-muted">
+                      <Spinner size="sm" animation="border" /> Loading chores…
+                    </div>
+                  ) : sortedChoreItemsDueToday.length === 0 ? (
+                    <div className="text-muted small">No chores, habits, or routines due today.</div>
+                  ) : (
+                    sortedChoreItemsDueToday.map((task) => {
+                      const kind = getChoreKind(task) || 'chore';
+                      const dueMs = resolveRecurringDueMs(task, new Date(), startOfDay(new Date()).getTime());
+                      const dueLabel = dueMs ? formatDueLabel(dueMs) : 'today';
+                      const isOverdue = !!dueMs && dueMs < startOfDay(new Date()).getTime();
+                      const badgeVariant = kind === 'routine' ? 'success' : kind === 'habit' ? 'secondary' : 'primary';
+                      const badgeLabel = kind === 'routine' ? 'Routine' : kind === 'habit' ? 'Habit' : 'Chore';
+                      const busy = !!choreCompletionBusy[task.id];
+                      return (
+                        <div key={task.id} className="border rounded p-2 d-flex align-items-start gap-2">
+                          <Form.Check
+                            type="checkbox"
+                            checked={busy}
+                            disabled={busy}
+                            onChange={() => handleCompleteChoreTask(task)}
+                            aria-label={`Complete ${task.title}`}
+                          />
+                          <div className="flex-grow-1">
+                            <div className="fw-semibold">{task.title}</div>
+                            <div className="text-muted small d-flex align-items-center gap-1">
+                              <Clock size={12} /> {isOverdue ? `Overdue · ${dueLabel}` : `Due ${dueLabel}`}
+                            </div>
+                          </div>
+                          <div className="d-flex flex-column align-items-end gap-1">
+                            {isOverdue && <Badge bg="danger">Overdue</Badge>}
+                            <Badge bg={badgeVariant}>{badgeLabel}</Badge>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </Card.Body>
+          </Card>
+
+          <Card className="shadow-sm border-0 mb-4">
+            <Card.Header className="fw-semibold">Planner Audit</Card.Header>
+            <Card.Body className="p-3">
+              {(() => {
+                const total = planner.instances.length;
+                const unscheduled = planner.instances.filter(i => i.status === 'unscheduled');
+                const lastUpdated = planner.instances.reduce<number>((acc, i) => {
+                  const t = Number((i as any).updatedAt || 0);
+                  return Number.isFinite(t) && t > acc ? t : acc;
+                }, 0);
+                const reasonCounts = new Map<string, number>();
+                unscheduled.forEach(i => {
+                  const r = String((i as any).statusReason || 'unknown');
+                  reasonCounts.set(r, (reasonCounts.get(r) || 0) + 1);
+                });
+                const topReasons = Array.from(reasonCounts.entries()).sort((a, b) => b[1] - a[1]).slice(0, 3);
+                return (
+                  <div>
+                    <div className="d-flex justify-content-between mb-2">
+                      <span className="text-muted">Instances in window</span>
+                      <span className="fw-semibold">{total}</span>
+                    </div>
+                    <div className="d-flex justify-content-between mb-2">
+                      <span className="text-muted">Unscheduled</span>
+                      <span className="fw-semibold">{unscheduled.length}</span>
+                    </div>
+                    {topReasons.length > 0 && (
+                      <div className="mb-2">
+                        <div className="text-muted small">Top reasons</div>
+                        <ul className="small mb-0">
+                          {topReasons.map(([label, count]) => (
+                            <li key={label}>{label} — {count}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    <div className="text-muted small">Last update {lastUpdated ? new Date(lastUpdated).toLocaleString() : '—'}</div>
+                  </div>
+                );
+              })()}
+            </Card.Body>
+          </Card>
+
+          <Card className="shadow-sm border-0 mb-4">
+            <Card.Header className="fw-semibold">AI Automations & Suggestions</Card.Header>
+            <Card.Body className="d-flex flex-column gap-3">
+              <div>
+                <div className="text-uppercase text-muted small fw-semibold mb-1">Pending insertions</div>
+                {unscheduledItems.length === 0 ? (
+                  <div className="text-muted small">AI has placed all chores and routines. Great job!</div>
+                ) : (
+                  <ul className="list-unstyled small mb-0">
+                    {unscheduledItems.map((item) => {
+                      const typeLabel = item.sourceType.charAt(0).toUpperCase() + item.sourceType.slice(1);
+                      const policyLabel = item.schedulingContext?.policyMode
+                        ? humanizePolicyMode(item.schedulingContext.policyMode)
+                        : null;
+                      const reasonLabel = item.statusReason || 'Waiting for calendar entry';
+                      return (
+                        <li key={item.id} className="border rounded p-2 mb-2">
+                          <div className="d-flex justify-content-between align-items-start gap-2">
+                            <div className="d-flex flex-column">
+                              <span className="fw-semibold">{item.title || item.sourceId}</span>
+                              <span className="text-muted small">{typeLabel}{policyLabel ? ` · ${policyLabel}` : ''}</span>
+                              {reasonLabel && (
+                                <span className="text-warning small">{reasonLabel}</span>
+                              )}
+                            </div>
+                            <Badge bg="warning" text="dark">{typeLabel}</Badge>
+                          </div>
+                          {(item.deepLink || item.mobileCheckinUrl) && (
+                            <div className="d-flex gap-2 flex-wrap mt-2">
+                              {item.deepLink && (
+                                <Button
+                                  as="a"
+                                  href={item.deepLink}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  size="sm"
+                                  variant="outline-primary"
+                                >
+                                  <LinkIcon size={14} className="me-1" /> Open item
+                                </Button>
+                              )}
+                              {item.mobileCheckinUrl && (
+                                <Button
+                                  as="a"
+                                  href={item.mobileCheckinUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  size="sm"
+                                  variant="outline-success"
+                                >
+                                  <Smartphone size={14} className="me-1" /> Check-in
+                                </Button>
+                              )}
+                            </div>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
+              <div>
+                <div className="text-uppercase text-muted small fw-semibold mb-1">Top priorities</div>
+                {topChores.length === 0 && topRoutines.length === 0 ? (
+                  <div className="text-muted small">No recurring chores or routines defined yet.</div>
+                ) : (
+                  <div className="d-flex flex-column gap-2">
+                    {topChores.map((chore) => (
+                      <div key={chore.id} className="d-flex justify-content-between small chore-pill">
+                        <div>
+                          <div className="fw-semibold">{chore.title}</div>
+                          <div className="text-muted">Priority P{chore.priority}</div>
+                        </div>
+                        <Badge bg="info">Chore</Badge>
+                      </div>
+                    ))}
+                    {topRoutines.map((routine) => (
+                      <div key={routine.id} className="d-flex justify-content-between small chore-pill">
+                        <div>
+                          <div className="fw-semibold">{routine.title}</div>
+                          <div className="text-muted">Target {routine.dailyTarget ?? 1}</div>
+                        </div>
+                        <Badge bg="success">Routine</Badge>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <Button
+                variant="outline-primary"
+                size="sm"
+                onClick={handleRebalanceNextDay}
+                disabled={rebalanceLoading}
+              >
+                {rebalanceLoading ? <Spinner size="sm" animation="border" className="me-1" /> : null}
+                Rebalance next 24h
+              </Button>
+            </Card.Body>
+          </Card>
+
+          {activeEvent && (
+            <Card className="shadow-sm border-0">
+              <Card.Header className="fw-semibold">Event details</Card.Header>
+              <Card.Body className="d-flex flex-column gap-3">
+                <div>
+                  <div className="fw-semibold">{activeEvent.title}</div>
+                  <div className="text-muted small">
+                    {format(activeEvent.start, 'EEE, MMM d • HH:mm')} – {format(activeEvent.end, 'HH:mm')}
+                  </div>
+                </div>
+                {activeEvent.type === 'external' && activeEvent.external?.raw?.htmlLink && (
+                  <Button
+                    as="a"
+                    href={String(activeEvent.external.raw.htmlLink)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    size="sm"
+                    variant="outline-secondary"
+                  >
+                    <ExternalLink size={16} className="me-1" /> Open in Google Calendar
+                  </Button>
+                )}
+                {activeEvent.type === 'external' && (
+                  <div className="text-muted small">
+                    Drag to reschedule. External events are never deleted from BOB.
+                  </div>
+                )}
+                {activeEvent.type === 'instance' && activeEvent.instance && (
+                  <>
+                    {['chore', 'routine', 'habit'].includes(
+                      (activeEvent.instance.sourceType || '').toLowerCase(),
+                    ) && (
+                      <div className="d-flex gap-2 flex-wrap">
+                        <Button
+                          size="sm"
+                          variant="success"
+                          onClick={() => handleInstanceStatusChange(activeEvent.instance!, 'completed')}
+                        >
+                          <CheckCircle size={16} className="me-1" /> Mark done
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline-secondary"
+                          onClick={() => handleInstanceStatusChange(activeEvent.instance!, 'missed')}
+                        >
+                          Skip
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline-primary"
+                          onClick={async () => {
+                            const s = addMinutes(new Date(activeEvent.start), 15);
+                            const e = addMinutes(new Date(activeEvent.end), 15);
+                            await handleEventMove({ event: activeEvent, start: s, end: e });
+                          }}
+                        >
+                          Shift +15m
+                        </Button>
+                      </div>
+                    )}
+                    {(activeEvent.instance.deepLink || activeEvent.instance.mobileCheckinUrl) && (
+                      <div className="d-flex gap-2 flex-wrap">
+                        {activeEvent.instance.deepLink && (
+                          <Button
+                            as="a"
+                            href={activeEvent.instance.deepLink}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            size="sm"
+                            variant="outline-primary"
+                          >
+                            <LinkIcon size={16} className="me-1" /> Open item
+                          </Button>
+                        )}
+                        {activeEvent.instance.mobileCheckinUrl && (
+                          <Button
+                            as="a"
+                            href={activeEvent.instance.mobileCheckinUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            size="sm"
+                            variant="outline-success"
+                          >
+                            <Smartphone size={16} className="me-1" /> Mobile check-in
+                          </Button>
+                        )}
+                      </div>
+                    )}
+                    {activeEvent.themeLabel && (
+                      <div className="text-muted small">
+                        Theme{' '}
+                        <Badge bg="light" text="dark">{activeEvent.themeLabel}</Badge>
+                      </div>
+                    )}
+                    <div className="text-muted small">
+                      Status: {activeEvent.instance.status
+                        .replace(/_/g, ' ')
+                        .replace(/\b\w/g, (char) => char.toUpperCase())}
+                    </div>
+                    {activeEvent.instance.schedulingContext?.policyMode && (
+                      <div className="text-muted small">
+                        Policy: {humanizePolicyMode(activeEvent.instance.schedulingContext.policyMode)}
+                      </div>
+                    )}
+                    {activeEvent.instance.status === 'unscheduled' && activeEvent.instance.statusReason && (
+                      <div className="text-warning small">
+                        Reason: {activeEvent.instance.statusReason}
+                      </div>
+                    )}
+                  </>
+                )}
+                {activeEvent.type === 'block' && activeEvent.block && (
+                  <>
+                    <div className="text-muted small">
+                      Theme{' '}
+                      <Badge bg="light" text="dark">
+                        {activeEvent.themeLabel || activeEvent.block.theme}
+                      </Badge>
+                    </div>
+                    <div className="d-flex gap-2 mt-2">
+                      <Button
+                        size="sm"
+                        variant="outline-primary"
+                        onClick={async () => {
+                          const s = addMinutes(new Date(activeEvent.start), 15);
+                          const e = addMinutes(new Date(activeEvent.end), 15);
+                          await handleEventMove({ event: activeEvent, start: s, end: e });
+                        }}
+                      >
+                        Shift +15m
+                      </Button>
+                    </div>
+                  </>
+                )}
+              </Card.Body>
+            </Card>
+          )}
+        </Col>
+      </Row>
+
+      <Modal show={composerOpen} onHide={resetComposer} centered>
+        <Modal.Header closeButton>
+          <Modal.Title>{blockForm.id ? 'Edit calendar entry' : 'New calendar entry'}</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <Form className="d-flex flex-column gap-3">
+            {(blockForm.aiScore != null || blockForm.aiReason) && (
+              <div className="d-flex align-items-center gap-2">
+                <strong>AI priority:</strong>
+                <span className="badge bg-info text-dark">
+                  {blockForm.aiScore != null ? Math.round(blockForm.aiScore) : '—'}
+                </span>
+                {blockForm.aiReason && <span className="text-muted small">{blockForm.aiReason}</span>}
+              </div>
+            )}
+            <Form.Group>
+              <Form.Label>Title</Form.Label>
+              <Form.Control
+                value={blockForm.title}
+                onChange={(event) => setBlockForm((prev) => ({ ...prev, title: event.target.value }))}
+              />
+            </Form.Group>
+            <Form.Group>
+              <Form.Label>Link to story (optional)</Form.Label>
+              <Form.Control
+                list="planner-story-options"
+                placeholder="Search story by title..."
+                value={blockForm.storyInput || ''}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setBlockForm((prev) => ({
+                    ...prev,
+                    storyInput: value,
+                  }));
+                }}
+                onBlur={(event) => {
+                  const value = event.target.value.trim();
+                  const match = stories.find((s) => s.title === value || s.id === value);
+                  setBlockForm((prev) => ({
+                    ...prev,
+                    storyId: match ? match.id : undefined,
+                    storyInput: match ? (match.title || '') : value,
+                    title: match ? `${match.title || ''}` : prev.title,
+                    theme: match?.theme || prev.theme || blockDefaultTheme,
+                    aiScore: match
+                      ? ((match as any)?.aiCriticalityScore ?? (match as any)?.aiScore ?? prev.aiScore ?? null)
+                      : prev.aiScore,
+                    aiReason: match
+                      ? ((match as any)?.aiCriticalityReason ?? prev.aiReason ?? null)
+                      : prev.aiReason,
+                  }));
+                }}
+              />
+              <datalist id="planner-story-options">
+                {stories.map((s) => (
+                  <option key={s.id} value={s.title || ''} />
+                ))}
+              </datalist>
+            </Form.Group>
+            <Row className="g-3">
+              <Col md={6}>
+                <Form.Group>
+                  <Form.Label>Start</Form.Label>
+                  <Form.Control
+                    type="datetime-local"
+                    value={blockForm.start}
+                    onChange={(event) => setBlockForm((prev) => ({ ...prev, start: event.target.value }))}
+                  />
+                </Form.Group>
+              </Col>
+              <Col md={6}>
+                <Form.Group>
+                  <Form.Label>End</Form.Label>
+                  <Form.Control
+                    type="datetime-local"
+                    value={blockForm.end}
+                    onChange={(event) => setBlockForm((prev) => ({ ...prev, end: event.target.value }))}
+                  />
+                </Form.Group>
+              </Col>
+            </Row>
+            <Form.Group>
+              <Form.Label>Notes / rationale</Form.Label>
+              <Form.Control
+                as="textarea"
+                rows={2}
+                value={blockForm.rationale}
+                onChange={(event) => setBlockForm((prev) => ({ ...prev, rationale: event.target.value }))}
+              />
+            </Form.Group>
+            <Form.Group>
+              <Form.Label>Recurrence</Form.Label>
+              <Form.Select
+                value={blockForm.recurrenceFreq}
+                onChange={(e) => setBlockForm((prev) => ({
+                  ...prev,
+                  recurrenceFreq: e.target.value as BlockFormState['recurrenceFreq'],
+                  recurrenceDays: e.target.value === 'weekly' ? prev.recurrenceDays : [],
+                }))}
+              >
+                <option value="none">One-time</option>
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly (pick days)</option>
+              </Form.Select>
+              {blockForm.recurrenceFreq === 'weekly' && (
+                <div className="d-flex flex-wrap gap-2 mt-2">
+                  {['MO','TU','WE','TH','FR','SA','SU'].map((day) => (
+                    <Form.Check
+                      inline
+                      key={day}
+                      type="checkbox"
+                      id={`rec-${day}`}
+                      label={day}
+                      checked={blockForm.recurrenceDays.includes(day)}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setBlockForm((prev) => ({
+                          ...prev,
+                          recurrenceDays: checked
+                            ? Array.from(new Set([...(prev.recurrenceDays || []), day]))
+                            : (prev.recurrenceDays || []).filter((d) => d !== day),
+                        }));
+                      }}
+                    />
+                  ))}
+                </div>
+              )}
+              <div className="mt-2">
+                <Form.Label className="mb-0">Repeat until (optional)</Form.Label>
+                <Form.Control
+                  type="date"
+                  value={blockForm.recurrenceUntil}
+                  onChange={(e) => setBlockForm((prev) => ({ ...prev, recurrenceUntil: e.target.value }))}
+                />
+              </div>
+            </Form.Group>
+          </Form>
+        </Modal.Body>
+        <Modal.Footer>
+          {blockForm.storyId && (
+            <Button
+              variant="outline-info"
+              onClick={() => window.open(`/stories/${blockForm.storyId}`, '_blank')}
+            >
+              Open story
+            </Button>
+          )}
+          <Button variant="outline-secondary" onClick={resetComposer}>
+            Cancel
+          </Button>
+          <Button variant="primary" onClick={handleComposerSubmit} disabled={composerSaving}>
+            {composerSaving ? <Spinner size="sm" animation="border" /> : 'Save entry'}
+          </Button>
+        </Modal.Footer>
+      </Modal>
+    </Container>
+
+    <EditTaskModal
+      show={!!inlineEditTask}
+      task={inlineEditTask}
+      onHide={() => setInlineEditTask(null)}
+    />
+    <EditStoryModal
+      show={!!inlineEditStory}
+      story={inlineEditStory}
+      goals={[] as Goal[]}
+      onHide={() => setInlineEditStory(null)}
+    />
+    </>
+  );
+};
+
+export default UnifiedPlannerPage;

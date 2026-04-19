@@ -1,0 +1,1000 @@
+import React, { useEffect, useMemo, useState } from 'react';
+import { format } from 'date-fns';
+import { Modal, Button, Form, Row, Col } from 'react-bootstrap';
+import { doc, updateDoc, serverTimestamp, collection, query, where, orderBy, limit, onSnapshot, addDoc, deleteDoc } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
+import { useNavigate } from 'react-router-dom';
+import { db, functions } from '../firebase';
+import { useSprint } from '../contexts/SprintContext';
+import { Task, Sprint, Story, Goal } from '../types';
+import { useAuth } from '../contexts/AuthContext';
+import { usePersona } from '../contexts/PersonaContext';
+import { useSidebar } from '../contexts/SidebarContext';
+import { useGlobalThemes } from '../hooks/useGlobalThemes';
+import { isStatus } from '../utils/statusHelpers';
+import { normalizePriorityValue } from '../utils/priorityUtils';
+import ActivityStreamPanel from './common/ActivityStreamPanel';
+import TagInput from './common/TagInput';
+import { cascadeTaskPersona } from '../utils/personaCascade';
+import { formatTaskTagLabel } from '../utils/tagDisplay';
+import { normalizeTaskTags } from '../utils/taskTagging';
+import { findSprintForDate } from '../utils/taskSprintHelpers';
+import { parsePointsValue, TASK_DEFAULT_POINTS } from '../utils/points';
+import { planningSprints } from '../utils/sprintFilter';
+import { getGoalDisplayPath, getLeafGoalOptions, resolveLeafGoalSelection } from '../utils/goalHierarchy';
+import EditStoryModal from './EditStoryModal';
+import NewCalendarEventModal, { buildCalendarComposerInitialValues } from './planner/NewCalendarEventModal';
+import DeferItemModal from './DeferItemModal';
+import { Activity, CalendarPlus, Clock3, Trash2, Wand2 } from 'lucide-react';
+import DrivePickerButton from './shared/DrivePickerButton';
+
+interface EditTaskModalProps {
+  show: boolean;
+  task: Task | null;
+  onHide: () => void;
+  onUpdated?: () => void;
+  container?: HTMLElement | null;
+}
+
+const TASK_TYPE_OPTIONS = ['task', 'read', 'watch', 'chore', 'routine', 'habit'] as const;
+const RECURRING_TASK_TYPES = new Set(['chore', 'routine', 'habit']);
+const normalizeTaskType = (value: any): 'task' | 'chore' | 'routine' | 'habit' | 'read' | 'watch' => {
+  const raw = String(value || 'task').trim().toLowerCase();
+  const normalized = raw === 'habitual' ? 'habit' : raw;
+  if (TASK_TYPE_OPTIONS.includes(normalized as any)) {
+    return normalized as 'task' | 'chore' | 'routine' | 'habit' | 'read' | 'watch';
+  }
+  return 'task';
+};
+
+const normalizeTaskStatus = (status: any) => {
+  if (typeof status === 'number') return status;
+  const value = String(status || '').toLowerCase();
+  if (value.includes('done') || value.includes('complete')) return 2;
+  if (value.includes('progress') || value.includes('active')) return 1;
+  if (value.includes('block')) return 3;
+  return 0;
+};
+
+const resolveTimestampMs = (value: any): number | null => {
+  if (!value) return null;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (value instanceof Date) return value.getTime();
+  if (typeof value?.toMillis === 'function') return value.toMillis();
+  if (typeof value?.toDate === 'function') {
+    const dateValue = value.toDate();
+    return dateValue instanceof Date ? dateValue.getTime() : null;
+  }
+  if (typeof value === 'string') {
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? null : parsed;
+  }
+  if (value.seconds != null) {
+    return (value.seconds * 1000) + Math.floor((value.nanoseconds || 0) / 1e6);
+  }
+  return null;
+};
+
+const isHiddenSprint = (sprint: Sprint) => isStatus(sprint.status, 'closed') || isStatus(sprint.status, 'cancelled');
+const formatSprintLabel = (sprint: Sprint, statusOverride?: string) => {
+  const name = sprint.name || sprint.ref || `Sprint ${sprint.id.slice(-4)}`;
+  const statusLabel = statusOverride
+    ? ` (${statusOverride})`
+    : (isStatus(sprint.status, 'active') ? ' (Active)' : '');
+  return `${name}${statusLabel}`;
+};
+
+const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpdated, container }) => {
+  const navigate = useNavigate();
+  const { showSidebar } = useSidebar();
+  const { currentUser } = useAuth();
+  const { currentPersona } = usePersona();
+  const { sprints } = useSprint();
+  const { themes: globalThemes } = useGlobalThemes();
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [form, setForm] = useState({
+    title: '',
+    description: '',
+    url: '',
+    documentLink: '' as string,
+    status: 0 as number | string,
+    priority: 2 as number | string,
+    sprintId: '' as string,
+    points: TASK_DEFAULT_POINTS as string | number,
+    dueDate: '' as string,
+    dueTime: '' as string,
+    timeOfDay: '' as 'morning' | 'afternoon' | 'evening' | '',
+    storyId: '' as string,
+    goalId: '' as string,
+    tags: [] as string[],
+    type: 'task' as 'task' | 'chore' | 'routine' | 'habit' | 'read' | 'watch',
+    repeatFrequency: '' as '' | 'daily' | 'weekly' | 'monthly' | 'yearly',
+    repeatInterval: 1 as number | string,
+    daysOfWeek: [] as string[],
+    persona: 'personal' as 'personal' | 'work',
+  });
+  const [storyInput, setStoryInput] = useState('');
+  const [goalInput, setGoalInput] = useState('');
+  const [showLinkedStoryModal, setShowLinkedStoryModal] = useState(false);
+  const [stories, setStories] = useState<Story[]>([]);
+  const [goals, setGoals] = useState<Goal[]>([]);
+  const [converting, setConverting] = useState(false);
+  const [showCalendarComposer, setShowCalendarComposer] = useState(false);
+  const [calendarComposerInitialValues, setCalendarComposerInitialValues] = useState<any>({});
+  const [showDeferModal, setShowDeferModal] = useState(false);
+  const visibleSprints = planningSprints(sprints);
+  const selectedSprint = form.sprintId ? sprints.find((sprint) => sprint.id === form.sprintId) : null;
+  const selectedSprintStatus = selectedSprint
+    ? (isStatus(selectedSprint.status, 'closed') ? 'Completed' : (isStatus(selectedSprint.status, 'cancelled') ? 'Cancelled' : ''))
+    : '';
+  const macSyncedAtMs = task ? resolveTimestampMs((task as any).macSyncedAt) : null;
+  const showMacSync = !!task && (
+    (task as any).macSyncedAt != null
+    || (task as any).source === 'MacApp'
+    || (task as any).createdBy === 'mac_app'
+  );
+
+  const linkedStory = useMemo(
+    () => (form.storyId ? stories.find((s) => s.id === form.storyId) : null),
+    [form.storyId, stories],
+  );
+  const linkedGoalId = form.goalId || linkedStory?.goalId || '';
+  const linkedGoal = useMemo(
+    () => (linkedGoalId ? goals.find((g) => g.id === linkedGoalId) : null),
+    [linkedGoalId, goals],
+  );
+  const leafGoalOptions = useMemo(() => getLeafGoalOptions(goals), [goals]);
+
+  useEffect(() => {
+    if (!currentUser?.uid) return;
+    const q = query(
+      collection(db, 'stories'),
+      where('ownerUid', '==', currentUser.uid),
+      orderBy('createdAt', 'desc'),
+      limit(200)
+    );
+    const unsub = onSnapshot(q, (snap) => {
+      const rows = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Story[];
+      const persona = (task as any)?.persona || currentPersona;
+      const filtered = persona ? rows.filter((s) => !s.persona || s.persona === persona) : rows;
+      setStories(filtered);
+    });
+    return () => unsub();
+  }, [currentUser?.uid, currentPersona, task]);
+
+  useEffect(() => {
+    if (!currentUser?.uid) return;
+    const q = query(
+      collection(db, 'goals'),
+      where('ownerUid', '==', currentUser.uid),
+      orderBy('createdAt', 'desc'),
+      limit(500)
+    );
+    const unsub = onSnapshot(q, (snap) => {
+      const rows = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Goal[];
+      const persona = (task as any)?.persona || currentPersona;
+      const filtered = persona ? rows.filter((g) => !g.persona || g.persona === persona) : rows;
+      setGoals(filtered);
+    });
+    return () => unsub();
+  }, [currentUser?.uid, currentPersona, task]);
+
+  useEffect(() => {
+    if (!show) return;
+    if (!task) {
+      setForm({
+        title: '',
+        description: '',
+        url: '',
+        documentLink: '',
+        status: 0,
+        priority: 2,
+        sprintId: '',
+        points: TASK_DEFAULT_POINTS,
+        dueDate: '',
+        dueTime: '',
+        timeOfDay: '',
+        storyId: '',
+        goalId: '',
+        tags: [],
+        type: 'task',
+        repeatFrequency: '',
+        repeatInterval: 1,
+        daysOfWeek: [],
+        persona: ((currentPersona || 'personal') as 'personal' | 'work'),
+      });
+      setStoryInput('');
+      setGoalInput('');
+      return;
+    }
+    const resolveDue = (value: any) => {
+      if (!value) return '';
+      const dateMs = typeof value === 'number'
+        ? value
+        : (value?.toMillis ? value.toMillis() : (value?.toDate ? value.toDate().getTime() : Date.parse(value)));
+      if (!Number.isFinite(dateMs)) return '';
+      return new Date(dateMs).toISOString().slice(0, 10);
+    };
+    const linkedStoryId = (task as any).storyId || (task as any).parentId || '';
+    const linkedStory = linkedStoryId ? stories.find((s) => s.id === linkedStoryId) : undefined;
+    setForm({
+      title: task.title || '',
+      description: (task as any).description || '',
+      url: String((task as any).url || ''),
+      documentLink: String((task as any).documentLink || ''),
+      status: normalizeTaskStatus((task as any).status),
+      priority: normalizePriorityValue((task as any).priority),
+      sprintId: (task as any).sprintId || '',
+      points: parsePointsValue((task as any).points) ?? TASK_DEFAULT_POINTS,
+      dueDate: resolveDue((task as any).dueDate || (task as any).dueDateMs || (task as any).targetDate),
+      dueTime: task.dueTime || '',
+      timeOfDay: task.timeOfDay || '',
+      storyId: linkedStoryId,
+      goalId: (task as any).goalId || linkedStory?.goalId || '',
+      tags: Array.isArray((task as any).tags) ? (task as any).tags : [],
+      type: normalizeTaskType((task as any).type),
+      repeatFrequency: ((task as any).repeatFrequency || '') as '' | 'daily' | 'weekly' | 'monthly' | 'yearly',
+      repeatInterval: Number((task as any).repeatInterval || 1) || 1,
+      daysOfWeek: Array.isArray((task as any).daysOfWeek) ? (task as any).daysOfWeek : [],
+      persona: ((task as any).persona || 'personal') as 'personal' | 'work',
+    });
+    setStoryInput(linkedStory ? (linkedStory.title || '') : '');
+    const resolvedGoalId = (task as any)?.goalId || linkedStory?.goalId || '';
+    const linkedGoalInit = resolvedGoalId ? goals.find((g) => g.id === resolvedGoalId) : undefined;
+    setGoalInput(linkedGoalInit ? getGoalDisplayPath(linkedGoalInit.id, goals) : '');
+  }, [task, show, stories, goals, currentPersona]);
+
+  const storyLabel = (s: Story) => s.title || '(untitled)';
+
+  const resolveStorySelection = (value: string) => {
+    const val = value.trim();
+    if (!val) {
+      setForm((prev) => ({ ...prev, storyId: '' }));
+      return;
+    }
+    const match = stories.find((s) => s.title === val || s.id === val);
+    if (match) {
+      const resolvedStoryGoal = resolveLeafGoalSelection(match.goalId || null, goals);
+      setForm((prev) => ({ ...prev, storyId: match.id, goalId: resolvedStoryGoal.goalId || prev.goalId }));
+      setStoryInput(match.title || '');
+      if (resolvedStoryGoal.goalId) {
+        const linkedGoal = goals.find((goal) => goal.id === resolvedStoryGoal.goalId);
+        setGoalInput(linkedGoal ? getGoalDisplayPath(linkedGoal.id, goals) : '');
+      }
+    } else {
+      setForm((prev) => ({ ...prev, storyId: '' }));
+    }
+  };
+
+  const resolveGoalSelection = (value: string) => {
+    const val = value.trim();
+    if (!val) {
+      setForm((prev) => ({ ...prev, goalId: '' }));
+      return;
+    }
+    const match = leafGoalOptions.find((g) => {
+      const displayPath = getGoalDisplayPath(g.id, goals);
+      return displayPath === val || g.id === val || g.title === val;
+    });
+    if (match) {
+      setForm((prev) => ({ ...prev, goalId: match.id }));
+      setGoalInput(getGoalDisplayPath(match.id, goals));
+    } else {
+      setForm((prev) => ({ ...prev, goalId: '' }));
+    }
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    const linkedStory = form.storyId ? stories.find((s) => s.id === form.storyId) : null;
+    if (!form.title.trim()) {
+      alert('Please add a task title.');
+      setSaving(false);
+      return;
+    }
+    try {
+      const normalizedTaskType = normalizeTaskType(form.type);
+      const isRecurringType = RECURRING_TASK_TYPES.has(normalizedTaskType);
+      const normalizedFrequency = isRecurringType ? (form.repeatFrequency || null) : null;
+      const normalizedInterval = isRecurringType ? Math.max(1, Number(form.repeatInterval) || 1) : null;
+      const normalizedDays = isRecurringType && form.repeatFrequency === 'weekly'
+        ? Array.isArray(form.daysOfWeek) ? form.daysOfWeek : []
+        : [];
+      const dueDateMs = form.dueDate ? new Date(`${form.dueDate}T00:00:00`).getTime() : null;
+      let nextSprintId = form.sprintId || null;
+      let dueDateChanged = false;
+      if (task) {
+        const originalDueDateMs = resolveTimestampMs((task as any).dueDate || (task as any).dueDateMs || (task as any).targetDate);
+        dueDateChanged = (originalDueDateMs ?? null) !== (dueDateMs ?? null);
+      }
+      if (dueDateChanged || (!task && dueDateMs && !nextSprintId)) {
+        const matched = findSprintForDate(sprints, dueDateMs);
+        nextSprintId = matched?.id ?? null;
+      }
+      const basePayload: any = {
+        title: form.title.trim(),
+        description: form.description,
+        url: form.url.trim() || null,
+        documentLink: form.documentLink.trim() || null,
+        status: typeof form.status === 'string' ? Number(form.status) || form.status : form.status,
+        priority: typeof form.priority === 'string' ? Number(form.priority) || form.priority : form.priority,
+        points: parsePointsValue(form.points) ?? TASK_DEFAULT_POINTS,
+        sprintId: nextSprintId,
+        dueDate: dueDateMs,
+        dueTime: form.dueTime || null,
+        timeOfDay: form.timeOfDay || null,
+        storyId: form.storyId || null,
+        parentType: form.storyId ? 'story' : null,
+        parentId: form.storyId || null,
+        goalId: form.goalId || null,
+        tags: Array.isArray(form.tags) ? form.tags.map((tag) => tag.trim()).filter(Boolean) : [],
+        type: normalizedTaskType,
+        repeatFrequency: normalizedFrequency,
+        repeatInterval: normalizedInterval,
+        daysOfWeek: normalizedDays,
+        persona: form.persona || 'personal',
+      };
+      const directGoalSelection = resolveLeafGoalSelection(form.goalId || null, goals);
+      if (!form.storyId && form.goalId && !directGoalSelection.goalId) {
+        alert(
+          directGoalSelection.reason === 'ambiguous_parent'
+            ? 'Tasks must link to a specific leaf goal. Select the child goal you want this task to execute against.'
+            : 'Please select a valid leaf goal before saving this task.'
+        );
+        setSaving(false);
+        return;
+      }
+      if (form.storyId) {
+        const linked = stories.find((s) => s.id === form.storyId);
+        const storyGoalSelection = resolveLeafGoalSelection(linked?.goalId || null, goals);
+        if (linked?.goalId && !storyGoalSelection.goalId) {
+          alert('The linked story is attached to a parent goal. Re-link the story to a leaf goal before attaching tasks to it.');
+          setSaving(false);
+          return;
+        }
+        if (storyGoalSelection.goalId) basePayload.goalId = storyGoalSelection.goalId;
+        if ((linked as any)?.sprintId) basePayload.sprintId = (linked as any).sprintId;
+      } else {
+        basePayload.goalId = directGoalSelection.goalId || null;
+      }
+      const storySprintId = linkedStory?.sprintId || (linkedStory as any)?.sprintId || null;
+      const resolvedGoalId = basePayload.goalId || linkedStory?.goalId || null;
+      const resolvedGoal = resolvedGoalId ? goals.find((g) => g.id === resolvedGoalId) : null;
+      const sprintForTag = (basePayload.sprintId || storySprintId)
+        ? sprints.find((sprint) => sprint.id === (basePayload.sprintId || storySprintId))
+        : null;
+      const themeValue = (resolvedGoal as any)?.theme
+        ?? (linkedStory as any)?.theme
+        ?? (task as any)?.theme
+        ?? (task as any)?.themeId
+        ?? (task as any)?.theme_id
+        ?? null;
+      basePayload.tags = normalizeTaskTags({
+        tags: basePayload.tags || [],
+        type: basePayload.type,
+        persona: basePayload.persona,
+        sprint: sprintForTag || null,
+        themeValue,
+        goalRef: (resolvedGoal as any)?.ref || null,
+        storyRef: (linkedStory as any)?.ref || null,
+        themes: globalThemes,
+      });
+
+      let savedTaskId = task?.id || null;
+      const prevPersona = (((task as any)?.persona) || 'personal') as 'personal' | 'work';
+      if (task) {
+        const updates: any = {
+          ...basePayload,
+          title: basePayload.title || task.title,
+          updatedAt: serverTimestamp(),
+          serverUpdatedAt: Date.now(),
+          ownerUid: (task as any).ownerUid || currentUser?.uid || null,
+          persona: basePayload.persona || (task as any).persona || currentPersona || 'personal',
+        };
+        if (dueDateChanged) {
+          updates.dueDateLocked = true;
+          updates.dueDateReason = 'user';
+        }
+        await updateDoc(doc(db, 'tasks', task.id), updates);
+      } else {
+        if (!currentUser?.uid) {
+          throw new Error('You must be signed in to create tasks.');
+        }
+        const createPayload: any = {
+          ...basePayload,
+          ownerUid: currentUser.uid,
+          persona: basePayload.persona || (currentPersona || 'personal'),
+          deleted: false,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+          dueDateLocked: dueDateMs != null,
+          dueDateReason: dueDateMs != null ? 'user' : null,
+        };
+        const createdRef = await addDoc(collection(db, 'tasks'), createPayload);
+        savedTaskId = createdRef.id;
+      }
+
+      // sprint_task_index is server-managed by Cloud Functions; skip client writes.
+      const nextPersona = (basePayload.persona || prevPersona) as 'personal' | 'work';
+      if (task?.id && prevPersona !== nextPersona && currentUser?.uid) {
+        try {
+          await cascadeTaskPersona(currentUser.uid, task.id, nextPersona);
+        } catch (err) {
+          console.warn('Failed to cascade persona for task', err);
+        }
+      }
+      // Fire-and-forget delta rescore for priority/top3 recalculation
+      if (savedTaskId) {
+        httpsCallable(functions, 'deltaPriorityRescore')({ entityId: savedTaskId, entityType: 'task' })
+          .catch((err) => console.warn('Delta rescore failed (non-blocking)', err));
+      }
+      onUpdated?.();
+      onHide();
+    } catch (error) {
+      console.error('Failed to update task', error);
+      alert('Failed to update task. Please try again.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleConvertToStory = async () => {
+    if (!task || converting) return;
+    const linkedStory = (form.storyId || (task as any).storyId || (task as any).parentId) ? true : false;
+    if (linkedStory) {
+      alert('This task is already linked to a story.');
+      return;
+    }
+    const confirmed = window.confirm('Convert this task to a story? The task will be marked complete and removed from tasks.');
+    if (!confirmed) return;
+    setConverting(true);
+    try {
+      const suggestCallable = httpsCallable(functions, 'suggestTaskStoryConversions');
+      const convertCallable = httpsCallable(functions, 'convertTasksToStories');
+      const response: any = await suggestCallable({
+        persona: form.persona || (task as any).persona || 'personal',
+        taskIds: [task.id],
+        limit: 1,
+      });
+      const suggestions: any[] = Array.isArray(response?.data?.suggestions) ? response.data.suggestions : [];
+      const suggestion = suggestions.find(item => item.taskId === task.id) || suggestions[0] || null;
+      const storyTitle = (suggestion?.storyTitle || form.title || task.title || 'New Story').slice(0, 140);
+      const storyDescription = (suggestion?.storyDescription || form.description || (task as any).description || '').slice(0, 1200);
+      const goalId = suggestion?.goalId || (task as any).goalId || null;
+      const sprintId = suggestion?.sprintId || (task as any).sprintId || null;
+
+      await convertCallable({
+        conversions: [{
+          taskId: task.id,
+          storyTitle,
+          storyDescription,
+          goalId,
+          sprintId,
+        }],
+      });
+      onUpdated?.();
+      onHide();
+    } catch (error) {
+      console.error('Error converting task to story:', error);
+      alert('Could not convert this task to a story. Please try again.');
+    } finally {
+      setConverting(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!task || deleting) return;
+    const label = (task as any).ref || task.title || task.id;
+    const confirmed = window.confirm(`Delete task "${label}"? This cannot be undone.`);
+    if (!confirmed) return;
+
+    setDeleting(true);
+    try {
+      await deleteDoc(doc(db, 'tasks', task.id));
+      onUpdated?.();
+      onHide();
+    } catch (error) {
+      console.error('Failed to delete task', error);
+      alert('Failed to delete task. Please try again.');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const handleOpenCalendarComposer = () => {
+    if (!task) return;
+    setCalendarComposerInitialValues(buildCalendarComposerInitialValues({
+      title: form.title || task.title || 'Task block',
+      persona: form.persona || ((task as any).persona || currentPersona || 'personal'),
+      theme: String((linkedGoal as any)?.theme || (linkedStory as any)?.theme || (task as any).theme || 'General'),
+      category: ((form.persona || (task as any).persona || currentPersona) === 'work' ? 'Work (Main Gig)' : 'Wellbeing') as any,
+      storyId: form.storyId || linkedStory?.id || undefined,
+      taskId: task.id,
+      points: Number(form.points || (task as any).points || 0) || null,
+      estimateMin: Number((task as any).estimateMin || 0) || null,
+      aiScore: Number.isFinite(Number((task as any).aiCriticalityScore)) ? Number((task as any).aiCriticalityScore) : null,
+      aiReason: String((task as any).aiTop3Reason || (task as any).aiCriticalityReason || '').trim() || null,
+      rationale: 'Manual schedule from task editor',
+    }));
+    setShowCalendarComposer(true);
+  };
+
+  return (
+    <Modal show={show} onHide={onHide} size="lg" container={container || undefined}>
+      <Modal.Header closeButton>
+        <div className="d-flex w-100 align-items-center justify-content-between gap-2">
+          <Modal.Title>{task ? 'Edit Task' : 'Add Task'}</Modal.Title>
+          {task && (
+            <div className="d-flex align-items-center gap-2">
+              <Button variant="outline-secondary" size="sm" title="Activity stream" onClick={() => showSidebar(task, 'task')}>
+                <Activity size={14} />
+              </Button>
+              <Button
+                variant="outline-secondary"
+                size="sm"
+                title="Convert to story"
+                onClick={handleConvertToStory}
+                disabled={
+                  converting
+                  || deleting
+                  || saving
+                  || !!(task as any)?.convertedToStoryId
+                  || !!(task as any)?.deleted
+                  || !!form.storyId
+                }
+              >
+                <Wand2 size={14} />
+              </Button>
+              <Button variant="outline-secondary" size="sm" title="Open calendar composer" onClick={handleOpenCalendarComposer}>
+                <CalendarPlus size={14} />
+              </Button>
+              <Button variant="outline-secondary" size="sm" title="Defer intelligently" onClick={() => setShowDeferModal(true)}>
+                <Clock3 size={14} />
+              </Button>
+              <Button variant="outline-danger" size="sm" title="Delete task" onClick={handleDelete} disabled={saving || converting || deleting}>
+                <Trash2 size={14} />
+              </Button>
+            </div>
+          )}
+        </div>
+      </Modal.Header>
+      <Modal.Body>
+        <Row className="g-3">
+          <Col lg={8}>
+            <Form>
+              <Form.Group className="mb-3">
+                <Form.Label>Title</Form.Label>
+                <Form.Control
+                  type="text"
+                  value={form.title}
+                  onChange={(e) => setForm({ ...form, title: e.target.value })}
+                />
+              </Form.Group>
+              <Form.Group className="mb-3">
+                <Form.Label>Description</Form.Label>
+                <Form.Control
+                  as="textarea"
+                  rows={3}
+                  value={form.description}
+                  onChange={(e) => setForm({ ...form, description: e.target.value })}
+                />
+              </Form.Group>
+              <Form.Group className="mb-3">
+                <Form.Label>Source URL</Form.Label>
+                <Form.Control
+                  type="url"
+                  value={form.url}
+                  onChange={(e) => setForm({ ...form, url: e.target.value })}
+                  placeholder="https://..."
+                />
+              </Form.Group>
+              <Form.Group className="mb-3">
+                <Form.Label>Document</Form.Label>
+                <div className="d-flex gap-2 align-items-center">
+                  <Form.Control
+                    type="url"
+                    value={form.documentLink}
+                    onChange={(e) => setForm({ ...form, documentLink: e.target.value })}
+                    placeholder="Google Docs / Drive link..."
+                  />
+                  <DrivePickerButton
+                    onSelect={(file) => setForm({ ...form, documentLink: file.url })}
+                  />
+                </div>
+                {form.documentLink && (
+                  <div className="mt-1">
+                    <a href={form.documentLink} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12 }}>
+                      {form.documentLink.length > 60 ? form.documentLink.slice(0, 57) + '…' : form.documentLink}
+                    </a>
+                  </div>
+                )}
+              </Form.Group>
+              <Form.Group className="mb-3">
+                <Form.Label>Tags</Form.Label>
+                <TagInput
+                  value={form.tags}
+                  onChange={(tags) => setForm({ ...form, tags })}
+                  placeholder="Add tags..."
+                  formatTag={(tag) => formatTaskTagLabel(tag, goals, sprints)}
+                />
+              </Form.Group>
+              <Form.Group className="mb-3">
+                <Form.Label>Task type</Form.Label>
+                <Form.Select
+                  value={form.type}
+                  onChange={(e) => setForm({ ...form, type: normalizeTaskType(e.target.value) })}
+                >
+                  {TASK_TYPE_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      {option.charAt(0).toUpperCase() + option.slice(1)}
+                    </option>
+                  ))}
+                </Form.Select>
+              </Form.Group>
+              {RECURRING_TASK_TYPES.has(form.type) && (
+                <div className="mb-3">
+                  <Row className="g-3 align-items-end">
+                    <Col md={4}>
+                      <Form.Label>Frequency</Form.Label>
+                      <Form.Select
+                        value={form.repeatFrequency || ''}
+                        onChange={(e) => setForm({ ...form, repeatFrequency: e.target.value as any })}
+                      >
+                        <option value="">None</option>
+                        <option value="daily">Daily</option>
+                        <option value="weekly">Weekly</option>
+                        <option value="monthly">Monthly</option>
+                        <option value="yearly">Yearly</option>
+                      </Form.Select>
+                    </Col>
+                    <Col md={4}>
+                      <Form.Label>Interval</Form.Label>
+                      <Form.Control
+                        type="number"
+                        min={1}
+                        max={365}
+                        value={form.repeatInterval ?? ''}
+                        onChange={(e) => setForm({
+                          ...form,
+                          repeatInterval: e.target.value === '' ? '' : e.target.value,
+                        })}
+                      />
+                    </Col>
+                  </Row>
+                  {form.repeatFrequency === 'weekly' && (
+                    <div className="mt-2">
+                      <Form.Label>Days of week</Form.Label>
+                      <div className="d-flex flex-wrap gap-3">
+                        {[
+                          { label: 'Mon', value: 'mon' },
+                          { label: 'Tue', value: 'tue' },
+                          { label: 'Wed', value: 'wed' },
+                          { label: 'Thu', value: 'thu' },
+                          { label: 'Fri', value: 'fri' },
+                          { label: 'Sat', value: 'sat' },
+                          { label: 'Sun', value: 'sun' },
+                        ].map((day) => (
+                          <Form.Check
+                            key={day.value}
+                            inline
+                            type="checkbox"
+                            id={`task-${day.value}`}
+                            label={day.label}
+                            checked={form.daysOfWeek.includes(day.value)}
+                            onChange={(e) => {
+                              const exists = form.daysOfWeek.includes(day.value);
+                              const next = exists
+                                ? form.daysOfWeek.filter((d) => d !== day.value)
+                                : [...form.daysOfWeek, day.value];
+                              setForm({ ...form, daysOfWeek: next });
+                            }}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+              <Form.Group className="mb-3">
+                <Form.Label>Persona</Form.Label>
+                <Form.Select
+                  value={form.persona}
+                  onChange={(e) => setForm({ ...form, persona: e.target.value as 'personal' | 'work' })}
+                >
+                  <option value="personal">Personal</option>
+                  <option value="work">Work</option>
+                </Form.Select>
+              </Form.Group>
+              <Row>
+                <Col md={4}>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Status</Form.Label>
+                    <Form.Select
+                      value={String(form.status)}
+                      onChange={(e) => setForm({ ...form, status: Number(e.target.value) })}
+                    >
+                      <option value={0}>Backlog</option>
+                      <option value={1}>In Progress</option>
+                      <option value={2}>Done</option>
+                      <option value={3}>Blocked</option>
+                    </Form.Select>
+                  </Form.Group>
+                </Col>
+                <Col md={4}>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Priority</Form.Label>
+                    <Form.Select
+                      value={String(form.priority)}
+                      onChange={(e) => setForm({ ...form, priority: Number(e.target.value) })}
+                    >
+                      <option value={4}>Critical</option>
+                      <option value={3}>High</option>
+                      <option value={2}>Medium</option>
+                      <option value={1}>Low</option>
+                    </Form.Select>
+                  </Form.Group>
+                </Col>
+                <Col md={4}>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Sprint</Form.Label>
+                    <Form.Select
+                      value={form.sprintId || ''}
+                      onChange={(e) => {
+                        const newSprintId = e.target.value;
+                        const sprint = sprints.find((s) => s.id === newSprintId);
+                        const sprintStart = sprint?.startDate ?? (sprint as any)?.start ?? null;
+                        let snapDate = form.dueDate;
+                        if (newSprintId && sprintStart) {
+                          const snapMs = typeof sprintStart === 'number' ? sprintStart
+                            : typeof sprintStart === 'string' ? Date.parse(sprintStart)
+                            : (sprintStart as any)?.seconds ? (sprintStart as any).seconds * 1000
+                            : null;
+                          if (snapMs) snapDate = new Date(snapMs).toISOString().slice(0, 10);
+                        }
+                        setForm({ ...form, sprintId: newSprintId, dueDate: snapDate });
+                      }}
+                    >
+                      <option value="">Backlog (No Sprint)</option>
+                      {selectedSprint && isHiddenSprint(selectedSprint) && (
+                        <option key={selectedSprint.id} value={selectedSprint.id} disabled>
+                          {formatSprintLabel(selectedSprint, selectedSprintStatus || 'Inactive')}
+                        </option>
+                      )}
+                      {visibleSprints.map((sprint) => (
+                        <option key={sprint.id} value={sprint.id}>
+                          {formatSprintLabel(sprint)}
+                        </option>
+                      ))}
+                    </Form.Select>
+                  </Form.Group>
+                </Col>
+              </Row>
+              <Row>
+                <Col md={3}>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Due date</Form.Label>
+                    <Form.Control
+                      type="date"
+                      value={form.dueDate}
+                      onChange={(e) => setForm({ ...form, dueDate: e.target.value })}
+                    />
+                  </Form.Group>
+                </Col>
+                <Col md={3}>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Due time</Form.Label>
+                    <Form.Control
+                      type="time"
+                      value={form.dueTime}
+                      onChange={(e) => setForm({ ...form, dueTime: e.target.value })}
+                    />
+                  </Form.Group>
+                </Col>
+                <Col md={3}>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Time of Day</Form.Label>
+                    <Form.Select
+                      value={form.timeOfDay}
+                      onChange={(e) => setForm({ ...form, timeOfDay: e.target.value as any as any })}
+                    >
+                      <option value="">Auto/None</option>
+                      <option value="morning">Morning</option>
+                      <option value="afternoon">Afternoon</option>
+                      <option value="evening">Evening</option>
+                    </Form.Select>
+                  </Form.Group>
+                </Col>
+                <Col md={3}>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Points</Form.Label>
+                    <Form.Control
+                      type="number"
+                      min={0}
+                      max={13}
+                      step="any"
+                      inputMode="decimal"
+                      placeholder="e.g. 0.5"
+                      value={form.points ?? ''}
+                      onChange={(e) => setForm({
+                        ...form,
+                        points: e.target.value,
+                      })}
+                    />
+                  </Form.Group>
+                </Col>
+              </Row>
+              <Row>
+                <Col md={12}>
+              <Form.Group className="mb-3">
+                <Form.Label>Link to goal</Form.Label>
+                <Form.Control
+                  list="task-goal-options"
+                  placeholder="Search leaf goal by title..."
+                  value={goalInput}
+                  onChange={(e) => {
+                    setGoalInput(e.target.value);
+                  }}
+                  onBlur={(e) => resolveGoalSelection(e.target.value)}
+                />
+                <datalist id="task-goal-options">
+                  {leafGoalOptions.map((g) => (
+                        <option key={g.id} value={getGoalDisplayPath(g.id, goals)} />
+                      ))}
+                </datalist>
+                {form.goalId && resolveLeafGoalSelection(form.goalId, goals).reason === 'ambiguous_parent' && (
+                  <div className="form-text text-warning">
+                    Tasks must link to a specific leaf goal. Select the child goal you want this task to execute against.
+                  </div>
+                )}
+                {linkedGoalId ? (
+                  <div className="form-text">
+                    <Button
+                          size="sm"
+                          variant="link"
+                          className="p-0"
+                          onClick={() => navigate(`/goals/${(linkedGoal as any)?.ref || linkedGoalId}`)}
+                        >
+                          View linked goal
+                        </Button>
+                      </div>
+                    ) : null}
+                    {RECURRING_TASK_TYPES.has(form.type) && (
+                      <div className="form-text">Recurring work only contributes to KPI adherence when linked to a leaf goal.</div>
+                    )}
+              </Form.Group>
+                </Col>
+              </Row>
+              <Row>
+                <Col md={12}>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Link to story</Form.Label>
+                    <Form.Control
+                      list="task-story-options"
+                      placeholder="Search story by title..."
+                      value={storyInput}
+                      onChange={(e) => {
+                        setStoryInput(e.target.value);
+                      }}
+                      onBlur={(e) => resolveStorySelection(e.target.value)}
+                    />
+                    <datalist id="task-story-options">
+                      {stories.map((s) => (
+                        <option key={s.id} value={storyLabel(s)} />
+                      ))}
+                    </datalist>
+                    {linkedStory ? (
+                      <div className="form-text">
+                        <Button
+                          size="sm"
+                          variant="link"
+                          className="p-0"
+                          onClick={() => setShowLinkedStoryModal(true)}
+                        >
+                          Edit linked story
+                        </Button>
+                      </div>
+                    ) : null}
+                    <div className="form-text">
+                      Selecting a story will also inherit its goal and sprint when available.
+                    </div>
+                  </Form.Group>
+                </Col>
+              </Row>
+              {task && (task as Task).aiCriticalityScore != null && (
+                <div className="mb-3">
+                  <strong>AI Score:</strong>{' '}
+                  {Number.isFinite(Number((task as Task).aiCriticalityScore))
+                    ? Math.round(Number((task as Task).aiCriticalityScore))
+                    : (task as Task).aiCriticalityScore}
+                  {(() => {
+                    const t = task as Task;
+                    const top3Reason = (t as any).aiTop3ForDay ? (t as any).aiTop3Reason : null;
+                    const reason = top3Reason || (t as any).aiCriticalityReason || null;
+                    return reason ? <div className="small text-muted">{reason}</div> : null;
+                  })()}
+                </div>
+              )}
+              {showMacSync && (
+                <div className="mb-3">
+                  <strong>Last Mac sync:</strong>{' '}
+                  {macSyncedAtMs ? format(new Date(macSyncedAtMs), 'MMM d, yyyy • HH:mm') : '—'}
+                </div>
+              )}
+            </Form>
+          </Col>
+          {task && (
+            <Col lg={4}>
+              <ActivityStreamPanel
+                entityId={task?.id}
+                entityType="task"
+                referenceNumber={(task as any)?.ref || (task as any)?.reference || (task as any)?.referenceNumber}
+              />
+            </Col>
+          )}
+        </Row>
+      </Modal.Body>
+      <Modal.Footer>
+        <Button
+          variant="outline-danger"
+          onClick={handleConvertToStory}
+          disabled={
+            converting
+            || deleting
+            || saving
+            || !task
+            || !!(task as any)?.convertedToStoryId
+            || !!(task as any)?.deleted
+            || !!form.storyId
+          }
+        >
+          {converting ? 'Converting...' : 'Convert to Story'}
+        </Button>
+        {task && (
+          <Button variant="danger" onClick={handleDelete} disabled={saving || converting || deleting}>
+            {deleting ? 'Deleting...' : 'Delete Task'}
+          </Button>
+        )}
+        <Button variant="secondary" onClick={onHide} disabled={deleting}>
+          Cancel
+        </Button>
+        <Button variant="primary" onClick={handleSave} disabled={saving || deleting}>
+          {saving ? 'Saving...' : task ? 'Save' : 'Create task'}
+        </Button>
+      </Modal.Footer>
+      <EditStoryModal
+        show={showLinkedStoryModal && !!linkedStory}
+        story={linkedStory}
+        goals={goals}
+        onHide={() => setShowLinkedStoryModal(false)}
+      />
+      <NewCalendarEventModal
+        show={showCalendarComposer}
+        onHide={() => setShowCalendarComposer(false)}
+        initialValues={calendarComposerInitialValues}
+        stories={stories}
+      />
+      <DeferItemModal
+        show={showDeferModal && !!task}
+        onHide={() => setShowDeferModal(false)}
+        itemType="task"
+        itemId={task?.id || ''}
+        itemTitle={task?.title || 'Task'}
+        onApply={async ({ dateMs, rationale, source }) => {
+          if (!task) return;
+          await updateDoc(doc(db, 'tasks', task.id), {
+            deferredUntil: dateMs,
+            deferredReason: rationale,
+            deferredBy: source,
+            deferredAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          } as any);
+          setShowDeferModal(false);
+          onUpdated?.();
+        }}
+      />
+    </Modal>
+  );
+};
+
+export default EditTaskModal;

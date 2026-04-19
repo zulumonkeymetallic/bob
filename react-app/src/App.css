@@ -1,0 +1,953 @@
+
+/* Import theme color system */
+@import './styles/ThemeColors.css';
+
+/* Notion AI inspired typography */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+:root {
+  --bg: #ffffff;
+  --text: #37352f;
+  --text-secondary: #787774;
+  --panel: #ffffff;
+  --line: #e9e9e7;
+  --shadow: rgba(15, 15, 15, 0.05);
+  --shadow-hover: rgba(15, 15, 15, 0.1);
+  
+  /* Notion AI color system */
+  --notion-bg: #ffffff;
+  --notion-text: #37352f;
+  --notion-text-gray: #787774;
+  --notion-border: #e9e9e7;
+  --notion-hover: #f7f6f3;
+  --notion-accent: #2383e2;
+}
+
+[data-theme='dark'] {
+  --bg: #191919;
+  --text: #e9e9e7;
+  --text-secondary: #9b9a97;
+  --panel: #2f2f2f;
+  --line: #373737;
+  --shadow: rgba(0, 0, 0, 0.3);
+  --shadow-hover: rgba(0, 0, 0, 0.4);
+  
+  /* Dark mode Notion AI colors */
+  --notion-bg: #191919;
+  --notion-text: #e9e9e7;
+  --notion-text-gray: #9b9a97;
+  --notion-border: #373737;
+  --notion-hover: #2f2f2f;
+  --notion-accent: #5fa8d3;
+}
+
+body {
+  background: var(--notion-bg);
+  color: var(--notion-text);
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif;
+  font-weight: 400;
+  line-height: 1.5;
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+  min-height: 100vh;
+  margin: 0;
+  padding: 0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.App {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--notion-bg);
+}
+
+/* Notion AI inspired component styles */
+.card {
+  background: var(--panel);
+  border: 1px solid var(--notion-border);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  transition: all 0.15s ease;
+}
+
+.card:hover {
+  box-shadow: var(--shadow-hover);
+  border-color: var(--notion-border);
+}
+
+.card-header {
+  background: transparent;
+  border-bottom: 1px solid var(--notion-border);
+  padding: 1rem 1.25rem;
+  font-weight: 600;
+  font-size: 0.875rem;
+  color: var(--notion-text);
+  letter-spacing: -0.01em;
+}
+
+.card-body {
+  padding: 1.25rem;
+  color: var(--notion-text);
+}
+
+/* Typography improvements */
+h1, h2, h3, h4, h5, h6 {
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-weight: 600;
+  color: var(--notion-text);
+  letter-spacing: -0.02em;
+  margin-bottom: 0.5rem;
+}
+
+h1 { font-size: 2rem; }
+h2 { font-size: 1.5rem; }
+h3 { font-size: 1.25rem; }
+h4 { font-size: 1.125rem; }
+h5 { font-size: 1rem; }
+h6 { font-size: 0.875rem; }
+
+p, .text-muted {
+  color: var(--notion-text-gray);
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* Button improvements */
+.btn {
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-weight: 500;
+  border-radius: 6px;
+  transition: all 0.15s ease;
+  letter-spacing: -0.01em;
+}
+
+.btn-primary {
+  background-color: var(--notion-accent);
+  border-color: var(--notion-accent);
+}
+
+.btn-primary:hover {
+  background-color: #1e6bb8;
+  border-color: #1e6bb8;
+}
+
+/* Navigation improvements */
+.navbar {
+  background: var(--panel) !important;
+  border-bottom: 1px solid var(--notion-border);
+  padding: 1rem;
+  margin: 0;
+  backdrop-filter: blur(12px);
+}
+
+.navbar-brand, .nav-link {
+  color: var(--notion-text) !important;
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-weight: 500;
+}
+
+.container-fluid {
+  background: var(--notion-bg);
+  flex: 1;
+  padding: 1.5rem;
+}
+
+/* Form improvements */
+.form-control {
+  border: 1px solid var(--notion-border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--notion-text);
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  transition: all 0.15s ease;
+}
+
+.form-control:focus {
+  border-color: var(--notion-accent);
+  box-shadow: 0 0 0 0.2rem rgba(35, 131, 226, 0.15);
+  background: var(--panel);
+  color: var(--notion-text);
+}
+
+.form-label {
+  color: var(--notion-text);
+  font-weight: 500;
+  font-size: 0.875rem;
+  margin-bottom: 0.5rem;
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* Table improvements */
+.table {
+  color: var(--notion-text);
+  background: var(--panel);
+  border-color: var(--notion-border);
+}
+
+.table th {
+  border-color: var(--notion-border);
+  background: var(--notion-hover);
+  font-weight: 600;
+  font-size: 0.875rem;
+  color: var(--notion-text);
+  padding: 0.75rem;
+}
+
+.table td {
+  border-color: var(--notion-border);
+  padding: 0.75rem;
+  vertical-align: middle;
+}
+
+/* Modal improvements */
+.modal-content {
+  background: var(--panel);
+  border: 1px solid var(--notion-border);
+  border-radius: 12px;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+}
+
+.modal-header {
+  border-bottom: 1px solid var(--notion-border);
+  background: transparent;
+}
+
+.modal-title {
+  color: var(--notion-text);
+  font-weight: 600;
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+.modal-body {
+  color: var(--notion-text);
+}
+
+/* Badge improvements */
+.badge {
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-weight: 500;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  padding: 0.25rem 0.5rem;
+}
+
+/* Alert improvements */
+.alert {
+  border-radius: 8px;
+  border: 1px solid;
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* Sidebar improvements */
+.sidebar-desktop {
+  background: var(--panel);
+  border-right: 1px solid var(--notion-border);
+}
+
+.bg-dark {
+  background: var(--panel) !important;
+}
+
+.text-white {
+  color: var(--notion-text) !important;
+}
+
+.text-white-50 {
+  color: var(--notion-text-gray) !important;
+}
+
+/* Tab improvements */
+.nav-tabs {
+  border-bottom: 1px solid var(--notion-border);
+}
+
+.nav-tabs .nav-link {
+  color: var(--notion-text-gray);
+  border: 1px solid transparent;
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-weight: 500;
+}
+
+.nav-tabs .nav-link:hover {
+  border-color: var(--notion-border);
+  color: var(--notion-text);
+}
+
+.nav-tabs .nav-link.active {
+  color: var(--notion-text);
+  background-color: var(--panel);
+  border-color: var(--notion-border) var(--notion-border) var(--panel);
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  color: var(--text);
+}
+
+.card-header {
+  background: var(--card);
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
+}
+
+.btn {
+  border-radius: 10px;
+  padding: 0.5rem 1rem;
+}
+
+.btn-primary {
+  background: var(--brand);
+  border: none;
+  color: var(--bg);
+}
+
+.btn-danger {
+  background: var(--red);
+  border: none;
+}
+
+/* Kanban Board Styles */
+.kanban-column {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  height: calc(100vh - 180px);
+  display: flex;
+  flex-direction: column;
+}
+
+.kanban-header {
+  padding: 1rem;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.kanban-header h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.task-count {
+  background: var(--card);
+  color: var(--muted);
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.85rem;
+}
+
+.kanban-tasks {
+  flex: 1;
+  padding: 1rem;
+  overflow-y: auto;
+  background: var(--panel);
+  border-radius: 0 0 14px 14px;
+}
+
+.kanban-tasks.is-dragging-over {
+  background: var(--card);
+}
+
+/* Task Card Styles */
+.task-card {
+  padding: 1rem;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  margin-bottom: 0.8rem;
+  cursor: grab;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.task-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.task-card.is-dragging {
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+}
+
+/* Story Card Drag Styles */
+.story-card-draggable {
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  touch-action: manipulation;
+}
+
+.story-card-draggable:active {
+  cursor: grabbing;
+}
+
+.story-card-dragging {
+  transform: rotate(2deg) !important;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3) !important;
+  z-index: 1000;
+  opacity: 0.95;
+}
+
+.story-card-draggable .drag-handle {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  color: #6c757d;
+  cursor: grab;
+  padding: 4px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.story-droppable-area.dragging-over {
+  background: rgba(0, 123, 255, 0.1) !important;
+  border: 2px dashed #007bff;
+  border-radius: 8px;
+}
+
+/* Enhanced mobile drag support */
+@media (max-width: 768px) {
+  .story-card-draggable {
+    touch-action: pan-y;
+  }
+  
+  .story-card-draggable .drag-handle {
+    position: relative;
+    display: block;
+    width: 100%;
+    text-align: center;
+    background: rgba(0, 0, 0, 0.1);
+    margin: -8px -12px 8px -12px;
+    padding: 8px;
+  }
+  
+  .story-card-draggable .drag-handle::before {
+    content: "⋮⋮⋮";
+    letter-spacing: 2px;
+    color: #6c757d;
+  }
+}
+
+.task-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.task-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.task-icon {
+  font-size: 1.2rem;
+}
+
+.task-title {
+  font-weight: 500;
+  color: var(--text);
+  flex: 1;
+  word-break: break-word;
+}
+
+.task-area {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  opacity: 0.8;
+}
+
+.area-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+/* Navigation Styles */
+.navbar {
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.navbar-brand {
+  font-size: 1.5rem;
+  letter-spacing: -0.5px;
+}
+
+.version-badge {
+  font-size: 0.75rem;
+  padding: 0.25rem 0.5rem;
+  background: var(--card);
+  color: var(--muted);
+  border-radius: 999px;
+  margin-left: 0.5rem;
+}
+
+.nav-link {
+  color: var(--muted) !important;
+  transition: color 0.2s;
+}
+
+.nav-link:hover,
+.nav-link.active {
+  color: var(--text) !important;
+}
+
+.search-box {
+  position: relative;
+  width: 300px;
+}
+
+.search-input {
+  background: var(--card);
+  border: 1px solid var(--line);
+  color: var(--text);
+  padding: 0.5rem 1rem;
+  border-radius: 8px;
+}
+
+.search-input:focus {
+  background: var(--card);
+  border-color: var(--brand);
+  color: var(--text);
+  box-shadow: none;
+}
+
+/* Calendar Styles */
+.calendar-container {
+  background: var(--panel);
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  padding: 1.5rem;
+  margin: 1rem 0;
+}
+
+.calendar-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+}
+
+.calendar-controls {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.calendar-grid {
+  background: var(--card);
+  border-radius: 10px;
+  padding: 1rem;
+  min-height: 400px;
+}
+
+.event-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+.event-card h4 {
+  color: var(--text);
+  margin: 0 0 0.5rem 0;
+}
+
+.event-card p {
+  color: var(--muted);
+  margin: 0;
+}
+
+.calendar-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--muted);
+  text-align: center;
+  padding: 2rem;
+}
+
+/* Welcome Screen */
+.welcome-screen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: calc(100vh - 70px);
+  background: var(--bg);
+}
+
+.welcome-screen h1 {
+  color: var(--text);
+  font-weight: 700;
+  margin-bottom: 1rem;
+}
+
+.welcome-screen .lead {
+  color: var(--muted);
+  margin-bottom: 2rem;
+}
+
+.app-content {
+  flex: 1;
+  background: var(--bg);
+}
+
+/* Changelog Styles */
+.changelog-container {
+  max-width: 800px;
+  margin: 2rem auto;
+  padding: 0 1rem;
+}
+
+.changelog-header {
+  margin-bottom: 3rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.current-version {
+  margin-top: 1rem;
+  color: var(--muted);
+}
+
+.version-tag {
+  display: inline-block;
+  padding: 0.25rem 0.75rem;
+  background: var(--brand);
+  color: var(--bg);
+  border-radius: 999px;
+  font-weight: 600;
+  margin: 0 0.5rem;
+}
+
+.release-date {
+  margin-top: 0.5rem;
+  font-size: 0.9rem;
+}
+
+.changelog-entry {
+  margin-bottom: 3rem;
+}
+
+.entry-header {
+  margin-bottom: 1rem;
+}
+
+.entry-header h2 {
+  font-size: 1.5rem;
+  margin: 0;
+}
+
+.release-notes {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.release-notes li {
+  position: relative;
+  padding-left: 1.5rem;
+  margin-bottom: 0.75rem;
+  color: var(--text);
+}
+
+.release-notes li::before {
+  content: "•";
+  position: absolute;
+  left: 0;
+  color: var(--brand);
+}
+
+/* Modal Styles */
+.modal {
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.modal-content {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  color: var(--text);
+}
+
+.modal-header {
+  border-bottom: 1px solid var(--line);
+  padding: 1rem 1.5rem;
+}
+
+.modal-footer {
+  border-top: 1px solid var(--line);
+  padding: 1rem 1.5rem;
+}
+
+.modal .form-control,
+.modal .form-select {
+  background: var(--card);
+  border: 1px solid var(--line);
+  color: var(--text);
+}
+
+.modal .form-control:focus,
+.modal .form-select:focus {
+  background: var(--card);
+  border-color: var(--brand);
+  color: var(--text);
+  box-shadow: none;
+}
+
+.modal .btn-close {
+  filter: invert(1) grayscale(100%) brightness(200%);
+}
+
+.kanban-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 0;
+}
+
+/* Mobile Responsiveness */
+@media (max-width: 768px) {
+  .container-fluid {
+    padding: 1rem;
+  }
+  
+  .row > [class*='col-'] {
+    margin-bottom: 1rem;
+  }
+
+  .kanban-column {
+    height: auto;
+    min-height: 400px;
+  }
+  
+  .kanban-tasks {
+    max-height: 400px;
+  }
+  
+  .navbar {
+    padding: 0.5rem 1rem;
+  }
+  
+  .nav-link {
+    padding: 0.5rem 0.75rem;
+    font-size: 0.9rem;
+  }
+}
+
+/* Mobile Priority Dashboard Styles */
+.mobile-priority-dashboard {
+  max-width: 100%;
+  background: var(--bg);
+}
+
+.mobile-filter-tabs .btn-group .btn {
+  flex: 1;
+  border-radius: 0;
+  font-size: 0.8rem;
+  padding: 0.5rem 0.25rem;
+}
+
+.mobile-filter-tabs .btn-group .btn:first-child {
+  border-radius: 0.375rem 0 0 0.375rem;
+}
+
+.mobile-filter-tabs .btn-group .btn:last-child {
+  border-radius: 0 0.375rem 0.375rem 0;
+}
+
+.mobile-task-item {
+  border: none !important;
+  border-bottom: 1px solid var(--line) !important;
+  border-radius: 0 !important;
+  background: var(--panel) !important;
+  color: var(--text) !important;
+  padding: 1rem !important;
+  transition: background-color 0.2s ease;
+}
+
+.mobile-task-item:hover {
+  background: var(--card) !important;
+}
+
+.mobile-task-item.completed-task {
+  opacity: 0.6;
+}
+
+.mobile-task-item .task-title {
+  font-weight: 500;
+  font-size: 0.95rem;
+  line-height: 1.4;
+}
+
+.mobile-stats {
+  background: var(--panel) !important;
+  border: 1px solid var(--line) !important;
+}
+
+.mobile-stats .card-body {
+  background: var(--panel) !important;
+}
+
+/* Touch-friendly button sizing */
+@media (max-width: 768px) {
+  .btn {
+    min-height: 44px; /* iOS recommended touch target */
+    padding: 0.75rem 1rem;
+  }
+  
+  .btn-sm {
+    min-height: 36px;
+    padding: 0.5rem 0.75rem;
+  }
+  
+  .form-control {
+    min-height: 44px;
+    font-size: 16px; /* Prevents zoom on iOS */
+  }
+  
+  .form-select {
+    min-height: 44px;
+    font-size: 16px;
+  }
+}
+
+/* Visual Canvas Styles */
+.visual-canvas-container {
+  background: var(--bg);
+  color: var(--text);
+}
+
+.canvas-container {
+  background: var(--panel);
+  border: 1px solid var(--line);
+}
+
+.canvas {
+  background-image: 
+    linear-gradient(90deg, var(--line) 1px, transparent 1px),
+    linear-gradient(180deg, var(--line) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+.canvas-node {
+  user-select: none;
+  transition: all 0.2s ease;
+}
+
+.canvas-node:hover {
+  z-index: 10 !important;
+}
+
+.canvas-node-goal {
+  border: 2px solid rgba(255, 255, 255, 0.2);
+}
+
+.canvas-node-story {
+  border: 2px solid rgba(255, 255, 255, 0.2);
+}
+
+.canvas-node-task {
+  border: 2px solid rgba(255, 255, 255, 0.2);
+}
+
+/* Dark mode adjustments for canvas */
+[data-theme='dark'] .canvas {
+  background-image: 
+    linear-gradient(90deg, rgba(255, 255, 255, 0.1) 1px, transparent 1px),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.1) 1px, transparent 1px);
+}
+
+[data-theme='dark'] .canvas-container {
+  background: var(--panel);
+  border-color: var(--line);
+}
+
+/* Force Bootstrap components to respect dark theme */
+[data-theme='dark'] .btn {
+  border-color: var(--notion-border) !important;
+}
+
+[data-theme='dark'] .form-control {
+  background-color: var(--panel) !important;
+  border-color: var(--notion-border) !important;
+  color: var(--notion-text) !important;
+}
+
+[data-theme='dark'] .form-control:focus {
+  background-color: var(--panel) !important;
+  border-color: var(--notion-accent) !important;
+  color: var(--notion-text) !important;
+  box-shadow: 0 0 0 0.2rem rgba(91, 168, 211, 0.25) !important;
+}
+
+[data-theme='dark'] .form-select {
+  background-color: var(--panel) !important;
+  border-color: var(--notion-border) !important;
+  color: var(--notion-text) !important;
+}
+
+[data-theme='dark'] .dropdown-menu {
+  background-color: var(--panel) !important;
+  border-color: var(--notion-border) !important;
+}
+
+[data-theme='dark'] .dropdown-item {
+  color: var(--notion-text) !important;
+}
+
+[data-theme='dark'] .dropdown-item:hover {
+  background-color: var(--notion-hover) !important;
+  color: var(--notion-text) !important;
+}
+
+[data-theme='dark'] .card {
+  background-color: var(--panel) !important;
+  border-color: var(--notion-border) !important;
+}
+
+[data-theme='dark'] .card-header {
+  background-color: var(--notion-hover) !important;
+  border-color: var(--notion-border) !important;
+  color: var(--notion-text) !important;
+}
+
+[data-theme='dark'] .card-body {
+  background-color: var(--panel) !important;
+  color: var(--notion-text) !important;
+}
+
+[data-theme='dark'] .table {
+  color: var(--notion-text) !important;
+  background-color: var(--panel) !important;
+}
+
+[data-theme='dark'] .table th {
+  background-color: var(--notion-hover) !important;
+  border-color: var(--notion-border) !important;
+  color: var(--notion-text) !important;
+}
+
+[data-theme='dark'] .table td {
+  border-color: var(--notion-border) !important;
+  color: var(--notion-text) !important;
+}
+
+[data-theme='dark'] .table-hover tbody tr:hover {
+  background-color: var(--notion-hover) !important;
+  color: var(--notion-text) !important;
+}
+
+/* Importing Bootstrap CSS */
+@import 'bootstrap/dist/css/bootstrap.min.css';
+@import 'bootstrap-icons/font/bootstrap-icons.css';

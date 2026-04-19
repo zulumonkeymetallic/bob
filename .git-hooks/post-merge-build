@@ -1,0 +1,67 @@
+#!/bin/bash
+
+################################################################################
+# post-merge Hook - Auto-create PR with build details after successful merge
+# Install this in: .git/hooks/post-merge
+################################################################################
+
+set -e
+
+BOB_ROOT="/Users/jim/GitHub/bob"
+MANIFEST_FILE="${BOB_ROOT}/build-logs/manifest.json"
+
+# Only run if we have a recent build manifest
+if [ ! -f "$MANIFEST_FILE" ]; then
+    exit 0
+fi
+
+# Check if manifest is recent (within last 5 minutes)
+MANIFEST_AGE=$(($(date +%s) - $(stat -f%m "$MANIFEST_FILE" 2>/dev/null || echo 0)))
+if [ $MANIFEST_AGE -gt 300 ]; then
+    exit 0
+fi
+
+# Extract build info from manifest
+BUILD_ID=$(jq -r '.buildId' "$MANIFEST_FILE" 2>/dev/null || echo "")
+WEB_COMMIT=$(jq -r '.commits.web' "$MANIFEST_FILE" 2>/dev/null || echo "")
+IOS_COMMIT=$(jq -r '.commits.ios' "$MANIFEST_FILE" 2>/dev/null || echo "")
+MAC_COMMIT=$(jq -r '.commits.mac' "$MANIFEST_FILE" 2>/dev/null || echo "")
+BUILD_DATE=$(jq -r '.date' "$MANIFEST_FILE" 2>/dev/null || echo "")
+
+if [ -z "$BUILD_ID" ] || [ -z "$WEB_COMMIT" ]; then
+    exit 0
+fi
+
+# Check if GitHub CLI is available
+if ! command -v gh &> /dev/null; then
+    exit 0
+fi
+
+# Create PR comment body
+read -r -d '' PR_BODY <<EOF || true
+## 🚀 Build Deployment Complete
+
+**Build ID:** \`$BUILD_ID\`  
+**Timestamp:** $BUILD_DATE  
+
+### Commits Included
+- 🌐 Web: \`$WEB_COMMIT\`  
+- 📱 iOS: \`$IOS_COMMIT\`  
+- 💻 Mac: \`$MAC_COMMIT\`  
+
+### Deployment Status
+✅ Web: Deployed to Firebase Hosting  
+✅ iOS: Built and signed  
+✅ Mac Sync: Built and signed  
+
+**Build Manifest:** [View Details](file://$MANIFEST_FILE)
+EOF
+
+# Try to find and comment on related PR
+CURRENT_BRANCH=$(cd "$BOB_ROOT" && git rev-parse --abbrev-ref HEAD 2>/dev/null)
+if [ -n "$CURRENT_BRANCH" ] && [ "$CURRENT_BRANCH" != "HEAD" ] && [ "$CURRENT_BRANCH" != "main" ]; then
+    # Attempt to find PR for this branch and add comment
+    gh pr list --head "$CURRENT_BRANCH" --json number --jq '.[0].number' 2>/dev/null | xargs -I {} gh pr comment {} --body "$PR_BODY" 2>/dev/null || true
+fi
+
+exit 0

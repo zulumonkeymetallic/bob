@@ -1,0 +1,771 @@
+import React, { useState, useEffect } from 'react';
+import { Container, Nav, Navbar, Button, Offcanvas } from 'react-bootstrap';
+import { useNavigate, useLocation, Link } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
+import { usePersona } from '../contexts/PersonaContext';
+import { useTheme } from '../contexts/ThemeContext';
+import VersionDisplay from './VersionDisplay';
+import { useSprint } from '../contexts/SprintContext';
+import { useSidebar } from '../contexts/SidebarContext';
+import SprintSelector from './SprintSelector';
+import GlobalSearchBar from './GlobalSearchBar';
+import CompactSprintMetrics from './CompactSprintMetrics';
+import AssistantDock from './AssistantDock';
+import SprintClosureBanner from './sprints/SprintClosureBanner';
+import CheckInBanner from './checkins/CheckInBanner';
+import { CoachVerdictBanner } from './coach/CoachVerdictBanner';
+import ProcessTextActivityHost from './ProcessTextActivityHost';
+import PlannerCapacityBanner from './planner/PlannerCapacityBanner';
+// Test mode UI removed per request
+
+interface SidebarLayoutProps {
+  children: React.ReactNode;
+  onSignOut?: () => Promise<void>;
+}
+
+interface NavigationGroup {
+  label: string;
+  items: NavigationItem[];
+  icon: string;
+}
+
+interface NavigationItem {
+  label: string;
+  path: string;
+  icon: string;
+}
+
+const normalizePath = (value: string) => (value.endsWith('/') && value.length > 1 ? value.slice(0, -1) : value);
+
+const resolveActiveGroupLabel = (pathname: string, groups: NavigationGroup[]): string | null => {
+  const currentPath = normalizePath(pathname);
+  let best: { label: string; score: number } | null = null;
+
+  groups.forEach((group) => {
+    group.items.forEach((item) => {
+      const itemPath = normalizePath(item.path);
+      const exact = currentPath === itemPath;
+      const prefix = currentPath.startsWith(`${itemPath}/`);
+      if (!exact && !prefix) return;
+      const score = itemPath.length + (exact ? 1000 : 0);
+      if (!best || score > best.score) {
+        best = { label: group.label, score };
+      }
+    });
+  });
+
+  return best?.label || null;
+};
+
+const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) => {
+  const { currentUser, signOut } = useAuth();
+  const { currentPersona, setPersona } = usePersona();
+  const { theme, toggleTheme } = useTheme();
+  // const { isTestMode, toggleTestMode, testModeLabel } = useTestMode();
+  const navigate = useNavigate();
+  const [showSidebar, setShowSidebar] = useState(false);
+  const location = useLocation();
+  const [isSmallScreen, setIsSmallScreen] = useState<boolean>(typeof window !== 'undefined' ? window.innerWidth < 768 : false);
+  const [navCollapsed, setNavCollapsed] = useState<boolean>(() => {
+    if (typeof window !== 'undefined' && window.innerWidth < 768) return true;
+    try { return localStorage.getItem('leftNavCollapsed') === '1'; } catch { return false; }
+  });
+  const toggleNavCollapsed = () => {
+    setNavCollapsed((prev) => {
+      const next = !prev;
+      try { localStorage.setItem('leftNavCollapsed', next ? '1' : '0'); } catch { }
+      return next;
+    });
+  };
+  // Start collapsed by default
+  const [expandedGroups, setExpandedGroups] = useState<string[]>([]);
+  const { selectedSprintId: globalSprintId, setSelectedSprintId: setGlobalSprintId } = useSprint();
+  const { isVisible: isRightSidebarVisible, isCollapsed: isRightSidebarCollapsed } = useSidebar();
+  const [assistantOpen, setAssistantOpen] = useState(false);
+
+  // Debug: Log location changes
+  useEffect(() => {
+    console.log('[SidebarLayout] Location changed:', { pathname: location.pathname, key: location.key });
+  }, [location]);
+  const hidePlannerCapacityBanner = isSmallScreen && /^\/mobile(?:\/|$)/.test(location.pathname);
+
+  const navigationGroups: NavigationGroup[] = [
+      {
+        label: 'Overview',
+        icon: 'home',
+      items: [
+        { label: 'Overview', path: '/dashboard', icon: 'home' },
+        { label: 'Daily Check-in', path: '/dashboard/daily-checkin', icon: 'clipboard-check' },
+        { label: 'Mobile', path: '/mobile', icon: 'mobile-alt' },
+        { label: 'Theme Progress', path: '/dashboard/theme-progress', icon: 'chart-line' },
+        { label: 'Finance Dashboard', path: '/dashboard/finance', icon: 'wallet' },
+        { label: 'Habit Tracking', path: '/dashboard/habit-tracking', icon: 'check-square' },
+        { label: 'Fitness', path: '/fitness', icon: 'heartbeat' },
+        { label: 'Kanban Board', path: '/sprints/kanban', icon: 'kanban' },
+        { label: 'Calendar', path: '/calendar', icon: 'calendar' },
+        { label: 'Metrics', path: '/metrics', icon: 'tachometer-alt' },
+        { label: '⚡ Overview', path: '/metrics/overview', icon: 'chart-area' },
+      ]
+    },
+    // Health
+    {
+      label: 'Health',
+      icon: 'heartbeat',
+      items: [
+        { label: '⚡ Metrics Overview', path: '/metrics/overview', icon: 'chart-area' },
+        { label: 'AI Coach', path: '/ai-coach', icon: 'dumbbell' },
+        { label: 'Fitness Results', path: '/fitness', icon: 'running' },
+        { label: 'Habit Tracking', path: '/dashboard/habit-tracking', icon: 'check-square' },
+        { label: 'Parkrun Results', path: '/parkrun-results', icon: 'flag-checkered' }
+      ]
+    },
+    {
+      label: 'Goals',
+      icon: 'target',
+      items: [
+        { label: 'Goals List', path: '/goals', icon: 'list' },
+        { label: 'Focus Goals', path: '/focus-goals', icon: 'bullseye' },
+        { label: 'Goal Planner', path: '/goals/year-planner', icon: 'columns' },
+        { label: 'Goals Roadmap', path: '/goals/roadmap-v6', icon: 'sparkles' },
+        { label: 'Theme Progress', path: '/metrics/progress', icon: 'chart-bar' },
+        { label: 'Visual Canvas', path: '/canvas', icon: 'share-alt' }
+      ]
+    },
+    {
+      label: 'Plan',
+      icon: 'project-diagram',
+      items: [
+        { label: 'Year Planner', path: '/goals/year-planner', icon: 'route' },
+        { label: 'Quarter/Month Roadmap', path: '/goals/roadmap-v6', icon: 'stream' },
+        { label: 'Sprint Planning', path: '/sprints/planning', icon: 'th' },
+        { label: '7-Day Prioritisation', path: '/planner/weekly', icon: 'th-large' },
+      ],
+    },
+    {
+      label: 'Finance',
+      icon: 'piggy-bank',
+      items: [
+        { label: 'Dashboard', path: '/finance/dashboard', icon: 'chart-line' },
+        { label: 'Budgets', path: '/finance/budgets', icon: 'wallet' },
+        { label: 'Merchants', path: '/finance/merchants', icon: 'tags' },
+        { label: 'Transactions', path: '/finance/transactions', icon: 'receipt' },
+        { label: 'Spend Breakdown', path: '/finance/flow', icon: 'project-diagram' },
+        { label: 'Pots', path: '/finance/pots', icon: 'database' },
+        { label: 'Goal Linking', path: '/finance/goals', icon: 'link' }
+      ]
+    },
+    {
+      label: 'Stories',
+      icon: 'book',
+      items: [
+        { label: 'Stories List', path: '/stories', icon: 'list' },
+        { label: 'Kanban Board', path: '/sprints/kanban', icon: 'kanban' },
+        { label: 'Calendar', path: '/calendar', icon: 'calendar' }
+      ]
+    },
+    {
+      label: 'Journals',
+      icon: 'book-open',
+      items: [
+        { label: 'Journal Entries', path: '/journals', icon: 'book-open' },
+        { label: 'Journal Insights', path: '/journals/insights', icon: 'chart-line' }
+      ]
+    },
+    {
+      label: 'Backlog',
+      icon: 'clipboard-list',
+      items: [
+        { label: 'Games', path: '/games-backlog', icon: 'gamepad' },
+        { label: 'Shows', path: '/shows-backlog', icon: 'tv' },
+        { label: 'Books', path: '/books-backlog', icon: 'book' },
+        { label: 'Videos', path: '/videos-backlog', icon: 'video' },
+        { label: 'YouTube History', path: '/youtube-history', icon: 'video' }
+      ]
+    },
+    {
+      label: 'Tasks',
+      icon: 'list-check',
+      items: [
+        { label: 'Tasks List', path: '/tasks', icon: 'list' }
+      ]
+    },
+    {
+      label: 'Sprints',
+      icon: 'calendar-alt',
+      items: [
+        { label: 'Sprint Management', path: '/sprints/management', icon: 'tasks' },
+        { label: 'Sprint Kanban', path: '/sprints/kanban', icon: 'columns' },
+        { label: 'Sprint Planning', path: '/sprints/planning', icon: 'th' },
+        { label: 'Capacity Planning', path: '/sprints/capacity', icon: 'chart-pie' },
+        { label: 'Retrospective', path: '/sprints/retrospective', icon: 'rotate-left' }
+      ]
+    },
+    {
+      label: 'Calendar',
+      icon: 'calendar',
+      items: [
+        { label: 'Calendar', path: '/calendar', icon: 'calendar' },
+        { label: 'Weekly Capacity', path: '/calendar/planner', icon: 'palette' },
+        { label: '7-Day Prioritisation', path: '/planner/weekly', icon: 'th-large' },
+        { label: 'Sprint Capacity', path: '/sprints/capacity', icon: 'chart-pie' },
+        { label: 'Google Integration', path: '/calendar/integration', icon: 'google' }
+      ]
+    },
+    {
+      label: 'Travel',
+      icon: 'globe',
+      items: [
+        { label: 'Travel Map', path: '/travel', icon: 'map' }
+      ]
+    },
+    // (Removed Data Management per request)
+    {
+      label: 'Settings',
+      icon: 'cog',
+      items: [
+        { label: 'Profile', path: '/settings/profile', icon: 'user' },
+        { label: 'AI', path: '/settings/ai', icon: 'robot' },
+        { label: 'Integrations', path: '/settings/integrations', icon: 'plug' },
+        { label: 'Finance', path: '/settings/finance', icon: 'wallet' },
+        { label: 'Notifications', path: '/settings/notifications', icon: 'envelope' },
+        { label: 'Privacy & Security', path: '/settings/privacy-security', icon: 'shield-alt' },
+        { label: 'Developer', path: '/settings/developer', icon: 'flask' }
+      ]
+    },
+    {
+      label: 'Logs',
+      icon: 'stream',
+      items: [
+        { label: 'Integration Logs', path: '/logs/integrations', icon: 'database' },
+        { label: 'AI Diagnostics', path: '/logs/ai', icon: 'robot' },
+        { label: 'Transcript Processing', path: '/logs/transcripts', icon: 'file-alt' }
+      ]
+    },
+    // Removed duplicate Health group at bottom
+  ];
+
+  const handleNavigation = (path: string) => {
+    try {
+      console.info('[Sidebar] navigation requested', { path, from: location.pathname, ts: new Date().toISOString() });
+
+      // Close sidebar immediately for better UX
+      setShowSidebar(false);
+
+      // Use setTimeout to ensure navigation happens after any pending state updates
+      navigate(path, { replace: false });
+      console.info('[Sidebar] navigation executed', { to: path, ts: new Date().toISOString() });
+
+    } catch (error) {
+      console.error('[Sidebar] navigation failed', { path, error });
+    }
+  };
+
+  // Global route-change logging to aid troubleshooting
+  React.useEffect(() => {
+    console.info('[Route] changed', { pathname: location.pathname, ts: new Date().toISOString() });
+  }, [location.pathname]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handler = () => setIsSmallScreen(window.innerWidth < 768);
+    handler();
+    window.addEventListener('resize', handler);
+    return () => window.removeEventListener('resize', handler);
+  }, []);
+
+  useEffect(() => {
+    const activeGroup = resolveActiveGroupLabel(location.pathname, navigationGroups);
+    if (!activeGroup) return;
+    setExpandedGroups((prev) => (prev.includes(activeGroup) ? prev : [...prev, activeGroup]));
+  }, [location.pathname]);
+
+  const toggleGroup = (groupLabel: string) => {
+    setExpandedGroups(prev =>
+      prev.includes(groupLabel)
+        ? prev.filter(g => g !== groupLabel)
+        : [...prev, groupLabel]
+    );
+  };
+
+  return (
+    <div className="d-flex sidebar-layout-outer" style={{ height: '100vh', overflow: 'hidden' }}>
+      {/* Desktop Sidebar (collapsible) */}
+      {!navCollapsed && (
+        <div className="sidebar-desktop d-none d-md-block" style={{ width: '250px', height: '100vh', flexShrink: 0 }}>
+          <div className="h-100 d-flex flex-column" style={{
+            background: 'var(--panel)',
+            color: 'var(--notion-text)',
+            borderRight: '1px solid var(--notion-border)',
+            maxHeight: '100vh',
+            overflow: 'hidden'
+          }}>
+            {/* Brand */}
+            <div className="p-3" style={{ borderBottom: '1px solid var(--notion-border)', flexShrink: 0, display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <img src="/logo192.png" alt="BOB Logo" style={{ width: '32px', height: '32px', objectFit: 'contain' }} />
+              <div>
+                <h4 className="mb-0" style={{ color: 'var(--notion-text)', fontWeight: '600', fontSize: '1rem', lineHeight: '1.2' }}>blueprint.<br />organize.build</h4>
+              </div>
+            </div>
+
+            {/* User Info */}
+            {currentUser && (
+              <div className="p-3" style={{ borderBottom: '1px solid var(--notion-border)', flexShrink: 0 }}>
+                <div className="d-flex align-items-center mb-2">
+                  <div className="rounded-circle d-flex align-items-center justify-content-center me-2"
+                    style={{
+                      width: '32px',
+                      height: '32px',
+                      fontSize: '14px',
+                      background: 'var(--notion-accent)',
+                      color: 'white'
+                    }}>
+                    {currentUser.displayName?.charAt(0) || 'U'}
+                  </div>
+                  <div className="flex-grow-1">
+                    <div className="small" style={{ color: 'var(--notion-text)' }}>
+                      {currentUser.displayName || 'User'}
+                    </div>
+                    <div className="badge" style={{
+                      background: 'var(--notion-accent)',
+                      color: 'white',
+                      fontSize: '0.75rem'
+                    }}>
+                      {currentPersona}
+                    </div>
+                  </div>
+                </div>
+                <div className="d-flex gap-1">
+                  <Button
+                    size="sm"
+                    variant={currentPersona === 'personal' ? 'primary' : 'outline-primary'}
+                    onClick={() => setPersona('personal')}
+                    className="flex-fill"
+                  >
+                    Personal
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={currentPersona === 'work' ? 'primary' : 'outline-primary'}
+                    onClick={() => setPersona('work')}
+                    className="flex-fill"
+                  >
+                    Work
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {/* Navigation - Scrollable */}
+            <div className="flex-grow-1" style={{
+              overflowY: 'auto',
+              overflowX: 'hidden',
+              scrollbarWidth: 'thin',
+              msOverflowStyle: 'scrollbar'
+            }}>
+              <Nav className="flex-column py-2">{navigationGroups.map((group) => (
+                <div key={group.label} className="mb-2">
+                  {/* Group Header */}
+                  <div
+                    className="d-flex align-items-center justify-content-between px-3 py-2 cursor-pointer"
+                    onClick={() => toggleGroup(group.label)}
+                    style={{
+                      cursor: 'pointer',
+                      fontSize: '0.9rem',
+                      fontWeight: '600',
+                      color: 'var(--notion-text-gray)',
+                      borderRadius: '6px',
+                      margin: '0 8px',
+                      transition: 'all 0.15s ease'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = 'var(--notion-hover)';
+                      e.currentTarget.style.color = 'var(--notion-text)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = 'transparent';
+                      e.currentTarget.style.color = 'var(--notion-text-gray)';
+                    }}
+                    title={group.label}
+                  >
+                    <div className="d-flex align-items-center">
+                      <i className={`fas fa-${group.icon} me-2`}></i>
+                      {group.label}
+                    </div>
+                    <i className={`fas fa-chevron-${expandedGroups.includes(group.label) ? 'down' : 'right'}`}></i>
+                  </div>
+
+                  {/* Group Items */}
+                  {expandedGroups.includes(group.label) && (
+                    <div className="ms-2">
+                      {group.items.map((item) => (
+                        <div
+                          key={item.path}
+                          className="nav-link px-3 py-2 border-0 text-start"
+                          title={item.label}
+                          onClick={() => {
+                            console.log('[Sidebar Desktop] BEFORE navigate()', { path: item.path, currentLocation: window.location.pathname });
+                            // Use setTimeout to ensure navigation happens after current event loop
+                            setTimeout(() => {
+                              navigate(item.path, { replace: true });
+                              console.log('[Sidebar Desktop] AFTER navigate()', { path: item.path, newLocation: window.location.pathname });
+                            }, 0);
+                            setShowSidebar(false);
+                            console.info('[Sidebar] navigation executed', { to: item.path, ts: new Date().toISOString() });
+                          }}
+                          style={{
+                            cursor: 'pointer',
+                            fontSize: '0.9rem',
+                            color: 'var(--notion-text)',
+                            borderRadius: '6px',
+                            margin: '2px 8px',
+                            display: 'block',
+                            textDecoration: 'none',
+                            transition: 'all 0.15s ease'
+                          }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.background = 'var(--notion-hover)';
+                            e.currentTarget.style.color = 'var(--notion-accent)';
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.background = 'transparent';
+                            e.currentTarget.style.color = 'var(--notion-text)';
+                          }}
+                        >
+                          <i className={`fas fa-${item.icon} me-2`}></i>
+                          {item.label}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+              </Nav>
+            </div>
+
+            {/* Bottom Actions - Now Sticky */}
+            <div
+              className="p-3"
+              style={{
+                borderTop: '1px solid var(--notion-border)',
+                position: 'sticky',
+                bottom: 0,
+                background: 'var(--notion-bg)',
+                zIndex: 10
+              }}
+            >
+              <div className="d-flex gap-2 mb-2">
+                <Button
+                  size="sm"
+                  onClick={toggleTheme}
+                  className="flex-fill"
+                  style={{
+                    background: 'var(--notion-hover)',
+                    border: '1px solid var(--notion-border)',
+                    color: 'var(--notion-text)',
+                    borderRadius: '6px'
+                  }}
+                >
+                  {theme === 'light' ? 'Dark' : 'Light'} Mode
+                </Button>
+                {/* Removed Test/Prod toggle */}
+              </div>
+              <Button
+                size="sm"
+                onClick={onSignOut || signOut}
+                className="w-100"
+                style={{
+                  background: 'transparent',
+                  border: '1px solid var(--notion-border)',
+                  color: 'var(--notion-text)',
+                  borderRadius: '6px'
+                }}
+              >
+                Sign Out
+              </Button>
+
+              {/* App Version */}
+              <div style={{ marginTop: '8px', textAlign: 'center' }}>
+                <span style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '2px 8px',
+                  borderRadius: '12px',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  border: '1px solid var(--notion-border)',
+                  background: 'var(--notion-hover)',
+                  color: 'var(--notion-text)'
+                }}>
+                  <VersionDisplay variant="badge-only" showSessionInfo={false} />
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Mobile Header */}
+      <div className="d-md-none fixed-top" style={{
+        background: currentPersona === 'work' ? '#d3d3d3' : 'white',
+        color: currentPersona === 'work' ? '#000' : '#000',
+        zIndex: 1050
+      }}>
+        <Navbar className="px-3" style={{
+          background: 'transparent'
+        }}>
+          <Button
+            variant={currentPersona === 'work' ? 'outline-dark' : 'outline-dark'}
+            size="sm"
+            onClick={() => setShowSidebar(true)}
+            style={{
+              color: '#000',
+              borderColor: '#000'
+            }}
+          >
+            Menu
+          </Button>
+          <Navbar.Brand className="mx-auto d-flex align-items-center gap-2" style={{ fontSize: '1rem', color: '#000' }}>
+            <img src="/logo192.png" alt="Logo" style={{ width: '24px', height: '24px', objectFit: 'contain' }} />
+            blueprint.organize.build
+          </Navbar.Brand>
+          <div className="d-flex align-items-center gap-2">
+            {currentUser && (
+              <div className="rounded-circle bg-primary d-flex align-items-center justify-content-center"
+                style={{ width: '24px', height: '24px', fontSize: '12px' }}>
+                {currentUser.displayName?.charAt(0) || 'U'}
+              </div>
+            )}
+          </div>
+        </Navbar>
+      </div>
+
+      {/* Mobile Sidebar Offcanvas */}
+      <Offcanvas
+        show={showSidebar}
+        onHide={() => setShowSidebar(false)}
+        placement="start"
+        className="bg-dark text-white"
+      >
+        <Offcanvas.Header closeButton closeVariant="white">
+          <Offcanvas.Title className="d-flex align-items-center gap-2">
+            <img src="/logo192.png" alt="Logo" style={{ width: '24px', height: '24px', objectFit: 'contain' }} />
+            blueprint.organize.build
+          </Offcanvas.Title>
+        </Offcanvas.Header>
+        <Offcanvas.Body>
+          {/* User Info Mobile */}
+          {currentUser && (
+            <div className="mb-3 pb-3 border-bottom border-secondary">
+              <div className="d-flex align-items-center mb-2">
+                <div className="rounded-circle bg-primary d-flex align-items-center justify-content-center me-2"
+                  style={{ width: '32px', height: '32px', fontSize: '14px' }}>
+                  {currentUser.displayName?.charAt(0) || 'U'}
+                </div>
+                <div>
+                  <div className="text-white">
+                    {currentUser.displayName || 'User'}
+                  </div>
+                  <small className="text-muted">
+                    {currentPersona} persona
+                  </small>
+                </div>
+              </div>
+              <div className="d-flex gap-1">
+                <Button
+                  size="sm"
+                  variant={currentPersona === 'personal' ? 'primary' : 'outline-primary'}
+                  onClick={() => setPersona('personal')}
+                  className="flex-fill"
+                >
+                  Personal
+                </Button>
+                <Button
+                  size="sm"
+                  variant={currentPersona === 'work' ? 'primary' : 'outline-primary'}
+                  onClick={() => setPersona('work')}
+                  className="flex-fill"
+                >
+                  Work
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {/* Navigation Mobile */}
+          <Nav className="flex-column">
+            {navigationGroups.map((group) => (
+              <div key={group.label} className="mb-2">
+                {/* Group Header Mobile */}
+                <div
+                  className="d-flex align-items-center justify-content-between px-3 py-2 text-white-50"
+                  onClick={() => toggleGroup(group.label)}
+                  style={{ cursor: 'pointer', fontSize: '0.9rem', fontWeight: '600' }}
+                >
+                  <div className="d-flex align-items-center">
+                    <i className={`fas fa-${group.icon} me-2`}></i>
+                    {group.label}
+                  </div>
+                  <i className={`fas fa-chevron-${expandedGroups.includes(group.label) ? 'down' : 'right'}`}></i>
+                </div>
+
+                {/* Group Items Mobile */}
+                {expandedGroups.includes(group.label) && (
+                  <div className="ms-3">
+                    {group.items.map((item) => (
+                      <div
+                        key={item.path}
+                        className="nav-link text-white py-2 border-0"
+                        onClick={() => {
+                          navigate(item.path);
+                          setShowSidebar(false);
+                          console.info('[Sidebar] mobile navigation executed', { to: item.path });
+                        }}
+                        style={{ fontSize: '0.9rem', cursor: 'pointer' }}
+                      >
+                        <i className={`fas fa-${item.icon} me-2`}></i>
+                        {item.label}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </Nav>
+
+          {/* Bottom Actions Mobile - Now Sticky */}
+          <div
+            className="mt-auto pt-3 border-top border-secondary"
+            style={{
+              position: 'sticky',
+              bottom: 0,
+              background: 'var(--bs-dark)',
+              zIndex: 10,
+              marginTop: 'auto !important'
+            }}
+          >
+            <div className="d-flex gap-2 mb-2">
+              <Button
+                variant="outline-light"
+                size="sm"
+                onClick={toggleTheme}
+                className="flex-fill"
+              >
+                {theme === 'light' ? 'Dark' : 'Light'} Mode
+              </Button>
+            </div>
+            <Button
+              variant="outline-danger"
+              size="sm"
+              onClick={signOut}
+              className="w-100"
+            >
+              Sign Out
+            </Button>
+          </div>
+        </Offcanvas.Body>
+      </Offcanvas>
+
+      {/* Global collapse/expand toggle */}
+      {!isSmallScreen && (
+        <button
+          type="button"
+          onClick={toggleNavCollapsed}
+          className="position-fixed"
+          style={{
+            top: 10,
+            left: navCollapsed ? 10 : 260,
+            zIndex: 2000,
+            boxShadow: '0 1px 4px rgba(0,0,0,0.15)',
+            border: '1px solid var(--notion-border)',
+            background: 'var(--notion-hover)',
+            color: 'var(--notion-text)',
+            padding: '4px 8px',
+            borderRadius: 6,
+            lineHeight: 1
+          }}
+          title={navCollapsed ? 'Show sidebar' : 'Hide sidebar'}
+        >
+          {navCollapsed ? '▶' : '◀'}
+        </button>
+      )}
+
+      {/* Main Content Area */}
+      <div
+        className="flex-grow-1 sidebar-layout-main"
+        style={{
+          paddingTop: isSmallScreen ? '60px' : '0',
+          marginRight: isRightSidebarVisible && window.innerWidth >= 768 ? (isRightSidebarCollapsed ? '60px' : '400px') : '0',
+          transition: 'margin-right 0.3s ease',
+          minWidth: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          height: '100%',
+        }}
+      >
+        {/* Desktop top toolbar with global Sprint selector */}
+        <div className="d-none d-md-block sidebar-layout-toolbar" style={{
+          borderBottom: '1px solid var(--notion-border)',
+          background: currentPersona === 'work' ? '#d3d3d3' : 'white',
+          position: 'relative',
+          zIndex: 1000
+        }}>
+          <div className="container-fluid" style={{ padding: '8px 16px' }}>
+            <div className="d-flex justify-content-end align-items-center gap-3">
+              {/* Persona indicator dot */}
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                fontSize: '12px',
+                fontWeight: '600',
+                color: '#000'
+              }}>
+                <span style={{
+                  width: '8px',
+                  height: '8px',
+                  borderRadius: '50%',
+                  backgroundColor: currentPersona === 'work' ? '#666' : '#4CAF50'
+                }}></span>
+                {currentPersona === 'work' ? 'Work' : 'Personal'}
+              </div>
+              {/* Pending approvals badge */}
+              {/* Lightweight import to avoid heavy planner deps here */}
+              {(() => {
+                const ApprovalsBadge = require('./planner/ApprovalsBadge').default;
+                return <ApprovalsBadge />;
+              })()}
+              <GlobalSearchBar />
+              <Button size="sm" variant="outline-primary" onClick={() => setAssistantOpen(v => !v)}>
+                {assistantOpen ? 'Hide Assistant' : 'Assistant'}
+              </Button>
+              {/* Metrics first, then selector so metrics appear to the left of the selector */}
+              <CompactSprintMetrics selectedSprintId={globalSprintId} />
+              <span className="text-muted small me-2 d-none d-xl-inline">Active Sprint:</span>
+              <SprintSelector
+                selectedSprintId={globalSprintId}
+                onSprintChange={setGlobalSprintId}
+              />
+            </div>
+          </div>
+        </div>
+
+        <main className="sidebar-layout-page" style={{ flex: 1, overflowY: 'auto', overflowX: 'auto', minHeight: 0 }}>
+          <div className="sidebar-layout-banners">
+            <CheckInBanner />
+            <CoachVerdictBanner />
+            {!hidePlannerCapacityBanner && <PlannerCapacityBanner />}
+            <SprintClosureBanner />
+            <ProcessTextActivityHost />
+          </div>
+          {children}
+        </main>
+        <AssistantDock open={assistantOpen} onClose={() => setAssistantOpen(false)} />
+      </div>
+    </div>
+  );
+};
+
+export default SidebarLayout;
+
+export { };

@@ -1,0 +1,11 @@
+{
+  "name": "bob-functions-chores",
+  "version": "1.0.0",
+  "private": true,
+  "engines": { "node": "20" },
+  "dependencies": {
+    "firebase-admin": "^12.5.0",
+    "firebase-functions": "^5.1.0"
+  }
+}
+

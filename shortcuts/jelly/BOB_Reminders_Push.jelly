@@ -1,0 +1,87 @@
+shortcut "BOB Reminders – Push" {
+  // Fetch tasks from BOB and upsert into Reminders.
+  // Map these helpers to Shortcuts actions when compiling in Jellycuts.
+
+  let base = "https://bob20250810.web.app"
+  let uid = ask("Enter BOB User ID")
+  let secret = ask("Enter Reminders Secret")
+  let remindersList = ask("Reminders List (default: Personal)")
+  if (remindersList == null || remindersList == "") { remindersList = "Personal" }
+
+  let headers = dictionary { "x-reminders-secret": secret }
+  let url = base + "/reminders/push?uid=" + uid
+
+  // GET /reminders/push
+  let response = getContentsOfURL(url: url, method: GET, headers: headers)
+  let payload = getDictionary(response)
+  let tasks = payload["tasks"]
+
+  repeat task in tasks {
+    let id = task["id"]
+    let title = task["title"]
+    let dueDateMs = task["dueDate"]
+    let ref = task["ref"] ?? id
+    let storyId = task["storyId"]
+    let goalId = task["goalId"]
+    let createdAtMs = task["createdAt"]
+    let createdLine = ""
+    if (createdAtMs != null) {
+      let createdDate = date((createdAtMs / 1000))
+      createdLine = "[Created: " + formatDate(createdDate, "yyyy-MM-dd HH:mm") + "]"
+    }
+
+    let due = null
+    if (dueDateMs != null) {
+      // Convert epoch ms → Date
+      due = date((dueDateMs / 1000))
+    }
+
+    // Use first Notes line to track mapping: "BOB: <ref>"
+    let marker = "BOB: " + ref
+    let existing = findReminders(
+      inList: remindersList,
+      where: notesContains(marker),
+      limit: 1
+    )
+
+    if (count(existing) == 0) {
+      let extra = ""
+      if (storyId != null && storyId != "") { extra = extra + " | Story: " + storyId }
+      if (goalId != null && goalId != "") { extra = extra + " | Goal: " + goalId }
+      let line1 = marker + extra
+      let line2 = "[" + formatDate(currentDate(), "yyyy-MM-dd HH:mm") + "] Created via Push"
+      let line3 = (due != null) ? ("(due: " + formatDate(due, "yyyy-MM-dd") + ")") : ""
+      let notes = line1 + "\n" + line2 + (line3 == "" ? "" : (" " + line3)) + (createdLine == "" ? "" : ("\n" + createdLine))
+
+      let r = createReminder(
+        title: title,
+        inList: remindersList,
+        dueDate: due,
+        notes: notes
+      )
+
+      // Optional: persist mapping id→identifier(r) to a file dictionary
+      // writeMapping(id, identifier(r))
+    } else {
+      let r = first(existing)
+      setReminder(
+        r,
+        title: title,
+        dueDate: due
+      )
+      let prepend = "[" + formatDate(currentDate(), "yyyy-MM-dd HH:mm") + "] Updated via Push"
+      prependReminderNotes(r, prepend)
+    }
+  }
+}
+
+// Helper signatures (map in Jellycuts to Shortcuts actions):
+// getContentsOfURL(url: string, method: GET|POST, headers: dictionary, body?: any) -> data
+// getDictionary(data) -> dictionary
+// findReminders(inList: string, where: filter, limit?: number) -> [Reminder]
+// createReminder(title: string, inList: string, dueDate?: date, notes?: string) -> Reminder
+// setReminder(Reminder, title?: string, dueDate?: date, notes?: string)
+// prependReminderNotes(Reminder, text: string)
+// identifier(Reminder) -> string
+// currentDate() -> date
+// formatDate(date, formatString) -> string

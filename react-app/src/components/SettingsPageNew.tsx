@@ -1,0 +1,642 @@
+import React, { useState, useEffect } from 'react';
+import { Container, Row, Col, Card, Button, Form, Modal, Alert, Nav, Tab, Badge } from 'react-bootstrap';
+import { db } from '../firebase';
+import { doc, getDoc, setDoc, serverTimestamp, collection, query, where, getDocs, writeBatch } from 'firebase/firestore';
+import { useAuth } from '../contexts/AuthContext';
+import { useTheme } from '../contexts/ThemeContext';
+import { useThemeAwareColors, getContrastTextColor } from '../hooks/useThemeAwareColors';
+import { GLOBAL_THEMES, GlobalTheme } from '../constants/globalThemes';
+import CalendarSyncManager from './CalendarSyncManager';
+import { functions } from '../firebase';
+import { httpsCallable } from 'firebase/functions';
+import { Settings, Palette, Database, Calendar } from 'lucide-react';
+import { POINTS_MIN, POINTS_STEP, TASK_POINTS_MAX, normalizePointsValue } from '../utils/points';
+
+interface GlobalThemeSettings {
+  themes: GlobalTheme[];
+  customizations: Record<string, any>;
+  lastUpdated: any;
+}
+
+const SettingsPage: React.FC = () => {
+  const { currentUser } = useAuth();
+  const { theme, toggleTheme } = useTheme();
+  const { isDark, colors, backgrounds } = useThemeAwareColors();
+  const [saveSuccess, setSaveSuccess] = useState(false);
+  const [migrateSuccess, setMigrateSuccess] = useState(false);
+  const [migrationProgress, setMigrationProgress] = useState(0);
+
+  // Global theme management state
+  const [globalThemes, setGlobalThemes] = useState<GlobalTheme[]>(GLOBAL_THEMES);
+  const [editingTheme, setEditingTheme] = useState<GlobalTheme | null>(null);
+  const [showThemeModal, setShowThemeModal] = useState(false);
+  const [backfillAfterEnrichment, setBackfillAfterEnrichment] = useState<boolean>(false);
+
+  // Migration state
+  const [migrationStats, setMigrationStats] = useState({
+    goals: 0,
+    stories: 0, 
+    tasks: 0,
+    needsMigration: false
+  });
+
+  // Planner & Automations toggles
+  const [pushOnPlan, setPushOnPlan] = useState<boolean>(true);
+  const [enableAutoLLMConversion, setEnableAutoLLMConversion] = useState<boolean>(false);
+  const [autoLLMConversionMinPoints, setAutoLLMConversionMinPoints] = useState<number>(4);
+  const [autoConversionThresholdMinutes, setAutoConversionThresholdMinutes] = useState<number>(240);
+  const [autoConversionThresholdPoints, setAutoConversionThresholdPoints] = useState<number>(2);
+  const [aiFocusTopCount, setAiFocusTopCount] = useState<number>(5);
+
+  // Check if database needs migration to new theme system
+  const checkMigrationStatus = async () => {
+    if (!currentUser) return;
+
+    try {
+      const collections = ['goals', 'stories', 'tasks'];
+      let needsMigration = false;
+
+      for (const collectionName of collections) {
+        const q = query(collection(db, collectionName), where('ownerUid', '==', currentUser.uid));
+        const snapshot = await getDocs(q);
+        
+        const count = snapshot.size;
+
+        // Check if any items have string-based themes (need migration)
+        snapshot.docs.forEach(doc => {
+          const data = doc.data();
+          if (typeof data.theme === 'string') {
+            needsMigration = true;
+          }
+        });
+
+        setMigrationStats(prev => ({
+          ...prev,
+          [collectionName]: count,
+          needsMigration
+        }));
+      }
+    } catch (error) {
+      console.error('Error checking migration status:', error);
+    }
+  };
+
+  // Load global theme settings from Firebase
+  useEffect(() => {
+    const loadGlobalThemes = async () => {
+      if (!currentUser) return;
+      
+      try {
+        const docRef = doc(db, 'global_themes', currentUser.uid);
+        const docSnap = await getDoc(docRef);
+        
+        if (docSnap.exists()) {
+          const data = docSnap.data() as GlobalThemeSettings;
+          setGlobalThemes(data.themes || GLOBAL_THEMES);
+        }
+        // Load user setting for planner backfill after enrichment
+        try {
+          const usRef = doc(db, 'user_settings', currentUser.uid);
+          const usSnap = await getDoc(usRef);
+          if (usSnap.exists()) {
+            setBackfillAfterEnrichment(!!usSnap.data().backfillAfterEnrichment);
+            setPushOnPlan(usSnap.data().pushOnPlan !== false); // default true
+          }
+        } catch {}
+
+        // Load profile-level AI planner toggles
+        try {
+          const pfRef = doc(db, 'profiles', currentUser.uid);
+          const pfSnap = await getDoc(pfRef);
+          if (pfSnap.exists()) {
+            const p = pfSnap.data() as any;
+            if (typeof p.enableAutoLLMConversion === 'boolean') setEnableAutoLLMConversion(p.enableAutoLLMConversion);
+            if (Number.isFinite(Number(p.autoLLMConversionMinPoints))) setAutoLLMConversionMinPoints(Number(p.autoLLMConversionMinPoints));
+            if (Number.isFinite(Number(p.autoConversionThresholdMinutes))) setAutoConversionThresholdMinutes(Number(p.autoConversionThresholdMinutes));
+            if (Number.isFinite(Number(p.autoConversionThresholdPoints))) setAutoConversionThresholdPoints(Number(p.autoConversionThresholdPoints));
+            if (Number.isFinite(Number(p.aiFocusTopCount))) setAiFocusTopCount(Number(p.aiFocusTopCount));
+          }
+        } catch {}
+        
+        // Check migration status
+        await checkMigrationStatus();
+        
+      } catch (error) {
+        console.error('Error loading global themes:', error);
+      }
+    };
+
+    loadGlobalThemes();
+  }, [currentUser]);
+
+  // Migrate database to use numeric theme IDs
+  const migrateDatabase = async () => {
+    if (!currentUser) return;
+
+    try {
+      setMigrationProgress(0);
+      const collections = ['goals', 'stories', 'tasks'];
+      const batch = writeBatch(db);
+      let totalProcessed = 0;
+      let totalItems = 0;
+      
+      // First count total items
+      for (const collectionName of collections) {
+        const q = query(collection(db, collectionName), where('ownerUid', '==', currentUser.uid));
+        const snapshot = await getDocs(q);
+        totalItems += snapshot.size;
+      }
+      
+      for (const collectionName of collections) {
+        const q = query(collection(db, collectionName), where('ownerUid', '==', currentUser.uid));
+        const snapshot = await getDocs(q);
+        
+        snapshot.docs.forEach(docSnapshot => {
+          const data = docSnapshot.data();
+          
+          // Only migrate if theme is still a string
+          if (typeof data.theme === 'string') {
+            const themeMapping: Record<string, number> = {
+              'Health': 1, 'Growth': 2, 'Wealth': 3, 'Tribe': 4, 'Home': 5, 'General': 0
+            };
+            
+            const newThemeId = themeMapping[data.theme] || 0;
+            
+            batch.update(doc(db, collectionName, docSnapshot.id), {
+              theme: newThemeId,
+              migratedAt: serverTimestamp()
+            });
+          }
+          
+          totalProcessed++;
+          setMigrationProgress(Math.round((totalProcessed / totalItems) * 100));
+        });
+      }
+      
+      await batch.commit();
+      setMigrateSuccess(true);
+      await checkMigrationStatus();
+      
+    } catch (error) {
+      console.error('Error migrating database:', error);
+    }
+  };
+
+  // Save global theme configuration
+  const saveGlobalThemes = async () => {
+    if (!currentUser) return;
+
+    try {
+      const globalThemeSettings: GlobalThemeSettings = {
+        themes: globalThemes,
+        customizations: {},
+        lastUpdated: serverTimestamp()
+      };
+
+      await setDoc(doc(db, 'global_themes', currentUser.uid), globalThemeSettings);
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 3000);
+    } catch (error) {
+      console.error('Error saving global themes:', error);
+    }
+  };
+
+  // Edit theme color
+  const handleThemeEdit = (theme: GlobalTheme) => {
+    setEditingTheme({ ...theme });
+    setShowThemeModal(true);
+  };
+
+  // Save edited theme
+  const saveThemeEdit = () => {
+    if (!editingTheme) return;
+
+    setGlobalThemes(prev => 
+      prev.map(theme => 
+        theme.id === editingTheme.id ? editingTheme : theme
+      )
+    );
+    
+    setShowThemeModal(false);
+    setEditingTheme(null);
+  };
+
+  // Reset to default themes
+  const resetToDefaults = () => {
+    setGlobalThemes(GLOBAL_THEMES);
+  };
+
+  return (
+    <Container fluid className="py-4">
+      <Row>
+        <Col>
+          <h2 style={{ color: colors.primary }} className="mb-4">
+            <Settings size={28} className="me-2" />
+            Settings
+          </h2>
+        </Col>
+      </Row>
+
+      <Tab.Container defaultActiveKey="themes">
+        <Row>
+          <Col sm={3}>
+            <Nav variant="pills" className="flex-column">
+              <Nav.Item>
+                <Nav.Link eventKey="themes" style={{ color: colors.primary }}>
+                  <Palette size={20} className="me-2" />
+                  Themes & Colors
+                </Nav.Link>
+              </Nav.Item>
+              <Nav.Item>
+                <Nav.Link eventKey="database" style={{ color: colors.primary }}>
+                  <Database size={20} className="me-2" />
+                  Database Migration
+                  {migrationStats.needsMigration && (
+                    <Badge bg="warning" className="ms-2">Action Needed</Badge>
+                  )}
+                </Nav.Link>
+              </Nav.Item>
+              <Nav.Item>
+                <Nav.Link eventKey="calendar" style={{ color: colors.primary }}>
+                  <Calendar size={20} className="me-2" />
+                  Calendar Integration
+                </Nav.Link>
+              </Nav.Item>
+              <Nav.Item>
+                <Nav.Link eventKey="system" style={{ color: colors.primary }}>
+                  <Settings size={20} className="me-2" />
+                  System Preferences
+                </Nav.Link>
+              </Nav.Item>
+            </Nav>
+          </Col>
+          
+          <Col sm={9}>
+            <Tab.Content>
+              {/* Themes & Colors Tab */}
+              <Tab.Pane eventKey="themes">
+                <Card style={{ backgroundColor: backgrounds.card, border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}` }}>
+                  <Card.Header style={{ backgroundColor: backgrounds.surface, color: colors.primary }}>
+                    <h4 className="mb-0">Global Theme Management</h4>
+                    <small style={{ color: colors.secondary }}>
+                      Customize themes used across all goals, stories, and tasks
+                    </small>
+                  </Card.Header>
+                  <Card.Body>
+                    {saveSuccess && (
+                      <Alert variant="success" className="mb-3">
+                        Global themes saved successfully!
+                      </Alert>
+                    )}
+                    
+                    <div className="d-flex justify-content-between align-items-center mb-3">
+                      <h5 style={{ color: colors.primary }}>Global Themes ({globalThemes.length})</h5>
+                      <div>
+                        <Button variant="outline-secondary" size="sm" onClick={resetToDefaults} className="me-2">
+                          Reset to Defaults
+                        </Button>
+                        <Button variant="primary" onClick={saveGlobalThemes}>
+                          Save Themes
+                        </Button>
+                      </div>
+                    </div>
+
+                    <Row>
+                      {globalThemes.map((theme) => (
+                        <Col md={6} lg={4} key={theme.id} className="mb-3">
+                          <Card 
+                            style={{ 
+                              backgroundColor: theme.color,
+                              color: getContrastTextColor(theme.color),
+                              cursor: 'pointer',
+                              transition: 'transform 0.2s ease'
+                            }}
+                            className="h-100"
+                            onClick={() => handleThemeEdit(theme)}
+                          >
+                            <Card.Body className="text-center">
+                              <h6 className="mb-1">{theme.label}</h6>
+                              <small style={{ opacity: 0.8 }}>
+                                ID: {theme.id} | {theme.color}
+                              </small>
+                            </Card.Body>
+                          </Card>
+                        </Col>
+                      ))}
+                    </Row>
+
+                    <Alert variant="info" className="mt-3">
+                      <strong>Note:</strong> Changes to themes will apply to all new goals, stories, and tasks. 
+                      Existing items will retain their current theme assignments unless migrated.
+                    </Alert>
+                  </Card.Body>
+                </Card>
+              </Tab.Pane>
+
+              {/* Database Migration Tab */}
+              <Tab.Pane eventKey="database">
+                <Card style={{ backgroundColor: backgrounds.card, border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}` }}>
+                  <Card.Header style={{ backgroundColor: backgrounds.surface, color: colors.primary }}>
+                    <h4 className="mb-0">Database Migration</h4>
+                    <small style={{ color: colors.secondary }}>
+                      Upgrade your data to use the new global theme system
+                    </small>
+                  </Card.Header>
+                  <Card.Body>
+                    {migrateSuccess && (
+                      <Alert variant="success" className="mb-3">
+                        Database migration completed successfully!
+                      </Alert>
+                    )}
+
+                    <Row className="mb-4">
+                      <Col md={4} className="text-center">
+                        <h3 style={{ color: colors.primary }}>{migrationStats.goals}</h3>
+                        <p style={{ color: colors.secondary }}>Goals</p>
+                      </Col>
+                      <Col md={4} className="text-center">
+                        <h3 style={{ color: colors.primary }}>{migrationStats.stories}</h3>
+                        <p style={{ color: colors.secondary }}>Stories</p>
+                      </Col>
+                      <Col md={4} className="text-center">
+                        <h3 style={{ color: colors.primary }}>{migrationStats.tasks}</h3>
+                        <p style={{ color: colors.secondary }}>Tasks</p>
+                      </Col>
+                    </Row>
+
+                    {migrationStats.needsMigration ? (
+                      <div>
+                        <Alert variant="warning">
+                          <strong>Migration Required:</strong> Your database contains items using the old theme format. 
+                          Click below to upgrade them to the new global theme system.
+                        </Alert>
+                        
+                        {migrationProgress > 0 && migrationProgress < 100 && (
+                          <div className="mb-3">
+                            <div className="progress">
+                              <div 
+                                className="progress-bar" 
+                                style={{ width: `${migrationProgress}%` }}
+                              >
+                                {migrationProgress}%
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                        
+                        <Button 
+                          variant="warning" 
+                          onClick={migrateDatabase}
+                          disabled={migrationProgress > 0 && migrationProgress < 100}
+                        >
+                          {migrationProgress > 0 && migrationProgress < 100 ? 'Migrating...' : 'Migrate Database'}
+                        </Button>
+                      </div>
+                    ) : (
+                      <Alert variant="success">
+                        <strong>Up to Date:</strong> Your database is using the latest global theme system.
+                      </Alert>
+                    )}
+                  </Card.Body>
+                </Card>
+              </Tab.Pane>
+
+              {/* Calendar Integration Tab */}
+              <Tab.Pane eventKey="calendar">
+                <CalendarSyncManager />
+              </Tab.Pane>
+
+              {/* System Preferences Tab */}
+              <Tab.Pane eventKey="system">
+                <Card style={{ backgroundColor: backgrounds.card, border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}` }}>
+                  <Card.Header style={{ backgroundColor: backgrounds.surface, color: colors.primary }}>
+                    <h4 className="mb-0">System Preferences</h4>
+                  </Card.Header>
+                  <Card.Body>
+                    <Form.Group className="mb-3">
+                      <Form.Label style={{ color: colors.primary }}>Theme Mode</Form.Label>
+                      <Form.Select 
+                        value={theme} 
+                        onChange={(e) => {
+                          const newTheme = e.target.value as 'light' | 'dark' | 'system';
+                          if (newTheme !== theme) {
+                            toggleTheme();
+                          }
+                        }}
+                        style={{ 
+                          backgroundColor: backgrounds.surface, 
+                          color: colors.onSurface,
+                          border: `1px solid ${isDark ? '#374151' : '#d1d5db'}`
+                        }}
+                      >
+                        <option value="light">Light</option>
+                        <option value="dark">Dark</option>
+                        <option value="system">System</option>
+                      </Form.Select>
+                  </Form.Group>
+
+                    <Form.Group className="mb-3">
+                      <Form.Check
+                        type="switch"
+                        id="switch-backfill-after-enrichment"
+                        label="Backfill planner after task enrichment"
+                        checked={backfillAfterEnrichment}
+                        onChange={async (e) => {
+                          const next = e.target.checked;
+                          setBackfillAfterEnrichment(next);
+                          try {
+                            if (currentUser) {
+                              await setDoc(doc(db, 'user_settings', currentUser.uid), { backfillAfterEnrichment: next, updatedAt: serverTimestamp() }, { merge: true });
+                            }
+                          } catch (error) {
+                            console.error('Failed to save user settings', error);
+                          }
+                        }}
+                      />
+                      <div className="text-muted small mt-1">When enabled, AI-estimate updates trigger a small immediate replanning.</div>
+                    </Form.Group>
+
+                    <Alert variant="info">
+                      <strong>Current Theme:</strong> {theme} mode
+                      {theme === 'system' && ` (resolved to ${isDark ? 'dark' : 'light'})`}
+                    </Alert>
+
+                    <hr />
+                    <h5 className="mb-3" style={{ color: colors.primary }}>Automation</h5>
+                    <Form.Group className="mb-3">
+                      <Form.Check
+                        type="switch"
+                        id="switch-daily-digest"
+                        label="Email me a daily priorities summary (06:30)"
+                        onChange={async (e) => {
+                          try {
+                            if (!currentUser) return;
+                            // Write to both profiles/ and users/ to satisfy legacy checks
+                            const pref = { dailyDigestEnabled: e.target.checked, updatedAt: serverTimestamp() } as any;
+                            await setDoc(doc(db, 'profiles', currentUser.uid), pref, { merge: true });
+                            await setDoc(doc(db, 'users', currentUser.uid), { emailDigest: e.target.checked, updatedAt: serverTimestamp() }, { merge: true });
+                          } catch (err) {
+                            console.error('Failed to save daily digest preference', err);
+                          }
+                        }}
+                      />
+                      <div className="text-muted small mt-1">Sends a concise AI-powered list of your top priorities, overdue and due-today items.</div>
+                    </Form.Group>
+
+                    <hr />
+                    <h5 className="mb-2" style={{ color: colors.primary }}>Planner & Automations</h5>
+                    <Form.Group className="mb-3">
+                      <Form.Check
+                        type="switch"
+                        id="switch-push-on-plan"
+                        label="Push planned blocks to Google Calendar"
+                        checked={pushOnPlan}
+                        onChange={async (e) => {
+                          const next = e.target.checked;
+                          setPushOnPlan(next);
+                          try { if (currentUser) await setDoc(doc(db, 'user_settings', currentUser.uid), { pushOnPlan: next, updatedAt: serverTimestamp() }, { merge: true }); } catch (err) { console.error('save pushOnPlan', err); }
+                        }}
+                      />
+                      <div className="text-muted small mt-1">When enabled, planning will automatically sync blocks to Google.</div>
+                    </Form.Group>
+
+                    <Form.Group className="mb-3">
+                      <Form.Check
+                        type="switch"
+                        id="switch-enable-auto-llm-conversion"
+                        label="Convert oversized tasks to stories via LLM (scheduled)"
+                        checked={enableAutoLLMConversion}
+                        onChange={async (e) => {
+                          const next = e.target.checked;
+                          setEnableAutoLLMConversion(next);
+                          try { if (currentUser) await setDoc(doc(db, 'profiles', currentUser.uid), { enableAutoLLMConversion: next, updatedAt: serverTimestamp() }, { merge: true }); } catch (err) { console.error('save enableAutoLLMConversion', err); }
+                        }}
+                      />
+                      <div className="text-muted small mt-1">Runs nightly. Uses “Min LLM story points” threshold.</div>
+                    </Form.Group>
+
+                    <Row className="mb-3">
+                      <Col md={4} className="mb-2">
+                        <Form.Label>Min LLM story points (0.25–8)</Form.Label>
+                        <Form.Control type="number" min={POINTS_MIN} max={TASK_POINTS_MAX} step={POINTS_STEP} value={autoLLMConversionMinPoints}
+                          onChange={async (e) => {
+                            const v = normalizePointsValue(e.target.value, { max: TASK_POINTS_MAX, fallback: 4 });
+                            setAutoLLMConversionMinPoints(v);
+                            try { if (currentUser) await setDoc(doc(db, 'profiles', currentUser.uid), { autoLLMConversionMinPoints: v, updatedAt: serverTimestamp() }, { merge: true }); } catch (err) { console.error('save minPoints', err); }
+                          }} />
+                      </Col>
+                      <Col md={4} className="mb-2">
+                        <Form.Label>Heuristic convert: minutes ≥</Form.Label>
+                        <Form.Control type="number" min={30} max={1440} step={30} value={autoConversionThresholdMinutes}
+                          onChange={async (e) => {
+                            const v = Math.max(30, Math.min(1440, Number(e.target.value) || 240));
+                            setAutoConversionThresholdMinutes(v);
+                            try { if (currentUser) await setDoc(doc(db, 'profiles', currentUser.uid), { autoConversionThresholdMinutes: v, updatedAt: serverTimestamp() }, { merge: true }); } catch (err) { console.error('save threshold minutes', err); }
+                          }} />
+                      </Col>
+                      <Col md={4} className="mb-2">
+                        <Form.Label>Heuristic convert: points &gt;</Form.Label>
+                        <Form.Control type="number" min={POINTS_MIN} max={TASK_POINTS_MAX} step={POINTS_STEP} value={autoConversionThresholdPoints}
+                          onChange={async (e) => {
+                            const v = normalizePointsValue(e.target.value, { max: TASK_POINTS_MAX, fallback: 2 });
+                            setAutoConversionThresholdPoints(v);
+                            try { if (currentUser) await setDoc(doc(db, 'profiles', currentUser.uid), { autoConversionThresholdPoints: v, updatedAt: serverTimestamp() }, { merge: true }); } catch (err) { console.error('save threshold points', err); }
+                          }} />
+                      </Col>
+                    </Row>
+
+                    <Form.Group className="mb-3">
+                      <Form.Label>Daily focus: show top N items</Form.Label>
+                      <Form.Control type="number" min={1} max={7} value={aiFocusTopCount}
+                        onChange={async (e) => {
+                          const v = Math.max(1, Math.min(7, Number(e.target.value) || 5));
+                          setAiFocusTopCount(v);
+                          try { if (currentUser) await setDoc(doc(db, 'profiles', currentUser.uid), { aiFocusTopCount: v, updatedAt: serverTimestamp() }, { merge: true }); } catch (err) { console.error('save aiFocusTopCount', err); }
+                        }} />
+                      <div className="text-muted small mt-1">Controls Assistant/Daily Digest “Top Priorities” length.</div>
+                    </Form.Group>
+
+                    <div className="d-flex gap-2">
+                      <Button
+                        variant="outline-primary"
+                        size="sm"
+                        onClick={async () => {
+                          try {
+                            const fn = httpsCallable(functions, 'sendDailyDigestNow');
+                            await fn({});
+                            alert('Daily digest requested. Check your inbox shortly.');
+                          } catch (e) {
+                            console.error('Failed to trigger digest', e);
+                            alert('Failed to trigger digest.');
+                          }
+                        }}
+                      >
+                        Send me a digest now
+                      </Button>
+                    </div>
+                  </Card.Body>
+                </Card>
+              </Tab.Pane>
+            </Tab.Content>
+          </Col>
+        </Row>
+      </Tab.Container>
+
+      {/* Theme Edit Modal */}
+      <Modal show={showThemeModal} onHide={() => setShowThemeModal(false)}>
+        <Modal.Header closeButton style={{ backgroundColor: backgrounds.surface, color: colors.primary }}>
+          <Modal.Title>Edit Theme</Modal.Title>
+        </Modal.Header>
+        <Modal.Body style={{ backgroundColor: backgrounds.card }}>
+          {editingTheme && (
+            <Form>
+              <Form.Group className="mb-3">
+                <Form.Label style={{ color: colors.primary }}>Theme Name</Form.Label>
+                <Form.Control
+                  type="text"
+                  value={editingTheme.label}
+                  onChange={(e) => setEditingTheme({...editingTheme, label: e.target.value})}
+                  style={{ 
+                    backgroundColor: backgrounds.surface, 
+                    color: colors.onSurface,
+                    border: `1px solid ${isDark ? '#374151' : '#d1d5db'}`
+                  }}
+                />
+              </Form.Group>
+              
+              <Form.Group className="mb-3">
+                <Form.Label style={{ color: colors.primary }}>Color</Form.Label>
+                <Form.Control
+                  type="color"
+                  value={editingTheme.color}
+                  onChange={(e) => setEditingTheme({...editingTheme, color: e.target.value})}
+                  style={{ 
+                    backgroundColor: backgrounds.surface,
+                    border: `1px solid ${isDark ? '#374151' : '#d1d5db'}`
+                  }}
+                />
+              </Form.Group>
+
+              <div className="preview-card p-3 text-center rounded" style={{ 
+                backgroundColor: editingTheme.color,
+                color: getContrastTextColor(editingTheme.color)
+              }}>
+                Preview: {editingTheme.label}
+              </div>
+            </Form>
+          )}
+        </Modal.Body>
+        <Modal.Footer style={{ backgroundColor: backgrounds.surface }}>
+          <Button variant="secondary" onClick={() => setShowThemeModal(false)}>
+            Cancel
+          </Button>
+          <Button variant="primary" onClick={saveThemeEdit}>
+            Save Changes
+          </Button>
+        </Modal.Footer>
+      </Modal>
+    </Container>
+  );
+};
+
+export default SettingsPage;

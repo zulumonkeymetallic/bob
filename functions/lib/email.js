@@ -1,0 +1,73 @@
+// Unified email sender: Brevo (Sendinblue) transactional API
+// Endpoint: POST https://api.brevo.com/v3/smtp/email
+// Auth: HTTP header "api-key: <BREVO_API_KEY>"
+// Docs: https://developers.brevo.com/docs/send-a-transactional-email
+
+const admin = require('firebase-admin');
+const BREVO_API_BASE = process.env.BREVO_API_BASE || 'https://api.brevo.com/v3';
+
+async function brevoFetch(path, payload) {
+  const apiKey = process.env.BREVO_API_KEY;
+  if (!apiKey) throw new Error('BREVO_API_KEY not configured');
+  const url = `${BREVO_API_BASE}${path}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'api-key': apiKey,
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    },
+    body: JSON.stringify(payload || {}),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const msg = json?.message || json?.error || `Brevo error ${res.status}`;
+    const err = new Error(msg);
+    err.status = res.status;
+    err.payload = json;
+    throw err;
+  }
+  return json;
+}
+
+let cachedFrom = null;
+let cachedFromAt = 0;
+async function resolveSenderFromSettings() {
+  try {
+    const now = Date.now();
+    if (cachedFrom && now - cachedFromAt < 5 * 60 * 1000) return cachedFrom; // cache 5 min
+    const db = admin.firestore();
+    const snap = await db.collection('system_settings').doc('email').get();
+    const from = snap.exists ? (snap.data() || {}).from : null;
+    cachedFrom = typeof from === 'string' && from.includes('@') ? from : null;
+    cachedFromAt = now;
+    return cachedFrom;
+  } catch {
+    return null;
+  }
+}
+
+const sendEmail = async ({ to, subject, html, text, from, senderName }) => {
+  if (!to) throw new Error('Email recipient required');
+  const toList = Array.isArray(to) ? to : [to];
+
+  // Resolve sender precedence: explicit arg > Firestore settings > env > default
+  let senderEmail = from;
+  if (!senderEmail) senderEmail = await resolveSenderFromSettings();
+  if (!senderEmail) senderEmail = process.env.BREVO_SENDER_EMAIL || 'no-reply@bob.local';
+  const sender = { email: senderEmail };
+  if (senderName || process.env.BREVO_SENDER_NAME) sender.name = senderName || process.env.BREVO_SENDER_NAME;
+
+  const payload = {
+    sender,
+    to: toList.map((addr) => ({ email: addr })),
+    subject: subject || '(no subject)',
+    ...(html ? { htmlContent: html } : {}),
+    ...(text ? { textContent: text } : {}),
+  };
+
+  const json = await brevoFetch('/smtp/email', payload);
+  return { messageId: json?.messageId || json?.messageId || null, response: json };
+};
+
+module.exports = { sendEmail };

@@ -1,0 +1,44 @@
+/* Motion-like layout */
+:root{
+  --bg:#0b0d11; --panel:#12141a; --card:#171a21; --line:#232632; --text:#e8e9ed;
+  --muted:#a0a5b1; --brand:#6aa5ff; --blue:#4A86E8; --purple:#674EA7; --green:#93C47D; --red:#E06666; --orange:#F6B26B;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
+button{border:1px solid var(--line);background:var(--card);color:var(--text);padding:8px 12px;border-radius:10px;cursor:pointer}
+button.primary{background:var(--brand);border-color:var(--brand);color:#000;font-weight:600}
+button.ghost{background:transparent}
+input[type=search]{background:var(--panel);border:1px solid var(--line);color:var(--text);padding:8px 10px;border-radius:10px;width:260px}
+
+.app{display:grid;grid-template-columns:260px 1fr;height:100vh}
+.sidebar{background:var(--panel);border-right:1px solid var(--line);padding:16px;display:flex;flex-direction:column;gap:16px}
+.logo{font-weight:700;letter-spacing:0.4px}
+.nav{display:flex;flex-direction:column;gap:8px}
+.nav-btn{justify-content:flex-start}
+.nav-btn.active,.nav-btn:hover{background:var(--card)}
+
+.sidebar-foot{margin-top:auto;display:grid;grid-template-columns:16px auto;gap:8px;align-items:center;color:var(--muted)}
+.area{width:12px;height:12px;border-radius:3px}
+.area.growth{background:var(--blue)} .area.tribe{background:var(--purple)} .area.wealth{background:var(--green)} .area.health{background:var(--red)} .area.home{background:var(--orange)}
+
+.main{display:flex;flex-direction:column}
+.topbar{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line);background:var(--panel)}
+.view{display:none;padding:16px}
+.view.visible{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.pane{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px}
+.list{display:flex;flex-direction:column;gap:8px}
+.item{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px}
+.item .badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;border:1px solid var(--line);margin-left:8px}
+
+.kanban{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;padding:16px}
+.col{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px}
+.cards{min-height:65vh;display:flex;flex-direction:column;gap:8px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px}
+
+.calendar-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.calendar-grid{border:1px solid var(--line);border-radius:14px;overflow:hidden}
+.calendar-row{display:grid;grid-template-columns:120px 1fr;border-top:1px solid var(--line)}
+.calendar-cell{border-left:1px solid var(--line);min-height:48px;padding:6px 8px}
+.calendar-hour{color:var(--muted);padding:6px 8px}
+.event{background:var(--brand);color:#000;border-radius:8px;padding:2px 6px;display:inline-block;margin:2px 0}

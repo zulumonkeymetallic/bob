@@ -1,0 +1,1524 @@
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { Modal, Button, Form, Alert, InputGroup, Toast, ToastContainer } from 'react-bootstrap';
+import { db, functions } from '../firebase';
+import { doc, updateDoc, serverTimestamp, collection, query, where, getDocs, setDoc, getDoc, addDoc, deleteDoc } from 'firebase/firestore';
+import { Goal, Story, Task } from '../types';
+import { generateRef } from '../utils/referenceGenerator';
+import { generateShareCode, getShareUrl } from '../utils/shareCodeGenerator';
+import { httpsCallable } from 'firebase/functions';
+import { migrateThemeValue } from '../constants/globalThemes';
+import { useGlobalThemes } from '../hooks/useGlobalThemes';
+import { useActivityTracking } from '../hooks/useActivityTracking';
+import { toDate } from '../utils/firestoreAdapters';
+import TagInput from './common/TagInput';
+import ActivityStreamPanel from './common/ActivityStreamPanel';
+import ModernStoriesTable from './ModernStoriesTable';
+import ModernTaskTable from './ModernTaskTable';
+import { usePersona } from '../contexts/PersonaContext';
+import { useSprint } from '../contexts/SprintContext';
+import { cascadeGoalPersona } from '../utils/personaCascade';
+import { parsePointsValue, TASK_DEFAULT_POINTS } from '../utils/points';
+import { normalizeGoalCostType } from '../utils/goalCost';
+import { Wand2 } from 'lucide-react';
+import DrivePickerButton from './shared/DrivePickerButton';
+import { resolveLeafGoalSelection } from '../utils/goalHierarchy';
+import { buildGoalTimelineImpactPlan } from './visualization/goalTimelineImpact';
+import { applyGoalTimelineChanges } from '../utils/goalTimelineChanges';
+
+interface EditGoalModalProps {
+  goal: Goal | null;
+  onClose: () => void;
+  show: boolean;
+  currentUserId: string;
+  allGoals?: Goal[];
+}
+
+const parseDateInput = (value: string) => {
+  if (!value) return null;
+  const parsed = new Date(`${value}T00:00:00`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const formatDateInput = (date: Date) => date.toISOString().slice(0, 10);
+
+const calculateDurationDays = (start?: string, end?: string) => {
+  const startDate = parseDateInput(start || '');
+  const endDate = parseDateInput(end || '');
+  if (!startDate || !endDate) return '';
+  const diff = Math.round((endDate.getTime() - startDate.getTime()) / 86400000);
+  return diff >= 0 ? diff : '';
+};
+
+const addDaysToStart = (start: string, days: number) => {
+  const startDate = parseDateInput(start);
+  if (!startDate) return '';
+  const next = new Date(startDate);
+  next.setDate(next.getDate() + days);
+  return formatDateInput(next);
+};
+
+const shiftDateInputToYear = (value: string, year: number) => {
+  const parsed = parseDateInput(value);
+  if (!parsed) return '';
+  const next = new Date(parsed);
+  next.setFullYear(year);
+  return formatDateInput(next);
+};
+
+const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, currentUserId, allGoals = [] }) => {
+  const { currentPersona } = usePersona();
+  const { sprints } = useSprint();
+  const [formData, setFormData] = useState({
+    title: '',
+    description: '',
+    url: '',
+    documentLink: '' as string,
+    theme: 1, // Default to Health & Fitness theme ID
+    size: 'M',
+    timeToMasterHours: 40,
+    confidence: 0.5,
+    startDate: '',
+    endDate: '',
+    targetYear: '',
+    status: 'New',
+    priority: 2,
+    estimatedCost: '',
+    costType: '',
+    recurrence: '',
+    kpis: [] as Array<{ name: string; target: number; unit: string }>,
+    parentGoalId: '',
+    linkedPotId: '',
+    tags: [] as string[],
+    autoCreatePot: false,
+    persona: (currentPersona || 'personal') as 'personal' | 'work',
+    isPublished: false,
+    shareCode: '',
+  });
+  const [durationDays, setDurationDays] = useState<number | ''>('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [submitResult, setSubmitResult] = useState<string | null>(null);
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const { themes } = useGlobalThemes();
+  const { trackFieldChange } = useActivityTracking();
+  const [themeInput, setThemeInput] = useState('');
+  const [themeTouched, setThemeTouched] = useState(false);
+  const resolveThemeId = useCallback((input: string, fallback: number) => {
+    const trimmed = (input || '').trim();
+    if (!trimmed) return fallback;
+    const normalize = (value: string) =>
+      value.toLowerCase().replace(/[^a-z0-9]+/g, '');
+    const normalizedInput = normalize(trimmed);
+    const match = themes.find(t => {
+      const label = t.label || '';
+      const name = t.name || '';
+      return (
+        normalize(label) === normalizedInput ||
+        normalize(name) === normalizedInput ||
+        normalize(String(t.id)) === normalizedInput ||
+        normalize(label).includes(normalizedInput) ||
+        normalize(name).includes(normalizedInput)
+      );
+    });
+    if (match) return match.id;
+    const numeric = Number.parseInt(trimmed, 10);
+    return Number.isFinite(numeric) ? numeric : fallback;
+  }, [themes]);
+  const themeLabelForId = useCallback((value: any) => {
+    if (value == null) return '';
+    const match = themes.find(t => String(t.id) === String(value));
+    return match?.label || match?.name || String(value);
+  }, [themes]);
+  const [parentSearch, setParentSearch] = useState('');
+  const [potSearch, setPotSearch] = useState('');
+  const [monzoPots, setMonzoPots] = useState<Array<{ id: string; name: string }>>([]);
+  const [monzoConnected, setMonzoConnected] = useState(false);
+  const [linkedStories, setLinkedStories] = useState<Story[]>([]);
+  const [linkedTasks, setLinkedTasks] = useState<Task[]>([]);
+  const [storiesLoading, setStoriesLoading] = useState(false);
+  const [tasksLoading, setTasksLoading] = useState(false);
+  const [isGeneratingStories, setIsGeneratingStories] = useState(false);
+  const sizes = [
+    { value: 'XS', label: 'XS - Quick (1-10 hours)', hours: 5 },
+    { value: 'S', label: 'S - Small (10-40 hours)', hours: 25 },
+    { value: 'M', label: 'M - Medium (40-100 hours)', hours: 70 },
+    { value: 'L', label: 'L - Large (100-250 hours)', hours: 175 },
+    { value: 'XL', label: 'XL - Epic (250+ hours)', hours: 400 }
+  ];
+  const statuses = ['New', 'Work in Progress', 'Complete', 'Blocked', 'Deferred'];
+  const priorities = [
+    { value: 4, label: 'Critical' },
+    { value: 3, label: 'High' },
+    { value: 2, label: 'Medium' },
+    { value: 1, label: 'Low' }
+  ];
+
+  const handleStartDateChange = (value: string) => {
+    setFormData(prev => {
+      let nextEnd = prev.endDate;
+      if (value && durationDays !== '') {
+        const days = Number(durationDays);
+        if (Number.isFinite(days)) {
+          nextEnd = addDaysToStart(value, days);
+        }
+      }
+      return { ...prev, startDate: value, endDate: nextEnd };
+    });
+  };
+
+  const handleDurationChange = (value: string) => {
+    const parsed = value ? Math.max(0, Number(value)) : '';
+    setDurationDays(parsed === '' || Number.isNaN(parsed) ? '' : parsed);
+    if (formData.startDate && parsed !== '' && Number.isFinite(parsed)) {
+      const nextEnd = addDaysToStart(formData.startDate, Number(parsed));
+      setFormData(prev => ({ ...prev, endDate: nextEnd }));
+    }
+  };
+
+  const handleTargetYearChange = (value: string) => {
+    setFormData(prev => {
+      const trimmed = value.trim();
+      const parsedYear = Number(trimmed);
+      if (!trimmed || !Number.isFinite(parsedYear)) {
+        return { ...prev, targetYear: trimmed };
+      }
+      return {
+        ...prev,
+        targetYear: trimmed,
+        startDate: prev.startDate ? shiftDateInputToYear(prev.startDate, parsedYear) : prev.startDate,
+        endDate: prev.endDate ? shiftDateInputToYear(prev.endDate, parsedYear) : prev.endDate,
+      };
+    });
+  };
+
+  const goalIndex = useMemo(() => {
+    const map = new Map<string, Goal>();
+    allGoals.forEach((g) => map.set(g.id, g));
+    return map;
+  }, [allGoals]);
+
+  const wouldCreateCycle = useCallback((sourceId: string, targetId: string | null | undefined) => {
+    if (!targetId) return false;
+    if (sourceId === targetId) return true;
+    const visited = new Set<string>();
+    let currentId: string | null | undefined = targetId;
+    while (currentId) {
+      if (currentId === sourceId) return true;
+      if (visited.has(currentId)) break;
+      visited.add(currentId);
+      currentId = goalIndex.get(currentId)?.parentGoalId || null;
+    }
+    return false;
+  }, [goalIndex]);
+
+  const parentCandidates = useMemo(() => {
+    if (!goal) return [] as Goal[];
+    const persona = (goal as any)?.persona;
+    return allGoals.filter((candidate) => {
+      if (candidate.id === goal.id) return false;
+      if (persona && (candidate as any)?.persona && (candidate as any)?.persona !== persona) return false;
+      return !wouldCreateCycle(goal.id, candidate.id);
+    });
+  }, [allGoals, goal, wouldCreateCycle]);
+
+  const formatParentGoalOption = useCallback((candidate: Goal) => {
+    const ref = String((candidate as any)?.ref || '').trim();
+    const title = String(candidate.title || 'Untitled goal').trim();
+    return ref ? `${ref} - ${title}` : title;
+  }, []);
+
+  const resolveParentGoalSelection = useCallback((input: string): Goal | null => {
+    const normalized = String(input || '').trim().toLowerCase();
+    if (!normalized) return null;
+    return parentCandidates.find((candidate) => {
+      const byId = candidate.id.toLowerCase() === normalized;
+      const byRef = String((candidate as any)?.ref || '').trim().toLowerCase() === normalized;
+      const byTitle = String(candidate.title || '').trim().toLowerCase() === normalized;
+      const byLabel = formatParentGoalOption(candidate).toLowerCase() === normalized;
+      return byId || byRef || byTitle || byLabel;
+    }) || null;
+  }, [formatParentGoalOption, parentCandidates]);
+
+  const selectedParentGoal = useMemo(() => {
+    if (!formData.parentGoalId) return null;
+    return parentCandidates.find((candidate) => candidate.id === formData.parentGoalId)
+      || allGoals.find((candidate) => candidate.id === formData.parentGoalId)
+      || null;
+  }, [allGoals, formData.parentGoalId, parentCandidates]);
+
+  const filteredParentOptions = useMemo(() => {
+    const query = parentSearch.trim().toLowerCase();
+    if (!query) return parentCandidates;
+    return parentCandidates.filter((candidate) => {
+      const title = candidate.title || '';
+      const ref = (candidate as any)?.ref || '';
+      const label = formatParentGoalOption(candidate);
+      return (
+        title.toLowerCase().includes(query)
+        || ref.toLowerCase().includes(query)
+        || label.toLowerCase().includes(query)
+      );
+    });
+  }, [parentCandidates, parentSearch, formatParentGoalOption]);
+
+  const activePersona = (formData.persona || (goal as any)?.persona || currentPersona || 'personal') as 'personal' | 'work';
+
+  const reloadLinkedStories = useCallback(async () => {
+    if (!goal || !currentUserId) {
+      setLinkedStories([]);
+      return;
+    }
+    setStoriesLoading(true);
+    try {
+      let list: Story[] = [];
+      try {
+        const baseQuery = query(
+          collection(db, 'stories'),
+          where('ownerUid', '==', currentUserId),
+          where('goalId', '==', goal.id)
+        );
+        const snap = await getDocs(baseQuery);
+        list = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Story[];
+      } catch (err) {
+        const fallback = await getDocs(query(collection(db, 'stories'), where('ownerUid', '==', currentUserId)));
+        list = fallback.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Story[];
+        list = list.filter((story) => story.goalId === goal.id);
+      }
+      if (activePersona) {
+        list = list.filter((story) => !story.persona || story.persona === activePersona);
+      }
+      setLinkedStories(list);
+    } catch (err) {
+      console.error('Failed to load linked stories', err);
+      setLinkedStories([]);
+    } finally {
+      setStoriesLoading(false);
+    }
+  }, [goal, currentUserId, activePersona]);
+
+  useEffect(() => {
+    if (!show) {
+      setLinkedStories([]);
+      return;
+    }
+    reloadLinkedStories();
+  }, [show, reloadLinkedStories]);
+
+  useEffect(() => {
+    const loadLinkedTasks = async () => {
+      if (!show || !goal || !currentUserId) {
+        setLinkedTasks([]);
+        return;
+      }
+      setTasksLoading(true);
+      try {
+        const tasksSnap = await getDocs(query(collection(db, 'tasks'), where('ownerUid', '==', currentUserId)));
+        let list = tasksSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Task[];
+        const storyIds = new Set(linkedStories.map((story) => story.id));
+        list = list.filter((task) => {
+          if (activePersona && task.persona && task.persona !== activePersona) return false;
+          if (task.goalId === goal.id) return true;
+          if (task.storyId && storyIds.has(task.storyId)) return true;
+          if (task.parentId && storyIds.has(task.parentId)) return true;
+          return false;
+        });
+        setLinkedTasks(list);
+      } catch (err) {
+        console.error('Failed to load linked tasks', err);
+        setLinkedTasks([]);
+      } finally {
+        setTasksLoading(false);
+      }
+    };
+    loadLinkedTasks();
+  }, [show, goal?.id, currentUserId, activePersona, linkedStories]);
+
+  const handleStoryUpdate = async (storyId: string, updates: Partial<Story>) => {
+    await updateDoc(doc(db, 'stories', storyId), { ...updates, updatedAt: serverTimestamp() } as any);
+    setLinkedStories((prev) => prev.map((story) => (story.id === storyId ? { ...story, ...updates } as Story : story)));
+    if (updates.goalId && goal && updates.goalId !== goal.id) {
+      setLinkedStories((prev) => prev.filter((story) => story.id !== storyId));
+    }
+  };
+
+  const handleStoryDelete = async (storyId: string) => {
+    await deleteDoc(doc(db, 'stories', storyId));
+    setLinkedStories((prev) => prev.filter((story) => story.id !== storyId));
+  };
+
+  const handleStoryPriorityChange = async (storyId: string, newPriority: number) => {
+    await updateDoc(doc(db, 'stories', storyId), { priority: newPriority, updatedAt: serverTimestamp() } as any);
+    setLinkedStories((prev) => prev.map((story) => (story.id === storyId ? { ...story, priority: newPriority } as Story : story)));
+  };
+
+  const handleStoryAdd = async (storyData: Omit<Story, 'ref' | 'id' | 'updatedAt' | 'createdAt'>) => {
+    if (!goal) return;
+    const resolvedGoalSelection = resolveLeafGoalSelection((storyData as any).goalId || goal.id, allGoals);
+    if (!resolvedGoalSelection.goalId) {
+      alert(
+        resolvedGoalSelection.reason === 'ambiguous_parent'
+          ? 'Stories must link to a specific leaf goal. Choose the child goal you want this story to execute against.'
+          : 'Please select a valid leaf goal before creating a story.'
+      );
+      return;
+    }
+    const parsedStoryPoints = parsePointsValue((storyData as any).points);
+    const normalizedStoryPoints = parsedStoryPoints == null ? 1 : parsedStoryPoints;
+    const payload: any = {
+      ...storyData,
+      url: (storyData as any).url || null,
+      points: normalizedStoryPoints,
+      goalId: resolvedGoalSelection.goalId,
+      ownerUid: currentUserId,
+      persona: activePersona || 'personal',
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    };
+    const ref = await addDoc(collection(db, 'stories'), payload);
+    setLinkedStories((prev) => [...prev, { id: ref.id, ...(payload as any) } as Story]);
+  };
+
+  const handleTaskUpdate = async (taskId: string, updates: Partial<Task>) => {
+    const payload: any = { ...updates, updatedAt: serverTimestamp() };
+    if ((updates as any).storyId) {
+      payload.parentType = 'story';
+      payload.parentId = (updates as any).storyId;
+      const linkedStory = linkedStories.find((story) => story.id === (updates as any).storyId);
+      if (linkedStory?.goalId) payload.goalId = linkedStory.goalId;
+    }
+    await updateDoc(doc(db, 'tasks', taskId), payload);
+    setLinkedTasks((prev) => prev.map((task) => (task.id === taskId ? { ...task, ...updates } as Task : task)));
+  };
+
+  const handleTaskDelete = async (taskId: string) => {
+    await deleteDoc(doc(db, 'tasks', taskId));
+    setLinkedTasks((prev) => prev.filter((task) => task.id !== taskId));
+  };
+
+  const handleTaskPriorityChange = async (taskId: string, newPriority: number) => {
+    await updateDoc(doc(db, 'tasks', taskId), { priority: newPriority, updatedAt: serverTimestamp() } as any);
+    setLinkedTasks((prev) => prev.map((task) => (task.id === taskId ? { ...task, priority: newPriority } as Task : task)));
+  };
+
+  const handleTaskCreate = async (newTask: Partial<Task>) => {
+    if (!goal) return;
+    const storyId = (newTask as any).storyId || null;
+    const linkedStory = storyId ? linkedStories.find((story) => story.id === storyId) : null;
+    const resolvedGoalSelection = resolveLeafGoalSelection(linkedStory?.goalId || goal.id, allGoals);
+    if (!resolvedGoalSelection.goalId) {
+      alert(
+        resolvedGoalSelection.reason === 'ambiguous_parent'
+          ? 'Tasks must link to a specific leaf goal. Use a child milestone goal instead of the parent goal.'
+          : 'Please select a valid leaf goal before creating a task.'
+      );
+      return;
+    }
+    const parsedTaskPoints = parsePointsValue((newTask as any).points);
+    const normalizedTaskPoints = parsedTaskPoints == null ? TASK_DEFAULT_POINTS : parsedTaskPoints;
+    const payload: any = {
+      title: newTask.title || '',
+      description: newTask.description || '',
+      url: (newTask as any).url || null,
+      status: (newTask as any).status ?? 0,
+      priority: (newTask as any).priority ?? 2,
+      effort: (newTask as any).effort ?? 'M',
+      dueDate: (newTask as any).dueDate || null,
+      points: normalizedTaskPoints,
+      ownerUid: currentUserId,
+      persona: activePersona || 'personal',
+      goalId: resolvedGoalSelection.goalId,
+      storyId: storyId || null,
+      parentType: storyId ? 'story' : 'project',
+      parentId: storyId || goal.id,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    };
+    const ref = await addDoc(collection(db, 'tasks'), payload);
+    setLinkedTasks((prev) => [...prev, { id: ref.id, ...(payload as any) } as Task]);
+  };
+
+  // Load goal data when modal opens
+  useEffect(() => {
+    if (show) {
+      if (goal) {
+        // EDIT MODE: Map database values back to form values
+        const sizeMap = { 1: 'XS', 2: 'S', 3: 'M', 4: 'L', 5: 'XL' };
+        const statusMap = { 0: 'New', 1: 'Work in Progress', 2: 'Complete', 3: 'Blocked', 4: 'Deferred' };
+
+        const startDateStr = (() => {
+          const d = toDate((goal as any).startDate);
+          return d ? d.toISOString().slice(0, 10) : '';
+        })();
+        const endDateStr = (() => {
+          const d = toDate((goal as any).endDate);
+          return d ? d.toISOString().slice(0, 10) : '';
+        })();
+
+        const resolvedThemeValue = (goal as any).theme ?? (goal as any).themeId ?? (goal as any).theme_id;
+        const fallbackThemeId = migrateThemeValue(resolvedThemeValue);
+        const canonicalThemeId = resolveThemeId(String(resolvedThemeValue ?? ''), fallbackThemeId);
+        const explicitTargetYear = Number((goal as any).targetYear);
+        const derivedTargetYear = Number.isFinite(explicitTargetYear)
+          ? String(explicitTargetYear)
+          : (endDateStr ? endDateStr.slice(0, 4) : (startDateStr ? startDateStr.slice(0, 4) : ''));
+
+        setFormData({
+          title: goal.title || '',
+          description: goal.description || '',
+          url: String((goal as any).url || ''),
+          documentLink: String((goal as any).documentLink || ''),
+          theme: canonicalThemeId ?? 1,
+          size: sizeMap[goal.size as keyof typeof sizeMap] || 'M',
+          timeToMasterHours: goal.timeToMasterHours || 40,
+          confidence: goal.confidence || 0.5,
+          startDate: startDateStr,
+          endDate: endDateStr,
+          targetYear: derivedTargetYear,
+          status: statusMap[goal.status as keyof typeof statusMap] || 'New',
+          priority: goal.priority ?? 2,
+          estimatedCost: goal.estimatedCost != null ? String(goal.estimatedCost) : '',
+          costType: normalizeGoalCostType((goal as any).costType) || '',
+          recurrence: String((goal as any).recurrence || ''),
+          kpis: goal.kpis || [],
+          parentGoalId: goal.parentGoalId || '',
+          linkedPotId: (goal as any).linkedPotId || (goal as any).potId || '',
+          tags: (goal as any).tags || [],
+          autoCreatePot: !!(goal as any).autoCreatePot,
+          persona: ((goal as any).persona || currentPersona || 'personal') as 'personal' | 'work',
+          isPublished: !!(goal as any).isPublished,
+          shareCode: (goal as any).shareCode || '',
+        });
+        const current = canonicalThemeId;
+        const themeObj = themes.find(t => String(t.id) === String(current));
+        setThemeInput(themeObj?.label || themeObj?.name || `${themeObj?.id ?? current ?? ''}`);
+        const linkedPot = (goal as any).linkedPotId || (goal as any).potId || '';
+        const linkedPotName = monzoPots.find((pot) => pot.id === linkedPot)?.name;
+        setPotSearch(linkedPotName || String(linkedPot || ''));
+        const selectedParent = allGoals.find((candidate) => candidate.id === (goal.parentGoalId || ''));
+        setParentSearch(selectedParent ? formatParentGoalOption(selectedParent) : '');
+        setThemeTouched(false);
+      } else {
+        // CREATE MODE: Reset to defaults
+        setFormData({
+          title: '',
+          description: '',
+          url: '',
+          documentLink: '',
+          theme: 1,
+          size: 'M',
+          timeToMasterHours: 40,
+          confidence: 0.5,
+          startDate: '',
+          endDate: '',
+          targetYear: '',
+          status: 'New',
+          priority: 2,
+          estimatedCost: '',
+          costType: '',
+          recurrence: '',
+          kpis: [],
+          parentGoalId: '',
+          linkedPotId: '',
+          tags: [],
+          autoCreatePot: false,
+          persona: (currentPersona || 'personal') as 'personal' | 'work',
+          isPublished: false,
+          shareCode: '',
+        });
+        setThemeInput('');
+        setPotSearch('');
+        setParentSearch('');
+        setThemeTouched(false);
+      }
+    }
+  }, [goal, show, resolveThemeId, currentPersona, monzoPots, allGoals, formatParentGoalOption]);
+
+  useEffect(() => {
+    if (!show) {
+      if (themeTouched) setThemeTouched(false);
+      return;
+    }
+    const resolved = themeInput.trim()
+      ? resolveThemeId(themeInput, formData.theme)
+      : formData.theme;
+    if (String(resolved) !== String(formData.theme)) {
+      setFormData(prev => ({ ...prev, theme: resolved }));
+    }
+    if (!themeTouched) {
+      const nextLabel = themeLabelForId(resolved);
+      if (nextLabel && nextLabel !== themeInput) {
+        setThemeInput(nextLabel);
+      }
+    }
+  }, [show, themeTouched, themeInput, formData.theme, themeLabelForId, resolveThemeId]);
+
+  useEffect(() => {
+    const derived = calculateDurationDays(formData.startDate, formData.endDate);
+    setDurationDays(derived);
+  }, [formData.startDate, formData.endDate]);
+
+  // Load user's Monzo pots for optional explicit mapping
+  useEffect(() => {
+    const loadPots = async () => {
+      try {
+        const q = query(collection(db, 'monzo_pots'), where('ownerUid', '==', currentUserId));
+        const snap = await getDocs(q);
+        const list = snap.docs
+          .map(d => ({
+            id: (d.data() as any).potId || d.id,
+            name: (d.data() as any).name || 'Pot',
+            deleted: (d.data() as any).deleted,
+            closed: (d.data() as any).closed,
+            archived: (d.data() as any).archived,
+            isArchived: (d.data() as any).isArchived
+          }))
+          .filter(p => !p.deleted && !p.closed && !p.archived && !p.isArchived)
+          .map(p => ({ id: p.id, name: p.name }));
+        setMonzoPots(list);
+      } catch { }
+    };
+    if (show && currentUserId) loadPots();
+  }, [show, currentUserId]);
+
+  useEffect(() => {
+    if (!show) return;
+    if (!formData.linkedPotId) return;
+    const linkedPotName = monzoPots.find((pot) => pot.id === formData.linkedPotId)?.name;
+    if (linkedPotName && linkedPotName !== potSearch) {
+      setPotSearch(linkedPotName);
+    }
+  }, [show, formData.linkedPotId, monzoPots, potSearch]);
+
+  // Check Monzo connection status to decide if pot auto-create can run
+  useEffect(() => {
+    const loadMonzoStatus = async () => {
+      if (!show || !currentUserId) return;
+      try {
+        const snap = await getDoc(doc(db, 'integration_status', `monzo_${currentUserId}`));
+        const data = snap.data() as any;
+        setMonzoConnected(!!data?.connected);
+      } catch {
+        setMonzoConnected(false);
+      }
+    };
+    loadMonzoStatus();
+  }, [show, currentUserId]);
+
+  // KPI Management functions
+  const addKPI = () => {
+    setFormData({
+      ...formData,
+      kpis: [...formData.kpis, { name: '', target: 1, unit: '' }]
+    });
+  };
+
+  const removeKPI = (index: number) => {
+    setFormData({
+      ...formData,
+      kpis: formData.kpis.filter((_, i) => i !== index)
+    });
+  };
+
+  const updateKPI = (index: number, field: 'name' | 'target' | 'unit', value: string | number) => {
+    const updatedKPIs = [...formData.kpis];
+    updatedKPIs[index] = { ...updatedKPIs[index], [field]: value };
+    setFormData({ ...formData, kpis: updatedKPIs });
+  };
+
+  const handleSubmit = async () => {
+    if (!formData.title.trim()) return;
+
+    setIsSubmitting(true);
+    setSubmitResult(null);
+
+    try {
+      // Map form values back to database values
+      const sizeMap = { 'XS': 1, 'S': 2, 'M': 3, 'L': 4, 'XL': 5 };
+      const statusMap = { 'New': 0, 'Work in Progress': 1, 'Complete': 2, 'Blocked': 3, 'Deferred': 4 };
+
+      const selectedSize = sizes.find(s => s.value === formData.size);
+      const themeId = resolveThemeId(themeInput, formData.theme);
+      const previousThemeRaw = goal ? ((goal as any).theme ?? (goal as any).themeId ?? (goal as any).theme_id) : null;
+      const previousThemeId = goal ? resolveThemeId(String(previousThemeRaw ?? ''), formData.theme) : null;
+      const normalizedCostType = normalizeGoalCostType(formData.costType);
+      const normalizedRecurrence = normalizedCostType === 'recurring'
+        ? String(formData.recurrence || '').trim().toLowerCase()
+        : '';
+      const isNoCostGoal = normalizedCostType === 'none';
+      const normalizedPotId = isNoCostGoal ? '' : String(formData.linkedPotId || '').trim();
+      const normalizedEstimatedCost = isNoCostGoal
+        ? null
+        : (formData.estimatedCost.trim() === '' ? null : Number(formData.estimatedCost));
+
+      const goalData: any = {
+        title: formData.title.trim(),
+        description: formData.description.trim(),
+        url: formData.url.trim() || null,
+        documentLink: formData.documentLink.trim() || null,
+        theme: themeId,
+        theme_id: themeId,
+        themeId: themeId,
+        size: sizeMap[formData.size as keyof typeof sizeMap] || 3,
+        timeToMasterHours: selectedSize?.hours || formData.timeToMasterHours,
+        confidence: formData.confidence,
+        startDate: formData.startDate ? new Date(formData.startDate).getTime() : null,
+        endDate: formData.endDate ? new Date(formData.endDate).getTime() : null,
+        status: statusMap[formData.status as keyof typeof statusMap] || 0,
+        priority: formData.priority,
+        kpis: formData.kpis,
+        estimatedCost: normalizedEstimatedCost,
+        parentGoalId: formData.parentGoalId ? formData.parentGoalId : null,
+        updatedAt: serverTimestamp(),
+        tags: formData.tags,
+        autoCreatePot: formData.autoCreatePot,
+        persona: formData.persona || currentPersona || 'personal',
+        costType: normalizedCostType || null,
+        recurrence: normalizedRecurrence || null,
+        isPublished: formData.isPublished,
+        shareCode: formData.isPublished ? formData.shareCode : null,
+        publishedAt: formData.isPublished && !goal?.isPublished ? serverTimestamp() : (goal?.publishedAt || null),
+      };
+
+      const ty = (formData.targetYear || '').trim();
+      goalData.targetYear = ty ? Number(ty) : null;
+      goalData.linkedPotId = normalizedPotId || null;
+      // Backwards compatibility
+      goalData.potId = normalizedPotId || null;
+      const estimatedCostValue = normalizedEstimatedCost;
+
+      const maybeCreateMonzoPot = async (goalId: string | null, goalRef?: string | null): Promise<string | null> => {
+        if (!goalId) return null;
+        if (!formData.autoCreatePot) return null;
+        if (!estimatedCostValue || Number.isNaN(estimatedCostValue)) return null;
+        if (normalizedPotId) return null;
+        if (!monzoConnected) {
+          setToastMsg('Connect Monzo to auto-create a pot.');
+          return null;
+        }
+        const refLabel = (goalRef || '').trim();
+        const titleLabel = (formData.title || 'Goal pot').trim();
+        const potName = refLabel ? `${refLabel} - ${titleLabel}` : titleLabel;
+        const callable = httpsCallable(functions, 'monzoCreatePot');
+        const resp: any = await callable({ name: potName, goalId });
+        const created = resp?.data?.pot || null;
+        return created?.potId || created?.id || null;
+      };
+
+      let goalIdForPot: string | null = goal?.id || null;
+      let goalRefForPot: string | null = (goal as any)?.ref || (goal as any)?.referenceNumber || null;
+
+      if (goal) {
+        // UPDATE existing goal
+        console.log('🚀 EditGoalModal: Starting GOAL update', { goalId: goal.id });
+        const prevStartDateMs = typeof (goal as any).startDate === 'number' ? (goal as any).startDate : null;
+        const prevEndDateMs = typeof (goal as any).endDate === 'number' ? (goal as any).endDate : null;
+        await updateDoc(doc(db, 'goals', goal.id), goalData);
+        // Auto-move stories when goal start/end date changes (same logic as roadmap drag)
+        const newStartDateMs = goalData.startDate as number | null;
+        const newEndDateMs = goalData.endDate as number | null;
+        const datesMoved = (newStartDateMs != null && newStartDateMs !== prevStartDateMs)
+          || (newEndDateMs != null && newEndDateMs !== prevEndDateMs);
+        if (datesMoved && newStartDateMs != null && newEndDateMs != null && linkedStories.length > 0 && sprints.length > 0) {
+          try {
+            const impactPlan = buildGoalTimelineImpactPlan({
+              goalId: goal.id,
+              newStartDate: new Date(newStartDateMs),
+              newEndDate: new Date(newEndDateMs),
+              stories: linkedStories,
+              tasks: linkedTasks,
+              sprints,
+            });
+            const movable = impactPlan.affectedStories.filter((s) => s.recommendationKind === 'move');
+            if (movable.length > 0) {
+              const persona = (goalData.persona || currentPersona || 'personal') as 'personal' | 'work';
+              const result = await applyGoalTimelineChanges({
+                goalId: goal.id,
+                startDateMs: newStartDateMs,
+                endDateMs: newEndDateMs,
+                ownerUid: currentUserId,
+                persona,
+                affectedStories: impactPlan.affectedStories,
+              });
+              if (result.movedStoryCount > 0) {
+                setToastMsg(`Goal updated — ${result.movedStoryCount} stor${result.movedStoryCount === 1 ? 'y' : 'ies'} moved to nearest sprint`);
+              }
+            }
+          } catch (err) {
+            console.warn('[EditGoalModal] Failed to auto-move stories after date change:', err);
+          }
+        }
+        const prevPersona = ((goal as any).persona || currentPersona || 'personal') as 'personal' | 'work';
+        const nextPersona = (goalData.persona || prevPersona) as 'personal' | 'work';
+        if (prevPersona !== nextPersona) {
+          try {
+            await cascadeGoalPersona(currentUserId, goal.id, nextPersona);
+            setLinkedStories((prev) => prev.map((story) => ({ ...story, persona: nextPersona } as Story)));
+            setLinkedTasks((prev) => prev.map((task) => ({ ...task, persona: nextPersona } as Task)));
+          } catch (err) {
+            console.warn('Failed to cascade persona for goal', err);
+          }
+        }
+        if (goal && previousThemeId != null && String(previousThemeId) !== String(themeId)) {
+          const referenceNumber = (goal as any)?.ref || (goal as any)?.referenceNumber || goal.id;
+          await trackFieldChange(
+            goal.id,
+            'goal',
+            'theme',
+            themeLabelForId(previousThemeId),
+            themeLabelForId(themeId),
+            referenceNumber
+          );
+        }
+        const createdPotId = await maybeCreateMonzoPot(goal.id, goalRefForPot);
+        if (createdPotId) {
+          await updateDoc(doc(db, 'goals', goal.id), { linkedPotId: createdPotId, potId: createdPotId });
+        }
+        setSubmitResult(`✅ Goal updated successfully!`);
+        setToastMsg('Goal updated');
+      } else {
+        // CREATE new goal
+        console.log('🚀 EditGoalModal: Creating NEW goal');
+        goalData.createdAt = serverTimestamp();
+        goalData.ownerUid = currentUserId;
+        if (!goalData.ref) {
+          let existingRefs = allGoals.map((g) => (g as any).ref).filter(Boolean) as string[];
+          if (existingRefs.length === 0) {
+            try {
+              const snap = await getDocs(query(collection(db, 'goals'), where('ownerUid', '==', currentUserId)));
+              existingRefs = snap.docs.map((d) => (d.data() as any).ref).filter(Boolean) as string[];
+            } catch {
+              existingRefs = [];
+            }
+          }
+          goalData.ref = generateRef('goal', existingRefs);
+        }
+        // Default persona if available, or fetch from context if passed (not available in props currently, assuming currentUserId context)
+        // For now, we'll rely on the parent component to handle persona or add it here if needed.
+        // Ideally, we should pass persona as a prop.
+        // Adding a safe fallback or update later.
+
+        await import('firebase/firestore').then(async ({ addDoc, collection }) => {
+          const ref = await addDoc(collection(db, 'goals'), goalData);
+          goalIdForPot = ref.id;
+        });
+
+        goalRefForPot = goalData.ref || goalRefForPot;
+        const createdPotId = await maybeCreateMonzoPot(goalIdForPot, goalRefForPot);
+        if (createdPotId && goalIdForPot) {
+          await updateDoc(doc(db, 'goals', goalIdForPot), { linkedPotId: createdPotId, potId: createdPotId });
+          setFormData(prev => ({ ...prev, linkedPotId: createdPotId }));
+        }
+        setSubmitResult(`✅ Goal created successfully!`);
+        setToastMsg('Goal created');
+      }
+
+      setFormData(prev => ({ ...prev, theme: themeId }));
+
+      // Auto-close after success
+      setTimeout(() => {
+        onClose();
+        setSubmitResult(null);
+      }, 1500);
+
+    } catch (error: any) {
+      console.error('❌ EditGoalModal: Operation failed', error);
+      setSubmitResult(`❌ Failed: ${error.message}`);
+    }
+    setIsSubmitting(false);
+  };
+
+  const handleClose = () => {
+    setSubmitResult(null);
+    onClose();
+  };
+
+  const handleDelete = async () => {
+    if (!goal || isDeleting) return;
+    const label = (goal as any).ref || goal.title || goal.id;
+    const confirmed = window.confirm(`Delete goal "${label}"? This cannot be undone.`);
+    if (!confirmed) return;
+
+    setIsDeleting(true);
+    setSubmitResult(null);
+    try {
+      await deleteDoc(doc(db, 'goals', goal.id));
+      setToastMsg('Goal deleted');
+      onClose();
+    } catch (error: any) {
+      console.error('❌ EditGoalModal: Delete failed', error);
+      setSubmitResult(`❌ Failed to delete goal: ${error?.message || 'Unknown error'}`);
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const handleGenerateStories = async () => {
+    if (!goal || isGeneratingStories) return;
+    setIsGeneratingStories(true);
+    setSubmitResult(null);
+    try {
+      const callable = httpsCallable(functions, 'generateStoriesForGoal');
+      const resp: any = await callable({ goalId: goal.id });
+      const created = Number(resp?.data?.created ?? 0);
+      setSubmitResult(
+        created > 0
+          ? `✅ Generated ${created} stories for "${goal.title}".`
+          : '✅ AI generation completed with no new stories.'
+      );
+      await reloadLinkedStories();
+    } catch (error: any) {
+      console.error('generateStoriesForGoal failed', error);
+      setSubmitResult(`❌ Failed to generate stories: ${error?.message || 'Unknown error'}`);
+    } finally {
+      setIsGeneratingStories(false);
+    }
+  };
+
+  // if (!goal) return null; // Removed to allow create mode
+
+  return (
+    <Modal show={show} onHide={handleClose} centered size="xl" fullscreen="lg-down" scrollable>
+      <ToastContainer position="bottom-end" className="p-3">
+        <Toast bg="success" onClose={() => setToastMsg(null)} show={!!toastMsg} delay={1800} autohide>
+          <Toast.Body className="text-white">{toastMsg}</Toast.Body>
+        </Toast>
+      </ToastContainer>
+      <Modal.Header closeButton>
+        <div className="d-flex w-100 align-items-center justify-content-between gap-2">
+          <Modal.Title>{goal ? `Edit Goal: ${goal.title}` : 'Create New Goal'}</Modal.Title>
+          {goal && (
+            <Button
+              variant="outline-primary"
+              size="sm"
+              onClick={handleGenerateStories}
+              disabled={isGeneratingStories || isSubmitting || isDeleting}
+              title="Auto-generate stories for this goal"
+            >
+              <Wand2 size={14} className="me-1" />
+              {isGeneratingStories ? 'Generating...' : 'AI Stories'}
+            </Button>
+          )}
+        </div>
+      </Modal.Header>
+      <Modal.Body>
+        <div className="row g-3">
+          <div className="col-lg-8">
+            <Form>
+              <Form.Group className="mb-3">
+                <Form.Label>Title *</Form.Label>
+                <Form.Control
+                  type="text"
+                  value={formData.title}
+                  onChange={(e) => setFormData({ ...formData, title: e.target.value })}
+                  placeholder="Enter goal title..."
+                  autoFocus
+                />
+              </Form.Group>
+
+              <Form.Group className="mb-3">
+                <Form.Label>Estimated Cost (£)</Form.Label>
+                <InputGroup>
+                  <InputGroup.Text>£</InputGroup.Text>
+                  <Form.Control
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={formData.estimatedCost}
+                    onChange={(e) => setFormData({ ...formData, estimatedCost: e.target.value })}
+                    placeholder="e.g. 1250"
+                    disabled={formData.costType === 'none'}
+                  />
+                </InputGroup>
+                <Form.Text className="text-muted">
+                  {formData.costType === 'none'
+                    ? 'Cost disabled for this goal.'
+                    : 'Used for finance projections and Monzo pot alignment.'}
+                </Form.Text>
+              </Form.Group>
+
+              <div className="row">
+                <div className="col-md-4">
+                  <Form.Group className="mb-3">
+                    <Form.Label>Cost Type</Form.Label>
+                    <Form.Select
+                      id="goal-cost-type"
+                      value={formData.costType}
+                      onChange={(e) => {
+                        const nextCostType = e.target.value;
+                        setFormData((prev) => ({
+                          ...prev,
+                          costType: nextCostType,
+                          estimatedCost: nextCostType === 'none' ? '' : prev.estimatedCost,
+                          linkedPotId: nextCostType === 'none' ? '' : prev.linkedPotId,
+                          autoCreatePot: nextCostType === 'none' ? false : prev.autoCreatePot,
+                        }));
+                        if (nextCostType === 'none') {
+                          setPotSearch('');
+                        }
+                      }}
+                    >
+                      <option value="">Not set</option>
+                      <option value="none">None (no cost)</option>
+                      <option value="one_off">One-off</option>
+                      <option value="recurring">Recurring</option>
+                    </Form.Select>
+                  </Form.Group>
+                </div>
+                <div className="col-md-4">
+                  <Form.Group className="mb-3">
+                    <Form.Label>Recurrence</Form.Label>
+                    <Form.Select
+                      id="goal-recurrence"
+                      value={formData.recurrence}
+                      onChange={(e) => setFormData({ ...formData, recurrence: e.target.value })}
+                      disabled={formData.costType !== 'recurring'}
+                    >
+                      <option value="">Not set</option>
+                      <option value="monthly">Monthly</option>
+                      <option value="annual">Annual</option>
+                    </Form.Select>
+                  </Form.Group>
+                </div>
+                <div className="col-md-4">
+                  <Form.Group className="mb-3">
+                    <Form.Label>Target Year</Form.Label>
+                    <Form.Control
+                      id="goal-target-year"
+                      type="number"
+                      min="2024"
+                      step="1"
+                      value={formData.targetYear}
+                      onChange={(e) => handleTargetYearChange(e.target.value)}
+                      placeholder="e.g., 2026"
+                    />
+                    <Form.Text className="text-muted">
+                      Date years: Start {formData.startDate ? formData.startDate.slice(0, 4) : '—'} · End {formData.endDate ? formData.endDate.slice(0, 4) : '—'}
+                    </Form.Text>
+                  </Form.Group>
+                </div>
+              </div>
+
+              <Form.Group className="mb-3">
+                <Form.Label>Link Monzo Pot (optional)</Form.Label>
+                <Form.Control
+                  list="goal-pot-options"
+                  value={potSearch}
+                  disabled={formData.costType === 'none'}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setPotSearch(value);
+                    const matched = monzoPots.find((pot) =>
+                      pot.id.toLowerCase() === value.trim().toLowerCase() ||
+                      pot.name.toLowerCase() === value.trim().toLowerCase()
+                    );
+                    setFormData((prev) => ({ ...prev, linkedPotId: matched?.id || '' }));
+                  }}
+                  onBlur={() => {
+                    const value = potSearch.trim();
+                    if (!value) {
+                      setFormData((prev) => ({ ...prev, linkedPotId: '' }));
+                      return;
+                    }
+                    const matched = monzoPots.find((pot) =>
+                      pot.id.toLowerCase() === value.toLowerCase() ||
+                      pot.name.toLowerCase() === value.toLowerCase()
+                    );
+                    if (matched) {
+                      setFormData((prev) => ({ ...prev, linkedPotId: matched.id }));
+                      setPotSearch(matched.name);
+                    }
+                  }}
+                  placeholder={formData.costType === 'none' ? 'Disabled for no-cost goals' : 'Search pots by name...'}
+                />
+                <datalist id="goal-pot-options">
+                  {monzoPots.map((pot) => (
+                    <option key={`pot-name-${pot.id}`} value={pot.name} label={pot.id} />
+                  ))}
+                  {monzoPots.map((pot) => (
+                    <option key={`pot-id-${pot.id}`} value={pot.id} />
+                  ))}
+                </datalist>
+                <Form.Text className="text-muted">
+                  {formData.costType === 'none'
+                    ? 'No-cost goals are excluded from pot tracking.'
+                    : 'Search and select a non-archived pot by name.'}
+                </Form.Text>
+              </Form.Group>
+              <Form.Check
+                className="mb-3"
+                type="checkbox"
+                label="Auto-create a Monzo pot for this goal (target = estimated cost)"
+                checked={formData.autoCreatePot}
+                disabled={formData.costType === 'none'}
+                onChange={(e) => setFormData({ ...formData, autoCreatePot: e.target.checked })}
+              />
+
+              <Form.Group className="mb-3">
+                <Form.Label>Description</Form.Label>
+                <Form.Control
+                  as="textarea"
+                  rows={3}
+                  value={formData.description}
+                  onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                  placeholder="Describe this goal in detail..."
+                />
+              </Form.Group>
+
+              <Form.Group className="mb-3">
+                <Form.Label>Source URL</Form.Label>
+                <Form.Control
+                  type="url"
+                  value={formData.url}
+                  onChange={(e) => setFormData({ ...formData, url: e.target.value })}
+                  placeholder="https://..."
+                />
+              </Form.Group>
+              <Form.Group className="mb-3">
+                <Form.Label>Document</Form.Label>
+                <div className="d-flex gap-2 align-items-center">
+                  <Form.Control
+                    type="url"
+                    value={formData.documentLink}
+                    onChange={(e) => setFormData({ ...formData, documentLink: e.target.value })}
+                    placeholder="Google Docs / Drive link..."
+                  />
+                  <DrivePickerButton
+                    onSelect={(file) => setFormData({ ...formData, documentLink: file.url })}
+                  />
+                </div>
+                {formData.documentLink && (
+                  <div className="mt-1">
+                    <a href={formData.documentLink} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12 }}>
+                      {formData.documentLink.length > 60 ? formData.documentLink.slice(0, 57) + '…' : formData.documentLink}
+                    </a>
+                  </div>
+                )}
+              </Form.Group>
+
+              <Form.Group className="mb-3">
+                <Form.Label>Tags</Form.Label>
+                <TagInput
+                  value={formData.tags}
+                  onChange={(tags) => setFormData({ ...formData, tags })}
+                  placeholder="Add tags..."
+                />
+              </Form.Group>
+
+              <Form.Group className="mb-3">
+                <Form.Label>Persona</Form.Label>
+                <Form.Select
+                  value={formData.persona}
+                  onChange={(e) => setFormData({ ...formData, persona: e.target.value as 'personal' | 'work' })}
+                >
+                  <option value="personal">Personal</option>
+                  <option value="work">Work</option>
+                </Form.Select>
+              </Form.Group>
+
+              <div className="row">
+                <div className="col-md-6">
+                  <Form.Group className="mb-3">
+                    <Form.Label>Theme</Form.Label>
+                    <Form.Control
+                      list="edit-goal-theme-options"
+                      value={themeInput}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        setThemeInput(value);
+                        if (!themeTouched) setThemeTouched(true);
+                        setFormData(prev => ({
+                          ...prev,
+                          theme: resolveThemeId(value, prev.theme)
+                        }));
+                      }}
+                      onBlur={() => {
+                        setThemeInput(prevInput => {
+                          let nextLabel = prevInput;
+                          setFormData(prev => {
+                            const nextThemeId = resolveThemeId(prevInput, prev.theme);
+                            const match = themes.find(t => t.id === nextThemeId);
+                            nextLabel = match?.label ?? prevInput;
+                            return { ...prev, theme: nextThemeId };
+                          });
+                          return nextLabel;
+                        });
+                      }}
+                      placeholder="Search themes..."
+                    />
+                    <datalist id="edit-goal-theme-options">
+                      {themes.map(t => {
+                        const display = t.label || t.name || `${t.id}`;
+                        return <option key={`label-${t.id}`} value={display} />;
+                      })}
+                      {themes.map(t => {
+                        if (!t.name || t.name === t.label) return null;
+                        return <option key={`name-${t.id}`} value={t.name!} />;
+                      })}
+                    </datalist>
+                  </Form.Group>
+                </div>
+                <div className="col-md-6">
+                  <Form.Group className="mb-3">
+                    <Form.Label>Size</Form.Label>
+                    <Form.Select
+                      value={formData.size}
+                      onChange={(e) => {
+                        const size = e.target.value;
+                        const sizeData = sizes.find(s => s.value === size);
+                        setFormData({
+                          ...formData,
+                          size,
+                          timeToMasterHours: sizeData?.hours || 40
+                        });
+                      }}
+                    >
+                      {sizes.map(size => (
+                        <option key={size.value} value={size.value}>{size.label}</option>
+                      ))}
+                    </Form.Select>
+                  </Form.Group>
+                </div>
+              </div>
+
+              <div className="row">
+                <div className="col-md-12">
+                  <Form.Group className="mb-3">
+                    <Form.Label>Parent Goal</Form.Label>
+                    <Form.Control
+                      type="text"
+                      size="sm"
+                      placeholder="Search parent goals by ref or title..."
+                      list="edit-goal-parent-options"
+                      value={parentSearch}
+                      onChange={(e) => {
+                        const nextInput = e.target.value;
+                        setParentSearch(nextInput);
+                        if (!nextInput.trim()) {
+                          setFormData({ ...formData, parentGoalId: '' });
+                          return;
+                        }
+                        const resolved = resolveParentGoalSelection(nextInput);
+                        if (resolved) {
+                          setFormData({ ...formData, parentGoalId: resolved.id });
+                        }
+                      }}
+                      onBlur={() => {
+                        const resolved = resolveParentGoalSelection(parentSearch);
+                        if (resolved) {
+                          setParentSearch(formatParentGoalOption(resolved));
+                          setFormData({ ...formData, parentGoalId: resolved.id });
+                          return;
+                        }
+                        if (!parentSearch.trim()) {
+                          setFormData({ ...formData, parentGoalId: '' });
+                          return;
+                        }
+                        setFormData({ ...formData, parentGoalId: '' });
+                      }}
+                    />
+                    <datalist id="edit-goal-parent-options">
+                      {filteredParentOptions.map((option) => (
+                        <option key={option.id} value={formatParentGoalOption(option)} />
+                      ))}
+                    </datalist>
+                    <Form.Text className="text-muted">
+                      {selectedParentGoal
+                        ? `Selected parent: ${formatParentGoalOption(selectedParentGoal)}`
+                        : 'Start typing to search parent goals, or leave blank for no parent.'}
+                    </Form.Text>
+                    <Form.Text className="text-muted d-block">
+                      Hold Option/Alt while dragging one goal onto another in the roadmap to link quickly.
+                    </Form.Text>
+                  </Form.Group>
+                </div>
+              </div>
+
+              <div className="row">
+                <div className="col-md-4">
+                  <Form.Group className="mb-3">
+                    <Form.Label>Start Date</Form.Label>
+                    <Form.Control
+                      type="date"
+                      value={formData.startDate}
+                      onChange={(e) => handleStartDateChange(e.target.value)}
+                    />
+                  </Form.Group>
+                </div>
+                <div className="col-md-4">
+                  <Form.Group className="mb-3">
+                    <Form.Label>End Date (Planned)</Form.Label>
+                    <Form.Control
+                      type="date"
+                      value={formData.endDate}
+                      onChange={(e) => setFormData({ ...formData, endDate: e.target.value })}
+                    />
+                  </Form.Group>
+                </div>
+                <div className="col-md-4">
+                  <Form.Group className="mb-3">
+                    <Form.Label>Duration (days)</Form.Label>
+                    <Form.Control
+                      type="number"
+                      min={0}
+                      value={durationDays}
+                      onChange={(e) => handleDurationChange(e.target.value)}
+                    />
+                    <Form.Text className="text-muted">
+                      Updates end date when start date changes.
+                    </Form.Text>
+                  </Form.Group>
+                </div>
+              </div>
+
+              <div className="row">
+                <div className="col-md-12">
+                  <Form.Group className="mb-3">
+                    <Form.Label>Confidence Level</Form.Label>
+                    <Form.Range
+                      value={formData.confidence}
+                      onChange={(e) => setFormData({ ...formData, confidence: parseFloat(e.target.value) })}
+                      min={0}
+                      max={1}
+                      step={0.1}
+                    />
+                    <Form.Text className="text-muted">
+                      {Math.round(formData.confidence * 100)}% - How confident are you about achieving this?
+                    </Form.Text>
+                  </Form.Group>
+                </div>
+              </div>
+
+              <div className="row">
+                <div className="col-md-6">
+                  <Form.Group className="mb-3">
+                    <Form.Label>Status</Form.Label>
+                    <Form.Select
+                      value={formData.status}
+                      onChange={(e) => setFormData({ ...formData, status: e.target.value })}
+                    >
+                      {statuses.map(status => (
+                        <option key={status} value={status}>{status}</option>
+                      ))}
+                    </Form.Select>
+                  </Form.Group>
+                </div>
+                <div className="col-md-6">
+                  <Form.Group className="mb-3">
+                    <Form.Label>Priority</Form.Label>
+                    <Form.Select
+                      value={formData.priority}
+                      onChange={(e) => setFormData({ ...formData, priority: parseInt(e.target.value) })}
+                    >
+                      {priorities.map(priority => (
+                        <option key={priority.value} value={priority.value}>{priority.label}</option>
+                      ))}
+                    </Form.Select>
+                  </Form.Group>
+                </div>
+              </div>
+
+              <Form.Group className="mb-3">
+                <Form.Label>Estimated Hours to Master</Form.Label>
+                <Form.Control
+                  type="number"
+                  value={formData.timeToMasterHours}
+                  onChange={(e) => setFormData({ ...formData, timeToMasterHours: parseInt(e.target.value) })}
+                  min={1}
+                  max={1000}
+                />
+                <Form.Text className="text-muted">
+                  Total time you expect to invest in this goal
+                </Form.Text>
+              </Form.Group>
+
+              {/* KPIs Section */}
+              <Form.Group className="mb-3">
+                <div className="d-flex justify-content-between align-items-center mb-2">
+                  <Form.Label>Key Performance Indicators (KPIs)</Form.Label>
+                  <Button
+                    variant="outline-primary"
+                    size="sm"
+                    onClick={addKPI}
+                  >
+                    + Add KPI
+                  </Button>
+                </div>
+                {formData.kpis.map((kpi, index) => (
+                  <div key={index} className="border rounded p-3 mb-2">
+                    <div className="row">
+                      <div className="col-md-4">
+                        <Form.Control
+                          type="text"
+                          placeholder="KPI Name (e.g., Weight Lost)"
+                          value={kpi.name}
+                          onChange={(e) => updateKPI(index, 'name', e.target.value)}
+                        />
+                      </div>
+                      <div className="col-md-3">
+                        <Form.Control
+                          type="number"
+                          placeholder="Target"
+                          value={kpi.target}
+                          onChange={(e) => updateKPI(index, 'target', parseFloat(e.target.value))}
+                        />
+                      </div>
+                      <div className="col-md-3">
+                        <Form.Control
+                          type="text"
+                          placeholder="Unit (e.g., lbs, books)"
+                          value={kpi.unit}
+                          onChange={(e) => updateKPI(index, 'unit', e.target.value)}
+                        />
+                      </div>
+                      <div className="col-md-2">
+                        <Button
+                          variant="outline-danger"
+                          size="sm"
+                          onClick={() => removeKPI(index)}
+                        >
+                          Remove
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                <Form.Text className="text-muted">
+                  Add measurable metrics to track progress toward this goal
+                </Form.Text>
+              </Form.Group>
+
+              {/* Publish & Share Section */}
+              <div className="border-top pt-3 mt-4">
+                <Form.Group className="mb-3">
+                  <Form.Check
+                    type="checkbox"
+                    id="publish-goal"
+                    label="Publish this goal (share publicly via link)"
+                    checked={formData.isPublished}
+                    onChange={(e) => {
+                      setFormData(prev => {
+                        const isPublished = e.target.checked;
+                        return {
+                          ...prev,
+                          isPublished,
+                          shareCode: isPublished && !prev.shareCode ? generateShareCode() : prev.shareCode
+                        };
+                      });
+                    }}
+                  />
+                  <Form.Text className="text-muted d-block mt-2">
+                    {formData.isPublished
+                      ? '✓ This goal is publicly visible with only title and progress bars showing'
+                      : 'When enabled, others can view this goal via a unique share link without logging in'}
+                  </Form.Text>
+                </Form.Group>
+
+                {formData.isPublished && formData.shareCode && (
+                  <Form.Group className="mb-3">
+                    <Form.Label className="fw-bold">Share Link</Form.Label>
+                    <InputGroup>
+                      <Form.Control
+                        type="text"
+                        value={getShareUrl(formData.shareCode)}
+                        readOnly
+                      />
+                      <Button
+                        variant="outline-secondary"
+                        onClick={() => {
+                          navigator.clipboard.writeText(getShareUrl(formData.shareCode));
+                          setToastMsg('Link copied to clipboard!');
+                        }}
+                      >
+                        Copy Link
+                      </Button>
+                    </InputGroup>
+                    <Form.Text className="text-muted d-block mt-2" style={{ fontSize: '0.8rem' }}>
+                      Share Code: <code>{formData.shareCode}</code>
+                    </Form.Text>
+                  </Form.Group>
+                )}
+              </div>
+            </Form>
+
+            {submitResult && (
+              <Alert variant={submitResult.includes('✅') ? 'success' : 'danger'}>
+                {submitResult}
+              </Alert>
+            )}
+          </div>
+          <div className="col-lg-4">
+            <ActivityStreamPanel
+              entityId={goal?.id}
+              entityType="goal"
+              referenceNumber={(goal as any)?.ref || (goal as any)?.referenceNumber}
+            />
+          </div>
+        </div>
+
+        {goal && (
+          <div className="mt-4">
+            <div className="mb-4">
+              <h5 className="mb-2">Linked Stories</h5>
+              {storiesLoading ? (
+                <div className="text-muted small">Loading stories…</div>
+              ) : (
+                <div style={{ overflowX: 'auto' }}>
+                  <ModernStoriesTable
+                    stories={linkedStories}
+                    goals={allGoals.length ? allGoals : (goal ? [goal] : [])}
+                    goalId={goal.id}
+                    onStoryUpdate={handleStoryUpdate}
+                    onStoryDelete={handleStoryDelete}
+                    onStoryPriorityChange={handleStoryPriorityChange}
+                    onStoryAdd={handleStoryAdd}
+                  />
+                </div>
+              )}
+            </div>
+
+            <div>
+              <h5 className="mb-2">Linked Tasks</h5>
+              {tasksLoading ? (
+                <div className="text-muted small">Loading tasks…</div>
+              ) : (
+                <div style={{ overflowX: 'auto' }}>
+                  <ModernTaskTable
+                    tasks={linkedTasks}
+                    stories={linkedStories}
+                    goals={allGoals.length ? allGoals : (goal ? [goal] : [])}
+                    sprints={sprints as any}
+                    compact
+                    defaultColumns={['ref', 'title', 'status', 'priority', 'dueDate', 'points', 'storyTitle']}
+                    onTaskCreate={handleTaskCreate}
+                    onTaskUpdate={handleTaskUpdate}
+                    onTaskDelete={handleTaskDelete}
+                    onTaskPriorityChange={handleTaskPriorityChange}
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </Modal.Body>
+      <Modal.Footer>
+        {goal && (
+          <Button variant="danger" onClick={handleDelete} disabled={isSubmitting || isDeleting}>
+            {isDeleting ? 'Deleting...' : 'Delete Goal'}
+          </Button>
+        )}
+        <Button variant="secondary" onClick={handleClose} disabled={isSubmitting || isDeleting}>
+          Cancel
+        </Button>
+        <Button
+          variant="primary"
+          onClick={handleSubmit}
+          disabled={isSubmitting || isDeleting || !formData.title.trim()}
+        >
+          {isSubmitting ? (goal ? 'Updating...' : 'Creating...') : (goal ? 'Update Goal' : 'Create Goal')}
+        </Button>
+      </Modal.Footer>
+    </Modal>
+  );
+};
+
+export default EditGoalModal;
