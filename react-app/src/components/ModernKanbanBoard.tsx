@@ -1261,7 +1261,10 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
       const tasksData = snapshot.docs.map(d => {
         const x = d.data() as any;
           const t: any = {
-            id: d.id,
+            // x.id is the canonical task document ID stored as a field; d.id is the
+            // sprint_task_index document ID (should be identical, but prefer x.id so
+            // writes to tasks/{id} target the correct document even if index is stale).
+            id: x.id || d.id,
             title: x.title,
             description: x.description || '',
             status: x.status,
