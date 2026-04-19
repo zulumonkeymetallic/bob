@@ -32,7 +32,8 @@ import {
   ChevronRight,
   ChevronDown
 } from 'lucide-react';
-import { Activity, Pencil, Trash2, Wand2, ExternalLink, CalendarClock } from 'lucide-react';
+import { Activity, Pencil, Trash2, Wand2, ExternalLink, CalendarClock, Clock3 } from 'lucide-react';
+import DeferItemModal from './DeferItemModal';
 import { Story, Goal, Sprint, Task } from '../types';
 import StoryTasksPanel from './StoryTasksPanel';
 import ModernTaskTable from './ModernTaskTable';
@@ -436,7 +437,15 @@ const SortableRow: React.FC<SortableRowProps> = ({
   const [editingCell, setEditingCell] = useState<string | null>(null);
   const [editValue, setEditValue] = useState<string>('');
   const [generatingStoryId, setGeneratingStoryId] = useState<string | null>(null);
+  const [showDeferModal, setShowDeferModal] = useState(false);
   const { trackFieldChange } = useActivityTracking();
+
+  // Deferred state for this story
+  const deferredUntilRaw = (story as any).deferredUntil ?? null;
+  const deferredUntilMs = typeof deferredUntilRaw === 'number'
+    ? deferredUntilRaw
+    : deferredUntilRaw?.toDate?.()?.getTime() ?? null;
+  const isDeferred = typeof deferredUntilMs === 'number' && deferredUntilMs > Date.now();
 
   // Track story view when component mounts (only once per story)
   React.useEffect(() => {
@@ -865,6 +874,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
   };
 
   return (
+    <>
     <tr
       ref={setNodeRef}
       style={{
@@ -1015,6 +1025,23 @@ const SortableRow: React.FC<SortableRowProps> = ({
           >
             <Wand2 size={14} />
           </button>
+          <button
+            onClick={(e) => { e.stopPropagation(); setShowDeferModal(true); }}
+            style={{
+              color: isDeferred ? '#b45309' : themeVars.muted as string,
+              padding: '4px',
+              borderRadius: '4px',
+              border: 'none',
+              backgroundColor: 'transparent',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease',
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = rgbaCard(0.04); }}
+            onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+            title={isDeferred ? `Deferred to ${new Date(deferredUntilMs!).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}` : 'Defer intelligently'}
+          >
+            <Clock3 size={14} />
+          </button>
           {onPriorityFlag && (
             <button
               onClick={() => onPriorityFlag(story)}
@@ -1083,6 +1110,25 @@ const SortableRow: React.FC<SortableRowProps> = ({
         </div>
       </td>
     </tr>
+    {showDeferModal && (
+      <DeferItemModal
+        show={showDeferModal}
+        onHide={() => setShowDeferModal(false)}
+        itemType="story"
+        itemId={(story as any).id}
+        itemTitle={story.title || ''}
+        onApply={async ({ dateMs, rationale, source }) => {
+          await onStoryUpdate((story as any).id, {
+            targetDate: dateMs,
+            deferredUntil: dateMs,
+            deferredReason: rationale,
+            deferredBy: source,
+          } as any);
+          setShowDeferModal(false);
+        }}
+      />
+    )}
+    </>
   );
 };
 
@@ -1131,6 +1177,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
     points: '',
     hasGoal: '',
     dataQuality: '',
+    deferStatus: '',
   });
 
   // Inline tasks expansion state (declare before effects that depend on it)
@@ -1353,6 +1400,14 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
       if (filters.dataQuality === 'missing_description' && !missingDescription) return false;
     }
 
+    if (filters.deferStatus) {
+      const rawDefer = (story as any).deferredUntil ?? null;
+      const deferMs = typeof rawDefer === 'number' ? rawDefer : rawDefer?.toDate?.()?.getTime() ?? null;
+      const storyIsDeferred = typeof deferMs === 'number' && deferMs > Date.now();
+      if (filters.deferStatus === 'deferred' && !storyIsDeferred) return false;
+      if (filters.deferStatus === 'not_deferred' && storyIsDeferred) return false;
+    }
+
     return true;
   });
 
@@ -1398,6 +1453,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
       points: '',
       hasGoal: '',
       dataQuality: '',
+      deferStatus: '',
     });
   };
 
@@ -1693,6 +1749,34 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
             <option value="missing_goal">Missing Goal Link</option>
             <option value="missing_points">Missing Points (0/blank)</option>
             <option value="missing_description">Missing Description</option>
+          </select>
+        </div>
+
+        <div>
+          <label style={{
+            display: 'block',
+            fontSize: '12px',
+            fontWeight: '500',
+            color: 'var(--text)',
+            marginBottom: '4px'
+          }}>
+            Deferral Status
+          </label>
+          <select
+            value={filters.deferStatus}
+            onChange={(e) => setFilters(prev => ({ ...prev, deferStatus: e.target.value }))}
+            style={{
+              width: '100%',
+              padding: '6px 10px',
+              fontSize: '14px',
+              border: '1px solid var(--line)',
+              borderRadius: '4px',
+              backgroundColor: 'var(--panel)'
+            }}
+          >
+            <option value="">All Stories</option>
+            <option value="deferred">Deferred</option>
+            <option value="not_deferred">Not Deferred</option>
           </select>
         </div>
 

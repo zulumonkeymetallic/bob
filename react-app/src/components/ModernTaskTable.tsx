@@ -28,8 +28,10 @@ import {
   Pencil,
   Trash2,
   Plus,
-  Activity
+  Activity,
+  Clock3
 } from 'lucide-react';
+import DeferItemModal from './DeferItemModal';
 import { Task, Story, Goal, Sprint } from '../types';
 import { Toast, ToastContainer } from 'react-bootstrap';
 import TagInput from './common/TagInput';
@@ -388,6 +390,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
 
   const [editingCell, setEditingCell] = useState<string | null>(null);
   const [editValue, setEditValue] = useState<string>('');
+  const [showDeferModal, setShowDeferModal] = useState(false);
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -396,6 +399,13 @@ const SortableRow: React.FC<SortableRowProps> = ({
   };
 
   const isConverting = convertLoadingId === task.id;
+
+  // Deferred state
+  const deferredUntilRaw = (task as any).deferredUntil ?? null;
+  const deferredUntilMs = typeof deferredUntilRaw === 'number'
+    ? deferredUntilRaw
+    : deferredUntilRaw?.toDate?.()?.getTime() ?? null;
+  const isDeferred = typeof deferredUntilMs === 'number' && deferredUntilMs > Date.now();
 
   const handleCellEdit = (key: string, value: string) => {
     setEditingCell(key);
@@ -800,6 +810,7 @@ const SortableRow: React.FC<SortableRowProps> = ({
   };
 
   return (
+    <>
     <tr
       ref={setNodeRef}
       style={{
@@ -886,6 +897,21 @@ const SortableRow: React.FC<SortableRowProps> = ({
           >
             <Activity size={16} />
           </button>
+          {/* Defer */}
+          <button
+            onClick={(e) => { e.stopPropagation(); setShowDeferModal(true); }}
+            style={{
+              color: isDeferred ? '#b45309' : themeVars.muted as string,
+              padding: 4,
+              borderRadius: 4,
+              border: 'none',
+              background: 'transparent',
+              cursor: 'pointer'
+            }}
+            title={isDeferred ? `Deferred to ${new Date(deferredUntilMs!).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}` : 'Defer intelligently'}
+          >
+            <Clock3 size={16} />
+          </button>
           {/* AI action */}
           <button
             onClick={() => onConvertToStory(task)}
@@ -930,6 +956,24 @@ const SortableRow: React.FC<SortableRowProps> = ({
         </div>
       </td>
     </tr>
+    {showDeferModal && (
+      <DeferItemModal
+        show={showDeferModal}
+        onHide={() => setShowDeferModal(false)}
+        itemType="task"
+        itemId={task.id}
+        itemTitle={task.title || ''}
+        onApply={async ({ dateMs, rationale, source }) => {
+          await onTaskUpdate(task.id, {
+            deferredUntil: dateMs,
+            deferredReason: rationale,
+            deferredBy: source,
+          } as any);
+          setShowDeferModal(false);
+        }}
+      />
+    )}
+    </>
   );
 };
 
@@ -984,6 +1028,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
   const [sprintFilter, setSprintFilter] = useState<string>('all');
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [dataQualityFilter, setDataQualityFilter] = useState<string>('all');
+  const [deferFilter, setDeferFilter] = useState<string>('all');
   const [convertLoadingId, setConvertLoadingId] = useState<string | null>(null);
   const [toastState, setToastState] = useState<{ show: boolean; message: string; variant: 'danger' | 'info' | 'success' }>({ show: false, message: '', variant: 'danger' });
 
@@ -1203,6 +1248,13 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
       if (dataQualityFilter === 'missing_link' && !(missingStory || missingGoal)) return false;
       if (dataQualityFilter === 'missing_points' && !missingPoints) return false;
       if (dataQualityFilter === 'missing_description' && !missingDescription) return false;
+    }
+    if (deferFilter !== 'all') {
+      const rawDefer = (task as any).deferredUntil ?? null;
+      const deferMs = typeof rawDefer === 'number' ? rawDefer : rawDefer?.toDate?.()?.getTime() ?? null;
+      const taskIsDeferred = typeof deferMs === 'number' && deferMs > Date.now();
+      if (deferFilter === 'deferred' && !taskIsDeferred) return false;
+      if (deferFilter === 'not_deferred' && taskIsDeferred) return false;
     }
     return true;
   });
@@ -1496,6 +1548,25 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
                   <option value="missing_link">Missing Link</option>
                   <option value="missing_points">Missing Points</option>
                   <option value="missing_description">Missing Description</option>
+                </select>
+              </label>
+              <label style={{ fontSize: '12px', color: themeVars.muted as string, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                Deferral
+                <select
+                  value={deferFilter}
+                  onChange={(e) => setDeferFilter(e.target.value)}
+                  style={{
+                    padding: '4px 8px',
+                    borderRadius: 6,
+                    border: `1px solid ${themeVars.border}`,
+                    backgroundColor: themeVars.panel as string,
+                    color: themeVars.text as string,
+                    fontSize: '12px'
+                  }}
+                >
+                  <option value="all">All</option>
+                  <option value="deferred">Deferred</option>
+                  <option value="not_deferred">Not Deferred</option>
                 </select>
               </label>
             </div>
