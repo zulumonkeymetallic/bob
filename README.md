@@ -1,156 +1,178 @@
-# BOB — AI-Enhanced Productivity Platform 🚀
+<p align="center">
+  <img src="assets/banner.png" alt="Hermes Agent" width="100%">
+</p>
 
-## 🌐 **IMPORTANT URLS & ACCESS**
+# Hermes Agent ☤
 
-### **Production Application**
-- **Live URL:** [https://bob20250810.web.app](https://bob20250810.web.app)
-- **Test Mode:** [https://bob20250810.web.app?test_login=true](https://bob20250810.web.app?test_login=true)
-- **AI Agent Test:** [https://bob20250810.web.app?test-login=ai-agent-token&test-mode=true](https://bob20250810.web.app?test-login=ai-agent-token&test-mode=true)
+<p align="center">
+  <a href="https://hermes-agent.nousresearch.com/docs/"><img src="https://img.shields.io/badge/Docs-hermes--agent.nousresearch.com-FFD700?style=for-the-badge" alt="Documentation"></a>
+  <a href="https://discord.gg/NousResearch"><img src="https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
+  <a href="https://github.com/NousResearch/hermes-agent/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License: MIT"></a>
+  <a href="https://nousresearch.com"><img src="https://img.shields.io/badge/Built%20by-Nous%20Research-blueviolet?style=for-the-badge" alt="Built by Nous Research"></a>
+</p>
 
-### **Firebase Console & Management**
-- **Firebase Console:** [https://console.firebase.google.com/project/bob20250810/overview](https://console.firebase.google.com/project/bob20250810/overview)
-- **Firestore Database:** [https://console.firebase.google.com/project/bob20250810/firestore](https://console.firebase.google.com/project/bob20250810/firestore)
-- **Firebase Hosting:** [https://console.firebase.google.com/project/bob20250810/hosting](https://console.firebase.google.com/project/bob20250810/hosting)
-- **Firebase Functions:** [https://console.firebase.google.com/project/bob20250810/functions](https://console.firebase.google.com/project/bob20250810/functions)
+**The self-improving AI agent built by [Nous Research](https://nousresearch.com).** It's the only agent with a built-in learning loop — it creates skills from experience, improves them during use, nudges itself to persist knowledge, searches its own past conversations, and builds a deepening model of who you are across sessions. Run it on a $5 VPS, a GPU cluster, or serverless infrastructure that costs nearly nothing when idle. It's not tied to your laptop — talk to it from Telegram while it works on a cloud VM.
 
-### **GitHub Repository**
-- **Main Repository:** [https://github.com/zulumonkeymetallic/bob](https://github.com/zulumonkeymetallic/bob)
-- **Latest Release:** [https://github.com/zulumonkeymetallic/bob/releases](https://github.com/zulumonkeymetallic/bob/releases)
-- **Issues:** [https://github.com/zulumonkeymetallic/bob/issues](https://github.com/zulumonkeymetallic/bob/issues)
-- **Pull Requests:** [https://github.com/zulumonkeymetallic/bob/pulls](https://github.com/zulumonkeymetallic/bob/pulls)
+Use any model you want — [Nous Portal](https://portal.nousresearch.com), [OpenRouter](https://openrouter.ai) (200+ models), [Xiaomi MiMo](https://platform.xiaomimimo.com), [z.ai/GLM](https://z.ai), [Kimi/Moonshot](https://platform.moonshot.ai), [MiniMax](https://www.minimax.io), [Hugging Face](https://huggingface.co), OpenAI, or your own endpoint. Switch with `hermes model` — no code changes, no lock-in.
 
-## 🚀 Quick Start
-
-### Using the Live Application
-1. **Access:** Open [https://bob20250810.web.app](https://bob20250810.web.app)
-2. **Sign In:** Use Google authentication (fixed v3.5.2 - now prompts for account selection)
-3. **Start Managing:** Create goals, stories, tasks with new visualization tools
-
-### For Developers
-1. **Docs:** Start with `Business Analyst AI/GETTING_STARTED.md`
-2. **Setup:** See root scripts (e.g., `setup-master.sh`) and `functions/`
-3. **Integrations:** Review `docs/integrations/n8n/` for external orchestration
-4. **Issues/Epics:** See Epics #229 (Finance) and #230 (Scheduling)
-
-## 📚 Documentation Navigation
-
-- Requirements & Guides: `Business Analyst AI/`
-- Integrations (n8n): `docs/integrations/n8n/`
-- Gaps & TODOs: `docs/ROADMAP_GAPS.md`
-- Action Plan: `CRITICAL_ACTION_PLAN.md`
-- AI Scheduling & Enrichment: `docs/ai-scheduling.md`
-
-## 📞 Support & Contributing
-
-- **Issues:** Create GitHub issues for bugs and feature requests
-- **Development:** Follow the automation scripts for quality assurance
-- **Documentation:** All documentation is in the unified structure under `Business Analyst AI/`
+<table>
+<tr><td><b>A real terminal interface</b></td><td>Full TUI with multiline editing, slash-command autocomplete, conversation history, interrupt-and-redirect, and streaming tool output.</td></tr>
+<tr><td><b>Lives where you do</b></td><td>Telegram, Discord, Slack, WhatsApp, Signal, and CLI — all from a single gateway process. Voice memo transcription, cross-platform conversation continuity.</td></tr>
+<tr><td><b>A closed learning loop</b></td><td>Agent-curated memory with periodic nudges. Autonomous skill creation after complex tasks. Skills self-improve during use. FTS5 session search with LLM summarization for cross-session recall. <a href="https://github.com/plastic-labs/honcho">Honcho</a> dialectic user modeling. Compatible with the <a href="https://agentskills.io">agentskills.io</a> open standard.</td></tr>
+<tr><td><b>Scheduled automations</b></td><td>Built-in cron scheduler with delivery to any platform. Daily reports, nightly backups, weekly audits — all in natural language, running unattended.</td></tr>
+<tr><td><b>Delegates and parallelizes</b></td><td>Spawn isolated subagents for parallel workstreams. Write Python scripts that call tools via RPC, collapsing multi-step pipelines into zero-context-cost turns.</td></tr>
+<tr><td><b>Runs anywhere, not just your laptop</b></td><td>Six terminal backends — local, Docker, SSH, Daytona, Singularity, and Modal. Daytona and Modal offer serverless persistence — your agent's environment hibernates when idle and wakes on demand, costing nearly nothing between sessions. Run it on a $5 VPS or a GPU cluster.</td></tr>
+<tr><td><b>Research-ready</b></td><td>Batch trajectory generation, Atropos RL environments, trajectory compression for training the next generation of tool-calling models.</td></tr>
+</table>
 
 ---
 
-**🔥 PRIORITY:** See [CRITICAL_ACTION_PLAN.md](./CRITICAL_ACTION_PLAN.md) and Epics #229/#230. 
+## Quick Install
 
-**Current Focus**
-- Scheduling & Routines: Auto-scheduler, Daily Summary, Reminders bridge (#226, #218, #215, #227)
-- AI Scheduling & Enrichment Layer Epic (see issues/epic-ai-scheduling-and-enrichment-layer.md)
-- Finance Platform: Monzo ingestion → Budget engine → Dashboards (#220–#225)
-- Roadmap V3 polish and performance (#181, #203–#212)
-
-**Last Reviewed:** September 20, 2025
-
----
-
-## 🎯 **PROJECT STATUS - v3.5.2 Scaffolding Complete**
-
-**✅ CORE PLATFORM STABLE:** Goals refinements, authentication fixes, and comprehensive UI scaffolding  
-**✅ NEW SCAFFOLDING:** Goals timeline, calendar integration, sprint management, route optimization  
-**🔄 NEXT PHASE:** Backend API integration and real data connectivity  
-**📋 ACTION PLAN:** See [CRITICAL_ACTION_PLAN.md](./CRITICAL_ACTION_PLAN.md) for priorities
-
-### Key Capabilities
-- Roadmap (V2/V3): Interactive timeline with drag/resize, filters, presets
-- Goals/Stories/Tasks: Firestore-backed CRUD, activity stream, AI helpers
-- Scheduling: Theme Blocks Auto-Scheduler (hybrid with n8n)
-- Messaging: Daily Priority Summary to Email/Telegram (n8n)
-- Reminders: iOS Reminders sync (hybrid with n8n)
-- Finance: Monzo → Budget Plan → Dashboards
-- Health: MyFitnessPal ingestion → Macro insights
-- Travel: Visited map → Stories
-
-### 📁 Documentation Structure
-- Requirements & Guides: `Business Analyst AI/`
-- Integrations (n8n): `docs/integrations/n8n/`
-- Gaps & TODOs: `docs/ROADMAP_GAPS.md`
-- Archives & Logs: `archive/`, `deployment-logs/`
-
-## 🆕 **What's New in Version 3.5.2**
-
-### **🎯 Goals Refinements**
-- ✅ **Enhanced Goals System** with improved CRUD operations
-- ✅ **Visual Progress Tracking** with theme-based color coding
-- ✅ **Goals-Stories-Tasks Hierarchy** with better relationship management
-- ✅ **Priority and Status Management** with drag-and-drop reordering
-
-### **🔧 Authentication Fixes**
-- ✅ **Google OAuth Enhancement** - Fixed account selection prompt
-- ✅ **Force Refresh Mechanism** - v3.5.2 prompts users to refresh for latest features
-- ✅ **Session Management** - Improved logout and cache clearing
-
-### **UI & Performance**
-- ✅ **Goals Visualization** - Interactive roadmap timeline with sprint markers
-- ✅ **Calendar Integration** - Google/Outlook sync with goal linking
-- ✅ **Sprint Management** - Complete Agile workflow with retrospectives
-- ✅ **Routes & Routines** - Daily optimization with efficiency tracking
-
-### **📱 Mobile & Accessibility**
-- ✅ **Responsive Design** - All new components work seamlessly on mobile
-- ✅ **Touch-Friendly Controls** - Optimized for tablet and phone interactions
-- ✅ **Dark Mode Support** - Consistent theming across all new components
-
-### **Integrations**
-- External I/O via n8n (Calendar, Reminders, Monzo, MFP). See `docs/integrations/n8n/`.
-- OAuth/verification in Firebase Functions.
-
-## What this platform does
-- **Personal Productivity**: Goals ↔ Stories ↔ Tasks linkage with AI-powered prioritization
-- **Work Management**: Projects → Tasks without goal dependencies  
-- **Smart Planning**: AI calendar scheduling with constraint awareness
-- **Entertainment Tracking**: Personal backlogs for games, movies, books
-- **Mobile Optimization**: Touch-friendly interfaces with device detection
-- **Visual Organization**: Interactive mind mapping for project visualization 
-## Setup (Firebase)
 ```bash
-cd /Users/jim/Github/bob/functions
-npm install
-cd ..
-
-# Set secrets (Blaze plan required)
-firebase use bob20250810
-firebase functions:secrets:set OPENAI_API_KEY
-firebase functions:secrets:set NYLAS_API_KEY
-firebase functions:secrets:set TRAKT_CLIENT_ID
-firebase functions:secrets:set TRAKT_CLIENT_SECRET
-firebase functions:secrets:set TRAKT_ACCESS_TOKEN
-firebase functions:secrets:set STEAM_WEB_API_KEY
-
-# Deploy storage rules (for file uploads)
-firebase deploy --only storage
-
-# Deploy functions/hosting
-firebase deploy --only functions,hosting
+curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash
 ```
 
-## Project Hygiene
-- Use issues/epics for tracking. Avoid manual bundle overwrites.
+Works on Linux, macOS, WSL2, and Android via Termux. The installer handles the platform-specific setup for you.
 
-## Using the app
-- Open your hosting URL (e.g., https://bob20250810.web.app), Sign in with Google.
-- Go to **/admin.html** to import spreadsheets and save your Trakt/Steam IDs.
-- If your OKRs have only a goal title, run the linker in the browser console:
-```js
-firebase.functions("europe-west2").httpsCallable("linkOkrsToGoals")().then(x=>console.log(x.data));
+> **Android / Termux:** The tested manual path is documented in the [Termux guide](https://hermes-agent.nousresearch.com/docs/getting-started/termux). On Termux, Hermes installs a curated `.[termux]` extra because the full `.[all]` extra currently pulls Android-incompatible voice dependencies.
+>
+> **Windows:** Native Windows is not supported. Please install [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install) and run the command above.
+
+After installation:
+
+```bash
+source ~/.bashrc    # reload shell (or: source ~/.zshrc)
+hermes              # start chatting!
 ```
 
-## Notes
-- Trakt/Steam/Goodreads require secrets and per‑integration enablement.
-- n8n workflows are stubs; configure credentials and endpoints before enabling.
+---
+
+## Getting Started
+
+```bash
+hermes              # Interactive CLI — start a conversation
+hermes model        # Choose your LLM provider and model
+hermes tools        # Configure which tools are enabled
+hermes config set   # Set individual config values
+hermes gateway      # Start the messaging gateway (Telegram, Discord, etc.)
+hermes setup        # Run the full setup wizard (configures everything at once)
+hermes claw migrate # Migrate from OpenClaw (if coming from OpenClaw)
+hermes update       # Update to the latest version
+hermes doctor       # Diagnose any issues
+```
+
+📖 **[Full documentation →](https://hermes-agent.nousresearch.com/docs/)**
+
+## CLI vs Messaging Quick Reference
+
+Hermes has two entry points: start the terminal UI with `hermes`, or run the gateway and talk to it from Telegram, Discord, Slack, WhatsApp, Signal, or Email. Once you're in a conversation, many slash commands are shared across both interfaces.
+
+| Action | CLI | Messaging platforms |
+|---------|-----|---------------------|
+| Start chatting | `hermes` | Run `hermes gateway setup` + `hermes gateway start`, then send the bot a message |
+| Start fresh conversation | `/new` or `/reset` | `/new` or `/reset` |
+| Change model | `/model [provider:model]` | `/model [provider:model]` |
+| Set a personality | `/personality [name]` | `/personality [name]` |
+| Retry or undo the last turn | `/retry`, `/undo` | `/retry`, `/undo` |
+| Compress context / check usage | `/compress`, `/usage`, `/insights [--days N]` | `/compress`, `/usage`, `/insights [days]` |
+| Browse skills | `/skills` or `/<skill-name>` | `/skills` or `/<skill-name>` |
+| Interrupt current work | `Ctrl+C` or send a new message | `/stop` or send a new message |
+| Platform-specific status | `/platforms` | `/status`, `/sethome` |
+
+For the full command lists, see the [CLI guide](https://hermes-agent.nousresearch.com/docs/user-guide/cli) and the [Messaging Gateway guide](https://hermes-agent.nousresearch.com/docs/user-guide/messaging).
+
+---
+
+## Documentation
+
+All documentation lives at **[hermes-agent.nousresearch.com/docs](https://hermes-agent.nousresearch.com/docs/)**:
+
+| Section | What's Covered |
+|---------|---------------|
+| [Quickstart](https://hermes-agent.nousresearch.com/docs/getting-started/quickstart) | Install → setup → first conversation in 2 minutes |
+| [CLI Usage](https://hermes-agent.nousresearch.com/docs/user-guide/cli) | Commands, keybindings, personalities, sessions |
+| [Configuration](https://hermes-agent.nousresearch.com/docs/user-guide/configuration) | Config file, providers, models, all options |
+| [Messaging Gateway](https://hermes-agent.nousresearch.com/docs/user-guide/messaging) | Telegram, Discord, Slack, WhatsApp, Signal, Home Assistant |
+| [Security](https://hermes-agent.nousresearch.com/docs/user-guide/security) | Command approval, DM pairing, container isolation |
+| [Tools & Toolsets](https://hermes-agent.nousresearch.com/docs/user-guide/features/tools) | 40+ tools, toolset system, terminal backends |
+| [Skills System](https://hermes-agent.nousresearch.com/docs/user-guide/features/skills) | Procedural memory, Skills Hub, creating skills |
+| [Memory](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory) | Persistent memory, user profiles, best practices |
+| [MCP Integration](https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp) | Connect any MCP server for extended capabilities |
+| [Cron Scheduling](https://hermes-agent.nousresearch.com/docs/user-guide/features/cron) | Scheduled tasks with platform delivery |
+| [Context Files](https://hermes-agent.nousresearch.com/docs/user-guide/features/context-files) | Project context that shapes every conversation |
+| [Architecture](https://hermes-agent.nousresearch.com/docs/developer-guide/architecture) | Project structure, agent loop, key classes |
+| [Contributing](https://hermes-agent.nousresearch.com/docs/developer-guide/contributing) | Development setup, PR process, code style |
+| [CLI Reference](https://hermes-agent.nousresearch.com/docs/reference/cli-commands) | All commands and flags |
+| [Environment Variables](https://hermes-agent.nousresearch.com/docs/reference/environment-variables) | Complete env var reference |
+
+---
+
+## Migrating from OpenClaw
+
+If you're coming from OpenClaw, Hermes can automatically import your settings, memories, skills, and API keys.
+
+**During first-time setup:** The setup wizard (`hermes setup`) automatically detects `~/.openclaw` and offers to migrate before configuration begins.
+
+**Anytime after install:**
+
+```bash
+hermes claw migrate              # Interactive migration (full preset)
+hermes claw migrate --dry-run    # Preview what would be migrated
+hermes claw migrate --preset user-data   # Migrate without secrets
+hermes claw migrate --overwrite  # Overwrite existing conflicts
+```
+
+What gets imported:
+- **SOUL.md** — persona file
+- **Memories** — MEMORY.md and USER.md entries
+- **Skills** — user-created skills → `~/.hermes/skills/openclaw-imports/`
+- **Command allowlist** — approval patterns
+- **Messaging settings** — platform configs, allowed users, working directory
+- **API keys** — allowlisted secrets (Telegram, OpenRouter, OpenAI, Anthropic, ElevenLabs)
+- **TTS assets** — workspace audio files
+- **Workspace instructions** — AGENTS.md (with `--workspace-target`)
+
+See `hermes claw migrate --help` for all options, or use the `openclaw-migration` skill for an interactive agent-guided migration with dry-run previews.
+
+---
+
+## Contributing
+
+We welcome contributions! See the [Contributing Guide](https://hermes-agent.nousresearch.com/docs/developer-guide/contributing) for development setup, code style, and PR process.
+
+Quick start for contributors:
+
+```bash
+git clone https://github.com/NousResearch/hermes-agent.git
+cd hermes-agent
+curl -LsSf https://astral.sh/uv/install.sh | sh
+uv venv venv --python 3.11
+source venv/bin/activate
+uv pip install -e ".[all,dev]"
+python -m pytest tests/ -q
+```
+
+> **RL Training (optional):** To work on the RL/Tinker-Atropos integration:
+> ```bash
+> git submodule update --init tinker-atropos
+> uv pip install -e "./tinker-atropos"
+> ```
+
+---
+
+## Community
+
+- 💬 [Discord](https://discord.gg/NousResearch)
+- 📚 [Skills Hub](https://agentskills.io)
+- 🐛 [Issues](https://github.com/NousResearch/hermes-agent/issues)
+- 💡 [Discussions](https://github.com/NousResearch/hermes-agent/discussions)
+- 🔌 [HermesClaw](https://github.com/AaronWong1999/hermesclaw) — Community WeChat bridge: Run Hermes Agent and OpenClaw on the same WeChat account.
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+
+Built by [Nous Research](https://nousresearch.com).
