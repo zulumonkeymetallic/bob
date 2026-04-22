@@ -23,4 +23,14 @@ describe('normalizePlannerSchedulingError', () => {
 
     expect(result.message).toBe('No feasible slot was available without conflicting with current calendar constraints.');
   });
+
+  test('maps missing callable and CORS-style failures to a deploy hint', () => {
+    const result = normalizePlannerSchedulingError({
+      code: 'functions/not-found',
+      message: 'Fetch API cannot load the endpoint due to access control checks.',
+    });
+
+    expect(result.code).toBe('not-found');
+    expect(result.message).toContain('schedulePlannerItem function has not been deployed yet');
+  });
 });

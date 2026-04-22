@@ -264,6 +264,9 @@ try {
     exports.materializeFitnessBlocksNow = nightlyOrchestration.materializeFitnessBlocksNow;
     exports.replanCalendarNow = nightlyOrchestration.replanCalendarNow;
     exports.runNightlyChainNow = nightlyOrchestration.runNightlyChainNow;
+    if (nightlyOrchestration.schedulePlannerItem) {
+      exports.schedulePlannerItem = nightlyOrchestration.schedulePlannerItem;
+    }
     if (nightlyOrchestration.seedNextWeekPlannerOverridesWeekly) {
       exports.seedNextWeekPlannerOverridesWeekly = nightlyOrchestration.seedNextWeekPlannerOverridesWeekly;
     }

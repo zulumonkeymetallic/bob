@@ -316,8 +316,6 @@ const DeferItemModal: React.FC<DeferItemModalProps> = ({
       };
     };
 
-    console.info('[DeferItemModal] opened', { itemType, itemId, itemTitle });
-
     const loadOptions = async () => {
       setLoading(true);
       setError(null);
@@ -336,7 +334,6 @@ const DeferItemModal: React.FC<DeferItemModalProps> = ({
 
         if (nextQuickMoveOption) {
           if (cancelled) return;
-          console.info('[DeferItemModal] recurring_fast_path', { itemType, itemId, quickKey: nextQuickMoveOption.key });
           setInferredFocusContext(null);
           setQuickMoveOption(nextQuickMoveOption);
           setOptions([nextQuickMoveOption]);
@@ -362,13 +359,6 @@ const DeferItemModal: React.FC<DeferItemModalProps> = ({
         const top = Array.isArray(resp?.data?.topOptions) ? resp.data.topOptions : next.slice(0, 3);
         const more = Array.isArray(resp?.data?.moreOptions) ? resp.data.moreOptions : next.slice(3);
         if (cancelled) return;
-        console.info('[DeferItemModal] suggestions_loaded', {
-          itemType,
-          itemId,
-          options: next.length,
-          topOptions: top.length,
-          moreOptions: more.length,
-        });
         const mergedTop = nextQuickMoveOption ? [nextQuickMoveOption, ...top.filter((opt: DeferralOption) => opt.key !== nextQuickMoveOption!.key)] : top;
         const mergedOptions = nextQuickMoveOption ? [nextQuickMoveOption, ...next.filter((opt: DeferralOption) => opt.key !== nextQuickMoveOption!.key)] : next;
         const mergedMore = nextQuickMoveOption ? more.filter((opt: DeferralOption) => opt.key !== nextQuickMoveOption!.key) : more;
@@ -433,15 +423,6 @@ const DeferItemModal: React.FC<DeferItemModalProps> = ({
     }
 
     setApplying(true);
-    console.info('[DeferItemModal] apply_clicked', {
-      itemType,
-      itemId,
-      itemTitle,
-      selectedKey,
-      dateMs,
-      source,
-      rationale,
-    });
     try {
       await onApply({ dateMs, rationale, source });
       onHide();

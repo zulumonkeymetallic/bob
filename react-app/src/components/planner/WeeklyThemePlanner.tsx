@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { httpsCallable } from 'firebase/functions';
 import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
-import { Button, Modal, Form, Container, Spinner, Alert, Dropdown } from 'react-bootstrap';
+import { Button, Modal, Form, Container, Spinner, Alert } from 'react-bootstrap';
 import { Calendar as CalendarIcon, ChevronDown, ChevronUp, Clock, LayoutDashboard, RefreshCw, Save, Sparkles } from 'lucide-react';
 import { GLOBAL_THEMES, type GlobalTheme } from '../../constants/globalThemes';
 import { useGlobalThemes } from '../../hooks/useGlobalThemes';
@@ -145,6 +145,7 @@ const WeeklyThemePlanner: React.FC = () => {
     const [fitnessBlocksAutoCreate, setFitnessBlocksAutoCreate] = useState(true);
     const [planningMode, setPlanningMode] = useState<'smart' | 'strict'>('smart');
     const [savingSettings, setSavingSettings] = useState(false);
+    const [showTemplateActions, setShowTemplateActions] = useState(false);
     const [showNavigationLinks, setShowNavigationLinks] = useState(false);
 
     const materializePlannerBlocks = httpsCallable(functions, 'materializeFitnessBlocksNow');
@@ -782,44 +783,17 @@ const WeeklyThemePlanner: React.FC = () => {
                         {saving ? <Spinner size="sm" animation="border" className="me-2" /> : <Save size={14} className="me-1" />}
                         Save Week Plan
                     </Button>
-                    <Dropdown>
-                        <Dropdown.Toggle
-                            size="sm"
-                            variant="outline-secondary"
-                            disabled={saving || applying || deltaReplanLoading || nightlyRunning || seedLoading}
-                            title="Template actions: copy, seed, reset, or save default template."
-                            style={{ whiteSpace: 'nowrap' }}
-                        >
-                            Template Actions
-                        </Dropdown.Toggle>
-                        <Dropdown.Menu>
-                            <Dropdown.Item
-                                onClick={copyPreviousWeek}
-                                title="Copy the previous week's allocations into this week before making changes."
-                            >
-                                Copy Previous Week
-                            </Dropdown.Item>
-                            <Dropdown.Item
-                                onClick={seedSelectedWeek}
-                                title="Seed this week from prior data; falls back to default template when needed."
-                            >
-                                {seedLoading ? 'Seeding… ' : ''}Auto-seed Selected Week
-                            </Dropdown.Item>
-                            <Dropdown.Item
-                                onClick={resetWeekToTemplate}
-                                disabled={!hasWeekOverride}
-                                title="Remove this week's override and use the default template."
-                            >
-                                Use Default Template
-                            </Dropdown.Item>
-                            <Dropdown.Item
-                                onClick={saveAsDefaultTemplate}
-                                title="Save the current week layout as the reusable default template."
-                            >
-                                Save as Default Template
-                            </Dropdown.Item>
-                        </Dropdown.Menu>
-                    </Dropdown>
+                    <Button
+                        size="sm"
+                        variant={showTemplateActions ? 'secondary' : 'outline-secondary'}
+                        onClick={() => setShowTemplateActions((prev) => !prev)}
+                        disabled={saving || applying || deltaReplanLoading || nightlyRunning || seedLoading}
+                        title="Template actions: copy, seed, reset, or save default template."
+                        style={{ whiteSpace: 'nowrap' }}
+                    >
+                        {showTemplateActions ? <ChevronUp size={14} className="me-1" /> : <ChevronDown size={14} className="me-1" />}
+                        Template Actions
+                    </Button>
                     <Button
                         size="sm"
                         variant="outline-primary"
@@ -875,6 +849,50 @@ const WeeklyThemePlanner: React.FC = () => {
                         Navigate
                     </Button>
                 </div>
+                {showTemplateActions && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, paddingBottom: 4 }}>
+                        <Button
+                            size="sm"
+                            variant="outline-secondary"
+                            onClick={copyPreviousWeek}
+                            disabled={saving || applying || deltaReplanLoading || nightlyRunning || seedLoading}
+                            title="Copy the previous week's allocations into this week before making changes."
+                            style={{ whiteSpace: 'nowrap' }}
+                        >
+                            Copy Previous Week
+                        </Button>
+                        <Button
+                            size="sm"
+                            variant="outline-secondary"
+                            onClick={seedSelectedWeek}
+                            disabled={saving || applying || deltaReplanLoading || nightlyRunning || seedLoading}
+                            title="Seed this week from prior data; falls back to default template when needed."
+                            style={{ whiteSpace: 'nowrap' }}
+                        >
+                            {seedLoading ? 'Seeding... ' : ''}Auto-seed Selected Week
+                        </Button>
+                        <Button
+                            size="sm"
+                            variant="outline-secondary"
+                            onClick={resetWeekToTemplate}
+                            disabled={!hasWeekOverride || saving || applying || deltaReplanLoading || nightlyRunning || seedLoading}
+                            title="Remove this week's override and use the default template."
+                            style={{ whiteSpace: 'nowrap' }}
+                        >
+                            Use Default Template
+                        </Button>
+                        <Button
+                            size="sm"
+                            variant="outline-secondary"
+                            onClick={saveAsDefaultTemplate}
+                            disabled={saving || applying || deltaReplanLoading || nightlyRunning || seedLoading}
+                            title="Save the current week layout as the reusable default template."
+                            style={{ whiteSpace: 'nowrap' }}
+                        >
+                            Save as Default Template
+                        </Button>
+                    </div>
+                )}
                 {showNavigationLinks && (
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, paddingBottom: 4 }}>
                         <Button

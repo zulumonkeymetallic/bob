@@ -86,6 +86,7 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
     alignmentMode: 'warn' as 'warn' | 'strict',
     focusGoalIds: [] as string[]
   });
+  const [focusGoalSearch, setFocusGoalSearch] = useState('');
   const [sortKey, setSortKey] = useState<'startDate' | 'endDate' | 'name'>('startDate');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
 
@@ -269,6 +270,7 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
       alignmentMode: 'warn',
       focusGoalIds: []
     });
+    setFocusGoalSearch('');
   };
 
   const openEditModal = (sprint: Sprint) => {
@@ -284,6 +286,7 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
         ? (sprint as any).focusGoalIds.map((id: any) => String(id || '').trim()).filter((id: string) => !!id)
         : []
     });
+    setFocusGoalSearch('');
     setShowModal(true);
   };
 
@@ -399,6 +402,18 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
   );
 
   const formatDate = (value: number) => new Date(value).toLocaleDateString();
+  const normalizedFocusGoalSearch = focusGoalSearch.trim().toLowerCase();
+  const filteredGoals = React.useMemo(() => {
+    if (!normalizedFocusGoalSearch) return goals;
+    return goals.filter((goal) => {
+      const displayPath = getGoalDisplayPath(goal.id, goals).toLowerCase();
+      const title = String(goal.title || '').toLowerCase();
+      const ref = String((goal as any).ref || '').toLowerCase();
+      return displayPath.includes(normalizedFocusGoalSearch)
+        || title.includes(normalizedFocusGoalSearch)
+        || ref.includes(normalizedFocusGoalSearch);
+    });
+  }, [goals, normalizedFocusGoalSearch]);
 
   if (loading) {
     return <div className="text-center p-4">Loading sprints...</div>;
@@ -696,27 +711,38 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
               {goals.length === 0 ? (
                 <Form.Text className="text-muted d-block">No goals available for this persona yet.</Form.Text>
               ) : (
-                <div style={{ maxHeight: 180, overflowY: 'auto', border: '1px solid var(--bs-border-color)', borderRadius: 6, padding: 10 }}>
-                  {goals.map((goal) => {
-                    const checked = formData.focusGoalIds.includes(goal.id);
-                    const leaf = isLeafGoal(goal.id, goals);
-                    return (
-                      <Form.Check
-                        key={goal.id}
-                        type="checkbox"
-                        id={`sprint-focus-goal-${goal.id}`}
-                        label={`${getGoalDisplayPath(goal.id, goals)} ${leaf ? '(Leaf goal)' : '(Program goal)'}`}
-                        checked={checked}
-                        onChange={(e) => {
-                          const nextIds = e.target.checked
-                            ? [...formData.focusGoalIds, goal.id]
-                            : formData.focusGoalIds.filter((id) => id !== goal.id);
-                          setFormData({ ...formData, focusGoalIds: nextIds });
-                        }}
-                        className="mb-1"
-                      />
-                    );
-                  })}
+                <div>
+                  <Form.Control
+                    type="search"
+                    value={focusGoalSearch}
+                    onChange={(e) => setFocusGoalSearch(e.target.value)}
+                    placeholder="Search focus goals by title, ref, or hierarchy path"
+                    className="mb-2"
+                  />
+                  <div style={{ maxHeight: 180, overflowY: 'auto', border: '1px solid var(--bs-border-color)', borderRadius: 6, padding: 10 }}>
+                    {filteredGoals.length === 0 ? (
+                      <div className="text-muted small">No focus goals match this search.</div>
+                    ) : filteredGoals.map((goal) => {
+                      const checked = formData.focusGoalIds.includes(goal.id);
+                      const leaf = isLeafGoal(goal.id, goals);
+                      return (
+                        <Form.Check
+                          key={goal.id}
+                          type="checkbox"
+                          id={`sprint-focus-goal-${goal.id}`}
+                          label={`${getGoalDisplayPath(goal.id, goals)} ${leaf ? '(Leaf goal)' : '(Program goal)'}`}
+                          checked={checked}
+                          onChange={(e) => {
+                            const nextIds = e.target.checked
+                              ? [...formData.focusGoalIds, goal.id]
+                              : formData.focusGoalIds.filter((id) => id !== goal.id);
+                            setFormData({ ...formData, focusGoalIds: nextIds });
+                          }}
+                          className="mb-1"
+                        />
+                      );
+                    })}
+                  </div>
                 </div>
               )}
               <Form.Text className="text-muted">

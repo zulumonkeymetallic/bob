@@ -51,6 +51,24 @@ export function normalizePlannerSchedulingError(error: any): PlannerScheduleErro
   const lowerDetails = detailsMessage.toLowerCase();
   const code = rawCode || 'unknown';
 
+  if (
+    code === 'not-found'
+    || lowerMessage.includes('preflight')
+    || lowerMessage.includes('access control checks')
+    || lowerMessage.includes('failed to fetch')
+    || lowerMessage.includes('cors')
+    || lowerDetails.includes('preflight')
+    || lowerDetails.includes('access control checks')
+    || lowerDetails.includes('failed to fetch')
+    || lowerDetails.includes('cors')
+  ) {
+    return {
+      code,
+      rawMessage: rawMessage || detailsMessage,
+      message: 'The planner scheduling service is not reachable right now. This usually means the schedulePlannerItem function has not been deployed yet or the endpoint is failing CORS checks.',
+    };
+  }
+
   if (rawMessage && rawMessage !== 'internal' && rawMessage !== 'unknown' && rawMessage !== rawCode) {
     return {
       code,

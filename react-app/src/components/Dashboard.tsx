@@ -616,12 +616,6 @@ const Dashboard: React.FC = () => {
   const navigate = useNavigate();
   const { themes: globalThemes } = useGlobalThemes();
 
-  // Debug logging for authentication
-  console.log('🔍 Dashboard: currentUser:', currentUser);
-  console.log('🔍 Dashboard: currentUser type:', typeof currentUser);
-  console.log('🔍 Dashboard: currentUser uid:', currentUser?.uid);
-  console.log('🔍 Dashboard: currentUser email:', currentUser?.email);
-
   const [stats, setStats] = useState<DashboardStats>({
     activeGoals: 0,
     goalsDueSoon: 0,

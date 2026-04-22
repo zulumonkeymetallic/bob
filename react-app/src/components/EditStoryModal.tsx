@@ -145,7 +145,6 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
   // Initialize form when story changes
   useEffect(() => {
     if (story) {
-      console.log('📝 EditStoryModal: Initializing with story:', story);
       const parsedPoints = parsePointsValue((story as any).points);
       const normalizedPoints = parsedPoints == null ? 1 : parsedPoints;
       const normalizedPriority = normalizePriorityValue((story as any).priority);

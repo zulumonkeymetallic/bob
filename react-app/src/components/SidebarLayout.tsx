@@ -83,10 +83,6 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   const { isVisible: isRightSidebarVisible, isCollapsed: isRightSidebarCollapsed } = useSidebar();
   const [assistantOpen, setAssistantOpen] = useState(false);
 
-  // Debug: Log location changes
-  useEffect(() => {
-    console.log('[SidebarLayout] Location changed:', { pathname: location.pathname, key: location.key });
-  }, [location]);
   const hidePlannerCapacityBanner = isSmallScreen && /^\/mobile(?:\/|$)/.test(location.pathname);
 
   const navigationGroups: NavigationGroup[] = [
@@ -259,11 +255,6 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       console.error('[Sidebar] navigation failed', { path, error });
     }
   };
-
-  // Global route-change logging to aid troubleshooting
-  React.useEffect(() => {
-    console.info('[Route] changed', { pathname: location.pathname, ts: new Date().toISOString() });
-  }, [location.pathname]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
