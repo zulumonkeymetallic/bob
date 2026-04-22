@@ -1718,14 +1718,14 @@ async function schedulePlacementQueueWithCanonicalScheduler({
     const alreadyMs = (scheduledMinutesByEntity.get(entityKey) || 0) * 60000;
     if (alreadyMs >= totalNeededMs) continue;
 
+    const parentStory = kind === 'task' && candidate?.storyId ? storyMap.get(candidate.storyId) : null;
     const rawScore = Number(candidate?.aiCriticalityScore || 0);
     const isCriticalPriority = Number(candidate?.priority || 0) >= 4;
     const isTop = candidate?.aiTop3ForDay === true;
-    if (rawScore > 0 && rawScore < 40 && !isCriticalPriority && !isTop) {
+    const hasManualPriority = Boolean(getManualPriorityRank(candidate) || getManualPriorityRank(parentStory));
+    if (rawScore > 0 && rawScore < 40 && !isCriticalPriority && !isTop && !hasManualPriority) {
       continue;
     }
-
-    const parentStory = kind === 'task' && candidate?.storyId ? storyMap.get(candidate.storyId) : null;
     const bucket = chooseSprintWeekBucket({
       candidate,
       kind,
@@ -4607,6 +4607,10 @@ exports.schedulePlannerItem = onCall({
       maxTargetDateMs: req?.data?.maxTargetDateMs || null,
       allowSplit: req?.data?.allowSplit === true,
       debugRequestId: req?.data?.debugRequestId || null,
+      exactTargetStartMs: req?.data?.exactTargetStartMs || null,
+      exactTargetEndMs: req?.data?.exactTargetEndMs || null,
+      previewOnly: req?.data?.previewOnly === true,
+      constraintMode: req?.data?.constraintMode || null,
     });
     return result;
   } catch (error) {

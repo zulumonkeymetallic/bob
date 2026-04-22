@@ -1169,6 +1169,7 @@ const WeeklyPlannerSurface: React.FC<WeeklyPlannerSurfaceProps> = ({
           itemType={deferTarget.kind === 'story' ? 'story' : 'task'}
           itemId={deferTarget.sourceId || ''}
           itemTitle={deferTarget.title}
+          allowAdvancedSearch
           focusContext={{
             isFocusAligned: deferTarget.isFocusAligned,
             activeFocusGoals: activeFocusGoals.map((focusGoal) => ({
@@ -1194,24 +1195,30 @@ const WeeklyPlannerSurface: React.FC<WeeklyPlannerSurfaceProps> = ({
                   itemType: 'task',
                   itemId: deferTarget.rawTask.id,
                   targetDateMs: payload.dateMs,
-                  targetBucket: deferTarget.timeOfDay || null,
+                  targetBucket: payload.targetBucket ?? deferTarget.timeOfDay ?? null,
                   intent: 'defer',
                   source: payload.source || 'weekly_planner',
                   rationale: payload.rationale,
                   linkedBlockId: deferTarget.scheduledBlockId || null,
                   durationMinutes,
+                  constraintMode: payload.constraintMode || null,
+                  exactTargetStartMs: payload.exactTargetStartMs || null,
+                  exactTargetEndMs: payload.exactTargetEndMs || null,
                 });
               } else if (deferTarget.rawStory) {
                 await schedulePlannerItemMutation({
                   itemType: 'story',
                   itemId: deferTarget.rawStory.id,
                   targetDateMs: payload.dateMs,
-                  targetBucket: deferTarget.timeOfDay || null,
+                  targetBucket: payload.targetBucket ?? deferTarget.timeOfDay ?? null,
                   intent: 'defer',
                   source: payload.source || 'weekly_planner',
                   rationale: payload.rationale,
                   linkedBlockId: deferTarget.scheduledBlockId || null,
                   durationMinutes,
+                  constraintMode: payload.constraintMode || null,
+                  exactTargetStartMs: payload.exactTargetStartMs || null,
+                  exactTargetEndMs: payload.exactTargetEndMs || null,
                 });
               }
               const acceptedDefers = planningSummary.acceptedDefers + 1;

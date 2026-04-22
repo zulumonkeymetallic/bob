@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Badge, Button, Card, Form, ListGroup, Spinner } from 'react-bootstrap';
 import { useSearchParams } from 'react-router-dom';
-import { collection, doc, getDoc, onSnapshot, query, updateDoc, where } from 'firebase/firestore';
+import { collection, doc, getDoc, onSnapshot, query, where } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { endOfDay, format, startOfDay } from 'date-fns';
 import { Activity, Clock3, Pencil } from 'lucide-react';
@@ -13,6 +13,7 @@ import { Task } from '../types';
 import DeferItemModal from './DeferItemModal';
 import EditTaskModal from './EditTaskModal';
 import { resolveRecurringDueMs } from '../utils/recurringTaskDue';
+import { applyPlannerDefer, type PlannerDeferPayload } from '../utils/plannerDeferral';
 
 interface BlockWindow {
   start: number;
@@ -185,26 +186,27 @@ const ChoreChecklistPage: React.FC = () => {
     }
   }, [currentUser?.uid, completing]);
 
-  const handleApplyDefer = useCallback(async ({ dateMs, rationale, source }: { dateMs: number; rationale: string; source: string }) => {
+  const handleApplyDefer = useCallback(async (payload: PlannerDeferPayload) => {
     if (!deferTask) return;
     const debugRequestId = `chore-checklist-defer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const bucketRaw = String((deferTask as any)?.timeOfDay || '').trim().toLowerCase();
-    const targetBucket = bucketRaw === 'morning' || bucketRaw === 'afternoon' || bucketRaw === 'evening' || bucketRaw === 'anytime'
-      ? bucketRaw
-      : null;
     try {
-      // Chore checklist always does a direct due-date write — no scheduler needed
-      await updateDoc(doc(db, 'tasks', deferTask.id), { dueDate: dateMs });
+      const result = await applyPlannerDefer({
+        itemType: 'task',
+        item: deferTask,
+        payload,
+        sourceFallback: 'chore_checklist',
+        linkedBlockId: blockId || null,
+      });
       setFeedback({
         variant: 'success',
-        message: `${deferTask.title} moved to ${new Date(dateMs).toLocaleDateString()}.`,
+        message: `${deferTask.title} moved to ${new Date(result.appliedStartMs).toLocaleDateString()}.`,
       });
       setDeferTask(null);
     } catch (error) {
       console.error('[ChoreChecklistPage] defer_failed', {
         debugRequestId,
         taskId: deferTask.id,
-        targetDateMs: dateMs,
+        targetDateMs: payload.dateMs,
         error,
       });
       throw error;
@@ -400,6 +402,7 @@ const ChoreChecklistPage: React.FC = () => {
         itemType="task"
         itemId={deferTask?.id || ''}
         itemTitle={deferTask?.title || ''}
+        allowAdvancedSearch
         onApply={handleApplyDefer}
       />
       {editingChore && (

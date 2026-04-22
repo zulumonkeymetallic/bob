@@ -22,11 +22,28 @@ const FALLBACK_SLOTS = [
   { days: [1, 2, 3, 4, 5, 6, 7], start: 13, end: 17, label: 'Fallback PM' },
   { days: [1, 2, 3, 4, 5, 6, 7], start: 18, end: 22, label: 'Fallback evening' },
 ];
+const FREE_SLOT_SLOTS = [
+  { days: [1, 2, 3, 4, 5, 6, 7], start: 5, end: 13, label: 'Free slot AM' },
+  { days: [1, 2, 3, 4, 5, 6, 7], start: 13, end: 19, label: 'Free slot PM' },
+  { days: [1, 2, 3, 4, 5, 6, 7], start: 19, end: 22, label: 'Free slot evening' },
+];
+
+function getManualPriorityRank(entity) {
+  const explicit = Number(entity?.userPriorityRank);
+  if (explicit === 1 || explicit === 2 || explicit === 3) return explicit;
+  return entity?.userPriorityFlag === true ? 1 : null;
+}
 
 function resolvePlanningMode(profile, requestedMode) {
   const fromReq = String(requestedMode || '').toLowerCase();
   const fromProfile = String(profile?.plannerMode || '').toLowerCase();
   return (fromReq || fromProfile) === 'strict' ? 'strict' : 'smart';
+}
+
+function resolveConstraintMode(entity, requestedMode) {
+  const explicit = String(requestedMode || '').trim().toLowerCase();
+  if (explicit === 'free_slot' || explicit === 'theme_block') return explicit;
+  return getManualPriorityRank(entity) ? 'free_slot' : 'theme_block';
 }
 
 function normalizeBucket(value) {
@@ -322,6 +339,7 @@ function choosePlacement({
   zone,
   searchDays,
   maxTargetDateMs = null,
+  constraintMode = 'theme_block',
 }) {
   const baseDay = DateTime.fromMillis(targetDateMs, { zone }).startOf('day');
   const durationMs = Math.max(MIN_BLOCK_MS, Math.round(durationMinutes) * 60 * 1000);
@@ -330,7 +348,8 @@ function choosePlacement({
   for (let offset = 0; offset < searchDays; offset += 1) {
     const day = baseDay.plus({ days: offset });
     if (Number.isFinite(maxTargetDateMs) && day.toMillis() > Number(maxTargetDateMs)) break;
-    const slots = filterSlotsByTimeOfDay(pickSlots(themeLabel, day), targetBucket);
+    const baseSlots = constraintMode === 'free_slot' ? FREE_SLOT_SLOTS : pickSlots(themeLabel, day);
+    const slots = filterSlotsByTimeOfDay(baseSlots, targetBucket);
     for (const slot of slots) {
       const slotDays = Array.isArray(slot.days) && slot.days.length ? slot.days : [1, 2, 3, 4, 5, 6, 7];
       if (!slotDays.includes(day.weekday)) continue;
@@ -378,6 +397,7 @@ function chooseSplitPlacements({
   zone,
   searchDays,
   maxTargetDateMs = null,
+  constraintMode = 'theme_block',
 }) {
   const baseDay = DateTime.fromMillis(targetDateMs, { zone }).startOf('day');
   let remainingMs = Math.max(MIN_BLOCK_MS, Math.round(durationMinutes) * 60 * 1000);
@@ -388,7 +408,8 @@ function chooseSplitPlacements({
   for (let offset = 0; offset < searchDays && remainingMs > 0; offset += 1) {
     const day = baseDay.plus({ days: offset });
     if (Number.isFinite(maxTargetDateMs) && day.toMillis() > Number(maxTargetDateMs)) break;
-    const slots = filterSlotsByTimeOfDay(pickSlots(themeLabel, day), targetBucket);
+    const baseSlots = constraintMode === 'free_slot' ? FREE_SLOT_SLOTS : pickSlots(themeLabel, day);
+    const slots = filterSlotsByTimeOfDay(baseSlots, targetBucket);
     for (const slot of slots) {
       if (remainingMs <= 0) break;
       const slotDays = Array.isArray(slot.days) && slot.days.length ? slot.days : [1, 2, 3, 4, 5, 6, 7];
@@ -484,6 +505,8 @@ async function schedulePlannerItemMutation({
   debugRequestId = null,
   exactTargetStartMs = null,
   exactTargetEndMs = null,
+  previewOnly = false,
+  constraintMode = null,
 }) {
   const logContext = {
     debugRequestId: debugRequestId || null,
@@ -522,12 +545,17 @@ async function schedulePlannerItemMutation({
   if (!entitySnap.exists) throw new Error(`${normalizedType} not found.`);
   const entity = entitySnap.data() || {};
   if (String(entity.ownerUid || '') !== userId) throw new Error('Permission denied for this item.');
+  const manualPriorityRank = getManualPriorityRank(entity);
+  const resolvedConstraintMode = resolveConstraintMode(entity, constraintMode);
   console.info('[schedulePlannerItemMutation] start', {
     ...logContext,
     entityPersona: entity.persona || null,
     entityTheme: entity.theme || entity.category || null,
     entityGoalId: entity.goalId || null,
     entitySprintId: entity.sprintId || null,
+    previewOnly: previewOnly === true,
+    manualPriorityRank,
+    constraintMode: resolvedConstraintMode,
   });
 
   const relatedBlocks = await loadRelatedBlocks(db, userId, normalizedType, itemId);
@@ -570,6 +598,7 @@ async function schedulePlannerItemMutation({
         zone,
         searchDays: normalizedSearchDays,
         maxTargetDateMs: Number.isFinite(Number(maxTargetDateMs)) ? Number(maxTargetDateMs) : null,
+        constraintMode: resolvedConstraintMode,
       })
     : (() => {
         const single = choosePlacement({
@@ -582,6 +611,7 @@ async function schedulePlannerItemMutation({
           zone,
           searchDays: normalizedSearchDays,
           maxTargetDateMs: Number.isFinite(Number(maxTargetDateMs)) ? Number(maxTargetDateMs) : null,
+          constraintMode: resolvedConstraintMode,
         });
         return single ? [single] : [];
       })();
@@ -595,6 +625,8 @@ async function schedulePlannerItemMutation({
       durationMinutes: effectiveDurationMinutes,
       persona,
       themeLabel,
+      manualPriorityRank,
+      constraintMode: resolvedConstraintMode,
     });
     throw new Error('No feasible slot was available without conflicting with current calendar constraints.');
   }
@@ -612,6 +644,27 @@ async function schedulePlannerItemMutation({
   const oldSprintId = String(entity.sprintId || '');
   const splitGroupId = db.collection('_').doc().id;
   const reusableBlocks = [primaryBlock, ...relatedBlocks.filter((block) => !primaryBlock || block.id !== primaryBlock.id)].filter(Boolean);
+
+  if (previewOnly === true) {
+    return {
+      ok: true,
+      debugRequestId: debugRequestId || null,
+      planningMode: effectivePlanningMode,
+      appliedStartMs: firstPlacement.appliedStartMs,
+      appliedEndMs: lastPlacement.appliedEndMs,
+      appliedDayMs,
+      appliedBucket: firstPlacement.appliedBucket,
+      appliedWeekKey,
+      appliedWeekStartMs,
+      scheduledMinutes: totalScheduledMinutes,
+      blockCount: placements.length,
+      sprintId: resolvedSprintId || null,
+      blockId: primaryBlock?.id || null,
+      scheduledByPolicy: manualPriorityRank ? 'manual_priority_override' : 'theme_window',
+      plannerConstraintMode: resolvedConstraintMode,
+      manualPriorityRank,
+    };
+  }
 
   const entityPatch = normalizedType === 'task'
     ? {
@@ -674,6 +727,9 @@ async function schedulePlannerItemMutation({
       splitGroupId,
       splitIndex: index,
       splitCount: placements.length,
+      scheduledByPolicy: manualPriorityRank ? 'manual_priority_override' : 'theme_window',
+      manualPriorityRank: manualPriorityRank || null,
+      plannerConstraintMode: resolvedConstraintMode,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       createdAt: reusable?.createdAt || admin.firestore.FieldValue.serverTimestamp(),
     };
@@ -706,6 +762,8 @@ async function schedulePlannerItemMutation({
     splitGroupId,
     resolvedSprintId: resolvedSprintId || null,
     forcedPlacement: Number.isFinite(forcedStartMs) && forcedStartMs > 0,
+    manualPriorityRank,
+    constraintMode: resolvedConstraintMode,
   });
 
   const activityPlacement = firstPlacement;
@@ -735,6 +793,9 @@ async function schedulePlannerItemMutation({
       scheduledMinutes: totalScheduledMinutes,
       splitGroupId,
       sprintId: resolvedSprintId || null,
+      scheduledByPolicy: manualPriorityRank ? 'manual_priority_override' : 'theme_window',
+      manualPriorityRank: manualPriorityRank || null,
+      plannerConstraintMode: resolvedConstraintMode,
     },
     oldSprintId,
     newSprintId: resolvedSprintId || '',
@@ -754,6 +815,9 @@ async function schedulePlannerItemMutation({
     blockCount: placements.length,
     sprintId: resolvedSprintId || null,
     blockId: Array.from(usedBlockIds)[0] || null,
+    scheduledByPolicy: manualPriorityRank ? 'manual_priority_override' : 'theme_window',
+    manualPriorityRank,
+    plannerConstraintMode: resolvedConstraintMode,
   };
 }
 

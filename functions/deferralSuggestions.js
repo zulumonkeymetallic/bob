@@ -276,6 +276,7 @@ const suggestDeferralOptions = httpsV2.onCall({ region: 'europe-west2', memory: 
     ok: true,
     generatedAtMs: Date.now(),
     dailyCapacityHours,
+    advancedSearchAvailable: true,
     cache: {
       capacityDayLoadHit: capacityCacheHit,
     },

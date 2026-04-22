@@ -7,6 +7,7 @@ import { functions, db } from '../firebase';
 import { updateDoc, doc, serverTimestamp } from 'firebase/firestore';
 import { Clock3 } from 'lucide-react';
 import DeferItemModal from './DeferItemModal';
+import { applyPlannerDefer } from '../utils/plannerDeferral';
 
 interface TaskCardProps {
   task: Task;
@@ -163,11 +164,13 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, index, onEdit, onDelete }) =>
           itemType="task"
           itemId={task.id}
           itemTitle={task.title || ''}
-          onApply={async ({ dateMs, rationale, source }) => {
-            await applyPatch({
-              deferredUntil: dateMs,
-              deferredReason: rationale,
-              deferredBy: source,
+          allowAdvancedSearch
+          onApply={async (payload) => {
+            await applyPlannerDefer({
+              itemType: 'task',
+              item: task,
+              payload,
+              sourceFallback: 'task_card',
             });
             setShowDeferModal(false);
           }}

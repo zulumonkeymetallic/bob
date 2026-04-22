@@ -2,6 +2,7 @@ import { httpsCallable } from 'firebase/functions';
 import { functions } from '../firebase';
 
 export type PlannerScheduleIntent = 'move' | 'defer';
+export type PlannerConstraintMode = 'free_slot' | 'theme_block' | 'auto';
 
 export interface SchedulePlannerItemRequest {
   itemType: 'task' | 'story';
@@ -19,6 +20,10 @@ export interface SchedulePlannerItemRequest {
   maxTargetDateMs?: number | null;
   allowSplit?: boolean;
   debugRequestId?: string | null;
+  exactTargetStartMs?: number | null;
+  exactTargetEndMs?: number | null;
+  previewOnly?: boolean;
+  constraintMode?: PlannerConstraintMode | null;
 }
 
 export interface SchedulePlannerItemResponse {
@@ -35,6 +40,9 @@ export interface SchedulePlannerItemResponse {
   blockCount?: number;
   sprintId: string | null;
   blockId: string | null;
+  scheduledByPolicy?: 'manual_priority_override' | 'theme_window';
+  manualPriorityRank?: number | null;
+  plannerConstraintMode?: 'free_slot' | 'theme_block' | null;
 }
 
 export interface PlannerScheduleErrorInfo {

@@ -18,6 +18,7 @@ import { getManualPriorityLabel, getManualPriorityRank } from '../utils/manualPr
 import DeferItemModal from './DeferItemModal';
 import NewCalendarEventModal, { type BlockFormState, buildCalendarComposerInitialValues } from './planner/NewCalendarEventModal';
 import '../styles/KanbanCards.css';
+import { applyPlannerDefer } from '../utils/plannerDeferral';
 
 interface StoriesCardViewProps {
   stories: Story[];
@@ -687,16 +688,17 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
         itemType="story"
         itemId={deferStory?.id || ''}
         itemTitle={deferStory?.title || ''}
-        onApply={async ({ dateMs, rationale, source }) => {
+        allowAdvancedSearch
+        onApply={async (payload) => {
           if (!deferStory) return;
           try {
-            await Promise.resolve(onStoryUpdate(deferStory.id, {
-              targetDate: dateMs,
-              deferredUntil: dateMs,
-              deferredReason: rationale,
-              deferredBy: source,
-            }));
-            showToast(`${deferStory.title} deferred to ${new Date(dateMs).toLocaleDateString()}.`, 'success');
+            const result = await applyPlannerDefer({
+              itemType: 'story',
+              item: deferStory as any,
+              payload,
+              sourceFallback: 'stories_card_view',
+            });
+            showToast(`${deferStory.title} deferred to ${new Date(result.appliedStartMs).toLocaleDateString()}.`, 'success');
             setDeferStory(null);
           } catch (error) {
             console.error('StoriesCardView: failed to defer story', error);

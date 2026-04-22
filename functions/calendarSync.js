@@ -2459,7 +2459,6 @@ async function pushPendingBlocks(uid, limit = 30) {
   let errors = 0;
   let skipped = 0;
   const pushWindowStart = Date.now() - (GCAL_PAST_DAYS * MS_IN_DAY);
-  const activeSprintId = await getActiveSprintId(uid);
   const candidates = docs.slice(0, limit);
   await logCalendarIntegration(uid, {
     action: 'push',
@@ -2513,21 +2512,6 @@ async function pushPendingBlocks(uid, limit = 30) {
         blockTitle: data.title || null,
         reason: 'status_not_planned',
         statusValue: status,
-      });
-      continue;
-    }
-    const isRoutine = ALLOWED_ROUTINE_TYPES.has(String(data.entityType || '').toLowerCase());
-    if (!isRoutine && data.sprintId && activeSprintId && data.sprintId !== activeSprintId) {
-      skipped += 1;
-      await logCalendarIntegration(uid, {
-        action: 'push',
-        direction: 'skip',
-        status: 'skipped',
-        blockId: doc.id,
-        blockTitle: data.title || null,
-        reason: 'out_of_active_sprint',
-        sprintId: data.sprintId,
-        activeSprintId,
       });
       continue;
     }

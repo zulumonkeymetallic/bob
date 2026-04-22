@@ -15,6 +15,7 @@ import { priorityLabel, priorityPillClass, taskStatusText } from '../utils/story
 import DeferItemModal from './DeferItemModal';
 import NewCalendarEventModal, { type BlockFormState, buildCalendarComposerInitialValues } from './planner/NewCalendarEventModal';
 import '../styles/KanbanCards.css';
+import { applyPlannerDefer } from '../utils/plannerDeferral';
 
 interface TasksCardViewProps {
   tasks: Task[];
@@ -692,16 +693,17 @@ const TasksCardView: React.FC<TasksCardViewProps> = ({
         itemType="task"
         itemId={deferTask?.id || ''}
         itemTitle={deferTask?.title || ''}
-        onApply={async ({ dateMs, rationale, source }) => {
+        allowAdvancedSearch
+        onApply={async (payload) => {
           if (!deferTask) return;
           try {
-            await Promise.resolve(onTaskUpdate(deferTask.id, {
-              dueDate: dateMs,
-              deferredUntil: dateMs,
-              deferredReason: rationale,
-              deferredBy: source,
-            }));
-            showToast(`${deferTask.title} deferred to ${new Date(dateMs).toLocaleDateString()}.`, 'success');
+            const result = await applyPlannerDefer({
+              itemType: 'task',
+              item: deferTask,
+              payload,
+              sourceFallback: 'tasks_card_view',
+            });
+            showToast(`${deferTask.title} deferred to ${new Date(result.appliedStartMs).toLocaleDateString()}.`, 'success');
             setDeferTask(null);
           } catch (error) {
             console.error('TasksCardView: failed to defer task', error);

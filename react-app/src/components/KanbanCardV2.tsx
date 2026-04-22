@@ -19,6 +19,7 @@ import { ActivityStreamService } from '../services/ActivityStreamService';
 import DeferItemModal from './DeferItemModal';
 import NewCalendarEventModal, { BlockFormState, buildCalendarComposerInitialValues } from './planner/NewCalendarEventModal';
 import { findItemWithManualPriorityRank, getManualPriorityLabel, getManualPriorityRank, getNextManualPriorityRank } from '../utils/manualPriority';
+import { applyPlannerDefer } from '../utils/plannerDeferral';
 
 interface KanbanCardV2Props {
     item: Story | Task;
@@ -1087,24 +1088,19 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
             itemType={type}
             itemId={item.id}
             itemTitle={item.title || ''}
-            onApply={async ({ dateMs, rationale, source }) => {
-                if (type === 'story') {
-                    await applyQuickPatch({
-                        targetDate: dateMs,
-                        deferredUntil: dateMs,
-                        deferredReason: rationale,
-                        deferredBy: source,
-                    });
-                    setDueInputValue(toDateInputValue(dateMs));
-                } else {
-                    await applyQuickPatch({
-                        dueDate: dateMs,
-                        deferredUntil: dateMs,
-                        deferredReason: rationale,
-                        deferredBy: source,
-                    });
-                    setDueInputValue(toDateInputValue(dateMs));
-                }
+            allowAdvancedSearch
+            onApply={async (payload) => {
+                const result = await applyPlannerDefer({
+                    itemType: type,
+                    item: item as any,
+                    payload,
+                    sourceFallback: 'kanban_card_v2',
+                    linkedBlockId: scheduledBlock?.id || null,
+                    durationMinutes: scheduledBlock
+                        ? Math.max(15, Math.round((scheduledBlock.end - scheduledBlock.start) / 60000))
+                        : null,
+                });
+                setDueInputValue(toDateInputValue(result.appliedStartMs));
                 setActionMessage('Deferred with capacity-aware date');
                 setTimeout(() => setActionMessage(null), 2500);
                 setShowDeferModal(false);

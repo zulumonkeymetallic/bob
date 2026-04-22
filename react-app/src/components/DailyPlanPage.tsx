@@ -984,6 +984,7 @@ const DailyPlanPage: React.FC = () => {
           itemType={deferTarget.type}
           itemId={deferTarget.id}
           itemTitle={deferTarget.title}
+          allowAdvancedSearch
           focusContext={{
             isFocusAligned: deferTarget.isFocusAligned,
             activeFocusGoals: activeFocusGoals.map((focusGoal) => ({
@@ -1011,7 +1012,7 @@ const DailyPlanPage: React.FC = () => {
               itemType: deferTarget.type,
               itemId: deferTarget.id,
               targetDateMs: payload.dateMs,
-              targetBucket: affectedItem?.timeOfDay || null,
+              targetBucket: payload.targetBucket ?? affectedItem?.timeOfDay ?? null,
               intent: 'defer',
               source: payload.source || 'daily_plan',
               rationale: payload.rationale,
@@ -1024,6 +1025,9 @@ const DailyPlanPage: React.FC = () => {
                       || 30),
                   )
                 : null,
+              constraintMode: payload.constraintMode || null,
+              exactTargetStartMs: payload.exactTargetStartMs || null,
+              exactTargetEndMs: payload.exactTargetEndMs || null,
               debugRequestId,
             });
             setPageMessage({ variant: 'success', text: `${deferTarget.title} deferred to ${new Date(result.appliedStartMs).toLocaleDateString()}.` });

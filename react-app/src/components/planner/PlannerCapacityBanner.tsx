@@ -10,6 +10,7 @@ import { useSprint } from '../../contexts/SprintContext';
 import EditTaskModal from '../EditTaskModal';
 import EditStoryModal from '../EditStoryModal';
 import { Goal, Story, Task } from '../../types';
+import { applyPlannerMoveToSprint } from '../../utils/plannerDeferral';
 
 const toMillis = (value: any): number | null => {
   if (!value) return null;
@@ -384,21 +385,15 @@ const PlannerCapacityBanner: React.FC = () => {
     setMovingIds((prev) => ({ ...prev, [actionKey]: true }));
     setRecommendationStatus(null);
     try {
-      if (item.kind === 'story') {
-        await updateDoc(doc(db, 'stories', item.id), {
-          sprintId: nextSprint.id,
-          updatedAt: serverTimestamp(),
-        });
-      } else {
-        await updateDoc(doc(db, 'tasks', item.id), {
-          sprintId: nextSprint.id,
-          dueDate: Number(nextSprint.startDate || Date.now()),
-          dueDateLocked: true,
-          dueDateReason: 'move_to_next_sprint',
-          updatedAt: serverTimestamp(),
-          serverUpdatedAt: Date.now(),
-        });
-      }
+      await applyPlannerMoveToSprint({
+        itemType: item.kind,
+        item: item.entity,
+        sprintId: nextSprint.id,
+        sprintStartMs: Number(nextSprint.startDate || Date.now()),
+        rationale: 'Move to next sprint from planner capacity banner',
+        source: 'planner_capacity_banner',
+        durationMinutes: Math.max(15, Math.round(item.hours * 60)),
+      });
       setRecommendations((prev) => prev.filter((r) => !(r.kind === item.kind && r.id === item.id)));
       setRecommendationStatus(`${item.ref} moved to ${nextSprint.name}.`);
     } catch (error: any) {

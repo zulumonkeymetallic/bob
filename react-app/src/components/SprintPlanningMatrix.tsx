@@ -1296,6 +1296,7 @@ const SprintPlanningMatrix: React.FC = () => {
           itemType="story"
           itemId={deferTarget.id}
           itemTitle={deferTarget.title}
+          allowAdvancedSearch
           focusContext={{
             isFocusAligned: (() => {
               const goalId = String(deferTarget.goalId || '').trim();
@@ -1315,11 +1316,14 @@ const SprintPlanningMatrix: React.FC = () => {
               itemType: 'story',
               itemId: deferTarget.id,
               targetDateMs: payload.dateMs,
-              targetBucket: null,
+              targetBucket: payload.targetBucket ?? null,
               intent: 'defer',
               source: payload.source || 'sprint_planning_matrix',
               rationale: payload.rationale,
               durationMinutes: Math.max(30, Math.round(storyPoints(deferTarget) * 60)),
+              constraintMode: payload.constraintMode || null,
+              exactTargetStartMs: payload.exactTargetStartMs || null,
+              exactTargetEndMs: payload.exactTargetEndMs || null,
             });
             setMoveNotice(`${deferTarget.title} deferred to ${new Date(result.appliedStartMs).toLocaleDateString()}.`);
             setMoveError(null);

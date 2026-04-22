@@ -11,6 +11,7 @@ import { GLOBAL_THEMES } from '../constants/globalThemes';
 import { themeVars } from '../utils/themeVars';
 import { colorWithAlpha } from '../utils/storyCardFormatting';
 import DeferItemModal from './DeferItemModal';
+import { applyPlannerDefer } from '../utils/plannerDeferral';
 
 interface StoryCardProps {
   story: Story;
@@ -309,15 +310,16 @@ const StoryCard: React.FC<StoryCardProps> = ({ story, index }) => {
           itemType="story"
           itemId={(story as any).id}
           itemTitle={story.title || ''}
-          onApply={async ({ dateMs, rationale, source }) => {
-            await applyPatch({
-              targetDate: dateMs,
-              deferredUntil: dateMs,
-              deferredReason: rationale,
-              deferredBy: source,
+          allowAdvancedSearch
+          onApply={async (payload) => {
+            const result = await applyPlannerDefer({
+              itemType: 'story',
+              item: story as any,
+              payload,
+              sourceFallback: 'story_card',
             });
             setDueInputValue(
-              `${new Date(dateMs).getFullYear()}-${String(new Date(dateMs).getMonth() + 1).padStart(2, '0')}-${String(new Date(dateMs).getDate()).padStart(2, '0')}`
+              `${new Date(result.appliedStartMs).getFullYear()}-${String(new Date(result.appliedStartMs).getMonth() + 1).padStart(2, '0')}-${String(new Date(result.appliedStartMs).getDate()).padStart(2, '0')}`
             );
             setShowDeferModal(false);
           }}
