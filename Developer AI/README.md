@@ -1,63 +1,19 @@
-# Bob — Goals/OKRs Kanban (no Goodreads) — 2025-08-10
+# Developer AI Notes
 
-## What this version does
-- Goals ↔ OKRs linkage (by `goalId`; auto-linker via `goalTitle`).
-- Kanban board (Backlog / Doing / Done) with drag-and-drop; cards colour-coded by area (growth/tribe/wealth/health/home).
-- Bulk import of `.xlsx`, `.csv`, `.json` into: `goals`, `okrs`, `tasks`, `resources`, `trips`.
-- Per-user profile storing **Trakt username** and **SteamID**.
-- Buttons to trigger **Trakt** / **Steam** sync (currently stubs; wire after adding secrets).
-- File uploads to Storage (optional checkbox): archives source files to `uploads/<uid>/<timestamp>-<filename>`.
-- AI helpers: `classifyGoal`, `prioritizeBacklog`, `rankResources` (OpenAI via secret).
-option 
-## Setup
-```bash
-cd /Users/jim/Github/bob/functions
-npm install
-cd ..
+Last updated: 2026-04-22
 
-# Set secrets (Blaze plan required)
-firebase use bob20250810
-firebase functions:secrets:set OPENAI_API_KEY
-firebase functions:secrets:set TRAKT_CLIENT_ID
-firebase functions:secrets:set TRAKT_CLIENT_SECRET
-firebase functions:secrets:set TRAKT_ACCESS_TOKEN
-firebase functions:secrets:set STEAM_WEB_API_KEY
+This folder is no longer the canonical source of repo architecture information.
 
-# Deploy storage rules (for file uploads)
-firebase deploy --only storage
+Use the maintained AI docs instead:
 
-# Deploy everything
-firebase deploy
-```
+- `docs/ai/README.md`
+- `docs/ai/repo-map.md`
+- `docs/ai/hermes-runtime.md`
+- `docs/ai/bob-frontend.md`
+- `docs/ai/firebase-functions.md`
 
-## Overwrite your existing folder
-```bash
-# Backup current project
-mv /Users/jim/Github/bob /Users/jim/Github/bob_backup_$(date +%Y%m%d)
+Why this changed:
 
-# Unzip this bundle (adjust path to your download)
-unzip ~/Downloads/bob_full_no_goodreads.zip -d /Users/jim/Github/bob
-```
-
-## Push to GitHub
-```bash
-cd /Users/jim/Github/bob
-git init
-git add .
-git commit -m "Bob full bundle: Goals/OKRs, Kanban, Imports, Storage, Trakt/Steam stubs"
-git branch -M main
-git remote add origin https://github.com/<YOUR_USERNAME>/bob.git
-git push -u origin main
-```
-
-## Using the app
-- Open your hosting URL (e.g., https://bob20250810.web.app), Sign in with Google.
-- Go to **/admin.html** to import spreadsheets and save your Trakt/Steam IDs.
-- If your OKRs have only a goal title, run the linker in the browser console:
-```js
-firebase.functions("europe-west2").httpsCallable("linkOkrsToGoals")().then(x=>console.log(x.data));
-```
-
-## Notes
-- Trakt/Steam callables are stubs until secrets are configured and fetchers implemented.
-- If you want scheduled nightly syncs, I’ll add `onSchedule` functions and parsers for each platform.
+- The repo is now much broader than the older Bob-only snapshot this file used to describe.
+- The previous content referenced paths and assumptions that no longer match the live code.
+- Another AI will get better results by starting from the code-backed docs under `docs/ai/`.

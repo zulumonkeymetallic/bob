@@ -200,6 +200,8 @@ const CalendarIntegrationView: React.FC = () => {
   };
   
   const loadDummyData = () => {
+    // TODO(#412, #418, #441): remove this seeded boot data once the integration view is fully backed by
+    // live goal/story/task/event queries and production audit surfaces.
     // Dummy goals, stories, tasks
     const dummyGoals: Goal[] = [
       { id: 'goal-1', title: 'Complete Marathon Training', theme: 'Health' },

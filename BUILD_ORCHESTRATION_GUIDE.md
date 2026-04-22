@@ -250,31 +250,13 @@ ls -lt /Users/jim/GitHub/bob/build-logs/ | head -20
 
 ---
 
-## Advanced Options
+## Deployment & CI/CD Strategy
 
-### Custom Build Targets
-Edit the script to add custom build targets or environments:
+1. **Production Releases:** All production deployments (TestFlight, Firebase Hosting) are handled **exclusively** by the GitHub Actions workflows (e.g., `testflight.yml`). Do not use the local orchestrator for production releases.
 
-```bash
-# Example: Add staging deployments
---web --staging    # Deploy to staging environment
---ios --testflight # Distribute to TestFlight
-```
+2. **Local Development:** The `./orchestrate-build.sh` script is strictly for local development, rapid build verification, and maintaining the project metadata manifest (`build-logs/manifest.json`).
 
-### Integration with CI/CD
-The orchestrator is designed to run in GitHub Actions:
-
-```yaml
-name: Build & Deploy
-on: push
-jobs:
-  build:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: orchestrate build
-        run: ./orchestrate-build.sh --all --skip-pr
-```
+3. **Automation Logic:** GitHub Action workflows are configured to trigger automatically on push or via manual dispatch for stable releases, ensuring environment consistency and secure credential handling.
 
 ---
 

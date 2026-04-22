@@ -890,13 +890,13 @@ function buildMeaningfulConsumptionTitle(kind, previewTitle, url = '', options =
   });
 
   if (kind === 'watch') {
-    if (subtype === 'music video') return 'Watch music video';
-    if (subtype === 'trailer') return 'Watch trailer';
-    if (subtype === 'tutorial') return 'Watch tutorial';
-    if (subtype === 'podcast') return 'Watch podcast episode';
-    if (subtype === 'interview') return 'Watch interview';
-    if (subtype === 'documentary') return 'Watch documentary';
-    if (subtype === 'talk') return 'Watch talk';
+    if (subtype === 'music video') return `Watch music video: ${cleanTitle}`.slice(0, 140);
+    if (subtype === 'trailer') return `Watch trailer: ${cleanTitle}`.slice(0, 140);
+    if (subtype === 'tutorial') return `Watch tutorial: ${cleanTitle}`.slice(0, 140);
+    if (subtype === 'podcast') return `Watch podcast: ${cleanTitle}`.slice(0, 140);
+    if (subtype === 'interview') return `Watch interview: ${cleanTitle}`.slice(0, 140);
+    if (subtype === 'documentary') return `Watch documentary: ${cleanTitle}`.slice(0, 140);
+    if (subtype === 'talk') return `Watch talk: ${cleanTitle}`.slice(0, 140);
     return `Watch: ${cleanTitle}`.slice(0, 140);
   }
   if (kind === 'read') {
@@ -939,8 +939,55 @@ function buildMeaningfulConsumptionDescription(kind, previewTitle, url = '', opt
   return description || cleanTitle;
 }
 
+function buildContentSignalText(...values) {
+  return values
+    .flat()
+    .map((value) => String(value || '').trim().toLowerCase())
+    .filter(Boolean)
+    .join(' ');
+}
+
+function isServiceNowRelatedContent(options = {}) {
+  const haystack = buildContentSignalText(
+    options.title,
+    options.description,
+    options.siteName,
+    options.authorName,
+    options.url,
+    options.theme,
+    options.storyTitle,
+    options.transcript
+  );
+  return (
+    /\bservice\s?now\b/.test(haystack) ||
+    /\bnow platform\b/.test(haystack) ||
+    /\bworkflow studio\b/.test(haystack) ||
+    /\bintegrationhub\b/.test(haystack) ||
+    /\bintegration hub\b/.test(haystack) ||
+    /\bapp engine\b/.test(haystack) ||
+    /\bcmdb\b/.test(haystack) ||
+    /\bitsm\b/.test(haystack) ||
+    /\bitom\b/.test(haystack) ||
+    /\bhrsd\b/.test(haystack) ||
+    /\bcsm\b/.test(haystack) ||
+    /\bsam pro\b/.test(haystack) ||
+    /\bham pro\b/.test(haystack)
+  );
+}
+
 function inferUrlTheme(kind, url = '', options = {}) {
   const cleanTitle = cleanPreviewTitle(options.title || '', url) || '';
+  if (isServiceNowRelatedContent({
+    title: cleanTitle,
+    description: options.description || '',
+    siteName: options.siteName || '',
+    authorName: options.authorName || '',
+    url,
+    theme: options.theme || '',
+    storyTitle: options.storyTitle || '',
+  })) {
+    return 'Work (Main Gig)';
+  }
   const subtype = inferConsumptionSubtype(kind, {
     title: cleanTitle,
     description: options.description || '',
@@ -948,6 +995,20 @@ function inferUrlTheme(kind, url = '', options = {}) {
     authorName: options.authorName || '',
     url,
   });
+  const professionalHaystack = buildContentSignalText(
+    cleanTitle,
+    options.description || '',
+    options.siteName || '',
+    options.authorName || '',
+    options.theme || '',
+    options.storyTitle || '',
+    url
+  );
+  if (
+    /\b(work|career|professional|enterprise|architecture|implementation|integration|developer|admin|webinar|conference|summit|roadmap|release)\b/.test(professionalHaystack)
+  ) {
+    return 'Career & Professional';
+  }
   if (isYouTubeUrl(url)) return 'Hobbies & Interests';
   if (kind === 'watch' && subtype === 'music video') return 'Hobbies & Interests';
   return null;
@@ -1637,6 +1698,9 @@ async function callTranscriptModel({ transcript, persona, timezone, urlPreviews,
     'If the text is mainly a task brain dump, product requirement list, backlog grooming note, or feature request with action items, use entryType="task_list" even if it contains repetition or a little incidental personal narrative.',
     'If the input is mainly application logs, console output, stack traces, diagnostics, or error dumps, use entryType="task_list" and do NOT create a journal entry.',
     'For application logs, console output, stack traces, diagnostics, or error dumps, do not create tasks or stories unless the user explicitly asks you to investigate, debug, fix, or resolve something.',
+    'Important professional learning videos should not default to hobby content just because they came from YouTube or another video platform.',
+    'If a YouTube, webinar, keynote, conference talk, or tutorial is ServiceNow-related or clearly likely to trigger implementation, research, planning, or follow-up work, prefer returning a story instead of a watch task.',
+    'For ServiceNow-related videos that should become stories, set priority to 4 and theme to "Work (Main Gig)" unless the transcript strongly indicates another work theme.',
     'Do not create a journal entry just because the speaker is thinking out loud while listing tasks.',
     'For entryType="journal" or entryType="mixed", act as a professional journal editor.',
     'Use UK English spelling and grammar for journal prose and analysis.',
@@ -1974,6 +2038,119 @@ function sanitizeAcceptanceCriteria(value) {
     .slice(0, 12);
 }
 
+function isImportantWorkVideoTask(task, transcript = '') {
+  if (!task || task.storyTitle) return false;
+  const kind = normalizeTaskKind(task.kind, task.title);
+  if (kind !== 'watch') return false;
+  const haystack = buildContentSignalText(
+    task.title,
+    task.description,
+    task.theme,
+    task.storyTitle,
+    task.url,
+    transcript
+  );
+  const serviceNowRelated = isServiceNowRelatedContent({
+    title: task.title,
+    description: task.description,
+    theme: task.theme,
+    storyTitle: task.storyTitle,
+    url: task.url,
+    transcript,
+  });
+  if (serviceNowRelated) return true;
+  const workSignal = (
+    /\b(work|career|professional|enterprise|platform|architecture|implementation|integration|developer|admin|training|tutorial|webinar|conference|summit|roadmap|release)\b/.test(haystack)
+  );
+  const urgencySignal = (
+    /\b(important|critical|priority|must watch|required|follow[- ]?up|action|need to|should)\b/.test(haystack)
+  );
+  return workSignal && urgencySignal;
+}
+
+function buildPromotedStoryFromTask(task, transcript = '') {
+  const rawTitle = String(task?.title || '')
+    .replace(/^(watch|read)(:\s*|\s+)/i, '')
+    .trim()
+    .slice(0, 140);
+  const cleanTitle = rawTitle || String(task?.title || 'Important video review').trim().slice(0, 140);
+  const serviceNowRelated = isServiceNowRelatedContent({
+    title: task?.title,
+    description: task?.description,
+    theme: task?.theme,
+    storyTitle: task?.storyTitle,
+    url: task?.url,
+    transcript,
+  });
+  const title = serviceNowRelated
+    ? `Review ServiceNow video and capture actions: ${cleanTitle}`.slice(0, 140)
+    : `Review important video and capture actions: ${cleanTitle}`.slice(0, 140);
+  const descriptionParts = [
+    String(task?.description || '').trim(),
+    serviceNowRelated
+      ? 'Promoted from a watch item to a story because this ServiceNow video is likely to generate follow-up implementation, research, or planning work.'
+      : 'Promoted from a watch item to a story because this video appears important enough to require follow-up work.'
+  ].filter(Boolean);
+  const defaultCriteria = serviceNowRelated
+    ? [
+      `Watch and summarize the source ServiceNow video "${cleanTitle}".`,
+      'Capture the key implementation, architecture, or platform actions triggered by the video.',
+      'Create or link any resulting follow-up tasks back to this story.',
+    ]
+    : [
+      `Watch and summarize the source video "${cleanTitle}".`,
+      'Capture the key actions or follow-up work triggered by the video.',
+      'Create or link any resulting follow-up tasks back to this story.',
+    ];
+  return {
+    title,
+    description: descriptionParts.join(' ').slice(0, 2000),
+    priority: serviceNowRelated ? 4 : Math.max(3, normalizePriority(task?.priority, 2)),
+    points: Math.max(serviceNowRelated ? 3 : 2, clampTaskPoints(task?.points) ?? 2),
+    acceptanceCriteria: sanitizeAcceptanceCriteria(defaultCriteria),
+    theme: serviceNowRelated ? 'Work (Main Gig)' : String(task?.theme || 'Career & Professional').trim(),
+    url: normalizeUrlValue(task?.url),
+  };
+}
+
+function promoteImportantConsumptionTasksToStories(stories, tasks, transcript = '') {
+  const existingStoryKeys = new Set(
+    (Array.isArray(stories) ? stories : []).flatMap((story) => {
+      const keys = [];
+      const titleKey = normalizeTitle(story?.title || '');
+      const urlKey = normalizeUrlValue(story?.url);
+      if (titleKey) keys.push(`title:${titleKey}`);
+      if (urlKey) keys.push(`url:${urlKey}`);
+      return keys;
+    })
+  );
+  const nextStories = [...(Array.isArray(stories) ? stories : [])];
+  const nextTasks = [];
+
+  for (const task of Array.isArray(tasks) ? tasks : []) {
+    if (!isImportantWorkVideoTask(task, transcript)) {
+      nextTasks.push(task);
+      continue;
+    }
+    const promotedStory = buildPromotedStoryFromTask(task, transcript);
+    const titleKey = normalizeTitle(promotedStory.title);
+    const urlKey = normalizeUrlValue(promotedStory.url);
+    const duplicate = (
+      (titleKey && existingStoryKeys.has(`title:${titleKey}`)) ||
+      (urlKey && existingStoryKeys.has(`url:${urlKey}`))
+    );
+    if (duplicate) continue;
+    if (titleKey) existingStoryKeys.add(`title:${titleKey}`);
+    if (urlKey) existingStoryKeys.add(`url:${urlKey}`);
+    nextStories.push(promotedStory);
+  }
+
+  return {
+    stories: nextStories.slice(0, 8),
+    tasks: nextTasks.slice(0, 16),
+  };
+}
+
 function normalizeDueDateIso(value, timezone = DEFAULT_TIMEZONE) {
   const raw = String(value || '').trim();
   if (!raw) return null;
@@ -2056,6 +2233,10 @@ function sanitizeAnalysis(raw, transcript, sourceUrls = [], timezone = DEFAULT_T
   if (diagnosticLog && !explicitDiagnosticAction) {
     stories = [];
     tasks = [];
+  }
+
+  if (!(diagnosticLog && !explicitDiagnosticAction)) {
+    ({ stories, tasks } = promoteImportantConsumptionTasksToStories(stories, tasks, transcript));
   }
 
   const entryType = normalizeEntryType(analysis.entryType, transcript, sourceUrls, tasks, stories);

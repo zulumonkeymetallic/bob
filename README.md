@@ -4,6 +4,8 @@
 
 # Hermes Agent ☤
 
+> Repository note for local contributors and AI agents: this workspace currently contains the Hermes Agent core plus the Bob product frontend/backend and other supporting surfaces. For the maintained codebase map, start with `docs/ai/README.md`.
+
 <p align="center">
   <a href="https://hermes-agent.nousresearch.com/docs/"><img src="https://img.shields.io/badge/Docs-hermes--agent.nousresearch.com-FFD700?style=for-the-badge" alt="Documentation"></a>
   <a href="https://discord.gg/NousResearch"><img src="https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
