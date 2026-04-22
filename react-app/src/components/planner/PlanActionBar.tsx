@@ -8,6 +8,7 @@ import {
   Milestone,
   Route,
   Timer,
+  Palette,
 } from 'lucide-react';
 
 type PlanDestination = {
@@ -19,6 +20,7 @@ const PLAN_LEVELS: PlanDestination[] = [
   { path: '/goals/year-planner', label: 'Year Planner' },
   { path: '/goals/roadmap-v6', label: 'Quarter/Month Roadmap' },
   { path: '/sprints/planning', label: 'Sprint Planning' },
+  { path: '/calendar/planner', label: 'Weekly Capacity' },
   { path: '/planner/weekly', label: '7-Day Prioritisation' },
 ];
 
@@ -70,6 +72,7 @@ const PlanActionBar: React.FC<PlanActionBarProps> = ({ className }) => {
               {entry.path === '/goals/year-planner' && <Route size={14} className="me-1" />}
               {entry.path === '/goals/roadmap-v6' && <Route size={14} className="me-1" />}
               {entry.path === '/sprints/planning' && <Milestone size={14} className="me-1" />}
+              {entry.path === '/calendar/planner' && <Palette size={14} className="me-1" />}
               {entry.path === '/planner/weekly' && <Timer size={14} className="me-1" />}
               {entry.label}
             </Dropdown.Item>

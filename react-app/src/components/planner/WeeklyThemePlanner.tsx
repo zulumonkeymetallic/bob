@@ -3,21 +3,22 @@ import { useAuth } from '../../contexts/AuthContext';
 import { httpsCallable } from 'firebase/functions';
 import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 import { Button, Modal, Form, Container, Spinner, Alert, Dropdown } from 'react-bootstrap';
-import { Calendar as CalendarIcon, Clock, LayoutDashboard, RefreshCw, Save, Sparkles } from 'lucide-react';
+import { Calendar as CalendarIcon, ChevronDown, ChevronUp, Clock, LayoutDashboard, RefreshCw, Save, Sparkles } from 'lucide-react';
 import { GLOBAL_THEMES, type GlobalTheme } from '../../constants/globalThemes';
 import { useGlobalThemes } from '../../hooks/useGlobalThemes';
 import { useNavigate } from 'react-router-dom';
 import { addWeeks, format, parseISO, startOfWeek, subWeeks } from 'date-fns';
 import { db, functions } from '../../firebase';
 import './WeeklyThemePlanner.css';
+import PlanActionBar from './PlanActionBar';
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-const START_HOUR = 6;
-const END_HOUR = 22;
+const START_MINUTES = (4 * 60) + 30;
+const END_MINUTES = 22 * 60;
 const SLOT_MINUTES = 30;
 const TIME_SLOTS = Array.from(
-    { length: ((END_HOUR - START_HOUR) * 60) / SLOT_MINUTES },
-    (_, i) => START_HOUR * 60 + i * SLOT_MINUTES
+    { length: (END_MINUTES - START_MINUTES) / SLOT_MINUTES },
+    (_, i) => START_MINUTES + i * SLOT_MINUTES
 );
 const HEALTH_SUBTHEMES = ['Bike', 'Run', 'Swim', 'Walk', 'S&C', 'Crossfit', 'Meal Prep'];
 const CLEAR_THEME_OPTION = 'Clear';
@@ -144,6 +145,7 @@ const WeeklyThemePlanner: React.FC = () => {
     const [fitnessBlocksAutoCreate, setFitnessBlocksAutoCreate] = useState(true);
     const [planningMode, setPlanningMode] = useState<'smart' | 'strict'>('smart');
     const [savingSettings, setSavingSettings] = useState(false);
+    const [showNavigationLinks, setShowNavigationLinks] = useState(false);
 
     const materializePlannerBlocks = httpsCallable(functions, 'materializeFitnessBlocksNow');
     const replanCalendarNowFn = httpsCallable(functions, 'replanCalendarNow', { timeout: 180000 });
@@ -502,8 +504,8 @@ const WeeklyThemePlanner: React.FC = () => {
 
         if (dragMode === 'move') {
             const duration = dragSelection.endMinutes - dragSelection.startMinutes;
-            const minStart = START_HOUR * 60;
-            const maxStart = END_HOUR * 60 - duration;
+            const minStart = START_MINUTES;
+            const maxStart = END_MINUTES - duration;
             const nextStart = clamp(minutes - dragOffsetMinutes, minStart, maxStart);
             const nextEnd = nextStart + duration;
             if (nextStart === dragSelection.startMinutes && jsDay === dragSelection.day) return;
@@ -736,7 +738,10 @@ const WeeklyThemePlanner: React.FC = () => {
         <Container fluid className="p-4">
             <div className="mb-3">
                 <h2 className="mb-2">Weekly Capacity</h2>
-                <div style={{ display: 'flex', flexWrap: 'nowrap', gap: 8, overflowX: 'auto', paddingBottom: 4, alignItems: 'center' }}>
+                <div className="mb-2">
+                    <PlanActionBar />
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, paddingBottom: 4, alignItems: 'center' }}>
                     <Button
                         variant={fitnessBlocksAutoCreate ? 'success' : 'outline-secondary'}
                         size="sm"
@@ -859,26 +864,51 @@ const WeeklyThemePlanner: React.FC = () => {
                         <Clock size={14} className="me-1" />
                         7-day view
                     </Button>
-                    <Dropdown>
-                        <Dropdown.Toggle size="sm" variant="outline-secondary" id="weekly-nav-dropdown" title="Navigation shortcuts to calendar and overview.">
-                            Navigate
-                        </Dropdown.Toggle>
-                        <Dropdown.Menu>
-                            <Dropdown.Item onClick={() => navigate('/calendar')} title="Open calendar view.">
-                                <CalendarIcon size={14} className="me-1" />
-                                View calendar
-                            </Dropdown.Item>
-                            <Dropdown.Item onClick={() => navigate('/dashboard')} title="Open overview dashboard.">
-                                <LayoutDashboard size={14} className="me-1" />
-                                View overview
-                            </Dropdown.Item>
-                            <Dropdown.Item onClick={() => navigate('/planner/weekly')} title="Open 7-day prioritisation view.">
-                                <Clock size={14} className="me-1" />
-                                7-day view
-                            </Dropdown.Item>
-                        </Dropdown.Menu>
-                    </Dropdown>
+                    <Button
+                        size="sm"
+                        variant={showNavigationLinks ? 'secondary' : 'outline-secondary'}
+                        onClick={() => setShowNavigationLinks((prev) => !prev)}
+                        title="Expand navigation shortcuts to calendar, overview, and weekly prioritisation."
+                        style={{ whiteSpace: 'nowrap' }}
+                    >
+                        {showNavigationLinks ? <ChevronUp size={14} className="me-1" /> : <ChevronDown size={14} className="me-1" />}
+                        Navigate
+                    </Button>
                 </div>
+                {showNavigationLinks && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, paddingBottom: 4 }}>
+                        <Button
+                            size="sm"
+                            variant="outline-secondary"
+                            onClick={() => navigate('/calendar')}
+                            title="Open calendar view."
+                            style={{ whiteSpace: 'nowrap' }}
+                        >
+                            <CalendarIcon size={14} className="me-1" />
+                            View calendar
+                        </Button>
+                        <Button
+                            size="sm"
+                            variant="outline-secondary"
+                            onClick={() => navigate('/dashboard')}
+                            title="Open overview dashboard."
+                            style={{ whiteSpace: 'nowrap' }}
+                        >
+                            <LayoutDashboard size={14} className="me-1" />
+                            View overview
+                        </Button>
+                        <Button
+                            size="sm"
+                            variant="outline-secondary"
+                            onClick={() => navigate('/planner/weekly')}
+                            title="Open 7-day prioritisation view."
+                            style={{ whiteSpace: 'nowrap' }}
+                        >
+                            <Clock size={14} className="me-1" />
+                            7-day view
+                        </Button>
+                    </div>
+                )}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, overflowX: 'auto', paddingBottom: 4, marginTop: 8 }}>
                     <span className="text-muted small" style={{ whiteSpace: 'nowrap' }} title="Select which week to edit.">Week:</span>
                     {weekOptions.map((option) => (
