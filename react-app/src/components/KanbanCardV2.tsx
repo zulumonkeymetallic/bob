@@ -945,15 +945,15 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                         <span
                             className="kanban-card__meta-badge"
                             style={{
-                                borderColor: 'rgba(99, 102, 241, 0.45)',
-                                backgroundColor: 'rgba(99, 102, 241, 0.12)',
-                                color: '#6366f1',
+                                borderColor: 'var(--focus-gold, rgba(245, 158, 11, 0.5))',
+                                backgroundColor: 'rgba(245, 158, 11, 0.1)',
+                                color: 'var(--focus-gold, #f59e0b)',
                                 fontWeight: 600,
                             }}
                             title="Aligned to an active Focus Goal"
                         >
                             <Target size={10} style={{ marginRight: 3, marginTop: -1 }} />
-                            Focus
+                            {(manualPriorityRank || isTop3) ? 'Focus Goal' : 'Focus'}
                         </span>
                     )}
                     {overdueDays > 0 && (

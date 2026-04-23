@@ -1,12 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Button } from 'react-bootstrap';
 import { ArrowRightLeft, CalendarClock, ChevronDown, ChevronRight, KanbanSquare, Settings2 } from 'lucide-react';
-import { collection, doc, getDocs, onSnapshot, query, serverTimestamp, setDoc, updateDoc, where } from 'firebase/firestore';
+import { collection, doc, getDocs, onSnapshot, query, serverTimestamp, setDoc, where } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
 import { useNavigate } from 'react-router-dom';
 import { db } from '../../firebase';
+import { functions } from '../../firebase';
 import { useAuth } from '../../contexts/AuthContext';
 import { usePersona } from '../../contexts/PersonaContext';
 import { useSprint } from '../../contexts/SprintContext';
+import { useFocusGoals } from '../../hooks/useFocusGoals';
+import { getActiveFocusLeafGoalIds } from '../../utils/goalHierarchy';
 import EditTaskModal from '../EditTaskModal';
 import EditStoryModal from '../EditStoryModal';
 import { Goal, Story, Task } from '../../types';
@@ -107,6 +111,7 @@ const PlannerCapacityBanner: React.FC = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const { sprints } = useSprint();
+  const { activeFocusGoals } = useFocusGoals(currentUser?.uid);
   const navigate = useNavigate();
   const [plannerStats, setPlannerStats] = useState<any | null>(null);
   const [recommendations, setRecommendations] = useState<MoveRecommendation[]>([]);
@@ -245,95 +250,37 @@ const PlannerCapacityBanner: React.FC = () => {
   }, [plannerStats]);
 
   const loadRecommendations = useCallback(async () => {
-    if (!currentUser?.uid || !currentPersona || !summary) {
+    if (!currentUser?.uid || !currentSprint) {
       setRecommendations([]);
       return;
     }
-    if (!currentSprint) {
-      setRecommendations([]);
-      setRecommendationStatus('No active/planning sprint is available yet to score move recommendations.');
-      return;
-    }
-
     setLoadingRecommendations(true);
     setRecommendationStatus(null);
-
     try {
-      const [storiesSnap, tasksSnap] = await Promise.all([
-        getDocs(query(
-          collection(db, 'stories'),
-          where('ownerUid', '==', currentUser.uid),
-          where('persona', '==', currentPersona),
-        )),
-        getDocs(query(
-          collection(db, 'tasks'),
-          where('ownerUid', '==', currentUser.uid),
-          where('persona', '==', currentPersona),
-        )),
-      ]);
-
-      const storyCandidates: MoveRecommendation[] = storiesSnap.docs
-        .map((d) => ({ id: d.id, ...(d.data() as any) }))
-        .filter((story) => String((story as any)?.sprintId || '') === String(currentSprint.id))
-        .filter((story) => !isStoryDone((story as any)?.status))
-        .map((story) => {
-          const points = normalizeStoryPoints(story);
-          return {
-            kind: 'story' as const,
-            id: story.id,
-            ref: String((story as any).ref || `STORY-${story.id.slice(0, 6).toUpperCase()}`),
-            title: String(story.title || 'Untitled story'),
-            priority: normalizePriority((story as any).priority, 2),
-            points,
-            hours: points,
-            entity: story,
-          };
-        });
-
-      const taskCandidates: MoveRecommendation[] = tasksSnap.docs
-        .map((d) => ({ id: d.id, ...(d.data() as any) }))
-        .filter((task) => String((task as any)?.sprintId || '') === String(currentSprint.id))
-        .filter((task) => !isTaskDone((task as any)?.status))
-        .filter((task) => isMovableTaskType((task as any)?.type))
-        .map((task) => {
-          const points = normalizeTaskPoints(task);
-          return {
-            kind: 'task' as const,
-            id: task.id,
-            ref: String((task as any).ref || `TASK-${task.id.slice(0, 6).toUpperCase()}`),
-            title: String(task.title || 'Untitled task'),
-            priority: normalizePriority((task as any).priority, 2),
-            points,
-            hours: points,
-            entity: task,
-          };
-        });
-
-      const ranked = [...storyCandidates, ...taskCandidates].sort((a, b) => {
-        if (a.priority !== b.priority) return a.priority - b.priority; // low priority first
-        if (a.hours !== b.hours) return b.hours - a.hours; // bigger first
-        return a.title.localeCompare(b.title);
-      });
-
-      const shortfallHours = Math.max(1, Number(summary.shortfallMinutes || 0) / 60);
-      const next: MoveRecommendation[] = [];
-      let covered = 0;
-      for (const item of ranked) {
-        if (next.length >= 6) break;
-        if (next.length >= 3 && covered >= shortfallHours) break;
-        next.push(item);
-        covered += item.hours;
-      }
-      setRecommendations(next);
-      if (!next.length) {
-        setRecommendationStatus('No movable in-sprint stories/tasks were found for the current sprint.');
+      const focusGoalIds = Array.from(getActiveFocusLeafGoalIds(activeFocusGoals));
+      const fn = httpsCallable<object, { ok: boolean; candidates: any[] }>(functions, 'suggestDeferralCandidates');
+      const result = await fn({ sprintId: currentSprint.id, nextSprintId: nextSprint?.id || null, focusGoalIds });
+      const candidates = result.data?.candidates || [];
+      const mapped: MoveRecommendation[] = candidates.map((c: any) => ({
+        kind: c.type as 'story' | 'task',
+        id: c.id,
+        ref: `${c.type === 'story' ? 'STORY' : 'TASK'}-${c.id.slice(0, 6).toUpperCase()}`,
+        title: c.title,
+        priority: 2,
+        points: c.effortHours || 1,
+        hours: c.effortHours || 1,
+        entity: { id: c.id, title: c.title },
+      }));
+      setRecommendations(mapped);
+      if (!mapped.length) {
+        setRecommendationStatus('No deferral candidates found for the current sprint.');
       } else {
-        const covered = next.reduce((sum, item) => sum + item.hours, 0);
-        if (nextSprint) {
-          setRecommendationStatus(`Suggested to move into ${nextSprint.name}: ${next.length} items (about ${Math.round(covered * 10) / 10}h) based on lower priority and larger size.`);
-        } else {
-          setRecommendationStatus(`Found ${next.length} move candidates (about ${Math.round(covered * 10) / 10}h). Create a next sprint to enable moves.`);
-        }
+        const totalHours = mapped.reduce((s, m) => s + m.hours, 0);
+        setRecommendationStatus(
+          nextSprint
+            ? `${mapped.length} candidate${mapped.length !== 1 ? 's' : ''} (${Math.round(totalHours * 10) / 10}h) — not focus-aligned or top-priority.`
+            : `${mapped.length} candidate${mapped.length !== 1 ? 's' : ''} (${Math.round(totalHours * 10) / 10}h). Create a next sprint to enable moves.`,
+        );
       }
     } catch (error: any) {
       console.error('PlannerCapacityBanner: failed to load move recommendations', error);
@@ -342,7 +289,7 @@ const PlannerCapacityBanner: React.FC = () => {
     } finally {
       setLoadingRecommendations(false);
     }
-  }, [currentPersona, currentSprint, currentUser?.uid, nextSprint, summary, entitiesVersion]);
+  }, [activeFocusGoals, currentSprint, currentUser?.uid, nextSprint, entitiesVersion]);
 
   useEffect(() => {
     loadRecommendations();

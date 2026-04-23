@@ -60,6 +60,10 @@
 
   --color-gradient-accent-start: #fd7e14;
   --color-gradient-accent-end: #b35c00;
+
+  /* Focus goal gold accent */
+  --focus-gold: #f59e0b;
+  --focus-gold-ring: 0 0 0 2.5px #f59e0b;
 }
 
 [data-theme="dark"] {

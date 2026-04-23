@@ -65,6 +65,7 @@ interface GanttTask {
   rowSpacing?: number;
   viewLevel?: 'year' | 'quarter' | 'month' | 'week';
   isCritical?: boolean;
+  isFocusAligned?: boolean;
   progressSummary?: string;
   themeId?: number | string;
   themeName?: string;
@@ -461,6 +462,9 @@ const GoalRoadmapV6: React.FC = () => {
   const [showStoryGoalsOnly, setShowStoryGoalsOnly] = useState(true);
   const [showFocusGoalsOnly, setShowFocusGoalsOnly] = useState(false);
   const [focusToggleTouched, setFocusToggleTouched] = useState(false);
+  const [roadmapLayoutMode, setRoadmapLayoutMode] = useState<'flat' | 'grouped'>(() => {
+    try { return (localStorage.getItem('roadmapLayoutMode') as 'flat' | 'grouped') || 'flat'; } catch { return 'flat'; }
+  });
   const [activeFocusGoalIds, setActiveFocusGoalIds] = useState<Set<string>>(new Set());
   const [respectSprintScope, setRespectSprintScope] = useState(true);
   const [editGoal, setEditGoal] = useState<Goal | null>(null);
@@ -900,6 +904,7 @@ const GoalRoadmapV6: React.FC = () => {
         onGenerateStories: (g: Goal) => handleGenerateStories(g),
         onOpenStream: (g: Goal) => showSidebar(g, 'goal'),
         isCritical: isCriticalGoal,
+        isFocusAligned: activeFocusGoalIds.size > 0 && activeFocusGoalIds.has(goal.id),
         progressSummary: progressSummaryParts.join(' · '),
         themeId: normalizedThemeId,
         themeName: themeDef?.name || themeDef?.label || `Theme ${normalizedThemeId}`,
@@ -1127,6 +1132,25 @@ const GoalRoadmapV6: React.FC = () => {
         };
       });
   }, [laneHeight, tasks]);
+
+  // Flat mode: sections across all themes, sorted by themeOrder then section start
+  const flatSections = useMemo(() => {
+    if (roadmapLayoutMode !== 'flat') return [];
+    return themeGroups.flatMap(group =>
+      group.sections.map(section => ({
+        ...section,
+        themeColor: group.themeColor,
+        themeName: group.themeName,
+        themeOrder: group.themeOrder,
+      }))
+    ).sort((a, b) => {
+      const orderDiff = (a.themeOrder ?? 0) - (b.themeOrder ?? 0);
+      if (orderDiff !== 0) return orderDiff;
+      const aStart = a.lanes.flat()[0]?.start?.getTime() ?? 0;
+      const bStart = b.lanes.flat()[0]?.start?.getTime() ?? 0;
+      return aStart - bStart;
+    });
+  }, [roadmapLayoutMode, themeGroups]);
 
   const topAxisSegments = useMemo(() => {
     if (zoomLevel === 'week') {
@@ -1577,6 +1601,22 @@ const GoalRoadmapV6: React.FC = () => {
           />{' '}
           Focus goals only{activeFocusGoalIds.size ? ` (${activeFocusGoalIds.size})` : ''}
         </label>
+        <div className="grv6-filter-row" style={{ marginTop: 4 }}>
+          <span style={{ fontSize: 11, opacity: 0.75, marginRight: 6 }}>Layout:</span>
+          {(['flat', 'grouped'] as const).map(mode => (
+            <button
+              key={mode}
+              className={`grv6-zoom-btn${roadmapLayoutMode === mode ? ' active' : ''}`}
+              style={{ marginRight: 4, fontSize: 10, padding: '2px 7px' }}
+              onClick={() => {
+                setRoadmapLayoutMode(mode);
+                try { localStorage.setItem('roadmapLayoutMode', mode); } catch { /* noop */ }
+              }}
+            >
+              {mode === 'flat' ? 'Flat' : 'Group by Theme'}
+            </button>
+          ))}
+        </div>
         <SprintSelector className="grv6-sprint-selector" />
 
       </div>
@@ -1641,14 +1681,23 @@ const GoalRoadmapV6: React.FC = () => {
           <div className="grv6-roadmap-shell" style={{ width: ROADMAP_LABEL_COL_WIDTH + timelineWidth }}>
             <div className="grv6-pill-row grv6-roadmap-summary">
               <span className="grv6-pill">{visibleGoalCount} goals</span>
-              <span className="grv6-pill subtle">{themeGroups.length} themes</span>
+              {roadmapLayoutMode === 'grouped'
+                ? <span className="grv6-pill subtle">{themeGroups.length} themes</span>
+                : <span className="grv6-pill subtle">{flatSections.length} sections</span>
+              }
               <span className="grv6-pill subtle">{milestoneCount} milestones</span>
             </div>
 
             <div className="grv6-roadmap-header" style={{ width: ROADMAP_LABEL_COL_WIDTH + timelineWidth }}>
               <div className="grv6-roadmap-label-spacer">
-                <div className="grv6-roadmap-header-title">Themes</div>
-                <div className="grv6-roadmap-header-subtitle">Grouped by theme, then parent goal sections</div>
+                <div className="grv6-roadmap-header-title">
+                  {roadmapLayoutMode === 'grouped' ? 'Themes' : 'Goals'}
+                </div>
+                <div className="grv6-roadmap-header-subtitle">
+                  {roadmapLayoutMode === 'grouped'
+                    ? 'Grouped by theme, then parent goal sections'
+                    : 'Flat list · sorted by theme then start date'}
+                </div>
               </div>
               <div className="grv6-roadmap-axis" style={{ width: timelineWidth }}>
                 <div className="grv6-roadmap-axis-row year">
@@ -1677,119 +1726,152 @@ const GoalRoadmapV6: React.FC = () => {
             </div>
 
             <div className="grv6-roadmap-body" style={{ width: ROADMAP_LABEL_COL_WIDTH + timelineWidth }}>
-              {themeGroups.map((group) => (
-                <div
-                  key={group.key}
-                  className="grv6-theme-group"
-                  style={{ minHeight: group.height }}
-                >
-                  <div className="grv6-theme-label-cell" style={{ minHeight: group.height }}>
-                    <div className="grv6-theme-label-stack">
-                      <span className="grv6-theme-dot" style={{ backgroundColor: group.themeColor }} />
-                      <div className="grv6-theme-label-copy">
-                        <span className="grv6-theme-label-title">{group.themeName}</span>
-                        <span className="grv6-theme-label-meta">
-                          {group.goalCount} goals across {group.sections.length} parent section{group.sections.length === 1 ? '' : 's'} and {group.laneCount} line{group.laneCount === 1 ? '' : 's'}
-                        </span>
+              {roadmapLayoutMode === 'flat' ? (
+                // ── Flat layout: sections without theme group wrappers ──────────
+                flatSections.map((section) => {
+                  const sectionHeight = section.height;
+                  return (
+                    <div
+                      key={section.key}
+                      className="grv6-theme-group"
+                      style={{ minHeight: sectionHeight }}
+                    >
+                      <div className="grv6-theme-label-cell" style={{ minHeight: sectionHeight }}>
+                        <div className="grv6-theme-label-stack">
+                          <span className="grv6-theme-dot" style={{ backgroundColor: section.themeColor }} />
+                          <div className="grv6-theme-label-copy">
+                            <span className="grv6-theme-label-title">{section.title}</span>
+                            <span className="grv6-theme-label-meta">
+                              {section.goalCount} goal{section.goalCount === 1 ? '' : 's'} · {section.themeName}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="grv6-theme-track" style={{ width: timelineWidth, minHeight: sectionHeight }}>
+                        {sprintBands.map((band) => (
+                          <div key={`flat-${section.key}-${band.id}`} className="grv6-roadmap-sprint-band" style={{ left: band.left, width: band.width, height: sectionHeight }}>
+                            <span className="grv6-roadmap-sprint-label">{band.label}</span>
+                          </div>
+                        ))}
+                        {gridLines.map((lineX, index) => (
+                          <div key={`flat-${section.key}-grid-${index}`} className="grv6-roadmap-grid-line" style={{ left: lineX, height: sectionHeight }} />
+                        ))}
+                        <div className="grv6-roadmap-today-line" style={{ left: todayLineX, height: sectionHeight }} />
+                        {section.lanes.map((lane, laneIndex) => (
+                          <div
+                            key={`flat-${section.key}-lane-${laneIndex}`}
+                            className="grv6-theme-lane-row"
+                            style={{ top: ROADMAP_SECTION_HEADER_HEIGHT + (laneIndex * laneHeight), height: laneHeight }}
+                          >
+                            <span className="grv6-theme-lane-label">Line {laneIndex + 1}</span>
+                          </div>
+                        ))}
+                        {section.lanes.flatMap((lane, laneIndex) =>
+                          lane.map((task) => {
+                            const startMs = task.start.getTime();
+                            const endMs = Math.max(task.end.getTime() + DAY_MS, startMs + DAY_MS);
+                            const left = xFromMs(startMs);
+                            const width = Math.max(task.isMilestone ? 120 : 72, xFromMs(endMs) - xFromMs(startMs));
+                            const prevH = laneHeight - 12;
+                            const height = Math.max(20, Math.round(prevH * 0.56));
+                            const top = ROADMAP_SECTION_HEADER_HEIGHT + (laneIndex * laneHeight) + Math.round((laneHeight - height) / 2);
+                            const isDragging = activeDragGoalId === task.id;
+                            return (
+                              <div
+                                key={`flat-${section.key}-${task.id}`}
+                                className={`grv6-roadmap-bar ${task.isMilestone ? 'milestone' : ''} ${isDragging ? 'dragging' : ''} ${task.isFocusAligned ? 'focus-aligned' : ''}`}
+                                style={{ left, top, width, height }}
+                                onPointerDown={(event) => startGoalDrag(event, task.id, 'move')}
+                              >
+                                <div className="grv6-resize-handle start" title="Adjust goal start date" onPointerDown={(event) => startGoalDrag(event, task.id, 'resize-start')} />
+                                <div className="grv6-roadmap-bar-content"><TaskTemplate data={task} /></div>
+                                <div className="grv6-resize-handle end" title="Adjust goal end date" onPointerDown={(event) => startGoalDrag(event, task.id, 'resize-end')} />
+                              </div>
+                            );
+                          })
+                        )}
                       </div>
                     </div>
-                  </div>
-
-                  <div className="grv6-theme-track" style={{ width: timelineWidth, minHeight: group.height }}>
-                    <div className="grv6-theme-track-header" />
-                    {sprintBands.map((band) => (
-                      <div
-                        key={`${group.key}-${band.id}`}
-                        className="grv6-roadmap-sprint-band"
-                        style={{ left: band.left, width: band.width, height: group.height }}
-                      >
-                        <span className="grv6-roadmap-sprint-label">{band.label}</span>
+                  );
+                })
+              ) : (
+                // ── Grouped layout: sections nested inside theme wrappers ───────
+                themeGroups.map((group) => (
+                  <div
+                    key={group.key}
+                    className="grv6-theme-group"
+                    style={{ minHeight: group.height }}
+                  >
+                    <div className="grv6-theme-label-cell" style={{ minHeight: group.height }}>
+                      <div className="grv6-theme-label-stack">
+                        <span className="grv6-theme-dot" style={{ backgroundColor: group.themeColor }} />
+                        <div className="grv6-theme-label-copy">
+                          <span className="grv6-theme-label-title">{group.themeName}</span>
+                          <span className="grv6-theme-label-meta">
+                            {group.goalCount} goals across {group.sections.length} parent section{group.sections.length === 1 ? '' : 's'} and {group.laneCount} line{group.laneCount === 1 ? '' : 's'}
+                          </span>
+                        </div>
                       </div>
-                    ))}
-                    {gridLines.map((lineX, index) => (
-                      <div
-                        key={`${group.key}-grid-${index}`}
-                        className="grv6-roadmap-grid-line"
-                        style={{ left: lineX, height: group.height }}
-                      />
-                    ))}
-                    <div className="grv6-roadmap-today-line" style={{ left: todayLineX, height: group.height }} />
-
-                    {(() => {
-                      let currentSectionTop = ROADMAP_GROUP_HEADER_HEIGHT;
-                      return group.sections.map((section) => {
-                        const sectionTop = currentSectionTop;
-                        currentSectionTop += section.height;
-                        return (
-                          <React.Fragment key={`${group.key}-${section.key}`}>
-                            <div
-                              className="grv6-roadmap-section-header"
-                              style={{
-                                top: sectionTop,
-                                height: ROADMAP_SECTION_HEADER_HEIGHT,
-                              }}
-                            >
-                              <span className="grv6-roadmap-section-title">{section.title}</span>
-                              <span className="grv6-roadmap-section-meta">
-                                {section.goalCount} goal{section.goalCount === 1 ? '' : 's'}
-                              </span>
-                            </div>
-
-                            {section.lanes.map((lane, laneIndex) => (
-                              <div
-                                key={`${group.key}-${section.key}-lane-${laneIndex}`}
-                                className="grv6-theme-lane-row"
-                                style={{
-                                  top: sectionTop + ROADMAP_SECTION_HEADER_HEIGHT + (laneIndex * laneHeight),
-                                  height: laneHeight
-                                }}
-                              >
-                                <span className="grv6-theme-lane-label">Line {laneIndex + 1}</span>
+                    </div>
+                    <div className="grv6-theme-track" style={{ width: timelineWidth, minHeight: group.height }}>
+                      <div className="grv6-theme-track-header" />
+                      {sprintBands.map((band) => (
+                        <div key={`${group.key}-${band.id}`} className="grv6-roadmap-sprint-band" style={{ left: band.left, width: band.width, height: group.height }}>
+                          <span className="grv6-roadmap-sprint-label">{band.label}</span>
+                        </div>
+                      ))}
+                      {gridLines.map((lineX, index) => (
+                        <div key={`${group.key}-grid-${index}`} className="grv6-roadmap-grid-line" style={{ left: lineX, height: group.height }} />
+                      ))}
+                      <div className="grv6-roadmap-today-line" style={{ left: todayLineX, height: group.height }} />
+                      {(() => {
+                        let currentSectionTop = ROADMAP_GROUP_HEADER_HEIGHT;
+                        return group.sections.map((section) => {
+                          const sectionTop = currentSectionTop;
+                          currentSectionTop += section.height;
+                          return (
+                            <React.Fragment key={`${group.key}-${section.key}`}>
+                              <div className="grv6-roadmap-section-header" style={{ top: sectionTop, height: ROADMAP_SECTION_HEADER_HEIGHT }}>
+                                <span className="grv6-roadmap-section-title">{section.title}</span>
+                                <span className="grv6-roadmap-section-meta">{section.goalCount} goal{section.goalCount === 1 ? '' : 's'}</span>
                               </div>
-                            ))}
-
-                            {section.lanes.flatMap((lane, laneIndex) =>
-                              lane.map((task) => {
-                                const startMs = task.start.getTime();
-                                const endMs = Math.max(task.end.getTime() + DAY_MS, startMs + DAY_MS);
-                                const left = xFromMs(startMs);
-                                const width = Math.max(task.isMilestone ? 120 : 72, xFromMs(endMs) - xFromMs(startMs));
-                                const previousHeight = laneHeight - 12;
-                                const height = Math.max(20, Math.round(previousHeight * 0.56));
-                                const top = sectionTop + ROADMAP_SECTION_HEADER_HEIGHT + (laneIndex * laneHeight) + Math.round((laneHeight - height) / 2);
-                                const isDragging = activeDragGoalId === task.id;
-
-                                return (
-                                  <div
-                                    key={`${group.key}-${section.key}-${task.id}`}
-                                    className={`grv6-roadmap-bar ${task.isMilestone ? 'milestone' : ''} ${isDragging ? 'dragging' : ''}`}
-                                    style={{ left, top, width, height }}
-                                    onPointerDown={(event) => startGoalDrag(event, task.id, 'move')}
-                                  >
+                              {section.lanes.map((lane, laneIndex) => (
+                                <div key={`${group.key}-${section.key}-lane-${laneIndex}`} className="grv6-theme-lane-row" style={{ top: sectionTop + ROADMAP_SECTION_HEADER_HEIGHT + (laneIndex * laneHeight), height: laneHeight }}>
+                                  <span className="grv6-theme-lane-label">Line {laneIndex + 1}</span>
+                                </div>
+                              ))}
+                              {section.lanes.flatMap((lane, laneIndex) =>
+                                lane.map((task) => {
+                                  const startMs = task.start.getTime();
+                                  const endMs = Math.max(task.end.getTime() + DAY_MS, startMs + DAY_MS);
+                                  const left = xFromMs(startMs);
+                                  const width = Math.max(task.isMilestone ? 120 : 72, xFromMs(endMs) - xFromMs(startMs));
+                                  const previousHeight = laneHeight - 12;
+                                  const height = Math.max(20, Math.round(previousHeight * 0.56));
+                                  const top = sectionTop + ROADMAP_SECTION_HEADER_HEIGHT + (laneIndex * laneHeight) + Math.round((laneHeight - height) / 2);
+                                  const isDragging = activeDragGoalId === task.id;
+                                  return (
                                     <div
-                                      className="grv6-resize-handle start"
-                                      title="Adjust goal start date"
-                                      onPointerDown={(event) => startGoalDrag(event, task.id, 'resize-start')}
-                                    />
-                                    <div className="grv6-roadmap-bar-content">
-                                      <TaskTemplate data={task} />
+                                      key={`${group.key}-${section.key}-${task.id}`}
+                                      className={`grv6-roadmap-bar ${task.isMilestone ? 'milestone' : ''} ${isDragging ? 'dragging' : ''} ${task.isFocusAligned ? 'focus-aligned' : ''}`}
+                                      style={{ left, top, width, height }}
+                                      onPointerDown={(event) => startGoalDrag(event, task.id, 'move')}
+                                    >
+                                      <div className="grv6-resize-handle start" title="Adjust goal start date" onPointerDown={(event) => startGoalDrag(event, task.id, 'resize-start')} />
+                                      <div className="grv6-roadmap-bar-content"><TaskTemplate data={task} /></div>
+                                      <div className="grv6-resize-handle end" title="Adjust goal end date" onPointerDown={(event) => startGoalDrag(event, task.id, 'resize-end')} />
                                     </div>
-                                    <div
-                                      className="grv6-resize-handle end"
-                                      title="Adjust goal end date"
-                                      onPointerDown={(event) => startGoalDrag(event, task.id, 'resize-end')}
-                                    />
-                                  </div>
-                                );
-                              })
-                            )}
-                          </React.Fragment>
-                        );
-                      });
-                    })()}
+                                  );
+                                })
+                              )}
+                            </React.Fragment>
+                          );
+                        });
+                      })()}
+                    </div>
                   </div>
-                </div>
-              ))}
+                ))
+              )}
             </div>
           </div>
         )}

@@ -35,6 +35,7 @@ import PlanActionBar from './planner/PlanActionBar';
 import ThemeMultiSelect from './shared/ThemeMultiSelect';
 import SprintMultiSelect from './shared/SprintMultiSelect';
 import ShareGoalsPanel from './shared/ShareGoalsPanel';
+import GoalCard from './GoalCard';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -182,8 +183,9 @@ const NodeCard: React.FC<{
   linkTarget: boolean;
   linkMode: boolean;
   detailLevel: 'minimal' | 'compact' | 'full';
+  isFocusAligned?: boolean;
   onClick: () => void;
-}> = ({ node, nodeW, selected, linkSource, linkTarget, linkMode, detailLevel, onClick }) => {
+}> = ({ node, nodeW, selected, linkSource, linkTarget, linkMode, detailLevel, isFocusAligned = false, onClick }) => {
   const col  = node.col;
   const data = node.data as any;
 
@@ -192,11 +194,36 @@ const NodeCard: React.FC<{
       ? goalThemeColor(data)
       : COL_COLOURS[col];
 
-  const statusLabel =
+  const storyStatusLabel =
     col === 'story' ? (data.status === 0 ? 'Backlog' : data.status === 1 ? 'In Progress' : data.status >= 4 ? 'Done' : 'Planned')
     : col === 'task'  ? (data.status === 'done' ? 'Done' : data.status === 'in_progress' ? 'Doing' : 'To do')
     : String(data.status ?? '');
 
+  // Goal-type nodes use the shared GoalCard component
+  if (col === 'focus' || col === 'umbrella' || col === 'phase') {
+    const ringOverride = selected
+      ? `0 0 0 2px ${accentColor}`
+      : linkSource
+      ? '0 0 0 2px #6366f1'
+      : linkTarget
+      ? '0 0 0 2px #10b981'
+      : undefined;
+    return (
+      <GoalCard
+        goal={data}
+        themeColor={accentColor}
+        themeLabel={data.theme ? getThemeName(data.theme) : undefined}
+        isFocusAligned={isFocusAligned}
+        isSelected={selected}
+        ringOverride={ringOverride}
+        detailLevel={detailLevel}
+        maxWidth={nodeW}
+        onClick={onClick}
+      />
+    );
+  }
+
+  // Story / task nodes retain existing bespoke rendering
   const ring = selected    ? `0 0 0 2px ${accentColor}` :
                linkSource  ? '0 0 0 2px #6366f1' :
                linkTarget  ? '0 0 0 2px #10b981' : 'none';
@@ -222,30 +249,16 @@ const NodeCard: React.FC<{
         <div style={{ fontWeight: 600, fontSize: 13, lineHeight: 1.3, color: 'var(--notion-text, #1a1a1a)' }}>
           {data.title || data.ref || 'Untitled'}
         </div>
-        {/* Theme badge always; remaining badges on compact/full */}
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 2 }}>
-          {(col === 'focus' || col === 'umbrella' || col === 'phase') && data.theme && (
-            <span className="kanban-card__meta-badge">{getThemeName(data.theme)}</span>
-          )}
           {detailLevel !== 'minimal' && (
             <>
-              {statusLabel && <span className="kanban-card__meta-badge">{statusLabel}</span>}
-              {data.goalKind && (
-                <span className="kanban-card__meta-badge" style={{ textTransform: 'capitalize' }}>{data.goalKind}</span>
-              )}
-              {data.priority && (col === 'story' || col === 'task') && (
+              {storyStatusLabel && <span className="kanban-card__meta-badge">{storyStatusLabel}</span>}
+              {data.priority && (
                 <span className="kanban-card__meta-badge">{String(data.priority)}</span>
               )}
             </>
           )}
         </div>
-        {/* KPIs — compact and full */}
-        {detailLevel !== 'minimal' && (col === 'umbrella' || col === 'phase') && Array.isArray(data.kpis) && data.kpis.length > 0 && (
-          <div style={{ fontSize: 10, color: 'var(--notion-text-muted, #888)', marginTop: 2 }}>
-            {data.kpis.slice(0, 2).map((k: any) => `${k.name}: ${k.target}${k.unit}`).join(' · ')}
-          </div>
-        )}
-        {/* Description — full only */}
         {detailLevel === 'full' && data.description && (
           <div style={{ fontSize: 11, color: 'var(--notion-text-muted, #666)', lineHeight: 1.4, marginTop: 2 }}>
             {String(data.description).slice(0, 120)}{data.description.length > 120 ? '…' : ''}
@@ -868,6 +881,7 @@ const VisualCanvas: React.FC = () => {
                       linkTarget={linkMode && !!linkSource && linkSource !== node.id}
                       linkMode={linkMode}
                       detailLevel={canvasDetailLevel}
+                      isFocusAligned={focusGoalIds.has(node.id)}
                       onClick={() => handleNodeClick(node)}
                     />
                   </div>
@@ -905,6 +919,7 @@ const VisualCanvas: React.FC = () => {
                       linkTarget={linkMode && !!linkSource && linkSource !== node.id}
                       linkMode={linkMode}
                       detailLevel={canvasDetailLevel}
+                      isFocusAligned={focusGoalIds.has(node.id)}
                       onClick={() => handleNodeClick(node)}
                     />
                   </div>

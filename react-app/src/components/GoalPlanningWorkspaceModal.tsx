@@ -3,7 +3,7 @@ import { Button, ButtonGroup, Modal } from 'react-bootstrap';
 import type { Goal } from '../types';
 import { getGoalDisplayPath } from '../utils/goalHierarchy';
 
-type WorkspaceView = 'roadmap' | 'planner' | 'matrix';
+type WorkspaceView = 'roadmap' | 'planner' | 'planner-quarter' | 'matrix';
 
 interface Props {
   show: boolean;
@@ -50,9 +50,13 @@ const GoalPlanningWorkspaceModal: React.FC<Props> = ({
     if (view === 'matrix') {
       params.set('groupBy', 'goal');
     }
+    if (view === 'planner-quarter') {
+      params.set('plannerMode', 'quarter');
+      params.set('plannerYear', String(new Date().getFullYear()));
+    }
     const path = view === 'roadmap'
       ? '/goals/roadmap-v6'
-      : view === 'planner'
+      : view === 'planner' || view === 'planner-quarter'
         ? '/goals/year-planner'
         : '/sprints/planning';
     return `${path}?${params.toString()}`;
@@ -88,7 +92,10 @@ const GoalPlanningWorkspaceModal: React.FC<Props> = ({
               Roadmap
             </Button>
             <Button variant={view === 'planner' ? 'primary' : 'outline-primary'} onClick={() => setView('planner')}>
-              Planner
+              Year Planner
+            </Button>
+            <Button variant={view === 'planner-quarter' ? 'primary' : 'outline-primary'} onClick={() => setView('planner-quarter')}>
+              Quarter Planner
             </Button>
             <Button variant={view === 'matrix' ? 'primary' : 'outline-primary'} onClick={() => setView('matrix')}>
               Sprint Matrix

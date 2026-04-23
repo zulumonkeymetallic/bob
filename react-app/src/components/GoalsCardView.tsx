@@ -27,8 +27,10 @@ interface GoalsCardViewProps {
   onGoalUpdate: (goalId: string, updates: Partial<Goal>) => void;
   onGoalDelete: (goalId: string) => void;
   onGoalPriorityChange: (goalId: string, newPriority: number) => void;
-  onGoalSelect?: (goalId: string) => void; // New prop for goal selection
-  selectedGoalId?: string | null; // New prop for highlighting selected goal
+  onGoalSelect?: (goalId: string) => void;
+  selectedGoalId?: string | null;
+  /** IDs of goals that are focus-aligned — receives gold ring treatment */
+  focusGoalIds?: string[];
   themes?: GlobalTheme[];
   cardLayout?: 'grid' | 'comfortable';
   showDescriptions?: boolean;
@@ -51,6 +53,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
   onGoalPriorityChange,
   onGoalSelect,
   selectedGoalId,
+  focusGoalIds,
   themes,
   cardLayout = 'grid',
   showDescriptions,
@@ -679,6 +682,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
           const themeColor = themeDef.color || 'var(--brand)';
           const themeTextColor = themeDef.textColor || 'var(--on-accent)';
           const isSelected = selectedGoalId === goal.id;
+          const isFocusAligned = focusGoalIds?.includes(goal.id) ?? false;
           const gradientStart = lightenColor(themeColor, showDetailed ? 0.35 : 0.55);
           const gradientEnd = lightenColor(themeColor, showDetailed ? 0.6 : 0.78);
           const cardBackground = `linear-gradient(165deg, ${gradientStart} 0%, ${gradientEnd} 100%)`;
@@ -782,7 +786,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
           return (
             <div
               key={goal.id}
-              className="goals-card-tile"
+              className={`goals-card-tile${isFocusAligned ? ' goals-card-tile--focus' : ''}`}
               data-goal-id={goal.id}
               style={rowSpan ? { gridRowEnd: `span ${rowSpan}` } : undefined}
             >

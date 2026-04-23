@@ -16,6 +16,7 @@ import CheckInBanner from './checkins/CheckInBanner';
 import { CoachVerdictBanner } from './coach/CoachVerdictBanner';
 import ProcessTextActivityHost from './ProcessTextActivityHost';
 import PlannerCapacityBanner from './planner/PlannerCapacityBanner';
+import DeferralRecommendationBanner from './DeferralRecommendationBanner';
 // Test mode UI removed per request
 
 interface SidebarLayoutProps {
@@ -84,6 +85,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   const [assistantOpen, setAssistantOpen] = useState(false);
 
   const hidePlannerCapacityBanner = isSmallScreen && /^\/mobile(?:\/|$)/.test(location.pathname);
+  const hideDeferralBanner = isSmallScreen && /^\/mobile(?:\/|$)/.test(location.pathname);
 
   const navigationGroups: NavigationGroup[] = [
       {
@@ -746,6 +748,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
             <CheckInBanner />
             <CoachVerdictBanner />
             {!hidePlannerCapacityBanner && <PlannerCapacityBanner />}
+            {!hideDeferralBanner && <DeferralRecommendationBanner />}
             <SprintClosureBanner />
             <ProcessTextActivityHost />
           </div>

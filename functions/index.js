@@ -208,6 +208,32 @@ try {
   console.warn('[init] deferralSuggestions not loaded', e?.message || e);
 }
 
+// Deferral candidate service — sprint-level banner candidates
+try {
+  const httpsV2 = require('firebase-functions/v2/https');
+  const admin = require('firebase-admin');
+  const { buildDeferralCandidates } = require('./services/deferralCandidateService');
+
+  exports.suggestDeferralCandidates = httpsV2.onCall({ region: 'europe-west2', memory: '512MiB' }, async (req) => {
+    if (!req.auth?.uid) {
+      throw new httpsV2.HttpsError('unauthenticated', 'Authentication required');
+    }
+    const uid = req.auth.uid;
+    const sprintId = String(req.data?.sprintId || '').trim();
+    if (!sprintId) {
+      throw new httpsV2.HttpsError('invalid-argument', 'sprintId is required');
+    }
+    const nextSprintId = String(req.data?.nextSprintId || '').trim() || null;
+    const rawFocusIds = Array.isArray(req.data?.focusGoalIds) ? req.data.focusGoalIds : [];
+    const focusGoalIds = new Set(rawFocusIds.map((id) => String(id || '').trim()).filter(Boolean));
+    const db = admin.firestore();
+    const candidates = await buildDeferralCandidates(db, uid, { sprintId, focusGoalIds, nextSprintId });
+    return { ok: true, candidates, generatedAtMs: Date.now() };
+  });
+} catch (e) {
+  console.warn('[init] suggestDeferralCandidates not loaded', e?.message || e);
+}
+
 // Import Feature Flags
 try {
   const featureFlagsModule = require('./featureFlags');

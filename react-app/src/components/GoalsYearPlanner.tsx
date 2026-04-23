@@ -36,6 +36,7 @@ interface GoalYearColumnProps {
   themePalette: any[];
   droppableId: string;
   detailLevel: 'minimal' | 'compact' | 'full';
+  focusGoalIds?: string[];
   onEdit: (goal: Goal) => void;
   onOpenWorkspace: (goal: Goal) => void;
   onOpenActivity: (goal: Goal) => void;
@@ -117,6 +118,30 @@ const addDaysToStart = (start: string, days: number) => {
   return formatDateInput(next);
 };
 
+const QUARTER_MONTHS = [[0, 2], [3, 5], [6, 8], [9, 11]] as const; // [startMonth, endMonth] 0-indexed
+
+function quarterStartMs(year: number, quarter: 1 | 2 | 3 | 4): number {
+  return new Date(year, QUARTER_MONTHS[quarter - 1][0], 1).getTime();
+}
+
+function quarterEndMs(year: number, quarter: 1 | 2 | 3 | 4): number {
+  const endMonth = QUARTER_MONTHS[quarter - 1][1];
+  const lastDay = new Date(year, endMonth + 1, 0).getDate();
+  return new Date(year, endMonth, lastDay, 23, 59, 59, 999).getTime();
+}
+
+function resolveGoalQuarter(goal: Goal, year: number): 1 | 2 | 3 | 4 | null {
+  const endDate = (goal as any).endDate;
+  const targetDate = (goal as any).targetDate;
+  const raw = endDate || targetDate;
+  if (!raw) return null;
+  const ms = typeof raw === 'number' ? raw : raw?.toDate?.()?.getTime?.();
+  if (!ms) return null;
+  const d = new Date(ms);
+  if (d.getFullYear() !== year) return null;
+  return (Math.floor(d.getMonth() / 3) + 1) as 1 | 2 | 3 | 4;
+}
+
 const resolveGoalYear = (goal: Goal): number | null => {
   const explicit = (goal as any).targetYear;
   if (explicit) {
@@ -167,6 +192,7 @@ const GoalYearCard: React.FC<{
   goal: Goal;
   themePalette: any[];
   detailLevel: 'minimal' | 'compact' | 'full';
+  isFocusAligned?: boolean;
   onEdit: (goal: Goal) => void;
   onOpenWorkspace: (goal: Goal) => void;
   onOpenActivity: (goal: Goal) => void;
@@ -178,6 +204,7 @@ const GoalYearCard: React.FC<{
   goal,
   themePalette,
   detailLevel,
+  isFocusAligned = false,
   onEdit,
   onOpenWorkspace,
   onOpenActivity,
@@ -238,9 +265,11 @@ const GoalYearCard: React.FC<{
       ref={ref}
       className="kanban-card"
       style={{
-        border: `1px solid ${withAlphaColor(themeColor, 0.3)}`,
+        border: `1px solid ${isFocusAligned ? 'var(--focus-gold)' : withAlphaColor(themeColor, 0.3)}`,
         background: cardBg,
-        boxShadow: '0 4px 12px var(--glass-shadow-color)',
+        boxShadow: isFocusAligned
+          ? 'var(--focus-gold-ring), 0 4px 12px var(--glass-shadow-color)'
+          : '0 4px 12px var(--glass-shadow-color)',
         cursor: 'grab',
         opacity: dragging ? 0.6 : 1,
         borderRadius: 14,
@@ -341,6 +370,7 @@ const GoalYearColumn: React.FC<GoalYearColumnProps> = ({
   themePalette,
   droppableId,
   detailLevel,
+  focusGoalIds,
   onEdit,
   onOpenWorkspace,
   onOpenActivity,
@@ -427,6 +457,7 @@ const GoalYearColumn: React.FC<GoalYearColumnProps> = ({
             goal={goal}
             themePalette={themePalette}
             detailLevel={detailLevel}
+            isFocusAligned={focusGoalIds?.includes(goal.id)}
             onEdit={onEdit}
             onOpenWorkspace={onOpenWorkspace}
             onOpenActivity={onOpenActivity}
@@ -582,6 +613,99 @@ const YearDateAdjustModal: React.FC<{
   );
 };
 
+const GoalQuarterColumn: React.FC<{
+  quarter: 1 | 2 | 3 | 4;
+  year: number;
+  goals: Goal[];
+  themePalette: any[];
+  detailLevel: 'minimal' | 'compact' | 'full';
+  focusGoalIds?: string[];
+  onEdit: (goal: Goal) => void;
+  onOpenWorkspace: (goal: Goal) => void;
+  onOpenActivity: (goal: Goal) => void;
+  onAutoGenerateStories: (goal: Goal) => void;
+  onScheduleGoal: (goal: Goal) => void;
+  generatingGoalId: string | null;
+  schedulingGoalId: string | null;
+}> = ({
+  quarter, year, goals, themePalette, detailLevel, focusGoalIds,
+  onEdit, onOpenWorkspace, onOpenActivity, onAutoGenerateStories, onScheduleGoal,
+  generatingGoalId, schedulingGoalId,
+}) => {
+  const ref = useRef<HTMLDivElement>(null);
+  const [isOver, setIsOver] = useState(false);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    return dropTargetForElements({
+      element: el,
+      getData: () => ({ targetQuarter: quarter, targetQuarterYear: year }),
+      onDragEnter: () => setIsOver(true),
+      onDragLeave: () => setIsOver(false),
+      onDrop: () => setIsOver(false),
+    });
+  }, [quarter, year]);
+
+  return (
+    <div className={`sprint-column${isOver ? ' is-over' : ''}`} style={{ minWidth: 220, flex: 1 }}>
+      <div className="sprint-column__header">
+        <div className="sprint-column__header-top">
+          <h5 style={{ margin: 0, fontSize: 14, fontWeight: 600, color: 'var(--notion-text)' }}>
+            Q{quarter} {year}
+          </h5>
+          <Badge
+            bg="light"
+            text="dark"
+            style={{
+              backgroundColor: 'var(--notion-border)',
+              color: 'var(--notion-text)',
+              fontSize: 10,
+              padding: '3px 8px',
+              fontWeight: 600,
+              letterSpacing: '0.05em',
+              textTransform: 'uppercase',
+            }}
+          >
+            {goals.length} goals
+          </Badge>
+        </div>
+      </div>
+      <div
+        ref={ref}
+        className={`drop-lane${isOver ? ' is-over' : ''}`}
+        style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8, padding: 8, minHeight: 220 }}
+      >
+        {goals.map(goal => (
+          <GoalYearCard
+            key={goal.id}
+            goal={goal}
+            themePalette={themePalette}
+            detailLevel={detailLevel}
+            isFocusAligned={focusGoalIds?.includes(goal.id)}
+            onEdit={onEdit}
+            onOpenWorkspace={onOpenWorkspace}
+            onOpenActivity={onOpenActivity}
+            onAutoGenerateStories={onAutoGenerateStories}
+            onScheduleGoal={onScheduleGoal}
+            generatingGoalId={generatingGoalId}
+            schedulingGoalId={schedulingGoalId}
+          />
+        ))}
+        {goals.length === 0 && (
+          <div className="sprint-column__placeholder">
+            <div>
+              <Calendar size={20} style={{ marginBottom: 8 }} />
+              <div>No goals in Q{quarter}</div>
+              <div style={{ fontSize: 11, marginTop: 4 }}>Drag goals here</div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
 const GoalsYearPlanner: React.FC = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
@@ -617,6 +741,15 @@ const GoalsYearPlanner: React.FC = () => {
   const [goalDetailLevel, setGoalDetailLevel] = useState<'minimal' | 'compact' | 'full'>('minimal');
   const [showNoPotOnly, setShowNoPotOnly] = useState(false);
   const [showFocusGoalsOnly, setShowFocusGoalsOnly] = useState(queryFocusOnly);
+  const [plannerViewMode, setPlannerViewMode] = useState<'year' | 'quarter'>(() => {
+    const param = searchParams.get('plannerMode');
+    return param === 'quarter' ? 'quarter' : 'year';
+  });
+  const [quarterYear, setQuarterYear] = useState<number>(() => {
+    const param = searchParams.get('plannerYear');
+    const parsed = param ? Number(param) : NaN;
+    return Number.isFinite(parsed) ? parsed : new Date().getFullYear();
+  });
   const [focusToggleTouched, setFocusToggleTouched] = useState(false);
   const [activeSprintGoalIds, setActiveSprintGoalIds] = useState<Set<string>>(new Set());
   const [applyActiveSprintFilter, setApplyActiveSprintFilter] = useState(true);
@@ -901,6 +1034,18 @@ const GoalsYearPlanner: React.FC = () => {
     return map;
   }, [orderedFilteredGoals]);
 
+  const goalsByQuarter = useMemo(() => {
+    const map = new Map<string, Goal[]>([
+      ['Q1', []], ['Q2', []], ['Q3', []], ['Q4', []], ['none', []]
+    ]);
+    orderedFilteredGoals.forEach(goal => {
+      const q = resolveGoalQuarter(goal, quarterYear);
+      const key = q ? `Q${q}` : 'none';
+      map.get(key)!.push(goal);
+    });
+    return map;
+  }, [orderedFilteredGoals, quarterYear]);
+
   const handleOpenGoalActivity = (goal: Goal) => {
     showSidebar(goal, 'goal');
   };
@@ -961,10 +1106,50 @@ const GoalsYearPlanner: React.FC = () => {
         try {
           const destination = location.current.dropTargets[0];
           if (!destination) return;
-          const targetYear = (destination.data as any)?.targetYear ?? null;
           const goal = source.data.item as Goal | undefined;
           if (!goal || !currentUser) return;
 
+          const destData = destination.data as any;
+
+          // Quarter drop
+          if (destData?.targetQuarter) {
+            const targetQ = destData.targetQuarter as 1 | 2 | 3 | 4;
+            const targetYearForQ = destData.targetQuarterYear as number;
+            const newStartMs = quarterStartMs(targetYearForQ, targetQ);
+            const startRaw = (goal as any).startDate;
+            const endRaw = (goal as any).endDate;
+            const oldStartMs = typeof startRaw === 'number' ? startRaw : startRaw?.toDate?.()?.getTime?.() ?? newStartMs;
+            const oldEndMs = typeof endRaw === 'number' ? endRaw : endRaw?.toDate?.()?.getTime?.() ?? (oldStartMs + 90 * 86400000);
+            const duration = Math.max(0, oldEndMs - oldStartMs);
+            const newEndMs = newStartMs + duration;
+            setMoveError(null);
+            setGoals(prev => prev.map(g => g.id === goal.id ? { ...g, startDate: newStartMs, endDate: newEndMs } as any : g));
+            const { affectedStories } = await buildGoalTimelineImpactPlan({
+              goalId: goal.id,
+              newStartDate: new Date(newStartMs),
+              newEndDate: new Date(newEndMs),
+              stories: storyDocs,
+              tasks: taskDocs,
+              sprints,
+            });
+            if (affectedStories.length > 0) {
+              setPendingSprintChanges({ goalId: goal.id, targetYear: targetYearForQ, startDate: newStartMs, endDate: newEndMs, affectedStories });
+            } else {
+              await applyGoalTimelineChanges({
+                goalId: goal.id,
+                startDateMs: newStartMs,
+                endDateMs: newEndMs,
+                targetYear: targetYearForQ,
+                ownerUid: currentUser.uid,
+                persona: currentPersona || 'personal',
+                affectedStories: [],
+              });
+            }
+            return;
+          }
+
+          // Year drop (existing logic)
+          const targetYear = destData?.targetYear ?? null;
           const sourceYear = resolveGoalYear(goal);
           if ((sourceYear ?? null) === (targetYear ?? null)) return;
 
@@ -994,7 +1179,7 @@ const GoalsYearPlanner: React.FC = () => {
         }
       },
     });
-  }, [currentUser]);
+  }, [currentUser, storyDocs, taskDocs, sprints, currentPersona]);
 
   if (loading) {
     return (
@@ -1283,6 +1468,37 @@ const GoalsYearPlanner: React.FC = () => {
             </Col>
             <Col md="auto">
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div
+                  style={{
+                    display: 'inline-flex',
+                    border: '1px solid var(--notion-border)',
+                    borderRadius: 6,
+                    overflow: 'hidden',
+                  }}
+                >
+                  {(['year', 'quarter'] as const).map(mode => (
+                    <Button
+                      key={mode}
+                      size="sm"
+                      variant={plannerViewMode === mode ? 'primary' : 'outline-secondary'}
+                      style={{ borderRadius: 0, border: 'none', fontSize: 11, padding: '3px 10px' }}
+                      onClick={() => setPlannerViewMode(mode)}
+                    >
+                      {mode === 'year' ? 'Year' : 'Quarter'}
+                    </Button>
+                  ))}
+                </div>
+                {plannerViewMode === 'quarter' && (
+                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                    <Button size="sm" variant="outline-secondary" style={{ padding: '2px 6px', fontSize: 11 }} onClick={() => setQuarterYear(y => y - 1)}>
+                      <ChevronLeft size={12} />
+                    </Button>
+                    <span style={{ fontSize: 12, fontWeight: 600, minWidth: 36, textAlign: 'center', color: 'var(--notion-text)' }}>{quarterYear}</span>
+                    <Button size="sm" variant="outline-secondary" style={{ padding: '2px 6px', fontSize: 11 }} onClick={() => setQuarterYear(y => y + 1)}>
+                      <ChevronRight size={12} />
+                    </Button>
+                  </div>
+                )}
                 <Button
                   size="sm"
                   variant="outline-secondary"
@@ -1333,26 +1549,50 @@ const GoalsYearPlanner: React.FC = () => {
         </Card.Body>
       </Card>
 
-      <div style={{ display: 'flex', gap: 16, overflowX: 'auto', paddingBottom: 16 }}>
-        {yearColumns.map((year) => (
-          <GoalYearColumn
-            key={year}
-            year={year}
-            goals={goalsByYear.get(String(year)) || []}
-            pots={pots}
-            themePalette={themes}
-            droppableId={`year-${year}`}
-            detailLevel={goalDetailLevel}
-            onEdit={(g) => setEditGoal(g)}
-            onOpenWorkspace={(g) => setWorkspaceGoal(g)}
-            onOpenActivity={handleOpenGoalActivity}
-            onAutoGenerateStories={handleAutoGenerateStories}
-            onScheduleGoal={handleScheduleGoal}
-            generatingGoalId={generatingGoalId}
-            schedulingGoalId={schedulingGoalId}
-          />
-        ))}
-      </div>
+      {plannerViewMode === 'quarter' ? (
+        <div style={{ display: 'flex', gap: 12, overflowX: 'auto', paddingBottom: 16 }}>
+          {([1, 2, 3, 4] as const).map((q) => (
+            <GoalQuarterColumn
+              key={`Q${q}`}
+              quarter={q}
+              year={quarterYear}
+              goals={goalsByQuarter.get(`Q${q}`) || []}
+              themePalette={themes}
+              detailLevel={goalDetailLevel}
+              focusGoalIds={[...activeFocusGoalIds]}
+              onEdit={(g) => setEditGoal(g)}
+              onOpenWorkspace={(g) => setWorkspaceGoal(g)}
+              onOpenActivity={handleOpenGoalActivity}
+              onAutoGenerateStories={handleAutoGenerateStories}
+              onScheduleGoal={handleScheduleGoal}
+              generatingGoalId={generatingGoalId}
+              schedulingGoalId={schedulingGoalId}
+            />
+          ))}
+        </div>
+      ) : (
+        <div style={{ display: 'flex', gap: 16, overflowX: 'auto', paddingBottom: 16 }}>
+          {yearColumns.map((year) => (
+            <GoalYearColumn
+              key={year}
+              year={year}
+              goals={goalsByYear.get(String(year)) || []}
+              pots={pots}
+              themePalette={themes}
+              droppableId={`year-${year}`}
+              detailLevel={goalDetailLevel}
+              focusGoalIds={[...activeFocusGoalIds]}
+              onEdit={(g) => setEditGoal(g)}
+              onOpenWorkspace={(g) => setWorkspaceGoal(g)}
+              onOpenActivity={handleOpenGoalActivity}
+              onAutoGenerateStories={handleAutoGenerateStories}
+              onScheduleGoal={handleScheduleGoal}
+              generatingGoalId={generatingGoalId}
+              schedulingGoalId={schedulingGoalId}
+            />
+          ))}
+        </div>
+      )}
 
       <EditGoalModal
         goal={editGoal}

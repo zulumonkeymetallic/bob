@@ -1151,6 +1151,12 @@ body.grv6-full-active {
   box-shadow: 0 8px 18px rgba(15, 23, 42, 0.28);
 }
 
+.grv6-roadmap-bar.focus-aligned .grv6-task-shell,
+.grv6-roadmap-bar.focus-aligned .grv6-milestone-shell {
+  outline: 2px solid var(--focus-gold);
+  outline-offset: 1px;
+}
+
 .grv6-roadmap-bar-content {
   position: relative;
   z-index: 10;
