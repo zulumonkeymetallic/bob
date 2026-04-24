@@ -37,7 +37,7 @@ export const CoachVerdictBanner: React.FC = () => {
     const docRef = doc(db, 'coach_daily', `${uid}_${today}`);
     const unsub = onSnapshot(docRef, snap => {
       if (snap.exists()) setCoachData(snap.data() as CoachDaily);
-    });
+    }, () => {});
     return unsub;
   }, [uid, today]);
 

@@ -191,7 +191,7 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
       if (data?.steamId) setSteamIdInput(data.steamId);
       if (data?.traktUser) setTraktUserInput(data.traktUser);
       if ((data as any)?.hardcoverToken) setHardcoverTokenInput((data as any).hardcoverToken);
-    });
+    }, () => {});
     return () => unsub();
   }, [currentUser]);
 
@@ -226,7 +226,7 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
       if (Array.isArray(data?.categories)) {
         // No action – categories handled in Finance hub; keep totals only here.
       }
-    });
+    }, () => {});
 
     const txQuery = query(
       collection(db, 'monzo_transactions'),
@@ -256,7 +256,7 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
         return bTime - aTime;
       });
       setMonzoTransactions(rows.slice(0, 10));
-    });
+    }, () => {});
 
     const potsQuery = query(
       collection(db, 'monzo_pots'),
@@ -271,7 +271,7 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
         map[id] = { name: data.name || id };
       });
       setMonzoPots(map);
-    });
+    }, () => {});
 
     const stravaQuery = query(
       collection(db, 'metrics_workouts'),
@@ -282,7 +282,7 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
       const rows = snap.docs.map((docSnap) => docSnap.data());
       rows.sort((a, b) => (b.startDate || 0) - (a.startDate || 0));
       setStravaActivities(rows.slice(0, 5));
-    });
+    }, () => {});
 
     const steamQuery = query(
       collection(db, 'steam'),
@@ -293,7 +293,7 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
       const rows = snap.docs.map((docSnap) => docSnap.data());
       rows.sort((a, b) => (b.playtime_forever || 0) - (a.playtime_forever || 0));
       setSteamGames(rows.slice(0, 5));
-    });
+    }, () => {});
 
     const traktQuery = query(
       collection(db, 'trakt'),
@@ -309,7 +309,7 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
         return bDate - aDate;
       });
       setTraktHistory(historyRows.slice(0, 5));
-    });
+    }, () => {});
 
     const hardcoverQuery = query(
       collection(db, 'hardcover'),
@@ -320,11 +320,11 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
       const rows = snap.docs.map((docSnap) => docSnap.data());
       rows.sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0));
       setHardcoverBooks(rows.slice(0, 5));
-    });
+    }, () => {});
     const integrationDoc = doc(db, 'integration_status', `monzo_${currentUser.uid}`);
     const unsubscribeIntegration = onSnapshot(integrationDoc, (snap) => {
       setMonzoIntegrationStatus(snap.exists ? snap.data() : null);
-    });
+    }, () => {});
 
     return () => {
       unsubscribeSummary();

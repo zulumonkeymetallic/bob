@@ -26,7 +26,7 @@ const WeeklyPlannerSummaryCard: React.FC = () => {
     return onSnapshot(doc(db, 'weekly_checkins', `${currentUser.uid}_${weekKey}`), (snap) => {
       const data = snap.data() as any;
       setPlanningSummary(data?.nextWeekPlanning || null);
-    });
+    }, () => { setPlanningSummary(null); });
   }, [currentUser?.uid, weekKey]);
 
   const statusLabel = planningSummary?.completedAt

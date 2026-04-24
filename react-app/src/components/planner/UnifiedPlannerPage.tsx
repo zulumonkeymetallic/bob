@@ -421,7 +421,7 @@ const UnifiedPlannerPage: React.FC = () => {
     );
     const unsub = onSnapshot(q, (snap) => {
       setStories(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })));
-    });
+    }, () => { setStories([]); });
     return () => unsub();
   }, [currentUser]);
 
@@ -1676,7 +1676,7 @@ const UnifiedPlannerPage: React.FC = () => {
         if (typeof data?.fitnessBlocksAutoCreate === 'boolean') {
           setFitnessBlocksAutoCreate(data.fitnessBlocksAutoCreate);
         }
-    });
+    }, () => {});
     return () => unsub();
   }, [currentUser]);
 

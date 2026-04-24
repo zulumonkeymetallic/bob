@@ -164,7 +164,7 @@ const PlannerCapacityBanner: React.FC = () => {
     const ref = doc(db, 'planner_stats', currentUser.uid);
     const unsub = onSnapshot(ref, (snap) => {
       setPlannerStats(snap.exists() ? snap.data() : null);
-    });
+    }, () => { setPlannerStats(null); });
     return () => unsub();
   }, [currentUser?.uid]);
 
@@ -181,7 +181,7 @@ const PlannerCapacityBanner: React.FC = () => {
       } else {
         setDismissedUntilMs(null);
       }
-    });
+    }, () => { setDismissedUntilMs(null); });
     return () => unsub();
   }, [currentUser?.uid]);
 
@@ -196,6 +196,7 @@ const PlannerCapacityBanner: React.FC = () => {
         where('persona', '==', currentPersona),
       ),
       () => setEntitiesVersion((prev) => prev + 1),
+      () => {},
     );
     const tasksUnsub = onSnapshot(
       query(
@@ -204,6 +205,7 @@ const PlannerCapacityBanner: React.FC = () => {
         where('persona', '==', currentPersona),
       ),
       () => setEntitiesVersion((prev) => prev + 1),
+      () => {},
     );
     return () => {
       storiesUnsub();
