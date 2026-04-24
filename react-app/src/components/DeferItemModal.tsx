@@ -1,13 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Alert, Button, Form, Modal, Spinner } from 'react-bootstrap';
-import { httpsCallable } from 'firebase/functions';
 import { collection, doc, getDoc, getDocs, query, where } from 'firebase/firestore';
-import { db, functions } from '../firebase';
-import { normalizePlannerSchedulingError, schedulePlannerItem, type PlannerConstraintMode } from '../utils/plannerScheduling';
+import { db } from '../firebase';
+import type { PlannerConstraintMode } from '../utils/plannerScheduling';
+import { computeItemDeferral } from '../utils/deferralHeuristics';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
+import { useSprint } from '../contexts/SprintContext';
 import { isGoalInHierarchySet } from '../utils/goalHierarchy';
-import type { Goal } from '../types';
+import type { Goal, Sprint } from '../types';
 
 type ItemType = 'task' | 'story';
 
@@ -50,6 +51,11 @@ interface DeferItemModalProps {
   itemId: string;
   itemTitle: string;
   allowAdvancedSearch?: boolean;
+  /** Sprint context from the caller — used for sprint-aware target generation */
+  sprintContext?: {
+    currentSprint: Sprint | null;
+    nextSprint: Sprint | null;
+  };
   focusContext?: {
     isFocusAligned?: boolean;
     activeFocusGoals?: Array<{
@@ -212,11 +218,43 @@ const DeferItemModal: React.FC<DeferItemModalProps> = ({
   itemId,
   itemTitle,
   allowAdvancedSearch = false,
+  sprintContext,
   focusContext,
   onApply,
 }) => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
+  const { sprints } = useSprint();
+
+  // Resolve current and next sprint using the same heuristic as PlannerCapacityBanner
+  const resolvedSprintContext = useMemo(() => {
+    if (sprintContext) return sprintContext;
+    const now = Date.now();
+    const open = [...sprints]
+      .filter((s) => {
+        const raw = String((s as any).status ?? '').toLowerCase().trim();
+        return !['closed', 'complete', 'completed', 'done', 'cancelled', 'canceled', 'archived'].includes(raw)
+          && !(typeof s.status === 'number' && s.status >= 2);
+      })
+      .sort((a, b) => Number(a.startDate || 0) - Number(b.startDate || 0));
+    const current =
+      open.find((s) => {
+        const raw = String((s as any).status ?? '').toLowerCase().trim();
+        return ['active', 'current', 'in-progress', 'in progress'].includes(raw) || (typeof s.status === 'number' && s.status === 1);
+      }) ||
+      open.find((s) => {
+        const start = Number(s.startDate || 0);
+        const end = Number(s.endDate || 0);
+        return start > 0 && end > 0 && now >= start && now <= end;
+      }) ||
+      open[0] ||
+      null;
+    const next = current
+      ? open.find((s) => Number(s.startDate || 0) > Number(current.startDate || 0)) || null
+      : null;
+    return { currentSprint: current ?? null, nextSprint: next };
+  }, [sprintContext, sprints]);
+
   const [loading, setLoading] = useState(false);
   const [applying, setApplying] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -228,8 +266,6 @@ const DeferItemModal: React.FC<DeferItemModalProps> = ({
   const [customDate, setCustomDate] = useState<string>('');
   const [showMoreSuggestions, setShowMoreSuggestions] = useState(false);
   const [inferredFocusContext, setInferredFocusContext] = useState<FocusContextPayload | null>(null);
-  const [advancedSearchAvailable, setAdvancedSearchAvailable] = useState(false);
-  const [advancedSearching, setAdvancedSearching] = useState(false);
   const effectiveFocusContext = focusContext || inferredFocusContext || undefined;
   const hasFocusPressure = !effectiveFocusContext?.isFocusAligned && (effectiveFocusContext?.activeFocusGoals?.length || 0) > 0;
 
@@ -334,11 +370,67 @@ const DeferItemModal: React.FC<DeferItemModalProps> = ({
       };
     };
 
+    const buildOptions = (
+      quick: DeferralOption | null,
+      nextFocusContext: FocusContextPayload | null,
+    ): { topOptions: DeferralOption[]; moreOptions: DeferralOption[] } => {
+      // Build focus leaf ID set from inferred context
+      const focusLeafIds = new Set<string>();
+      (nextFocusContext?.activeFocusGoals || []).forEach((fg) => {
+        const ids = [
+          ...(Array.isArray(fg.focusLeafGoalIds) ? fg.focusLeafGoalIds : []),
+          ...(Array.isArray(fg.goalIds) ? fg.goalIds : []),
+        ];
+        ids.forEach((id) => { if (id) focusLeafIds.add(String(id).trim()); });
+      });
+
+      // Use shared heuristic — resolvedSprintContext always has a value (from hook or prop)
+      if (resolvedSprintContext.currentSprint || resolvedSprintContext.nextSprint) {
+        const score = computeItemDeferral({
+          item: { goalId: '' },   // focus alignment already determined via inferFocusContext
+          itemType,
+          currentSprint: resolvedSprintContext.currentSprint,
+          nextSprint: resolvedSprintContext.nextSprint,
+          focusLeafIds,
+        });
+
+        // Map DeferralTarget → DeferralOption (compatible shape)
+        const mapped: DeferralOption[] = score.suggestedTargets.map((t) => ({
+          key: t.key,
+          dateMs: t.dateMs,
+          label: t.label,
+          rationale: t.rationale,
+          source: t.source,
+        }));
+
+        const top = quick ? [quick, ...mapped.slice(0, 2)] : mapped.slice(0, 3);
+        const more = quick ? mapped.slice(2) : mapped.slice(3);
+        return { topOptions: top, moreOptions: more };
+      }
+
+      // Fallback: generic date-based options when no sprint context
+      const today = startOfDayMs(Date.now());
+      const focusNote = nextFocusContext && !nextFocusContext.isFocusAligned
+        ? ' This item is outside your active focus goals.'
+        : '';
+      const top: DeferralOption[] = [
+        { key: 'tomorrow', dateMs: addDays(today, 1), label: 'Tomorrow', rationale: `Push to tomorrow to free up today.${focusNote}`, source: 'on_device' },
+        { key: 'next-week', dateMs: addDays(today, 7), label: 'Next week', rationale: `Move to next week.${focusNote}`, source: 'on_device' },
+        { key: 'two-weeks', dateMs: addDays(today, 14), label: 'In 2 weeks', rationale: `Defer by two weeks.${focusNote}`, source: 'on_device' },
+      ];
+      const more: DeferralOption[] = [
+        { key: 'three-weeks', dateMs: addDays(today, 21), label: 'In 3 weeks', rationale: 'Defer for three weeks.', source: 'on_device' },
+        { key: 'next-month', dateMs: addMonths(today, 1), label: 'Next month', rationale: 'Defer for a full month.', source: 'on_device' },
+      ];
+      return quick
+        ? { topOptions: [quick, ...top], moreOptions: more }
+        : { topOptions: top, moreOptions: more };
+    };
+
     const loadOptions = async () => {
       setLoading(true);
       setError(null);
       setInferredFocusContext(null);
-      setAdvancedSearchAvailable(false);
       try {
         if (itemType === 'task' && itemId) {
           try {
@@ -351,50 +443,27 @@ const DeferItemModal: React.FC<DeferItemModalProps> = ({
           }
         }
 
-        if (nextQuickMoveOption) {
-          if (cancelled) return;
-          setInferredFocusContext(null);
-          setQuickMoveOption(nextQuickMoveOption);
-          setOptions([nextQuickMoveOption]);
-          setTopOptions([nextQuickMoveOption]);
-          setMoreOptions([]);
-          setSelectedKey(nextQuickMoveOption.key);
-          setShowMoreSuggestions(false);
-          return;
-        }
-
         const nextFocusContext = focusContext || await inferFocusContext();
         if (cancelled) return;
         setInferredFocusContext(focusContext ? null : nextFocusContext);
 
-        const callable = httpsCallable(functions, 'suggestDeferralOptions');
-        const resp: any = await callable({
-          itemType,
-          itemId,
-          horizonDays: 21,
-          focusContext: nextFocusContext,
-        });
-        setAdvancedSearchAvailable(resp?.data?.advancedSearchAvailable === true);
-        const next = Array.isArray(resp?.data?.options) ? resp.data.options : [];
-        const top = Array.isArray(resp?.data?.topOptions) ? resp.data.topOptions : next.slice(0, 3);
-        const more = Array.isArray(resp?.data?.moreOptions) ? resp.data.moreOptions : next.slice(3);
-        if (cancelled) return;
-        const mergedTop = nextQuickMoveOption ? [nextQuickMoveOption, ...top.filter((opt: DeferralOption) => opt.key !== nextQuickMoveOption!.key)] : top;
-        const mergedOptions = nextQuickMoveOption ? [nextQuickMoveOption, ...next.filter((opt: DeferralOption) => opt.key !== nextQuickMoveOption!.key)] : next;
-        const mergedMore = nextQuickMoveOption ? more.filter((opt: DeferralOption) => opt.key !== nextQuickMoveOption!.key) : more;
+        const { topOptions: top, moreOptions: more } = buildOptions(nextQuickMoveOption, nextFocusContext);
+
+        const allOptions = [...top, ...more.filter((o) => !top.find((t) => t.key === o.key))];
         setQuickMoveOption(nextQuickMoveOption);
-        setOptions(mergedOptions);
-        setTopOptions(mergedTop);
-        setMoreOptions(mergedMore);
-        setSelectedKey(mergedTop[0]?.key || mergedOptions[0]?.key || 'custom');
+        setOptions(allOptions);
+        setTopOptions(top);
+        setMoreOptions(more);
+        setSelectedKey(top[0]?.key || 'custom');
         setShowMoreSuggestions(false);
       } catch (err: any) {
         if (cancelled) return;
         console.error('[DeferItemModal] suggestions_failed', { itemType, itemId, err });
-        setError(normalizePlannerSchedulingError(err).message || 'Could not generate defer suggestions.');
+        setError('Could not generate defer suggestions.');
+        const fallback = nextQuickMoveOption ? [nextQuickMoveOption] : [];
         setQuickMoveOption(nextQuickMoveOption);
-        setOptions(nextQuickMoveOption ? [nextQuickMoveOption] : []);
-        setTopOptions(nextQuickMoveOption ? [nextQuickMoveOption] : []);
+        setOptions(fallback);
+        setTopOptions(fallback);
         setMoreOptions([]);
         setSelectedKey(nextQuickMoveOption?.key || 'custom');
       } finally {
@@ -412,70 +481,6 @@ const DeferItemModal: React.FC<DeferItemModalProps> = ({
     () => options.find((opt) => opt.key === selectedKey) || null,
     [options, selectedKey]
   );
-
-  const handleAdvancedSearch = async () => {
-    if (!allowAdvancedSearch || !itemId) return;
-    setAdvancedSearching(true);
-    setError(null);
-    try {
-      let previewDateMs: number | null = null;
-      if (selectedKey === 'custom') {
-        if (!customDate) {
-          setError('Choose a custom date before searching for an exact slot.');
-          return;
-        }
-        const parsed = Date.parse(`${customDate}T12:00:00`);
-        if (Number.isNaN(parsed)) {
-          setError('Custom date is invalid.');
-          return;
-        }
-        previewDateMs = startOfDayMs(parsed);
-      } else if (selectedOption) {
-        previewDateMs = Number(selectedOption.dateMs);
-      } else {
-        previewDateMs = addDays(Date.now(), 1);
-      }
-
-      const result = await schedulePlannerItem({
-        itemType,
-        itemId,
-        targetDateMs: previewDateMs,
-        targetBucket: selectedOption?.targetBucket || null,
-        intent: 'defer',
-        source: 'defer_modal_advanced_preview',
-        rationale: 'Advanced exact-slot preview',
-        searchDays: 42,
-        previewOnly: true,
-        constraintMode: 'free_slot',
-      });
-
-      const advancedOption: DeferralOption = {
-        key: 'advanced-exact-slot',
-        dateMs: result.appliedStartMs,
-        label: 'Exact free slot',
-        rationale: `Found an exact free slot on ${new Date(result.appliedStartMs).toLocaleString()}.`,
-        source: 'advanced_exact_slot',
-        targetBucket: result.appliedBucket || null,
-        constraintMode: 'free_slot',
-        exactTargetStartMs: result.appliedStartMs,
-        exactTargetEndMs: result.appliedEndMs,
-      };
-
-      setOptions((prev) => [
-        advancedOption,
-        ...prev.filter((opt) => opt.key !== advancedOption.key),
-      ]);
-      setTopOptions((prev) => [
-        advancedOption,
-        ...prev.filter((opt) => opt.key !== advancedOption.key).slice(0, 2),
-      ]);
-      setSelectedKey(advancedOption.key);
-    } catch (err: any) {
-      setError(normalizePlannerSchedulingError(err).message || 'Failed to find an exact slot.');
-    } finally {
-      setAdvancedSearching(false);
-    }
-  };
 
   const handleApply = async () => {
     setError(null);
@@ -528,7 +533,7 @@ const DeferItemModal: React.FC<DeferItemModalProps> = ({
       onHide();
     } catch (err: any) {
       console.error('[DeferItemModal] apply_failed', { itemType, itemId, err });
-      setError(normalizePlannerSchedulingError(err).message || 'Failed to defer this item.');
+      setError(err?.message || 'Failed to defer this item.');
     } finally {
       setApplying(false);
     }
@@ -634,19 +639,6 @@ const DeferItemModal: React.FC<DeferItemModalProps> = ({
               />
             )}
 
-            {allowAdvancedSearch && advancedSearchAvailable && (
-              <div className="mt-3">
-                <Button
-                  variant="outline-secondary"
-                  size="sm"
-                  onClick={() => void handleAdvancedSearch()}
-                  disabled={advancedSearching || loading || applying}
-                >
-                  {advancedSearching ? <Spinner animation="border" size="sm" className="me-1" /> : null}
-                  Find exact free slot
-                </Button>
-              </div>
-            )}
           </>
         )}
       </Modal.Body>

@@ -219,10 +219,22 @@ def classify_persona(item, story_lookup, goal_lookup):
 
 
 def entity_link(entity_type, item):
-    slug = item.get("ref") or item.get("id") or "unknown"
+    existing = str(item.get("deepLink") or "").strip()
+    if existing:
+        return existing
+    slug = item.get("id") or item.get("ref") or "unknown"
     if entity_type == "story":
         return f"{APP_BASE_URL}/stories/{slug}"
     return f"{APP_BASE_URL}/tasks/{slug}"
+
+
+def entity_tags(item):
+    tags = item.get("tags")
+    if isinstance(tags, list):
+        return [str(tag).strip() for tag in tags if str(tag).strip()]
+    if isinstance(tags, str) and tags.strip():
+        return [tags.strip()]
+    return []
 
 
 def entity_due_date(item):
@@ -268,17 +280,20 @@ def build_priority_candidates(snapshot):
                 "status": item.get("status"),
                 "persona": classify_persona(item, story_lookup, goal_lookup),
                 "link": entity_link(entity_type, item),
+                "tags": entity_tags(item),
                 "dueDate": entity_due_date(item),
             })
     return candidates
 
 
-def top_three_by_persona(candidates, persona):
+def top_items_by_persona(candidates, persona, entity_type=None, limit=3):
     filtered = [item for item in candidates if item["persona"] == persona]
+    if entity_type is not None:
+        filtered = [item for item in filtered if item["entityType"] == entity_type]
     return sorted(
         filtered,
         key=lambda item: (-item["aiCriticalityScore"], item["title"].lower(), item["ref"]),
-    )[:3]
+    )[:limit]
 
 
 def format_section(title, items):
@@ -289,12 +304,14 @@ def format_section(title, items):
 
     for index, item in enumerate(items, start=1):
         ref_link = f"[{item['ref']}]({item['link']})"
+        tags = ", ".join(item.get("tags") or []) if item.get("tags") else "None"
         lines.extend([
             f"{index}. Title: {item['title']}",
             f"   Ref hyperlink: {ref_link}",
-            f"   Due date: {item['dueDate']}",
-            f"   Link: {item['link']}",
             f"   AI score: {item['aiCriticalityScore']}",
+            f"   Tags: {tags}",
+            f"   Full deep link: {item['link']}",
+            f"   Due date: {item['dueDate']}",
         ])
     return "\n".join(lines)
 
@@ -332,8 +349,12 @@ def build_focus_sentence(personal_items, work_items, recovery_text, spend_text):
 def generate_daily_brief():
     snapshot = load_snapshot()
     candidates = build_priority_candidates(snapshot)
-    personal_items = top_three_by_persona(candidates, "personal")
-    work_items = top_three_by_persona(candidates, "work")
+    personal_items = top_items_by_persona(candidates, "personal", limit=3)
+    work_items = top_items_by_persona(candidates, "work", limit=3)
+    personal_tasks = top_items_by_persona(candidates, "personal", entity_type="task", limit=3)
+    personal_stories = top_items_by_persona(candidates, "personal", entity_type="story", limit=3)
+    work_tasks = top_items_by_persona(candidates, "work", entity_type="task", limit=3)
+    work_stories = top_items_by_persona(candidates, "work", entity_type="story", limit=3)
     recovery_text = latest_recovery_summary(snapshot)
     spend_text = current_month_spend_summary(snapshot)
     weather_text = fetch_weather_summary()
@@ -350,9 +371,13 @@ def generate_daily_brief():
         "*BOB 07:00 Brief*",
         f"Snapshot: {captured_display}",
         "",
-        format_section("Personal Persona - Top 3", personal_items),
+        format_section("Personal Persona - Tasks (Top 3)", personal_tasks),
         "",
-        format_section("Work Persona - Top 3", work_items),
+        format_section("Personal Persona - Stories (Top 3)", personal_stories),
+        "",
+        format_section("Work Persona - Tasks (Top 3)", work_tasks),
+        "",
+        format_section("Work Persona - Stories (Top 3)", work_stories),
         "",
         "*Signals*",
         f"- Focus: {focus_sentence}",

@@ -1,4 +1,4 @@
-import { doc, updateDoc } from 'firebase/firestore';
+import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { schedulePlannerItem, type PlannerConstraintMode, type SchedulePlannerItemResponse } from './plannerScheduling';
 
@@ -37,7 +37,7 @@ interface ApplyPlannerMoveToSprintArgs {
   itemType: PlannerEntityType;
   item: PlannerEntityLike;
   sprintId: string;
-  sprintStartMs: number;
+  sprintStartMs?: number;
   rationale: string;
   source: string;
   durationMinutes?: number | null;
@@ -84,10 +84,6 @@ export async function applyPlannerDefer({
   });
 }
 
-/**
- * Sets dueDate on a focus-aligned story so the nightly planner schedules it
- * at Tier 5 (after top-3 and manual priority items).
- */
 export async function applyStoryDueDate(storyId: string, dueDateMs: number): Promise<void> {
   await updateDoc(doc(db, 'stories', storyId), {
     dueDate: dueDateMs,
@@ -95,24 +91,36 @@ export async function applyStoryDueDate(storyId: string, dueDateMs: number): Pro
   });
 }
 
+/**
+ * Move a story or task to a specific sprint via a direct Firestore update.
+ * Does NOT call schedulePlannerItem — that Cloud Function tries to find a
+ * calendar slot which is both unnecessary for sprint reassignment and
+ * fails when the calendar is fully booked (400 failed-precondition).
+ */
 export async function applyPlannerMoveToSprint({
   itemType,
   item,
   sprintId,
-  sprintStartMs,
   rationale,
   source,
-  durationMinutes = null,
 }: ApplyPlannerMoveToSprintArgs): Promise<SchedulePlannerItemResponse> {
-  return schedulePlannerItem({
-    itemType,
-    itemId: item.id,
-    targetDateMs: sprintStartMs,
-    targetBucket: (item.timeOfDay as PlannerBucket) ?? null,
-    intent: 'defer',
-    source,
-    rationale,
-    targetSprintId: sprintId,
-    durationMinutes: inferPlannerDurationMinutes(itemType, item, durationMinutes),
+  const collection = itemType === 'story' ? 'stories' : 'tasks';
+  const ref = doc(db, collection, item.id);
+  await updateDoc(ref, {
+    sprintId,
+    deferredUntil: null,
+    deferredReason: rationale || null,
+    deferredBy: source || 'planner_move',
+    updatedAt: serverTimestamp(),
   });
+  return {
+    ok: true,
+    planningMode: 'smart',
+    appliedStartMs: Date.now(),
+    appliedEndMs: Date.now(),
+    appliedDayMs: Date.now(),
+    appliedBucket: null,
+    sprintId,
+    blockId: null,
+  };
 }
