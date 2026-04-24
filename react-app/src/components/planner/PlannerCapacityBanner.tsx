@@ -7,6 +7,7 @@ import { db } from '../../firebase';
 import { useAuth } from '../../contexts/AuthContext';
 import { usePersona } from '../../contexts/PersonaContext';
 import { useSprint } from '../../contexts/SprintContext';
+import { useSidebar } from '../../contexts/SidebarContext';
 import { useFocusGoals } from '../../hooks/useFocusGoals';
 import { getActiveFocusLeafGoalIds } from '../../utils/goalHierarchy';
 import EditTaskModal from '../EditTaskModal';
@@ -110,6 +111,7 @@ const PlannerCapacityBanner: React.FC = () => {
   const { sprints } = useSprint();
   const { activeFocusGoals } = useFocusGoals(currentUser?.uid);
   const navigate = useNavigate();
+  const { showSidebar } = useSidebar();
   const [plannerStats, setPlannerStats] = useState<any | null>(null);
   const [recommendations, setRecommendations] = useState<MoveRecommendation[]>([]);
   const [capacityBreakdown, setCapacityBreakdown] = useState<CapacityBreakdown | null>(null);
@@ -637,7 +639,7 @@ const PlannerCapacityBanner: React.FC = () => {
                   </div>
                   <div className="d-flex align-items-center gap-1 ms-auto flex-nowrap">
                     <button
-                      onClick={() => navigate(`/${item.kind === 'story' ? 'stories' : 'tasks'}/${item.id}`)}
+                      onClick={() => showSidebar(item.entity, item.kind)}
                       style={iconBtnStyle}
                       title="Activity stream"
                     >
