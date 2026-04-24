@@ -13,6 +13,7 @@ import EditTaskModal from '../EditTaskModal';
 import EditStoryModal from '../EditStoryModal';
 import { Goal, Story, Task } from '../../types';
 import { applyPlannerMoveToSprint } from '../../utils/plannerDeferral';
+import { computeItemDeferral } from '../../utils/deferralHeuristics';
 
 const toMillis = (value: any): number | null => {
   if (!value) return null;
@@ -51,18 +52,6 @@ const normalizeStoryPoints = (story: any): number => {
   return 1;
 };
 
-const isTaskDone = (value: unknown): boolean => {
-  if (typeof value === 'number') return value === 2;
-  const raw = String(value || '').toLowerCase();
-  return ['done', 'complete', 'completed', 'closed', 'finished'].includes(raw);
-};
-
-const isStoryDone = (value: unknown): boolean => {
-  if (typeof value === 'number') return value >= 4;
-  const raw = String(value || '').toLowerCase();
-  return ['done', 'complete', 'completed', 'closed', 'finished'].includes(raw);
-};
-
 const isClosedSprintStatus = (value: unknown): boolean => {
   if (typeof value === 'number') return value >= 2;
   const raw = String(value || '').toLowerCase().trim();
@@ -84,14 +73,6 @@ const getEndOfTodayMs = (): number => {
   const end = new Date();
   end.setHours(23, 59, 59, 999);
   return end.getTime();
-};
-
-const reasonLabel = (codes: string[]): string => {
-  if (codes.includes('not_focus_aligned')) return 'Not focus-aligned';
-  if (codes.includes('low_relative_priority')) return 'Lower priority';
-  if (codes.includes('large_effort')) return 'High effort';
-  if (codes.includes('no_goal_link')) return 'No goal link';
-  return 'Lower priority';
 };
 
 type MoveRecommendation = {
@@ -274,59 +255,50 @@ const PlannerCapacityBanner: React.FC = () => {
 
       for (const snap of storiesSnap.docs) {
         const s = { id: snap.id, ...(snap.data() as any) };
-        if (isStoryDone(s.status)) continue;
-        const priority = normalizePriority(s.priority, 2);
-        const points = normalizeStoryPoints(s);
-        const goalId = String(s.goalId || '').trim();
-        const isAligned = focusLeafIds.size === 0 || (goalId && focusLeafIds.has(goalId));
-        const reasonCodes: string[] = [];
-        if (!isAligned && focusLeafIds.size > 0) reasonCodes.push('not_focus_aligned');
-        if (priority <= 2) reasonCodes.push('low_relative_priority');
-        if (!goalId) reasonCodes.push('no_goal_link');
-        if (points > 8) reasonCodes.push('large_effort');
-        if (priority >= 4) continue;
-        if (priority >= 3 && isAligned && focusLeafIds.size > 0) continue;
-        if (!reasonCodes.length) continue;
+        const score = computeItemDeferral({
+          item: s,
+          itemType: 'story',
+          currentSprint,
+          nextSprint,
+          focusLeafIds,
+        });
+        if (!score.shouldDefer) continue;
         candidates.push({
           kind: 'story',
           id: s.id,
           ref: `STORY-${s.id.slice(0, 6).toUpperCase()}`,
           title: s.title || 'Untitled story',
-          priority,
-          points,
-          hours: points,
-          reasonCodes,
-          reasonSummary: reasonLabel(reasonCodes),
+          priority: normalizePriority(s.priority, 2),
+          points: normalizeStoryPoints(s),
+          hours: normalizeStoryPoints(s),
+          reasonCodes: score.reasonCodes,
+          reasonSummary: score.reasonSummary,
           entity: s,
         });
       }
 
       for (const snap of tasksSnap.docs) {
         const t = { id: snap.id, ...(snap.data() as any) };
-        if (isTaskDone(t.status)) continue;
         if (!isMovableTaskType(t.type || t.task_type)) continue;
-        const priority = normalizePriority(t.priority, 2);
+        const score = computeItemDeferral({
+          item: t,
+          itemType: 'task',
+          currentSprint,
+          nextSprint,
+          focusLeafIds,
+        });
+        if (!score.shouldDefer) continue;
         const hours = normalizeTaskPoints(t);
-        const goalId = String(t.goalId || '').trim();
-        const isAligned = focusLeafIds.size === 0 || (goalId && focusLeafIds.has(goalId));
-        const reasonCodes: string[] = [];
-        if (!isAligned && focusLeafIds.size > 0) reasonCodes.push('not_focus_aligned');
-        if (priority <= 2) reasonCodes.push('low_relative_priority');
-        if (!goalId) reasonCodes.push('no_goal_link');
-        if (hours > 8) reasonCodes.push('large_effort');
-        if (priority >= 4) continue;
-        if (priority >= 3 && isAligned && focusLeafIds.size > 0) continue;
-        if (!reasonCodes.length) continue;
         candidates.push({
           kind: 'task',
           id: t.id,
           ref: `TASK-${t.id.slice(0, 6).toUpperCase()}`,
           title: t.title || 'Untitled task',
-          priority,
+          priority: normalizePriority(t.priority, 2),
           points: hours,
           hours,
-          reasonCodes,
-          reasonSummary: reasonLabel(reasonCodes),
+          reasonCodes: score.reasonCodes,
+          reasonSummary: score.reasonSummary,
           entity: t,
         });
       }

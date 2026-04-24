@@ -3,10 +3,12 @@ import { Alert, Button, Form, Modal, Spinner } from 'react-bootstrap';
 import { collection, doc, getDoc, getDocs, query, where } from 'firebase/firestore';
 import { db } from '../firebase';
 import type { PlannerConstraintMode } from '../utils/plannerScheduling';
+import { computeItemDeferral } from '../utils/deferralHeuristics';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
+import { useSprint } from '../contexts/SprintContext';
 import { isGoalInHierarchySet } from '../utils/goalHierarchy';
-import type { Goal } from '../types';
+import type { Goal, Sprint } from '../types';
 
 type ItemType = 'task' | 'story';
 
@@ -49,6 +51,11 @@ interface DeferItemModalProps {
   itemId: string;
   itemTitle: string;
   allowAdvancedSearch?: boolean;
+  /** Sprint context from the caller — used for sprint-aware target generation */
+  sprintContext?: {
+    currentSprint: Sprint | null;
+    nextSprint: Sprint | null;
+  };
   focusContext?: {
     isFocusAligned?: boolean;
     activeFocusGoals?: Array<{
@@ -211,11 +218,43 @@ const DeferItemModal: React.FC<DeferItemModalProps> = ({
   itemId,
   itemTitle,
   allowAdvancedSearch = false,
+  sprintContext,
   focusContext,
   onApply,
 }) => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
+  const { sprints } = useSprint();
+
+  // Resolve current and next sprint using the same heuristic as PlannerCapacityBanner
+  const resolvedSprintContext = useMemo(() => {
+    if (sprintContext) return sprintContext;
+    const now = Date.now();
+    const open = [...sprints]
+      .filter((s) => {
+        const raw = String((s as any).status ?? '').toLowerCase().trim();
+        return !['closed', 'complete', 'completed', 'done', 'cancelled', 'canceled', 'archived'].includes(raw)
+          && !(typeof s.status === 'number' && s.status >= 2);
+      })
+      .sort((a, b) => Number(a.startDate || 0) - Number(b.startDate || 0));
+    const current =
+      open.find((s) => {
+        const raw = String((s as any).status ?? '').toLowerCase().trim();
+        return ['active', 'current', 'in-progress', 'in progress'].includes(raw) || (typeof s.status === 'number' && s.status === 1);
+      }) ||
+      open.find((s) => {
+        const start = Number(s.startDate || 0);
+        const end = Number(s.endDate || 0);
+        return start > 0 && end > 0 && now >= start && now <= end;
+      }) ||
+      open[0] ||
+      null;
+    const next = current
+      ? open.find((s) => Number(s.startDate || 0) > Number(current.startDate || 0)) || null
+      : null;
+    return { currentSprint: current ?? null, nextSprint: next };
+  }, [sprintContext, sprints]);
+
   const [loading, setLoading] = useState(false);
   const [applying, setApplying] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -331,55 +370,61 @@ const DeferItemModal: React.FC<DeferItemModalProps> = ({
       };
     };
 
-    const buildOnDeviceOptions = (
+    const buildOptions = (
       quick: DeferralOption | null,
-      hasFocusPressure: boolean,
+      nextFocusContext: FocusContextPayload | null,
     ): { topOptions: DeferralOption[]; moreOptions: DeferralOption[] } => {
+      // Build focus leaf ID set from inferred context
+      const focusLeafIds = new Set<string>();
+      (nextFocusContext?.activeFocusGoals || []).forEach((fg) => {
+        const ids = [
+          ...(Array.isArray(fg.focusLeafGoalIds) ? fg.focusLeafGoalIds : []),
+          ...(Array.isArray(fg.goalIds) ? fg.goalIds : []),
+        ];
+        ids.forEach((id) => { if (id) focusLeafIds.add(String(id).trim()); });
+      });
+
+      // Use shared heuristic — resolvedSprintContext always has a value (from hook or prop)
+      if (resolvedSprintContext.currentSprint || resolvedSprintContext.nextSprint) {
+        const score = computeItemDeferral({
+          item: { goalId: '' },   // focus alignment already determined via inferFocusContext
+          itemType,
+          currentSprint: resolvedSprintContext.currentSprint,
+          nextSprint: resolvedSprintContext.nextSprint,
+          focusLeafIds,
+        });
+
+        // Map DeferralTarget → DeferralOption (compatible shape)
+        const mapped: DeferralOption[] = score.suggestedTargets.map((t) => ({
+          key: t.key,
+          dateMs: t.dateMs,
+          label: t.label,
+          rationale: t.rationale,
+          source: t.source,
+        }));
+
+        const top = quick ? [quick, ...mapped.slice(0, 2)] : mapped.slice(0, 3);
+        const more = quick ? mapped.slice(2) : mapped.slice(3);
+        return { topOptions: top, moreOptions: more };
+      }
+
+      // Fallback: generic date-based options when no sprint context
       const today = startOfDayMs(Date.now());
-      const focusNote = hasFocusPressure ? ' This item is outside your active focus goals.' : '';
+      const focusNote = nextFocusContext && !nextFocusContext.isFocusAligned
+        ? ' This item is outside your active focus goals.'
+        : '';
       const top: DeferralOption[] = [
-        {
-          key: 'tomorrow',
-          dateMs: addDays(today, 1),
-          label: 'Tomorrow',
-          rationale: `Push to tomorrow to free up today.${focusNote}`,
-          source: 'on_device',
-        },
-        {
-          key: 'next-week',
-          dateMs: addDays(today, 7),
-          label: 'Next week',
-          rationale: `Move to the start of next week.${focusNote}`,
-          source: 'on_device',
-        },
-        {
-          key: 'two-weeks',
-          dateMs: addDays(today, 14),
-          label: 'In 2 weeks',
-          rationale: `Defer by two weeks to reduce sprint pressure.${focusNote}`,
-          source: 'on_device',
-        },
+        { key: 'tomorrow', dateMs: addDays(today, 1), label: 'Tomorrow', rationale: `Push to tomorrow to free up today.${focusNote}`, source: 'on_device' },
+        { key: 'next-week', dateMs: addDays(today, 7), label: 'Next week', rationale: `Move to next week.${focusNote}`, source: 'on_device' },
+        { key: 'two-weeks', dateMs: addDays(today, 14), label: 'In 2 weeks', rationale: `Defer by two weeks.${focusNote}`, source: 'on_device' },
       ];
       const more: DeferralOption[] = [
-        {
-          key: 'three-weeks',
-          dateMs: addDays(today, 21),
-          label: 'In 3 weeks',
-          rationale: 'Defer for three weeks.',
-          source: 'on_device',
-        },
-        {
-          key: 'next-month',
-          dateMs: addMonths(today, 1),
-          label: 'Next month',
-          rationale: 'Defer for a full month.',
-          source: 'on_device',
-        },
+        { key: 'three-weeks', dateMs: addDays(today, 21), label: 'In 3 weeks', rationale: 'Defer for three weeks.', source: 'on_device' },
+        { key: 'next-month', dateMs: addMonths(today, 1), label: 'Next month', rationale: 'Defer for a full month.', source: 'on_device' },
       ];
-      if (quick) {
-        return { topOptions: [quick, ...top], moreOptions: more };
-      }
-      return { topOptions: top, moreOptions: more };
+      return quick
+        ? { topOptions: [quick, ...top], moreOptions: more }
+        : { topOptions: top, moreOptions: more };
     };
 
     const loadOptions = async () => {
@@ -402,8 +447,7 @@ const DeferItemModal: React.FC<DeferItemModalProps> = ({
         if (cancelled) return;
         setInferredFocusContext(focusContext ? null : nextFocusContext);
 
-        const hasFocusPressure = !nextFocusContext?.isFocusAligned && (nextFocusContext?.activeFocusGoals?.length || 0) > 0;
-        const { topOptions: top, moreOptions: more } = buildOnDeviceOptions(nextQuickMoveOption, hasFocusPressure);
+        const { topOptions: top, moreOptions: more } = buildOptions(nextQuickMoveOption, nextFocusContext);
 
         const allOptions = [...top, ...more.filter((o) => !top.find((t) => t.key === o.key))];
         setQuickMoveOption(nextQuickMoveOption);
