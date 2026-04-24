@@ -171,10 +171,14 @@ const SprintKanbanPageV2: React.FC = () => {
 
         const unsubStories = onSnapshot(storiesQuery, (snap) => {
             setStories(snap.docs.map(d => ({ id: d.id, ...d.data() } as Story)));
+        }, (err) => {
+            console.error('[kanban] stories snapshot error', err?.message || err);
         });
 
         const unsubGoals = onSnapshot(goalsQuery, (snap) => {
             setGoals(snap.docs.map(d => ({ id: d.id, ...d.data() } as Goal)));
+        }, (err) => {
+            console.error('[kanban] goals snapshot error', err?.message || err);
         });
 
         const unsubTasks = onSnapshot(tasksQuery, (snap) => {

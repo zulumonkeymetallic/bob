@@ -132,11 +132,11 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
 
         const unsubGoals = onSnapshot(goalsQuery, (snap) => {
             setGoals(snap.docs.map(d => ({ id: d.id, ...d.data() } as Goal)));
-        });
+        }, (err) => { console.error('[KanbanBoardV2] goals error', err?.message); });
 
         const unsubStories = onSnapshot(storiesQuery, (snap) => {
             setStories(snap.docs.map(d => ({ id: d.id, ...d.data() } as Story)));
-        });
+        }, (err) => { console.error('[KanbanBoardV2] stories error', err?.message); });
 
         const unsubTasks = onSnapshot(tasksQuery, (snap) => {
             setTasks(snap.docs.map(d => {
@@ -144,12 +144,11 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
                 return {
                     id: d.id,
                     ...data,
-                    // Ensure required fields for Task type
                     ref: data.ref || `TASK-${d.id.slice(-4).toUpperCase()}`,
                 } as Task;
             }));
             setLoading(false);
-        });
+        }, (err) => { console.error('[KanbanBoardV2] tasks error', err?.message); setLoading(false); });
 
         return () => {
             unsubGoals();
@@ -180,13 +179,13 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
                 }
             });
             setSteamByAppId(map);
-        });
+        }, () => { setSteamByAppId({}); });
 
         const profileRef = doc(db, 'profiles', currentUser.uid);
         const unsubProfile = onSnapshot(profileRef, (snap) => {
             const data = snap.data() as any;
             setSteamLastSyncAt(data?.steamLastSyncAt ?? null);
-        });
+        }, () => { setSteamLastSyncAt(null); });
 
         return () => {
             unsubSteam();
