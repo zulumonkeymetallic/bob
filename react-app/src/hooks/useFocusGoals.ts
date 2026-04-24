@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { collection, query, where, onSnapshot, doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { FocusGoal } from '../types';
@@ -66,7 +66,7 @@ export const useFocusGoals = (userId: string | undefined) => {
     }
   };
 
-  const activeFocusGoals = focusGoals.filter(fg => fg.isActive);
+  const activeFocusGoals = useMemo(() => focusGoals.filter(fg => fg.isActive), [focusGoals]);
 
   return {
     focusGoals,
