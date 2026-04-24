@@ -322,7 +322,7 @@ const JournalsManagement: React.FC = () => {
 
     const unsubscribe = onSnapshot(goalQuery, (snap) => {
       setStoryGoals(snap.docs.map((goalDoc) => ({ id: goalDoc.id, ...(goalDoc.data() as any) } as Goal)));
-    });
+    }, () => { setStoryGoals([]); });
 
     return () => unsubscribe();
   }, [currentPersona, currentUser?.uid]);

@@ -49,20 +49,20 @@ const ThemeRoadmap: React.FC<ThemeRoadmapProps> = ({ onBackToTimeline }) => {
       const data = snap.docs.map(d => ({ id: d.id, ...d.data() })) as Goal[];
       setGoals(data);
       logger.debug('roadmap', 'Goals snapshot', { count: data.length });
-    }));
+    }, (err) => { logger.warn('roadmap', 'Goals snapshot error', err?.message); }));
 
     const qStories = query(collection(db, 'stories'), where('ownerUid', '==', currentUser.uid));
     unsubs.push(onSnapshot(qStories, (snap) => {
       const data = snap.docs.map(d => ({ id: d.id, ...d.data() })) as Story[];
       setStories(data);
-    }));
+    }, (err) => { logger.warn('roadmap', 'Stories snapshot error', err?.message); }));
 
     // Use materialized index for open tasks only to avoid loading entire tasks collection
     const qTasks = query(collection(db, 'sprint_task_index'), where('ownerUid', '==', currentUser.uid), where('isOpen', '==', true));
     unsubs.push(onSnapshot(qTasks, (snap) => {
       const data = snap.docs.map(d => ({ id: d.id, ...d.data() })) as Task[];
       setTasks(data);
-    }));
+    }, (err) => { logger.warn('roadmap', 'Tasks snapshot error', err?.message); }));
 
     setLoading(false);
     return () => unsubs.forEach(u => u());
