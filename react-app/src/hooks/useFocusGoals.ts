@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { collection, query, where, onSnapshot, doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { FocusGoal } from '../types';
@@ -28,27 +28,33 @@ export const useFocusGoals = (userId: string | undefined) => {
       where('ownerUid', '==', userId)
     );
 
-    const unsubscribe = onSnapshot(q, snapshot => {
-      const focusGoalsData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as FocusGoal[];
+    const unsubscribe = onSnapshot(
+      q,
+      snapshot => {
+        const focusGoalsData = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        })) as FocusGoal[];
 
-      // Calculate daysRemaining for each
-      const withDaysRemaining = focusGoalsData.map(fg => {
-        const endDateMs = toMillis(fg.endDate);
-        const daysRemaining = Math.ceil(
-          (endDateMs - Date.now()) / (24 * 60 * 60 * 1000)
-        );
-        return {
-          ...fg,
-          daysRemaining: Number.isFinite(daysRemaining) ? daysRemaining : 0,
-        };
-      });
+        const withDaysRemaining = focusGoalsData.map(fg => {
+          const endDateMs = toMillis(fg.endDate);
+          const daysRemaining = Math.ceil(
+            (endDateMs - Date.now()) / (24 * 60 * 60 * 1000)
+          );
+          return {
+            ...fg,
+            daysRemaining: Number.isFinite(daysRemaining) ? daysRemaining : 0,
+          };
+        });
 
-      setFocusGoals(withDaysRemaining);
-      setLoading(false);
-    });
+        setFocusGoals(withDaysRemaining);
+        setLoading(false);
+      },
+      error => {
+        console.error('useFocusGoals: snapshot error', error);
+        setLoading(false);
+      }
+    );
 
     return () => unsubscribe();
   }, [userId]);
@@ -66,7 +72,7 @@ export const useFocusGoals = (userId: string | undefined) => {
     }
   };
 
-  const activeFocusGoals = focusGoals.filter(fg => fg.isActive);
+  const activeFocusGoals = useMemo(() => focusGoals.filter(fg => fg.isActive), [focusGoals]);
 
   return {
     focusGoals,
