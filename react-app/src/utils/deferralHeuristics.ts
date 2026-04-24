@@ -3,7 +3,7 @@
  * and DeferItemModal (per-item target generation) to ensure a consistent approach.
  *
  * Focus story/task  → defer WITHIN current sprint window (keep focus work close)
- * Non-focus item    → defer to next sprint start
+ * Non-focus item    → defer to sprint closest to parent goal's start date
  * Chore/recurring   → caller handles via buildRecurringQuickMoveOption
  */
 
@@ -35,6 +35,8 @@ export interface DeferralScore {
   shouldDefer: boolean;
   /** Ordered list of suggested deferral targets, best first */
   suggestedTargets: DeferralTarget[];
+  /** Best sprint to move to (goal-proximity or next sprint) */
+  targetSprint: Sprint | null;
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
@@ -90,6 +92,27 @@ const isItemDone = (item: any, itemType: 'story' | 'task'): boolean => {
   return ['done', 'complete', 'completed', 'closed', 'finished'].includes(String(val || '').toLowerCase());
 };
 
+/**
+ * Find the sprint whose start date is closest to the goal's start date.
+ * Excludes the current sprint to avoid scheduling into an already-running sprint.
+ */
+const findSprintClosestToGoal = (
+  allSprints: Sprint[],
+  goalStartDateMs: number,
+  currentSprint: Sprint | null,
+): Sprint | null => {
+  const candidates = allSprints.filter((s) => {
+    const start = Number(s.startDate || 0);
+    return start > 0 && s.id !== currentSprint?.id;
+  });
+  if (!candidates.length) return null;
+  return candidates.reduce((best, s) => {
+    const d = Math.abs(Number(s.startDate || 0) - goalStartDateMs);
+    const bd = Math.abs(Number(best.startDate || 0) - goalStartDateMs);
+    return d < bd ? s : best;
+  });
+};
+
 // ─── Reason helpers ───────────────────────────────────────────────────────────
 
 export const reasonSummaryFromCodes = (codes: DeferralReasonCode[]): string => {
@@ -104,14 +127,13 @@ export const reasonSummaryFromCodes = (codes: DeferralReasonCode[]): string => {
 
 /**
  * Focus-aligned items: prefer staying within the current sprint window.
- * The "theme block" proxy is the last few days of the current sprint — work
- * that belongs to the focus theme should be completed inside the sprint.
- * If the sprint has already ended or is very close, fall back to next sprint start.
+ * If a goal-aligned sprint exists, offer it as an alternative.
  */
 const buildFocusTargets = (
   currentSprint: Sprint | null,
   nextSprint: Sprint | null,
   focusNote: string,
+  goalSprint: Sprint | null,
 ): DeferralTarget[] => {
   const now = Date.now();
   const targets: DeferralTarget[] = [];
@@ -121,7 +143,6 @@ const buildFocusTargets = (
     const daysLeft = (sprintEnd - now) / 86_400_000;
 
     if (daysLeft > 3) {
-      // Aim for mid-point of remaining sprint so there's still time to act on it
       const midpoint = startOfDayMs(now + (sprintEnd - now) / 2);
       targets.push({
         key: 'sprint-window',
@@ -143,6 +164,18 @@ const buildFocusTargets = (
     }
   }
 
+  if (goalSprint && goalSprint.id !== currentSprint?.id && goalSprint.id !== nextSprint?.id) {
+    const goalSprintStart = Number(goalSprint.startDate || 0);
+    targets.push({
+      key: 'goal-sprint',
+      dateMs: startOfDayMs(goalSprintStart),
+      label: `${goalSprint.name} (${shortDate(goalSprintStart)}) — goal-aligned`,
+      rationale: `Focus-aligned — sprint closest to parent goal's start date.${focusNote}`,
+      source: 'heuristic_focus',
+      sprintId: goalSprint.id,
+    });
+  }
+
   if (nextSprint) {
     const nextStart = Number(nextSprint.startDate || 0);
     targets.push({
@@ -155,7 +188,6 @@ const buildFocusTargets = (
     });
   }
 
-  // Fallbacks
   const today = startOfDayMs(now);
   if (!targets.length) {
     targets.push({
@@ -178,18 +210,36 @@ const buildFocusTargets = (
 };
 
 /**
- * Non-focus items: move to the next sprint start. That's the clearest
- * signal — this work is not in the current focus and should wait its turn.
+ * Non-focus items: move to the sprint closest to the parent goal's start date.
+ * Falls back to next sprint if no goal date is available.
  */
 const buildNonFocusTargets = (
   currentSprint: Sprint | null,
   nextSprint: Sprint | null,
   reasonNote: string,
+  goalSprint: Sprint | null,
 ): DeferralTarget[] => {
   const today = startOfDayMs(Date.now());
   const targets: DeferralTarget[] = [];
 
-  if (nextSprint) {
+  const primarySprint = goalSprint || nextSprint;
+  if (primarySprint) {
+    const start = Number(primarySprint.startDate || 0);
+    targets.push({
+      key: 'goal-sprint',
+      dateMs: startOfDayMs(start),
+      label: goalSprint
+        ? `${primarySprint.name} (${shortDate(start)}) — goal-aligned`
+        : `Next sprint – ${primarySprint.name} (${shortDate(start)})`,
+      rationale: goalSprint
+        ? `Not focus-aligned — moving to sprint closest to parent goal's start date.${reasonNote}`
+        : `Not focus-aligned — move to next sprint.${reasonNote}`,
+      source: 'heuristic_non_focus',
+      sprintId: primarySprint.id,
+    });
+  }
+
+  if (nextSprint && nextSprint.id !== goalSprint?.id) {
     const nextStart = Number(nextSprint.startDate || 0);
     targets.push({
       key: 'next-sprint',
@@ -244,10 +294,14 @@ export interface ComputeItemDeferralParams {
   nextSprint: Sprint | null;
   /** Pre-computed set of active focus leaf goal IDs (from getActiveFocusLeafGoalIds) */
   focusLeafIds: Set<string>;
+  /** All available sprints — used to find the sprint closest to the goal's start date */
+  allSprints?: Sprint[];
+  /** The parent goal's start date in ms — drives goal-sprint selection */
+  goalStartDateMs?: number | null;
 }
 
 export const computeItemDeferral = (params: ComputeItemDeferralParams): DeferralScore => {
-  const { item, itemType, currentSprint, nextSprint, focusLeafIds } = params;
+  const { item, itemType, currentSprint, nextSprint, focusLeafIds, allSprints = [], goalStartDateMs } = params;
 
   const isChore = itemType === 'task' && isChoreItem(item);
   const isDone = isItemDone(item, itemType);
@@ -260,6 +314,7 @@ export const computeItemDeferral = (params: ComputeItemDeferralParams): Deferral
       reasonSummary: '',
       shouldDefer: false,
       suggestedTargets: [],
+      targetSprint: null,
     };
   }
 
@@ -286,9 +341,15 @@ export const computeItemDeferral = (params: ComputeItemDeferralParams): Deferral
   const focusNote = isFocusAligned ? '' : ' Freeing capacity for focus work.';
   const reasonNote = reasonCodes.length ? ` Reason: ${reasonSummary.toLowerCase()}.` : '';
 
+  const goalSprint = goalStartDateMs
+    ? findSprintClosestToGoal(allSprints, goalStartDateMs, currentSprint)
+    : null;
+
   const suggestedTargets = isFocusAligned
-    ? buildFocusTargets(currentSprint, nextSprint, focusNote)
-    : buildNonFocusTargets(currentSprint, nextSprint, reasonNote);
+    ? buildFocusTargets(currentSprint, nextSprint, focusNote, goalSprint)
+    : buildNonFocusTargets(currentSprint, nextSprint, reasonNote, goalSprint);
+
+  const targetSprint = goalSprint || nextSprint;
 
   return {
     isFocusAligned,
@@ -297,5 +358,6 @@ export const computeItemDeferral = (params: ComputeItemDeferralParams): Deferral
     reasonSummary,
     shouldDefer,
     suggestedTargets,
+    targetSprint,
   };
 };

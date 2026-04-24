@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Button } from 'react-bootstrap';
-import { ArrowRightLeft, CalendarClock, ChevronDown, ChevronRight, KanbanSquare, Pencil, Settings2 } from 'lucide-react';
+import { Activity, ArrowRightLeft, CalendarClock, ChevronDown, ChevronRight, KanbanSquare, Pencil, Settings2 } from 'lucide-react';
 import { collection, doc, getDocs, onSnapshot, query, serverTimestamp, setDoc, where } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
 import { db } from '../../firebase';
@@ -11,7 +11,7 @@ import { useFocusGoals } from '../../hooks/useFocusGoals';
 import { getActiveFocusLeafGoalIds } from '../../utils/goalHierarchy';
 import EditTaskModal from '../EditTaskModal';
 import EditStoryModal from '../EditStoryModal';
-import { Goal, Story, Task } from '../../types';
+import { Goal, Sprint, Story, Task } from '../../types';
 import { applyPlannerMoveToSprint } from '../../utils/plannerDeferral';
 import { computeItemDeferral } from '../../utils/deferralHeuristics';
 
@@ -27,6 +27,11 @@ const toMillis = (value: any): number | null => {
 const formatHours = (minutes: number): string => {
   const hours = Math.max(0, Number(minutes || 0)) / 60;
   const rounded = Math.round(hours * 10) / 10;
+  return `${rounded.toFixed(Number.isInteger(rounded) ? 0 : 1)}h`;
+};
+
+const formatHoursRaw = (h: number): string => {
+  const rounded = Math.round(h * 10) / 10;
   return `${rounded.toFixed(Number.isInteger(rounded) ? 0 : 1)}h`;
 };
 
@@ -85,7 +90,18 @@ type MoveRecommendation = {
   hours: number;
   reasonCodes: string[];
   reasonSummary: string;
+  isFocusAligned: boolean;
+  targetSprint: Sprint | null;
   entity: any;
+};
+
+type CapacityBreakdown = {
+  totalItems: number;
+  totalHours: number;
+  focusCount: number;
+  focusHours: number;
+  nonFocusCount: number;
+  nonFocusHours: number;
 };
 
 const PlannerCapacityBanner: React.FC = () => {
@@ -96,6 +112,7 @@ const PlannerCapacityBanner: React.FC = () => {
   const navigate = useNavigate();
   const [plannerStats, setPlannerStats] = useState<any | null>(null);
   const [recommendations, setRecommendations] = useState<MoveRecommendation[]>([]);
+  const [capacityBreakdown, setCapacityBreakdown] = useState<CapacityBreakdown | null>(null);
   const [recommendationStatus, setRecommendationStatus] = useState<string | null>(null);
   const [loadingRecommendations, setLoadingRecommendations] = useState(false);
   const [movingIds, setMovingIds] = useState<Record<string, boolean>>({});
@@ -226,10 +243,10 @@ const PlannerCapacityBanner: React.FC = () => {
     return { unscheduledStories, unscheduledTasks, shortfallMinutes, rangeLabel, updatedLabel };
   }, [plannerStats]);
 
-  // On-device heuristic: fetch sprint stories + tasks, score them locally
   const loadRecommendations = useCallback(async () => {
     if (!currentUser?.uid || !currentSprint) {
       setRecommendations([]);
+      setCapacityBreakdown(null);
       return;
     }
     setLoadingRecommendations(true);
@@ -238,7 +255,7 @@ const PlannerCapacityBanner: React.FC = () => {
       const focusLeafIds = new Set(Array.from(getActiveFocusLeafGoalIds(activeFocusGoals)));
       const sprintId = currentSprint.id;
 
-      const [storiesSnap, tasksSnap] = await Promise.all([
+      const [storiesSnap, tasksSnap, goalsSnap] = await Promise.all([
         getDocs(query(
           collection(db, 'stories'),
           where('ownerUid', '==', currentUser.uid),
@@ -249,19 +266,37 @@ const PlannerCapacityBanner: React.FC = () => {
           where('ownerUid', '==', currentUser.uid),
           where('sprintId', '==', sprintId),
         )),
+        getDocs(query(
+          collection(db, 'goals'),
+          where('ownerUid', '==', currentUser.uid),
+        )),
       ]);
 
+      const goalStartDateMap = new Map<string, number>();
+      for (const snap of goalsSnap.docs) {
+        const g = snap.data();
+        const startMs = toMillis(g.startDate);
+        if (startMs) goalStartDateMap.set(snap.id, startMs);
+      }
+
       const candidates: MoveRecommendation[] = [];
+      let focusCount = 0, focusHours = 0, nonFocusCount = 0, nonFocusHours = 0;
 
       for (const snap of storiesSnap.docs) {
         const s = { id: snap.id, ...(snap.data() as any) };
+        const goalStartDateMs = s.goalId ? (goalStartDateMap.get(String(s.goalId)) ?? null) : null;
         const score = computeItemDeferral({
           item: s,
           itemType: 'story',
           currentSprint,
           nextSprint,
           focusLeafIds,
+          allSprints: sortedUpcomingSprints as Sprint[],
+          goalStartDateMs,
         });
+        const hrs = normalizeStoryPoints(s);
+        if (score.isFocusAligned) { focusCount++; focusHours += hrs; }
+        else { nonFocusCount++; nonFocusHours += hrs; }
         if (!score.shouldDefer) continue;
         candidates.push({
           kind: 'story',
@@ -269,10 +304,12 @@ const PlannerCapacityBanner: React.FC = () => {
           ref: `STORY-${s.id.slice(0, 6).toUpperCase()}`,
           title: s.title || 'Untitled story',
           priority: normalizePriority(s.priority, 2),
-          points: normalizeStoryPoints(s),
-          hours: normalizeStoryPoints(s),
+          points: hrs,
+          hours: hrs,
           reasonCodes: score.reasonCodes,
           reasonSummary: score.reasonSummary,
+          isFocusAligned: score.isFocusAligned,
+          targetSprint: score.targetSprint,
           entity: s,
         });
       }
@@ -280,30 +317,45 @@ const PlannerCapacityBanner: React.FC = () => {
       for (const snap of tasksSnap.docs) {
         const t = { id: snap.id, ...(snap.data() as any) };
         if (!isMovableTaskType(t.type || t.task_type)) continue;
+        const goalStartDateMs = t.goalId ? (goalStartDateMap.get(String(t.goalId)) ?? null) : null;
         const score = computeItemDeferral({
           item: t,
           itemType: 'task',
           currentSprint,
           nextSprint,
           focusLeafIds,
+          allSprints: sortedUpcomingSprints as Sprint[],
+          goalStartDateMs,
         });
+        const hrs = normalizeTaskPoints(t);
+        if (score.isFocusAligned) { focusCount++; focusHours += hrs; }
+        else { nonFocusCount++; nonFocusHours += hrs; }
         if (!score.shouldDefer) continue;
-        const hours = normalizeTaskPoints(t);
         candidates.push({
           kind: 'task',
           id: t.id,
           ref: `TASK-${t.id.slice(0, 6).toUpperCase()}`,
           title: t.title || 'Untitled task',
           priority: normalizePriority(t.priority, 2),
-          points: hours,
-          hours,
+          points: hrs,
+          hours: hrs,
           reasonCodes: score.reasonCodes,
           reasonSummary: score.reasonSummary,
+          isFocusAligned: score.isFocusAligned,
+          targetSprint: score.targetSprint,
           entity: t,
         });
       }
 
-      // Sort lowest priority first, then highest effort
+      setCapacityBreakdown({
+        totalItems: focusCount + nonFocusCount,
+        totalHours: focusHours + nonFocusHours,
+        focusCount,
+        focusHours,
+        nonFocusCount,
+        nonFocusHours,
+      });
+
       candidates.sort((a, b) => a.priority !== b.priority ? a.priority - b.priority : b.hours - a.hours);
 
       const top = candidates.slice(0, 10);
@@ -312,21 +364,22 @@ const PlannerCapacityBanner: React.FC = () => {
       if (!top.length) {
         setRecommendationStatus('No deferral candidates found for the current sprint.');
       } else {
-        const totalHours = top.reduce((s, c) => s + c.hours, 0);
+        const totalCandidateHours = top.reduce((s, c) => s + c.hours, 0);
         setRecommendationStatus(
           nextSprint
-            ? `${top.length} candidate${top.length !== 1 ? 's' : ''} (${Math.round(totalHours * 10) / 10}h) — not focus-aligned or top-priority.`
-            : `${top.length} candidate${top.length !== 1 ? 's' : ''} (${Math.round(totalHours * 10) / 10}h). Create a next sprint to enable moves.`,
+            ? `${top.length} candidate${top.length !== 1 ? 's' : ''} (${Math.round(totalCandidateHours * 10) / 10}h) — not focus-aligned or top-priority.`
+            : `${top.length} candidate${top.length !== 1 ? 's' : ''} (${Math.round(totalCandidateHours * 10) / 10}h). Create a next sprint to enable moves.`,
         );
       }
     } catch (error: any) {
       console.error('PlannerCapacityBanner: failed to load recommendations', error);
       setRecommendations([]);
+      setCapacityBreakdown(null);
       setRecommendationStatus('Failed to compute recommendations.');
     } finally {
       setLoadingRecommendations(false);
     }
-  }, [activeFocusGoals, currentSprint, currentUser?.uid, nextSprint, entitiesVersion]);
+  }, [activeFocusGoals, currentSprint, currentUser?.uid, nextSprint, sortedUpcomingSprints, entitiesVersion]);
 
   useEffect(() => {
     loadRecommendations();
@@ -358,8 +411,9 @@ const PlannerCapacityBanner: React.FC = () => {
     setEditingStory(item.entity as Story);
   }, [ensureStoryGoalsLoaded]);
 
-  const moveItemToNextSprint = useCallback(async (item: MoveRecommendation) => {
-    if (!nextSprint) return;
+  const moveItem = useCallback(async (item: MoveRecommendation) => {
+    const sprint = item.targetSprint || nextSprint;
+    if (!sprint) return;
     const actionKey = `${item.kind}:${item.id}`;
     setMovingIds((prev) => ({ ...prev, [actionKey]: true }));
     setRecommendationStatus(null);
@@ -367,14 +421,14 @@ const PlannerCapacityBanner: React.FC = () => {
       await applyPlannerMoveToSprint({
         itemType: item.kind,
         item: item.entity,
-        sprintId: nextSprint.id,
-        sprintStartMs: Number(nextSprint.startDate || Date.now()),
-        rationale: `Move to next sprint: ${item.reasonSummary}`,
+        sprintId: sprint.id,
+        sprintStartMs: Number(sprint.startDate || Date.now()),
+        rationale: `Move to ${sprint.name}: ${item.reasonSummary}`,
         source: 'planner_capacity_banner',
         durationMinutes: Math.max(15, Math.round(item.hours * 60)),
       });
       setRecommendations((prev) => prev.filter((r) => !(r.kind === item.kind && r.id === item.id)));
-      setRecommendationStatus(`${item.ref} moved to ${nextSprint.name}.`);
+      setRecommendationStatus(`${item.ref} moved to ${sprint.name}.`);
     } catch (error: any) {
       setRecommendationStatus(error?.message || `Failed to move ${item.ref}.`);
     } finally {
@@ -387,13 +441,13 @@ const PlannerCapacityBanner: React.FC = () => {
   }, [nextSprint]);
 
   const moveAllRecommendations = useCallback(async () => {
-    if (!recommendations.length || !nextSprint) return;
+    if (!recommendations.length) return;
     setRecommendationStatus(null);
     for (const item of recommendations) {
-      await moveItemToNextSprint(item);
+      await moveItem(item);
     }
     await loadRecommendations();
-  }, [loadRecommendations, moveItemToNextSprint, nextSprint, recommendations]);
+  }, [loadRecommendations, moveItem, recommendations]);
 
   const dismissForToday = useCallback(async () => {
     if (!currentUser?.uid) return;
@@ -419,6 +473,16 @@ const PlannerCapacityBanner: React.FC = () => {
     summary.shortfallMinutes > 0 ? `${formatHours(summary.shortfallMinutes)} still uncovered` : null,
   ].filter(Boolean);
 
+  const iconBtnStyle: React.CSSProperties = {
+    color: 'var(--bs-secondary)',
+    padding: '4px 6px',
+    borderRadius: 4,
+    border: 'none',
+    background: 'transparent',
+    cursor: 'pointer',
+    lineHeight: 1,
+  };
+
   return (
     <>
     <Alert
@@ -427,6 +491,35 @@ const PlannerCapacityBanner: React.FC = () => {
       dismissible
       onClose={() => { void dismissForToday(); }}
     >
+      {capacityBreakdown && (
+        <div
+          className="d-flex flex-wrap gap-3 mb-3 pb-2 border-bottom"
+          style={{ fontSize: 12 }}
+        >
+          <span>
+            <span className="text-muted">Sprint items: </span>
+            <strong>{capacityBreakdown.totalItems}</strong>
+            <span className="text-muted ms-1">({formatHoursRaw(capacityBreakdown.totalHours)} total)</span>
+          </span>
+          <span>
+            <span className="text-muted">Focus: </span>
+            <strong className="text-success">{capacityBreakdown.focusCount}</strong>
+            <span className="text-muted ms-1">({formatHoursRaw(capacityBreakdown.focusHours)})</span>
+          </span>
+          <span>
+            <span className="text-muted">Non-focus: </span>
+            <strong className="text-warning-emphasis">{capacityBreakdown.nonFocusCount}</strong>
+            <span className="text-muted ms-1">({formatHoursRaw(capacityBreakdown.nonFocusHours)})</span>
+          </span>
+          {summary.shortfallMinutes > 0 && (
+            <span>
+              <span className="text-muted">Shortfall: </span>
+              <strong className="text-danger">{formatHours(summary.shortfallMinutes)}</strong>
+            </span>
+          )}
+        </div>
+      )}
+
       <div className="d-flex flex-wrap align-items-center justify-content-between gap-3">
         <div className="d-flex align-items-center gap-2">
           <CalendarClock size={20} />
@@ -474,7 +567,7 @@ const PlannerCapacityBanner: React.FC = () => {
               {showRecommendations ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
             </Button>
             <div className="fw-semibold" style={{ fontSize: 13 }}>
-              Suggested moves to {nextSprint?.name || 'next sprint'}
+              Suggested moves
             </div>
           </div>
           <div className="d-flex align-items-center gap-2">
@@ -515,6 +608,9 @@ const PlannerCapacityBanner: React.FC = () => {
             {recommendations.map((item) => {
               const actionKey = `${item.kind}:${item.id}`;
               const moving = Boolean(movingIds[actionKey]);
+              const targetSprint = item.targetSprint || nextSprint;
+              const targetLabel = targetSprint ? `Move to ${targetSprint.name}` : 'No sprint available';
+              const isGoalSprint = targetSprint && targetSprint.id !== nextSprint?.id;
               return (
                 <div
                   key={actionKey}
@@ -533,21 +629,23 @@ const PlannerCapacityBanner: React.FC = () => {
                     {' · '}
                     <strong>{item.title}</strong>
                     <span className="text-muted ms-1">
-                      · {item.reasonSummary} · {Math.round(item.hours * 10) / 10}h
+                      · {item.reasonSummary} · {formatHoursRaw(item.hours)}
+                      {isGoalSprint && (
+                        <span> · goal-sprint: {targetSprint!.name}</span>
+                      )}
                     </span>
                   </div>
                   <div className="d-flex align-items-center gap-1 ms-auto flex-nowrap">
                     <button
+                      onClick={() => navigate(`/${item.kind === 'story' ? 'stories' : 'tasks'}/${item.id}`)}
+                      style={iconBtnStyle}
+                      title="Activity stream"
+                    >
+                      <Activity size={13} />
+                    </button>
+                    <button
                       onClick={() => { void openEditModal(item); }}
-                      style={{
-                        color: 'var(--bs-secondary)',
-                        padding: '4px 6px',
-                        borderRadius: 4,
-                        border: 'none',
-                        background: 'transparent',
-                        cursor: 'pointer',
-                        lineHeight: 1,
-                      }}
+                      style={iconBtnStyle}
                       title="Quick edit"
                     >
                       <Pencil size={13} />
@@ -556,10 +654,10 @@ const PlannerCapacityBanner: React.FC = () => {
                       size="sm"
                       variant="outline-dark"
                       style={{ minWidth: 170 }}
-                      disabled={moving || !nextSprint}
-                      onClick={() => moveItemToNextSprint(item)}
+                      disabled={moving || !targetSprint}
+                      onClick={() => moveItem(item)}
                     >
-                      {moving ? 'Moving…' : `Move to ${nextSprint?.name || 'next sprint'}`}
+                      {moving ? 'Moving…' : targetLabel}
                     </Button>
                   </div>
                 </div>
