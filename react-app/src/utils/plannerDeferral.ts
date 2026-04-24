@@ -1,3 +1,5 @@
+import { doc, updateDoc } from 'firebase/firestore';
+import { db } from '../firebase';
 import { schedulePlannerItem, type PlannerConstraintMode, type SchedulePlannerItemResponse } from './plannerScheduling';
 
 type PlannerEntityType = 'task' | 'story';
@@ -79,6 +81,17 @@ export async function applyPlannerDefer({
     constraintMode: payload.constraintMode || null,
     exactTargetStartMs: payload.exactTargetStartMs || null,
     exactTargetEndMs: payload.exactTargetEndMs || null,
+  });
+}
+
+/**
+ * Sets dueDate on a focus-aligned story so the nightly planner schedules it
+ * at Tier 5 (after top-3 and manual priority items).
+ */
+export async function applyStoryDueDate(storyId: string, dueDateMs: number): Promise<void> {
+  await updateDoc(doc(db, 'stories', storyId), {
+    dueDate: dueDateMs,
+    updatedAt: Date.now(),
   });
 }
 
