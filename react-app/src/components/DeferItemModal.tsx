@@ -1,9 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Alert, Button, Form, Modal, Spinner } from 'react-bootstrap';
-import { httpsCallable } from 'firebase/functions';
 import { collection, doc, getDoc, getDocs, query, where } from 'firebase/firestore';
-import { db, functions } from '../firebase';
-import { normalizePlannerSchedulingError, schedulePlannerItem, type PlannerConstraintMode } from '../utils/plannerScheduling';
+import { db } from '../firebase';
+import type { PlannerConstraintMode } from '../utils/plannerScheduling';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { isGoalInHierarchySet } from '../utils/goalHierarchy';
@@ -228,8 +227,6 @@ const DeferItemModal: React.FC<DeferItemModalProps> = ({
   const [customDate, setCustomDate] = useState<string>('');
   const [showMoreSuggestions, setShowMoreSuggestions] = useState(false);
   const [inferredFocusContext, setInferredFocusContext] = useState<FocusContextPayload | null>(null);
-  const [advancedSearchAvailable, setAdvancedSearchAvailable] = useState(false);
-  const [advancedSearching, setAdvancedSearching] = useState(false);
   const effectiveFocusContext = focusContext || inferredFocusContext || undefined;
   const hasFocusPressure = !effectiveFocusContext?.isFocusAligned && (effectiveFocusContext?.activeFocusGoals?.length || 0) > 0;
 
@@ -334,11 +331,61 @@ const DeferItemModal: React.FC<DeferItemModalProps> = ({
       };
     };
 
+    const buildOnDeviceOptions = (
+      quick: DeferralOption | null,
+      hasFocusPressure: boolean,
+    ): { topOptions: DeferralOption[]; moreOptions: DeferralOption[] } => {
+      const today = startOfDayMs(Date.now());
+      const focusNote = hasFocusPressure ? ' This item is outside your active focus goals.' : '';
+      const top: DeferralOption[] = [
+        {
+          key: 'tomorrow',
+          dateMs: addDays(today, 1),
+          label: 'Tomorrow',
+          rationale: `Push to tomorrow to free up today.${focusNote}`,
+          source: 'on_device',
+        },
+        {
+          key: 'next-week',
+          dateMs: addDays(today, 7),
+          label: 'Next week',
+          rationale: `Move to the start of next week.${focusNote}`,
+          source: 'on_device',
+        },
+        {
+          key: 'two-weeks',
+          dateMs: addDays(today, 14),
+          label: 'In 2 weeks',
+          rationale: `Defer by two weeks to reduce sprint pressure.${focusNote}`,
+          source: 'on_device',
+        },
+      ];
+      const more: DeferralOption[] = [
+        {
+          key: 'three-weeks',
+          dateMs: addDays(today, 21),
+          label: 'In 3 weeks',
+          rationale: 'Defer for three weeks.',
+          source: 'on_device',
+        },
+        {
+          key: 'next-month',
+          dateMs: addMonths(today, 1),
+          label: 'Next month',
+          rationale: 'Defer for a full month.',
+          source: 'on_device',
+        },
+      ];
+      if (quick) {
+        return { topOptions: [quick, ...top], moreOptions: more };
+      }
+      return { topOptions: top, moreOptions: more };
+    };
+
     const loadOptions = async () => {
       setLoading(true);
       setError(null);
       setInferredFocusContext(null);
-      setAdvancedSearchAvailable(false);
       try {
         if (itemType === 'task' && itemId) {
           try {
@@ -351,50 +398,28 @@ const DeferItemModal: React.FC<DeferItemModalProps> = ({
           }
         }
 
-        if (nextQuickMoveOption) {
-          if (cancelled) return;
-          setInferredFocusContext(null);
-          setQuickMoveOption(nextQuickMoveOption);
-          setOptions([nextQuickMoveOption]);
-          setTopOptions([nextQuickMoveOption]);
-          setMoreOptions([]);
-          setSelectedKey(nextQuickMoveOption.key);
-          setShowMoreSuggestions(false);
-          return;
-        }
-
         const nextFocusContext = focusContext || await inferFocusContext();
         if (cancelled) return;
         setInferredFocusContext(focusContext ? null : nextFocusContext);
 
-        const callable = httpsCallable(functions, 'suggestDeferralOptions');
-        const resp: any = await callable({
-          itemType,
-          itemId,
-          horizonDays: 21,
-          focusContext: nextFocusContext,
-        });
-        setAdvancedSearchAvailable(resp?.data?.advancedSearchAvailable === true);
-        const next = Array.isArray(resp?.data?.options) ? resp.data.options : [];
-        const top = Array.isArray(resp?.data?.topOptions) ? resp.data.topOptions : next.slice(0, 3);
-        const more = Array.isArray(resp?.data?.moreOptions) ? resp.data.moreOptions : next.slice(3);
-        if (cancelled) return;
-        const mergedTop = nextQuickMoveOption ? [nextQuickMoveOption, ...top.filter((opt: DeferralOption) => opt.key !== nextQuickMoveOption!.key)] : top;
-        const mergedOptions = nextQuickMoveOption ? [nextQuickMoveOption, ...next.filter((opt: DeferralOption) => opt.key !== nextQuickMoveOption!.key)] : next;
-        const mergedMore = nextQuickMoveOption ? more.filter((opt: DeferralOption) => opt.key !== nextQuickMoveOption!.key) : more;
+        const hasFocusPressure = !nextFocusContext?.isFocusAligned && (nextFocusContext?.activeFocusGoals?.length || 0) > 0;
+        const { topOptions: top, moreOptions: more } = buildOnDeviceOptions(nextQuickMoveOption, hasFocusPressure);
+
+        const allOptions = [...top, ...more.filter((o) => !top.find((t) => t.key === o.key))];
         setQuickMoveOption(nextQuickMoveOption);
-        setOptions(mergedOptions);
-        setTopOptions(mergedTop);
-        setMoreOptions(mergedMore);
-        setSelectedKey(mergedTop[0]?.key || mergedOptions[0]?.key || 'custom');
+        setOptions(allOptions);
+        setTopOptions(top);
+        setMoreOptions(more);
+        setSelectedKey(top[0]?.key || 'custom');
         setShowMoreSuggestions(false);
       } catch (err: any) {
         if (cancelled) return;
         console.error('[DeferItemModal] suggestions_failed', { itemType, itemId, err });
-        setError(normalizePlannerSchedulingError(err).message || 'Could not generate defer suggestions.');
+        setError('Could not generate defer suggestions.');
+        const fallback = nextQuickMoveOption ? [nextQuickMoveOption] : [];
         setQuickMoveOption(nextQuickMoveOption);
-        setOptions(nextQuickMoveOption ? [nextQuickMoveOption] : []);
-        setTopOptions(nextQuickMoveOption ? [nextQuickMoveOption] : []);
+        setOptions(fallback);
+        setTopOptions(fallback);
         setMoreOptions([]);
         setSelectedKey(nextQuickMoveOption?.key || 'custom');
       } finally {
@@ -412,70 +437,6 @@ const DeferItemModal: React.FC<DeferItemModalProps> = ({
     () => options.find((opt) => opt.key === selectedKey) || null,
     [options, selectedKey]
   );
-
-  const handleAdvancedSearch = async () => {
-    if (!allowAdvancedSearch || !itemId) return;
-    setAdvancedSearching(true);
-    setError(null);
-    try {
-      let previewDateMs: number | null = null;
-      if (selectedKey === 'custom') {
-        if (!customDate) {
-          setError('Choose a custom date before searching for an exact slot.');
-          return;
-        }
-        const parsed = Date.parse(`${customDate}T12:00:00`);
-        if (Number.isNaN(parsed)) {
-          setError('Custom date is invalid.');
-          return;
-        }
-        previewDateMs = startOfDayMs(parsed);
-      } else if (selectedOption) {
-        previewDateMs = Number(selectedOption.dateMs);
-      } else {
-        previewDateMs = addDays(Date.now(), 1);
-      }
-
-      const result = await schedulePlannerItem({
-        itemType,
-        itemId,
-        targetDateMs: previewDateMs,
-        targetBucket: selectedOption?.targetBucket || null,
-        intent: 'defer',
-        source: 'defer_modal_advanced_preview',
-        rationale: 'Advanced exact-slot preview',
-        searchDays: 42,
-        previewOnly: true,
-        constraintMode: 'free_slot',
-      });
-
-      const advancedOption: DeferralOption = {
-        key: 'advanced-exact-slot',
-        dateMs: result.appliedStartMs,
-        label: 'Exact free slot',
-        rationale: `Found an exact free slot on ${new Date(result.appliedStartMs).toLocaleString()}.`,
-        source: 'advanced_exact_slot',
-        targetBucket: result.appliedBucket || null,
-        constraintMode: 'free_slot',
-        exactTargetStartMs: result.appliedStartMs,
-        exactTargetEndMs: result.appliedEndMs,
-      };
-
-      setOptions((prev) => [
-        advancedOption,
-        ...prev.filter((opt) => opt.key !== advancedOption.key),
-      ]);
-      setTopOptions((prev) => [
-        advancedOption,
-        ...prev.filter((opt) => opt.key !== advancedOption.key).slice(0, 2),
-      ]);
-      setSelectedKey(advancedOption.key);
-    } catch (err: any) {
-      setError(normalizePlannerSchedulingError(err).message || 'Failed to find an exact slot.');
-    } finally {
-      setAdvancedSearching(false);
-    }
-  };
 
   const handleApply = async () => {
     setError(null);
@@ -528,7 +489,7 @@ const DeferItemModal: React.FC<DeferItemModalProps> = ({
       onHide();
     } catch (err: any) {
       console.error('[DeferItemModal] apply_failed', { itemType, itemId, err });
-      setError(normalizePlannerSchedulingError(err).message || 'Failed to defer this item.');
+      setError(err?.message || 'Failed to defer this item.');
     } finally {
       setApplying(false);
     }
@@ -634,19 +595,6 @@ const DeferItemModal: React.FC<DeferItemModalProps> = ({
               />
             )}
 
-            {allowAdvancedSearch && advancedSearchAvailable && (
-              <div className="mt-3">
-                <Button
-                  variant="outline-secondary"
-                  size="sm"
-                  onClick={() => void handleAdvancedSearch()}
-                  disabled={advancedSearching || loading || applying}
-                >
-                  {advancedSearching ? <Spinner animation="border" size="sm" className="me-1" /> : null}
-                  Find exact free slot
-                </Button>
-              </div>
-            )}
           </>
         )}
       </Modal.Body>

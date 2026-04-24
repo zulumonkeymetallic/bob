@@ -1,11 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Button } from 'react-bootstrap';
-import { ArrowRightLeft, CalendarClock, ChevronDown, ChevronRight, KanbanSquare, Settings2 } from 'lucide-react';
+import { ArrowRightLeft, CalendarClock, ChevronDown, ChevronRight, KanbanSquare, Pencil, Settings2 } from 'lucide-react';
 import { collection, doc, getDocs, onSnapshot, query, serverTimestamp, setDoc, where } from 'firebase/firestore';
-import { httpsCallable } from 'firebase/functions';
 import { useNavigate } from 'react-router-dom';
 import { db } from '../../firebase';
-import { functions } from '../../firebase';
 import { useAuth } from '../../contexts/AuthContext';
 import { usePersona } from '../../contexts/PersonaContext';
 import { useSprint } from '../../contexts/SprintContext';
@@ -82,18 +80,18 @@ const isMovableTaskType = (value: unknown): boolean => {
   return !['chore', 'routine', 'habit'].includes(raw);
 };
 
-const formatPriorityLabel = (value: unknown): string => {
-  const normalized = normalizePriority(value, 2);
-  if (normalized >= 4) return 'Critical';
-  if (normalized === 3) return 'High';
-  if (normalized === 2) return 'Medium';
-  return 'Low';
-};
-
 const getEndOfTodayMs = (): number => {
   const end = new Date();
   end.setHours(23, 59, 59, 999);
   return end.getTime();
+};
+
+const reasonLabel = (codes: string[]): string => {
+  if (codes.includes('not_focus_aligned')) return 'Not focus-aligned';
+  if (codes.includes('low_relative_priority')) return 'Lower priority';
+  if (codes.includes('large_effort')) return 'High effort';
+  if (codes.includes('no_goal_link')) return 'No goal link';
+  return 'Lower priority';
 };
 
 type MoveRecommendation = {
@@ -104,6 +102,8 @@ type MoveRecommendation = {
   priority: number;
   points: number;
   hours: number;
+  reasonCodes: string[];
+  reasonSummary: string;
   entity: any;
 };
 
@@ -242,15 +242,10 @@ const PlannerCapacityBanner: React.FC = () => {
       ? new Date(lastRunAtMs).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
       : null;
 
-    return {
-      unscheduledStories,
-      unscheduledTasks,
-      shortfallMinutes,
-      rangeLabel,
-      updatedLabel,
-    };
+    return { unscheduledStories, unscheduledTasks, shortfallMinutes, rangeLabel, updatedLabel };
   }, [plannerStats]);
 
+  // On-device heuristic: fetch sprint stories + tasks, score them locally
   const loadRecommendations = useCallback(async () => {
     if (!currentUser?.uid || !currentSprint) {
       setRecommendations([]);
@@ -259,35 +254,103 @@ const PlannerCapacityBanner: React.FC = () => {
     setLoadingRecommendations(true);
     setRecommendationStatus(null);
     try {
-      const focusGoalIds = Array.from(getActiveFocusLeafGoalIds(activeFocusGoals));
-      const fn = httpsCallable<object, { ok: boolean; candidates: any[] }>(functions, 'suggestDeferralCandidates');
-      const result = await fn({ sprintId: currentSprint.id, nextSprintId: nextSprint?.id || null, focusGoalIds });
-      const candidates = result.data?.candidates || [];
-      const mapped: MoveRecommendation[] = candidates.map((c: any) => ({
-        kind: c.type as 'story' | 'task',
-        id: c.id,
-        ref: `${c.type === 'story' ? 'STORY' : 'TASK'}-${c.id.slice(0, 6).toUpperCase()}`,
-        title: c.title,
-        priority: 2,
-        points: c.effortHours || 1,
-        hours: c.effortHours || 1,
-        entity: { id: c.id, title: c.title },
-      }));
-      setRecommendations(mapped);
-      if (!mapped.length) {
+      const focusLeafIds = new Set(Array.from(getActiveFocusLeafGoalIds(activeFocusGoals)));
+      const sprintId = currentSprint.id;
+
+      const [storiesSnap, tasksSnap] = await Promise.all([
+        getDocs(query(
+          collection(db, 'stories'),
+          where('ownerUid', '==', currentUser.uid),
+          where('sprintId', '==', sprintId),
+        )),
+        getDocs(query(
+          collection(db, 'tasks'),
+          where('ownerUid', '==', currentUser.uid),
+          where('sprintId', '==', sprintId),
+        )),
+      ]);
+
+      const candidates: MoveRecommendation[] = [];
+
+      for (const snap of storiesSnap.docs) {
+        const s = { id: snap.id, ...(snap.data() as any) };
+        if (isStoryDone(s.status)) continue;
+        const priority = normalizePriority(s.priority, 2);
+        const points = normalizeStoryPoints(s);
+        const goalId = String(s.goalId || '').trim();
+        const isAligned = focusLeafIds.size === 0 || (goalId && focusLeafIds.has(goalId));
+        const reasonCodes: string[] = [];
+        if (!isAligned && focusLeafIds.size > 0) reasonCodes.push('not_focus_aligned');
+        if (priority <= 2) reasonCodes.push('low_relative_priority');
+        if (!goalId) reasonCodes.push('no_goal_link');
+        if (points > 8) reasonCodes.push('large_effort');
+        if (priority >= 4) continue;
+        if (priority >= 3 && isAligned && focusLeafIds.size > 0) continue;
+        if (!reasonCodes.length) continue;
+        candidates.push({
+          kind: 'story',
+          id: s.id,
+          ref: `STORY-${s.id.slice(0, 6).toUpperCase()}`,
+          title: s.title || 'Untitled story',
+          priority,
+          points,
+          hours: points,
+          reasonCodes,
+          reasonSummary: reasonLabel(reasonCodes),
+          entity: s,
+        });
+      }
+
+      for (const snap of tasksSnap.docs) {
+        const t = { id: snap.id, ...(snap.data() as any) };
+        if (isTaskDone(t.status)) continue;
+        if (!isMovableTaskType(t.type || t.task_type)) continue;
+        const priority = normalizePriority(t.priority, 2);
+        const hours = normalizeTaskPoints(t);
+        const goalId = String(t.goalId || '').trim();
+        const isAligned = focusLeafIds.size === 0 || (goalId && focusLeafIds.has(goalId));
+        const reasonCodes: string[] = [];
+        if (!isAligned && focusLeafIds.size > 0) reasonCodes.push('not_focus_aligned');
+        if (priority <= 2) reasonCodes.push('low_relative_priority');
+        if (!goalId) reasonCodes.push('no_goal_link');
+        if (hours > 8) reasonCodes.push('large_effort');
+        if (priority >= 4) continue;
+        if (priority >= 3 && isAligned && focusLeafIds.size > 0) continue;
+        if (!reasonCodes.length) continue;
+        candidates.push({
+          kind: 'task',
+          id: t.id,
+          ref: `TASK-${t.id.slice(0, 6).toUpperCase()}`,
+          title: t.title || 'Untitled task',
+          priority,
+          points: hours,
+          hours,
+          reasonCodes,
+          reasonSummary: reasonLabel(reasonCodes),
+          entity: t,
+        });
+      }
+
+      // Sort lowest priority first, then highest effort
+      candidates.sort((a, b) => a.priority !== b.priority ? a.priority - b.priority : b.hours - a.hours);
+
+      const top = candidates.slice(0, 10);
+      setRecommendations(top);
+
+      if (!top.length) {
         setRecommendationStatus('No deferral candidates found for the current sprint.');
       } else {
-        const totalHours = mapped.reduce((s, m) => s + m.hours, 0);
+        const totalHours = top.reduce((s, c) => s + c.hours, 0);
         setRecommendationStatus(
           nextSprint
-            ? `${mapped.length} candidate${mapped.length !== 1 ? 's' : ''} (${Math.round(totalHours * 10) / 10}h) — not focus-aligned or top-priority.`
-            : `${mapped.length} candidate${mapped.length !== 1 ? 's' : ''} (${Math.round(totalHours * 10) / 10}h). Create a next sprint to enable moves.`,
+            ? `${top.length} candidate${top.length !== 1 ? 's' : ''} (${Math.round(totalHours * 10) / 10}h) — not focus-aligned or top-priority.`
+            : `${top.length} candidate${top.length !== 1 ? 's' : ''} (${Math.round(totalHours * 10) / 10}h). Create a next sprint to enable moves.`,
         );
       }
     } catch (error: any) {
-      console.error('PlannerCapacityBanner: failed to load move recommendations', error);
+      console.error('PlannerCapacityBanner: failed to load recommendations', error);
       setRecommendations([]);
-      setRecommendationStatus(error?.message || 'Failed to load move recommendations.');
+      setRecommendationStatus('Failed to compute recommendations.');
     } finally {
       setLoadingRecommendations(false);
     }
@@ -305,14 +368,9 @@ const PlannerCapacityBanner: React.FC = () => {
         where('ownerUid', '==', currentUser.uid),
       ));
       const rawGoals = goalsSnap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Goal[];
-      const filteredGoals = rawGoals.filter((goal) => (
-        !currentPersona
-        || !goal.persona
-        || goal.persona === currentPersona
-      ));
-      setStoryGoals(filteredGoals);
+      setStoryGoals(rawGoals.filter((g) => !currentPersona || !g.persona || g.persona === currentPersona));
     } catch (error) {
-      console.error('PlannerCapacityBanner: failed to load goals for story editor', error);
+      console.error('PlannerCapacityBanner: failed to load goals', error);
       setStoryGoals([]);
     } finally {
       setStoryGoalsLoaded(true);
@@ -339,14 +397,13 @@ const PlannerCapacityBanner: React.FC = () => {
         item: item.entity,
         sprintId: nextSprint.id,
         sprintStartMs: Number(nextSprint.startDate || Date.now()),
-        rationale: 'Move to next sprint from planner capacity banner',
+        rationale: `Move to next sprint: ${item.reasonSummary}`,
         source: 'planner_capacity_banner',
         durationMinutes: Math.max(15, Math.round(item.hours * 60)),
       });
       setRecommendations((prev) => prev.filter((r) => !(r.kind === item.kind && r.id === item.id)));
       setRecommendationStatus(`${item.ref} moved to ${nextSprint.name}.`);
     } catch (error: any) {
-      console.error('PlannerCapacityBanner: failed to move item', { item, error });
       setRecommendationStatus(error?.message || `Failed to move ${item.ref}.`);
     } finally {
       setMovingIds((prev) => {
@@ -393,12 +450,10 @@ const PlannerCapacityBanner: React.FC = () => {
   return (
     <>
     <Alert
-      variant="warning"
+      variant="info"
       className="border-0 shadow-sm mb-3"
       dismissible
-      onClose={() => {
-        void dismissForToday();
-      }}
+      onClose={() => { void dismissForToday(); }}
     >
       <div className="d-flex flex-wrap align-items-center justify-content-between gap-3">
         <div className="d-flex align-items-center gap-2">
@@ -406,7 +461,7 @@ const PlannerCapacityBanner: React.FC = () => {
           <div>
             <div className="fw-semibold">Planner capacity is short</div>
             <div className="text-muted small">
-              {detailParts.join(' · ')} across {summary.rangeLabel}. Existing Google Calendar events and fixed blocks are already being treated as busy time.
+              {detailParts.join(' · ')} across {summary.rangeLabel}. Existing Google Calendar events and fixed blocks are treated as busy.
             </div>
             {summary.updatedLabel && (
               <div className="text-muted" style={{ fontSize: 12 }}>
@@ -422,7 +477,7 @@ const PlannerCapacityBanner: React.FC = () => {
           </Button>
           <Button size="sm" variant="outline-dark" onClick={() => navigate('/planner/sprint-capacity')}>
             <Settings2 size={14} className="me-1" />
-            Sprint capacity plan
+            Sprint capacity
           </Button>
           <Button size="sm" variant="outline-dark" onClick={() => navigate('/calendar')}>
             <CalendarClock size={14} className="me-1" />
@@ -434,6 +489,7 @@ const PlannerCapacityBanner: React.FC = () => {
           </Button>
         </div>
       </div>
+
       <div className="mt-3 pt-2 border-top">
         <div className="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
           <div className="d-flex align-items-center gap-2">
@@ -442,13 +498,11 @@ const PlannerCapacityBanner: React.FC = () => {
               variant="link"
               className="p-0 text-dark d-inline-flex align-items-center"
               onClick={() => setShowRecommendations((prev) => !prev)}
-              aria-label={showRecommendations ? 'Hide recommended moves' : 'Show recommended moves'}
-              title={showRecommendations ? 'Hide recommended moves' : 'Show recommended moves'}
             >
               {showRecommendations ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
             </Button>
             <div className="fw-semibold" style={{ fontSize: 13 }}>
-              Recommended moves to {nextSprint?.name || 'next sprint'}
+              Suggested moves to {nextSprint?.name || 'next sprint'}
             </div>
           </div>
           <div className="d-flex align-items-center gap-2">
@@ -461,11 +515,7 @@ const PlannerCapacityBanner: React.FC = () => {
               {loadingRecommendations ? 'Refreshing…' : 'Refresh'}
             </Button>
             {!nextSprint ? (
-              <Button
-                size="sm"
-                variant="outline-warning"
-                onClick={() => navigate('/sprints')}
-              >
+              <Button size="sm" variant="outline-secondary" onClick={() => navigate('/sprints')}>
                 Create next sprint to enable moves
               </Button>
             ) : (
@@ -473,19 +523,21 @@ const PlannerCapacityBanner: React.FC = () => {
                 size="sm"
                 variant="dark"
                 onClick={moveAllRecommendations}
-                disabled={!recommendations.length}
+                disabled={!recommendations.length || loadingRecommendations}
               >
                 Move all suggested
               </Button>
             )}
           </div>
         </div>
+
         {showRecommendations && recommendationStatus && (
           <div className="text-muted small mb-2">{recommendationStatus}</div>
         )}
         {showRecommendations && !recommendations.length && !loadingRecommendations && (
           <div className="text-muted small">No move candidates right now.</div>
         )}
+
         {showRecommendations && recommendations.length > 0 && (
           <div className="d-flex flex-column gap-2">
             {recommendations.map((item) => {
@@ -503,20 +555,31 @@ const PlannerCapacityBanner: React.FC = () => {
                   }}
                 >
                   <div className="small flex-grow-1 me-2">
-                    <strong>{item.ref}</strong> · {item.title} · {item.kind === 'story' ? 'Story' : 'Task'} · {formatPriorityLabel(item.priority)} · {Math.round(item.points * 10) / 10} pts
-                    {item.kind === 'task' && nextSprint?.startDate ? (
-                      <span className="text-muted"> · due {new Date(nextSprint.startDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}</span>
-                    ) : null}
+                    <span className="text-muted" style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                      {item.kind === 'story' ? 'Story' : 'Task'}
+                    </span>
+                    {' · '}
+                    <strong>{item.title}</strong>
+                    <span className="text-muted ms-1">
+                      · {item.reasonSummary} · {Math.round(item.hours * 10) / 10}h
+                    </span>
                   </div>
-                  <div className="d-flex align-items-center gap-2 ms-auto flex-nowrap">
-                    <Button
-                      size="sm"
-                      variant="outline-secondary"
-                      style={{ minWidth: 72 }}
+                  <div className="d-flex align-items-center gap-1 ms-auto flex-nowrap">
+                    <button
                       onClick={() => { void openEditModal(item); }}
+                      style={{
+                        color: 'var(--bs-secondary)',
+                        padding: '4px 6px',
+                        borderRadius: 4,
+                        border: 'none',
+                        background: 'transparent',
+                        cursor: 'pointer',
+                        lineHeight: 1,
+                      }}
+                      title="Quick edit"
                     >
-                      Edit
-                    </Button>
+                      <Pencil size={13} />
+                    </button>
                     <Button
                       size="sm"
                       variant="outline-dark"
