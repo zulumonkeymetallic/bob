@@ -52,9 +52,11 @@ const SprintKanbanPageV2: React.FC = () => {
     const [showLatestNotes, setShowLatestNotes] = useState(false);
     const [editStory, setEditStory] = useState<Story | null>(null);
     const [editTask, setEditTask] = useState<Task | null>(null);
-    const [dueFilter, setDueFilter] = useState<'all' | 'today' | 'overdue' | 'top3' | 'critical'>('top3');
+    const [dueFilter, setDueFilter] = useState<'all' | 'today' | 'overdue' | 'top3' | 'critical'>('all');
     const [showFocusOnly, setShowFocusOnly] = useState(false);
-    const [sortBy, setSortBy] = useState<'ai' | 'due' | 'priority' | 'default'>('ai');
+    const [showCompletedItems, setShowCompletedItems] = useState(false);
+    const [showAiScoredOnly, setShowAiScoredOnly] = useState(false);
+    const [sortBy, setSortBy] = useState<'ai' | 'due' | 'priority' | 'default'>('default');
     const [replanLoading, setReplanLoading] = useState(false);
     const [fullReplanLoading, setFullReplanLoading] = useState(false);
     const [replanFeedback, setReplanFeedback] = useState<string | null>(null);
@@ -376,10 +378,28 @@ const SprintKanbanPageV2: React.FC = () => {
                                 onChange={(e) => setShowLatestNotes(e.target.checked)}
                                 className="ms-2"
                             />
+                            <Form.Check
+                                type="switch"
+                                id="toggle-kanban-completed"
+                                label="Show completed"
+                                checked={showCompletedItems}
+                                onChange={(e) => setShowCompletedItems(e.target.checked)}
+                                className="ms-2"
+                            />
+                            <Form.Check
+                                type="switch"
+                                id="toggle-kanban-ai-scored"
+                                label="AI-scored only"
+                                checked={showAiScoredOnly}
+                                onChange={(e) => setShowAiScoredOnly(e.target.checked)}
+                                className="ms-2"
+                            />
 
                             <Dropdown>
                                 <Dropdown.Toggle variant="outline-secondary" size="sm">
-                                    {dueFilter === 'today'
+                                    {dueFilter === 'all'
+                                        ? 'All items'
+                                        : dueFilter === 'today'
                                         ? 'Due Today'
                                         : dueFilter === 'overdue'
                                             ? 'Overdue'
@@ -390,7 +410,7 @@ const SprintKanbanPageV2: React.FC = () => {
                                                     : 'All Due'}
                                 </Dropdown.Toggle>
                                 <Dropdown.Menu>
-                                    <Dropdown.Item active={dueFilter === 'all'} onClick={() => setDueFilter('all')}>All</Dropdown.Item>
+                                    <Dropdown.Item active={dueFilter === 'all'} onClick={() => setDueFilter('all')}>All items</Dropdown.Item>
                                     <Dropdown.Item active={dueFilter === 'today'} onClick={() => setDueFilter('today')}>Due Today</Dropdown.Item>
                                     <Dropdown.Item active={dueFilter === 'overdue'} onClick={() => setDueFilter('overdue')}>Overdue</Dropdown.Item>
                                     <Dropdown.Item active={dueFilter === 'top3'} onClick={() => setDueFilter('top3')}>Top 3</Dropdown.Item>
@@ -413,10 +433,10 @@ const SprintKanbanPageV2: React.FC = () => {
                                         value={sortBy}
                                         onChange={(e) => setSortBy(e.target.value as any)}
                                     >
+                                        <option value="default">Sort: Priority stack</option>
                                         <option value="ai">Sort: AI score</option>
                                         <option value="due">Sort: Due date</option>
                                         <option value="priority">Sort: Priority</option>
-                                        <option value="default">Sort: Default</option>
                                     </Form.Select>
                                 </Form.Group>
 
@@ -588,6 +608,8 @@ const SprintKanbanPageV2: React.FC = () => {
                                     showLatestNotes={showLatestNotes}
                                     dueFilter={dueFilter}
                                     sortBy={sortBy}
+                                    showCompletedItems={showCompletedItems}
+                                    showAiScoredOnly={showAiScoredOnly}
                                     themes={globalThemes}
                                     detailLevel={detailLevel}
                                 />

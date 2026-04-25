@@ -16,6 +16,7 @@ import { getManualPriorityRank } from '../utils/manualPriority';
 import { useActivityTracking } from '../hooks/useActivityTracking';
 import { formatTaskTagLabel } from '../utils/tagDisplay';
 import { isGoalInHierarchySet } from '../utils/goalHierarchy';
+import { compareTop3Stories, compareTop3Tasks, getEntityAiScore, isTop3Story, isTop3Task } from '../utils/top3';
 import '../styles/KanbanCards.css';
 import '../styles/KanbanFixes.css';
 
@@ -32,6 +33,8 @@ interface KanbanBoardV2Props {
     themes?: GlobalTheme[];
     focusOnly?: boolean;
     focusGoalIds?: Set<string>;
+    showCompletedItems?: boolean;
+    showAiScoredOnly?: boolean;
     detailLevel?: 'full' | 'compact' | 'minimal';
 }
 
@@ -54,10 +57,12 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
     showDescriptions = false,
     showLatestNotes = false,
     dueFilter = 'all',
-    sortBy = 'ai',
+    sortBy = 'default',
     themes,
     focusOnly = false,
     focusGoalIds = new Set(),
+    showCompletedItems = false,
+    showAiScoredOnly = false,
     detailLevel = 'full',
     }) => {
     const { currentUser } = useAuth();
@@ -333,13 +338,6 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
 
     // Filtering and Grouping
 
-    const isCurrentTop3 = (item: any): boolean => {
-        if (item?.aiTop3ForDay !== true) return false;
-        const top3Date = item?.aiTop3Date;
-        if (!top3Date) return true;
-        return String(top3Date).slice(0, 10) === new Date().toISOString().slice(0, 10);
-    };
-
     const getTaskManualRank = (task: Task): number | null => {
         const directRank = getManualPriorityRank(task);
         if (directRank) return directRank;
@@ -348,9 +346,11 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
         return getManualPriorityRank(stories.find((story) => story.id === parentStoryId));
     };
 
-    const isTop3Task = (task: Task): boolean => Boolean(getTaskManualRank(task)) || isCurrentTop3(task);
-
-    const isTop3Story = (story: Story): boolean => Boolean(getManualPriorityRank(story)) || isCurrentTop3(story);
+    const isDoneStatus = (value: any, kind: 'story' | 'task'): boolean => {
+        if (typeof value === 'number') return kind === 'story' ? value >= 4 : value >= 2;
+        const normalized = String(value || '').trim().toLowerCase();
+        return ['done', 'complete', 'completed', 'finished', 'closed', 'archived'].includes(normalized);
+    };
 
     const getItemDueMs = (item: any): number | null => {
         const raw = item?.dueDate ?? item?.targetDate ?? item?.endDate ?? item?.dueDateMs ?? null;
@@ -401,14 +401,14 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
 
         const goalIds = Array.isArray(goalFilter) ? goalFilter : goalFilter ? [goalFilter] : [];
         if (goalIds.length > 0) {
-            // Filter tasks by goal. Tasks might have goalId or be linked to a story with goalId.
             result = result.filter(t => {
-                if (goalIds.includes((t as any).goalId)) return true;
-                if (t.parentType === 'story' && t.parentId) {
-                    const s = stories.find(s => s.id === t.parentId);
-                    return !!(s?.goalId && goalIds.includes(s.goalId));
-                }
-                return false;
+                const directGoalId = String((t as any).goalId || '').trim();
+                if (directGoalId && isGoalInHierarchySet(directGoalId, goals, goalIds)) return true;
+                const parentStoryId = String(t.storyId || (t.parentType === 'story' ? t.parentId || '' : '')).trim();
+                if (!parentStoryId) return false;
+                const s = stories.find((story) => story.id === parentStoryId);
+                const storyGoalId = String((s as any)?.goalId || '').trim();
+                return !!storyGoalId && isGoalInHierarchySet(storyGoalId, goals, goalIds);
             });
         }
 
@@ -431,9 +431,17 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
             });
         }
 
-        result = result.filter((t) => matchesDueFilter(t, isTop3Task(t)));
+        if (!showCompletedItems) {
+            result = result.filter((t) => !isDoneStatus((t as any).status, 'task'));
+        }
+
+        if (showAiScoredOnly) {
+            result = result.filter((t) => Number.isFinite(getEntityAiScore(t)));
+        }
+
+        result = result.filter((t) => matchesDueFilter(t, isTop3Task(t, getTaskManualRank)));
         return result;
-    }, [tasks, stories, goals, sprintId, goalFilter, themeFilter, dueFilter, focusOnly, focusGoalIds]);
+    }, [tasks, stories, goals, sprintId, goalFilter, themeFilter, dueFilter, focusOnly, focusGoalIds, showCompletedItems, showAiScoredOnly]);
 
     const filteredStories = useMemo(() => {
         let result = stories;
@@ -449,7 +457,10 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
 
         const storyGoalIds = Array.isArray(goalFilter) ? goalFilter : goalFilter ? [goalFilter] : [];
         if (storyGoalIds.length > 0) {
-            result = result.filter(s => !!(s as any).goalId && storyGoalIds.includes((s as any).goalId));
+            result = result.filter((s) => {
+                const goalId = String((s as any).goalId || '').trim();
+                return !!goalId && isGoalInHierarchySet(goalId, goals, storyGoalIds);
+            });
         }
         const storyThemeIds = Array.isArray(themeFilter) ? themeFilter : themeFilter != null ? [themeFilter] : [];
         if (storyThemeIds.length > 0) {
@@ -463,9 +474,17 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
                 return false;
             });
         }
+        if (!showCompletedItems) {
+            result = result.filter((s) => !isDoneStatus((s as any).status, 'story'));
+        }
+
+        if (showAiScoredOnly) {
+            result = result.filter((s) => Number.isFinite(getEntityAiScore(s)));
+        }
+
         result = result.filter((s) => matchesDueFilter(s, isTop3Story(s)));
         return result;
-    }, [stories, goals, sprintId, goalFilter, themeFilter, dueFilter, focusOnly, focusGoalIds]);
+    }, [stories, goals, sprintId, goalFilter, themeFilter, dueFilter, focusOnly, focusGoalIds, showCompletedItems, showAiScoredOnly]);
 
     const visibleEntityIds = useMemo(() => {
         const ids = new Set<string>();
@@ -607,8 +626,14 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
         };
 
         const sorter = (a: any, b: any) => {
-            const manualA = (a?.storyId || a?.parentId) ? getTaskManualRank(a as Task) : getManualPriorityRank(a);
-            const manualB = (b?.storyId || b?.parentId) ? getTaskManualRank(b as Task) : getManualPriorityRank(b);
+            const aIsTask = tasks.some((task) => task.id === a.id);
+            const bIsTask = tasks.some((task) => task.id === b.id);
+            if (sortBy === 'default') {
+                if (aIsTask && bIsTask) return compareTop3Tasks(a as Task, b as Task, getTaskManualRank);
+                if (!aIsTask && !bIsTask) return compareTop3Stories(a as Story, b as Story);
+            }
+            const manualA = aIsTask ? getTaskManualRank(a as Task) : getManualPriorityRank(a);
+            const manualB = bIsTask ? getTaskManualRank(b as Task) : getManualPriorityRank(b);
             if ((manualA || 99) !== (manualB || 99)) return (manualA || 99) - (manualB || 99);
             if (sortBy === 'ai') {
                 const sa = scoreOf(a);
