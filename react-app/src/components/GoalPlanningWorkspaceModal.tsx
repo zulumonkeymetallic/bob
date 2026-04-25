@@ -2,8 +2,9 @@ import React, { useMemo, useState } from 'react';
 import { Button, ButtonGroup, Modal } from 'react-bootstrap';
 import type { Goal } from '../types';
 import { getGoalDisplayPath } from '../utils/goalHierarchy';
+import { buildPlannerPath, type UnifiedPlannerLevel } from '../utils/plannerRoutes';
 
-type WorkspaceView = 'roadmap' | 'planner' | 'planner-quarter' | 'matrix';
+type WorkspaceView = 'gantt' | 'year' | 'quarter' | 'sprint';
 
 interface Props {
   show: boolean;
@@ -18,11 +19,11 @@ const GoalPlanningWorkspaceModal: React.FC<Props> = ({
   allGoals,
   onHide,
 }) => {
-  const [view, setView] = useState<WorkspaceView>('roadmap');
+  const [view, setView] = useState<WorkspaceView>('gantt');
 
   React.useEffect(() => {
     if (show) {
-      setView('roadmap');
+      setView('gantt');
     }
   }, [goal?.id, show]);
 
@@ -47,19 +48,15 @@ const GoalPlanningWorkspaceModal: React.FC<Props> = ({
     if (goal.theme != null) {
       params.set('themeId', String(goal.theme));
     }
-    if (view === 'matrix') {
-      params.set('groupBy', 'goal');
-    }
-    if (view === 'planner-quarter') {
-      params.set('plannerMode', 'quarter');
-      params.set('plannerYear', String(new Date().getFullYear()));
-    }
-    const path = view === 'roadmap'
-      ? '/goals/roadmap-v6'
-      : view === 'planner' || view === 'planner-quarter'
-        ? '/goals/year-planner'
-        : '/sprints/planning';
-    return `${path}?${params.toString()}`;
+    const level: UnifiedPlannerLevel = view === 'gantt'
+      ? 'gantt'
+      : view === 'year'
+        ? 'year'
+        : view === 'quarter'
+          ? 'quarter'
+          : 'sprint';
+    if (view === 'sprint') params.set('groupBy', 'goal');
+    return buildPlannerPath(level, params);
   }, [goal?.id, goal?.theme, view]);
 
   return (
@@ -88,17 +85,17 @@ const GoalPlanningWorkspaceModal: React.FC<Props> = ({
             Switch between the roadmap, year planner, and sprint matrix without losing the current goal context.
           </div>
           <ButtonGroup size="sm">
-            <Button variant={view === 'roadmap' ? 'primary' : 'outline-primary'} onClick={() => setView('roadmap')}>
-              Roadmap
+            <Button variant={view === 'gantt' ? 'primary' : 'outline-primary'} onClick={() => setView('gantt')}>
+              Gantt
             </Button>
-            <Button variant={view === 'planner' ? 'primary' : 'outline-primary'} onClick={() => setView('planner')}>
-              Year Planner
+            <Button variant={view === 'year' ? 'primary' : 'outline-primary'} onClick={() => setView('year')}>
+              Year
             </Button>
-            <Button variant={view === 'planner-quarter' ? 'primary' : 'outline-primary'} onClick={() => setView('planner-quarter')}>
-              Quarter Planner
+            <Button variant={view === 'quarter' ? 'primary' : 'outline-primary'} onClick={() => setView('quarter')}>
+              Quarter
             </Button>
-            <Button variant={view === 'matrix' ? 'primary' : 'outline-primary'} onClick={() => setView('matrix')}>
-              Sprint Matrix
+            <Button variant={view === 'sprint' ? 'primary' : 'outline-primary'} onClick={() => setView('sprint')}>
+              Sprint
             </Button>
           </ButtonGroup>
         </div>

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Badge,
@@ -46,11 +46,16 @@ import {
   toDayKey,
 } from '../../utils/plannerItems';
 import { bucketLabel, bucketOrder, type TimelineBucket } from '../../utils/timelineBuckets';
-import { getActiveFocusLeafGoalIds } from '../../utils/goalHierarchy';
 import { buildPlannerRecommendation, type PlannerRecommendation } from '../../utils/plannerRecommendations';
 import { buildDayCapacityMap, plannerItemPoints } from '../../utils/plannerCapacity';
 import { schedulePlannerItem as schedulePlannerItemMutation } from '../../utils/plannerScheduling';
 import { useDetailLevel } from '../../contexts/DetailLevelContext';
+import { useUnifiedPlannerData } from '../../hooks/useUnifiedPlannerData';
+import GoalMultiSelect from '../shared/GoalMultiSelect';
+import ThemeMultiSelect from '../shared/ThemeMultiSelect';
+import { getGoalDisplayPath, getActiveFocusLeafGoalIds, isGoalInHierarchySet } from '../../utils/goalHierarchy';
+import { compareTop3Stories, compareTop3Tasks, getEntityAiScore } from '../../utils/top3';
+import { getManualPriorityRank } from '../../utils/manualPriority';
 
 type WeeklyPlannerView = 'table' | 'planner';
 
@@ -169,7 +174,11 @@ const WeeklyPlannerSurface: React.FC<WeeklyPlannerSurfaceProps> = ({
   const [applyingKey, setApplyingKey] = useState<string | null>(null);
   const [dragItemId, setDragItemId] = useState<string | null>(null);
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
-  const [plannerFilter, setPlannerFilter] = useState<'all' | 'focus' | 'top3' | 'stories'>('all');
+  const [selectedGoalIds, setSelectedGoalIds] = useState<string[]>([]);
+  const [selectedThemeIds, setSelectedThemeIds] = useState<number[]>([]);
+  const [showTop3Only, setShowTop3Only] = useState(false);
+  const [showAiScoredOnly, setShowAiScoredOnly] = useState(false);
+  const [applyFocusOnlyFilter, setApplyFocusOnlyFilter] = useState(false);
   const { detailLevel, setDetailLevel } = useDetailLevel();
   const [planningSummary, setPlanningSummary] = useState<{ acceptedMoves: number; acceptedDefers: number }>({
     acceptedMoves: 0,
@@ -185,6 +194,17 @@ const WeeklyPlannerSurface: React.FC<WeeklyPlannerSurfaceProps> = ({
   );
   const activeFocusGoalIds = useMemo(() => getActiveFocusLeafGoalIds(activeFocusGoals), [activeFocusGoals]);
   const nextSprint = useMemo(() => nextSprintForDate(sprints as Sprint[], weekEndMs), [sprints, weekEndMs]);
+  const plannerRange = useMemo(() => ({ start: weekStart, end: addDays(weekStart, 6) }), [weekStart]);
+  const unifiedPlannerData = useUnifiedPlannerData(plannerRange);
+  const summaryEvents = useMemo(
+    () => unifiedPlannerData.externalEvents.map((event) => ({
+      id: event.id,
+      title: event.title,
+      startMs: event.start.getTime(),
+      endMs: event.end.getTime(),
+    })),
+    [unifiedPlannerData.externalEvents],
+  );
 
   useEffect(() => {
     const update = () => setIsMobileLayout(window.innerWidth < 768);
@@ -313,9 +333,10 @@ const WeeklyPlannerSurface: React.FC<WeeklyPlannerSurfaceProps> = ({
         activeFocusGoalIds,
         rangeStartMs: weekStartMs,
         rangeEndMs: weekEndMs,
+        summaryEvents,
         includeUnscheduledTasks: true,
-      }).filter((item) => item.kind !== 'event'),
-    [tasks, stories, goals, calendarBlocks, scheduledInstances, activeFocusGoalIds, weekStartMs, weekEndMs],
+      }),
+    [tasks, stories, goals, calendarBlocks, scheduledInstances, activeFocusGoalIds, weekStartMs, weekEndMs, summaryEvents],
   );
 
   const reviewCandidates = useMemo(
@@ -329,10 +350,59 @@ const WeeklyPlannerSurface: React.FC<WeeklyPlannerSurfaceProps> = ({
         activeFocusGoalIds,
         rangeStartMs: weekStartMs,
         rangeEndMs: weekEndMs,
+        summaryEvents,
         includeUnscheduledTasks: true,
       }).filter((item) => item.kind !== 'event'),
-    [tasks, stories, goals, calendarBlocks, scheduledInstances, activeFocusGoalIds, weekStartMs, weekEndMs],
+    [tasks, stories, goals, calendarBlocks, scheduledInstances, activeFocusGoalIds, weekStartMs, weekEndMs, summaryEvents],
   );
+
+  const getTaskManualRank = useCallback((task: Task): number | null => {
+    const directRank = getManualPriorityRank(task);
+    if (directRank) return directRank;
+    const parentStoryId = String(task.storyId || task.parentId || '').trim();
+    if (!parentStoryId) return null;
+    return getManualPriorityRank(stories.find((story) => story.id === parentStoryId));
+  }, [stories]);
+
+  const getPlannerItemGoalId = useCallback((item: PlannerItem): string | null => {
+    const rawGoalId = String(
+      item.goalId
+      || (item.rawStory as any)?.goalId
+      || (item.rawTask as any)?.goalId
+      || '',
+    ).trim();
+    if (rawGoalId) return rawGoalId;
+    if (!item.rawTask) return null;
+    const parentStoryId = String(item.rawTask.storyId || item.rawTask.parentId || '').trim();
+    const parentStory = parentStoryId ? stories.find((story) => story.id === parentStoryId) : null;
+    const parentGoalId = String(parentStory?.goalId || '').trim();
+    return parentGoalId || null;
+  }, [stories]);
+
+  const getPlannerItemThemeId = useCallback((item: PlannerItem): number | null => {
+    const directTheme = Number(
+      item.goalTheme
+      ?? (item.rawStory as any)?.theme
+      ?? (item.rawStory as any)?.themeId
+      ?? (item.rawTask as any)?.theme
+      ?? (item.rawTask as any)?.themeId
+      ?? NaN,
+    );
+    if (Number.isFinite(directTheme)) return directTheme;
+    const goalId = getPlannerItemGoalId(item);
+    const goal = goalId ? goals.find((candidate) => candidate.id === goalId) : null;
+    const goalTheme = Number(goal?.theme ?? NaN);
+    return Number.isFinite(goalTheme) ? goalTheme : null;
+  }, [getPlannerItemGoalId, goals]);
+
+  const goalFilterOptions = useMemo(() => {
+    const baseGoals = applyFocusOnlyFilter && activeFocusGoalIds.size > 0
+      ? goals.filter((goal) => isGoalInHierarchySet(goal.id, goals, activeFocusGoalIds))
+      : goals;
+    return selectedThemeIds.length > 0
+      ? baseGoals.filter((goal) => selectedThemeIds.includes(Number(goal.theme)))
+      : baseGoals;
+  }, [activeFocusGoalIds, applyFocusOnlyFilter, goals, selectedThemeIds]);
 
   const dailyLoadHours = useMemo(() => {
     const map = new Map<string, number>();
@@ -348,14 +418,75 @@ const WeeklyPlannerSurface: React.FC<WeeklyPlannerSurfaceProps> = ({
     [dayColumns, weekAssignedItems],
   );
 
-  const filteredPlannerItems = useMemo(() => {
-    return weekAssignedItems.filter((item) => {
-      if (plannerFilter === 'focus') return item.isFocusAligned;
-      if (plannerFilter === 'top3') return !!item.isTop3;
-      if (plannerFilter === 'stories') return item.kind === 'story';
-      return true;
-    });
-  }, [weekAssignedItems, plannerFilter]);
+  const selectedGoalIdSet = useMemo(() => new Set(selectedGoalIds), [selectedGoalIds]);
+  const selectedThemeIdSet = useMemo(() => new Set(selectedThemeIds), [selectedThemeIds]);
+
+  const matchesPlannerFilters = useCallback((item: PlannerItem) => {
+    if (item.kind === 'event') return true;
+    if (applyFocusOnlyFilter && !item.isFocusAligned) return false;
+    if (showTop3Only && !item.isTop3) return false;
+    if (showAiScoredOnly) {
+      const rawEntity = item.rawStory ?? item.rawTask;
+      if (!rawEntity || !Number.isFinite(getEntityAiScore(rawEntity))) return false;
+    }
+    if (selectedGoalIdSet.size > 0) {
+      const goalId = getPlannerItemGoalId(item);
+      if (!goalId || !isGoalInHierarchySet(goalId, goals, selectedGoalIdSet)) return false;
+    }
+    if (selectedThemeIdSet.size > 0) {
+      const themeId = getPlannerItemThemeId(item);
+      if (themeId == null || !selectedThemeIdSet.has(themeId)) return false;
+    }
+    return true;
+  }, [applyFocusOnlyFilter, getPlannerItemGoalId, getPlannerItemThemeId, goals, selectedGoalIdSet, selectedThemeIdSet, showAiScoredOnly, showTop3Only]);
+
+  const comparePlannerPriority = useCallback((a: PlannerItem, b: PlannerItem) => {
+    if (a.rawStory && b.rawStory) return compareTop3Stories(a.rawStory, b.rawStory);
+    if (a.rawTask && b.rawTask) return compareTop3Tasks(a.rawTask, b.rawTask, getTaskManualRank);
+
+    const manualA = a.rawStory
+      ? (getManualPriorityRank(a.rawStory) || 99)
+      : a.rawTask
+        ? (getTaskManualRank(a.rawTask) || 99)
+        : 99;
+    const manualB = b.rawStory
+      ? (getManualPriorityRank(b.rawStory) || 99)
+      : b.rawTask
+        ? (getTaskManualRank(b.rawTask) || 99)
+        : 99;
+    if (manualA !== manualB) return manualA - manualB;
+    if (!!a.isTop3 !== !!b.isTop3) return a.isTop3 ? -1 : 1;
+    const aiA = a.rawStory || a.rawTask ? getEntityAiScore((a.rawStory || a.rawTask) as Story | Task) : -Infinity;
+    const aiB = b.rawStory || b.rawTask ? getEntityAiScore((b.rawStory || b.rawTask) as Story | Task) : -Infinity;
+    if (aiA !== aiB) return aiB - aiA;
+    return String(a.title || '').localeCompare(String(b.title || ''));
+  }, [getTaskManualRank]);
+
+  const sortPlannerItems = useCallback((items: PlannerItem[]) => (
+    [...items].sort((a, b) => {
+      if (a.dayKey !== b.dayKey) return a.dayKey.localeCompare(b.dayKey);
+      const bucketDelta = bucketOrder.indexOf(a.bucket) - bucketOrder.indexOf(b.bucket);
+      if (bucketDelta !== 0) return bucketDelta;
+      if ((a.rawStory || a.rawTask) && (b.rawStory || b.rawTask)) {
+        const priorityDelta = comparePlannerPriority(a, b);
+        if (priorityDelta !== 0) return priorityDelta;
+      }
+      const aMs = a.sortMs ?? Number.MAX_SAFE_INTEGER;
+      const bMs = b.sortMs ?? Number.MAX_SAFE_INTEGER;
+      if (aMs !== bMs) return aMs - bMs;
+      return String(a.title || '').localeCompare(String(b.title || ''));
+    })
+  ), [comparePlannerPriority]);
+
+  const filteredPlannerItems = useMemo(
+    () => sortPlannerItems(weekAssignedItems.filter((item) => matchesPlannerFilters(item))),
+    [matchesPlannerFilters, sortPlannerItems, weekAssignedItems],
+  );
+
+  const filteredReviewCandidates = useMemo(
+    () => sortPlannerItems(reviewCandidates.filter((item) => matchesPlannerFilters(item))),
+    [matchesPlannerFilters, reviewCandidates, sortPlannerItems],
+  );
 
   const groupedPlannerItems = useMemo(() => {
     const grouped = new Map<string, Map<TimelineBucket, PlannerItem[]>>();
@@ -370,8 +501,15 @@ const WeeklyPlannerSurface: React.FC<WeeklyPlannerSurfaceProps> = ({
       list.push(item);
       bucketMap.set(item.bucket, list);
     });
+    grouped.forEach((bucketMap, dayKey) => {
+      const nextBucketMap = new Map(bucketMap);
+      bucketOrder.forEach((bucket) => {
+        nextBucketMap.set(bucket, sortPlannerItems(nextBucketMap.get(bucket) || []));
+      });
+      grouped.set(dayKey, nextBucketMap);
+    });
     return grouped;
-  }, [dayColumns, filteredPlannerItems]);
+  }, [dayColumns, filteredPlannerItems, sortPlannerItems]);
 
   const bucketLoadByDay = useMemo(() => {
     const grouped = new Map<string, Map<TimelineBucket, number>>();
@@ -510,11 +648,11 @@ const WeeklyPlannerSurface: React.FC<WeeklyPlannerSurfaceProps> = ({
 
   const recommendationByItemId = useMemo(() => {
     const next = new Map<string, PlannerRecommendation>();
-    reviewCandidates.forEach((item) => {
+    filteredReviewCandidates.forEach((item) => {
       next.set(item.id, deriveAutoPlacement(item));
     });
     return next;
-  }, [reviewCandidates, weekStartMs, weekEndMs, dailyLoadHours, nextSprint, dayCapacityByKey, bucketLoadByDay, themeAllocationByDay, themePalette, dayColumns]);
+  }, [filteredReviewCandidates, weekStartMs, weekEndMs, dailyLoadHours, nextSprint, dayCapacityByKey, bucketLoadByDay, themeAllocationByDay, themePalette, dayColumns]);
 
   const persistPlanningSummary = async (updates?: Partial<{ acceptedMoves: number; acceptedDefers: number; view: WeeklyPlannerView }>) => {
     if (!currentUser?.uid) return;
@@ -616,36 +754,56 @@ const WeeklyPlannerSurface: React.FC<WeeklyPlannerSurfaceProps> = ({
             : `${item.title} moved to ${new Date(targetDateMs).toLocaleDateString()} ${bucketLabel(targetBucket).toLowerCase()}.`,
         });
       } else if (item.rawTask) {
-        // Direct canonical write — user is explicitly placing this item, skip scheduling engine
-        const dayMs = dayStartMs(targetDateMs);
-        await updateDoc(doc(db, 'tasks', item.rawTask.id), {
-          dueDate: dayMs,
-          timeOfDay: targetBucket,
-          updatedAt: Date.now(),
+        const durationMinutes = Math.max(
+          15,
+          Math.round((((item.scheduledBlockEnd || 0) - (item.scheduledBlockStart || 0)) / 60000) || Number((item.rawTask as any)?.estimateMin || 0) || 30),
+        );
+        const exactTiming = buildTargetTiming(targetDateMs, targetBucket, durationMinutes);
+        await schedulePlannerItemMutation({
+          itemType: 'task',
+          itemId: item.rawTask.id,
+          targetDateMs,
+          targetBucket,
+          intent: 'move',
+          source: 'weekly_planner',
+          linkedBlockId: item.scheduledBlockId || null,
+          durationMinutes,
+          exactTargetStartMs: exactTiming.startMs,
+          exactTargetEndMs: exactTiming.endMs,
         });
         const acceptedMoves = planningSummary.acceptedMoves + 1;
         await persistPlanningSummary({ acceptedMoves });
         setFeedback({
           variant: 'success',
           text: recommendation?.rationale
-            ? `${item.title} moved to ${new Date(dayMs).toLocaleDateString()} ${bucketLabel(targetBucket).toLowerCase()}. ${recommendation.rationale}`
-            : `${item.title} moved to ${new Date(dayMs).toLocaleDateString()} ${bucketLabel(targetBucket).toLowerCase()}.`,
+            ? `${item.title} moved to ${new Date(exactTiming.startMs).toLocaleDateString()} ${bucketLabel(targetBucket).toLowerCase()}. ${recommendation.rationale}`
+            : `${item.title} moved to ${new Date(exactTiming.startMs).toLocaleDateString()} ${bucketLabel(targetBucket).toLowerCase()}.`,
         });
       } else if (item.rawStory) {
-        // Direct canonical write — user is explicitly placing this item, skip scheduling engine
-        const dayMs = dayStartMs(targetDateMs);
-        await updateDoc(doc(db, 'stories', item.rawStory.id), {
-          dueDate: dayMs,
-          timeOfDay: targetBucket,
-          updatedAt: Date.now(),
+        const durationMinutes = Math.max(
+          30,
+          Math.round((((item.scheduledBlockEnd || 0) - (item.scheduledBlockStart || 0)) / 60000) || Number((item.rawStory as any)?.estimateMin || 0) || 60),
+        );
+        const exactTiming = buildTargetTiming(targetDateMs, targetBucket, durationMinutes);
+        await schedulePlannerItemMutation({
+          itemType: 'story',
+          itemId: item.rawStory.id,
+          targetDateMs,
+          targetBucket,
+          intent: 'move',
+          source: 'weekly_planner',
+          linkedBlockId: item.scheduledBlockId || null,
+          durationMinutes,
+          exactTargetStartMs: exactTiming.startMs,
+          exactTargetEndMs: exactTiming.endMs,
         });
         const acceptedMoves = planningSummary.acceptedMoves + 1;
         await persistPlanningSummary({ acceptedMoves });
         setFeedback({
           variant: 'success',
           text: recommendation?.rationale
-            ? `${item.title} moved to ${new Date(dayMs).toLocaleDateString()} ${bucketLabel(targetBucket).toLowerCase()}. ${recommendation.rationale}`
-            : `${item.title} moved to ${new Date(dayMs).toLocaleDateString()} ${bucketLabel(targetBucket).toLowerCase()}.`,
+            ? `${item.title} moved to ${new Date(exactTiming.startMs).toLocaleDateString()} ${bucketLabel(targetBucket).toLowerCase()}. ${recommendation.rationale}`
+            : `${item.title} moved to ${new Date(exactTiming.startMs).toLocaleDateString()} ${bucketLabel(targetBucket).toLowerCase()}.`,
         });
       } else {
         const acceptedMoves = planningSummary.acceptedMoves + 1;
@@ -810,7 +968,7 @@ const WeeklyPlannerSurface: React.FC<WeeklyPlannerSurfaceProps> = ({
           </div>
         </div>
         <div className="d-flex align-items-center gap-2 flex-wrap">
-          <Badge bg="secondary">{reviewCandidates.length} items</Badge>
+          <Badge bg="secondary">{filteredReviewCandidates.length} items</Badge>
           <Badge bg="info">{planningSummary.acceptedMoves} planned</Badge>
           <Badge bg="warning" text="dark">{planningSummary.acceptedDefers} deferred</Badge>
         </div>
@@ -843,20 +1001,40 @@ const WeeklyPlannerSurface: React.FC<WeeklyPlannerSurfaceProps> = ({
         >
           Planner
         </Button>
-        {activeView === 'planner' && (
-          <>
-            <Button size="sm" variant={plannerFilter === 'all' ? 'dark' : 'outline-dark'} onClick={() => setPlannerFilter('all')}>
-              All
-            </Button>
-            <Button size="sm" variant={plannerFilter === 'focus' ? 'success' : 'outline-success'} onClick={() => setPlannerFilter('focus')}>
-              Focus
-            </Button>
-            <Button size="sm" variant={plannerFilter === 'top3' ? 'danger' : 'outline-danger'} onClick={() => setPlannerFilter('top3')}>
-              Top 3
-            </Button>
-            <Button size="sm" variant={plannerFilter === 'stories' ? 'info' : 'outline-info'} onClick={() => setPlannerFilter('stories')}>
-              Stories
-            </Button>
+        <>
+          <GoalMultiSelect
+            goals={goalFilterOptions}
+            selectedIds={selectedGoalIds}
+            onChange={setSelectedGoalIds}
+            getLabel={(goal) => getGoalDisplayPath(goal.id, goals)}
+            style={{ minWidth: 220 }}
+          />
+          <ThemeMultiSelect
+            selectedIds={selectedThemeIds}
+            onChange={setSelectedThemeIds}
+            style={{ minWidth: 180 }}
+          />
+          <Form.Check
+            type="switch"
+            label="Top 3 only"
+            checked={showTop3Only}
+            onChange={(e) => setShowTop3Only(e.target.checked)}
+          />
+          <Form.Check
+            type="switch"
+            label="AI-scored only"
+            checked={showAiScoredOnly}
+            onChange={(e) => setShowAiScoredOnly(e.target.checked)}
+          />
+          <Form.Check
+            type="switch"
+            label={`Focus goals only${activeFocusGoalIds.size ? ` (${activeFocusGoalIds.size})` : ''}`}
+            checked={applyFocusOnlyFilter}
+            onChange={(e) => setApplyFocusOnlyFilter(e.target.checked)}
+            disabled={activeFocusGoalIds.size === 0}
+          />
+          <Badge bg="light" text="dark">Completed work hidden</Badge>
+          {activeView === 'planner' && (
             <Form.Select
               size="sm"
               value={detailLevel}
@@ -868,8 +1046,8 @@ const WeeklyPlannerSurface: React.FC<WeeklyPlannerSurfaceProps> = ({
               <option value="compact">Detail: Compact</option>
               <option value="minimal">Detail: Minimal</option>
             </Form.Select>
-          </>
-        )}
+          )}
+        </>
       </div>
 
       {loading ? (
@@ -879,7 +1057,7 @@ const WeeklyPlannerSurface: React.FC<WeeklyPlannerSurfaceProps> = ({
       ) : activeView === 'table' ? (
         isMobileLayout ? (
           <div className="d-flex flex-column gap-2">
-            {reviewCandidates.map((item) => {
+            {filteredReviewCandidates.map((item) => {
               const recommendation = recommendationByItemId.get(item.id) || null;
               return (
                 <Card key={item.id} className="shadow-sm border">
@@ -929,7 +1107,7 @@ const WeeklyPlannerSurface: React.FC<WeeklyPlannerSurfaceProps> = ({
               </tr>
             </thead>
             <tbody>
-              {reviewCandidates.map((item) => {
+              {filteredReviewCandidates.map((item) => {
                 const recommendation = recommendationByItemId.get(item.id) || null;
                 return (
                   <tr key={item.id}>

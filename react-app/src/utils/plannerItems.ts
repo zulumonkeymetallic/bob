@@ -1,7 +1,9 @@
 import type { Goal, Story, Task } from '../types';
 import { getGoalAncestors, getGoalDisplayPath } from './goalHierarchy';
+import { getManualPriorityRank } from './manualPriority';
 import { isRecurringDueOnDate, resolveTaskDueMs } from './recurringTaskDue';
 import { storyStatusText, taskStatusText } from './storyCardFormatting';
+import { isTop3Story, isTop3Task } from './top3';
 import {
   bucketFromTime,
   bucketPseudoTime,
@@ -143,13 +145,6 @@ export const normalizeStoryStatus = (value: any): number => {
   if (raw === 'in progress' || raw === 'in-progress' || raw === 'active' || raw === 'doing' || raw === 'blocked') return 2;
   if (raw === 'planned' || raw === 'ready') return 1;
   return 0;
-};
-
-const isTop3ForToday = (value: any): boolean => {
-  if (value?.aiTop3ForDay !== true) return false;
-  const top3Date = String(value?.aiTop3Date || '').trim();
-  if (!top3Date) return true;
-  return top3Date.slice(0, 10) === new Date().toISOString().slice(0, 10);
 };
 
 export const getChoreKind = (task: Task): 'chore' | 'routine' | 'habit' | null => {
@@ -441,7 +436,14 @@ export const buildPlannerItems = ({
       const goal = goalId ? goalMap.get(goalId) || null : null;
       const deferredUntilMs = toMs((task as any).deferredUntil);
       if (deferredUntilMs != null && startOfDayMs(deferredUntilMs) > rangeEndDayMs) return;
-      const top3ForToday = isTop3ForToday(task);
+      const top3ForToday = isTop3Task(
+        task,
+        (candidateTask) => {
+          const directRank = getManualPriorityRank(candidateTask);
+          if (directRank) return directRank;
+          return getManualPriorityRank(parentStory);
+        },
+      );
       const dueMs = linkedBlock ? toMs(linkedBlock.start) : resolveTaskDueMs(task);
       const endMs = linkedBlock ? toMs(linkedBlock.end) : null;
       const include = linkedBlock
@@ -499,7 +501,7 @@ export const buildPlannerItems = ({
       const linkedBlock = blockByStoryId.get(story.id) || null;
       const deferredUntilMs = toMs((story as any).deferredUntil);
       if (deferredUntilMs != null && startOfDayMs(deferredUntilMs) > rangeEndDayMs) return;
-      const top3ForToday = isTop3ForToday(story);
+      const top3ForToday = isTop3Story(story);
       const dueMs = linkedBlock ? toMs(linkedBlock.start) : toMs((story as any).targetDate || (story as any).dueDate || (story as any).plannedStartDate);
       const endMs = linkedBlock ? toMs(linkedBlock.end) : null;
       const include = linkedBlock

@@ -73,6 +73,8 @@ import EditStoryModal from '../EditStoryModal';
 import DayCapacityWarningBanner from './DayCapacityWarningBanner';
 import { useSidebar } from '../../contexts/SidebarContext';
 import PlanActionBar from './PlanActionBar';
+import UnifiedPlannerLevels from './UnifiedPlannerLevels';
+import { normalizePlannerLevel } from '../../utils/plannerRoutes';
 
 const locales = { 'en-GB': enGB } as const;
 const localizer = dateFnsLocalizer({
@@ -231,10 +233,11 @@ const hexToRgba = (hex: string, alpha: number) => {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 };
 
-const UnifiedPlannerPage: React.FC = () => {
+const UnifiedPlannerCalendarPage: React.FC = () => {
   const { currentUser } = useAuth();
   const { showSidebar } = useSidebar();
   const { themes: globalThemes } = useGlobalThemes();
+  const location = useLocation();
   const [stories, setStories] = useState<any[]>([]);
 
   const legacyThemeNameById = useMemo(() => {
@@ -408,7 +411,6 @@ const UnifiedPlannerPage: React.FC = () => {
   }, [range.start, range.end, view]);
 
   const planner = useUnifiedPlannerData(range);
-  const location = useLocation();
   const navigate = useNavigate();
   const { currentPersona } = usePersona();
 
@@ -2740,6 +2742,17 @@ const UnifiedPlannerPage: React.FC = () => {
     />
     </>
   );
+};
+
+const UnifiedPlannerPage: React.FC = () => {
+  const location = useLocation();
+  const plannerLevel = useMemo(() => normalizePlannerLevel(new URLSearchParams(location.search).get('level')), [location.search]);
+
+  if (plannerLevel !== 'calendar') {
+    return <UnifiedPlannerLevels />;
+  }
+
+  return <UnifiedPlannerCalendarPage />;
 };
 
 export default UnifiedPlannerPage;

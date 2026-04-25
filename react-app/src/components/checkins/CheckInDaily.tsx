@@ -12,6 +12,7 @@ import type { Goal, Story, Task } from '../../types';
 import EditTaskModal from '../EditTaskModal';
 import EditStoryModal from '../EditStoryModal';
 import { callDeltaReplan } from '../../utils/plannerOrchestration';
+import './CheckInDaily.css';
 
 type CheckInItemType = 'block' | 'instance' | 'habit' | 'task' | 'chore' | 'routine';
 
@@ -150,7 +151,7 @@ const CheckInDaily: React.FC<CheckInDailyProps> = ({ embedded = false, fixedDate
   }>>({});
   const [healthSaving, setHealthSaving] = useState(false);
   const [healthSaved, setHealthSaved] = useState(false);
-  const [viewMode, setViewMode] = useState<'card' | 'list'>('card');
+  const [showHealthEditor, setShowHealthEditor] = useState(false);
   const [quickEditTask, setQuickEditTask] = useState<Task | null>(null);
   const [quickEditStory, setQuickEditStory] = useState<Story | null>(null);
   const [goals, setGoals] = useState<Goal[]>([]);
@@ -1191,6 +1192,7 @@ const CheckInDaily: React.FC<CheckInDailyProps> = ({ embedded = false, fixedDate
 
   const completedCount = items.filter((i) => i.completed).length;
   const nowMs = Date.now();
+  const completionPct = items.length ? Math.round((completedCount / items.length) * 100) : 0;
   const formatTime = (value?: number | null) => {
     if (!value) return '—';
     return new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -1222,6 +1224,17 @@ const CheckInDaily: React.FC<CheckInDailyProps> = ({ embedded = false, fixedDate
   };
 
   const visibleItems = hideCompleted ? items.filter((i) => !i.completed) : items;
+  const dirtyCount = dirtyKeys.size;
+  const hasManualDraftHealthInputs = Object.values(manualInputs).some((v) => v && v !== '');
+  const healthStatusLabel = health.healthkitStatus === 'synced' ? 'HealthKit synced' : 'Manual or partial';
+  const hasMissingHealthFields = [
+    effectiveSleepMinutes,
+    effectiveSteps,
+    effectiveWorkoutMinutes,
+    effectiveProtein,
+    effectiveCarbs,
+    effectiveFat,
+  ].some((value) => value == null);
 
   const BUCKETS = [
     { key: 'morning' as const, label: 'Morning', range: '5am – 12pm' },
@@ -1231,52 +1244,148 @@ const CheckInDaily: React.FC<CheckInDailyProps> = ({ embedded = false, fixedDate
   ];
 
   const itemsByBucket = BUCKETS.reduce((acc, b) => {
-    acc[b.key] = visibleItems.filter((i) => getBucketForItem(i) === b.key);
+    acc[b.key] = visibleItems
+      .filter((i) => getBucketForItem(i) === b.key)
+      .sort((a, b2) => (a.start || Number.MAX_SAFE_INTEGER) - (b2.start || Number.MAX_SAFE_INTEGER));
     return acc;
   }, {} as Record<string, DailyCheckInItem[]>);
 
-  const renderCheckInCard = (item: DailyCheckInItem) => {
+  const scheduledItems = visibleItems
+    .filter((item) => !!item.start)
+    .sort((a, b) => (a.start || 0) - (b.start || 0));
+
+  const dueTaskAndChoreItems = visibleItems
+    .filter((item) => {
+      const type = String(item.taskType || item.sourceType || item.type || '').toLowerCase();
+      if (['chore', 'routine', 'habit'].includes(type)) return true;
+      return !!item.taskId && !item.storyId;
+    })
+    .sort((a, b) => {
+      const overdueDelta = Number(isItemOverdue(b)) - Number(isItemOverdue(a));
+      if (overdueDelta !== 0) return overdueDelta;
+      return (a.start || Number.MAX_SAFE_INTEGER) - (b.start || Number.MAX_SAFE_INTEGER);
+    });
+
+  const storyItems = visibleItems
+    .filter((item) => !!item.storyId)
+    .sort((a, b) => (a.start || Number.MAX_SAFE_INTEGER) - (b.start || Number.MAX_SAFE_INTEGER));
+
+  const summaryCards = [
+    {
+      key: 'completion',
+      eyebrow: 'Check-in status',
+      title: `${completedCount}/${items.length}`,
+      subtitle: items.length ? `${completionPct}% complete today` : 'No items planned yet',
+    },
+    {
+      key: 'stories',
+      eyebrow: 'Story work',
+      title: `${storyItems.length}`,
+      subtitle: storyItems.length ? `${storyItems.filter((item) => !!item.start).length} scheduled on the calendar` : 'No story work linked today',
+    },
+    {
+      key: 'tasks',
+      eyebrow: 'Tasks and chores due',
+      title: `${dueTaskAndChoreItems.length}`,
+      subtitle: dueTaskAndChoreItems.length
+        ? `${dueTaskAndChoreItems.filter((item) => isItemOverdue(item)).length} currently overdue`
+        : 'Nothing due right now',
+    },
+    {
+      key: 'health',
+      eyebrow: 'Health snapshot',
+      title: effectiveSteps != null ? Number(effectiveSteps).toLocaleString() : '—',
+      subtitle: effectiveProtein != null
+        ? `${Math.round(Number(effectiveProtein))}g protein tracked`
+        : 'Macros pending',
+    },
+  ];
+
+  const healthCards = [
+    {
+      key: 'steps',
+      label: 'Steps',
+      value: effectiveSteps != null ? Number(effectiveSteps).toLocaleString() : 'Add data',
+      detail: health.healthkitStepGoal ? `Goal ${Number(health.healthkitStepGoal).toLocaleString()}` : 'Daily movement',
+    },
+    {
+      key: 'sleep',
+      label: 'Sleep',
+      value: effectiveSleepMinutes != null ? `${(Number(effectiveSleepMinutes) / 60).toFixed(1)}h` : 'Add data',
+      detail: effectiveWorkoutMinutes != null ? `${Math.round(Number(effectiveWorkoutMinutes))}m workout` : 'Recovery first',
+    },
+    {
+      key: 'macros',
+      label: 'Macros',
+      value: effectiveProtein != null || effectiveCarbs != null || effectiveFat != null
+        ? `${effectiveProtein != null ? `${Math.round(Number(effectiveProtein))}P` : '—P'} · ${effectiveCarbs != null ? `${Math.round(Number(effectiveCarbs))}C` : '—C'} · ${effectiveFat != null ? `${Math.round(Number(effectiveFat))}F` : '—F'}`
+        : 'Add data',
+      detail: effectiveCalories != null ? `${Math.round(Number(effectiveCalories))} kcal` : 'Calories pending',
+    },
+    {
+      key: 'body',
+      label: 'Body',
+      value: effectiveWeightKg != null ? `${Number(effectiveWeightKg).toFixed(1)} kg` : (effectiveBodyFatPct != null ? `${Number(effectiveBodyFatPct).toFixed(1)}% fat` : 'Add data'),
+      detail: effectiveBodyFatPct != null ? `${Number(effectiveBodyFatPct).toFixed(1)}% body fat` : (health.healthkitReadinessLabel || 'Readiness pending'),
+    },
+  ];
+
+  const getItemTimingLabel = (item: DailyCheckInItem): string => {
+    if (item.start && item.end) return `${formatTime(item.start)} – ${formatTime(item.end)}`;
+    if (item.start) return formatTime(item.start);
+    if (item.type === 'habit' || item.type === 'routine' || item.type === 'chore') return 'Due today';
+    if (item.taskId && !item.storyId) return 'Due today';
+    return 'Anytime';
+  };
+
+  const getItemSecondaryMeta = (item: DailyCheckInItem): string[] => {
+    const parts: string[] = [];
+    if (item.points != null) parts.push(`${item.points} pts`);
+    else if (item.durationMin) parts.push(`${item.durationMin}m`);
+    if (item.goalTitle) parts.push(item.goalTitle);
+    if (dirtyKeys.has(item.key)) parts.push('Unsaved changes');
+    return parts;
+  };
+
+  const renderWorkCard = (item: DailyCheckInItem) => {
     const badge = getBadgeForItem(item);
     const overdue = isItemOverdue(item);
-    const timeLabel = item.start && item.end
-      ? `${formatTime(item.start)} – ${formatTime(item.end)}`
-      : item.start ? formatTime(item.start) : null;
+    const timeLabel = getItemTimingLabel(item);
+    const commentValue = item.note || '';
+    const latestComment = commentValue || item.lastComment || '';
+    const itemMeta = getItemSecondaryMeta(item);
     return (
-      <div
-        key={item.key}
-        className={`d-flex align-items-start gap-2 p-2 mb-2 rounded border${item.completed ? ' opacity-50' : ''}${overdue ? ' border-danger' : ''}`}
-        style={{ background: item.completed ? 'var(--bs-light-bg-subtle, #f8f9fa)' : undefined }}
-      >
-        <Form.Check
-          type="checkbox"
-          className="mt-1 flex-shrink-0"
-          checked={item.completed}
-          onChange={() => handleToggle(item)}
-          aria-label={`Toggle ${item.title}`}
-        />
-        <div className="flex-grow-1 min-w-0">
-          <div className="d-flex align-items-center gap-2 flex-wrap">
-            <span className={`fw-semibold${item.completed ? ' text-decoration-line-through text-muted' : ''}`}
-              style={{ wordBreak: 'break-word' }}>
-              {item.title}
-            </span>
-            <Badge bg={badge.bg} className="text-capitalize" style={{ fontSize: '0.7rem' }}>{badge.label}</Badge>
-            {overdue && <Badge bg="danger" style={{ fontSize: '0.7rem' }}>Overdue</Badge>}
-            {item.completed && item.completedBy === 'mac_sync' && <Badge bg="secondary" style={{ fontSize: '0.65rem' }}>Synced</Badge>}
+      <div key={item.key} className={`daily-checkin-work-card${item.completed ? ' is-complete' : ''}${overdue ? ' is-overdue' : ''}`}>
+        <div className="daily-checkin-work-card__header">
+          <div className="daily-checkin-work-card__title-row">
+            <Form.Check
+              type="checkbox"
+              className="mt-0"
+              checked={item.completed}
+              onChange={() => handleToggle(item)}
+              aria-label={`Toggle ${item.title}`}
+            />
+            <div className="min-w-0">
+              <div className={`daily-checkin-work-card__title${item.completed ? ' is-complete' : ''}`}>{item.title}</div>
+              <div className="daily-checkin-work-card__time">{timeLabel}</div>
+            </div>
           </div>
-          <div className="d-flex align-items-center gap-3 mt-1 flex-wrap">
-            {dirtyKeys.has(item.key) && (
-              <span title="Unsaved changes" style={{ fontSize: '0.7rem', color: 'var(--bs-warning-text-emphasis, #664d03)' }}>● unsaved</span>
-            )}
-            {timeLabel && <span className="text-muted" style={{ fontSize: '0.78rem' }}>{timeLabel}</span>}
-            {item.points != null && <span className="text-muted" style={{ fontSize: '0.78rem' }}>{item.points} pts</span>}
-            {item.durationMin && !item.points && <span className="text-muted" style={{ fontSize: '0.78rem' }}>{item.durationMin}m</span>}
-            {item.goalTitle && <span className="text-muted" style={{ fontSize: '0.78rem' }}>Goal: {item.goalTitle}</span>}
+          <div className="daily-checkin-work-card__badges">
+            <Badge bg={badge.bg} className="text-capitalize">{badge.label}</Badge>
+            {overdue && <Badge bg="danger">Overdue</Badge>}
+            {item.completed && item.completedBy === 'mac_sync' && <Badge bg="secondary">Synced</Badge>}
+          </div>
+        </div>
+
+        {(itemMeta.length > 0 || item.storyRef || item.taskRef) && (
+          <div className="daily-checkin-work-card__meta">
+            {itemMeta.map((entry) => (
+              <span key={`${item.key}-${entry}`} className="daily-checkin-work-card__meta-pill">{entry}</span>
+            ))}
             {item.storyRef && (
               <button
                 type="button"
-                className="btn btn-link p-0 text-decoration-none"
-                style={{ fontSize: '0.78rem' }}
+                className="btn btn-link p-0 text-decoration-none daily-checkin-work-card__ref"
                 onClick={() => { void openStoryEdit(item); }}
               >
                 {item.storyRef}
@@ -1285,204 +1394,99 @@ const CheckInDaily: React.FC<CheckInDailyProps> = ({ embedded = false, fixedDate
             {item.taskRef && !item.storyRef && (
               <button
                 type="button"
-                className="btn btn-link p-0 text-decoration-none"
-                style={{ fontSize: '0.78rem' }}
+                className="btn btn-link p-0 text-decoration-none daily-checkin-work-card__ref"
                 onClick={() => { void openTaskEdit(item); }}
               >
                 {item.taskRef}
               </button>
             )}
           </div>
-          {supportsProgressForItem(item) && (
-            <Form.Control
-              size="sm"
-              type="number"
-              min={0}
-              max={100}
-              className="mt-1"
-              style={{ maxWidth: 120 }}
-              placeholder="Progress %"
-              value={item.progressPct ?? ''}
-              onChange={(e) => {
-                const v = e.target.value === '' ? null : Math.min(100, Math.max(0, Number(e.target.value)));
-                handleProgressChange(item.key, v);
-              }}
-            />
-          )}
-          {supportsCommentsForItem(item) && (
-            <Form.Control
-              size="sm"
-              className="mt-1"
-              value={item.note || ''}
-              placeholder="Add comment…"
-              onChange={(e) => handleNoteChange(item.key, e.target.value)}
-            />
-          )}
-          {supportsCommentsForItem(item) && !!item.note && (
-            <div className="text-muted mt-1" style={{ fontSize: '0.75rem' }}>
-              Last comment: {item.note || item.lastComment}
-              {item.lastCommentAt ? ` (${formatTime(item.lastCommentAt)})` : ''}
-            </div>
-          )}
-          {supportsCommentsForItem(item) && !item.note && !!item.lastComment && (
-            <div className="text-muted mt-1" style={{ fontSize: '0.75rem' }}>
-              Last comment: {item.lastComment}
-              {item.lastCommentAt ? ` (${formatTime(item.lastCommentAt)})` : ''}
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  };
-
-  const renderCheckInListRow = (item: DailyCheckInItem) => {
-    const badge = getBadgeForItem(item);
-    const overdue = isItemOverdue(item);
-    const timeLabel = item.start && item.end
-      ? `${formatTime(item.start)} – ${formatTime(item.end)}`
-      : item.start ? formatTime(item.start) : null;
-
-    return (
-      <div
-        key={item.key}
-        className={`d-flex flex-column gap-2 p-2 mb-2 border rounded${item.completed ? ' opacity-50' : ''}${overdue ? ' border-danger' : ''}`}
-      >
-        <div className="d-flex align-items-center gap-2">
-          <Form.Check
-            type="checkbox"
-            className="mt-0"
-            checked={item.completed}
-            onChange={() => handleToggle(item)}
-            aria-label={`Toggle ${item.title}`}
-          />
-          <span className={`fw-semibold${item.completed ? ' text-decoration-line-through text-muted' : ''}`}>
-            {item.title}
-          </span>
-          <Badge bg={badge.bg} className="text-capitalize" style={{ fontSize: '0.7rem' }}>{badge.label}</Badge>
-          {overdue && <Badge bg="danger" style={{ fontSize: '0.7rem' }}>Overdue</Badge>}
-          <div className="ms-auto text-muted" style={{ fontSize: '0.78rem' }}>
-            {timeLabel || 'Anytime'}
-          </div>
-        </div>
-        <div className="d-flex align-items-center gap-2 flex-wrap">
-          {dirtyKeys.has(item.key) && (
-            <span title="Unsaved changes" style={{ fontSize: '0.7rem', color: 'var(--bs-warning-text-emphasis, #664d03)' }}>● unsaved</span>
-          )}
-          {item.points != null && <span className="text-muted" style={{ fontSize: '0.78rem' }}>{item.points} pts</span>}
-          {item.goalTitle && <span className="text-muted" style={{ fontSize: '0.78rem' }}>Goal: {item.goalTitle}</span>}
-          {item.storyRef && (
-            <button
-              type="button"
-              className="btn btn-link p-0 text-decoration-none"
-              style={{ fontSize: '0.78rem' }}
-              onClick={() => { void openStoryEdit(item); }}
-            >
-              {item.storyRef}
-            </button>
-          )}
-          {item.taskRef && !item.storyRef && (
-            <button
-              type="button"
-              className="btn btn-link p-0 text-decoration-none"
-              style={{ fontSize: '0.78rem' }}
-              onClick={() => { void openTaskEdit(item); }}
-            >
-              {item.taskRef}
-            </button>
-          )}
-        </div>
-        {supportsProgressForItem(item) && (
-          <Form.Control
-            size="sm"
-            type="number"
-            min={0}
-            max={100}
-            style={{ maxWidth: 160 }}
-            placeholder="Progress %"
-            value={item.progressPct ?? ''}
-            onChange={(e) => {
-              const v = e.target.value === '' ? null : Math.min(100, Math.max(0, Number(e.target.value)));
-              handleProgressChange(item.key, v);
-            }}
-          />
         )}
-        {supportsCommentsForItem(item) && (
-          <>
-            <Form.Control
-              size="sm"
-              value={item.note || ''}
-              placeholder="Add comment…"
-              onChange={(e) => handleNoteChange(item.key, e.target.value)}
-            />
-            {!!item.note && (
-              <div className="text-muted" style={{ fontSize: '0.75rem' }}>
-                Last comment: {item.note || item.lastComment}
-                {item.lastCommentAt ? ` (${formatTime(item.lastCommentAt)})` : ''}
-              </div>
+
+        {(supportsProgressForItem(item) || supportsCommentsForItem(item)) && (
+          <div className="daily-checkin-work-card__editor">
+            {supportsProgressForItem(item) && (
+              <Form.Group className="daily-checkin-work-card__field">
+                <Form.Label className="daily-checkin-work-card__label">Progress</Form.Label>
+                <Form.Control
+                  size="sm"
+                  type="number"
+                  min={0}
+                  max={100}
+                  placeholder="0-100"
+                  value={item.progressPct ?? ''}
+                  onChange={(e) => {
+                    const v = e.target.value === '' ? null : Math.min(100, Math.max(0, Number(e.target.value)));
+                    handleProgressChange(item.key, v);
+                  }}
+                />
+              </Form.Group>
             )}
-            {!item.note && !!item.lastComment && (
-              <div className="text-muted" style={{ fontSize: '0.75rem' }}>
-                Last comment: {item.lastComment}
-                {item.lastCommentAt ? ` (${formatTime(item.lastCommentAt)})` : ''}
-              </div>
+            {supportsCommentsForItem(item) && (
+              <Form.Group className="daily-checkin-work-card__field daily-checkin-work-card__field--comment">
+                <Form.Label className="daily-checkin-work-card__label">Check-in note</Form.Label>
+                <Form.Control
+                  as="textarea"
+                  rows={2}
+                  size="sm"
+                  value={commentValue}
+                  placeholder="What moved forward? Any blockers?"
+                  onChange={(e) => handleNoteChange(item.key, e.target.value)}
+                />
+              </Form.Group>
             )}
-          </>
+          </div>
+        )}
+
+        {!!latestComment && supportsCommentsForItem(item) && (
+          <div className="daily-checkin-work-card__comment">
+            <span className="daily-checkin-work-card__comment-label">Latest:</span> {latestComment}
+            {item.lastCommentAt ? ` (${formatTime(item.lastCommentAt)})` : ''}
+          </div>
         )}
       </div>
     );
   };
 
   return (
-    <div className={embedded ? 'p-0' : 'p-3'}>
-      {!embedded && <h3 className="mb-3">Daily Check-in</h3>}
-      <div className="d-flex flex-wrap gap-2 align-items-center mb-3">
-        {!fixedDate && (
-          <Form.Control
-            type="date"
-            value={format(date, 'yyyy-MM-dd')}
-            onChange={(e) => setDate(new Date(e.target.value))}
-            style={{ maxWidth: 200 }}
+    <div className={`daily-checkin-shell ${embedded ? 'daily-checkin-shell--embedded' : ''}`}>
+      <div className="daily-checkin-hero">
+        <div>
+          <div className="daily-checkin-hero__eyebrow">Daily Check-in</div>
+          <h3 className="daily-checkin-hero__title">{format(date, 'EEEE d MMMM')}</h3>
+          <div className="daily-checkin-hero__subtitle">
+            Review scheduled stories, due tasks and chores, then capture progress so tonight’s planning stays accurate.
+          </div>
+        </div>
+        <div className="daily-checkin-hero__actions">
+          {!fixedDate && (
+            <Form.Control
+              type="date"
+              value={format(date, 'yyyy-MM-dd')}
+              onChange={(e) => setDate(new Date(e.target.value))}
+              className="daily-checkin-date-input"
+            />
+          )}
+          <Form.Check
+            type="switch"
+            id="hide-completed-switch"
+            label="Hide completed"
+            checked={hideCompleted}
+            onChange={() => setHideCompleted((p) => !p)}
           />
-        )}
-        <Badge bg={completedCount === items.length && items.length > 0 ? 'success' : 'secondary'}>
-          {completedCount}/{items.length} done
-        </Badge>
-        <Form.Check
-          type="switch"
-          id="hide-completed-switch"
-          label="Hide completed"
-          checked={hideCompleted}
-          onChange={() => setHideCompleted((p) => !p)}
-          className="ms-2"
-        />
-        <div className="btn-group ms-2" role="group" aria-label="Daily check-in view mode">
           <Button
             size="sm"
-            variant={viewMode === 'card' ? 'secondary' : 'outline-secondary'}
-            onClick={() => setViewMode('card')}
+            variant="outline-secondary"
+            onClick={refreshComments}
+            disabled={refreshingComments || loading}
+            title="Reload latest comments from activity stream"
           >
-            Card view
+            {refreshingComments ? <Spinner size="sm" animation="border" /> : 'Refresh comments'}
           </Button>
-          <Button
-            size="sm"
-            variant={viewMode === 'list' ? 'secondary' : 'outline-secondary'}
-            onClick={() => setViewMode('list')}
-          >
-            List view
+          <Button variant="primary" onClick={handleSave} disabled={saving || loading}>
+            {saving ? 'Saving…' : dirtyCount > 0 ? `Save check-in (${dirtyCount})` : 'Save check-in'}
           </Button>
         </div>
-        <Button
-          size="sm"
-          variant="outline-secondary"
-          onClick={refreshComments}
-          disabled={refreshingComments || loading}
-          title="Reload latest comments from activity stream"
-        >
-          {refreshingComments ? <Spinner size="sm" animation="border" /> : '↺ Comments'}
-        </Button>
-        <Button variant="primary" onClick={handleSave} disabled={saving || loading} className="ms-auto">
-          {saving ? 'Saving…' : 'Submit check-in'}
-        </Button>
       </div>
 
       {yesterdayWarning && (
@@ -1502,179 +1506,71 @@ const CheckInDaily: React.FC<CheckInDailyProps> = ({ embedded = false, fixedDate
       )}
       {error && <Alert variant="danger">{error}</Alert>}
 
-      {/* ── Health data panel ─────────────────────────────────────────── */}
-      <Card className="mb-3 border-0 shadow-sm">
-        <Card.Header className="py-2 d-flex justify-content-between align-items-center">
-          <span className="fw-semibold small">Today's Health Data</span>
-          <span className="text-muted small">
-            {health.healthkitStatus === 'synced' ? '● HealthKit synced' : 'Manual entry'}
-          </span>
+      <div className="daily-checkin-summary-grid">
+        {summaryCards.map((card) => (
+          <Card key={card.key} className="daily-checkin-summary-card border-0 shadow-sm">
+            <Card.Body>
+              <div className="daily-checkin-summary-card__eyebrow">{card.eyebrow}</div>
+              <div className="daily-checkin-summary-card__title">{card.title}</div>
+              <div className="daily-checkin-summary-card__subtitle">{card.subtitle}</div>
+            </Card.Body>
+          </Card>
+        ))}
+      </div>
+
+      <Card className="daily-checkin-panel border-0 shadow-sm">
+        <Card.Header className="daily-checkin-panel__header">
+          <div>
+            <div className="daily-checkin-panel__title">Health snapshot</div>
+            <div className="daily-checkin-panel__subtitle">Steps, sleep, workouts, and macros are shown first so routine completion can auto-resolve where possible.</div>
+          </div>
+          <div className="daily-checkin-health__header-actions">
+            <Badge bg={health.healthkitStatus === 'synced' ? 'success' : 'secondary'}>{healthStatusLabel}</Badge>
+            <Button
+              size="sm"
+              variant={showHealthEditor ? 'secondary' : 'outline-secondary'}
+              onClick={() => setShowHealthEditor((prev) => !prev)}
+            >
+              {showHealthEditor ? 'Hide manual inputs' : (hasMissingHealthFields ? 'Fill missing health data' : 'Adjust health data')}
+            </Button>
+          </div>
         </Card.Header>
-        <Card.Body className="py-2">
-          <Row className="g-2">
-            {/* Sleep */}
-            <Col xs={6} md={4} xl={2}>
-              <div className="text-muted small mb-1">Sleep</div>
-              {effectiveSleepMinutes != null ? (
-                <div className="fw-semibold">{(effectiveSleepMinutes / 60).toFixed(1)}h</div>
-              ) : (
-                <Form.Control
-                  size="sm"
-                  type="number"
-                  placeholder="hrs (e.g. 7.5)"
-                  value={manualInputs.sleepH ?? ''}
-                  onChange={(e) => setManualInputs((p) => ({ ...p, sleepH: e.target.value }))}
-                />
-              )}
-            </Col>
-            {/* Steps */}
-            <Col xs={6} md={4} xl={2}>
-              <div className="text-muted small mb-1">Steps</div>
-              {effectiveSteps != null ? (
-                <div className="fw-semibold">{Number(effectiveSteps).toLocaleString()}</div>
-              ) : (
-                <Form.Control
-                  size="sm"
-                  type="number"
-                  placeholder="e.g. 8000"
-                  value={manualInputs.steps ?? ''}
-                  onChange={(e) => setManualInputs((p) => ({ ...p, steps: e.target.value }))}
-                />
-              )}
-            </Col>
-            {/* Distance */}
-            <Col xs={6} md={4} xl={2}>
-              <div className="text-muted small mb-1">Distance</div>
-              {effectiveDistanceKm != null ? (
-                <div className="fw-semibold">{Number(effectiveDistanceKm).toFixed(2)} km</div>
-              ) : (
-                <Form.Control
-                  size="sm"
-                  type="number"
-                  placeholder="km"
-                  value={manualInputs.distanceKm ?? ''}
-                  onChange={(e) => setManualInputs((p) => ({ ...p, distanceKm: e.target.value }))}
-                />
-              )}
-            </Col>
-            {/* Workout minutes */}
-            <Col xs={6} md={4} xl={2}>
-              <div className="text-muted small mb-1">Workout</div>
-              {effectiveWorkoutMinutes != null ? (
-                <div className="fw-semibold">{Math.round(Number(effectiveWorkoutMinutes))} min</div>
-              ) : (
-                <Form.Control
-                  size="sm"
-                  type="number"
-                  placeholder="minutes"
-                  value={manualInputs.workoutMin ?? ''}
-                  onChange={(e) => setManualInputs((p) => ({ ...p, workoutMin: e.target.value }))}
-                />
-              )}
-            </Col>
-            {/* Calories */}
-            <Col xs={6} md={4} xl={2}>
-              <div className="text-muted small mb-1">Calories</div>
-              {effectiveCalories != null ? (
-                <div className="fw-semibold">{Math.round(effectiveCalories)} kcal</div>
-              ) : (
-                <Form.Control
-                  size="sm"
-                  type="number"
-                  placeholder="kcal"
-                  value={manualInputs.calories ?? ''}
-                  onChange={(e) => setManualInputs((p) => ({ ...p, calories: e.target.value }))}
-                />
-              )}
-            </Col>
-            {/* Protein */}
-            <Col xs={6} md={4} xl={2}>
-              <div className="text-muted small mb-1">Protein</div>
-              {effectiveProtein != null ? (
-                <div className="fw-semibold">{Math.round(effectiveProtein)}g</div>
-              ) : (
-                <Form.Control
-                  size="sm"
-                  type="number"
-                  placeholder="g"
-                  value={manualInputs.protein ?? ''}
-                  onChange={(e) => setManualInputs((p) => ({ ...p, protein: e.target.value }))}
-                />
-              )}
-            </Col>
-            {/* Fat */}
-            <Col xs={6} md={4} xl={2}>
-              <div className="text-muted small mb-1">Fat</div>
-              {effectiveFat != null ? (
-                <div className="fw-semibold">{Math.round(effectiveFat)}g</div>
-              ) : (
-                <Form.Control
-                  size="sm"
-                  type="number"
-                  placeholder="g"
-                  value={manualInputs.fat ?? ''}
-                  onChange={(e) => setManualInputs((p) => ({ ...p, fat: e.target.value }))}
-                />
-              )}
-            </Col>
-            {/* Carbs */}
-            <Col xs={6} md={4} xl={2}>
-              <div className="text-muted small mb-1">Carbs</div>
-              {effectiveCarbs != null ? (
-                <div className="fw-semibold">{Math.round(effectiveCarbs)}g</div>
-              ) : (
-                <Form.Control
-                  size="sm"
-                  type="number"
-                  placeholder="g"
-                  value={manualInputs.carbs ?? ''}
-                  onChange={(e) => setManualInputs((p) => ({ ...p, carbs: e.target.value }))}
-                />
-              )}
-            </Col>
-            {/* Weight */}
-            <Col xs={6} md={4} xl={2}>
-              <div className="text-muted small mb-1">Weight</div>
-              {effectiveWeightKg != null ? (
-                <div className="fw-semibold">{Number(effectiveWeightKg).toFixed(1)} kg</div>
-              ) : (
-                <Form.Control
-                  size="sm"
-                  type="number"
-                  placeholder="kg"
-                  value={manualInputs.weightKg ?? ''}
-                  onChange={(e) => setManualInputs((p) => ({ ...p, weightKg: e.target.value }))}
-                />
-              )}
-            </Col>
-            {/* Body fat */}
-            <Col xs={6} md={4} xl={2}>
-              <div className="text-muted small mb-1">Body Fat</div>
-              {effectiveBodyFatPct != null ? (
-                <div className="fw-semibold">{Number(effectiveBodyFatPct).toFixed(1)}%</div>
-              ) : (
-                <Form.Control
-                  size="sm"
-                  type="number"
-                  placeholder="%"
-                  value={manualInputs.bodyFatPct ?? ''}
-                  onChange={(e) => setManualInputs((p) => ({ ...p, bodyFatPct: e.target.value }))}
-                />
-              )}
-            </Col>
-          </Row>
-          {/* Save button — only show if any manual inputs are present */}
-          {Object.values(manualInputs).some((v) => v && v !== '') && (
-            <div className="d-flex align-items-center gap-2 mt-2">
-              <Button size="sm" variant="outline-primary" onClick={saveHealthData} disabled={healthSaving}>
-                {healthSaving ? <Spinner size="sm" animation="border" /> : 'Save health data'}
-              </Button>
-              {healthSaved && <span className="text-success small">Saved! Routines auto-marked where applicable.</span>}
+        <Card.Body>
+          <div className="daily-checkin-health-grid">
+            {healthCards.map((card) => (
+              <div key={card.key} className="daily-checkin-health-card">
+                <div className="daily-checkin-health-card__label">{card.label}</div>
+                <div className="daily-checkin-health-card__value">{card.value}</div>
+                <div className="daily-checkin-health-card__detail">{card.detail}</div>
+              </div>
+            ))}
+          </div>
+
+          {(showHealthEditor || hasManualDraftHealthInputs) && (
+            <div className="daily-checkin-health-editor">
+              <div className="daily-checkin-health-editor__title">Manual health entry</div>
+              <div className="daily-checkin-health-editor__grid">
+                <Form.Control size="sm" type="number" placeholder="Sleep hrs" value={manualInputs.sleepH ?? ''} onChange={(e) => setManualInputs((p) => ({ ...p, sleepH: e.target.value }))} />
+                <Form.Control size="sm" type="number" placeholder="Steps" value={manualInputs.steps ?? ''} onChange={(e) => setManualInputs((p) => ({ ...p, steps: e.target.value }))} />
+                <Form.Control size="sm" type="number" placeholder="Distance km" value={manualInputs.distanceKm ?? ''} onChange={(e) => setManualInputs((p) => ({ ...p, distanceKm: e.target.value }))} />
+                <Form.Control size="sm" type="number" placeholder="Workout min" value={manualInputs.workoutMin ?? ''} onChange={(e) => setManualInputs((p) => ({ ...p, workoutMin: e.target.value }))} />
+                <Form.Control size="sm" type="number" placeholder="Calories" value={manualInputs.calories ?? ''} onChange={(e) => setManualInputs((p) => ({ ...p, calories: e.target.value }))} />
+                <Form.Control size="sm" type="number" placeholder="Protein g" value={manualInputs.protein ?? ''} onChange={(e) => setManualInputs((p) => ({ ...p, protein: e.target.value }))} />
+                <Form.Control size="sm" type="number" placeholder="Fat g" value={manualInputs.fat ?? ''} onChange={(e) => setManualInputs((p) => ({ ...p, fat: e.target.value }))} />
+                <Form.Control size="sm" type="number" placeholder="Carbs g" value={manualInputs.carbs ?? ''} onChange={(e) => setManualInputs((p) => ({ ...p, carbs: e.target.value }))} />
+                <Form.Control size="sm" type="number" placeholder="Weight kg" value={manualInputs.weightKg ?? ''} onChange={(e) => setManualInputs((p) => ({ ...p, weightKg: e.target.value }))} />
+                <Form.Control size="sm" type="number" placeholder="Body fat %" value={manualInputs.bodyFatPct ?? ''} onChange={(e) => setManualInputs((p) => ({ ...p, bodyFatPct: e.target.value }))} />
+              </div>
+              <div className="daily-checkin-health-editor__actions">
+                <Button size="sm" variant="outline-primary" onClick={saveHealthData} disabled={healthSaving || !hasManualDraftHealthInputs}>
+                  {healthSaving ? <Spinner size="sm" animation="border" /> : 'Save health data'}
+                </Button>
+                {healthSaved && <span className="text-success small">Saved. Any matching routines can now auto-complete.</span>}
+              </div>
             </div>
           )}
         </Card.Body>
       </Card>
-      {/* ─────────────────────────────────────────────────────────────── */}
 
       {loading ? (
         <div className="d-flex align-items-center gap-2 text-muted">
@@ -1683,41 +1579,88 @@ const CheckInDaily: React.FC<CheckInDailyProps> = ({ embedded = false, fixedDate
       ) : items.length === 0 ? (
         <div className="text-muted">No planned items for this day.</div>
       ) : (
-        <>
+        <div className="daily-checkin-layout">
           {hideCompleted && completedCount > 0 && (
-            <div className="text-muted small mb-3">{completedCount} completed item{completedCount !== 1 ? 's' : ''} hidden</div>
+            <div className="daily-checkin-hidden-note">{completedCount} completed item{completedCount !== 1 ? 's' : ''} hidden</div>
           )}
-          {/* On md+ screens, show morning/afternoon/evening as 3 side-by-side columns; anytime always full-width */}
-          <Row className="g-3">
-            {BUCKETS.filter((b) => b.key !== 'anytime').map((bucket) => {
-              const bucketItems = itemsByBucket[bucket.key] || [];
-              if (bucketItems.length === 0) return null;
-              return (
-                <Col key={bucket.key} xs={12} md={4}>
-                  <Card className="h-100 border-0 shadow-sm">
-                    <Card.Header className="py-2 d-flex align-items-center justify-content-between">
-                      <span className="fw-bold small">{bucket.label}</span>
-                      {bucket.range && <span className="text-muted small">{bucket.range}</span>}
-                    </Card.Header>
-                    <Card.Body className="py-2">
-                      {bucketItems.map((item) => (viewMode === 'card' ? renderCheckInCard(item) : renderCheckInListRow(item)))}
-                    </Card.Body>
-                  </Card>
-                </Col>
-              );
-            })}
-          </Row>
-          {(itemsByBucket['anytime'] || []).length > 0 && (
-            <Card className="mt-3 border-0 shadow-sm">
-              <Card.Header className="py-2 d-flex align-items-center justify-content-between">
-                <span className="fw-bold small">Anytime</span>
+          <div className="daily-checkin-main-column">
+            <Card className="daily-checkin-panel border-0 shadow-sm">
+              <Card.Header className="daily-checkin-panel__header">
+                <div>
+                  <div className="daily-checkin-panel__title">Today’s agenda</div>
+                  <div className="daily-checkin-panel__subtitle">Scheduled stories and planned work, grouped by time of day.</div>
+                </div>
+                <Badge bg="light" text="dark">{scheduledItems.length} scheduled</Badge>
               </Card.Header>
-              <Card.Body className="py-2">
-                {(itemsByBucket['anytime'] || []).map((item) => (viewMode === 'card' ? renderCheckInCard(item) : renderCheckInListRow(item)))}
+              <Card.Body>
+                {scheduledItems.length === 0 ? (
+                  <div className="text-muted">Nothing is scheduled on the calendar for this day yet.</div>
+                ) : (
+                  <div className="daily-checkin-agenda">
+                    {BUCKETS.map((bucket) => {
+                      const bucketItems = itemsByBucket[bucket.key] || [];
+                      if (bucketItems.length === 0) return null;
+                      return (
+                        <section key={bucket.key} className="daily-checkin-agenda__section">
+                          <div className="daily-checkin-agenda__section-header">
+                            <div>
+                              <div className="daily-checkin-agenda__section-title">{bucket.label}</div>
+                              {bucket.range && <div className="daily-checkin-agenda__section-range">{bucket.range}</div>}
+                            </div>
+                            <Badge bg="light" text="dark">{bucketItems.length}</Badge>
+                          </div>
+                          <div className="daily-checkin-agenda__cards">
+                            {bucketItems.map((item) => renderWorkCard(item))}
+                          </div>
+                        </section>
+                      );
+                    })}
+                  </div>
+                )}
               </Card.Body>
             </Card>
-          )}
-        </>
+          </div>
+
+          <div className="daily-checkin-side-column">
+            <Card className="daily-checkin-panel border-0 shadow-sm">
+              <Card.Header className="daily-checkin-panel__header">
+                <div>
+                  <div className="daily-checkin-panel__title">Due tasks and chores</div>
+                  <div className="daily-checkin-panel__subtitle">Operational work that still needs checking off today.</div>
+                </div>
+                <Badge bg="light" text="dark">{dueTaskAndChoreItems.length}</Badge>
+              </Card.Header>
+              <Card.Body>
+                {dueTaskAndChoreItems.length === 0 ? (
+                  <div className="text-muted">No standalone tasks, chores, or recurring work due today.</div>
+                ) : (
+                  <div className="daily-checkin-stack">
+                    {dueTaskAndChoreItems.map((item) => renderWorkCard(item))}
+                  </div>
+                )}
+              </Card.Body>
+            </Card>
+
+            <Card className="daily-checkin-panel border-0 shadow-sm">
+              <Card.Header className="daily-checkin-panel__header">
+                <div>
+                  <div className="daily-checkin-panel__title">Story focus</div>
+                  <div className="daily-checkin-panel__subtitle">Story work scheduled or due on this date, with progress close at hand.</div>
+                </div>
+                <Badge bg="light" text="dark">{storyItems.length}</Badge>
+              </Card.Header>
+              <Card.Body>
+                {storyItems.length === 0 ? (
+                  <div className="text-muted">No story work is linked to this day.</div>
+                ) : (
+                  <div className="daily-checkin-stack">
+                    {storyItems.map((item) => renderWorkCard(item))}
+                  </div>
+                )}
+              </Card.Body>
+            </Card>
+          </div>
+        </div>
       )}
 
       <EditTaskModal

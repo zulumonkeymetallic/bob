@@ -123,6 +123,7 @@ import { collection, deleteDoc, doc, limit, onSnapshot, orderBy, query, serverTi
 import { db } from './firebase';
 import type { Goal, Story, Task } from './types';
 import { setupRecaptchaOnStartup } from './utils/recaptchaHelper';
+import { buildPlannerPath } from './utils/plannerRoutes';
 
 
 // Lazy-loaded heavy routes
@@ -160,15 +161,20 @@ function AppContent() {
   const [showImportModal, setShowImportModal] = useState(false);
   const [showAssistant, setShowAssistant] = useState(false);
 
+  const LegacyPlannerRedirect: React.FC<{ level: Parameters<typeof buildPlannerPath>[0] }> = ({ level }) => {
+    const legacyLocation = useLocation();
+    return <Navigate to={buildPlannerPath(level, legacyLocation.search)} replace />;
+  };
+
   // Root path redirect: mobile -> /mobile, desktop -> rotate between overview, kanban, and calendar
   const RootRedirect: React.FC = () => {
     const dev = useDeviceInfo();
     if (dev?.isMobile) return <Navigate to="/mobile" replace />;
     const hour = new Date().getHours();
     // Before 7am: show calendar first so you can review today's schedule
-    if (hour < 7) return <Navigate to="/calendar" replace />;
+    if (hour < 7) return <Navigate to={buildPlannerPath('calendar')} replace />;
     // 7am onwards: 3-way rotation — dashboard / kanban / calendar
-    const targets = ['/dashboard', '/sprints/kanban', '/calendar'] as const;
+    const targets = ['/dashboard', '/sprints/kanban', buildPlannerPath('calendar')] as const;
     const target = targets[hour % 3];
     return <Navigate to={target} replace />;
   };
@@ -401,7 +407,7 @@ function AppContent() {
             <Route path="/sprints/kanban-v2" element={<Navigate to="/sprints/kanban" replace />} />
             <Route path="/sprints/stories" element={<StoriesManagement />} />
             <Route path="/sprints/table" element={<SprintTablePage />} />
-            <Route path="/sprints/planning" element={<SprintPlanningMatrix />} />
+            <Route path="/sprints/planning" element={<LegacyPlannerRedirect level="sprint" />} />
             <Route path="/sprints/retrospective" element={<SprintRetrospective />} />
             <Route path="/checkin/daily" element={<CheckInDaily />} />
             <Route path="/checkin/weekly" element={<CheckInWeekly />} />
@@ -444,11 +450,11 @@ function AppContent() {
             />
             <Route path="/goals/:id" element={<DeepLinkGoal />} />
             <Route path="/goals-management" element={<GoalsManagement />} />
-            <Route path="/goals/year-planner" element={<GoalsYearPlanner />} />
-            <Route path="/goals/roadmap" element={<GoalRoadmapV5 />} />
+            <Route path="/goals/year-planner" element={<LegacyPlannerRedirect level="year" />} />
+            <Route path="/goals/roadmap" element={<LegacyPlannerRedirect level="gantt" />} />
             <Route path="/goals/roadmap-legacy" element={<GoalRoadmapV3 />} />
             <Route path="/goals/roadmap-v5" element={<GoalRoadmapV5 />} />
-            <Route path="/goals/roadmap-v6" element={<GoalRoadmapV6 />} />
+            <Route path="/goals/roadmap-v6" element={<LegacyPlannerRedirect level="gantt" />} />
             {/* Legacy V2 removed; no preview route retained */}
             <Route path="/goals/viz" element={<GoalVizPage />} />
 
@@ -473,13 +479,14 @@ function AppContent() {
 
             <Route path="/canvas" element={<VisualCanvas />} />
             <Route path="/visual-canvas" element={<VisualCanvas />} />
-            <Route path="/calendar" element={<UnifiedPlannerPage />} />
-            <Route path="/calendar/planner" element={<WeeklyThemePlanner />} />
-            <Route path="/calendar/themes" element={<Navigate to="/calendar/planner" replace />} />
-            <Route path="/planner/weekly" element={<WeeklyPlannerPage />} />
-            <Route path="/planner/weekly/*" element={<WeeklyPlannerPage />} />
-            <Route path="/weekly-planner" element={<Navigate to="/planner/weekly" replace />} />
-            <Route path="/planner/week" element={<Navigate to="/planner/weekly" replace />} />
+            <Route path="/planner" element={<UnifiedPlannerPage />} />
+            <Route path="/calendar" element={<LegacyPlannerRedirect level="calendar" />} />
+            <Route path="/calendar/planner" element={<LegacyPlannerRedirect level="calendar" />} />
+            <Route path="/calendar/themes" element={<LegacyPlannerRedirect level="calendar" />} />
+            <Route path="/planner/weekly" element={<LegacyPlannerRedirect level="week" />} />
+            <Route path="/planner/weekly/*" element={<LegacyPlannerRedirect level="week" />} />
+            <Route path="/weekly-planner" element={<LegacyPlannerRedirect level="week" />} />
+            <Route path="/planner/week" element={<LegacyPlannerRedirect level="week" />} />
             <Route path="/ai-coach" element={<AiCoachPage />} />
             <Route path="/fitness" element={<WorkoutsDashboard />} />
             <Route path="/running-results" element={<Navigate to="/fitness" replace />} />

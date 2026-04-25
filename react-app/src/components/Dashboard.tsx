@@ -52,6 +52,7 @@ import {
   formatFullReplanSummary,
   normalizePlannerCallableError,
 } from '../utils/plannerOrchestration';
+import { compareTop3Stories, compareTop3Tasks, isTop3Story, isTop3Task, top3DateForToday } from '../utils/top3';
 
 const _rbcLocales = { 'en-GB': enGB } as const;
 const _rbcLocalizer = dateFnsLocalizer({
@@ -651,9 +652,6 @@ const Dashboard: React.FC = () => {
   const [tasksDueTodayLoading, setTasksDueTodayLoading] = useState(false);
   const [tasksDueTodaySortMode, setTasksDueTodaySortMode] = useState<'due' | 'ai' | 'top3'>('ai');
   const [top3Collapsed, setTop3Collapsed] = useState(false);
-  const [top3Tasks, setTop3Tasks] = useState<Task[]>([]);
-  const [top3Stories, setTop3Stories] = useState<Story[]>([]);
-  const [top3Loading, setTop3Loading] = useState(false);
   const [unscheduledToday, setUnscheduledToday] = useState<ScheduledInstanceModel[]>([]);
   const [inlineEditTask, setInlineEditTask] = useState<Task | null>(null);
   const [inlineEditStory, setInlineEditStory] = useState<Story | null>(null);
@@ -2522,117 +2520,36 @@ const Dashboard: React.FC = () => {
     return () => unsub();
   }, [currentUser, currentPersona, getTaskDueMs, getChoreKind, getTaskLastDoneMs]);
 
-  useEffect(() => {
-    if (!currentUser || !currentPersona) {
-      setTop3Tasks([]);
-      setTop3Stories([]);
-      setTop3Loading(false);
-      return;
-    }
-    setTop3Loading(true);
-    const todayIso = new Date().toISOString().slice(0, 10);
-    let tasksReady = false;
-    let storiesReady = false;
-    const markReady = () => {
-      if (tasksReady && storiesReady) setTop3Loading(false);
-    };
+  const todayTop3Iso = useMemo(() => top3DateForToday(), []);
 
-    const isTaskDone = (status: any) => {
-      if (typeof status === 'number') return status >= 2;
-      const s = String(status || '').toLowerCase();
-      return ['done', 'complete', 'completed', 'finished', 'closed'].includes(s);
-    };
-    const isStoryDone = (status: any) => {
-      if (typeof status === 'number') return status >= 4;
-      const s = String(status || '').toLowerCase();
-      return ['done', 'complete', 'completed', 'finished', 'closed'].includes(s);
-    };
+  const getDashboardTaskManualRank = useCallback((task: Task) => {
+    const directRank = Number((task as any)?.manualPriorityRank || 0);
+    if (Number.isFinite(directRank) && directRank > 0) return directRank;
+    const parentStoryId = String(task.storyId || (task.parentType === 'story' ? task.parentId || '' : '')).trim();
+    if (!parentStoryId) return null;
+    const parentStory = personaStoriesPool.find((story) => story.id === parentStoryId);
+    const parentRank = Number((parentStory as any)?.manualPriorityRank || 0);
+    return Number.isFinite(parentRank) && parentRank > 0 ? parentRank : null;
+  }, [personaStoriesPool]);
 
-    const taskQuery = query(
-      collection(db, 'tasks'),
-      where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona),
-      where('aiTop3ForDay', '==', true),
-    );
-    const storyQuery = query(
-      collection(db, 'stories'),
-      where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona),
-      where('aiTop3ForDay', '==', true),
-    );
+  const top3Tasks = useMemo(() => {
+    return personaTasksPool
+      .filter((task) => !task.deleted)
+      .filter((task) => !isTaskDoneState(task.status))
+      .filter((task) => isTop3Task(task, getDashboardTaskManualRank, todayTop3Iso))
+      .sort((a, b) => compareTop3Tasks(a, b, getDashboardTaskManualRank))
+      .slice(0, 3);
+  }, [personaTasksPool, getDashboardTaskManualRank, todayTop3Iso]);
 
-    const unsubTasks = onSnapshot(
-      taskQuery,
-      (snap) => {
-        const rows = snap.docs
-          .map((doc) => ({ id: doc.id, ...(doc.data() as any) } as Task))
-          .filter((task) => !task.deleted)
-          .filter((task) => !isTaskDone(task.status))
-          .filter((task) => {
-            const aiDate = (task as any).aiTop3Date;
-            if (!aiDate) return true;
-            return String(aiDate).slice(0, 10) === todayIso;
-          })
-          .sort((a, b) => {
-            const ar = Number((a as any).aiPriorityRank || 0) || 99;
-            const br = Number((b as any).aiPriorityRank || 0) || 99;
-            if (ar !== br) return ar - br;
-            const as = Number((a as any).aiCriticalityScore ?? -1);
-            const bs = Number((b as any).aiCriticalityScore ?? -1);
-            if (as !== bs) return bs - as;
-            return String(a.title || '').localeCompare(String(b.title || ''));
-          })
-          .slice(0, 3);
-        setTop3Tasks(rows);
-        tasksReady = true;
-        markReady();
-      },
-      (err) => {
-        console.warn('Failed to load top 3 tasks', err);
-        setTop3Tasks([]);
-        tasksReady = true;
-        markReady();
-      },
-    );
+  const top3Stories = useMemo(() => {
+    return personaStoriesPool
+      .filter((story) => !isStatus(story.status, 'done'))
+      .filter((story) => isTop3Story(story, todayTop3Iso))
+      .sort(compareTop3Stories)
+      .slice(0, 3);
+  }, [personaStoriesPool, todayTop3Iso]);
 
-    const unsubStories = onSnapshot(
-      storyQuery,
-      (snap) => {
-        const rows = snap.docs
-          .map((doc) => ({ id: doc.id, ...(doc.data() as any) } as Story))
-          .filter((story) => !isStoryDone(story.status))
-          .filter((story) => {
-            const aiDate = (story as any).aiTop3Date;
-            if (!aiDate) return true;
-            return String(aiDate).slice(0, 10) === todayIso;
-          })
-          .sort((a, b) => {
-            const ar = Number((a as any).aiFocusStoryRank || 0) || 99;
-            const br = Number((b as any).aiFocusStoryRank || 0) || 99;
-            if (ar !== br) return ar - br;
-            const as = Number((a as any).aiCriticalityScore ?? -1);
-            const bs = Number((b as any).aiCriticalityScore ?? -1);
-            if (as !== bs) return bs - as;
-            return String(a.title || '').localeCompare(String(b.title || ''));
-          })
-          .slice(0, 3);
-        setTop3Stories(rows);
-        storiesReady = true;
-        markReady();
-      },
-      (err) => {
-        console.warn('Failed to load top 3 stories', err);
-        setTop3Stories([]);
-        storiesReady = true;
-        markReady();
-      },
-    );
-
-    return () => {
-      unsubTasks();
-      unsubStories();
-    };
-  }, [currentUser, currentPersona]);
+  const top3Loading = loading && top3Tasks.length === 0 && top3Stories.length === 0;
 
   const unscheduledSummary = unscheduledToday.slice(0, 3);
 

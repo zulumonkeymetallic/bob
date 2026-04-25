@@ -32,6 +32,7 @@ import {
   getManualPriorityRank,
   getNextManualPriorityRank,
 } from '../utils/manualPriority';
+import { compareTop3Stories, compareTop3Tasks, isTop3Story, isTop3Task, top3DateForToday } from '../utils/top3';
 import { useFocusGoals } from '../hooks/useFocusGoals';
 import { getProtectedFocusGoalIds, isGoalInHierarchySet } from '../utils/goalHierarchy';
 import { schedulePlannerItem as schedulePlannerItemMutation } from '../utils/plannerScheduling';
@@ -154,7 +155,7 @@ const MobileHome: React.FC = () => {
     const nextSearch = params.toString();
     navigate({ pathname: '/mobile', search: nextSearch ? `?${nextSearch}` : '' }, { replace: true });
   }, [location.search, navigate]);
-  const todayIso = useMemo(() => new Date().toISOString().split('T')[0], []);
+  const todayIso = useMemo(() => top3DateForToday(), []);
   const activePlanningSprints = useMemo(
     () => sprints.filter((s) => s.status === 0 || s.status === 1),
     [sprints]
@@ -476,37 +477,23 @@ const MobileHome: React.FC = () => {
     return isStoryFocusAligned(storiesById.get(parentStoryId));
   }, [goals, protectedFocusGoalIds, isStoryFocusAligned, storiesById]);
 
-  const isTop3Task = useCallback((task: Task) => {
-    if (getTaskManualRank(task)) return true;
-    const flagged = (task as any).aiTop3ForDay === true;
-    if (!flagged) return false;
-    const aiDate = (task as any).aiTop3Date;
-    if (!aiDate) return true;
-    return String(aiDate).slice(0, 10) === todayIso;
-  }, [getTaskManualRank, todayIso]);
+  const isTaskInTop3 = useCallback((task: Task) => isTop3Task(task, getTaskManualRank, todayIso), [getTaskManualRank, todayIso]);
 
-  const isTop3Story = useCallback((story: Story) => {
-    if (getManualPriorityRank(story)) return true;
-    const flagged = (story as any).aiTop3ForDay === true;
-    if (!flagged) return false;
-    const aiDate = (story as any).aiTop3Date;
-    if (!aiDate) return true;
-    return String(aiDate).slice(0, 10) === todayIso;
-  }, [todayIso]);
+  const isStoryInTop3 = useCallback((story: Story) => isTop3Story(story, todayIso), [todayIso]);
 
   const matchesTaskSharedFilters = useCallback((task: Task) => {
-    if (sharedFilters.top3 && !isTop3Task(task)) return false;
+    if (sharedFilters.top3 && !isTaskInTop3(task)) return false;
     if (sharedFilters.chores && !getChoreKind(task)) return false;
     if (sharedFilters.focusAligned && !isTaskFocusAligned(task)) return false;
     return true;
-  }, [sharedFilters, isTop3Task, getChoreKind, isTaskFocusAligned]);
+  }, [sharedFilters, isTaskInTop3, getChoreKind, isTaskFocusAligned]);
 
   const matchesStorySharedFilters = useCallback((story: Story) => {
-    if (sharedFilters.top3 && !isTop3Story(story)) return false;
+    if (sharedFilters.top3 && !isStoryInTop3(story)) return false;
     if (sharedFilters.chores) return false;
     if (sharedFilters.focusAligned && !isStoryFocusAligned(story)) return false;
     return true;
-  }, [sharedFilters, isTop3Story, isStoryFocusAligned]);
+  }, [sharedFilters, isStoryInTop3, isStoryFocusAligned]);
 
   const matchesTimelineSharedFilters = useCallback((item: MobileTimelineItem) => {
     if (!sharedFilters.top3 && !sharedFilters.chores && !sharedFilters.focusAligned) return true;
@@ -920,40 +907,18 @@ const MobileHome: React.FC = () => {
     return tasks
       .filter(t => !t.deleted)
       .filter(t => t.status !== 2)
-      .filter(isTop3Task)
-      .sort((a, b) => {
-        const manualA = getTaskManualRank(a) || 99;
-        const manualB = getTaskManualRank(b) || 99;
-        if (manualA !== manualB) return manualA - manualB;
-        const ar = Number((a as any).aiPriorityRank || 0) || 99;
-        const br = Number((b as any).aiPriorityRank || 0) || 99;
-        if (ar !== br) return ar - br;
-        const as = getTaskAiScore(a) ?? 0;
-        const bs = getTaskAiScore(b) ?? 0;
-        if (as !== bs) return bs - as;
-        return String(a.title || '').localeCompare(String(b.title || ''));
-      })
+      .filter(isTaskInTop3)
+      .sort((a, b) => compareTop3Tasks(a, b, getTaskManualRank))
       .slice(0, 3);
-  }, [tasks, isTop3Task, getTaskAiScore, getTaskManualRank]);
+  }, [tasks, isTaskInTop3, getTaskManualRank]);
 
   const top3Stories = useMemo(() => {
     return stories
       .filter(s => s.status !== 4)
-      .filter(isTop3Story)
-      .sort((a, b) => {
-        const manualA = getManualPriorityRank(a) || 99;
-        const manualB = getManualPriorityRank(b) || 99;
-        if (manualA !== manualB) return manualA - manualB;
-        const ar = Number((a as any).aiFocusStoryRank || 0) || 99;
-        const br = Number((b as any).aiFocusStoryRank || 0) || 99;
-        if (ar !== br) return ar - br;
-        const as = getStoryAiScore(a) ?? 0;
-        const bs = getStoryAiScore(b) ?? 0;
-        if (as !== bs) return bs - as;
-        return String(a.title || '').localeCompare(String(b.title || ''));
-      })
+      .filter(isStoryInTop3)
+      .sort(compareTop3Stories)
       .slice(0, 3);
-  }, [stories, isTop3Story, getStoryAiScore]);
+  }, [stories, isStoryInTop3]);
 
   const tasksDueTodayForMobile = useMemo(() => {
     const today = new Date();
@@ -980,7 +945,7 @@ const MobileHome: React.FC = () => {
   const visibleTaskRows = useMemo(() => {
     let rows: Task[];
     if (tasksViewFilter === 'top3') {
-      rows = sortedPendingTasks.filter((task) => isTop3Task(task));
+      rows = sortedPendingTasks.filter((task) => isTaskInTop3(task));
     } else if (tasksViewFilter === 'due_today') {
       rows = tasksDueTodayForMobile;
     } else if (tasksViewFilter === 'overdue') {
@@ -989,7 +954,7 @@ const MobileHome: React.FC = () => {
       rows = sortedPendingTasks;
     }
     return rows.filter(matchesTaskSharedFilters);
-  }, [tasksViewFilter, sortedPendingTasks, isTop3Task, tasksDueTodayForMobile, tasksOverdueForMobile, matchesTaskSharedFilters]);
+  }, [tasksViewFilter, sortedPendingTasks, isTaskInTop3, tasksDueTodayForMobile, tasksOverdueForMobile, matchesTaskSharedFilters]);
 
   const visibleStoryRows = useMemo(
     () => sortedStories.filter(matchesStorySharedFilters),
@@ -1201,7 +1166,7 @@ const MobileHome: React.FC = () => {
       const busy = !!choreCompletionBusy[task.id];
       const aiScore = getTaskAiScore(task);
       const manualPriority = getManualPriorityLabel(task) || null;
-      const top3 = isTop3Task(task);
+      const top3 = isTaskInTop3(task);
       const focusAligned = isTaskFocusAligned(task);
       return (
         <ListGroup.Item key={task.id} className="d-flex align-items-center gap-2" style={{ fontSize: 14 }}>

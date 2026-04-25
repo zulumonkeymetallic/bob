@@ -51,7 +51,11 @@ import { normalizePriorityValue, isCriticalPriority } from '../utils/priorityUti
 import { cascadeTaskPersona } from '../utils/personaCascade';
 import { formatTaskTagLabel } from '../utils/tagDisplay';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
+import GoalMultiSelect from './shared/GoalMultiSelect';
+import ThemeMultiSelect from './shared/ThemeMultiSelect';
 import { getManualPriorityRank } from '../utils/manualPriority';
+import { compareTop3Stories, compareTop3Tasks, isTop3Story, isTop3Task } from '../utils/top3';
+import { getGoalDisplayPath, isGoalInHierarchySet } from '../utils/goalHierarchy';
 
 const normalizeBoardTaskType = (value: any): 'task' | 'chore' | 'routine' | 'habit' | 'read' | 'watch' => {
   const raw = String(value || 'task').trim().toLowerCase();
@@ -117,13 +121,6 @@ const getAiScoreValue = (item: Story | Task): number => {
   const raw = (item as any).aiCriticalityScore ?? (item as any).aiPriorityScore ?? null;
   const parsed = Number(raw);
   return Number.isFinite(parsed) ? parsed : -Infinity;
-};
-
-const isCurrentTop3 = (item: any): boolean => {
-  if (item?.aiTop3ForDay !== true) return false;
-  const top3Date = item?.aiTop3Date;
-  if (!top3Date) return true;
-  return String(top3Date).slice(0, 10) === new Date().toISOString().slice(0, 10);
 };
 
 const matchesCriticalOrHighAi = (item: Story | Task): boolean => {
@@ -567,16 +564,12 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
   const [filterUnlinkedStoriesOnly, setFilterUnlinkedStoriesOnly] = useState(false);
   const [filterUnlinkedTasksOnly, setFilterUnlinkedTasksOnly] = useState(false);
   const [showChoreTasks, setShowChoreTasks] = useState(false);
-  const [filterTop3Only, setFilterTop3Only] = useState(() => {
-    if (typeof window === 'undefined') return false;
-    try {
-      const stored = window.localStorage.getItem('kanbanTop3Only');
-      return stored ? stored === 'true' : false;
-    } catch {
-      return false;
-    }
-  });
-  const [sortMode, setSortMode] = useState<'default' | 'ai' | 'overdue' | 'priority' | 'due'>('ai');
+  const [filterTop3Only, setFilterTop3Only] = useState(false);
+  const [showAiScoredOnly, setShowAiScoredOnly] = useState(false);
+  const [showCompletedItems, setShowCompletedItems] = useState(false);
+  const [selectedGoalIds, setSelectedGoalIds] = useState<string[]>([]);
+  const [selectedThemeIds, setSelectedThemeIds] = useState<number[]>([]);
+  const [sortMode, setSortMode] = useState<'default' | 'ai' | 'overdue' | 'priority' | 'due'>('default');
   const [filterAlignmentMode, setFilterAlignmentMode] = useState<'all' | 'focus-only' | 'warn'>('all');
   const [showTags, setShowTags] = useState(() => {
     if (typeof window === 'undefined') return true;
@@ -596,13 +589,9 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
     return getManualPriorityRank(stories.find((story) => story.id === parentStoryId));
   }, [stories]);
 
-  const isTop3Task = useCallback((task: Task): boolean => {
-    return Boolean(getTaskManualRank(task)) || isCurrentTop3(task);
-  }, [getTaskManualRank]);
+  const isTaskInTop3 = useCallback((task: Task): boolean => isTop3Task(task, getTaskManualRank), [getTaskManualRank]);
 
-  const isTop3Story = useCallback((story: Story): boolean => {
-    return Boolean(getManualPriorityRank(story)) || isCurrentTop3(story);
-  }, []);
+  const isStoryInTop3 = useCallback((story: Story): boolean => isTop3Story(story), []);
   const formatTaskTag = useCallback(
     (tag: string) => formatTaskTagLabel(tag, goals, sprints),
     [goals, sprints]
@@ -680,13 +669,6 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
       window.localStorage.setItem('kanbanShowTags', showTags ? 'true' : 'false');
     } catch { }
   }, [showTags]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    try {
-      window.localStorage.setItem('kanbanTop3Only', filterTop3Only ? 'true' : 'false');
-    } catch { }
-  }, [filterTop3Only]);
 
   useEffect(() => {
     if (!currentUser?.uid) {
@@ -1054,9 +1036,67 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
     return false;
   }, [focusGoalIdSet, stories]);
 
+  const getStoryGoalId = useCallback((story: Story): string | null => {
+    const goalId = String(story.goalId || '').trim();
+    return goalId || null;
+  }, []);
+
+  const getStoryThemeId = useCallback((story: Story): number | null => {
+    const goal = goals.find((candidate) => candidate.id === story.goalId);
+    const rawTheme = (story as any).theme ?? goal?.theme ?? null;
+    const numeric = Number(rawTheme);
+    return Number.isFinite(numeric) ? numeric : null;
+  }, [goals]);
+
+  const getTaskGoalId = useCallback((task: Task): string | null => {
+    const directGoalId = String((task as any).goalId || '').trim();
+    if (directGoalId) return directGoalId;
+    const parentStoryId = String(task.storyId || task.parentId || '').trim();
+    const parentStory = parentStoryId ? stories.find((story) => story.id === parentStoryId) : null;
+    const parentGoalId = String(parentStory?.goalId || '').trim();
+    return parentGoalId || null;
+  }, [stories]);
+
+  const getTaskThemeId = useCallback((task: Task): number | null => {
+    const directTheme = Number((task as any).theme ?? (task as any).themeId);
+    if (Number.isFinite(directTheme)) return directTheme;
+    const parentStoryId = String(task.storyId || task.parentId || '').trim();
+    const parentStory = parentStoryId ? stories.find((story) => story.id === parentStoryId) : null;
+    if (parentStory) {
+      const parentTheme = getStoryThemeId(parentStory);
+      if (parentTheme != null) return parentTheme;
+    }
+    const goalId = getTaskGoalId(task);
+    const goal = goalId ? goals.find((candidate) => candidate.id === goalId) : null;
+    const goalTheme = Number(goal?.theme ?? NaN);
+    return Number.isFinite(goalTheme) ? goalTheme : null;
+  }, [getStoryThemeId, getTaskGoalId, goals, stories]);
+
+  const goalFilterOptions = useMemo(() => {
+    const baseGoals = filterAlignmentMode === 'focus-only' && focusGoalIdSet.size > 0
+      ? goals.filter((goal) => isGoalInHierarchySet(goal.id, goals, focusGoalIdSet))
+      : goals;
+    return selectedThemeIds.length > 0
+      ? baseGoals.filter((goal) => selectedThemeIds.includes(Number(goal.theme)))
+      : baseGoals;
+  }, [filterAlignmentMode, focusGoalIdSet, goals, selectedThemeIds]);
+
+  const selectedGoalIdSet = useMemo(() => new Set(selectedGoalIds), [selectedGoalIds]);
+  const selectedThemeIdSet = useMemo(() => new Set(selectedThemeIds), [selectedThemeIds]);
+
   const filteredStories = storiesInScope.filter((story) => {
-    if (filterTop3Only && !isTop3Story(story)) return false;
-    if (filterCriticalOnly && !(isCriticalPriority(story.priority) || isTop3Story(story))) return false;
+    if (!showCompletedItems && isStatus((story as any).status, 'done')) return false;
+    const storyGoalId = getStoryGoalId(story);
+    if (selectedGoalIdSet.size > 0) {
+      if (!storyGoalId || !isGoalInHierarchySet(storyGoalId, goals, selectedGoalIdSet)) return false;
+    }
+    if (selectedThemeIdSet.size > 0) {
+      const storyThemeId = getStoryThemeId(story);
+      if (storyThemeId == null || !selectedThemeIdSet.has(storyThemeId)) return false;
+    }
+    if (filterTop3Only && !isStoryInTop3(story)) return false;
+    if (showAiScoredOnly && getAiScoreValue(story) === -Infinity) return false;
+    if (filterCriticalOnly && !(isCriticalPriority(story.priority) || isStoryInTop3(story))) return false;
     if (filterCriticalAiOnly && !matchesCriticalOrHighAi(story)) return false;
     if (filterUnlinkedStoriesOnly && isStoryLinkedToGoal(story)) return false;
     if (filterAlignmentMode === 'focus-only' && !isStoryFocusAligned(story)) return false;
@@ -1066,8 +1106,18 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
   const filteredTasks = tasksInScope.filter((task) => {
     const taskType = normalizeBoardTaskType((task as any).type || (task as any).task_type);
     if (!showChoreTasks && ['chore', 'routine', 'habit'].includes(taskType)) return false;
-    if (filterTop3Only && !isTop3Task(task)) return false;
-    if (filterCriticalOnly && !(isCriticalPriority(task.priority) || isTop3Task(task))) return false;
+    if (!showCompletedItems && isStatus((task as any).status, 'done')) return false;
+    if (selectedGoalIdSet.size > 0) {
+      const taskGoalId = getTaskGoalId(task);
+      if (!taskGoalId || !isGoalInHierarchySet(taskGoalId, goals, selectedGoalIdSet)) return false;
+    }
+    if (selectedThemeIdSet.size > 0) {
+      const taskThemeId = getTaskThemeId(task);
+      if (taskThemeId == null || !selectedThemeIdSet.has(taskThemeId)) return false;
+    }
+    if (filterTop3Only && !isTaskInTop3(task)) return false;
+    if (showAiScoredOnly && getAiScoreValue(task) === -Infinity) return false;
+    if (filterCriticalOnly && !(isCriticalPriority(task.priority) || isTaskInTop3(task))) return false;
     if (filterCriticalAiOnly && !matchesCriticalOrHighAi(task)) return false;
     if (filterOverdueOnly && !isTaskOverdue(task)) return false;
     if (filterUnlinkedTasksOnly && isTaskLinkedToStory(task)) return false;
@@ -1081,10 +1131,12 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
     const score = getAiScoreValue;
     const dueMs = (story: Story) => getStoryDueMs(story);
     arr.sort((a, b) => {
+      if (sortMode === 'default') return compareTop3Stories(a, b);
       const manualA = getManualPriorityRank(a) || 99;
       const manualB = getManualPriorityRank(b) || 99;
       if (manualA !== manualB) return manualA - manualB;
       if (sortMode === 'ai') return (score(b) || -Infinity) - (score(a) || -Infinity);
+      if (sortMode === 'due') return (dueMs(a) || Infinity) - (dueMs(b) || Infinity);
       if (sortMode === 'overdue') {
         const da = dueMs(a); const db = dueMs(b);
         const oa = da != null ? Math.max(0, now - da) : -Infinity;
@@ -1107,6 +1159,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
       return Math.max(0, now - due);
     };
     arr.sort((a, b) => {
+      if (sortMode === 'default') return compareTop3Tasks(a, b, getTaskManualRank);
       const manualA = getTaskManualRank(a) || 99;
       const manualB = getTaskManualRank(b) || 99;
       if (manualA !== manualB) return manualA - manualB;
@@ -1391,7 +1444,6 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
     setSelectedItem(item);
     setSelectedType(type);
     setEditForm(item);
-    setFilterTop3Only(true);
     setShowEditModal(true);
   };
 
@@ -1610,6 +1662,26 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
             <small>{autoLinkMessage}</small>
           </Alert>
         )}
+        <GoalMultiSelect
+          goals={goalFilterOptions}
+          selectedIds={selectedGoalIds}
+          onChange={setSelectedGoalIds}
+          getLabel={(goal) => getGoalDisplayPath(goal.id, goals)}
+          style={{ minWidth: 220 }}
+        />
+        <ThemeMultiSelect
+          selectedIds={selectedThemeIds}
+          onChange={setSelectedThemeIds}
+          style={{ minWidth: 180 }}
+        />
+        <Form.Check
+          inline
+          type="switch"
+          id="filter-show-completed"
+          label="Show completed"
+          checked={showCompletedItems}
+          onChange={(e) => setShowCompletedItems(e.currentTarget.checked)}
+        />
         <Form.Check
           inline
           type="switch"
@@ -1633,6 +1705,14 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
           label="Top 3 only"
           checked={filterTop3Only}
           onChange={(e) => setFilterTop3Only(e.currentTarget.checked)}
+        />
+        <Form.Check
+          inline
+          type="switch"
+          id="filter-ai-scored"
+          label="AI-scored only"
+          checked={showAiScoredOnly}
+          onChange={(e) => setShowAiScoredOnly(e.currentTarget.checked)}
         />
         <Form.Check
           inline
@@ -1681,7 +1761,7 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
             value={sortMode}
             onChange={(e) => setSortMode(e.currentTarget.value as any)}
           >
-            <option value="default">Default</option>
+            <option value="default">Priority stack</option>
             <option value="due">Due date</option>
             <option value="priority">Priority (Critical → Low)</option>
             <option value="overdue">Days overdue</option>
@@ -1689,18 +1769,24 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
           </Form.Select>
         </Form.Group>
         {focusGoalIdSet.size > 0 && (
-          <Form.Group className="d-flex align-items-center mb-0">
-            <Form.Label className="me-2 mb-0" style={{ whiteSpace: 'nowrap' }}>Focus</Form.Label>
-            <Form.Select
-              size="sm"
-              value={filterAlignmentMode}
-              onChange={(e) => setFilterAlignmentMode(e.currentTarget.value as any)}
-            >
-              <option value="all">All items</option>
-              <option value="warn">Warn non-aligned</option>
-              <option value="focus-only">Focus only</option>
-            </Form.Select>
-          </Form.Group>
+          <>
+            <Form.Check
+              inline
+              type="switch"
+              id="filter-focus-only"
+              label={`Focus goals only (${focusGoalIdSet.size})`}
+              checked={filterAlignmentMode === 'focus-only'}
+              onChange={(e) => setFilterAlignmentMode(e.currentTarget.checked ? 'focus-only' : 'all')}
+            />
+            <Form.Check
+              inline
+              type="switch"
+              id="filter-focus-warn"
+              label="Warn non-aligned"
+              checked={filterAlignmentMode === 'warn'}
+              onChange={(e) => setFilterAlignmentMode(e.currentTarget.checked ? 'warn' : 'all')}
+            />
+          </>
         )}
       </div>
 

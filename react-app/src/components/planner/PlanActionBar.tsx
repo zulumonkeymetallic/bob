@@ -6,74 +6,105 @@ import {
   LayoutDashboard,
   LayoutGrid,
   Milestone,
-  Route,
+  GitBranch,
+  Layers3,
   Timer,
-  Palette,
+  Route,
 } from 'lucide-react';
+import {
+  buildPlannerPath,
+  normalizePlannerLevel,
+  plannerLevelLabel,
+  type UnifiedPlannerLevel,
+} from '../../utils/plannerRoutes';
 
 type PlanDestination = {
-  path: string;
+  level: UnifiedPlannerLevel;
   label: string;
 };
 
 const PLAN_LEVELS: PlanDestination[] = [
-  { path: '/goals/year-planner', label: 'Year Planner' },
-  { path: '/goals/roadmap-v6', label: 'Quarter/Month Roadmap' },
-  { path: '/sprints/planning', label: 'Sprint Planning' },
-  { path: '/calendar/planner', label: 'Weekly Capacity' },
-  { path: '/planner/weekly', label: '7-Day Prioritisation' },
+  { level: 'gantt', label: 'Gantt Chart' },
+  { level: 'year', label: 'Year Planner' },
+  { level: 'quarter', label: 'Quarter Planner' },
+  { level: 'month', label: 'Month Planner' },
+  { level: 'sprint', label: 'Sprint Planner' },
+  { level: 'week', label: 'Week Planner' },
+  { level: 'calendar', label: 'Calendar' },
 ];
 
 interface PlanActionBarProps {
   className?: string;
 }
 
-const normalizePath = (value: string) => (value.endsWith('/') && value.length > 1 ? value.slice(0, -1) : value);
-
-const matchesPath = (pathname: string, candidatePath: string) => {
-  const current = normalizePath(pathname);
-  const target = normalizePath(candidatePath);
-  return current === target || current.startsWith(`${target}/`);
-};
-
 const PlanActionBar: React.FC<PlanActionBarProps> = ({ className }) => {
   const navigate = useNavigate();
   const location = useLocation();
+  const query = useMemo(() => new URLSearchParams(location.search), [location.search]);
+  const currentPlannerLevel = useMemo(
+    () => (location.pathname.startsWith('/planner') ? normalizePlannerLevel(query.get('level')) : null),
+    [location.pathname, query],
+  );
   const activePlanLevel = useMemo(
-    () => PLAN_LEVELS.find((entry) => matchesPath(location.pathname, entry.path)) || null,
-    [location.pathname],
+    () => (currentPlannerLevel ? PLAN_LEVELS.find((entry) => entry.level === currentPlannerLevel) || null : null),
+    [currentPlannerLevel],
   );
 
-  const buttonVariant = (path: string) => (matchesPath(location.pathname, path) ? 'primary' : 'outline-secondary');
+  const buttonVariant = (target: 'dashboard' | 'planner' | 'kanban') => {
+    if (target === 'dashboard') return location.pathname.startsWith('/dashboard') ? 'primary' : 'outline-secondary';
+    if (target === 'planner') return location.pathname.startsWith('/planner') ? 'primary' : 'outline-secondary';
+    return location.pathname.startsWith('/sprints/kanban') ? 'primary' : 'outline-secondary';
+  };
+
+  const navigateToLevel = (level: UnifiedPlannerLevel) => {
+    const nextParams = new URLSearchParams(location.search);
+    nextParams.set('level', level);
+    navigate(buildPlannerPath(level, nextParams));
+  };
+
+  const iconForLevel = (level: UnifiedPlannerLevel) => {
+    switch (level) {
+      case 'gantt':
+        return <Route size={14} className="me-1" />;
+      case 'year':
+        return <Milestone size={14} className="me-1" />;
+      case 'quarter':
+      case 'month':
+        return <Layers3 size={14} className="me-1" />;
+      case 'sprint':
+        return <GitBranch size={14} className="me-1" />;
+      case 'week':
+        return <Timer size={14} className="me-1" />;
+      case 'calendar':
+      default:
+        return <Calendar size={14} className="me-1" />;
+    }
+  };
 
   return (
     <div className={`d-flex align-items-center gap-2 flex-wrap ${className || ''}`.trim()}>
-      <Button size="sm" variant={buttonVariant('/dashboard')} onClick={() => navigate('/dashboard')} title="Open overview dashboard">
+      <Button size="sm" variant={buttonVariant('dashboard')} onClick={() => navigate('/dashboard')} title="Open overview dashboard">
         <LayoutDashboard size={14} className="me-1" /> Overview
       </Button>
-      <Button size="sm" variant={buttonVariant('/calendar')} onClick={() => navigate('/calendar')} title="Open calendar view">
-        <Calendar size={14} className="me-1" /> Calendar
+      <Button size="sm" variant={buttonVariant('planner')} onClick={() => navigate(buildPlannerPath(currentPlannerLevel || 'calendar', location.search))} title="Open unified planner">
+        <Calendar size={14} className="me-1" /> Planner
       </Button>
-      <Button size="sm" variant={buttonVariant('/sprints/kanban')} onClick={() => navigate('/sprints/kanban')} title="Open kanban board">
+      <Button size="sm" variant={buttonVariant('kanban')} onClick={() => navigate('/sprints/kanban')} title="Open kanban board">
         <LayoutGrid size={14} className="me-1" /> Kanban
       </Button>
       <Dropdown>
         <Dropdown.Toggle size="sm" variant={activePlanLevel ? 'primary' : 'outline-secondary'} title="Switch planning level">
           <Milestone size={14} className="me-1" /> Plan
-          {activePlanLevel ? `: ${activePlanLevel.label}` : ''}
+          {activePlanLevel ? `: ${plannerLevelLabel(activePlanLevel.level)}` : ''}
         </Dropdown.Toggle>
         <Dropdown.Menu>
           {PLAN_LEVELS.map((entry) => (
             <Dropdown.Item
-              key={entry.path}
-              active={matchesPath(location.pathname, entry.path)}
-              onClick={() => navigate(entry.path)}
+              key={entry.level}
+              active={currentPlannerLevel === entry.level}
+              onClick={() => navigateToLevel(entry.level)}
             >
-              {entry.path === '/goals/year-planner' && <Route size={14} className="me-1" />}
-              {entry.path === '/goals/roadmap-v6' && <Route size={14} className="me-1" />}
-              {entry.path === '/sprints/planning' && <Milestone size={14} className="me-1" />}
-              {entry.path === '/calendar/planner' && <Palette size={14} className="me-1" />}
-              {entry.path === '/planner/weekly' && <Timer size={14} className="me-1" />}
+              {iconForLevel(entry.level)}
               {entry.label}
             </Dropdown.Item>
           ))}
