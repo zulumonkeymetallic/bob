@@ -381,6 +381,7 @@ const WorkoutsDashboard: React.FC = () => {
   const [excludeWithDadFromMetrics, setExcludeWithDadFromMetrics] = useState(true);
   const [fitnessOverview, setFitnessOverview] = useState<any | null>(null);
   const [runAnalysis, setRunAnalysis] = useState<any | null>(null);
+  const [fitnessGoals, setFitnessGoals] = useState<any[]>([]);
   const queryParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const forcedProvider = useMemo(() => {
     const path = location.pathname || '';
@@ -537,6 +538,27 @@ const WorkoutsDashboard: React.FC = () => {
     const unsub = onSnapshot(qRef, (snap) => {
       setVo2Metrics(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })));
     }, () => setVo2Metrics([]));
+    return () => unsub();
+  }, [currentUser]);
+
+  useEffect(() => {
+    if (!currentUser) { setFitnessGoals([]); return; }
+    const q = query(collection(db, 'goals'), where('ownerUid', '==', currentUser.uid));
+    const unsub = onSnapshot(q, (snap) => {
+      const all = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      setFitnessGoals(all.filter(g => {
+        const kpis: any[] = Array.isArray((g as any).kpisV2) ? (g as any).kpisV2 : [];
+        return kpis.some(k => {
+          if (!String(k.type || '').startsWith('fitness_')) return false;
+          const sources: string[] = [
+            ...(Array.isArray(k.sourcePriority) ? k.sourcePriority : []),
+            String(k.sourceId || ''),
+            String(k.source || ''),
+          ];
+          return sources.some(s => s === 'healthkit' || s === 'strava');
+        });
+      }));
+    }, () => setFitnessGoals([]));
     return () => unsub();
   }, [currentUser]);
 
@@ -1549,6 +1571,87 @@ const WorkoutsDashboard: React.FC = () => {
     ? sportCards.filter((card) => card.sport === 'run')
     : sportCards;
 
+  const weekKmBySport = useMemo(() => ({
+    run: sportCards.find(c => c.sport === 'run')?.weekKm ?? 0,
+    swim: sportCards.find(c => c.sport === 'swim')?.weekKm ?? 0,
+    bike: sportCards.find(c => c.sport === 'bike')?.weekKm ?? 0,
+  }), [sportCards]);
+
+  const goalKpiRows = useMemo(() => {
+    return fitnessGoals.map(goal => {
+      const kpis: any[] = Array.isArray(goal.kpisV2) ? goal.kpisV2 : [];
+      const resolvedKpis = kpis
+        .filter(k => {
+          if (!String(k.type || '').startsWith('fitness_')) return false;
+          const sources: string[] = [
+            ...(Array.isArray(k.sourcePriority) ? k.sourcePriority : []),
+            String(k.sourceId || ''), String(k.source || ''),
+          ];
+          return sources.some(s => s === 'healthkit' || s === 'strava');
+        })
+        .map(k => {
+          const type = String(k.type || '');
+          const fieldPath = String(k.sourceFieldPath || k.metricKey || '').toLowerCase();
+          const nameLower = String(k.name || '').toLowerCase();
+          let current: number | null = null;
+          let isTrendOnly = false;
+
+          if (fieldPath.includes('bodyfat') || nameLower.includes('body fat') || nameLower.includes('bodyfat')) {
+            current = readNumericValue(healthProfile, 'healthkitBodyFatPct');
+            isTrendOnly = true;
+          } else if (fieldPath.includes('protein') || nameLower.includes('protein')) {
+            current = readNumericValue(healthProfile, 'healthkitProteinTodayG');
+          } else if (type === 'fitness_steps') {
+            current = currentHealthSnapshot?.stepsToday ?? null;
+          } else if (type === 'fitness_running') {
+            current = weekKmBySport.run > 0 ? weekKmBySport.run : null;
+          } else if (type === 'fitness_swimming') {
+            current = weekKmBySport.swim > 0 ? weekKmBySport.swim : null;
+          } else if (type === 'fitness_cycling' || type === 'fitness_walking') {
+            current = weekKmBySport.bike > 0 ? weekKmBySport.bike : null;
+          } else if (type === 'fitness_sleep') {
+            const mins = readNumericValue(healthProfile, 'healthkitSleepMinutes');
+            current = mins != null ? mins / 60 : null;
+          }
+
+          const target = Number(k.target ?? 0);
+          const unit = String(k.unit || '');
+          let chipBg: string;
+          let chipLabel: string;
+
+          if (isTrendOnly) {
+            chipBg = 'secondary'; chipLabel = 'Trend only';
+          } else if (current == null || target <= 0) {
+            chipBg = 'secondary'; chipLabel = 'No data';
+          } else if (current >= target) {
+            chipBg = 'success'; chipLabel = 'On target';
+          } else if (current >= target * 0.8) {
+            chipBg = 'warning'; chipLabel = 'Close';
+          } else {
+            chipBg = 'danger'; chipLabel = 'Behind';
+          }
+
+          const currentDisplay = current != null
+            ? `${current % 1 === 0 ? current : Number(current.toFixed(1))}${unit ? ` ${unit}` : ''}`
+            : '—';
+          const targetDisplay = target > 0
+            ? `${target}${unit ? ` ${unit}` : ''}`
+            : '—';
+
+          return {
+            name: String(k.name || type),
+            currentDisplay,
+            targetDisplay,
+            isTrendOnly,
+            chipBg,
+            chipLabel,
+          };
+        });
+
+      return { id: String(goal.id), title: String(goal.title || 'Unnamed goal'), kpis: resolvedKpis };
+    }).filter(g => g.kpis.length > 0);
+  }, [fitnessGoals, currentHealthSnapshot, weekKmBySport, healthProfile]);
+
   const workoutTargetModel = useMemo(() => {
     const explicitTargetMinutes = readNumericValue(
       healthProfile,
@@ -1936,6 +2039,41 @@ const WorkoutsDashboard: React.FC = () => {
           </div>
         </Card.Body>
       </Card>
+
+      {goalKpiRows.length > 0 && (
+        <Row className="g-3 mb-3">
+          {goalKpiRows.map(goal => (
+            <Col key={goal.id} xs={12} md={6}>
+              <Card className="h-100">
+                <Card.Header className="py-2">
+                  <strong className="small">{goal.title}</strong>
+                </Card.Header>
+                <Card.Body className="py-2">
+                  <div className="d-flex flex-column gap-2">
+                    {goal.kpis.map((kpi, i) => (
+                      <div key={i} className="d-flex align-items-center justify-content-between gap-2 small">
+                        <span className="text-truncate">{kpi.name}</span>
+                        <div className="d-flex align-items-center gap-2 flex-shrink-0">
+                          <span className="text-muted" style={{ whiteSpace: 'nowrap' }}>
+                            {kpi.currentDisplay} / {kpi.targetDisplay}
+                          </span>
+                          <Badge
+                            bg={kpi.chipBg}
+                            text={kpi.chipBg === 'warning' ? 'dark' : undefined}
+                            style={{ fontSize: 10, whiteSpace: 'nowrap' }}
+                          >
+                            {kpi.chipLabel}
+                          </Badge>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </Card.Body>
+              </Card>
+            </Col>
+          ))}
+        </Row>
+      )}
 
       <Row className="g-3 mb-3">
         {visibleSportCards.map((card) => (

@@ -84,7 +84,6 @@ import SprintKanbanPageV2 from './components/SprintKanbanPageV2';
 import TasksManagement from './components/TasksManagement';
 import SprintPlanningMatrix from './components/SprintPlanningMatrix';
 import WorkoutsDashboard from './components/WorkoutsDashboard';
-import FitnessKPIPage from './components/FitnessKPIPage';
 import AiCoachPage from './components/coach/AiCoachPage';
 import FinanceDashboardModern from './components/FinanceDashboardModern';
 import MerchantMappings from './components/finance/MerchantMappings';
@@ -489,11 +488,10 @@ function AppContent() {
             <Route path="/weekly-planner" element={<LegacyPlannerRedirect level="week" />} />
             <Route path="/planner/week" element={<LegacyPlannerRedirect level="week" />} />
             <Route path="/ai-coach" element={<AiCoachPage />} />
-            <Route path="/fitness" element={<FitnessKPIPage />} />
-            <Route path="/fitness/workouts" element={<WorkoutsDashboard />} />
-            <Route path="/running-results" element={<Navigate to="/fitness/workouts" replace />} />
+            <Route path="/fitness" element={<WorkoutsDashboard />} />
+            <Route path="/running-results" element={<Navigate to="/fitness" replace />} />
             <Route path="/parkrun-results" element={<WorkoutsDashboard />} />
-            <Route path="/workouts" element={<Navigate to="/fitness/workouts" replace />} />
+            <Route path="/workouts" element={<Navigate to="/fitness" replace />} />
             <Route path="/finance" element={<Navigate to="/finance/dashboard" replace />} />
             <Route path="/finance/merchants" element={<MerchantMappings />} />
             <Route path="/finance/categories" element={<Navigate to="/finance/merchants" replace />} />

@@ -96,7 +96,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         { label: 'Theme Progress', path: '/dashboard/theme-progress', icon: 'chart-line' },
         { label: 'Finance Dashboard', path: '/dashboard/finance', icon: 'wallet' },
         { label: 'Habit Tracking', path: '/dashboard/habit-tracking', icon: 'check-square' },
-        { label: 'Fitness KPIs', path: '/fitness', icon: 'heartbeat' },
+        { label: 'Fitness', path: '/fitness', icon: 'heartbeat' },
         { label: 'Kanban Board', path: '/sprints/kanban', icon: 'kanban' },
         { label: 'Calendar', path: '/calendar', icon: 'calendar' },
         { label: 'Metrics', path: '/metrics', icon: 'tachometer-alt' },
@@ -110,8 +110,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       items: [
         { label: '⚡ Metrics Overview', path: '/metrics/overview', icon: 'chart-area' },
         { label: 'AI Coach', path: '/ai-coach', icon: 'dumbbell' },
-        { label: 'Fitness KPIs', path: '/fitness', icon: 'heartbeat' },
-        { label: 'Fitness Workouts', path: '/fitness/workouts', icon: 'running' },
+        { label: 'Fitness Results', path: '/fitness', icon: 'running' },
         { label: 'Habit Tracking', path: '/dashboard/habit-tracking', icon: 'check-square' },
         { label: 'Parkrun Results', path: '/parkrun-results', icon: 'flag-checkered' }
       ]
