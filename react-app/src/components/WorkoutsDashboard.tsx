@@ -16,6 +16,7 @@ import {
   Legend,
   TimeScale
 } from 'chart.js';
+import FitnessKpiGrid from './fitness/FitnessKpiGrid';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend, TimeScale);
 
@@ -78,6 +79,7 @@ interface HealthTrendPoint {
   fatG: number | null;
   carbsG: number | null;
   readiness: number | null;
+  sleepMinutes: number | null;
 }
 
 interface RecoveryTrendPoint {
@@ -247,6 +249,34 @@ function estimateEquivalentRaceSec(
   if (!Number.isFinite(distanceKm) || !Number.isFinite(timeSec) || distanceKm <= 0 || timeSec <= 0) return null;
   if (distanceKm < minKm || distanceKm > maxKm) return null;
   return timeSec * Math.pow(targetKm / distanceKm, exponent);
+}
+
+function getISOWeekKey(date: Date): string {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  const week = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+  return `${d.getUTCFullYear()}-W${String(week).padStart(2, '0')}`;
+}
+function getLast12WeekKeys(): string[] {
+  const keys: string[] = [];
+  const now = new Date();
+  for (let i = 11; i >= 0; i--) {
+    const d = new Date(now);
+    d.setDate(d.getDate() - i * 7);
+    keys.push(getISOWeekKey(d));
+  }
+  return keys;
+}
+function getLast30Days(): string[] {
+  const days: string[] = [];
+  const now = new Date();
+  for (let i = 29; i >= 0; i--) {
+    const d = new Date(now);
+    d.setDate(d.getDate() - i);
+    days.push(d.toISOString().slice(0, 10));
+  }
+  return days;
 }
 
 type LookbackWindow = '1y' | '2y' | '3y' | 'all';
@@ -610,6 +640,7 @@ const WorkoutsDashboard: React.FC = () => {
         fatG: readNumericValue(metric, 'fatTodayG', 'healthkitFatTodayG', 'manualFatG'),
         carbsG: readNumericValue(metric, 'carbsTodayG', 'healthkitCarbsTodayG', 'manualCarbsG'),
         readiness: readNumericValue(metric, 'readinessScore', 'healthkitReadinessScore'),
+        sleepMinutes: readNumericValue(metric, 'sleepMinutes', 'healthkitSleepMinutes', 'manualSleepMinutes'),
       };
       const existing = latestByDay.get(dayKey);
       if (!existing || snapshotMs >= existing.snapshotMs) {
@@ -1832,6 +1863,79 @@ const WorkoutsDashboard: React.FC = () => {
     }))
   ), [activityComposition30d, activityCompositionTotalMinutes]);
 
+  const weeklyKpiData = useMemo(() => {
+    const weekKeys = getLast12WeekKeys();
+    const byWeek: Record<string, { run_m: number; swim_m: number; cycle_m: number }> = {};
+    weekKeys.forEach(k => { byWeek[k] = { run_m: 0, swim_m: 0, cycle_m: 0 }; });
+    workouts.forEach(w => {
+      const startMs = resolveWorkoutStartMs(w);
+      if (!startMs) return;
+      const wk = getISOWeekKey(new Date(startMs));
+      if (!byWeek[wk]) return;
+      const sport = (w.sportType || w.type || '').toLowerCase();
+      const dist = w.distance_m || 0;
+      if (sport.includes('run')) byWeek[wk].run_m += dist;
+      else if (sport.includes('swim')) byWeek[wk].swim_m += dist;
+      else if (sport.includes('ride') || sport.includes('cycl')) byWeek[wk].cycle_m += dist;
+    });
+    const hitsInLast12 = (vals: number[], target: number) =>
+      vals.filter(v => v >= target).length;
+    const runKms   = weekKeys.map(k => byWeek[k].run_m   / 1000);
+    const swimKms  = weekKeys.map(k => byWeek[k].swim_m  / 1000);
+    const cycleKms = weekKeys.map(k => byWeek[k].cycle_m / 1000);
+    return {
+      run: weekKeys.map((k, i) => ({
+        key: k,
+        pct: runKms[i] > 0 ? Math.round((runKms[i] / 50) * 100) : null,
+        tooltip: `${k}: ${runKms[i].toFixed(1)} km`,
+      })),
+      swim: weekKeys.map((k, i) => ({
+        key: k,
+        pct: swimKms[i] > 0 ? Math.round((swimKms[i] / 4) * 100) : null,
+        tooltip: `${k}: ${swimKms[i].toFixed(1)} km`,
+      })),
+      cycle: weekKeys.map((k, i) => ({
+        key: k,
+        pct: cycleKms[i] > 0 ? Math.round((cycleKms[i] / 50) * 100) : null,
+        tooltip: `${k}: ${cycleKms[i].toFixed(1)} km`,
+      })),
+      runHits:   hitsInLast12(runKms,   50),
+      swimHits:  hitsInLast12(swimKms,    4),
+      cycleHits: hitsInLast12(cycleKms,  50),
+    };
+  }, [workouts]);
+
+  const dailyKpiData = useMemo(() => {
+    const days = getLast30Days();
+    const byDay: Record<string, HealthTrendPoint> = {};
+    healthTrendRows.forEach(r => { byDay[r.dayKey] = r; });
+    const hits = (vals: (number | null)[], target: number) =>
+      vals.filter(v => v != null && v >= target).length;
+    const stepsVals   = days.map(d => byDay[d]?.steps ?? null);
+    const sleepVals   = days.map(d => byDay[d]?.sleepMinutes != null ? byDay[d].sleepMinutes! / 60 : null);
+    const proteinVals = days.map(d => byDay[d]?.proteinG ?? null);
+    return {
+      steps: days.map((d, i) => ({
+        key: d,
+        pct: stepsVals[i] != null ? Math.round((stepsVals[i]! / 12000) * 100) : null,
+        tooltip: `${d}: ${stepsVals[i] != null ? Math.round(stepsVals[i]!).toLocaleString() + ' steps' : 'no data'}`,
+      })),
+      sleep: days.map((d, i) => ({
+        key: d,
+        pct: sleepVals[i] != null ? Math.round((sleepVals[i]! / 8) * 100) : null,
+        tooltip: `${d}: ${sleepVals[i] != null ? sleepVals[i]!.toFixed(1) + 'h' : 'no data'}`,
+      })),
+      protein: days.map((d, i) => ({
+        key: d,
+        pct: proteinVals[i] != null ? Math.round((proteinVals[i]! / 180) * 100) : null,
+        tooltip: `${d}: ${proteinVals[i] != null ? Math.round(proteinVals[i]!) + 'g' : 'no data'}`,
+      })),
+      stepsHits:   hits(stepsVals,   12000),
+      sleepHits:   hits(sleepVals,       8),
+      proteinHits: hits(proteinVals,   180),
+    };
+  }, [healthTrendRows]);
+
   return (
     <div className="container-fluid py-3">
       <Row className="mb-3">
@@ -1936,6 +2040,30 @@ const WorkoutsDashboard: React.FC = () => {
           </div>
         </Card.Body>
       </Card>
+
+      {/* Fitness KPI Habit Grid */}
+      <div className="mb-4">
+        <h6 className="fw-semibold mb-2" style={{ color: '#9ca3af', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+          Weekly targets
+        </h6>
+        <FitnessKpiGrid
+          rows={[
+            { label: 'Run  50km/wk',  summaryText: `${weeklyKpiData.runHits}/12 weeks hit target`,   boxes: weeklyKpiData.run   },
+            { label: 'Swim  4km/wk',  summaryText: `${weeklyKpiData.swimHits}/12 weeks hit target`,  boxes: weeklyKpiData.swim  },
+            { label: 'Cycle 50km/wk', summaryText: `${weeklyKpiData.cycleHits}/12 weeks hit target`, boxes: weeklyKpiData.cycle },
+          ]}
+        />
+        <h6 className="fw-semibold mb-2 mt-3" style={{ color: '#9ca3af', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+          Daily targets
+        </h6>
+        <FitnessKpiGrid
+          rows={[
+            { label: 'Steps 12k/day',  summaryText: `${dailyKpiData.stepsHits}/30 days hit target`,   boxes: dailyKpiData.steps   },
+            { label: 'Sleep  8hr/day', summaryText: `${dailyKpiData.sleepHits}/30 days hit target`,   boxes: dailyKpiData.sleep   },
+            { label: 'Protein 180g',   summaryText: `${dailyKpiData.proteinHits}/30 days hit target`, boxes: dailyKpiData.protein },
+          ]}
+        />
+      </div>
 
       <Row className="g-3 mb-3">
         {visibleSportCards.map((card) => (
