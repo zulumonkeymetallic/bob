@@ -64,6 +64,10 @@ const SprintKanbanPageV2: React.FC = () => {
     const boardContainerRef = React.useRef<HTMLDivElement>(null);
     const activeFocusGoalIds = useMemo(() => getActiveFocusLeafGoalIds(activeFocusGoals), [activeFocusGoals]);
 
+    useEffect(() => {
+        setDetailLevel('full');
+    }, [setDetailLevel]);
+
     const resolveTimestampMs = (value: any): number | null => {
         if (!value) return null;
         if (typeof value === 'number') return Number.isFinite(value) ? value : null;

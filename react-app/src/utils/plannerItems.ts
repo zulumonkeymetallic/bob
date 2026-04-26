@@ -18,6 +18,7 @@ export interface PlannerCalendarBlockRow {
   title?: string;
   start?: number;
   end?: number;
+  googleEventId?: string | null;
   taskId?: string | null;
   storyId?: string | null;
   linkedStoryId?: string | null;
@@ -211,6 +212,7 @@ export const buildPlannerItems = ({
   const blockByStoryId = new Map<string, PlannerCalendarBlockRow>();
   const calendarBlockById = new Map<string, PlannerCalendarBlockRow>();
   const blockByInstanceId = new Map<string, PlannerCalendarBlockRow>();
+  const calendarBlockGoogleEventIds = new Set<string>();
   const instanceMap = new Map<string, PlannerScheduledInstanceRow[]>();
   const instanceById = new Map<string, PlannerScheduledInstanceRow>();
   const groupedRecurringBlockIds = new Set<string>();
@@ -222,6 +224,8 @@ export const buildPlannerItems = ({
     const blockStart = toMs(block.start);
     calendarBlockById.set(block.id, block);
     if (blockStart == null || blockStart < rangeStartMs || blockStart > rangeEndMs) return;
+    const googleEventId = String(block.googleEventId || '').trim();
+    if (googleEventId) calendarBlockGoogleEventIds.add(googleEventId);
     const taskId = String(block.taskId || '').trim();
     const storyId = String(block.storyId || block.linkedStoryId || '').trim();
     if (taskId) blockByTaskId.set(taskId, block);
@@ -584,6 +588,7 @@ export const buildPlannerItems = ({
     });
 
   summaryEvents.forEach((event) => {
+    if (calendarBlockGoogleEventIds.has(String(event.id || '').trim())) return;
     if (event.startMs != null && (event.startMs < rangeStartMs || event.startMs > rangeEndMs)) return;
     const anchorMs = event.startMs ?? rangeStartMs;
     const bucket = bucketFromTime(event.startMs, null, 'anytime');
