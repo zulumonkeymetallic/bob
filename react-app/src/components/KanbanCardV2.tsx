@@ -1023,6 +1023,7 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                     </div>
                 )}
 
+                {detailLevel !== 'minimal' && (
                 <div className="kanban-card__goal">
                     {type === 'story' ? (
                         <>
@@ -1048,6 +1049,7 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                         </>
                     )}
                 </div>
+                )}
             </div>
             {actionMessage && (
                 <div className="kanban-card__meta-text text-muted small px-3 pb-2">

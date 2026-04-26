@@ -28,7 +28,7 @@ import { parseBooleanParam, parseIdListParam, parseNumberListParam } from '../ut
 import PlanActionBar from './planner/PlanActionBar';
 import ThemeMultiSelect from './shared/ThemeMultiSelect';
 import GoalMultiSelect from './shared/GoalMultiSelect';
-import type { DetailLevel } from '../contexts/DetailLevelContext';
+import { useDetailLevel, type DetailLevel } from '../contexts/DetailLevelContext';
 
 // Normalize sprint identifiers so we handle doc refs, strings, and legacy placeholders
 const normalizeSprintId = (value: any): string | null => {
@@ -293,6 +293,7 @@ const GroupedSprintCell: React.FC<{
 const SprintPlanningMatrix: React.FC = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
+  const { detailLevel, setDetailLevel } = useDetailLevel();
   const [searchParams] = useSearchParams();
   const { sprints } = useSprint();
   const { activeFocusGoals } = useFocusGoals(currentUser?.uid);
@@ -347,6 +348,21 @@ const SprintPlanningMatrix: React.FC = () => {
   const [selectedSprintIds, setSelectedSprintIds] = useState<string[]>([]);
   const [showAllSprintColumns, setShowAllSprintColumns] = useState(false);
   const [sprintColumnsTouched, setSprintColumnsTouched] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      setDetailLevel('compact');
+      return;
+    }
+    try {
+      const stored = window.localStorage.getItem('plannerDetailLevel');
+      if (!stored) {
+        setDetailLevel('compact');
+      }
+    } catch {
+      setDetailLevel('compact');
+    }
+  }, [setDetailLevel]);
 
   useEffect(() => {
     const handler = () => {
@@ -796,6 +812,7 @@ const SprintPlanningMatrix: React.FC = () => {
           const currentSprintId = normalizeSprintId((story as any).sprintId);
           if (normalizedTarget === currentSprintId) return;
 
+          let moveWarning: string | null = null;
           if (normalizedTarget) {
             const targetSprint = sprints.find((sprint) => sprint.id === normalizedTarget) || null;
             const targetSummary = sprintCapacityById.get(normalizedTarget)
@@ -817,11 +834,7 @@ const SprintPlanningMatrix: React.FC = () => {
               if (outsideFocus) {
                 reasons.push('this story is outside active focus goals');
               }
-              setDeferPromptMessage(`Move blocked: ${reasons.join(' and ')}. Use intelligent defer instead.`);
-              setDeferTarget(story);
-              setMoveNotice(`Opened intelligent defer for ${story.title}.`);
-              setMoveError(null);
-              return;
+              moveWarning = reasons.join(' and ');
             }
           }
 
@@ -830,6 +843,7 @@ const SprintPlanningMatrix: React.FC = () => {
             prev.map((s) => (s.id === story.id ? { ...s, sprintId: normalizedTarget ?? undefined } : s))
           );
           setMoveError(null);
+          setDeferPromptMessage(null);
 
           await updateDoc(doc(db, 'stories', story.id), {
             sprintId: normalizedTarget ?? null,
@@ -837,6 +851,15 @@ const SprintPlanningMatrix: React.FC = () => {
             persona: currentPersona,
             updatedAt: serverTimestamp(),
           });
+
+          const targetLabel = normalizedTarget
+            ? (sprints.find((sprint) => sprint.id === normalizedTarget)?.name || 'target sprint')
+            : 'backlog';
+          setMoveNotice(
+            moveWarning
+              ? `${story.title} moved to ${targetLabel}. Warning: ${moveWarning}.`
+              : `${story.title} moved to ${targetLabel}.`
+          );
         } catch (error) {
           console.error('❌ Error moving story:', error);
           setMoveError('Failed to move story. Please try again.');
@@ -1096,6 +1119,17 @@ const SprintPlanningMatrix: React.FC = () => {
                     />
                   </Form.Group>
                 </Col>
+                <Col md={3}>
+                  <Form.Label style={{ fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>
+                    <LayoutGrid size={14} style={{ marginRight: '6px' }} />
+                    Detail level
+                  </Form.Label>
+                  <Form.Select size="sm" value={detailLevel} onChange={(e) => setDetailLevel(e.target.value as DetailLevel)}>
+                    <option value="full">Full</option>
+                    <option value="compact">Compact</option>
+                    <option value="minimal">Minimal</option>
+                  </Form.Select>
+                </Col>
                 <Col md={6}>
                   <div style={{ paddingTop: '20px', display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
                     <Button
@@ -1204,7 +1238,7 @@ const SprintPlanningMatrix: React.FC = () => {
                           showDescriptions={showDescriptions}
                           formatTag={formatTag}
                           themes={globalThemes}
-                          detailLevel="minimal"
+                          detailLevel={detailLevel}
                         />
                         {visibleSprints.map((sprint) => (
                           <GroupedSprintCell
@@ -1215,7 +1249,7 @@ const SprintPlanningMatrix: React.FC = () => {
                             showDescriptions={showDescriptions}
                             formatTag={formatTag}
                             themes={globalThemes}
-                            detailLevel="minimal"
+                            detailLevel={detailLevel}
                           />
                         ))}
                       </div>
@@ -1239,7 +1273,7 @@ const SprintPlanningMatrix: React.FC = () => {
           showDescriptions={showDescriptions}
           formatTag={formatTag}
           themes={globalThemes}
-          detailLevel="minimal"
+          detailLevel={detailLevel}
         />
         {visibleSprints.map((sprint) => (
           <SprintColumn
@@ -1253,7 +1287,7 @@ const SprintPlanningMatrix: React.FC = () => {
             showDescriptions={showDescriptions}
             formatTag={formatTag}
             themes={globalThemes}
-            detailLevel="minimal"
+            detailLevel={detailLevel}
           />
         ))}
       </div>

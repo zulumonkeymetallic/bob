@@ -738,9 +738,19 @@ const WeeklyPlannerSurface: React.FC<WeeklyPlannerSurfaceProps> = ({
     return true;
   };
 
-  const applyMove = async (item: PlannerItem, targetDateMs: number, targetBucket: TimelineBucket, recommendation?: PlannerRecommendation | null) => {
+  const applyMove = async (
+    item: PlannerItem,
+    targetDateMs: number,
+    targetBucket: TimelineBucket,
+    recommendation?: PlannerRecommendation | null,
+    options?: { suppressDeferralPrompt?: boolean },
+  ) => {
     if (!currentUser?.uid) return;
-    if ((recommendation?.action == null || recommendation.action === 'move_day') && shouldPromptIntelligentDefer(item, targetDateMs)) {
+    if (
+      !options?.suppressDeferralPrompt
+      && (recommendation?.action == null || recommendation.action === 'move_day')
+      && shouldPromptIntelligentDefer(item, targetDateMs)
+    ) {
       return;
     }
     setApplyingKey(item.id);
@@ -836,13 +846,13 @@ const WeeklyPlannerSurface: React.FC<WeeklyPlannerSurfaceProps> = ({
     }
   };
 
-  const applyDayAutoMove = async (item: PlannerItem, targetDateMs: number) => {
+  const applyDayAutoMove = async (item: PlannerItem, targetDateMs: number, options?: { suppressDeferralPrompt?: boolean }) => {
     const recommendation = deriveAutoPlacement(item, targetDateMs);
     if (recommendation.targetDateMs == null || recommendation.targetBucket == null) {
       setFeedback({ variant: 'warning', text: `No suitable placement was available for ${item.title}.` });
       return;
     }
-    await applyMove(item, recommendation.targetDateMs, recommendation.targetBucket, recommendation);
+    await applyMove(item, recommendation.targetDateMs, recommendation.targetBucket, recommendation, options);
   };
 
   const applyRecommendation = async (item: PlannerItem, recommendation: PlannerRecommendation) => {
@@ -1241,7 +1251,7 @@ const WeeklyPlannerSurface: React.FC<WeeklyPlannerSurfaceProps> = ({
                         event.preventDefault();
                         const item = weekAssignedItems.find((row) => row.id === dragItemId);
                         if (item) {
-                          void applyDayAutoMove(item, dayStartMs(date));
+                          void applyDayAutoMove(item, dayStartMs(date), { suppressDeferralPrompt: true });
                         }
                         setDragItemId(null);
                       }}
@@ -1260,7 +1270,7 @@ const WeeklyPlannerSurface: React.FC<WeeklyPlannerSurfaceProps> = ({
                               event.stopPropagation();
                               const item = weekAssignedItems.find((row) => row.id === dragItemId);
                               if (item) {
-                                void applyMove(item, dayStartMs(date), bucket, null);
+                                void applyMove(item, dayStartMs(date), bucket, null, { suppressDeferralPrompt: true });
                               }
                               setDragItemId(null);
                             }}
