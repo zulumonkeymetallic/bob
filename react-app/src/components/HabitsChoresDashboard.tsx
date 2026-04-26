@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Badge, Button, Card, Form, Spinner, Table } from 'react-bootstrap';
+import { Badge, Button, Card, Form, Spinner } from 'react-bootstrap';
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
-import { endOfDay, format, formatDistanceToNow, startOfDay, subDays } from 'date-fns';
+import { endOfDay, format, startOfDay, subDays } from 'date-fns';
 import { db, functions } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
@@ -28,7 +28,15 @@ interface TaskStats {
 
 const LOOKBACK_DAYS = 180;
 const TARGET_OCCURRENCES = 100;
-const VISIBLE_DOTS = 25;
+const VISIBLE_BOXES = 30;
+
+const BOX_SIZE = 13;
+const BOX_GAP = 2;
+const NAME_COL_WIDTH = 180;
+
+function habitBoxColor(done: boolean): string {
+  return done ? '#22c55e' : '#ef4444';
+}
 
 const getLastDoneMs = (task: Task): number | null => {
   const raw: any = (task as any).lastDoneAt ?? (task as any).completedAt;
@@ -59,29 +67,6 @@ const getHabitKind = (task: Task): 'routine' | 'habit' | null => {
   return null;
 };
 
-const formatDueLabel = (dueMs?: number | null) => {
-  if (!dueMs) return '—';
-  const d = new Date(dueMs);
-  const hasTime = d.getHours() !== 0 || d.getMinutes() !== 0;
-  return hasTime ? format(d, 'MMM d, HH:mm') : format(d, 'MMM d');
-};
-
-const formatRelative = (value?: number | null) => {
-  if (!value) return '—';
-  try {
-    return formatDistanceToNow(new Date(value), { addSuffix: true });
-  } catch {
-    return '—';
-  }
-};
-
-const getConsistencyBadge = (completed: number, total: number) => {
-  if (!total) return { label: 'No data', variant: 'secondary' };
-  const rate = completed / total;
-  if (rate >= 0.8) return { label: 'On track', variant: 'success' };
-  if (rate >= 0.5) return { label: 'Mixed', variant: 'warning' };
-  return { label: 'Needs attention', variant: 'danger' };
-};
 
 const HabitsChoresDashboard: React.FC = () => {
   const { currentUser } = useAuth();
@@ -95,6 +80,7 @@ const HabitsChoresDashboard: React.FC = () => {
   const [completing, setCompleting] = useState<Record<string, boolean>>({});
   const [sortMode, setSortMode] = useState<'type' | 'due' | 'streak'>('type');
   const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [hoveredBox, setHoveredBox] = useState<string | null>(null);
 
   const todayStartMs = useMemo(() => startOfDay(new Date()).getTime(), []);
   const todayEndMs = useMemo(() => endOfDay(new Date()).getTime(), []);
@@ -361,126 +347,76 @@ const HabitsChoresDashboard: React.FC = () => {
                   <Badge bg="secondary" pill>{group.tasks.length} item{group.tasks.length === 1 ? '' : 's'}</Badge>
                 </div>
               </Card.Header>
-              <Card.Body className="p-0">
-                <div className="table-responsive">
-                  <Table hover responsive size="sm" className="mb-0 align-middle">
-                    <thead>
-                      <tr>
-                        <th style={{ width: 260 }}>Item</th>
-                        <th>Next Due</th>
-                        <th>Last Done</th>
-                        <th>Streak</th>
-                        <th>Last 100</th>
-                        <th>Status</th>
-                        <th style={{ width: 120 }}>Today</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {group.tasks.map((task) => {
-                        const kind = getHabitKind(task) || 'habit';
-                        const badgeVariant = kind === 'routine' ? 'success' : 'secondary';
-                        const badgeLabel = kind === 'routine' ? 'Routine' : 'Habit';
-                        const stats = taskStats[task.id] || { occurrences: [], completedCount: 0, totalCount: 0, streak: 0, expectedSlots: [] };
-                        const consistency = getConsistencyBadge(stats.completedCount, stats.totalCount);
-                        const dueMs = resolveRecurringDueMs(task, new Date(), todayStartMs);
-                        const lastDoneMs = getLastDoneMs(task);
-                        const dueLabel = formatDueLabel(dueMs);
-                        const lastLabel = formatRelative(lastDoneMs);
-                        const doneToday = !!lastDoneMs && lastDoneMs >= todayStartMs;
-                        const canComplete = !!dueMs && dueMs <= todayEndMs && !doneToday;
-                        const busy = !!completing[task.id];
-                        return (
-                          <tr key={task.id}>
-                            <td>
-                              <div className="fw-semibold">{task.title}</div>
-                              <div className="text-muted small d-flex align-items-center gap-2">
-                                <Badge bg={badgeVariant}>{badgeLabel}</Badge>
-                                <button
-                                  type="button"
-                                  className="btn btn-link p-0 text-decoration-none"
-                                  onClick={() => setEditingTask(task)}
-                                >
-                                  Open
-                                </button>
+              <Card.Body className="py-2 px-3">
+                {group.tasks.map((task, taskIdx) => {
+                  const kind = getHabitKind(task) || 'habit';
+                  const badgeVariant = kind === 'routine' ? 'success' : 'secondary';
+                  const badgeLabel = kind === 'routine' ? 'Routine' : 'Habit';
+                  const stats = taskStats[task.id] || { occurrences: [], completedCount: 0, totalCount: 0, streak: 0, expectedSlots: [] };
+                  const dueMs = resolveRecurringDueMs(task, new Date(), todayStartMs);
+                  const lastDoneMs = getLastDoneMs(task);
+                  const doneToday = !!lastDoneMs && lastDoneMs >= todayStartMs;
+                  const canComplete = !!dueMs && dueMs <= todayEndMs && !doneToday;
+                  const busy = !!completing[task.id];
+                  const boxes = stats.expectedSlots.slice(0, VISIBLE_BOXES);
+                  const hitCount = boxes.filter(s => s.done).length;
+                  return (
+                    <div
+                      key={task.id}
+                      style={{ borderTop: taskIdx > 0 ? '1px solid #e5e7eb' : undefined, paddingTop: taskIdx > 0 ? 8 : 0, paddingBottom: 8 }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                        {/* Name */}
+                        <div style={{ width: NAME_COL_WIDTH, minWidth: NAME_COL_WIDTH, flexShrink: 0 }}>
+                          <div className="fw-semibold" style={{ fontSize: 13 }}>{task.title}</div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
+                            <Badge bg={badgeVariant} style={{ fontSize: 10 }}>{badgeLabel}</Badge>
+                            <button type="button" className="btn btn-link p-0 text-decoration-none" style={{ fontSize: 11 }} onClick={() => setEditingTask(task)}>Open</button>
+                          </div>
+                        </div>
+                        {/* Boxes */}
+                        <div style={{ display: 'flex', gap: BOX_GAP, flexWrap: 'nowrap', overflowX: 'auto', flex: 1 }}>
+                          {boxes.length === 0 ? (
+                            <span className="text-muted small">No data</span>
+                          ) : boxes.map((slot, idx) => {
+                            const id = `${task.id}-${slot.dayMs}`;
+                            const label = `${format(new Date(slot.dayMs), 'EEE d MMM')}: ${slot.done ? 'completed' : 'missed'}`;
+                            return (
+                              <div key={idx} style={{ position: 'relative', flexShrink: 0 }} onMouseEnter={() => setHoveredBox(id)} onMouseLeave={() => setHoveredBox(null)}>
+                                <div style={{ width: BOX_SIZE, height: BOX_SIZE, borderRadius: 4, background: habitBoxColor(slot.done), cursor: 'default' }} />
+                                {hoveredBox === id && (
+                                  <div style={{ position: 'absolute', bottom: BOX_SIZE + 6, left: '50%', transform: 'translateX(-50%)', background: '#111827', color: '#f9fafb', padding: '4px 8px', borderRadius: 4, fontSize: 11, whiteSpace: 'nowrap', zIndex: 100, pointerEvents: 'none', border: '1px solid #374151' }}>
+                                    {label}
+                                  </div>
+                                )}
                               </div>
-                            </td>
-                            <td>{dueLabel}</td>
-                            <td>{lastLabel}</td>
-                            <td>
-                              <div className="fw-semibold" style={{ fontSize: 18 }}>{stats.streak}</div>
-                              <div className="text-muted" style={{ fontSize: 10 }}>day{stats.streak !== 1 ? 's' : ''}</div>
-                            </td>
-                            <td>
-                              {stats.expectedSlots.length === 0 ? (
-                                <span className="text-muted">—</span>
-                              ) : (
-                                <div>
-                                  <div className="d-flex align-items-center gap-2 mb-1">
-                                    <span className="small text-muted">{stats.completedCount}/{stats.totalCount}</span>
-                                    <span className="small text-muted">({stats.totalCount ? Math.round((stats.completedCount / stats.totalCount) * 100) : 0}%)</span>
-                                  </div>
-                                  <div className="d-flex align-items-center gap-1 flex-wrap">
-                                    {stats.expectedSlots.slice(0, VISIBLE_DOTS).map((slot, idx) => (
-                                      <span
-                                        key={`${task.id}-${slot.dayMs}-${idx}`}
-                                        title={`${format(new Date(slot.dayMs), 'EEE d MMM')}: ${slot.done ? 'completed' : 'not completed'}`}
-                                        style={{
-                                          width: 10,
-                                          height: 10,
-                                          borderRadius: 999,
-                                          display: 'inline-block',
-                                          backgroundColor: slot.done ? '#16a34a' : '#dc2626',
-                                          border: '1px solid rgba(15, 23, 42, 0.15)',
-                                        }}
-                                      />
-                                    ))}
-                                    {stats.expectedSlots.length > VISIBLE_DOTS && (() => {
-                                      const older = stats.expectedSlots.slice(VISIBLE_DOTS);
-                                      const olderDone = older.filter((s) => s.done).length;
-                                      const olderTotal = older.length;
-                                      const pct = olderTotal ? Math.round((olderDone / olderTotal) * 100) : 0;
-                                      return (
-                                        <span
-                                          title={`Older ${olderTotal}: ${olderDone}/${olderTotal} (${pct}%)`}
-                                          className="small"
-                                          style={{
-                                            display: 'inline-flex',
-                                            alignItems: 'center',
-                                            gap: 2,
-                                            padding: '1px 6px',
-                                            borderRadius: 8,
-                                            fontSize: 10,
-                                            fontWeight: 600,
-                                            backgroundColor: pct >= 80 ? '#dcfce7' : pct >= 50 ? '#fef9c3' : '#fee2e2',
-                                            color: pct >= 80 ? '#15803d' : pct >= 50 ? '#a16207' : '#b91c1c',
-                                          }}
-                                        >
-                                          +{olderTotal} ({pct}%)
-                                        </span>
-                                      );
-                                    })()}
-                                  </div>
-                                </div>
-                              )}
-                            </td>
-                            <td>
-                              <Badge bg={consistency.variant}>{consistency.label}</Badge>
-                            </td>
-                            <td>
-                              <Form.Check
-                                type="checkbox"
-                                checked={doneToday}
-                                disabled={!canComplete || busy}
-                                onChange={() => handleComplete(task)}
-                                aria-label={`Complete ${task.title} today`}
-                              />
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </Table>
-                </div>
+                            );
+                          })}
+                        </div>
+                        {/* Streak */}
+                        <div style={{ minWidth: 48, textAlign: 'center', flexShrink: 0 }}>
+                          <div className="fw-bold" style={{ fontSize: 16, lineHeight: 1 }}>{stats.streak}</div>
+                          <div style={{ fontSize: 10, color: '#9ca3af' }}>streak</div>
+                        </div>
+                        {/* Today */}
+                        <div style={{ flexShrink: 0 }}>
+                          <Form.Check
+                            type="checkbox"
+                            checked={doneToday}
+                            disabled={!canComplete || busy}
+                            onChange={() => handleComplete(task)}
+                            aria-label={`Complete ${task.title} today`}
+                          />
+                        </div>
+                      </div>
+                      {boxes.length > 0 && (
+                        <div style={{ fontSize: 11, color: '#6b7280', marginTop: 3, paddingLeft: NAME_COL_WIDTH + 12 }}>
+                          {hitCount}/{boxes.length} completed · {stats.totalCount ? Math.round((stats.completedCount / stats.totalCount) * 100) : 0}% all-time
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </Card.Body>
             </Card>
           );
