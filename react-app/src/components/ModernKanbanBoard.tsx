@@ -1584,11 +1584,11 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
   }, []);
 
   const handleOpenPlanningMatrix = useCallback(() => {
-    navigate('/sprints/planning');
+    navigate('/planner?level=sprint');
   }, [navigate]);
 
   const handleOpenSevenDayPlanner = useCallback(() => {
-    navigate('/planner/weekly');
+    navigate('/planner?level=week');
   }, [navigate]);
 
   if (loading) {
@@ -1639,8 +1639,8 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
           <Button
             variant="outline-secondary"
             onClick={handleOpenSevenDayPlanner}
-            aria-label="Open 7-day view"
-            title="Open 7-day view"
+            aria-label="Open 4-day planner"
+            title="Open 4-day planner"
             className="btn-icon-themed"
           >
             <Clock3 size={16} />

@@ -799,7 +799,7 @@ const WeeklyThemePlanner: React.FC = () => {
                         variant="outline-primary"
                         onClick={applyPlannerBlocksNow}
                         disabled={saving || applying || deltaReplanLoading || nightlyRunning || seedLoading}
-                        title="Apply Planner Blocks Now: materializes Fitness and Work (Main Gig) allocations into calendar blocks for the next 7 days."
+                        title="Apply Planner Blocks Now: materializes Fitness and Work (Main Gig) allocations into calendar blocks for the next 4 days."
                         style={{ whiteSpace: 'nowrap' }}
                     >
                         {applying ? <Spinner size="sm" animation="border" className="me-1" /> : null}
@@ -830,13 +830,13 @@ const WeeklyThemePlanner: React.FC = () => {
                     <Button
                         size="sm"
                         variant="outline-secondary"
-                        onClick={() => navigate('/planner/weekly')}
+                        onClick={() => navigate('/planner?level=week')}
                         disabled={saving || applying || deltaReplanLoading || nightlyRunning || seedLoading}
-                        title="Open 7-day prioritisation view."
+                        title="Open 4-day planner."
                         style={{ whiteSpace: 'nowrap' }}
                     >
                         <Clock size={14} className="me-1" />
-                        7-day view
+                        4-day view
                     </Button>
                     <Button
                         size="sm"
@@ -918,12 +918,12 @@ const WeeklyThemePlanner: React.FC = () => {
                         <Button
                             size="sm"
                             variant="outline-secondary"
-                            onClick={() => navigate('/planner/weekly')}
-                            title="Open 7-day prioritisation view."
+                            onClick={() => navigate('/planner?level=week')}
+                            title="Open 4-day planner."
                             style={{ whiteSpace: 'nowrap' }}
                         >
                             <Clock size={14} className="me-1" />
-                            7-day view
+                            4-day view
                         </Button>
                     </div>
                 )}

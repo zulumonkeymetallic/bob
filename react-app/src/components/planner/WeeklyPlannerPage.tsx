@@ -67,11 +67,11 @@ const WeeklyPlannerPage: React.FC = () => {
     <div className="p-3">
       <div className="d-flex justify-content-between align-items-center gap-2 flex-wrap mb-3">
         <div>
-          <h3 className="mb-1">7-Day Prioritisation</h3>
-          <div className="text-muted small">Review story and task placement over the next 7 days and rebalance priority before execution.</div>
+          <h3 className="mb-1">4-Day Planner</h3>
+          <div className="text-muted small">Review story and task placement over the next 4 days and rebalance priority before execution.</div>
         </div>
         <Badge bg="info">
-          {format(weekStart, 'dd MMM')} – {format(addDays(weekStart, 6), 'dd MMM yyyy')}
+          {format(weekStart, 'dd MMM')} – {format(addDays(weekStart, 3), 'dd MMM yyyy')}
         </Badge>
       </div>
 
@@ -94,7 +94,7 @@ const WeeklyPlannerPage: React.FC = () => {
 
       <Card className="shadow-sm border-0 mb-3">
         <Card.Body className="d-flex align-items-center gap-2 flex-wrap">
-          <Button size="sm" variant="outline-secondary" onClick={() => setWeekStart((prev) => startOfWeek(addDays(prev, -7), { weekStartsOn: 1 }))}>
+          <Button size="sm" variant="outline-secondary" onClick={() => setWeekStart((prev) => startOfWeek(addDays(prev, -4), { weekStartsOn: 1 }))}>
             <ChevronLeft size={14} />
           </Button>
           <Form.Control
@@ -103,7 +103,7 @@ const WeeklyPlannerPage: React.FC = () => {
             onChange={(e) => setWeekStart(startOfWeek(new Date(e.target.value), { weekStartsOn: 1 }))}
             style={{ maxWidth: 180 }}
           />
-          <Button size="sm" variant="outline-secondary" onClick={() => setWeekStart((prev) => startOfWeek(addDays(prev, 7), { weekStartsOn: 1 }))}>
+          <Button size="sm" variant="outline-secondary" onClick={() => setWeekStart((prev) => startOfWeek(addDays(prev, 4), { weekStartsOn: 1 }))}>
             <ChevronRight size={14} />
           </Button>
         </Card.Body>
@@ -132,7 +132,13 @@ const WeeklyPlannerPage: React.FC = () => {
         </Card>
       )}
 
-      <WeeklyPlannerSurface weekStart={weekStart} title="7-Day Prioritisation Matrix" />
+      <WeeklyPlannerSurface
+        weekStart={weekStart}
+        title="4-Day Planner"
+        visibleDays={4}
+        initialDetailLevel="minimal"
+        hideGoalTextWhenMinimal
+      />
     </div>
   );
 };

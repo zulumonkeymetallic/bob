@@ -5,18 +5,12 @@ import { draggable, dropTargetForElements, monitorForElements } from '@atlaskit/
 import { collection, doc, onSnapshot, query, updateDoc, where } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import {
-  addMonths,
   addQuarters,
-  addWeeks,
   addYears,
-  endOfMonth,
   endOfQuarter,
-  endOfWeek,
   endOfYear,
   format,
-  startOfMonth,
   startOfQuarter,
-  startOfWeek,
   startOfYear,
 } from 'date-fns';
 import { db, functions } from '../../firebase';
@@ -40,7 +34,7 @@ import ThemeMultiSelect from '../shared/ThemeMultiSelect';
 import PlanActionBar from './PlanActionBar';
 import { getEntityAiScore, isTop3Story, isTop3Task } from '../../utils/top3';
 
-export type GoalPlannerLevel = 'year' | 'quarter' | 'month' | 'sprint';
+export type GoalPlannerLevel = 'year' | 'quarter';
 
 interface UnifiedGoalPlannerLevelsProps {
   level: GoalPlannerLevel;
@@ -100,29 +94,20 @@ const getLevelTitle = (level: GoalPlannerLevel) => {
   switch (level) {
     case 'year':
       return 'Year Planner';
-    case 'quarter':
-      return 'Quarter Planner';
-    case 'month':
-      return 'Month Planner';
-    case 'sprint':
     default:
-      return 'Sprint Planner';
+      return 'Quarter Planner';
   }
 };
 
 const normalizeAnchor = (level: GoalPlannerLevel, anchorDate?: Date) => {
   const source = anchorDate || new Date();
   if (level === 'year') return startOfYear(source);
-  if (level === 'quarter') return startOfQuarter(source);
-  if (level === 'month') return startOfMonth(source);
-  return startOfWeek(source, { weekStartsOn: 1 });
+  return startOfQuarter(source);
 };
 
 const shiftAnchor = (level: GoalPlannerLevel, anchor: Date, delta: number) => {
   if (level === 'year') return addYears(anchor, delta);
-  if (level === 'quarter') return addQuarters(anchor, delta);
-  if (level === 'month') return addMonths(anchor, delta);
-  return addWeeks(anchor, delta);
+  return addQuarters(anchor, delta);
 };
 
 const buildPeriods = (level: GoalPlannerLevel, anchor: Date): PlannerPeriod[] => {
@@ -130,21 +115,11 @@ const buildPeriods = (level: GoalPlannerLevel, anchor: Date): PlannerPeriod[] =>
     const start = shiftAnchor(level, anchor, index);
     const end = level === 'year'
       ? endOfYear(start)
-      : level === 'quarter'
-        ? endOfQuarter(start)
-        : level === 'month'
-          ? endOfMonth(start)
-          : endOfWeek(start, { weekStartsOn: 1 });
+      : endOfQuarter(start);
     const label = level === 'year'
       ? format(start, 'yyyy')
-      : level === 'quarter'
-        ? `Q${Math.floor(start.getMonth() / 3) + 1} ${format(start, 'yyyy')}`
-        : level === 'month'
-          ? format(start, 'MMM yyyy')
-          : format(start, 'dd MMM');
-    const subLabel = level === 'sprint'
-      ? `${format(start, 'EEE')} - ${format(end, 'EEE d MMM')}`
-      : `${format(start, 'd MMM')} - ${format(end, 'd MMM')}`;
+      : `Q${Math.floor(start.getMonth() / 3) + 1} ${format(start, 'yyyy')}`;
+    const subLabel = `${format(start, 'd MMM')} - ${format(end, 'd MMM')}`;
     return {
       key: `${level}-${format(start, 'yyyy-MM-dd')}`,
       label,

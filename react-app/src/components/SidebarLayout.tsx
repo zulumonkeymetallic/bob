@@ -121,8 +121,8 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       items: [
         { label: 'Goals List', path: '/goals', icon: 'list' },
         { label: 'Focus Goals', path: '/focus-goals', icon: 'bullseye' },
-        { label: 'Goal Planner', path: '/goals/year-planner', icon: 'columns' },
-        { label: 'Goals Roadmap', path: '/goals/roadmap-v6', icon: 'sparkles' },
+        { label: 'Goal Planner', path: '/planner?level=year', icon: 'columns' },
+        { label: 'Gannt chart', path: '/planner?level=gantt', icon: 'sparkles' },
         { label: 'Theme Progress', path: '/metrics/progress', icon: 'chart-bar' },
         { label: 'Visual Canvas', path: '/canvas', icon: 'share-alt' }
       ]
@@ -131,10 +131,10 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       label: 'Plan',
       icon: 'project-diagram',
       items: [
-        { label: 'Year Planner', path: '/goals/year-planner', icon: 'route' },
-        { label: 'Quarter/Month Roadmap', path: '/goals/roadmap-v6', icon: 'stream' },
-        { label: 'Sprint Planning', path: '/sprints/planning', icon: 'th' },
-        { label: '7-Day Prioritisation', path: '/planner/weekly', icon: 'th-large' },
+        { label: 'Year Planner', path: '/planner?level=year', icon: 'route' },
+        { label: 'Gannt chart', path: '/planner?level=gantt', icon: 'stream' },
+        { label: 'Multi Sprint Planner', path: '/planner?level=sprint', icon: 'th' },
+        { label: '4-Day Planner', path: '/planner?level=week', icon: 'th-large' },
       ],
     },
     {
@@ -191,7 +191,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       items: [
         { label: 'Sprint Management', path: '/sprints/management', icon: 'tasks' },
         { label: 'Sprint Kanban', path: '/sprints/kanban', icon: 'columns' },
-        { label: 'Sprint Planning', path: '/sprints/planning', icon: 'th' },
+        { label: 'Multi Sprint Planner', path: '/planner?level=sprint', icon: 'th' },
         { label: 'Capacity Planning', path: '/sprints/capacity', icon: 'chart-pie' },
         { label: 'Retrospective', path: '/sprints/retrospective', icon: 'rotate-left' }
       ]
@@ -202,7 +202,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       items: [
         { label: 'Calendar', path: '/calendar', icon: 'calendar' },
         { label: 'Weekly Capacity', path: '/calendar/planner', icon: 'palette' },
-        { label: '7-Day Prioritisation', path: '/planner/weekly', icon: 'th-large' },
+        { label: '4-Day Planner', path: '/planner?level=week', icon: 'th-large' },
         { label: 'Sprint Capacity', path: '/sprints/capacity', icon: 'chart-pie' },
         { label: 'Google Integration', path: '/calendar/integration', icon: 'google' }
       ]

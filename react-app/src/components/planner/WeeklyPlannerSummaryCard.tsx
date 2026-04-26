@@ -55,7 +55,7 @@ const WeeklyPlannerSummaryCard: React.FC = () => {
               <div className="small text-muted mt-1">
                 {planningSummary?.completedAt
                   ? `${Number(planningSummary.acceptedMoves || 0)} planned · ${Number(planningSummary.acceptedDefers || 0)} deferred`
-                  : 'Review the next 7 days from Overview before the week fills up.'}
+                  : 'Review the next 4 days from Overview before the week fills up.'}
               </div>
             </Alert>
             <div className="d-flex flex-wrap gap-2 mb-3">
@@ -63,8 +63,8 @@ const WeeklyPlannerSummaryCard: React.FC = () => {
               <Badge bg="info">Planned {Number(planningSummary?.acceptedMoves || 0)}</Badge>
               <Badge bg="warning" text="dark">Deferred {Number(planningSummary?.acceptedDefers || 0)}</Badge>
             </div>
-            <Button size="sm" variant="outline-primary" onClick={() => navigate('/planner/weekly')}>
-              Open 7-day planner
+            <Button size="sm" variant="outline-primary" onClick={() => navigate('/planner?level=week')}>
+              Open 4-day planner
             </Button>
           </>
         )}

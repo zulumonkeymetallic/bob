@@ -568,7 +568,7 @@ const CheckInWeekly: React.FC = () => {
       {showPlanningPrompt && mode === 'reflect' && (
         <Alert variant="warning" className="py-2 mb-3 d-flex align-items-center justify-content-between gap-2 flex-wrap">
           <div className="small">
-            Finish your reflection, then switch to <strong>Plan next week</strong> to move items across the next 7 days and accept defer proposals.
+            Finish your reflection, then switch to <strong>Plan next week</strong> to move items across the next 4 days and accept defer proposals.
           </div>
           <Button size="sm" variant="outline-dark" onClick={() => setMode('plan')}>
             Open planner
@@ -606,18 +606,18 @@ const CheckInWeekly: React.FC = () => {
               <div>
                 <div className="fw-semibold">Weekly Review Tools</div>
                 <div className="text-muted small">
-                  Use Weekly Capacity and the 7-day prioritisation matrix together before locking next week.
+                  Use Weekly Capacity and the 4-day planner together before locking next week.
                 </div>
               </div>
               <div className="d-flex flex-wrap gap-2">
                 <Button size="sm" variant="outline-secondary" onClick={() => navigate('/calendar/planner')}>
                   Weekly Capacity
                 </Button>
-                <Button size="sm" variant="outline-primary" onClick={() => navigate('/planner/weekly')}>
-                  7-Day Prioritisation
+                <Button size="sm" variant="outline-primary" onClick={() => navigate('/planner?level=week')}>
+                  4-Day Planner
                 </Button>
-                <Button size="sm" variant="outline-secondary" onClick={() => navigate('/sprints/planning')}>
-                  Sprint Planning
+                <Button size="sm" variant="outline-secondary" onClick={() => navigate('/planner?level=sprint')}>
+                  Multi Sprint Planner
                 </Button>
               </div>
             </Card.Body>
@@ -625,7 +625,10 @@ const CheckInWeekly: React.FC = () => {
           <WeeklyPlannerSurface
             weekStart={planningWeekStart}
             embedded
-            title={`7-Day Prioritisation Matrix · Week of ${format(planningWeekStart, 'dd MMM yyyy')}`}
+            title={`4-Day Planner · Week of ${format(planningWeekStart, 'dd MMM yyyy')}`}
+            visibleDays={4}
+            initialDetailLevel="minimal"
+            hideGoalTextWhenMinimal
             storageScope="weekly_checkin"
           />
         </>

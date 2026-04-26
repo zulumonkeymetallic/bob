@@ -49,7 +49,7 @@ import { bucketLabel, bucketOrder, type TimelineBucket } from '../../utils/timel
 import { buildPlannerRecommendation, type PlannerRecommendation } from '../../utils/plannerRecommendations';
 import { buildDayCapacityMap, plannerItemPoints } from '../../utils/plannerCapacity';
 import { schedulePlannerItem as schedulePlannerItemMutation } from '../../utils/plannerScheduling';
-import { useDetailLevel } from '../../contexts/DetailLevelContext';
+import { useDetailLevel, type DetailLevel } from '../../contexts/DetailLevelContext';
 import { useUnifiedPlannerData } from '../../hooks/useUnifiedPlannerData';
 import GoalMultiSelect from '../shared/GoalMultiSelect';
 import ThemeMultiSelect from '../shared/ThemeMultiSelect';
@@ -63,6 +63,9 @@ interface WeeklyPlannerSurfaceProps {
   weekStart: Date;
   embedded?: boolean;
   title?: string;
+  visibleDays?: number;
+  initialDetailLevel?: DetailLevel;
+  hideGoalTextWhenMinimal?: boolean;
   storageScope?: 'weekly_checkin' | 'standalone';
   onPlanningSaved?: (summary: {
     acceptedMoves: number;
@@ -149,6 +152,9 @@ const WeeklyPlannerSurface: React.FC<WeeklyPlannerSurfaceProps> = ({
   weekStart,
   embedded = false,
   title = 'Weekly Planner',
+  visibleDays = 7,
+  initialDetailLevel,
+  hideGoalTextWhenMinimal = false,
   storageScope = 'standalone',
   onPlanningSaved,
 }) => {
@@ -186,15 +192,15 @@ const WeeklyPlannerSurface: React.FC<WeeklyPlannerSurfaceProps> = ({
   });
 
   const weekStartMs = useMemo(() => dayStartMs(weekStart), [weekStart]);
-  const weekEndMs = useMemo(() => dayStartMs(addDays(weekStart, 6)) + (24 * 60 * 60 * 1000) - 1, [weekStart]);
+  const weekEndMs = useMemo(() => dayStartMs(addDays(weekStart, visibleDays - 1)) + (24 * 60 * 60 * 1000) - 1, [visibleDays, weekStart]);
   const weekKey = useMemo(() => format(weekStart, "yyyy-'W'II"), [weekStart]);
   const dayColumns = useMemo(
-    () => Array.from({ length: 7 }, (_, index) => new Date(dayStartMs(addDays(weekStart, index)))),
-    [weekStart],
+    () => Array.from({ length: visibleDays }, (_, index) => new Date(dayStartMs(addDays(weekStart, index)))),
+    [visibleDays, weekStart],
   );
   const activeFocusGoalIds = useMemo(() => getActiveFocusLeafGoalIds(activeFocusGoals), [activeFocusGoals]);
   const nextSprint = useMemo(() => nextSprintForDate(sprints as Sprint[], weekEndMs), [sprints, weekEndMs]);
-  const plannerRange = useMemo(() => ({ start: weekStart, end: addDays(weekStart, 6) }), [weekStart]);
+  const plannerRange = useMemo(() => ({ start: weekStart, end: addDays(weekStart, visibleDays - 1) }), [visibleDays, weekStart]);
   const unifiedPlannerData = useUnifiedPlannerData(plannerRange);
   const summaryEvents = useMemo(
     () => unifiedPlannerData.externalEvents.map((event) => ({
@@ -212,6 +218,12 @@ const WeeklyPlannerSurface: React.FC<WeeklyPlannerSurfaceProps> = ({
     window.addEventListener('resize', update);
     return () => window.removeEventListener('resize', update);
   }, []);
+
+  useEffect(() => {
+    if (initialDetailLevel) {
+      setDetailLevel(initialDetailLevel);
+    }
+  }, [initialDetailLevel, setDetailLevel]);
 
   useEffect(() => {
     if (!currentUser?.uid) {
@@ -276,7 +288,7 @@ const WeeklyPlannerSurface: React.FC<WeeklyPlannerSurfaceProps> = ({
             const raw = String(row.occurrenceDate || '').trim();
             if (!raw) return false;
             const normalized = /^\d{8}$/.test(raw) ? `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}` : raw;
-            return normalized >= format(weekStart, 'yyyy-MM-dd') && normalized <= format(addDays(weekStart, 6), 'yyyy-MM-dd');
+            return normalized >= format(weekStart, 'yyyy-MM-dd') && normalized <= format(addDays(weekStart, visibleDays - 1), 'yyyy-MM-dd');
           }) as PlannerScheduledInstanceRow[];
 
         const themeAllocationsData = themeAllocationsSnap.exists() ? (themeAllocationsSnap.data() as any) : null;
@@ -320,7 +332,7 @@ const WeeklyPlannerSurface: React.FC<WeeklyPlannerSurfaceProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [currentUser?.uid, weekStart, weekStartMs, weekEndMs, weekKey]);
+  }, [currentUser?.uid, visibleDays, weekStart, weekStartMs, weekEndMs, weekKey]);
 
   const weekAssignedItems = useMemo(
     () =>
@@ -964,7 +976,7 @@ const WeeklyPlannerSurface: React.FC<WeeklyPlannerSurfaceProps> = ({
         <div>
           <div className="fw-semibold">{title}</div>
           <div className="text-muted small">
-            {format(weekStart, 'dd MMM')} – {format(addDays(weekStart, 6), 'dd MMM yyyy')}
+            {format(weekStart, 'dd MMM')} – {format(addDays(weekStart, visibleDays - 1), 'dd MMM yyyy')}
           </div>
         </div>
         <div className="d-flex align-items-center gap-2 flex-wrap">
@@ -1064,7 +1076,11 @@ const WeeklyPlannerSurface: React.FC<WeeklyPlannerSurfaceProps> = ({
                   <Card.Body className="p-3">
                     <div className="fw-semibold">{item.title}</div>
                     <div className="text-muted small mb-2">
-                      {[item.ref, item.statusLabel, item.goalTitle || 'No linked goal'].filter(Boolean).join(' · ')}
+                      [
+                        item.ref,
+                        item.statusLabel,
+                        !(hideGoalTextWhenMinimal && detailLevel === 'minimal') ? (item.goalTitle || 'No linked goal') : null,
+                      ].filter(Boolean).join(' · ')
                     </div>
                     {recommendation && (
                       <div className="small mb-2">
@@ -1101,7 +1117,7 @@ const WeeklyPlannerSurface: React.FC<WeeklyPlannerSurfaceProps> = ({
               <tr>
                 <th>Item</th>
                 <th>Current</th>
-                <th>Goal</th>
+                {!(hideGoalTextWhenMinimal && detailLevel === 'minimal') && <th>Goal</th>}
                 <th>Recommendation</th>
                 <th className="text-end">Action</th>
               </tr>
@@ -1118,7 +1134,9 @@ const WeeklyPlannerSurface: React.FC<WeeklyPlannerSurfaceProps> = ({
                       </div>
                     </td>
                     <td className="small text-muted">{item.timeLabel}</td>
-                    <td className="small text-muted">{item.goalTitle || 'No linked goal'}</td>
+                    {!(hideGoalTextWhenMinimal && detailLevel === 'minimal') && (
+                      <td className="small text-muted">{item.goalTitle || 'No linked goal'}</td>
+                    )}
                     <td>
                       {recommendation ? (
                         <>

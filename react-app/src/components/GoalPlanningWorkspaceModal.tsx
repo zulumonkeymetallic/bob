@@ -86,7 +86,7 @@ const GoalPlanningWorkspaceModal: React.FC<Props> = ({
           </div>
           <ButtonGroup size="sm">
             <Button variant={view === 'gantt' ? 'primary' : 'outline-primary'} onClick={() => setView('gantt')}>
-              Gantt
+              Gannt
             </Button>
             <Button variant={view === 'year' ? 'primary' : 'outline-primary'} onClick={() => setView('year')}>
               Year
@@ -95,7 +95,7 @@ const GoalPlanningWorkspaceModal: React.FC<Props> = ({
               Quarter
             </Button>
             <Button variant={view === 'sprint' ? 'primary' : 'outline-primary'} onClick={() => setView('sprint')}>
-              Sprint
+              Multi Sprint
             </Button>
           </ButtonGroup>
         </div>

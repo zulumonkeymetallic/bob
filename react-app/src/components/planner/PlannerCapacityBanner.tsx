@@ -538,7 +538,7 @@ const PlannerCapacityBanner: React.FC = () => {
           </div>
         </div>
         <div className="d-flex align-items-center gap-2">
-          <Button size="sm" variant="dark" onClick={() => navigate('/sprints/planning')}>
+          <Button size="sm" variant="dark" onClick={() => navigate('/planner?level=sprint')}>
             <ArrowRightLeft size={14} className="me-1" />
             Priority matrix
           </Button>

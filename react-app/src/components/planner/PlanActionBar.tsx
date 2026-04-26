@@ -24,12 +24,11 @@ type PlanDestination = {
 };
 
 const PLAN_LEVELS: PlanDestination[] = [
-  { level: 'gantt', label: 'Gantt Chart' },
+  { level: 'gantt', label: 'Gannt chart' },
   { level: 'year', label: 'Year Planner' },
   { level: 'quarter', label: 'Quarter Planner' },
-  { level: 'month', label: 'Month Planner' },
-  { level: 'sprint', label: 'Sprint Planner' },
-  { level: 'week', label: 'Week Planner' },
+  { level: 'sprint', label: 'Multi Sprint Planner' },
+  { level: 'week', label: '4-Day Planner' },
   { level: 'calendar', label: 'Calendar' },
 ];
 
@@ -69,7 +68,6 @@ const PlanActionBar: React.FC<PlanActionBarProps> = ({ className }) => {
       case 'year':
         return <Milestone size={14} className="me-1" />;
       case 'quarter':
-      case 'month':
         return <Layers3 size={14} className="me-1" />;
       case 'sprint':
         return <GitBranch size={14} className="me-1" />;

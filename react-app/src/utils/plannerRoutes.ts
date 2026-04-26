@@ -2,7 +2,6 @@ export type UnifiedPlannerLevel =
   | 'gantt'
   | 'year'
   | 'quarter'
-  | 'month'
   | 'sprint'
   | 'week'
   | 'calendar';
@@ -11,7 +10,6 @@ const VALID_LEVELS = new Set<UnifiedPlannerLevel>([
   'gantt',
   'year',
   'quarter',
-  'month',
   'sprint',
   'week',
   'calendar',
@@ -21,6 +19,7 @@ export const DEFAULT_PLANNER_LEVEL: UnifiedPlannerLevel = 'calendar';
 
 export function normalizePlannerLevel(value: string | null | undefined): UnifiedPlannerLevel {
   const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'month') return 'quarter';
   if (VALID_LEVELS.has(normalized as UnifiedPlannerLevel)) {
     return normalized as UnifiedPlannerLevel;
   }
@@ -30,17 +29,15 @@ export function normalizePlannerLevel(value: string | null | undefined): Unified
 export function plannerLevelLabel(level: UnifiedPlannerLevel): string {
   switch (level) {
     case 'gantt':
-      return 'Gantt Chart';
+      return 'Gannt chart';
     case 'year':
       return 'Year Planner';
     case 'quarter':
       return 'Quarter Planner';
-    case 'month':
-      return 'Month Planner';
     case 'sprint':
-      return 'Sprint Planner';
+      return 'Multi Sprint Planner';
     case 'week':
-      return 'Week Planner';
+      return '4-Day Planner';
     case 'calendar':
     default:
       return 'Calendar';
@@ -74,4 +71,3 @@ export function buildPlannerPath(
 
   return `/planner?${search.toString()}`;
 }
-

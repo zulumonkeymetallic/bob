@@ -107,7 +107,7 @@ const SprintClosureBanner: React.FC = () => {
   };
 
   const handlePlanningMatrix = () => {
-    navigate('/sprints/planning');
+    navigate('/planner?level=sprint');
   };
 
   const handleDismiss = (sprintId: string) => {

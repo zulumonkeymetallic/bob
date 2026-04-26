@@ -28,6 +28,7 @@ import { parseBooleanParam, parseIdListParam, parseNumberListParam } from '../ut
 import PlanActionBar from './planner/PlanActionBar';
 import ThemeMultiSelect from './shared/ThemeMultiSelect';
 import GoalMultiSelect from './shared/GoalMultiSelect';
+import type { DetailLevel } from '../contexts/DetailLevelContext';
 
 // Normalize sprint identifiers so we handle doc refs, strings, and legacy placeholders
 const normalizeSprintId = (value: any): string | null => {
@@ -103,7 +104,8 @@ const SprintColumn: React.FC<{
   showDescriptions: boolean;
   formatTag?: (tag: string) => string;
   themes?: GlobalTheme[];
-}> = ({ sprint, stories, goals, capacitySummary = null, isBacklog = false, placeholderLabel, droppableId, showDescriptions, formatTag, themes }) => {
+  detailLevel?: DetailLevel;
+}> = ({ sprint, stories, goals, capacitySummary = null, isBacklog = false, placeholderLabel, droppableId, showDescriptions, formatTag, themes, detailLevel = 'minimal' }) => {
   const ref = useRef<HTMLDivElement>(null);
   const [isOver, setIsOver] = useState(false);
 
@@ -156,6 +158,9 @@ const SprintColumn: React.FC<{
   const dateRangeLabel = sprint && !isBacklog && sprint.startDate && sprint.endDate
     ? `${new Date(sprint.startDate).toLocaleDateString()} – ${new Date(sprint.endDate).toLocaleDateString()}`
     : null;
+  const sprintWeeksLabel = sprint && !isBacklog && sprint.startDate && sprint.endDate
+    ? `${Math.max(1, Math.ceil((Number(sprint.endDate) - Number(sprint.startDate) + (24 * 60 * 60 * 1000)) / (7 * 24 * 60 * 60 * 1000)))} wk`
+    : null;
 
   return (
     <div className={`sprint-column${isOver ? ' is-over' : ''}`}>
@@ -181,7 +186,9 @@ const SprintColumn: React.FC<{
           </Badge>
         </div>
         {dateRangeLabel && (
-          <span style={{ fontSize: 11, color: themeVars.muted as string }}>{dateRangeLabel}</span>
+          <span style={{ fontSize: 11, color: themeVars.muted as string }}>
+            {dateRangeLabel}{sprintWeeksLabel ? ` · ${sprintWeeksLabel}` : ''}
+          </span>
         )}
         <div className="sprint-column__stats">
           <span>{stories.length} stories</span>
@@ -219,6 +226,7 @@ const SprintColumn: React.FC<{
                 showDescription={showDescriptions}
                 formatTag={formatTag}
                 themes={themes}
+                detailLevel={detailLevel}
               />
             );
           })}
@@ -247,7 +255,8 @@ const GroupedSprintCell: React.FC<{
   showDescriptions: boolean;
   formatTag?: (tag: string) => string;
   themes?: GlobalTheme[];
-}> = ({ title, stories, goals, showDescriptions, formatTag, themes }) => (
+  detailLevel?: DetailLevel;
+}> = ({ title, stories, goals, showDescriptions, formatTag, themes, detailLevel = 'minimal' }) => (
   <Card style={{ border: '1px solid rgba(0,0,0,0.08)', minWidth: 240 }}>
     <Card.Body style={{ padding: 10 }}>
       <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, color: themeVars.text as string }}>
@@ -271,6 +280,7 @@ const GroupedSprintCell: React.FC<{
                 showDescription={showDescriptions}
                 formatTag={formatTag}
                 themes={themes}
+                detailLevel={detailLevel}
               />
             );
           })}
@@ -578,7 +588,7 @@ const SprintPlanningMatrix: React.FC = () => {
   );
 
   const defaultSelectedSprintIds = useMemo(
-    () => planningSprintPool.slice(0, 3).map((sprint) => sprint.id),
+    () => planningSprintPool.slice(0, 5).map((sprint) => sprint.id),
     [planningSprintPool],
   );
 
@@ -855,7 +865,7 @@ const SprintPlanningMatrix: React.FC = () => {
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
                 <h2 style={{ margin: 0, fontSize: '28px', fontWeight: '700', color: themeVars.text as string }}>
-                  Sprint Planning
+                  Multi Sprint Planner
                 </h2>
                 <Badge bg="primary" style={{ fontSize: '12px', padding: '6px 12px' }}>
                   {currentPersona.charAt(0).toUpperCase() + currentPersona.slice(1)} Persona
@@ -1194,6 +1204,7 @@ const SprintPlanningMatrix: React.FC = () => {
                           showDescriptions={showDescriptions}
                           formatTag={formatTag}
                           themes={globalThemes}
+                          detailLevel="minimal"
                         />
                         {visibleSprints.map((sprint) => (
                           <GroupedSprintCell
@@ -1204,6 +1215,7 @@ const SprintPlanningMatrix: React.FC = () => {
                             showDescriptions={showDescriptions}
                             formatTag={formatTag}
                             themes={globalThemes}
+                            detailLevel="minimal"
                           />
                         ))}
                       </div>
@@ -1227,6 +1239,7 @@ const SprintPlanningMatrix: React.FC = () => {
           showDescriptions={showDescriptions}
           formatTag={formatTag}
           themes={globalThemes}
+          detailLevel="minimal"
         />
         {visibleSprints.map((sprint) => (
           <SprintColumn
@@ -1240,6 +1253,7 @@ const SprintPlanningMatrix: React.FC = () => {
             showDescriptions={showDescriptions}
             formatTag={formatTag}
             themes={globalThemes}
+            detailLevel="minimal"
           />
         ))}
       </div>
@@ -1257,7 +1271,7 @@ const SprintPlanningMatrix: React.FC = () => {
                       Drag & Drop Instructions
                     </h6>
                     <p style={{ margin: '4px 0 0 0', fontSize: '12px', color: '#1e40af' }}>
-                      Drag stories between backlog and sprints to plan your work. 
+                      Drag stories between backlog and sprints to plan your work.
                       Stories will automatically update their sprint assignment.
                     </p>
                   </div>
