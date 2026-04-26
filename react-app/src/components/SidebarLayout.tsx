@@ -100,7 +100,6 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         { label: 'Kanban Board', path: '/sprints/kanban', icon: 'kanban' },
         { label: 'Calendar', path: '/calendar', icon: 'calendar' },
         { label: 'Metrics', path: '/metrics', icon: 'tachometer-alt' },
-        { label: '⚡ Overview', path: '/metrics/overview', icon: 'chart-area' },
       ]
     },
     // Health

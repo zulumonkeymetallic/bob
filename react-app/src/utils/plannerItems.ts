@@ -582,8 +582,10 @@ export const buildPlannerItems = ({
         isFocusAligned: false,
         rawTask: null,
         rawStory: null,
+        scheduledSourceLabel: scheduledSourceLabelForBlock(block),
         scheduledBlockStart: startMs,
         scheduledBlockEnd: endMs,
+        scheduledBlockId: block.id,
       }, dedupeKey);
     });
 

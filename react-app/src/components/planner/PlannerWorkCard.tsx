@@ -142,6 +142,7 @@ const PlannerWorkCard: React.FC<PlannerWorkCardProps> = ({
   const kindColor = item.kind === 'story' ? '#0dcaf0' : item.kind === 'chore' ? '#198754' : item.kind === 'event' ? '#6c757d' : '#0d6efd';
   const color = themeColor || kindColor;
   const compactWeekly = context === 'weekly';
+  const canEditEvent = isEvent && !!item.scheduledBlockId && !!onOpenEditor;
   const secondaryMeta = compactWeekly
     ? [item.ref].filter(Boolean).join(' · ')
     : [item.ref, !scheduledBlockLabel ? item.timeLabel : null].filter(Boolean).join(' · ');
@@ -409,7 +410,7 @@ const PlannerWorkCard: React.FC<PlannerWorkCardProps> = ({
                 )}
               </div>
 
-              {actionButtons && (
+              {(actionButtons || canEditEvent) && (
                 <div className="d-flex align-items-center gap-1 flex-wrap">
                   {onOpenActivity && (item.rawTask || item.rawStory) && (
                     <Button
@@ -422,7 +423,7 @@ const PlannerWorkCard: React.FC<PlannerWorkCardProps> = ({
                       {isMobileLayout ? 'Note' : null}
                     </Button>
                   )}
-                  {onOpenEditor && (item.rawTask || item.rawStory) && (
+                  {onOpenEditor && (item.rawTask || item.rawStory || canEditEvent) && (
                     <Button
                       size="sm"
                       variant="outline-secondary"
@@ -433,7 +434,7 @@ const PlannerWorkCard: React.FC<PlannerWorkCardProps> = ({
                       {isMobileLayout ? 'Edit' : null}
                     </Button>
                   )}
-                  {onSchedule && !isGroup && (
+                  {onSchedule && !isGroup && !isEvent && (
                     <Button
                       size="sm"
                       variant="outline-secondary"
@@ -444,7 +445,7 @@ const PlannerWorkCard: React.FC<PlannerWorkCardProps> = ({
                       {isMobileLayout ? 'Schedule' : null}
                     </Button>
                   )}
-                  {onMove && (
+                  {onMove && !isEvent && (
                     <Button
                       size="sm"
                       variant="outline-secondary"
@@ -455,7 +456,7 @@ const PlannerWorkCard: React.FC<PlannerWorkCardProps> = ({
                       {isMobileLayout ? 'Move' : null}
                     </Button>
                   )}
-                  {showInlineRecommendation && recommendation && onAcceptRecommendation ? (
+                  {showInlineRecommendation && recommendation && onAcceptRecommendation && !isEvent ? (
                     <>
                       <Button size="sm" variant="primary" disabled={applyingKey === item.id} onClick={() => onAcceptRecommendation(item)}>
                         {applyingKey === item.id ? 'Applying…' : 'Accept'}
@@ -467,7 +468,7 @@ const PlannerWorkCard: React.FC<PlannerWorkCardProps> = ({
                       )}
                     </>
                   ) : (
-                    onDefer && !isGroup && (
+                    onDefer && !isGroup && !isEvent && (
                       <Button
                         size="sm"
                         variant="outline-warning"

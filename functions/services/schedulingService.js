@@ -329,6 +329,12 @@ function resolveManualScheduleOverride(itemType, entity, zone, durationMinutes) 
   };
 }
 
+function shouldPersistWeeklyPlannerManualLock({ source, exactTargetStartMs }) {
+  const normalizedSource = String(source || '').trim().toLowerCase();
+  const exactStart = Number(exactTargetStartMs);
+  return normalizedSource === 'weekly_planner' && Number.isFinite(exactStart) && exactStart > 0;
+}
+
 function choosePlacement({
   targetDateMs,
   targetBucket,
@@ -579,6 +585,7 @@ async function schedulePlannerItemMutation({
   const forcedStartMs = Number(exactTargetStartMs);
   const forcedEndMs = Number(exactTargetEndMs);
   const forcedDurationMs = Math.max(MIN_BLOCK_MS, Math.round(effectiveDurationMinutes) * 60 * 1000);
+  const persistWeeklyPlannerManualLock = shouldPersistWeeklyPlannerManualLock({ source, exactTargetStartMs });
   const placements = Number.isFinite(forcedStartMs) && forcedStartMs > 0
     ? [{
         appliedStartMs: forcedStartMs,
@@ -700,6 +707,13 @@ async function schedulePlannerItemMutation({
     entityPatch.deferredUntil = null;
     entityPatch.deferredReason = null;
     entityPatch.deferredBy = null;
+  }
+
+  if (persistWeeklyPlannerManualLock) {
+    entityPatch.orchestrationLocked = true;
+    entityPatch.orchestrationLockedReason = 'manual_weekly_planner_placement';
+    entityPatch.orchestrationLockedSource = source || 'weekly_planner';
+    entityPatch.orchestrationLockedAt = admin.firestore.FieldValue.serverTimestamp();
   }
 
   const batch = db.batch();

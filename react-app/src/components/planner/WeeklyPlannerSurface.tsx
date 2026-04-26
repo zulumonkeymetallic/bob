@@ -56,6 +56,7 @@ import ThemeMultiSelect from '../shared/ThemeMultiSelect';
 import { getGoalDisplayPath, getActiveFocusLeafGoalIds, isGoalInHierarchySet } from '../../utils/goalHierarchy';
 import { compareTop3Stories, compareTop3Tasks, getEntityAiScore } from '../../utils/top3';
 import { getManualPriorityRank } from '../../utils/manualPriority';
+import NewCalendarEventModal, { type BlockFormState, toInputValue } from './NewCalendarEventModal';
 
 type WeeklyPlannerView = 'table' | 'planner';
 
@@ -177,6 +178,7 @@ const WeeklyPlannerSurface: React.FC<WeeklyPlannerSurfaceProps> = ({
   const [isMobileLayout, setIsMobileLayout] = useState<boolean>(typeof window !== 'undefined' ? window.innerWidth < 768 : false);
   const [moveTarget, setMoveTarget] = useState<MoveTarget | null>(null);
   const [deferTarget, setDeferTarget] = useState<PlannerItem | null>(null);
+  const [editCalendarInitialValues, setEditCalendarInitialValues] = useState<Partial<BlockFormState> | null>(null);
   const [applyingKey, setApplyingKey] = useState<string | null>(null);
   const [dragItemId, setDragItemId] = useState<string | null>(null);
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
@@ -896,6 +898,42 @@ const WeeklyPlannerSurface: React.FC<WeeklyPlannerSurfaceProps> = ({
     await applyMove(item, recommendation.targetDateMs, recommendation.targetBucket, recommendation);
   };
 
+  const openCalendarEventEditor = useCallback((item: PlannerItem) => {
+    const blockId = String(item.scheduledBlockId || '').trim();
+    if (!blockId) {
+      setFeedback({ variant: 'warning', text: 'This calendar event cannot be edited from the planner because it is not backed by a planner block.' });
+      return;
+    }
+    const block = calendarBlocks.find((row) => row.id === blockId);
+    if (!block) {
+      setFeedback({ variant: 'warning', text: 'The linked calendar block could not be found.' });
+      return;
+    }
+    const startMs = Number(block.start || item.scheduledBlockStart || 0);
+    const endMs = Number(block.end || item.scheduledBlockEnd || 0);
+    setEditCalendarInitialValues({
+      id: block.id,
+      title: String(block.title || item.title || 'Calendar event').trim() || 'Calendar event',
+      theme: (block as any).theme || undefined,
+      category: (block as any).category || undefined,
+      flexibility: (block as any).flexibility || undefined,
+      rationale: String((block as any).rationale || '').trim(),
+      start: startMs > 0 ? toInputValue(new Date(startMs)) : '',
+      end: endMs > 0 ? toInputValue(new Date(endMs)) : '',
+      syncToGoogle: (block as any).syncToGoogle !== false,
+      subTheme: String((block as any).subTheme || ''),
+      persona: ((block as any).persona || currentPersona || 'personal') as 'personal' | 'work',
+      storyId: String((block as any).storyId || '').trim() || undefined,
+      taskId: String((block as any).taskId || '').trim() || undefined,
+      aiScore: Number.isFinite(Number((block as any).aiScore)) ? Number((block as any).aiScore) : null,
+      aiReason: String((block as any).aiReason || '').trim() || null,
+      storyInput: '',
+      recurrenceFreq: 'none',
+      recurrenceDays: [],
+      recurrenceUntil: '',
+    });
+  }, [calendarBlocks, currentPersona]);
+
   const renderPlannerCard = (item: PlannerItem) => {
     const recommendation = recommendationByItemId.get(item.id) || null;
     const plannerMode = activeView === 'planner';
@@ -918,9 +956,10 @@ const WeeklyPlannerSurface: React.FC<WeeklyPlannerSurfaceProps> = ({
             canEditState={false}
             showInlineRecommendation={!plannerMode && !!recommendation}
             recommendation={recommendation}
-            canShowActions={!plannerMode || isMobileLayout}
+            canShowActions={item.kind === 'event' ? true : (!plannerMode || isMobileLayout)}
             expanded={!!expandedGroups[item.id]}
             onToggleExpanded={(nextItem) => setExpandedGroups((prev) => ({ ...prev, [nextItem.id]: !prev[nextItem.id] }))}
+            onOpenEditor={item.kind === 'event' ? openCalendarEventEditor : undefined}
             onMove={(nextItem) => setMoveTarget({ item: nextItem, recommendation: deriveAutoPlacement(nextItem) })}
             onDefer={(nextItem) => {
               if (nextItem.childItems?.length) return;
@@ -1437,6 +1476,16 @@ const WeeklyPlannerSurface: React.FC<WeeklyPlannerSurfaceProps> = ({
           }}
         />
       )}
+      <NewCalendarEventModal
+        show={!!editCalendarInitialValues}
+        onHide={() => setEditCalendarInitialValues(null)}
+        initialValues={editCalendarInitialValues || undefined}
+        stories={stories}
+        onSaved={() => {
+          setEditCalendarInitialValues(null);
+          setFeedback({ variant: 'success', text: 'Calendar event updated.' });
+        }}
+      />
     </div>
   );
 };
