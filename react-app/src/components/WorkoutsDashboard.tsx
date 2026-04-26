@@ -2042,28 +2042,36 @@ const WorkoutsDashboard: React.FC = () => {
       </Card>
 
       {/* Fitness KPI Habit Grid */}
-      <div className="mb-4">
-        <h6 className="fw-semibold mb-2" style={{ color: '#9ca3af', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-          Weekly targets
-        </h6>
-        <FitnessKpiGrid
-          rows={[
-            { label: 'Run  50km/wk',  summaryText: `${weeklyKpiData.runHits}/12 weeks hit target`,   boxes: weeklyKpiData.run   },
-            { label: 'Swim  4km/wk',  summaryText: `${weeklyKpiData.swimHits}/12 weeks hit target`,  boxes: weeklyKpiData.swim  },
-            { label: 'Cycle 50km/wk', summaryText: `${weeklyKpiData.cycleHits}/12 weeks hit target`, boxes: weeklyKpiData.cycle },
-          ]}
-        />
-        <h6 className="fw-semibold mb-2 mt-3" style={{ color: '#9ca3af', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-          Daily targets
-        </h6>
-        <FitnessKpiGrid
-          rows={[
-            { label: 'Steps 12k/day',  summaryText: `${dailyKpiData.stepsHits}/30 days hit target`,   boxes: dailyKpiData.steps   },
-            { label: 'Sleep  8hr/day', summaryText: `${dailyKpiData.sleepHits}/30 days hit target`,   boxes: dailyKpiData.sleep   },
-            { label: 'Protein 180g',   summaryText: `${dailyKpiData.proteinHits}/30 days hit target`, boxes: dailyKpiData.protein },
-          ]}
-        />
-      </div>
+      <Row className="g-3 mb-3">
+        <Col xs={12} md={6}>
+          <Card className="h-100">
+            <Card.Header className="py-2"><strong>Weekly Targets</strong></Card.Header>
+            <Card.Body className="py-2">
+              <FitnessKpiGrid
+                rows={[
+                  { label: 'Run  50km/wk',  summaryText: `${weeklyKpiData.runHits}/12 weeks hit target`,   boxes: weeklyKpiData.run   },
+                  { label: 'Swim  4km/wk',  summaryText: `${weeklyKpiData.swimHits}/12 weeks hit target`,  boxes: weeklyKpiData.swim  },
+                  { label: 'Cycle 50km/wk', summaryText: `${weeklyKpiData.cycleHits}/12 weeks hit target`, boxes: weeklyKpiData.cycle },
+                ]}
+              />
+            </Card.Body>
+          </Card>
+        </Col>
+        <Col xs={12} md={6}>
+          <Card className="h-100">
+            <Card.Header className="py-2"><strong>Daily Targets</strong></Card.Header>
+            <Card.Body className="py-2">
+              <FitnessKpiGrid
+                rows={[
+                  { label: 'Steps 12k/day',  summaryText: `${dailyKpiData.stepsHits}/30 days hit target`,   boxes: dailyKpiData.steps   },
+                  { label: 'Sleep  8hr/day', summaryText: `${dailyKpiData.sleepHits}/30 days hit target`,   boxes: dailyKpiData.sleep   },
+                  { label: 'Protein 180g',   summaryText: `${dailyKpiData.proteinHits}/30 days hit target`, boxes: dailyKpiData.protein },
+                ]}
+              />
+            </Card.Body>
+          </Card>
+        </Col>
+      </Row>
 
       <Row className="g-3 mb-3">
         {visibleSportCards.map((card) => (

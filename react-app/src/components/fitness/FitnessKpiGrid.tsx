@@ -16,9 +16,9 @@ interface Props {
   rows: FitnessKpiRow[];
 }
 
-const BOX_SIZE = 28;
-const BOX_GAP = 3;
-const LABEL_WIDTH = 128;
+const BOX_SIZE = 13;
+const BOX_GAP = 2;
+const LABEL_WIDTH = 96;
 
 function boxColor(pct: number | null): string {
   if (pct == null) return '#374151';
@@ -34,7 +34,7 @@ export default function FitnessKpiGrid({ rows }: Props) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       {rows.map((row) => (
         <div key={row.label}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <span style={{
               fontSize: 12,
               color: '#9ca3af',
@@ -45,7 +45,7 @@ export default function FitnessKpiGrid({ rows }: Props) {
             }}>
               {row.label}
             </span>
-            <div style={{ display: 'flex', gap: BOX_GAP, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: BOX_GAP, flexWrap: 'nowrap', overflowX: 'auto' }}>
               {row.boxes.map((box) => {
                 const id = `${row.label}::${box.key}`;
                 const isHovered = hoveredId === id;
