@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Container, Card, Button, Badge, ListGroup, Form, Modal, Spinner } from 'react-bootstrap';
+import { Container, Card, Button, Badge, ListGroup, Form, Modal, Spinner, Dropdown } from 'react-bootstrap';
 import { httpsCallable } from 'firebase/functions';
 import { collection, query, where, onSnapshot, orderBy, limit, updateDoc, doc, serverTimestamp } from 'firebase/firestore';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -2108,16 +2108,44 @@ const MobileHome: React.FC = () => {
                     <div className="fw-semibold text-truncate" style={{ lineHeight: 1.2 }}>{story.title}</div>
                     <div className="text-muted small">{meta}</div>
                   </div>
-                  <Badge
-                    bg={statusChip.bg}
-                    style={{
-                      flexShrink: 0,
-                      fontSize: 10,
-                      color: statusChip.bg === 'warning' ? '#000' : '#fff',
-                    }}
-                  >
-                    {statusChip.text}
-                  </Badge>
+                  <Dropdown style={{ flexShrink: 0 }}>
+                    <Dropdown.Toggle
+                      as="span"
+                      id={`story-status-${story.id}`}
+                      style={{ cursor: 'pointer' }}
+                    >
+                      <Badge
+                        bg={statusChip.bg}
+                        style={{
+                          fontSize: 10,
+                          color: statusChip.bg === 'warning' ? '#000' : '#fff',
+                          cursor: 'pointer',
+                          userSelect: 'none',
+                        }}
+                      >
+                        {statusChip.text} ▾
+                      </Badge>
+                    </Dropdown.Toggle>
+                    <Dropdown.Menu align="end">
+                      {([
+                        { value: 0, bg: 'secondary', text: 'Backlog' },
+                        { value: 1, bg: 'info',      text: 'Planned' },
+                        { value: 2, bg: 'primary',   text: 'In progress' },
+                        { value: 3, bg: 'warning',   text: 'Testing' },
+                        { value: 4, bg: 'success',   text: 'Done' },
+                      ] as { value: number; bg: string; text: string }[]).map(opt => (
+                        <Dropdown.Item
+                          key={opt.value}
+                          active={storyStatusNum === opt.value}
+                          onClick={() => updateStoryField(story, { status: opt.value as Story['status'] })}
+                        >
+                          <Badge bg={opt.bg} style={{ fontSize: 10, color: opt.bg === 'warning' ? '#000' : '#fff', marginRight: 6 }}>
+                            {opt.text}
+                          </Badge>
+                        </Dropdown.Item>
+                      ))}
+                    </Dropdown.Menu>
+                  </Dropdown>
                   <div className="d-flex gap-1 flex-shrink-0">
                     <button type="button" style={iconBtnStyle} title="Move due date"
                       onClick={() => setDeferTarget({ type: 'story', id: story.id, title: story.title, listView: true })}>
