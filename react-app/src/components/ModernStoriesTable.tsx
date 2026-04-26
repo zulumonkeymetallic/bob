@@ -1177,6 +1177,10 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
   const [isAddingNewStory, setIsAddingNewStory] = useState(false);
   const [newStoryData, setNewStoryData] = useState<Partial<Story>>({});
   
+  const [showTravel, setShowTravel] = useState<boolean>(() => {
+    try { return localStorage.getItem('bob.showTravel') === 'true'; } catch { return false; }
+  });
+
   // Enhanced filtering and search state
   const [filters, setFilters] = useState({
     search: '',
@@ -1348,6 +1352,14 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
     // Respect global sprint selection from context: when a sprint is chosen, enforce it
     if (selectedSprintId && selectedSprintId !== '' && story.sprintId !== selectedSprintId) {
       return false;
+    }
+    if (!showTravel) {
+      const linkedGoal = goals.find(g => g.id === (story as any).goalId);
+      if (linkedGoal) {
+        const cat = String((linkedGoal as any).category || '').toLowerCase();
+        const tags: string[] = Array.isArray((linkedGoal as any).tags) ? (linkedGoal as any).tags : [];
+        if (cat === 'travel' || tags.map((t: any) => String(t).toLowerCase()).includes('travel')) return false;
+      }
     }
     // Search filter (searches title, description, ref, and goal title)
     if (filters.search) {
@@ -1825,6 +1837,21 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
             </select>
           </div>
         )}
+
+        {/* Travel filter */}
+        <div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: 'var(--muted)' }}>
+            <input
+              type="checkbox"
+              checked={showTravel}
+              onChange={(e) => {
+                setShowTravel(e.currentTarget.checked);
+                try { localStorage.setItem('bob.showTravel', String(e.currentTarget.checked)); } catch {}
+              }}
+            />
+            Show travel
+          </label>
+        </div>
 
         {/* Reset Filters Button */}
         <div>

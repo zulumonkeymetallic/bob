@@ -563,6 +563,9 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
   const [filterOverdueOnly, setFilterOverdueOnly] = useState(false);
   const [filterUnlinkedStoriesOnly, setFilterUnlinkedStoriesOnly] = useState(false);
   const [filterUnlinkedTasksOnly, setFilterUnlinkedTasksOnly] = useState(false);
+  const [showTravel, setShowTravel] = useState<boolean>(() => {
+    try { return localStorage.getItem('bob.showTravel') === 'true'; } catch { return false; }
+  });
   const [showChoreTasks, setShowChoreTasks] = useState(false);
   const [filterTop3Only, setFilterTop3Only] = useState(false);
   const [showAiScoredOnly, setShowAiScoredOnly] = useState(false);
@@ -1084,9 +1087,20 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
   const selectedGoalIdSet = useMemo(() => new Set(selectedGoalIds), [selectedGoalIds]);
   const selectedThemeIdSet = useMemo(() => new Set(selectedThemeIds), [selectedThemeIds]);
 
+  const travelGoalIdSet = useMemo(() => {
+    const s = new Set<string>();
+    goals.forEach(g => {
+      const cat = String((g as any).category || '').toLowerCase();
+      const tags: string[] = Array.isArray((g as any).tags) ? (g as any).tags : [];
+      if (cat === 'travel' || tags.map((t: any) => String(t).toLowerCase()).includes('travel')) s.add(g.id);
+    });
+    return s;
+  }, [goals]);
+
   const filteredStories = storiesInScope.filter((story) => {
     if (!showCompletedItems && isStatus((story as any).status, 'done')) return false;
     const storyGoalId = getStoryGoalId(story);
+    if (!showTravel && storyGoalId && travelGoalIdSet.has(storyGoalId)) return false;
     if (selectedGoalIdSet.size > 0) {
       if (!storyGoalId || !isGoalInHierarchySet(storyGoalId, goals, selectedGoalIdSet)) return false;
     }
@@ -1107,6 +1121,10 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
     const taskType = normalizeBoardTaskType((task as any).type || (task as any).task_type);
     if (!showChoreTasks && ['chore', 'routine', 'habit'].includes(taskType)) return false;
     if (!showCompletedItems && isStatus((task as any).status, 'done')) return false;
+    if (!showTravel) {
+      const taskGoalId = getTaskGoalId(task);
+      if (taskGoalId && travelGoalIdSet.has(taskGoalId)) return false;
+    }
     if (selectedGoalIdSet.size > 0) {
       const taskGoalId = getTaskGoalId(task);
       if (!taskGoalId || !isGoalInHierarchySet(taskGoalId, goals, selectedGoalIdSet)) return false;
@@ -1788,6 +1806,17 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
             />
           </>
         )}
+        <Form.Check
+          inline
+          type="switch"
+          id="filter-show-travel"
+          label="Show travel"
+          checked={showTravel}
+          onChange={(e) => {
+            setShowTravel(e.currentTarget.checked);
+            try { localStorage.setItem('bob.showTravel', String(e.currentTarget.checked)); } catch {}
+          }}
+        />
       </div>
 
       <div

@@ -1262,6 +1262,9 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
   const [storyPointsData, setStoryPointsData] = useState<Record<string, { total: number; completed: number; progress: number }>>({});
   const [habitAdherenceData, setHabitAdherenceData] = useState<Record<string, { planned: number; completed: number; progress: number }>>({});
   const [costDataFilter, setCostDataFilter] = useState<'all' | 'missing_any' | 'missing_cost_type' | 'missing_estimated_cost'>('all');
+  const [showTravel, setShowTravel] = useState<boolean>(() => {
+    try { return localStorage.getItem('bob.showTravel') === 'true'; } catch { return false; }
+  });
   const { selectedSprintId } = useSprint();
   const [sortConfig, setSortConfig] = useState<{ key: 'orderIndex' | 'startDate' | 'endDate' | 'targetYear'; direction: 'asc' | 'desc' }>({
     key: 'startDate',
@@ -1617,6 +1620,11 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
   }));
 
   const qualityFilteredRows = tableRows.filter((goal) => {
+    if (!showTravel) {
+      const cat = String((goal as any).category || '').toLowerCase();
+      const tags: string[] = Array.isArray((goal as any).tags) ? (goal as any).tags : [];
+      if (cat === 'travel' || tags.map(t => String(t).toLowerCase()).includes('travel')) return false;
+    }
     if (costDataFilter === 'missing_any') {
       return isGoalMissingCostType(goal) || isGoalMissingEstimatedCost(goal);
     }
@@ -1845,6 +1853,17 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
             </select>
           </label>
         )}
+        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: themeVars.muted as string }}>
+          <input
+            type="checkbox"
+            checked={showTravel}
+            onChange={(e) => {
+              setShowTravel(e.currentTarget.checked);
+              try { localStorage.setItem('bob.showTravel', String(e.currentTarget.checked)); } catch {}
+            }}
+          />
+          Show travel goals
+        </label>
       </div>
 
       <div style={{ display: 'flex' }}>
