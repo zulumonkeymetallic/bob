@@ -5441,8 +5441,8 @@ exports.fetchDashboardData = httpsV2.onCall(async (req) => {
 });
 
 
-// 15-min backstop transaction sync
-exports.monzoBackstopSync = schedulerV2.onSchedule('every 15 minutes', async () => {
+// Backstop transaction sync (reduced from 15 min for cost)
+exports.monzoBackstopSync = schedulerV2.onSchedule('every 60 minutes', async () => {
   const db = admin.firestore();
   const tokens = await db.collection('tokens').where('provider', '==', 'monzo').get();
   for (const t of tokens.docs) {
@@ -6657,9 +6657,11 @@ exports.classifyMonzoTransactions = functionsV2.firestore.onDocumentWritten('mon
     return;
   }
 
-  // Defer LLM heavy lifting to scheduled job unless this is a small, recent batch
-  const isRecent = after.createdAt?.toMillis ? (Date.now() - after.createdAt.toMillis() < 3 * 24 * 60 * 60 * 1000) : false;
-  if (!isRecent) return;
+  // Only classify in real-time for truly live transactions (< 5 min old).
+  // Bulk historical imports are deferred to monzoAiCategorizationSweep to avoid
+  // hundreds of simultaneous LLM calls on a single import batch.
+  const isLive = after.createdAt?.toMillis ? (Date.now() - after.createdAt.toMillis() < 5 * 60 * 1000) : false;
+  if (!isLive) return;
 
   try {
     const categories = await loadFinanceCategoriesForUser(db, uid);
@@ -9096,8 +9098,8 @@ async function importGoogleCalendarEvents(uid, { startDate, endDate }) {
   return { events: events.length, stored: seenDocIds.size };
 }
 
-// Scheduled: reconcile Google Calendar deletions for all users every 15 minutes
-exports.reconcileAllCalendars = schedulerV2.onSchedule({ schedule: 'every 15 minutes', timeZone: 'UTC', secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (event) => {
+// Scheduled: reconcile Google Calendar deletions for all users every 60 minutes (reduced from 15 for cost)
+exports.reconcileAllCalendars = schedulerV2.onSchedule({ schedule: 'every 60 minutes', timeZone: 'UTC', secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (event) => {
   const db = admin.firestore();
   // Find users with Google tokens
   const snap = await db.collection('tokens').where('provider', '==', 'google').get().catch(() => null);
@@ -10579,7 +10581,7 @@ exports.suggestTaskStoryConversions = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDI
   };
 });
 
-exports.monzoGoalPotRefLinker = schedulerV2.onSchedule('every 30 minutes', async () => {
+exports.monzoGoalPotRefLinker = schedulerV2.onSchedule('every 60 minutes', async () => {
   const db = admin.firestore();
   const tokens = await db.collection('tokens').where('provider', '==', 'monzo').get();
   let usersChecked = 0;
@@ -19563,7 +19565,7 @@ async function dispatchDataQualityForUser({ db, userId, profile, nowUtc, force =
 }
 
 exports.dispatchDailySummaryEmail = schedulerV2.onSchedule({
-  schedule: 'every 15 minutes',
+  schedule: 'every 60 minutes',
   timeZone: 'UTC',
   memory: '512MiB',
   secrets: [defineSecret('BREVO_API_KEY'), GOOGLE_AI_STUDIO_API_KEY],
@@ -19599,7 +19601,7 @@ exports.dispatchDailySummaryEmail = schedulerV2.onSchedule({
 });
 
 exports.dispatchDataQualityEmail = schedulerV2.onSchedule({
-  schedule: 'every 30 minutes',
+  schedule: 'every 2 hours',
   timeZone: 'UTC',
   memory: '512MiB',
   secrets: [defineSecret('BREVO_API_KEY'), GOOGLE_AI_STUDIO_API_KEY],
@@ -19635,7 +19637,7 @@ exports.dispatchDataQualityEmail = schedulerV2.onSchedule({
 });
 
 exports.dispatchWeeklyFinanceSummaryEmail = schedulerV2.onSchedule({
-  schedule: 'every 30 minutes',
+  schedule: 'every 2 hours',
   timeZone: 'UTC',
   memory: '512MiB',
   secrets: [defineSecret('BREVO_API_KEY'), GOOGLE_AI_STUDIO_API_KEY],
@@ -20371,7 +20373,7 @@ async function updateTaskDueDate(db, taskId, { newDueDateMs, reason, userId, run
 }
 
 exports.runDailySchedulerAdjustments = schedulerV2.onSchedule({
-  schedule: 'every 30 minutes',
+  schedule: 'every 60 minutes',
   timeZone: 'UTC',
   memory: '1GiB',
 }, async () => {
@@ -20661,7 +20663,7 @@ function normalizeTaskTagsForSystem({
   return cleaned;
 }
 
-exports.tagTasksAndBuildDeepLinks = schedulerV2.onSchedule({ schedule: 'every 30 minutes', timeZone: 'UTC' }, async () => {
+exports.tagTasksAndBuildDeepLinks = schedulerV2.onSchedule({ schedule: 'every 2 hours', timeZone: 'UTC' }, async () => {
   const db = admin.firestore();
   const now = Date.now();
   const cutoff = now - 24 * 60 * 60 * 1000; // process tasks touched in last 24h
