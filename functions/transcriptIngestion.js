@@ -13,6 +13,7 @@ const { buildEntityUrl } = require('./utils/urlHelpers');
 const { ensureTaskPoints, clampTaskPoints } = require('./utils/taskPoints');
 
 const GOOGLE_AI_STUDIO_API_KEY = defineSecret('GOOGLEAISTUDIOAPIKEY');
+const ANTHROPIC_API_KEY = defineSecret('ANTHROPIC_API_KEY');
 const BREVO_API_KEY = defineSecret('BREVO_API_KEY');
 const GOOGLE_OAUTH_CLIENT_ID = defineSecret('GOOGLE_OAUTH_CLIENT_ID');
 const GOOGLE_OAUTH_CLIENT_SECRET = defineSecret('GOOGLE_OAUTH_CLIENT_SECRET');
@@ -460,6 +461,58 @@ async function generateGeminiJsonText(model, prompt, emptyMessage) {
   const response = await model.generateContent(prompt);
   const text = response?.response?.text?.();
   if (!text) throw new Error(emptyMessage);
+  return text;
+}
+
+function resolveProfileProviderApiKeys(profile = null) {
+  const profileData = profile && typeof profile === 'object' ? profile : {};
+  const perProvider = profileData.aiApiKeys && typeof profileData.aiApiKeys === 'object'
+    ? profileData.aiApiKeys
+    : {};
+  const legacyKey = String(profileData.aiApiKey || '').trim() || null;
+
+  const geminiApiKey = String(
+    perProvider.gemini ||
+    perProvider['google-ai-studio'] ||
+    perProvider.google ||
+    legacyKey ||
+    ''
+  ).trim() || null;
+
+  const anthropicApiKey = String(
+    perProvider.anthropic ||
+    legacyKey ||
+    ''
+  ).trim() || null;
+
+  return {
+    geminiApiKey,
+    anthropicApiKey,
+  };
+}
+
+async function callAnthropicText({ system, user, apiKey }) {
+  const key = String(apiKey || process.env.ANTHROPIC_API_KEY || '').trim();
+  if (!key) throw new Error('ANTHROPIC_API_KEY not configured for fallback');
+  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': key,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 8192,
+      system,
+      messages: [{ role: 'user', content: user }],
+      temperature: 0.2,
+    }),
+  });
+  if (!resp.ok) throw new Error(`Anthropic HTTP ${resp.status}: ${await resp.text()}`);
+  const data = await resp.json();
+  const text = data?.content?.[0]?.text || '';
+  if (!text) throw new Error('Empty response from Anthropic');
   return text;
 }
 
@@ -1578,8 +1631,8 @@ function buildDocAppendPlan(sections, options = {}) {
   };
 }
 
-async function callAgentRouterModel({ transcript, persona, timezone, urlPreviews }) {
-  const apiKey = String(process.env.GOOGLEAISTUDIOAPIKEY || '').trim();
+async function callAgentRouterModel({ transcript, persona, timezone, urlPreviews, geminiApiKey = null }) {
+  const apiKey = String(geminiApiKey || process.env.GOOGLEAISTUDIOAPIKEY || '').trim();
   if (!apiKey) throw new Error('GOOGLEAISTUDIOAPIKEY not configured');
 
   const system = [
@@ -1635,8 +1688,17 @@ async function callAgentRouterModel({ transcript, persona, timezone, urlPreviews
   return parseModelJson(text, 'Gemini routing response');
 }
 
-async function callTranscriptModel({ transcript, persona, timezone, urlPreviews, logger = null, journalPromptOverride = '' }) {
-  const apiKey = String(process.env.GOOGLEAISTUDIOAPIKEY || '').trim();
+async function callTranscriptModel({
+  transcript,
+  persona,
+  timezone,
+  urlPreviews,
+  logger = null,
+  journalPromptOverride = '',
+  geminiApiKey = null,
+  anthropicApiKey = null,
+}) {
+  const apiKey = String(geminiApiKey || process.env.GOOGLEAISTUDIOAPIKEY || '').trim();
   if (!apiKey) throw new Error('GOOGLEAISTUDIOAPIKEY not configured');
   const currentDate = DateTime.now().setZone(timezone || DEFAULT_TIMEZONE);
   const customJournalPrompt = sanitizeUserJournalPrompt(journalPromptOverride);
@@ -1772,24 +1834,59 @@ async function callTranscriptModel({ transcript, persona, timezone, urlPreviews,
     }, 'info', { raw: true });
   }
 
-  const model = createGeminiJsonModel(apiKey, {
-    schema: TRANSCRIPT_ANALYSIS_SCHEMA,
-    maxOutputTokens: 8192,
-    temperature: 0.2,
-    topP: 0.95,
-    topK: 40,
-  });
-  const text = await generateGeminiJsonText(model, `${system}\n\n${user}`, 'Gemini returned an empty response');
+  const isGeminiQuotaError = (err) => {
+    const msg = String(err?.message || err?.status || '');
+    return msg.includes('429') || msg.toLowerCase().includes('quota') || msg.toLowerCase().includes('too many requests');
+  };
+
+  let text;
+  let usedProvider = 'gemini';
+
+  try {
+    const model = createGeminiJsonModel(apiKey, {
+      schema: TRANSCRIPT_ANALYSIS_SCHEMA,
+      maxOutputTokens: 8192,
+      temperature: 0.2,
+      topP: 0.95,
+      topK: 40,
+    });
+    text = await generateGeminiJsonText(model, `${system}\n\n${user}`, 'Gemini returned an empty response');
+  } catch (geminiError) {
+    if (!isGeminiQuotaError(geminiError)) throw geminiError;
+
+    const fallbackKey = String(anthropicApiKey || process.env.ANTHROPIC_API_KEY || '').trim();
+    if (!fallbackKey) throw geminiError;
+
+    if (logger) {
+      await logger.event('llm_gemini_quota_fallback', 'Gemini quota exceeded — falling back to Anthropic', {
+        geminiError: geminiError?.message?.slice(0, 200),
+      }, 'warn');
+    }
+    usedProvider = 'anthropic';
+    text = await callAnthropicText({ system, user, apiKey: fallbackKey });
+  }
 
   if (logger) {
-    await logger.event('llm_response_raw', 'Gemini response received', {
+    await logger.event('llm_response_raw', `${usedProvider} response received`, {
+      provider: usedProvider,
       rawResponse: text,
       responseCharCount: text?.length ?? 0,
     }, 'info', { raw: true });
   }
   try {
-    return parseModelJson(text, 'Gemini transcript analysis response');
+    return parseModelJson(text, `${usedProvider} transcript analysis response`);
   } catch (parseError) {
+    if (usedProvider === 'anthropic') {
+      if (logger) {
+        await logger.event('analysis_json_repair_failed', 'Anthropic transcript analysis returned malformed JSON', {
+          error: parseError?.message || String(parseError),
+          rawResponse: text,
+        }, 'error');
+      }
+      throw new Error(
+        `Anthropic transcript analysis response could not be parsed. Parse error: ${parseError?.message || 'Unknown parse error'}`
+      );
+    }
     if (logger) {
       await logger.event('analysis_json_repair_start', 'Gemini transcript analysis returned malformed JSON; attempting repair', {
         error: parseError?.message || String(parseError),
@@ -1852,6 +1949,33 @@ function looksLikeTaskBrainDump(text) {
   if ((lowered.match(/\bi need to\b/g) || []).length >= 2) score += 2;
   if ((lowered.match(/\balso\b/g) || []).length >= 3) score += 1;
   if (/\b(requirement|requirements|bulk paste tasks|extract all of the tasks)\b/.test(lowered)) score += 2;
+
+  return score >= 4;
+}
+
+function looksLikeReflectiveJournalNarrative(text) {
+  const lowered = stripUrlsForHeuristics(text).toLowerCase();
+  if (!lowered) return false;
+
+  const words = lowered.split(/\s+/).filter(Boolean);
+  if (words.length < 80) return false;
+
+  const firstPersonCount = (lowered.match(/\b(i|me|my|myself)\b/g) || []).length;
+  const sentenceCount = lowered
+    .split(/[.!?]+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean)
+    .length;
+
+  let score = 0;
+  if (firstPersonCount >= 8) score += 2;
+  else if (firstPersonCount >= 4) score += 1;
+
+  if (/\b(feel|felt|feeling|mindset|emotion|grateful|anxious|stressed|calm|proud|ashamed|guilty|sad|happy|overwhelmed|regret|apologize|sorry|love)\b/.test(lowered)) score += 2;
+  if (/\b(today|tonight|yesterday|this morning|this afternoon|this evening|this week|last week)\b/.test(lowered)) score += 1;
+  if (sentenceCount >= 6) score += 1;
+  if (/\b(because|however|while|then|after|before|instead)\b/.test(lowered)) score += 1;
+  if (/\b(task list|to do list|todo list|brain dump of tasks|bulk paste tasks)\b/.test(lowered)) score -= 2;
 
   return score >= 4;
 }
@@ -2014,17 +2138,23 @@ function normalizeEntryType(rawType, transcript, sourceUrls, tasks, stories) {
   if (looksLikeDiagnosticLogDump(transcript)) {
     return 'task_list';
   }
+  const stripped = stripUrlsForHeuristics(transcript);
+  const wordCount = stripped ? stripped.split(/\s+/).length : 0;
+  const reflectiveNarrative = looksLikeReflectiveJournalNarrative(transcript);
   const type = String(rawType || '').trim().toLowerCase();
   if (type === 'journal' || type === 'task_list' || type === 'url_only' || type === 'mixed') {
+    if (type === 'task_list' && reflectiveNarrative && wordCount >= 120) {
+      return (tasks?.length || stories?.length) ? 'mixed' : 'journal';
+    }
     return type;
   }
 
-  const stripped = stripUrlsForHeuristics(transcript);
-  const wordCount = stripped ? stripped.split(/\s+/).length : 0;
   const likelyUrlOnly = Array.isArray(sourceUrls) && sourceUrls.length > 0 && wordCount <= 6;
   const likelyTaskList = looksLikeTaskBrainDump(transcript);
   if (likelyUrlOnly) return 'url_only';
-  if (likelyTaskList && (tasks?.length || stories?.length)) return 'task_list';
+  if (likelyTaskList && (tasks?.length || stories?.length)) {
+    return reflectiveNarrative && wordCount >= 120 ? 'mixed' : 'task_list';
+  }
   if ((tasks?.length || stories?.length) && wordCount <= 50) return 'task_list';
   if ((tasks?.length || stories?.length) && wordCount > 50) return 'mixed';
   return 'journal';
@@ -4185,6 +4315,7 @@ async function processTranscriptIngestion({
       timezone,
     });
 
+    const profileApiKeys = resolveProfileProviderApiKeys(profile);
     const rawAnalysis = existingLock.analysis || await callTranscriptModel({
       transcript: normalizedTranscript,
       persona: persona || 'personal',
@@ -4192,6 +4323,8 @@ async function processTranscriptIngestion({
       urlPreviews,
       logger,
       journalPromptOverride: profile?.journalEditorPrompt || profile?.journalPromptOverride || null,
+      geminiApiKey: profileApiKeys.geminiApiKey,
+      anthropicApiKey: profileApiKeys.anthropicApiKey,
     });
     const analysis = enrichAnalysisWithUrlMetadata(
       sanitizeAnalysis(rawAnalysis, normalizedTranscript, sourceUrls, timezone),
@@ -4657,6 +4790,7 @@ async function processAgentRequest({
     profile?.settings?.timezone ||
     DEFAULT_TIMEZONE
   ).trim() || DEFAULT_TIMEZONE;
+  const profileApiKeys = resolveProfileProviderApiKeys(profile);
   let effectiveRoute;
   if (!likelyQueryOrAction) {
     effectiveRoute = sanitizeAgentRoute({
@@ -4682,6 +4816,7 @@ async function processAgentRequest({
         persona: persona || 'personal',
         timezone,
         urlPreviews,
+        geminiApiKey: profileApiKeys.geminiApiKey,
       });
       const route = sanitizeAgentRoute(rawRoute, normalizedTranscript, sourceUrls);
       effectiveRoute = (
@@ -4975,6 +5110,7 @@ exports.ingestTranscript = httpsV2.onCall({
   timeoutSeconds: 180,
   secrets: [
     GOOGLE_AI_STUDIO_API_KEY,
+    ANTHROPIC_API_KEY,
     BREVO_API_KEY,
     GOOGLE_OAUTH_CLIENT_ID,
     GOOGLE_OAUTH_CLIENT_SECRET,
@@ -5006,6 +5142,7 @@ exports.ingestTranscriptHttp = httpsV2.onRequest({
   timeoutSeconds: 180,
   secrets: [
     GOOGLE_AI_STUDIO_API_KEY,
+    ANTHROPIC_API_KEY,
     BREVO_API_KEY,
     GOOGLE_OAUTH_CLIENT_ID,
     GOOGLE_OAUTH_CLIENT_SECRET,
