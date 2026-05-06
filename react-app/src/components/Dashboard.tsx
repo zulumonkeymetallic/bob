@@ -24,6 +24,7 @@ import { colors } from '../utils/colors';
 import SprintMetricsPanel from './SprintMetricsPanel';
 import JournalInsightsCard from './JournalInsightsCard';
 import BirthdayMilestoneCard from './BirthdayMilestoneCard';
+import CountdownBanner from './CountdownBanner';
 import KpiDashboardWidget from './KpiDashboardWidget';
 import DailyPlanSummaryCard from './planner/DailyPlanSummaryCard';
 import WeeklyPlannerSummaryCard from './planner/WeeklyPlannerSummaryCard';
@@ -4563,6 +4564,16 @@ const Dashboard: React.FC = () => {
       <Container fluid className="p-2 dashboard-compact">
         <Row>
           <Col>
+            {/* China Trip Countdown Banner */}
+            <CountdownBanner 
+              goalId="Nzp2xQCTZbTaOLCgycjQ"
+              targetDate={new Date('2026-09-01')}
+              title="China Trip 2026"
+              subtitle="Dublin → Dubai → Beijing • Sep 1-30 • Return via Hong Kong"
+              color="warning"
+              showProgress={true}
+            />
+
             <BirthdayMilestoneCard 
               targetDate={new Date('2027-09-22')} 
               age={45} 
