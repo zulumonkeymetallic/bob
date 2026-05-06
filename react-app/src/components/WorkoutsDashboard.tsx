@@ -229,6 +229,17 @@ function formatMetricLabel(ms: number): string {
   return new Date(ms).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
 }
 
+function formatRelativeSync(ms: number | null): string {
+  if (!ms || ms <= 0) return 'never';
+  const diffMs = Date.now() - ms;
+  const diffH = Math.round(diffMs / (60 * 60 * 1000));
+  const diffD = Math.round(diffMs / (24 * 60 * 60 * 1000));
+  if (diffH < 1) return 'just now';
+  if (diffH < 24) return `${diffH}h ago`;
+  if (diffD === 1) return 'yesterday';
+  return `${diffD}d ago`;
+}
+
 function deriveRpeFromSuffer(w: WorkoutDoc): number | null {
   const suffer = Number(w.sufferScore ?? null);
   if (!Number.isFinite(suffer) || suffer <= 0) return null;
@@ -502,7 +513,7 @@ const WorkoutsDashboard: React.FC = () => {
     const unsub = onSnapshot(qRef, (snap) => {
       const rows = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as WorkoutDoc[];
       setWorkouts(rows);
-    });
+    }, () => setWorkouts([]));
     return () => unsub();
   }, [currentUser]);
 
@@ -1937,6 +1948,16 @@ const WorkoutsDashboard: React.FC = () => {
     };
   }, [healthTrendRows]);
 
+  const stravaLastSyncMs = useMemo(
+    () => toMillis(healthProfile?.stravaLastSyncAt) || null,
+    [healthProfile]
+  );
+
+  const healthKitLastSyncMs = useMemo(() => {
+    if (!healthMetrics.length) return null;
+    return Math.max(...healthMetrics.map(m => toMillis(m.updatedAt) || toMillis(m.createdAt) || 0)) || null;
+  }, [healthMetrics]);
+
   return (
     <div className="container-fluid py-3">
       <Row className="mb-3">
@@ -1944,6 +1965,14 @@ const WorkoutsDashboard: React.FC = () => {
           <h3>{pageTitle}</h3>
         </Col>
         <Col className="text-end">
+          <div className="text-muted small mb-1" style={{ fontSize: 11 }}>
+            {healthKitLastSyncMs != null && (
+              <span className="me-3">HealthKit: {formatRelativeSync(healthKitLastSyncMs)}</span>
+            )}
+            {stravaLastSyncMs != null && (
+              <span>Strava: {formatRelativeSync(stravaLastSyncMs)}</span>
+            )}
+          </div>
           {!forcedProvider && (
             <Form.Select value={providerFilter} onChange={(e)=>setProviderFilter(e.target.value as any)} style={{ display: 'inline-block', width: 180 }}>
               <option value="all">All Providers</option>
