@@ -9098,8 +9098,8 @@ async function importGoogleCalendarEvents(uid, { startDate, endDate }) {
   return { events: events.length, stored: seenDocIds.size };
 }
 
-// Scheduled: reconcile Google Calendar deletions for all users every 4 hours
-exports.reconcileAllCalendars = schedulerV2.onSchedule({ schedule: 'every 4 hours', timeZone: 'UTC', secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (event) => {
+// Scheduled: reconcile Google Calendar deletions for all users every 15 minutes
+exports.reconcileAllCalendars = schedulerV2.onSchedule({ schedule: 'every 15 minutes', timeZone: 'UTC', secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (event) => {
   const db = admin.firestore();
   // Find users with Google tokens
   const snap = await db.collection('tokens').where('provider', '==', 'google').get().catch(() => null);
@@ -9129,13 +9129,43 @@ exports.reconcileAllCalendars = schedulerV2.onSchedule({ schedule: 'every 4 hour
   await Promise.allSettled(work);
 });
 
-// DISABLED - Redundant with calendarSync.js (May 2026 - Firebase cost optimisation)
-// exports.syncGoogleCalendarsHourly = schedulerV2.onSchedule({ schedule: 'every 60 minutes', timeZone: 'UTC', secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async () => {
-//   const db = admin.firestore();
-//   const tokensSnap = await db.collection('tokens').where('provider', '==', 'google').get().catch(() => null);
-//   if (!tokensSnap || tokensSnap.empty) return;
-//   ...disabled...
-// });
+exports.syncGoogleCalendarsHourly = schedulerV2.onSchedule({ schedule: 'every 60 minutes', timeZone: 'UTC', secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async () => {
+  const db = admin.firestore();
+  const tokensSnap = await db.collection('tokens').where('provider', '==', 'google').get().catch(() => null);
+  if (!tokensSnap || tokensSnap.empty) return;
+
+  const legacyImportEnabled = process.env.LEGACY_GCAL_IMPORT === 'true';
+  if (!legacyImportEnabled) {
+    console.log('[gcal-sync] legacy import disabled; calendarSync handles pull/push.');
+  }
+
+  const startDate = new Date(Date.now() - 6 * 60 * 60 * 1000); // past 6 hours to pick updates
+  const endDate = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000); // next two weeks
+  const todayStr = new Date().toISOString().slice(0, 10);
+
+  for (const doc of tokensSnap.docs) {
+    const tokenId = doc.id;
+    const uid = tokenId.includes('_') ? tokenId.split('_')[0] : tokenId;
+    try {
+      if (legacyImportEnabled) {
+        await importGoogleCalendarEvents(uid, { startDate, endDate });
+      }
+
+      // Push today's plan to Google Calendar
+      try {
+        await syncPlanToGoogleForUser(uid, todayStr);
+        console.log(`[gcal-sync] pushed plan for ${uid} for ${todayStr}`);
+      } catch (e) {
+        console.warn(`[gcal-sync] push plan failed for ${uid}`, e.message);
+      }
+
+      try { await recordIntegrationLog(uid, 'google', 'success', 'Hourly Google Calendar sync ran', { start: startDate.toISOString(), end: endDate.toISOString() }); } catch { }
+    } catch (error) {
+      console.warn(`[gcal-sync] hourly sync failed for ${uid}`, error.message);
+      try { await recordIntegrationLog(uid, 'google', 'error', 'Hourly Google Calendar sync failed', { error: String(error?.message || error) }); } catch { }
+    }
+  }
+});
 
 // ===== Duplicate Detection for iOS Reminders (AC11 - Issue #124)
 exports.generateWeeklySummaries = schedulerV2.onSchedule({ schedule: 'every monday 08:00', timeZone: 'Europe/London' }, async (event) => {
@@ -11092,14 +11122,29 @@ async function callOpenRouterChat({ system, user, model = OPENROUTER_FALLBACK_MO
   const apiKey = (userApiKey || process.env.OPENROUTER_API_KEY || '').trim();
   if (!apiKey) throw new Error('OPENROUTER_API_KEY not configured');
   const selectedModel = String(model || OPENROUTER_FALLBACK_MODEL).trim();
-  const body = {
+  const buildBody = ({ enforceJsonMode = true } = {}) => ({
     model: selectedModel,
     temperature: temperature ?? 0.2,
     messages: [
-      { role: 'system', content: system },
+      {
+        role: 'system',
+        content: expectJson && !enforceJsonMode
+          ? `${system}\n\nReturn STRICT JSON only. Do not include markdown or commentary.`
+          : system,
+      },
       { role: 'user', content: user },
     ],
-    ...(expectJson ? { response_format: { type: 'json_object' } } : {}),
+    ...(expectJson && enforceJsonMode ? { response_format: { type: 'json_object' } } : {}),
+  });
+  const isResponseFormatUnsupported = (status, bodyText) => {
+    if (status < 400 || status >= 500) return false;
+    const lowered = String(bodyText || '').toLowerCase();
+    return (
+      lowered.includes('response_format') ||
+      lowered.includes('unsupported') ||
+      lowered.includes('not supported') ||
+      lowered.includes('invalid parameter')
+    );
   };
   const headers = {
     'Content-Type': 'application/json',
@@ -11112,9 +11157,24 @@ async function callOpenRouterChat({ system, user, model = OPENROUTER_FALLBACK_MO
   const res = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
     method: 'POST',
     headers,
-    body: JSON.stringify(body),
+    body: JSON.stringify(buildBody({ enforceJsonMode: true })),
   });
-  if (!res.ok) throw new Error(`OpenRouter HTTP ${res.status}: ${await res.text()}`);
+  if (!res.ok) {
+    const errorText = await res.text();
+    if (!(expectJson && isResponseFormatUnsupported(res.status, errorText))) {
+      throw new Error(`OpenRouter HTTP ${res.status}: ${errorText}`);
+    }
+    const retryRes = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(buildBody({ enforceJsonMode: false })),
+    });
+    if (!retryRes.ok) throw new Error(`OpenRouter HTTP ${retryRes.status}: ${await retryRes.text()}`);
+    const retryData = await retryRes.json();
+    const retryText = retryData?.choices?.[0]?.message?.content || '';
+    if (!retryText) throw new Error('Empty response from OpenRouter');
+    return retryText;
+  }
   const data = await res.json();
   const text = data?.choices?.[0]?.message?.content || '';
   if (!text) throw new Error('Empty response from OpenRouter');

@@ -538,14 +538,29 @@ async function callOpenRouterText({ system, user, apiKey, model = OPENROUTER_FAL
   const key = String(apiKey || process.env.OPENROUTER_API_KEY || '').trim();
   if (!key) throw new Error('OPENROUTER_API_KEY not configured for fallback');
   const selectedModel = String(model || OPENROUTER_FALLBACK_MODEL).trim() || OPENROUTER_FALLBACK_MODEL;
-  const body = {
+  const buildBody = ({ enforceJsonMode = true } = {}) => ({
     model: selectedModel,
     temperature: 0.2,
     messages: [
-      { role: 'system', content: system },
+      {
+        role: 'system',
+        content: enforceJsonMode
+          ? system
+          : `${system}\n\nReturn STRICT JSON only. Do not include markdown or commentary.`,
+      },
       { role: 'user', content: user },
     ],
-    response_format: { type: 'json_object' },
+    ...(enforceJsonMode ? { response_format: { type: 'json_object' } } : {}),
+  });
+  const isResponseFormatUnsupported = (status, bodyText) => {
+    if (status < 400 || status >= 500) return false;
+    const lowered = String(bodyText || '').toLowerCase();
+    return (
+      lowered.includes('response_format') ||
+      lowered.includes('unsupported') ||
+      lowered.includes('not supported') ||
+      lowered.includes('invalid parameter')
+    );
   };
   const headers = {
     'Content-Type': 'application/json',
@@ -558,9 +573,24 @@ async function callOpenRouterText({ system, user, apiKey, model = OPENROUTER_FAL
   const resp = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
     method: 'POST',
     headers,
-    body: JSON.stringify(body),
+    body: JSON.stringify(buildBody({ enforceJsonMode: true })),
   });
-  if (!resp.ok) throw new Error(`OpenRouter HTTP ${resp.status}: ${await resp.text()}`);
+  if (!resp.ok) {
+    const errorText = await resp.text();
+    if (!isResponseFormatUnsupported(resp.status, errorText)) {
+      throw new Error(`OpenRouter HTTP ${resp.status}: ${errorText}`);
+    }
+    const retryResp = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(buildBody({ enforceJsonMode: false })),
+    });
+    if (!retryResp.ok) throw new Error(`OpenRouter HTTP ${retryResp.status}: ${await retryResp.text()}`);
+    const retryData = await retryResp.json();
+    const retryText = retryData?.choices?.[0]?.message?.content || '';
+    if (!retryText) throw new Error('Empty response from OpenRouter');
+    return retryText;
+  }
   const data = await resp.json();
   const text = data?.choices?.[0]?.message?.content || '';
   if (!text) throw new Error('Empty response from OpenRouter');
@@ -1692,7 +1722,10 @@ async function callAgentRouterModel({
   openRouterModel = OPENROUTER_FALLBACK_MODEL,
 }) {
   const apiKey = String(geminiApiKey || process.env.GOOGLEAISTUDIOAPIKEY || '').trim();
-  if (!apiKey) throw new Error('GOOGLEAISTUDIOAPIKEY not configured');
+  const fallbackKey = String(openRouterApiKey || process.env.OPENROUTER_API_KEY || '').trim();
+  if (!apiKey && !fallbackKey) {
+    throw new Error('No AI API key configured. Add GOOGLEAISTUDIOAPIKEY or OPENROUTER_API_KEY.');
+  }
 
   const system = [
     'You are an intent router for a productivity assistant.',
@@ -1752,6 +1785,17 @@ async function callAgentRouterModel({
     );
   };
 
+  if (!apiKey) {
+    const repairedSystem = `${system}\nReturn STRICT JSON only with no extra text.`;
+    const text = await callOpenRouterText({
+      system: repairedSystem,
+      user,
+      apiKey: fallbackKey,
+      model: openRouterModel || OPENROUTER_FALLBACK_MODEL,
+    });
+    return parseModelJson(text, 'OpenRouter routing response');
+  }
+
   try {
     const model = createGeminiJsonModel(apiKey, {
       schema: ROUTER_RESPONSE_SCHEMA,
@@ -1763,7 +1807,6 @@ async function callAgentRouterModel({
     const text = await generateGeminiJsonText(model, `${system}\n\n${user}`, 'Gemini returned an empty routing response');
     return parseModelJson(text, 'Gemini routing response');
   } catch (geminiError) {
-    const fallbackKey = String(openRouterApiKey || process.env.OPENROUTER_API_KEY || '').trim();
     if (!shouldFallbackToOpenRouter(geminiError) || !fallbackKey) throw geminiError;
     const repairedSystem = `${system}\nReturn STRICT JSON only with no extra text.`;
     const text = await callOpenRouterText({
@@ -1789,7 +1832,11 @@ async function callTranscriptModel({
   openRouterModel = OPENROUTER_FALLBACK_MODEL,
 }) {
   const apiKey = String(geminiApiKey || process.env.GOOGLEAISTUDIOAPIKEY || '').trim();
-  if (!apiKey) throw new Error('GOOGLEAISTUDIOAPIKEY not configured');
+  const anthropicKey = String(anthropicApiKey || process.env.ANTHROPIC_API_KEY || '').trim();
+  const openRouterKey = String(openRouterApiKey || process.env.OPENROUTER_API_KEY || '').trim();
+  if (!apiKey && !anthropicKey && !openRouterKey) {
+    throw new Error('No AI API key configured. Add GOOGLEAISTUDIOAPIKEY, ANTHROPIC_API_KEY, or OPENROUTER_API_KEY.');
+  }
   const currentDate = DateTime.now().setZone(timezone || DEFAULT_TIMEZONE);
   const customJournalPrompt = sanitizeUserJournalPrompt(journalPromptOverride);
 
@@ -1943,32 +1990,16 @@ async function callTranscriptModel({
   let text;
   let usedProvider = 'gemini';
 
-  try {
-    const model = createGeminiJsonModel(apiKey, {
-      schema: TRANSCRIPT_ANALYSIS_SCHEMA,
-      maxOutputTokens: 8192,
-      temperature: 0.2,
-      topP: 0.95,
-      topK: 40,
-    });
-    text = await generateGeminiJsonText(model, `${system}\n\n${user}`, 'Gemini returned an empty response');
-  } catch (geminiError) {
-    if (!shouldFallbackToAlternateProvider(geminiError)) throw geminiError;
-
-    const anthropicKey = String(anthropicApiKey || process.env.ANTHROPIC_API_KEY || '').trim();
-    const openRouterKey = String(openRouterApiKey || process.env.OPENROUTER_API_KEY || '').trim();
-
-    if (!anthropicKey && !openRouterKey) throw geminiError;
-
+  const tryAnthropicThenOpenRouter = async (sourceError = null) => {
     if (anthropicKey) {
-      if (logger) {
+      if (logger && sourceError) {
         await logger.event('llm_gemini_quota_fallback', 'Gemini unavailable — falling back to Anthropic', {
-          geminiError: geminiError?.message?.slice(0, 200),
+          geminiError: sourceError?.message?.slice(0, 200),
         }, 'warn');
       }
       try {
         usedProvider = 'anthropic';
-        text = await callAnthropicText({ system, user, apiKey: anthropicKey });
+        return await callAnthropicText({ system, user, apiKey: anthropicKey });
       } catch (anthropicError) {
         if (!openRouterKey || !shouldFallbackToAlternateProvider(anthropicError)) throw anthropicError;
         if (logger) {
@@ -1976,27 +2007,40 @@ async function callTranscriptModel({
             anthropicError: anthropicError?.message?.slice(0, 200),
           }, 'warn');
         }
-        usedProvider = 'openrouter';
-        text = await callOpenRouterText({
-          system,
-          user,
-          apiKey: openRouterKey,
-          model: openRouterModel || OPENROUTER_FALLBACK_MODEL,
-        });
       }
-    } else {
-      if (logger) {
-        await logger.event('llm_gemini_openrouter_fallback', 'Gemini unavailable — falling back to OpenRouter', {
-          geminiError: geminiError?.message?.slice(0, 200),
-        }, 'warn');
-      }
-      usedProvider = 'openrouter';
-      text = await callOpenRouterText({
-        system,
-        user,
-        apiKey: openRouterKey,
-        model: openRouterModel || OPENROUTER_FALLBACK_MODEL,
+    }
+    if (!openRouterKey) {
+      throw sourceError || new Error('No OpenRouter key configured for fallback');
+    }
+    if (logger && sourceError && !anthropicKey) {
+      await logger.event('llm_gemini_openrouter_fallback', 'Gemini unavailable — falling back to OpenRouter', {
+        geminiError: sourceError?.message?.slice(0, 200),
+      }, 'warn');
+    }
+    usedProvider = 'openrouter';
+    return callOpenRouterText({
+      system,
+      user,
+      apiKey: openRouterKey,
+      model: openRouterModel || OPENROUTER_FALLBACK_MODEL,
+    });
+  };
+
+  if (!apiKey) {
+    text = await tryAnthropicThenOpenRouter(null);
+  } else {
+    try {
+      const model = createGeminiJsonModel(apiKey, {
+        schema: TRANSCRIPT_ANALYSIS_SCHEMA,
+        maxOutputTokens: 8192,
+        temperature: 0.2,
+        topP: 0.95,
+        topK: 40,
       });
+      text = await generateGeminiJsonText(model, `${system}\n\n${user}`, 'Gemini returned an empty response');
+    } catch (geminiError) {
+      if (!shouldFallbackToAlternateProvider(geminiError)) throw geminiError;
+      text = await tryAnthropicThenOpenRouter(geminiError);
     }
   }
 
@@ -2019,6 +2063,11 @@ async function callTranscriptModel({
       }
       throw new Error(
         `Anthropic transcript analysis response could not be parsed. Parse error: ${parseError?.message || 'Unknown parse error'}`
+      );
+    }
+    if (!apiKey) {
+      throw new Error(
+        `${usedProvider} transcript analysis response could not be parsed and Gemini repair is unavailable because GOOGLEAISTUDIOAPIKEY is not configured. Parse error: ${parseError?.message || 'Unknown parse error'}`
       );
     }
     if (logger) {
