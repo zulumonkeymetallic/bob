@@ -22,6 +22,8 @@ const REMINDERS_WEBHOOK_SECRET = defineSecret('REMINDERS_WEBHOOK_SECRET');
 
 const DEFAULT_TIMEZONE = 'Europe/London';
 const GEMINI_MODEL = String(process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite').trim();
+const OPENROUTER_BASE_URL = String(process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').trim().replace(/\/+$/, '');
+const OPENROUTER_FALLBACK_MODEL = String(process.env.OPENROUTER_FALLBACK_MODEL || 'meta-llama/llama-3.1-8b-instruct:free').trim();
 const GOOGLE_REGION = 'europe-west2';
 const MAX_DIAGNOSTIC_TEXT = 500;
 const DEFAULT_CALENDAR_QUERY_COUNT = 4;
@@ -485,9 +487,25 @@ function resolveProfileProviderApiKeys(profile = null) {
     ''
   ).trim() || null;
 
+  const openRouterApiKey = String(
+    perProvider.openrouter ||
+    perProvider['open-router'] ||
+    perProvider.open_router ||
+    ''
+  ).trim() || null;
+
+  const openRouterModel = String(
+    profileData?.aiFeatureConfig?.fallback?.openrouterModel ||
+    profileData?.aiFallbackModel?.openrouter ||
+    profileData?.openrouterModel ||
+    OPENROUTER_FALLBACK_MODEL
+  ).trim() || OPENROUTER_FALLBACK_MODEL;
+
   return {
     geminiApiKey,
     anthropicApiKey,
+    openRouterApiKey,
+    openRouterModel,
   };
 }
 
@@ -513,6 +531,39 @@ async function callAnthropicText({ system, user, apiKey }) {
   const data = await resp.json();
   const text = data?.content?.[0]?.text || '';
   if (!text) throw new Error('Empty response from Anthropic');
+  return text;
+}
+
+async function callOpenRouterText({ system, user, apiKey, model = OPENROUTER_FALLBACK_MODEL }) {
+  const key = String(apiKey || process.env.OPENROUTER_API_KEY || '').trim();
+  if (!key) throw new Error('OPENROUTER_API_KEY not configured for fallback');
+  const selectedModel = String(model || OPENROUTER_FALLBACK_MODEL).trim() || OPENROUTER_FALLBACK_MODEL;
+  const body = {
+    model: selectedModel,
+    temperature: 0.2,
+    messages: [
+      { role: 'system', content: system },
+      { role: 'user', content: user },
+    ],
+    response_format: { type: 'json_object' },
+  };
+  const headers = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${key}`,
+  };
+  const appTitle = String(process.env.OPENROUTER_APP_NAME || 'BOB').trim();
+  const appUrl = String(process.env.OPENROUTER_APP_URL || 'https://bob20250810.web.app').trim();
+  if (appUrl) headers['HTTP-Referer'] = appUrl;
+  if (appTitle) headers['X-Title'] = appTitle;
+  const resp = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) throw new Error(`OpenRouter HTTP ${resp.status}: ${await resp.text()}`);
+  const data = await resp.json();
+  const text = data?.choices?.[0]?.message?.content || '';
+  if (!text) throw new Error('Empty response from OpenRouter');
   return text;
 }
 
@@ -1631,7 +1682,15 @@ function buildDocAppendPlan(sections, options = {}) {
   };
 }
 
-async function callAgentRouterModel({ transcript, persona, timezone, urlPreviews, geminiApiKey = null }) {
+async function callAgentRouterModel({
+  transcript,
+  persona,
+  timezone,
+  urlPreviews,
+  geminiApiKey = null,
+  openRouterApiKey = null,
+  openRouterModel = OPENROUTER_FALLBACK_MODEL,
+}) {
   const apiKey = String(geminiApiKey || process.env.GOOGLEAISTUDIOAPIKEY || '').trim();
   if (!apiKey) throw new Error('GOOGLEAISTUDIOAPIKEY not configured');
 
@@ -1677,15 +1736,44 @@ async function callAgentRouterModel({ transcript, persona, timezone, urlPreviews
     transcript,
   ].filter(Boolean).join('\n\n');
 
-  const model = createGeminiJsonModel(apiKey, {
-    schema: ROUTER_RESPONSE_SCHEMA,
-    maxOutputTokens: 1024,
-    temperature: 0.1,
-    topP: 0.9,
-    topK: 40,
-  });
-  const text = await generateGeminiJsonText(model, `${system}\n\n${user}`, 'Gemini returned an empty routing response');
-  return parseModelJson(text, 'Gemini routing response');
+  const shouldFallbackToOpenRouter = (err) => {
+    const msg = String(err?.message || err?.status || '');
+    const lowered = msg.toLowerCase();
+    return (
+      msg.includes('429') ||
+      msg.includes('503') ||
+      lowered.includes('quota') ||
+      lowered.includes('too many requests') ||
+      lowered.includes('service unavailable') ||
+      lowered.includes('high demand') ||
+      lowered.includes('credit balance is too low') ||
+      lowered.includes('insufficient credits') ||
+      lowered.includes('billing')
+    );
+  };
+
+  try {
+    const model = createGeminiJsonModel(apiKey, {
+      schema: ROUTER_RESPONSE_SCHEMA,
+      maxOutputTokens: 1024,
+      temperature: 0.1,
+      topP: 0.9,
+      topK: 40,
+    });
+    const text = await generateGeminiJsonText(model, `${system}\n\n${user}`, 'Gemini returned an empty routing response');
+    return parseModelJson(text, 'Gemini routing response');
+  } catch (geminiError) {
+    const fallbackKey = String(openRouterApiKey || process.env.OPENROUTER_API_KEY || '').trim();
+    if (!shouldFallbackToOpenRouter(geminiError) || !fallbackKey) throw geminiError;
+    const repairedSystem = `${system}\nReturn STRICT JSON only with no extra text.`;
+    const text = await callOpenRouterText({
+      system: repairedSystem,
+      user,
+      apiKey: fallbackKey,
+      model: openRouterModel || OPENROUTER_FALLBACK_MODEL,
+    });
+    return parseModelJson(text, 'OpenRouter routing response');
+  }
 }
 
 async function callTranscriptModel({
@@ -1697,6 +1785,8 @@ async function callTranscriptModel({
   journalPromptOverride = '',
   geminiApiKey = null,
   anthropicApiKey = null,
+  openRouterApiKey = null,
+  openRouterModel = OPENROUTER_FALLBACK_MODEL,
 }) {
   const apiKey = String(geminiApiKey || process.env.GOOGLEAISTUDIOAPIKEY || '').trim();
   if (!apiKey) throw new Error('GOOGLEAISTUDIOAPIKEY not configured');
@@ -1834,7 +1924,7 @@ async function callTranscriptModel({
     }, 'info', { raw: true });
   }
 
-  const shouldFallbackToAnthropic = (err) => {
+  const shouldFallbackToAlternateProvider = (err) => {
     const msg = String(err?.message || err?.status || '');
     const lowered = msg.toLowerCase();
     return (
@@ -1843,7 +1933,10 @@ async function callTranscriptModel({
       lowered.includes('too many requests') ||
       msg.includes('503') ||
       lowered.includes('service unavailable') ||
-      lowered.includes('high demand')
+      lowered.includes('high demand') ||
+      lowered.includes('credit balance is too low') ||
+      lowered.includes('insufficient credits') ||
+      lowered.includes('billing')
     );
   };
 
@@ -1860,18 +1953,51 @@ async function callTranscriptModel({
     });
     text = await generateGeminiJsonText(model, `${system}\n\n${user}`, 'Gemini returned an empty response');
   } catch (geminiError) {
-    if (!shouldFallbackToAnthropic(geminiError)) throw geminiError;
+    if (!shouldFallbackToAlternateProvider(geminiError)) throw geminiError;
 
-    const fallbackKey = String(anthropicApiKey || process.env.ANTHROPIC_API_KEY || '').trim();
-    if (!fallbackKey) throw geminiError;
+    const anthropicKey = String(anthropicApiKey || process.env.ANTHROPIC_API_KEY || '').trim();
+    const openRouterKey = String(openRouterApiKey || process.env.OPENROUTER_API_KEY || '').trim();
 
-    if (logger) {
-      await logger.event('llm_gemini_quota_fallback', 'Gemini quota exceeded — falling back to Anthropic', {
-        geminiError: geminiError?.message?.slice(0, 200),
-      }, 'warn');
+    if (!anthropicKey && !openRouterKey) throw geminiError;
+
+    if (anthropicKey) {
+      if (logger) {
+        await logger.event('llm_gemini_quota_fallback', 'Gemini unavailable — falling back to Anthropic', {
+          geminiError: geminiError?.message?.slice(0, 200),
+        }, 'warn');
+      }
+      try {
+        usedProvider = 'anthropic';
+        text = await callAnthropicText({ system, user, apiKey: anthropicKey });
+      } catch (anthropicError) {
+        if (!openRouterKey || !shouldFallbackToAlternateProvider(anthropicError)) throw anthropicError;
+        if (logger) {
+          await logger.event('llm_anthropic_quota_fallback', 'Anthropic unavailable — falling back to OpenRouter', {
+            anthropicError: anthropicError?.message?.slice(0, 200),
+          }, 'warn');
+        }
+        usedProvider = 'openrouter';
+        text = await callOpenRouterText({
+          system,
+          user,
+          apiKey: openRouterKey,
+          model: openRouterModel || OPENROUTER_FALLBACK_MODEL,
+        });
+      }
+    } else {
+      if (logger) {
+        await logger.event('llm_gemini_openrouter_fallback', 'Gemini unavailable — falling back to OpenRouter', {
+          geminiError: geminiError?.message?.slice(0, 200),
+        }, 'warn');
+      }
+      usedProvider = 'openrouter';
+      text = await callOpenRouterText({
+        system,
+        user,
+        apiKey: openRouterKey,
+        model: openRouterModel || OPENROUTER_FALLBACK_MODEL,
+      });
     }
-    usedProvider = 'anthropic';
-    text = await callAnthropicText({ system, user, apiKey: fallbackKey });
   }
 
   if (logger) {
@@ -4333,6 +4459,8 @@ async function processTranscriptIngestion({
       journalPromptOverride: profile?.journalEditorPrompt || profile?.journalPromptOverride || null,
       geminiApiKey: profileApiKeys.geminiApiKey,
       anthropicApiKey: profileApiKeys.anthropicApiKey,
+      openRouterApiKey: profileApiKeys.openRouterApiKey,
+      openRouterModel: profileApiKeys.openRouterModel,
     });
     const analysis = enrichAnalysisWithUrlMetadata(
       sanitizeAnalysis(rawAnalysis, normalizedTranscript, sourceUrls, timezone),
@@ -4825,6 +4953,8 @@ async function processAgentRequest({
         timezone,
         urlPreviews,
         geminiApiKey: profileApiKeys.geminiApiKey,
+        openRouterApiKey: profileApiKeys.openRouterApiKey,
+        openRouterModel: profileApiKeys.openRouterModel,
       });
       const route = sanitizeAgentRoute(rawRoute, normalizedTranscript, sourceUrls);
       effectiveRoute = (

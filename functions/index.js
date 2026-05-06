@@ -504,6 +504,8 @@ const CHORE_DUE_ROLLOVER_DAYS = 3;
 const CHORE_DUE_ROLLOVER_MS = CHORE_DUE_ROLLOVER_DAYS * 24 * 60 * 60 * 1000;
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
 const AI_PRIORITY_MODEL = GEMINI_MODEL;
+const OPENROUTER_BASE_URL = String(process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').trim().replace(/\/+$/, '');
+const OPENROUTER_FALLBACK_MODEL = String(process.env.OPENROUTER_FALLBACK_MODEL || 'meta-llama/llama-3.1-8b-instruct:free').trim();
 const PARKRUN_API_BASE = String(process.env.PARKRUN_API_BASE || 'https://api.parkrun.com').trim().replace(/\/+$/, '');
 const PARKRUN_API_CLIENT_ID = String(process.env.PARKRUN_API_CLIENT_ID || 'netdreams-iphone-s01').trim();
 const PARKRUN_API_CLIENT_SECRET = String(process.env.PARKRUN_API_CLIENT_SECRET || 'gfKbDD6NJkYoFmkisR(iVFopQCKWzbQeQgZAZZKK').trim();
@@ -9096,8 +9098,8 @@ async function importGoogleCalendarEvents(uid, { startDate, endDate }) {
   return { events: events.length, stored: seenDocIds.size };
 }
 
-// Scheduled: reconcile Google Calendar deletions for all users every 15 minutes
-exports.reconcileAllCalendars = schedulerV2.onSchedule({ schedule: 'every 15 minutes', timeZone: 'UTC', secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (event) => {
+// Scheduled: reconcile Google Calendar deletions for all users every 4 hours
+exports.reconcileAllCalendars = schedulerV2.onSchedule({ schedule: 'every 4 hours', timeZone: 'UTC', secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (event) => {
   const db = admin.firestore();
   // Find users with Google tokens
   const snap = await db.collection('tokens').where('provider', '==', 'google').get().catch(() => null);
@@ -9127,43 +9129,13 @@ exports.reconcileAllCalendars = schedulerV2.onSchedule({ schedule: 'every 15 min
   await Promise.allSettled(work);
 });
 
-exports.syncGoogleCalendarsHourly = schedulerV2.onSchedule({ schedule: 'every 60 minutes', timeZone: 'UTC', secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async () => {
-  const db = admin.firestore();
-  const tokensSnap = await db.collection('tokens').where('provider', '==', 'google').get().catch(() => null);
-  if (!tokensSnap || tokensSnap.empty) return;
-
-  const legacyImportEnabled = process.env.LEGACY_GCAL_IMPORT === 'true';
-  if (!legacyImportEnabled) {
-    console.log('[gcal-sync] legacy import disabled; calendarSync handles pull/push.');
-  }
-
-  const startDate = new Date(Date.now() - 6 * 60 * 60 * 1000); // past 6 hours to pick updates
-  const endDate = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000); // next two weeks
-  const todayStr = new Date().toISOString().slice(0, 10);
-
-  for (const doc of tokensSnap.docs) {
-    const tokenId = doc.id;
-    const uid = tokenId.includes('_') ? tokenId.split('_')[0] : tokenId;
-    try {
-      if (legacyImportEnabled) {
-        await importGoogleCalendarEvents(uid, { startDate, endDate });
-      }
-
-      // Push today's plan to Google Calendar
-      try {
-        await syncPlanToGoogleForUser(uid, todayStr);
-        console.log(`[gcal-sync] pushed plan for ${uid} for ${todayStr}`);
-      } catch (e) {
-        console.warn(`[gcal-sync] push plan failed for ${uid}`, e.message);
-      }
-
-      try { await recordIntegrationLog(uid, 'google', 'success', 'Hourly Google Calendar sync ran', { start: startDate.toISOString(), end: endDate.toISOString() }); } catch { }
-    } catch (error) {
-      console.warn(`[gcal-sync] hourly sync failed for ${uid}`, error.message);
-      try { await recordIntegrationLog(uid, 'google', 'error', 'Hourly Google Calendar sync failed', { error: String(error?.message || error) }); } catch { }
-    }
-  }
-});
+// DISABLED - Redundant with calendarSync.js (May 2026 - Firebase cost optimisation)
+// exports.syncGoogleCalendarsHourly = schedulerV2.onSchedule({ schedule: 'every 60 minutes', timeZone: 'UTC', secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async () => {
+//   const db = admin.firestore();
+//   const tokensSnap = await db.collection('tokens').where('provider', '==', 'google').get().catch(() => null);
+//   if (!tokensSnap || tokensSnap.empty) return;
+//   ...disabled...
+// });
 
 // ===== Duplicate Detection for iOS Reminders (AC11 - Issue #124)
 exports.generateWeeklySummaries = schedulerV2.onSchedule({ schedule: 'every monday 08:00', timeZone: 'Europe/London' }, async (event) => {
@@ -10836,11 +10808,65 @@ const PURPOSE_TO_FEATURE = {
   finance_commentary:             'finance',
 };
 
+function providerSupportsOpenRouterFallback(providerName) {
+  const provider = String(providerName || '').toLowerCase();
+  return provider === 'gemini' || provider === 'anthropic' || provider === 'openai';
+}
+
+function shouldFallbackToOpenRouter(providerName, error) {
+  const provider = String(providerName || '').toLowerCase();
+  if (!providerSupportsOpenRouterFallback(provider)) return false;
+  const message = String(error?.message || error?.status || '');
+  const lowered = message.toLowerCase();
+  return (
+    message.includes('429') ||
+    message.includes('503') ||
+    lowered.includes('quota') ||
+    lowered.includes('rate limit') ||
+    lowered.includes('too many requests') ||
+    lowered.includes('service unavailable') ||
+    lowered.includes('high demand') ||
+    lowered.includes('credit balance is too low') ||
+    lowered.includes('insufficient credits') ||
+    lowered.includes('billing')
+  );
+}
+
+async function callResolvedProvider({ provider, system, user, model, expectJson, temperature, apiKey }) {
+  if (provider === 'openai') {
+    return callOpenAIChat({ system, user, model, expectJson, temperature, apiKey });
+  }
+  if (provider === 'anthropic') {
+    return callAnthropic({ system, user, model, expectJson, temperature, apiKey });
+  }
+  if (provider === 'openrouter') {
+    return callOpenRouterChat({ system, user, model, expectJson, temperature, apiKey });
+  }
+  return callGemini({ system, user, model, expectJson, temperature, apiKey });
+}
+
+async function callWithRetries(candidate, payload, attempts = 3) {
+  let lastErr = null;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const text = await callResolvedProvider({ ...candidate, ...payload });
+      return { ok: true, text };
+    } catch (error) {
+      lastErr = error;
+      if (i < attempts - 1) {
+        await new Promise((r) => setTimeout(r, Math.pow(2, i) * 500));
+      }
+    }
+  }
+  return { ok: false, error: lastErr };
+}
+
 async function callLLMJson({ system, user, purpose, userId, expectJson = false, temperature = 0.2, provider = 'gemini', model = GEMINI_MODEL, personality = null, userApiKey = null }) {
-  // ── Resolve provider / model / API key from user profile ───────────────────
   let resolvedProvider = provider;
-  let resolvedModel    = model;
-  let resolvedApiKey   = userApiKey;
+  let resolvedModel = model;
+  let resolvedApiKey = userApiKey;
+  let openRouterApiKey = null;
+  let openRouterModel = OPENROUTER_FALLBACK_MODEL;
 
   if (userId && !userApiKey) {
     try {
@@ -10848,67 +10874,103 @@ async function callLLMJson({ system, user, purpose, userId, expectJson = false, 
       const profileSnap = await db.collection('profiles').doc(userId).get();
       if (profileSnap.exists) {
         const profileData = profileSnap.data() || {};
+        const perProviderKeys = profileData.aiApiKeys || {};
+        const legacyKey = profileData.aiApiKey || null;
 
-        // 1. Start with global default provider + model
         if (profileData.aiProvider) resolvedProvider = profileData.aiProvider;
-        if (profileData.aiModel)    resolvedModel    = profileData.aiModel;
+        if (profileData.aiModel) resolvedModel = profileData.aiModel;
 
-        // 2. Check for a per-feature override (e.g. telegram uses Claude, journal uses GPT-4o)
         const featureKey = PURPOSE_TO_FEATURE[purpose];
         const featureConfig = featureKey && profileData.aiFeatureConfig?.[featureKey];
         if (featureConfig) {
           if (featureConfig.provider) resolvedProvider = featureConfig.provider;
-          if (featureConfig.model)    resolvedModel    = featureConfig.model;
+          if (featureConfig.model) resolvedModel = featureConfig.model;
         }
 
-        // 3. Resolve API key for the effective provider
-        //    New schema: aiApiKeys.{provider}   Legacy: aiApiKey (single key)
-        const perProviderKeys = profileData.aiApiKeys || {};
         resolvedApiKey =
-          perProviderKeys[resolvedProvider] ||  // per-provider key
-          profileData.aiApiKey              ||  // legacy single key
+          perProviderKeys[resolvedProvider] ||
+          legacyKey ||
           null;
 
-        // 4. Auto-load personality if caller didn't supply one explicitly
+        openRouterApiKey =
+          perProviderKeys.openrouter ||
+          perProviderKeys['open-router'] ||
+          perProviderKeys.open_router ||
+          null;
+
+        const profileOpenRouterModel = String(
+          profileData?.aiFeatureConfig?.fallback?.openrouterModel ||
+          profileData?.aiFallbackModel?.openrouter ||
+          profileData?.openrouterModel ||
+          ''
+        ).trim();
+        if (profileOpenRouterModel) {
+          openRouterModel = profileOpenRouterModel;
+        }
+
         if (!personality && profileData.aiPersonality) {
           personality = profileData.aiPersonality;
         }
 
-        // 5. Merge global system-prompt override
         if (profileData.aiSystemPromptOverride) {
           system = `${profileData.aiSystemPromptOverride}\n\n${system}`;
         }
       }
     } catch (e) {
-      // Non-fatal — fall back to server defaults
       console.warn('[callLLMJson] Profile lookup failed:', e?.message);
     }
   }
 
+  openRouterApiKey = String(openRouterApiKey || process.env.OPENROUTER_API_KEY || '').trim() || null;
   const effectiveSystem = personality ? `${buildPersonalityInstruction(personality)}\n\n${system}` : system;
-  const attempts = 3; // initial + 2 retries
-  let lastErr = null;
-  for (let i = 0; i < attempts; i++) {
-    try {
-      let text;
-      if (resolvedProvider === 'openai') {
-        text = await callOpenAIChat({ system: effectiveSystem, user, model: resolvedModel, expectJson, temperature, apiKey: resolvedApiKey });
-      } else if (resolvedProvider === 'anthropic') {
-        text = await callAnthropic({ system: effectiveSystem, user, model: resolvedModel, expectJson, temperature, apiKey: resolvedApiKey });
-      } else {
-        text = await callGemini({ system: effectiveSystem, user, model: resolvedModel, expectJson, temperature, apiKey: resolvedApiKey });
-      }
-      // lightweight usage log
-      const wrapped = aiUsageLogger.wrapAICall('google-ai-studio', GEMINI_MODEL);
-      await wrapped(async () => ({ ok: true }), { userId, functionName: purpose, purpose });
-      return text;
-    } catch (e) {
-      lastErr = e;
-      await new Promise(r => setTimeout(r, Math.pow(2, i) * 500));
-    }
+  const primaryCandidate = {
+    provider: String(resolvedProvider || 'gemini').toLowerCase(),
+    model: resolvedModel,
+    apiKey: resolvedApiKey,
+  };
+
+  const primaryResult = await callWithRetries(primaryCandidate, {
+    system: effectiveSystem,
+    user,
+    expectJson,
+    temperature,
+  });
+  if (primaryResult.ok) {
+    const wrapped = aiUsageLogger.wrapAICall(primaryCandidate.provider, String(primaryCandidate.model || 'unknown'));
+    await wrapped(async () => ({ ok: true }), { userId, functionName: purpose, purpose });
+    return primaryResult.text;
   }
+
+  const primaryError = primaryResult.error || new Error('Primary provider unavailable');
+  const canUseOpenRouterFallback = (
+    primaryCandidate.provider !== 'openrouter' &&
+    Boolean(openRouterApiKey) &&
+    shouldFallbackToOpenRouter(primaryCandidate.provider, primaryError)
+  );
+
+  if (canUseOpenRouterFallback) {
+    const openRouterCandidate = {
+      provider: 'openrouter',
+      model: openRouterModel || OPENROUTER_FALLBACK_MODEL,
+      apiKey: openRouterApiKey,
+    };
+    const fallbackResult = await callWithRetries(openRouterCandidate, {
+      system: effectiveSystem,
+      user,
+      expectJson,
+      temperature,
+    });
+    if (fallbackResult.ok) {
+      const wrapped = aiUsageLogger.wrapAICall('openrouter', String(openRouterCandidate.model || 'unknown'));
+      await wrapped(async () => ({ ok: true }), { userId, functionName: purpose, purpose });
+      return fallbackResult.text;
+    }
+    if (expectJson) return '{}';
+    throw fallbackResult.error || primaryError;
+  }
+
   if (expectJson) return '{}';
-  throw lastErr || new Error('LLM unavailable');
+  throw primaryError;
 }
 
 async function callGemini({ system, user, model = GEMINI_MODEL, expectJson, temperature, apiKey: userApiKey = null }) {
@@ -11023,6 +11085,39 @@ async function callOpenAIChat({ system, user, model = 'gpt-4o-mini', expectJson,
   const data = await res.json();
   const text = data?.choices?.[0]?.message?.content || '';
   if (!text) throw new Error('Empty response from OpenAI');
+  return text;
+}
+
+async function callOpenRouterChat({ system, user, model = OPENROUTER_FALLBACK_MODEL, expectJson, temperature, apiKey: userApiKey = null }) {
+  const apiKey = (userApiKey || process.env.OPENROUTER_API_KEY || '').trim();
+  if (!apiKey) throw new Error('OPENROUTER_API_KEY not configured');
+  const selectedModel = String(model || OPENROUTER_FALLBACK_MODEL).trim();
+  const body = {
+    model: selectedModel,
+    temperature: temperature ?? 0.2,
+    messages: [
+      { role: 'system', content: system },
+      { role: 'user', content: user },
+    ],
+    ...(expectJson ? { response_format: { type: 'json_object' } } : {}),
+  };
+  const headers = {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${apiKey}`,
+  };
+  const appTitle = String(process.env.OPENROUTER_APP_NAME || 'BOB').trim();
+  const appUrl = String(process.env.OPENROUTER_APP_URL || 'https://bob20250810.web.app').trim();
+  if (appTitle) headers['HTTP-Referer'] = appUrl;
+  if (appTitle) headers['X-Title'] = appTitle;
+  const res = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`OpenRouter HTTP ${res.status}: ${await res.text()}`);
+  const data = await res.json();
+  const text = data?.choices?.[0]?.message?.content || '';
+  if (!text) throw new Error('Empty response from OpenRouter');
   return text;
 }
 
@@ -19081,14 +19176,15 @@ exports.autoRescheduleMissed = httpsV2.onCall(async (req) => {
   return await _autoRescheduleMissedForUser(uid, { limit: 10 });
 });
 
-exports.rescheduleMissedHourly = schedulerV2.onSchedule({ schedule: 'every 60 minutes', timeZone: 'UTC' }, async () => {
-  const db = ensureFirestore();
-  const usersSnap = await db.collection('profiles').get();
-  for (const doc of usersSnap.docs) {
-    const uid = doc.id;
-    try { await _autoRescheduleMissedForUser(uid, { limit: 10 }); } catch (e) { console.warn('[rescheduleMissedHourly]', uid, e?.message || e); }
-  }
-});
+// DISABLED - Not needed after consolidating schedulers (May 2026)
+// exports.rescheduleMissedHourly = schedulerV2.onSchedule({ schedule: 'every 60 minutes', timeZone: 'UTC' }, async () => {
+//   const db = ensureFirestore();
+//   const usersSnap = await db.collection('profiles').get();
+//   for (const doc of usersSnap.docs) {
+//     const uid = doc.id;
+//     try { await _autoRescheduleMissedForUser(uid, { limit: 10 }); } catch {}
+//   }
+// });
 
 async function _autoRescheduleMissedForUser(uid, { limit = 10 } = {}) {
   const db = ensureFirestore();
@@ -20661,7 +20757,7 @@ function normalizeTaskTagsForSystem({
   return cleaned;
 }
 
-exports.tagTasksAndBuildDeepLinks = schedulerV2.onSchedule({ schedule: 'every 30 minutes', timeZone: 'UTC' }, async () => {
+exports.tagTasksAndBuildDeepLinks = schedulerV2.onSchedule({ schedule: 'every 6 hours', timeZone: 'UTC' }, async () => {
   const db = admin.firestore();
   const now = Date.now();
   const cutoff = now - 24 * 60 * 60 * 1000; // process tasks touched in last 24h
