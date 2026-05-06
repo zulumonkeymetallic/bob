@@ -82,6 +82,19 @@ function normalizeStory(storyDoc) {
       createdAt: toMillis(data.createdAt),
       acceptanceCriteriaCount: Array.isArray(data.acceptanceCriteria) ? data.acceptanceCriteria.length : 0,
     },
+    // Delegation fields — always present so Hermes can find queued items
+    flaggedToAi: data.flaggedToAi === true,
+    aiDelegationStatus: data.aiDelegationStatus || null,
+    aiDelegationNote: data.aiDelegationNote || null,
+    aiDelegatedAt: toMillis(data.aiDelegatedAt),
+    aiDelegationDocumentLink: data.aiDelegationDocumentLink || null,
+    // Include full acceptance criteria only for delegated items (avoids snapshot bloat)
+    ...(data.flaggedToAi === true
+      ? {
+          acceptanceCriteria: Array.isArray(data.acceptanceCriteria) ? data.acceptanceCriteria : [],
+          description: data.description || null,
+        }
+      : {}),
   };
 }
 
@@ -113,6 +126,14 @@ function normalizeTask(taskDoc) {
       updatedAt: toMillis(data.updatedAt),
       createdAt: toMillis(data.createdAt),
     },
+    // Delegation fields — always present so Hermes can find queued items
+    flaggedToAi: data.flaggedToAi === true,
+    aiDelegationStatus: data.aiDelegationStatus || null,
+    aiDelegationNote: data.aiDelegationNote || null,
+    aiDelegatedAt: toMillis(data.aiDelegatedAt),
+    aiDelegationDocumentLink: data.aiDelegationDocumentLink || null,
+    // Include description for delegated tasks so Hermes has full context
+    ...(data.flaggedToAi === true ? { description: data.description || null } : {}),
   };
 }
 
@@ -235,7 +256,7 @@ async function writeSnapshotForUser({ db, userId }) {
 
 const generateGlobalHierarchySnapshots = schedulerV2.onSchedule(
   {
-    schedule: 'every 6 hours',
+    schedule: 'every 12 hours',
     timeZone: 'UTC',
     region: 'europe-west2',
     memory: '512MiB',

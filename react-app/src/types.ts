@@ -89,6 +89,7 @@ export interface Goal {
   isPublished?: boolean; // Whether goal is publicly shareable
   shareCode?: string; // Unique code for sharing (e.g., abc123xyz)
   publishedAt?: any; // Firebase Timestamp when goal was published
+  showInDashboardBanner?: boolean;
   // Legacy fields for backward compatibility
   dueDate?: number;
   category?: string;
@@ -152,6 +153,12 @@ export interface Story {
   locationName?: string; // Full display name
   locationLat?: number;
   locationLon?: number;
+  // AI delegation
+  flaggedToAi?: boolean;
+  aiDelegationStatus?: 'queued' | 'in_progress' | 'review' | 'failed';
+  aiDelegationNote?: string;
+  aiDelegatedAt?: number;
+  aiDelegationDocumentLink?: string;
 }
 
 export interface JournalMindsetAnalysis {
@@ -351,6 +358,12 @@ export interface Task {
   deferredUntil?: any;
   deferredReason?: string;
   deferredBy?: string;
+  // AI delegation
+  flaggedToAi?: boolean;
+  aiDelegationStatus?: 'queued' | 'in_progress' | 'review' | 'failed';
+  aiDelegationNote?: string;
+  aiDelegatedAt?: number;
+  aiDelegationDocumentLink?: string;
 }
 
 export interface Column {

@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { draggable } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
 import { Button, Modal, Spinner } from 'react-bootstrap';
-import { GripVertical, Activity, Wand2, Edit3, Trash2, Target, BookOpen, Shuffle, CalendarClock, Clock3, CalendarPlus, FileText } from 'lucide-react';
+import { GripVertical, Activity, Wand2, Edit3, Trash2, Target, BookOpen, Shuffle, CalendarClock, Clock3, CalendarPlus, FileText, Bot } from 'lucide-react';
 import { httpsCallable } from 'firebase/functions';
 import { functions, db } from '../firebase';
 import { Story, Task, Goal } from '../types';
@@ -179,6 +179,22 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
     const aiReason = isTop3 && (item as any).aiTop3Reason
         ? (item as any).aiTop3Reason
         : ((item as any).aiCriticalityReason || null);
+    const aiScoreRounded = (() => {
+        const value = Number((item as any).aiCriticalityScore);
+        if (!Number.isFinite(value)) return null;
+        if (value <= 1) return Math.round(value * 100);
+        return Math.round(value);
+    })();
+    const flaggedToAi = (item as any).flaggedToAi === true;
+    const aiDelegationStatus = (item as any).aiDelegationStatus as string | undefined;
+    const aiDelegationDocumentLink = (item as any).aiDelegationDocumentLink as string | undefined;
+    const aiDelegationNote = (item as any).aiDelegationNote as string | undefined;
+    const delegationColor = flaggedToAi
+        ? aiDelegationStatus === 'review'   ? 'var(--bs-success)'
+        : aiDelegationStatus === 'in_progress' ? 'var(--bs-info)'
+        : aiDelegationStatus === 'failed'   ? 'var(--bs-danger)'
+        : 'var(--bs-warning)'
+        : themeVars.muted;
     const dueDateMs = (() => {
         const raw = (item as any).dueDate ?? (item as any).targetDate ?? (item as any).dueDateMs ?? null;
         if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
@@ -603,6 +619,43 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
         }
     };
 
+    const handleDelegateToAi = async (e: React.MouseEvent) => {
+        e.stopPropagation();
+        if (!currentUser) return;
+        // Lock during active AI execution
+        if (aiDelegationStatus === 'in_progress') return;
+
+        const collectionName = type === 'story' ? 'stories' : 'tasks';
+        const docRef = doc(db, collectionName, item.id);
+
+        try {
+            if (flaggedToAi && aiDelegationStatus !== 'failed') {
+                // Cancel delegation
+                await updateDoc(docRef, {
+                    flaggedToAi: false,
+                    aiDelegationStatus: null,
+                    aiDelegatedAt: null,
+                    updatedAt: serverTimestamp(),
+                });
+                setActionMessage('AI delegation cancelled');
+            } else {
+                // Queue for delegation (or re-queue after failure)
+                await updateDoc(docRef, {
+                    flaggedToAi: true,
+                    aiDelegationStatus: 'queued',
+                    aiDelegatedAt: Date.now(),
+                    updatedAt: serverTimestamp(),
+                });
+                setActionMessage('Queued for Hermes AI');
+            }
+        } catch (err) {
+            console.warn('[KanbanCardV2] delegation toggle failed', err);
+            setActionMessage('Delegation update failed');
+        } finally {
+            setTimeout(() => setActionMessage(null), 2400);
+        }
+    };
+
     const handlePriorityPromptReplanNow = async () => {
         setPriorityReplanLoading(true);
         try {
@@ -720,6 +773,29 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                                 <Shuffle size={12} />
                             </Button>
                         )}
+                        <Button
+                            variant="link"
+                            size="sm"
+                            className="p-0"
+                            style={{
+                                width: 24,
+                                height: 24,
+                                color: delegationColor,
+                                opacity: aiDelegationStatus === 'in_progress' ? 0.5 : 1,
+                            }}
+                            title={
+                                aiDelegationStatus === 'in_progress' ? 'Hermes is executing this'
+                                : aiDelegationStatus === 'review' ? `Hermes complete — awaiting review${aiDelegationNote ? ': ' + aiDelegationNote : ''}`
+                                : aiDelegationStatus === 'failed' ? 'Hermes failed — click to re-queue'
+                                : flaggedToAi ? 'Queued for Hermes — click to cancel'
+                                : 'Delegate to Hermes AI'
+                            }
+                            onClick={handleDelegateToAi}
+                            onPointerDown={(e) => e.stopPropagation()}
+                            disabled={aiDelegationStatus === 'in_progress'}
+                        >
+                            <Bot size={12} />
+                        </Button>
                         {type === 'story' && (
                             <Button
                                 variant="link"
@@ -816,27 +892,25 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                 )}
 
                 <div className="kanban-card__quick-edit">
-                    {detailLevel !== 'minimal' && (
-                        <select
-                            className="kanban-card__chip-select"
-                            value={priorityValue}
-                            onChange={handlePriorityChange}
-                            onClick={(e) => e.stopPropagation()}
-                            onPointerDown={(e) => e.stopPropagation()}
-                            disabled={updatingField === 'priority'}
-                            title="Priority"
-                            style={{
-                                backgroundColor: `var(--bs-${priorityBadge.bg})`,
-                                color: priorityBadge.bg === 'warning' || priorityBadge.bg === 'orange' || priorityBadge.bg === 'light' ? '#000' : '#fff',
-                            }}
-                        >
-                            <option value={0}>None</option>
-                            <option value={1}>Low</option>
-                            <option value={2}>Medium</option>
-                            <option value={3}>High</option>
-                            <option value={4}>Critical</option>
-                        </select>
-                    )}
+                    <select
+                        className="kanban-card__chip-select"
+                        value={priorityValue}
+                        onChange={handlePriorityChange}
+                        onClick={(e) => e.stopPropagation()}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        disabled={updatingField === 'priority'}
+                        title="Priority"
+                        style={{
+                            backgroundColor: `var(--bs-${priorityBadge.bg})`,
+                            color: priorityBadge.bg === 'warning' || priorityBadge.bg === 'orange' || priorityBadge.bg === 'light' ? '#000' : '#fff',
+                        }}
+                    >
+                        <option value={0}>None</option>
+                        <option value={1}>Low</option>
+                        <option value={2}>Medium</option>
+                        <option value={3}>High</option>
+                        <option value={4}>Critical</option>
+                    </select>
                     {detailLevel !== 'minimal' && (
                         <input
                             type="date"
@@ -921,9 +995,8 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                         )}
                     </div>
                 )}
-                {detailLevel !== 'minimal' && (
                 <div className="kanban-card__meta">
-                    {type === 'story' && manualPriorityRank && (
+                    {detailLevel !== 'minimal' && type === 'story' && manualPriorityRank && (
                         <span
                             className="kanban-card__meta-badge"
                             style={{
@@ -936,12 +1009,12 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                             <span style={{ fontWeight: 800 }}>{manualPriorityRank}</span>&nbsp;Priority
                         </span>
                     )}
-                    {isTop3 && (
+                    {detailLevel !== 'minimal' && isTop3 && (
                         <span className="kanban-card__meta-badge kanban-card__meta-badge--top3" title="Top 3 priority">
                             Top 3
                         </span>
                     )}
-                    {isFocusAligned && (
+                    {detailLevel !== 'minimal' && isFocusAligned && (
                         <span
                             className="kanban-card__meta-badge"
                             style={{
@@ -956,12 +1029,12 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                             {(manualPriorityRank || isTop3) ? 'Focus Goal' : 'Focus'}
                         </span>
                     )}
-                    {overdueDays > 0 && (
+                    {detailLevel !== 'minimal' && overdueDays > 0 && (
                         <span className="kanban-card__meta-badge" style={{ color: 'var(--red)' }} title="Overdue">
                             {overdueDays}d overdue
                         </span>
                     )}
-                    {scheduledBlockLabel && (
+                    {detailLevel !== 'minimal' && scheduledBlockLabel && (
                         <span
                             className="kanban-card__meta-badge"
                             style={{
@@ -975,7 +1048,7 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                             {scheduledBlockLabel}
                         </span>
                     )}
-                    {deferredLabel && (
+                    {detailLevel !== 'minimal' && deferredLabel && (
                         <span
                             className="kanban-card__meta-badge"
                             style={{
@@ -1004,14 +1077,46 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                             {(item as Task).effort}
                         </span>
                     )}
-                    {detailLevel === 'full' && (item as any).aiCriticalityScore != null ? (
+                    {aiScoreRounded != null ? (
                         <span className="kanban-card__meta-badge" title={aiReason ? `AI reason: ${aiReason}` : 'AI score'}>
                             AI&nbsp;
-                            {Math.round(Number((item as any).aiCriticalityScore))}
+                            {aiScoreRounded}
                         </span>
                     ) : null}
+                    {flaggedToAi && aiDelegationStatus && (
+                        <span
+                            className="kanban-card__meta-badge"
+                            title={aiDelegationNote || `Hermes: ${aiDelegationStatus}`}
+                            style={{
+                                color: delegationColor,
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 3,
+                            }}
+                        >
+                            <Bot size={10} />
+                            {aiDelegationStatus === 'in_progress' ? 'running'
+                            : aiDelegationStatus === 'review' ? 'review'
+                            : aiDelegationStatus === 'failed' ? 'failed'
+                            : 'queued'}
+                        </span>
+                    )}
+                    {aiDelegationDocumentLink && (
+                        <a
+                            href={aiDelegationDocumentLink}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title="Open Hermes output document"
+                            className="kanban-card__meta-badge"
+                            style={{ color: 'var(--bs-success)', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 3 }}
+                            onClick={(e) => e.stopPropagation()}
+                            onPointerDown={(e) => e.stopPropagation()}
+                        >
+                            <FileText size={10} />
+                            doc
+                        </a>
+                    )}
                 </div>
-                )}
                 {detailLevel === 'full' && scheduledBlockLabel && (scheduledBlockSourceLabel || scheduledBlockSourceNote) && (
                     <div className={scheduledBlockSourceClassName}>
                         {scheduledBlockSourceLabel || scheduledBlockSourceNote}

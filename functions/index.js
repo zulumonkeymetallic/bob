@@ -111,6 +111,17 @@ function clampStoryPoints(value) {
 // Import the daily digest generator
 const { generateDailyDigest } = require("./dailyDigestGenerator");
 
+// AI delegation worker — Firestore triggers for review notifications
+try {
+  const delegationWorker = require('./agent/delegationWorker');
+  if (delegationWorker) {
+    exports.onStoryDelegationComplete = delegationWorker.onStoryDelegationComplete;
+    exports.onTaskDelegationComplete = delegationWorker.onTaskDelegationComplete;
+  }
+} catch (e) {
+  console.warn('[init] delegationWorker not loaded', e?.message || e);
+}
+
 // Import calendar sync functions
 try {
   const calendarSync = require('./calendarSync');
