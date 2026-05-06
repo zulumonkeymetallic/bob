@@ -1834,9 +1834,17 @@ async function callTranscriptModel({
     }, 'info', { raw: true });
   }
 
-  const isGeminiQuotaError = (err) => {
+  const shouldFallbackToAnthropic = (err) => {
     const msg = String(err?.message || err?.status || '');
-    return msg.includes('429') || msg.toLowerCase().includes('quota') || msg.toLowerCase().includes('too many requests');
+    const lowered = msg.toLowerCase();
+    return (
+      msg.includes('429') ||
+      lowered.includes('quota') ||
+      lowered.includes('too many requests') ||
+      msg.includes('503') ||
+      lowered.includes('service unavailable') ||
+      lowered.includes('high demand')
+    );
   };
 
   let text;
@@ -1852,7 +1860,7 @@ async function callTranscriptModel({
     });
     text = await generateGeminiJsonText(model, `${system}\n\n${user}`, 'Gemini returned an empty response');
   } catch (geminiError) {
-    if (!isGeminiQuotaError(geminiError)) throw geminiError;
+    if (!shouldFallbackToAnthropic(geminiError)) throw geminiError;
 
     const fallbackKey = String(anthropicApiKey || process.env.ANTHROPIC_API_KEY || '').trim();
     if (!fallbackKey) throw geminiError;
