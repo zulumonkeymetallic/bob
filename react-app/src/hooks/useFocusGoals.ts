@@ -51,7 +51,11 @@ export const useFocusGoals = (userId: string | undefined) => {
         setLoading(false);
       },
       error => {
-        console.error('useFocusGoals: snapshot error', error);
+        if (String(error?.code || '').includes('permission-denied')) {
+          console.warn('useFocusGoals: focusGoals collection not accessible', error?.code);
+        } else {
+          console.error('useFocusGoals: snapshot error', error);
+        }
         setLoading(false);
       }
     );

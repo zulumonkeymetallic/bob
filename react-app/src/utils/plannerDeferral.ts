@@ -67,21 +67,50 @@ export async function applyPlannerDefer({
   targetSprintId = null,
   durationMinutes = null,
 }: ApplyPlannerDeferArgs): Promise<SchedulePlannerItemResponse> {
-  return schedulePlannerItem({
-    itemType,
-    itemId: item.id,
-    targetDateMs: payload.dateMs,
-    targetBucket: payload.targetBucket ?? (item.timeOfDay as PlannerBucket) ?? null,
-    intent: 'defer',
-    source: payload.source || sourceFallback,
-    rationale: payload.rationale || null,
-    linkedBlockId,
-    targetSprintId,
-    durationMinutes: inferPlannerDurationMinutes(itemType, item, durationMinutes),
-    constraintMode: payload.constraintMode || null,
-    exactTargetStartMs: payload.exactTargetStartMs || null,
-    exactTargetEndMs: payload.exactTargetEndMs || null,
-  });
+  try {
+    return await schedulePlannerItem({
+      itemType,
+      itemId: item.id,
+      targetDateMs: payload.dateMs,
+      targetBucket: payload.targetBucket ?? (item.timeOfDay as PlannerBucket) ?? null,
+      intent: 'defer',
+      source: payload.source || sourceFallback,
+      rationale: payload.rationale || null,
+      linkedBlockId,
+      targetSprintId,
+      durationMinutes: inferPlannerDurationMinutes(itemType, item, durationMinutes),
+      constraintMode: payload.constraintMode || 'free_slot',
+      exactTargetStartMs: payload.exactTargetStartMs || null,
+      exactTargetEndMs: payload.exactTargetEndMs || null,
+      allowSplit: true,
+      searchDays: 21,
+    });
+  } catch (err: any) {
+    const code = String(err?.code || '').replace(/^functions\//, '');
+    // Cloud function couldn't find a free slot — fall back to a direct Firestore write
+    // so the user's intent is captured even without a calendar placement.
+    if (code === 'failed-precondition' || code === 'internal') {
+      const coll = itemType === 'story' ? 'stories' : 'tasks';
+      const ref = doc(db, coll, item.id);
+      await updateDoc(ref, {
+        deferredUntil: payload.dateMs,
+        deferredReason: payload.rationale || null,
+        deferredBy: payload.source || sourceFallback || 'planner_defer',
+        updatedAt: serverTimestamp(),
+      });
+      return {
+        ok: true,
+        planningMode: 'smart',
+        appliedStartMs: payload.dateMs,
+        appliedEndMs: payload.dateMs,
+        appliedDayMs: payload.dateMs,
+        appliedBucket: payload.targetBucket ?? null,
+        sprintId: targetSprintId,
+        blockId: null,
+      };
+    }
+    throw err;
+  }
 }
 
 export async function applyStoryDueDate(storyId: string, dueDateMs: number): Promise<void> {
