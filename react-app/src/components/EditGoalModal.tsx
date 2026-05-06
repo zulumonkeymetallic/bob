@@ -1364,7 +1364,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
                     </Button>
                     <Button
                       variant={kpiTab === 'advanced' ? 'primary' : 'outline-secondary'}
-                      onClick={() => { setKpiTab('advanced'); void handleAdvancedTabOpen(); }}
+                      onClick={() => setKpiTab('advanced')}
                     >
                       Advanced
                     </Button>
