@@ -37,6 +37,14 @@ interface KPIDesignerProps {
   initialGoalId?: string;
 }
 
+export interface KPIDesignerFormProps {
+  goals: Goal[];
+  ownerUid: string;
+  onSaved?: () => void;
+  initialGoalId?: string;
+  onClose?: () => void;
+}
+
 const KPI_TYPE_OPTIONS: Array<{ value: KpiType; label: string }> = [
   { value: 'fitness_steps', label: 'Fitness: steps' },
   { value: 'fitness_running', label: 'Fitness: running distance' },
@@ -96,13 +104,12 @@ const slugify = (value: string) => (
     .replace(/^_+|_+$/g, '')
 );
 
-const KPIDesigner: React.FC<KPIDesignerProps> = ({
-  show,
-  onHide,
+export const KPIDesignerForm: React.FC<KPIDesignerFormProps> = ({
   goals,
   ownerUid,
   onSaved,
   initialGoalId,
+  onClose,
 }) => {
   const [designerTab, setDesignerTab] = useState<string>(DEFAULT_TAB);
   const [goalId, setGoalId] = useState('');
@@ -161,13 +168,12 @@ const KPIDesigner: React.FC<KPIDesignerProps> = ({
   const effectiveType = isCuratedMode ? selectedMetric?.kpiType : customKpiType;
 
   useEffect(() => {
-    if (!show) return;
     setGoalId(defaultGoalId(sortedGoals, initialGoalId));
     setDesignerTab(DEFAULT_TAB);
-  }, [initialGoalId, show, sortedGoals]);
+  }, [initialGoalId, sortedGoals]);
 
   useEffect(() => {
-    if (!show || !ownerUid) return;
+    if (!ownerUid) return;
     let mounted = true;
 
     const loadLinkedItems = async () => {
@@ -209,7 +215,7 @@ const KPIDesigner: React.FC<KPIDesignerProps> = ({
     return () => {
       mounted = false;
     };
-  }, [ownerUid, show]);
+  }, [ownerUid]);
 
   useEffect(() => {
     if (!selectedMetric || !isCuratedMode) return;
@@ -272,7 +278,7 @@ const KPIDesigner: React.FC<KPIDesignerProps> = ({
 
   const close = () => {
     reset();
-    onHide();
+    onClose?.();
   };
 
   const handleToggleLinkedId = (current: string[], id: string, setter: React.Dispatch<React.SetStateAction<string[]>>) => {
@@ -619,15 +625,12 @@ const KPIDesigner: React.FC<KPIDesignerProps> = ({
   };
 
   return (
-    <Modal show={show} onHide={close} size="xl" centered>
-      <Modal.Header closeButton>
-        <Modal.Title>KPI Designer</Modal.Title>
-      </Modal.Header>
-      <Modal.Body>
+    <div>
         {error && <Alert variant="danger">{error}</Alert>}
         {success && <Alert variant="success">{success}</Alert>}
 
         <Row className="g-3 mb-3">
+          {!initialGoalId && (
           <Col md={5}>
             <Form.Group>
               <Form.Label>Goal</Form.Label>
@@ -639,6 +642,7 @@ const KPIDesigner: React.FC<KPIDesignerProps> = ({
               </Form.Select>
             </Form.Group>
           </Col>
+          )}
           <Col md={7}>
             <Card className="border-0" style={{ background: 'var(--bs-light-bg-subtle, #f8f9fa)' }}>
               <Card.Body className="py-2">
@@ -1123,9 +1127,8 @@ const KPIDesigner: React.FC<KPIDesignerProps> = ({
             </Card>
           </Col>
         </Row>
-      </Modal.Body>
-      <Modal.Footer>
-        <Button variant="secondary" onClick={close} disabled={saving}>Close</Button>
+      <div className="d-flex justify-content-end gap-2 mt-3">
+        {onClose && <Button variant="secondary" onClick={close} disabled={saving}>Close</Button>}
         <Button variant="primary" onClick={() => void handleSave()} disabled={saving}>
           {saving ? (
             <>
@@ -1136,9 +1139,20 @@ const KPIDesigner: React.FC<KPIDesignerProps> = ({
             isCuratedMode ? 'Save curated KPI' : 'Save source-mapped KPI'
           )}
         </Button>
-      </Modal.Footer>
-    </Modal>
+      </div>
+    </div>
   );
 };
+
+const KPIDesigner: React.FC<KPIDesignerProps> = ({ show, onHide, ...rest }) => (
+  <Modal show={show} onHide={onHide} size="xl" centered>
+    <Modal.Header closeButton>
+      <Modal.Title>KPI Designer</Modal.Title>
+    </Modal.Header>
+    <Modal.Body>
+      {show && <KPIDesignerForm {...rest} onClose={onHide} />}
+    </Modal.Body>
+  </Modal>
+);
 
 export default KPIDesigner;

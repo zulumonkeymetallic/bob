@@ -543,7 +543,7 @@ const WorkoutsDashboard: React.FC = () => {
       return;
     }
     const qRef = query(
-      collection(db, 'metrics_hrv'),
+      collection(db, 'health_metrics'),
       where('ownerUid', '==', currentUser.uid),
       limit(120)
     );
@@ -640,7 +640,8 @@ const WorkoutsDashboard: React.FC = () => {
         fatG: readNumericValue(metric, 'fatTodayG', 'healthkitFatTodayG', 'manualFatG'),
         carbsG: readNumericValue(metric, 'carbsTodayG', 'healthkitCarbsTodayG', 'manualCarbsG'),
         readiness: readNumericValue(metric, 'readinessScore', 'healthkitReadinessScore'),
-        sleepMinutes: readNumericValue(metric, 'sleepMinutes', 'healthkitSleepMinutes', 'manualSleepMinutes'),
+        sleepMinutes: readNumericValue(metric, 'sleepMinutes', 'healthkitSleepMinutes', 'manualSleepMinutes')
+          ?? (() => { const h = readNumericValue(metric, 'sleepDurationH'); return h != null ? h * 60 : null; })(),
       };
       const existing = latestByDay.get(dayKey);
       if (!existing || snapshotMs >= existing.snapshotMs) {

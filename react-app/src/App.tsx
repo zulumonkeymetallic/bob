@@ -44,6 +44,7 @@ import { ProcessTextActivityProvider } from './contexts/ProcessTextActivityConte
 import './styles/theme-aware.css';
 import { TestModeProvider } from './contexts/TestModeContext';
 import { DetailLevelProvider } from './contexts/DetailLevelContext';
+import { BobDataProvider } from './contexts/BobDataContext';
 import PersonaSwitcher from './components/PersonaSwitcher';
 import GlobalSidebar from './components/GlobalSidebar';
 import { useDeviceInfo } from './utils/deviceDetection';
@@ -355,7 +356,8 @@ function AppContent() {
   return (
     <ErrorBoundary>
       <MigrationManager>
-        <SidebarLayout onSignOut={handleSignOut}>
+        <BobDataProvider>
+          <SidebarLayout onSignOut={handleSignOut}>
           <Routes>
             <Route path="/" element={<RootRedirect />} />
             <Route path="/dashboard" element={<Dashboard />} />
@@ -403,6 +405,7 @@ function AppContent() {
             <Route path="/sprints/management" element={<SprintManagementView />} />
             <Route path="/sprints/management/burndown" element={<SprintManagementView />} />
             <Route path="/sprints/kanban" element={<SprintKanbanPageV2 />} />
+            <Route path="/planner/weekly-capacity" element={<WeeklyThemePlanner />} />
 
             <Route path="/sprints/kanban-v2" element={<Navigate to="/sprints/kanban" replace />} />
             <Route path="/sprints/stories" element={<StoriesManagement />} />
@@ -487,6 +490,16 @@ function AppContent() {
             <Route path="/planner/weekly/*" element={<LegacyPlannerRedirect level="week" />} />
             <Route path="/weekly-planner" element={<LegacyPlannerRedirect level="week" />} />
             <Route path="/planner/week" element={<LegacyPlannerRedirect level="week" />} />
+            <Route path="/wplanner" element={<LegacyPlannerRedirect level="week" />} />
+            <Route path="/wplanner/week" element={<LegacyPlannerRedirect level="week" />} />
+            <Route path="/wplanner/weekly" element={<LegacyPlannerRedirect level="week" />} />
+            <Route path="/wplanner/calendar" element={<LegacyPlannerRedirect level="calendar" />} />
+            <Route path="/wplanner/capacity" element={<LegacyPlannerRedirect level="calendar" />} />
+            <Route path="/wplanner/sprint" element={<LegacyPlannerRedirect level="sprint" />} />
+            <Route path="/wplanner/quarter" element={<LegacyPlannerRedirect level="quarter" />} />
+            <Route path="/wplanner/year" element={<LegacyPlannerRedirect level="year" />} />
+            <Route path="/wplanner/gantt" element={<LegacyPlannerRedirect level="gantt" />} />
+            <Route path="/planner/sprint-capacity" element={<Navigate to="/sprints/capacity" replace />} />
             <Route path="/ai-coach" element={<AiCoachPage />} />
             <Route path="/fitness" element={<WorkoutsDashboard />} />
             <Route path="/running-results" element={<Navigate to="/fitness" replace />} />
@@ -553,6 +566,7 @@ function AppContent() {
             onDelete={handleGlobalSidebarDelete}
           />
         </SidebarLayout>
+        </BobDataProvider>
       </MigrationManager>
     </ErrorBoundary>
   );

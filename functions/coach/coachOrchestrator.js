@@ -475,7 +475,7 @@ async function _runOrchestratorForUser(uid) {
  * Nightly orchestration — 05:00 Europe/London
  */
 exports.runCoachOrchestratorNightly = schedulerV2.onSchedule(
-  { schedule: '0 5 * * *', timeZone: TZ, region: REGION },
+  { schedule: '0 4 * * *', timeZone: TZ, region: REGION },  // Changed to 4am to allow time for morning briefing integration
   async () => {
     const firestore = db();
     // Process all users with Strava connected or Telegram linked
@@ -509,10 +509,10 @@ exports.logHealthMetric = httpsV2.onCall({ region: REGION }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
 
-  const { date, hrvMs, sleepDurationH, restingHr, sleepScore, weightKg, source } = req.data || {};
+  const { date, hrvMs, sleepDurationH, restingHr, sleepScore, weightKg, bodyFatPct, source } = req.data || {};
   if (!date) throw new httpsV2.HttpsError('invalid-argument', 'date is required (YYYY-MM-DD)');
-  if (hrvMs === undefined && sleepDurationH === undefined && weightKg === undefined) {
-    throw new httpsV2.HttpsError('invalid-argument', 'At least one metric (hrvMs, sleepDurationH, weightKg) required');
+  if (hrvMs === undefined && sleepDurationH === undefined && weightKg === undefined && bodyFatPct === undefined) {
+    throw new httpsV2.HttpsError('invalid-argument', 'At least one metric required');
   }
 
   const docId = `${uid}_${date}`;
@@ -525,21 +525,21 @@ exports.logHealthMetric = httpsV2.onCall({ region: REGION }, async (req) => {
   if (sleepDurationH !== undefined) payload.sleepDurationH = sleepDurationH;
   if (restingHr !== undefined) payload.restingHr = restingHr;
   if (sleepScore !== undefined) payload.sleepScore = sleepScore;
+  if (weightKg !== undefined) payload.weightKg = weightKg;
+  if (bodyFatPct !== undefined) payload.bodyFatPct = bodyFatPct;
 
-  // Also mirror weightKg to profiles for macro engine
+  // Mirror current-value fields to profiles for macro engine
   const writes = [
     db().collection('health_metrics').doc(docId).set(
       { ...payload, createdAt: admin.firestore.FieldValue.serverTimestamp() },
       { merge: true }
     ),
   ];
-  if (weightKg !== undefined) {
-    writes.push(
-      db().collection('profiles').doc(uid).update({
-        healthkitWeightKg: weightKg,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      })
-    );
+  if (weightKg !== undefined || bodyFatPct !== undefined) {
+    const profileUpdate = { updatedAt: admin.firestore.FieldValue.serverTimestamp() };
+    if (weightKg !== undefined) profileUpdate.healthkitWeightKg = weightKg;
+    if (bodyFatPct !== undefined) profileUpdate.healthkitBodyFatPct = bodyFatPct;
+    writes.push(db().collection('profiles').doc(uid).update(profileUpdate));
   }
 
   await Promise.all(writes);
@@ -549,53 +549,58 @@ exports.logHealthMetric = httpsV2.onCall({ region: REGION }, async (req) => {
 /**
  * Callable — return today's coach state (hydrates if absent)
  */
-exports.getCoachToday = httpsV2.onCall({ region: REGION }, async (req) => {
-  const uid = req?.auth?.uid;
-  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+// ===== HYBRID ARCHITECTURE: Coach functions DISABLED (May 2026) =====
+// Moving coach analytics to client-side calculations
+// Keep only logHealthMetric() as write endpoint - saves ~25k calls/month (£2)
 
-  const today = todayStr();
-  const docId = `${uid}_${today}`;
-
-  try {
-    const snap = await db().collection('coach_daily').doc(docId).get();
-
-    let data;
-    if (snap.exists) {
-      data = snap.data();
-    } else {
-      // Only hydrate if user has an umbrella goal — avoids errors for unprovisiond users
-      const profileSnap = await db().collection('profiles').doc(uid).get();
-      if (!profileSnap.data()?.ironmanUmbrellaGoalId) {
-        return { notProvisioned: true };
-      }
-      data = await _runOrchestratorForUser(uid);
-    }
-
-    return {
-      readiness: {
-        score: data.readinessScore,
-        label: data.readinessLabel,
-        hrvToday: data.hrvToday,
-        hrv7dAvg: data.hrv7dAvg,
-        sleepToday: data.sleepToday,
-      },
-      macros: data.macros,
-      todayTraining: {
-        blockId: data.adaptedBlockId,
-        title: (data.briefingText || '').split('\n')[2]?.replace('Today: ', '').replace('.', '') || 'No training scheduled',
-        adapted: data.adaptationAction !== 'none',
-        adaptationAction: data.adaptationAction,
-      },
-      phase: data.phase,
-      weeklyPhotoPrompt: data.weeklyPhotoPromptActive,
-      briefingText: data.briefingText,
-    };
-  } catch (e) {
-    console.error(`[coachOrchestrator] getCoachToday failed uid=${uid}:`, e?.message);
-    await logCoachEvent(uid, 'get_coach_today_error', { error: e?.message });
-    throw new httpsV2.HttpsError('internal', `Coach data unavailable: ${e?.message}`);
-  }
-});
+// Callable — return today's coach state (hydrates if absent) - DISABLED
+// exports.getCoachToday = httpsV2.onCall({ region: REGION }, async (req) => {
+//   const uid = req?.auth?.uid;
+//   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+//
+//   const today = todayStr();
+//   const docId = `${uid}_${today}`;
+//
+//   try {
+//     const snap = await db().collection('coach_daily').doc(docId).get();
+//
+//     let data;
+//     if (snap.exists) {
+//       data = snap.data();
+//     } else {
+//       // Only hydrate if user has an umbrella goal — avoids errors for unprovisiond users
+//       const profileSnap = await db().collection('profiles').doc(uid).get();
+//       if (!profileSnap.data()?.ironmanUmbrellaGoalId) {
+//         return { notProvisioned: true };
+//       }
+//       data = await _runOrchestratorForUser(uid);
+//     }
+//
+//     return {
+//       readiness: {
+//         score: data.readinessScore,
+//         label: data.readinessLabel,
+//         hrvToday: data.hrvToday,
+//         hrv7dAvg: data.hrv7dAvg,
+//         sleepToday: data.sleepToday,
+//       },
+//       macros: data.macros,
+//       todayTraining: {
+//         blockId: data.adaptedBlockId,
+//         title: (data.briefingText || '').split('\n')[2]?.replace('Today: ', '').replace('.', '') || 'No training scheduled',
+//         adapted: data.adaptationAction !== 'none',
+//         adaptationAction: data.adaptationAction,
+//       },
+//       phase: data.phase,
+//       weeklyPhotoPrompt: data.weeklyPhotoPromptActive,
+//       briefingText: data.briefingText,
+//     };
+//   } catch (e) {
+//     console.error(`[coachOrchestrator] getCoachToday failed uid=${uid}:`, e?.message);
+//     await logCoachEvent(uid, 'get_coach_today_error', { error: e?.message });
+//     throw new httpsV2.HttpsError('internal', `Coach data unavailable: ${e?.message}`);
+//   }
+// });
 
 /**
  * Callable — idempotent Ironman goal hierarchy setup
@@ -911,79 +916,82 @@ exports.provisionIronmanGoals = httpsV2.onCall({ region: REGION }, async (req) =
   return { ok: true, alreadyExisted: false, umbrellaGoalId, phaseGoalIds, focusGoalId };
 });
 
+// ===== HYBRID ARCHITECTURE: Body photo analysis DISABLED (May 2026) =====
+// AI vision calls expensive — moving to local Ollama multimodal when available
+
 /**
- * Callable — Vision AI body fat estimation from uploaded photo
+ * Callable — Vision AI body fat estimation from uploaded photo - DISABLED
  * req.data: { storagePath: 'coach-photos/{uid}/{timestamp}.jpg' }
  */
-exports.analyzeBodyPhoto = httpsV2.onCall({ region: REGION }, async (req) => {
-  const uid = req?.auth?.uid;
-  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
-
-  const { storagePath } = req.data || {};
-  if (!storagePath) throw new httpsV2.HttpsError('invalid-argument', 'storagePath required');
-
-  const bucket = admin.storage().bucket();
-  const file = bucket.file(storagePath);
-
-  // Download and encode
-  const [buffer] = await file.download();
-  const base64Data = buffer.toString('base64');
-  const mimeType = storagePath.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
-
-  // Get a signed download URL (1 hour)
-  const [downloadUrl] = await file.getSignedUrl({
-    action: 'read',
-    expires: Date.now() + 365 * 24 * 60 * 60 * 1000, // 1 year
-  });
-
-  const timestamp = Date.now();
-  const photoDocRef = db()
-    .collection('coach_photos')
-    .doc(uid)
-    .collection('photos')
-    .doc(String(timestamp));
-
-  // Write pending state
-  await photoDocRef.set({
-    uid,
-    storagePath,
-    downloadUrl,
-    estimatedBfPct: null,
-    observations: null,
-    analysisStatus: 'pending',
-    analysisError: null,
-    capturedAt: admin.firestore.FieldValue.serverTimestamp(),
-    analyzedAt: null,
-  });
-
-  // Call Claude Haiku vision
-  const systemPrompt =
-    'Analyze this male physique (43y, 170cm, 79kg). ' +
-    'Estimate body fat % based on abdominal definition and vascularity. ' +
-    'Return ONLY valid JSON with no markdown: {"estimated_bf": int, "observations": string}';
-
-  try {
-    const raw = await _callAnthropicVision(base64Data, mimeType, systemPrompt);
-    const parsed = JSON.parse(raw.trim());
-    const estimatedBfPct = parsed.estimated_bf ?? null;
-    const observations = parsed.observations ?? null;
-
-    await photoDocRef.update({
-      estimatedBfPct,
-      observations,
-      analysisStatus: 'complete',
-      analyzedAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-
-    return { ok: true, estimatedBfPct, observations, downloadUrl };
-  } catch (e) {
-    await photoDocRef.update({
-      analysisStatus: 'error',
-      analysisError: e?.message || 'Unknown error',
-    });
-    throw new httpsV2.HttpsError('internal', `Vision analysis failed: ${e?.message}`);
-  }
-});
+// exports.analyzeBodyPhoto = httpsV2.onCall({ region: REGION }, async (req) => {
+//   const uid = req?.auth?.uid;
+//   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+//
+//   const { storagePath } = req.data || {};
+//   if (!storagePath) throw new httpsV2.HttpsError('invalid-argument', 'storagePath required');
+//
+//   const bucket = admin.storage().bucket();
+//   const file = bucket.file(storagePath);
+//
+//   // Download and encode
+//   const [buffer] = await file.download();
+//   const base64Data = buffer.toString('base64');
+//   const mimeType = storagePath.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
+//
+//   // Get a signed download URL (1 hour)
+//   const [downloadUrl] = await file.getSignedUrl({
+//     action: 'read',
+//     expires: Date.now() + 365 * 24 * 60 * 60 * 1000, // 1 year
+//   });
+//
+//   const timestamp = Date.now();
+//   const photoDocRef = db()
+//     .collection('coach_photos')
+//     .doc(uid)
+//     .collection('photos')
+//     .doc(String(timestamp));
+//
+//   // Write pending state
+//   await photoDocRef.set({
+//     uid,
+//     storagePath,
+//     downloadUrl,
+//     estimatedBfPct: null,
+//     observations: null,
+//     analysisStatus: 'pending',
+//     analysisError: null,
+//     capturedAt: admin.firestore.FieldValue.serverTimestamp(),
+//     analyzedAt: null,
+//   });
+//
+//   // Call Claude Haiku vision
+//   const systemPrompt =
+//     'Analyze this male physique (43y, 170cm, 79kg). ' +
+//     'Estimate body fat % based on abdominal definition and vascularity. ' +
+//     'Return ONLY valid JSON with no markdown: {"estimated_bf": int, "observations": string}';
+//
+//   try {
+//     const raw = await _callAnthropicVision(base64Data, mimeType, systemPrompt);
+//     const parsed = JSON.parse(raw.trim());
+//     const estimatedBfPct = parsed.estimated_bf ?? null;
+//     const observations = parsed.observations ?? null;
+//
+//     await photoDocRef.update({
+//       estimatedBfPct,
+//       observations,
+//       analysisStatus: 'complete',
+//       analyzedAt: admin.firestore.FieldValue.serverTimestamp(),
+//     });
+//
+//     return { ok: true, estimatedBfPct, observations, downloadUrl };
+//   } catch (e) {
+//     await photoDocRef.update({
+//       analysisStatus: 'error',
+//       analysisError: e?.message || 'Unknown error',
+//     });
+//     throw new httpsV2.HttpsError('internal', `Vision analysis failed: ${e?.message}`);
+//   }
+// });
 
 /**
  * Macro nudge — 12:00 and 18:00 Europe/London
@@ -1023,15 +1031,16 @@ async function _sendMacroNudges() {
   }
 }
 
-exports.sendCoachNudgesNoon = schedulerV2.onSchedule(
-  { schedule: '0 12 * * *', timeZone: TZ, region: REGION },
-  _sendMacroNudges
-);
-
-exports.sendCoachNudgesEvening = schedulerV2.onSchedule(
-  { schedule: '0 18 * * *', timeZone: TZ, region: REGION },
-  _sendMacroNudges
-);
+// DISABLED - Unnecessary Telegram noise (May 2026 Firebase optimisation)
+// exports.sendCoachNudgesNoon = schedulerV2.onSchedule(
+//   { schedule: '0 12 * * *', timeZone: TZ, region: REGION },
+//   _sendMacroNudges
+// );
+// 
+// exports.sendCoachNudgesEvening = schedulerV2.onSchedule(
+//   { schedule: '0 18 * * *', timeZone: TZ, region: REGION },
+//   _sendMacroNudges
+// );
 
 // Export internal helper for use by briefing module
 exports._runOrchestratorForUser = _runOrchestratorForUser;

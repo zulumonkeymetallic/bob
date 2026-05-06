@@ -24,6 +24,7 @@ import DrivePickerButton from './shared/DrivePickerButton';
 import { resolveLeafGoalSelection } from '../utils/goalHierarchy';
 import { buildGoalTimelineImpactPlan } from './visualization/goalTimelineImpact';
 import { applyGoalTimelineChanges } from '../utils/goalTimelineChanges';
+import { KPIDesignerForm } from './KPIDesigner';
 
 interface EditGoalModalProps {
   goal: Goal | null;
@@ -90,11 +91,13 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
     linkedPotId: '',
     tags: [] as string[],
     autoCreatePot: false,
+    showInDashboardBanner: false,
     persona: (currentPersona || 'personal') as 'personal' | 'work',
     isPublished: false,
     shareCode: '',
   });
   const [durationDays, setDurationDays] = useState<number | ''>('');
+  const [kpiTab, setKpiTab] = useState<'simple' | 'advanced'>('simple');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [submitResult, setSubmitResult] = useState<string | null>(null);
@@ -484,6 +487,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
           linkedPotId: (goal as any).linkedPotId || (goal as any).potId || '',
           tags: (goal as any).tags || [],
           autoCreatePot: !!(goal as any).autoCreatePot,
+          showInDashboardBanner: !!(goal as any).showInDashboardBanner,
           persona: ((goal as any).persona || currentPersona || 'personal') as 'personal' | 'work',
           isPublished: !!(goal as any).isPublished,
           shareCode: (goal as any).shareCode || '',
@@ -521,6 +525,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
           linkedPotId: '',
           tags: [],
           autoCreatePot: false,
+          showInDashboardBanner: false,
           persona: (currentPersona || 'personal') as 'personal' | 'work',
           isPublished: false,
           shareCode: '',
@@ -671,6 +676,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         updatedAt: serverTimestamp(),
         tags: formData.tags,
         autoCreatePot: formData.autoCreatePot,
+        showInDashboardBanner: !!formData.showInDashboardBanner,
         persona: formData.persona || currentPersona || 'personal',
         costType: normalizedCostType || null,
         recurrence: normalizedRecurrence || null,
@@ -1178,6 +1184,20 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
                     </Form.Select>
                   </Form.Group>
                 </div>
+                <div className="col-md-6 d-flex align-items-end">
+                  <Form.Group className="mb-3 w-100">
+                    <Form.Check
+                      type="switch"
+                      id="edit-goal-show-in-dashboard-banner"
+                      label="Include in dashboard goal banner rotation"
+                      checked={!!formData.showInDashboardBanner}
+                      onChange={(e) => setFormData({ ...formData, showInDashboardBanner: e.target.checked })}
+                    />
+                    <Form.Text className="text-muted">
+                      Rotates this goal into the daily dashboard focus banner.
+                    </Form.Text>
+                  </Form.Group>
+                </div>
               </div>
 
               <div className="row">
@@ -1334,57 +1354,80 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
               {/* KPIs Section */}
               <Form.Group className="mb-3">
                 <div className="d-flex justify-content-between align-items-center mb-2">
-                  <Form.Label>Key Performance Indicators (KPIs)</Form.Label>
-                  <Button
-                    variant="outline-primary"
-                    size="sm"
-                    onClick={addKPI}
-                  >
-                    + Add KPI
-                  </Button>
-                </div>
-                {formData.kpis.map((kpi, index) => (
-                  <div key={index} className="border rounded p-3 mb-2">
-                    <div className="row">
-                      <div className="col-md-4">
-                        <Form.Control
-                          type="text"
-                          placeholder="KPI Name (e.g., Weight Lost)"
-                          value={kpi.name}
-                          onChange={(e) => updateKPI(index, 'name', e.target.value)}
-                        />
-                      </div>
-                      <div className="col-md-3">
-                        <Form.Control
-                          type="number"
-                          placeholder="Target"
-                          value={kpi.target}
-                          onChange={(e) => updateKPI(index, 'target', parseFloat(e.target.value))}
-                        />
-                      </div>
-                      <div className="col-md-3">
-                        <Form.Control
-                          type="text"
-                          placeholder="Unit (e.g., lbs, books)"
-                          value={kpi.unit}
-                          onChange={(e) => updateKPI(index, 'unit', e.target.value)}
-                        />
-                      </div>
-                      <div className="col-md-2">
-                        <Button
-                          variant="outline-danger"
-                          size="sm"
-                          onClick={() => removeKPI(index)}
-                        >
-                          Remove
-                        </Button>
-                      </div>
-                    </div>
+                  <Form.Label className="mb-0">Key Performance Indicators</Form.Label>
+                  <div className="btn-group btn-group-sm">
+                    <Button
+                      variant={kpiTab === 'simple' ? 'primary' : 'outline-secondary'}
+                      onClick={() => setKpiTab('simple')}
+                    >
+                      Simple
+                    </Button>
+                    <Button
+                      variant={kpiTab === 'advanced' ? 'primary' : 'outline-secondary'}
+                      onClick={() => { setKpiTab('advanced'); void handleAdvancedTabOpen(); }}
+                    >
+                      Advanced
+                    </Button>
                   </div>
-                ))}
-                <Form.Text className="text-muted">
-                  Add measurable metrics to track progress toward this goal
-                </Form.Text>
+                </div>
+
+                {kpiTab === 'simple' && (
+                  <>
+                    <div className="d-flex justify-content-end mb-2">
+                      <Button variant="outline-primary" size="sm" onClick={addKPI}>+ Add KPI</Button>
+                    </div>
+                    {formData.kpis.map((kpi, index) => (
+                      <div key={index} className="border rounded p-3 mb-2">
+                        <div className="row">
+                          <div className="col-md-4">
+                            <Form.Control
+                              type="text"
+                              placeholder="KPI Name (e.g., Weight Lost)"
+                              value={kpi.name}
+                              onChange={(e) => updateKPI(index, 'name', e.target.value)}
+                            />
+                          </div>
+                          <div className="col-md-3">
+                            <Form.Control
+                              type="number"
+                              placeholder="Target"
+                              value={kpi.target}
+                              onChange={(e) => updateKPI(index, 'target', parseFloat(e.target.value))}
+                            />
+                          </div>
+                          <div className="col-md-3">
+                            <Form.Control
+                              type="text"
+                              placeholder="Unit (e.g., lbs, books)"
+                              value={kpi.unit}
+                              onChange={(e) => updateKPI(index, 'unit', e.target.value)}
+                            />
+                          </div>
+                          <div className="col-md-2">
+                            <Button
+                              variant="outline-danger"
+                              size="sm"
+                              onClick={() => removeKPI(index)}
+                            >
+                              Remove
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                    <Form.Text className="text-muted">
+                      Add measurable metrics to track progress toward this goal
+                    </Form.Text>
+                  </>
+                )}
+
+                {kpiTab === 'advanced' && goal && (
+                  <KPIDesignerForm
+                    goals={[goal, ...(allGoals || []).filter(g => g.id !== goal.id)]}
+                    ownerUid={currentUserId}
+                    initialGoalId={goal.id}
+                  />
+                )}
               </Form.Group>
 
               {/* Publish & Share Section */}

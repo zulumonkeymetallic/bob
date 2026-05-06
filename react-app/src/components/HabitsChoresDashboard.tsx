@@ -321,7 +321,42 @@ const HabitsChoresDashboard: React.FC = () => {
           <Card.Body className="text-muted">No routines or habits found for this persona.</Card.Body>
         </Card>
       ) : (
-        grouped.map((group) => {
+        <>
+          {/* Compact RAG summary — one box per habit, 7-day adherence */}
+          <Card className="mb-3">
+            <Card.Header className="py-2 fw-semibold" style={{ fontSize: 13 }}>At a glance — 7-day adherence</Card.Header>
+            <Card.Body className="py-2 px-3">
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {grouped.flatMap(g => g.tasks).map(task => {
+                  const stats = taskStats[task.id];
+                  const recent = stats?.expectedSlots?.slice(-7) ?? [];
+                  const done = recent.filter(s => s.done).length;
+                  const pct = recent.length ? Math.round((done / recent.length) * 100) : null;
+                  const bg = pct === null ? '#6b7280' : pct >= 75 ? '#22c55e' : pct >= 40 ? '#f59e0b' : '#ef4444';
+                  return (
+                    <div key={task.id} style={{ width: 78, textAlign: 'center', cursor: 'pointer' }} onClick={() => setEditingTask(task)}>
+                      <div style={{ background: bg, borderRadius: 6, padding: '6px 4px', marginBottom: 4 }}>
+                        <div style={{ fontSize: 17, fontWeight: 700, color: '#fff', lineHeight: 1 }}>
+                          {pct !== null ? `${pct}%` : '—'}
+                        </div>
+                        <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.8)', marginTop: 2 }}>
+                          {recent.length ? `${done}/${recent.length} days` : 'no data'}
+                        </div>
+                      </div>
+                      <div style={{ fontSize: 11, lineHeight: 1.3, color: 'var(--bs-body-color)', overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', textOverflow: 'ellipsis' }}>
+                        {task.title}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="text-muted mt-2" style={{ fontSize: 11 }}>
+                Green ≥ 75% &nbsp;·&nbsp; Amber 40–74% &nbsp;·&nbsp; Red &lt; 40% &nbsp;·&nbsp; Click to open
+              </div>
+            </Card.Body>
+          </Card>
+
+          {grouped.map((group) => {
           const goalTitle = group.goal?.title || (group.goalId === 'unlinked' ? 'Unlinked' : 'Goal');
           return (
             <Card key={group.goalId} className="mb-3">
@@ -420,7 +455,8 @@ const HabitsChoresDashboard: React.FC = () => {
               </Card.Body>
             </Card>
           );
-        })
+        })}
+        </>
       )}
 
       <EditTaskModal

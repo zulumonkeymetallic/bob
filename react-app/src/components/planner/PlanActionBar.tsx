@@ -48,6 +48,7 @@ const PlanActionBar: React.FC<PlanActionBarProps> = ({ className }) => {
     () => (currentPlannerLevel ? PLAN_LEVELS.find((entry) => entry.level === currentPlannerLevel) || null : null),
     [currentPlannerLevel],
   );
+  const isWeeklyCapacityActive = location.pathname.startsWith('/planner/weekly-capacity');
 
   const buttonVariant = (target: 'dashboard' | 'planner' | 'kanban') => {
     if (target === 'dashboard') return location.pathname.startsWith('/dashboard') ? 'primary' : 'outline-secondary';
@@ -106,6 +107,14 @@ const PlanActionBar: React.FC<PlanActionBarProps> = ({ className }) => {
               {entry.label}
             </Dropdown.Item>
           ))}
+          <Dropdown.Divider />
+          <Dropdown.Item
+            active={isWeeklyCapacityActive}
+            onClick={() => navigate('/planner/weekly-capacity')}
+          >
+            <Calendar size={14} className="me-1" />
+            Weekly Capacity
+          </Dropdown.Item>
         </Dropdown.Menu>
       </Dropdown>
     </div>
