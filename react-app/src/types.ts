@@ -159,6 +159,10 @@ export interface Story {
   aiDelegationNote?: string;
   aiDelegatedAt?: number;
   aiDelegationDocumentLink?: string;
+  aiDelegationFeedback?: string;
+  aiDelegationRevision?: number;
+  aiDelegationPreviousDocumentLink?: string;
+  aiDelegationExecutionSummary?: string;
 }
 
 export interface JournalMindsetAnalysis {
@@ -364,6 +368,10 @@ export interface Task {
   aiDelegationNote?: string;
   aiDelegatedAt?: number;
   aiDelegationDocumentLink?: string;
+  aiDelegationFeedback?: string;
+  aiDelegationRevision?: number;
+  aiDelegationPreviousDocumentLink?: string;
+  aiDelegationExecutionSummary?: string;
 }
 
 export interface Column {

@@ -94,6 +94,9 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
     const [showDeferModal, setShowDeferModal] = useState(false);
     const [showCalendarComposer, setShowCalendarComposer] = useState(false);
     const [calendarComposerInitialValues, setCalendarComposerInitialValues] = useState<Partial<BlockFormState>>({});
+    const [showRejectModal, setShowRejectModal] = useState(false);
+    const [rejectFeedback, setRejectFeedback] = useState('');
+    const [rejectSubmitting, setRejectSubmitting] = useState(false);
 
     useEffect(() => {
         const el = ref.current;
@@ -201,6 +204,9 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
         : propDelegationStatus;
     const aiDelegationDocumentLink = (item as any).aiDelegationDocumentLink as string | undefined;
     const aiDelegationNote = (item as any).aiDelegationNote as string | undefined;
+    const aiDelegationPreviousDocumentLink = (item as any).aiDelegationPreviousDocumentLink as string | undefined;
+    const aiDelegationRevisionRaw = Number((item as any).aiDelegationRevision);
+    const aiDelegationRevision = Number.isFinite(aiDelegationRevisionRaw) ? aiDelegationRevisionRaw : 1;
     const delegationColor = flaggedToAi
         ? aiDelegationStatus === 'review'      ? '#28a745'
         : aiDelegationStatus === 'in_progress' ? '#17a2b8'
@@ -692,6 +698,68 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
         }
     };
 
+    const openRejectModal = (event: React.MouseEvent) => {
+        event.stopPropagation();
+        setRejectFeedback((item as any).aiDelegationFeedback || '');
+        setShowRejectModal(true);
+    };
+
+    const handleRejectAndRequeue = async () => {
+        const feedback = rejectFeedback.trim();
+        if (!feedback || !currentUser) return;
+
+        const collectionName = type === 'story' ? 'stories' : 'tasks';
+        const docRef = doc(db, collectionName, item.id);
+        const nextRevision = Math.max(1, aiDelegationRevision) + 1;
+        const previousLink = aiDelegationDocumentLink || aiDelegationPreviousDocumentLink || null;
+
+        setRejectSubmitting(true);
+        setPendingFlagged(true);
+
+        try {
+            await updateDoc(docRef, {
+                flaggedToAi: true,
+                aiDelegationStatus: 'queued',
+                aiDelegationFeedback: feedback,
+                aiDelegationRevision: nextRevision,
+                aiDelegationPreviousDocumentLink: previousLink,
+                aiDelegationDocumentLink: null,
+                aiDelegationNote: 'Rejected in review and auto-requeued for regeneration.',
+                aiDelegatedAt: Date.now(),
+                updatedAt: serverTimestamp(),
+            });
+
+            await ActivityStreamService.addActivity({
+                entityId: item.id,
+                entityType: type,
+                activityType: 'automation_activity',
+                userId: currentUser.uid,
+                userEmail: currentUser.email || undefined,
+                description: `Hermes output rejected and auto-requeued (v${nextRevision})`,
+                persona: (item as any).persona || 'personal',
+                referenceNumber: (item as any).ref,
+                source: 'human',
+                metadata: {
+                    delegationAction: 'reject_requeue',
+                    aiDelegationRevision: nextRevision,
+                    aiDelegationFeedback: feedback,
+                    previousDocumentLink: previousLink,
+                },
+            } as any);
+
+            setActionMessage('Rejected and re-queued for regeneration');
+            setShowRejectModal(false);
+            setRejectFeedback('');
+        } catch (error) {
+            console.warn('[KanbanCardV2] reject/requeue failed', error);
+            setPendingFlagged(null);
+            setActionMessage('Reject and re-queue failed');
+        } finally {
+            setRejectSubmitting(false);
+            setTimeout(() => setActionMessage(null), 2600);
+        }
+    };
+
     const handlePriorityPromptReplanNow = async () => {
         setPriorityReplanLoading(true);
         try {
@@ -821,7 +889,7 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                             }}
                             title={
                                 aiDelegationStatus === 'in_progress' ? 'Hermes is executing this'
-                                : aiDelegationStatus === 'review' ? `Hermes complete — awaiting review${aiDelegationNote ? ': ' + aiDelegationNote : ''}`
+                                : aiDelegationStatus === 'review' ? `Hermes complete — awaiting review (use review chip to reject/requeue)${aiDelegationNote ? ': ' + aiDelegationNote : ''}`
                                 : aiDelegationStatus === 'failed' ? 'Hermes failed — click to re-queue'
                                 : flaggedToAi ? 'Queued for Hermes — click to cancel'
                                 : 'Delegate to Hermes AI'
@@ -1119,7 +1187,7 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                             {aiScoreRounded}
                         </span>
                     ) : null}
-                    {flaggedToAi && aiDelegationStatus && (
+                    {flaggedToAi && aiDelegationStatus && aiDelegationStatus !== 'review' && (
                         <span
                             className="kanban-card__meta-badge"
                             title={aiDelegationNote || `Hermes: ${aiDelegationStatus}`}
@@ -1136,6 +1204,27 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                             : aiDelegationStatus === 'failed' ? 'failed'
                             : 'queued'}
                         </span>
+                    )}
+                    {flaggedToAi && aiDelegationStatus === 'review' && (
+                        <button
+                            type="button"
+                            className="kanban-card__meta-badge"
+                            title="Review ready — click to reject and re-queue with feedback"
+                            style={{
+                                color: delegationColor,
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 3,
+                                border: 'none',
+                                background: 'transparent',
+                                cursor: 'pointer',
+                            }}
+                            onClick={openRejectModal}
+                            onPointerDown={(e) => e.stopPropagation()}
+                        >
+                            <Bot size={10} />
+                            review
+                        </button>
                     )}
                     {aiDelegationDocumentLink && (
                         <a
@@ -1264,6 +1353,53 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                 setShowCalendarComposer(false);
             }}
         />
+        <Modal
+            show={showRejectModal}
+            onHide={() => {
+                if (!rejectSubmitting) setShowRejectModal(false);
+            }}
+            centered
+        >
+            <Modal.Header closeButton={!rejectSubmitting}>
+                <Modal.Title style={{ fontSize: 16 }}>Reject Hermes Output</Modal.Title>
+            </Modal.Header>
+            <Modal.Body>
+                <p className="mb-2">
+                    Rejecting this review will immediately re-queue it for regeneration.
+                </p>
+                <label htmlFor={`reject-feedback-${item.id}`} className="form-label mb-1">
+                    Feedback (required)
+                </label>
+                <textarea
+                    id={`reject-feedback-${item.id}`}
+                    className="form-control"
+                    rows={4}
+                    value={rejectFeedback}
+                    onChange={(e) => setRejectFeedback(e.target.value)}
+                    placeholder="Tell Hermes exactly what to fix for the next version."
+                    onClick={(e) => e.stopPropagation()}
+                />
+            </Modal.Body>
+            <Modal.Footer>
+                <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => setShowRejectModal(false)}
+                    disabled={rejectSubmitting}
+                >
+                    Cancel
+                </Button>
+                <Button
+                    variant="danger"
+                    size="sm"
+                    onClick={handleRejectAndRequeue}
+                    disabled={rejectSubmitting || !rejectFeedback.trim()}
+                >
+                    {rejectSubmitting ? <Spinner animation="border" size="sm" className="me-1" /> : null}
+                    Reject &amp; Requeue
+                </Button>
+            </Modal.Footer>
+        </Modal>
         </>
     );
 };

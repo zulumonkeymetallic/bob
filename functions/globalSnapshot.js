@@ -62,6 +62,9 @@ function normalizeGoal(goalDoc) {
 
 function normalizeStory(storyDoc) {
   const data = storyDoc.data() || {};
+  const executionSummary = typeof data.aiDelegationExecutionSummary === 'string'
+    ? data.aiDelegationExecutionSummary.slice(0, 600)
+    : null;
   return {
     id: storyDoc.id,
     ref: data.ref || data.referenceNumber || null,
@@ -88,6 +91,12 @@ function normalizeStory(storyDoc) {
     aiDelegationNote: data.aiDelegationNote || null,
     aiDelegatedAt: toMillis(data.aiDelegatedAt),
     aiDelegationDocumentLink: data.aiDelegationDocumentLink || null,
+    aiDelegationFeedback: data.aiDelegationFeedback || null,
+    aiDelegationRevision: Number.isFinite(Number(data.aiDelegationRevision))
+      ? Number(data.aiDelegationRevision)
+      : null,
+    aiDelegationPreviousDocumentLink: data.aiDelegationPreviousDocumentLink || null,
+    aiDelegationExecutionSummary: executionSummary,
     // Include full acceptance criteria only for delegated items (avoids snapshot bloat)
     ...(data.flaggedToAi === true
       ? {
@@ -101,6 +110,9 @@ function normalizeStory(storyDoc) {
 function normalizeTask(taskDoc) {
   const data = taskDoc.data() || {};
   const linkedStoryId = data.storyId || (data.parentType === 'story' ? data.parentId : null) || null;
+  const executionSummary = typeof data.aiDelegationExecutionSummary === 'string'
+    ? data.aiDelegationExecutionSummary.slice(0, 600)
+    : null;
   return {
     id: taskDoc.id,
     ref: data.ref || data.reference || null,
@@ -132,6 +144,12 @@ function normalizeTask(taskDoc) {
     aiDelegationNote: data.aiDelegationNote || null,
     aiDelegatedAt: toMillis(data.aiDelegatedAt),
     aiDelegationDocumentLink: data.aiDelegationDocumentLink || null,
+    aiDelegationFeedback: data.aiDelegationFeedback || null,
+    aiDelegationRevision: Number.isFinite(Number(data.aiDelegationRevision))
+      ? Number(data.aiDelegationRevision)
+      : null,
+    aiDelegationPreviousDocumentLink: data.aiDelegationPreviousDocumentLink || null,
+    aiDelegationExecutionSummary: executionSummary,
     // Include description for delegated tasks so Hermes has full context
     ...(data.flaggedToAi === true ? { description: data.description || null } : {}),
   };
