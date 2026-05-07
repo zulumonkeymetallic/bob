@@ -6,6 +6,7 @@ const { defineSecret } = require('firebase-functions/params');
 const { DateTime, Interval } = require('luxon');
 
 const { ensureFirestore, resolveTimezone } = require('./lib/reporting');
+const { makeRefCandidate } = require('./lib/refGenerator');
 const { clampTaskPoints } = require('./utils/taskPoints');
 const { buildAbsoluteUrl, buildEntityUrl } = require('./utils/urlHelpers');
 const { coerceZone, toDateTime, toMillis } = require('./lib/time');
@@ -1964,7 +1965,7 @@ async function materializePlannerThemeBlocks({
       conflictStatus: overlapsExisting ? 'overlap_with_existing' : null,
       status: 'planned',
       aiGenerated: true,
-      syncToGoogle: false,
+      syncToGoogle: kind !== 'work_shift',
       rationale: `Weekly theme plan: ${themeLabel}`,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -2570,13 +2571,16 @@ async function runAutoPointingJob() {
   }
 }
 
-exports.runAutoPointing = onSchedule({
-  schedule: '0 1 * * *',
-  timeZone: 'Europe/London',
-  secrets: [GOOGLE_AI_STUDIO_API_KEY],
-  memory: '512MiB',
-  region: 'europe-west2',
-}, runAutoPointingJob);
+// ===== HYBRID ARCHITECTURE: Individual nightly schedulers DISABLED (May 2026) =====
+// Replaced by single orchestrator at 4am — reduces 4→1 scheduled chain, saves ~3k calls/month
+
+// exports.runAutoPointing = onSchedule({
+//   schedule: '0 1 * * *',
+//   timeZone: 'Europe/London',
+//   secrets: [GOOGLE_AI_STUDIO_API_KEY],
+//   memory: '512MiB',
+//   region: 'europe-west2',
+// }, runAutoPointingJob);
 
 // ===== 02:00 Bi-directional conversion
 async function runAutoConversionsJob() {
@@ -2607,7 +2611,7 @@ async function runAutoConversionsJob() {
       const task = doc.data() || {};
       if (!shouldForceStory(task)) continue;
       const storyRef = db.collection('stories').doc();
-      const storyRefValue = task.ref ? `ST-${String(task.ref).replace(/^TK-?/i, '')}` : storyRef.id.slice(-8).toUpperCase();
+      const storyRefValue = makeRefCandidate('story');
       await storyRef.set({
         ref: storyRefValue,
         title: task.title || 'Story created from task',
@@ -2653,7 +2657,7 @@ async function runAutoConversionsJob() {
       const task = doc.data() || {};
       if (task.convertedToStoryId) continue;
       const storyRef = db.collection('stories').doc();
-      const storyRefValue = task.ref ? `ST-${String(task.ref).replace(/^TK-?/i, '')}` : storyRef.id.slice(-8).toUpperCase();
+      const storyRefValue = makeRefCandidate('story');
       await storyRef.set({
         ref: storyRefValue,
         title: task.title || 'Story created from task',
@@ -2698,7 +2702,7 @@ async function runAutoConversionsJob() {
       const story = doc.data() || {};
       if (story.convertedToTaskId) continue;
       const taskRef = db.collection('tasks').doc();
-      const taskRefValue = story.ref ? `TK-${String(story.ref).replace(/^ST-?/i, '')}` : taskRef.id.slice(-8).toUpperCase();
+      const taskRefValue = makeRefCandidate('task');
       await taskRef.set({
         ref: taskRefValue,
         title: story.title || 'Task created from story',
@@ -2733,13 +2737,15 @@ async function runAutoConversionsJob() {
   }
 }
 
-exports.runAutoConversions = onSchedule({
-  schedule: '0 2 * * *',
-  timeZone: 'Europe/London',
-  secrets: [GOOGLE_AI_STUDIO_API_KEY],
-  memory: '512MiB',
-  region: 'europe-west2',
-}, runAutoConversionsJob);
+// ===== HYBRID ARCHITECTURE: Disabled, replaced by unified nightly orchestrator at 4am
+
+// exports.runAutoConversions = onSchedule({
+//   schedule: '0 2 * * *',
+//   timeZone: 'Europe/London',
+//   secrets: [GOOGLE_AI_STUDIO_API_KEY],
+//   memory: '512MiB',
+//   region: 'europe-west2',
+// }, runAutoConversionsJob);
 
 // ===== 03:00 Prioritisation (0-100) + To-do promotion
 async function runPriorityScoringJob() {
@@ -3427,13 +3433,15 @@ async function runPriorityScoringJob() {
   }
 }
 
-exports.runPriorityScoring = onSchedule({
-  schedule: '0 3 * * *',
-  timeZone: 'Europe/London',
-  secrets: [GOOGLE_AI_STUDIO_API_KEY],
-  memory: '512MiB',
-  region: 'europe-west2',
-}, runPriorityScoringJob);
+// ===== HYBRID ARCHITECTURE: Disabled, replaced by unified nightly orchestrator at 4am
+
+// exports.runPriorityScoring = onSchedule({
+//   schedule: '0 3 * * *',
+//   timeZone: 'Europe/London',
+//   secrets: [GOOGLE_AI_STUDIO_API_KEY],
+//   memory: '512MiB',
+//   region: 'europe-west2',
+// }, runPriorityScoringJob);
 
 // ===== 05:30 Calendar insertion respecting theme windows and busy time
 async function runCalendarPlannerJob() {
@@ -3698,9 +3706,9 @@ async function runCalendarPlannerJob() {
                             block.sourceType === 'work_shift_allocation';
       const key = block.storyId ? `story:${block.storyId}` : block.taskId ? `task:${block.taskId}` : null;
       
-      // Only delete AI-generated task/story blocks that are no longer in top set
-      // Always preserve user-defined planner blocks
-      if (isAi && !isPlannerBlock && key && !candidateIds.has(key)) {
+      // Only delete AI-generated task/story blocks that are no longer in top set.
+      // Always preserve user-defined planner blocks and P1-pinned blocks.
+      if (isAi && !isPlannerBlock && key && !candidateIds.has(key) && !block.userPriorityPinned) {
         await db.collection('calendar_blocks').doc(block.id).delete().catch(() => { });
       } else {
         remainingBlocks.push(block);
@@ -3752,14 +3760,45 @@ async function runCalendarPlannerJob() {
   }
 }
 
-exports.runCalendarPlanner = onSchedule({
-  schedule: '30 5 * * *',
+// ===== HYBRID ARCHITECTURE: Disabled, replaced by unified nightly orchestrator at 4am
+
+// exports.runCalendarPlanner = onSchedule({
+//   schedule: '30 5 * * *',
+//   timeZone: 'Europe/London',
+//   secrets: [GOOGLE_AI_STUDIO_API_KEY],
+//   memory: '1GiB',
+//   timeoutSeconds: 540,
+//   region: 'europe-west2',
+// }, runCalendarPlannerJob);
+
+// ===== UNIFIED NIGHTLY ORCHESTRATOR: Runs all nightly jobs as single chain =====
+// Consolidates 4 schedulers into 1 — saves ~3k invocations/month (£2-3)
+exports.unifiedNightlyOrchestrator = onSchedule({
+  schedule: '0 4 * * *',  // Changed from scattered 1/2/3/5am → consolidated at 4am
   timeZone: 'Europe/London',
-  secrets: [GOOGLE_AI_STUDIO_API_KEY],
   memory: '1GiB',
-  timeoutSeconds: 540,
+  timeoutSeconds: 600,
+  secrets: [GOOGLE_AI_STUDIO_API_KEY, BOB_CLI_ACCESS],
   region: 'europe-west2',
-}, runCalendarPlannerJob);
+}, async () => {
+  console.log('[unifiedNightlyOrchestrator] Starting consolidated nightly chain...');
+  
+  try {
+    // Call existing runNightlyChainNow which orchestrates sub-jobs
+    const result = await exports.runNightlyChainNow({ 
+      rawRequest: { 
+        get: () => null, 
+        query: {} 
+      } 
+    });
+    
+    console.log('[unifiedNightlyOrchestrator] Complete:', JSON.stringify(result.results?.map(r => `${r.step}:${r.status}`)));
+    return result;
+  } catch (error) {
+    console.error('[unifiedNightlyOrchestrator] Failed:', error);
+    throw error;
+  }
+});
 
 async function recomputeTop3ForUser(db, userId) {
   for (const persona of ['personal', 'work']) {

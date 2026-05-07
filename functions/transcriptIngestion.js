@@ -1231,10 +1231,16 @@ function buildStableDocId(kind, uid, fingerprint, index = null) {
 }
 
 function buildStableRef(kind, docId) {
-  const short = String(docId || '').slice(-6).toUpperCase().replace(/[^A-Z0-9]/g, 'X').padStart(6, '0');
-  if (kind === 'story') return `ST-${short}`;
-  if (kind === 'task') return `TK-${short}`;
-  return `JR-${short}`;
+  // Deterministic 5-digit numeric ref derived from docId hash.
+  let hash = 0;
+  const s = String(docId || '');
+  for (let i = 0; i < s.length; i++) {
+    hash = Math.imul(31, hash) + s.charCodeAt(i) | 0;
+  }
+  const numericId = 10000 + (Math.abs(hash) % 90000);
+  const prefixMap = { story: 'ST', task: 'TK' };
+  const prefix = prefixMap[kind] || 'JR';
+  return `${prefix}-${numericId}`;
 }
 
 function extractUrls(text, explicitUrl = null) {

@@ -797,12 +797,10 @@ async function upsertChoreBlocksForTask(db, task, lookaheadDays = 14) {
   return { created: 0, updated: 0, disabled: true };
 }
 
+const { generateRef: _generateRef, makeRefCandidate } = require('./lib/refGenerator');
+
 function makeRef(type) {
-  const prefixMap = { story: 'ST', task: 'TK', goal: 'GR', sprint: 'SP' };
-  const prefix = prefixMap[type] || 'ID';
-  const timestampPart = Date.now().toString(36).toUpperCase().slice(-4);
-  const randomPart = Math.random().toString(36).toUpperCase().slice(2, 6);
-  return `${prefix}-${timestampPart}${randomPart}`;
+  return makeRefCandidate(type);
 }
 
 // --- Redaction helper for safe audit metadata
@@ -822,16 +820,7 @@ function redact(obj) {
 }
 
 async function generateStoryRef(db, ownerUid) {
-  for (let attempt = 0; attempt < 10; attempt++) {
-    const candidate = makeRef('story');
-    const snap = await db.collection('stories')
-      .where('ownerUid', '==', ownerUid)
-      .where('ref', '==', candidate)
-      .limit(1)
-      .get();
-    if (snap.empty) return candidate;
-  }
-  return `ST-${Date.now().toString(36).toUpperCase()}`;
+  return _generateRef(db, 'story', ownerUid);
 }
 
 // ===== Deterministic Scheduler (Issue #152 - Phase 1)
