@@ -66,7 +66,7 @@ const SprintKanbanPageV2: React.FC = () => {
     const activeFocusGoalIds = useMemo(() => getActiveFocusLeafGoalIds(activeFocusGoals), [activeFocusGoals]);
 
     useEffect(() => {
-        setDetailLevel('minimal');
+        setDetailLevel('full');
     }, [setDetailLevel]);
 
     const resolveTimestampMs = (value: any): number | null => {
