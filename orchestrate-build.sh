@@ -34,7 +34,7 @@ NC='\033[0m'
 # Configuration
 BOB_ROOT="/Users/jim/GitHub/bob"
 BOB_IOS_ROOT="/Users/jim/GitHub/bob-ios"
-BOB_MAC_SYNC_ROOT="/Users/jim/GitHub/bob-mac-sync"
+BOB_MAC_SYNC_ROOT="/Users/jim/git/bob-mac-sync"
 BUILD_LOGS_DIR="/Users/jim/GitHub/bob/build-logs"
 BUILD_MANIFEST_FILE="${BUILD_LOGS_DIR}/manifest.json"
 
