@@ -698,10 +698,19 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
         }
     };
 
-    const openRejectModal = (event: React.MouseEvent) => {
-        event.stopPropagation();
+    const openRejectModal = () => {
         setRejectFeedback((item as any).aiDelegationFeedback || '');
         setShowRejectModal(true);
+    };
+
+    const handleReviewActionChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
+        event.stopPropagation();
+        const action = event.target.value;
+        if (action === 'reject_requeue') {
+            openRejectModal();
+        }
+        // Keep the chip anchored on "review" after any action selection.
+        event.target.value = 'review';
     };
 
     const handleRejectAndRequeue = async () => {
@@ -1206,25 +1215,37 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                         </span>
                     )}
                     {flaggedToAi && aiDelegationStatus === 'review' && (
-                        <button
-                            type="button"
+                        <span
                             className="kanban-card__meta-badge"
-                            title="Review ready — click to reject and re-queue with feedback"
+                            title="Review ready — choose an action"
                             style={{
                                 color: delegationColor,
                                 display: 'inline-flex',
                                 alignItems: 'center',
-                                gap: 3,
-                                border: 'none',
-                                background: 'transparent',
-                                cursor: 'pointer',
+                                gap: 4,
+                                padding: '2px 6px',
                             }}
-                            onClick={openRejectModal}
-                            onPointerDown={(e) => e.stopPropagation()}
                         >
                             <Bot size={10} />
-                            review
-                        </button>
+                            <select
+                                className="kanban-card__chip-select"
+                                defaultValue="review"
+                                onChange={handleReviewActionChange}
+                                onClick={(e) => e.stopPropagation()}
+                                onPointerDown={(e) => e.stopPropagation()}
+                                style={{
+                                    minWidth: 118,
+                                    backgroundColor: 'rgba(40, 167, 69, 0.12)',
+                                    borderColor: 'rgba(40, 167, 69, 0.4)',
+                                    color: 'var(--bs-success)',
+                                    fontSize: 11,
+                                    padding: '2px 6px',
+                                }}
+                            >
+                                <option value="review">Review</option>
+                                <option value="reject_requeue">Reject &amp; Requeue</option>
+                            </select>
+                        </span>
                     )}
                     {aiDelegationDocumentLink && (
                         <a
