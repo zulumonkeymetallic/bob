@@ -542,7 +542,7 @@ const PlannerCapacityBanner: React.FC = () => {
             <ArrowRightLeft size={14} className="me-1" />
             Priority matrix
           </Button>
-          <Button size="sm" variant="outline-dark" onClick={() => navigate('/planner/sprint-capacity')}>
+          <Button size="sm" variant="outline-dark" onClick={() => navigate('/sprints/capacity')}>
             <Settings2 size={14} className="me-1" />
             Sprint capacity
           </Button>

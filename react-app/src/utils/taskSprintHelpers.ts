@@ -49,7 +49,7 @@ export const deriveTaskSprint = ({ task, updates = {}, stories, sprints }: Sprin
   const story = storyId ? stories.find((s) => s.id === storyId) : undefined;
   const dueDateMs = toMillis((updates.dueDate as any) ?? task.dueDate ?? null);
 
-  let sprintId: string | null = story?.sprintId ?? (updates.sprintId ?? task.sprintId ?? null) ?? null;
+  let sprintId: string | null = story?.sprintId ?? updates.sprintId ?? task.sprintId ?? null;
 
   if (!sprintId && dueDateMs) {
     const matched = findSprintForDate(sprints, dueDateMs);

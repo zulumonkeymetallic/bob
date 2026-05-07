@@ -351,16 +351,16 @@ const SprintPlanningMatrix: React.FC = () => {
 
   useEffect(() => {
     if (typeof window === 'undefined') {
-      setDetailLevel('compact');
+      setDetailLevel('minimal');
       return;
     }
     try {
       const stored = window.localStorage.getItem('plannerDetailLevel');
       if (!stored) {
-        setDetailLevel('compact');
+        setDetailLevel('minimal');
       }
     } catch {
-      setDetailLevel('compact');
+      setDetailLevel('minimal');
     }
   }, [setDetailLevel]);
 

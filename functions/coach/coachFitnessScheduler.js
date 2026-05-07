@@ -184,7 +184,7 @@ async function _pollForUser(uid, profile) {
 }
 
 exports.pollFitnessProgrammes = schedulerV2.onSchedule(
-  { schedule: '0 */2 * * *', timeZone: TZ, region: REGION, memory: '512MiB' },
+  { schedule: '0 */4 * * *', timeZone: TZ, region: REGION, memory: '512MiB' },  // Reduced from 2h to 4h (May 2026 Firebase optimisation)
   async () => {
     const firestore = db();
     console.log('[coachScheduler] pollFitnessProgrammes starting');

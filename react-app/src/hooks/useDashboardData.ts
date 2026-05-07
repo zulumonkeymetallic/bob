@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef } from 'react';
-import { collection, doc, onSnapshot, orderBy, query, where, limit } from 'firebase/firestore';
+import { useState, useEffect, useRef, useMemo } from 'react';
+import { collection, doc, onSnapshot, orderBy, query, where, limit, DocumentData } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -15,6 +15,8 @@ interface DashboardData {
   uncategorizedCount: number;
   pots?: any[];
   goals?: any[];
+  lastUpdatedISO?: string;
+  isStale?: boolean;
 }
 
 export function useDashboardData() {
@@ -33,18 +35,29 @@ export function useDashboardData() {
     setLoading(true);
     setError(null);
 
-    // Subscribe to recent transactions
+    // Track last transaction timestamp for staleness check
+    const MAX_STALE_HOURS = 24; // Alert if data older than 24h
+    
+    // Optimize: combine queries where possible
     const txQuery = query(
       collection(db, 'monzo_transactions'),
       where('ownerUid', '==', currentUser.uid),
       orderBy('createdISO', 'desc'),
-      limit(200)
+      limit(100) // Reduced from 200 for performance
     );
 
     let latestTotals: any = {};
     let latestCategories: any[] = [];
+    let currentTransactions: any[] = [];
 
     const buildData = (transactions: any[]) => {
+      // Check for stale data
+      const lastTxDate = transactions.length > 0 
+        ? new Date(transactions[0].createdISO)
+        : null;
+      
+      const isStale = lastTxDate && ((Date.now() - lastTxDate.getTime()) / (1000 * 60 * 60)) > MAX_STALE_HOURS;
+      
       const uncategorized = transactions.filter(tx =>
         !tx.userCategoryType && !tx.aiCategoryKey && !tx.defaultCategoryType
       ).length;
@@ -65,6 +78,8 @@ export function useDashboardData() {
         }, {}),
         recentTransactions: transactions,
         uncategorizedCount: uncategorized,
+        lastUpdatedISO: lastTxDate?.toISOString(),
+        isStale,
       });
 
       setLoading(false);
@@ -89,28 +104,26 @@ export function useDashboardData() {
     const unsubTx = onSnapshot(
       txQuery,
       (txSnap) => {
-        const transactions = txSnap.docs.map(d => {
-          const txData = d.data();
-          return {
-            id: d.id,
-            transactionId: txData.transactionId,
-            description: txData.description,
-            merchantName: txData.merchant?.name || null,
-            amount: txData.amount || 0,
-            createdISO: txData.createdISO,
-            userCategoryType: txData.userCategoryType,
-            userCategoryLabel: txData.userCategoryLabel,
-            aiBucket: txData.aiBucket,
-            aiCategoryKey: txData.aiCategoryKey,
-            aiCategoryLabel: txData.aiCategoryLabel,
-            defaultCategoryType: txData.defaultCategoryType,
-            defaultCategoryLabel: txData.defaultCategoryLabel,
-            potName: txData.potName,
-            aiAnomalyFlag: txData.aiAnomalyFlag,
-            isSubscription: txData.isSubscription,
-          };
-        });
-
+        const transactions = txSnap.docs.map(d => ({
+          id: d.id,
+          transactionId: d.data().transactionId,
+          description: d.data().description,
+          merchantName: d.data().merchant?.name || null,
+          amount: d.data().amount || 0,
+          createdISO: d.data().createdISO,
+          userCategoryType: d.data().userCategoryType,
+          userCategoryLabel: d.data().userCategoryLabel,
+          aiBucket: d.data().aiBucket,
+          aiCategoryKey: d.data().aiCategoryKey,
+          aiCategoryLabel: d.data().aiCategoryLabel,
+          defaultCategoryType: d.data().defaultCategoryType,
+          defaultCategoryLabel: d.data().defaultCategoryLabel,
+          potName: d.data().potName,
+          aiAnomalyFlag: d.data().aiAnomalyFlag,
+          isSubscription: d.data().isSubscription,
+        }));
+        
+        currentTransactions = transactions;
         buildData(transactions);
       },
       (err) => {

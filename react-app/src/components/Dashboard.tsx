@@ -24,7 +24,7 @@ import { colors } from '../utils/colors';
 import SprintMetricsPanel from './SprintMetricsPanel';
 import JournalInsightsCard from './JournalInsightsCard';
 import BirthdayMilestoneCard from './BirthdayMilestoneCard';
-import CountdownBanner from './CountdownBanner';
+import RotatingGoalFocusBanner from './RotatingGoalFocusBanner';
 import KpiDashboardWidget from './KpiDashboardWidget';
 import DailyPlanSummaryCard from './planner/DailyPlanSummaryCard';
 import WeeklyPlannerSummaryCard from './planner/WeeklyPlannerSummaryCard';
@@ -1206,7 +1206,8 @@ const Dashboard: React.FC = () => {
 
   const showMonzoReconnectBanner = useMemo(() => {
     const connected = !!monzoIntegrationStatus?.connected;
-    if (!connected || monzoSyncAgeDays == null) return false;
+    if (!connected) return true;
+    if (monzoSyncAgeDays == null) return true;
     return monzoSyncAgeDays >= 3;
   }, [monzoIntegrationStatus, monzoSyncAgeDays]);
 
@@ -4564,14 +4565,10 @@ const Dashboard: React.FC = () => {
       <Container fluid className="p-2 dashboard-compact">
         <Row>
           <Col>
-            {/* China Trip Countdown Banner */}
-            <CountdownBanner 
-              goalId="Nzp2xQCTZbTaOLCgycjQ"
-              targetDate={new Date('2026-09-01')}
-              title="China Trip 2026"
-              subtitle="Dublin → Dubai → Beijing • Sep 1-30 • Return via Hong Kong"
-              color="warning"
-              showProgress={true}
+            <RotatingGoalFocusBanner
+              goals={goalsList}
+              defaultGoalIds={['Nzp2xQCTZbTaOLCgycjQ']}
+              onOpenGoal={() => navigate('/goals')}
             />
 
             <BirthdayMilestoneCard 
@@ -4579,14 +4576,6 @@ const Dashboard: React.FC = () => {
               age={45} 
               linkedGoalsCount={goalsList.length} 
             />
-
-            {stats.tasksUnlinked > 0 && (
-              <div className="mb-2">
-                <Badge bg="warning" text="dark" pill>
-                  {stats.tasksUnlinked} unlinked tasks
-                </Badge>
-              </div>
-            )}
 
             {showPersistentDashboardBanners && healthBannerData && showHealthBanner && (
               <Card
@@ -4691,12 +4680,15 @@ const Dashboard: React.FC = () => {
             {showPersistentDashboardBanners && showMonzoReconnectBanner && (
               <Alert variant="warning" className="d-flex align-items-center justify-content-between flex-wrap gap-1 py-1 px-2 mb-1" style={{ fontSize: 11 }}>
                 <div>
-                  <span className="fw-semibold">Monzo sync stale</span>
-                  <span className="text-muted ms-1">— {monzoSyncAgeDays}d ago{monzoReconnectMsg ? ` · ${monzoReconnectMsg}` : ''}</span>
+                  <span className="fw-semibold">{monzoIntegrationStatus?.connected ? 'Monzo sync stale' : 'Monzo integration disconnected'}</span>
+                  <span className="text-muted ms-1">
+                    — {monzoIntegrationStatus?.connected ? `${monzoSyncAgeDays ?? 'unknown'}d ago` : 'connect to resume sync'}
+                    {monzoReconnectMsg ? ` · ${monzoReconnectMsg}` : ''}
+                  </span>
                 </div>
                 <Button variant="outline-dark" size="sm" style={{ fontSize: 10, padding: '1px 8px' }} onClick={handleMonzoReconnect} disabled={monzoReconnectBusy}>
                   {monzoReconnectBusy ? <Spinner size="sm" animation="border" className="me-1" /> : null}
-                  Reconnect
+                  {monzoIntegrationStatus?.connected ? 'Reconnect' : 'Connect'}
                 </Button>
               </Alert>
             )}
@@ -4724,19 +4716,6 @@ const Dashboard: React.FC = () => {
                 </Button>
               </Alert>
             )}
-
-            {showPersistentDashboardBanners && showHardcoverReconnectBanner && (
-              <Alert variant="warning" className="d-flex align-items-center justify-content-between flex-wrap gap-1 py-1 px-2 mb-1" style={{ fontSize: 11 }}>
-                <div>
-                  <span className="fw-semibold">Hardcover sync stale</span>
-                  <span className="text-muted ms-1">— {hardcoverSyncAgeDays}d ago</span>
-                </div>
-                <Button variant="outline-dark" size="sm" style={{ fontSize: 10, padding: '1px 8px' }} onClick={() => navigate('/settings/integrations/hardcover')}>
-                  Settings
-                </Button>
-              </Alert>
-            )}
-
 
             <Row className="g-2 mb-1">
               <Col xl={12}>

@@ -33,18 +33,19 @@ const SESSIONS_COLLECTION = 'telegram_sessions';
 // Morning briefing — 07:00 Europe/London
 // ---------------------------------------------------------------------------
 
-exports.sendMorningBriefing = onSchedule(
-  {
-    schedule: '0 7 * * *',
-    timeZone: 'Europe/London',
-    region: 'europe-west2',
-    memory: '256MiB',
-    timeoutSeconds: 120,
-  },
-  async () => {
-    await _runBriefingForAllUsers('morning');
-  },
-);
+// DISABLED - Now integrated into coach orchestrator (May 2026 Firebase optimisation)
+// exports.sendMorningBriefing = onSchedule(
+//   {
+//     schedule: '0 7 * * *',
+//     timeZone: 'Europe/London',
+//     region: 'europe-west2',
+//     memory: '256MiB',
+//     timeoutSeconds: 120,
+//   },
+//   async () => {
+//     await _runBriefingForAllUsers('morning');
+//   },
+// );
 
 // ---------------------------------------------------------------------------
 // Weekly review — 18:00 Europe/London on Sundays

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Alert, Button, Badge } from 'react-bootstrap';
+import { Alert, Button, Badge, Col } from 'react-bootstrap';
 import { Plane, Calendar, Target, TrendingDown } from 'lucide-react';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';

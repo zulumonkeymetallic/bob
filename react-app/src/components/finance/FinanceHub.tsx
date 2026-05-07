@@ -34,8 +34,26 @@ const FinanceHub: React.FC = () => {
     );
   }
 
+  // Stale data warning banner
+  const showStaleWarning = data?.isStale && data?.lastUpdatedISO;
+  
   return (
     <Container fluid className="p-4">
+      {showStaleWarning && (
+        <div className="alert alert-warning mb-3 d-flex align-items-center justify-content-between">
+          <div className="d-flex align-items-center">
+            <AlertCircle size={20} className="me-2" />
+            <strong>Data may be stale:</strong> Last updated {new Date(data.lastUpdatedISO).toLocaleString('en-GB')}
+            {' '}({Math.round((Date.now() - new Date(data.lastUpdatedISO).getTime()) / (1000 * 60 * 60))} hours ago)
+          </div>
+          <button 
+            className="btn btn-sm btn-outline-warning"
+            onClick={() => window.location.reload()}
+          >
+            Refresh Data
+          </button>
+        </div>
+      )}
       <div className="d-flex justify-content-between align-items-center mb-4">
         <div>
           <h2 className="mb-1">Finance Hub</h2>

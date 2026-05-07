@@ -30,6 +30,7 @@ import {
   Calendar as CalendarIcon,
   CheckCircle,
   Clock,
+  Clock3,
   ExternalLink,
   Link as LinkIcon,
   ListChecks,
@@ -70,11 +71,13 @@ import { getBadgeVariant, getPriorityBadge, getStatusName } from '../../utils/st
 import { isRecurringDueOnDate, resolveRecurringDueMs } from '../../utils/recurringTaskDue';
 import EditTaskModal from '../EditTaskModal';
 import EditStoryModal from '../EditStoryModal';
+import DeferItemModal from '../DeferItemModal';
 import DayCapacityWarningBanner from './DayCapacityWarningBanner';
 import { useSidebar } from '../../contexts/SidebarContext';
 import PlanActionBar from './PlanActionBar';
 import UnifiedPlannerLevels from './UnifiedPlannerLevels';
 import { normalizePlannerLevel } from '../../utils/plannerRoutes';
+import { applyPlannerDefer, type PlannerDeferPayload } from '../../utils/plannerDeferral';
 
 const locales = { 'en-GB': enGB } as const;
 const localizer = dateFnsLocalizer({
@@ -371,6 +374,8 @@ const UnifiedPlannerCalendarPage: React.FC = () => {
   const [top3Stories, setTop3Stories] = useState<Story[]>([]);
   const [top3Loading, setTop3Loading] = useState(false);
   const [choreCompletionBusy, setChoreCompletionBusy] = useState<Record<string, boolean>>({});
+  const [deferChoreTask, setDeferChoreTask] = useState<Task | null>(null);
+  const [deferTopPriorityItem, setDeferTopPriorityItem] = useState<{ type: 'task' | 'story'; item: Task | Story } | null>(null);
   const [inlineEditTask, setInlineEditTask] = useState<Task | null>(null);
   const [inlineEditStory, setInlineEditStory] = useState<Story | null>(null);
 
@@ -1341,6 +1346,59 @@ const UnifiedPlannerCalendarPage: React.FC = () => {
     }, 1500);
   }, [currentUser, choreCompletionBusy]);
 
+  const handleApplyChoreDefer = useCallback(async (payload: PlannerDeferPayload) => {
+    if (!deferChoreTask) return;
+    const debugRequestId = `planner-calendar-chore-defer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    try {
+      const result = await applyPlannerDefer({
+        itemType: 'task',
+        item: deferChoreTask,
+        payload,
+        sourceFallback: 'planner_calendar_chores',
+      });
+      setFeedback({
+        variant: 'success',
+        message: `${deferChoreTask.title} moved to ${new Date(result.appliedStartMs).toLocaleDateString()}.`,
+      });
+      setDeferChoreTask(null);
+    } catch (error) {
+      console.error('[UnifiedPlannerPage] chore_defer_failed', {
+        debugRequestId,
+        taskId: deferChoreTask.id,
+        targetDateMs: payload.dateMs,
+        error,
+      });
+      throw error;
+    }
+  }, [deferChoreTask]);
+
+  const handleApplyTopPriorityDefer = useCallback(async (payload: PlannerDeferPayload) => {
+    if (!deferTopPriorityItem) return;
+    const debugRequestId = `planner-calendar-top3-defer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    try {
+      const result = await applyPlannerDefer({
+        itemType: deferTopPriorityItem.type,
+        item: deferTopPriorityItem.item,
+        payload,
+        sourceFallback: 'planner_calendar_top3',
+      });
+      setFeedback({
+        variant: 'success',
+        message: `${deferTopPriorityItem.item.title || 'Item'} moved to ${new Date(result.appliedStartMs).toLocaleDateString()}.`,
+      });
+      setDeferTopPriorityItem(null);
+    } catch (error) {
+      console.error('[UnifiedPlannerPage] top3_defer_failed', {
+        debugRequestId,
+        itemType: deferTopPriorityItem.type,
+        itemId: deferTopPriorityItem.item.id,
+        targetDateMs: payload.dateMs,
+        error,
+      });
+      throw error;
+    }
+  }, [deferTopPriorityItem]);
+
   const sortedTasksDueToday = useMemo(() => {
     const todayDate = new Date();
     todayDate.setHours(0, 0, 0, 0);
@@ -1916,24 +1974,45 @@ const UnifiedPlannerCalendarPage: React.FC = () => {
                                 <div className="fw-semibold small flex-grow-1">
                                   <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditStory(story); }}>{label}</a>
                                 </div>
-                                <button
-                                  type="button"
-                                  className="d-none d-md-inline-flex align-items-center justify-content-center"
-                                  onClick={() => showSidebar(story as any, 'story')}
-                                  title="Activity stream"
-                                  style={{
-                                    color: 'var(--bs-secondary-color)',
-                                    padding: 4,
-                                    borderRadius: 4,
-                                    border: 'none',
-                                    background: 'transparent',
-                                    cursor: 'pointer',
-                                    lineHeight: 0,
-                                    flexShrink: 0,
-                                  }}
-                                >
-                                  <Activity size={14} />
-                                </button>
+                                <div className="d-flex align-items-center gap-1">
+                                  <button
+                                    type="button"
+                                    className="d-none d-md-inline-flex align-items-center justify-content-center"
+                                    onClick={() => setDeferTopPriorityItem({ type: 'story', item: story })}
+                                    title="Move/defer"
+                                    aria-label={`Move or defer ${label}`}
+                                    style={{
+                                      color: 'var(--bs-secondary-color)',
+                                      padding: 4,
+                                      borderRadius: 4,
+                                      border: 'none',
+                                      background: 'transparent',
+                                      cursor: 'pointer',
+                                      lineHeight: 0,
+                                      flexShrink: 0,
+                                    }}
+                                  >
+                                    <Clock3 size={14} />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="d-none d-md-inline-flex align-items-center justify-content-center"
+                                    onClick={() => showSidebar(story as any, 'story')}
+                                    title="Activity stream"
+                                    style={{
+                                      color: 'var(--bs-secondary-color)',
+                                      padding: 4,
+                                      borderRadius: 4,
+                                      border: 'none',
+                                      background: 'transparent',
+                                      cursor: 'pointer',
+                                      lineHeight: 0,
+                                      flexShrink: 0,
+                                    }}
+                                  >
+                                    <Activity size={14} />
+                                  </button>
+                                </div>
                               </div>
                               <div className="d-flex align-items-center gap-2 mt-1 flex-wrap">
                                 <span className="text-muted d-inline-flex align-items-center gap-1" style={{ fontSize: 11 }}>
@@ -2009,24 +2088,45 @@ const UnifiedPlannerCalendarPage: React.FC = () => {
                                 <div className="fw-semibold small flex-grow-1">
                                   <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>{task.title}</a>
                                 </div>
-                                <button
-                                  type="button"
-                                  className="d-none d-md-inline-flex align-items-center justify-content-center"
-                                  onClick={() => showSidebar(task as any, 'task')}
-                                  title="Activity stream"
-                                  style={{
-                                    color: 'var(--bs-secondary-color)',
-                                    padding: 4,
-                                    borderRadius: 4,
-                                    border: 'none',
-                                    background: 'transparent',
-                                    cursor: 'pointer',
-                                    lineHeight: 0,
-                                    flexShrink: 0,
-                                  }}
-                                >
-                                  <Activity size={14} />
-                                </button>
+                                <div className="d-flex align-items-center gap-1">
+                                  <button
+                                    type="button"
+                                    className="d-none d-md-inline-flex align-items-center justify-content-center"
+                                    onClick={() => setDeferTopPriorityItem({ type: 'task', item: task })}
+                                    title="Move/defer"
+                                    aria-label={`Move or defer ${task.title || 'task'}`}
+                                    style={{
+                                      color: 'var(--bs-secondary-color)',
+                                      padding: 4,
+                                      borderRadius: 4,
+                                      border: 'none',
+                                      background: 'transparent',
+                                      cursor: 'pointer',
+                                      lineHeight: 0,
+                                      flexShrink: 0,
+                                    }}
+                                  >
+                                    <Clock3 size={14} />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="d-none d-md-inline-flex align-items-center justify-content-center"
+                                    onClick={() => showSidebar(task as any, 'task')}
+                                    title="Activity stream"
+                                    style={{
+                                      color: 'var(--bs-secondary-color)',
+                                      padding: 4,
+                                      borderRadius: 4,
+                                      border: 'none',
+                                      background: 'transparent',
+                                      cursor: 'pointer',
+                                      lineHeight: 0,
+                                      flexShrink: 0,
+                                    }}
+                                  >
+                                    <Activity size={14} />
+                                  </button>
+                                </div>
                               </div>
                               {refLabel && (
                                 <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>
@@ -2281,6 +2381,37 @@ const UnifiedPlannerCalendarPage: React.FC = () => {
                           <div className="d-flex flex-column align-items-end gap-1">
                             {isOverdue && <Badge bg="danger">Overdue</Badge>}
                             <Badge bg={badgeVariant}>{badgeLabel}</Badge>
+                            <div className="d-flex align-items-center gap-1">
+                              <Button
+                                size="sm"
+                                variant="outline-secondary"
+                                className="d-md-none py-0 px-2"
+                                onClick={() => setDeferChoreTask(task)}
+                                title="Move/defer chore"
+                                aria-label={`Move or defer ${task.title}`}
+                              >
+                                Move/Defer
+                              </Button>
+                              <button
+                                type="button"
+                                className="d-none d-md-inline-flex align-items-center justify-content-center"
+                                onClick={() => setDeferChoreTask(task)}
+                                title="Move/defer chore"
+                                aria-label={`Move or defer ${task.title}`}
+                                style={{
+                                  color: 'var(--bs-secondary-color)',
+                                  padding: 4,
+                                  borderRadius: 4,
+                                  border: 'none',
+                                  background: 'transparent',
+                                  cursor: 'pointer',
+                                  lineHeight: 0,
+                                  flexShrink: 0,
+                                }}
+                              >
+                                <Clock3 size={14} />
+                              </button>
+                            </div>
                           </div>
                         </div>
                       );
@@ -2739,6 +2870,24 @@ const UnifiedPlannerCalendarPage: React.FC = () => {
       story={inlineEditStory}
       goals={[] as Goal[]}
       onHide={() => setInlineEditStory(null)}
+    />
+    <DeferItemModal
+      show={Boolean(deferChoreTask)}
+      onHide={() => setDeferChoreTask(null)}
+      itemType="task"
+      itemId={deferChoreTask?.id || ''}
+      itemTitle={deferChoreTask?.title || ''}
+      allowAdvancedSearch
+      onApply={handleApplyChoreDefer}
+    />
+    <DeferItemModal
+      show={Boolean(deferTopPriorityItem)}
+      onHide={() => setDeferTopPriorityItem(null)}
+      itemType={deferTopPriorityItem?.type || 'task'}
+      itemId={deferTopPriorityItem?.item?.id || ''}
+      itemTitle={deferTopPriorityItem?.item?.title || ''}
+      allowAdvancedSearch
+      onApply={handleApplyTopPriorityDefer}
     />
     </>
   );

@@ -35,7 +35,7 @@ const TELEGRAM_SESSIONS_COLLECTION = 'telegram_sessions';
 
 exports.sweepExpiredApprovals = onSchedule(
   {
-    schedule: 'every 5 minutes',
+    schedule: 'every 30 minutes',
     timeZone: 'UTC',
     region: 'europe-west2',
     memory: '256MiB',

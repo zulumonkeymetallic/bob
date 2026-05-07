@@ -8,6 +8,8 @@
 
 import React, { useEffect, useState } from 'react';
 import { doc, onSnapshot } from 'firebase/firestore';
+import { Badge, Button, Card, ProgressBar } from 'react-bootstrap';
+import { Activity, Dumbbell, HeartPulse, X } from 'lucide-react';
 import { db } from '../../firebase';
 import { useAuth } from '../../contexts/AuthContext';
 import type { CoachDaily } from '../../types/CoachTypes';
@@ -20,6 +22,7 @@ export const CoachVerdictBanner: React.FC = () => {
   const { currentUser } = useAuth();
   const uid = currentUser?.uid;
   const [coachData, setCoachData] = useState<CoachDaily | null>(null);
+  const [coachConfigured, setCoachConfigured] = useState(false);
   const [dismissed, setDismissed] = useState(false);
 
   const today = todayStr();
@@ -33,15 +36,41 @@ export const CoachVerdictBanner: React.FC = () => {
   }, [dismissKey]);
 
   useEffect(() => {
-    if (!uid) return;
+    if (!uid) {
+      setCoachConfigured(false);
+      return;
+    }
+    const profileRef = doc(db, 'profiles', uid);
+    const unsub = onSnapshot(profileRef, (snap) => {
+      const data = snap.data() as any;
+      const hasCoachPlan =
+        Boolean(data?.ironmanUmbrellaGoalId) &&
+        (Boolean(data?.runnerProgrammeUrl) || Boolean(data?.crossFitProgrammeUrl));
+      const enabled = data?.aiCoachEnabled !== false;
+      setCoachConfigured(enabled && hasCoachPlan);
+    }, () => {
+      setCoachConfigured(false);
+    });
+    return unsub;
+  }, [uid]);
+
+  useEffect(() => {
+    if (!uid || !coachConfigured) {
+      setCoachData(null);
+      return;
+    }
     const docRef = doc(db, 'coach_daily', `${uid}_${today}`);
     const unsub = onSnapshot(docRef, snap => {
-      if (snap.exists()) setCoachData(snap.data() as CoachDaily);
+      if (snap.exists()) {
+        setCoachData(snap.data() as CoachDaily);
+      } else {
+        setCoachData(null);
+      }
     }, () => {});
     return unsub;
-  }, [uid, today]);
+  }, [uid, today, coachConfigured]);
 
-  if (!coachData || dismissed) return null;
+  if (!coachConfigured || !coachData || dismissed) return null;
 
   const { readinessLabel, readinessScore, briefingText } = coachData;
   const readinessPct = Math.round((readinessScore ?? 0) * 100);
@@ -51,14 +80,27 @@ export const CoachVerdictBanner: React.FC = () => {
     ?.replace('Today: ', '')
     .replace('.', '') || '';
 
-  const colour =
-    readinessLabel === 'green' ? 'bg-green-900/40 border-green-500/50 text-green-300' :
-    readinessLabel === 'amber' ? 'bg-yellow-900/40 border-yellow-500/50 text-yellow-300' :
-                                 'bg-red-900/40 border-red-500/50 text-red-300';
-
-  const emoji =
-    readinessLabel === 'green' ? '🟢' :
-    readinessLabel === 'amber' ? '🟡' : '🔴';
+  const appearance =
+    readinessLabel === 'green'
+      ? {
+        gradient: 'linear-gradient(135deg, #157347 0%, #1f9d63 100%)',
+        pillBg: 'rgba(255,255,255,0.22)',
+        icon: <HeartPulse size={18} />,
+        label: 'Green',
+      }
+      : readinessLabel === 'amber'
+        ? {
+          gradient: 'linear-gradient(135deg, #b58105 0%, #d39e00 100%)',
+          pillBg: 'rgba(255,255,255,0.22)',
+          icon: <Activity size={18} />,
+          label: 'Amber',
+        }
+        : {
+          gradient: 'linear-gradient(135deg, #b02a37 0%, #d63344 100%)',
+          pillBg: 'rgba(255,255,255,0.22)',
+          icon: <Dumbbell size={18} />,
+          label: 'Red',
+        };
 
   const handleDismiss = () => {
     if (dismissKey) localStorage.setItem(dismissKey, 'true');
@@ -66,19 +108,93 @@ export const CoachVerdictBanner: React.FC = () => {
   };
 
   return (
-    <div className={`flex items-center justify-between gap-2 rounded-lg border px-3 py-2 text-sm mb-2 ${colour}`}>
-      <span>
-        {emoji} <strong>Coach:</strong> Readiness {readinessPct}%
-        {todayTraining ? ` — ${todayTraining}` : ''}
-      </span>
-      <button
-        onClick={handleDismiss}
-        className="opacity-60 hover:opacity-100 transition-opacity ml-2 shrink-0"
-        aria-label="Dismiss coach banner"
-      >
-        ✕
-      </button>
-    </div>
+    <Card
+      className="mb-3 border-0 shadow-sm"
+      style={{
+        background: appearance.gradient,
+        color: '#fff',
+      }}
+    >
+      <Card.Body style={{ padding: '10px 14px' }}>
+        <div className="d-flex align-items-start gap-2">
+          <div
+            style={{
+              width: 34,
+              height: 34,
+              borderRadius: 8,
+              backgroundColor: appearance.pillBg,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0,
+            }}
+            aria-hidden="true"
+          >
+            {appearance.icon}
+          </div>
+
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="d-flex align-items-center gap-2 flex-wrap">
+              <span style={{ fontSize: 13, fontWeight: 700 }}>AI Coach</span>
+              <Badge pill bg="light" text="dark" style={{ fontSize: 10 }}>
+                {appearance.label}
+              </Badge>
+              <span style={{ fontSize: 12, opacity: 0.95 }}>Readiness {readinessPct}%</span>
+            </div>
+            <div
+              style={{
+                marginTop: 2,
+                fontSize: 11,
+                opacity: 0.9,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+              title={todayTraining || 'No training scheduled'}
+            >
+              {todayTraining || 'No training scheduled'}
+            </div>
+            <ProgressBar
+              now={readinessPct}
+              variant="light"
+              style={{ marginTop: 7, height: 6, backgroundColor: 'rgba(255,255,255,0.22)' }}
+            />
+          </div>
+
+          <div className="d-flex align-items-center gap-1" style={{ flexShrink: 0 }}>
+            <Button
+              size="sm"
+              variant="light"
+              href="/ai-coach"
+              style={{ borderRadius: 999, padding: '2px 10px', fontSize: 11, fontWeight: 700 }}
+            >
+              Open coach
+            </Button>
+            <button
+              type="button"
+              onClick={handleDismiss}
+              aria-label="Dismiss coach banner"
+              title="Dismiss for today"
+              style={{
+                background: 'rgba(255,255,255,0.24)',
+                border: 'none',
+                color: '#fff',
+                cursor: 'pointer',
+                width: 24,
+                height: 24,
+                borderRadius: 6,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: 0,
+              }}
+            >
+              <X size={14} />
+            </button>
+          </div>
+        </div>
+      </Card.Body>
+    </Card>
   );
 };
 

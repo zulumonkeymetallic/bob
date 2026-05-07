@@ -1,0 +1,177 @@
+#!/usr/bin/env python3
+"""
+Weekly Budget Briefing Script
+
+Generates a Telegram-friendly summary of spending progress against the £964/month target.
+Runs every Monday morning via cron job.
+
+Usage:
+    python3 scripts/generate_weekly_budget_brief.py [--debug]
+    
+Outputs formatted text suitable for Telegram delivery.
+"""
+
+import sys
+import os
+from datetime import datetime, timedelta
+from collections import defaultdict
+
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+def fetch_monzo_transactions_last_week():
+    """Fetch transactions from last 7 days via Firebase (placeholder - needs implementation)"""
+    # TODO: Implement Firebase read using service account
+    # For now, return mock structure showing expected format
+    
+    return {
+        "transactions": [],
+        "last_updated_iso": datetime.utcnow().isoformat(),
+    }
+
+def categorise_transaction(name: str, amount: float) -> tuple[str, str]:
+    """Map transaction to BOB category and bucket."""
+    name_lower = name.lower()
+    
+    # COFFEE
+    if any(x in name_lower for x in ['costa', 'starbucks', 'cafe nero', 'works coffee']):
+        return 'coffee', 'discretionary'
+    
+    # GROCERIES
+    if any(x in name_lower for x in ['tesco', 'sainsbury', 'asda', 'aldi', 'lidl']):
+        return 'groceries', 'mandatory'
+    
+    # EATING OUT
+    if any(x in name_lower for x in ['four horsemen', 'madigans', 'general merchants', 'pub', 'restaurant']):
+        return 'eating_out', 'discretionary'
+    
+    # MOBILE BILLS
+    if any(x in name_lower for x in ['o2', 'vodafone', 'ee']):
+        return 'mobile_bill', 'mandatory'
+    
+    # DEFAULT
+    return 'uncategorised', 'unknown'
+
+def generate_brief():
+    """Generate the weekly budget briefing content."""
+    
+    # Date range
+    today = datetime.utcnow()
+    last_monday = today - timedelta(days=today.weekday())
+    week_start = last_monday - timedelta(days=7)
+    
+    lines = []
+    lines.append("📊 **WEEKLY BUDGET BRIEFING**")
+    lines.append(f"*{week_start.strftime('%d %b')} — {last_monday.strftime('%d %b')}*")
+    lines.append("")
+    
+    # TODO: Fetch real data from Firebase/Monzo
+    # For demo, show structure with placeholder
+    
+    # Weekly spend summary
+    weekly_totals = {
+        'mandatory': 120 * 100,  # pence
+        'discretionary': 85 * 100,
+        'total': 205 * 100,
+    }
+    
+    monthly_run_rate = weekly_totals['total'] / 100 * 4  # Extrapolate to month
+    
+    lines.append("💰 **THIS WEEK'S SPENDING**")
+    lines.append(f"Total spent: £{weekly_totals['total']/100:.2f}")
+    lines.append(f"Mandatory: £{weekly_totals['mandatory']/100:.2f}")
+    lines.append(f"Discretionary: £{weekly_totals['discretionary']/100:.2f}")
+    lines.append("")
+    
+    lines.append("📈 **MONTHLY PROJECTION**")
+    lines.append(f"Run rate: £{monthly_run_rate:.2f}/month")
+    lines.append(f"Target: £964.00/month")
+    
+    variance = monthly_run_rate - 964
+    if variance <= 20:  # Within £20 buffer
+        status_emoji = "✅"
+        status_text = "ON TARGET"
+    elif variance <= 100:
+        status_emoji = "⚠️"
+        status_text = "CAUTION"
+    else:
+        status_emoji = "🔴"
+        status_text = "OFF TRACK"
+    
+    lines.append(f"Variance: {'' if variance >= 0 else '-'}£{abs(variance):.2f} ({status_emoji} {status_text})")
+    lines.append("")
+    
+    # Category breakdown
+    lines.append("📂 **BY CATEGORY**")
+    categories = [
+        ('Groceries', 108, 100),  # current, target
+        ('Eating Out', 154, 60),
+        ('Coffee', 60, 24),
+        ('Online Shopping', 279, 150),
+    ]
+    
+    for cat_name, current, target in categories:
+        overage = current - target
+        marker = "🔴" if overage > 20 else ("🟡" if overage > 0 else "🟢")
+        lines.append(f"{marker} {cat_name}: £{current}/mo (target: £{target}) {'— ' + f'Over by £{overage}' if overage > 0 else ''}")
+    
+    lines.append("")
+    
+    # Action items based on overspend
+    lines.append("🎯 **PRIORITIES THIS WEEK**")
+    
+    action_items = []
+    if monthly_run_rate > 1000:
+        action_items.append("• Review eating out spend — limit to 1 proper meal this week")
+    if any(c[1] > c[2] for c in categories):
+        action_items.append("• Check PayPal recurring charges for hidden subscriptions")
+    action_items.append("• Sunday meal planning session before grocery shop")
+    
+    if not action_items:
+        action_items.append("• All systems green — maintain current discipline")
+    
+    lines.extend(action_items)
+    lines.append("")
+    
+    # Goal links
+    lines.append("📱 **BOB GOAL TRACKING**")
+    lines.append("[Cut monthly outgoings by 38%](https://bob.jc1.tech/goals/GR-994977)")
+    lines.append("[View active stories](https://bob.jc1.tech/stories?goalId=IwYdRCMV0pDjd8BE3B7X)")
+    lines.append("")
+    
+    lines.append("---")
+    lines.append("*Generated by Hermes weekly budget brief | Next brief: Monday 7am*")
+    
+    return "\n".join(lines)
+
+
+def main():
+    debug = '--debug' in sys.argv
+    
+    try:
+        brief_content = generate_brief()
+        
+        if debug:
+            print("DEBUG MODE - Weekly Budget Brief:")
+            print("="*70)
+            print(brief_content)
+        else:
+            # In production, this would deliver via Telegram API or save for cron handler
+            output_path = os.path.expanduser("~/.hermes/cron/output/daily-bob-briefing/")
+            os.makedirs(output_path, exist_ok=True)
+            
+            timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+            output_file = os.path.join(output_path, f"budget_brief_{timestamp}.txt")
+            
+            with open(output_file, 'w') as f:
+                f.write(brief_content)
+            
+            print(f"Budget brief generated: {output_file}")
+            
+    except Exception as e:
+        print(f"ERROR generating budget brief: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

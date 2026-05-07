@@ -40,6 +40,7 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
     kpis: [] as Array<{name: string; target: number; unit: string}>,
     goalKind: '' as '' | 'umbrella' | 'milestone',
     parentGoalId: '' as string,
+    showInDashboardBanner: false,
   };
   const [formData, setFormData] = useState(emptyForm);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -193,6 +194,7 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
         linkedPotId: normalizedPotId,
         potId: normalizedPotId,
         kpis: formData.kpis,
+        showInDashboardBanner: !!formData.showInDashboardBanner,
         persona: currentPersona || 'personal',
         ownerUid: currentUser.uid,
         createdAt: serverTimestamp(),
@@ -455,6 +457,20 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
                     <option key={size.value} value={size.value}>{size.label}</option>
                   ))}
                 </Form.Select>
+              </Form.Group>
+            </div>
+            <div className="col-md-6 d-flex align-items-end">
+              <Form.Group className="mb-3 w-100">
+                <Form.Check
+                  type="switch"
+                  id="goal-show-in-dashboard-banner"
+                  label="Include in dashboard goal banner rotation"
+                  checked={!!formData.showInDashboardBanner}
+                  onChange={(e) => setFormData({ ...formData, showInDashboardBanner: e.target.checked })}
+                />
+                <Form.Text className="text-muted">
+                  Shows this goal in the rotating daily focus banner.
+                </Form.Text>
               </Form.Group>
             </div>
           </div>

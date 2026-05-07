@@ -42,8 +42,11 @@ function resolvePlanningMode(profile, requestedMode) {
 
 function resolveConstraintMode(entity, requestedMode) {
   const explicit = String(requestedMode || '').trim().toLowerCase();
-  if (explicit === 'free_slot' || explicit === 'theme_block') return explicit;
-  return getManualPriorityRank(entity) ? 'free_slot' : 'theme_block';
+  if (explicit === 'override' || explicit === 'free_slot' || explicit === 'theme_block') return explicit;
+  const rank = getManualPriorityRank(entity);
+  if (rank === 1) return 'override';
+  if (rank) return 'free_slot';
+  return 'theme_block';
 }
 
 function normalizeBucket(value) {
@@ -170,7 +173,12 @@ function inferDurationMinutes(itemType, entity, existingBlock, requestedMinutes)
   return Math.max(15, Math.round(inferItemPoints(itemType, entity) * 60));
 }
 
-function buildBusyIntervals(blocks, { planningMode, persona, excludedBlockIds }) {
+function isPlannerThemeBlock(block) {
+  const st = String(block?.sourceType || '');
+  return st === 'work_shift_allocation' || st === 'health_allocation' || block?.source === 'theme_allocation';
+}
+
+function buildBusyIntervals(blocks, { planningMode, persona, excludedBlockIds, constraintMode }) {
   const busy = [];
   blocks.forEach((block) => {
     const blockId = String(block?.id || '').trim();
@@ -182,6 +190,9 @@ function buildBusyIntervals(blocks, { planningMode, persona, excludedBlockIds })
       busy.push({ start, end });
       return;
     }
+    // P1 override: treat work/fitness theme blocks as transparent so the item
+    // can be placed inside or alongside them.
+    if (constraintMode === 'override' && isPlannerThemeBlock(block)) return;
     if (persona === 'work' && isMainGigBlock(block)) return;
     busy.push({ start, end });
   });
@@ -354,7 +365,7 @@ function choosePlacement({
   for (let offset = 0; offset < searchDays; offset += 1) {
     const day = baseDay.plus({ days: offset });
     if (Number.isFinite(maxTargetDateMs) && day.toMillis() > Number(maxTargetDateMs)) break;
-    const baseSlots = constraintMode === 'free_slot' ? FREE_SLOT_SLOTS : pickSlots(themeLabel, day);
+    const baseSlots = (constraintMode === 'free_slot' || constraintMode === 'override') ? FREE_SLOT_SLOTS : pickSlots(themeLabel, day);
     const slots = filterSlotsByTimeOfDay(baseSlots, targetBucket);
     for (const slot of slots) {
       const slotDays = Array.isArray(slot.days) && slot.days.length ? slot.days : [1, 2, 3, 4, 5, 6, 7];
@@ -414,7 +425,7 @@ function chooseSplitPlacements({
   for (let offset = 0; offset < searchDays && remainingMs > 0; offset += 1) {
     const day = baseDay.plus({ days: offset });
     if (Number.isFinite(maxTargetDateMs) && day.toMillis() > Number(maxTargetDateMs)) break;
-    const baseSlots = constraintMode === 'free_slot' ? FREE_SLOT_SLOTS : pickSlots(themeLabel, day);
+    const baseSlots = (constraintMode === 'free_slot' || constraintMode === 'override') ? FREE_SLOT_SLOTS : pickSlots(themeLabel, day);
     const slots = filterSlotsByTimeOfDay(baseSlots, targetBucket);
     for (const slot of slots) {
       if (remainingMs <= 0) break;
@@ -581,11 +592,12 @@ async function schedulePlannerItemMutation({
   const themePlan = normalizeThemeAllocationPlan(themePlanSnap && themePlanSnap.exists ? (themePlanSnap.data() || {}) : {});
   const { pickSlots } = buildPickSlots(themePlan);
   const normalizedSearchDays = Math.max(1, Math.min(Number(searchDays || DEFAULT_SEARCH_DAYS), 84));
-  const busyIntervals = buildBusyIntervals(allBlocks, { planningMode: effectivePlanningMode, persona, excludedBlockIds });
+  const busyIntervals = buildBusyIntervals(allBlocks, { planningMode: effectivePlanningMode, persona, excludedBlockIds, constraintMode: resolvedConstraintMode });
   const forcedStartMs = Number(exactTargetStartMs);
   const forcedEndMs = Number(exactTargetEndMs);
   const forcedDurationMs = Math.max(MIN_BLOCK_MS, Math.round(effectiveDurationMinutes) * 60 * 1000);
   const persistWeeklyPlannerManualLock = shouldPersistWeeklyPlannerManualLock({ source, exactTargetStartMs });
+  const oldSprintId = String(entity.sprintId || '');
   const placements = Number.isFinite(forcedStartMs) && forcedStartMs > 0
     ? [{
         appliedStartMs: forcedStartMs,
@@ -635,6 +647,114 @@ async function schedulePlannerItemMutation({
       manualPriorityRank,
       constraintMode: resolvedConstraintMode,
     });
+    if (intent === 'defer' && previewOnly !== true) {
+      const appliedDayMs = startOfDayMs(targetMs);
+      const appliedWeekStartMs = plannerWeekStartMs(appliedDayMs, zone);
+      const appliedWeekKey = plannerWeekKey(appliedDayMs, zone);
+      const resolvedSprintId = targetSprintId || await resolveSprintIdForDate(db, userId, appliedDayMs);
+      const fallbackBucket = normalizeBucket(targetBucket) || normalizeBucket(entity.timeOfDay);
+      const entityPatch = normalizedType === 'task'
+        ? {
+            dueDate: appliedDayMs,
+            dueDateMs: appliedDayMs,
+            scheduledTime: null,
+            actualScheduledStart: null,
+            timeOfDay: fallbackBucket || null,
+            plannedWeekKey: appliedWeekKey,
+            plannedWeekStart: appliedWeekStartMs,
+            sprintId: resolvedSprintId || null,
+            deferredUntil: appliedDayMs,
+            deferredReason: rationale || null,
+            deferredBy: source || 'planner',
+            deferredAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          }
+        : {
+            targetDate: appliedDayMs,
+            dueDate: appliedDayMs,
+            plannedStartDate: null,
+            plannedTime: null,
+            actualScheduledStart: null,
+            timeOfDay: fallbackBucket || null,
+            plannedWeekKey: appliedWeekKey,
+            plannedWeekStart: appliedWeekStartMs,
+            sprintId: resolvedSprintId || null,
+            deferredUntil: appliedDayMs,
+            deferredReason: rationale || null,
+            deferredBy: source || 'planner',
+            deferredAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          };
+
+      const batch = db.batch();
+      batch.set(entityRef, entityPatch, { merge: true });
+      relatedBlocks
+        .filter((block) => block.aiGenerated === true || String(block.source || '').includes('planner') || String(block.source || '').includes('scheduler'))
+        .forEach((block) => {
+          batch.delete(db.collection('calendar_blocks').doc(block.id));
+        });
+      await batch.commit();
+
+      console.info('[schedulePlannerItemMutation] deferred-without-placement', {
+        ...logContext,
+        appliedDayMs,
+        appliedWeekKey,
+        resolvedSprintId: resolvedSprintId || null,
+        manualPriorityRank,
+        constraintMode: resolvedConstraintMode,
+      });
+
+      await logSchedulingActivity({
+        db,
+        ownerUid: userId,
+        entityId: itemId,
+        entityType: normalizedType,
+        referenceNumber: entity.ref || entity.referenceNumber || null,
+        persona,
+        description: `Deferred to ${DateTime.fromMillis(appliedDayMs, { zone }).toFormat('dd LLL yyyy')} (date-only fallback) via ${source}.`,
+        metadata: {
+          source,
+          rationale: rationale || null,
+          planningMode: effectivePlanningMode,
+          requestedTargetDateMs: targetMs,
+          requestedBucket: normalizeBucket(targetBucket),
+          appliedStartMs: appliedDayMs,
+          appliedEndMs: appliedDayMs,
+          appliedBucket: fallbackBucket || null,
+          appliedWeekKey,
+          appliedWeekStartMs,
+          blockCount: 0,
+          scheduledMinutes: 0,
+          splitGroupId: null,
+          sprintId: resolvedSprintId || null,
+          scheduledByPolicy: 'theme_window',
+          manualPriorityRank: manualPriorityRank || null,
+          plannerConstraintMode: resolvedConstraintMode,
+          placementFallback: 'date_only_defer',
+        },
+        oldSprintId,
+        newSprintId: resolvedSprintId || '',
+      });
+
+      return {
+        ok: true,
+        debugRequestId: debugRequestId || null,
+        planningMode: effectivePlanningMode,
+        appliedStartMs: appliedDayMs,
+        appliedEndMs: appliedDayMs,
+        appliedDayMs,
+        appliedBucket: fallbackBucket || null,
+        appliedWeekKey,
+        appliedWeekStartMs,
+        scheduledMinutes: 0,
+        blockCount: 0,
+        sprintId: resolvedSprintId || null,
+        blockId: null,
+        scheduledByPolicy: 'theme_window',
+        manualPriorityRank,
+        plannerConstraintMode: resolvedConstraintMode,
+      };
+    }
     throw new Error('No feasible slot was available without conflicting with current calendar constraints.');
   }
 
@@ -648,7 +768,6 @@ async function schedulePlannerItemMutation({
   const appliedWeekKey = plannerWeekKey(appliedDayMs, zone);
   const resolvedSprintId = targetSprintId || await resolveSprintIdForDate(db, userId, appliedDayMs);
   const timeString = formatTimeString(firstPlacement.appliedStartMs, zone);
-  const oldSprintId = String(entity.sprintId || '');
   const splitGroupId = db.collection('_').doc().id;
   const reusableBlocks = [primaryBlock, ...relatedBlocks.filter((block) => !primaryBlock || block.id !== primaryBlock.id)].filter(Boolean);
 
@@ -743,6 +862,7 @@ async function schedulePlannerItemMutation({
       splitCount: placements.length,
       scheduledByPolicy: manualPriorityRank ? 'manual_priority_override' : 'theme_window',
       manualPriorityRank: manualPriorityRank || null,
+      userPriorityPinned: manualPriorityRank === 1,
       plannerConstraintMode: resolvedConstraintMode,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       createdAt: reusable?.createdAt || admin.firestore.FieldValue.serverTimestamp(),

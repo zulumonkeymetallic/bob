@@ -18,16 +18,16 @@ const isDetailLevel = (value: unknown): value is DetailLevel => (
   value === 'full' || value === 'compact' || value === 'minimal'
 );
 
-// Treat anything narrower than iPad Pro landscape (1366px) as compact/mobile
+// Default to minimal across planner/kanban surfaces unless the user has an explicit saved preference.
 const getInitialLevel = (): DetailLevel => {
   if (typeof window !== 'undefined') {
     try {
       const stored = window.localStorage.getItem(DETAIL_LEVEL_STORAGE_KEY);
       if (isDetailLevel(stored)) return stored;
     } catch {}
-    return window.innerWidth < 1366 ? 'minimal' : 'full';
+    return 'minimal';
   }
-  return 'full';
+  return 'minimal';
 };
 
 export const DetailLevelProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
