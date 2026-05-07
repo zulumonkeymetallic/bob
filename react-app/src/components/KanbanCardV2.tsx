@@ -131,8 +131,10 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
     const refLabel = (() => {
         if (type === 'story') {
             const s = item as Story;
+            // Prefer stored ref regardless of format — old alphanumeric refs (ST-G538NBIK) are valid.
+            // Only fall back to hash-computed ref when no stored value exists.
             const shortRef = (s as any).referenceNumber || s.ref;
-            return shortRef && validateRef(shortRef, 'story') ? shortRef : displayRefForEntity('story', s.id);
+            return shortRef || displayRefForEntity('story', s.id);
         } else {
             const t = item as Task;
             return t.ref || `TASK-${t.id.slice(-4).toUpperCase()}`;
