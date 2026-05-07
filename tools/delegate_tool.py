@@ -31,7 +31,6 @@ from toolsets import TOOLSETS
 # Tools that children must never have access to
 DELEGATE_BLOCKED_TOOLS = frozenset([
     "delegate_task",   # no recursive delegation
-    "clarify",         # no user interaction
     "memory",          # no writes to shared MEMORY.md
     "send_message",    # no cross-platform side effects
     "execute_code",    # children should reason step-by-step, not write scripts
@@ -150,7 +149,7 @@ def _resolve_workspace_hint(parent_agent) -> Optional[str]:
 def _strip_blocked_tools(toolsets: List[str]) -> List[str]:
     """Remove toolsets that contain only blocked tools."""
     blocked_toolset_names = {
-        "delegation", "clarify", "memory", "code_execution",
+        "delegation", "memory", "code_execution",
     }
     return [t for t in toolsets if t not in blocked_toolset_names]
 
@@ -364,7 +363,7 @@ def _build_child_agent(
         platform=parent_agent.platform,
         skip_context_files=True,
         skip_memory=True,
-        clarify_callback=None,
+        clarify_callback=getattr(parent_agent, "clarify_callback", None),
         thinking_callback=child_thinking_cb,
         session_db=getattr(parent_agent, '_session_db', None),
         parent_session_id=getattr(parent_agent, 'session_id', None),
@@ -1019,11 +1018,11 @@ DELEGATE_TASK_SCHEMA = {
         "WHEN NOT TO USE (use these instead):\n"
         "- Mechanical multi-step work with no reasoning needed -> use execute_code\n"
         "- Single tool call -> just call the tool directly\n"
-        "- Tasks needing user interaction -> subagents cannot use clarify\n\n"
+        "- Tasks needing user interaction when clarify is unavailable in your platform context\n\n"
         "IMPORTANT:\n"
         "- Subagents have NO memory of your conversation. Pass all relevant "
         "info (file paths, error messages, constraints) via the 'context' field.\n"
-        "- Subagents CANNOT call: delegate_task, clarify, memory, send_message, "
+        "- Subagents CANNOT call: delegate_task, memory, send_message, "
         "execute_code.\n"
         "- Each subagent gets its own terminal session (separate working directory and state).\n"
         "- Results are always returned as an array, one entry per task."
