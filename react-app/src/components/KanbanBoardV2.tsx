@@ -35,6 +35,7 @@ interface KanbanBoardV2Props {
     focusGoalIds?: Set<string>;
     showCompletedItems?: boolean;
     showAiScoredOnly?: boolean;
+    showDelegatedOnly?: boolean;
     detailLevel?: 'full' | 'compact' | 'minimal';
 }
 
@@ -63,6 +64,7 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
     focusGoalIds = new Set(),
     showCompletedItems = false,
     showAiScoredOnly = false,
+    showDelegatedOnly = false,
     detailLevel = 'full',
     }) => {
     const { currentUser } = useAuth();
@@ -439,9 +441,13 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
             result = result.filter((t) => Number.isFinite(getEntityAiScore(t)));
         }
 
+        if (showDelegatedOnly) {
+            result = result.filter((t) => (t as any).flaggedToAi === true);
+        }
+
         result = result.filter((t) => matchesDueFilter(t, isTop3Task(t, getTaskManualRank)));
         return result;
-    }, [tasks, stories, goals, sprintId, goalFilter, themeFilter, dueFilter, focusOnly, focusGoalIds, showCompletedItems, showAiScoredOnly]);
+    }, [tasks, stories, goals, sprintId, goalFilter, themeFilter, dueFilter, focusOnly, focusGoalIds, showCompletedItems, showAiScoredOnly, showDelegatedOnly]);
 
     const filteredStories = useMemo(() => {
         let result = stories;
@@ -482,9 +488,13 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
             result = result.filter((s) => Number.isFinite(getEntityAiScore(s)));
         }
 
+        if (showDelegatedOnly) {
+            result = result.filter((s) => (s as any).flaggedToAi === true);
+        }
+
         result = result.filter((s) => matchesDueFilter(s, isTop3Story(s)));
         return result;
-    }, [stories, goals, sprintId, goalFilter, themeFilter, dueFilter, focusOnly, focusGoalIds, showCompletedItems, showAiScoredOnly]);
+    }, [stories, goals, sprintId, goalFilter, themeFilter, dueFilter, focusOnly, focusGoalIds, showCompletedItems, showAiScoredOnly, showDelegatedOnly]);
 
     const visibleEntityIds = useMemo(() => {
         const ids = new Set<string>();

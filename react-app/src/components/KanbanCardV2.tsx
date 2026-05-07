@@ -185,15 +185,25 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
         if (value <= 1) return Math.round(value * 100);
         return Math.round(value);
     })();
-    const flaggedToAi = (item as any).flaggedToAi === true;
-    const aiDelegationStatus = (item as any).aiDelegationStatus as string | undefined;
+    // Optimistic delegation state — turns the icon yellow immediately on click
+    // without waiting for the Firestore listener round-trip.
+    const [pendingFlagged, setPendingFlagged] = useState<boolean | null>(null);
+    const propFlagged = (item as any).flaggedToAi === true;
+    const propDelegationStatus = (item as any).aiDelegationStatus as string | undefined;
+    useEffect(() => {
+        setPendingFlagged(null);
+    }, [propFlagged, propDelegationStatus]);
+    const flaggedToAi = pendingFlagged !== null ? pendingFlagged : propFlagged;
+    const aiDelegationStatus = pendingFlagged !== null
+        ? (pendingFlagged ? 'queued' : undefined)
+        : propDelegationStatus;
     const aiDelegationDocumentLink = (item as any).aiDelegationDocumentLink as string | undefined;
     const aiDelegationNote = (item as any).aiDelegationNote as string | undefined;
     const delegationColor = flaggedToAi
-        ? aiDelegationStatus === 'review'   ? 'var(--bs-success)'
-        : aiDelegationStatus === 'in_progress' ? 'var(--bs-info)'
-        : aiDelegationStatus === 'failed'   ? 'var(--bs-danger)'
-        : 'var(--bs-warning)'
+        ? aiDelegationStatus === 'review'      ? '#28a745'
+        : aiDelegationStatus === 'in_progress' ? '#17a2b8'
+        : aiDelegationStatus === 'failed'      ? '#dc3545'
+        : '#ffc107'   // queued → yellow
         : themeVars.muted;
     const dueDateMs = (() => {
         const raw = (item as any).dueDate ?? (item as any).targetDate ?? (item as any).dueDateMs ?? null;
@@ -622,15 +632,17 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
     const handleDelegateToAi = async (e: React.MouseEvent) => {
         e.stopPropagation();
         if (!currentUser) return;
-        // Lock during active AI execution
         if (aiDelegationStatus === 'in_progress') return;
 
+        const cancelling = flaggedToAi && aiDelegationStatus !== 'failed';
         const collectionName = type === 'story' ? 'stories' : 'tasks';
         const docRef = doc(db, collectionName, item.id);
 
+        // Optimistic UI — icon turns yellow/grey immediately
+        setPendingFlagged(!cancelling);
+
         try {
-            if (flaggedToAi && aiDelegationStatus !== 'failed') {
-                // Cancel delegation
+            if (cancelling) {
                 await updateDoc(docRef, {
                     flaggedToAi: false,
                     aiDelegationStatus: null,
@@ -638,18 +650,40 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                     updatedAt: serverTimestamp(),
                 });
                 setActionMessage('AI delegation cancelled');
+                await ActivityStreamService.addActivity({
+                    entityId: item.id,
+                    entityType: type,
+                    activityType: 'automation_activity',
+                    userId: currentUser.uid,
+                    userEmail: currentUser.email || undefined,
+                    description: 'AI delegation cancelled',
+                    persona: (item as any).persona || 'personal',
+                    referenceNumber: (item as any).ref,
+                    source: 'human',
+                } as any);
             } else {
-                // Queue for delegation (or re-queue after failure)
                 await updateDoc(docRef, {
                     flaggedToAi: true,
                     aiDelegationStatus: 'queued',
                     aiDelegatedAt: Date.now(),
                     updatedAt: serverTimestamp(),
                 });
-                setActionMessage('Queued for Hermes AI');
+                setActionMessage('Delegated to Hermes AI');
+                await ActivityStreamService.addActivity({
+                    entityId: item.id,
+                    entityType: type,
+                    activityType: 'automation_activity',
+                    userId: currentUser.uid,
+                    userEmail: currentUser.email || undefined,
+                    description: 'Delegated to Hermes AI for autonomous execution',
+                    persona: (item as any).persona || 'personal',
+                    referenceNumber: (item as any).ref,
+                    source: 'human',
+                } as any);
             }
         } catch (err) {
             console.warn('[KanbanCardV2] delegation toggle failed', err);
+            setPendingFlagged(null); // Roll back optimistic update on error
             setActionMessage('Delegation update failed');
         } finally {
             setTimeout(() => setActionMessage(null), 2400);

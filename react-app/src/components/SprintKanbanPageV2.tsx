@@ -56,6 +56,7 @@ const SprintKanbanPageV2: React.FC = () => {
     const [showFocusOnly, setShowFocusOnly] = useState(false);
     const [showCompletedItems, setShowCompletedItems] = useState(false);
     const [showAiScoredOnly, setShowAiScoredOnly] = useState(false);
+    const [showDelegatedOnly, setShowDelegatedOnly] = useState(false);
     const [sortBy, setSortBy] = useState<'ai' | 'due' | 'priority' | 'default'>('default');
     const [replanLoading, setReplanLoading] = useState(false);
     const [fullReplanLoading, setFullReplanLoading] = useState(false);
@@ -65,7 +66,7 @@ const SprintKanbanPageV2: React.FC = () => {
     const activeFocusGoalIds = useMemo(() => getActiveFocusLeafGoalIds(activeFocusGoals), [activeFocusGoals]);
 
     useEffect(() => {
-        setDetailLevel('full');
+        setDetailLevel('minimal');
     }, [setDetailLevel]);
 
     const resolveTimestampMs = (value: any): number | null => {
@@ -398,6 +399,14 @@ const SprintKanbanPageV2: React.FC = () => {
                                 onChange={(e) => setShowAiScoredOnly(e.target.checked)}
                                 className="ms-2"
                             />
+                            <Form.Check
+                                type="switch"
+                                id="toggle-kanban-delegated"
+                                label="Delegated to AI"
+                                checked={showDelegatedOnly}
+                                onChange={(e) => setShowDelegatedOnly(e.target.checked)}
+                                className="ms-2"
+                            />
 
                             <Dropdown>
                                 <Dropdown.Toggle variant="outline-secondary" size="sm">
@@ -614,6 +623,7 @@ const SprintKanbanPageV2: React.FC = () => {
                                     sortBy={sortBy}
                                     showCompletedItems={showCompletedItems}
                                     showAiScoredOnly={showAiScoredOnly}
+                                    showDelegatedOnly={showDelegatedOnly}
                                     themes={globalThemes}
                                     detailLevel={detailLevel}
                                 />
