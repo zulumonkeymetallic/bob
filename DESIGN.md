@@ -2020,4 +2020,488 @@ Planning ↔ Journals:
 
 ---
 
-*End of DESIGN.md — Total coverage: 53 screens, 16 document types, 50+ routes, 15 integrations, 2 guided flows, 20+ AI agent functions. Zero omissions.*
+---
+
+## Part D: Kanban Card & Board Component Anatomy
+
+> This section documents the complete card and board component library — the most design-critical layer of the UI. The primary card is `KanbanCardV2.tsx` (1,130 lines). All implementations, variants, and sub-components are catalogued below.
+
+---
+
+### D.1 The Primary Kanban Card — `KanbanCardV2.tsx`
+
+**File:** `src/components/KanbanCardV2.tsx`
+**Size:** 1,130 lines
+**Status:** Active primary card — the card we want to refactor into.
+**DnD:** Atlaskit drag-and-drop (draggable item)
+
+This is the canonical card used throughout the Kanban board. It handles both `Story` and `Task` entity types and is the most feature-rich card in the system.
+
+#### D.1.1 Props Interface
+
+| Prop | Type | Required | Notes |
+|------|------|----------|-------|
+| `item` | `Story \| Task` | ✓ | The entity to render |
+| `type` | `'story' \| 'task'` | ✓ | Determines field mapping |
+| `goal` | `Goal` | ? | Parent goal (for name + theme color) |
+| `parentStory` | `Story` | ? | Parent story (when type=task) |
+| `themeColors` | `ThemeColors` | ? | Resolved color tokens |
+| `onEdit` | `(item) => void` | ✓ | Opens edit modal |
+| `onDelete` | `(id) => void` | ✓ | Delete with confirm |
+| `onDefer` | `(item) => void` | ? | Opens defer modal |
+| `onSchedule` | `(item) => void` | ? | Opens calendar scheduler |
+| `onStatusChange` | `(id, status) => void` | ? | Inline status update |
+| `onPriorityChange` | `(id, priority) => void` | ? | Inline priority update |
+| `isDragging` | `boolean` | ? | Visual drag state |
+| `showGoalChip` | `boolean` | ? | Show/hide goal pill |
+
+#### D.1.2 Visual Anatomy (Top → Bottom)
+
+```
+┌─────────────────────────────────────────────┐
+│ ⠿  [REF]  [STATUS ▾]   ···  🗓 🔔 ✨ ⋯  │  ← Header row
+│                                              │
+│  Title text goes here (2-line clamp)         │  ← Title
+│                                              │
+│  [PRIORITY ▾]  [DUE DATE ▾]  [P: 5pts]     │  ← Quick-edit row
+│                                              │
+│  ████████░░░░░░ 60%  (3/5 tasks done)        │  ← Progress bar
+│                                              │
+│  🎯 Goal Name   📅 Next block: Mon 2pm       │  ← Meta row
+│                                              │
+│  [⬆ TOP3] [🔗 FOCUS] [⚠ OVERDUE] [💤 SNOOZED]│ ← Status badges
+│                                              │
+│  📝 Latest note: "Updated design..."         │  ← Latest activity
+└─────────────────────────────────────────────┘
+```
+
+#### D.1.3 Card Zones
+
+| Zone | CSS Class | Content |
+|------|-----------|---------|
+| Drag handle | `.kanban-card__handle` | `⠿` grip dots — grab target |
+| Header | `.kanban-card__header` | Ref badge + status dropdown + action icons |
+| Title | `.kanban-card__title` | 2-line clamped title text |
+| Quick-edit | `.kanban-card__quick-edit` | Priority `<select>`, due date `<input>`, points badge |
+| Progress | `.kanban-card__progress` | Bar + `done/total tasks` counter |
+| Goal chip | `.kanban-card__goal` | Theme dot + goal name (truncated) |
+| Next block | `.kanban-card__next-block` | Next scheduled calendar block time |
+| Meta badges | `.kanban-card__meta` | Status badges (see below) |
+| Steam data | `.kanban-card__steam` | Playtime / achievement % (games backlog) |
+| Latest note | `.kanban-card__note` | Most recent journal/activity line |
+
+#### D.1.4 Action Icons (Header — right side)
+
+| Icon | Action | Notes |
+|------|--------|-------|
+| 🗓 Calendar | Schedule block | Opens `CalendarBlock` scheduler |
+| 🔔 Activity | View activity log | Shows recent changes |
+| ✨ AI | AI criticality score | Shows `aiCriticalityScore` + reason |
+| 💤 Defer | Defer item | Opens defer-until date picker |
+| ✏️ Edit | Open edit modal | `EditStoryModal` or `EditTaskModal` |
+| 🗑 Delete | Delete with confirm | `ConfirmDialog` |
+
+#### D.1.5 Meta Badges
+
+| Badge | Trigger Condition | Color |
+|-------|-------------------|-------|
+| `TOP 3` | `userPriorityFlag=true` or `userPriorityRank ≤ 3` | Gold |
+| `AI TOP 3` | `aiTop3ForDay=true` | Purple |
+| `FOCUS` | Item aligned to active `FocusGoal` | Primary indigo |
+| `OVERDUE` | `dueDate < now` and status ≠ Done | Red |
+| `BLOCKED` | `blocked=true` or `status=3` | Red |
+| `SNOOZED` | `deferredUntil` in future | Amber |
+| `SCHEDULED` | Has upcoming `CalendarBlock` | Teal |
+| `MAC` | `macSyncedAt` present | Neutral |
+| `AI SCORE: N` | `aiCriticalityScore` present | Purple chip |
+
+#### D.1.6 Design Tokens Specific to KanbanCardV2
+
+| Token | Value |
+|-------|-------|
+| Card width (board column) | `280px` min, fluid |
+| Card min-height | `auto` (content-driven) |
+| Card border-left | `3px solid <theme-color>` |
+| Card border-radius | `10px` |
+| Card padding | `12px` |
+| Card background | `surface-card` token |
+| Card shadow | `shadow-sm` at rest, `shadow-lg` while dragging |
+| Title font | `text-md`, weight 600 |
+| Ref badge font | `mono-ref` token |
+| Progress bar height | `4px`, radius `full` |
+| Handle opacity | `0.3` at rest, `0.7` on hover |
+| Quick-edit select | `border: none`, `background: transparent` |
+
+---
+
+### D.2 Supporting Card Variants
+
+#### D.2.1 `StoryCard.tsx`
+
+**Purpose:** Lighter story card used in list contexts and planning views (not the primary Kanban card).
+
+**Key UI elements:**
+- Priority chip (color-coded)
+- Status dropdown (inline)
+- Due date display with overdue highlight
+- Goal name chip
+- Points badge
+- `SortableStoryCard.tsx` wrapper adds vertical-sort drag handle for sprint planning lists
+
+#### D.2.2 `TaskCard.tsx`
+
+**Purpose:** Task card for task list views. Simpler than KanbanCardV2.
+
+**Key UI elements:**
+- Checkbox (inline complete)
+- Effort badge (S/M/L)
+- Priority dot
+- Due date
+- Source icon (iOS / web / AI / Gmail)
+- Sync state indicator dot (clean=green, dirty=amber, pending=blue)
+
+#### D.2.3 `GoalCard.tsx`
+
+**Purpose:** Goal-level card. Used within `GoalsCardView` grid.
+
+**Key UI elements:**
+- Large theme-coloured left border (6px)
+- Goal kind badge (Umbrella / Milestone / Execution)
+- Status badge
+- Time horizon chip
+- Confidence indicator (Low/Med/High coloured pill)
+- KPI summary row (up to 3 KPIs shown)
+- Story count + points rollup
+- Estimated cost display (if set)
+- Monzo pot balance (if linked)
+- Progress bar (% complete based on child story statuses)
+- Target date with days-remaining countdown
+
+#### D.2.4 `SortableStoryCard.tsx`
+
+**File:** `src/components/stories/SortableStoryCard.tsx`
+**Purpose:** `@dnd-kit/sortable` wrapper around a story card for vertical reorder lists (sprint planning panel).
+
+**Additions over base StoryCard:**
+- `useSortable` hook integration
+- Transform/transition CSS for smooth reorder animations
+- Drag overlay placeholder
+
+#### D.2.5 `DraggableGoalCard.tsx`
+
+**File:** `src/components/travel/DraggableGoalCard.tsx`
+**Purpose:** Goal card variant used on the Travel Map for location-linked goals. Draggable onto map pins.
+
+**Additions:**
+- Location name + country flag
+- Lat/lon display
+- Map pin drop target integration
+
+---
+
+### D.3 Card View Collections (Grid Layouts)
+
+#### D.3.1 `GoalsCardView.tsx` (1,269 lines)
+
+**Route context:** `/goals` (Card view mode)
+**Layout:** CSS Grid with `ResizeObserver` for dynamic row-spanning
+
+**Props:**
+| Prop | Type | Notes |
+|------|------|-------|
+| `goals` | `Goal[]` | Filtered goal list |
+| `layoutMode` | `'grid' \| 'comfortable'` | Grid = dense, Comfortable = larger tiles |
+| `focusGoalIds` | `string[]` | Highlighted goals |
+| `themeColors` | map | Theme ID → color tokens |
+
+**CSS Classes:**
+- `.goals-card-grid` — outer grid wrapper
+- `.goals-card-grid--grid` — 3-column dense mode
+- `.goals-card-grid--comfortable` — 2-column spacious mode
+- `.goals-card-tile` — individual tile (spans 1–2 rows based on content)
+- `.goals-card` — card inner container
+
+**Per-tile actions:**
+- "Schedule Time" → opens CalendarBlock scheduler
+- "Generate Stories" → calls AI to create stories for this goal
+- "Defer" → sets goal status to Deferred
+- Edit (pencil) → `EditGoalModal`
+- Delete → `ConfirmDialog`
+
+**Savings progress bar:** shown when `monzoPotId` is set — displays Monzo pot balance vs. `estimatedCost`.
+
+#### D.3.2 `StoriesCardView.tsx` (738 lines)
+
+**Route context:** `/stories` (Card view toggle)
+**Layout:** Masonry-style grid with ResizeObserver row-span
+
+**Features:**
+- Toggle: show/hide descriptions
+- Toggle: show/hide latest activity
+- Next calendar block indicator per story card
+- "Latest update" line from activity stream
+- Linked goal chip
+- Task progress bar (doneTaskCount / taskCount)
+- Defer modal integration
+
+#### D.3.3 `TasksCardView.tsx` (743 lines)
+
+**Route context:** `/tasks` (Card view toggle)
+**Layout:** 3-column grid
+
+**Features:**
+- Group by: status / priority / due date
+- Check-off inline
+- Effort badge
+- Source icon
+- Linked story + goal chip chain
+
+---
+
+### D.4 Kanban Board Implementations
+
+The app has multiple Kanban board implementations at different evolution stages:
+
+| Component | File | DnD Library | Status | Lines |
+|-----------|------|-------------|--------|-------|
+| `KanbanBoard.tsx` | `src/components/` | React Aria | Legacy | ~400 |
+| `KanbanBoardV2.tsx` | `src/components/` | Atlaskit DnD | Active (non-sprint) | 753 |
+| `KanbanColumnV2.tsx` | `src/components/` | Atlaskit DnD | Active | ~300 |
+| `KanbanContainer.tsx` | `src/components/` | Wrapper | Active | ~150 |
+| `ModernKanbanBoard.tsx` | `src/components/` | `@dnd-kit/core` | Active (sprint) | 1,018 |
+| `ModernKanbanBoard-v3.0.8.tsx` | `src/components/` | `@dnd-kit/core` | Archived variant | ~1,018 |
+| `EnhancedKanbanPage.tsx` | `src/components/` | `@dnd-kit/core` | Experimental | ~500 |
+| `ResponsiveKanban.tsx` | `src/components/` | `@dnd-kit/core` | Mobile-responsive | ~400 |
+
+#### D.4.1 `KanbanBoardV2.tsx` + `KanbanColumnV2.tsx` (Atlaskit)
+
+**Used on:** `/stories` → Kanban view (non-sprint)
+
+**Board layout:**
+```
+[Backlog Column]  [In Progress Column]  [Done Column]
+     (status=0)        (status=2)           (status=4)
+```
+
+**Column anatomy (`KanbanColumnV2`):**
+```
+┌──────────────────────────┐
+│ STATUS LABEL   [N] [Σpts]│  ← Column header: name, count, total points
+│ ── WIP LIMIT BAR ────────│  ← Coloured if over WIP limit
+│                          │
+│  [KanbanCardV2]          │
+│  [KanbanCardV2]          │  ← Card stack (droppable)
+│  [KanbanCardV2]          │
+│                          │
+│  + Add Story             │  ← Inline create
+└──────────────────────────┘
+```
+
+**Column header tokens:**
+- Column width: `300px` fixed
+- Column gap: `12px`
+- Column background: `surface-bg` (slightly recessed from card)
+- Header font: `label` token (uppercase, 11px)
+- Count badge: `neutral-200` background
+- WIP exceeded: `danger-light` background on count badge
+
+#### D.4.2 `ModernKanbanBoard.tsx` (`@dnd-kit/core`)
+
+**Used on:** `/sprints/kanban`, `ModernKanbanPage.tsx`
+**Size:** 1,018 lines
+
+**Features over KanbanBoardV2:**
+- `DndContext` + `SortableContext` for within-column reordering
+- `DragOverlay` for ghost card during drag
+- Pointer sensor + keyboard sensor (accessibility)
+- Optimistic updates (card moves instantly, Firestore write follows)
+- Collision detection: `closestCenter` algorithm
+- Column-level `droppable` zones
+
+**Board columns in sprint mode:**
+```
+[Backlog]  [Planned]  [In Progress]  [Testing/Review]  [Done]
+  (0)         (1)          (2)              (3)            (4)
+```
+
+#### D.4.3 `ModernKanbanPage.tsx` (818 lines)
+
+**Route:** `/stories` (primary Kanban page), `/sprints/kanban`
+
+**Page-level UI elements:**
+- Persona toggle (personal / work)
+- Sprint selector dropdown (active sprint highlighted)
+- View toggle: Kanban | Table | Card
+- Filter bar: theme, goal, priority, tag, blocked-only
+- "Group by Goal" toggle — creates goal-named swimlanes
+- Search input
+- "+ New Story" button
+- Velocity summary chip (points done this sprint)
+- `ModernKanbanBoard` embedded below
+
+**Swimlane mode (Group by Goal):**
+```
+── 🎯 Goal A ──────────────────────────────────────────
+  [Backlog]  [In Progress]  [Done]
+── 🎯 Goal B ──────────────────────────────────────────
+  [Backlog]  [In Progress]  [Done]
+── Unaligned ───────────────────────────────────────────
+  [Backlog]  [In Progress]  [Done]
+```
+
+#### D.4.4 `SprintKanbanPage.tsx` / `SprintKanbanPageV2.tsx`
+
+**Routes:** `/sprints/kanban`
+
+Sprint-scoped Kanban — stories filtered to the active sprint. V2 adds:
+- Capacity bar at top (sprint hours remaining)
+- "Close Sprint" button → `SprintCloseDialog`
+- Stories that slip shown in a "Carry-over" warning panel
+
+#### D.4.5 `EnhancedKanbanPage.tsx`
+
+Experimental variant with:
+- Swimlane grouping by theme (not goal)
+- Collapsed/expanded swimlane toggle
+- Aggregate points per swimlane header
+
+#### D.4.6 `ResponsiveKanban.tsx`
+
+Mobile-optimised single-column view:
+- One column visible at a time with left/right swipe
+- Column indicator dots at bottom
+- Touch-based drag with longer press threshold
+
+#### D.4.7 Dashboard Kanban Embeds
+
+| Component | Used On | Description |
+|-----------|---------|-------------|
+| `CurrentSprintKanban.tsx` | Dashboard | Compact 3-column Kanban widget for active sprint |
+| `DashboardSprintKanban.tsx` | Dashboard | Alt dashboard Kanban embed — shows top stories |
+
+Both are read-only (no drag) with "View Full Kanban" CTA link.
+
+---
+
+### D.5 Specialised Card Components
+
+#### D.5.1 `common/StatCard.tsx`
+
+**Purpose:** Generic metric display card used across dashboards.
+
+**UI elements:**
+- Icon (top-left)
+- Label (all-caps, `label` token)
+- Value (large, `heading-1` token)
+- Delta chip (+ / - % change vs. previous period, coloured green/red)
+- Sparkline (optional inline chart)
+
+#### D.5.2 `common/PremiumCard.tsx`
+
+**Purpose:** Feature gate card for premium/locked features.
+
+**UI elements:**
+- Lock icon
+- Feature name
+- "Upgrade" CTA button
+- Blurred content preview behind overlay
+
+#### D.5.3 `BirthdayMilestoneCard.tsx`
+
+**Purpose:** Dashboard card showing upcoming birthday/age milestones for life goals.
+
+**UI elements:**
+- Countdown in days
+- Age milestone label (e.g., "Turning 40 in 127 days")
+- Theme-7 (Travel/Adventure) color scheme
+- Linked goal CTA
+
+#### D.5.4 `JournalInsightsCard.tsx`
+
+**Purpose:** Summary card showing AI-extracted insights from a journal entry.
+
+**UI elements:**
+- Entry date
+- `oneLineSummary` headline
+- `aiSummaryBullets` list (max 3)
+- Mindset score indicator
+- "View full entry" link
+
+#### D.5.5 Planner-specific Cards
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| `DailyPlanSummaryCard` | `planner/DailyPlanSummaryCard.tsx` | Today's scheduled blocks summary card |
+| `PlannerWorkCard` | `planner/PlannerWorkCard.tsx` | Represents a single work block in the planner |
+| `WeeklyPlannerSummaryCard` | `planner/WeeklyPlannerSummaryCard.tsx` | Week-at-a-glance summary card with theme hours |
+
+**`DailyPlanSummaryCard` elements:**
+- Date header
+- Theme breakdown mini-bars (today's hours by theme)
+- Top 3 stories list
+- Total scheduled hours vs capacity
+
+**`PlannerWorkCard` elements:**
+- Theme color left border (4px)
+- Title (linked story/goal name)
+- Time range (HH:mm–HH:mm)
+- Category badge
+- Flexibility indicator (hard/soft)
+- Rationale tooltip (AI-generated reason)
+
+**`WeeklyPlannerSummaryCard` elements:**
+- Week label (Mon DD – Sun DD)
+- 5 theme rows with target vs actual bars
+- Total hours booked vs available
+
+---
+
+### D.6 Card Design Language — Refactor Targets
+
+For the hybrid Kanban Card / Modern Story Table refactor, these are the definitive design rules derived from the existing card system:
+
+#### D.6.1 Card Hierarchy
+
+```
+Level 1 — Goal Card (GoalCard.tsx)
+  Largest visual footprint. Theme border 6px. Shows KPIs, cost, story count.
+  → Recommended: Full-width card or 2-col grid tile.
+
+Level 2 — Story Card (KanbanCardV2.tsx primary)
+  Medium card. Theme border 3px. Shows progress, tasks, next block.
+  → Recommended: 280px min-width Kanban card or full-width table row.
+
+Level 3 — Task Card (TaskCard.tsx)
+  Compact card / list row. Checkbox-first. Minimal chrome.
+  → Recommended: List row (checklist style) with optional card expand.
+```
+
+#### D.6.2 Universal Card Rules
+
+1. **Theme stripe:** Every card must carry a left border (`3px` for story/task, `6px` for goal) in the entity's resolved theme color.
+2. **Ref badge:** Always present, monospace font, `neutral-700` background, top-left position.
+3. **Status:** Inline `<select>` or badge — never hidden.
+4. **Priority:** Color-coded chip — Critical=red, High=amber, Medium=blue, Low=neutral.
+5. **No orphan data:** Every card must show its parent context (goal chip on story cards, story chip on task cards).
+6. **Action density:** At-rest — minimal actions visible (edit + overflow). On hover — full action strip revealed.
+7. **Progress bar:** Always 4px height, `radius-full`, theme color fill.
+8. **Drag handle:** `⠿` icon, left-edge, opacity 0.3→0.7 on hover. Only shown when board is in edit mode.
+9. **Empty state:** Each Kanban column shows an illustrated empty state with a "+" add button.
+10. **Overdue:** `dueDate < now` → due date text turns `danger` red, overdue badge appears.
+
+#### D.6.3 List Row (Modern Story Table) Rules
+
+When the same entity is displayed in table/list mode:
+
+1. Row height: `48px` default, `36px` compact, `64px` expanded (with description preview).
+2. First column: ref badge + title (truncated).
+3. Inline editable cells: status, priority, due date (click-to-edit).
+4. Row hover: `surface-table-row-alt` background + action icons reveal.
+5. Row expand: click row → expands to show description + acceptance criteria + task list.
+6. Colour accent: a `4px` left border on the row in theme colour (matching card language).
+7. Sticky header row with sort indicators.
+8. Virtualised with `react-window` or similar for 100+ row performance.
+
+---
+
+*End of DESIGN.md — Total coverage: 31 card/board components, 53 screens, 16 document types, 50+ routes, 15 integrations, 2 guided flows, 20+ AI agent functions. Zero omissions.*
