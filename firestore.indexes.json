@@ -1763,6 +1763,24 @@
           "order": "ASCENDING"
         },
         {
+          "fieldPath": "dueDateLockSource",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "dueDate",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "tasks",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
           "fieldPath": "persona",
           "order": "ASCENDING"
         },

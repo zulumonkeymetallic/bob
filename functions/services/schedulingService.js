@@ -44,8 +44,10 @@ function resolveConstraintMode(entity, requestedMode) {
   const explicit = String(requestedMode || '').trim().toLowerCase();
   if (explicit === 'override' || explicit === 'free_slot' || explicit === 'theme_block') return explicit;
   const rank = getManualPriorityRank(entity);
-  if (rank === 1) return 'override';
-  if (rank) return 'free_slot';
+  // Manual Top 1/2/3 should bypass planner theme blocks and search true free
+  // time on the calendar. AI Top 3 is unaffected because it does not set this
+  // manual priority rank.
+  if (rank) return 'override';
   return 'theme_block';
 }
 
@@ -833,6 +835,36 @@ async function schedulePlannerItemMutation({
     entityPatch.orchestrationLockedReason = 'manual_weekly_planner_placement';
     entityPatch.orchestrationLockedSource = source || 'weekly_planner';
     entityPatch.orchestrationLockedAt = admin.firestore.FieldValue.serverTimestamp();
+  }
+
+  // Sources where the user explicitly moved the task — these override the
+  // mac_sync lock because the user's planner action takes precedence.
+  const USER_DRIVEN_SOURCES = new Set(['weekly_planner', 'planner', 'replan_calendar']);
+  const userDriven = USER_DRIVEN_SOURCES.has(source);
+
+  // Guard requires both the source tag and at least one lock boolean, so a stale
+  // dueDateLockSource after explicit unlock (dueDateLocked: false) doesn't block.
+  const macSyncDueDateLocked = entity.dueDateLockSource === 'mac_sync'
+    && (entity.dueDateLocked === true || entity.lockDueDate === true);
+
+  if (macSyncDueDateLocked && !userDriven) {
+    // Automated scheduler cannot move a date the user set in Reminders.
+    delete entityPatch.dueDate;
+    delete entityPatch.dueDateMs;
+    delete entityPatch.targetDate;
+  } else {
+    entityPatch.dueDateUpdatedBy = 'scheduler';
+    entityPatch.dueDateUpdatedSource = source || 'planner';
+    entityPatch.dueDateUpdatedAt = admin.firestore.FieldValue.serverTimestamp();
+    entityPatch.serverUpdatedAt = admin.firestore.FieldValue.serverTimestamp();
+    if (macSyncDueDateLocked && userDriven) {
+      // User explicitly moved the task in the planner — release the Reminders lock.
+      entityPatch.dueDateLocked = false;
+      entityPatch.lockDueDate = false;
+      entityPatch.dueDateLockSource = admin.firestore.FieldValue.delete();
+      entityPatch.dueDateLockedAt = admin.firestore.FieldValue.delete();
+      entityPatch.dueDateReason = admin.firestore.FieldValue.delete();
+    }
   }
 
   const batch = db.batch();

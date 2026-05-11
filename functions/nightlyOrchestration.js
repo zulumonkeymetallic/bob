@@ -2748,6 +2748,48 @@ async function runAutoConversionsJob() {
 // }, runAutoConversionsJob);
 
 // ===== 03:00 Prioritisation (0-100) + To-do promotion
+// Clears mac_sync due-date locks on tasks whose locked date is now in the past.
+// Once a date has passed the user can no longer act on it in Reminders, so the
+// scheduler should be free to replan. Runs nightly per user before scoring.
+async function clearStaleMacSyncDueDateLocks(db, userId) {
+  const todayStartMs = new Date().setHours(0, 0, 0, 0);
+  // NOTE: requires composite index on tasks: (ownerUid ASC, dueDateLockSource ASC, dueDate ASC).
+  // Do NOT swallow errors here — a missing index will silently return no docs and
+  // stale locks will never clear. Let the error propagate to the caller log.
+  const snap = await db.collection('tasks')
+    .where('ownerUid', '==', userId)
+    .where('dueDateLockSource', '==', 'mac_sync')
+    .where('dueDate', '<', todayStartMs)
+    .get();
+
+  if (!snap.docs.length) return 0;
+
+  const writer = db.bulkWriter();
+  let cleared = 0;
+  snap.docs.forEach((doc) => {
+    const data = doc.data() || {};
+    // Only clear if the task is not already complete
+    const status = data.status;
+    const isDone = status === 2 || status === 'complete' || status === 'done';
+    if (isDone) return;
+    // Only clear if a lock boolean is actually set (not just a stale source tag)
+    if (!data.dueDateLocked && !data.lockDueDate) return;
+    writer.set(doc.ref, {
+      dueDateLocked: false,
+      lockDueDate: false,
+      dueDateLockSource: admin.firestore.FieldValue.delete(),
+      dueDateLockedAt: admin.firestore.FieldValue.delete(),
+      dueDateReason: admin.firestore.FieldValue.delete(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      serverUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      syncState: 'dirty',
+    }, { merge: true });
+    cleared += 1;
+  });
+  await writer.close();
+  return cleared;
+}
+
 async function runPriorityScoringJob() {
   const db = ensureFirestore();
   const profiles = await db.collection('profiles').get().catch(() => ({ docs: [] }));
@@ -3303,6 +3345,10 @@ async function runPriorityScoringJob() {
           patch.dueDate = focusDueDate;
           patch.aiDueDateSetAt = admin.firestore.FieldValue.serverTimestamp();
           patch.dueDateReason = reason;
+          patch.dueDateUpdatedBy = 'scheduler';
+          patch.dueDateUpdatedSource = 'nightly_top3';
+          patch.dueDateUpdatedAt = admin.firestore.FieldValue.serverTimestamp();
+          patch.serverUpdatedAt = admin.firestore.FieldValue.serverTimestamp();
         }
         taskBatch.set(task.refObj, patch, { merge: true });
 
@@ -3339,6 +3385,10 @@ async function runPriorityScoringJob() {
           patch.dueDate = focusDueDate;
           patch.aiDueDateSetAt = admin.firestore.FieldValue.serverTimestamp();
           patch.dueDateReason = reason;
+          patch.dueDateUpdatedBy = 'scheduler';
+          patch.dueDateUpdatedSource = 'nightly_top3';
+          patch.dueDateUpdatedAt = admin.firestore.FieldValue.serverTimestamp();
+          patch.serverUpdatedAt = admin.firestore.FieldValue.serverTimestamp();
         }
         storyBatch.set(story.refObj, patch, { merge: true });
 
@@ -3408,6 +3458,10 @@ async function runPriorityScoringJob() {
         }
         if (sprintEnd && !isStoryLocked(data)) {
           patch.dueDate = sprintEnd;
+          patch.dueDateUpdatedBy = 'scheduler';
+          patch.dueDateUpdatedSource = 'nightly_sprint_end';
+          patch.dueDateUpdatedAt = admin.firestore.FieldValue.serverTimestamp();
+          patch.serverUpdatedAt = admin.firestore.FieldValue.serverTimestamp();
         }
       }
       if (Object.keys(patch).length) {
@@ -3417,6 +3471,13 @@ async function runPriorityScoringJob() {
       }
     });
     await storyClearWriter.close();
+
+    // Release stale mac_sync locks before scoring so past-due tasks can be replanned
+    await clearStaleMacSyncDueDateLocks(db, userId).then((n) => {
+      if (n > 0) console.log(`[runPriorityScoringJob] cleared ${n} stale mac_sync due-date locks for ${userId}`);
+    }).catch((err) => {
+      console.warn(`[runPriorityScoringJob] clearStaleMacSyncDueDateLocks failed for ${userId}:`, err?.message);
+    });
 
     // Compute Top 3 immediately after scoring so it's ready before calendar planning
     await recomputeTop3ForUser(db, userId).catch((err) => {
@@ -5022,6 +5083,10 @@ async function _deltaTop3ForPersona(db, userId, persona) {
       patch.dueDate = focusDueDate;
       patch.aiDueDateSetAt = admin.firestore.FieldValue.serverTimestamp();
       patch.dueDateReason = reason;
+      patch.dueDateUpdatedBy = 'scheduler';
+      patch.dueDateUpdatedSource = 'recompute_top3';
+      patch.dueDateUpdatedAt = admin.firestore.FieldValue.serverTimestamp();
+      patch.serverUpdatedAt = admin.firestore.FieldValue.serverTimestamp();
     }
     promoteTaskBatch.set(task.refObj, patch, { merge: true });
   });
@@ -5067,6 +5132,10 @@ async function _deltaTop3ForPersona(db, userId, persona) {
       patch.dueDate = focusDueDate;
       patch.aiDueDateSetAt = admin.firestore.FieldValue.serverTimestamp();
       patch.dueDateReason = reason;
+      patch.dueDateUpdatedBy = 'scheduler';
+      patch.dueDateUpdatedSource = 'recompute_top3';
+      patch.dueDateUpdatedAt = admin.firestore.FieldValue.serverTimestamp();
+      patch.serverUpdatedAt = admin.firestore.FieldValue.serverTimestamp();
     }
     promoteStoryBatch.set(story.refObj, patch, { merge: true });
   });
