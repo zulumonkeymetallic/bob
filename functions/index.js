@@ -478,6 +478,7 @@ const STRAVA_WEBHOOK_VERIFY_TOKEN = defineSecret("STRAVA_WEBHOOK_VERIFY_TOKEN");
 // No secrets required for Parkrun
 const REMINDERS_WEBHOOK_SECRET = defineSecret("REMINDERS_WEBHOOK_SECRET");
 const BREVO_API_KEY = defineSecret('BREVO_API_KEY');
+const OPENROUTER_API_KEY_SECRET = defineSecret('OPENROUTER_API_KEY');
 
 // Monday user->Bob ownerUid mapping (hardcoded for now)
 const MONDAY_USER_MAP = {
@@ -516,7 +517,7 @@ const CHORE_DUE_ROLLOVER_MS = CHORE_DUE_ROLLOVER_DAYS * 24 * 60 * 60 * 1000;
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
 const AI_PRIORITY_MODEL = GEMINI_MODEL;
 const OPENROUTER_BASE_URL = String(process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').trim().replace(/\/+$/, '');
-const OPENROUTER_FALLBACK_MODEL = String(process.env.OPENROUTER_FALLBACK_MODEL || 'meta-llama/llama-3.1-8b-instruct:free').trim();
+const OPENROUTER_FALLBACK_MODEL = String(process.env.OPENROUTER_FALLBACK_MODEL || 'openrouter/auto').trim();
 const PARKRUN_API_BASE = String(process.env.PARKRUN_API_BASE || 'https://api.parkrun.com').trim().replace(/\/+$/, '');
 const PARKRUN_API_CLIENT_ID = String(process.env.PARKRUN_API_CLIENT_ID || 'netdreams-iphone-s01').trim();
 const PARKRUN_API_CLIENT_SECRET = String(process.env.PARKRUN_API_CLIENT_SECRET || 'gfKbDD6NJkYoFmkisR(iVFopQCKWzbQeQgZAZZKK').trim();
@@ -1238,7 +1239,7 @@ exports.syncCalendarAndTasks = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID
   })
 );
 
-exports.autoEnrichTasks = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY], maxInstances: 5, enforceAppCheck: true }, async (req) => {
+exports.autoEnrichTasks = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET], maxInstances: 5, enforceAppCheck: true }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
 
@@ -1325,7 +1326,7 @@ exports.autoEnrichTasks = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY], 
 });
 
 // ===== enhanceNewTask: spell-check title, estimate points, score on new task creation
-exports.enhanceNewTask = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY], memory: '512MiB' },
+exports.enhanceNewTask = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET], memory: '512MiB' },
   secureFunction(async (req) => {
     const uid = req?.auth?.uid;
     if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
@@ -1396,7 +1397,7 @@ exports.enhanceNewTask = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY], m
 );
 
 
-exports.taskStoryConversion = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY], maxInstances: 5, enforceAppCheck: true }, async (req) => {
+exports.taskStoryConversion = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET], maxInstances: 5, enforceAppCheck: true }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
 
@@ -1454,7 +1455,7 @@ exports.taskStoryConversion = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KE
   return { suggestions, converted };
 });
 
-exports.plannerLLM = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY], maxInstances: 3, enforceAppCheck: true }, async (req) => {
+exports.plannerLLM = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET], maxInstances: 3, enforceAppCheck: true }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
 
@@ -2382,7 +2383,7 @@ async function logPriorityActivity(db, { ownerUid, correlationId, priorities, me
   }
 }
 
-exports.priorityNow = httpsV2.onRequest({ invoker: 'public', secrets: [GOOGLE_AI_STUDIO_API_KEY], maxInstances: 5 }, async (req, res) => {
+exports.priorityNow = httpsV2.onRequest({ invoker: 'public', secrets: [GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET], maxInstances: 5 }, async (req, res) => {
   applyPriorityCors(res, req);
   if (req.method === 'OPTIONS') {
     res.status(204).send('');
@@ -2928,7 +2929,7 @@ async function fetchLatestPriorityRun(db, uid) {
   }
 }
 
-exports.replanDay = httpsV2.onRequest({ invoker: 'public', secrets: [GOOGLE_AI_STUDIO_API_KEY], maxInstances: 3 }, async (req, res) => {
+exports.replanDay = httpsV2.onRequest({ invoker: 'public', secrets: [GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET], maxInstances: 3 }, async (req, res) => {
   applyPriorityCors(res, req);
   if (req.method === 'OPTIONS') {
     res.status(204).send('');
@@ -4199,7 +4200,7 @@ exports.diagnosticsStatus = httpsV2.onCall({}, async (req) => {
 });
 
 // Diagnostics: test LLM (Gemini) round-trip
-exports.matchTravelGoal = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
+exports.matchTravelGoal = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET] }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
 
@@ -4448,7 +4449,7 @@ exports.normalizeStatuses = httpsV2.onCall({}, async (req) => {
 exports.sendAssistantMessage = httpsV2.onCall({
   memory: '512MiB',
   timeoutSeconds: 180,
-  secrets: [GOOGLE_AI_STUDIO_API_KEY, BREVO_API_KEY, GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET],
+  secrets: [GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET, BREVO_API_KEY, GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET],
 }, async (req) => {
   const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   const message = String(req?.data?.message || '').trim();
@@ -6769,7 +6770,7 @@ exports.monzoAiCategorizationSweep = schedulerV2.onSchedule({
   schedule: 'every 30 minutes',
   timeZone: 'UTC',
   memory: '512MiB',
-  secrets: [GOOGLE_AI_STUDIO_API_KEY],
+  secrets: [GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET],
 }, async () => {
   const db = ensureFirestore();
   const pendingSnap = await db.collection('monzo_transactions')
@@ -7479,7 +7480,7 @@ exports.syncMonzoHourly = schedulerV2.onSchedule({
 });
 
 // ===== AI Planning Function
-exports.planCalendar = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY], enforceAppCheck: true }, async (request) => {
+exports.planCalendar = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET], enforceAppCheck: true }, async (request) => {
   const uid = request.auth?.uid;
   if (!uid) {
     throw new functionsV2.https.HttpsError("unauthenticated", "Must be authenticated");
@@ -7593,7 +7594,7 @@ exports.runPlanner = functionsV2.https.onCall(async (req) => {
 });
 
 // ===== Story Generation for Goal (AI)
-exports.generateStoriesForGoal = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (request) => {
+exports.generateStoriesForGoal = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET] }, async (request) => {
   const uid = request.auth?.uid;
   if (!uid) {
     throw new functionsV2.https.HttpsError("unauthenticated", "Must be authenticated");
@@ -7702,7 +7703,7 @@ exports.generateStoriesForGoal = functionsV2.https.onCall({ secrets: [GOOGLE_AI_
 });
 
 // ===== Story Acceptance Criteria Generation (AI)
-exports.generateStoryAcceptanceCriteria = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (request) => {
+exports.generateStoryAcceptanceCriteria = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET] }, async (request) => {
   const uid = request.auth?.uid;
   if (!uid) {
     throw new functionsV2.https.HttpsError('unauthenticated', 'Must be authenticated');
@@ -7764,7 +7765,7 @@ exports.generateStoryAcceptanceCriteria = functionsV2.https.onCall({ secrets: [G
 });
 
 // ===== Task Description Enhancement (AI)
-exports.enhanceTaskDescription = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (request) => {
+exports.enhanceTaskDescription = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET] }, async (request) => {
   const uid = request.auth?.uid;
   if (!uid) {
     throw new functionsV2.https.HttpsError('unauthenticated', 'Must be authenticated');
@@ -7988,7 +7989,7 @@ Generate a plan as JSON with:
 }
 
 // Orchestrated Goal Planning: research → stories/tasks → schedule → (optional) GitHub issues
-exports.orchestrateGoalPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, BREVO_API_KEY] }, async (req) => {
+exports.orchestrateGoalPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET, BREVO_API_KEY] }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   const goalId = String(req?.data?.goalId || '').trim();
@@ -8157,7 +8158,7 @@ exports.orchestrateGoalPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_AI
 });
 
 // Orchestrated Story Planning: (optional) brief research → tasks → schedule
-exports.orchestrateStoryPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, BREVO_API_KEY] }, async (req) => {
+exports.orchestrateStoryPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET, BREVO_API_KEY] }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   const storyId = String(req?.data?.storyId || '').trim();
@@ -8308,7 +8309,7 @@ function escapeHtml(s) {
 // (GitHub helper removed)
 
 // Generate stories/tasks from an existing research doc using a chosen model
-exports.generateStoriesFromResearch = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
+exports.generateStoriesFromResearch = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET] }, async (req) => {
   const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   const goalId = String(req?.data?.goalId || '').trim() || null;
   const storyId = String(req?.data?.storyId || '').trim() || null;
@@ -8404,7 +8405,7 @@ exports.generateStoriesFromResearch = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDI
 });
 
 // Minimal goal chat: store message and respond with clarifying Q/A
-exports.sendGoalChatMessage = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
+exports.sendGoalChatMessage = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET] }, async (req) => {
   const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   const goalId = String(req?.data?.goalId || '');
   const message = String(req?.data?.message || '').trim();
@@ -10440,7 +10441,7 @@ exports.deduplicateTasks = httpsV2.onCall(async (request) => {
   }
 });
 
-exports.suggestTaskStoryConversions = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
+exports.suggestTaskStoryConversions = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET] }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
 
@@ -10849,6 +10850,8 @@ function shouldFallbackToOpenRouter(providerName, error) {
   const message = String(error?.message || error?.status || '');
   const lowered = message.toLowerCase();
   return (
+    message.includes('401') ||
+    message.includes('403') ||
     message.includes('429') ||
     message.includes('503') ||
     lowered.includes('quota') ||
@@ -10858,7 +10861,13 @@ function shouldFallbackToOpenRouter(providerName, error) {
     lowered.includes('high demand') ||
     lowered.includes('credit balance is too low') ||
     lowered.includes('insufficient credits') ||
-    lowered.includes('billing')
+    lowered.includes('billing') ||
+    lowered.includes('invalid api key') ||
+    lowered.includes('invalid_api_key') ||
+    lowered.includes('authentication') ||
+    lowered.includes('unauthorized') ||
+    lowered.includes('permission denied') ||
+    lowered.includes('not configured')
   );
 }
 
@@ -10875,6 +10884,20 @@ async function callResolvedProvider({ provider, system, user, model, expectJson,
   return callGemini({ system, user, model, expectJson, temperature, apiKey });
 }
 
+function _isAuthError(error) {
+  const msg = String(error?.message || error?.status || '').toLowerCase();
+  return (
+    msg.includes('401') ||
+    msg.includes('403') ||
+    msg.includes('invalid api key') ||
+    msg.includes('invalid_api_key') ||
+    msg.includes('unauthorized') ||
+    msg.includes('permission denied') ||
+    msg.includes('not configured') ||
+    msg.includes('api key not valid')
+  );
+}
+
 async function callWithRetries(candidate, payload, attempts = 3) {
   let lastErr = null;
   for (let i = 0; i < attempts; i++) {
@@ -10883,6 +10906,8 @@ async function callWithRetries(candidate, payload, attempts = 3) {
       return { ok: true, text };
     } catch (error) {
       lastErr = error;
+      // Auth errors won't resolve on retry — skip the backoff wait
+      if (_isAuthError(error)) break;
       if (i < attempts - 1) {
         await new Promise((r) => setTimeout(r, Math.pow(2, i) * 500));
       }
@@ -10952,12 +10977,17 @@ async function callLLMJson({ system, user, purpose, userId, expectJson = false, 
   }
 
   openRouterApiKey = String(openRouterApiKey || process.env.OPENROUTER_API_KEY || '').trim() || null;
+  if (!openRouterApiKey) {
+    // Secret not injected into this function — add OPENROUTER_API_KEY_SECRET to its secrets array
+    console.warn('[callLLMJson] OPENROUTER_API_KEY unavailable in this function runtime; fallback disabled', { purpose, userId });
+  }
   const effectiveSystem = personality ? `${buildPersonalityInstruction(personality)}\n\n${system}` : system;
-  const primaryCandidate = {
-    provider: String(resolvedProvider || 'gemini').toLowerCase(),
-    model: resolvedModel,
-    apiKey: resolvedApiKey,
-  };
+
+  // When user has no personal key, route directly to OpenRouter instead of falling back to the system Google key
+  const userHasOwnKey = Boolean(resolvedApiKey);
+  const primaryCandidate = (!userHasOwnKey && openRouterApiKey)
+    ? { provider: 'openrouter', model: openRouterModel || OPENROUTER_FALLBACK_MODEL, apiKey: openRouterApiKey }
+    : { provider: String(resolvedProvider || 'gemini').toLowerCase(), model: resolvedModel, apiKey: resolvedApiKey };
 
   const primaryResult = await callWithRetries(primaryCandidate, {
     system: effectiveSystem,
@@ -10974,8 +11004,7 @@ async function callLLMJson({ system, user, purpose, userId, expectJson = false, 
   const primaryError = primaryResult.error || new Error('Primary provider unavailable');
   const canUseOpenRouterFallback = (
     primaryCandidate.provider !== 'openrouter' &&
-    Boolean(openRouterApiKey) &&
-    shouldFallbackToOpenRouter(primaryCandidate.provider, primaryError)
+    Boolean(openRouterApiKey)
   );
 
   if (canUseOpenRouterFallback) {
@@ -16689,7 +16718,7 @@ exports.remindersPush = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
   }
 });
 
-exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET, GOOGLE_AI_STUDIO_API_KEY], invoker: 'public' }, async (req, res) => {
+exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET, GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET], invoker: 'public' }, async (req, res) => {
   try {
     if (req.method !== 'POST') return res.status(405).send('Method not allowed');
     const uid = String(req.query.uid || req.body?.uid || '');
@@ -17423,7 +17452,7 @@ exports.onTaskWritten = firestoreV2.onDocumentWritten('tasks/{taskId}', async (e
 });
 
 // ===== AI helpers (as before, simplified)
-exports.prioritizeBacklog = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
+exports.prioritizeBacklog = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET] }, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError("unauthenticated", "Sign in required.");
   let tasks = (req.data && Array.isArray(req.data.tasks)) ? req.data.tasks : [];
   if (tasks.length > 50) tasks = tasks.slice(0, 50);
@@ -19082,7 +19111,7 @@ exports.weeklyParkrunSync = schedulerV2.onSchedule({
 
 // Theme-based Calendar Planner (runs daily at 01:00 UTC)
 /*
-exports.dailyPlanningJob = schedulerV2.onSchedule({ schedule: '0 1 * * *', timeZone: 'UTC', secrets: [GOOGLE_AI_STUDIO_API_KEY, BREVO_API_KEY] }, async () => {
+exports.dailyPlanningJob = schedulerV2.onSchedule({ schedule: '0 1 * * *', timeZone: 'UTC', secrets: [GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET, BREVO_API_KEY] }, async () => {
   const db = ensureFirestore();
   const profilesSnap = await db.collection('profiles').get();
   const runStartedAt = admin.firestore.FieldValue.serverTimestamp();
@@ -19116,7 +19145,7 @@ exports.nightlyTaskMaintenance = schedulerV2.onSchedule({
   schedule: '0 2 * * *',
   timeZone: 'UTC',
   memory: '1GiB',
-  secrets: [GOOGLE_AI_STUDIO_API_KEY],
+  secrets: [GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET],
 }, async () => {
   const db = ensureFirestore();
   const nowUtc = DateTime.now().setZone('UTC');
@@ -19311,7 +19340,7 @@ async function _autoRescheduleMissedForUser(uid, { limit = 10 } = {}) {
   return { ok: true, rescheduled };
 }
 
-exports.runNightlyMaintenanceNow = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, BREVO_API_KEY] }, async (req) => {
+exports.runNightlyMaintenanceNow = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET, BREVO_API_KEY] }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
 
@@ -19722,7 +19751,7 @@ exports.dispatchDailySummaryEmail = schedulerV2.onSchedule({
   schedule: 'every 15 minutes',
   timeZone: 'UTC',
   memory: '512MiB',
-  secrets: [defineSecret('BREVO_API_KEY'), GOOGLE_AI_STUDIO_API_KEY],
+  secrets: [defineSecret('BREVO_API_KEY'), GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET],
 }, async () => {
   const db = ensureFirestore();
   const nowUtc = DateTime.now().setZone('UTC');
@@ -19758,7 +19787,7 @@ exports.dispatchDataQualityEmail = schedulerV2.onSchedule({
   schedule: 'every 30 minutes',
   timeZone: 'UTC',
   memory: '512MiB',
-  secrets: [defineSecret('BREVO_API_KEY'), GOOGLE_AI_STUDIO_API_KEY],
+  secrets: [defineSecret('BREVO_API_KEY'), GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET],
 }, async () => {
   const db = ensureFirestore();
   const nowUtc = DateTime.now().setZone('UTC');
@@ -19794,7 +19823,7 @@ exports.dispatchWeeklyFinanceSummaryEmail = schedulerV2.onSchedule({
   schedule: 'every 30 minutes',
   timeZone: 'UTC',
   memory: '512MiB',
-  secrets: [defineSecret('BREVO_API_KEY'), GOOGLE_AI_STUDIO_API_KEY],
+  secrets: [defineSecret('BREVO_API_KEY'), GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET],
 }, async () => {
   const db = ensureFirestore();
   const nowUtc = DateTime.now().setZone('UTC');
@@ -19826,7 +19855,7 @@ exports.dispatchWeeklyFinanceSummaryEmail = schedulerV2.onSchedule({
   }
 });
 
-exports.sendDailySummaryNow = httpsV2.onCall({ secrets: [defineSecret('BREVO_API_KEY'), GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
+exports.sendDailySummaryNow = httpsV2.onCall({ secrets: [defineSecret('BREVO_API_KEY'), GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET] }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   const db = ensureFirestore();
@@ -20896,7 +20925,7 @@ exports.tagTasksAndBuildDeepLinks = schedulerV2.onSchedule({ schedule: 'every 6 
 });
 
 // Sprint Retrospective Generation
-exports.generateSprintRetrospective = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (request) => {
+exports.generateSprintRetrospective = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET] }, async (request) => {
   const { data, auth } = request;
   if (!auth) throw new httpsV2.HttpsError('unauthenticated', 'User must be authenticated');
 

@@ -39,6 +39,7 @@ const {
 
 // Secrets
 const GOOGLE_AI_STUDIO_API_KEY = defineSecret('GOOGLEAISTUDIOAPIKEY');
+const OPENROUTER_API_KEY_SECRET = defineSecret('OPENROUTER_API_KEY');
 const BOB_CLI_ACCESS = defineSecret('BOB_CLI_ACCESS');
 
 const THEME_RULES = [
@@ -1085,10 +1086,6 @@ async function applyAggressiveDueDateReplanForUser({
 }) {
   if (!db || !userId) return { moved: 0, routineRolled: 0, researchShifted: 0, backlogDeferred: 0, suggestions: 0 };
 
-  // Auto-deferral is intentionally disabled. Due dates should only move through
-  // explicit user deferral flows or chore-specific planner rollover.
-  return { moved: 0, routineRolled: 0, researchShifted: 0, backlogDeferred: 0, suggestions: 0, disabled: true, trigger };
-
   const profileSnap = await db.collection('profiles').doc(userId).get().catch(() => null);
   const profile = profileSnap && profileSnap.exists ? (profileSnap.data() || {}) : {};
   const zone = coerceZone(resolveTimezone(profile, 'Europe/London'));
@@ -1096,33 +1093,14 @@ async function applyAggressiveDueDateReplanForUser({
   const todayIso = nowLocal.toISODate();
   const todayEnd = nowLocal.endOf('day').toMillis();
   const tomorrowEnd = nowLocal.plus({ days: 1 }).endOf('day').toMillis();
+  const focusDueDate = (nowLocal.hour >= 17) ? tomorrowEnd : todayEnd;
+  const nonTopDeferralDate = nowLocal.plus({ days: AUTO_DEFER_LOOKAHEAD_DAYS }).endOf('day').toMillis();
 
-  const [tasksSnap, storiesSnap, focusSnap, dayLoadHours] = await Promise.all([
+  const [tasksSnap, storiesSnap, dayLoadHours] = await Promise.all([
     db.collection('tasks').where('ownerUid', '==', userId).get().catch(() => ({ docs: [] })),
     db.collection('stories').where('ownerUid', '==', userId).get().catch(() => ({ docs: [] })),
-    db.collection('focusGoals')
-      .where('ownerUid', '==', userId)
-      .where('isActive', '==', true)
-      .get()
-      .catch(() => ({ docs: [] })),
     buildDayLoadHoursMap(db, userId, nowLocal.startOf('day').toMillis(), nowLocal.plus({ days: 56 }).endOf('day').toMillis()),
   ]);
-
-  const focusGoalIdsByPersona = { personal: new Set(), work: new Set() };
-  for (const doc of (focusSnap.docs || [])) {
-    const row = doc.data() || {};
-    const persona = resolvePersona(row.persona);
-    const ids = Array.isArray(row.goalIds) ? row.goalIds : [];
-    ids.forEach((goalId) => {
-      const normalized = String(goalId || '').trim();
-      if (normalized) focusGoalIdsByPersona[persona].add(normalized);
-    });
-  }
-
-  const storyById = new Map();
-  for (const doc of (storiesSnap.docs || [])) {
-    storyById.set(doc.id, doc.data() || {});
-  }
 
   const lowPriorityPools = { personal: [], work: [] };
   const top3Progress = {
@@ -1156,17 +1134,6 @@ async function applyAggressiveDueDateReplanForUser({
     if (isTaskDoneStatus(data.status) || data.deleted) continue;
     if (isTop) continue;
 
-    const parentStory = data.storyId ? storyById.get(data.storyId) : null;
-    const focusGoalIds = focusGoalIdsByPersona[persona] || new Set();
-    const critical = entityIsCritical({
-      entity: data,
-      entityType: 'task',
-      parentStory,
-      isTop,
-      focusGoalIds,
-    });
-    if (critical) continue;
-
     const score = Number(data.aiCriticalityScore || 0);
     const dueMs = getDueDateMs(data);
     const locked = isTaskLocked(data);
@@ -1193,10 +1160,10 @@ async function applyAggressiveDueDateReplanForUser({
       nextDueMs = nextWeekendDateByCapacity(nowLocal, dayLoadHours);
       reason = 'Research work moved to weekend capacity window';
     } else {
-      const shouldDefer = dueMs != null && dueMs <= tomorrowEnd;
+      const shouldDefer = dueMs != null && dueMs <= focusDueDate;
       if (shouldDefer) {
-        nextDueMs = nowLocal.plus({ days: AUTO_DEFER_LOOKAHEAD_DAYS }).endOf('day').toMillis();
-        reason = 'Auto-deferred low priority non-critical work';
+        nextDueMs = nonTopDeferralDate;
+        reason = 'Auto-deferred non-Top-3 work';
       }
     }
     if (!nextDueMs) continue;
@@ -1205,9 +1172,13 @@ async function applyAggressiveDueDateReplanForUser({
     const patch = {
       dueDate: nextDueMs,
       targetDate: nextDueMs,
+      dueDateUpdatedBy: 'scheduler',
+      dueDateUpdatedSource: 'nightly_non_top3',
+      dueDateUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
       aiBacklogDeferredAt: admin.firestore.FieldValue.serverTimestamp(),
       aiBacklogDeferredReason: reason,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      serverUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
       syncState: 'dirty',
     };
     if (research) patch.aiWorkType = 'research';
@@ -1226,16 +1197,6 @@ async function applyAggressiveDueDateReplanForUser({
     if (isStoryDoneStatus(data.status)) continue;
     if (isTop) continue;
     if (isStoryLocked(data)) continue;
-
-    const focusGoalIds = focusGoalIdsByPersona[persona] || new Set();
-    const critical = entityIsCritical({
-      entity: data,
-      entityType: 'story',
-      parentStory: null,
-      isTop,
-      focusGoalIds,
-    });
-    if (critical) continue;
 
     const score = Number(data.aiCriticalityScore || 0);
     const dueMs = getDueDateMs(data);
@@ -1257,10 +1218,10 @@ async function applyAggressiveDueDateReplanForUser({
       nextDueMs = nextWeekendDateByCapacity(nowLocal, dayLoadHours);
       reason = 'Research story moved to weekend capacity window';
     } else {
-      const shouldDefer = dueMs != null && dueMs <= tomorrowEnd;
+      const shouldDefer = dueMs != null && dueMs <= focusDueDate;
       if (shouldDefer) {
-        nextDueMs = nowLocal.plus({ days: AUTO_DEFER_LOOKAHEAD_DAYS }).endOf('day').toMillis();
-        reason = 'Auto-deferred low priority non-critical story';
+        nextDueMs = nonTopDeferralDate;
+        reason = 'Auto-deferred non-Top-3 story';
       }
     }
     if (!nextDueMs) continue;
@@ -1269,9 +1230,13 @@ async function applyAggressiveDueDateReplanForUser({
     const patch = {
       dueDate: nextDueMs,
       targetDate: nextDueMs,
+      dueDateUpdatedBy: 'scheduler',
+      dueDateUpdatedSource: 'nightly_non_top3',
+      dueDateUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
       aiBacklogDeferredAt: admin.firestore.FieldValue.serverTimestamp(),
       aiBacklogDeferredReason: reason,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      serverUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
       syncState: 'dirty',
     };
     if (research) patch.aiWorkType = 'research';
@@ -3839,7 +3804,7 @@ exports.unifiedNightlyOrchestrator = onSchedule({
   timeZone: 'Europe/London',
   memory: '1GiB',
   timeoutSeconds: 600,
-  secrets: [GOOGLE_AI_STUDIO_API_KEY, BOB_CLI_ACCESS],
+  secrets: [GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET, BOB_CLI_ACCESS],
   region: 'europe-west2',
 }, async () => {
   console.log('[unifiedNightlyOrchestrator] Starting consolidated nightly chain...');
@@ -4714,7 +4679,29 @@ exports.schedulePlannerItem = onCall({
     });
     return result;
   } catch (error) {
-    const message = error?.message || 'Failed to schedule planner item';
+    const message = String(error?.message || 'Failed to schedule planner item');
+    const lowerMsg = message.toLowerCase();
+
+    let httpsCode = 'failed-precondition';
+    let reason = 'scheduling_error';
+    if (lowerMsg.includes('not found') || lowerMsg.includes('does not exist')) {
+      httpsCode = 'not-found';
+      reason = 'entity_not_found';
+    } else if (lowerMsg.includes('permission denied')) {
+      httpsCode = 'permission-denied';
+      reason = 'permission_denied';
+    } else if (lowerMsg.includes('valid targetdatems') || lowerMsg.includes('only supports tasks and stories')) {
+      httpsCode = 'invalid-argument';
+      reason = 'invalid_argument';
+    } else if (lowerMsg.includes('no feasible slot') || lowerMsg.includes('no valid placement')) {
+      httpsCode = 'failed-precondition';
+      reason = 'no_feasible_slot';
+    } else if (!lowerMsg.includes('constraint') && !lowerMsg.includes('conflict') && !lowerMsg.includes('capacity')) {
+      // Nothing recognisably schedulingrelated — likely an unexpected crash
+      httpsCode = 'internal';
+      reason = 'unexpected_error';
+    }
+
     console.error('[schedulePlannerItem] failure', {
       debugRequestId: req?.data?.debugRequestId || null,
       uid,
@@ -4726,8 +4713,17 @@ exports.schedulePlannerItem = onCall({
       targetBucket: req?.data?.targetBucket || null,
       linkedBlockId: req?.data?.linkedBlockId || null,
       error: message,
+      reason,
+      httpsCode,
+      stack: error?.stack || null,
     });
-    throw new https.HttpsError('failed-precondition', message);
+
+    throw new https.HttpsError(httpsCode, message, {
+      reason,
+      debugRequestId: req?.data?.debugRequestId || null,
+      itemType,
+      itemId,
+    });
   }
 });
 

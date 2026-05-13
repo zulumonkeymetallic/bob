@@ -36,6 +36,7 @@ import { compareTop3Stories, compareTop3Tasks, isTop3Story, isTop3Task, top3Date
 import { useFocusGoals } from '../hooks/useFocusGoals';
 import { getProtectedFocusGoalIds, isGoalInHierarchySet } from '../utils/goalHierarchy';
 import { schedulePlannerItem as schedulePlannerItemMutation } from '../utils/plannerScheduling';
+import { applyChoreQuickDefer, isRecurringTask } from '../utils/plannerDeferral';
 import {
   buildStoryProgressUpdate,
   formatStoryProgressLabel,
@@ -684,9 +685,21 @@ const MobileHome: React.FC = () => {
     const targetBucket = targetBucketRaw === 'morning' || targetBucketRaw === 'afternoon' || targetBucketRaw === 'evening' || targetBucketRaw === 'anytime'
       ? targetBucketRaw
       : null;
-    if (source === 'recurring_quick_move' || deferTarget.listView) {
+    if (source === 'recurring_quick_move' && deferTarget.type === 'task' && targetEntity && isRecurringTask(targetEntity as any)) {
+      await applyChoreQuickDefer(targetEntity as any, source, rationale);
+      setDeferTarget(null);
+      return;
+    }
+    if (deferTarget.listView) {
       const coll = deferTarget.type === 'task' ? 'tasks' : 'stories';
-      await updateDoc(doc(db, coll, deferTarget.id), { dueDate: dateMs });
+      await updateDoc(doc(db, coll, deferTarget.id), {
+        dueDate: dateMs,
+        dueDateMs: dateMs,
+        deferredUntil: dateMs,
+        deferredReason: rationale || null,
+        deferredBy: source || 'list_view_defer',
+        updatedAt: serverTimestamp(),
+      });
       setDeferTarget(null);
       return;
     }

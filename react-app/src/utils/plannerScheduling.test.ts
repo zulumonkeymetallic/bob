@@ -12,7 +12,7 @@ describe('normalizePlannerSchedulingError', () => {
     });
 
     expect(result.code).toBe('failed-precondition');
-    expect(result.message.toLowerCase()).toContain('planner could not place this item automatically');
+    expect(result.message.toLowerCase()).toContain('planner could not place this item');
   });
 
   test('preserves actionable backend messages when they are provided', () => {
@@ -31,6 +31,6 @@ describe('normalizePlannerSchedulingError', () => {
     });
 
     expect(result.code).toBe('not-found');
-    expect(result.message).toContain('schedulePlannerItem function has not been deployed yet');
+    expect(result.message.toLowerCase()).toContain('not reachable');
   });
 });

@@ -19,7 +19,7 @@ exports.generateDailyDigest = onSchedule({
   memory: '512MiB',
   timeoutSeconds: 300,
   region: 'europe-west2',
-  secrets: [defineSecret('BREVO_API_KEY'), defineSecret('GOOGLEAISTUDIOAPIKEY')]
+  secrets: [defineSecret('BREVO_API_KEY'), defineSecret('GOOGLEAISTUDIOAPIKEY'), defineSecret('OPENROUTER_API_KEY')]
 }, async (event) => {
   console.log('🌅 Starting daily digest generation at 06:45');
   if (!DAILY_DIGEST_ENABLED) {
@@ -58,7 +58,7 @@ exports.generateDailyDigest = onSchedule({
 });
 
 // Manual trigger (per-user) to generate a digest on demand
-exports.runDailyDigestNow = httpsV2.onCall({ region: 'europe-west2', secrets: [defineSecret('BREVO_API_KEY'), defineSecret('GOOGLEAISTUDIOAPIKEY')] }, async (req) => {
+exports.runDailyDigestNow = httpsV2.onCall({ region: 'europe-west2', secrets: [defineSecret('BREVO_API_KEY'), defineSecret('GOOGLEAISTUDIOAPIKEY'), defineSecret('OPENROUTER_API_KEY')] }, async (req) => {
   if (!DAILY_DIGEST_ENABLED) {
     throw new httpsV2.HttpsError('failed-precondition', 'Daily digest email is disabled in favor of the Daily Summary.');
   }

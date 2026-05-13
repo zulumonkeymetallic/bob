@@ -33,6 +33,7 @@ const admin                  = require('firebase-admin');
 
 // BOB's own Gemini key (available to the refresh function)
 const GOOGLE_AI_STUDIO_API_KEY = defineSecret('GOOGLEAISTUDIOAPIKEY');
+const OPENROUTER_API_KEY_SECRET = defineSecret('OPENROUTER_API_KEY');
 
 // Registry TTL: consider entries stale after 25 hours
 const REGISTRY_TTL_MS = 25 * 60 * 60 * 1000;
@@ -67,6 +68,12 @@ const FALLBACK_MODELS = {
     { id: 'claude-haiku-3-5',          name: 'Claude Haiku 3.5',            contextWindow: 200000,  tier: 'fast',     description: 'Fastest Claude, best value' },
     { id: 'claude-opus-4',             name: 'Claude Opus 4',               contextWindow: 200000,  tier: 'premium',  description: 'Previous Opus' },
     { id: 'claude-sonnet-4',           name: 'Claude Sonnet 4',             contextWindow: 200000,  tier: 'standard', description: 'Previous Sonnet' },
+  ],
+  openrouter: [
+    { id: 'openrouter/auto',           name: 'Auto (Best Available)',        contextWindow: null,    tier: 'standard', description: 'OpenRouter selects optimal model automatically' },
+    { id: 'anthropic/claude-sonnet-4', name: 'Claude Sonnet 4 via OR',      contextWindow: 200000,  tier: 'premium',  description: 'Claude Sonnet via OpenRouter' },
+    { id: 'openai/gpt-4.1-mini',       name: 'GPT-4.1 Mini via OR',         contextWindow: 1000000, tier: 'fast',     description: 'GPT-4.1 Mini via OpenRouter' },
+    { id: 'google/gemini-2.5-flash',   name: 'Gemini 2.5 Flash via OR',     contextWindow: 1000000, tier: 'fast',     description: 'Gemini 2.5 Flash via OpenRouter' },
   ],
 };
 
@@ -115,7 +122,7 @@ async function _writeRegistry(provider, models) {
 // ---------------------------------------------------------------------------
 
 exports.getAIModels = onCall(
-  { region: 'europe-west2', memory: '256MiB', timeoutSeconds: 15 },
+  { region: 'europe-west2', memory: '256MiB', timeoutSeconds: 15, secrets: [OPENROUTER_API_KEY_SECRET] },
   async (request) => {
     if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in required');
 
@@ -163,7 +170,7 @@ exports.refreshModelRegistry = onSchedule(
     region: 'europe-west2',
     memory: '256MiB',
     timeoutSeconds: 60,
-    secrets: [GOOGLE_AI_STUDIO_API_KEY],
+    secrets: [GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET],
   },
   async () => {
     const db = admin.firestore();
@@ -227,7 +234,7 @@ exports.refreshModelRegistry = onSchedule(
 // ---------------------------------------------------------------------------
 
 exports.testLLMConnection = onCall(
-  { region: 'europe-west2', memory: '256MiB', timeoutSeconds: 30 },
+  { region: 'europe-west2', memory: '256MiB', timeoutSeconds: 30, secrets: [OPENROUTER_API_KEY_SECRET] },
   async (request) => {
     if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in required');
 
@@ -243,9 +250,10 @@ exports.testLLMConnection = onCall(
     const startMs = Date.now();
     try {
       let reply;
-      if (provider === 'gemini')         reply = await _testGemini(apiKey.trim(), model);
-      else if (provider === 'openai')    reply = await _testOpenAI(apiKey.trim(), model);
-      else if (provider === 'anthropic') reply = await _testAnthropic(apiKey.trim(), model);
+      if (provider === 'gemini')           reply = await _testGemini(apiKey.trim(), model);
+      else if (provider === 'openai')      reply = await _testOpenAI(apiKey.trim(), model);
+      else if (provider === 'anthropic')   reply = await _testAnthropic(apiKey.trim(), model);
+      else if (provider === 'openrouter')  reply = await _testOpenRouter(apiKey.trim(), model);
       else throw new Error(`Unsupported provider: ${provider}`);
 
       const latencyMs = Date.now() - startMs;
@@ -370,6 +378,28 @@ async function _testAnthropic(apiKey, model) {
   if (!resp.ok) throw new Error(`Anthropic HTTP ${resp.status}: ${await resp.text()}`);
   const data = await resp.json();
   return data?.content?.[0]?.text?.trim();
+}
+
+async function _testOpenRouter(apiKey, model) {
+  const resp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+      'HTTP-Referer': 'https://bob20250810.web.app',
+      'X-Title': 'BOB',
+    },
+    body: JSON.stringify({
+      model,
+      messages: [{ role: 'user', content: TEST_PROMPT }],
+      max_tokens: 50,
+      temperature: 0,
+    }),
+    signal: AbortSignal.timeout(20000),
+  });
+  if (!resp.ok) throw new Error(`OpenRouter HTTP ${resp.status}: ${await resp.text()}`);
+  const data = await resp.json();
+  return data?.choices?.[0]?.message?.content?.trim();
 }
 
 // ---------------------------------------------------------------------------

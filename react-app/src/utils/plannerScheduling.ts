@@ -54,14 +54,16 @@ export interface PlannerScheduleErrorInfo {
 export function normalizePlannerSchedulingError(error: any): PlannerScheduleErrorInfo {
   const rawCode = String(error?.code || '').replace(/^functions\//, '').trim();
   const rawMessage = String(error?.message || '').trim();
-  const detailsMessage = String(error?.details?.message || error?.details || '').trim();
+  const details = (error?.details && typeof error.details === 'object') ? error.details : {};
+  const reason = String(details?.reason || '').trim();
+  const detailsMessage = String(details?.message || (typeof error?.details === 'string' ? error.details : '') || '').trim();
   const lowerMessage = rawMessage.toLowerCase();
   const lowerDetails = detailsMessage.toLowerCase();
   const code = rawCode || 'unknown';
 
+  // CORS / not deployed — network-level failures before the function even runs
   if (
-    code === 'not-found'
-    || lowerMessage.includes('preflight')
+    lowerMessage.includes('preflight')
     || lowerMessage.includes('access control checks')
     || lowerMessage.includes('failed to fetch')
     || lowerMessage.includes('cors')
@@ -73,34 +75,52 @@ export function normalizePlannerSchedulingError(error: any): PlannerScheduleErro
     return {
       code,
       rawMessage: rawMessage || detailsMessage,
-      message: 'The planner scheduling service is not reachable right now. This usually means the schedulePlannerItem function has not been deployed yet or the endpoint is failing CORS checks.',
+      message: 'The planner scheduling service is not reachable. The function may not be deployed yet or is failing CORS checks.',
     };
   }
 
-  if (rawMessage && rawMessage !== 'internal' && rawMessage !== 'unknown' && rawMessage !== rawCode) {
+  // Structured reason from server details (preferred path post-enhancement)
+  if (reason === 'no_feasible_slot') {
     return {
       code,
       rawMessage,
-      message: rawMessage,
+      message: 'No available slot was found for that date. Try a different date, adjust the time bucket, or use defer.',
     };
   }
 
-  if (detailsMessage && detailsMessage !== 'internal' && detailsMessage !== 'unknown') {
+  if (reason === 'entity_not_found') {
     return {
       code,
-      rawMessage: detailsMessage,
-      message: detailsMessage,
+      rawMessage,
+      message: 'This item no longer exists. Refresh the page and try again.',
     };
   }
 
-  if (code === 'permission-denied' || lowerMessage.includes('permission denied')) {
+  if (reason === 'permission_denied') {
     return {
       code,
-      rawMessage: rawMessage || detailsMessage,
-      message: 'The planner could not update this item because you do not have permission to edit it.',
+      rawMessage,
+      message: 'You do not have permission to move or defer this item.',
     };
   }
 
+  if (reason === 'invalid_argument') {
+    return {
+      code,
+      rawMessage,
+      message: 'The scheduling request was malformed. Refresh the page and try again.',
+    };
+  }
+
+  if (reason === 'unexpected_error') {
+    return {
+      code,
+      rawMessage,
+      message: rawMessage || 'An unexpected server error occurred. Check Firebase logs for details.',
+    };
+  }
+
+  // Fallback: use HTTP code
   if (code === 'unauthenticated') {
     return {
       code,
@@ -117,18 +137,39 @@ export function normalizePlannerSchedulingError(error: any): PlannerScheduleErro
     };
   }
 
-  if (
-    code === 'failed-precondition' ||
-    code === 'internal' ||
-    lowerMessage === 'internal' ||
-    lowerMessage === 'unknown' ||
-    lowerDetails === 'internal' ||
-    lowerDetails === 'unknown'
-  ) {
+  if (code === 'permission-denied') {
     return {
       code,
       rawMessage: rawMessage || detailsMessage,
-      message: 'The planner could not place this item automatically. This usually means the suggested date conflicts with existing calendar blocks, sprint limits, or another scheduling constraint.',
+      message: 'You do not have permission to edit this item.',
+    };
+  }
+
+  if (code === 'not-found') {
+    return {
+      code,
+      rawMessage: rawMessage || detailsMessage,
+      message: 'This item no longer exists. Refresh the page and try again.',
+    };
+  }
+
+  if (code === 'internal') {
+    // Unexpected crash — surface the raw message if it's meaningful
+    const surfaced = rawMessage && !['internal', 'unknown'].includes(rawMessage.toLowerCase())
+      ? rawMessage
+      : 'An unexpected server error occurred. Check Firebase logs for details.';
+    return { code, rawMessage, message: surfaced };
+  }
+
+  if (code === 'failed-precondition') {
+    // Surface the server message if it's specific (not a generic fallback string)
+    const isGeneric = !rawMessage || ['internal', 'unknown', 'failed-precondition'].includes(rawMessage.toLowerCase());
+    return {
+      code,
+      rawMessage: rawMessage || detailsMessage,
+      message: isGeneric
+        ? 'The planner could not place this item. The date may conflict with existing blocks or sprint limits.'
+        : rawMessage,
     };
   }
 
