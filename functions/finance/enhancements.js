@@ -2,11 +2,12 @@ const httpsV2 = require('firebase-functions/v2/https');
 const { defineSecret } = require('firebase-functions/params');
 const admin = require('firebase-admin');
 const crypto = require('crypto');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { normaliseMerchantName, inferDefaultCategoryType, inferDefaultCategoryLabel } = require('../monzo/shared');
 const { mergeFinanceCategories } = require('./categories');
+const { callLLM } = require('../utils/llmHelper');
 
 const GOOGLE_AI_STUDIO_API_KEY = defineSecret('GOOGLEAISTUDIOAPIKEY');
+const OPENROUTER_API_KEY_SECRET = defineSecret('OPENROUTER_API_KEY');
 const FUNCTION_REGION = 'europe-west2';
 const EXTERNAL_SOURCES = new Set(['barclays', 'paypal', 'other']);
 const MANUAL_ACCOUNT_TYPES = new Set(['asset', 'debt', 'investment', 'cash', 'savings']);
@@ -433,20 +434,15 @@ function extractJson(text) {
 }
 
 async function callGeminiActionRefinement({ uid, actions }) {
-  const apiKey = process.env.GOOGLEAISTUDIOAPIKEY || process.env.GOOGLE_AI_STUDIO_API_KEY || '';
-  if (!apiKey || !actions.length) return null;
-  const modelName = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
-  const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: modelName });
-  const prompt = [
-    'You are a personal finance optimization assistant.',
-    'Given these action candidates, return JSON only in the shape:',
+  if (!actions.length) return null;
+  const system = [
+    'You are a personal finance optimisation assistant.',
+    'Return JSON only in the shape:',
     '{"actions":[{"merchantKey":"string","type":"cancel|reduce|review|debt_optimization","title":"string","reason":"string","estimatedMonthlySavings":number,"confidence":0-1}]}',
-    'Keep at most 12 actions. Be conservative and practical.',
-    `Candidates: ${JSON.stringify(actions.slice(0, 40))}`,
+    'Keep at most 12 actions. Be conservative and practical. Output raw JSON with no markdown fences.',
   ].join('\n');
-  const result = await model.generateContent(prompt);
-  const text = result?.response?.text?.() || '';
+  const user = `Candidates: ${JSON.stringify(actions.slice(0, 40))}`;
+  const text = await callLLM(system, user);
   const parsed = extractJson(text);
   const list = Array.isArray(parsed?.actions) ? parsed.actions : [];
   if (!list.length) return null;
@@ -877,7 +873,7 @@ const recomputeDebtServiceBreakdown = httpsV2.onCall({ region: FUNCTION_REGION }
   return { ok: true, source, perMonth, totals };
 });
 
-const generateFinanceActionInsights = httpsV2.onCall({ region: FUNCTION_REGION, secrets: [GOOGLE_AI_STUDIO_API_KEY] }, async (req) => {
+const generateFinanceActionInsights = httpsV2.onCall({ region: FUNCTION_REGION, secrets: [GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET] }, async (req) => {
   if (!req?.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
   const uid = req.auth.uid;
   const source = normalizeExternalSource(req.data?.source || 'barclays');

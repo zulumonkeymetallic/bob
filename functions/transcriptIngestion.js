@@ -14,6 +14,7 @@ const { ensureTaskPoints, clampTaskPoints } = require('./utils/taskPoints');
 
 const GOOGLE_AI_STUDIO_API_KEY = defineSecret('GOOGLEAISTUDIOAPIKEY');
 const ANTHROPIC_API_KEY = defineSecret('ANTHROPIC_API_KEY');
+const OPENROUTER_API_KEY_SECRET = defineSecret('OPENROUTER_API_KEY');
 const BREVO_API_KEY = defineSecret('BREVO_API_KEY');
 const GOOGLE_OAUTH_CLIENT_ID = defineSecret('GOOGLE_OAUTH_CLIENT_ID');
 const GOOGLE_OAUTH_CLIENT_SECRET = defineSecret('GOOGLE_OAUTH_CLIENT_SECRET');
@@ -5304,6 +5305,7 @@ exports.ingestTranscript = httpsV2.onCall({
   secrets: [
     GOOGLE_AI_STUDIO_API_KEY,
     ANTHROPIC_API_KEY,
+    OPENROUTER_API_KEY_SECRET,
     BREVO_API_KEY,
     GOOGLE_OAUTH_CLIENT_ID,
     GOOGLE_OAUTH_CLIENT_SECRET,
@@ -5336,6 +5338,7 @@ exports.ingestTranscriptHttp = httpsV2.onRequest({
   secrets: [
     GOOGLE_AI_STUDIO_API_KEY,
     ANTHROPIC_API_KEY,
+    OPENROUTER_API_KEY_SECRET,
     BREVO_API_KEY,
     GOOGLE_OAUTH_CLIENT_ID,
     GOOGLE_OAUTH_CLIENT_SECRET,
