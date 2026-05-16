@@ -12755,6 +12755,7 @@ async function upsertWorkout(uid, activity) {
     isCommute: activity.commute || false,
     isManual: activity.manual || false,
     visibility: activity.visibility || null,
+    summaryPolyline: activity.map?.summary_polyline || null,
     source: 'strava',
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -17159,6 +17160,40 @@ exports.onStoryWritten = firestoreV2.onDocumentWritten('stories/{storyId}', asyn
   }
 });
 
+// ===== YouTube transcript ingestion — story queue watcher
+exports.onStoryYouTubeQueue = firestoreV2.onDocumentWritten({
+  document: 'stories/{storyId}',
+  secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET, GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET],
+  timeoutSeconds: 540,
+  memory: '512MiB',
+}, async (event) => {
+  try {
+    const before = event.data?.before?.data() || null;
+    const after = event.data?.after?.data() || null;
+    if (!after || !after.ownerUid) return;
+    if (after.youtubeIngestionStatus === 'in_progress') return;
+
+    const url = String(after.url || '').trim();
+    if (!url) return;
+
+    const { extractVideoId } = require('./utils/youtubeTranscript');
+    const isYouTube = extractVideoId(url) !== null;
+    if (!isYouTube) return;
+    if (after.youtubeIngested) return;
+    if (after.youtubeIngestionStatus && after.youtubeIngestionStatus !== 'queued') return;
+
+    const urlChanged = (before?.url || '') !== url;
+    const isNew = !before;
+    const isQueued = after.youtubeIngestionStatus === 'queued';
+    if (!urlChanged && !isNew && !isQueued) return;
+
+    const { ingestYouTubeUrl } = require('./youtubeIngestion');
+    await ingestYouTubeUrl({ uid: after.ownerUid, entityType: 'story', entityId: event.params.storyId, videoUrl: url });
+  } catch (e) {
+    console.warn('[onStoryYouTubeQueue] failed:', e?.message || e);
+  }
+});
+
 // ===== Task lifecycle maintenance (completed/duplicates TTL and flags)
 exports.onTaskWritten = firestoreV2.onDocumentWritten('tasks/{taskId}', async (event) => {
   const before = event.data?.before?.data() || null;
@@ -17448,6 +17483,40 @@ exports.onTaskWritten = firestoreV2.onDocumentWritten('tasks/{taskId}', async (e
     await indexRef.set(indexDoc, { merge: true });
   } catch (e) {
     console.warn('[onTaskWritten] sprint_task_index maintenance failed', id, e?.message || e);
+  }
+});
+
+// ===== YouTube transcript ingestion — task queue watcher
+exports.onTaskYouTubeQueue = firestoreV2.onDocumentWritten({
+  document: 'tasks/{taskId}',
+  secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET, GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET],
+  timeoutSeconds: 540,
+  memory: '512MiB',
+}, async (event) => {
+  try {
+    const before = event.data?.before?.data() || null;
+    const after = event.data?.after?.data() || null;
+    if (!after || !after.ownerUid) return;
+    if (after.youtubeIngestionStatus === 'in_progress') return;
+
+    const url = String(after.url || '').trim();
+    if (!url) return;
+
+    const { extractVideoId } = require('./utils/youtubeTranscript');
+    const isYouTube = extractVideoId(url) !== null;
+    if (!isYouTube) return;
+    if (after.youtubeIngested) return;
+    if (after.youtubeIngestionStatus && after.youtubeIngestionStatus !== 'queued') return;
+
+    const urlChanged = (before?.url || '') !== url;
+    const isNew = !before;
+    const isQueued = after.youtubeIngestionStatus === 'queued';
+    if (!urlChanged && !isNew && !isQueued) return;
+
+    const { ingestYouTubeUrl } = require('./youtubeIngestion');
+    await ingestYouTubeUrl({ uid: after.ownerUid, entityType: 'task', entityId: event.params.taskId, videoUrl: url });
+  } catch (e) {
+    console.warn('[onTaskYouTubeQueue] failed:', e?.message || e);
   }
 });
 
@@ -21030,4 +21099,14 @@ try {
   }
 } catch (e) {
   console.warn('[init] agent/agentBriefing not loaded', e?.message || e);
+}
+
+// ===== YouTube ingestion — manual callable trigger
+try {
+  const youtubeIngestionModule = require('./youtubeIngestion');
+  if (youtubeIngestionModule) {
+    exports.ingestYouTubeUrlHttp = youtubeIngestionModule.ingestYouTubeUrlHttp;
+  }
+} catch (e) {
+  console.warn('[init] youtubeIngestion not loaded', e?.message || e);
 }
