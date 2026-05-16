@@ -107,7 +107,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       label: 'Health',
       icon: 'heartbeat',
       items: [
-        { label: '⚡ Metrics Overview', path: '/metrics/overview', icon: 'chart-area' },
+        { label: 'Metrics Overview', path: '/metrics/overview', icon: 'chart-area' },
         { label: 'AI Coach', path: '/ai-coach', icon: 'dumbbell' },
         { label: 'Fitness Results', path: '/fitness', icon: 'running' },
         { label: 'Habit Tracking', path: '/dashboard/habit-tracking', icon: 'check-square' },
