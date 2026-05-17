@@ -14,6 +14,30 @@
 const admin = require('firebase-admin');
 const { writeConsolidatedCalendarBlocks, calculateBlockCapacity, getDayCapacityWarnings } = require('./blockConsolidation');
 
+function isImmovableSourceDoc(data) {
+  if (!data) return false;
+  if (data.immovable === true) return true;
+  const status = String(data.status || '').toLowerCase();
+  return status === 'immovable';
+}
+
+function schedulerCanonicalDuePatch(plannedDateMidnightMs, source = 'nightly_calendar_alignment') {
+  return {
+    dueDate: plannedDateMidnightMs,
+    targetDate: plannedDateMidnightMs,
+    dueDateUpdatedBy: 'scheduler',
+    dueDateUpdatedSource: source,
+    dueDateUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    // Explicit scheduler overwrite: remove stale reminder lock ownership.
+    dueDateLocked: false,
+    lockDueDate: false,
+    dueDateLockSource: admin.firestore.FieldValue.delete(),
+    dueDateLockedAt: admin.firestore.FieldValue.delete(),
+    dueDateReason: admin.firestore.FieldValue.delete(),
+    serverUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+}
+
 /**
  * Write scheduled instances to Firestore.
  * @param {FirebaseFirestore.Firestore} db 
@@ -280,12 +304,12 @@ async function writeScheduledTimesToSources(db, userId, scheduledInstances) {
         console.warn(`[writeScheduledTimesToSources] Failed to parse date for ${sourceId}:`, dateErr?.message);
       }
 
-      // Read current doc to check lock flag before writing dueDate
-      let isLocked = false;
+      // Read current doc to detect immovable items.
+      let isImmovable = false;
       try {
         const snap = await db.collection(collection).doc(sourceId).get();
         const data = snap.exists ? snap.data() : {};
-        isLocked = !!(data.dueDateLocked || data.lockDueDate || data.immovable);
+        isImmovable = isImmovableSourceDoc(data);
       } catch (_) { /* ignore — treat as unlocked */ }
 
       const updatePayload = {
@@ -307,13 +331,9 @@ async function writeScheduledTimesToSources(db, userId, scheduledInstances) {
         updatePayload.timeOfDay = inferredTimeOfDay;
       }
 
-      // Write dueDate from scheduled block date, unless user has locked it
-      if (plannedDateMidnightMs && !isLocked) {
-        if (sourceType === 'story') {
-          updatePayload.targetDate = plannedDateMidnightMs;
-        } else {
-          updatePayload.dueDate = plannedDateMidnightMs;
-        }
+      // Write canonical due-date alignment from scheduled block date, unless immovable.
+      if (plannedDateMidnightMs && !isImmovable && (sourceType === 'task' || sourceType === 'story')) {
+        Object.assign(updatePayload, schedulerCanonicalDuePatch(plannedDateMidnightMs, 'nightly_calendar_alignment'));
       }
 
       await db.collection(collection).doc(sourceId).update(updatePayload);

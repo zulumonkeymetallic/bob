@@ -260,8 +260,8 @@ try {
 try {
   const fuzzyTaskLinking = require('./fuzzyTaskLinking');
   if (fuzzyTaskLinking) {
-    exports.nightlyTaskLinking = fuzzyTaskLinking.nightlyTaskLinking;
-    exports.nightlyStoryGoalLinking = fuzzyTaskLinking.nightlyStoryGoalLinking;
+    // Keep manual fuzzy-linking tools available, but retire standalone scheduled
+    // linking jobs in favor of the unified nightly orchestrator chain.
     exports.triggerTaskLinking = fuzzyTaskLinking.triggerTaskLinking;
     exports.triggerStoryGoalLinking = fuzzyTaskLinking.triggerStoryGoalLinking;
     exports.respondToTaskSuggestion = fuzzyTaskLinking.respondToTaskSuggestion;
@@ -275,11 +275,10 @@ try {
 try {
   const aiPlanning = require('./aiPlanning');
   if (aiPlanning) {
-    exports.runNightlyScheduler = aiPlanning.runNightlyScheduler;
+    // Legacy nightly scheduler retired; unifiedNightlyOrchestrator is canonical.
     exports.runMorningPlanner = aiPlanning.runMorningPlanner;
     exports.onStoryWrite = aiPlanning.onStoryWrite;
     exports.onTaskWrite = aiPlanning.onTaskWrite; // New Trigger
-    exports.convertTasksToStories = aiPlanning.convertTasksToStories; // New Scheduled Function
 
     // Capacity Planning
     const capacityPlanning = require('./capacityPlanning');
@@ -300,6 +299,7 @@ try {
     exports.runCalendarPlanner = nightlyOrchestration.runCalendarPlanner;
     exports.materializeFitnessBlocksNow = nightlyOrchestration.materializeFitnessBlocksNow;
     exports.replanCalendarNow = nightlyOrchestration.replanCalendarNow;
+    exports.unifiedNightlyOrchestrator = nightlyOrchestration.unifiedNightlyOrchestrator;
     exports.runNightlyChainNow = nightlyOrchestration.runNightlyChainNow;
     if (nightlyOrchestration.schedulePlannerItem) {
       exports.schedulePlannerItem = nightlyOrchestration.schedulePlannerItem;

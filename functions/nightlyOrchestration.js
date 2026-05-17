@@ -36,6 +36,7 @@ const {
   resolveManualScheduleOverride,
   schedulePlannerItemMutation,
 } = require('./services/schedulingService');
+const fuzzyTaskLinking = require('./fuzzyTaskLinking');
 
 // Secrets
 const GOOGLE_AI_STUDIO_API_KEY = defineSecret('GOOGLEAISTUDIOAPIKEY');
@@ -763,6 +764,25 @@ const resolvePersona = (value) => (String(value || '').toLowerCase() === 'work' 
 
 const isTaskLocked = (task) => task.dueDateLocked || task.lockDueDate || task.immovable === true || task.status === 'immovable';
 const isStoryLocked = (story) => story?.dueDateLocked || story?.lockDueDate || story?.immovable === true || story?.status === 'immovable';
+const isTaskImmovable = (task) => task?.immovable === true || String(task?.status || '').toLowerCase() === 'immovable';
+const isStoryImmovable = (story) => story?.immovable === true || String(story?.status || '').toLowerCase() === 'immovable';
+
+function schedulerCanonicalDuePatch(dueMs, source) {
+  return {
+    dueDate: dueMs,
+    targetDate: dueMs,
+    dueDateUpdatedBy: 'scheduler',
+    dueDateUpdatedSource: source,
+    dueDateUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    // Scheduler overwrite is now canonical; clear reminder-owned lock fields.
+    dueDateLocked: false,
+    lockDueDate: false,
+    dueDateLockSource: admin.firestore.FieldValue.delete(),
+    dueDateLockedAt: admin.firestore.FieldValue.delete(),
+    dueDateReason: admin.firestore.FieldValue.delete(),
+    serverUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+}
 
 const TOP3_TAG_TOKENS = new Set(['top3', '#top3']);
 
@@ -1136,7 +1156,7 @@ async function applyAggressiveDueDateReplanForUser({
 
     const score = Number(data.aiCriticalityScore || 0);
     const dueMs = getDueDateMs(data);
-    const locked = isTaskLocked(data);
+    const locked = isTaskImmovable(data);
     const recurring = isRoutineChoreHabit(data) || hasRecurrence(data);
     const research = isResearchTitle(data.title || data.name || '');
 
@@ -1170,17 +1190,12 @@ async function applyAggressiveDueDateReplanForUser({
     if (dueMs && nextDueMs <= dueMs) continue;
 
     const patch = {
-      dueDate: nextDueMs,
-      targetDate: nextDueMs,
-      dueDateUpdatedBy: 'scheduler',
-      dueDateUpdatedSource: 'nightly_non_top3',
-      dueDateUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
       aiBacklogDeferredAt: admin.firestore.FieldValue.serverTimestamp(),
       aiBacklogDeferredReason: reason,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      serverUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
       syncState: 'dirty',
     };
+    Object.assign(patch, schedulerCanonicalDuePatch(nextDueMs, 'nightly_non_top3'));
     if (research) patch.aiWorkType = 'research';
     await updateItem(doc.ref, patch, reason);
   }
@@ -1196,7 +1211,7 @@ async function applyAggressiveDueDateReplanForUser({
     }
     if (isStoryDoneStatus(data.status)) continue;
     if (isTop) continue;
-    if (isStoryLocked(data)) continue;
+    if (isStoryImmovable(data)) continue;
 
     const score = Number(data.aiCriticalityScore || 0);
     const dueMs = getDueDateMs(data);
@@ -1228,17 +1243,12 @@ async function applyAggressiveDueDateReplanForUser({
     if (dueMs && nextDueMs <= dueMs) continue;
 
     const patch = {
-      dueDate: nextDueMs,
-      targetDate: nextDueMs,
-      dueDateUpdatedBy: 'scheduler',
-      dueDateUpdatedSource: 'nightly_non_top3',
-      dueDateUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
       aiBacklogDeferredAt: admin.firestore.FieldValue.serverTimestamp(),
       aiBacklogDeferredReason: reason,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      serverUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
       syncState: 'dirty',
     };
+    Object.assign(patch, schedulerCanonicalDuePatch(nextDueMs, 'nightly_non_top3'));
     if (research) patch.aiWorkType = 'research';
     await updateItem(doc.ref, patch, reason);
   }
@@ -2547,7 +2557,7 @@ async function runAutoPointingJob() {
 //   region: 'europe-west2',
 // }, runAutoPointingJob);
 
-// ===== 02:00 Bi-directional conversion
+// ===== 02:00 Conversion (task -> story only)
 async function runAutoConversionsJob() {
   const db = ensureFirestore();
   const profiles = await db.collection('profiles').get().catch(() => ({ docs: [] }));
@@ -2655,50 +2665,9 @@ async function runAutoConversionsJob() {
       }));
     }
 
-    // Story -> Task (points < 4)
-    const storiesSnap = await db.collection('stories')
-      .where('ownerUid', '==', userId)
-      .where('points', '<', 4)
-      .limit(50)
-      .get()
-      .catch(() => ({ docs: [] }));
-
-    for (const doc of storiesSnap.docs) {
-      const story = doc.data() || {};
-      if (story.convertedToTaskId) continue;
-      const taskRef = db.collection('tasks').doc();
-      const taskRefValue = makeRefCandidate('task');
-      await taskRef.set({
-        ref: taskRefValue,
-        title: story.title || 'Task created from story',
-        description: story.description || '',
-        points: story.points,
-        ownerUid: userId,
-        goalId: story.goalId || null,
-        sprintId: story.sprintId || null,
-        theme: story.theme || null,
-        status: 'todo',
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        convertedFromStoryId: doc.id,
-      }, { merge: true });
-
-      await appendToDescription(doc.ref, story.description, `Converted to a task (${taskRefValue})`);
-      await doc.ref.set({
-        status: 'done',
-        convertedToTaskId: taskRef.id,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      }, { merge: true });
-
-      await db.collection('activity_stream').add(activityPayload({
-        ownerUid: userId,
-        entityId: doc.id,
-        entityType: 'story',
-        activityType: 'task_to_story_conversion',
-        description: `Converted to task ${taskRefValue}`,
-        metadata: { direction: 'story_to_task', taskId: taskRef.id, taskRef: taskRefValue, points: story.points },
-      }));
-    }
+    // Intentionally no Story -> Task auto-conversion.
+    // Conversion is one-way so high-effort tasks become stories, while stories
+    // remain stable planning anchors.
   }
 }
 
@@ -3261,7 +3230,6 @@ async function runPriorityScoringJob() {
       .map((t) => ({
         ...t,
         createdMs: toDateTime(t.data.createdAt || t.data.serverCreatedAt, { defaultValue: null })?.toMillis() || null,
-        persona: String(t.data.persona || 'personal').toLowerCase() === 'work' ? 'work' : 'personal',
       }))
       .filter((t) => !isRoutineChoreHabit(t.data));
 
@@ -3269,113 +3237,76 @@ async function runPriorityScoringJob() {
       .map((s) => ({
         ...s,
         createdMs: toDateTime(s.data.createdAt || s.data.serverCreatedAt, { defaultValue: null })?.toMillis() || null,
-        persona: String(s.data.persona || 'personal').toLowerCase() === 'work' ? 'work' : 'personal',
       }));
 
-    const topTaskIdsByPersona = { personal: new Set(), work: new Set() };
-    const topStoryIdsByPersona = { personal: new Set(), work: new Set() };
+    // Global Top 3, story-first: pick three stories, then inherit top3 status
+    // to tasks linked to those stories.
+    const focusStories = selectTopStoriesFresh(storyCandidates);
+    const topStoryIds = new Set(focusStories.map((story) => story.id));
+    const focusTasks = taskCandidates
+      .filter((task) => task?.data?.storyId && topStoryIds.has(task.data.storyId))
+      .sort(scoreCreatedSort);
+    const promotedTaskIds = new Set(focusTasks.map((task) => task.id));
 
-    for (const persona of ['personal', 'work']) {
-      const personaTasks = taskCandidates.filter((t) => t.persona === persona);
-      const personaStories = storyCandidates.filter((s) => s.persona === persona);
+    const taskBatch = db.batch();
+    focusTasks.forEach((task, idx) => {
+      const reason = [
+        'Top 3 via story',
+        `storyId=${task.data.storyId}`,
+        `score=${Math.round(task.score || 0)}`,
+      ].join(' | ');
+      const patch = {
+        aiFlaggedTop: true,
+        aiPriorityRank: idx + 1,
+        aiTop3ForDay: true,
+        aiTop3Date: todayIso,
+        aiTop3Reason: reason,
+        aiCriticalityScore: 100,
+        aiPriorityReason: admin.firestore.FieldValue.delete(),
+        tags: withTop3Tag(task.data?.tags),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        syncState: 'dirty',
+      };
+      if (!isTaskImmovable(task.data)) {
+        Object.assign(patch, schedulerCanonicalDuePatch(focusDueDate, 'nightly_top3'));
+        patch.aiDueDateSetAt = admin.firestore.FieldValue.serverTimestamp();
+      }
+      taskBatch.set(task.refObj, patch, { merge: true });
+    });
+    if (focusTasks.length > 0) await taskBatch.commit();
 
-      const storyMap = new Map(personaStories.map((story) => [story.id, story]));
-      const focusStories = selectTopStoriesFresh(personaStories);
-      const focusTasks = selectTopTasksFresh(personaTasks, storyMap);
+    const storyBatch = db.batch();
+    focusStories.forEach((story, idx) => {
+      const reason = [
+        'Top 3 priority',
+        `score=${Math.round(story.score || 0)}`,
+        story.reason ? `why=${story.reason}` : null,
+      ].filter(Boolean).join(' | ');
+      const patch = {
+        aiFocusStoryRank: idx + 1,
+        aiFocusStoryAt: admin.firestore.FieldValue.serverTimestamp(),
+        aiTop3ForDay: true,
+        aiTop3Date: todayIso,
+        aiTop3Reason: reason,
+        aiCriticalityScore: 100,
+        aiPriorityReason: admin.firestore.FieldValue.delete(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        syncState: 'dirty',
+      };
+      if (focusDueDate && !isStoryImmovable(story.data)) {
+        Object.assign(patch, schedulerCanonicalDuePatch(focusDueDate, 'nightly_top3'));
+        patch.aiDueDateSetAt = admin.firestore.FieldValue.serverTimestamp();
+      }
+      storyBatch.set(story.refObj, patch, { merge: true });
+    });
+    if (focusStories.length > 0) await storyBatch.commit();
 
-      topTaskIdsByPersona[persona] = new Set(focusTasks.map((t) => t.id));
-      topStoryIdsByPersona[persona] = new Set(focusStories.map((s) => s.id));
-
-      const taskBatch = db.batch();
-      focusTasks.forEach((task, idx) => {
-        const tags = withTop3Tag(task.data?.tags);
-        const reason = [
-          'Top 3 priority',
-          `score=${Math.round(task.score || 0)}`,
-          task.reason ? `why=${task.reason}` : null,
-        ].filter(Boolean).join(' | ');
-        const patch = {
-          aiFlaggedTop: true,
-          aiPriorityRank: idx + 1,
-          aiTop3ForDay: true,
-          aiTop3Date: todayIso,
-          aiTop3Reason: reason,
-          aiCriticalityScore: 100,
-          aiPriorityReason: admin.firestore.FieldValue.delete(),
-          tags,
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          syncState: 'dirty',
-        };
-        if (!isTaskLocked(task.data)) {
-          patch.dueDate = focusDueDate;
-          patch.aiDueDateSetAt = admin.firestore.FieldValue.serverTimestamp();
-          patch.dueDateReason = reason;
-          patch.dueDateUpdatedBy = 'scheduler';
-          patch.dueDateUpdatedSource = 'nightly_top3';
-          patch.dueDateUpdatedAt = admin.firestore.FieldValue.serverTimestamp();
-          patch.serverUpdatedAt = admin.firestore.FieldValue.serverTimestamp();
-        }
-        taskBatch.set(task.refObj, patch, { merge: true });
-
-        db.collection('activity_stream').add(activityPayload({
-          ownerUid: userId,
-          entityId: task.id,
-          entityType: 'task',
-          activityType: 'ai_top3_selected',
-          description: `Selected as top ${idx + 1}/3 (${persona}) · score ${Math.round(task.score || 0)}/100`,
-          metadata: { persona, rank: idx + 1, score: task.score, reason: task.reason || null, run: '03:00_priority_top3' },
-        })).catch(() => { });
-      });
-      await taskBatch.commit();
-
-      const storyBatch = db.batch();
-      focusStories.forEach((story, idx) => {
-        const reason = [
-          'Top 3 priority',
-          `score=${Math.round(story.score || 0)}`,
-          story.reason ? `why=${story.reason}` : null,
-        ].filter(Boolean).join(' | ');
-        const patch = {
-          aiFocusStoryRank: idx + 1,
-          aiFocusStoryAt: admin.firestore.FieldValue.serverTimestamp(),
-          aiTop3ForDay: true,
-          aiTop3Date: todayIso,
-          aiTop3Reason: reason,
-          aiCriticalityScore: 100,
-          aiPriorityReason: admin.firestore.FieldValue.delete(),
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          syncState: 'dirty',
-        };
-        if (focusDueDate && !isStoryLocked(story.data)) {
-          patch.dueDate = focusDueDate;
-          patch.aiDueDateSetAt = admin.firestore.FieldValue.serverTimestamp();
-          patch.dueDateReason = reason;
-          patch.dueDateUpdatedBy = 'scheduler';
-          patch.dueDateUpdatedSource = 'nightly_top3';
-          patch.dueDateUpdatedAt = admin.firestore.FieldValue.serverTimestamp();
-          patch.serverUpdatedAt = admin.firestore.FieldValue.serverTimestamp();
-        }
-        storyBatch.set(story.refObj, patch, { merge: true });
-
-        db.collection('activity_stream').add(activityPayload({
-          ownerUid: userId,
-          entityId: story.id,
-          entityType: 'story',
-          activityType: 'ai_top3_selected',
-          description: `Selected as top ${idx + 1}/3 (${persona}) · score ${Math.round(story.score || 0)}/100`,
-          metadata: { persona, rank: idx + 1, score: story.score, reason: story.reason || null, run: '03:00_priority_top3' },
-        })).catch(() => { });
-      });
-      await storyBatch.commit();
-    }
-
-    // Clear flags for tasks no longer in top 3 (per persona)
+    // Clear flags for tasks no longer in Top 3 inheritance set.
     const flaggedMap = await collectTaskTop3CandidateDocs(db, userId, 400);
     const clearTasksWriter = db.bulkWriter();
     flaggedMap.forEach((doc) => {
       const data = doc.data() || {};
-      const persona = String(data.persona || 'personal').toLowerCase() === 'work' ? 'work' : 'personal';
-      if (!topTaskIdsByPersona[persona].has(doc.id)) {
+      if (!promotedTaskIds.has(doc.id)) {
         const cleanedTags = stripTop3Tags(data.tags);
         clearTasksWriter.set(doc.ref, {
           aiFlaggedTop: false,
@@ -3398,8 +3329,7 @@ async function runPriorityScoringJob() {
     storiesSnap.docs.forEach((doc) => {
       const data = doc.data() || {};
       if (isStoryDoneStatus(data.status)) return;
-      const persona = String(data.persona || 'personal').toLowerCase() === 'work' ? 'work' : 'personal';
-      const isTop = topStoryIdsByPersona[persona].has(doc.id);
+      const isTop = topStoryIds.has(doc.id);
       const sprint = data.sprintId ? sprintMap.get(data.sprintId) : null;
       const sprintEnd = sprint?.endDateMs || null;
       const patch = {};
@@ -3421,12 +3351,8 @@ async function runPriorityScoringJob() {
             patch.tags = cleanedTags;
           }
         }
-        if (sprintEnd && !isStoryLocked(data)) {
-          patch.dueDate = sprintEnd;
-          patch.dueDateUpdatedBy = 'scheduler';
-          patch.dueDateUpdatedSource = 'nightly_sprint_end';
-          patch.dueDateUpdatedAt = admin.firestore.FieldValue.serverTimestamp();
-          patch.serverUpdatedAt = admin.firestore.FieldValue.serverTimestamp();
+        if (sprintEnd && !isStoryImmovable(data)) {
+          Object.assign(patch, schedulerCanonicalDuePatch(sprintEnd, 'nightly_sprint_end'));
         }
       }
       if (Object.keys(patch).length) {
@@ -3442,11 +3368,6 @@ async function runPriorityScoringJob() {
       if (n > 0) console.log(`[runPriorityScoringJob] cleared ${n} stale mac_sync due-date locks for ${userId}`);
     }).catch((err) => {
       console.warn(`[runPriorityScoringJob] clearStaleMacSyncDueDateLocks failed for ${userId}:`, err?.message);
-    });
-
-    // Compute Top 3 immediately after scoring so it's ready before calendar planning
-    await recomputeTop3ForUser(db, userId).catch((err) => {
-      console.warn(`[runPriorityScoringJob] recomputeTop3ForUser failed for ${userId}:`, err?.message);
     });
 
     await applyAggressiveDueDateReplanForUser({
@@ -3827,9 +3748,7 @@ exports.unifiedNightlyOrchestrator = onSchedule({
 });
 
 async function recomputeTop3ForUser(db, userId) {
-  for (const persona of ['personal', 'work']) {
-    await _deltaTop3ForPersona(db, userId, persona);
-  }
+  await _deltaTop3ForPersona(db, userId, 'global');
 }
 
 exports.materializeFitnessBlocksNow = onCall({
@@ -4746,6 +4665,26 @@ exports.runNightlyChainNow = onCall({
     { name: 'runAutoConversions', fn: runAutoConversionsJob },
     { name: 'runPriorityScoring', fn: runPriorityScoringJob },
     { name: 'runCalendarPlanner', fn: runCalendarPlannerJob },
+    {
+      name: 'nightlyTaskLinking',
+      fn: async () => {
+        if (!fuzzyTaskLinking?.nightlyTaskLinking?.run) return;
+        await fuzzyTaskLinking.nightlyTaskLinking.run({
+          scheduleTime: new Date().toISOString(),
+          source: 'unified_nightly_orchestrator',
+        });
+      },
+    },
+    {
+      name: 'nightlyStoryGoalLinking',
+      fn: async () => {
+        if (!fuzzyTaskLinking?.nightlyStoryGoalLinking?.run) return;
+        await fuzzyTaskLinking.nightlyStoryGoalLinking.run({
+          scheduleTime: new Date().toISOString(),
+          source: 'unified_nightly_orchestrator',
+        });
+      },
+    },
   ];
   const results = [];
   for (const step of steps) {
@@ -4851,8 +4790,7 @@ exports.applyEveningPullForward = onCall({
   const reason = 'User accepted evening pull-forward suggestion';
 
   await entityRef.set({
-    dueDate: todayEnd,
-    targetDate: todayEnd,
+    ...schedulerCanonicalDuePatch(todayEnd, 'user_pull_forward'),
     aiEveningPullForwardAt: admin.firestore.FieldValue.serverTimestamp(),
     aiEveningPullForwardReason: reason,
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -4996,7 +4934,9 @@ exports.deltaPriorityRescore = onCall({
   return { ok: true, action: 'rescored', score, reason, persona };
 });
 
-// Helper: recompute top3 for a single persona after a delta change
+// Helper: recompute top3 after a delta change.
+// `persona` is retained for backwards compatibility with existing callers,
+// but Top 3 is now global (story-first) per user.
 async function _deltaTop3ForPersona(db, userId, persona) {
   const nowLocal = DateTime.now();
   const todayIso = nowLocal.toISODate();
@@ -5022,7 +4962,6 @@ async function _deltaTop3ForPersona(db, userId, persona) {
     const data = doc.data() || {};
     const score = Number(data.aiCriticalityScore || 0);
     if (!(score > 0)) continue;
-    if (resolvePersona(data.persona) !== persona) continue;
     if (data.deleted || isRoutineChoreHabit(data) || hasRecurrence(data)) continue;
     if (isTaskDoneStatus(data.status)) continue;
     const createdMs = toDateTime(data.createdAt || data.serverCreatedAt, { defaultValue: null })?.toMillis() || null;
@@ -5034,36 +4973,27 @@ async function _deltaTop3ForPersona(db, userId, persona) {
     const data = doc.data() || {};
     const score = Number(data.aiCriticalityScore || 0);
     if (!(score > 0)) continue;
-    if (resolvePersona(data.persona) !== persona) continue;
     if (isStoryDoneStatus(data.status)) continue;
     const createdMs = toDateTime(data.createdAt || data.serverCreatedAt, { defaultValue: null })?.toMillis() || null;
     storyCandidates.push({ id: doc.id, score, data, createdMs, refObj: doc.ref });
   }
 
-  const storyMap = new Map(storyCandidates.map((story) => [story.id, story]));
+  // Global Top 3, story-first: pick top 3 stories and then promote tasks that
+  // belong to those stories.
   const topStories = selectTopStoriesFresh(storyCandidates);
-  const topTasks = selectTopTasksFresh(taskCandidates, storyMap);
-  const topTaskIds = new Set(topTasks.map((task) => task.id));
   const topStoryIds = new Set(topStories.map((story) => story.id));
-  const forcedStoryTaskCandidates = taskCandidates.filter((task) => {
-    const storyId = task?.data?.storyId;
-    if (!storyId) return false;
-    const parentStory = storyMap.get(storyId);
-    return !!getManualPriorityRank(parentStory?.data);
-  });
-  const promotedTasks = [
-    ...topTasks,
-    ...forcedStoryTaskCandidates.filter((task) => !topTaskIds.has(task.id)),
-  ];
+  const promotedTasks = taskCandidates
+    .filter((task) => task?.data?.storyId && topStoryIds.has(task.data.storyId))
+    .sort(scoreCreatedSort);
   const promotedTaskIds = new Set(promotedTasks.map((task) => task.id));
 
   const promoteTaskBatch = db.batch();
   promotedTasks.forEach((task, idx) => {
-    const parentStory = task?.data?.storyId ? storyMap.get(task.data.storyId) : null;
-    const parentManualRank = getManualPriorityRank(parentStory?.data);
-    const reason = parentManualRank
-      ? [`Manual story priority #${parentManualRank}`, `score=${Math.round(task.score || 0)}`].filter(Boolean).join(' | ')
-      : ['Top 3 priority', `score=${Math.round(task.score || 0)}`].filter(Boolean).join(' | ');
+    const reason = [
+      'Top 3 via story',
+      `storyId=${task.data.storyId}`,
+      `score=${Math.round(task.score || 0)}`,
+    ].join(' | ');
     const patch = {
       aiFlaggedTop: true,
       aiPriorityRank: idx + 1,
@@ -5075,14 +5005,9 @@ async function _deltaTop3ForPersona(db, userId, persona) {
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       syncState: 'dirty',
     };
-    if (!isTaskLocked(task.data)) {
-      patch.dueDate = focusDueDate;
+    if (!isTaskImmovable(task.data)) {
+      Object.assign(patch, schedulerCanonicalDuePatch(focusDueDate, 'recompute_top3'));
       patch.aiDueDateSetAt = admin.firestore.FieldValue.serverTimestamp();
-      patch.dueDateReason = reason;
-      patch.dueDateUpdatedBy = 'scheduler';
-      patch.dueDateUpdatedSource = 'recompute_top3';
-      patch.dueDateUpdatedAt = admin.firestore.FieldValue.serverTimestamp();
-      patch.serverUpdatedAt = admin.firestore.FieldValue.serverTimestamp();
     }
     promoteTaskBatch.set(task.refObj, patch, { merge: true });
   });
@@ -5093,7 +5018,6 @@ async function _deltaTop3ForPersona(db, userId, persona) {
   demoteTaskMap.forEach((doc) => {
     if (promotedTaskIds.has(doc.id)) return;
     const data = doc.data() || {};
-    if (resolvePersona(data.persona) !== persona) return;
     const cleanedTags = stripTop3Tags(data.tags);
     const patch = {
       aiFlaggedTop: false,
@@ -5124,14 +5048,9 @@ async function _deltaTop3ForPersona(db, userId, persona) {
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       syncState: 'dirty',
     };
-    if (focusDueDate && !isStoryLocked(story.data)) {
-      patch.dueDate = focusDueDate;
+    if (focusDueDate && !isStoryImmovable(story.data)) {
+      Object.assign(patch, schedulerCanonicalDuePatch(focusDueDate, 'recompute_top3'));
       patch.aiDueDateSetAt = admin.firestore.FieldValue.serverTimestamp();
-      patch.dueDateReason = reason;
-      patch.dueDateUpdatedBy = 'scheduler';
-      patch.dueDateUpdatedSource = 'recompute_top3';
-      patch.dueDateUpdatedAt = admin.firestore.FieldValue.serverTimestamp();
-      patch.serverUpdatedAt = admin.firestore.FieldValue.serverTimestamp();
     }
     promoteStoryBatch.set(story.refObj, patch, { merge: true });
   });
@@ -5142,7 +5061,6 @@ async function _deltaTop3ForPersona(db, userId, persona) {
   demoteStoryMap.forEach((doc) => {
     if (topStoryIds.has(doc.id)) return;
     const data = doc.data() || {};
-    if (resolvePersona(data.persona) !== persona) return;
     const cleanedTags = stripTop3Tags(data.tags);
     const patch = {
       aiFocusStoryRank: admin.firestore.FieldValue.delete(),
@@ -5163,10 +5081,9 @@ async function _deltaTop3ForPersona(db, userId, persona) {
   await applyAggressiveDueDateReplanForUser({
     db,
     userId,
-    personaFilter: persona,
     trigger: 'delta_priority_rescore',
   }).catch((err) => {
-    console.warn(`[_deltaTop3ForPersona] aggressive due-date replan failed for ${userId}/${persona}:`, err?.message || err);
+    console.warn(`[_deltaTop3ForPersona] aggressive due-date replan failed for ${userId} (requested=${persona}):`, err?.message || err);
   });
 }
 
