@@ -774,12 +774,15 @@ function schedulerCanonicalDuePatch(dueMs, source) {
     dueDateUpdatedBy: 'scheduler',
     dueDateUpdatedSource: source,
     dueDateUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    // Scheduler overwrite is now canonical; clear reminder-owned lock fields.
+    // Scheduler overwrite is canonical; clear reminder-owned lock fields.
     dueDateLocked: false,
     lockDueDate: false,
     dueDateLockSource: admin.firestore.FieldValue.delete(),
     dueDateLockedAt: admin.firestore.FieldValue.delete(),
     dueDateReason: admin.firestore.FieldValue.delete(),
+    // Both timestamps ensure delta sync (serverUpdatedAt) and mostRecentBobUpdate
+    // (updatedAt) correctly surface this task as BOB-newer on the next mac sync.
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     serverUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
   };
 }
@@ -5086,6 +5089,75 @@ async function _deltaTop3ForPersona(db, userId, persona) {
     console.warn(`[_deltaTop3ForPersona] aggressive due-date replan failed for ${userId} (requested=${persona}):`, err?.message || err);
   });
 }
+
+/**
+ * Callable: sweepStaleDueDateLocks
+ *
+ * Clears legacy reminder-owned due-date locks on tasks where:
+ *   - dueDateLockSource = "mac_sync"  (lock was set by the mac sync app)
+ *   - dueDateLocked = true OR lockDueDate = true
+ *   - dueDateUpdatedSource is absent (old lock pre-dating provenance fields)
+ *
+ * Without this sweep, those tasks are permanently blocked from receiving
+ * Firestore→Reminders due-date updates even after the scheduler overwrites
+ * the date, because reminderOwnsDueDateLock() falls through to return true.
+ *
+ * Safe to run multiple times — tasks with dueDateUpdatedSource already set
+ * are skipped. Dry-run mode returns counts without writing.
+ */
+exports.sweepStaleDueDateLocks = onCall({
+  region: 'europe-west2',
+  memory: '512MiB',
+  timeoutSeconds: 300,
+  invoker: 'public',
+}, async (req) => {
+  const db = ensureFirestore();
+  const dryRun = req.data?.dryRun === true;
+
+  // Query tasks that have the mac_sync lock source set.
+  // Firestore can't query "field is null" directly, so we fetch all
+  // mac_sync-locked tasks and filter in memory for missing dueDateUpdatedSource.
+  const [lockedSnap, lockDueDateSnap] = await Promise.all([
+    db.collection('tasks').where('dueDateLockSource', '==', 'mac_sync').where('dueDateLocked', '==', true).get(),
+    db.collection('tasks').where('dueDateLockSource', '==', 'mac_sync').where('lockDueDate', '==', true).get(),
+  ]);
+
+  const seen = new Set();
+  const candidates = [];
+  for (const doc of [...lockedSnap.docs, ...lockDueDateSnap.docs]) {
+    if (seen.has(doc.id)) continue;
+    seen.add(doc.id);
+    const data = doc.data() || {};
+    // Only sweep locks that pre-date the provenance system (no dueDateUpdatedSource).
+    const src = data.dueDateUpdatedSource;
+    if (src && String(src).trim()) continue;
+    candidates.push(doc);
+  }
+
+  if (dryRun) {
+    return { ok: true, dryRun: true, wouldClear: candidates.length };
+  }
+
+  const writer = db.bulkWriter();
+  const clearPatch = {
+    dueDateLocked: false,
+    lockDueDate: false,
+    dueDateLockSource: admin.firestore.FieldValue.delete(),
+    dueDateLockedAt: admin.firestore.FieldValue.delete(),
+    dueDateReason: admin.firestore.FieldValue.delete(),
+    // Mark as cleared so mac-sync knows BOB now owns the date.
+    dueDateUpdatedBy: 'sweep',
+    dueDateUpdatedSource: 'stale_lock_sweep',
+    dueDateUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    serverUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+  candidates.forEach((doc) => writer.set(doc.ref, clearPatch, { merge: true }));
+  await writer.close();
+
+  console.log(`[sweepStaleDueDateLocks] cleared ${candidates.length} stale locks`);
+  return { ok: true, dryRun: false, cleared: candidates.length };
+});
 
 // Internal job exports to enable manual orchestration/testing without scheduler
 exports._runAutoPointingJob = runAutoPointingJob;

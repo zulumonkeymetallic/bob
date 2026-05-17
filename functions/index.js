@@ -297,6 +297,7 @@ try {
     exports.runAutoConversions = nightlyOrchestration.runAutoConversions;
     exports.runPriorityScoring = nightlyOrchestration.runPriorityScoring;
     exports.runCalendarPlanner = nightlyOrchestration.runCalendarPlanner;
+    exports.sweepStaleDueDateLocks = nightlyOrchestration.sweepStaleDueDateLocks;
     exports.materializeFitnessBlocksNow = nightlyOrchestration.materializeFitnessBlocksNow;
     exports.replanCalendarNow = nightlyOrchestration.replanCalendarNow;
     exports.unifiedNightlyOrchestrator = nightlyOrchestration.unifiedNightlyOrchestrator;

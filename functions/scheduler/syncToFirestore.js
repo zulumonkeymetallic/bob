@@ -34,6 +34,9 @@ function schedulerCanonicalDuePatch(plannedDateMidnightMs, source = 'nightly_cal
     dueDateLockSource: admin.firestore.FieldValue.delete(),
     dueDateLockedAt: admin.firestore.FieldValue.delete(),
     dueDateReason: admin.firestore.FieldValue.delete(),
+    // Both timestamps required: serverUpdatedAt drives delta sync query;
+    // updatedAt drives mostRecentBobUpdate in mac-sync tie-breaking.
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     serverUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
   };
 }
