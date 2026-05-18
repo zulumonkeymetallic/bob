@@ -498,7 +498,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
 
       {/* Mobile Header */}
       <div className="d-md-none fixed-top" style={{
-        background: currentPersona === 'work' ? '#d3d3d3' : 'white',
+        background: currentPersona === 'work' ? '#d3d3d3' : 'var(--panel)',
         color: currentPersona === 'work' ? '#000' : '#000',
         zIndex: 1050
       }}>
@@ -697,7 +697,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         {/* Desktop top toolbar with global Sprint selector */}
         <div className="d-none d-md-block sidebar-layout-toolbar" style={{
           borderBottom: '1px solid var(--notion-border)',
-          background: currentPersona === 'work' ? '#d3d3d3' : 'white',
+          background: currentPersona === 'work' ? '#d3d3d3' : 'var(--panel)',
           position: 'relative',
           zIndex: 1000
         }}>
