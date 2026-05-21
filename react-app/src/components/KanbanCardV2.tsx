@@ -346,18 +346,6 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
             return Math.max(0, Math.min(100, Math.round(value)));
         })()
         : null;
-    const storyLastComment = type === 'story'
-        ? (() => {
-            const raw = (item as any).lastComment
-                ?? (item as any).latestComment
-                ?? (item as any).lastNote
-                ?? trimmedNote
-                ?? '';
-            const text = String(raw || '').replace(/\s+/g, ' ').trim();
-            if (!text) return null;
-            return text.length > 140 ? `${text.slice(0, 140)}...` : text;
-        })()
-        : null;
     const toDate = (value: any): Date | null => {
         if (!value) return null;
         if (typeof value?.toDate === 'function') return value.toDate();
@@ -1091,12 +1079,6 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                     <div className="kanban-card__note">
                         <span className="kanban-card__note-label">Last note:</span>{' '}
                         {trimmedNote}
-                    </div>
-                )}
-                {detailLevel === 'full' && type === 'story' && storyLastComment && (
-                    <div className="kanban-card__note">
-                        <span className="kanban-card__note-label">Last comment:</span>{' '}
-                        {storyLastComment}
                     </div>
                 )}
                 {detailLevel === 'full' && showSteamInfo && (
