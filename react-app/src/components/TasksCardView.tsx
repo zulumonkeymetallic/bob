@@ -16,6 +16,7 @@ import DeferItemModal from './DeferItemModal';
 import NewCalendarEventModal, { type BlockFormState, buildCalendarComposerInitialValues } from './planner/NewCalendarEventModal';
 import '../styles/KanbanCards.css';
 import { applyPlannerDefer } from '../utils/plannerDeferral';
+import { cardThemeGradient } from '../utils/cardGradient';
 
 interface TasksCardViewProps {
   tasks: Task[];
@@ -397,7 +398,7 @@ const TasksCardView: React.FC<TasksCardViewProps> = ({
                   overflow: 'hidden',
                   transition: 'all 0.3s ease',
                   cursor: 'pointer',
-                  background: 'var(--bs-body-bg, #fff)',
+                  background: cardThemeGradient(themeColor),
                   color: textColor,
                   display: 'flex',
                   flexDirection: 'column'
@@ -414,7 +415,8 @@ const TasksCardView: React.FC<TasksCardViewProps> = ({
                   e.currentTarget.style.boxShadow = '0 6px 12px var(--glass-shadow-color)';
                 }}
               >
-                <Card.Body style={{ padding: '14px 12px', display: 'flex', flexDirection: 'column', gap: '10px', borderLeft: `4px solid ${themeColor}` }}>
+                <div style={{ height: 6, background: themeColor, flexShrink: 0 }} />
+                <Card.Body style={{ padding: '14px 12px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       {task.ref && (

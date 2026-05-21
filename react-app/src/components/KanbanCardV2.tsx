@@ -8,6 +8,7 @@ import { Story, Task, Goal } from '../types';
 import { useSidebar } from '../contexts/SidebarContext';
 import { displayRefForEntity, validateRef } from '../utils/referenceGenerator';
 import { colorWithAlpha, goalThemeColor } from '../utils/storyCardFormatting';
+import { cardThemeGradient } from '../utils/cardGradient';
 import { getPriorityBadge } from '../utils/statusHelpers';
 import { themeVars } from '../utils/themeVars';
 import type { GlobalTheme } from '../constants/globalThemes';
@@ -796,9 +797,10 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
             ref={ref}
             className={`kanban-card kanban-card--${type} kanban-card__clickable${dragging ? ' dragging' : ''}`}
             style={{
-                borderLeft: `3px solid ${((item as any).blocked ? 'var(--bs-danger, #dc3545)' : resolvedThemeColor)}`,
+                borderTop: `6px solid ${((item as any).blocked ? 'var(--bs-danger, #dc3545)' : resolvedThemeColor)}`,
+                background: cardThemeGradient(resolvedThemeColor),
                 opacity: dragging ? 0.4 : 1,
-                marginBottom: '8px'
+                marginBottom: '8px',
             }}
             role="button"
             tabIndex={0}
