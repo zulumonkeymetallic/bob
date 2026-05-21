@@ -49,7 +49,12 @@ const SprintKanbanPageV2: React.FC = () => {
     const [goalFilterIds, setGoalFilterIds] = useState<string[]>([]);
     const [isFullscreen, setIsFullscreen] = useState(false);
     const [showDescriptions, setShowDescriptions] = useState(false);
-    const [showLatestNotes, setShowLatestNotes] = useState(false);
+    const [showLatestNotes, setShowLatestNotes] = useState(() => {
+        try {
+            const stored = localStorage.getItem('kanban_show_latest_notes');
+            return stored === null ? true : stored === 'true';
+        } catch { return true; }
+    });
     const [editStory, setEditStory] = useState<Story | null>(null);
     const [editTask, setEditTask] = useState<Task | null>(null);
     const [dueFilter, setDueFilter] = useState<'all' | 'today' | 'overdue' | 'top3' | 'critical'>('all');
@@ -380,7 +385,10 @@ const SprintKanbanPageV2: React.FC = () => {
                                 id="toggle-kanban-notes"
                                 label="Show latest notes"
                                 checked={showLatestNotes}
-                                onChange={(e) => setShowLatestNotes(e.target.checked)}
+                                onChange={(e) => {
+                                    setShowLatestNotes(e.target.checked);
+                                    try { localStorage.setItem('kanban_show_latest_notes', String(e.target.checked)); } catch { /* noop */ }
+                                }}
                                 className="ms-2"
                             />
                             <Form.Check
