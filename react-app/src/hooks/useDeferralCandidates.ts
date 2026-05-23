@@ -6,7 +6,16 @@ import { useSprint } from '../contexts/SprintContext';
 import { useFocusGoals } from './useFocusGoals';
 import { getActiveFocusLeafGoalIds } from '../utils/goalHierarchy';
 import { deriveSprintCapacityPoints } from '../utils/plannerCapacity';
+import { buildSprintFillPlan } from '../utils/deferralHeuristics';
 import type { CalendarBlock } from '../types';
+
+export interface OverCapacityMove {
+  id: string;
+  title: string;
+  points: number;
+  suggestedSprintId: string;
+  suggestedSprintName: string;
+}
 
 export interface DeferralCandidate {
   id: string;
@@ -422,8 +431,56 @@ export const useDeferralCandidates = () => {
     dayLoadMap, dailyCapacityHours, blocksReady, storiesReady, tasksReady, sprintEndMs,
   ]);
 
+  /**
+   * Items the fill-plan algorithm wants to move to the next sprint due to capacity overflow.
+   * Only surfaces after the nightly job has written real capacityPoints to sprint documents.
+   */
+  const overCapacityMoves = useMemo<OverCapacityMove[]>(() => {
+    if (!currentSprint || !nextSprint || !storiesReady) return [];
+    const activeCap = deriveSprintCapacityPoints(currentSprint as any);
+    const nextCap = deriveSprintCapacityPoints(nextSprint as any);
+    if (activeCap <= 0) return [];
+
+    const fillItems = stories
+      .filter((s) => {
+        const status = String(s.status || '').toLowerCase();
+        return status !== 'done' && status !== 'completed' && status !== 'closed';
+      })
+      .map((s) => ({
+        id: s._id,
+        points: Number(s.points || 0) || 2,
+        userPriorityFlag: Boolean(s.userPriorityFlag),
+        userPriorityRank: getManualPriorityRank(s),
+        isFocusAligned: focusGoalIds.size === 0 || focusGoalIds.has(String(s.goalId || '').trim()),
+        aiCriticalityScore: Number(s.aiCriticalityScore || 0),
+        priority: Math.max(1, Math.min(4, Number(s.priority || 4))),
+      }));
+
+    const sortedSprints = [currentSprint, nextSprint] as any[];
+    const capacityBySprintId: Record<string, number> = {
+      [currentSprint.id]: activeCap,
+      [nextSprint.id]: nextCap,
+    };
+
+    const { assignments } = buildSprintFillPlan(fillItems, sortedSprints, capacityBySprintId);
+    const nextSprintIds = new Set(assignments.get(nextSprint.id) ?? []);
+    if (nextSprintIds.size === 0) return [];
+
+    const nextSprintName = String((nextSprint as any).name || 'Next sprint');
+    return stories
+      .filter((s) => nextSprintIds.has(s._id))
+      .map((s) => ({
+        id: s._id,
+        title: String(s.title || 'Untitled story'),
+        points: Number(s.points || 0) || 2,
+        suggestedSprintId: nextSprint.id,
+        suggestedSprintName: nextSprintName,
+      }));
+  }, [stories, currentSprint, nextSprint, focusGoalIds, storiesReady]);
+
   return {
     candidates,
+    overCapacityMoves,
     loading: !storiesReady || !tasksReady,
     currentSprint,
     nextSprint,

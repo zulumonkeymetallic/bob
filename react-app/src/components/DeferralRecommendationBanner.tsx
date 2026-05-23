@@ -1,7 +1,7 @@
 import React, { useCallback, useState } from 'react';
 import { Alert, Badge, Button } from 'react-bootstrap';
 import { CalendarClock, ChevronDown, ChevronRight } from 'lucide-react';
-import { useDeferralCandidates, type DeferralCandidate } from '../hooks/useDeferralCandidates';
+import { useDeferralCandidates, type DeferralCandidate, type OverCapacityMove } from '../hooks/useDeferralCandidates';
 import { applyPlannerDefer, applyPlannerMoveToSprint, applyStoryDueDate } from '../utils/plannerDeferral';
 
 function formatDate(dateMs: number | null): string {
@@ -22,10 +22,11 @@ interface Props {
 }
 
 const DeferralRecommendationBanner: React.FC<Props> = ({ compact = false }) => {
-  const { candidates, loading, currentSprint, nextSprint } = useDeferralCandidates();
+  const { candidates, overCapacityMoves, loading, currentSprint, nextSprint } = useDeferralCandidates();
 
   const [expanded, setExpanded] = useState(false);
   const [actioningId, setActioningId] = useState<string | null>(null);
+  const [bulkApplying, setBulkApplying] = useState(false);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [dismissed, setDismissed] = useState(false);
   const [actioned, setActioned] = useState<Set<string>>(() => new Set());
@@ -98,9 +99,37 @@ const DeferralRecommendationBanner: React.FC<Props> = ({ compact = false }) => {
     }
   }, []);
 
+  const handleBulkOverCapacity = useCallback(async () => {
+    if (!nextSprint || overCapacityMoves.length === 0) return;
+    setBulkApplying(true);
+    setStatusMsg(null);
+    let moved = 0;
+    for (const move of overCapacityMoves) {
+      if (actioned.has(move.id)) continue;
+      try {
+        await applyPlannerMoveToSprint({
+          itemType: 'story',
+          item: { id: move.id, title: move.title },
+          sprintId: move.suggestedSprintId,
+          sprintStartMs: Number((nextSprint as any).startDate || Date.now()),
+          rationale: 'Sprint over capacity — priority-ordered fill plan',
+          source: 'deferral_recommendation_banner',
+        });
+        markActioned(move.id);
+        moved++;
+      } catch {
+        // continue best-effort
+      }
+    }
+    setBulkApplying(false);
+    setStatusMsg(`Moved ${moved} ${moved === 1 ? 'story' : 'stories'} to ${(nextSprint as any).name || 'next sprint'}.`);
+  }, [nextSprint, overCapacityMoves, actioned]);
+
+  const visibleOverCapacity = overCapacityMoves.filter((m) => !actioned.has(m.id));
+
   if (dismissed) return null;
   if (!currentSprint || loading) return null;
-  if (visibleCandidates.length === 0) return null;
+  if (visibleCandidates.length === 0 && visibleOverCapacity.length === 0) return null;
 
   const focusStoryCandidates = visibleCandidates.filter((c) => c.type === 'story' && c.recommendedAction === 'set_due_date');
   const deferStoryCandidates = visibleCandidates.filter((c) => c.type === 'story' && c.recommendedAction !== 'set_due_date');
@@ -144,6 +173,8 @@ const DeferralRecommendationBanner: React.FC<Props> = ({ compact = false }) => {
     );
   }
 
+  const totalSuggestions = visibleCandidates.length + visibleOverCapacity.length;
+
   return (
     <Alert
       variant="info"
@@ -155,12 +186,19 @@ const DeferralRecommendationBanner: React.FC<Props> = ({ compact = false }) => {
         <CalendarClock size={20} />
         <div>
           <div className="fw-semibold">
-            {visibleCandidates.length} deferral suggestion{visibleCandidates.length !== 1 ? 's' : ''}
+            {totalSuggestions} deferral suggestion{totalSuggestions !== 1 ? 's' : ''}
             <Badge bg="secondary" className="ms-2" style={{ fontSize: 11 }}>
-              {currentSprint.name || 'Current sprint'}
+              {(currentSprint as any).name || 'Current sprint'}
             </Badge>
+            {visibleOverCapacity.length > 0 && (
+              <Badge bg="warning" text="dark" className="ms-1" style={{ fontSize: 11 }}>
+                Over capacity
+              </Badge>
+            )}
           </div>
           <div className="text-muted small">
+            {visibleOverCapacity.length > 0 && `${visibleOverCapacity.length} over capacity → next sprint`}
+            {visibleOverCapacity.length > 0 && focusStoryCandidates.length > 0 && ' · '}
             {focusStoryCandidates.length > 0 && `${focusStoryCandidates.length} focus ${focusStoryCandidates.length === 1 ? 'story' : 'stories'} → schedule within sprint`}
             {focusStoryCandidates.length > 0 && (deferStoryCandidates.length > 0 || taskCandidates.length > 0) && ' · '}
             {deferStoryCandidates.length > 0 && `${deferStoryCandidates.length} ${deferStoryCandidates.length === 1 ? 'story' : 'stories'} → next sprint`}
@@ -187,6 +225,70 @@ const DeferralRecommendationBanner: React.FC<Props> = ({ compact = false }) => {
 
         {expanded && (
           <div className="d-flex flex-column gap-2">
+            {visibleOverCapacity.length > 0 && (
+              <>
+                <div className="d-flex align-items-center justify-content-between">
+                  <div className="text-muted small fw-semibold" style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                    Sprint over capacity — move to next sprint
+                  </div>
+                  {nextSprint && (
+                    <Button
+                      size="sm"
+                      variant="warning"
+                      style={{ minWidth: 160 }}
+                      disabled={bulkApplying}
+                      onClick={handleBulkOverCapacity}
+                    >
+                      {bulkApplying ? 'Applying…' : `Apply all (${visibleOverCapacity.length})`}
+                    </Button>
+                  )}
+                </div>
+                {visibleOverCapacity.map((m) => (
+                  <div
+                    key={m.id}
+                    className="d-flex flex-wrap align-items-center justify-content-between gap-2"
+                    style={{ background: 'rgba(255,193,7,0.1)', border: '1px solid rgba(255,193,7,0.4)', borderRadius: 8, padding: '8px 10px' }}
+                  >
+                    <div className="small flex-grow-1 me-2">
+                      <Badge bg="warning" text="dark" className="me-1" style={{ fontSize: 10 }}>Over cap</Badge>
+                      <strong>{m.title}</strong>
+                      <span className="text-muted ms-1">· {m.points}pt{m.points !== 1 ? 's' : ''}</span>
+                    </div>
+                    {nextSprint ? (
+                      <Button
+                        size="sm"
+                        variant="outline-warning"
+                        style={{ minWidth: 140 }}
+                        disabled={actioningId === m.id}
+                        onClick={async () => {
+                          setActioningId(m.id);
+                          try {
+                            await applyPlannerMoveToSprint({
+                              itemType: 'story',
+                              item: { id: m.id, title: m.title },
+                              sprintId: m.suggestedSprintId,
+                              sprintStartMs: Number((nextSprint as any).startDate || Date.now()),
+                              rationale: 'Sprint over capacity — priority-ordered fill plan',
+                              source: 'deferral_recommendation_banner',
+                            });
+                            markActioned(m.id);
+                          } catch (err: any) {
+                            setStatusMsg(err?.message || 'Failed to move story.');
+                          } finally {
+                            setActioningId(null);
+                          }
+                        }}
+                      >
+                        {actioningId === m.id ? 'Moving…' : `Move to ${m.suggestedSprintName}`}
+                      </Button>
+                    ) : (
+                      <Button size="sm" variant="outline-secondary" disabled>Create next sprint</Button>
+                    )}
+                  </div>
+                ))}
+              </>
+            )}
+
             {focusStoryCandidates.length > 0 && (
               <>
                 <div className="text-muted small fw-semibold" style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em' }}>

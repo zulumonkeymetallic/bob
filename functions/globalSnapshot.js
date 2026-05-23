@@ -155,6 +155,30 @@ function normalizeTask(taskDoc) {
   };
 }
 
+function normalizeSprint(sprintDoc) {
+  const data = sprintDoc.data() || {};
+  return {
+    id: sprintDoc.id,
+    ref: data.ref || null,
+    name: data.name || data.title || null,
+    objective: data.objective || null,
+    status: data.status ?? null,        // 0=Planning, 1=Active, 2=Complete, 3=Cancelled
+    persona: data.persona || null,
+    focusGoalIds: Array.isArray(data.focusGoalIds) ? data.focusGoalIds : [],
+    startDate: toMillis(data.startDate),
+    endDate: toMillis(data.endDate),
+    planningDate: toMillis(data.planningDate),
+    retroDate: toMillis(data.retroDate),
+    capacityPoints: typeof data.capacityPoints === 'number' ? data.capacityPoints : null,
+    lastCapacityCalculatedAt: toMillis(data.lastCapacityCalculatedAt),
+    ownerUid: data.ownerUid || null,
+    metadata: {
+      updatedAt: toMillis(data.updatedAt),
+      createdAt: toMillis(data.createdAt),
+    },
+  };
+}
+
 function normalizeCalendarBlock(blockDoc) {
   const data = blockDoc.data() || {};
   return {
@@ -176,17 +200,19 @@ function dedupePush(list, value) {
 }
 
 async function buildUserHierarchySnapshot({ db, userId }) {
-  const [goalsSnap, storiesSnap, tasksSnap, blocksSnap] = await Promise.all([
+  const [goalsSnap, storiesSnap, tasksSnap, blocksSnap, sprintsSnap] = await Promise.all([
     db.collection('goals').where('ownerUid', '==', userId).get(),
     db.collection('stories').where('ownerUid', '==', userId).get(),
     db.collection('tasks').where('ownerUid', '==', userId).get(),
     db.collection('calendar_blocks').where('ownerUid', '==', userId).get(),
+    db.collection('sprints').where('ownerUid', '==', userId).get(),
   ]);
 
   const goals = goalsSnap.docs.map(normalizeGoal);
   const stories = storiesSnap.docs.map(normalizeStory);
   const tasks = tasksSnap.docs.map(normalizeTask);
   const blocks = blocksSnap.docs.map(normalizeCalendarBlock);
+  const sprints = sprintsSnap.docs.map(normalizeSprint);
 
   const goalsById = new Map(goals.map((g) => [g.id, g]));
   const storiesById = new Map(stories.map((s) => [s.id, s]));
@@ -236,12 +262,14 @@ async function buildUserHierarchySnapshot({ db, userId }) {
       stories,
       tasks,
       calendarBlocks: blocks,
+      sprints,
     },
     stats: {
       goalCount: goals.length,
       storyCount: stories.length,
       taskCount: tasks.length,
       calendarBlockCount: blocks.length,
+      sprintCount: sprints.length,
       orphanStories,
       orphanTasks,
       inferredGoalLinks,

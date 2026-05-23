@@ -78,6 +78,7 @@ export interface Goal {
   updatedAt: any; // Firebase Timestamp
   url?: string | null;
   documentLink?: string | null; // Google Drive / Docs link
+  driveFolderId?: string | null; // Google Drive folder for this goal's hierarchy
   orderIndex?: number; // Stable ordering for modern tables
   // Relationships
   parentGoalId?: string | null; // Optional parent goal relationship
@@ -120,6 +121,13 @@ export interface Story {
   updatedAt: any; // Firebase Timestamp
   url?: string | null;
   documentLink?: string | null; // Google Drive / Docs link
+  driveFolderId?: string | null; // Google Drive folder for this story's hierarchy
+  youtubeVideoId?: string | null;
+  youtubeTranscript?: string | null;
+  youtubeDocumentLink?: string | null; // Google Doc containing transcript + analysis (separate from delegation documentLink)
+  youtubeIngested?: boolean;
+  youtubeIngestionStatus?: 'in_progress' | 'done' | 'failed' | 'queued' | null;
+  youtubeIngestionError?: string | null;
   dueDate?: number; // Legacy compatibility
   dueTime?: string; // HH:mm format
   timeOfDay?: 'morning' | 'afternoon' | 'evening';
@@ -252,6 +260,10 @@ export interface Sprint {
   ownerUid: string;
   createdAt: any; // Firebase Timestamp
   updatedAt: any; // Firebase Timestamp
+  /** Written nightly by orchestration. 1pt = 1hr free calendar time. */
+  capacityPoints?: number;
+  /** Timestamp of last nightly capacity calculation — used to detect stale values. */
+  lastCapacityCalculatedAt?: any;
 }
 
 export interface WorkProject {
@@ -347,6 +359,13 @@ export interface Task {
   deepLink?: string; // Optional deep link for navigation
   url?: string | null;
   documentLink?: string | null; // Google Drive / Docs link
+  driveFolderId?: string | null; // Google Drive folder for this task's hierarchy
+  youtubeVideoId?: string | null;
+  youtubeTranscript?: string | null;
+  youtubeDocumentLink?: string | null; // Google Doc containing transcript + analysis
+  youtubeIngested?: boolean;
+  youtubeIngestionStatus?: 'in_progress' | 'done' | 'failed' | 'queued' | null;
+  youtubeIngestionError?: string | null;
   // Legacy fields for backward compatibility
   reference?: string;
   storyId?: string;

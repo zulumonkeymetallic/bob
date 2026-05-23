@@ -300,6 +300,85 @@ export interface ComputeItemDeferralParams {
   goalStartDateMs?: number | null;
 }
 
+// ─── Sprint fill plan ─────────────────────────────────────────────────────────
+
+export interface SprintFillItem {
+  id: string;
+  points: number;
+  userPriorityFlag: boolean;
+  userPriorityRank: number | null;
+  isFocusAligned: boolean;
+  aiCriticalityScore: number;
+  priority: number; // 1 = critical, 4 = low
+}
+
+export interface SprintFillPlan {
+  /** sprintId → ordered list of item ids assigned to that sprint */
+  assignments: Map<string, string[]>;
+  /** item ids that overflow all provided sprints */
+  overflow: string[];
+}
+
+/**
+ * Allocates items across sprints in priority order and returns which items
+ * should move to which sprint. Uses 1pt = 1hr convention.
+ *
+ * Sort order: pinned (userPriorityFlag) → focus-aligned → aiCriticalityScore DESC → priority ASC
+ *
+ * @param items   All stories/tasks to allocate (typically current-sprint items + unassigned backlog)
+ * @param sprints Ordered by startDate ascending — first entry is treated as the active sprint
+ * @param capacityBySprintId Map of sprintId → capacityPoints (from sprint.capacityPoints, nightly-written)
+ */
+export const buildSprintFillPlan = (
+  items: SprintFillItem[],
+  sprints: Sprint[],
+  capacityBySprintId: Record<string, number>,
+): SprintFillPlan => {
+  const POINTS_PER_HOUR = 1; // 1pt = 1hr — constant per system convention
+
+  const sorted = [...items].sort((a, b) => {
+    // 1. Pinned items always first
+    const aPin = a.userPriorityFlag ? 0 : 1;
+    const bPin = b.userPriorityFlag ? 0 : 1;
+    if (aPin !== bPin) return aPin - bPin;
+    if (a.userPriorityFlag && b.userPriorityFlag) {
+      return (a.userPriorityRank ?? 99) - (b.userPriorityRank ?? 99);
+    }
+    // 2. Focus-aligned before non-focus
+    const aFocus = a.isFocusAligned ? 0 : 1;
+    const bFocus = b.isFocusAligned ? 0 : 1;
+    if (aFocus !== bFocus) return aFocus - bFocus;
+    // 3. Higher aiCriticalityScore first
+    if (a.aiCriticalityScore !== b.aiCriticalityScore) return b.aiCriticalityScore - a.aiCriticalityScore;
+    // 4. Lower priority number = more critical (P1 before P4)
+    return (a.priority || 4) - (b.priority || 4);
+  });
+
+  const assignments = new Map<string, string[]>();
+  const allocated = new Map<string, number>(); // sprintId → points used
+  const overflow: string[] = [];
+
+  for (const item of sorted) {
+    const pts = item.points * POINTS_PER_HOUR;
+    let placed = false;
+    for (const sprint of sprints) {
+      const cap = capacityBySprintId[sprint.id] ?? 0;
+      const used = allocated.get(sprint.id) ?? 0;
+      if (cap > 0 && used + pts <= cap) {
+        const list = assignments.get(sprint.id) ?? [];
+        list.push(item.id);
+        assignments.set(sprint.id, list);
+        allocated.set(sprint.id, used + pts);
+        placed = true;
+        break;
+      }
+    }
+    if (!placed) overflow.push(item.id);
+  }
+
+  return { assignments, overflow };
+};
+
 export const computeItemDeferral = (params: ComputeItemDeferralParams): DeferralScore => {
   const { item, itemType, currentSprint, nextSprint, focusLeafIds, allSprints = [], goalStartDateMs } = params;
 

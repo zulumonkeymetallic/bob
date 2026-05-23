@@ -4649,6 +4649,103 @@ exports.schedulePlannerItem = onCall({
   }
 });
 
+/**
+ * Compute free calendar hours for a sprint window.
+ * Deducts explicit "work"/"main gig" calendar blocks; assumes 8h work on weekdays with no blocks.
+ * Returns total free hours (1pt = 1hr per Jim's convention).
+ */
+async function computeSprintCalendarCapacity(db, userId, sprint) {
+  const toMs = (v) => {
+    if (v == null) return null;
+    if (typeof v === 'number') return v;
+    if (typeof v.toMillis === 'function') return v.toMillis();
+    if (typeof v.toDate === 'function') return v.toDate().getTime();
+    return null;
+  };
+  const startMs = toMs(sprint.startDate);
+  const endMs = toMs(sprint.endDate);
+  if (!startMs || !endMs || endMs < startMs) return 40; // 2-week fallback
+
+  const blocksSnap = await db.collection('calendar_blocks')
+    .where('ownerUid', '==', userId)
+    .where('start', '>=', startMs)
+    .where('start', '<=', endMs)
+    .get()
+    .catch(() => ({ docs: [] }));
+
+  const workByDay = {};
+  for (const doc of (blocksSnap.docs || [])) {
+    const b = doc.data() || {};
+    if (!b.start || !b.end) continue;
+    const title = String(b.title || '').toLowerCase();
+    if (!title.includes('work') && !title.includes('main gig')) continue;
+    const dateStr = new Date(b.start).toISOString().slice(0, 10);
+    workByDay[dateStr] = (workByDay[dateStr] || 0) + (b.end - b.start) / (1000 * 60 * 60);
+  }
+
+  let total = 0;
+  const cur = new Date(startMs);
+  const end = new Date(endMs);
+  while (cur <= end) {
+    const dateStr = cur.toISOString().slice(0, 10);
+    const dow = cur.getDay();
+    let available = 16; // 24h - 8h sleep
+    if (workByDay[dateStr] != null) {
+      available -= workByDay[dateStr];
+    } else if (dow >= 1 && dow <= 5) {
+      available -= 8; // weekday with no explicit block: assume standard workday
+    }
+    total += Math.max(0, available);
+    cur.setDate(cur.getDate() + 1);
+  }
+  return Math.round(total * 10) / 10;
+}
+
+/**
+ * Step 7 of the nightly chain.
+ * Writes capacityPoints (free calendar hours, 1pt=1hr) to every active sprint and any
+ * planning sprint starting within the next 14 days. The deferral banner and fill-plan
+ * algorithm read this field instead of falling back to the weeks×20 estimate.
+ */
+async function nightlySprintCapacityUpdate() {
+  const db = admin.firestore();
+  const now = Date.now();
+  const twoWeeksMs = now + 14 * 24 * 60 * 60 * 1000;
+
+  const [activeSnap, upcomingSnap] = await Promise.all([
+    db.collection('sprints').where('status', '==', 1).get().catch(() => ({ docs: [] })),
+    db.collection('sprints').where('status', '==', 0).where('startDate', '<=', twoWeeksMs).get().catch(() => ({ docs: [] })),
+  ]);
+
+  const seen = new Set();
+  const sprintDocs = [...(activeSnap.docs || []), ...(upcomingSnap.docs || [])].filter((d) => {
+    if (seen.has(d.id)) return false;
+    seen.add(d.id);
+    return true;
+  });
+
+  console.log(`[nightlySprintCapacityUpdate] Processing ${sprintDocs.length} sprint(s)`);
+  let updated = 0;
+
+  for (const sprintDoc of sprintDocs) {
+    const sprint = sprintDoc.data() || {};
+    const userId = sprint.ownerUid;
+    if (!userId) continue;
+    try {
+      const capacityPoints = await computeSprintCalendarCapacity(db, userId, sprint);
+      await sprintDoc.ref.update({
+        capacityPoints,
+        lastCapacityCalculatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      updated++;
+      console.log(`[nightlySprintCapacityUpdate] ${sprintDoc.id} → ${capacityPoints}pts`);
+    } catch (err) {
+      console.warn(`[nightlySprintCapacityUpdate] ${sprintDoc.id} failed:`, err?.message || err);
+    }
+  }
+  console.log(`[nightlySprintCapacityUpdate] Done — ${updated}/${sprintDocs.length} updated`);
+}
+
 // Manual trigger to run the nightly chain (pointing → conversions → scoring+Top3 → calendar)
 exports.runNightlyChainNow = onCall({
   timeZone: 'Europe/London',
@@ -4688,6 +4785,7 @@ exports.runNightlyChainNow = onCall({
         });
       },
     },
+    { name: 'nightlySprintCapacityUpdate', fn: nightlySprintCapacityUpdate },
   ];
   const results = [];
   for (const step of steps) {
