@@ -157,7 +157,9 @@ const MacroBar: React.FC<{
 const PhaseCard: React.FC<{
   phase: CoachDaily['phase'];
   coachData: CoachDaily;
-}> = ({ phase, coachData }) => {
+  weeklyKpiRows?: any[];
+  onNavigate?: (path: string) => void;
+}> = ({ phase, coachData, weeklyKpiRows, onNavigate }) => {
   const [phaseGoal, setPhaseGoal] = useState<any>(null);
 
   useEffect(() => {
@@ -207,19 +209,21 @@ const PhaseCard: React.FC<{
         </div>
 
         {/* Weekly sport KPI grid (12 weeks) */}
-        {workouts.length > 0 && (
+        {weeklyKpiRows && weeklyKpiRows.length > 0 && (
           <div className="mb-3">
             <div className="d-flex align-items-center justify-content-between mb-2">
               <span style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--bs-secondary)' }}>
                 Weekly targets — 12 weeks
               </span>
-              <button
-                className="btn btn-link btn-sm p-0 text-muted"
-                style={{ fontSize: '0.7rem' }}
-                onClick={() => navigate('/metrics')}
-              >
-                Full metrics →
-              </button>
+              {onNavigate && (
+                <button
+                  className="btn btn-link btn-sm p-0 text-muted"
+                  style={{ fontSize: '0.7rem' }}
+                  onClick={() => onNavigate('/metrics')}
+                >
+                  Full metrics →
+                </button>
+              )}
             </div>
             <FitnessKpiGrid rows={weeklyKpiRows} />
           </div>
@@ -818,6 +822,7 @@ const ManualProteinCard: React.FC<{
 
 export const AiCoachPage: React.FC = () => {
   const { currentUser } = useAuth();
+  const navigate = useNavigate();
   const uid = currentUser?.uid;
   const [hasUmbrella, setHasUmbrella] = useState<boolean | null>(null);
   const [umbrellaGoalId, setUmbrellaGoalId] = useState<string | null>(null);
@@ -1084,7 +1089,14 @@ export const AiCoachPage: React.FC = () => {
         {coachData && <CoachActionsToday coachData={coachData} />}
 
         {/* Phase card */}
-        {phase && coachData && <PhaseCard phase={phase} coachData={coachData} />}
+        {phase && coachData && (
+          <PhaseCard
+            phase={phase}
+            coachData={coachData}
+            weeklyKpiRows={weeklyKpiRows.length > 0 ? weeklyKpiRows : undefined}
+            onNavigate={navigate}
+          />
+        )}
 
         {/* Macros */}
         {macros && (
