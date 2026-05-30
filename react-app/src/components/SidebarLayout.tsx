@@ -114,6 +114,16 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         { label: 'Parkrun Results', path: '/parkrun-results', icon: 'flag-checkered' }
       ]
     },
+    // Running
+    {
+      label: 'Running',
+      icon: 'running',
+      items: [
+        { label: 'Heatmap', path: '/running/heatmap', icon: 'map-marked-alt' },
+        { label: 'Activity Log', path: '/fitness', icon: 'list-ul' },
+        { label: 'Parkrun Results', path: '/parkrun-results', icon: 'flag-checkered' }
+      ]
+    },
     {
       label: 'Goals',
       icon: 'target',
