@@ -20991,6 +20991,65 @@ try {
   console.warn('[init] agent/approvalWorker not loaded', e?.message || e);
 }
 
+// ===== Running GPS Streams — fetch latlng streams for all running activities and cache in Firestore
+exports.fetchRunningGpsStreams = httpsV2.onCall({ secrets: [STRAVA_CLIENT_ID, STRAVA_CLIENT_SECRET], timeoutSeconds: 300 }, async (req) => {
+  if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const db = admin.firestore();
+
+  // Fetch all running activities for this user
+  const workoutsSnap = await db.collection('metrics_workouts')
+    .where('ownerUid', '==', uid)
+    .where('provider', '==', 'strava')
+    .where('run', '==', true)
+    .get();
+
+  if (workoutsSnap.empty) return { fetched: 0, skipped: 0, failed: 0, reason: 'no_running_activities' };
+
+  // Find which streams already exist so we don't re-fetch
+  const existingSnap = await db.collection('strava_gps_streams').where('uid', '==', uid).get();
+  const existingIds = new Set(existingSnap.docs.map(d => d.data().stravaActivityId?.toString()));
+
+  let accessToken;
+  try {
+    accessToken = await getStravaAccessToken(uid);
+  } catch (e) {
+    throw new httpsV2.HttpsError('failed-precondition', 'Strava not connected or token refresh failed.');
+  }
+
+  const activities = workoutsSnap.docs.map(d => d.data());
+  let fetched = 0, skipped = 0, failed = 0;
+
+  for (const activity of activities) {
+    const activityId = activity.stravaActivityId?.toString();
+    if (!activityId) { skipped++; continue; }
+    if (existingIds.has(activityId)) { skipped++; continue; }
+
+    try {
+      const url = `https://www.strava.com/api/v3/activities/${activityId}/streams?keys=latlng&key_by_type=true`;
+      const streams = await fetchStravaJson(url, { headers: { Authorization: `Bearer ${accessToken}` } }, { retries: 1 });
+      const latlng = streams?.latlng?.data;
+      if (!Array.isArray(latlng) || latlng.length === 0) { skipped++; continue; }
+
+      const points = latlng.map(([lat, lng]) => ({ lat, lng }));
+      await db.collection('strava_gps_streams').add({
+        uid,
+        stravaActivityId: activityId,
+        activityType: activity.sportType || activity.type || 'Run',
+        startDate: activity.startDate || null,
+        points,
+        fetchedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      fetched++;
+    } catch (e) {
+      console.warn('[fetchRunningGpsStreams] failed for activity', activityId, e?.message);
+      failed++;
+    }
+  }
+
+  return { fetched, skipped, failed, total: activities.length };
+});
+
 // Phase 4: Proactive scheduled briefings
 try {
   const agentBriefingModule = require('./agent/agentBriefing');

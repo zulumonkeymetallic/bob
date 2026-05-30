@@ -129,6 +129,7 @@ import { buildPlannerPath } from './utils/plannerRoutes';
 
 // Lazy-loaded heavy routes
 const TravelMap = React.lazy(() => import('./components/travel/TravelMap'));
+const RunningHeatmap = React.lazy(() => import('./components/running/RunningHeatmap'));
 
 function App() {
   return (
@@ -505,6 +506,7 @@ function AppContent() {
             <Route path="/running-results" element={<Navigate to="/fitness" replace />} />
             <Route path="/parkrun-results" element={<WorkoutsDashboard />} />
             <Route path="/workouts" element={<Navigate to="/fitness" replace />} />
+            <Route path="/running/heatmap" element={<React.Suspense fallback={<div className="p-4">Loading...</div>}><RunningHeatmap /></React.Suspense>} />
             <Route path="/finance" element={<Navigate to="/finance/dashboard" replace />} />
             <Route path="/finance/merchants" element={<MerchantMappings />} />
             <Route path="/finance/categories" element={<Navigate to="/finance/merchants" replace />} />
