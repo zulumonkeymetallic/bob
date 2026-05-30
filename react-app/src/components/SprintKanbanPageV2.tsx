@@ -221,8 +221,9 @@ const SprintKanbanPageV2: React.FC = () => {
         return isGoalInHierarchySet(goalId, goals, activeFocusGoalIds);
     });
 
-    // Chores, routines and habits are surfaced in the daily plan — exclude from kanban
-    const CHORE_TYPES = new Set(['chore', 'routine', 'habit']);
+    // Chores, routines, habits, read and watch tasks are excluded from kanban
+    // (chores → daily plan; read/watch → media consumption, not sprint work)
+    const CHORE_TYPES = new Set(['chore', 'routine', 'habit', 'read', 'watch']);
     const sprintTasks = tasks.filter(
         (t) => !CHORE_TYPES.has(String((t as any).type || '').toLowerCase())
     );

@@ -450,10 +450,14 @@ function computeCriticalityScore({ dueDateMs, createdAtMs, goalDueMs, theme, poi
     else if (points >= 8) score -= 4;
   }
 
-  // NEW: Cap chores/habits/routines at 30 to prevent them from appearing in Top 3
-  const isExcludedType = ['chore', 'habit', 'routine'].includes(taskType);
-  if (isExcludedType) {
+  // Cap passive/recurring types to prevent them appearing in Top 3 or dominating AI ranking:
+  //   chore / habit / routine → max 30 (surfaced in daily plan, not sprint board)
+  //   read / watch            → max 10 (media consumption, not actionable work)
+  const type = String(taskType || '').toLowerCase();
+  if (['chore', 'habit', 'routine'].includes(type)) {
     score = Math.min(30, score);
+  } else if (['read', 'watch'].includes(type)) {
+    score = Math.min(10, score);
   }
 
   return Math.max(0, Math.min(100, Math.round(score)));
@@ -2920,6 +2924,8 @@ async function runPriorityScoringJob() {
       if (hasRecurrence(data)) return;
       const dueMs = toDateTime(data.dueDate || data.targetDate, { defaultValue: null })?.toMillis() || null;
       if (isRoutineChoreHabit(data) && !isTodayOrOverdue(dueMs)) return;
+      // read / watch tasks are media consumption — never scored by LLM
+      if (['read', 'watch'].includes(String(data.type || '').toLowerCase())) return;
 
       const goal = data.goalId ? goalMap.get(data.goalId) : null;
       const createdMs = toDateTime(data.createdAt || data.serverCreatedAt, { defaultValue: null })?.toMillis() || null;
@@ -4271,6 +4277,7 @@ exports.replanCalendarNow = onCall({
     .map((d) => ({ id: d.id, ...(d.data() || {}) }))
     .filter((t) => !isTaskDoneStatus(t.status))
     .filter((t) => !isRoutineChoreHabit(t))
+    .filter((t) => !['read', 'watch'].includes(String(t.type || '').toLowerCase()))
     .filter((t) => {
       if (activeSprintIds.length === 0) return true;
       if (t.sprintId && activeSprintIds.includes(t.sprintId)) return true;
