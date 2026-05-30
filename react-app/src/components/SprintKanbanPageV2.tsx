@@ -221,7 +221,11 @@ const SprintKanbanPageV2: React.FC = () => {
         return isGoalInHierarchySet(goalId, goals, activeFocusGoalIds);
     });
 
-    const sprintTasks = tasks; // Already filtered by query if sprintId is set
+    // Chores, routines and habits are surfaced in the daily plan — exclude from kanban
+    const CHORE_TYPES = new Set(['chore', 'routine', 'habit']);
+    const sprintTasks = tasks.filter(
+        (t) => !CHORE_TYPES.has(String((t as any).type || '').toLowerCase())
+    );
     const sprintStartMs = resolveTimestampMs(currentSprint?.startDate);
     const sprintEndMs = resolveTimestampMs(currentSprint?.endDate);
     const sprintTasksForMetrics = sprintTasks.filter((task) => {

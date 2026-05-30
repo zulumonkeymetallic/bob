@@ -16,6 +16,7 @@ import CheckInBanner from './checkins/CheckInBanner';
 import { CoachVerdictBanner } from './coach/CoachVerdictBanner';
 import ProcessTextActivityHost from './ProcessTextActivityHost';
 import PlannerCapacityBanner from './planner/PlannerCapacityBanner';
+import GlobalGoalFocusBanner from './GlobalGoalFocusBanner';
 // Test mode UI removed per request
 
 interface SidebarLayoutProps {
@@ -107,7 +108,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       label: 'Health',
       icon: 'heartbeat',
       items: [
-        { label: 'Metrics Overview', path: '/metrics/overview', icon: 'chart-area' },
+        { label: 'KPI Metrics', path: '/metrics', icon: 'th' },
         { label: 'AI Coach', path: '/ai-coach', icon: 'dumbbell' },
         { label: 'Fitness Results', path: '/fitness', icon: 'running' },
         { label: 'Habit Tracking', path: '/dashboard/habit-tracking', icon: 'check-square' },
@@ -747,6 +748,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
             <CoachVerdictBanner />
             {!hidePlannerCapacityBanner && <PlannerCapacityBanner />}
             <SprintClosureBanner />
+            {!isSmallScreen && <GlobalGoalFocusBanner />}
             <ProcessTextActivityHost />
           </div>
           {children}

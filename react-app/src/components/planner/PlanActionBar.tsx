@@ -86,7 +86,7 @@ const PlanActionBar: React.FC<PlanActionBarProps> = ({ className }) => {
         <LayoutDashboard size={14} className="me-1" /> Overview
       </Button>
       <Button size="sm" variant={buttonVariant('planner')} onClick={() => navigate(buildPlannerPath(currentPlannerLevel || 'calendar', location.search))} title="Open unified planner">
-        <Calendar size={14} className="me-1" /> Planner
+        <Calendar size={14} className="me-1" /> Calendar
       </Button>
       <Button size="sm" variant={buttonVariant('kanban')} onClick={() => navigate('/sprints/kanban')} title="Open kanban board">
         <LayoutGrid size={14} className="me-1" /> Kanban

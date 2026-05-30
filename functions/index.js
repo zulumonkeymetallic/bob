@@ -70,6 +70,8 @@ try {
     exports.scheduleCoachFitnessBlocks        = coachModule.scheduleCoachFitnessBlocks;
     exports.triggerPollFitnessProgrammes      = coachModule.triggerPollFitnessProgrammes;
     exports.triggerScheduleCoachFitnessBlocks = coachModule.triggerScheduleCoachFitnessBlocks;
+    exports.checkAfternoonSteps               = coachModule.checkAfternoonSteps;
+    exports.triggerCheckAfternoonSteps        = coachModule.triggerCheckAfternoonSteps;
   }
 } catch (e) {
   console.warn('[init] coachModule not loaded', e?.message || e);

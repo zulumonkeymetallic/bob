@@ -85,6 +85,7 @@ import SprintKanbanPageV2 from './components/SprintKanbanPageV2';
 import TasksManagement from './components/TasksManagement';
 import SprintPlanningMatrix from './components/SprintPlanningMatrix';
 import WorkoutsDashboard from './components/WorkoutsDashboard';
+import MetricsPage from './components/MetricsPage';
 import AiCoachPage from './components/coach/AiCoachPage';
 import FinanceDashboardModern from './components/FinanceDashboardModern';
 import MerchantMappings from './components/finance/MerchantMappings';
@@ -502,6 +503,7 @@ function AppContent() {
             <Route path="/wplanner/gantt" element={<LegacyPlannerRedirect level="gantt" />} />
             <Route path="/planner/sprint-capacity" element={<Navigate to="/sprints/capacity" replace />} />
             <Route path="/ai-coach" element={<AiCoachPage />} />
+            <Route path="/metrics" element={<MetricsPage />} />
             <Route path="/fitness" element={<WorkoutsDashboard />} />
             <Route path="/running-results" element={<Navigate to="/fitness" replace />} />
             <Route path="/parkrun-results" element={<WorkoutsDashboard />} />

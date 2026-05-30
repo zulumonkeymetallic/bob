@@ -340,8 +340,8 @@ const UnifiedPlannerCalendarPage: React.FC = () => {
   );
 
   const [range, setRange] = useState<PlannerRange>(() => getInitialRange());
-  const [view, setView] = useState<ViewType>(Views.AGENDA as ViewType);
-  // Tracks the navigated date independently so agenda always opens on today
+  const [view, setView] = useState<ViewType>(Views.DAY as ViewType);
+  // Tracks the navigated date independently so day view always opens on today
   const [calendarDate, setCalendarDate] = useState<Date>(() => new Date());
   const [calendarScrollTime, setCalendarScrollTime] = useState<Date>(() => {
     const now = new Date();
@@ -1876,7 +1876,7 @@ const UnifiedPlannerCalendarPage: React.FC = () => {
                     localizer={localizer}
                     events={events}
                     view={view}
-                    defaultView={Views.AGENDA}
+                    defaultView={Views.DAY}
                     date={calendarDate}
                     onNavigate={(date) => setCalendarDate(date)}
                     onView={(next) => setView(next as ViewType)}

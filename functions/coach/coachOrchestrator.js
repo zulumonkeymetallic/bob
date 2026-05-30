@@ -416,14 +416,37 @@ async function _runOrchestratorForUser(uid) {
   }
   const programmeLine = progParts.length > 0 ? `\nProgramme: ${progParts.join(' + ')}` : '';
 
+  // 12c. Weekly volume nudges — mid-week only (Tue–Thu)
+  const dayOfWeek = todayDt.weekday; // 1=Mon … 7=Sun
+  const weeklyNudges = [];
+  const weeklyRunKm = fitnessOverview?.sportTotals?.last7?.runKm ?? fitnessOverview?.sportTotals?.last30?.runKm ?? null;
+  const weeklySwimKm = fitnessOverview?.sportTotals?.last7?.swimKm ?? fitnessOverview?.sportTotals?.last30?.swimKm ?? null;
+  if (dayOfWeek >= 2 && dayOfWeek <= 4) {
+    // Run: target 15km mid-week check (half of 30km weekly)
+    if (weeklyRunKm !== null && weeklyRunKm < 15) {
+      weeklyNudges.push(`Run behind target (${weeklyRunKm.toFixed(1)}km this week — aim for 30km)`);
+    }
+    // Swim: target 2km mid-week check (half of 4km weekly)
+    if (weeklySwimKm !== null && weeklySwimKm < 2) {
+      weeklyNudges.push(`Swim behind target (${weeklySwimKm.toFixed(1)}km this week — aim for 4km)`);
+    }
+  }
+  const volumeLine = weeklyNudges.length > 0 ? `\n⚠️ Volume: ${weeklyNudges.join('. ')}` : '';
+
+  // 12d. Steps today
+  const stepsToday = profile.healthkitStepsToday ?? profile.stepsToday ?? null;
+  const stepsLine = stepsToday !== null ? `\nSteps: ${stepsToday.toLocaleString()} / 12,000` : '';
+
   const briefingText =
-    `🏊 Coach Briefing\n` +
+    `🏊 AI Coach Briefing\n` +
     `HRV: ${hrvToday !== null ? `${Math.round(hrvToday)}ms` : 'n/a'} (${readinessLabel === 'green' ? '🟢' : readinessLabel === 'amber' ? '🟡' : '🔴'} ${readinessPct}%). ` +
     `Sleep: ${sleepToday !== null ? `${sleepToday.toFixed(1)}h` : 'n/a'}.\n` +
     `Today: ${todayBlockTitle}.\n` +
     `Targets: P:${proteinG}g C:${carbG}g F:${fatG}g\n` +
     `R-Score: ${(readinessScore).toFixed(2)}` +
-    programmeLine;
+    stepsLine +
+    programmeLine +
+    volumeLine;
 
   // 13. Write coach_daily
   const coachDailyData = {
@@ -449,9 +472,10 @@ async function _runOrchestratorForUser(uid) {
     // Fitness overview fields surfaced for the UI
     fitnessScore: fitnessOverview?.fitnessScore ?? null,
     fitnessLevel: fitnessOverview?.fitnessLevel ?? null,
-    weeklyRunKm: fitnessOverview?.sportTotals?.last30?.runKm ?? null,
-    weeklyBikeKm: fitnessOverview?.sportTotals?.last30?.bikeKm ?? null,
-    weeklySwimKm: fitnessOverview?.sportTotals?.last30?.swimKm ?? null,
+    weeklyRunKm: fitnessOverview?.sportTotals?.last7?.runKm ?? fitnessOverview?.sportTotals?.last30?.runKm ?? null,
+    weeklyBikeKm: fitnessOverview?.sportTotals?.last7?.bikeKm ?? fitnessOverview?.sportTotals?.last30?.bikeKm ?? null,
+    weeklySwimKm: fitnessOverview?.sportTotals?.last7?.swimKm ?? fitnessOverview?.sportTotals?.last30?.swimKm ?? null,
+    stepsToday: profile.healthkitStepsToday ?? profile.stepsToday ?? null,
     currentBodyFatPct: bodyFatPct,
     currentWeightKg: weightKg,
     briefingText,
@@ -463,6 +487,33 @@ async function _runOrchestratorForUser(uid) {
 
   await firestore.collection('coach_daily').doc(docId).set(
     { ...coachDailyData, createdAt: admin.firestore.FieldValue.serverTimestamp() },
+    { merge: true }
+  );
+
+  // Mirror today's daily totals from profiles → health_metrics so 30-day boxes are populated.
+  // Only writes fields present on the profile; safe to merge repeatedly (idempotent).
+  const dailyMirror = {
+    ownerUid: uid,
+    uid,
+    date: today,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+  const stepsVal = profile.healthkitStepsToday ?? profile.stepsToday ?? null;
+  const proteinVal = profile.healthkitProteinTodayG ?? profile.manualProteinG ?? null;
+  const carbsVal = profile.healthkitCarbsTodayG ?? profile.manualCarbsG ?? null;
+  const fatVal = profile.healthkitFatTodayG ?? profile.manualFatG ?? null;
+  const calsVal = profile.healthkitCaloriesTodayKcal ?? profile.manualCaloriesKcal ?? null;
+  const sleepVal = hm.sleepDurationH ?? null;  // from health_metrics written by iOS
+  if (stepsVal !== null) dailyMirror.healthkitStepsToday = stepsVal;
+  if (proteinVal !== null) dailyMirror.proteinTodayG = proteinVal;
+  if (carbsVal !== null) dailyMirror.carbsTodayG = carbsVal;
+  if (fatVal !== null) dailyMirror.fatTodayG = fatVal;
+  if (calsVal !== null) dailyMirror.caloriesTodayKcal = calsVal;
+  if (sleepVal !== null) dailyMirror.sleepDurationH = sleepVal;
+  if (bodyFatPct != null) dailyMirror.bodyFatPct = bodyFatPct;
+  if (weightKg != null) dailyMirror.weightKg = weightKg;
+  await firestore.collection('health_metrics').doc(docId).set(
+    { ...dailyMirror, createdAt: admin.firestore.FieldValue.serverTimestamp() },
     { merge: true }
   );
 
@@ -509,15 +560,20 @@ exports.logHealthMetric = httpsV2.onCall({ region: REGION }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
 
-  const { date, hrvMs, sleepDurationH, restingHr, sleepScore, weightKg, bodyFatPct, source } = req.data || {};
+  const {
+    date, hrvMs, sleepDurationH, restingHr, sleepScore, weightKg, bodyFatPct, source,
+    // Daily totals — sent alongside HRV/sleep so health_metrics has a full per-day snapshot
+    stepsToday, proteinTodayG, carbsTodayG, fatTodayG, caloriesTodayKcal,
+  } = req.data || {};
   if (!date) throw new httpsV2.HttpsError('invalid-argument', 'date is required (YYYY-MM-DD)');
-  if (hrvMs === undefined && sleepDurationH === undefined && weightKg === undefined && bodyFatPct === undefined) {
-    throw new httpsV2.HttpsError('invalid-argument', 'At least one metric required');
-  }
+  const anyMetric = [hrvMs, sleepDurationH, weightKg, bodyFatPct, stepsToday, proteinTodayG].some(v => v !== undefined);
+  if (!anyMetric) throw new httpsV2.HttpsError('invalid-argument', 'At least one metric required');
 
   const docId = `${uid}_${date}`;
   const payload = {
-    uid, date,
+    uid,
+    ownerUid: uid,   // WorkoutsDashboard queries health_metrics by ownerUid
+    date,
     source: source || 'ios_app',
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   };
@@ -527,6 +583,12 @@ exports.logHealthMetric = httpsV2.onCall({ region: REGION }, async (req) => {
   if (sleepScore !== undefined) payload.sleepScore = sleepScore;
   if (weightKg !== undefined) payload.weightKg = weightKg;
   if (bodyFatPct !== undefined) payload.bodyFatPct = bodyFatPct;
+  // Daily totals for 30-day adherence grid in WorkoutsDashboard
+  if (stepsToday !== undefined) payload.healthkitStepsToday = stepsToday;
+  if (proteinTodayG !== undefined) payload.proteinTodayG = proteinTodayG;
+  if (carbsTodayG !== undefined) payload.carbsTodayG = carbsTodayG;
+  if (fatTodayG !== undefined) payload.fatTodayG = fatTodayG;
+  if (caloriesTodayKcal !== undefined) payload.caloriesTodayKcal = caloriesTodayKcal;
 
   // Mirror current-value fields to profiles for macro engine
   const writes = [
@@ -1041,6 +1103,90 @@ async function _sendMacroNudges() {
 //   { schedule: '0 18 * * *', timeZone: TZ, region: REGION },
 //   _sendMacroNudges
 // );
+
+// ─── Afternoon Steps Check — 14:00 Europe/London ─────────────────────────────
+/**
+ * If steps < 12,000 at 14:00, create a 30-min walk block for this afternoon
+ * and send a Telegram nudge. Idempotent — skips if a walk block already exists today.
+ */
+async function _checkAfternoonStepsForUser(uid, chatId) {
+  const firestore = db();
+  const today = todayStr();
+  const nowDt = DateTime.now().setZone(TZ);
+
+  const profileSnap = await firestore.collection('profiles').doc(uid).get();
+  const profile = profileSnap.data() || {};
+  const steps = profile.healthkitStepsToday ?? profile.stepsToday ?? null;
+
+  if (steps === null || steps >= 12000) return; // nothing to do
+
+  // Check if a walk block already exists today (afternoon: 14:00–23:59)
+  const afternoonStart = nowDt.set({ hour: 14, minute: 0, second: 0 }).toMillis();
+  const dayEnd = nowDt.endOf('day').toMillis();
+
+  const existingWalkSnap = await firestore
+    .collection('calendar_blocks')
+    .where('ownerUid', '==', uid)
+    .where('start', '>=', afternoonStart)
+    .where('start', '<=', dayEnd)
+    .where('category', '==', 'walk')
+    .limit(1)
+    .get();
+
+  if (!existingWalkSnap.empty) return; // already scheduled
+
+  // Create walk block at next 30-min boundary
+  const nowMs = Date.now();
+  const slotStart = Math.ceil(nowMs / (30 * 60 * 1000)) * (30 * 60 * 1000);
+  const slotEnd = slotStart + 30 * 60 * 1000;
+
+  await firestore.collection('calendar_blocks').add({
+    ownerUid: uid,
+    title: '[AI Coach] 30-min Walk — Step Target',
+    category: 'walk',
+    theme: 'health',
+    start: slotStart,
+    end: slotEnd,
+    durationMin: 30,
+    rationale: `Step count at 14:00 was ${steps.toLocaleString()} / 12,000 — AI Coach added a walk slot.`,
+    aiGenerated: true,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  const remaining = 12000 - steps;
+  if (chatId) {
+    await sendTelegram(chatId,
+      `🚶 AI Coach — Step Nudge\n` +
+      `${steps.toLocaleString()} steps logged so far today. You need ${remaining.toLocaleString()} more to hit 12,000.\n` +
+      `A 30-min walk block has been added to your calendar this afternoon.`
+    );
+  }
+}
+
+exports.checkAfternoonSteps = schedulerV2.onSchedule(
+  { schedule: '0 14 * * *', timeZone: TZ, region: REGION },
+  async () => {
+    const firestore = db();
+    const sessionsSnap = await firestore.collection('telegram_sessions').get();
+    for (const sessionDoc of sessionsSnap.docs) {
+      const { uid, chatId } = sessionDoc.data();
+      if (!uid) continue;
+      try {
+        await _checkAfternoonStepsForUser(uid, chatId || null);
+      } catch (e) {
+        console.warn(`[coachSteps] uid=${uid} failed:`, e?.message);
+      }
+    }
+  }
+);
+
+exports.triggerCheckAfternoonSteps = httpsV2.onCall({ region: REGION }, async (req) => {
+  if (!req.auth?.uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const chatId = await getTelegramChatId(req.auth.uid);
+  await _checkAfternoonStepsForUser(req.auth.uid, chatId);
+  return { ok: true };
+});
 
 // Export internal helper for use by briefing module
 exports._runOrchestratorForUser = _runOrchestratorForUser;

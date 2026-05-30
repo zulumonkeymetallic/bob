@@ -14,9 +14,11 @@ exports.runCoachOrchestratorNightly = orchestrator.runCoachOrchestratorNightly;
 exports.logHealthMetric            = orchestrator.logHealthMetric;
 exports.getCoachToday              = orchestrator.getCoachToday;
 exports.provisionIronmanGoals      = orchestrator.provisionIronmanGoals;
-exports.analyzeBodyPhoto           = orchestrator.analyzeBodyPhoto;
-exports.sendCoachNudgesNoon        = orchestrator.sendCoachNudgesNoon;
-exports.sendCoachNudgesEvening     = orchestrator.sendCoachNudgesEvening;
+exports.analyzeBodyPhoto               = orchestrator.analyzeBodyPhoto;
+exports.sendCoachNudgesNoon            = orchestrator.sendCoachNudgesNoon;
+exports.sendCoachNudgesEvening         = orchestrator.sendCoachNudgesEvening;
+exports.checkAfternoonSteps            = orchestrator.checkAfternoonSteps;
+exports.triggerCheckAfternoonSteps     = orchestrator.triggerCheckAfternoonSteps;
 
 // Telegram briefings & alerts
 exports.sendCoachMorningBriefing   = briefing.sendCoachMorningBriefing;

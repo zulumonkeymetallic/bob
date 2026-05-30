@@ -7,6 +7,7 @@
  */
 
 import React, { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { Badge, Button, Card, ProgressBar } from 'react-bootstrap';
 import { Activity, Dumbbell, HeartPulse, X } from 'lucide-react';
@@ -20,6 +21,7 @@ function todayStr(): string {
 
 export const CoachVerdictBanner: React.FC = () => {
   const { currentUser } = useAuth();
+  const navigate = useNavigate();
   const uid = currentUser?.uid;
   const [coachData, setCoachData] = useState<CoachDaily | null>(null);
   const [coachConfigured, setCoachConfigured] = useState(false);
@@ -165,7 +167,7 @@ export const CoachVerdictBanner: React.FC = () => {
             <Button
               size="sm"
               variant="light"
-              href="/ai-coach"
+              onClick={() => navigate('/ai-coach')}
               style={{ borderRadius: 999, padding: '2px 10px', fontSize: 11, fontWeight: 700 }}
             >
               Open coach

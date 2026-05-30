@@ -13,7 +13,7 @@
  * surfaces what it *did today* — not just numbers, but explicit actions taken.
  */
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   collection,
@@ -21,9 +21,11 @@ import {
   getDoc,
   getDocs,
   onSnapshot,
+  orderBy,
   query,
   updateDoc,
   where,
+  limit,
 } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { httpsCallable } from 'firebase/functions';
@@ -32,7 +34,26 @@ import { useAuth } from '../../contexts/AuthContext';
 import { saveFocusWizardPrefill } from '../../services/focusGoalsService';
 import { CoachVerdictBanner } from './CoachVerdictBanner';
 import { AiCoachPhotoGallery } from './AiCoachPhotoGallery';
+import FitnessKpiGrid from '../fitness/FitnessKpiGrid';
 import type { CoachDaily } from '../../types/CoachTypes';
+
+// ─── Weekly sport helpers (shared with MetricsPage) ────────────────────────────
+function getISOWeekKey(date: Date): string {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  const week = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+  return `${d.getUTCFullYear()}-W${String(week).padStart(2, '0')}`;
+}
+function getLast12WeekKeys(): string[] {
+  const keys: string[] = [];
+  const now = new Date();
+  for (let i = 11; i >= 0; i--) {
+    const d = new Date(now); d.setDate(d.getDate() - i * 7);
+    keys.push(getISOWeekKey(d));
+  }
+  return keys;
+}
 
 function todayStr() {
   return new Date().toISOString().split('T')[0];
@@ -185,13 +206,22 @@ const PhaseCard: React.FC<{
           />
         </div>
 
-        {/* 30-day sport actuals */}
-        {(coachData.weeklyRunKm || coachData.weeklyBikeKm || coachData.weeklySwimKm) && (
-          <div className="d-flex gap-3 small text-muted mb-3">
-            {coachData.weeklyRunKm ? <span>🏃 {coachData.weeklyRunKm.toFixed(0)}km</span> : null}
-            {coachData.weeklyBikeKm ? <span>🚴 {coachData.weeklyBikeKm.toFixed(0)}km</span> : null}
-            {coachData.weeklySwimKm ? <span>🏊 {coachData.weeklySwimKm.toFixed(0)}km</span> : null}
-            <span className="ms-auto text-muted fst-italic">last 30 days</span>
+        {/* Weekly sport KPI grid (12 weeks) */}
+        {workouts.length > 0 && (
+          <div className="mb-3">
+            <div className="d-flex align-items-center justify-content-between mb-2">
+              <span style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--bs-secondary)' }}>
+                Weekly targets — 12 weeks
+              </span>
+              <button
+                className="btn btn-link btn-sm p-0 text-muted"
+                style={{ fontSize: '0.7rem' }}
+                onClick={() => navigate('/metrics')}
+              >
+                Full metrics →
+              </button>
+            </div>
+            <FitnessKpiGrid rows={weeklyKpiRows} />
           </div>
         )}
 
@@ -663,6 +693,127 @@ const CoachActionsToday: React.FC<{ coachData: CoachDaily }> = ({ coachData }) =
   );
 };
 
+// ─── Steps Card ──────────────────────────────────────────────────────────────
+
+const STEP_TARGET = 12000;
+
+const StepsCard: React.FC<{ stepsToday: number | null; uid: string }> = ({ stepsToday, uid }) => {
+  const pct = stepsToday !== null ? Math.min(100, Math.round((stepsToday / STEP_TARGET) * 100)) : 0;
+  const colour = pct >= 100 ? 'success' : pct >= 50 ? 'primary' : 'warning';
+  const remaining = stepsToday !== null ? Math.max(0, STEP_TARGET - stepsToday) : null;
+
+  const handleManualSteps = async () => {
+    const input = window.prompt('Enter today\'s step count:');
+    const val = input ? parseInt(input.replace(/[^0-9]/g, ''), 10) : NaN;
+    if (!Number.isFinite(val) || val < 0) return;
+    try {
+      await updateDoc(doc(db, 'profiles', uid), { stepsToday: val });
+    } catch (e) {
+      console.warn('[StepsCard] manual entry failed', e);
+    }
+  };
+
+  return (
+    <div className="card border-0 shadow-sm">
+      <div className="card-body">
+        <div className="d-flex align-items-center justify-content-between mb-1">
+          <h6 className="text-muted mb-0" style={{ fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            Daily Step Goal — 12,000
+          </h6>
+          <span className="text-muted small" style={{ cursor: 'pointer' }} onClick={handleManualSteps} title="Tap to enter manually">
+            {stepsToday !== null ? stepsToday.toLocaleString() : '—'} / {STEP_TARGET.toLocaleString()}
+          </span>
+        </div>
+        <div className="progress" style={{ height: '8px' }}>
+          <div
+            className={`progress-bar bg-${colour}`}
+            role="progressbar"
+            aria-valuenow={pct}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            style={{ width: `${pct}%`, transition: 'width 0.4s ease' }}
+          />
+        </div>
+        <div className="d-flex justify-content-between mt-1" style={{ fontSize: '0.7rem', color: 'var(--bs-secondary)' }}>
+          <span>Progress toward 12,000 steps today</span>
+          {stepsToday !== null && remaining !== null && remaining > 0 && (
+            <span>{remaining.toLocaleString()} to go (~{Math.round(remaining / 100)} min walk)</span>
+          )}
+          {stepsToday !== null && remaining !== null && remaining <= 0 && (
+            <span className="text-success">Goal hit ✓</span>
+          )}
+          {stepsToday === null && (
+            <span style={{ cursor: 'pointer' }} onClick={handleManualSteps}>Syncs from Apple Health · tap to enter manually</span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ─── Manual Protein Entry ─────────────────────────────────────────────────────
+
+const ManualProteinCard: React.FC<{
+  proteinTarget: number;
+  proteinActual: number | null;
+  uid: string;
+}> = ({ proteinTarget, proteinActual, uid }) => {
+  const [value, setValue] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  // Only show if Apple Health hasn't already provided actuals
+  if (proteinActual !== null) return null;
+
+  const handleSave = async () => {
+    const val = parseFloat(value);
+    if (!Number.isFinite(val) || val < 0) return;
+    setSaving(true);
+    try {
+      await updateDoc(doc(db, 'profiles', uid), { manualProteinG: val });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 3000);
+      setValue('');
+    } catch (e) {
+      console.warn('[ManualProtein] save failed', e);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="card border-0 shadow-sm">
+      <div className="card-body">
+        <h6 className="text-muted mb-2" style={{ fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+          Log Protein Manually
+        </h6>
+        <p className="text-muted small mb-2">
+          Target: {proteinTarget}g. When MyFitnessPal or a nutrition app is connected to Apple Health on your iPhone,
+          protein is synced automatically — this entry is a fallback for when it isn't.
+        </p>
+        <div className="input-group input-group-sm">
+          <input
+            type="number"
+            className="form-control"
+            placeholder={`e.g. ${Math.round(proteinTarget * 0.7)}`}
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            style={{ maxWidth: '120px' }}
+          />
+          <span className="input-group-text">g</span>
+          <button
+            className="btn btn-outline-success"
+            disabled={saving || !value}
+            onClick={handleSave}
+          >
+            {saving ? '…' : saved ? '✓ Saved' : 'Log'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export const AiCoachPage: React.FC = () => {
@@ -675,6 +826,7 @@ export const AiCoachPage: React.FC = () => {
   const [weeklyPromptActive, setWeeklyPromptActive] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [workouts, setWorkouts] = useState<any[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const today = todayStr();
 
@@ -735,6 +887,47 @@ export const AiCoachPage: React.FC = () => {
     });
     return unsub;
   }, [uid]);
+
+  // Load workouts for weekly KPI grid
+  useEffect(() => {
+    if (!uid) return;
+    const q = query(
+      collection(db, 'metrics_workouts'),
+      where('ownerUid', '==', uid),
+      orderBy('startDate', 'desc'),
+      limit(2000)
+    );
+    return onSnapshot(q, snap => {
+      setWorkouts(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    }, () => setWorkouts([]));
+  }, [uid]);
+
+  // Compute weekly sport KPI grid from workouts
+  const weeklyKpiRows = useMemo(() => {
+    const weekKeys = getLast12WeekKeys();
+    const byWeek: Record<string, { run_m: number; swim_m: number; cycle_m: number }> = {};
+    weekKeys.forEach(k => { byWeek[k] = { run_m: 0, swim_m: 0, cycle_m: 0 }; });
+    for (const w of workouts) {
+      const startMs = typeof w.startDate === 'number' ? w.startDate : (w.startDate?.toMillis?.() ?? 0);
+      if (!startMs) continue;
+      const wk = getISOWeekKey(new Date(startMs));
+      if (!byWeek[wk]) continue;
+      const dist = Number(w.distance_m || 0);
+      const sport = String(w.sportType || w.type || '').toLowerCase();
+      if (sport.includes('run') || sport.includes('walk')) byWeek[wk].run_m += dist;
+      else if (sport.includes('swim')) byWeek[wk].swim_m += dist;
+      else if (sport.includes('cycl') || sport.includes('ride') || sport.includes('bike')) byWeek[wk].cycle_m += dist;
+    }
+    const runKms   = weekKeys.map(k => byWeek[k].run_m   / 1000);
+    const swimKms  = weekKeys.map(k => byWeek[k].swim_m  / 1000);
+    const cycleKms = weekKeys.map(k => byWeek[k].cycle_m / 1000);
+    const h12 = (vals: number[], t: number) => vals.filter(v => v >= t).length;
+    return [
+      { label: 'Run  30km/wk',  summaryText: `${h12(runKms,   30)}/12 weeks hit target`, boxes: weekKeys.map((k, i) => ({ key: k, pct: runKms[i]   > 0 ? Math.round((runKms[i]   / 30) * 100) : null, tooltip: `${k}: ${runKms[i].toFixed(1)} km`   })) },
+      { label: 'Swim  4km/wk',  summaryText: `${h12(swimKms,   4)}/12 weeks hit target`, boxes: weekKeys.map((k, i) => ({ key: k, pct: swimKms[i]  > 0 ? Math.round((swimKms[i]  /  4) * 100) : null, tooltip: `${k}: ${swimKms[i].toFixed(2)} km`  })) },
+      { label: 'Cycle 50km/wk', summaryText: `${h12(cycleKms, 50)}/12 weeks hit target`, boxes: weekKeys.map((k, i) => ({ key: k, pct: cycleKms[i] > 0 ? Math.round((cycleKms[i] / 50) * 100) : null, tooltip: `${k}: ${cycleKms[i].toFixed(1)} km` })) },
+    ];
+  }, [workouts]);
 
   const dismissWeeklyPrompt = async () => {
     if (!uid) return;
@@ -920,6 +1113,20 @@ export const AiCoachPage: React.FC = () => {
               </div>
             </div>
           </div>
+        )}
+
+        {/* Steps today */}
+        {coachData && (
+          <StepsCard stepsToday={(coachData as any).stepsToday ?? null} uid={uid!} />
+        )}
+
+        {/* Manual protein entry */}
+        {macros && uid && (
+          <ManualProteinCard
+            proteinTarget={macros.proteinG}
+            proteinActual={macros.proteinActualG}
+            uid={uid}
+          />
         )}
 
         {/* Photo gallery */}
