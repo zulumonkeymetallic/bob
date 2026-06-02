@@ -1840,6 +1840,7 @@ async function materializePlannerThemeBlocks({
   themeAllocations,
   existingBlocks,
   fitnessBlocksAutoCreate = true,
+  fitnessGoalId = null,  // goalId to write on health theme blocks (links FITNESS goal → calendar)
 }) {
   const results = { created: 0, skipped: 0, total: 0 };
   const isWorkShiftTheme = (value) => {
@@ -1949,6 +1950,13 @@ async function materializePlannerThemeBlocks({
       aiGenerated: true,
       syncToGoogle: kind !== 'work_shift',
       rationale: `Weekly theme plan: ${themeLabel}`,
+      // Link fitness blocks to the user's fitness focus goal
+      goalId: kind === 'health' && fitnessGoalId ? fitnessGoalId : null,
+      activityType: kind === 'health' ? (rawLabel.toLowerCase().includes('swim') ? 'swim'
+        : rawLabel.toLowerCase().includes('run') ? 'run'
+        : rawLabel.toLowerCase().includes('cycl') || rawLabel.toLowerCase().includes('bike') ? 'cycle'
+        : rawLabel.toLowerCase().includes('gym') || rawLabel.toLowerCase().includes('cross') ? 'gym'
+        : 'fitness') : null,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     };
@@ -3533,6 +3541,7 @@ async function runCalendarPlannerJob() {
       themeAllocations,
       existingBlocks,
       fitnessBlocksAutoCreate,
+      fitnessGoalId: profile?.ironmanUmbrellaGoalId || null,
     });
     if (plannerBlockResult.created > 0) {
       console.log(`[calendar-planner] planner blocks created for ${userId}: ${plannerBlockResult.created}`);
@@ -3796,6 +3805,8 @@ exports.materializeFitnessBlocksNow = onCall({
   }
   const existingBlocks = dedupeResult.blocks;
 
+  const profileSnap2 = await db.collection('profiles').doc(uid).get().catch(() => null);
+  const profile2 = profileSnap2?.exists ? profileSnap2.data() : {};
   const result = await materializePlannerThemeBlocks({
     db,
     userId: uid,
@@ -3803,6 +3814,7 @@ exports.materializeFitnessBlocksNow = onCall({
     windowEnd,
     themeAllocations,
     existingBlocks,
+    fitnessGoalId: profile2?.ironmanUmbrellaGoalId || null,
   });
 
   return {
@@ -4433,6 +4445,7 @@ exports.replanCalendarNow = onCall({
     themeAllocations,
     existingBlocks: remainingBlocks,
     fitnessBlocksAutoCreate,
+    fitnessGoalId: profile?.ironmanUmbrellaGoalId || null,
   });
   {
     const refreshedBlocksSnap = await db.collection('calendar_blocks')

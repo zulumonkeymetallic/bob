@@ -242,6 +242,30 @@ const UnifiedPlannerCalendarPage: React.FC = () => {
   const { themes: globalThemes } = useGlobalThemes();
   const location = useLocation();
   const [stories, setStories] = useState<any[]>([]);
+  const [focusGoals, setFocusGoals] = useState<Goal[]>([]);
+
+  // Map goalId → domain hex colour for calendar event colouring
+  const goalColorMap = useMemo(() => {
+    const GOAL_DOMAIN_COLORS: Record<string, string> = {
+      'health':        '#22c55e',
+      'fitness':       '#22c55e',
+      'professional':  '#6366f1',
+      'career':        '#6366f1',
+      'wealth':        '#eab308',
+      'finance':       '#eab308',
+      'ai':            '#a855f7',
+      'travel':        '#f59e0b',
+      'bob':           '#ef4444',
+      'platform':      '#ef4444',
+    };
+    const map = new Map<string, string>();
+    focusGoals.forEach(goal => {
+      const theme = String(goal.theme || goal.title || '').toLowerCase();
+      const match = Object.entries(GOAL_DOMAIN_COLORS).find(([k]) => theme.includes(k));
+      if (match) map.set(goal.id, match[1]);
+    });
+    return map;
+  }, [focusGoals]);
 
   const legacyThemeNameById = useMemo(() => {
     const map = new Map<number, string>();
@@ -432,6 +456,20 @@ const UnifiedPlannerCalendarPage: React.FC = () => {
     return () => unsub();
   }, [currentUser]);
 
+  // Load focus goals for calendar colour-coding by domain
+  useEffect(() => {
+    if (!currentUser) return;
+    const q = query(
+      collection(db, 'goals'),
+      where('ownerUid', '==', currentUser.uid),
+      where('isFocusGoal', '==', true),
+    );
+    const unsub = onSnapshot(q, (snap) => {
+      setFocusGoals(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }) as Goal));
+    }, () => setFocusGoals([]));
+    return () => unsub();
+  }, [currentUser]);
+
   useEffect(() => {
     const state = ((location as unknown) as { state?: { focus?: string } | null }).state ?? null;
     if (!state?.focus) return;
@@ -470,13 +508,16 @@ const UnifiedPlannerCalendarPage: React.FC = () => {
           ?? block.subTheme
           ?? block.category,
       );
+      // Goal-linked events: use the focus goal's domain colour
+      const goalColor = block.goalId ? goalColorMap.get(block.goalId) : undefined;
       return {
         id: block.id,
         title,
         start,
         end,
         type: 'block' as const,
-        color: appearance?.color
+        color: goalColor
+          || appearance?.color
           || FALLBACK_THEME_COLORS[String(block.theme || block.category)] || '#14b8a6',
         textColor: appearance?.textColor || '#ffffff',
         themeLabel: appearance?.label,
@@ -585,7 +626,7 @@ const UnifiedPlannerCalendarPage: React.FC = () => {
       });
 
     return [...externalEvents, ...blockEvents, ...instanceEvents];
-  }, [planner.blocks, planner.externalEvents, planner.instances, resolveThemeAppearance]);
+  }, [planner.blocks, planner.externalEvents, planner.instances, resolveThemeAppearance, goalColorMap]);
 
   const storyLabel = useCallback((story: any) => {
     if (!story) return '';

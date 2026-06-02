@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { Modal, Button, Form, Alert, InputGroup, Toast, ToastContainer } from 'react-bootstrap';
 import { db, functions } from '../firebase';
-import { doc, updateDoc, serverTimestamp, collection, query, where, getDocs, setDoc, getDoc, addDoc, deleteDoc } from 'firebase/firestore';
+import { doc, updateDoc, serverTimestamp, collection, query, where, getDocs, setDoc, getDoc, addDoc, deleteDoc, onSnapshot, orderBy } from 'firebase/firestore';
 import { Goal, Story, Task } from '../types';
 import { generateRef } from '../utils/referenceGenerator';
 import { generateShareCode, getShareUrl } from '../utils/shareCodeGenerator';
@@ -138,6 +138,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
   const [monzoConnected, setMonzoConnected] = useState(false);
   const [linkedStories, setLinkedStories] = useState<Story[]>([]);
   const [linkedTasks, setLinkedTasks] = useState<Task[]>([]);
+  const [linkedCalendarBlocks, setLinkedCalendarBlocks] = useState<any[]>([]);
   const [storiesLoading, setStoriesLoading] = useState(false);
   const [tasksLoading, setTasksLoading] = useState(false);
   const [isGeneratingStories, setIsGeneratingStories] = useState(false);
@@ -306,6 +307,28 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
     }
     reloadLinkedStories();
   }, [show, reloadLinkedStories]);
+
+  // Subscribe to calendar_blocks linked to this goal (±60 days window)
+  useEffect(() => {
+    if (!show || !goal?.id || !currentUserId) {
+      setLinkedCalendarBlocks([]);
+      return;
+    }
+    const since = Date.now() - 60 * 24 * 60 * 60 * 1000;
+    const q = query(
+      collection(db, 'calendar_blocks'),
+      where('ownerUid', '==', currentUserId),
+      where('goalId', '==', goal.id),
+      orderBy('start', 'asc'),
+    );
+    const unsub = onSnapshot(q, (snap) => {
+      const blocks = snap.docs
+        .map(d => ({ id: d.id, ...(d.data() as any) }))
+        .filter(b => b.start >= since);
+      setLinkedCalendarBlocks(blocks);
+    }, () => setLinkedCalendarBlocks([]));
+    return () => unsub();
+  }, [show, goal?.id, currentUserId]);
 
   useEffect(() => {
     const loadLinkedTasks = async () => {
@@ -1540,6 +1563,49 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
                 </div>
               )}
             </div>
+
+            {linkedCalendarBlocks.length > 0 && (
+              <div className="mt-4">
+                <h5 className="mb-2">Calendar Events</h5>
+                <div className="vstack gap-1">
+                  {linkedCalendarBlocks.map(block => {
+                    const startMs = typeof block.start === 'number' ? block.start : 0;
+                    const endMs   = typeof block.end   === 'number' ? block.end   : 0;
+                    const isPast  = startMs < Date.now();
+                    const dateStr = new Date(startMs).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+                    const timeStr = new Date(startMs).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+                    const durMin  = Math.round((endMs - startMs) / 60000);
+                    return (
+                      <div
+                        key={block.id}
+                        className="d-flex align-items-center gap-2 px-3 py-2 rounded"
+                        style={{
+                          background: isPast ? 'var(--bs-secondary-bg)' : 'var(--bs-tertiary-bg)',
+                          opacity: isPast ? 0.65 : 1,
+                          fontSize: '0.85rem',
+                        }}
+                      >
+                        <span style={{ fontWeight: 600, minWidth: 110 }}>{dateStr}</span>
+                        <span className="text-muted">{timeStr}</span>
+                        <span className="text-muted">·</span>
+                        <span style={{ flex: 1 }}>{block.title || block.category}</span>
+                        {durMin > 0 && (
+                          <span className="text-muted" style={{ fontSize: '0.75rem' }}>
+                            {durMin >= 60 ? `${Math.round(durMin / 6) / 10}h` : `${durMin}m`}
+                          </span>
+                        )}
+                        {block.status === 'applied' && (
+                          <span className="badge bg-success-subtle text-success" style={{ fontSize: '0.7rem' }}>done</span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="text-muted small mt-2">
+                  Showing last 60 days and upcoming. Link more events by setting goalId on a calendar block.
+                </div>
+              </div>
+            )}
           </div>
         )}
       </Modal.Body>

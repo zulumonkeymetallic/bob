@@ -479,6 +479,8 @@ export interface CalendarBlock {
   calendarMatchScore?: number;
   calendarMatchConfidence?: number;
   calendarMatchConfidenceTier?: 'high' | 'medium' | 'low' | string;
+  // Goal linking fields (Gap 1 — Calendar-to-goal linking)
+  activityType?: 'run' | 'swim' | 'cycle' | 'gym' | 'fitness' | string | null;
 }
 
 export interface PlanningPrefs {
