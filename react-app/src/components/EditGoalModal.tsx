@@ -23,6 +23,7 @@ import { Wand2 } from 'lucide-react';
 import DrivePickerButton from './shared/DrivePickerButton';
 import { resolveLeafGoalSelection } from '../utils/goalHierarchy';
 import { buildGoalTimelineImpactPlan } from './visualization/goalTimelineImpact';
+import GoalKpiLivePanel from './goals/GoalKpiLivePanel';
 import { applyGoalTimelineChanges } from '../utils/goalTimelineChanges';
 import { KPIDesignerForm } from './KPIDesigner';
 
@@ -1520,6 +1521,15 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
             />
           </div>
         </div>
+
+        {/* KPI live data — only shown for focus goals with kpisV2 */}
+        {goal && Array.isArray((goal as any).kpisV2) && (goal as any).kpisV2.length > 0 && (
+          <GoalKpiLivePanel
+            goalId={goal.id}
+            ownerUid={currentUserId}
+            kpisV2={(goal as any).kpisV2}
+          />
+        )}
 
         {goal && (
           <div className="mt-4">

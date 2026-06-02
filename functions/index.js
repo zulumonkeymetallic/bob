@@ -12713,8 +12713,9 @@ async function getStravaAccessToken(uid, { forceRefresh = false } = {}) {
   return refreshStravaAccessToken(uid, doc);
 }
 
-async function upsertWorkout(uid, activity) {
+async function upsertWorkout(uid, activity, opts = {}) {
   const db = admin.firestore();
+  const { fitnessGoalId = null } = opts;
   const activityId = String(activity.id);
   const docId = `${uid}_${activityId}`;
   const ref = db.collection('metrics_workouts').doc(docId);
@@ -12760,6 +12761,15 @@ async function upsertWorkout(uid, activity) {
     visibility: activity.visibility || null,
     summaryPolyline: activity.map?.summary_polyline || null,
     source: 'strava',
+    // Link to the user's fitness focus goal (Ironman umbrella) so goal detail
+    // and calendar view can surface these workouts under the correct goal.
+    goalId: fitnessGoalId || null,
+    activityType: lowerType.includes('run') || lowerType.includes('trail') ? 'run'
+      : lowerType.includes('swim') ? 'swim'
+      : lowerType.includes('cycl') || lowerType.includes('ride') || lowerType.includes('bike') ? 'cycle'
+      : lowerType.includes('walk') || lowerType.includes('hike') ? 'walk'
+      : lowerType.includes('weight') || lowerType.includes('cross') || lowerType.includes('gym') ? 'gym'
+      : 'fitness',
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
   };
@@ -12779,6 +12789,7 @@ async function fetchStravaActivities(uid, {
   beforeSec = null,
   perPage = 100,
   maxPages = 3,
+  fitnessGoalId = null,
 } = {}) {
   const db = admin.firestore();
   const normalizedBeforeSec = normalizeEpochSec(beforeSec);
@@ -12835,7 +12846,7 @@ async function fetchStravaActivities(uid, {
       let pageOldestSec = null;
       let pageNewestSec = null;
       for (const act of rows) {
-        lastDocId = await upsertWorkout(uid, act);
+        lastDocId = await upsertWorkout(uid, act, { fitnessGoalId });
         total += 1;
         const startSec = normalizeEpochSec(act?.start_date ? Date.parse(act.start_date) : null);
         if (startSec != null) {
@@ -12932,7 +12943,7 @@ exports.syncStrava = httpsV2.onCall({ secrets: [STRAVA_CLIENT_ID, STRAVA_CLIENT_
 
   console.log('[syncStrava] uid', uid, 'after', after, 'afterSec', afterSec, 'before', before, 'beforeSec', beforeSec, 'fullHistory', fullHistory, 'perPage', perPage, 'maxPages', maxPages);
   try {
-    const result = await fetchStravaActivities(uid, { afterSec, beforeSec, perPage, maxPages });
+    const result = await fetchStravaActivities(uid, { afterSec, beforeSec, perPage, maxPages, fitnessGoalId: profile?.ironmanUmbrellaGoalId || null });
     const hasMoreHistory = fullHistory && !!result?.hasMore && !!result?.nextBeforeSec;
     const backfillStatePatch = fullHistory
       ? {
@@ -13181,7 +13192,9 @@ exports.stravaWebhook = httpsV2.onRequest({ secrets: [STRAVA_WEBHOOK_VERIFY_TOKE
             try {
               const accessToken = await getStravaAccessToken(uid);
               const act = await fetchStravaJson(`https://www.strava.com/api/v3/activities/${body.object_id}`, { headers: { Authorization: `Bearer ${accessToken}` } }, { retries: 1 });
-              await upsertWorkout(uid, act);
+              const wProfile = await admin.firestore().collection('profiles').doc(uid).get().catch(() => null);
+              const wFitnessGoalId = wProfile?.exists ? (wProfile.data()?.ironmanUmbrellaGoalId || null) : null;
+              await upsertWorkout(uid, act, { fitnessGoalId: wFitnessGoalId });
             } catch (e) {
               console.error('Failed to upsert Strava activity from webhook:', e);
             }
