@@ -17,6 +17,7 @@ import { CoachVerdictBanner } from './coach/CoachVerdictBanner';
 import ProcessTextActivityHost from './ProcessTextActivityHost';
 import PlannerCapacityBanner from './planner/PlannerCapacityBanner';
 import GlobalGoalFocusBanner from './GlobalGoalFocusBanner';
+import GlobalIntegrationStatus from './GlobalIntegrationStatus';
 // Test mode UI removed per request
 
 interface SidebarLayoutProps {
@@ -749,6 +750,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
             {!hidePlannerCapacityBanner && <PlannerCapacityBanner />}
             <SprintClosureBanner />
             {!isSmallScreen && <GlobalGoalFocusBanner />}
+            {!isSmallScreen && <GlobalIntegrationStatus />}
             <ProcessTextActivityHost />
           </div>
           {children}
