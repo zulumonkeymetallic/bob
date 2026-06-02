@@ -832,6 +832,7 @@ export const AiCoachPage: React.FC = () => {
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [workouts, setWorkouts] = useState<any[]>([]);
+  const [lastHealthKitSync, setLastHealthKitSync] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const today = todayStr();
 
@@ -905,6 +906,23 @@ export const AiCoachPage: React.FC = () => {
     return onSnapshot(q, snap => {
       setWorkouts(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     }, () => setWorkouts([]));
+  }, [uid]);
+
+  // Track last HealthKit sync from health_metrics — most recently updated doc
+  useEffect(() => {
+    if (!uid) return;
+    const q = query(
+      collection(db, 'health_metrics'),
+      where('ownerUid', '==', uid),
+      orderBy('updatedAt', 'desc'),
+      limit(1)
+    );
+    return onSnapshot(q, snap => {
+      if (snap.empty) { setLastHealthKitSync(null); return; }
+      const d = snap.docs[0].data();
+      const ts = d.updatedAt?.toMillis?.() ?? (typeof d.updatedAt === 'number' ? d.updatedAt : null);
+      setLastHealthKitSync(ts);
+    }, () => setLastHealthKitSync(null));
   }, [uid]);
 
   // Compute weekly sport KPI grid from workouts
@@ -986,7 +1004,28 @@ export const AiCoachPage: React.FC = () => {
       <div className="d-flex align-items-center justify-content-between mb-4">
         <div>
           <h4 className="fw-bold mb-0">🏊‍♂️ Ironman Coach</h4>
-          <p className="text-muted small mb-0">Proactive. Agentic. Daily at 05:00.</p>
+          <p className="text-muted small mb-0">
+            Proactive. Agentic. Daily at 05:00.
+            {lastHealthKitSync !== null && (
+              <span className="ms-2" style={{ fontSize: '0.7rem', color: 'var(--bs-secondary)' }}>
+                · HealthKit synced {(() => {
+                  const diffMs = Date.now() - lastHealthKitSync;
+                  const diffMins = Math.round(diffMs / 60000);
+                  const diffHrs  = Math.round(diffMs / 3600000);
+                  const diffDays = Math.round(diffMs / 86400000);
+                  if (diffMins < 2)   return 'just now';
+                  if (diffMins < 60)  return `${diffMins}m ago`;
+                  if (diffHrs  < 24)  return `${diffHrs}h ago`;
+                  return `${diffDays}d ago`;
+                })()}
+              </span>
+            )}
+            {lastHealthKitSync === null && (
+              <span className="ms-2" style={{ fontSize: '0.7rem', color: 'var(--bs-secondary)' }}>
+                · HealthKit: no data — open BOB on iPhone to sync
+              </span>
+            )}
+          </p>
         </div>
         <div className="d-flex gap-2">
           <button
