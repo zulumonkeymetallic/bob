@@ -504,10 +504,11 @@ function AppContent() {
             <Route path="/planner/sprint-capacity" element={<Navigate to="/sprints/capacity" replace />} />
             <Route path="/ai-coach" element={<AiCoachPage />} />
             <Route path="/metrics" element={<MetricsPage />} />
-            <Route path="/fitness" element={<WorkoutsDashboard />} />
-            <Route path="/running-results" element={<Navigate to="/fitness" replace />} />
+            <Route path="/fitness" element={<MetricsPage />} />
+            <Route path="/fitness/full" element={<WorkoutsDashboard />} />
+            <Route path="/running-results" element={<Navigate to="/fitness/full" replace />} />
             <Route path="/parkrun-results" element={<WorkoutsDashboard />} />
-            <Route path="/workouts" element={<Navigate to="/fitness" replace />} />
+            <Route path="/workouts" element={<Navigate to="/fitness/full" replace />} />
             <Route path="/running/heatmap" element={
               <Suspense fallback={<div className="p-4">Loading…</div>}>
                 <RunningHeatmap />

@@ -8,12 +8,22 @@
 
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { doc, onSnapshot } from 'firebase/firestore';
+import { collection, doc, limit, onSnapshot, orderBy, query, where } from 'firebase/firestore';
 import { Badge, Button, Card, ProgressBar } from 'react-bootstrap';
 import { Activity, Dumbbell, HeartPulse, X } from 'lucide-react';
 import { db } from '../../firebase';
 import { useAuth } from '../../contexts/AuthContext';
 import type { CoachDaily } from '../../types/CoachTypes';
+
+function fmtSyncAge(tsMs: number): string {
+  const diff = Date.now() - tsMs;
+  const mins = Math.round(diff / 60000);
+  if (mins < 2)   return 'just now';
+  if (mins < 60)  return `${mins}m ago`;
+  const hrs = Math.round(diff / 3600000);
+  if (hrs  < 24)  return `${hrs}h ago`;
+  return `${Math.round(diff / 86400000)}d ago`;
+}
 
 function todayStr(): string {
   return new Date().toISOString().split('T')[0];
@@ -26,6 +36,7 @@ export const CoachVerdictBanner: React.FC = () => {
   const [coachData, setCoachData] = useState<CoachDaily | null>(null);
   const [coachConfigured, setCoachConfigured] = useState(false);
   const [dismissed, setDismissed] = useState(false);
+  const [lastSyncMs, setLastSyncMs] = useState<number | null>(null);
 
   const today = todayStr();
   const dismissKey = uid ? `coach_verdict_dismissed_${uid}_${today}` : null;
@@ -71,6 +82,22 @@ export const CoachVerdictBanner: React.FC = () => {
     }, () => {});
     return unsub;
   }, [uid, today, coachConfigured]);
+
+  useEffect(() => {
+    if (!uid) return;
+    const q = query(
+      collection(db, 'health_metrics'),
+      where('ownerUid', '==', uid),
+      orderBy('updatedAt', 'desc'),
+      limit(1)
+    );
+    return onSnapshot(q, snap => {
+      if (snap.empty) { setLastSyncMs(null); return; }
+      const d = snap.docs[0].data();
+      const ts = d.updatedAt?.toMillis?.() ?? (typeof d.updatedAt === 'number' ? d.updatedAt : null);
+      setLastSyncMs(ts);
+    }, () => setLastSyncMs(null));
+  }, [uid]);
 
   if (!coachConfigured || !coachData || dismissed) return null;
 
@@ -142,6 +169,14 @@ export const CoachVerdictBanner: React.FC = () => {
                 {appearance.label}
               </Badge>
               <span style={{ fontSize: 12, opacity: 0.95 }}>Readiness {readinessPct}%</span>
+              {lastSyncMs !== null && (
+                <span style={{ fontSize: 10, opacity: 0.8 }}>
+                  · HealthKit {fmtSyncAge(lastSyncMs)}
+                </span>
+              )}
+              {lastSyncMs === null && (
+                <span style={{ fontSize: 10, opacity: 0.7 }}>· HealthKit: no sync</span>
+              )}
             </div>
             <div
               style={{

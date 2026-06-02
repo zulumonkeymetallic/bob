@@ -108,9 +108,9 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       label: 'Health',
       icon: 'heartbeat',
       items: [
-        { label: 'KPI Metrics', path: '/metrics', icon: 'th' },
+        { label: 'Fitness', path: '/fitness', icon: 'th' },
         { label: 'AI Coach', path: '/ai-coach', icon: 'dumbbell' },
-        { label: 'Fitness Results', path: '/fitness', icon: 'running' },
+        { label: 'Activity Log', path: '/fitness/full', icon: 'running' },
         { label: 'Habit Tracking', path: '/dashboard/habit-tracking', icon: 'check-square' },
         { label: 'Parkrun Results', path: '/parkrun-results', icon: 'flag-checkered' },
         { label: 'Running Heatmap', path: '/running/heatmap', icon: 'map-marked-alt' },

@@ -20,6 +20,7 @@ import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import FitnessKpiGrid, { FitnessKpiBox, FitnessKpiRow } from './fitness/FitnessKpiGrid';
+import { CoachVerdictBanner } from './coach/CoachVerdictBanner';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -267,16 +268,19 @@ const MetricsPage: React.FC = () => {
   return (
     <div style={{ maxWidth: 680, margin: '0 auto', padding: '12px 12px 40px' }}>
       <div className="d-flex align-items-center justify-content-between mb-3">
-        <h5 className="mb-0" style={{ fontWeight: 700 }}>Metrics</h5>
+        <h5 className="mb-0" style={{ fontWeight: 700 }}>Fitness</h5>
         <div className="d-flex gap-2">
-          <button className="btn btn-sm btn-outline-secondary" onClick={() => navigate('/workouts')}>
-            Full Dashboard
+          <button className="btn btn-sm btn-outline-secondary" onClick={() => navigate('/fitness/full')}>
+            Activity Log
           </button>
           <button className="btn btn-sm btn-outline-secondary" onClick={() => navigate('/ai-coach')}>
             AI Coach
           </button>
         </div>
       </div>
+
+      {/* AI Coach readiness banner */}
+      <CoachVerdictBanner />
 
       {/* ── FITNESS ──────────────────────────────────────────────────────────── */}
       <div className="card border-0 shadow-sm mb-3">

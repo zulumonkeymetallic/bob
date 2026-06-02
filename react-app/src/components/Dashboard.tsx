@@ -4661,6 +4661,14 @@ const Dashboard: React.FC = () => {
                       {healthBannerData.workoutMinutesToday != null ? `${Math.round(healthBannerData.workoutMinutesToday)} min workout` : 'workout missing'}
                       {' • '}
                       {healthBannerData.macroAdherencePct != null ? `${healthBannerData.macroAdherencePct}% macros` : 'macro targets missing'}
+                      {(() => {
+                        const ts = profileSnapshot?.updatedAt?.toMillis?.() ?? (typeof profileSnapshot?.updatedAt === 'number' ? profileSnapshot.updatedAt : null);
+                        if (!ts) return null;
+                        const diff = Date.now() - ts;
+                        const mins = Math.round(diff / 60000);
+                        const label = mins < 2 ? 'just now' : mins < 60 ? `${mins}m ago` : diff < 86400000 ? `${Math.round(diff / 3600000)}h ago` : `${Math.round(diff / 86400000)}d ago`;
+                        return <span>{' • '}HealthKit synced {label}</span>;
+                      })()}
                     </div>
                     <div className="d-flex align-items-center gap-2">
                       {healthBannerData.missingTargets && (
