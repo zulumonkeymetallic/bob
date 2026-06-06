@@ -16,7 +16,7 @@ import ActivityStreamPanel from './common/ActivityStreamPanel';
 import ModernTaskTable from './ModernTaskTable';
 import { cascadeStoryPersona } from '../utils/personaCascade';
 import { useNavigate } from 'react-router-dom';
-import { Activity, CalendarPlus, Clock3, Shuffle, Trash2, Wand2 } from 'lucide-react';
+import { Activity, Bot, CalendarPlus, Clock3, Shuffle, Trash2, Wand2 } from 'lucide-react';
 import { planningSprints } from '../utils/sprintFilter';
 import { evaluateStorySprintAlignment } from '../utils/sprintAlignment';
 import { getGoalDisplayPath, getLeafGoalOptions, resolveLeafGoalSelection } from '../utils/goalHierarchy';
@@ -555,6 +555,18 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
               </Button>
               <Button variant="outline-secondary" size="sm" title="Open calendar composer" onClick={handleOpenCalendarComposer}>
                 <CalendarPlus size={14} />
+              </Button>
+              <Button
+                variant={(story as any)?.flaggedToAi ? 'warning' : 'outline-secondary'}
+                size="sm"
+                title={(story as any)?.flaggedToAi ? 'Remove AI delegation' : 'Delegate to AI'}
+                onClick={async () => {
+                  const newVal = !(story as any)?.flaggedToAi;
+                  await updateDoc(doc(db, 'stories', story!.id), { flaggedToAi: newVal, updatedAt: serverTimestamp() });
+                }}
+                disabled={loading || !story}
+              >
+                <Bot size={14} />
               </Button>
               <Button variant="outline-secondary" size="sm" title="Defer intelligently" onClick={() => setShowDeferModal(true)}>
                 <Clock3 size={14} />

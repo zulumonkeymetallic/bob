@@ -82,6 +82,10 @@ const FinanceHub: React.FC = () => {
           <TransactionsTab data={data} />
         </Tab>
 
+        <Tab eventKey="insights" title={<><TrendingUp size={16} className="me-1" />Insights</>}>
+          <InsightsTab data={data} />
+        </Tab>
+
         <Tab eventKey="goals" title="Goals & Pots">
           <GoalPotLinking />
         </Tab>
@@ -411,5 +415,168 @@ const TransactionsTab: React.FC<{ data: any }> = ({ data }) => (
     </Card.Body>
   </Card>
 );
+
+// Insights Tab — category trends, budget vs actual, net worth, subscriptions
+const InsightsTab: React.FC<{ data: any }> = ({ data }) => {
+  const palette = ['#22c55e', '#0ea5e9', '#f97316', '#8b5cf6', '#ef4444', '#14b8a6', '#f59e0b'];
+  const fmt = (v: number) => (v / 100).toLocaleString('en-GB', { style: 'currency', currency: 'GBP', minimumFractionDigits: 0 });
+
+  // Category spend trend — top 5 categories month-by-month
+  const { trendOption, topCategories } = useMemo(() => {
+    const ts: Record<string, any[]> = data?.timeSeriesByCategory || {};
+    const totals: Record<string, number> = {};
+    Object.entries(ts).forEach(([cat, points]) => {
+      totals[cat] = (points || []).reduce((s: number, p: any) => s + Math.abs(Number(p.amount || 0)), 0);
+    });
+    const top5 = Object.entries(totals).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([k]) => k);
+    const months = Array.from(new Set(
+      top5.flatMap((cat) => (ts[cat] || []).map((p: any) => String(p.month || '')))
+    )).sort();
+    const option = {
+      tooltip: { trigger: 'axis' },
+      legend: { data: top5, bottom: 0 },
+      grid: { left: 55, right: 10, top: 20, bottom: 60 },
+      xAxis: { type: 'category', data: months },
+      yAxis: { type: 'value', axisLabel: { formatter: (v: number) => `£${(v / 100).toFixed(0)}` } },
+      series: top5.map((cat, idx) => ({
+        name: cat,
+        type: 'bar',
+        stack: 'spend',
+        data: months.map((m) => {
+          const pt = (ts[cat] || []).find((p: any) => p.month === m);
+          return Math.abs(Number(pt?.amount || 0));
+        }),
+        color: palette[idx % palette.length],
+      })),
+    };
+    return { trendOption: option, topCategories: top5 };
+  }, [data]);
+
+  // Budget vs actual — 30d spend vs budget per category
+  const budgetVsActual = useMemo(() => {
+    const budgets: Record<string, number> = data?.categoryBudgets || {};
+    const spend30: Record<string, number> = data?.spendByCategory || {};
+    return Object.entries(budgets)
+      .filter(([k, v]) => Number(v) > 0)
+      .map(([key, budgetPence]) => ({
+        key,
+        budget: Number(budgetPence),
+        actual: Math.abs(Number(spend30[key] || 0)),
+      }))
+      .sort((a, b) => b.budget - a.budget)
+      .slice(0, 10);
+  }, [data]);
+
+  // Subscriptions list
+  const subscriptions = useMemo(() => {
+    const txns: any[] = data?.recentTransactions || [];
+    const byMerchant: Record<string, { name: string; totalPence: number; count: number }> = {};
+    txns.forEach((tx: any) => {
+      if (!tx.isSubscription) return;
+      const key = tx.merchantKey || tx.merchant || 'unknown';
+      if (!byMerchant[key]) byMerchant[key] = { name: tx.merchant || key, totalPence: 0, count: 0 };
+      byMerchant[key].totalPence += Math.abs(Number(tx.amount || 0) * 100);
+      byMerchant[key].count++;
+    });
+    return Object.values(byMerchant).sort((a, b) => b.totalPence - a.totalPence);
+  }, [data]);
+
+  return (
+    <Row className="g-4">
+      <Col md={12}>
+        <Card>
+          <Card.Header>
+            <span>Spend Trend — Top 5 Categories</span>
+          </Card.Header>
+          <Card.Body>
+            {topCategories.length === 0 ? (
+              <p className="text-muted">No time series data available. Categorise your transactions first.</p>
+            ) : (
+              <ReactECharts option={trendOption} style={{ height: 320 }} />
+            )}
+          </Card.Body>
+        </Card>
+      </Col>
+
+      <Col md={8}>
+        <Card>
+          <Card.Header>Budget vs Actual (30 days)</Card.Header>
+          <Card.Body>
+            {budgetVsActual.length === 0 ? (
+              <p className="text-muted">Set category budgets in the Budgets tab to see this comparison.</p>
+            ) : (
+              <div className="d-flex flex-column gap-3">
+                {budgetVsActual.map(({ key, budget, actual }) => {
+                  const pct = budget > 0 ? Math.min(120, (actual / budget) * 100) : 0;
+                  const over = actual > budget;
+                  return (
+                    <div key={key}>
+                      <div className="d-flex justify-content-between mb-1">
+                        <span className="small">{key.replace(/_/g, ' ')}</span>
+                        <span className={`small ${over ? 'text-danger fw-bold' : 'text-muted'}`}>
+                          {fmt(actual)} / {fmt(budget)}
+                          {over && ' ▲'}
+                        </span>
+                      </div>
+                      <div className="progress" style={{ height: 10 }}>
+                        <div
+                          className={`progress-bar ${over ? 'bg-danger' : 'bg-success'}`}
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </Card.Body>
+        </Card>
+      </Col>
+
+      <Col md={4}>
+        <Card className="mb-3">
+          <Card.Header>Subscriptions</Card.Header>
+          <Card.Body style={{ maxHeight: 300, overflowY: 'auto' }}>
+            {subscriptions.length === 0 ? (
+              <p className="text-muted small">No subscriptions detected. Mark transactions as subscriptions in the Transactions view.</p>
+            ) : (
+              <div className="d-flex flex-column gap-1">
+                {subscriptions.map((s) => (
+                  <div key={s.name} className="d-flex justify-content-between align-items-center">
+                    <span className="small">{s.name}</span>
+                    <Badge bg="secondary">{fmt(s.totalPence)}/mo est.</Badge>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card.Body>
+        </Card>
+
+        <Card>
+          <Card.Header>Savings Rate Indicator</Card.Header>
+          <Card.Body>
+            {(() => {
+              const income = data?.totalIncome || 0;
+              const spend = data?.totalSpend || 0;
+              const rate = income > 0 ? ((income - spend) / income) * 100 : 0;
+              const color = rate >= 20 ? 'success' : rate >= 10 ? 'warning' : 'danger';
+              return (
+                <div>
+                  <h3 className={`text-${color}`}>{rate.toFixed(1)}%</h3>
+                  <div className="progress mb-2" style={{ height: 12 }}>
+                    <div className={`progress-bar bg-${color}`} style={{ width: `${Math.min(100, rate)}%` }} />
+                  </div>
+                  <div className="small text-muted">
+                    {rate >= 20 ? 'Excellent — above 20% target' : rate >= 10 ? 'Good — target 20%+ for FIRE' : 'Low — aim for 10%+ minimum'}
+                  </div>
+                </div>
+              );
+            })()}
+          </Card.Body>
+        </Card>
+      </Col>
+    </Row>
+  );
+};
 
 export default FinanceHub;

@@ -26,6 +26,7 @@ interface KanbanBoardV2Props {
     goalFilter?: string | string[] | null;
     onItemSelect?: (item: Story | Task, type: 'story' | 'task') => void;
     onEdit?: (item: Story | Task, type: 'story' | 'task') => void;
+    onParentClick?: (parentId: string, parentType: 'story' | 'goal') => void;
     showDescriptions?: boolean;
     showLatestNotes?: boolean;
     dueFilter?: 'all' | 'today' | 'overdue' | 'top3' | 'critical';
@@ -55,6 +56,7 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
     goalFilter,
     onItemSelect,
     onEdit,
+    onParentClick,
     showDescriptions = false,
     showLatestNotes = false,
     dueFilter = 'all',
@@ -747,6 +749,7 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
                                 scheduledBlock={scheduledBlocksByEntity[`${type}:${item.id}`]}
                                 steamMeta={steamMeta}
                                 onEdit={() => onEdit?.(item, type)}
+                                onParentClick={onParentClick}
                                 formatTag={formatTag}
                                 themes={themes}
                                 isFocusAligned={isFocusAligned}

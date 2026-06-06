@@ -99,7 +99,7 @@
 
 .finance-grid-header {
     display: grid;
-    grid-template-columns: 1.1fr 1.3fr 1.8fr 1.05fr 1.7fr 0.95fr 1.25fr;
+    grid-template-columns: 1.1fr 1.3fr 1.8fr 1.05fr 1.7fr 1.2fr 1.4fr;
     gap: 6px;
     padding: 10px 16px;
     background: #f8fafc;
@@ -111,7 +111,7 @@
 
 .finance-row {
      display: grid;
-     grid-template-columns: 1.1fr 1.3fr 1.8fr 1.05fr 1.7fr 0.95fr 1.25fr;
+     grid-template-columns: 1.1fr 1.3fr 1.8fr 1.05fr 1.7fr 1.2fr 1.4fr;
      gap: 6px;
      align-items: center;
      padding: 14px 16px;
@@ -209,6 +209,9 @@
 .finance-amount {
      font-weight: 700;
      font-size: 0.98rem;
+     overflow: hidden;
+     text-overflow: ellipsis;
+     white-space: nowrap;
  }
 
 .finance-amount.negative {

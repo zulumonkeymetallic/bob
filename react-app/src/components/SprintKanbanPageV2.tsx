@@ -18,6 +18,7 @@ import ThemeMultiSelect from './shared/ThemeMultiSelect';
 import GoalMultiSelect from './shared/GoalMultiSelect';
 import EditStoryModal from './EditStoryModal';
 import EditTaskModal from './EditTaskModal';
+import EditGoalModal from './EditGoalModal';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { useDetailLevel } from '../contexts/DetailLevelContext';
 import { useFocusGoals } from '../hooks/useFocusGoals';
@@ -57,9 +58,10 @@ const SprintKanbanPageV2: React.FC = () => {
     });
     const [editStory, setEditStory] = useState<Story | null>(null);
     const [editTask, setEditTask] = useState<Task | null>(null);
+    const [editGoal, setEditGoal] = useState<Goal | null>(null);
     const [dueFilter, setDueFilter] = useState<'all' | 'today' | 'overdue' | 'top3' | 'critical'>('all');
     const [showFocusOnly, setShowFocusOnly] = useState(false);
-    const [showCompletedItems, setShowCompletedItems] = useState(false);
+    const [showCompletedItems, setShowCompletedItems] = useState(true);
     const [showAiScoredOnly, setShowAiScoredOnly] = useState(false);
     const [showDelegatedOnly, setShowDelegatedOnly] = useState(false);
     const [sortBy, setSortBy] = useState<'ai' | 'due' | 'priority' | 'default'>('default');
@@ -296,6 +298,16 @@ const SprintKanbanPageV2: React.FC = () => {
             setEditStory(item as Story);
         } else {
             setEditTask(item as Task);
+        }
+    };
+
+    const handleParentClick = (parentId: string, parentType: 'story' | 'goal') => {
+        if (parentType === 'story') {
+            const story = stories.find((s) => s.id === parentId);
+            if (story) setEditStory(story);
+        } else {
+            const goal = goals.find((g) => g.id === parentId);
+            if (goal) setEditGoal(goal);
         }
     };
 
@@ -630,6 +642,7 @@ const SprintKanbanPageV2: React.FC = () => {
                                     focusGoalIds={activeFocusGoalIds}
                                     onItemSelect={(item, type) => showSidebar(item, type)}
                                     onEdit={handleEditItem}
+                                    onParentClick={handleParentClick}
                                     showDescriptions={showDescriptions}
                                     showLatestNotes={showLatestNotes}
                                     dueFilter={dueFilter}
@@ -660,6 +673,14 @@ const SprintKanbanPageV2: React.FC = () => {
                 onHide={() => setEditTask(null)}
                 onUpdated={() => setEditTask(null)}
                 container={boardContainerRef.current}
+            />
+
+            <EditGoalModal
+                show={!!editGoal}
+                goal={editGoal}
+                onClose={() => setEditGoal(null)}
+                currentUserId={currentUser?.uid || ''}
+                allGoals={goals}
             />
         </Container>
     );

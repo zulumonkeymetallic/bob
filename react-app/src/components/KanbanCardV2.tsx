@@ -33,6 +33,7 @@ interface KanbanCardV2Props {
     onEdit?: (item: Story | Task) => void;
     onDelete?: (item: Story | Task) => void;
     onItemSelect?: (item: Story | Task, type: 'story' | 'task') => void;
+    onParentClick?: (parentId: string, parentType: 'story' | 'goal') => void;
     showDescription?: boolean;
     showLatestNote?: boolean;
     showTags?: boolean;
@@ -72,6 +73,7 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
     onEdit,
     onDelete,
     onItemSelect,
+    onParentClick,
     showDescription = true,
     showLatestNote = false,
     latestNote,
@@ -1261,7 +1263,11 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                     {type === 'story' ? (
                         <>
                             <Target size={12} color={resolvedThemeColor} />
-                            <span title={goal?.title || 'No goal linked'}>
+                            <span
+                                title={goal ? `Open goal: ${goal.title}` : 'No goal linked'}
+                                style={goal && onParentClick ? { cursor: 'pointer', textDecoration: 'underline dotted' } : undefined}
+                                onClick={goal && onParentClick ? (e) => { e.stopPropagation(); onParentClick(goal.id, 'goal'); } : undefined}
+                            >
                                 {goal?.title || 'No goal'}
                             </span>
                             <span className="kanban-card__meta-text" style={{ marginLeft: 'auto' }}>
@@ -1271,7 +1277,11 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                     ) : (
                         <>
                             <BookOpen size={12} color={resolvedThemeColor} />
-                            <span title={parentStory?.title || 'No parent story'}>
+                            <span
+                                title={parentStory ? `Open story: ${parentStory.title}` : 'No parent story'}
+                                style={parentStory && onParentClick ? { cursor: 'pointer', textDecoration: 'underline dotted' } : undefined}
+                                onClick={parentStory && onParentClick ? (e) => { e.stopPropagation(); onParentClick(parentStory.id, 'story'); } : undefined}
+                            >
                                 {parentStory?.title || 'No parent story'}
                             </span>
                             {macSyncLabel && (

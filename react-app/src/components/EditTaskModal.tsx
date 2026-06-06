@@ -25,7 +25,7 @@ import { getGoalDisplayPath, getLeafGoalOptions, resolveLeafGoalSelection } from
 import EditStoryModal from './EditStoryModal';
 import NewCalendarEventModal, { buildCalendarComposerInitialValues } from './planner/NewCalendarEventModal';
 import DeferItemModal from './DeferItemModal';
-import { Activity, CalendarPlus, Clock3, Trash2, Wand2 } from 'lucide-react';
+import { Activity, Bot, CalendarPlus, Clock3, Trash2, Wand2 } from 'lucide-react';
 import DrivePickerButton from './shared/DrivePickerButton';
 
 interface EditTaskModalProps {
@@ -548,6 +548,18 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
               </Button>
               <Button variant="outline-secondary" size="sm" title="Open calendar composer" onClick={handleOpenCalendarComposer}>
                 <CalendarPlus size={14} />
+              </Button>
+              <Button
+                variant={(task as any)?.flaggedToAi ? 'warning' : 'outline-secondary'}
+                size="sm"
+                title={(task as any)?.flaggedToAi ? 'Remove AI delegation' : 'Delegate to AI'}
+                onClick={async () => {
+                  const newVal = !(task as any)?.flaggedToAi;
+                  await updateDoc(doc(db, 'tasks', task!.id), { flaggedToAi: newVal, updatedAt: serverTimestamp() });
+                }}
+                disabled={saving || !task}
+              >
+                <Bot size={14} />
               </Button>
               <Button variant="outline-secondary" size="sm" title="Defer intelligently" onClick={() => setShowDeferModal(true)}>
                 <Clock3 size={14} />

@@ -27,10 +27,12 @@ import {
 } from 'react-bootstrap';
 import {
   Activity,
+  BookOpen,
   Calendar as CalendarIcon,
   CheckCircle,
   Clock,
   Clock3,
+  Target,
   ExternalLink,
   Link as LinkIcon,
   ListChecks,
@@ -2287,6 +2289,12 @@ const UnifiedPlannerCalendarPage: React.FC = () => {
                         2: { bg: 'success', label: 'Done' },
                       };
                       const s = statusMap[statusVal] || statusMap[0];
+                      const parentStory = (task as any).storyId ? stories.find((s: any) => s.id === (task as any).storyId) : null;
+                      const parentGoal = parentStory?.goalId
+                        ? focusGoals.find((g) => g.id === parentStory.goalId)
+                        : (task as any).goalId
+                        ? focusGoals.find((g) => g.id === (task as any).goalId)
+                        : null;
                       return (
                         <div key={task.id} className="border rounded p-2 dashboard-due-item">
                           <div className="d-flex align-items-start justify-content-between gap-2">
@@ -2316,6 +2324,22 @@ const UnifiedPlannerCalendarPage: React.FC = () => {
                             <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>
                               <code className="text-primary" style={{ fontSize: 11 }}>{refLabel}</code>
                             </a>
+                          )}
+                          {(parentStory || parentGoal) && (
+                            <div className="d-flex align-items-center gap-2 mt-1 flex-wrap" style={{ fontSize: 11 }}>
+                              {parentStory && (
+                                <a href={`/stories/${parentStory.id}`} className="text-decoration-none text-muted d-inline-flex align-items-center gap-1" style={{ fontSize: 11 }}>
+                                  <BookOpen size={10} />
+                                  {parentStory.title}
+                                </a>
+                              )}
+                              {parentGoal && (
+                                <a href={`/goals/${parentGoal.id}`} className="text-decoration-none text-muted d-inline-flex align-items-center gap-1" style={{ fontSize: 11 }}>
+                                  <Target size={10} />
+                                  {parentGoal.title}
+                                </a>
+                              )}
+                            </div>
                           )}
                           <div className="d-flex align-items-center gap-2 mt-1 flex-wrap">
                             <span className="text-muted d-inline-flex align-items-center gap-1" style={{ fontSize: 11 }}>

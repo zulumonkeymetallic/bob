@@ -164,13 +164,17 @@ const FinanceFlowDiagram: React.FC = () => {
   const flow = useMemo(() => {
     if (!rowsForCharts.length) return { nodes: [], links: [] };
 
-    const nodes: { name: string; color?: string }[] = [];
+    // Nodes carry a unique internal key (prefixed by level) and a display label.
+    // Prefixing prevents same-display-name collisions across levels (e.g. a "Food"
+    // bucket and a "Food" category would otherwise share a node index, creating a
+    // DAG cycle that crashes ECharts Sankey).
+    const nodes: { name: string; displayLabel: string; color?: string }[] = [];
     const links: { source: number; target: number; value: number; color?: string }[] = [];
 
-    const addNode = (name: string, color?: string) => {
-      const existing = nodes.findIndex((n) => n.name === name);
+    const addNode = (uniqueKey: string, displayLabel: string, color?: string) => {
+      const existing = nodes.findIndex((n) => n.name === uniqueKey);
       if (existing >= 0) return existing;
-      nodes.push({ name, color });
+      nodes.push({ name: uniqueKey, displayLabel, color });
       return nodes.length - 1;
     };
 
@@ -196,22 +200,22 @@ const FinanceFlowDiagram: React.FC = () => {
       categoryMerchantTotals[category][merchant] = (categoryMerchantTotals[category][merchant] || 0) + amount;
     });
 
-    const root = addNode('Total Spend');
+    const root = addNode('root:total', 'Total Spend');
 
     Object.entries(bucketTotals).forEach(([bucket, val], idx) => {
-      const bucketNode = addNode(formatNodeLabel(bucket), palette[idx % palette.length]);
+      const bucketNode = addNode(`b:${bucket}`, formatNodeLabel(bucket), palette[idx % palette.length]);
       links.push({ source: root, target: bucketNode, value: val, color: palette[idx % palette.length] });
 
       const catTotals = Object.entries(bucketCategoryTotals[bucket] || {})
         .sort((a, b) => b[1] - a[1]);
       catTotals.forEach(([cat, catVal], cIdx) => {
-        const catNode = addNode(formatNodeLabel(cat), palette[(idx + cIdx) % palette.length]);
+        const catNode = addNode(`c:${bucket}:${cat}`, formatNodeLabel(cat), palette[(idx + cIdx) % palette.length]);
         links.push({ source: bucketNode, target: catNode, value: catVal, color: palette[(idx + cIdx) % palette.length] });
 
         const merchTotals = Object.entries(categoryMerchantTotals[cat] || {})
           .sort((a, b) => b[1] - a[1]);
         merchTotals.forEach(([merchant, merchVal], mIdx) => {
-          const merchNode = addNode(formatNodeLabel(merchant), palette[(idx + cIdx + mIdx) % palette.length]);
+          const merchNode = addNode(`m:${cat}:${merchant}`, formatNodeLabel(merchant), palette[(idx + cIdx + mIdx) % palette.length]);
           links.push({ source: catNode, target: merchNode, value: merchVal, color: palette[(idx + cIdx + mIdx) % palette.length] });
         });
       });
@@ -223,12 +227,22 @@ const FinanceFlowDiagram: React.FC = () => {
   const sankeyOption = {
     tooltip: {
       trigger: 'item',
-      formatter: ({ data }: any) => `${data.name || ''}: ${formatMoney(Math.abs(data.value || 0), 0)}`,
+      formatter: ({ name, data }: any) => {
+        // name is the node's unique key (e.g. "b:discretionary"); strip the prefix for display
+        const rawName = name || data?.name || data?.source || '';
+        const displayName = flow.nodes.find((n) => n.name === rawName)?.displayLabel
+          || String(rawName).split(':').pop() || rawName;
+        return `${displayName}: ${formatMoney(Math.abs(data?.value || 0), 0)}`;
+      },
     },
     series: [
       {
         type: 'sankey',
-        data: flow.nodes.map((n) => ({ ...n })),
+        data: flow.nodes.map((n) => ({
+          name: n.name,
+          itemStyle: { color: n.color },
+          label: { formatter: () => n.displayLabel },
+        })),
         links: flow.links.map((l) => ({
           source: flow.nodes[l.source]?.name,
           target: flow.nodes[l.target]?.name,

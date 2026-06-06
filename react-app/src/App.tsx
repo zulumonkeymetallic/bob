@@ -119,6 +119,7 @@ import QueryDeepLinkGate from './components/routes/QueryDeepLinkGate';
 import AdvancedOverview from './components/AdvancedOverview';
 import MetricsOverview from './components/MetricsOverview';
 import FinanceDashboardAdvanced from './components/finance/FinanceDashboardAdvanced';
+import FinanceCoachPage from './components/finance/FinanceCoachPage';
 import CapacityDashboard from './components/CapacityDashboard';
 import FocusGoalsPage from './components/FocusGoalsPage';
 import { collection, deleteDoc, doc, limit, onSnapshot, orderBy, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
@@ -523,6 +524,7 @@ function AppContent() {
             <Route path="/finance/dashboard" element={<FinanceDashboardAdvanced />} />
             <Route path="/finance/flow" element={<FinanceFlowDiagram />} />
             <Route path="/finance/pots" element={<PotsBoard />} />
+            <Route path="/finance/coach" element={<FinanceCoachPage />} />
             <Route path="/finance/advanced" element={<Navigate to="/finance/dashboard" replace />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/settings/profile" element={<Navigate to="/settings?tab=profile" replace />} />

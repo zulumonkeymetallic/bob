@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Container, Card, Row, Col, Badge, Button, Alert, Collapse, OverlayTrigger, Tooltip, Form, Spinner, Table } from 'react-bootstrap';
 import { useNavigate, Link } from 'react-router-dom';
-import { Target, BookOpen, TrendingUp, Wallet, Clock, ListChecks, Calendar as CalendarIcon, LayoutGrid, RefreshCw, Sparkles, Activity, GripVertical, Heart, CheckCircle, X } from 'lucide-react';
+import { Target, BookOpen, TrendingUp, Wallet, Clock, Clock3, ListChecks, Calendar as CalendarIcon, LayoutGrid, RefreshCw, Sparkles, Activity, GripVertical, Heart, CheckCircle, X } from 'lucide-react';
 import { DndContext, DragEndEvent, PointerSensor, useSensor, useSensors, closestCenter } from '@dnd-kit/core';
 import { SortableContext, useSortable, arrayMove, rectSortingStrategy } from '@dnd-kit/sortable';
 import { CSS as DndCSS } from '@dnd-kit/utilities';
@@ -6158,18 +6158,22 @@ const Dashboard: React.FC = () => {
                                   <div className="text-muted small">No tasks due today.</div>
                                 ) : (
                                   (() => {
-                                    const morning: typeof tasksDueTodayCombined = [];
-                                    const afternoon: typeof tasksDueTodayCombined = [];
-                                    const evening: typeof tasksDueTodayCombined = [];
-                                    const other: typeof tasksDueTodayCombined = [];
-                                    tasksDueTodayCombined.forEach((item) => {
+                                    // Sort: top-3-pinned items first (by userPriorityRank), then by AI score DESC. Cap at 10.
+                                    const pinned = tasksDueTodayCombined.filter(i => (i.task as any)?.userPriorityFlag).sort((a, b) => ((a.task as any)?.userPriorityRank ?? 99) - ((b.task as any)?.userPriorityRank ?? 99));
+                                    const rest = tasksDueTodayCombined.filter(i => !(i.task as any)?.userPriorityFlag).sort((a, b) => ((b.task as any)?.aiCriticalityScore ?? 0) - ((a.task as any)?.aiCriticalityScore ?? 0));
+                                    const capped = [...pinned, ...rest].slice(0, 10);
+                                    const morning: typeof capped = [];
+                                    const afternoon: typeof capped = [];
+                                    const evening: typeof capped = [];
+                                    const other: typeof capped = [];
+                                    capped.forEach((item) => {
                                       const tod = item.task && (item.task as any).timeOfDay;
                                       if (tod === 'morning') morning.push(item);
                                       else if (tod === 'afternoon') afternoon.push(item);
                                       else if (tod === 'evening') evening.push(item);
                                       else other.push(item);
                                     });
-                                    const sortByDueTime = (arr: typeof tasksDueTodayCombined) =>
+                                    const sortByDueTime = (arr: typeof capped) =>
                                       [...arr].sort((a, b) => {
                                         const aTime = (a.task as any)?.dueTime ?? '';
                                         const bTime = (b.task as any)?.dueTime ?? '';
@@ -6192,9 +6196,14 @@ const Dashboard: React.FC = () => {
                                               <div className="fw-semibold small flex-grow-1">
                                                 <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>{task.title}</a>
                                               </div>
-                                              <button type="button" className="d-none d-md-inline-flex align-items-center justify-content-center" onClick={() => showSidebar(task as any, 'task')} title="Activity stream" style={{ color: 'var(--bs-secondary-color)', padding: 4, borderRadius: 4, border: 'none', background: 'transparent', cursor: 'pointer', lineHeight: 0, flexShrink: 0 }}>
+                                              <div className="d-flex align-items-center gap-1 flex-shrink-0">
+                                              <button type="button" className="d-none d-md-inline-flex align-items-center justify-content-center" onClick={() => showSidebar(task as any, 'task')} title="Activity stream" style={{ color: 'var(--bs-secondary-color)', padding: 4, borderRadius: 4, border: 'none', background: 'transparent', cursor: 'pointer', lineHeight: 0 }}>
                                                 <Activity size={14} />
                                               </button>
+                                              <Link to="/planner?level=calendar" title="Open calendar to defer" style={{ color: 'var(--bs-secondary-color)', padding: 4, lineHeight: 0, display: 'inline-flex' }}>
+                                                <Clock3 size={14} />
+                                              </Link>
+                                              </div>
                                             </div>
                                             {refLabel && (
                                               <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>
@@ -6237,11 +6246,12 @@ const Dashboard: React.FC = () => {
                                       return null;
                                     };
                                     return (
-                                      <div className="widget-time-buckets">
+                                      <div className="widget-time-buckets" style={{ overflowY: 'auto', maxHeight: 420 }}>
                                         {morning.length > 0 && (<div className="mb-3"><h6 className="text-muted mb-2 border-bottom pb-1 fw-bold"><small>Morning</small></h6>{sortByDueTime(morning).map(renderItem)}</div>)}
                                         {afternoon.length > 0 && (<div className="mb-3"><h6 className="text-muted mb-2 border-bottom pb-1 fw-bold"><small>Afternoon</small></h6>{sortByDueTime(afternoon).map(renderItem)}</div>)}
                                         {evening.length > 0 && (<div className="mb-3"><h6 className="text-muted mb-2 border-bottom pb-1 fw-bold"><small>Evening</small></h6>{sortByDueTime(evening).map(renderItem)}</div>)}
                                         {other.length > 0 && (<div className="mb-0">{(morning.length > 0 || afternoon.length > 0 || evening.length > 0) && <h6 className="text-muted mb-2 border-bottom pb-1 fw-bold"><small>Other / Anytime</small></h6>}{sortByDueTime(other).map(renderItem)}</div>)}
+                                        {tasksDueTodayCombined.length > 10 && <div className="text-muted small pt-2">Showing top 10 of {tasksDueTodayCombined.length} items</div>}
                                       </div>
                                     );
                                   })()
@@ -6276,11 +6286,12 @@ const Dashboard: React.FC = () => {
                                   <div className="text-muted small">No chores, habits, or routines due today.</div>
                                 ) : (
                                   (() => {
-                                    const morning: typeof choresDueTodayTasks = [];
-                                    const afternoon: typeof choresDueTodayTasks = [];
-                                    const evening: typeof choresDueTodayTasks = [];
-                                    const other: typeof choresDueTodayTasks = [];
-                                    choresDueTodayTasks.forEach((task) => {
+                                    const cappedChores = choresDueTodayTasks.slice(0, 10);
+                                    const morning: typeof cappedChores = [];
+                                    const afternoon: typeof cappedChores = [];
+                                    const evening: typeof cappedChores = [];
+                                    const other: typeof cappedChores = [];
+                                    cappedChores.forEach((task) => {
                                       const tod = (task as any).timeOfDay;
                                       if (tod === 'morning') morning.push(task);
                                       else if (tod === 'afternoon') afternoon.push(task);
@@ -6303,9 +6314,14 @@ const Dashboard: React.FC = () => {
                                             <div className="text-muted small">Due {dueLabel}</div>
                                           </div>
                                           <div className="d-flex flex-column align-items-end gap-1">
-                                            <button type="button" className="d-inline-flex align-items-center justify-content-center" onClick={() => showSidebar(task as any, 'task' as any)} title="Activity stream" style={{ color: 'var(--bs-secondary-color)', padding: 4, borderRadius: 4, border: 'none', background: 'transparent', cursor: 'pointer', lineHeight: 0 }}>
-                                              <Activity size={14} />
-                                            </button>
+                                            <div className="d-flex align-items-center gap-1">
+                                              <button type="button" className="d-inline-flex align-items-center justify-content-center" onClick={() => showSidebar(task as any, 'task' as any)} title="Activity stream" style={{ color: 'var(--bs-secondary-color)', padding: 4, borderRadius: 4, border: 'none', background: 'transparent', cursor: 'pointer', lineHeight: 0 }}>
+                                                <Activity size={14} />
+                                              </button>
+                                              <Link to="/planner?level=calendar" title="Open calendar to defer" style={{ color: 'var(--bs-secondary-color)', padding: 4, lineHeight: 0, display: 'inline-flex' }}>
+                                                <Clock3 size={14} />
+                                              </Link>
+                                            </div>
                                             {isOverdue && <Badge bg="danger">Overdue</Badge>}
                                             <Badge bg={badgeVariant}>{badgeLabel}</Badge>
                                           </div>
@@ -6313,11 +6329,12 @@ const Dashboard: React.FC = () => {
                                       );
                                     };
                                     return (
-                                      <div className="widget-time-buckets">
+                                      <div className="widget-time-buckets" style={{ overflowY: 'auto', maxHeight: 360 }}>
                                         {morning.length > 0 && (<div className="mb-3"><h6 className="text-muted mb-2 border-bottom pb-1 fw-bold"><small>Morning</small></h6>{morning.map((t) => renderChore(t))}</div>)}
                                         {afternoon.length > 0 && (<div className="mb-3"><h6 className="text-muted mb-2 border-bottom pb-1 fw-bold"><small>Afternoon</small></h6>{afternoon.map((t) => renderChore(t))}</div>)}
                                         {evening.length > 0 && (<div className="mb-3"><h6 className="text-muted mb-2 border-bottom pb-1 fw-bold"><small>Evening</small></h6>{evening.map((t) => renderChore(t))}</div>)}
                                         {other.length > 0 && (<div className="mb-0">{(morning.length > 0 || afternoon.length > 0 || evening.length > 0) && <h6 className="text-muted mb-2 border-bottom pb-1 fw-bold"><small>Other / Anytime</small></h6>}{other.map((t) => renderChore(t))}</div>)}
+                                        {choresDueTodayTasks.length > 10 && <div className="text-muted small pt-2">Showing top 10 of {choresDueTodayTasks.length}</div>}
                                       </div>
                                     );
                                   })()

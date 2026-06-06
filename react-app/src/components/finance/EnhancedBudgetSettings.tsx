@@ -61,6 +61,10 @@ const EnhancedBudgetSettings: React.FC = () => {
     const [goalAllocations, setGoalAllocations] = useState<Record<string, number>>({});
     const [debts, setDebts] = useState<DebtItem[]>([]);
     const [snowballExtra, setSnowballExtra] = useState<number>(0);
+    const [debtStrategy, setDebtStrategy] = useState<'snowball' | 'avalanche'>('snowball');
+    const [netWorthPounds, setNetWorthPounds] = useState<number>(0);
+    const [currentAge, setCurrentAge] = useState<number>(42);
+    const [targetRetirementAge, setTargetRetirementAge] = useState<number>(55);
     const [customCategories, setCustomCategories] = useState<CategoryItem[]>([]);
     const [legacyBudgetLoaded, setLegacyBudgetLoaded] = useState(false);
     const [categorySpend, setCategorySpend] = useState<Record<string, { d30: number; d90: number; ytd: number }>>({});
@@ -576,18 +580,55 @@ const EnhancedBudgetSettings: React.FC = () => {
         setDebts((prev) => prev.filter((d) => d.id !== id));
     };
 
-    const snowballPlan = useMemo(() => {
+    // Months to pay off a balance with compound interest (0 if unplayable)
+    const calcPayoffMonths = (balancePence: number, apr: number, monthlyPaymentPence: number): number => {
+        const B = balancePence / 100;
+        const P = monthlyPaymentPence / 100;
+        if (P <= 0 || B <= 0) return 0;
+        const r = apr / 100 / 12;
+        if (r <= 0) return Math.ceil(B / P);
+        if (P <= B * r) return Infinity; // payment doesn't cover interest
+        return Math.ceil(-Math.log(1 - (B * r) / P) / Math.log(1 + r));
+    };
+
+    const buildPlan = (strategy: 'snowball' | 'avalanche') => {
         if (!debts.length) return [];
         const extraPence = Math.max(0, Math.round((Number(snowballExtra) || 0) * 100));
-        const ordered = [...debts].sort((a, b) => (a.balancePence || 0) - (b.balancePence || 0));
+        const ordered = [...debts].sort((a, b) =>
+            strategy === 'avalanche'
+                ? (b.apr || 0) - (a.apr || 0)          // highest APR first
+                : (a.balancePence || 0) - (b.balancePence || 0) // smallest balance first
+        );
         return ordered.map((debt, idx) => {
             const minPay = Number(debt.minPaymentPence || 0);
             const allocation = minPay + (idx === 0 ? extraPence : 0);
-            return { ...debt, allocationPence: allocation };
+            const months = calcPayoffMonths(debt.balancePence, debt.apr, allocation);
+            const totalPaidPence = months === Infinity ? Infinity : Math.round(months * allocation);
+            const totalInterestPence = months === Infinity ? Infinity : Math.max(0, totalPaidPence - debt.balancePence);
+            const payoffDate = months === Infinity ? null : (() => {
+                const d = new Date();
+                d.setMonth(d.getMonth() + months);
+                return d.toLocaleDateString('en-GB', { month: 'short', year: 'numeric' });
+            })();
+            return { ...debt, allocationPence: allocation, months, totalInterestPence, payoffDate };
         });
-    }, [debts, snowballExtra]);
+    };
+
+    const snowballPlan = useMemo(() => buildPlan(debtStrategy), [debts, snowballExtra, debtStrategy]);
+    const comparisonPlan = useMemo(() => buildPlan(debtStrategy === 'snowball' ? 'avalanche' : 'snowball'), [debts, snowballExtra, debtStrategy]);
 
     const snowballTotalPence = snowballPlan.reduce((sum, debt) => sum + (Number((debt as any).allocationPence) || 0), 0);
+    const snowballTotalInterest = snowballPlan.reduce((sum, d) => {
+        const v = (d as any).totalInterestPence;
+        return v === Infinity ? Infinity : sum + v;
+    }, 0);
+    const comparisonTotalInterest = comparisonPlan.reduce((sum, d) => {
+        const v = (d as any).totalInterestPence;
+        return v === Infinity ? Infinity : sum + v;
+    }, 0);
+    const interestSavedPence = (snowballTotalInterest !== Infinity && comparisonTotalInterest !== Infinity)
+        ? comparisonTotalInterest - snowballTotalInterest
+        : null;
 
     const formatCurrency = (value: number, curr = currency) => {
         const pounds = (Number(value) || 0) / 100;
@@ -763,17 +804,34 @@ const EnhancedBudgetSettings: React.FC = () => {
             <Card className="mb-3">
                 <Card.Header className="d-flex justify-content-between align-items-center">
                     <div className="d-flex flex-column">
-                        <span>Debt Snowball (dry run)</span>
-                        <small className="text-muted">Planned total: £{(snowballTotalPence / 100).toFixed(2)}</small>
+                        <span>Debt Paydown — {debtStrategy === 'snowball' ? 'Snowball' : 'Avalanche'} (dry run)</span>
+                        <small className="text-muted">
+                            Monthly total: £{(snowballTotalPence / 100).toFixed(2)}
+                            {snowballTotalInterest !== Infinity && ` · Total interest: £${(snowballTotalInterest / 100).toFixed(0)}`}
+                            {interestSavedPence !== null && interestSavedPence > 0 && (
+                                <span className="text-success ms-1">
+                                    (save £{(interestSavedPence / 100).toFixed(0)} vs {debtStrategy === 'snowball' ? 'avalanche' : 'snowball'})
+                                </span>
+                            )}
+                            {interestSavedPence !== null && interestSavedPence < 0 && (
+                                <span className="text-warning ms-1">
+                                    ({debtStrategy === 'snowball' ? 'avalanche' : 'snowball'} saves £{(Math.abs(interestSavedPence) / 100).toFixed(0)} more — consider switching)
+                                </span>
+                            )}
+                        </small>
                     </div>
-                    <Button size="sm" variant="outline-primary" onClick={addDebt}>
-                        + Add debt
-                    </Button>
+                    <div className="d-flex gap-2 align-items-center">
+                        <div className="btn-group btn-group-sm">
+                            <Button variant={debtStrategy === 'snowball' ? 'primary' : 'outline-secondary'} onClick={() => setDebtStrategy('snowball')}>Snowball</Button>
+                            <Button variant={debtStrategy === 'avalanche' ? 'primary' : 'outline-secondary'} onClick={() => setDebtStrategy('avalanche')}>Avalanche</Button>
+                        </div>
+                        <Button size="sm" variant="outline-primary" onClick={addDebt}>+ Add debt</Button>
+                    </div>
                 </Card.Header>
                 <Card.Body>
                     <Row className="g-3 align-items-end mb-3">
                         <Col md={4}>
-                            <Form.Label>Extra snowball budget (monthly)</Form.Label>
+                            <Form.Label>Extra monthly budget</Form.Label>
                             <InputGroup>
                                 <InputGroup.Text>£</InputGroup.Text>
                                 <Form.Control
@@ -784,11 +842,13 @@ const EnhancedBudgetSettings: React.FC = () => {
                                     onChange={(e) => setSnowballExtra(parseFloat(e.target.value) || 0)}
                                 />
                             </InputGroup>
-                            <Form.Text className="text-muted">This extra is applied to the smallest balance first.</Form.Text>
+                            <Form.Text className="text-muted">
+                                {debtStrategy === 'snowball' ? 'Applied to smallest balance first.' : 'Applied to highest APR first.'}
+                            </Form.Text>
                         </Col>
                         <Col md={8}>
                             <Alert variant="light" className="mb-0 small">
-                                Snowball transfers are a preview only for now — no money is moved automatically.
+                                Preview only — no money is moved automatically. <strong>Snowball</strong>: smallest balance first (psychological wins). <strong>Avalanche</strong>: highest APR first (minimises total interest).
                             </Alert>
                         </Col>
                     </Row>
@@ -799,19 +859,21 @@ const EnhancedBudgetSettings: React.FC = () => {
                         <Table size="sm" hover responsive>
                             <thead>
                                 <tr>
-                                    <th style={{ width: 60 }}>Priority</th>
+                                    <th style={{ width: 40 }}>#</th>
                                     <th>Debt</th>
                                     <th className="text-end">Balance</th>
                                     <th className="text-end">APR %</th>
                                     <th className="text-end">Min / mo</th>
                                     <th>Pot</th>
                                     <th className="text-end">Planned</th>
+                                    <th className="text-end">Payoff</th>
+                                    <th className="text-end">Interest</th>
                                     <th />
                                 </tr>
                             </thead>
                             <tbody>
                                 {debts.map((debt) => {
-                                    const plan = snowballPlan.find((p: any) => p.id === debt.id);
+                                    const plan = snowballPlan.find((p: any) => p.id === debt.id) as any;
                                     const priority = plan ? snowballPlan.findIndex((p: any) => p.id === debt.id) + 1 : '-';
                                     return (
                                         <tr key={debt.id}>
@@ -868,7 +930,17 @@ const EnhancedBudgetSettings: React.FC = () => {
                                                     ))}
                                                 </Form.Select>
                                             </td>
-                                            <td className="text-end">£{(((plan as any)?.allocationPence || 0) / 100).toFixed(2)}</td>
+                                            <td className="text-end">£{((plan?.allocationPence || 0) / 100).toFixed(2)}</td>
+                                            <td className="text-end small">
+                                                {plan?.payoffDate ? (
+                                                    <span title={`${plan.months} months`}>{plan.payoffDate}</span>
+                                                ) : plan?.months === Infinity ? (
+                                                    <span className="text-danger">Never</span>
+                                                ) : '—'}
+                                            </td>
+                                            <td className="text-end small">
+                                                {plan?.totalInterestPence === Infinity ? '∞' : plan?.totalInterestPence != null ? `£${(plan.totalInterestPence / 100).toFixed(0)}` : '—'}
+                                            </td>
                                             <td className="text-end">
                                                 <Button size="sm" variant="outline-danger" onClick={() => removeDebt(debt.id)}>Remove</Button>
                                             </td>
@@ -878,6 +950,123 @@ const EnhancedBudgetSettings: React.FC = () => {
                             </tbody>
                         </Table>
                     )}
+                </Card.Body>
+            </Card>
+
+            {/* FIRE Projection */}
+            <Card className="mb-3">
+                <Card.Header>
+                    <span>FIRE Projection (Financial Independence, Retire Early)</span>
+                    <small className="text-muted ms-2">Based on the 4% safe withdrawal rate rule</small>
+                </Card.Header>
+                <Card.Body>
+                    <Row className="g-3 mb-3">
+                        <Col md={3}>
+                            <Form.Label>Current age</Form.Label>
+                            <Form.Control
+                                type="number"
+                                min="18"
+                                max="80"
+                                value={currentAge}
+                                onChange={(e) => setCurrentAge(parseInt(e.target.value) || 42)}
+                            />
+                        </Col>
+                        <Col md={3}>
+                            <Form.Label>Target retirement age</Form.Label>
+                            <Form.Control
+                                type="number"
+                                min="30"
+                                max="80"
+                                value={targetRetirementAge}
+                                onChange={(e) => setTargetRetirementAge(parseInt(e.target.value) || 55)}
+                            />
+                        </Col>
+                        <Col md={3}>
+                            <Form.Label>Current net worth (£)</Form.Label>
+                            <InputGroup>
+                                <InputGroup.Text>£</InputGroup.Text>
+                                <Form.Control
+                                    type="number"
+                                    min="0"
+                                    step="1000"
+                                    value={netWorthPounds}
+                                    onChange={(e) => setNetWorthPounds(parseFloat(e.target.value) || 0)}
+                                    placeholder="Assets minus debts"
+                                />
+                            </InputGroup>
+                        </Col>
+                        <Col md={3} className="d-flex align-items-end">
+                            <Alert variant="light" className="mb-0 small w-100">
+                                Monthly income: £{monthlyIncome.toFixed(0)}<br />
+                                Annual income: £{(monthlyIncome * 12).toFixed(0)}
+                            </Alert>
+                        </Col>
+                    </Row>
+                    {(() => {
+                        // Use 90d spend data if available, else estimate from income
+                        const annualSpendPounds = monthlyIncome * 12 * 0.7; // conservative: 70% of income
+                        const fireNumber = annualSpendPounds * 25;
+                        const monthlySurplus = monthlyIncome - (annualSpendPounds / 12);
+                        const yearsToFire = monthlySurplus > 0
+                            ? (fireNumber - netWorthPounds) / (monthlySurplus * 12)
+                            : Infinity;
+                        const fireDate = yearsToFire < 100 ? (() => {
+                            const d = new Date();
+                            d.setFullYear(d.getFullYear() + Math.ceil(yearsToFire));
+                            return d.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
+                        })() : null;
+                        const progressPct = fireNumber > 0 ? Math.min(100, (netWorthPounds / fireNumber) * 100) : 0;
+                        const yearsAvailable = targetRetirementAge - currentAge;
+                        const onTrack = yearsToFire <= yearsAvailable;
+                        return (
+                            <div>
+                                <Row className="g-3 mb-3">
+                                    <Col md={3}>
+                                        <div className="text-muted small">FIRE Number (25× annual spend)</div>
+                                        <div className="fw-bold fs-5">£{fireNumber.toLocaleString('en-GB', { maximumFractionDigits: 0 })}</div>
+                                    </Col>
+                                    <Col md={3}>
+                                        <div className="text-muted small">Monthly surplus</div>
+                                        <div className={`fw-bold fs-5 ${monthlySurplus >= 0 ? 'text-success' : 'text-danger'}`}>
+                                            £{monthlySurplus.toLocaleString('en-GB', { maximumFractionDigits: 0 })}
+                                        </div>
+                                    </Col>
+                                    <Col md={3}>
+                                        <div className="text-muted small">Years to FIRE</div>
+                                        <div className={`fw-bold fs-5 ${onTrack ? 'text-success' : 'text-warning'}`}>
+                                            {yearsToFire < 100 ? `${yearsToFire.toFixed(1)} yrs` : 'Not on track'}
+                                        </div>
+                                        {fireDate && <div className="small text-muted">{fireDate}</div>}
+                                    </Col>
+                                    <Col md={3}>
+                                        <div className="text-muted small">Progress to FIRE</div>
+                                        <div className="fw-bold fs-5">{progressPct.toFixed(1)}%</div>
+                                        <div className="progress mt-1" style={{ height: 8 }}>
+                                            <div
+                                                className={`progress-bar ${onTrack ? 'bg-success' : 'bg-warning'}`}
+                                                style={{ width: `${progressPct}%` }}
+                                            />
+                                        </div>
+                                    </Col>
+                                </Row>
+                                {!onTrack && yearsToFire < Infinity && (
+                                    <Alert variant="warning" className="small mb-0">
+                                        At current surplus you'd reach FIRE in {yearsToFire.toFixed(1)} years — {(yearsToFire - yearsAvailable).toFixed(1)} years past your target age of {targetRetirementAge}.
+                                        To hit {targetRetirementAge}, you need £{((fireNumber - netWorthPounds) / Math.max(1, yearsAvailable * 12)).toLocaleString('en-GB', { maximumFractionDigits: 0 })}/mo surplus.
+                                    </Alert>
+                                )}
+                                {onTrack && yearsToFire < Infinity && (
+                                    <Alert variant="success" className="small mb-0">
+                                        On track — projected to reach FIRE by {fireDate}, {(yearsAvailable - yearsToFire).toFixed(1)} years ahead of your target.
+                                    </Alert>
+                                )}
+                                <div className="text-muted small mt-2">
+                                    Estimate uses 70% of income as annual spend. Update income in Budget Settings above for accurate projections.
+                                    FIRE number = annual spend × 25 (4% rule: withdraw 4%/year from portfolio).
+                                </div>
+                            </div>
+                        );
+                    })()}
                 </Card.Body>
             </Card>
 

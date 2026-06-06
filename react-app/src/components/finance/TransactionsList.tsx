@@ -220,6 +220,8 @@ const shouldExcludeFromAiAndSubscriptionAnalysis = (
 
 const SUBSCRIPTION_KEYWORDS = /(subscription|membership|renewal|monthly|annual|prime|netflix|spotify|apple|icloud|adobe|notion|dropbox|patreon|youtube|chatgpt|openai|gym|xbox|playstation)/i;
 const NON_SUBSCRIPTION_CATEGORY_HINTS = /(eating_out|eat|dining|restaurant|takeaway|coffee|grocer|transport|fuel|shopping)/i;
+// Insurance, rent, mortgage, loans are recurring but are not subscriptions — exclude from subscription detection
+const INSURANCE_AND_MANDATORY_HINTS = /(insurance|mortgage|rent|loan|council.?tax|rates|solicitor|land.?lord|property.?se)/i;
 
 const buildSubscriptionSuggestion = (
   row: TxRow,
@@ -232,6 +234,12 @@ const buildSubscriptionSuggestion = (
 
   const categoryText = `${toText(row.userCategoryKey, '')} ${toText(row.aiCategoryKey, '')} ${toText(row.userCategoryLabel, '')} ${toText(row.aiCategoryLabel, '')}`.toLowerCase();
   const text = `${toText(row.merchant, '')} ${toText(row.description, '')}`.toLowerCase();
+
+  // Insurance, rent, mortgage etc. recur but are not subscriptions — skip them
+  if (INSURANCE_AND_MANDATORY_HINTS.test(text) || INSURANCE_AND_MANDATORY_HINTS.test(categoryText)) {
+    return { suggested: false, reason: '' };
+  }
+
   const keywordMatch = SUBSCRIPTION_KEYWORDS.test(text);
   const likelyFoodOrOneOffCategory = NON_SUBSCRIPTION_CATEGORY_HINTS.test(categoryText);
   const predictableCadence = Boolean(cadence && ['weekly', 'monthly', 'quarterly', 'semiannual', 'yearly'].includes(String(cadence.frequencyKey || '')) && Number(cadence.txCount || 0) >= 2);
@@ -524,6 +532,10 @@ const TransactionsList: React.FC<TransactionsListProps> = ({ embedded = false, e
       },
       (err) => {
         console.error('Failed to load finance actions', err);
+        // Degrade gracefully — actions column will show "—" but the page remains functional
+        if ((err as any)?.code === 'permission-denied') {
+          console.warn('finance_action_insights: permission denied — document may be missing ownerUid field. Actions column disabled.');
+        }
       }
     );
     return () => unsub();
@@ -661,7 +673,8 @@ const TransactionsList: React.FC<TransactionsListProps> = ({ embedded = false, e
       const displayBucket = isPotTransfer ? 'bank_transfer' : toNullableText(r.aiBucket || r.userCategoryType || r.defaultCategoryType);
       const cadence = cadenceByMerchant.get(resolveMerchantKey(r));
       const inferredFrequency = cadence?.frequencyLabel || 'Irregular';
-      const action = isWithinLastYear(r.createdISO) ? getActionForMerchant(actionLookup, r) : null;
+      const isDiscretionaryBucket = ['discretionary', 'irregular_income'].includes(String(displayBucket || '').toLowerCase());
+      const action = isWithinLastYear(r.createdISO) && isDiscretionaryBucket ? getActionForMerchant(actionLookup, r) : null;
       const externalMatch = externalMatchesByMonzoDocId.get(r.id) || null;
       const selectedSubscription = subscriptionSelection[r.id];
       const excludedFromAiAndSubscription = shouldExcludeFromAiAndSubscriptionAnalysis({
@@ -958,6 +971,41 @@ const TransactionsList: React.FC<TransactionsListProps> = ({ embedded = false, e
     }
   };
 
+  const [bulkApplying, setBulkApplying] = useState(false);
+
+  const applyAllAiSuggestions = async () => {
+    if (!currentUser) return;
+    setBulkApplying(true);
+    setErrorMsg('');
+    setStatusMsg('');
+    try {
+      // Collect unique merchants that have an AI suggestion but no user-saved category
+      const merchantsToApply = new Map<string, { tx: any; categoryKey: string }>();
+      for (const tx of filtered) {
+        const hasUserCategory = !!(tx.userCategoryKey);
+        const aiKey = tx.aiCategoryKey;
+        if (!hasUserCategory && aiKey && (tx.merchantKey || tx.merchant)) {
+          const mKey = tx.merchantKey || tx.merchant;
+          if (!merchantsToApply.has(mKey)) {
+            merchantsToApply.set(mKey, { tx, categoryKey: aiKey });
+          }
+        }
+      }
+      let done = 0;
+      for (const { tx, categoryKey } of merchantsToApply.values()) {
+        await updateTransactionCategory(tx, categoryKey, true);
+        done++;
+        setStatusMsg(`Applying AI suggestions… ${done}/${merchantsToApply.size}`);
+      }
+      setStatusMsg(`Applied ${done} merchant mappings from AI suggestions.`);
+    } catch (err) {
+      console.error('Bulk apply failed', err);
+      setErrorMsg((err as any)?.message || 'Bulk apply failed');
+    } finally {
+      setBulkApplying(false);
+    }
+  };
+
   const convertActionToStory = async (action: FinanceActionInsight | null) => {
     if (!action?.id) return;
     setConvertingActionId(action.id);
@@ -1156,13 +1204,17 @@ const TransactionsList: React.FC<TransactionsListProps> = ({ embedded = false, e
                   </Col>
                   <Col md={3}>
                     <Form.Label className="text-muted small">Merchant</Form.Label>
-                    <Form.Control
-                      size="sm"
-                      className="finance-input"
-                      placeholder="Filter merchant"
-                      value={merchantFilter}
-                      onChange={(e) => setMerchantFilter(e.target.value)}
-                    />
+                    <InputGroup size="sm">
+                      <Form.Control
+                        className="finance-input"
+                        placeholder="Filter merchant"
+                        value={merchantFilter}
+                        onChange={(e) => setMerchantFilter(e.target.value)}
+                      />
+                      {merchantFilter && (
+                        <Button variant="outline-secondary" onClick={() => setMerchantFilter('')} title="Clear merchant filter">×</Button>
+                      )}
+                    </InputGroup>
                   </Col>
                   <Col md={3}>
                     <Form.Label className="text-muted small">Description</Form.Label>
@@ -1326,7 +1378,19 @@ const TransactionsList: React.FC<TransactionsListProps> = ({ embedded = false, e
                 ? `Compact column mode (${compactLevel}) enabled for laptop widths. Expand window to show more columns.`
                 : `${effectiveVisibleColumns.length} columns visible`}
             </div>
-            {renderColumnsMenu()}
+            <div className="d-flex align-items-center gap-2">
+              <Button
+                size="sm"
+                variant="outline-primary"
+                disabled={bulkApplying || loading}
+                onClick={applyAllAiSuggestions}
+                title="Save all AI-suggested categories for uncategorised merchants in one go"
+              >
+                {bulkApplying ? <Spinner size="sm" animation="border" className="me-1" /> : null}
+                Apply all AI suggestions
+              </Button>
+              {renderColumnsMenu()}
+            </div>
           </div>
           <div className="finance-grid-header" style={{ gridTemplateColumns }}>
             {effectiveVisibleColumns.includes('date') && renderSortHeader('date')}
@@ -1417,7 +1481,14 @@ const TransactionsList: React.FC<TransactionsListProps> = ({ embedded = false, e
                               <div className="finance-avatar-placeholder" />
                             )}
                             <div>
-                              <div className="finance-label">{toText(tx.merchant, '—')}</div>
+                              <div
+                                className="finance-label"
+                                style={{ cursor: 'pointer', textDecoration: 'underline dotted' }}
+                                title="Click to filter by this merchant"
+                                onClick={() => setMerchantFilter(toText(tx.merchant, ''))}
+                              >
+                                {toText(tx.merchant, '—')}
+                              </div>
                               <div className="finance-subtext">{toText(tx.merchantKey, '—')}</div>
                             </div>
                           </div>

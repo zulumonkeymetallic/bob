@@ -81,7 +81,7 @@ Cloud services: Firebase, Google Workspace, Telegram
 
 ### 2.2 Path Conventions
 ```
-~/GitHub/bob/orchestrate-build.sh       # BOB master build orchestrator
+~/git/bob/orchestrate-build.sh       # BOB master build orchestrator
 ~/Library/Mobile Documents/com~apple~CloudDocs/secret/bob/    # BOB Firebase service account
 ~/.hermes/secret/trasing212.json        # Trading 212 credentials (demo mode)
 ~/.hermes/skills/                       # Hermes skill definitions
@@ -118,11 +118,11 @@ bob-mac-sync/     — Native background sync service (Rust or Swift binary)
 
 ### 3.2 Build Orchestration
 
-**Master entry point:** `/Users/jim/GitHub/bob/orchestrate-build.sh`
+**Master entry point:** `/Users/jim/git/bob/orchestrate-build.sh`
 
 **Usage:**
 ```bash
-cd ~/GitHub/bob
+cd ~/git/bob
 ./orchestrate-build.sh [OPTIONS]
 
 # Or shorthand from any repo:
@@ -135,7 +135,7 @@ cd ~/GitHub/bob
 ./build --beta           # Mark as beta
 ```
 
-**Build manifest logged to:** `/Users/jim/GitHub/bob/build-logs/manifest.json`
+**Build manifest logged to:** `/Users/jim/git/bob/build-logs/manifest.json`
 
 ### 3.3 Core Data Model
 
@@ -473,7 +473,7 @@ const API_KEY = defineSecret('GOOGLE_AI_STUDIO_API_KEY');
 **When taking over an ongoing session:**
 
 1. Check `~/.hermes/cron/output/` for recent scheduled job results
-2. Review BOB manifest: `/Users/jim/GitHub/bob/build-logs/manifest.json`
+2. Review BOB manifest: `/Users/jim/git/bob/build-logs/manifest.json`
 3. Check trading bot state: `~/.hermes/data/trading-bot/positions.json`
 4. Look for any unresolved error logs in console output
 5. Verify which OAuth flows are completed vs pending

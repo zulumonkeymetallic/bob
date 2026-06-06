@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Container, Card, Button, Badge, ListGroup, Form, Modal, Spinner, Dropdown } from 'react-bootstrap';
+import { Container, Card, Button, Badge, ListGroup, Form, Modal, Spinner, Dropdown, Alert } from 'react-bootstrap';
 import { httpsCallable } from 'firebase/functions';
 import { collection, query, where, onSnapshot, orderBy, limit, updateDoc, doc, serverTimestamp } from 'firebase/firestore';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate, Link } from 'react-router-dom';
 import { db, functions } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { useSprint } from '../contexts/SprintContext';
@@ -34,6 +34,7 @@ import {
 } from '../utils/manualPriority';
 import { compareTop3Stories, compareTop3Tasks, isTop3Story, isTop3Task, top3DateForToday } from '../utils/top3';
 import { useFocusGoals } from '../hooks/useFocusGoals';
+import { useDashboardData } from '../hooks/useDashboardData';
 import { getProtectedFocusGoalIds, isGoalInHierarchySet } from '../utils/goalHierarchy';
 import { schedulePlannerItem as schedulePlannerItemMutation } from '../utils/plannerScheduling';
 import { applyChoreQuickDefer, isRecurringTask } from '../utils/plannerDeferral';
@@ -43,7 +44,7 @@ import {
   MOBILE_STORY_PROGRESS_OPTIONS,
 } from '../utils/storyProgress';
 
-type TabKey = 'overview' | 'daily_plan' | 'tasks' | 'stories' | 'goals' | 'chores';
+type TabKey = 'overview' | 'daily_plan' | 'tasks' | 'stories' | 'goals' | 'chores' | 'finance';
 type TaskViewFilter = 'top3' | 'due_today' | 'overdue' | 'all';
 type GoalsViewFilter = 'active_sprint' | 'year';
 type MobileSharedFilters = {
@@ -51,7 +52,7 @@ type MobileSharedFilters = {
   chores: boolean;
   focusAligned: boolean;
 };
-const MOBILE_TAB_ORDER: TabKey[] = ['overview', 'daily_plan', 'tasks', 'stories', 'goals', 'chores'];
+const MOBILE_TAB_ORDER: TabKey[] = ['overview', 'daily_plan', 'tasks', 'stories', 'goals', 'chores', 'finance'];
 const MOBILE_TAB_LABELS: Record<TabKey, string> = {
   overview: 'Overview',
   daily_plan: 'Daily Plan',
@@ -59,6 +60,7 @@ const MOBILE_TAB_LABELS: Record<TabKey, string> = {
   stories: 'Stories',
   goals: 'Goals',
   chores: 'Chores',
+  finance: 'Finance',
 };
 
 const THEME_COLORS: Record<number, string> = {
@@ -1440,7 +1442,7 @@ const MobileHome: React.FC = () => {
         </div>
       </div>
 
-      {activeTab !== 'goals' && (
+      {activeTab !== 'goals' && activeTab !== 'finance' && (
         <>
           <div className="d-flex flex-wrap gap-2 mb-2">
             <Button
@@ -2295,6 +2297,10 @@ const MobileHome: React.FC = () => {
         renderChoresHabitsWidget()
       )}
 
+      {activeTab === 'finance' && (
+        <MobileFinanceTab />
+      )}
+
       <Modal show={!!noteModal?.show} onHide={() => setNoteModal(null)} centered>
         <Modal.Header closeButton>
           <Modal.Title>Add Note</Modal.Title>
@@ -2359,6 +2365,118 @@ const MobileHome: React.FC = () => {
         onApply={applyDeferredDate}
       />
     </Container>
+  );
+};
+
+const MobileFinanceTab: React.FC = () => {
+  const { data, loading } = useDashboardData();
+
+  const fmt = (pence: number) =>
+    (pence / 100).toLocaleString('en-GB', { style: 'currency', currency: 'GBP', minimumFractionDigits: 0 });
+
+  if (loading) {
+    return <div className="text-center py-4"><Spinner animation="border" size="sm" className="me-2" />Loading finance data…</div>;
+  }
+
+  const income = data?.totalIncome || 0;
+  const spend = data?.totalSpend || 0;
+  const savings = income > 0 ? income - spend : 0;
+  const savingsRate = income > 0 ? (savings / income) * 100 : 0;
+  const verdict = savingsRate >= 20 ? { label: 'On track', bg: 'success' } : savingsRate >= 10 ? { label: 'Watch spending', bg: 'warning' } : { label: 'Budget alert', bg: 'danger' };
+  const uncatCount = data?.uncategorizedCount || 0;
+  const budgets: Record<string, number> = (data as any)?.categoryBudgets || {};
+  const spend30: Record<string, number> = (data as any)?.spendByCategory || {};
+
+  const budgetRows = Object.entries(budgets)
+    .filter(([, v]) => Number(v) > 0)
+    .map(([key, budget]) => ({
+      key,
+      budget: Number(budget),
+      actual: Math.abs(Number(spend30[key] || 0)),
+    }))
+    .sort((a, b) => b.budget - a.budget)
+    .slice(0, 5);
+
+  const overBudget = budgetRows.filter((r) => r.actual > r.budget);
+  const recentTxns: any[] = (data?.recentTransactions || []).slice(0, 5);
+
+  return (
+    <div className="d-flex flex-column gap-3">
+      {/* Spending health */}
+      <Card className={`border-0 bg-${verdict.bg} text-white`}>
+        <Card.Body className="py-3">
+          <div className="fw-bold mb-1">{verdict.label}</div>
+          <div className="small">
+            Savings rate: <strong>{savingsRate.toFixed(1)}%</strong> · Income: {fmt(income)} · Spend: {fmt(spend)}
+          </div>
+          {overBudget.length > 0 && (
+            <div className="small mt-1">{overBudget.length} categor{overBudget.length === 1 ? 'y' : 'ies'} over budget</div>
+          )}
+        </Card.Body>
+      </Card>
+
+      {/* Budget status */}
+      {budgetRows.length > 0 && (
+        <Card className="border-0 shadow-sm">
+          <Card.Header className="fw-semibold small py-2">Budget Status (30 days)</Card.Header>
+          <Card.Body className="py-2 px-3">
+            {budgetRows.map(({ key, budget, actual }) => {
+              const pct = Math.min(120, budget > 0 ? (actual / budget) * 100 : 0);
+              const over = actual > budget;
+              return (
+                <div key={key} className="mb-2">
+                  <div className="d-flex justify-content-between mb-1" style={{ fontSize: 12 }}>
+                    <span>{key.replace(/_/g, ' ')}</span>
+                    <span className={over ? 'text-danger fw-bold' : 'text-muted'}>{fmt(actual)} / {fmt(budget)}</span>
+                  </div>
+                  <div className="progress" style={{ height: 6 }}>
+                    <div className={`progress-bar ${over ? 'bg-danger' : 'bg-success'}`} style={{ width: `${pct}%` }} />
+                  </div>
+                </div>
+              );
+            })}
+          </Card.Body>
+        </Card>
+      )}
+
+      {/* Over-budget alerts */}
+      {overBudget.length > 0 && (
+        <div className="d-flex flex-wrap gap-2">
+          {overBudget.map(({ key, actual, budget }) => (
+            <span key={key} className="badge bg-danger">{key.replace(/_/g, ' ')} +{fmt(actual - budget)}</span>
+          ))}
+        </div>
+      )}
+
+      {/* Uncategorised warning */}
+      {uncatCount > 0 && (
+        <Alert variant="warning" className="py-2 small mb-0">{uncatCount} uncategorised transaction{uncatCount !== 1 ? 's' : ''} — categorise in Finance Hub for accurate reporting.</Alert>
+      )}
+
+      {/* Recent transactions */}
+      {recentTxns.length > 0 && (
+        <Card className="border-0 shadow-sm">
+          <Card.Header className="fw-semibold small py-2">Recent Transactions</Card.Header>
+          <Card.Body className="py-2 px-3">
+            {recentTxns.map((tx: any) => (
+              <div key={tx.id} className="d-flex justify-content-between align-items-center mb-2 border-bottom pb-1">
+                <div>
+                  <div className="fw-semibold" style={{ fontSize: 13 }}>{tx.merchantName || tx.description || 'Unknown'}</div>
+                  <div className="text-muted" style={{ fontSize: 11 }}>{tx.userCategoryLabel || tx.aiCategoryLabel || 'Uncategorised'}</div>
+                </div>
+                <span className={`fw-bold small ${(tx.amount || 0) < 0 ? 'text-danger' : 'text-success'}`}>
+                  {fmt(Math.abs((tx.amount || 0) * 100))}
+                </span>
+              </div>
+            ))}
+          </Card.Body>
+        </Card>
+      )}
+
+      {/* CTA */}
+      <Link to="/finance/dashboard" className="btn btn-outline-primary btn-sm w-100">Open Finance Hub</Link>
+      <Link to="/finance/coach" className="btn btn-outline-secondary btn-sm w-100">AI Finance Coach</Link>
+    </div>
   );
 };
 
