@@ -2269,7 +2269,7 @@ const UnifiedPlannerCalendarPage: React.FC = () => {
                     </Badge>
                   </div>
                 </Card.Header>
-                <Card.Body className="p-3 d-flex flex-column gap-2">
+                <Card.Body className="p-3">
                   {tasksLoading ? (
                     <div className="d-flex align-items-center gap-2 text-muted">
                       <Spinner size="sm" animation="border" /> Loading tasks…
@@ -2277,7 +2277,13 @@ const UnifiedPlannerCalendarPage: React.FC = () => {
                   ) : sortedTaskItemsDueToday.length === 0 ? (
                     <div className="text-muted small">No tasks due today.</div>
                   ) : (
-                    sortedTaskItemsDueToday.map((task) => {
+                    <div className="d-flex flex-column gap-2" style={{ overflowY: 'auto', maxHeight: 420 }}>
+                    {(() => {
+                      // Top-3-pinned first, then AI score DESC, cap at 10
+                      const pinned = sortedTaskItemsDueToday.filter((t) => (t as any).userPriorityFlag).sort((a, b) => ((a as any).userPriorityRank ?? 99) - ((b as any).userPriorityRank ?? 99));
+                      const rest = sortedTaskItemsDueToday.filter((t) => !(t as any).userPriorityFlag);
+                      const capped = [...pinned, ...rest].slice(0, 10);
+                      return capped.map((task) => {
                       const dueMs = getTaskDueMs(task);
                       const aiScore = (task as any).aiCriticalityScore ?? (task as any).aiPriorityScore;
                       const refLabel = taskRefLabel(task);
@@ -2394,7 +2400,12 @@ const UnifiedPlannerCalendarPage: React.FC = () => {
                           </div>
                         </div>
                       );
-                    })
+                    });
+                    })()}
+                    {sortedTaskItemsDueToday.length > 10 && (
+                      <div className="text-muted small pt-1">Showing top 10 of {sortedTaskItemsDueToday.length} tasks</div>
+                    )}
+                    </div>
                   )}
                 </Card.Body>
           </Card>
