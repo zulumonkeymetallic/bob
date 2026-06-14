@@ -22,9 +22,11 @@ import { useAuth } from '../../contexts/AuthContext';
 import { usePersona } from '../../contexts/PersonaContext';
 import { useSidebar } from '../../contexts/SidebarContext';
 import { Story, Goal, Task, Sprint } from '../../types';
+import SprintPlannerWizard from './SprintPlannerWizard';
 import { generateRef } from '../../utils/referenceGenerator';
 import { isStatus, isTheme, isPriority, getThemeClass, getPriorityColor, getBadgeVariant, getThemeName, getStatusName, getPriorityName, getPriorityIcon } from '../../utils/statusHelpers';
 import { useSprint } from '../../contexts/SprintContext';
+import { useSearchParams } from 'react-router-dom';
 
 // BOB v3.5.6 - Sprint Management with Database Integration
 // Replaces /kanban route with comprehensive sprint management
@@ -34,14 +36,15 @@ const SprintManagementView: React.FC = () => {
   const { currentPersona } = usePersona();
   const { showSidebar } = useSidebar();
   const { selectedSprintId, setSelectedSprintId, sprints } = useSprint();
-  
+  const [searchParams, setSearchParams] = useSearchParams();
+
   // State management
   const [stories, setStories] = useState<Story[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [selectedSprint, setSelectedSprint] = useState<Sprint | null>(null);
   const [selectedStory, setSelectedStory] = useState<Story | null>(null);
-  const [showSprintModal, setShowSprintModal] = useState(false);
+  const [showSprintModal, setShowSprintModal] = useState(() => searchParams.get('wizard') === 'true');
   const [showAddTask, setShowAddTask] = useState(false);
   const [activeTab, setActiveTab] = useState<'overview' | 'board' | 'burndown' | 'retrospective'>('board');
   
@@ -773,27 +776,12 @@ const SprintManagementView: React.FC = () => {
         </Modal.Footer>
       </Modal>
 
-      {/* Sprint Modal placeholder */}
-      <Modal show={showSprintModal} onHide={() => setShowSprintModal(false)}>
-        <Modal.Header closeButton>
-          <Modal.Title>Create New Sprint</Modal.Title>
-        </Modal.Header>
-        <Modal.Body>
-          <div className="text-center text-muted py-4">
-            <Calendar size={48} className="mb-3" />
-            <h5>Sprint Creation</h5>
-            <p>Sprint creation form will be implemented here.</p>
-          </div>
-        </Modal.Body>
-        <Modal.Footer>
-          <Button variant="secondary" onClick={() => setShowSprintModal(false)}>
-            Cancel
-          </Button>
-          <Button variant="primary" disabled>
-            Create Sprint
-          </Button>
-        </Modal.Footer>
-      </Modal>
+      <SprintPlannerWizard
+        show={showSprintModal}
+        onHide={() => { setShowSprintModal(false); searchParams.delete('wizard'); setSearchParams(searchParams); }}
+        currentUserId={currentUser?.uid}
+        onComplete={() => { setShowSprintModal(false); searchParams.delete('wizard'); setSearchParams(searchParams); }}
+      />
     </Container>
   );
 };

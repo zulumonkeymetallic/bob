@@ -12,6 +12,7 @@ import GlobalSearchBar from './GlobalSearchBar';
 import CompactSprintMetrics from './CompactSprintMetrics';
 import AssistantDock from './AssistantDock';
 import SprintClosureBanner from './sprints/SprintClosureBanner';
+import PlannedSprintBanner from './sprints/PlannedSprintBanner';
 import CheckInBanner from './checkins/CheckInBanner';
 import { CoachVerdictBanner } from './coach/CoachVerdictBanner';
 import ProcessTextActivityHost from './ProcessTextActivityHost';
@@ -749,6 +750,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
             <CoachVerdictBanner />
             {!hidePlannerCapacityBanner && <PlannerCapacityBanner />}
             <SprintClosureBanner />
+            <PlannedSprintBanner />
             {!isSmallScreen && <GlobalGoalFocusBanner />}
             {!isSmallScreen && <GlobalIntegrationStatus />}
             <ProcessTextActivityHost />

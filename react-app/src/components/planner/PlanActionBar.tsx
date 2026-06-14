@@ -10,6 +10,7 @@ import {
   Layers3,
   Timer,
   Route,
+  Wand2,
 } from 'lucide-react';
 import {
   buildPlannerPath,
@@ -114,6 +115,11 @@ const PlanActionBar: React.FC<PlanActionBarProps> = ({ className }) => {
           >
             <Calendar size={14} className="me-1" />
             Weekly Capacity
+          </Dropdown.Item>
+          <Dropdown.Divider />
+          <Dropdown.Item onClick={() => navigate('/sprints/management?wizard=true')}>
+            <Wand2 size={14} className="me-1" />
+            Plan Sprint (Wizard)
           </Dropdown.Item>
         </Dropdown.Menu>
       </Dropdown>

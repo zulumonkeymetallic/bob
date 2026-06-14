@@ -29,6 +29,7 @@ import PlanActionBar from './planner/PlanActionBar';
 import ThemeMultiSelect from './shared/ThemeMultiSelect';
 import GoalMultiSelect from './shared/GoalMultiSelect';
 import { useDetailLevel, type DetailLevel } from '../contexts/DetailLevelContext';
+import SprintPlannerWizard from './sprints/SprintPlannerWizard';
 
 // Normalize sprint identifiers so we handle doc refs, strings, and legacy placeholders
 const normalizeSprintId = (value: any): string | null => {
@@ -323,6 +324,7 @@ const SprintPlanningMatrix: React.FC = () => {
   const [goals, setGoals] = useState<Goal[]>([]);
   const [loading, setLoading] = useState(true);
   const [moveError, setMoveError] = useState<string | null>(null);
+  const [showPlannerWizard, setShowPlannerWizard] = useState(false);
   const [deferTarget, setDeferTarget] = useState<Story | null>(null);
   const [deferPromptMessage, setDeferPromptMessage] = useState<string | null>(null);
   const [showDescriptions, setShowDescriptions] = useState(false);
@@ -914,9 +916,9 @@ const SprintPlanningMatrix: React.FC = () => {
                   {isFullscreen ? <Minimize2 size={16} style={{ marginRight: 6 }} /> : <Maximize2 size={16} style={{ marginRight: 6 }} />}
                   {isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
                 </Button>
-                <Button variant="primary" href="/sprints/new">
+                <Button variant="primary" onClick={() => setShowPlannerWizard(true)}>
                   <Plus size={16} style={{ marginRight: '8px' }} />
-                  Create Sprint
+                  Plan Sprint
                 </Button>
               </div>
             </div>
@@ -1380,6 +1382,11 @@ const SprintPlanningMatrix: React.FC = () => {
           }}
         />
       )}
+      <SprintPlannerWizard
+        show={showPlannerWizard}
+        onHide={() => setShowPlannerWizard(false)}
+        onComplete={() => setShowPlannerWizard(false)}
+      />
     </Container>
   );
 };
