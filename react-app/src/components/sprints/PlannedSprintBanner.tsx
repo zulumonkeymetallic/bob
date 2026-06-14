@@ -34,12 +34,17 @@ const PlannedSprintBanner: React.FC = () => {
       where('persona', '==', currentPersona),
       where('status', '==', 0),
     );
-    return onSnapshot(q, snap => {
-      const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as Sprint));
-      // Only show if there is no currently active sprint (status=1)
-      // We load active separately via a quick check
-      setPlannedSprints(list);
-    });
+    return onSnapshot(
+      q,
+      snap => {
+        const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as Sprint));
+        setPlannedSprints(list);
+      },
+      err => {
+        console.warn('PlannedSprintBanner: planned sprints query error', err?.code || err);
+        setPlannedSprints([]);
+      },
+    );
   }, [currentUser, currentPersona]);
 
   const [hasActive, setHasActive] = useState(false);
@@ -51,7 +56,14 @@ const PlannedSprintBanner: React.FC = () => {
       where('persona', '==', currentPersona),
       where('status', '==', 1),
     );
-    return onSnapshot(q, snap => setHasActive(!snap.empty));
+    return onSnapshot(
+      q,
+      snap => setHasActive(!snap.empty),
+      err => {
+        console.warn('PlannedSprintBanner: active sprints query error', err?.code || err);
+        setHasActive(false);
+      },
+    );
   }, [currentUser, currentPersona]);
 
   const visible = plannedSprints.filter(s => !dismissed.has(s.id));
