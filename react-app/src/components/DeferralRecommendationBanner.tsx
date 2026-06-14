@@ -1,6 +1,8 @@
 import React, { useCallback, useState } from 'react';
 import { Alert, Badge, Button } from 'react-bootstrap';
-import { CalendarClock, ChevronDown, ChevronRight } from 'lucide-react';
+import { CalendarClock, CheckCircle, ChevronDown, ChevronRight, Trash2 } from 'lucide-react';
+import { doc, deleteDoc, updateDoc } from 'firebase/firestore';
+import { db } from '../firebase';
 import { useDeferralCandidates, type DeferralCandidate, type OverCapacityMove } from '../hooks/useDeferralCandidates';
 import { applyPlannerDefer, applyPlannerMoveToSprint, applyStoryDueDate } from '../utils/plannerDeferral';
 
@@ -124,6 +126,36 @@ const DeferralRecommendationBanner: React.FC<Props> = ({ compact = false }) => {
     setBulkApplying(false);
     setStatusMsg(`Moved ${moved} ${moved === 1 ? 'story' : 'stories'} to ${(nextSprint as any).name || 'next sprint'}.`);
   }, [nextSprint, overCapacityMoves, actioned]);
+
+  const handleMarkComplete = useCallback(async (candidate: DeferralCandidate) => {
+    setActioningId(candidate.id);
+    setStatusMsg(null);
+    try {
+      const col = candidate.type === 'task' ? 'tasks' : 'stories';
+      await updateDoc(doc(db, col, candidate.id), { status: 3 });
+      markActioned(candidate.id);
+      setStatusMsg('Marked as complete.');
+    } catch (err: any) {
+      setStatusMsg(err?.message || 'Failed to mark complete.');
+    } finally {
+      setActioningId(null);
+    }
+  }, []);
+
+  const handleDelete = useCallback(async (candidate: DeferralCandidate) => {
+    setActioningId(candidate.id);
+    setStatusMsg(null);
+    try {
+      const col = candidate.type === 'task' ? 'tasks' : 'stories';
+      await deleteDoc(doc(db, col, candidate.id));
+      markActioned(candidate.id);
+      setStatusMsg('Deleted.');
+    } catch (err: any) {
+      setStatusMsg(err?.message || 'Failed to delete.');
+    } finally {
+      setActioningId(null);
+    }
+  }, []);
 
   const visibleOverCapacity = overCapacityMoves.filter((m) => !actioned.has(m.id));
 
@@ -314,6 +346,8 @@ const DeferralRecommendationBanner: React.FC<Props> = ({ compact = false }) => {
                     >
                       {actioningId === c.id ? 'Scheduling…' : `Schedule by ${formatDate(c.targetDateMs)}`}
                     </Button>
+                    <button title="Mark complete" disabled={actioningId === c.id} onClick={() => handleMarkComplete(c)} style={{ border: 'none', background: 'transparent', color: 'var(--bs-success)', padding: '2px 4px', cursor: 'pointer' }}><CheckCircle size={14} /></button>
+                    <button title="Delete" disabled={actioningId === c.id} onClick={() => handleDelete(c)} style={{ border: 'none', background: 'transparent', color: 'var(--bs-danger)', padding: '2px 4px', cursor: 'pointer' }}><Trash2 size={14} /></button>
                   </div>
                 ))}
               </>
@@ -347,6 +381,8 @@ const DeferralRecommendationBanner: React.FC<Props> = ({ compact = false }) => {
                         Create next sprint to enable
                       </Button>
                     )}
+                    <button title="Mark complete" disabled={actioningId === c.id} onClick={() => handleMarkComplete(c)} style={{ border: 'none', background: 'transparent', color: 'var(--bs-success)', padding: '2px 4px', cursor: 'pointer' }}><CheckCircle size={14} /></button>
+                    <button title="Delete" disabled={actioningId === c.id} onClick={() => handleDelete(c)} style={{ border: 'none', background: 'transparent', color: 'var(--bs-danger)', padding: '2px 4px', cursor: 'pointer' }}><Trash2 size={14} /></button>
                   </div>
                 ))}
               </>
@@ -374,6 +410,8 @@ const DeferralRecommendationBanner: React.FC<Props> = ({ compact = false }) => {
                     >
                       {actioningId === c.id ? 'Deferring…' : `Defer to ${formatDate(c.targetDateMs)}`}
                     </Button>
+                    <button title="Mark complete" disabled={actioningId === c.id} onClick={() => handleMarkComplete(c)} style={{ border: 'none', background: 'transparent', color: 'var(--bs-success)', padding: '2px 4px', cursor: 'pointer' }}><CheckCircle size={14} /></button>
+                    <button title="Delete" disabled={actioningId === c.id} onClick={() => handleDelete(c)} style={{ border: 'none', background: 'transparent', color: 'var(--bs-danger)', padding: '2px 4px', cursor: 'pointer' }}><Trash2 size={14} /></button>
                   </div>
                 ))}
               </>

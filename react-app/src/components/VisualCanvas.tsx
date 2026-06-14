@@ -23,7 +23,7 @@ import {
   updateDoc,
   where,
 } from 'firebase/firestore';
-import { ZoomIn, ZoomOut, RotateCcw, Link2, Link2Off, Filter, GitBranch, Rows3, Info } from 'lucide-react';
+import { ZoomIn, ZoomOut, RotateCcw, Link2, Link2Off, Filter, GitBranch, Rows3, Info, Pencil } from 'lucide-react';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import type { Goal, Story, Task, Sprint } from '../types';
@@ -36,6 +36,7 @@ import ThemeMultiSelect from './shared/ThemeMultiSelect';
 import SprintMultiSelect from './shared/SprintMultiSelect';
 import ShareGoalsPanel from './shared/ShareGoalsPanel';
 import GoalCard from './GoalCard';
+import EditGoalModal from './EditGoalModal';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -185,7 +186,8 @@ const NodeCard: React.FC<{
   detailLevel: 'minimal' | 'compact' | 'full';
   isFocusAligned?: boolean;
   onClick: () => void;
-}> = ({ node, nodeW, selected, linkSource, linkTarget, linkMode, detailLevel, isFocusAligned = false, onClick }) => {
+  onEdit?: (goal: Goal) => void;
+}> = ({ node, nodeW, selected, linkSource, linkTarget, linkMode, detailLevel, isFocusAligned = false, onClick, onEdit }) => {
   const col  = node.col;
   const data = node.data as any;
 
@@ -219,6 +221,15 @@ const NodeCard: React.FC<{
         detailLevel={detailLevel}
         maxWidth={nodeW}
         onClick={onClick}
+        actions={onEdit && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onEdit(data as Goal); }}
+            style={{ border: 'none', background: 'transparent', color: 'var(--muted)', padding: '2px 4px', cursor: 'pointer', marginLeft: 'auto', display: 'flex' }}
+            title="Edit goal"
+          >
+            <Pencil size={11} />
+          </button>
+        )}
       />
     );
   }
@@ -291,6 +302,8 @@ const VisualCanvas: React.FC = () => {
   const [showStories,      setShowStories]      = useState(true);
   const [showTasks,        setShowTasks]        = useState(false);
   const [canvasDetailLevel, setCanvasDetailLevel] = useState<'minimal' | 'compact' | 'full'>('minimal');
+  const [nodeSort, setNodeSort] = useState<'default' | 'due' | 'start'>('default');
+  const [editingGoal, setEditingGoal] = useState<Goal | null>(null);
 
   // ── Layout ───────────────────────────────────────────────────────────────────
   const [viewLayout, setViewLayout] = useState<ViewLayout>('tree');
@@ -395,8 +408,14 @@ const VisualCanvas: React.FC = () => {
       return true;
     }) : [];
 
+    const sortItems = (items: any[]): any[] => {
+      if (nodeSort === 'due')   return [...items].sort((a, b) => (a.endDate ?? a.dueDate ?? 9e15) - (b.endDate ?? b.dueDate ?? 9e15));
+      if (nodeSort === 'start') return [...items].sort((a, b) => (a.startDate ?? 9e15) - (b.startDate ?? 9e15));
+      return items;
+    };
+
     const buildNodes = (items: any[], col: ColType, parentIdFn: (item: any) => string[]): CanvasNode[] =>
-      items.map((item, i) => ({
+      sortItems(items).map((item, i) => ({
         id: item.id,
         col,
         colIndex: i,
@@ -430,7 +449,7 @@ const VisualCanvas: React.FC = () => {
   }, [
     goals, stories, tasks, focusGoals, focusGoalIds,
     filterThemeIds, filterSprintIds, activeOnly, focusOnly,
-    showStories, showTasks, searchTerm,
+    showStories, showTasks, searchTerm, nodeSort,
   ]);
 
   const nodeMap = useMemo(() => new Map(nodes.map(n => [n.id, n])), [nodes]);
@@ -712,6 +731,17 @@ const VisualCanvas: React.FC = () => {
           <option value="compact">Detail: Compact</option>
           <option value="full">Detail: Full</option>
         </Form.Select>
+        <Form.Select
+          size="sm"
+          value={nodeSort}
+          onChange={(e) => setNodeSort(e.target.value as any)}
+          title="Sort nodes"
+          style={{ width: 'auto' }}
+        >
+          <option value="default">Sort: Default</option>
+          <option value="due">Sort: Due date</option>
+          <option value="start">Sort: Start date</option>
+        </Form.Select>
 
         <div className="vr" />
 
@@ -769,6 +799,50 @@ const VisualCanvas: React.FC = () => {
           Source selected: <strong>{(nodeMap.get(linkSource)?.data as any)?.title || linkSource}</strong> — click the target node
         </div>
       )}
+
+      {/* Theme legend chips */}
+      {(() => {
+        const presentThemes = GLOBAL_THEMES.filter(t =>
+          goals.some(g => g.theme === t.id)
+        );
+        if (presentThemes.length === 0) return null;
+        return (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '6px 12px', borderBottom: '1px solid var(--notion-border)', background: 'var(--notion-bg, #fff)' }}>
+            {presentThemes.map(t => {
+              const active = filterThemeIds.length === 0 || filterThemeIds.includes(t.id);
+              return (
+                <span
+                  key={t.id}
+                  onClick={() => {
+                    setFilterThemeIds(prev =>
+                      prev.includes(t.id) ? prev.filter(x => x !== t.id) : [...prev, t.id]
+                    );
+                  }}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 4,
+                    padding: '2px 8px', borderRadius: 12, fontSize: 11, cursor: 'pointer',
+                    background: active ? t.color : 'transparent',
+                    color: active ? '#fff' : t.color,
+                    border: `1px solid ${t.color}`,
+                    opacity: active ? 1 : 0.6,
+                    transition: 'opacity 0.15s',
+                  }}
+                >
+                  {t.label}
+                </span>
+              );
+            })}
+            {filterThemeIds.length > 0 && (
+              <span
+                onClick={() => setFilterThemeIds([])}
+                style={{ fontSize: 11, color: 'var(--bs-secondary)', cursor: 'pointer', alignSelf: 'center' }}
+              >
+                Clear
+              </span>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Canvas */}
       <div
@@ -883,6 +957,7 @@ const VisualCanvas: React.FC = () => {
                       detailLevel={canvasDetailLevel}
                       isFocusAligned={focusGoalIds.has(node.id)}
                       onClick={() => handleNodeClick(node)}
+                      onEdit={(node.col === 'focus' || node.col === 'umbrella' || node.col === 'phase') ? setEditingGoal : undefined}
                     />
                   </div>
                 );
@@ -921,6 +996,7 @@ const VisualCanvas: React.FC = () => {
                       detailLevel={canvasDetailLevel}
                       isFocusAligned={focusGoalIds.has(node.id)}
                       onClick={() => handleNodeClick(node)}
+                      onEdit={(node.col === 'focus' || node.col === 'umbrella' || node.col === 'phase') ? setEditingGoal : undefined}
                     />
                   </div>
                 );
@@ -962,6 +1038,17 @@ const VisualCanvas: React.FC = () => {
             : 'Swimlane view — drag to pan · scroll to zoom · Link Mode to create relationships'}
         </span>
       </div>
+
+      {/* Edit Goal Modal */}
+      {editingGoal && (
+        <EditGoalModal
+          show={Boolean(editingGoal)}
+          goal={editingGoal}
+          onClose={() => setEditingGoal(null)}
+          currentUserId={currentUser?.uid ?? ''}
+          allGoals={goals}
+        />
+      )}
     </div>
   );
 };

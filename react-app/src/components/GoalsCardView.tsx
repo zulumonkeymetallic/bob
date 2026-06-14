@@ -34,6 +34,7 @@ interface GoalsCardViewProps {
   themes?: GlobalTheme[];
   cardLayout?: 'grid' | 'comfortable';
   showDescriptions?: boolean;
+  detailLevel?: 'minimal' | 'compact' | 'full';
   goalKpiStatusByGoalId?: Record<string, {
     goalId: string;
     goalTitle: string;
@@ -57,6 +58,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
   themes,
   cardLayout = 'grid',
   showDescriptions,
+  detailLevel = 'compact',
   goalKpiStatusByGoalId
 }) => {
   const { showSidebar } = useSidebar();
@@ -755,7 +757,9 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
           const kpiProgressLabel = effectiveGoalKpiStatus.progressPct != null
             ? `${Math.round(effectiveGoalKpiStatus.progressPct)}%${effectiveGoalKpiStatus.expectedProgressPct != null ? ` (exp ${Math.round(effectiveGoalKpiStatus.expectedProgressPct)}%)` : ''}`
             : 'n/a';
-          const shouldShowDescription = showDescriptionsResolved && !!goal.description;
+          const shouldShowDescription = detailLevel !== 'minimal' && showDescriptionsResolved && !!goal.description;
+          const shouldShowKpiProgress = detailLevel !== 'minimal';
+          const shouldShowActivity = detailLevel === 'full';
           const latestActivityLabel = latestActivity
             ? latestActivity.activityType === 'note_added'
               ? 'Latest Comment'
@@ -971,7 +975,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                   </div>
                 )}
 
-                {!showDetailed && (
+                {!showDetailed && shouldShowKpiProgress && (
                   <div className="goals-card-quick-stats">
                     <div className="goals-card-progress">
                       <div className="goals-card-progress__header">
@@ -1170,6 +1174,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                         ) : null;
                       })()}
                     </div>
+                    {shouldShowActivity && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                       <div style={{ display: 'flex', alignItems: 'center' }}>
                         <Calendar size={12} style={{ marginRight: '4px' }} />
@@ -1192,6 +1197,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                         ) : null;
                       })()}
                     </div>
+                    )}
                   </div>
                   <div />
                 </div>

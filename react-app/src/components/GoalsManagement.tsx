@@ -20,7 +20,7 @@ import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import ConfirmDialog from './ConfirmDialog';
 import { arrayMove } from '@dnd-kit/sortable';
 import { useSidebar } from '../contexts/SidebarContext';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { AlignLeft, ChevronLeft, ChevronRight, LayoutGrid, Minimize2 } from 'lucide-react';
 import { computeWindowExpectedProgress, evaluateGoalTargetStatus } from '../utils/goalKpiStatus';
 import { goalNeedsLinkedPot } from '../utils/goalCost';
 
@@ -39,6 +39,9 @@ const GoalsManagement: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'list' | 'cards'>('cards');
+  const [cardDetailLevel, setCardDetailLevel] = useState<'minimal' | 'compact' | 'full'>(() =>
+    (localStorage.getItem('bob_goals_detail_level') as 'minimal' | 'compact' | 'full' | null) || 'compact'
+  );
   const [showAddGoal, setShowAddGoal] = useState(false);
   const [showGoalDescriptions, setShowGoalDescriptions] = useState<boolean>(() => {
     try {
@@ -711,6 +714,22 @@ const GoalsManagement: React.FC = () => {
                 Cards
               </Button>
             </div>
+            {viewMode === 'cards' && (
+              <div style={{ display: 'flex', border: '1px solid var(--notion-border)', borderRadius: 6, overflow: 'hidden' }}>
+                {(['minimal', 'compact', 'full'] as const).map((level) => (
+                  <Button
+                    key={level}
+                    size="sm"
+                    variant={cardDetailLevel === level ? 'primary' : 'outline-secondary'}
+                    title={level.charAt(0).toUpperCase() + level.slice(1)}
+                    onClick={() => { setCardDetailLevel(level); localStorage.setItem('bob_goals_detail_level', level); }}
+                    style={{ borderRadius: 0, padding: '4px 8px' }}
+                  >
+                    {level === 'minimal' ? <Minimize2 size={14} /> : level === 'compact' ? <LayoutGrid size={14} /> : <AlignLeft size={14} />}
+                  </Button>
+                ))}
+              </div>
+            )}
             <Button variant="primary" onClick={() => setShowAddGoal(true)}>
               Add Goal
             </Button>
@@ -975,6 +994,7 @@ const GoalsManagement: React.FC = () => {
                     themes={globalThemes}
                     cardLayout="grid"
                     showDescriptions={showGoalDescriptions}
+                    detailLevel={cardDetailLevel}
                     goalKpiStatusByGoalId={goalKpiStatusByGoalId}
                   />
                 )}
