@@ -135,6 +135,9 @@ const SettingsPage: React.FC = () => {
   const [saveProfileMsg, setSaveProfileMsg] = useState<string>('');
   const [saveProfileError, setSaveProfileError] = useState<string>('');
   const [savingProfile, setSavingProfile] = useState<boolean>(false);
+  const [savingTargets, setSavingTargets] = useState<boolean>(false);
+  const [saveTargetsMsg, setSaveTargetsMsg] = useState<string>('');
+  const [saveTargetsError, setSaveTargetsError] = useState<string>('');
   const [savingLocation, setSavingLocation] = useState<boolean>(false);
   const [saveLocationMsg, setSaveLocationMsg] = useState('');
   const [saveLocationError, setSaveLocationError] = useState('');
@@ -1154,7 +1157,149 @@ firebase deploy --only functions:remindersPush,functions:remindersPull --project
 
                     <Card className="mb-3">
                       <Card.Body>
-                        <h5 className="mb-2">Fitness & Integrations</h5>
+                        <h5 className="mb-2">Health Targets</h5>
+                        <p className="text-muted small mb-3">These feed the dashboard health card, /fitness compliance cards, and nutrition trends across the app.</p>
+                        <Row className="g-3">
+                          <Col md={3}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Weight Target (kg)</Form.Label>
+                              <Form.Control type="number" step="0.1" placeholder="e.g., 82.5" value={targetWeightKg} onChange={(e) => setTargetWeightKg(e.target.value)} />
+                            </Form.Group>
+                          </Col>
+                          <Col md={3}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Body Fat Target (%)</Form.Label>
+                              <Form.Control type="number" step="0.1" placeholder="e.g., 15" value={targetBodyFatPct} onChange={(e) => setTargetBodyFatPct(e.target.value)} />
+                            </Form.Group>
+                          </Col>
+                          <Col md={3}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Steps Target / day</Form.Label>
+                              <Form.Control type="number" step="100" placeholder="e.g., 10000" value={targetStepsPerDay} onChange={(e) => setTargetStepsPerDay(e.target.value)} />
+                            </Form.Group>
+                          </Col>
+                          <Col md={3}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Distance Target (km/day)</Form.Label>
+                              <Form.Control type="number" step="0.1" placeholder="e.g., 5" value={targetDistanceKmPerDay} onChange={(e) => setTargetDistanceKmPerDay(e.target.value)} />
+                            </Form.Group>
+                          </Col>
+                          <Col md={3}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Protein Target (g/day)</Form.Label>
+                              <Form.Control type="number" step="1" placeholder="e.g., 180" value={targetProteinG} onChange={(e) => setTargetProteinG(e.target.value)} />
+                            </Form.Group>
+                          </Col>
+                          <Col md={3}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Fat Target (g/day)</Form.Label>
+                              <Form.Control type="number" step="1" placeholder="e.g., 70" value={targetFatG} onChange={(e) => setTargetFatG(e.target.value)} />
+                            </Form.Group>
+                          </Col>
+                          <Col md={3}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Carbs Target (g/day)</Form.Label>
+                              <Form.Control type="number" step="1" placeholder="e.g., 250" value={targetCarbsG} onChange={(e) => setTargetCarbsG(e.target.value)} />
+                            </Form.Group>
+                          </Col>
+                          <Col md={3}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Calories Target (kcal/day)</Form.Label>
+                              <Form.Control type="number" step="10" placeholder="e.g., 1400" value={targetCaloriesKcal} onChange={(e) => setTargetCaloriesKcal(e.target.value)} />
+                            </Form.Group>
+                          </Col>
+                          <Col md={3}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Workout mins/week</Form.Label>
+                              <Form.Control type="number" step="5" placeholder="Leave blank to derive" value={targetWorkoutMinutesPerWeek} onChange={(e) => setTargetWorkoutMinutesPerWeek(e.target.value)} />
+                              <Form.Text className="text-muted">Leave blank to derive from awake/work hours and training %.</Form.Text>
+                            </Form.Group>
+                          </Col>
+                          <Col md={3}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Awake Hours / day</Form.Label>
+                              <Form.Control type="number" step="0.5" placeholder="e.g., 16" value={targetAwakeHoursPerDay} onChange={(e) => setTargetAwakeHoursPerDay(e.target.value)} />
+                            </Form.Group>
+                          </Col>
+                          <Col md={3}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Work Hours / day</Form.Label>
+                              <Form.Control type="number" step="0.5" placeholder="e.g., 8" value={targetWorkHoursPerDay} onChange={(e) => setTargetWorkHoursPerDay(e.target.value)} />
+                            </Form.Group>
+                          </Col>
+                          <Col md={3}>
+                            <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Workout % of free time</Form.Label>
+                              <Form.Control type="number" step="1" placeholder="e.g., 20" value={targetWorkoutPctOfFreeTime} onChange={(e) => setTargetWorkoutPctOfFreeTime(e.target.value)} />
+                            </Form.Group>
+                          </Col>
+                        </Row>
+                        <Row className="g-3 mt-2 align-items-center">
+                          <Col md="auto">
+                            <Button
+                              variant="primary"
+                              disabled={savingTargets}
+                              onClick={async () => {
+                                if (!currentUser) return;
+                                setSavingTargets(true);
+                                setSaveTargetsError('');
+                                try {
+                                  await setDoc(doc(db, 'profiles', currentUser.uid), {
+                                    ownerUid: currentUser.uid,
+                                    targetWeightKg: targetWeightKg.trim() !== '' ? Number(targetWeightKg) : null,
+                                    healthTargetWeightKg: targetWeightKg.trim() !== '' ? Number(targetWeightKg) : null,
+                                    targetBodyFatPct: targetBodyFatPct.trim() !== '' ? Number(targetBodyFatPct) : null,
+                                    healthTargetBodyFatPct: targetBodyFatPct.trim() !== '' ? Number(targetBodyFatPct) : null,
+                                    targetStepsPerDay: targetStepsPerDay.trim() !== '' ? Number(targetStepsPerDay) : null,
+                                    dailyStepTarget: targetStepsPerDay.trim() !== '' ? Number(targetStepsPerDay) : null,
+                                    healthTargetStepsPerDay: targetStepsPerDay.trim() !== '' ? Number(targetStepsPerDay) : null,
+                                    targetDistanceKmPerDay: targetDistanceKmPerDay.trim() !== '' ? Number(targetDistanceKmPerDay) : null,
+                                    dailyDistanceTargetKm: targetDistanceKmPerDay.trim() !== '' ? Number(targetDistanceKmPerDay) : null,
+                                    healthTargetDistanceKmPerDay: targetDistanceKmPerDay.trim() !== '' ? Number(targetDistanceKmPerDay) : null,
+                                    weeklyWorkoutTargetMinutes: targetWorkoutMinutesPerWeek.trim() !== '' ? Number(targetWorkoutMinutesPerWeek) : null,
+                                    targetWorkoutMinutesPerWeek: targetWorkoutMinutesPerWeek.trim() !== '' ? Number(targetWorkoutMinutesPerWeek) : null,
+                                    healthTargetWorkoutMinutesWeekly: targetWorkoutMinutesPerWeek.trim() !== '' ? Number(targetWorkoutMinutesPerWeek) : null,
+                                    awakeHoursPerDay: targetAwakeHoursPerDay.trim() !== '' ? Number(targetAwakeHoursPerDay) : null,
+                                    targetAwakeHoursPerDay: targetAwakeHoursPerDay.trim() !== '' ? Number(targetAwakeHoursPerDay) : null,
+                                    workHoursPerDay: targetWorkHoursPerDay.trim() !== '' ? Number(targetWorkHoursPerDay) : null,
+                                    targetWorkHoursPerDay: targetWorkHoursPerDay.trim() !== '' ? Number(targetWorkHoursPerDay) : null,
+                                    targetWorkoutPctOfFreeTime: targetWorkoutPctOfFreeTime.trim() !== '' ? Number(targetWorkoutPctOfFreeTime) : null,
+                                    weeklyWorkoutTargetPercent: targetWorkoutPctOfFreeTime.trim() !== '' ? Number(targetWorkoutPctOfFreeTime) : null,
+                                    targetProteinG: targetProteinG.trim() !== '' ? Number(targetProteinG) : null,
+                                    dailyProteinTargetG: targetProteinG.trim() !== '' ? Number(targetProteinG) : null,
+                                    healthTargetProteinG: targetProteinG.trim() !== '' ? Number(targetProteinG) : null,
+                                    targetFatG: targetFatG.trim() !== '' ? Number(targetFatG) : null,
+                                    dailyFatTargetG: targetFatG.trim() !== '' ? Number(targetFatG) : null,
+                                    healthTargetFatG: targetFatG.trim() !== '' ? Number(targetFatG) : null,
+                                    targetCarbsG: targetCarbsG.trim() !== '' ? Number(targetCarbsG) : null,
+                                    dailyCarbsTargetG: targetCarbsG.trim() !== '' ? Number(targetCarbsG) : null,
+                                    healthTargetCarbsG: targetCarbsG.trim() !== '' ? Number(targetCarbsG) : null,
+                                    targetCaloriesKcal: targetCaloriesKcal.trim() !== '' ? Number(targetCaloriesKcal) : null,
+                                    dailyCaloriesTargetKcal: targetCaloriesKcal.trim() !== '' ? Number(targetCaloriesKcal) : null,
+                                    healthTargetCaloriesKcal: targetCaloriesKcal.trim() !== '' ? Number(targetCaloriesKcal) : null,
+                                    updatedAt: serverTimestamp(),
+                                  }, { merge: true });
+                                  setSaveTargetsMsg('Targets saved');
+                                  setTimeout(() => setSaveTargetsMsg(''), 3000);
+                                } catch (e: any) {
+                                  setSaveTargetsError(e?.message || 'Failed to save');
+                                } finally {
+                                  setSavingTargets(false);
+                                }
+                              }}
+                            >
+                              {savingTargets ? 'Saving…' : 'Save Targets'}
+                            </Button>
+                          </Col>
+                          {saveTargetsMsg && <Col md="auto"><span className="text-success">{saveTargetsMsg}</span></Col>}
+                          {saveTargetsError && <Col md="auto"><span className="text-danger small">{saveTargetsError}</span></Col>}
+                        </Row>
+                      </Card.Body>
+                    </Card>
+
+                    <Card className="mb-3">
+                      <Card.Body>
+                        <h5 className="mb-2">Fitness Integrations</h5>
                         <Row className="g-3 align-items-end">
                           <Col md={6}>
                             <Form.Group>
@@ -1250,162 +1395,6 @@ firebase deploy --only functions:remindersPush,functions:remindersPull --project
                           <Col md={3}>
                             {saveProfileMsg && <span className="text-success">{saveProfileMsg}</span>}
                             {saveProfileError && <span className="text-danger">{saveProfileError}</span>}
-                          </Col>
-                        </Row>
-                        <Row className="g-3 mt-1">
-                          <Col md={3}>
-                            <Form.Group>
-                              <Form.Label style={{ color: colors.primary }}>Weight Target (kg)</Form.Label>
-                              <Form.Control
-                                type="number"
-                                step="0.1"
-                                placeholder="e.g., 82.5"
-                                value={targetWeightKg}
-                                onChange={(e) => setTargetWeightKg(e.target.value)}
-                              />
-                            </Form.Group>
-                          </Col>
-                          <Col md={3}>
-                            <Form.Group>
-                              <Form.Label style={{ color: colors.primary }}>Body Fat Target (%)</Form.Label>
-                              <Form.Control
-                                type="number"
-                                step="0.1"
-                                placeholder="e.g., 15"
-                                value={targetBodyFatPct}
-                                onChange={(e) => setTargetBodyFatPct(e.target.value)}
-                              />
-                            </Form.Group>
-                          </Col>
-                          <Col md={3}>
-                            <Form.Group>
-                              <Form.Label style={{ color: colors.primary }}>Steps Target</Form.Label>
-                              <Form.Control
-                                type="number"
-                                step="100"
-                                placeholder="e.g., 10000"
-                                value={targetStepsPerDay}
-                                onChange={(e) => setTargetStepsPerDay(e.target.value)}
-                              />
-                            </Form.Group>
-                          </Col>
-                          <Col md={3}>
-                            <Form.Group>
-                              <Form.Label style={{ color: colors.primary }}>Distance Target (km/day)</Form.Label>
-                              <Form.Control
-                                type="number"
-                                step="0.1"
-                                placeholder="e.g., 5"
-                                value={targetDistanceKmPerDay}
-                                onChange={(e) => setTargetDistanceKmPerDay(e.target.value)}
-                              />
-                            </Form.Group>
-                          </Col>
-                          <Col md={3}>
-                            <Form.Group>
-                              <Form.Label style={{ color: colors.primary }}>Workout Target Override (min/week)</Form.Label>
-                              <Form.Control
-                                type="number"
-                                step="5"
-                                placeholder="Leave blank to derive"
-                                value={targetWorkoutMinutesPerWeek}
-                                onChange={(e) => setTargetWorkoutMinutesPerWeek(e.target.value)}
-                              />
-                              <Form.Text className="text-muted">Optional explicit override. Leave blank to derive from awake/work hours and training %.</Form.Text>
-                            </Form.Group>
-                          </Col>
-                          <Col md={3}>
-                            <Form.Group>
-                              <Form.Label style={{ color: colors.primary }}>Awake Hours / Day</Form.Label>
-                              <Form.Control
-                                type="number"
-                                step="0.5"
-                                placeholder="e.g., 16"
-                                value={targetAwakeHoursPerDay}
-                                onChange={(e) => setTargetAwakeHoursPerDay(e.target.value)}
-                              />
-                            </Form.Group>
-                          </Col>
-                          <Col md={3}>
-                            <Form.Group>
-                              <Form.Label style={{ color: colors.primary }}>Work Hours / Day</Form.Label>
-                              <Form.Control
-                                type="number"
-                                step="0.5"
-                                placeholder="e.g., 8"
-                                value={targetWorkHoursPerDay}
-                                onChange={(e) => setTargetWorkHoursPerDay(e.target.value)}
-                              />
-                            </Form.Group>
-                          </Col>
-                          <Col md={3}>
-                            <Form.Group>
-                              <Form.Label style={{ color: colors.primary }}>Workout % Of Free Time</Form.Label>
-                              <Form.Control
-                                type="number"
-                                step="1"
-                                placeholder="e.g., 20"
-                                value={targetWorkoutPctOfFreeTime}
-                                onChange={(e) => setTargetWorkoutPctOfFreeTime(e.target.value)}
-                              />
-                            </Form.Group>
-                          </Col>
-                        </Row>
-                        <Row className="g-3 mt-1">
-                          <Col md={3}>
-                            <Form.Group>
-                              <Form.Label style={{ color: colors.primary }}>Protein Target (g/day)</Form.Label>
-                              <Form.Control
-                                type="number"
-                                step="1"
-                                placeholder="e.g., 180"
-                                value={targetProteinG}
-                                onChange={(e) => setTargetProteinG(e.target.value)}
-                              />
-                            </Form.Group>
-                          </Col>
-                          <Col md={3}>
-                            <Form.Group>
-                              <Form.Label style={{ color: colors.primary }}>Fat Target (g/day)</Form.Label>
-                              <Form.Control
-                                type="number"
-                                step="1"
-                                placeholder="e.g., 70"
-                                value={targetFatG}
-                                onChange={(e) => setTargetFatG(e.target.value)}
-                              />
-                            </Form.Group>
-                          </Col>
-                          <Col md={3}>
-                            <Form.Group>
-                              <Form.Label style={{ color: colors.primary }}>Carbs Target (g/day)</Form.Label>
-                              <Form.Control
-                                type="number"
-                                step="1"
-                                placeholder="e.g., 250"
-                                value={targetCarbsG}
-                                onChange={(e) => setTargetCarbsG(e.target.value)}
-                              />
-                            </Form.Group>
-                          </Col>
-                          <Col md={3}>
-                            <Form.Group>
-                              <Form.Label style={{ color: colors.primary }}>Calories Target (kcal/day)</Form.Label>
-                              <Form.Control
-                                type="number"
-                                step="10"
-                                placeholder="e.g., 2400"
-                                value={targetCaloriesKcal}
-                                onChange={(e) => setTargetCaloriesKcal(e.target.value)}
-                              />
-                            </Form.Group>
-                          </Col>
-                        </Row>
-                        <Row className="g-3 mt-1">
-                          <Col md={6} className="d-flex align-items-end">
-                            <Form.Text className="text-muted">
-                              These targets feed the dashboard health card, the `/fitness` compliance cards, and the health/nutrition trends shown across the app.
-                            </Form.Text>
                           </Col>
                         </Row>
                         <hr />
