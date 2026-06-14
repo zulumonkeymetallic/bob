@@ -44,7 +44,6 @@ import { ProcessTextActivityProvider } from './contexts/ProcessTextActivityConte
 import './styles/theme-aware.css';
 import { TestModeProvider } from './contexts/TestModeContext';
 import { DetailLevelProvider } from './contexts/DetailLevelContext';
-import { BobDataProvider } from './contexts/BobDataContext';
 import PersonaSwitcher from './components/PersonaSwitcher';
 import GlobalSidebar from './components/GlobalSidebar';
 import { useDeviceInfo } from './utils/deviceDetection';
@@ -359,7 +358,6 @@ function AppContent() {
   return (
     <ErrorBoundary>
       <MigrationManager>
-        <BobDataProvider>
           <SidebarLayout onSignOut={handleSignOut}>
           <Routes>
             <Route path="/" element={<RootRedirect />} />
@@ -577,7 +575,6 @@ function AppContent() {
             onDelete={handleGlobalSidebarDelete}
           />
         </SidebarLayout>
-        </BobDataProvider>
       </MigrationManager>
     </ErrorBoundary>
   );
