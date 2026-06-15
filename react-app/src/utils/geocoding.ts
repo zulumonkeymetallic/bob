@@ -4,6 +4,7 @@ export interface GeocodeResult {
   displayName: string;
   countryCode?: string; // ISO alpha-2, uppercased
   city?: string;
+  region?: string; // state / province / county
 }
 
 /**
@@ -26,12 +27,14 @@ export async function geocodePlace(query: string): Promise<GeocodeResult | null>
     const address = best.address || {};
     const cityLike = address.city || address.town || address.village || address.hamlet || undefined;
     const countryCode = (address.country_code || '').toUpperCase() || undefined;
+    const region = address.state || address.province || address.region || address.county || undefined;
     return {
       lat: parseFloat(best.lat),
       lon: parseFloat(best.lon),
       displayName: best.display_name || query,
       countryCode,
       city: cityLike,
+      region,
     };
   } catch (e) {
     console.warn('geocodePlace error', e);
