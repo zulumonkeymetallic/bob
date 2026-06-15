@@ -2193,16 +2193,20 @@ const Dashboard: React.FC = () => {
       limit(8)
     );
 
+    // limit(500) prevents unbounded reads — IndexedDB cache serves subsequent loads instantly
     const storiesSummaryQuery = query(
       collection(db, 'stories'),
       where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona)
+      where('persona', '==', currentPersona),
+      limit(500)
     );
 
+    // limit(200) prevents unbounded reads
     const goalsQuery = query(
       collection(db, 'goals'),
       where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona)
+      where('persona', '==', currentPersona),
+      limit(200)
     );
 
     const tasksQuery = query(
@@ -2357,7 +2361,6 @@ const Dashboard: React.FC = () => {
       if (!currentUser) return;
       try {
         await Promise.all([
-          loadLLMPriority(),
           loadTodayBlocks(),
           countTasksDueToday(),
           loadRemindersDueToday(),
@@ -2369,6 +2372,8 @@ const Dashboard: React.FC = () => {
       } catch (error) {
         console.error("Error loading additional dashboard data:", error);
       }
+      // LLM priority is deferred — not needed for initial render
+      setTimeout(() => loadLLMPriority(), 3000);
     };
 
     loadAdditionalData();
@@ -3903,7 +3908,8 @@ const Dashboard: React.FC = () => {
     const goalsQuery = query(
       collection(db, 'goals'),
       where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona)
+      where('persona', '==', currentPersona),
+      limit(200)
     );
 
     const unsubStories = onSnapshot(storiesQuery, (snap) => {
