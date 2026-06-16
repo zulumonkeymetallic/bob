@@ -5,6 +5,7 @@ import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useSprint } from '../contexts/SprintContext';
+import { useBobData } from '../contexts/BobDataContext';
 import { Story, Task, Goal, Sprint, CalendarBlock } from '../types';
 import type { GlobalTheme } from '../constants/globalThemes';
 import KanbanColumnV2 from './KanbanColumnV2';
@@ -72,11 +73,11 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
     const { currentUser } = useAuth();
     const { currentPersona } = usePersona();
     const { sprints } = useSprint();
+    const { stories: contextStories, goals: contextGoals, loading: contextLoading } = useBobData();
     const { trackFieldChange } = useActivityTracking();
 
-    const [stories, setStories] = useState<Story[]>([]);
+    // Sprint_task_index is a separate collection not in BobDataContext — keep its own listener
     const [tasks, setTasks] = useState<Task[]>([]);
-    const [goals, setGoals] = useState<Goal[]>([]);
     const [loading, setLoading] = useState(true);
     const [latestNotesById, setLatestNotesById] = useState<Record<string, string>>({});
     const [steamByAppId, setSteamByAppId] = useState<Record<string, any>>({});
@@ -84,68 +85,34 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
     const [scheduledBlocksByEntity, setScheduledBlocksByEntity] = useState<Record<string, ScheduledBlockInfo>>({});
     const formatTag = (tag: string) => formatTaskTagLabel(tag, goals, sprints);
 
-    // Data fetching
+    // Stories and goals come from BobDataProvider — no separate listeners needed here
+    const goals = contextGoals;
+    const stories = sprintId
+        ? contextStories.filter(s => (s as any).sprintId === sprintId)
+        : contextStories;
+
+    // Tasks: sprint_task_index is a separate collection — keep a scoped listener
     useEffect(() => {
         if (!currentUser || !currentPersona) return;
 
         setLoading(true);
 
-        // Goals
-        const goalsQuery = query(
-            collection(db, 'goals'),
-            where('ownerUid', '==', currentUser.uid),
-            where('persona', '==', currentPersona),
-            orderBy('createdAt', 'desc'),
-            limit(1000)
-        );
-
-        // Stories (respect active sprint filter when provided)
-        const storiesQuery = sprintId
+        const tasksQuery = sprintId
             ? query(
-                collection(db, 'stories'),
+                collection(db, 'sprint_task_index'),
                 where('ownerUid', '==', currentUser.uid),
                 where('persona', '==', currentPersona),
                 where('sprintId', '==', sprintId),
-                orderBy('createdAt', 'desc'),
-                limit(1000)
+                orderBy('dueDate', 'asc'),
+                limit(300)
             )
             : query(
-                collection(db, 'stories'),
-                where('ownerUid', '==', currentUser.uid),
-                where('persona', '==', currentPersona),
-                orderBy('createdAt', 'desc'),
-                limit(1000)
-            );
-
-        // Tasks (using sprint_task_index)
-        // Include completed tasks so Done column shows accurately; keep sprint filter when provided.
-        let tasksQuery;
-        if (sprintId) {
-            tasksQuery = query(
-                collection(db, 'sprint_task_index'),
-                where('ownerUid', '==', currentUser.uid),
-                where('persona', '==', currentPersona),
-                where('sprintId', '==', sprintId),
-                orderBy('dueDate', 'asc'),
-                limit(1000)
-            );
-        } else {
-            tasksQuery = query(
                 collection(db, 'sprint_task_index'),
                 where('ownerUid', '==', currentUser.uid),
                 where('persona', '==', currentPersona),
                 orderBy('dueDate', 'asc'),
-                limit(1000)
+                limit(300)
             );
-        }
-
-        const unsubGoals = onSnapshot(goalsQuery, (snap) => {
-            setGoals(snap.docs.map(d => ({ id: d.id, ...d.data() } as Goal)));
-        }, (err) => { console.error('[KanbanBoardV2] goals error', err?.message); });
-
-        const unsubStories = onSnapshot(storiesQuery, (snap) => {
-            setStories(snap.docs.map(d => ({ id: d.id, ...d.data() } as Story)));
-        }, (err) => { console.error('[KanbanBoardV2] stories error', err?.message); });
 
         const unsubTasks = onSnapshot(tasksQuery, (snap) => {
             setTasks(snap.docs.map(d => {
@@ -159,11 +126,7 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
             setLoading(false);
         }, (err) => { console.error('[KanbanBoardV2] tasks error', err?.message); setLoading(false); });
 
-        return () => {
-            unsubGoals();
-            unsubStories();
-            unsubTasks();
-        };
+        return () => { unsubTasks(); };
     }, [currentUser, currentPersona, sprintId]);
 
     useEffect(() => {
@@ -383,9 +346,14 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
         return true;
     };
 
+    // Chores, habits, core routines — excluded from Kanban; they belong in Daily Plan / Checklist views
+    const EXCLUDED_TASK_TYPES = new Set(['chore', 'routine', 'habit', 'read', 'watch']);
+
     const filteredTasks = useMemo(() => {
         let result = tasks;
-        // Tasks are already filtered by query if sprintId is present, 
+        // Filter excluded types first
+        result = result.filter(t => !EXCLUDED_TASK_TYPES.has(String((t as any).type || '').toLowerCase()));
+        // Tasks are already filtered by query if sprintId is present,
         // but if sprintId changed rapidly, safety check:
         if (sprintId) {
             result = result.filter(t => t.sprintId === sprintId);

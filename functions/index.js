@@ -6770,7 +6770,7 @@ const applyAiMappingToTransaction = async (ref, mapping) => {
 };
 
 exports.monzoAiCategorizationSweep = schedulerV2.onSchedule({
-  schedule: 'every 30 minutes',
+  schedule: 'every 60 minutes',
   timeZone: 'UTC',
   memory: '512MiB',
   secrets: [GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET],
@@ -9102,8 +9102,8 @@ async function importGoogleCalendarEvents(uid, { startDate, endDate }) {
   return { events: events.length, stored: seenDocIds.size };
 }
 
-// Scheduled: reconcile Google Calendar deletions for all users every 15 minutes
-exports.reconcileAllCalendars = schedulerV2.onSchedule({ schedule: 'every 15 minutes', timeZone: 'UTC', secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (event) => {
+// Scheduled: reconcile Google Calendar deletions for all users hourly
+exports.reconcileAllCalendars = schedulerV2.onSchedule({ schedule: 'every 60 minutes', timeZone: 'UTC', secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] }, async (event) => {
   const db = admin.firestore();
   // Find users with Google tokens
   const snap = await db.collection('tokens').where('provider', '==', 'google').get().catch(() => null);
@@ -9171,7 +9171,8 @@ exports.syncGoogleCalendarsHourly = schedulerV2.onSchedule({ schedule: 'every 60
   }
 });
 
-// ===== Duplicate Detection for iOS Reminders (AC11 - Issue #124)
+// ===== Weekly Summaries
+const { ensureBudget: ensureBudgetDefault } = require('./utils/usageGuard');
 exports.generateWeeklySummaries = schedulerV2.onSchedule({ schedule: 'every monday 08:00', timeZone: 'Europe/London' }, async (event) => {
   const db = ensureFirestore();
   try { await ensureBudgetDefault(db, 'generateWeeklySummaries', { reads: 3000, writes: 500 }); } catch (e) { console.warn('[weekly summaries] budget exceeded, skipping run'); return { ok: false, skipped: true }; }
@@ -10300,46 +10301,6 @@ async function getLatestMaintenanceSummary({ db, userId }) {
   }
 }
 
-// ===== Weekly summaries (AUD-3)
-const { ensureBudget: ensureBudgetDefault } = require('./utils/usageGuard');
-
-exports.generateWeeklySummaries = schedulerV2.onSchedule({ schedule: 'every monday 08:00', timeZone: 'Europe/London' }, async (event) => {
-  const db = ensureFirestore();
-  try { await ensureBudgetDefault(db, 'generateWeeklySummaries', { reads: 3000, writes: 500 }); } catch (e) { console.warn('[weekly summaries] budget exceeded, skipping run'); return { ok: false, skipped: true }; }
-  const now = new Date();
-  const periodStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7).getTime();
-  const profiles = await db.collection('profiles').get().catch(() => ({ empty: true, docs: [] }));
-  for (const doc of profiles.docs) {
-    const uid = doc.id;
-    try {
-      const q = await db.collection('activity_stream')
-        .where('ownerUid', '==', uid)
-        .where('timestamp', '>=', admin.firestore.Timestamp.fromMillis(periodStart))
-        .get();
-      const counts = {};
-      let total = 0;
-      q.docs.forEach(d => {
-        const t = String(d.data()?.activityType || 'unknown');
-        counts[t] = (counts[t] || 0) + 1;
-        total += 1;
-      });
-      const weekKey = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (now.getDay() || 7)).toISOString().slice(0, 10);
-      const summaryRef = db.collection('weekly_summaries').doc(`${uid}_${weekKey}`);
-      await summaryRef.set({
-        id: summaryRef.id,
-        userId: uid,
-        week: weekKey,
-        total,
-        byType: counts,
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      }, { merge: true });
-    } catch (e) {
-      console.warn('[weekly summaries] failed for user', uid, e?.message || e);
-    }
-  }
-  return { ok: true, users: profiles.docs.length };
-});
 async function runNightlyMaintenanceForUser({ db, userId, profile, nowUtc, runId }) {
   const duplicateReminders = await detectDuplicateRemindersForUser({ db, userId });
 
@@ -19833,8 +19794,8 @@ async function dispatchDataQualityForUser({ db, userId, profile, nowUtc, force =
 }
 
 exports.dispatchDailySummaryEmail = schedulerV2.onSchedule({
-  schedule: 'every 15 minutes',
-  timeZone: 'UTC',
+  schedule: '0 7 * * *',
+  timeZone: 'Europe/London',
   memory: '512MiB',
   secrets: [defineSecret('BREVO_API_KEY'), GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET],
 }, async () => {
@@ -19869,8 +19830,8 @@ exports.dispatchDailySummaryEmail = schedulerV2.onSchedule({
 });
 
 exports.dispatchDataQualityEmail = schedulerV2.onSchedule({
-  schedule: 'every 30 minutes',
-  timeZone: 'UTC',
+  schedule: '0 8 * * *',
+  timeZone: 'Europe/London',
   memory: '512MiB',
   secrets: [defineSecret('BREVO_API_KEY'), GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET],
 }, async () => {
@@ -19905,8 +19866,8 @@ exports.dispatchDataQualityEmail = schedulerV2.onSchedule({
 });
 
 exports.dispatchWeeklyFinanceSummaryEmail = schedulerV2.onSchedule({
-  schedule: 'every 30 minutes',
-  timeZone: 'UTC',
+  schedule: '0 9 * * 1',
+  timeZone: 'Europe/London',
   memory: '512MiB',
   secrets: [defineSecret('BREVO_API_KEY'), GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET],
 }, async () => {
@@ -20641,7 +20602,7 @@ async function updateTaskDueDate(db, taskId, { newDueDateMs, reason, userId, run
 }
 
 exports.runDailySchedulerAdjustments = schedulerV2.onSchedule({
-  schedule: 'every 30 minutes',
+  schedule: 'every 60 minutes',
   timeZone: 'UTC',
   memory: '1GiB',
 }, async () => {

@@ -36,6 +36,7 @@ import { PersonaProvider, usePersona } from './contexts/PersonaContext';
 import { SprintProvider, useSprint } from './contexts/SprintContext';
 import { SidebarProvider } from './contexts/SidebarContext';
 import { ProcessTextActivityProvider } from './contexts/ProcessTextActivityContext';
+import { BobDataProvider, useBobData } from './contexts/BobDataContext';
 
 // Import theme-aware styles
 import './styles/theme-aware.css';
@@ -106,7 +107,7 @@ import DeepLinkGoal from './components/routes/DeepLinkGoal';
 import DeepLinkTask from './components/routes/DeepLinkTask';
 import QueryDeepLinkGate from './components/routes/QueryDeepLinkGate';
 import FocusGoalsPage from './components/FocusGoalsPage';
-import { collection, deleteDoc, doc, limit, onSnapshot, orderBy, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
+import { deleteDoc, doc, serverTimestamp, updateDoc } from 'firebase/firestore';
 import { db } from './firebase';
 import type { Goal, Story, Task } from './types';
 import { setupRecaptchaOnStartup } from './utils/recaptchaHelper';
@@ -136,13 +137,15 @@ function App() {
       <DetailLevelProvider>
         <PersonaProvider>
           <SprintProvider>
-            <ProcessTextActivityProvider>
-              <SidebarProvider>
-                <Router>
-                  <AppContent />
-                </Router>
-              </SidebarProvider>
-            </ProcessTextActivityProvider>
+            <BobDataProvider>
+              <ProcessTextActivityProvider>
+                <SidebarProvider>
+                  <Router>
+                    <AppContent />
+                  </Router>
+                </SidebarProvider>
+              </ProcessTextActivityProvider>
+            </BobDataProvider>
           </SprintProvider>
         </PersonaProvider>
       </DetailLevelProvider>
@@ -180,55 +183,17 @@ function AppContent() {
     return <Navigate to={target} replace />;
   };
 
-  // Data for the global sidebar
-  const [goals, setGoals] = useState<Goal[]>([]);
-  const [stories, setStories] = useState<Story[]>([]);
+  // Data for the global sidebar — served from shared BobDataProvider
+  const { goals, stories, error: bobDataError, loading: bobDataLoading } = useBobData();
+
+  // Show a non-blocking banner if Firestore is unavailable (billing disabled, quota exceeded)
+  const [bannerDismissed, setBannerDismissed] = useState(false);
+  const showOfflineBanner = !!bobDataError && !bobDataLoading && !bannerDismissed;
 
   // Initialize reCAPTCHA on app load
   useEffect(() => {
     setupRecaptchaOnStartup();
   }, []);
-
-  useEffect(() => {
-    if (!currentUser?.uid || !currentPersona) {
-      setGoals([]);
-      setStories([]);
-      return;
-    }
-
-    const goalsQuery = query(
-      collection(db, 'goals'),
-      where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona),
-      orderBy('createdAt', 'desc'),
-      limit(1000)
-    );
-
-    const storiesQuery = query(
-      collection(db, 'stories'),
-      where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona),
-      orderBy('createdAt', 'desc'),
-      limit(1000)
-    );
-
-    const unsubGoals = onSnapshot(
-      goalsQuery,
-      (snap) => setGoals(snap.docs.map((doc) => ({ id: doc.id, ...(doc.data() as any) }) as Goal)),
-      (err) => console.warn('[global-sidebar] goals snapshot error', err?.message || err)
-    );
-
-    const unsubStories = onSnapshot(
-      storiesQuery,
-      (snap) => setStories(snap.docs.map((doc) => ({ id: doc.id, ...(doc.data() as any) }) as Story)),
-      (err) => console.warn('[global-sidebar] stories snapshot error', err?.message || err)
-    );
-
-    return () => {
-      unsubGoals();
-      unsubStories();
-    };
-  }, [currentUser?.uid, currentPersona]);
 
   const handleGlobalSidebarDelete = async (
     item: Story | Task | Goal,
@@ -357,6 +322,12 @@ function AppContent() {
     <ErrorBoundary>
       <MigrationManager>
           <SidebarLayout onSignOut={handleSignOut}>
+          {showOfflineBanner && (
+            <div style={{ background: '#7c3aed', color: '#fff', padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 12, fontSize: 13, position: 'sticky', top: 0, zIndex: 9999 }}>
+              <span style={{ flex: 1 }}>Offline or Firebase billing issue — showing cached data. CRUD operations are queued locally and will sync when restored.</span>
+              <button onClick={() => setBannerDismissed(true)} style={{ background: 'none', border: '1px solid rgba(255,255,255,0.5)', color: '#fff', borderRadius: 4, padding: '2px 8px', cursor: 'pointer', fontSize: 12 }}>Dismiss</button>
+            </div>
+          )}
           <Suspense fallback={<div className="p-4 text-center">Loading…</div>}>
           <Routes>
             <Route path="/" element={<RootRedirect />} />

@@ -4,6 +4,7 @@ import { db, functions } from '../firebase';
 import { collection, query, where, onSnapshot, orderBy, limit } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
+import { useBobData } from '../contexts/BobDataContext';
 import { Story, Task, Goal } from '../types';
 import KanbanBoardV2 from './KanbanBoardV2';
 import { useNavigate } from 'react-router-dom';
@@ -41,9 +42,8 @@ const SprintKanbanPageV2: React.FC = () => {
     const { themes: globalThemes } = useGlobalThemes();
     const { activeFocusGoals } = useFocusGoals(currentUser?.uid);
 
-    const [stories, setStories] = useState<Story[]>([]);
+    const { stories: contextStories, goals: contextGoals } = useBobData();
     const [tasks, setTasks] = useState<Task[]>([]);
-    const [goals, setGoals] = useState<Goal[]>([]); // Added goals state
     const [loading, setLoading] = useState(true);
 
     const [themeFilterIds, setThemeFilterIds] = useState<number[]>([]);
@@ -137,63 +137,24 @@ const SprintKanbanPageV2: React.FC = () => {
     useEffect(() => {
         if (!currentUser) return;
 
-        const storiesQuery = filterSprintId
+        // stories and goals come from BobDataProvider — no extra listeners needed
+        // tasks use sprint_task_index (separate collection optimised for sprint queries)
+        const tasksQuery = filterSprintId
             ? query(
-                collection(db, 'stories'),
+                collection(db, 'sprint_task_index'),
                 where('ownerUid', '==', currentUser.uid),
                 where('persona', '==', currentPersona),
                 where('sprintId', '==', filterSprintId),
-                orderBy('createdAt', 'desc'),
-                limit(1000)
+                orderBy('dueDate', 'asc'),
+                limit(300)
             )
             : query(
-                collection(db, 'stories'),
-                where('ownerUid', '==', currentUser.uid),
-                where('persona', '==', currentPersona),
-                orderBy('createdAt', 'desc'),
-                limit(1000)
-            );
-
-        const goalsQuery = query(
-            collection(db, 'goals'),
-            where('ownerUid', '==', currentUser.uid),
-            where('persona', '==', currentPersona),
-            orderBy('createdAt', 'desc'),
-            limit(1000)
-        );
-
-        // For metrics we need tasks too (include done so counts/Done lane align)
-        let tasksQuery;
-        if (filterSprintId) {
-            tasksQuery = query(
-                collection(db, 'sprint_task_index'),
-                where('ownerUid', '==', currentUser.uid),
-                where('persona', '==', currentPersona),
-                where('sprintId', '==', filterSprintId),
-                orderBy('dueDate', 'asc'),
-                limit(1000)
-            );
-        } else {
-            tasksQuery = query(
                 collection(db, 'sprint_task_index'),
                 where('ownerUid', '==', currentUser.uid),
                 where('persona', '==', currentPersona),
                 orderBy('dueDate', 'asc'),
-                limit(1000)
+                limit(300)
             );
-        }
-
-        const unsubStories = onSnapshot(storiesQuery, (snap) => {
-            setStories(snap.docs.map(d => ({ id: d.id, ...d.data() } as Story)));
-        }, (err) => {
-            console.error('[kanban] stories snapshot error', err?.message || err);
-        });
-
-        const unsubGoals = onSnapshot(goalsQuery, (snap) => {
-            setGoals(snap.docs.map(d => ({ id: d.id, ...d.data() } as Goal)));
-        }, (err) => {
-            console.error('[kanban] goals snapshot error', err?.message || err);
-        });
 
         const unsubTasks = onSnapshot(tasksQuery, (snap) => {
             setTasks(snap.docs.map(d => ({ id: d.id, ...d.data() } as Task)));
@@ -204,14 +165,14 @@ const SprintKanbanPageV2: React.FC = () => {
         });
 
         return () => {
-            unsubStories();
-            unsubGoals();
             unsubTasks();
         };
     }, [currentUser, currentPersona, filterSprintId]);
 
-    // Filter for metrics and board
-    const sprintStories = stories.filter((story) => {
+    // Filter for metrics and board — stories/goals from BobDataProvider context
+    const goals = contextGoals;
+    const stories = contextStories;
+    const sprintStories = contextStories.filter((story) => {
         const storySprint = (story as any).sprintId as string | undefined;
         if (!filterSprintId && !currentSprint) return true;
         if (!filterSprintId) return true;
