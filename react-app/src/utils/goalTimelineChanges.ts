@@ -4,8 +4,8 @@ import type { GoalTimelineAffectedStory } from '../components/visualization/goal
 
 interface ApplyGoalTimelineChangesArgs {
   goalId: string;
-  startDateMs: number;
-  endDateMs: number;
+  startDateMs: number | null;
+  endDateMs: number | null;
   targetYear?: number | null;
   ownerUid: string;
   persona: 'personal' | 'work';

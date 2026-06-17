@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Modal, Button, Form, Alert, ProgressBar, ListGroup, Badge, Spinner, Card, Row, Col } from 'react-bootstrap';
 import { ChevronRight, CheckCircle, AlertCircle, Zap, DollarSign, BookOpen, Calendar } from 'lucide-react';
 import { httpsCallable } from 'firebase/functions';
@@ -7,6 +7,17 @@ import { Goal, FocusGoal } from '../types';
 import { FocusWizardPrefill } from '../services/focusGoalsService';
 import KPIDesigner from './KPIDesigner';
 import { expandFocusGoalIdsToLeafGoalIds, getGoalDisplayPath, isLeafGoal } from '../utils/goalHierarchy';
+import { applyGoalTimelineChanges } from '../utils/goalTimelineChanges';
+
+function toMsTimestamp(v: any): number | null {
+  if (v == null) return null;
+  if (typeof v === 'number') return v < 1e11 ? v * 1000 : v;
+  if (v instanceof Date) return v.getTime();
+  if (typeof v?.toMillis === 'function') return v.toMillis();
+  if (typeof v?.seconds === 'number') return v.seconds * 1000;
+  const parsed = Date.parse(String(v));
+  return Number.isNaN(parsed) ? null : parsed;
+}
 
 interface FocusGoalWizardProps {
   show: boolean;
@@ -18,7 +29,7 @@ interface FocusGoalWizardProps {
   onSave: (focusGoal: FocusGoal) => Promise<void>;
 }
 
-type WizardStep = 'vision' | 'select' | 'goalTypes' | 'timeframe' | 'milestones' | 'review' | 'confirm';
+type WizardStep = 'vision' | 'goalTypes' | 'timeframe' | 'milestones' | 'review' | 'confirm';
 type GoalPlanningType = 'story' | 'calendar';
 
 interface SelectedGoalSummary {
@@ -119,6 +130,7 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
   const [draftLeafTitleByParentId, setDraftLeafTitleByParentId] = useState<Record<string, string>>({});
   const [sprintPlanByGoalId, setSprintPlanByGoalId] = useState<Record<string, number[]>>({});
   const [prefillStructureApplied, setPrefillStructureApplied] = useState(false);
+  const overlapAutoAddedIdsRef = useRef<Set<string>>(new Set());
 
   // Reset on modal open
   useEffect(() => {
@@ -144,6 +156,7 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
       setDraftLeafTitleByParentId({});
       setSprintPlanByGoalId({});
       setPrefillStructureApplied(false);
+      overlapAutoAddedIdsRef.current = new Set();
     }
   }, [show]);
 
@@ -281,6 +294,46 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
       daysRemaining
     };
   }, [customEndDateInput, timeframe]);
+
+  // Goals whose [startDate, endDate] (or fall-back targetDate/dueDate) overlap
+  // the focus window. These are auto-suggested for selection.
+  const overlapGoalIds = useMemo<Set<string>>(() => {
+    const winStart = timeframeInfo.startDate.getTime();
+    const winEnd = timeframeInfo.endDate.getTime();
+    const result = new Set<string>();
+    for (const goal of goals) {
+      if (goal.status === 2) continue;
+      const gStartMs = toMsTimestamp((goal as any).startDate);
+      const gEndMs = toMsTimestamp(
+        (goal as any).endDate ?? (goal as any).targetDate ?? (goal as any).dueDate,
+      );
+      if (gStartMs == null && gEndMs == null) continue;
+      const s = gStartMs ?? (gEndMs as number);
+      const e = gEndMs ?? (gStartMs as number);
+      if (e >= winStart && s <= winEnd) result.add(goal.id);
+    }
+    return result;
+  }, [goals, timeframeInfo]);
+
+  // When overlap set changes (e.g. timeframe edit), additively pre-tick those
+  // goals and remember that we added them — so we can clear their dates later
+  // if the user unticks them before saving.
+  useEffect(() => {
+    if (!show) return;
+    if (overlapGoalIds.size === 0) return;
+    setSelectedGoalIds((prev) => {
+      const next = new Set(prev);
+      let changed = false;
+      overlapGoalIds.forEach((goalId) => {
+        if (!next.has(goalId)) {
+          next.add(goalId);
+          changed = true;
+        }
+        overlapAutoAddedIdsRef.current.add(goalId);
+      });
+      return changed ? next : prev;
+    });
+  }, [show, overlapGoalIds]);
 
   const sprintPlanSegments = useMemo<SprintPlanSegment[]>(() => {
     const segments: SprintPlanSegment[] = [];
@@ -523,10 +576,8 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
         setError('Please provide a short vision before continuing.');
         return;
       }
-      setStep('select');
-    } else if (step === 'select') {
       if (selectedGoalIds.size === 0) {
-        setError('Please select at least 1 goal');
+        setError('Pick at least one goal to focus on. Run AI Match for suggestions or tick any goal in the list.');
         return;
       }
       setStep('goalTypes');
@@ -619,8 +670,7 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
   ]);
 
   const handleBack = () => {
-    if (step === 'select') setStep('vision');
-    else if (step === 'goalTypes') setStep('select');
+    if (step === 'goalTypes') setStep('vision');
     else if (step === 'timeframe') setStep('goalTypes');
     else if (step === 'milestones') setStep('timeframe');
     else if (step === 'review') setStep('milestones');
@@ -683,6 +733,33 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
       };
 
       await onSave(focusGoal);
+
+      // For goals auto-suggested by date overlap but unticked by the user,
+      // clear their dates so they no longer schedule into this focus window.
+      // Story re-homing is delegated to the shared timeline util used by the
+      // Goal Planner / Gantt — affectedStories defaults to [], which leaves
+      // stories where they are (matches the user-chosen 'clear dates' policy).
+      if (currentUserId) {
+        const ticked = selectedGoalIds;
+        const toClear = Array.from(overlapAutoAddedIdsRef.current).filter((id) => !ticked.has(id));
+        for (const goalId of toClear) {
+          try {
+            const goal = goals.find((g) => g.id === goalId);
+            await applyGoalTimelineChanges({
+              goalId,
+              startDateMs: null,
+              endDateMs: null,
+              ownerUid: currentUserId,
+              persona: (goal as any)?.persona === 'work' ? 'work' : 'personal',
+              affectedStories: [],
+            });
+          } catch (clearErr) {
+            // Non-fatal: surface in console, keep going with remaining clears.
+            console.warn('[FocusGoalWizard] failed to clear dates for goal', goalId, clearErr);
+          }
+        }
+      }
+
       if (useModernStoryTableHandoff && typeof window !== 'undefined') {
         window.localStorage.setItem('focusWizardStoryTableHandoff', '1');
       }
@@ -695,12 +772,11 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
   };
 
   const progressPercent = {
-    vision: 14,
-    select: 28,
-    goalTypes: 42,
-    timeframe: 56,
-    milestones: 72,
-    review: 86,
+    vision: 16,
+    goalTypes: 33,
+    timeframe: 50,
+    milestones: 66,
+    review: 83,
     confirm: 100
   };
 
@@ -719,18 +795,16 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontSize: '12px' }}>
             <span style={{ fontWeight: '600' }}>
               {step === 'vision'
-                ? 'Step 1: Define Vision + Match'
-                : step === 'select'
-                  ? 'Step 2: Select Goals'
-                  : step === 'goalTypes'
-                    ? 'Step 3: Goal Planning Types'
-                    : step === 'timeframe'
-                      ? 'Step 4: Choose Timeframe'
-                      : step === 'milestones'
-                        ? 'Step 5: Milestones + Sprint Plan'
-                        : step === 'review'
-                          ? 'Step 6: Review Checklist'
-                          : 'Step 7: Confirm'}
+                ? 'Step 1: Vision + Match + Select Goals'
+                : step === 'goalTypes'
+                  ? 'Step 2: Goal Planning Types'
+                  : step === 'timeframe'
+                    ? 'Step 3: Choose Timeframe'
+                    : step === 'milestones'
+                      ? 'Step 4: Milestones + Sprint Plan'
+                      : step === 'review'
+                        ? 'Step 5: Review Checklist'
+                        : 'Step 6: Confirm'}
             </span>
             <span style={{ color: '#666' }}>{progressPercent[step]}%</span>
           </div>
@@ -800,20 +874,6 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
               </Alert>
             )}
 
-            {(intentResult?.matches || []).length > 0 && (
-              <Alert variant="info">
-                <strong>Existing goal matches</strong>
-                <div style={{ fontSize: 12, marginTop: 4, marginBottom: 6 }}>
-                  Matched goals are auto-selected in the next step.
-                </div>
-                <ul style={{ marginBottom: 0, marginTop: 8 }}>
-                  {(intentResult?.matches || []).slice(0, 5).map((m) => (
-                    <li key={m.goalId}>{m.title} (score {m.score})</li>
-                  ))}
-                </ul>
-              </Alert>
-            )}
-
             {(intentResult?.proposals || []).length > 0 && (
               <Alert variant="warning">
                 <strong>New-goal proposals</strong>
@@ -824,95 +884,116 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
                 </ul>
               </Alert>
             )}
-          </div>
-        )}
 
-        {/* Step 2: Select Goals */}
-        {step === 'select' && (
-          <div>
-            <p style={{ color: '#666', marginBottom: '16px' }}>
-              Select which goals you want to focus on. You can choose 1 or more goals to track together.
-            </p>
+            {/* Inline goal picker — confirm AI matches and add other goals */}
+            <div className="mt-4">
+              <h6 className="mb-1" style={{ fontWeight: 600 }}>Confirm focus goals</h6>
+              <p className="text-muted small mb-2">
+                {(intentResult?.matches || []).length > 0
+                  ? 'AI suggestions are pre-selected and pinned to the top — untick to drop, tick any other goal to add it.'
+                  : 'Tick the goals you want in this focus period. Run AI Match above to get suggestions.'}
+              </p>
 
-            {goals.length === 0 ? (
-              <Alert variant="info">
-                <AlertCircle size={16} className="me-2" style={{ display: 'inline' }} />
-                No goals found. Create some goals first!
-              </Alert>
-            ) : (
-              <>
-              <Form.Group className="mb-2">
-                <Form.Control
-                  type="text"
-                  value={goalSearchTerm}
-                  onChange={(e) => setGoalSearchTerm(e.target.value)}
-                  placeholder="Search goals by title..."
-                />
-              </Form.Group>
-              <ListGroup>
-                {goals
-                  .filter(g => g.status !== 2) // Hide completed goals
-                  .filter(g => {
-                    if (!goalSearchTerm.trim()) return true;
-                    return String(g.title || '').toLowerCase().includes(goalSearchTerm.toLowerCase());
-                  })
-                  .map(goal => (
-                    <ListGroup.Item
-                      key={goal.id}
-                      style={{
-                        cursor: 'pointer',
-                        background: selectedGoalIds.has(goal.id) ? '#e7f5ff' : undefined,
-                        borderColor: selectedGoalIds.has(goal.id) ? '#0066cc' : undefined
-                      }}
-                      onClick={() => handleSelectGoal(goal.id)}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                        <Form.Check
-                          type="checkbox"
-                          checked={selectedGoalIds.has(goal.id)}
-                          readOnly
-                          style={{ margin: 0 }}
-                        />
-                        <div style={{ flex: 1 }}>
-                          <div style={{ fontWeight: '500' }}>{goal.title}</div>
-                          <div style={{ fontSize: '12px', color: '#666' }}>
-                            Theme: {goal.theme || 'Not set'} • Status: {goal.status || 'New'}
-                          </div>
-                        </div>
-                        {selectedGoalIds.has(goal.id) && (
-                          <CheckCircle size={20} style={{ color: '#0066cc' }} />
-                        )}
-                      </div>
-                    </ListGroup.Item>
-                  ))}
-              </ListGroup>
-              </>
-            )}
-
-            <div style={{ marginTop: '16px', padding: '12px', background: '#f8f9fa', borderRadius: '8px' }}>
-              <strong>{selectedGoalIds.size}</strong> root goal{selectedGoalIds.size !== 1 ? 's' : ''} selected
-              {' • '}
-              <strong>{selectedLeafGoals.length}</strong> leaf goal{selectedLeafGoals.length !== 1 ? 's' : ''} in execution scope
+              {goals.length === 0 ? (
+                <Alert variant="info">
+                  <AlertCircle size={16} className="me-2" style={{ display: 'inline' }} />
+                  No goals found. Create some goals first.
+                </Alert>
+              ) : (
+                <>
+                  <Form.Control
+                    type="text"
+                    size="sm"
+                    value={goalSearchTerm}
+                    onChange={(e) => setGoalSearchTerm(e.target.value)}
+                    placeholder="Search goals by title..."
+                    className="mb-2"
+                  />
+                  <div style={{ maxHeight: 320, overflowY: 'auto' }}>
+                    <ListGroup>
+                      {(() => {
+                        const matchScoreById = new Map<string, number>();
+                        (intentResult?.matches || []).forEach((m) => {
+                          if (m?.goalId) matchScoreById.set(String(m.goalId), Number(m.score) || 0);
+                        });
+                        const filtered = goals
+                          .filter((g) => g.status !== 2)
+                          .filter((g) => {
+                            if (!goalSearchTerm.trim()) return true;
+                            return String(g.title || '').toLowerCase().includes(goalSearchTerm.toLowerCase());
+                          });
+                        const ranked = [...filtered].sort((a, b) => {
+                          const aMatched = matchScoreById.has(a.id) ? 1 : 0;
+                          const bMatched = matchScoreById.has(b.id) ? 1 : 0;
+                          if (aMatched !== bMatched) return bMatched - aMatched;
+                          if (aMatched) {
+                            return (matchScoreById.get(b.id) || 0) - (matchScoreById.get(a.id) || 0);
+                          }
+                          const aOverlap = overlapGoalIds.has(a.id) ? 1 : 0;
+                          const bOverlap = overlapGoalIds.has(b.id) ? 1 : 0;
+                          if (aOverlap !== bOverlap) return bOverlap - aOverlap;
+                          const aSelected = selectedGoalIds.has(a.id) ? 1 : 0;
+                          const bSelected = selectedGoalIds.has(b.id) ? 1 : 0;
+                          return bSelected - aSelected;
+                        });
+                        return ranked.map((goal) => {
+                          const aiScore = matchScoreById.get(goal.id);
+                          const isMatched = aiScore !== undefined;
+                          const isSelected = selectedGoalIds.has(goal.id);
+                          return (
+                            <ListGroup.Item
+                              key={goal.id}
+                              style={{
+                                cursor: 'pointer',
+                                background: isSelected ? '#e7f5ff' : undefined,
+                                borderColor: isSelected ? '#0066cc' : undefined,
+                              }}
+                              onClick={() => handleSelectGoal(goal.id)}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                                <Form.Check
+                                  type="checkbox"
+                                  checked={isSelected}
+                                  readOnly
+                                  style={{ margin: 0 }}
+                                />
+                                <div style={{ flex: 1 }}>
+                                  <div style={{ fontWeight: 500 }}>{goal.title}</div>
+                                  <div style={{ fontSize: 12, color: '#666' }}>
+                                    Theme: {goal.theme || 'Not set'} • Status: {goal.status || 'New'}
+                                  </div>
+                                </div>
+                                {isMatched && (
+                                  <Badge bg="warning" text="dark" style={{ fontSize: 10 }}>
+                                    AI match · {aiScore}
+                                  </Badge>
+                                )}
+                                {overlapGoalIds.has(goal.id) && (
+                                  <Badge bg="info" text="dark" style={{ fontSize: 10 }}>
+                                    In window
+                                  </Badge>
+                                )}
+                                {isSelected && <CheckCircle size={18} style={{ color: '#0066cc' }} />}
+                              </div>
+                            </ListGroup.Item>
+                          );
+                        });
+                      })()}
+                    </ListGroup>
+                  </div>
+                  <div className="mt-2 small text-muted">
+                    <strong>{selectedGoalIds.size}</strong> root goal{selectedGoalIds.size !== 1 ? 's' : ''} selected
+                    {selectedLeafGoals.length > 0 && (
+                      <> · <strong>{selectedLeafGoals.length}</strong> leaf goal{selectedLeafGoals.length !== 1 ? 's' : ''} in execution scope</>
+                    )}
+                  </div>
+                </>
+              )}
             </div>
-
-            {selectedLeafGoals.length > 0 && (
-              <Alert variant="secondary" className="mt-3 mb-0">
-                <div className="fw-semibold">Execution scope</div>
-                <div className="small text-muted mb-2">
-                  Focus alignment, KPI execution, and story planning will run against these leaf goals.
-                </div>
-                <ul className="mb-0 small">
-                  {selectedLeafGoals.slice(0, 6).map((goal) => (
-                    <li key={goal.id}>{getGoalDisplayPath(goal.id, planningGoals)}</li>
-                  ))}
-                  {selectedLeafGoals.length > 6 && <li>+{selectedLeafGoals.length - 6} more</li>}
-                </ul>
-              </Alert>
-            )}
           </div>
         )}
 
-        {/* Step 3: Goal planning types */}
+        {/* Step 2: Goal planning types */}
         {step === 'goalTypes' && (
           <div>
             <p style={{ color: '#666', marginBottom: '16px' }}>
@@ -1338,9 +1419,7 @@ export const FocusGoalWizard: React.FC<FocusGoalWizardProps> = ({
           <Button
             variant="primary"
             onClick={handleNext}
-            disabled={
-              loading || (step === 'select' && selectedGoalIds.size === 0)
-            }
+            disabled={loading}
           >
             Next <ChevronRight size={16} style={{ display: 'inline', marginLeft: '6px' }} />
           </Button>
