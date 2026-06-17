@@ -743,15 +743,14 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         const prevStartDateMs = typeof (goal as any).startDate === 'number' ? (goal as any).startDate : null;
         const prevEndDateMs = typeof (goal as any).endDate === 'number' ? (goal as any).endDate : null;
         await updateDoc(doc(db, 'goals', goal.id), goalData);
-        // Auto-move stories whenever the goal has dates + linked stories + sprints.
-        // Stories already aligned with the goal window are tagged 'already_closest'
-        // and skipped by the 'move' filter below, so this is a no-op when nothing
-        // has drifted. We run on every save (not only date-changes) so stories that
-        // drifted by other paths get pulled back into alignment.
-        void prevStartDateMs; void prevEndDateMs;
+        // Auto-move stories when goal start/end date changes (same logic as roadmap drag).
+        // Drift caused by other paths is handled by the nightly alignStoriesToGoalSprints
+        // step inside the unified nightly orchestrator (04:00 Europe/London).
         const newStartDateMs = goalData.startDate as number | null;
         const newEndDateMs = goalData.endDate as number | null;
-        if (newStartDateMs != null && newEndDateMs != null && linkedStories.length > 0 && sprints.length > 0) {
+        const datesMoved = (newStartDateMs != null && newStartDateMs !== prevStartDateMs)
+          || (newEndDateMs != null && newEndDateMs !== prevEndDateMs);
+        if (datesMoved && newStartDateMs != null && newEndDateMs != null && linkedStories.length > 0 && sprints.length > 0) {
           try {
             const impactPlan = buildGoalTimelineImpactPlan({
               goalId: goal.id,
