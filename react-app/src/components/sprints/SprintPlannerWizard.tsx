@@ -30,9 +30,22 @@ import { expandFocusGoalIdsToLeafGoalIds } from '../../utils/goalHierarchy';
 import { goalThemeColor } from '../../utils/storyCardFormatting';
 import { getThemeName } from '../../utils/statusHelpers';
 import { GLOBAL_THEMES } from '../../constants/globalThemes';
+import ThemeMultiSelect from '../shared/ThemeMultiSelect';
 import GoalKpiLivePanel from '../goals/GoalKpiLivePanel';
 import type { Goal, Story, Sprint } from '../../types';
 import type { IHabit } from '../../types';
+
+// Convert assorted Firestore date shapes to ms-since-epoch. Returns null if absent.
+const goalDateMs = (v: any): number | null => {
+  if (!v) return null;
+  if (typeof v === 'number') return v < 1e11 ? v * 1000 : v;
+  if (v instanceof Date) return v.getTime();
+  if (typeof v?.toMillis === 'function') return v.toMillis();
+  if (typeof v?.seconds === 'number') return v.seconds * 1000;
+  const parsed = Date.parse(String(v));
+  return Number.isNaN(parsed) ? null : parsed;
+};
+const fmtShortDate = (ms: number | null): string => ms == null ? '' : new Date(ms).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' });
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -131,8 +144,12 @@ const SprintPlannerWizard: React.FC<SprintPlannerWizardProps> = ({
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  // ── Goal search ────────────────────────────────────────────────────────────
+  // ── Goal search + filters (Step 1) ─────────────────────────────────────────
   const [goalSearch, setGoalSearch] = useState('');
+  // Default: only show goals planned in the next 6 months. Reuses the same
+  // mental model as the Goals list page filters (theme multi-select, scope).
+  const [showAllHorizon, setShowAllHorizon] = useState(false);
+  const [filterThemeIds, setFilterThemeIds] = useState<number[]>([]);
 
   // ── Wizard state ───────────────────────────────────────────────────────────
   const today = new Date();
@@ -156,6 +173,9 @@ const SprintPlannerWizard: React.FC<SprintPlannerWizardProps> = ({
       };
     }
     return {
+      // Partnership with Focus Goals Wizard: pre-select the horizon-level focus
+      // goals as a strong default. User can still add non-focus goals or
+      // deselect focus ones — focus is a recommendation, not a restriction.
       selectedGoalIds: new Set(activeFocusGoals.flatMap(fg => fg.goalIds || [])),
       selectedStoryIds: new Set(),
       name: `Sprint — w/c ${today.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}`,
@@ -376,12 +396,33 @@ const SprintPlannerWizard: React.FC<SprintPlannerWizardProps> = ({
   };
 
   // ── Filtered goals for step 1 ───────────────────────────────────────────────
+  // Lookup table for parent goal titles + lookup of children counts.
+  const goalById = useMemo(() => {
+    const m = new Map<string, Goal>();
+    for (const g of allGoals) m.set(g.id, g);
+    return m;
+  }, [allGoals]);
+
   const filteredGoals = useMemo(() => {
     const search = goalSearch.toLowerCase();
+    const now = Date.now();
+    const sixMonthsMs = now + 180 * 24 * 60 * 60 * 1000;
     return allGoals
       .filter(g => {
         const st = typeof g.status === 'number' ? g.status : parseInt(String(g.status ?? 0));
         return st < 4; // not done
+      })
+      // Theme multi-select (matches Goals list page semantics)
+      .filter(g => filterThemeIds.length === 0 || filterThemeIds.includes(Number((g as any).theme)))
+      // Horizon: by default show only goals whose end/target falls within the next 6 months.
+      // Always keep currently-selected goals visible so users don't lose context.
+      // Always keep goals with NO end date visible (we can't filter what we can't measure).
+      .filter(g => {
+        if (showAllHorizon) return true;
+        if (wiz.selectedGoalIds.has(g.id)) return true;
+        const endMs = goalDateMs((g as any).endDate) ?? goalDateMs((g as any).targetDate) ?? goalDateMs((g as any).dueDate);
+        if (endMs == null) return true; // undated goals stay visible
+        return endMs >= now && endMs <= sixMonthsMs;
       })
       .filter(g => !search || (g.title || '').toLowerCase().includes(search))
       .sort((a, b) => {
@@ -389,7 +430,7 @@ const SprintPlannerWizard: React.FC<SprintPlannerWizardProps> = ({
         const bSelected = wiz.selectedGoalIds.has(b.id) ? 0 : 1;
         return aSelected - bSelected || (a.title || '').localeCompare(b.title || '');
       });
-  }, [allGoals, goalSearch, wiz.selectedGoalIds]);
+  }, [allGoals, goalSearch, wiz.selectedGoalIds, filterThemeIds, showAllHorizon]);
 
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
@@ -429,15 +470,35 @@ const SprintPlannerWizard: React.FC<SprintPlannerWizardProps> = ({
         {step === 1 && (
           <div>
             <h6 className="mb-1">Select focus goals for this sprint</h6>
-            <p className="text-muted small mb-3">Your active focus goals are pre-selected. Add or remove as needed.</p>
+            <p className="text-muted small mb-3">Your active focus goals are pre-selected. Showing goals planned in the next 6 months by default. Add or remove as needed.</p>
 
-            <Form.Control
-              placeholder="Search goals..."
-              size="sm"
-              className="mb-3"
-              value={goalSearch}
-              onChange={e => setGoalSearch(e.target.value)}
-            />
+            <div className="d-flex flex-wrap gap-2 mb-2 align-items-center">
+              <Form.Control
+                placeholder="Search goals..."
+                size="sm"
+                value={goalSearch}
+                onChange={e => setGoalSearch(e.target.value)}
+                style={{ minWidth: 180, flex: '1 1 200px' }}
+              />
+              <div style={{ minWidth: 180 }}>
+                <ThemeMultiSelect
+                  selectedIds={filterThemeIds}
+                  onChange={setFilterThemeIds}
+                  placeholder="All themes"
+                />
+              </div>
+              <Form.Check
+                type="switch"
+                id="wizard-show-all-horizon"
+                label="Show all goals (any horizon)"
+                checked={showAllHorizon}
+                onChange={e => setShowAllHorizon(e.target.checked)}
+                className="small"
+              />
+            </div>
+            <div className="text-muted small mb-3">
+              {filteredGoals.length} goal{filteredGoals.length === 1 ? '' : 's'} shown · {wiz.selectedGoalIds.size} selected
+            </div>
 
             {goalsLoading ? (
               <div className="text-center py-4"><Spinner size="sm" /> Loading goals...</div>
@@ -448,6 +509,13 @@ const SprintPlannerWizard: React.FC<SprintPlannerWizardProps> = ({
                   const color = goalThemeColor(goal);
                   const isFocusGoal = activeFocusGoals.some(fg => (fg.goalIds || []).includes(goal.id));
                   const kindLabel = goal.goalKind === 'umbrella' ? 'Program' : goal.goalKind === 'milestone' ? 'Phase' : goal.goalKind === 'execution' ? 'Leaf' : goal.goalKind || '';
+                  const parentId = (goal as any).parentGoalId || (goal as any).parentId;
+                  const parent = parentId ? goalById.get(String(parentId)) : null;
+                  const startMs = goalDateMs((goal as any).startDate);
+                  const endMs = goalDateMs((goal as any).endDate) ?? goalDateMs((goal as any).targetDate) ?? goalDateMs((goal as any).dueDate);
+                  const dateLabel = startMs || endMs
+                    ? `${fmtShortDate(startMs) || '—'} → ${fmtShortDate(endMs) || '—'}`
+                    : '';
                   return (
                     <div
                       key={goal.id}
@@ -468,6 +536,17 @@ const SprintPlannerWizard: React.FC<SprintPlannerWizardProps> = ({
                       {checked ? <CheckCircle2 size={16} color={color} /> : <Circle size={16} color="var(--bs-secondary-color)" />}
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontWeight: 500, fontSize: 13, lineHeight: 1.3 }}>{goal.title || 'Untitled'}</div>
+                        {parent && (
+                          <div style={{ fontSize: 11, color: 'var(--bs-secondary-color)', marginTop: 2, lineHeight: 1.2 }}>
+                            ↳ Parent: {parent.title || 'Untitled'}
+                          </div>
+                        )}
+                        {dateLabel && (
+                          <div style={{ fontSize: 11, color: 'var(--bs-secondary-color)', marginTop: 1, lineHeight: 1.2 }}>
+                            <CalendarDays size={10} style={{ marginRight: 4, verticalAlign: 'text-bottom' }} />
+                            {dateLabel}
+                          </div>
+                        )}
                         <div style={{ display: 'flex', gap: 4, marginTop: 3, flexWrap: 'wrap' }}>
                           {goal.theme != null && (
                             <span style={{ fontSize: 11, color: color, background: `${color}15`, padding: '1px 6px', borderRadius: 10 }}>

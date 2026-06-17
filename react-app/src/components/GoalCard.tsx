@@ -1,14 +1,7 @@
 import React from 'react';
-import { Layers2, GitBranch, Leaf } from 'lucide-react';
 import { colorWithAlpha } from '../utils/storyCardFormatting';
 import { getThemeName, getStatusName } from '../utils/statusHelpers';
 import './GoalsCardView.css';
-
-const GOAL_KIND_META: Record<string, { label: string; icon: React.ReactNode; color: string }> = {
-  umbrella:  { label: 'Program',  icon: <Layers2 size={10} />, color: '#0ea5e9' },
-  milestone: { label: 'Phase',    icon: <GitBranch size={10} />, color: '#10b981' },
-  execution: { label: 'Leaf',     icon: <Leaf size={10} />,     color: '#8b5cf6' },
-};
 
 export interface GoalCardProps {
   /** Raw goal data */
@@ -128,34 +121,15 @@ const GoalCard: React.FC<GoalCardProps> = ({
               {statusLabel(goal.status, goal.goalKind)}
             </span>
           )}
-          {/* Start date quarter badge (compact / full) */}
-          {detailLevel !== 'minimal' && goal.startDate && (() => {
-            const d = goal.startDate instanceof Date
-              ? goal.startDate
-              : typeof goal.startDate === 'object' && goal.startDate?.toDate
-              ? goal.startDate.toDate()
-              : new Date(goal.startDate);
-            if (isNaN(d.getTime())) return null;
-            const q = `Q${Math.ceil((d.getMonth() + 1) / 3)} ${d.getFullYear()}`;
-            return (
-              <span className="kanban-card__meta-badge" style={{ color: 'var(--muted)' }}>
-                {q}
-              </span>
-            );
-          })()}
           {/* Goal kind (compact / full) */}
-          {detailLevel !== 'minimal' && goal.goalKind && (() => {
-            const k = GOAL_KIND_META[goal.goalKind ?? ''];
-            if (!k) return null;
-            return (
-              <span
-                className="kanban-card__meta-badge"
-                style={{ color: k.color, display: 'inline-flex', alignItems: 'center', gap: 3 }}
-              >
-                {k.icon}{k.label}
-              </span>
-            );
-          })()}
+          {detailLevel !== 'minimal' && goal.goalKind && (
+            <span
+              className="kanban-card__meta-badge"
+              style={{ textTransform: 'capitalize' }}
+            >
+              {goal.goalKind}
+            </span>
+          )}
           {/* KPI status (compact / full) */}
           {detailLevel !== 'minimal' && kpiLabel && (
             <span className="kanban-card__meta-badge" style={{ color: kpiColor }}>

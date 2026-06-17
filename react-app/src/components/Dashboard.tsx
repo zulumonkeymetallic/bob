@@ -7,7 +7,6 @@ import { SortableContext, useSortable, arrayMove, rectSortingStrategy } from '@d
 import { CSS as DndCSS } from '@dnd-kit/utilities';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
-import { useBobData } from '../contexts/BobDataContext';
 import { collection, query, where, onSnapshot, orderBy, limit, getDocs, doc, getDoc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Story, Task, Sprint, Goal } from '../types';
@@ -615,7 +614,6 @@ const resolveMonzoBucket = (tx: any): string => {
 const Dashboard: React.FC = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
-  const { stories: contextStories, goals: contextGoals, tasks: contextTasks } = useBobData();
   const { showSidebar } = useSidebar();
   const navigate = useNavigate();
   const { themes: globalThemes } = useGlobalThemes();
@@ -2177,66 +2175,35 @@ const Dashboard: React.FC = () => {
     return () => unsubscribe();
   }, [currentUser, currentPersona]);
 
-  // Derive story stats/state from BobDataProvider context (no separate listener needed)
-  useEffect(() => {
-    setPersonaStoriesPool(contextStories);
-    setRecentStories(contextStories.slice(0, 5));
-    let totalPoints = 0;
-    let donePoints = 0;
-    let totalStories = 0;
-    let doneStories = 0;
-    contextStories.forEach((story) => {
-      const data = story as any;
-      const points = Number.isFinite(Number(data.points)) ? Number(data.points) : 0;
-      totalPoints += points;
-      totalStories += 1;
-      if (isStatus(data.status, 'done')) {
-        donePoints += points;
-        doneStories += 1;
-      }
-    });
-    const activeStories = totalStories - doneStories;
-    const storyCompletion = totalStories > 0 ? Math.round((doneStories / totalStories) * 100) : 0;
-    const storyPointsCompletion = totalPoints > 0 ? Math.round((donePoints / totalPoints) * 100) : 0;
-    setStats(prev => ({
-      ...prev,
-      activeStories,
-      storyCompletion,
-      totalStoryPoints: totalPoints,
-      doneStoryPoints: donePoints,
-      storyPointsCompletion,
-    }));
-  }, [contextStories]);
-
-  // Derive goal stats/state from BobDataProvider context (no separate listener needed)
-  useEffect(() => {
-    setGoalsList(contextGoals);
-    const activeGoals = contextGoals.filter(goal => !isStatus(goal.status, 'Complete')).length;
-    const doneGoals = contextGoals.filter(goal => isStatus(goal.status, 'Complete')).length;
-    const now = new Date();
-    const soon = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
-    const dueSoon = contextGoals.filter(goal => {
-      const due = decodeToDate(goal.targetDate || (goal as any).dueDate);
-      return due ? due >= now && due <= soon : false;
-    }).length;
-    setStats(prev => ({
-      ...prev,
-      activeGoals,
-      goalsDueSoon: dueSoon,
-      totalGoals: contextGoals.length,
-      doneGoals,
-      goalCompletion: contextGoals.length > 0 ? Math.round((doneGoals / contextGoals.length) * 100) : 0,
-    }));
-  }, [contextGoals, decodeToDate]);
-
   useEffect(() => {
     console.log('🔍 Dashboard useEffect triggered:', { currentUser: !!currentUser, persona: currentPersona });
     if (!currentUser) {
       console.log('🔍 Dashboard: No currentUser, returning early');
+      setPersonaStoriesPool([]);
       return;
     }
 
     setLoading(true);
+
+    const storiesQuery = query(
+      collection(db, 'stories'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+      orderBy('updatedAt', 'desc'),
+      limit(8)
+    );
+
+    const storiesSummaryQuery = query(
+      collection(db, 'stories'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona)
+    );
+
+    const goalsQuery = query(
+      collection(db, 'goals'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona)
+    );
 
     const tasksQuery = query(
       collection(db, 'sprint_task_index'),
@@ -2246,6 +2213,83 @@ const Dashboard: React.FC = () => {
       orderBy('dueDate', 'asc'),
       limit(60)
     );
+
+    const unsubscribeStories = onSnapshot(storiesQuery, (snapshot) => {
+      const storiesData = snapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          ...data,
+          createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : data.createdAt,
+          updatedAt: data.updatedAt?.toDate ? data.updatedAt.toDate() : data.updatedAt,
+        };
+      }) as Story[];
+      setRecentStories(storiesData.slice(0, 5));
+      const activeStories = storiesData.filter(story => !isStatus(story.status, 'done')).length;
+      const doneStories = storiesData.filter(story => isStatus(story.status, 'done')).length;
+      setStats(prev => ({
+        ...prev,
+        activeStories,
+        storyCompletion: storiesData.length > 0 ? Math.round((doneStories / storiesData.length) * 100) : 0,
+      }));
+    });
+
+    const unsubscribeStorySummary = onSnapshot(storiesSummaryQuery, (snapshot) => {
+      const allStories = snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) } as Story));
+      setPersonaStoriesPool(allStories);
+      let totalPoints = 0;
+      let donePoints = 0;
+      let totalStories = 0;
+      let doneStories = 0;
+      allStories.forEach((story) => {
+        const data = story as any;
+        const points = Number.isFinite(Number(data.points)) ? Number(data.points) : 0;
+        totalPoints += points;
+        totalStories += 1;
+        if (isStatus(data.status, 'done')) {
+          donePoints += points;
+          doneStories += 1;
+        }
+      });
+      const percent = totalPoints > 0 ? Math.round((donePoints / totalPoints) * 100) : 0;
+      setStats(prev => ({
+        ...prev,
+        totalStoryPoints: totalPoints,
+        doneStoryPoints: donePoints,
+        storyPointsCompletion: percent,
+        activeStories: totalStories - doneStories,
+        storyCompletion: totalStories > 0 ? Math.round((doneStories / totalStories) * 100) : 0,
+      }));
+    });
+
+    const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
+      const goalData = snapshot.docs.map((docSnap) => {
+        const data = docSnap.data();
+        return {
+          id: docSnap.id,
+          ...data,
+          targetDate: data.targetDate?.toDate ? data.targetDate.toDate() : data.targetDate,
+          dueDate: data.dueDate?.toDate ? data.dueDate.toDate() : data.dueDate,
+        } as Goal;
+      });
+      setGoalsList(goalData);
+      const activeGoals = goalData.filter(goal => !isStatus(goal.status, 'Complete')).length;
+      const doneGoals = goalData.filter(goal => isStatus(goal.status, 'Complete')).length;
+      const now = new Date();
+      const soon = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
+      const dueSoon = goalData.filter(goal => {
+        const due = decodeToDate(goal.targetDate || goal.dueDate);
+        return due ? due >= now && due <= soon : false;
+      }).length;
+      setStats(prev => ({
+        ...prev,
+        activeGoals,
+        goalsDueSoon: dueSoon,
+        totalGoals: goalData.length,
+        doneGoals,
+        goalCompletion: goalData.length > 0 ? Math.round((doneGoals / goalData.length) * 100) : 0,
+      }));
+    });
 
     const unsubscribeTasks = onSnapshot(tasksQuery, (snapshot) => {
       const allTasks = snapshot.docs.map(doc => {
@@ -2313,19 +2357,18 @@ const Dashboard: React.FC = () => {
       if (!currentUser) return;
       try {
         await Promise.all([
+          loadLLMPriority(),
           loadTodayBlocks(),
           countTasksDueToday(),
           loadRemindersDueToday(),
           loadChecklistDueToday(),
           loadDailySummary(),
+          loadMonzoSummary(),
+          loadFitnessTrendSummary()
         ]);
       } catch (error) {
         console.error("Error loading additional dashboard data:", error);
       }
-      // Defer heavy data loads so they don't compete with initial render + Firestore listeners
-      setTimeout(() => loadMonzoSummary(), 2000);
-      setTimeout(() => loadFitnessTrendSummary(), 4000);
-      setTimeout(() => loadLLMPriority(), 6000);
     };
 
     loadAdditionalData();
@@ -2333,6 +2376,9 @@ const Dashboard: React.FC = () => {
     setLoading(false);
 
     return () => {
+      unsubscribeStories();
+      unsubscribeStorySummary();
+      unsubscribeGoals();
       unsubscribeTasks();
       unsubscribePots();
     };
@@ -3833,18 +3879,49 @@ const Dashboard: React.FC = () => {
     navigate('/stories', { state: { themeId } });
   };
 
-  // Sprint-scoped data for metrics panel — derived from context, no extra listeners
+  // Sprint-scoped data for metrics panel
   useEffect(() => {
-    if (!selectedSprintId) {
+    if (!currentUser || !currentPersona || !selectedSprintId) {
       setSprintStories([]);
       setSprintTasks([]);
       setSprintGoals([]);
       return;
     }
-    setSprintStories(contextStories.filter(s => (s as any).sprintId === selectedSprintId));
-    setSprintTasks(contextTasks.filter(t => (t as any).sprintId === selectedSprintId));
-    setSprintGoals(contextGoals);
-  }, [selectedSprintId, contextStories, contextTasks, contextGoals]);
+
+    const storiesQuery = query(
+      collection(db, 'stories'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+      where('sprintId', '==', selectedSprintId)
+    );
+    const tasksQuery = query(
+      collection(db, 'tasks'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+      where('sprintId', '==', selectedSprintId)
+    );
+    const goalsQuery = query(
+      collection(db, 'goals'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona)
+    );
+
+    const unsubStories = onSnapshot(storiesQuery, (snap) => {
+      setSprintStories(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) } as Story)));
+    });
+    const unsubTasks = onSnapshot(tasksQuery, (snap) => {
+      setSprintTasks(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) } as Task)));
+    });
+    const unsubGoals = onSnapshot(goalsQuery, (snap) => {
+      setSprintGoals(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) } as Goal)));
+    });
+
+    return () => {
+      unsubStories();
+      unsubTasks();
+      unsubGoals();
+    };
+  }, [currentUser, currentPersona, selectedSprintId]);
 
   useEffect(() => {
     if (!currentUser?.uid || !selectedSprintId) {

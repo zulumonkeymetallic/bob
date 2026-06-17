@@ -1,6 +1,7 @@
 import React, { useState, useEffect, Suspense } from 'react';
 import { Button } from 'react-bootstrap';
 import { Routes, Route, BrowserRouter as Router, Navigate, useLocation, useNavigate } from 'react-router-dom';
+import Dashboard from './components/Dashboard';
 import TaskListView from './components/TaskListView';
 import GoalsManagement from './components/GoalsManagement';
 import GoalsYearPlanner from './components/GoalsYearPlanner';
@@ -16,11 +17,13 @@ import BacklogManager from './components/BacklogManager';
 import VisualCanvas from './components/VisualCanvas';
 import StoriesManagement from './components/StoriesManagement';
 import JournalsManagement from './components/JournalsManagement';
+import JournalInsightsPage from './components/JournalInsightsPage';
 import PersonalListsManagement from './components/PersonalListsManagement';
 import GamesBacklog from './components/GamesBacklog';
 import BooksBacklog from './components/BooksBacklog';
 import ShowsBacklog from './components/ShowsBacklog';
 import VideosBacklog from './components/VideosBacklog';
+import YouTubeHistoryDashboard from './components/YouTubeHistoryDashboard';
 // import ModernTableDemo from './components/ModernTableDemo';
 import FloatingActionButton from './components/FloatingActionButton';
 import FloatingAssistantButton from './components/FloatingAssistantButton';
@@ -36,12 +39,12 @@ import { PersonaProvider, usePersona } from './contexts/PersonaContext';
 import { SprintProvider, useSprint } from './contexts/SprintContext';
 import { SidebarProvider } from './contexts/SidebarContext';
 import { ProcessTextActivityProvider } from './contexts/ProcessTextActivityContext';
-import { BobDataProvider, useBobData } from './contexts/BobDataContext';
 
 // Import theme-aware styles
 import './styles/theme-aware.css';
 import { TestModeProvider } from './contexts/TestModeContext';
 import { DetailLevelProvider } from './contexts/DetailLevelContext';
+import { BobDataProvider } from './contexts/BobDataContext';
 import PersonaSwitcher from './components/PersonaSwitcher';
 import GlobalSidebar from './components/GlobalSidebar';
 import { useDeviceInfo } from './utils/deviceDetection';
@@ -52,7 +55,10 @@ import { clickTrackingService } from './services/ClickTrackingService';
 import logger from './utils/logger';
 
 // BOB v3.5.2 - New Scaffolding Components
+import EnhancedGanttChart from './components/visualization/EnhancedGanttChart';
 import CalendarIntegrationView from './components/calendar/CalendarIntegrationView';
+import SprintManagementView from './components/sprints/SprintManagementView';
+import SprintsPage from './components/sprints/SprintsPage';
 import SprintTablePage from './components/sprints/SprintTablePage';
 import SprintRetrospective from './components/SprintRetrospective';
 import CheckInDaily from './components/checkins/CheckInDaily';
@@ -78,11 +84,15 @@ import GoalRoadmapV6 from './components/visualization/GoalRoadmapV6';
 import SprintKanbanPageV2 from './components/SprintKanbanPageV2';
 import TasksManagement from './components/TasksManagement';
 import SprintPlanningMatrix from './components/SprintPlanningMatrix';
+import WorkoutsDashboard from './components/WorkoutsDashboard';
 import MetricsPage from './components/MetricsPage';
+import AiCoachPage from './components/coach/AiCoachPage';
+import FinanceDashboardModern from './components/FinanceDashboardModern';
 import MerchantMappings from './components/finance/MerchantMappings';
 import BudgetsPage from './components/finance/BudgetsPage';
 import GoalPotLinking from './components/finance/GoalPotLinking';
 import TransactionsList from './components/finance/TransactionsList';
+import FinanceFlowDiagram from './components/finance/FinanceFlowDiagram';
 import PotsBoard from './components/finance/PotsBoard';
 import IntegrationSettings from './components/IntegrationSettings';
 import IntegrationLogs from './components/IntegrationLogs';
@@ -106,30 +116,22 @@ import DeepLinkStory from './components/routes/DeepLinkStory';
 import DeepLinkGoal from './components/routes/DeepLinkGoal';
 import DeepLinkTask from './components/routes/DeepLinkTask';
 import QueryDeepLinkGate from './components/routes/QueryDeepLinkGate';
+import AdvancedOverview from './components/AdvancedOverview';
+import MetricsOverview from './components/MetricsOverview';
+import FinanceDashboardAdvanced from './components/finance/FinanceDashboardAdvanced';
+import FinanceCoachPage from './components/finance/FinanceCoachPage';
+import CapacityDashboard from './components/CapacityDashboard';
 import FocusGoalsPage from './components/FocusGoalsPage';
-import { deleteDoc, doc, serverTimestamp, updateDoc } from 'firebase/firestore';
+import { collection, deleteDoc, doc, limit, onSnapshot, orderBy, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
 import { db } from './firebase';
 import type { Goal, Story, Task } from './types';
 import { setupRecaptchaOnStartup } from './utils/recaptchaHelper';
 import { buildPlannerPath } from './utils/plannerRoutes';
 
 
-// Lazy-loaded heavy routes — keeps echarts, recharts, chart.js, and maplibre out of the main bundle
-const Dashboard = React.lazy(() => import('./components/Dashboard'));
+// Lazy-loaded heavy routes
 const TravelMap = React.lazy(() => import('./components/travel/TravelMap-v2'));
 const RunningHeatmap = React.lazy(() => import('./components/health/RunningHeatmap'));
-const FinanceDashboardAdvanced = React.lazy(() => import('./components/finance/FinanceDashboardAdvanced'));
-const FinanceFlowDiagram = React.lazy(() => import('./components/finance/FinanceFlowDiagram'));
-const FinanceCoachPage = React.lazy(() => import('./components/finance/FinanceCoachPage'));
-const AdvancedOverview = React.lazy(() => import('./components/AdvancedOverview'));
-const WorkoutsDashboard = React.lazy(() => import('./components/WorkoutsDashboard'));
-const YouTubeHistoryDashboard = React.lazy(() => import('./components/YouTubeHistoryDashboard'));
-const AiCoachPage = React.lazy(() => import('./components/coach/AiCoachPage'));
-const SprintManagementView = React.lazy(() => import('./components/sprints/SprintManagementView'));
-const EnhancedGanttChart = React.lazy(() => import('./components/visualization/EnhancedGanttChart'));
-const CapacityDashboard = React.lazy(() => import('./components/CapacityDashboard'));
-const JournalInsightsPage = React.lazy(() => import('./components/JournalInsightsPage'));
-const SprintsPage = React.lazy(() => import('./components/sprints/SprintsPage'));
 
 function App() {
   return (
@@ -137,15 +139,13 @@ function App() {
       <DetailLevelProvider>
         <PersonaProvider>
           <SprintProvider>
-            <BobDataProvider>
-              <ProcessTextActivityProvider>
-                <SidebarProvider>
-                  <Router>
-                    <AppContent />
-                  </Router>
-                </SidebarProvider>
-              </ProcessTextActivityProvider>
-            </BobDataProvider>
+            <ProcessTextActivityProvider>
+              <SidebarProvider>
+                <Router>
+                  <AppContent />
+                </Router>
+              </SidebarProvider>
+            </ProcessTextActivityProvider>
           </SprintProvider>
         </PersonaProvider>
       </DetailLevelProvider>
@@ -183,17 +183,55 @@ function AppContent() {
     return <Navigate to={target} replace />;
   };
 
-  // Data for the global sidebar — served from shared BobDataProvider
-  const { goals, stories, error: bobDataError, loading: bobDataLoading } = useBobData();
-
-  // Show a non-blocking banner if Firestore is unavailable (billing disabled, quota exceeded)
-  const [bannerDismissed, setBannerDismissed] = useState(false);
-  const showOfflineBanner = !!bobDataError && !bobDataLoading && !bannerDismissed;
+  // Data for the global sidebar
+  const [goals, setGoals] = useState<Goal[]>([]);
+  const [stories, setStories] = useState<Story[]>([]);
 
   // Initialize reCAPTCHA on app load
   useEffect(() => {
     setupRecaptchaOnStartup();
   }, []);
+
+  useEffect(() => {
+    if (!currentUser?.uid || !currentPersona) {
+      setGoals([]);
+      setStories([]);
+      return;
+    }
+
+    const goalsQuery = query(
+      collection(db, 'goals'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+      orderBy('createdAt', 'desc'),
+      limit(1000)
+    );
+
+    const storiesQuery = query(
+      collection(db, 'stories'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+      orderBy('createdAt', 'desc'),
+      limit(1000)
+    );
+
+    const unsubGoals = onSnapshot(
+      goalsQuery,
+      (snap) => setGoals(snap.docs.map((doc) => ({ id: doc.id, ...(doc.data() as any) }) as Goal)),
+      (err) => console.warn('[global-sidebar] goals snapshot error', err?.message || err)
+    );
+
+    const unsubStories = onSnapshot(
+      storiesQuery,
+      (snap) => setStories(snap.docs.map((doc) => ({ id: doc.id, ...(doc.data() as any) }) as Story)),
+      (err) => console.warn('[global-sidebar] stories snapshot error', err?.message || err)
+    );
+
+    return () => {
+      unsubGoals();
+      unsubStories();
+    };
+  }, [currentUser?.uid, currentPersona]);
 
   const handleGlobalSidebarDelete = async (
     item: Story | Task | Goal,
@@ -321,14 +359,8 @@ function AppContent() {
   return (
     <ErrorBoundary>
       <MigrationManager>
+        <BobDataProvider>
           <SidebarLayout onSignOut={handleSignOut}>
-          {showOfflineBanner && (
-            <div style={{ background: '#7c3aed', color: '#fff', padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 12, fontSize: 13, position: 'sticky', top: 0, zIndex: 9999 }}>
-              <span style={{ flex: 1 }}>Offline or Firebase billing issue — showing cached data. CRUD operations are queued locally and will sync when restored.</span>
-              <button onClick={() => setBannerDismissed(true)} style={{ background: 'none', border: '1px solid rgba(255,255,255,0.5)', color: '#fff', borderRadius: 4, padding: '2px 8px', cursor: 'pointer', fontSize: 12 }}>Dismiss</button>
-            </div>
-          )}
-          <Suspense fallback={<div className="p-4 text-center">Loading…</div>}>
           <Routes>
             <Route path="/" element={<RootRedirect />} />
             <Route path="/dashboard" element={<Dashboard />} />
@@ -478,7 +510,11 @@ function AppContent() {
             <Route path="/running-results" element={<Navigate to="/fitness/full" replace />} />
             <Route path="/parkrun-results" element={<WorkoutsDashboard />} />
             <Route path="/workouts" element={<Navigate to="/fitness/full" replace />} />
-            <Route path="/running/heatmap" element={<RunningHeatmap />} />
+            <Route path="/running/heatmap" element={
+              <Suspense fallback={<div className="p-4">Loading…</div>}>
+                <RunningHeatmap />
+              </Suspense>
+            } />
             <Route path="/finance" element={<Navigate to="/finance/dashboard" replace />} />
             <Route path="/finance/merchants" element={<MerchantMappings />} />
             <Route path="/finance/categories" element={<Navigate to="/finance/merchants" replace />} />
@@ -519,7 +555,6 @@ function AppContent() {
             <Route path="/public/roadmap/:shareCode" element={<PublicRoadmapView />} />
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
-          </Suspense>
 
           {/* Assistant (floating, near FAB but separate) */}
           <FloatingAssistantButton onClick={() => setShowAssistant(true)} />
@@ -542,6 +577,7 @@ function AppContent() {
             onDelete={handleGlobalSidebarDelete}
           />
         </SidebarLayout>
+        </BobDataProvider>
       </MigrationManager>
     </ErrorBoundary>
   );

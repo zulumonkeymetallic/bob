@@ -34,7 +34,6 @@ interface GoalsCardViewProps {
   themes?: GlobalTheme[];
   cardLayout?: 'grid' | 'comfortable';
   showDescriptions?: boolean;
-  detailLevel?: 'minimal' | 'compact' | 'full';
   goalKpiStatusByGoalId?: Record<string, {
     goalId: string;
     goalTitle: string;
@@ -58,7 +57,6 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
   themes,
   cardLayout = 'grid',
   showDescriptions,
-  detailLevel = 'compact',
   goalKpiStatusByGoalId
 }) => {
   const { showSidebar } = useSidebar();
@@ -685,13 +683,13 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
           const themeTextColor = themeDef.textColor || 'var(--on-accent)';
           const isSelected = selectedGoalId === goal.id;
           const isFocusAligned = focusGoalIds?.includes(goal.id) ?? false;
-          const gradientStart = lightenColor(themeColor, showDetailed ? 0.35 : 0.55);
-          const gradientEnd = lightenColor(themeColor, showDetailed ? 0.6 : 0.78);
-          const cardBackground = `linear-gradient(165deg, ${gradientStart} 0%, ${gradientEnd} 100%)`;
+          // White card with a theme-coloured top bar and border (replaces the previous gradient).
+          // Keeps full readability against light backgrounds and uses theme color as the accent.
+          const cardBackground = 'var(--card, #fff)';
           const defaultText = themeVars.text as string;
           const defaultMuted = themeVars.muted as string;
-          const textColor = showDetailed ? (themeDef.textColor || (themeVars.onAccent as string)) : defaultText;
-          const mutedTextColor = showDetailed ? withAlpha(themeColor, 0.75) : defaultMuted;
+          const textColor = defaultText;
+          const mutedTextColor = defaultMuted;
           const totalStories = (goal as any).storyCount ?? (goal as any).storiesCount ?? (goal as any).story_counts ?? null;
           const doneStories = (goal as any).doneStories ?? (goal as any).completedStories ?? null;
           const allocatedMinutes = goalTimeAllocations[goal.id];
@@ -757,9 +755,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
           const kpiProgressLabel = effectiveGoalKpiStatus.progressPct != null
             ? `${Math.round(effectiveGoalKpiStatus.progressPct)}%${effectiveGoalKpiStatus.expectedProgressPct != null ? ` (exp ${Math.round(effectiveGoalKpiStatus.expectedProgressPct)}%)` : ''}`
             : 'n/a';
-          const shouldShowDescription = detailLevel !== 'minimal' && showDescriptionsResolved && !!goal.description;
-          const shouldShowKpiProgress = detailLevel !== 'minimal';
-          const shouldShowActivity = detailLevel === 'full';
+          const shouldShowDescription = showDescriptionsResolved && !!goal.description;
           const latestActivityLabel = latestActivity
             ? latestActivity.activityType === 'note_added'
               ? 'Latest Comment'
@@ -799,8 +795,9 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                 style={{
                 height: '100%',
                 minHeight: showDetailed ? 300 : 220,
-                border: isSelected ? `3px solid ${themeColor}` : `1px solid ${rgbaCard(0.06)}`,
-                boxShadow: isSelected ? '0 0 0 0 transparent' : '0 10px 24px var(--glass-shadow-color)',
+                border: isSelected ? `2px solid ${themeColor}` : `1px solid ${withAlpha(themeColor, 0.35)}`,
+                borderTop: `4px solid ${themeColor}`,
+                boxShadow: isSelected ? '0 0 0 0 transparent' : '0 6px 16px var(--glass-shadow-color)',
                 borderRadius: showDetailed ? '16px' : '14px',
                 overflow: 'hidden',
                 transition: 'all 0.3s ease',
@@ -975,7 +972,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                   </div>
                 )}
 
-                {!showDetailed && shouldShowKpiProgress && (
+                {!showDetailed && (
                   <div className="goals-card-quick-stats">
                     <div className="goals-card-progress">
                       <div className="goals-card-progress__header">
@@ -1174,7 +1171,6 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                         ) : null;
                       })()}
                     </div>
-                    {shouldShowActivity && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                       <div style={{ display: 'flex', alignItems: 'center' }}>
                         <Calendar size={12} style={{ marginRight: '4px' }} />
@@ -1197,7 +1193,6 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                         ) : null;
                       })()}
                     </div>
-                    )}
                   </div>
                   <div />
                 </div>

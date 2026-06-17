@@ -20,7 +20,7 @@ import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import ConfirmDialog from './ConfirmDialog';
 import { arrayMove } from '@dnd-kit/sortable';
 import { useSidebar } from '../contexts/SidebarContext';
-import { AlignLeft, ChevronLeft, ChevronRight, LayoutGrid, Minimize2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { computeWindowExpectedProgress, evaluateGoalTargetStatus } from '../utils/goalKpiStatus';
 import { goalNeedsLinkedPot } from '../utils/goalCost';
 
@@ -39,10 +39,17 @@ const GoalsManagement: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'list' | 'cards'>('cards');
-  const [cardDetailLevel, setCardDetailLevel] = useState<'minimal' | 'compact' | 'full'>(() =>
-    (localStorage.getItem('bob_goals_detail_level') as 'minimal' | 'compact' | 'full' | null) || 'compact'
-  );
   const [showAddGoal, setShowAddGoal] = useState(false);
+  const [goalsDetailLevel, setGoalsDetailLevel] = useState<'minimal' | 'medium' | 'full'>(() => {
+    try {
+      const stored = localStorage.getItem('bob_goals_detail_level');
+      if (stored === 'minimal' || stored === 'medium' || stored === 'full') return stored;
+    } catch {}
+    return 'medium';
+  });
+  useEffect(() => {
+    try { localStorage.setItem('bob_goals_detail_level', goalsDetailLevel); } catch {}
+  }, [goalsDetailLevel]);
   const [showGoalDescriptions, setShowGoalDescriptions] = useState<boolean>(() => {
     try {
       const stored = localStorage.getItem('bob_goals_show_descriptions');
@@ -714,22 +721,6 @@ const GoalsManagement: React.FC = () => {
                 Cards
               </Button>
             </div>
-            {viewMode === 'cards' && (
-              <div style={{ display: 'flex', border: '1px solid var(--notion-border)', borderRadius: 6, overflow: 'hidden' }}>
-                {(['minimal', 'compact', 'full'] as const).map((level) => (
-                  <Button
-                    key={level}
-                    size="sm"
-                    variant={cardDetailLevel === level ? 'primary' : 'outline-secondary'}
-                    title={level.charAt(0).toUpperCase() + level.slice(1)}
-                    onClick={() => { setCardDetailLevel(level); localStorage.setItem('bob_goals_detail_level', level); }}
-                    style={{ borderRadius: 0, padding: '4px 8px' }}
-                  >
-                    {level === 'minimal' ? <Minimize2 size={14} /> : level === 'compact' ? <LayoutGrid size={14} /> : <AlignLeft size={14} />}
-                  </Button>
-                ))}
-              </div>
-            )}
             <Button variant="primary" onClick={() => setShowAddGoal(true)}>
               Add Goal
             </Button>
@@ -874,15 +865,19 @@ const GoalsManagement: React.FC = () => {
                   />
                 </Form.Group>
               </Col>
-              <Col md={2}>
+              <Col md={1}>
                 <Form.Group>
-                  <Form.Label style={{ fontWeight: '500', marginBottom: '2px', fontSize: '11px' }}>Sprint</Form.Label>
-                  <div>
-                    <SprintSelector
-                      selectedSprintId={selectedSprintId}
-                      onSprintChange={(id) => setSelectedSprintId(id)}
-                    />
-                  </div>
+                  <Form.Label style={{ fontWeight: '500', marginBottom: '2px', fontSize: '11px' }}>Detail</Form.Label>
+                  <Form.Select
+                    size="sm"
+                    value={goalsDetailLevel}
+                    onChange={(e) => setGoalsDetailLevel(e.target.value as 'minimal' | 'medium' | 'full')}
+                    style={{ border: '1px solid var(--notion-border)', background: 'var(--notion-bg)', color: 'var(--notion-text)' }}
+                  >
+                    <option value="minimal">Minimal</option>
+                    <option value="medium">Medium</option>
+                    <option value="full">Full</option>
+                  </Form.Select>
                 </Form.Group>
               </Col>
               <Col md={1}>
@@ -992,9 +987,8 @@ const GoalsManagement: React.FC = () => {
                     onGoalDelete={handleGoalDelete}
                     onGoalPriorityChange={handleGoalPriorityChange}
                     themes={globalThemes}
-                    cardLayout="grid"
-                    showDescriptions={showGoalDescriptions}
-                    detailLevel={cardDetailLevel}
+                    cardLayout={goalsDetailLevel === 'full' ? 'comfortable' : 'grid'}
+                    showDescriptions={goalsDetailLevel === 'minimal' ? false : showGoalDescriptions}
                     goalKpiStatusByGoalId={goalKpiStatusByGoalId}
                   />
                 )}

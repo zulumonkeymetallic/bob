@@ -20,6 +20,8 @@ import { useSidebar } from '../../contexts/SidebarContext';
 import { useSprint } from '../../contexts/SprintContext';
 import { useFocusGoals } from '../../hooks/useFocusGoals';
 import { useGlobalThemes } from '../../hooks/useGlobalThemes';
+import GoalCard from '../shared/GoalCard';
+import GoalCardRichPanels from '../shared/GoalCardRichPanels';
 import type { Goal, Sprint, Story, Task } from '../../types';
 import { getStatusName, getThemeName, isStatus } from '../../utils/statusHelpers';
 import { getActiveFocusLeafGoalIds, getGoalDisplayPath, isGoalInHierarchySet } from '../../utils/goalHierarchy';
@@ -69,6 +71,11 @@ interface GoalMetrics {
   maxAiScore: number | null;
   earliestDueMs: number | null;
   isFocusAligned: boolean;
+  // Counts used by the rich-panels slot (full detail). Include ALL stories
+  // (including done) for accurate progress bars — distinct from storyCount
+  // above which is non-done only for sorting/filtering.
+  doneStoriesTotal: number;
+  allStoriesTotal: number;
 }
 
 const DEFAULT_DURATION_MS = 30 * 86400000;
@@ -110,8 +117,8 @@ const shiftAnchor = (level: GoalPlannerLevel, anchor: Date, delta: number) => {
   return addQuarters(anchor, delta);
 };
 
-const buildPeriods = (level: GoalPlannerLevel, anchor: Date): PlannerPeriod[] => {
-  return Array.from({ length: 5 }, (_, index) => {
+const buildPeriods = (level: GoalPlannerLevel, anchor: Date, count: number = 3): PlannerPeriod[] => {
+  return Array.from({ length: Math.max(1, count) }, (_, index) => {
     const start = shiftAnchor(level, anchor, index);
     const end = level === 'year'
       ? endOfYear(start)
@@ -145,85 +152,51 @@ const goalThemeColor = (goal: Goal, themes: Array<{ id: number | string; color?:
   return match?.color || '#2563eb';
 };
 
+type DetailLevel = 'minimal' | 'medium' | 'full';
+
+// Thin wrapper around the shared <GoalCard /> so existing planner call-sites
+// don't need to change. All the layout logic lives in shared/GoalCard.tsx.
 const GoalPlannerCard: React.FC<{
   goal: Goal;
   metrics: GoalMetrics;
   allGoals: Goal[];
   themeColor: string;
+  detailLevel?: DetailLevel;
+  potBalanceGbp?: number;
   onEdit: (goal: Goal) => void;
   onWorkspace: (goal: Goal) => void;
   onActivity: (goal: Goal) => void;
   onGenerateStories: (goal: Goal) => void;
   onSchedule: (goal: Goal) => void;
-}> = ({ goal, metrics, allGoals, themeColor, onEdit, onWorkspace, onActivity, onGenerateStories, onSchedule }) => {
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    return draggable({
-      element: el,
-      getInitialData: () => ({ type: 'goal', item: goal, id: goal.id }),
-    });
-  }, [goal]);
-
+}> = ({ goal, metrics, allGoals, themeColor, detailLevel = 'medium', potBalanceGbp, onEdit, onWorkspace, onActivity, onGenerateStories, onSchedule }) => {
+  const richPanels = detailLevel === 'full' ? (
+    <GoalCardRichPanels
+      themeColor={themeColor}
+      doneStories={metrics.doneStoriesTotal}
+      totalStories={metrics.allStoriesTotal}
+      estimatedCostGbp={Number((goal as any).estimatedCost) || null}
+      potBalanceGbp={potBalanceGbp ?? null}
+    />
+  ) : null;
   return (
-    <Card
-      ref={ref}
-      className="shadow-sm border-0"
-      style={{
-        cursor: 'grab',
-        borderLeft: `4px solid ${themeColor}`,
-      }}
-    >
-      <Card.Body className="p-3">
-        <div className="d-flex align-items-start justify-content-between gap-2 mb-2">
-          <div className="min-w-0">
-            <div className="small fw-semibold text-uppercase" style={{ color: themeColor }}>
-              {String((goal as any).ref || goal.id).slice(0, 16)}
-            </div>
-            <div className="fw-semibold" style={{ lineHeight: 1.3 }}>{goal.title}</div>
-          </div>
-          <div className="d-flex align-items-center gap-1 flex-wrap justify-content-end">
-            <Button size="sm" variant="link" className="p-0 text-muted" onClick={() => onWorkspace(goal)} title="Open planning workspace">
-              <PanelsTopLeft size={15} />
-            </Button>
-            <Button size="sm" variant="link" className="p-0 text-muted" onClick={() => onActivity(goal)} title="Open activity stream">
-              <Activity size={15} />
-            </Button>
-            <Button size="sm" variant="link" className="p-0 text-muted" onClick={() => onEdit(goal)} title="Edit goal">
-              <Edit3 size={15} />
-            </Button>
-          </div>
-        </div>
-        <div className="text-muted small mb-2">
-          {getGoalDisplayPath(goal.id, allGoals)}
-        </div>
-        <div className="d-flex gap-1 flex-wrap mb-2">
-          <Badge bg="light" text="dark">{getThemeName((goal as any).theme)}</Badge>
-          <Badge bg="secondary">{getStatusName((goal as any).status)}</Badge>
-          {metrics.isFocusAligned && <Badge bg="primary">Focus</Badge>}
-          {metrics.top3Count > 0 && <Badge bg="danger">Top 3 {metrics.top3Count}</Badge>}
-          {metrics.aiScoredCount > 0 && <Badge bg="info">AI {metrics.aiScoredCount}</Badge>}
-          {goalNeedsLinkedPot(goal) && <Badge bg="warning" text="dark">No pot</Badge>}
-        </div>
-        <div className="small text-muted mb-3">
-          {metrics.storyCount} stories · {metrics.taskCount} tasks
-          {metrics.maxAiScore != null ? ` · max AI ${metrics.maxAiScore}` : ''}
-          {metrics.earliestDueMs ? ` · next due ${new Date(metrics.earliestDueMs).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}` : ''}
-        </div>
-        <div className="d-flex gap-2 flex-wrap">
-          <Button size="sm" variant="outline-primary" onClick={() => onGenerateStories(goal)}>
-            <Wand2 size={14} className="me-1" /> Stories
-          </Button>
-          <Button size="sm" variant="outline-secondary" onClick={() => onSchedule(goal)}>
-            <CalendarPlus size={14} className="me-1" /> Schedule
-          </Button>
-        </div>
-      </Card.Body>
-    </Card>
+    <GoalCard
+      goal={goal}
+      metrics={metrics}
+      themeColor={themeColor}
+      detailLevel={detailLevel}
+      parentPath={getGoalDisplayPath(goal.id, allGoals)}
+      draggablePayload={{ source: 'planner_year_quarter' }}
+      showNoPot={goalNeedsLinkedPot(goal)}
+      extraFullContent={richPanels}
+      onEdit={onEdit}
+      onActivity={onActivity}
+      onGenerateStories={onGenerateStories}
+      onSchedule={onSchedule}
+      onWorkspace={onWorkspace}
+    />
   );
 };
+
 
 const GoalPlannerPeriodColumn: React.FC<{
   period: PlannerPeriod;
@@ -231,12 +204,14 @@ const GoalPlannerPeriodColumn: React.FC<{
   metricsByGoalId: Map<string, GoalMetrics>;
   allGoals: Goal[];
   themes: Array<{ id: number | string; color?: string; name?: string; label?: string }>;
+  detailLevel: DetailLevel;
+  potBalancesByGoalId: Record<string, number>;
   onEdit: (goal: Goal) => void;
   onWorkspace: (goal: Goal) => void;
   onActivity: (goal: Goal) => void;
   onGenerateStories: (goal: Goal) => void;
   onSchedule: (goal: Goal) => void;
-}> = ({ period, goals, metricsByGoalId, allGoals, themes, onEdit, onWorkspace, onActivity, onGenerateStories, onSchedule }) => {
+}> = ({ period, goals, metricsByGoalId, allGoals, themes, detailLevel, potBalancesByGoalId, onEdit, onWorkspace, onActivity, onGenerateStories, onSchedule }) => {
   const ref = useRef<HTMLDivElement>(null);
   const [isOver, setIsOver] = useState(false);
 
@@ -286,9 +261,13 @@ const GoalPlannerPeriodColumn: React.FC<{
               maxAiScore: null,
               earliestDueMs: null,
               isFocusAligned: false,
+              doneStoriesTotal: 0,
+              allStoriesTotal: 0,
             }}
             allGoals={allGoals}
             themeColor={goalThemeColor(goal, themes)}
+            detailLevel={detailLevel}
+            potBalanceGbp={potBalancesByGoalId[goal.id]}
             onEdit={onEdit}
             onWorkspace={onWorkspace}
             onActivity={onActivity}
@@ -315,6 +294,8 @@ const UnifiedGoalPlannerLevels: React.FC<UnifiedGoalPlannerLevelsProps> = ({
   const [goals, setGoals] = useState<Goal[]>([]);
   const [stories, setStories] = useState<Story[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
+  // Pots → goalId map, used by the rich panels (savings progress bar) on the planner card.
+  const [potBalancesByGoalId, setPotBalancesByGoalId] = useState<Record<string, number>>({});
   const [selectedGoalIds, setSelectedGoalIds] = useState<string[]>([]);
   const [selectedThemeIds, setSelectedThemeIds] = useState<number[]>([]);
   const [showCompletedItems, setShowCompletedItems] = useState(false);
@@ -323,13 +304,15 @@ const UnifiedGoalPlannerLevels: React.FC<UnifiedGoalPlannerLevelsProps> = ({
   const [showFocusOnly, setShowFocusOnly] = useState(false);
   const [showNoPotOnly, setShowNoPotOnly] = useState(false);
   const [sortField, setSortField] = useState<'none' | 'top3' | 'aiScore' | 'dueDate'>('none');
+  const [detailLevel, setDetailLevel] = useState<DetailLevel>('medium');
   const [currentAnchor, setCurrentAnchor] = useState<Date>(() => normalizeAnchor(level, anchorDate));
+  const [periodCount, setPeriodCount] = useState<number>(3);
   const [editingGoal, setEditingGoal] = useState<Goal | null>(null);
   const [workspaceGoal, setWorkspaceGoal] = useState<Goal | null>(null);
   const [pendingSprintChanges, setPendingSprintChanges] = useState<PendingGoalTimelineChange | null>(null);
   const [feedback, setFeedback] = useState<{ variant: 'success' | 'warning' | 'danger'; text: string } | null>(null);
   const activeFocusGoalIds = useMemo(() => getActiveFocusLeafGoalIds(activeFocusGoals), [activeFocusGoals]);
-  const periods = useMemo(() => buildPeriods(level, currentAnchor), [level, currentAnchor]);
+  const periods = useMemo(() => buildPeriods(level, currentAnchor, periodCount), [level, currentAnchor, periodCount]);
   const themesPalette = useMemo(() => themes || [], [themes]);
 
   useEffect(() => {
@@ -339,10 +322,12 @@ const UnifiedGoalPlannerLevels: React.FC<UnifiedGoalPlannerLevelsProps> = ({
   useEffect(() => {
     if (!currentUser?.uid || !currentPersona) return;
 
+    // Note: persona filter is applied client-side rather than via Firestore where()
+    // clause — older goals don't have a persona field set and would be invisibly
+    // excluded by Firestore's exclusion semantics. Client-side filter keeps them.
     const goalsQuery = query(
       collection(db, 'goals'),
       where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona),
     );
     const storiesQuery = query(
       collection(db, 'stories'),
@@ -355,12 +340,33 @@ const UnifiedGoalPlannerLevels: React.FC<UnifiedGoalPlannerLevelsProps> = ({
       where('persona', '==', currentPersona),
     );
 
-    const unsubGoals = onSnapshot(goalsQuery, (snap) => setGoals(snap.docs.map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) })) as Goal[]));
+    const unsubGoals = onSnapshot(goalsQuery, (snap) => {
+      const all = snap.docs.map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) })) as Goal[];
+      // Keep goals where persona matches OR is missing (legacy untagged goals).
+      const filtered = all.filter((g) => !(g as any).persona || (g as any).persona === currentPersona);
+      setGoals(filtered);
+    });
+    // Load pots so the rich panels can show goal savings progress when detail level === 'full'.
+    const potsQuery = query(collection(db, 'pots'), where('ownerUid', '==', currentUser.uid));
+    const unsubPots = onSnapshot(potsQuery, (snap) => {
+      const next: Record<string, number> = {};
+      snap.docs.forEach((d) => {
+        const data = d.data() as any;
+        const goalIds: string[] = Array.isArray(data?.linkedGoalIds) ? data.linkedGoalIds : (data?.goalId ? [String(data.goalId)] : []);
+        const balancePence = Number(data?.balance || 0);
+        const balanceGbp = balancePence > 1000 ? balancePence / 100 : balancePence;
+        goalIds.forEach((gid) => {
+          next[gid] = (next[gid] || 0) + balanceGbp;
+        });
+      });
+      setPotBalancesByGoalId(next);
+    }, () => setPotBalancesByGoalId({}));
     const unsubStories = onSnapshot(storiesQuery, (snap) => setStories(snap.docs.map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) })) as Story[]));
     const unsubTasks = onSnapshot(tasksQuery, (snap) => setTasks(snap.docs.map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) })) as Task[]));
 
     return () => {
       unsubGoals();
+      unsubPots();
       unsubStories();
       unsubTasks();
     };
@@ -404,6 +410,12 @@ const UnifiedGoalPlannerLevels: React.FC<UnifiedGoalPlannerLevelsProps> = ({
         ...descendantStories.map((story) => goalAnchorMs(story as any)).filter((value): value is number => value != null),
         ...descendantTasks.map((task) => toMillis((task as any).dueDate ?? (task as any).targetDate)).filter((value): value is number => value != null),
       ].sort((a, b) => a - b);
+      // Story totals INCLUDING done — for the rich-panels progress bar.
+      const allDescendantStories = stories.filter((story) => {
+        const goalId = String((story as any).goalId || '').trim();
+        return goalId ? isGoalInHierarchySet(goalId, goals, new Set([goal.id])) : false;
+      });
+      const doneStoriesTotal = allDescendantStories.filter((s) => isStatus((s as any).status, 'done')).length;
       next.set(goal.id, {
         storyCount: descendantStories.length,
         taskCount: descendantTasks.length,
@@ -412,6 +424,8 @@ const UnifiedGoalPlannerLevels: React.FC<UnifiedGoalPlannerLevelsProps> = ({
         maxAiScore: aiScores.length ? Math.max(...aiScores) : null,
         earliestDueMs: dueValues[0] || null,
         isFocusAligned: activeFocusGoalIds.size > 0 && isGoalInHierarchySet(goal.id, goals, activeFocusGoalIds),
+        doneStoriesTotal,
+        allStoriesTotal: allDescendantStories.length,
       });
     });
     return next;
@@ -421,7 +435,12 @@ const UnifiedGoalPlannerLevels: React.FC<UnifiedGoalPlannerLevelsProps> = ({
     const selectedGoalIdSet = new Set(selectedGoalIds);
     const selectedThemeIdSet = new Set(selectedThemeIds);
     return goals.filter((goal) => {
-      if (!showCompletedItems && isStatus((goal as any).status, 'done')) return false;
+      // Goals use 'Complete' (status === 2) as their done state — `isStatus(..., 'done')`
+      // is hard-coded for stories/tasks and never matches goals. Explicit check:
+      if (!showCompletedItems) {
+        const goalStatus = Number((goal as any).status);
+        if (goalStatus === 2 || isStatus((goal as any).status, 'Complete')) return false;
+      }
       if (selectedGoalIdSet.size > 0 && !isGoalInHierarchySet(goal.id, goals, selectedGoalIdSet)) return false;
       if (selectedThemeIdSet.size > 0 && !selectedThemeIdSet.has(Number((goal as any).theme))) return false;
       const metrics = metricsByGoalId.get(goal.id);
@@ -486,16 +505,9 @@ const UnifiedGoalPlannerLevels: React.FC<UnifiedGoalPlannerLevelsProps> = ({
       tasks,
       sprints: sprints as Sprint[],
     });
-    if (impact.affectedStories.length > 0) {
-      setPendingSprintChanges({
-        goalId: goal.id,
-        startDate: startDateMs,
-        endDate: endDateMs,
-        targetYear,
-        affectedStories: impact.affectedStories,
-      });
-      return;
-    }
+    // Stage 3: auto-apply (no confirmation modal) — matches /planner?level=gantt behaviour.
+    // Any stories whose existing sprints fall outside the goal's new date window are
+    // re-assigned to the nearest sprint inside it by applyGoalTimelineChanges.
     await applyGoalTimelineChanges({
       goalId: goal.id,
       startDateMs,
@@ -503,9 +515,15 @@ const UnifiedGoalPlannerLevels: React.FC<UnifiedGoalPlannerLevelsProps> = ({
       targetYear,
       ownerUid: currentUser.uid,
       persona: (currentPersona || 'personal') as 'personal' | 'work',
-      affectedStories: [],
+      affectedStories: impact.affectedStories,
     });
-    setFeedback({ variant: 'success', text: `${goal.title} moved to ${new Date(startDateMs).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}.` });
+    const movedStoryCount = impact.affectedStories.length;
+    setFeedback({
+      variant: 'success',
+      text: movedStoryCount > 0
+        ? `${goal.title} moved to ${new Date(startDateMs).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}. ${movedStoryCount} ${movedStoryCount === 1 ? 'story' : 'stories'} reassigned to nearest sprint.`
+        : `${goal.title} moved to ${new Date(startDateMs).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}.`,
+    });
   };
 
   useEffect(() => {
@@ -621,6 +639,12 @@ const UnifiedGoalPlannerLevels: React.FC<UnifiedGoalPlannerLevelsProps> = ({
                 <option value="aiScore">Max AI score</option>
                 <option value="dueDate">Next due</option>
               </Form.Select>
+              <Form.Label className="small fw-semibold mt-2">Detail</Form.Label>
+              <Form.Select size="sm" value={detailLevel} onChange={(event) => setDetailLevel(event.target.value as DetailLevel)}>
+                <option value="minimal">Minimal</option>
+                <option value="medium">Medium</option>
+                <option value="full">Full</option>
+              </Form.Select>
             </Col>
             <Col md={3}>
               <Form.Label className="small fw-semibold">Window</Form.Label>
@@ -635,6 +659,12 @@ const UnifiedGoalPlannerLevels: React.FC<UnifiedGoalPlannerLevelsProps> = ({
                   <ChevronRight size={14} />
                 </Button>
               </div>
+              <Form.Label className="small fw-semibold mt-2">Show {level === 'year' ? 'years' : 'quarters'}</Form.Label>
+              <Form.Select size="sm" value={periodCount} onChange={(e) => setPeriodCount(Math.max(1, Number(e.target.value) || 3))}>
+                {[2, 3, 4, 5, 6, 8, 12].map((n) => (
+                  <option key={n} value={n}>{n}</option>
+                ))}
+              </Form.Select>
             </Col>
             <Col md={3}>
               <Form.Check type="switch" label="Show completed goals" checked={showCompletedItems} onChange={(event) => setShowCompletedItems(event.target.checked)} />
@@ -658,12 +688,53 @@ const UnifiedGoalPlannerLevels: React.FC<UnifiedGoalPlannerLevelsProps> = ({
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(5, minmax(240px, 1fr))',
+          gridTemplateColumns: `minmax(220px, 0.85fr) repeat(${periodCount}, minmax(240px, 1fr))`,
           gap: 16,
           alignItems: 'start',
           overflowX: 'auto',
         }}
       >
+        {/* Backlog column — always first; goals without sprint placement live here */}
+        <Card className="shadow-sm border-0 h-100" style={{ background: 'var(--bs-secondary-bg, #f8f9fa)' }}>
+          <Card.Header className="bg-transparent border-0 pb-0">
+            <div className="fw-semibold">Backlog</div>
+            <div className="text-muted small">No sprint placement</div>
+            <div className="text-muted small mt-1">{unscheduledGoals.length} goal{unscheduledGoals.length === 1 ? '' : 's'}</div>
+          </Card.Header>
+          <Card.Body
+            className="d-flex flex-column gap-2"
+            style={{ minHeight: 240, maxHeight: '70vh', overflowY: 'auto' }}
+          >
+            {unscheduledGoals.length === 0 ? (
+              <div className="text-muted small">Empty — drag goals here to clear their sprint placement</div>
+            ) : unscheduledGoals.map((goal) => (
+              <GoalPlannerCard
+                key={goal.id}
+                goal={goal}
+                metrics={metricsByGoalId.get(goal.id) || {
+                  storyCount: 0,
+                  taskCount: 0,
+                  top3Count: 0,
+                  aiScoredCount: 0,
+                  maxAiScore: null,
+                  earliestDueMs: null,
+                  isFocusAligned: false,
+                  doneStoriesTotal: 0,
+                  allStoriesTotal: 0,
+                }}
+                allGoals={goals}
+                themeColor={goalThemeColor(goal, themesPalette)}
+                detailLevel={detailLevel}
+                potBalanceGbp={potBalancesByGoalId[goal.id]}
+                onEdit={setEditingGoal}
+                onWorkspace={setWorkspaceGoal}
+                onActivity={(candidate) => showSidebar(candidate, 'goal')}
+                onGenerateStories={handleGenerateStories}
+                onSchedule={handleScheduleGoal}
+              />
+            ))}
+          </Card.Body>
+        </Card>
         {periods.map((period) => (
           <GoalPlannerPeriodColumn
             key={period.key}
@@ -672,6 +743,8 @@ const UnifiedGoalPlannerLevels: React.FC<UnifiedGoalPlannerLevelsProps> = ({
             metricsByGoalId={metricsByGoalId}
             allGoals={goals}
             themes={themesPalette}
+            detailLevel={detailLevel}
+            potBalancesByGoalId={potBalancesByGoalId}
             onEdit={setEditingGoal}
             onWorkspace={setWorkspaceGoal}
             onActivity={(goal) => showSidebar(goal, 'goal')}
@@ -680,31 +753,6 @@ const UnifiedGoalPlannerLevels: React.FC<UnifiedGoalPlannerLevelsProps> = ({
           />
         ))}
       </div>
-
-      {unscheduledGoals.length > 0 && (
-        <Card className="shadow-sm border-0 mt-3">
-          <Card.Body>
-            <div className="fw-semibold mb-2">Unscheduled Goals</div>
-            <div className="text-muted small mb-3">These goals do not yet fall inside the visible rolling window.</div>
-            <div className="d-flex flex-column gap-2">
-              {unscheduledGoals.slice(0, 10).map((goal) => (
-                <GoalPlannerCard
-                  key={goal.id}
-                  goal={goal}
-                  metrics={metricsByGoalId.get(goal.id)!}
-                  allGoals={goals}
-                  themeColor={goalThemeColor(goal, themesPalette)}
-                  onEdit={setEditingGoal}
-                  onWorkspace={setWorkspaceGoal}
-                  onActivity={(candidate) => showSidebar(candidate, 'goal')}
-                  onGenerateStories={handleGenerateStories}
-                  onSchedule={handleScheduleGoal}
-                />
-              ))}
-            </div>
-          </Card.Body>
-        </Card>
-      )}
 
       <EditGoalModal
         show={Boolean(editingGoal)}

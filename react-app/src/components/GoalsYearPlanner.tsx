@@ -232,10 +232,8 @@ const GoalYearCard: React.FC<{
   const themeLabel = getThemeName(goal.theme);
   const targetYear = resolveGoalYear(goal);
 
-  // GoalsCardView-style gradient background
-  const gradientStart = lightenHex(themeColor, 0.55);
-  const gradientEnd = lightenHex(themeColor, 0.78);
-  const cardBg = `linear-gradient(165deg, ${gradientStart} 0%, ${gradientEnd} 100%)`;
+  // White card with theme-coloured top bar + border (matches goal cards on /goals).
+  const cardBg = 'var(--card, #fff)';
 
   // Badge style using theme color
   const badgeStyle: React.CSSProperties = {
@@ -291,12 +289,6 @@ const GoalYearCard: React.FC<{
             </Button>
             <Button variant="link" size="sm" className="p-0" style={{ width: 20, height: 20, color: iconColor }} title="Edit" onClick={e => { e.stopPropagation(); onEdit(goal); }}>
               <Edit3 size={13} />
-            </Button>
-            <Button variant="link" size="sm" className="p-0" style={{ width: 20, height: 20, color: iconColor }} title="Generate stories" disabled={generatingGoalId === goal.id} onClick={e => { e.stopPropagation(); onAutoGenerateStories(goal); }}>
-              <Wand2 size={13} />
-            </Button>
-            <Button variant="link" size="sm" className="p-0" style={{ width: 20, height: 20, color: iconColor }} title="Schedule calendar blocks" disabled={schedulingGoalId === goal.id} onClick={e => { e.stopPropagation(); onScheduleGoal(goal); }}>
-              <CalendarPlus size={13} />
             </Button>
           </div>
         </div>

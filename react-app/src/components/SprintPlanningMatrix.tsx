@@ -1382,13 +1382,11 @@ const SprintPlanningMatrix: React.FC = () => {
           }}
         />
       )}
-      {showPlannerWizard && (
-        <SprintPlannerWizard
-          show={showPlannerWizard}
-          onHide={() => setShowPlannerWizard(false)}
-          onComplete={() => setShowPlannerWizard(false)}
-        />
-      )}
+      <SprintPlannerWizard
+        show={showPlannerWizard}
+        onHide={() => setShowPlannerWizard(false)}
+        onComplete={() => setShowPlannerWizard(false)}
+      />
     </Container>
   );
 };

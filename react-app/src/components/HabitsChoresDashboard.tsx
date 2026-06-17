@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Badge, Button, Form, Spinner } from 'react-bootstrap';
+import { Badge, Button, Card, Form, Spinner } from 'react-bootstrap';
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { endOfDay, format, startOfDay, subDays } from 'date-fns';
@@ -7,10 +7,9 @@ import { db, functions } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { Goal, Task } from '../types';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { isRecurringDueOnDate, resolveRecurringDueMs } from '../utils/recurringTaskDue';
 import EditTaskModal from './EditTaskModal';
-import '../styles/HabitsChoresDashboard.css';
 
 interface Occurrence {
   id: string;
@@ -27,24 +26,17 @@ interface TaskStats {
   expectedSlots: { dayMs: number; done: boolean }[];
 }
 
-interface ChecklistItem {
-  task: Task;
-  kind: 'chore' | 'routine' | 'habit';
-  dueMs: number;
-  doneToday: boolean;
-}
-
 const LOOKBACK_DAYS = 180;
 const TARGET_OCCURRENCES = 100;
 const VISIBLE_BOXES = 30;
 
-const THEME_LABELS: Record<number, string> = {
-  1: 'Health',
-  2: 'Growth',
-  3: 'Wealth',
-  4: 'Tribe',
-  5: 'Home',
-};
+const BOX_SIZE = 13;
+const BOX_GAP = 2;
+const NAME_COL_WIDTH = 180;
+
+function habitBoxColor(done: boolean): string {
+  return done ? '#22c55e' : '#ef4444';
+}
 
 const getLastDoneMs = (task: Task): number | null => {
   const raw: any = (task as any).lastDoneAt ?? (task as any).completedAt;
@@ -64,31 +56,17 @@ const getLastDoneMs = (task: Task): number | null => {
   return null;
 };
 
-const getRecurringKind = (task: Task): 'chore' | 'routine' | 'habit' | null => {
+const getHabitKind = (task: Task): 'routine' | 'habit' | null => {
   const raw = String((task as any)?.type || (task as any)?.task_type || '').toLowerCase();
   const normalized = raw === 'habitual' ? 'habit' : raw;
-  if (normalized === 'chore' || normalized === 'routine' || normalized === 'habit') return normalized as any;
+  if (normalized === 'routine' || normalized === 'habit') return normalized as any;
   const tags = Array.isArray((task as any)?.tags) ? (task as any).tags : [];
   const tagKeys = tags.map((tag) => String(tag || '').toLowerCase().replace(/^#/, ''));
-  if (tagKeys.includes('chore')) return 'chore';
   if (tagKeys.includes('routine')) return 'routine';
   if (tagKeys.includes('habit') || tagKeys.includes('habitual')) return 'habit';
   return null;
 };
 
-const getHabitKind = (task: Task): 'routine' | 'habit' | null => {
-  const kind = getRecurringKind(task);
-  return kind === 'routine' || kind === 'habit' ? kind : null;
-};
-
-const cadenceLabel = (task: Task): 'Daily Protocols' | 'Weekly Maintenance' | 'Monthly Operations' => {
-  const frequency = String((task as any).repeatFrequency || '').toLowerCase();
-  if (frequency === 'weekly') return 'Weekly Maintenance';
-  if (frequency === 'monthly' || frequency === 'yearly') return 'Monthly Operations';
-  return 'Daily Protocols';
-};
-
-const percent = (num: number, den: number): number => (den > 0 ? Math.round((num / den) * 100) : 0);
 
 const HabitsChoresDashboard: React.FC = () => {
   const { currentUser } = useAuth();
@@ -102,6 +80,7 @@ const HabitsChoresDashboard: React.FC = () => {
   const [completing, setCompleting] = useState<Record<string, boolean>>({});
   const [sortMode, setSortMode] = useState<'type' | 'due' | 'streak'>('type');
   const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [hoveredBox, setHoveredBox] = useState<string | null>(null);
 
   const todayStartMs = useMemo(() => startOfDay(new Date()).getTime(), []);
   const todayEndMs = useMemo(() => endOfDay(new Date()).getTime(), []);
@@ -187,23 +166,17 @@ const HabitsChoresDashboard: React.FC = () => {
     return () => unsub();
   }, [currentUser?.uid]);
 
-  const goalsById = useMemo(() => new Map(goals.map((goal) => [goal.id, goal])), [goals]);
-
-  const recurringTasks = useMemo(() => {
+  const filteredTasks = useMemo(() => {
     return tasks
       .filter((task) => !task.deleted)
       .filter((task) => (task.status ?? 0) !== 2)
       .filter((task) => !currentPersona || !task.persona || task.persona === currentPersona)
-      .filter((task) => !!getRecurringKind(task));
+      .filter((task) => !!getHabitKind(task));
   }, [tasks, currentPersona]);
-
-  const filteredHabitTasks = useMemo(() => {
-    return recurringTasks.filter((task) => !!getHabitKind(task));
-  }, [recurringTasks]);
 
   const taskStats = useMemo(() => {
     const stats: Record<string, TaskStats> = {};
-    filteredHabitTasks.forEach((task) => {
+    filteredTasks.forEach((task) => {
       const occurrences = occurrenceMap[task.id] || [];
       const doneDaySet = new Set<number>();
       occurrences.forEach((occ) => {
@@ -230,7 +203,10 @@ const HabitsChoresDashboard: React.FC = () => {
           .slice(0, TARGET_OCCURRENCES);
         expectedDays.push(...fallbackDays);
       }
-      const expectedSlots = expectedDays.map((dayMs) => ({ dayMs, done: doneDaySet.has(dayMs) }));
+      const expectedSlots = expectedDays.map((dayMs) => ({
+        dayMs,
+        done: doneDaySet.has(dayMs),
+      }));
       const completedCount = expectedSlots.filter((slot) => slot.done).length;
       const totalCount = expectedSlots.length;
       let streak = 0;
@@ -241,150 +217,55 @@ const HabitsChoresDashboard: React.FC = () => {
       stats[task.id] = { occurrences, completedCount, totalCount, streak, expectedSlots };
     });
     return stats;
-  }, [filteredHabitTasks, occurrenceMap]);
+  }, [filteredTasks, occurrenceMap]);
 
-  const heatmapRows = useMemo(() => {
-    const rows = filteredHabitTasks.map((task) => {
-      const stats = taskStats[task.id] || { occurrences: [], completedCount: 0, totalCount: 0, streak: 0, expectedSlots: [] };
-      const dueMs = resolveRecurringDueMs(task, new Date(), todayStartMs) ?? Number.POSITIVE_INFINITY;
-      const goal = task.goalId ? goalsById.get(task.goalId) : undefined;
-      const domain = goal?.theme ? THEME_LABELS[goal.theme] || 'Growth' : 'Growth';
-      const rowAdherence = percent(stats.completedCount, stats.totalCount);
-      const chronological = stats.expectedSlots.slice(0, VISIBLE_BOXES).reverse();
-      const emptyCount = Math.max(0, VISIBLE_BOXES - chronological.length);
-      const displaySlots = [
-        ...Array.from({ length: emptyCount }, (_, idx) => ({ key: `empty-${idx}`, dayMs: null as number | null, done: false, empty: true })),
-        ...chronological.map((slot) => ({ key: `${task.id}-${slot.dayMs}`, dayMs: slot.dayMs, done: slot.done, empty: false })),
-      ];
-      return {
-        task,
-        kind: getHabitKind(task) || 'habit',
-        stats,
-        dueMs,
-        domain,
-        rowAdherence,
-        displaySlots,
-      };
-    });
+  const goalsById = useMemo(() => new Map(goals.map((goal) => [goal.id, goal])), [goals]);
 
-    rows.sort((a, b) => {
-      if (sortMode === 'type') {
-        const ka = a.kind === 'habit' ? 0 : 1;
-        const kb = b.kind === 'habit' ? 0 : 1;
-        if (ka !== kb) return ka - kb;
-        return (a.task.title || '').localeCompare(b.task.title || '');
+  const grouped = useMemo(() => {
+    const groups = new Map<string, { goal: Goal | null; tasks: Task[] }>();
+    filteredTasks.forEach((task) => {
+      const goalId = task.goalId || 'unlinked';
+      if (!groups.has(goalId)) {
+        groups.set(goalId, { goal: goalId !== 'unlinked' ? goalsById.get(goalId) || null : null, tasks: [] });
       }
-      if (sortMode === 'due') return a.dueMs - b.dueMs;
-      return b.stats.streak - a.stats.streak;
+      groups.get(goalId)!.tasks.push(task);
     });
-
-    return rows;
-  }, [filteredHabitTasks, goalsById, sortMode, taskStats, todayStartMs]);
-
-  const checklistItems = useMemo(() => {
-    const rows: ChecklistItem[] = recurringTasks
-      .map((task) => {
-        const kind = getRecurringKind(task);
-        if (!kind) return null;
-        const dueMs = resolveRecurringDueMs(task, new Date(), todayStartMs);
-        if (!dueMs || dueMs > todayEndMs) return null;
-        const lastDoneMs = getLastDoneMs(task);
-        const doneToday = !!lastDoneMs && lastDoneMs >= todayStartMs;
-        return { task, kind, dueMs, doneToday };
-      })
-      .filter(Boolean) as ChecklistItem[];
-
-    rows.sort((a, b) => {
-      if (a.doneToday !== b.doneToday) return a.doneToday ? 1 : -1;
-      return a.dueMs - b.dueMs;
-    });
-
-    return rows;
-  }, [recurringTasks, todayStartMs, todayEndMs]);
-
-  const checklistGroups = useMemo(() => {
-    const grouped: Record<string, ChecklistItem[]> = {
-      'Daily Protocols': [],
-      'Weekly Maintenance': [],
-      'Monthly Operations': [],
+    // Sort tasks within each group
+    const kindOrder = (t: Task) => {
+      const k = getHabitKind(t);
+      if (k === 'habit') return 0;
+      if (k === 'routine') return 1;
+      return 2; // chore
     };
-    checklistItems.forEach((item) => {
-      grouped[cadenceLabel(item.task)].push(item);
-    });
-    return grouped;
-  }, [checklistItems]);
-
-  const tomorrowDueCount = useMemo(() => {
-    const tomorrowStart = startOfDay(subDays(new Date(), -1)).getTime();
-    const tomorrowEnd = endOfDay(subDays(new Date(), -1)).getTime();
-    return recurringTasks.filter((task) => {
-      const dueMs = resolveRecurringDueMs(task, new Date(subDays(new Date(), -1)), tomorrowStart);
-      return !!dueMs && dueMs >= tomorrowStart && dueMs <= tomorrowEnd;
-    }).length;
-  }, [recurringTasks]);
-
-  const kpis = useMemo(() => {
-    const globalStreak = heatmapRows.reduce((max, row) => Math.max(max, row.stats.streak), 0);
-
-    const dueToday = heatmapRows.filter((row) => row.dueMs <= todayEndMs).length;
-    const doneToday = heatmapRows.filter((row) => {
-      const lastDoneMs = getLastDoneMs(row.task);
-      return !!lastDoneMs && lastDoneMs >= todayStartMs;
-    }).length;
-    const todayLoadPct = dueToday > 0 ? percent(doneToday, dueToday) : 100;
-
-    const pendingChores = checklistItems.filter((item) => item.kind === 'chore' && !item.doneToday).length;
-
-    const allSlots = heatmapRows.flatMap((row) => row.stats.expectedSlots);
-    const consistency = allSlots.length ? percent(allSlots.filter((slot) => slot.done).length, allSlots.length) : 0;
-
-    const now = new Date();
-    const latestStart = startOfDay(subDays(now, 6)).getTime();
-    const prevStart = startOfDay(subDays(now, 13)).getTime();
-    const prevEnd = endOfDay(subDays(now, 7)).getTime();
-
-    const getWindowPct = (fromMs: number, toMs: number) => {
-      let total = 0;
-      let done = 0;
-      heatmapRows.forEach((row) => {
-        row.stats.expectedSlots.forEach((slot) => {
-          if (slot.dayMs >= fromMs && slot.dayMs <= toMs) {
-            total += 1;
-            if (slot.done) done += 1;
-          }
-        });
+    groups.forEach((group) => {
+      group.tasks.sort((a, b) => {
+        if (sortMode === 'type') {
+          const ka = kindOrder(a);
+          const kb = kindOrder(b);
+          if (ka !== kb) return ka - kb;
+          return (a.title || '').localeCompare(b.title || '');
+        }
+        if (sortMode === 'due') {
+          const aDue = resolveRecurringDueMs(a, new Date(), todayStartMs) ?? Infinity;
+          const bDue = resolveRecurringDueMs(b, new Date(), todayStartMs) ?? Infinity;
+          return aDue - bDue;
+        }
+        if (sortMode === 'streak') {
+          const aStreak = taskStats[a.id]?.streak ?? 0;
+          const bStreak = taskStats[b.id]?.streak ?? 0;
+          return bStreak - aStreak; // highest streak first
+        }
+        return 0;
       });
-      return total ? (done / total) * 100 : 0;
-    };
-
-    const currentWeekPct = getWindowPct(latestStart, todayEndMs);
-    const previousWeekPct = getWindowPct(prevStart, prevEnd);
-    const velocity = currentWeekPct - previousWeekPct;
-    const readiness = Math.max(0, Math.min(100, Math.round((todayLoadPct * 0.65) + (consistency * 0.35))));
-
-    return {
-      globalStreak,
-      dueToday,
-      doneToday,
-      todayLoadPct,
-      pendingChores,
-      consistency,
-      velocity,
-      readiness,
-    };
-  }, [heatmapRows, checklistItems, todayEndMs, todayStartMs]);
-
-  const aiAdvice = useMemo(() => {
-    if (heatmapRows.length === 0) {
-      return 'Build your first recurring routine to unlock streak intelligence and tailored coaching.';
-    }
-    const weakest = [...heatmapRows].sort((a, b) => a.rowAdherence - b.rowAdherence)[0];
-    if (!weakest) return 'Momentum looks stable. Keep your recovery blocks protected to sustain consistency.';
-    if (weakest.rowAdherence >= 80) {
-      return `Your consistency is strong. Lock in ${weakest.task.title} earlier in the day to protect the streak under busy schedules.`;
-    }
-    return `"${weakest.task.title}" is trending low at ${weakest.rowAdherence}%. Try adding a fixed trigger time and a 2-minute starter version.`;
-  }, [heatmapRows]);
+    });
+    const ordered = Array.from(groups.entries()).map(([goalId, data]) => ({ goalId, ...data }));
+    ordered.sort((a, b) => {
+      if (a.goalId === 'unlinked') return 1;
+      if (b.goalId === 'unlinked') return -1;
+      return String(a.goal?.title || '').localeCompare(String(b.goal?.title || ''));
+    });
+    return ordered;
+  }, [filteredTasks, goalsById, sortMode, todayStartMs, taskStats]);
 
   const handleComplete = useCallback(async (task: Task) => {
     if (!currentUser?.uid) return;
@@ -394,7 +275,7 @@ const HabitsChoresDashboard: React.FC = () => {
       const callable = httpsCallable(functions, 'completeChoreTask');
       await callable({ taskId: task.id });
     } catch (err) {
-      console.warn('Failed to complete recurring task', err);
+      console.warn('Failed to complete chore task', err);
     } finally {
       setCompleting((prev) => {
         const next = { ...prev };
@@ -407,190 +288,174 @@ const HabitsChoresDashboard: React.FC = () => {
   const loading = loadingTasks || loadingBlocks;
 
   return (
-    <div className="habits-os-shell">
-      <header className="habits-os-topbar">
+    <div className="container py-3" style={{ maxWidth: 1200 }}>
+      <div className="d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-2 mb-3">
         <div>
-          <p className="habits-os-kicker">Dashboard</p>
-          <h1 className="habits-os-title">Habits &amp; Chores</h1>
+          <h4 className="mb-1">Habit Tracking</h4>
+          <div className="text-muted small">Track routines and habits with 100-instance completion history, streaks and linked goals.</div>
         </div>
-        <div className="habits-os-topbar-actions">
+        <div className="d-flex align-items-center gap-2">
           <Form.Select
             size="sm"
             value={sortMode}
             onChange={(e) => setSortMode(e.target.value as 'type' | 'due' | 'streak')}
-            className="habits-os-select"
+            style={{ width: 160 }}
           >
             <option value="type">Sort: Habits first</option>
             <option value="due">Sort: Next due</option>
             <option value="streak">Sort: Streak</option>
           </Form.Select>
-          <Button variant="outline-light" size="sm" onClick={() => navigate('/chores/checklist')}>Checklist</Button>
-          <Button variant="primary" size="sm" onClick={() => navigate('/tasks')}>Manage Tasks</Button>
+          <Button variant="outline-secondary" size="sm" onClick={() => navigate('/chores/checklist')}>Open today's checklist</Button>
+          <Button variant="primary" size="sm" onClick={() => navigate('/tasks')}>Manage tasks</Button>
         </div>
-      </header>
+      </div>
 
       {loading ? (
-        <section className="habits-os-loading">
-          <Spinner size="sm" animation="border" /> Loading habits and chores…
-        </section>
-      ) : heatmapRows.length === 0 ? (
-        <section className="habits-os-empty">No habits or routines found for this persona.</section>
+        <Card className="mb-3">
+          <Card.Body className="d-flex align-items-center gap-2 text-muted">
+            <Spinner size="sm" animation="border" /> Loading habits and routines…
+          </Card.Body>
+        </Card>
+      ) : grouped.length === 0 ? (
+        <Card>
+          <Card.Body className="text-muted">No routines or habits found for this persona.</Card.Body>
+        </Card>
       ) : (
         <>
-          <section className="habits-os-kpis">
-            <article className="habits-os-kpi-card">
-              <span className="habits-os-kpi-label">Global Streak</span>
-              <div className="habits-os-kpi-value-row">
-                <h2>{kpis.globalStreak}</h2>
-                <span>days</span>
-              </div>
-              <div className="habits-os-meter">
-                <div style={{ width: `${Math.min(100, kpis.globalStreak)}%` }} />
-              </div>
-            </article>
-
-            <article className="habits-os-kpi-card">
-              <span className="habits-os-kpi-label">Today&apos;s Load</span>
-              <div className="habits-os-kpi-value-row">
-                <h2>{kpis.todayLoadPct}%</h2>
-              </div>
-              <p>{kpis.doneToday}/{kpis.dueToday || 0} recurring actions complete</p>
-            </article>
-
-            <article className="habits-os-kpi-card">
-              <span className="habits-os-kpi-label">Pending Chores</span>
-              <div className="habits-os-kpi-value-row">
-                <h2>{String(kpis.pendingChores).padStart(2, '0')}</h2>
-                <span>urgent</span>
-              </div>
-              <div className="habits-os-alert-bars">
-                <i className={kpis.pendingChores >= 1 ? 'on' : ''} />
-                <i className={kpis.pendingChores >= 2 ? 'on' : ''} />
-                <i className={kpis.pendingChores >= 3 ? 'on' : ''} />
-                <i className={kpis.pendingChores >= 4 ? 'on' : ''} />
-                <i className={kpis.pendingChores >= 5 ? 'on' : ''} />
-              </div>
-            </article>
-
-            <article className="habits-os-kpi-card habits-os-readiness">
-              <span className="habits-os-kpi-label">Neural Readiness</span>
-              <div className="habits-os-ring" style={{ ['--score' as any]: `${kpis.readiness}` }}>
-                <span>{kpis.readiness}%</span>
-              </div>
-              <p>{kpis.readiness >= 75 ? 'High focus window' : 'Recovery window recommended'}</p>
-            </article>
-          </section>
-
-          <section className="habits-os-grid">
-            <div className="habits-os-panel habits-os-heatmap-panel">
-              <div className="habits-os-panel-header">
-                <div>
-                  <h3>Behavior Heatmaps (30D)</h3>
-                  <p>Green = done, red = missed, gray = empty</p>
-                </div>
-                <Badge bg="dark">Consistency {kpis.consistency}%</Badge>
-              </div>
-
-              <div className="habits-os-heatmap-list">
-                {heatmapRows.map((row) => (
-                  <div key={row.task.id} className="habits-os-heatmap-row">
-                    <div className="habits-os-row-meta">
-                      <button type="button" onClick={() => setEditingTask(row.task)}>
-                        {row.task.title || 'Untitled'}
-                      </button>
-                      <p>Domain: {row.domain}</p>
+          {/* Compact RAG summary — one box per habit, 7-day adherence */}
+          <Card className="mb-3">
+            <Card.Header className="py-2 fw-semibold" style={{ fontSize: 13 }}>At a glance — 7-day adherence</Card.Header>
+            <Card.Body className="py-2 px-3">
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {grouped.flatMap(g => g.tasks).map(task => {
+                  const stats = taskStats[task.id];
+                  const recent = stats?.expectedSlots?.slice(-7) ?? [];
+                  const done = recent.filter(s => s.done).length;
+                  const pct = recent.length ? Math.round((done / recent.length) * 100) : null;
+                  const bg = pct === null ? '#6b7280' : pct >= 75 ? '#22c55e' : pct >= 40 ? '#f59e0b' : '#ef4444';
+                  return (
+                    <div key={task.id} style={{ width: 78, textAlign: 'center', cursor: 'pointer' }} onClick={() => setEditingTask(task)}>
+                      <div style={{ background: bg, borderRadius: 6, padding: '6px 4px', marginBottom: 4 }}>
+                        <div style={{ fontSize: 17, fontWeight: 700, color: '#fff', lineHeight: 1 }}>
+                          {pct !== null ? `${pct}%` : '—'}
+                        </div>
+                        <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.8)', marginTop: 2 }}>
+                          {recent.length ? `${done}/${recent.length} days` : 'no data'}
+                        </div>
+                      </div>
+                      <div style={{ fontSize: 11, lineHeight: 1.3, color: 'var(--bs-body-color)', overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', textOverflow: 'ellipsis' }}>
+                        {task.title}
+                      </div>
                     </div>
-
-                    <div className="habits-os-heatmap-track" aria-label={`30 day consistency for ${row.task.title}`}>
-                      {row.displaySlots.map((slot) => {
-                        if (slot.empty) return <span key={slot.key} className="heatbox empty" />;
-                        const label = `${format(new Date(slot.dayMs as number), 'EEE d MMM')}: ${slot.done ? 'completed' : 'missed'}`;
-                        return (
-                          <span
-                            key={slot.key}
-                            className={`heatbox ${slot.done ? 'done' : 'missed'}`}
-                            title={label}
-                          />
-                        );
-                      })}
-                    </div>
-
-                    <div className="habits-os-row-right">
-                      <strong>{row.rowAdherence}%</strong>
-                      <span>{row.stats.streak}d streak</span>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
-
-              <div className="habits-os-panel-footer">
-                <div>
-                  <span>Consistency Index</span>
-                  <strong>{kpis.consistency.toFixed(1)}</strong>
-                </div>
-                <div>
-                  <span>Velocity</span>
-                  <strong className={kpis.velocity >= 0 ? 'up' : 'down'}>{kpis.velocity >= 0 ? '+' : ''}{kpis.velocity.toFixed(1)}%</strong>
-                </div>
+              <div className="text-muted mt-2" style={{ fontSize: 11 }}>
+                Green ≥ 75% &nbsp;·&nbsp; Amber 40–74% &nbsp;·&nbsp; Red &lt; 40% &nbsp;·&nbsp; Click to open
               </div>
-            </div>
+            </Card.Body>
+          </Card>
 
-            <aside className="habits-os-sidecol">
-              <div className="habits-os-panel habits-os-checklist-panel">
-                <div className="habits-os-panel-header">
-                  <div>
-                    <h3>Chore Command</h3>
-                    <p>Recurring due today</p>
-                  </div>
-                  <Badge bg={kpis.pendingChores > 0 ? 'danger' : 'success'}>{kpis.pendingChores > 0 ? 'Critical' : 'Stable'}</Badge>
+          {grouped.map((group) => {
+          const goalTitle = group.goal?.title || (group.goalId === 'unlinked' ? 'Unlinked' : 'Goal');
+          return (
+            <Card key={group.goalId} className="mb-3">
+              <Card.Header className="d-flex align-items-center justify-content-between">
+                <div className="d-flex align-items-center gap-2">
+                  <span className="fw-semibold">{goalTitle}</span>
+                  {group.goal && (
+                    <Link to={`/goals/${(group.goal as any).ref || group.goalId}`} className="text-decoration-none small">View goal</Link>
+                  )}
                 </div>
-
-                <div className="habits-os-checklist-body">
-                  {Object.entries(checklistGroups).map(([title, items]) => (
-                    <section key={title} className="habits-os-checklist-group">
-                      <h4>{title}</h4>
-                      {items.length === 0 ? (
-                        <p className="habits-os-muted">No items due.</p>
-                      ) : (
-                        items.slice(0, 8).map((item) => {
-                          const busy = !!completing[item.task.id];
-                          const statusClass = item.doneToday ? 'done' : 'todo';
-                          return (
-                            <label key={item.task.id} className={`habits-os-check-item ${statusClass}`}>
-                              <input
-                                type="checkbox"
-                                checked={item.doneToday}
-                                disabled={item.doneToday || busy}
-                                onChange={() => handleComplete(item.task)}
-                              />
-                              <div>
-                                <button type="button" onClick={() => setEditingTask(item.task)}>
-                                  {item.task.title || 'Untitled recurring task'}
-                                </button>
-                                <p>
-                                  {item.kind.toUpperCase()} · Due {format(new Date(item.dueMs), 'HH:mm')}
-                                </p>
+                <div className="d-flex align-items-center gap-2">
+                  {group.goal && (() => {
+                    const groupStats = group.tasks.map((t) => taskStats[t.id]).filter(Boolean);
+                    const totalCompleted = groupStats.reduce((s, ts) => s + ts.completedCount, 0);
+                    const totalExpected = groupStats.reduce((s, ts) => s + ts.totalCount, 0);
+                    const adherence = totalExpected ? Math.round((totalCompleted / totalExpected) * 100) : 0;
+                    return (
+                      <Badge bg={adherence >= 80 ? 'success' : adherence >= 50 ? 'warning' : 'danger'} pill>
+                        {adherence}% adherence
+                      </Badge>
+                    );
+                  })()}
+                  <Badge bg="secondary" pill>{group.tasks.length} item{group.tasks.length === 1 ? '' : 's'}</Badge>
+                </div>
+              </Card.Header>
+              <Card.Body className="py-2 px-3">
+                {group.tasks.map((task, taskIdx) => {
+                  const kind = getHabitKind(task) || 'habit';
+                  const badgeVariant = kind === 'routine' ? 'success' : 'secondary';
+                  const badgeLabel = kind === 'routine' ? 'Routine' : 'Habit';
+                  const stats = taskStats[task.id] || { occurrences: [], completedCount: 0, totalCount: 0, streak: 0, expectedSlots: [] };
+                  const dueMs = resolveRecurringDueMs(task, new Date(), todayStartMs);
+                  const lastDoneMs = getLastDoneMs(task);
+                  const doneToday = !!lastDoneMs && lastDoneMs >= todayStartMs;
+                  const canComplete = !!dueMs && dueMs <= todayEndMs && !doneToday;
+                  const busy = !!completing[task.id];
+                  const boxes = stats.expectedSlots.slice(0, VISIBLE_BOXES);
+                  const hitCount = boxes.filter(s => s.done).length;
+                  return (
+                    <div
+                      key={task.id}
+                      style={{ borderTop: taskIdx > 0 ? '1px solid #e5e7eb' : undefined, paddingTop: taskIdx > 0 ? 8 : 0, paddingBottom: 8 }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                        {/* Name */}
+                        <div style={{ width: NAME_COL_WIDTH, minWidth: NAME_COL_WIDTH, flexShrink: 0 }}>
+                          <div className="fw-semibold" style={{ fontSize: 13 }}>{task.title}</div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
+                            <Badge bg={badgeVariant} style={{ fontSize: 10 }}>{badgeLabel}</Badge>
+                            <button type="button" className="btn btn-link p-0 text-decoration-none" style={{ fontSize: 11 }} onClick={() => setEditingTask(task)}>Open</button>
+                          </div>
+                        </div>
+                        {/* Boxes */}
+                        <div style={{ display: 'flex', gap: BOX_GAP, flexWrap: 'nowrap', overflowX: 'auto', flex: 1 }}>
+                          {boxes.length === 0 ? (
+                            <span className="text-muted small">No data</span>
+                          ) : boxes.map((slot, idx) => {
+                            const id = `${task.id}-${slot.dayMs}`;
+                            const label = `${format(new Date(slot.dayMs), 'EEE d MMM')}: ${slot.done ? 'completed' : 'missed'}`;
+                            return (
+                              <div key={idx} style={{ position: 'relative', flexShrink: 0 }} onMouseEnter={() => setHoveredBox(id)} onMouseLeave={() => setHoveredBox(null)}>
+                                <div style={{ width: BOX_SIZE, height: BOX_SIZE, borderRadius: 4, background: habitBoxColor(slot.done), cursor: 'default' }} />
+                                {hoveredBox === id && (
+                                  <div style={{ position: 'absolute', bottom: BOX_SIZE + 6, left: '50%', transform: 'translateX(-50%)', background: '#111827', color: '#f9fafb', padding: '4px 8px', borderRadius: 4, fontSize: 11, whiteSpace: 'nowrap', zIndex: 100, pointerEvents: 'none', border: '1px solid #374151' }}>
+                                    {label}
+                                  </div>
+                                )}
                               </div>
-                            </label>
-                          );
-                        })
+                            );
+                          })}
+                        </div>
+                        {/* Streak */}
+                        <div style={{ minWidth: 48, textAlign: 'center', flexShrink: 0 }}>
+                          <div className="fw-bold" style={{ fontSize: 16, lineHeight: 1 }}>{stats.streak}</div>
+                          <div style={{ fontSize: 10, color: '#9ca3af' }}>streak</div>
+                        </div>
+                        {/* Today */}
+                        <div style={{ flexShrink: 0 }}>
+                          <Form.Check
+                            type="checkbox"
+                            checked={doneToday}
+                            disabled={!canComplete || busy}
+                            onChange={() => handleComplete(task)}
+                            aria-label={`Complete ${task.title} today`}
+                          />
+                        </div>
+                      </div>
+                      {boxes.length > 0 && (
+                        <div style={{ fontSize: 11, color: '#6b7280', marginTop: 3, paddingLeft: NAME_COL_WIDTH + 12 }}>
+                          {hitCount}/{boxes.length} completed · {stats.totalCount ? Math.round((stats.completedCount / stats.totalCount) * 100) : 0}% all-time
+                        </div>
                       )}
-                    </section>
-                  ))}
-                </div>
-
-                <div className="habits-os-checklist-footer">
-                  <p>System generated: {tomorrowDueCount} item{tomorrowDueCount === 1 ? '' : 's'} recurring tomorrow</p>
-                  <Button variant="outline-light" size="sm" onClick={() => navigate('/chores/checklist')}>Manage Recurring Logic</Button>
-                </div>
-              </div>
-
-              <div className="habits-os-advice-card">
-                <h4>AI Coach Advice</h4>
-                <p>{aiAdvice}</p>
-              </div>
-            </aside>
-          </section>
+                    </div>
+                  );
+                })}
+              </Card.Body>
+            </Card>
+          );
+        })}
         </>
       )}
 

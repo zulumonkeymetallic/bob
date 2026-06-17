@@ -14,7 +14,6 @@ import TagInput from './common/TagInput';
 import ActivityStreamPanel from './common/ActivityStreamPanel';
 import ModernStoriesTable from './ModernStoriesTable';
 import ModernTaskTable from './ModernTaskTable';
-import ModernGoalsTable from './ModernGoalsTable';
 import { usePersona } from '../contexts/PersonaContext';
 import { useSprint } from '../contexts/SprintContext';
 import { cascadeGoalPersona } from '../utils/personaCascade';
@@ -141,9 +140,6 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
   const [linkedStories, setLinkedStories] = useState<Story[]>([]);
   const [linkedTasks, setLinkedTasks] = useState<Task[]>([]);
   const [linkedCalendarBlocks, setLinkedCalendarBlocks] = useState<any[]>([]);
-  const [childGoals, setChildGoals] = useState<Goal[]>([]);
-  const [childGoalsLoading, setChildGoalsLoading] = useState(false);
-  const [nestedChildGoal, setNestedChildGoal] = useState<Goal | null>(null);
   const [storiesLoading, setStoriesLoading] = useState(false);
   const [tasksLoading, setTasksLoading] = useState(false);
   const [isGeneratingStories, setIsGeneratingStories] = useState(false);
@@ -312,28 +308,6 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
     }
     reloadLinkedStories();
   }, [show, reloadLinkedStories]);
-
-  const reloadChildGoals = useCallback(async () => {
-    if (!goal || !currentUserId) { setChildGoals([]); return; }
-    setChildGoalsLoading(true);
-    try {
-      const snap = await getDocs(query(
-        collection(db, 'goals'),
-        where('ownerUid', '==', currentUserId),
-        where('parentGoalId', '==', goal.id),
-      ));
-      setChildGoals(snap.docs.map(d => ({ id: d.id, ...d.data() } as Goal)));
-    } catch {
-      setChildGoals([]);
-    } finally {
-      setChildGoalsLoading(false);
-    }
-  }, [goal, currentUserId]);
-
-  useEffect(() => {
-    if (!show) { setChildGoals([]); return; }
-    reloadChildGoals();
-  }, [show, reloadChildGoals]);
 
   // Subscribe to calendar_blocks linked to this goal (±60 days window)
   useEffect(() => {
@@ -933,7 +907,6 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
   // if (!goal) return null; // Removed to allow create mode
 
   return (
-    <>
     <Modal show={show} onHide={handleClose} centered size="xl" fullscreen="lg-down" scrollable>
       <ToastContainer position="bottom-end" className="p-3">
         <Toast bg="success" onClose={() => setToastMsg(null)} show={!!toastMsg} delay={1800} autohide>
@@ -1560,32 +1533,6 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
 
         {goal && (
           <div className="mt-4">
-            {(childGoals.length > 0 || childGoalsLoading) && (
-              <div className="mb-4">
-                <h5 className="mb-2">Child Goals</h5>
-                {childGoalsLoading ? (
-                  <div className="text-muted small">Loading…</div>
-                ) : (
-                  <div style={{ overflowX: 'auto' }}>
-                    <ModernGoalsTable
-                      goals={childGoals}
-                      onGoalUpdate={async (goalId, updates) => {
-                        await updateDoc(doc(db, 'goals', goalId), { ...updates, updatedAt: serverTimestamp() });
-                        reloadChildGoals();
-                      }}
-                      onGoalDelete={async (goalId) => {
-                        await deleteDoc(doc(db, 'goals', goalId));
-                        reloadChildGoals();
-                      }}
-                      onGoalPriorityChange={async (goalId, newPriority) => {
-                        await updateDoc(doc(db, 'goals', goalId), { priority: newPriority, updatedAt: serverTimestamp() });
-                      }}
-                      onEditModal={(g) => setNestedChildGoal(g)}
-                    />
-                  </div>
-                )}
-              </div>
-            )}
             <div className="mb-4">
               <h5 className="mb-2">Linked Stories</h5>
               {storiesLoading ? (
@@ -1690,16 +1637,6 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         </Button>
       </Modal.Footer>
     </Modal>
-
-    {/* Nested modal for editing child goals */}
-    <EditGoalModal
-      show={Boolean(nestedChildGoal)}
-      goal={nestedChildGoal}
-      onClose={() => { setNestedChildGoal(null); reloadChildGoals(); }}
-      currentUserId={currentUserId}
-      allGoals={allGoals}
-    />
-    </>
   );
 };
 

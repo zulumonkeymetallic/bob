@@ -1,24 +1,26 @@
-import React, { createContext, useContext, useEffect, useRef, useState, useCallback, useMemo } from 'react';
-import {
-  collection,
-  query,
-  where,
-  onSnapshot,
+import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import { 
+  collection, 
+  query, 
+  where, 
+  onSnapshot, 
   orderBy,
   limit,
+  DocumentData
 } from 'firebase/firestore';
 import { db } from '../firebase';
-import { useAuth } from './AuthContext';
-import { usePersona } from './PersonaContext';
-import type { Story, Task, Goal, Sprint } from '../types';
 
 // ============================================================
 // BOB Unified Data Context
-// Purpose: Replace scattered onSnapshot() listeners with
+// Purpose: Replace 500+ scattered onSnapshot() listeners with
 //          a single centralised subscription manager per user.
 // Created: May 2026 (Firebase cost optimisation)
 // ============================================================
 
+interface Story { id: string; ref?: string; title?: string; [key: string]: any; }
+interface Task { id: string; ref?: string; title?: string; [key: string]: any; }
+interface Goal { id: string; ref?: string; title?: string; [key: string]: any; }
+interface Sprint { id: string; ref?: string; title?: string; [key: string]: any; }
 interface CalendarBlock { id: string; [key: string]: any; }
 
 interface BobDataState {
@@ -28,28 +30,35 @@ interface BobDataState {
   sprints: Sprint[];
   calendarBlocks: CalendarBlock[];
   themeAllocations: any[];
-  monzoTransactions: any[];
   loading: boolean;
   error: string | null;
   lastUpdated: number | null;
 }
 
 interface BobDataContextType extends BobDataState {
-  // Derived sprint data — no extra listeners
-  activeSprint: Sprint | null;
-  activeSprintStories: Story[];
-  activeSprintTasks: Task[];
+  // Manual refresh for pull-to-refresh pattern
   refreshCollection: (collectionName: string) => Promise<void>;
+  // Check if data is stale (> N seconds old)
   isStale: (collectionName: string, maxAgeSeconds?: number) => boolean;
-  subscribeToEntity: <T>(collectionName: string, entityId: string) => T | undefined;
+  // Subscribe to specific entity by ID (for detail views)
+  subscribeToEntity: <T>(
+    collectionName: string, 
+    entityId: string
+  ) => T | undefined;
 }
 
 const BobDataContext = createContext<BobDataContextType | undefined>(undefined);
 
-export const BobDataProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { currentUser } = useAuth();
-  const { currentPersona } = usePersona();
+const COLLECTION_CACHE_AGE = {
+  goals: 30 * 60,           // 30 min
+  stories: 15 * 60,         // 15 min  
+  tasks: 60,                // 1 min (high frequency updates)
+  sprints: 30 * 60,         // 30 min
+  calendarBlocks: 30,       // 30 sec (very dynamic)
+  themeAllocations: 60 * 60 // 1 hour
+};
 
+export const BobDataProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [state, setState] = useState<BobDataState>({
     goals: [],
     stories: [],
@@ -57,48 +66,47 @@ export const BobDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     sprints: [],
     calendarBlocks: [],
     themeAllocations: [],
-    monzoTransactions: [],
     loading: true,
     error: null,
     lastUpdated: null
   });
 
   const [timestamps, setTimestamps] = useState<Record<string, number>>({});
-  const loadingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Safety net: if Firestore is unreachable (billing disabled, quota hit), force loading:false
-  // after 10s so the app doesn't hang forever. Cached IndexedDB data will still be shown.
+  // Centralised subscription manager
   useEffect(() => {
-    if (!state.loading) return;
-    loadingTimeoutRef.current = setTimeout(() => {
-      console.warn('[BobData] Load timeout — forcing loading:false. Firestore may be unavailable.');
-      setState(s => ({ ...s, loading: false, error: 'Some data may be unavailable. Check Firebase billing.' }));
-    }, 10000);
-    return () => {
-      if (loadingTimeoutRef.current) clearTimeout(loadingTimeoutRef.current);
-    };
-  }, [state.loading]);
-
-  useEffect(() => {
-    if (!currentUser?.uid || !currentPersona) {
-      setState(s => ({ ...s, goals: [], stories: [], tasks: [], sprints: [], calendarBlocks: [], themeAllocations: [], monzoTransactions: [], loading: false }));
-      return;
-    }
-
-    const uid = currentUser.uid;
-
     let unsubGoals: (() => void) | null = null;
     let unsubStories: (() => void) | null = null;
     let unsubTasks: (() => void) | null = null;
     let unsubSprints: (() => void) | null = null;
     let unsubCalendar: (() => void) | null = null;
     let unsubThemes: (() => void) | null = null;
-    let unsubMonzo: (() => void) | null = null;
 
-    // Goals - persona-scoped
+    const initialiseSubscriptions = async () => {
+      // Wait for auth to settle
+      const authModule = await import('../contexts/AuthContext');
+      const { useAuth } = authModule;
+      
+      // This won't work directly in useEffect - need different approach
+      console.log('[BobData] Initialising centralised subscriptions...');
+    };
+
+    // For now, basic setup - will be enhanced with proper auth handling
+    const uid = localStorage.getItem('bob_current_user_uid') as string | null;
+    if (!uid) {
+      setState(s => ({ ...s, loading: false }));
+      return;
+    }
+
+    // Goals - low frequency, cache-friendly
     try {
+      const goalsQuery = query(
+        collection(db, 'goals'),
+        where('ownerUid', '==', uid),
+        orderBy('createdAt', 'desc')
+      );
       unsubGoals = onSnapshot(
-        query(collection(db, 'goals'), where('ownerUid', '==', uid), where('persona', '==', currentPersona), orderBy('createdAt', 'desc'), limit(200)),
+        goalsQuery,
         (snap) => {
           const goals = snap.docs.map((doc) => ({ id: doc.id, ...(doc.data() as Goal) }));
           setState(s => ({ ...s, goals, lastUpdated: Date.now() }));
@@ -110,10 +118,16 @@ export const BobDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       console.error('[BobData] Failed to subscribe to goals:', error);
     }
 
-    // Stories - persona-scoped, limit 500
+    // Stories
     try {
+      const storiesQuery = query(
+        collection(db, 'stories'),
+        where('ownerUid', '==', uid),
+        orderBy('createdAt', 'desc'),
+        limit(500)
+      );
       unsubStories = onSnapshot(
-        query(collection(db, 'stories'), where('ownerUid', '==', uid), where('persona', '==', currentPersona), orderBy('createdAt', 'desc'), limit(500)),
+        storiesQuery,
         (snap) => {
           const stories = snap.docs.map((doc) => ({ id: doc.id, ...(doc.data() as Story) }));
           setState(s => ({ ...s, stories, lastUpdated: Date.now() }));
@@ -125,10 +139,16 @@ export const BobDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       console.error('[BobData] Failed to subscribe to stories:', error);
     }
 
-    // Tasks - persona-scoped
+    // Tasks - higher frequency
     try {
+      const tasksQuery = query(
+        collection(db, 'tasks'),
+        where('ownerUid', '==', uid),
+        orderBy('dueDate', 'asc'),
+        limit(1000)
+      );
       unsubTasks = onSnapshot(
-        query(collection(db, 'tasks'), where('ownerUid', '==', uid), where('persona', '==', currentPersona), orderBy('dueDate', 'asc'), limit(300)),
+        tasksQuery,
         (snap) => {
           const tasks = snap.docs.map((doc) => ({ id: doc.id, ...(doc.data() as Task) }));
           setState(s => ({ ...s, tasks, loading: false, lastUpdated: Date.now() }));
@@ -140,10 +160,15 @@ export const BobDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       console.error('[BobData] Failed to subscribe to tasks:', error);
     }
 
-    // Sprints - persona-scoped
+    // Sprints
     try {
+      const sprintsQuery = query(
+        collection(db, 'sprints'),
+        where('ownerUid', '==', uid),
+        orderBy('startDate', 'desc')
+      );
       unsubSprints = onSnapshot(
-        query(collection(db, 'sprints'), where('ownerUid', '==', uid), where('persona', '==', currentPersona), orderBy('startDate', 'desc'), limit(60)),
+        sprintsQuery,
         (snap) => {
           const sprints = snap.docs.map((doc) => ({ id: doc.id, ...(doc.data() as Sprint) }));
           setState(s => ({ ...s, sprints, lastUpdated: Date.now() }));
@@ -155,10 +180,16 @@ export const BobDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       console.error('[BobData] Failed to subscribe to sprints:', error);
     }
 
-    // Calendar blocks - owner-scoped (not persona-specific), limit 200
+    // Calendar blocks - very dynamic
     try {
+      const calendarQuery = query(
+        collection(db, 'calendar_blocks'),
+        where('ownerUid', '==', uid),
+        orderBy('start', 'asc'),
+        limit(200)
+      );
       unsubCalendar = onSnapshot(
-        query(collection(db, 'calendar_blocks'), where('ownerUid', '==', uid), orderBy('start', 'asc'), limit(200)),
+        calendarQuery,
         (snap) => {
           const blocks = snap.docs.map((doc) => ({ id: doc.id, ownerUid: uid, updatedAt: Date.now(), ...(doc.data() as CalendarBlock) }));
           setState(s => ({ ...s, calendarBlocks: blocks, lastUpdated: Date.now() }));
@@ -170,10 +201,15 @@ export const BobDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       console.error('[BobData] Failed to subscribe to calendar_blocks:', error);
     }
 
-    // Theme allocations - owner-scoped
+    // Theme allocations
     try {
+      const themesQuery = query(
+        collection(db, 'theme_allocations'),
+        where('ownerUid', '==', uid),
+        orderBy('dateKey', 'desc')
+      );
       unsubThemes = onSnapshot(
-        query(collection(db, 'theme_allocations'), where('ownerUid', '==', uid), orderBy('dateKey', 'desc'), limit(400)),
+        themesQuery,
         (snap) => {
           const themes = snap.docs.map((doc) => ({ id: doc.id, ownerUid: uid, updatedAt: Date.now(), ...(doc.data()) }));
           setState(s => ({ ...s, themeAllocations: themes, loading: false, lastUpdated: Date.now() }));
@@ -185,21 +221,6 @@ export const BobDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       console.error('[BobData] Failed to subscribe to theme_allocations:', error);
     }
 
-    // Monzo transactions - last 200, owner-scoped
-    try {
-      unsubMonzo = onSnapshot(
-        query(collection(db, 'monzo_transactions'), where('ownerUid', '==', uid), orderBy('createdAt', 'desc'), limit(200)),
-        (snap) => {
-          const monzoTransactions = snap.docs.map((doc) => ({ id: doc.id, ...(doc.data()) }));
-          setState(s => ({ ...s, monzoTransactions, lastUpdated: Date.now() }));
-          setTimestamps(t => ({ ...t, monzoTransactions: Date.now() }));
-        },
-        (err) => console.warn('[BobData] Monzo transactions snapshot error:', err?.message)
-      );
-    } catch (error) {
-      console.error('[BobData] Failed to subscribe to monzo_transactions:', error);
-    }
-
     return () => {
       unsubGoals?.();
       unsubStories?.();
@@ -207,42 +228,24 @@ export const BobDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       unsubSprints?.();
       unsubCalendar?.();
       unsubThemes?.();
-      unsubMonzo?.();
     };
-  }, [currentUser?.uid, currentPersona]);
+  }, []);
 
-  // Derived: active sprint (status === 1)
-  const activeSprint = useMemo(() =>
-    state.sprints.find(s => s.status === 1) ?? null,
-    [state.sprints]
-  );
-
-  // Derived: stories and tasks for the active sprint — no extra listeners
-  const activeSprintStories = useMemo(() =>
-    activeSprint
-      ? state.stories.filter(s => (s as any).sprintId === activeSprint.id)
-      : [],
-    [state.stories, activeSprint]
-  );
-
-  const activeSprintTasks = useMemo(() =>
-    activeSprint
-      ? state.tasks.filter(t => (t as any).sprintId === activeSprint.id)
-      : [],
-    [state.tasks, activeSprint]
-  );
-
-  const refreshCollection = useCallback(async (_collectionName: string) => {
+  // Manual refresh helper (for pull-to-refresh)
+  const refreshCollection = useCallback(async (collectionName: string) => {
     setState(s => ({ ...s, loading: true }));
+    // Trigger re-render, real data comes from live subscription
     setTimeout(() => setState(s => ({ ...s, loading: false })), 500);
   }, []);
 
+  // Staleness check
   const isStale = useCallback((collectionName: string, maxAgeSeconds: number = 60) => {
     const timestamp = timestamps[collectionName];
     if (!timestamp) return true;
     return (Date.now() - timestamp) > (maxAgeSeconds * 1000);
   }, [timestamps]);
 
+  // Entity lookup (avoid individual subscriptions)
   const subscribeToEntity = useCallback(<T,>(
     collectionName: string,
     entityId: string
@@ -254,15 +257,12 @@ export const BobDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       sprints: state.sprints,
       calendar_blocks: state.calendarBlocks,
     };
-    const col = collectionMap[collectionName];
-    return col?.find(item => item.id === entityId) as T | undefined;
+    const collection = collectionMap[collectionName];
+    return collection?.find(item => item.id === entityId) as T | undefined;
   }, [state]);
 
   const contextValue: BobDataContextType = {
     ...state,
-    activeSprint,
-    activeSprintStories,
-    activeSprintTasks,
     refreshCollection,
     isStale,
     subscribeToEntity

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Button } from 'react-bootstrap';
-import { Activity, ArrowRightLeft, CalendarClock, ChevronDown, ChevronRight, KanbanSquare, Pencil, Settings2 } from 'lucide-react';
-import { collection, doc, getDocs, onSnapshot, query, serverTimestamp, setDoc, where } from 'firebase/firestore';
+import { Activity, ArrowRightLeft, CalendarClock, Check, ChevronDown, ChevronRight, KanbanSquare, Pencil, Settings2, Trash2 } from 'lucide-react';
+import { collection, doc, getDocs, onSnapshot, query, serverTimestamp, setDoc, updateDoc, where } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
 import { db } from '../../firebase';
 import { useAuth } from '../../contexts/AuthContext';
@@ -93,6 +93,8 @@ type MoveRecommendation = {
   reasonSummary: string;
   isFocusAligned: boolean;
   targetSprint: Sprint | null;
+  goalTitle: string | null;
+  goalStartDateMs: number | null;
   entity: any;
 };
 
@@ -232,9 +234,12 @@ const PlannerCapacityBanner: React.FC = () => {
     }
 
     const rangeLabel = (() => {
-      if (!windowStartMs || !windowEndMs) return 'next planning window';
-      const start = new Date(windowStartMs);
-      const end = new Date(windowEndMs);
+      const now = Date.now();
+      // If stored window is stale (ended before today) or missing, show a rolling
+      // "next 30 days from today" label so the banner reflects the current planning horizon.
+      const stale = !windowStartMs || !windowEndMs || windowEndMs < now;
+      const start = stale ? new Date(now) : new Date(windowStartMs!);
+      const end = stale ? new Date(now + 30 * 24 * 60 * 60 * 1000) : new Date(windowEndMs!);
       return `${start.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} to ${end.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}`;
     })();
 
@@ -275,10 +280,12 @@ const PlannerCapacityBanner: React.FC = () => {
       ]);
 
       const goalStartDateMap = new Map<string, number>();
+      const goalTitleMap = new Map<string, string>();
       for (const snap of goalsSnap.docs) {
         const g = snap.data();
         const startMs = toMillis(g.startDate);
         if (startMs) goalStartDateMap.set(snap.id, startMs);
+        if (g?.title) goalTitleMap.set(snap.id, String(g.title));
       }
 
       const candidates: MoveRecommendation[] = [];
@@ -312,6 +319,8 @@ const PlannerCapacityBanner: React.FC = () => {
           reasonSummary: score.reasonSummary,
           isFocusAligned: score.isFocusAligned,
           targetSprint: score.targetSprint,
+          goalTitle: s.goalId ? (goalTitleMap.get(String(s.goalId)) ?? null) : null,
+          goalStartDateMs,
           entity: s,
         });
       }
@@ -345,6 +354,8 @@ const PlannerCapacityBanner: React.FC = () => {
           reasonSummary: score.reasonSummary,
           isFocusAligned: score.isFocusAligned,
           targetSprint: score.targetSprint,
+          goalTitle: t.goalId ? (goalTitleMap.get(String(t.goalId)) ?? null) : null,
+          goalStartDateMs,
           entity: t,
         });
       }
@@ -358,7 +369,20 @@ const PlannerCapacityBanner: React.FC = () => {
         nonFocusHours,
       });
 
-      candidates.sort((a, b) => a.priority !== b.priority ? a.priority - b.priority : b.hours - a.hours);
+      // Sort deferral candidates by aiCriticalityScore ASC (lowest-scoring items
+      // get bumped to a later sprint first; highest-scoring items stay).
+      // Tiebreakers: priority (lower number = higher priority, so keep them), then hours desc.
+      const getScore = (m: MoveRecommendation): number => {
+        const raw = Number((m.entity as any)?.aiCriticalityScore);
+        return Number.isFinite(raw) ? raw : 0;
+      };
+      candidates.sort((a, b) => {
+        const sa = getScore(a);
+        const sb = getScore(b);
+        if (sa !== sb) return sa - sb;
+        if (a.priority !== b.priority) return a.priority - b.priority;
+        return b.hours - a.hours;
+      });
 
       const top = candidates.slice(0, 10);
       setRecommendations(top);
@@ -441,6 +465,26 @@ const PlannerCapacityBanner: React.FC = () => {
       });
     }
   }, [nextSprint]);
+
+  const setItemStatus = useCallback(async (item: MoveRecommendation, newStatus: number, label: string) => {
+    const actionKey = `${item.kind}:${item.id}:${newStatus}`;
+    setMovingIds((prev) => ({ ...prev, [actionKey]: true }));
+    setRecommendationStatus(null);
+    try {
+      const col = item.kind === 'story' ? 'stories' : 'tasks';
+      await updateDoc(doc(db, col, item.id), { status: newStatus, updatedAt: serverTimestamp() });
+      setRecommendations((prev) => prev.filter((r) => !(r.kind === item.kind && r.id === item.id)));
+      setRecommendationStatus(`${item.ref} ${label}.`);
+    } catch (error: any) {
+      setRecommendationStatus(error?.message || `Failed to ${label} ${item.ref}.`);
+    } finally {
+      setMovingIds((prev) => {
+        const next = { ...prev };
+        delete next[actionKey];
+        return next;
+      });
+    }
+  }, []);
 
   const moveAllRecommendations = useCallback(async () => {
     if (!recommendations.length) return;
@@ -625,17 +669,23 @@ const PlannerCapacityBanner: React.FC = () => {
                   }}
                 >
                   <div className="small flex-grow-1 me-2">
-                    <span className="text-muted" style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.03em' }}>
-                      {item.kind === 'story' ? 'Story' : 'Task'}
-                    </span>
-                    {' · '}
-                    <strong>{item.title}</strong>
-                    <span className="text-muted ms-1">
-                      · {item.reasonSummary} · {formatHoursRaw(item.hours)}
-                      {isGoalSprint && (
-                        <span> · goal-sprint: {targetSprint!.name}</span>
+                    <div>
+                      <span className="text-muted" style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                        {item.kind === 'story' ? 'Story' : 'Task'}
+                      </span>
+                      {' · '}
+                      <strong>{item.title}</strong>
+                      <span className="text-muted ms-1">· {formatHoursRaw(item.hours)}</span>
+                    </div>
+                    <div className="text-muted" style={{ fontSize: 11, marginTop: 2 }}>
+                      {item.goalTitle && <>Goal: <strong>{item.goalTitle}</strong>{' '}</>}
+                      {item.goalStartDateMs && <>(starts {new Date(item.goalStartDateMs).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}) </>}
+                      {targetSprint && (
+                        <>→ <strong>{targetSprint.name}</strong>{' '}</>
                       )}
-                    </span>
+                      · {item.reasonSummary}
+                      {isGoalSprint && <span> (aligned to goal start)</span>}
+                    </div>
                   </div>
                   <div className="d-flex align-items-center gap-1 ms-auto flex-nowrap">
                     <button
@@ -651,6 +701,22 @@ const PlannerCapacityBanner: React.FC = () => {
                       title="Quick edit"
                     >
                       <Pencil size={13} />
+                    </button>
+                    <button
+                      onClick={() => { void setItemStatus(item, 2, 'marked for review'); }}
+                      style={{ ...iconBtnStyle, color: 'var(--bs-success)' }}
+                      title="Mark complete (status → Review)"
+                      disabled={moving}
+                    >
+                      <Check size={13} />
+                    </button>
+                    <button
+                      onClick={() => { void setItemStatus(item, 4, 'moved to bin'); }}
+                      style={{ ...iconBtnStyle, color: 'var(--bs-danger)' }}
+                      title="Delete (status → Bin)"
+                      disabled={moving}
+                    >
+                      <Trash2 size={13} />
                     </button>
                     <Button
                       size="sm"

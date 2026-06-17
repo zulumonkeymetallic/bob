@@ -12,6 +12,10 @@ const toMillis = (value: any): number => {
   return Number.isNaN(parsed) ? Number.NaN : parsed;
 };
 
+// useFocusGoals — Focus Goals Wizard sets the horizon-level "what matters this
+// phase" list. The Sprint Planner Wizard reads these to pre-select sensible
+// defaults for each new sprint, but users can still pick anything.
+
 export const useFocusGoals = (userId: string | undefined) => {
   const [focusGoals, setFocusGoals] = useState<FocusGoal[]>([]);
   const [loading, setLoading] = useState(true);

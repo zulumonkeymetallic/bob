@@ -13,14 +13,17 @@ export const MigrationManager: React.FC<MigrationManagerProps> = ({ children }) 
   const { currentPersona } = usePersona();
   const [showMigrationModal, setShowMigrationModal] = useState(false);
   const [migrationProgress, setMigrationProgress] = useState(0);
-  const [migrationStatus, setMigrationStatus] = useState<'checking' | 'needed' | 'running' | 'complete' | 'error'>('complete');
+  const [migrationStatus, setMigrationStatus] = useState<'checking' | 'needed' | 'running' | 'complete' | 'error'>('checking');
   const [errorMessage, setErrorMessage] = useState('');
 
   const checkAndRunMigration = useCallback(async () => {
     if (!currentUser || !currentPersona) return;
 
     try {
+      setMigrationStatus('checking');
+      
       // Migration is completed - skip check and mark as complete
+      console.log('🎯 Migration system bypassed - database migration completed');
       setMigrationStatus('complete');
       
       // Legacy code for reference - migration check disabled

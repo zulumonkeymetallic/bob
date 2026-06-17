@@ -937,9 +937,8 @@ const SortableRow: React.FC<SortableRowProps> = ({
             if (column.key === 'title') {
               const kind = (goal as any).goalKind as string | undefined;
               const kindBadge =
-                kind === 'umbrella'  ? { label: 'Program', style: { background: '#0ea5e9', color: '#fff' } } :
-                kind === 'milestone' ? { label: 'Phase',   style: { background: '#10b981', color: '#fff' } } :
-                kind === 'execution' ? { label: 'Leaf',    style: { background: '#8b5cf6', color: '#fff' } } :
+                kind === 'umbrella' ? { label: '📁 Project', style: { background: 'var(--bs-primary)', color: '#fff' } } :
+                kind === 'milestone' ? { label: '🎯 Phase', style: { background: 'var(--bs-info)', color: '#fff' } } :
                 null;
               const hasParent = !!(goal as any).parentGoalId;
               return (

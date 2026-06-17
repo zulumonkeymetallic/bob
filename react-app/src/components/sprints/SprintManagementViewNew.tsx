@@ -776,14 +776,12 @@ const SprintManagementView: React.FC = () => {
         </Modal.Footer>
       </Modal>
 
-      {showSprintModal && (
-        <SprintPlannerWizard
-          show={showSprintModal}
-          onHide={() => { setShowSprintModal(false); searchParams.delete('wizard'); setSearchParams(searchParams); }}
-          currentUserId={currentUser?.uid}
-          onComplete={() => { setShowSprintModal(false); searchParams.delete('wizard'); setSearchParams(searchParams); }}
-        />
-      )}
+      <SprintPlannerWizard
+        show={showSprintModal}
+        onHide={() => { setShowSprintModal(false); searchParams.delete('wizard'); setSearchParams(searchParams); }}
+        currentUserId={currentUser?.uid}
+        onComplete={() => { setShowSprintModal(false); searchParams.delete('wizard'); setSearchParams(searchParams); }}
+      />
     </Container>
   );
 };

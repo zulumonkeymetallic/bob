@@ -34,17 +34,12 @@ const PlannedSprintBanner: React.FC = () => {
       where('persona', '==', currentPersona),
       where('status', '==', 0),
     );
-    return onSnapshot(
-      q,
-      snap => {
-        const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as Sprint));
-        setPlannedSprints(list);
-      },
-      err => {
-        console.warn('PlannedSprintBanner: planned sprints query error', err?.code || err);
-        setPlannedSprints([]);
-      },
-    );
+    return onSnapshot(q, snap => {
+      const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as Sprint));
+      // Only show if there is no currently active sprint (status=1)
+      // We load active separately via a quick check
+      setPlannedSprints(list);
+    });
   }, [currentUser, currentPersona]);
 
   const [hasActive, setHasActive] = useState(false);
@@ -56,17 +51,15 @@ const PlannedSprintBanner: React.FC = () => {
       where('persona', '==', currentPersona),
       where('status', '==', 1),
     );
-    return onSnapshot(
-      q,
-      snap => setHasActive(!snap.empty),
-      err => {
-        console.warn('PlannedSprintBanner: active sprints query error', err?.code || err);
-        setHasActive(false);
-      },
-    );
+    return onSnapshot(q, snap => setHasActive(!snap.empty));
   }, [currentUser, currentPersona]);
 
-  const visible = plannedSprints.filter(s => !dismissed.has(s.id));
+  // Sort by startDate ascending and only surface the next (earliest) planned sprint.
+  // Showing all planned sprints clutters the UI when there's a long pipeline.
+  const visible = plannedSprints
+    .filter(s => !dismissed.has(s.id))
+    .sort((a, b) => (toMs((a as any).startDate) ?? Infinity) - (toMs((b as any).startDate) ?? Infinity))
+    .slice(0, 1);
 
   if (hasActive || visible.length === 0) return null;
 
