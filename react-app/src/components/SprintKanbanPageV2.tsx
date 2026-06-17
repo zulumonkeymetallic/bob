@@ -49,7 +49,12 @@ const SprintKanbanPageV2: React.FC = () => {
     const [themeFilterIds, setThemeFilterIds] = useState<number[]>([]);
     const [goalFilterIds, setGoalFilterIds] = useState<string[]>([]);
     const [isFullscreen, setIsFullscreen] = useState(false);
-    const [showDescriptions, setShowDescriptions] = useState(false);
+    const [showDescriptions, setShowDescriptions] = useState(() => {
+        try {
+            const stored = localStorage.getItem('kanban_show_descriptions');
+            return stored === null ? true : stored === 'true';
+        } catch { return true; }
+    });
     const [showLatestNotes, setShowLatestNotes] = useState(() => {
         try {
             const stored = localStorage.getItem('kanban_show_latest_notes');
@@ -394,7 +399,10 @@ const SprintKanbanPageV2: React.FC = () => {
                                 id="toggle-kanban-descriptions"
                                 label="Show story descriptions"
                                 checked={showDescriptions}
-                                onChange={(e) => setShowDescriptions(e.target.checked)}
+                                onChange={(e) => {
+                                    setShowDescriptions(e.target.checked);
+                                    try { localStorage.setItem('kanban_show_descriptions', String(e.target.checked)); } catch { /* noop */ }
+                                }}
                                 className="ms-2"
                             />
                             <Form.Check
