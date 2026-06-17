@@ -21089,170 +21089,21 @@ try {
 }
 
 // ============================================================================
-// alignStoriesToGoalSprints — nightly scheduled job
+// alignStoriesToGoalSprints — moved to ./alignStoriesToGoalSprints.js
 // ----------------------------------------------------------------------------
-// For each user: for each story whose parent goal has a startDate, ensure the
-// story's sprintId points at the sprint whose startDate is closest to the
-// goal's startDate. If no sprint exists within 6 months either side of the
-// goal's startDate, move the story to the backlog (sprintId = null).
-//
-// Why: keeps long-arc programs (e.g. triathlon Sept 2027) tracking against
-// sprints that actually fall in their date window, instead of all stories
-// piling into the current sprint.
-//
-// Safety rails:
-//   - Only touches stories that are CURRENTLY in a sprint (sprintId set).
-//   - Only moves when the destination differs from the current sprintId.
-//   - Skips stories with status >= 2 (Review/Done/Bin) — never reassigns work
-//     that's already in flight or finished.
-//   - Logs every move to activity_stream with source='align_stories_nightly'.
-//   - Per-user try/catch so one bad user doesn't break the batch.
+// The implementation now lives in its own module so it can be called from
+// the unified nightly orchestrator without circular deps. The standalone
+// 02:00 cron has been removed; the work runs as a step inside
+// unifiedNightlyOrchestrator (04:00 Europe/London) — see
+// functions/nightlyOrchestration.js. Manual trigger callable below.
 // ============================================================================
-const toMillisAlign = (v) => {
-  if (v == null) return null;
-  if (typeof v === 'number') return v < 1e11 ? v * 1000 : v;
-  if (v instanceof Date) return v.getTime();
-  if (typeof v?.toMillis === 'function') return v.toMillis();
-  if (typeof v?.seconds === 'number') return v.seconds * 1000;
-  const parsed = Date.parse(String(v));
-  return Number.isNaN(parsed) ? null : parsed;
-};
-const SIX_MONTHS_MS = 180 * 24 * 60 * 60 * 1000;
+const _alignStories = require('./alignStoriesToGoalSprints');
 
-async function runAlignStoriesToGoalSprintsForUser(db, uid, options = {}) {
-  const dryRun = !!options.dryRun;
-
-  // 1. Load goals with a startDate
-  const goalsSnap = await db.collection('goals').where('ownerUid', '==', uid).get();
-  const goalStartByGoalId = new Map();
-  const goalTitleByGoalId = new Map();
-  for (const g of goalsSnap.docs) {
-    const data = g.data();
-    const startMs = toMillisAlign(data.startDate);
-    if (startMs != null) goalStartByGoalId.set(g.id, startMs);
-    if (data.title) goalTitleByGoalId.set(g.id, String(data.title));
-  }
-  if (goalStartByGoalId.size === 0) return { user: uid, dryRun, moved: 0, backlogged: 0, skipped: 0, wouldMove: [] };
-
-  // 2. Load all non-closed sprints, sorted by startDate ascending
-  const sprintsSnap = await db.collection('sprints').where('ownerUid', '==', uid).get();
-  const sprints = sprintsSnap.docs
-    .map((d) => ({ id: d.id, ...d.data() }))
-    .filter((s) => Number(s.status) < 2) // 0=planned, 1=active. 2+=closed
-    .map((s) => ({ id: s.id, name: s.name || s.id, startMs: toMillisAlign(s.startDate) }))
-    .filter((s) => s.startMs != null)
-    .sort((a, b) => a.startMs - b.startMs);
-  const sprintNameById = new Map(sprints.map((s) => [s.id, s.name]));
-
-  // 3. For each goal, pick the closest sprint within 6 months either side.
-  //    If no sprint qualifies → null (backlog).
-  const targetSprintIdByGoalId = new Map();
-  for (const [goalId, goalStart] of goalStartByGoalId.entries()) {
-    let best = null;
-    let bestDelta = Infinity;
-    for (const s of sprints) {
-      const d = Math.abs(s.startMs - goalStart);
-      if (d < bestDelta) { best = s; bestDelta = d; }
-    }
-    targetSprintIdByGoalId.set(goalId, best && bestDelta <= SIX_MONTHS_MS ? best.id : null);
-  }
-
-  // 4. Find candidate stories: currently in a sprint, status <2, with a goal whose
-  //    startDate target differs from current sprintId.
-  const storiesSnap = await db.collection('stories').where('ownerUid', '==', uid).get();
-  let moved = 0, backlogged = 0, skipped = 0;
-  const wouldMove = [];
-  const batch = dryRun ? null : db.batch();
-  let writes = 0;
-  for (const doc of storiesSnap.docs) {
-    const s = doc.data();
-    const status = Number(s.status);
-    if (Number.isFinite(status) && status >= 2) { skipped++; continue; } // skip review/done/bin
-    const currentSprintId = s.sprintId ? String(s.sprintId) : null;
-    if (!currentSprintId) { skipped++; continue; } // only touch in-sprint stories
-    const goalId = s.goalId ? String(s.goalId) : null;
-    if (!goalId || !targetSprintIdByGoalId.has(goalId)) { skipped++; continue; }
-    const targetId = targetSprintIdByGoalId.get(goalId);
-    if (targetId === currentSprintId) { skipped++; continue; }
-
-    const moveRecord = {
-      storyId: doc.id,
-      storyTitle: s.title || 'Untitled',
-      goalId,
-      goalTitle: goalTitleByGoalId.get(goalId) || null,
-      goalStartDateMs: goalStartByGoalId.get(goalId) || null,
-      fromSprintId: currentSprintId,
-      fromSprintName: sprintNameById.get(currentSprintId) || currentSprintId,
-      toSprintId: targetId,
-      toSprintName: targetId ? (sprintNameById.get(targetId) || targetId) : '(backlog)',
-    };
-    wouldMove.push(moveRecord);
-
-    if (!dryRun) {
-      batch.update(doc.ref, {
-        sprintId: targetId,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        lastAlignedToGoalSprintAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
-      writes++;
-
-      const activityRef = db.collection('activity_stream').doc();
-      batch.set(activityRef, {
-        id: activityRef.id,
-        ownerUid: uid,
-        entityId: doc.id,
-        entityType: 'story',
-        activityType: 'updated',
-        description: targetId
-          ? `Auto-aligned story to sprint matching parent goal's start date`
-          : `Auto-moved story to backlog (no sprint within 6 months of parent goal's start date)`,
-        source: 'align_stories_nightly',
-        payload: { fromSprintId: currentSprintId, toSprintId: targetId, goalId },
-        timestamp: admin.firestore.FieldValue.serverTimestamp(),
-      });
-      writes++;
-    }
-
-    if (targetId) moved++; else backlogged++;
-
-    // Firestore batch hard limit is 500 writes. Flush at 400 to leave headroom.
-    if (!dryRun && writes >= 400) {
-      await batch.commit();
-      console.warn('[align_stories_nightly] batch full at 400 writes for user', uid, '— remaining stories will align next run');
-      return { user: uid, dryRun, moved, backlogged, skipped, wouldMove, truncated: true };
-    }
-  }
-  if (!dryRun && writes > 0) await batch.commit();
-  return { user: uid, dryRun, moved, backlogged, skipped, wouldMove };
-}
-
-exports.alignStoriesToGoalSprints = schedulerV2.onSchedule(
-  { schedule: '0 2 * * *', timeZone: 'Europe/London', memory: '512MiB' },
-  async () => {
-    const db = ensureFirestore();
-    const profiles = await db.collection('profiles').get().catch(() => ({ docs: [] }));
-    const results = [];
-    for (const profile of profiles.docs) {
-      const uid = profile.id;
-      try {
-        const r = await runAlignStoriesToGoalSprintsForUser(db, uid);
-        results.push(r);
-      } catch (e) {
-        console.error('[align_stories_nightly] user failed', uid, e?.message || e);
-        results.push({ user: uid, error: String(e?.message || e) });
-      }
-    }
-    console.log('[align_stories_nightly] complete', JSON.stringify(results));
-    return { ok: true, results };
-  },
-);
-
-// Manual trigger so we can verify behaviour before relying on the cron.
-// Pass { dryRun: true } from the client to preview the move list without writing.
 exports.runAlignStoriesToGoalSprintsNow = httpsV2.onCall(async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new functionsV2.https.HttpsError('unauthenticated', 'Sign in required');
   const dryRun = !!req?.data?.dryRun;
   const db = ensureFirestore();
-  return await runAlignStoriesToGoalSprintsForUser(db, uid, { dryRun });
+  return await _alignStories.runForUser(db, uid, { dryRun });
 });
+

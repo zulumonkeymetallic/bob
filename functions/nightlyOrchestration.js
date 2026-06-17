@@ -4783,6 +4783,15 @@ exports.runNightlyChainNow = onCall({
   const steps = [
     { name: 'runAutoPointing', fn: runAutoPointingJob },
     { name: 'runAutoConversions', fn: runAutoConversionsJob },
+    {
+      name: 'alignStoriesToGoalSprints',
+      fn: async () => {
+        const align = require('./alignStoriesToGoalSprints');
+        if (align?.runForAllUsers) {
+          await align.runForAllUsers();
+        }
+      },
+    },
     { name: 'runPriorityScoring', fn: runPriorityScoringJob },
     { name: 'runCalendarPlanner', fn: runCalendarPlannerJob },
     {

@@ -22,6 +22,7 @@ import { useFocusGoals } from '../../hooks/useFocusGoals';
 import { useGlobalThemes } from '../../hooks/useGlobalThemes';
 import GoalCard from '../shared/GoalCard';
 import GoalCardRichPanels from '../shared/GoalCardRichPanels';
+import YearMultiSelect from '../shared/YearMultiSelect';
 import type { Goal, Sprint, Story, Task } from '../../types';
 import { getStatusName, getThemeName, isStatus } from '../../utils/statusHelpers';
 import { getActiveFocusLeafGoalIds, getGoalDisplayPath, isGoalInHierarchySet } from '../../utils/goalHierarchy';
@@ -307,13 +308,59 @@ const UnifiedGoalPlannerLevels: React.FC<UnifiedGoalPlannerLevelsProps> = ({
   const [detailLevel, setDetailLevel] = useState<DetailLevel>('medium');
   const [currentAnchor, setCurrentAnchor] = useState<Date>(() => normalizeAnchor(level, anchorDate));
   const [periodCount, setPeriodCount] = useState<number>(3);
+  // Year-mode uses the same multi-select pattern as /goals (YearMultiSelect).
+  // Default: current + next two years, matching GoalsManagement.tsx.
+  const [selectedYears, setSelectedYears] = useState<number[]>(() => {
+    const y = new Date().getFullYear();
+    return [y, y + 1, y + 2];
+  });
+  const [allYears, setAllYears] = useState(false);
   const [editingGoal, setEditingGoal] = useState<Goal | null>(null);
   const [workspaceGoal, setWorkspaceGoal] = useState<Goal | null>(null);
   const [pendingSprintChanges, setPendingSprintChanges] = useState<PendingGoalTimelineChange | null>(null);
   const [feedback, setFeedback] = useState<{ variant: 'success' | 'warning' | 'danger'; text: string } | null>(null);
   const activeFocusGoalIds = useMemo(() => getActiveFocusLeafGoalIds(activeFocusGoals), [activeFocusGoals]);
-  const periods = useMemo(() => buildPeriods(level, currentAnchor, periodCount), [level, currentAnchor, periodCount]);
   const themesPalette = useMemo(() => themes || [], [themes]);
+
+  // Years available across loaded goals — derived from targetYear, startDate
+  // and endDate. Mirrors the deduction logic in GoalsManagement.tsx.
+  const availableYears = useMemo<number[]>(() => {
+    const yearSet = new Set<number>();
+    const pushYear = (raw: any) => {
+      if (raw == null) return;
+      if (typeof raw === 'number') {
+        const ms = raw < 1e11 ? raw * 1000 : raw;
+        const y = new Date(ms).getFullYear();
+        if (Number.isFinite(y)) yearSet.add(y);
+        return;
+      }
+      const d = new Date(raw);
+      if (Number.isFinite(d.getTime())) yearSet.add(d.getFullYear());
+    };
+    for (const goal of goals) {
+      const ty = Number((goal as any).targetYear);
+      if (Number.isFinite(ty)) yearSet.add(ty);
+      pushYear((goal as any).startDate);
+      pushYear((goal as any).endDate);
+    }
+    const thisYear = new Date().getFullYear();
+    yearSet.add(thisYear);
+    yearSet.add(thisYear + 1);
+    yearSet.add(thisYear + 2);
+    return Array.from(yearSet).sort((a, b) => a - b);
+  }, [goals]);
+
+  // Periods are anchor+count for quarters, multi-select years for year level.
+  const periods = useMemo(() => {
+    if (level === 'year') {
+      const years = (allYears ? availableYears : selectedYears).slice().sort((a, b) => a - b);
+      if (years.length === 0) {
+        return buildPeriods('year', currentAnchor, 1);
+      }
+      return years.flatMap((year) => buildPeriods('year', new Date(year, 0, 1), 1));
+    }
+    return buildPeriods(level, currentAnchor, periodCount);
+  }, [level, currentAnchor, periodCount, selectedYears, allYears, availableYears]);
 
   useEffect(() => {
     setCurrentAnchor(normalizeAnchor(level, anchorDate));
@@ -659,12 +706,25 @@ const UnifiedGoalPlannerLevels: React.FC<UnifiedGoalPlannerLevelsProps> = ({
                   <ChevronRight size={14} />
                 </Button>
               </div>
-              <Form.Label className="small fw-semibold mt-2">Show {level === 'year' ? 'years' : 'quarters'}</Form.Label>
-              <Form.Select size="sm" value={periodCount} onChange={(e) => setPeriodCount(Math.max(1, Number(e.target.value) || 3))}>
-                {[2, 3, 4, 5, 6, 8, 12].map((n) => (
-                  <option key={n} value={n}>{n}</option>
-                ))}
-              </Form.Select>
+              <Form.Label className="small fw-semibold mt-2">
+                {level === 'year' ? 'Years' : 'Show quarters'}
+              </Form.Label>
+              {level === 'year' ? (
+                <YearMultiSelect
+                  availableYears={availableYears}
+                  selectedYears={selectedYears}
+                  onChange={setSelectedYears}
+                  allYears={allYears}
+                  onAllYearsChange={setAllYears}
+                  style={{ width: '100%' }}
+                />
+              ) : (
+                <Form.Select size="sm" value={periodCount} onChange={(e) => setPeriodCount(Math.max(1, Number(e.target.value) || 3))}>
+                  {[2, 3, 4, 5, 6, 8, 12].map((n) => (
+                    <option key={n} value={n}>{n}</option>
+                  ))}
+                </Form.Select>
+              )}
             </Col>
             <Col md={3}>
               <Form.Check type="switch" label="Show completed goals" checked={showCompletedItems} onChange={(event) => setShowCompletedItems(event.target.checked)} />
@@ -688,7 +748,7 @@ const UnifiedGoalPlannerLevels: React.FC<UnifiedGoalPlannerLevelsProps> = ({
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: `minmax(220px, 0.85fr) repeat(${periodCount}, minmax(240px, 1fr))`,
+          gridTemplateColumns: `minmax(220px, 0.85fr) repeat(${periods.length || 1}, minmax(240px, 1fr))`,
           gap: 16,
           alignItems: 'start',
           overflowX: 'auto',
