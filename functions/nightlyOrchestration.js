@@ -4783,15 +4783,6 @@ exports.runNightlyChainNow = onCall({
   const steps = [
     { name: 'runAutoPointing', fn: runAutoPointingJob },
     { name: 'runAutoConversions', fn: runAutoConversionsJob },
-    {
-      name: 'nightlyGoalDateSync',
-      fn: async () => {
-        const sync = require('./goalTimelineSync');
-        if (sync?.runNightlyGoalDateSync) {
-          await sync.runNightlyGoalDateSync();
-        }
-      },
-    },
     { name: 'runPriorityScoring', fn: runPriorityScoringJob },
     { name: 'runCalendarPlanner', fn: runCalendarPlannerJob },
     {
