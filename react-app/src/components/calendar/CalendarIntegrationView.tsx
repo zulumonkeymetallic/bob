@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { Link } from 'react-router-dom';
 import { Container, Row, Col, Card, Button, Modal, Form, Alert, Table, Badge } from 'react-bootstrap';
+import FitnessWidget from '../metrics/FitnessWidget';
 import { 
   Calendar as CalendarIcon, 
   Plus, 
@@ -841,7 +843,56 @@ const CalendarIntegrationView: React.FC = () => {
       
       {/* Events List */}
       <Row>
-        <Col md={8}>
+        {/* Left rail — fitness + habits widgets */}
+        <Col xl={3} lg={4} md={12} className="mb-3">
+          <Card className="mb-3">
+            <Card.Header>
+              <h6 className="mb-0">Fitness</h6>
+            </Card.Header>
+            <Card.Body>
+              <FitnessWidget />
+            </Card.Body>
+          </Card>
+
+          <Card>
+            <Card.Header className="d-flex align-items-center justify-content-between">
+              <h6 className="mb-0">Habits &amp; Chores</h6>
+              <Link to="/dashboard/habit-tracking" className="small text-decoration-none">Open →</Link>
+            </Card.Header>
+            <Card.Body>
+              {(() => {
+                const recurring = tasks.filter((t: any) => {
+                  const kind = String(t?.type || t?.task_type || '').toLowerCase();
+                  return kind === 'habit' || kind === 'habitual' || kind === 'chore' || kind === 'routine';
+                });
+                const habits = recurring.filter((t: any) => {
+                  const k = String(t?.type || t?.task_type || '').toLowerCase();
+                  return k === 'habit' || k === 'habitual';
+                });
+                const chores = recurring.filter((t: any) => String(t?.type || t?.task_type || '').toLowerCase() === 'chore');
+                const routines = recurring.filter((t: any) => String(t?.type || t?.task_type || '').toLowerCase() === 'routine');
+                if (recurring.length === 0) {
+                  return <div className="text-muted small">No habits, chores, or routines yet.</div>;
+                }
+                return (
+                  <>
+                    <div className="d-flex justify-content-between small mb-1">
+                      <span>Habits</span><strong>{habits.length}</strong>
+                    </div>
+                    <div className="d-flex justify-content-between small mb-1">
+                      <span>Chores</span><strong>{chores.length}</strong>
+                    </div>
+                    <div className="d-flex justify-content-between small">
+                      <span>Routines</span><strong>{routines.length}</strong>
+                    </div>
+                  </>
+                );
+              })()}
+            </Card.Body>
+          </Card>
+        </Col>
+
+        <Col xl={5} lg={8} md={12}>
           <Card>
             <Card.Header>
               <h5>
@@ -980,7 +1031,7 @@ const CalendarIntegrationView: React.FC = () => {
         </Col>
         
         {/* Calendar Status Sidebar */}
-        <Col md={4}>
+        <Col xl={4} lg={12} md={12}>
           <Card className="mb-3">
             <Card.Header>
               <h6>Calendar Status</h6>

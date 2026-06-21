@@ -539,7 +539,7 @@ const DASHBOARD_WIDGET_DEFAULT_VISIBILITY: DashboardWidgetVisibility = {
   calendar: false,
   recoveryMetrics: false,
   activityMetrics: false,
-  fitnessMetrics: false,
+  fitnessMetrics: true,
   sprintVelocity: false,
 };
 

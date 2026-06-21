@@ -19,6 +19,9 @@ import EditTaskModal from './EditTaskModal';
 import EditStoryModal from './EditStoryModal';
 import DeferItemModal from './DeferItemModal';
 import KanbanCardV2 from './KanbanCardV2';
+import AiCoachPage from './coach/AiCoachPage';
+import FinanceCoachPage from './finance/FinanceCoachPage';
+import FitnessWidget from './metrics/FitnessWidget';
 import {
   callDeltaReplan,
   callFullReplan,
@@ -44,7 +47,7 @@ import {
   MOBILE_STORY_PROGRESS_OPTIONS,
 } from '../utils/storyProgress';
 
-type TabKey = 'overview' | 'daily_plan' | 'tasks' | 'stories' | 'goals' | 'chores' | 'finance';
+type TabKey = 'overview' | 'daily_plan' | 'tasks' | 'stories' | 'goals' | 'chores' | 'finance' | 'coach' | 'finance_coach';
 type TaskViewFilter = 'top3' | 'due_today' | 'overdue' | 'all';
 type GoalsViewFilter = 'active_sprint' | 'year';
 type MobileSharedFilters = {
@@ -52,16 +55,33 @@ type MobileSharedFilters = {
   chores: boolean;
   focusAligned: boolean;
 };
-const MOBILE_TAB_ORDER: TabKey[] = ['overview', 'daily_plan', 'tasks', 'stories', 'goals', 'chores', 'finance'];
+const MOBILE_TAB_ORDER: TabKey[] = ['overview', 'daily_plan', 'tasks', 'stories', 'goals', 'chores', 'finance', 'coach', 'finance_coach'];
 const MOBILE_TAB_LABELS: Record<TabKey, string> = {
-  overview: 'Overview',
-  daily_plan: 'Daily Plan',
+  overview: 'Today',
+  daily_plan: 'Plan',
   tasks: 'Tasks',
   stories: 'Stories',
   goals: 'Goals',
   chores: 'Chores',
   finance: 'Finance',
+  coach: 'Coach',
+  finance_coach: 'Money',
 };
+// FA icon names for the bottom tab bar (no "fa-" prefix)
+const MOBILE_TAB_ICONS: Record<TabKey, string> = {
+  overview: 'home',
+  daily_plan: 'calendar-day',
+  tasks: 'list-check',
+  stories: 'book',
+  goals: 'bullseye',
+  chores: 'check-square',
+  finance: 'wallet',
+  coach: 'dumbbell',
+  finance_coach: 'chart-line',
+};
+const MOBILE_TAB_BAR_HEIGHT = 64;
+// Coach/Money tabs render full-page components; they skip the overview chrome
+const COACH_TABS: TabKey[] = ['coach', 'finance_coach'];
 
 const THEME_COLORS: Record<number, string> = {
   1: '#22c55e', // Health
@@ -1313,6 +1333,7 @@ const MobileHome: React.FC = () => {
       </div>
 
       {/* Key metrics condensed into a single horizontal row */}
+      {!COACH_TABS.includes(activeTab) && (
       <div
         className="d-flex gap-1 mb-2 flex-nowrap"
         style={{ paddingBottom: 4, overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}
@@ -1388,7 +1409,9 @@ const MobileHome: React.FC = () => {
           <div>{sprintMetricsSummary.behind ? 'Behind' : 'On track'}</div>
         </div>
       </div>
+      )}
 
+      {!COACH_TABS.includes(activeTab) && (
       <div
         className="d-flex gap-1 mb-2 flex-nowrap"
         style={{ paddingBottom: 4, overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}
@@ -1422,27 +1445,10 @@ const MobileHome: React.FC = () => {
           </Card.Body>
         </Card>
       </div>
-      {/* AI Daily Summary + Focus */}
-      {/* Tabs: Overview | Tasks | Stories | Goals | Chores */}
-      <div className="mobile-filter-tabs mb-3">
-        <div className="d-flex align-items-center gap-1 flex-nowrap" style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
-          <div className="btn-group flex-nowrap w-100" role="group">
-            {MOBILE_TAB_ORDER.map((key) => (
-              <Button
-                key={key}
-                variant={activeTab === key ? 'primary' : 'outline-primary'}
-                size="sm"
-                onClick={() => setActiveMobileTab(key)}
-                style={{ padding: '3px 6px', fontSize: 11, whiteSpace: 'nowrap' }}
-              >
-                {MOBILE_TAB_LABELS[key]}
-              </Button>
-            ))}
-          </div>
-        </div>
-      </div>
+      )}
+      {/* Tab navigation lives in the fixed bottom bar at the end of the component */}
 
-      {activeTab !== 'goals' && activeTab !== 'finance' && (
+      {!COACH_TABS.includes(activeTab) && activeTab !== 'goals' && activeTab !== 'finance' && (
         <>
           <div className="d-flex flex-wrap gap-2 mb-2">
             <Button
@@ -1862,6 +1868,34 @@ const MobileHome: React.FC = () => {
                   Full replan is in progress—running the complete nightly orchestration chain.
                 </div>
               )}
+            </Card.Body>
+          </Card>
+
+          {/* Fitness widget — Run/Swim/Bike SportCards */}
+          <Card className="mb-3">
+            <Card.Body>
+              <div className="d-flex align-items-center justify-content-between mb-2">
+                <div className="fw-semibold" style={{ fontSize: 14 }}>Fitness</div>
+                <Link to="/fitness" className="small text-decoration-none">Full →</Link>
+              </div>
+              <FitnessWidget />
+            </Card.Body>
+          </Card>
+
+          {/* Habits & Chores roll-up */}
+          <Card className="mb-3">
+            <Card.Body>
+              <div className="d-flex align-items-center justify-content-between mb-2">
+                <div className="fw-semibold" style={{ fontSize: 14 }}>Habits & Chores</div>
+                <button
+                  type="button"
+                  className="btn btn-link btn-sm p-0 text-decoration-none"
+                  onClick={() => setActiveMobileTab('chores')}
+                >
+                  Open →
+                </button>
+              </div>
+              {renderChoresHabitsWidget()}
             </Card.Body>
           </Card>
         </div>
@@ -2301,6 +2335,21 @@ const MobileHome: React.FC = () => {
         <MobileFinanceTab />
       )}
 
+      {activeTab === 'coach' && (
+        <div style={{ marginLeft: -12, marginRight: -12 }}>
+          <AiCoachPage />
+        </div>
+      )}
+
+      {activeTab === 'finance_coach' && (
+        <div style={{ marginLeft: -12, marginRight: -12 }}>
+          <FinanceCoachPage />
+        </div>
+      )}
+
+      {/* Fixed bottom tab bar — replaces the old top button group */}
+      <MobileTabBar activeTab={activeTab} onChange={setActiveMobileTab} />
+
       <Modal show={!!noteModal?.show} onHide={() => setNoteModal(null)} centered>
         <Modal.Header closeButton>
           <Modal.Title>Add Note</Modal.Title>
@@ -2365,6 +2414,84 @@ const MobileHome: React.FC = () => {
         onApply={applyDeferredDate}
       />
     </Container>
+  );
+};
+
+// ─── Bottom tab bar ──────────────────────────────────────────────────────────
+//
+// iOS-style fixed bar at the bottom of /mobile. Replaces the old top button
+// group. Scrollable horizontally because we have 9 tabs. While mounted, it
+// adds bottom padding to <body> so page content isn't covered.
+
+const MobileTabBar: React.FC<{ activeTab: TabKey; onChange: (k: TabKey) => void }> = ({ activeTab, onChange }) => {
+  useEffect(() => {
+    const prev = document.body.style.paddingBottom;
+    document.body.style.paddingBottom = `calc(${MOBILE_TAB_BAR_HEIGHT}px + env(safe-area-inset-bottom, 0px))`;
+    return () => { document.body.style.paddingBottom = prev; };
+  }, []);
+
+  return (
+    <nav
+      aria-label="Mobile tabs"
+      style={{
+        position: 'fixed',
+        left: 0,
+        right: 0,
+        bottom: 0,
+        zIndex: 1030,
+        background: 'var(--bs-body-bg)',
+        borderTop: '1px solid var(--bs-border-color)',
+        boxShadow: '0 -2px 10px rgba(0,0,0,0.04)',
+        paddingBottom: 'env(safe-area-inset-bottom, 0)',
+        overflowX: 'auto',
+        WebkitOverflowScrolling: 'touch',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          minWidth: '100%',
+        }}
+      >
+        {MOBILE_TAB_ORDER.map((key) => {
+          const active = key === activeTab;
+          const colour = active ? 'var(--bs-primary)' : 'var(--bs-secondary)';
+          return (
+            <button
+              key={key}
+              type="button"
+              onClick={() => onChange(key)}
+              aria-current={active ? 'page' : undefined}
+              aria-label={MOBILE_TAB_LABELS[key]}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                padding: '8px 6px 6px',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: 2,
+                minWidth: 64,
+                flex: '1 1 0',
+                color: colour,
+                fontSize: 10,
+                fontWeight: active ? 600 : 500,
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+                transition: 'color 0.15s ease',
+              }}
+            >
+              <i
+                className={`fas fa-${MOBILE_TAB_ICONS[key]}`}
+                aria-hidden="true"
+                style={{ fontSize: 18, lineHeight: 1 }}
+              />
+              <span>{MOBILE_TAB_LABELS[key]}</span>
+            </button>
+          );
+        })}
+      </div>
+    </nav>
   );
 };
 

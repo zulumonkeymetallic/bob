@@ -111,7 +111,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       icon: 'heartbeat',
       items: [
         { label: 'Fitness', path: '/fitness', icon: 'th' },
-        { label: 'AI Coach', path: '/ai-coach', icon: 'dumbbell' },
+        { label: 'AI Coach', path: '/coach', icon: 'dumbbell' },
         { label: 'Activity Log', path: '/fitness/full', icon: 'running' },
         { label: 'Habit Tracking', path: '/dashboard/habit-tracking', icon: 'check-square' },
         { label: 'Parkrun Results', path: '/parkrun-results', icon: 'flag-checkered' },

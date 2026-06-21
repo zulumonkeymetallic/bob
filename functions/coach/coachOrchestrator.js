@@ -22,9 +22,125 @@ const admin = require('firebase-admin');
 const { randomUUID } = require('crypto');
 const httpsV2 = require('firebase-functions/v2/https');
 const schedulerV2 = require('firebase-functions/v2/scheduler');
+const { defineSecret } = require('firebase-functions/params');
 const { DateTime } = require('luxon');
+const { callLLM } = require('../utils/llmHelper');
 const TZ = 'Europe/London';
 const REGION = 'europe-west2';
+
+const GOOGLE_AI_STUDIO_API_KEY = defineSecret('GOOGLEAISTUDIOAPIKEY');
+const OPENROUTER_API_KEY_SECRET = defineSecret('OPENROUTER_API_KEY');
+
+// ─── Coach persona (triathlon + strength) ────────────────────────────────────
+//
+// Used as the LLM system prompt for the morning briefing. Focus-goal titles are
+// appended at runtime by buildCoachSystemPrompt() so the coach is aware of
+// what the athlete is currently prioritising.
+
+const COACH_SYSTEM_PROMPT_BASE = [
+  "You are Jim's personal triathlon and strength coach.",
+  '',
+  'Athlete profile:',
+  '- Training for a full Ironman, target date September 2027',
+  '- Currently in base-building phase',
+  '- 13 years CrossFit background — high fitness floor, bias toward intensity that needs managing',
+  '- Disciplines: swim, bike, run, strength (2x/week max)',
+  '- Based in Belfast, training solo, works from home',
+  '',
+  'Coaching priorities (in order):',
+  '1. Aerobic base development — protect Zone 2 volume above all else',
+  '2. Injury resilience — posterior chain, single-leg stability, shoulder integrity',
+  '3. Sport-specific volume progression — swim technique first, then volume',
+  '4. Manage CrossFit instincts — intensity is the enemy during base phase',
+  '',
+  'Weekly structure target:',
+  '- Swim: 3x (technique focus in base phase)',
+  '- Bike: 3x including 1 long aerobic ride',
+  '- Run: 4x including 1 long easy run',
+  '- Strength: 2x (compound, low rep, 45 mins max)',
+  '- Rest/recovery: 1 day minimum',
+  '',
+  'Current phase: Base Build (now → October 2026)',
+  'Upcoming phases: Build 1 → Build 2 → Peak → Taper → Race (Sept 2027)',
+  '',
+  'Be direct, evidence-based, and concise. No filler.',
+  'If asked about a specific session, give concrete numbers (duration, intensity, HR zone).',
+].join('\n');
+
+async function buildCoachSystemPrompt(uid, firestore) {
+  let titles = [];
+  try {
+    const fgSnap = await firestore.collection('focusGoals')
+      .where('ownerUid', '==', uid)
+      .where('isActive', '==', true)
+      .get();
+
+    const goalIdSet = new Set();
+    for (const doc of fgSnap.docs) {
+      const fg = doc.data() || {};
+      if (fg.title) titles.push(String(fg.title));
+      const ids = Array.isArray(fg.focusRootGoalIds) && fg.focusRootGoalIds.length
+        ? fg.focusRootGoalIds
+        : (Array.isArray(fg.goalIds) ? fg.goalIds : []);
+      ids.slice(0, 10).forEach(id => id && goalIdSet.add(String(id)));
+    }
+
+    for (const gid of Array.from(goalIdSet).slice(0, 10)) {
+      try {
+        const gSnap = await firestore.collection('goals').doc(gid).get();
+        if (gSnap.exists) {
+          const g = gSnap.data() || {};
+          if (g.title) titles.push(String(g.title));
+        }
+      } catch (e) {
+        // skip missing goal
+      }
+    }
+  } catch (e) {
+    console.warn('[coachOrchestrator] focusGoals query failed:', e?.message);
+  }
+
+  const dedup = Array.from(new Set(titles.map(t => t.trim()).filter(Boolean))).slice(0, 10);
+  if (dedup.length === 0) return COACH_SYSTEM_PROMPT_BASE;
+  return `${COACH_SYSTEM_PROMPT_BASE}\n\nAthlete's current focus goals: ${dedup.join('; ')}`;
+}
+
+async function generateCoachBriefingLLM(uid, firestore, ctx) {
+  try {
+    const systemPrompt = await buildCoachSystemPrompt(uid, firestore);
+    const lines = [
+      "Generate this morning's coaching briefing for the athlete.",
+      '',
+      `Today's readiness: ${ctx.readinessPct}% (${String(ctx.readinessLabel || '').toUpperCase()})`,
+      `HRV: ${ctx.hrvToday !== null ? `${Math.round(ctx.hrvToday)}ms` : 'n/a'} | Sleep: ${ctx.sleepToday !== null ? `${ctx.sleepToday.toFixed(1)}h` : 'n/a'}`,
+      `Scheduled session: ${ctx.todayBlockTitle || 'None scheduled'}`,
+      `Macro targets: P:${ctx.proteinG}g  C:${ctx.carbG}g  F:${ctx.fatG}g`,
+      `Tomorrow training type: ${String(ctx.tomorrowTrainingType || 'rest').replace('_', ' ')}`,
+      ctx.stepsToday !== null && ctx.stepsToday !== undefined
+        ? `Steps so far today: ${Number(ctx.stepsToday).toLocaleString()} / 12,000` : null,
+      ctx.weeklyRunKm !== null && ctx.weeklyRunKm !== undefined
+        ? `Weekly run volume: ${Number(ctx.weeklyRunKm).toFixed(1)}km` : null,
+      ctx.weeklySwimKm !== null && ctx.weeklySwimKm !== undefined
+        ? `Weekly swim volume: ${Number(ctx.weeklySwimKm).toFixed(1)}km` : null,
+      ctx.weeklyBikeKm !== null && ctx.weeklyBikeKm !== undefined
+        ? `Weekly bike volume: ${Number(ctx.weeklyBikeKm).toFixed(1)}km` : null,
+      ctx.phaseName ? `Active phase: ${ctx.phaseName} (day ${ctx.dayInPhase}/${ctx.totalDaysInPhase})` : null,
+      ctx.programmeLine ? ctx.programmeLine.replace(/^\n/, '') : null,
+      '',
+      'Write the briefing as plain text under 800 characters, suitable for a Telegram message.',
+      'Lead with the readiness call and what the athlete should do today.',
+      'Keep instructions concrete (duration, intensity, HR zone). Mention macros briefly.',
+      'Use UK English. Avoid markdown headings; short emoji prefixes are fine.',
+    ].filter(Boolean);
+
+    const text = await callLLM(systemPrompt, lines.join('\n'));
+    const trimmed = String(text || '').trim();
+    return trimmed.length > 0 ? trimmed : null;
+  } catch (e) {
+    console.warn('[coachOrchestrator] LLM briefing failed; falling back to programmatic:', e?.message);
+    return null;
+  }
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -437,7 +553,33 @@ async function _runOrchestratorForUser(uid) {
   const stepsToday = profile.healthkitStepsToday ?? profile.stepsToday ?? null;
   const stepsLine = stepsToday !== null ? `\nSteps: ${stepsToday.toLocaleString()} / 12,000` : '';
 
-  const briefingText =
+  // 12e. Generate the briefing via LLM with the triathlon coach persona +
+  // focus-goal awareness. Falls back to the programmatic template if the LLM
+  // call fails (missing key, quota, etc.) so the nightly job is never broken.
+  const weeklyBikeKmCtx = fitnessOverview?.sportTotals?.last7?.bikeKm
+    ?? fitnessOverview?.sportTotals?.last30?.bikeKm ?? null;
+
+  const llmBriefing = await generateCoachBriefingLLM(uid, firestore, {
+    readinessPct,
+    readinessLabel,
+    hrvToday,
+    sleepToday,
+    todayBlockTitle,
+    proteinG,
+    carbG,
+    fatG,
+    tomorrowTrainingType,
+    stepsToday,
+    weeklyRunKm,
+    weeklySwimKm,
+    weeklyBikeKm: weeklyBikeKmCtx,
+    phaseName: phaseRef.phaseName,
+    dayInPhase: phaseRef.dayInPhase,
+    totalDaysInPhase: phaseRef.totalDaysInPhase,
+    programmeLine,
+  });
+
+  const fallbackBriefing =
     `🏊 AI Coach Briefing\n` +
     `HRV: ${hrvToday !== null ? `${Math.round(hrvToday)}ms` : 'n/a'} (${readinessLabel === 'green' ? '🟢' : readinessLabel === 'amber' ? '🟡' : '🔴'} ${readinessPct}%). ` +
     `Sleep: ${sleepToday !== null ? `${sleepToday.toFixed(1)}h` : 'n/a'}.\n` +
@@ -447,6 +589,8 @@ async function _runOrchestratorForUser(uid) {
     stepsLine +
     programmeLine +
     volumeLine;
+
+  const briefingText = llmBriefing || fallbackBriefing;
 
   // 13. Write coach_daily
   const coachDailyData = {
@@ -526,7 +670,12 @@ async function _runOrchestratorForUser(uid) {
  * Nightly orchestration — 05:00 Europe/London
  */
 exports.runCoachOrchestratorNightly = schedulerV2.onSchedule(
-  { schedule: '0 4 * * *', timeZone: TZ, region: REGION },  // Changed to 4am to allow time for morning briefing integration
+  {
+    schedule: '0 4 * * *',  // 4am — gives morning briefing (07:00) time to read coach_daily
+    timeZone: TZ,
+    region: REGION,
+    secrets: [GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET],
+  },
   async () => {
     const firestore = db();
     // Process all users with Strava connected or Telegram linked

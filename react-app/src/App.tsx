@@ -87,6 +87,7 @@ import SprintPlanningMatrix from './components/SprintPlanningMatrix';
 import WorkoutsDashboard from './components/WorkoutsDashboard';
 import MetricsPage from './components/MetricsPage';
 import AiCoachPage from './components/coach/AiCoachPage';
+import FitnessTabBar from './components/coach/FitnessTabBar';
 import FinanceDashboardModern from './components/FinanceDashboardModern';
 import MerchantMappings from './components/finance/MerchantMappings';
 import BudgetsPage from './components/finance/BudgetsPage';
@@ -504,6 +505,7 @@ function AppContent() {
             <Route path="/wplanner/gantt" element={<LegacyPlannerRedirect level="gantt" />} />
             <Route path="/planner/sprint-capacity" element={<Navigate to="/sprints/capacity" replace />} />
             <Route path="/ai-coach" element={<AiCoachPage />} />
+            <Route path="/coach" element={<AiCoachPage />} />
             <Route path="/metrics" element={<MetricsPage />} />
             <Route path="/fitness" element={<MetricsPage />} />
             <Route path="/fitness/full" element={<WorkoutsDashboard />} />
@@ -559,6 +561,9 @@ function AppContent() {
           {/* Assistant (floating, near FAB but separate) */}
           <FloatingAssistantButton onClick={() => setShowAssistant(true)} />
           <AssistantChatModal show={showAssistant} onHide={() => setShowAssistant(false)} />
+
+          {/* Bottom tab bar — only renders on Home/Fitness/Coach/Goals/Tasks routes */}
+          <FitnessTabBar />
 
           {/* Floating Action Button for quick adds */}
           <FloatingActionButton onImportClick={() => setShowImportModal(true)} />
