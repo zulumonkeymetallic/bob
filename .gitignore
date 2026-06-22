@@ -62,3 +62,14 @@ mini-swe-agent/
 .direnv/
 result
 website/static/api/skills-index.json
+
+# macOS metadata
+.DS_Store
+**/.DS_Store
+
+# Firebase local deploy cache (auto-generated)
+.firebase/
+
+# Claude Code worktree submodule pointers — managed by `git worktree`,
+# never meant to be staged from main
+.claude/worktrees/

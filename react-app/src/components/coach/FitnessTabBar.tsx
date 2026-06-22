@@ -8,6 +8,7 @@
 
 import React, { useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { Home, Heart, Dumbbell, Target, ListChecks, type LucideIcon } from 'lucide-react';
 
 const BODY_CLASS = 'has-fitness-tab-bar';
 const TAB_BAR_HEIGHT_PX = 64;
@@ -15,17 +16,17 @@ const TAB_BAR_HEIGHT_PX = 64;
 interface TabDef {
   key: string;
   label: string;
-  icon: string;
+  Icon: LucideIcon;
   path: string;
   matches: (pathname: string) => boolean;
 }
 
 const TABS: TabDef[] = [
-  { key: 'home',    label: 'Home',    icon: 'home',       path: '/dashboard', matches: p => p === '/' || p.startsWith('/dashboard') },
-  { key: 'fitness', label: 'Fitness', icon: 'heartbeat',  path: '/fitness',   matches: p => p.startsWith('/fitness') },
-  { key: 'coach',   label: 'Coach',   icon: 'dumbbell',   path: '/coach',     matches: p => p.startsWith('/coach') || p.startsWith('/ai-coach') },
-  { key: 'goals',   label: 'Goals',   icon: 'bullseye',   path: '/goals',     matches: p => p.startsWith('/goals') },
-  { key: 'tasks',   label: 'Tasks',   icon: 'list-check', path: '/tasks',     matches: p => p.startsWith('/tasks') || p.startsWith('/task/') },
+  { key: 'home',    label: 'Home',    Icon: Home,       path: '/dashboard', matches: p => p === '/' || p.startsWith('/dashboard') },
+  { key: 'fitness', label: 'Fitness', Icon: Heart,      path: '/fitness',   matches: p => p.startsWith('/fitness') },
+  { key: 'coach',   label: 'Coach',   Icon: Dumbbell,   path: '/coach',     matches: p => p.startsWith('/coach') || p.startsWith('/ai-coach') },
+  { key: 'goals',   label: 'Goals',   Icon: Target,     path: '/goals',     matches: p => p.startsWith('/goals') },
+  { key: 'tasks',   label: 'Tasks',   Icon: ListChecks, path: '/tasks',     matches: p => p.startsWith('/tasks') || p.startsWith('/task/') },
 ];
 
 const SHOW_ON = TABS.flatMap(t => [t.path]);
@@ -78,6 +79,7 @@ export const FitnessTabBar: React.FC = () => {
         {TABS.map(tab => {
           const active = tab.matches(pathname);
           const colour = active ? 'var(--bs-primary)' : 'var(--bs-secondary)';
+          const Icon = tab.Icon;
           return (
             <button
               key={tab.key}
@@ -100,11 +102,7 @@ export const FitnessTabBar: React.FC = () => {
                 transition: 'color 0.15s ease',
               }}
             >
-              <i
-                className={`fas fa-${tab.icon}`}
-                aria-hidden="true"
-                style={{ fontSize: 18, lineHeight: 1 }}
-              />
+              <Icon size={20} strokeWidth={active ? 2.25 : 2} aria-hidden="true" />
               <span>{tab.label}</span>
             </button>
           );

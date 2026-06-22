@@ -14,7 +14,7 @@ import { getBadgeVariant, getPriorityBadge, getStatusName } from '../utils/statu
 import { taskStatusText } from '../utils/storyCardFormatting';
 import { extractWeatherSummary, extractWeatherTemp, formatWeatherLine } from '../utils/weatherFormat';
 import { isRecurringDueOnDate, resolveRecurringDueMs, resolveTaskDueMs } from '../utils/recurringTaskDue';
-import { Wand2, AlertCircle, RefreshCw, Sparkles, Clock3, Pencil } from 'lucide-react';
+import { Wand2, AlertCircle, RefreshCw, Sparkles, Clock3, Pencil, Home, CalendarDays, ListChecks, BookOpen, Target, CheckSquare, Wallet, Dumbbell, TrendingUp, type LucideIcon } from 'lucide-react';
 import EditTaskModal from './EditTaskModal';
 import EditStoryModal from './EditStoryModal';
 import DeferItemModal from './DeferItemModal';
@@ -67,17 +67,17 @@ const MOBILE_TAB_LABELS: Record<TabKey, string> = {
   coach: 'Coach',
   finance_coach: 'Money',
 };
-// FA icon names for the bottom tab bar (no "fa-" prefix)
-const MOBILE_TAB_ICONS: Record<TabKey, string> = {
-  overview: 'home',
-  daily_plan: 'calendar-day',
-  tasks: 'list-check',
-  stories: 'book',
-  goals: 'bullseye',
-  chores: 'check-square',
-  finance: 'wallet',
-  coach: 'dumbbell',
-  finance_coach: 'chart-line',
+// Lucide icon components for the bottom tab bar
+const MOBILE_TAB_ICONS: Record<TabKey, LucideIcon> = {
+  overview: Home,
+  daily_plan: CalendarDays,
+  tasks: ListChecks,
+  stories: BookOpen,
+  goals: Target,
+  chores: CheckSquare,
+  finance: Wallet,
+  coach: Dumbbell,
+  finance_coach: TrendingUp,
 };
 const MOBILE_TAB_BAR_HEIGHT = 64;
 // Coach/Money tabs render full-page components; they skip the overview chrome
@@ -2456,6 +2456,7 @@ const MobileTabBar: React.FC<{ activeTab: TabKey; onChange: (k: TabKey) => void 
         {MOBILE_TAB_ORDER.map((key) => {
           const active = key === activeTab;
           const colour = active ? 'var(--bs-primary)' : 'var(--bs-secondary)';
+          const Icon = MOBILE_TAB_ICONS[key];
           return (
             <button
               key={key}
@@ -2481,11 +2482,7 @@ const MobileTabBar: React.FC<{ activeTab: TabKey; onChange: (k: TabKey) => void 
                 transition: 'color 0.15s ease',
               }}
             >
-              <i
-                className={`fas fa-${MOBILE_TAB_ICONS[key]}`}
-                aria-hidden="true"
-                style={{ fontSize: 18, lineHeight: 1 }}
-              />
+              <Icon size={20} strokeWidth={active ? 2.25 : 2} aria-hidden="true" />
               <span>{MOBILE_TAB_LABELS[key]}</span>
             </button>
           );
