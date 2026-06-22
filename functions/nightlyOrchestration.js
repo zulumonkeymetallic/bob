@@ -2434,24 +2434,20 @@ async function runAutoPointingJob() {
       const data = task.data || {};
       const type = String(data.type || data.task_type || '').toLowerCase();
       const isRoutine = ['chore', 'routine', 'habit', 'habitual'].includes(type) || isRoutineChoreHabit(data);
+      // Skip chores/habits/routines — they are recurring lightweight items;
+      // auto-pointing them pollutes sizing data and (via derived_minutes) can
+      // push them over the 4-point conversion threshold.
+      if (isRoutine) continue;
 
-      let pts = null;
-      let proposedTimeOfDay = null;
-      if (isRoutine) {
-        const estimateMinutes = Number(data.estimateMin || data.estimatedMinutes || data.estimateMinutes || data.durationMinutes || 0);
-        const fallbackMinutes = Number.isFinite(estimateMinutes) && estimateMinutes > 0 ? estimateMinutes : 15;
-        pts = clampTaskPoints(fallbackMinutes / 60) || 0.25;
-      } else {
-        const estimate = await callLLMJsonSafe({
-          system: 'Estimate agile story points (0.25–8, 0.25 increments) and suggest time of day for this task. Return {"points":number,"timeOfDay":"morning"|"afternoon"|"evening"|null}. Use morning for deep/creative work, afternoon for reviews/meetings, evening for light/admin tasks.',
-          user: buildSizingPrompt(data, 'Task'),
-          purpose: 'autoPoint_task',
-          userId,
-        });
-        pts = clampTaskPoints(estimate?.points);
-        const tod = String(estimate?.timeOfDay || '').toLowerCase();
-        if (['morning', 'afternoon', 'evening'].includes(tod)) proposedTimeOfDay = tod;
-      }
+      const estimate = await callLLMJsonSafe({
+        system: 'Estimate agile story points (0.25–8, 0.25 increments) and suggest time of day for this task. Return {"points":number,"timeOfDay":"morning"|"afternoon"|"evening"|null}. Use morning for deep/creative work, afternoon for reviews/meetings, evening for light/admin tasks.',
+        user: buildSizingPrompt(data, 'Task'),
+        purpose: 'autoPoint_task',
+        userId,
+      });
+      const pts = clampTaskPoints(estimate?.points);
+      const tod = String(estimate?.timeOfDay || '').toLowerCase();
+      const proposedTimeOfDay = ['morning', 'afternoon', 'evening'].includes(tod) ? tod : null;
       if (!pts) continue;
 
       const fieldUpdate = { points: pts, updatedAt: admin.firestore.FieldValue.serverTimestamp() };
@@ -2463,7 +2459,7 @@ async function runAutoPointingJob() {
         entityType: 'task',
         activityType: 'auto_point',
         description: `Auto-pointed task at ${pts} pts${proposedTimeOfDay ? `, suggested timeOfDay: ${proposedTimeOfDay}` : ''}`,
-        metadata: { run: '01:00_auto_point', points: pts, timeOfDay: proposedTimeOfDay, source: isRoutine ? 'derived_minutes' : 'llm' },
+        metadata: { run: '01:00_auto_point', points: pts, timeOfDay: proposedTimeOfDay, source: 'llm' },
       }));
     }
 
@@ -2580,6 +2576,14 @@ async function runAutoConversionsJob() {
   for (const prof of profiles.docs) {
     const userId = prof.id;
 
+    // Chores / habits / routines must never auto-convert — they are recurring
+    // lightweight items, not multi-point work that belongs in a sprint.
+    const isExcludedTaskType = (task) => {
+      const type = String(task?.type || task?.task_type || '').toLowerCase();
+      if (['chore', 'routine', 'habit', 'habitual'].includes(type)) return true;
+      return isRoutineChoreHabit(task);
+    };
+
     // Task -> Story (explicit request or points > 4)
     // Convert tasks marked for story conversion first (hashtags/tags)
     const forcedStoryTasksSnap = await db.collection('tasks')
@@ -2600,6 +2604,7 @@ async function runAutoConversionsJob() {
     for (const doc of forcedStoryTasksSnap.docs) {
       const task = doc.data() || {};
       if (!shouldForceStory(task)) continue;
+      if (isExcludedTaskType(task)) continue;
       const storyRef = db.collection('stories').doc();
       const storyRefValue = makeRefCandidate('story');
       await storyRef.set({
@@ -2646,6 +2651,7 @@ async function runAutoConversionsJob() {
     for (const doc of tasksSnap.docs) {
       const task = doc.data() || {};
       if (task.convertedToStoryId) continue;
+      if (isExcludedTaskType(task)) continue;
       const storyRef = db.collection('stories').doc();
       const storyRefValue = makeRefCandidate('story');
       await storyRef.set({
@@ -3747,16 +3753,12 @@ exports.unifiedNightlyOrchestrator = onSchedule({
   region: 'europe-west2',
 }, async () => {
   console.log('[unifiedNightlyOrchestrator] Starting consolidated nightly chain...');
-  
+
   try {
-    // Call existing runNightlyChainNow which orchestrates sub-jobs
-    const result = await exports.runNightlyChainNow({ 
-      rawRequest: { 
-        get: () => null, 
-        query: {} 
-      } 
-    });
-    
+    // Invoke the plain core directly — do NOT call the onCall wrapper from inside
+    // a scheduled function (the v2 callable wrapper expects a real HTTP request
+    // object with a .on() streaming method on rawRequest).
+    const result = await runNightlyChainCore();
     console.log('[unifiedNightlyOrchestrator] Complete:', JSON.stringify(result.results?.map(r => `${r.step}:${r.status}`)));
     return result;
   } catch (error) {
@@ -4767,19 +4769,7 @@ async function nightlySprintCapacityUpdate() {
 }
 
 // Manual trigger to run the nightly chain (pointing → conversions → scoring+Top3 → calendar)
-exports.runNightlyChainNow = onCall({
-  timeZone: 'Europe/London',
-  memory: '1GiB',
-  timeoutSeconds: 540,
-  secrets: [BOB_CLI_ACCESS],
-  region: 'europe-west2',
-  invoker: 'public',
-}, async (req) => {
-  const cliKey = BOB_CLI_ACCESS.value();
-  const key = req.rawRequest?.get('x-api-key') || req.rawRequest?.query?.key;
-  if (cliKey && key && key !== cliKey) {
-    throw new https.HttpsError('permission-denied', 'unauthorized');
-  }
+async function runNightlyChainCore() {
   const steps = [
     { name: 'runAutoPointing', fn: runAutoPointingJob },
     { name: 'runAutoConversions', fn: runAutoConversionsJob },
@@ -4788,8 +4778,9 @@ exports.runNightlyChainNow = onCall({
       fn: async () => {
         const align = require('./alignStoriesToGoalSprints');
         if (align?.runForAllUsers) {
-          await align.runForAllUsers();
+          return await align.runForAllUsers();
         }
+        return null;
       },
     },
     { name: 'runPriorityScoring', fn: runPriorityScoringJob },
@@ -4819,14 +4810,31 @@ exports.runNightlyChainNow = onCall({
   const results = [];
   for (const step of steps) {
     try {
-      await step.fn();
-      results.push({ step: step.name, status: 'ok' });
+      const out = await step.fn();
+      results.push({ step: step.name, status: 'ok', result: out ?? null });
     } catch (err) {
       results.push({ step: step.name, status: 'error', error: err?.message || String(err) });
       // Continue so later steps still attempt to run
     }
   }
   return { ok: true, results };
+}
+exports._runNightlyChainCore = runNightlyChainCore;
+
+exports.runNightlyChainNow = onCall({
+  timeZone: 'Europe/London',
+  memory: '1GiB',
+  timeoutSeconds: 540,
+  secrets: [GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET, BOB_CLI_ACCESS],
+  region: 'europe-west2',
+  invoker: 'public',
+}, async (req) => {
+  const cliKey = BOB_CLI_ACCESS.value();
+  const key = req.rawRequest?.get?.('x-api-key') || req.rawRequest?.query?.key;
+  if (cliKey && key && key !== cliKey) {
+    throw new https.HttpsError('permission-denied', 'unauthorized');
+  }
+  return runNightlyChainCore();
 });
 
 // HTTP variant removed to keep callable signature stable
@@ -4834,7 +4842,7 @@ exports.runNightlyChainNowHttp = https.onRequest({
   timeZone: 'Europe/London',
   memory: '1GiB',
   timeoutSeconds: 540,
-  secrets: [BOB_CLI_ACCESS],
+  secrets: [GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET, BOB_CLI_ACCESS],
   region: 'europe-west2',
 }, async (req, res) => {
   const cliKey = BOB_CLI_ACCESS.value();
@@ -4843,7 +4851,7 @@ exports.runNightlyChainNowHttp = https.onRequest({
     return res.status(401).json({ ok: false, error: 'unauthorized' });
   }
   try {
-    const result = await exports.runNightlyChainNow({ rawRequest: req });
+    const result = await runNightlyChainCore();
     return res.status(200).json(result);
   } catch (err) {
     return res.status(500).json({ ok: false, error: err?.message || String(err) });

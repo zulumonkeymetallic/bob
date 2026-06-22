@@ -1370,6 +1370,49 @@ const renderDataQualityEmail = ({ profile, snapshot }) => {
   const conversionsHtml = renderConversionTable(snapshot.conversions || []);
   const duplicatesHtml = renderDuplicateTable(snapshot.dedupes || []);
 
+  const renderAlignMovesTable = (moves) => {
+    if (!moves || !moves.length) {
+      return `<p style="color:#94a3b8;margin:8px 0 0;">No stories realigned in this window.</p>`;
+    }
+    const rows = moves.map((m) => {
+      const refCell = m.storyDeepLink
+        ? `<a href="${escape(m.storyDeepLink)}" style="color:#38bdf8;">${escape(m.storyRef || m.storyId || '')}</a>`
+        : escape(m.storyRef || m.storyId || '');
+      const goalCell = escape(m.goalTitle || m.goalId || '—');
+      const fromCell = escape(m.fromSprintName || '—');
+      const toCell = m.toBacklog
+        ? `<span style="color:#fbbf24;">${escape(m.toSprintName || '(backlog)')}</span>`
+        : escape(m.toSprintName || '—');
+      const when = m.createdAtIso ? escape(m.createdAtIso.slice(0, 16).replace('T', ' ')) : '—';
+      return `
+        <tr>
+          <td style="padding:6px 8px;border-bottom:1px solid rgba(148,163,184,0.2);">${refCell}</td>
+          <td style="padding:6px 8px;border-bottom:1px solid rgba(148,163,184,0.2);">${escape(m.storyTitle || '')}</td>
+          <td style="padding:6px 8px;border-bottom:1px solid rgba(148,163,184,0.2);">${goalCell}</td>
+          <td style="padding:6px 8px;border-bottom:1px solid rgba(148,163,184,0.2);">${fromCell}</td>
+          <td style="padding:6px 8px;border-bottom:1px solid rgba(148,163,184,0.2);">${toCell}</td>
+          <td style="padding:6px 8px;border-bottom:1px solid rgba(148,163,184,0.2);color:#94a3b8;font-size:12px;">${when}</td>
+        </tr>
+      `;
+    }).join('');
+    return `
+      <table role="presentation" style="width:100%;border-collapse:collapse;font-size:13px;margin-top:8px;">
+        <thead>
+          <tr style="text-align:left;background:rgba(148,163,184,0.12);">
+            <th style="padding:8px;border-bottom:1px solid rgba(148,163,184,0.3);">Story</th>
+            <th style="padding:8px;border-bottom:1px solid rgba(148,163,184,0.3);">Title</th>
+            <th style="padding:8px;border-bottom:1px solid rgba(148,163,184,0.3);">Parent goal</th>
+            <th style="padding:8px;border-bottom:1px solid rgba(148,163,184,0.3);">From sprint</th>
+            <th style="padding:8px;border-bottom:1px solid rgba(148,163,184,0.3);">To sprint</th>
+            <th style="padding:8px;border-bottom:1px solid rgba(148,163,184,0.3);">When</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+  };
+  const alignMovesHtml = renderAlignMovesTable(snapshot.alignMoves || []);
+
   return `
 <!DOCTYPE html>
 <html>
@@ -1395,12 +1438,17 @@ const renderDataQualityEmail = ({ profile, snapshot }) => {
           <li><strong>${summary.missingPoints || 0}</strong> stories still missing points</li>
           <li><strong>${summary.missingAcceptance || 0}</strong> stories missing acceptance criteria</li>
           <li><strong>${summary.missingGoalLink || 0}</strong> stories missing goal linkage</li>
+          <li><strong>${summary.alignMoves || 0}</strong> stories realigned to goal-matched sprints${summary.alignMovesToBacklog ? ` (${summary.alignMovesToBacklog} to backlog)` : ''}</li>
           <li><strong>${summary.errors || 0}</strong> errors flagged</li>
         </ul>
       </section>
 
       <section style="margin-top:24px;background:#1e293b;border-radius:12px;padding:20px;border:1px solid rgba(148,163,184,0.2);">
-        <h3 style="margin-top:0;color:#f8fafc;">Conversions</h3>
+        <h3 style="margin-top:0;color:#f8fafc;">Story → goal-sprint alignment moves</h3>
+        <p style="margin:4px 0 0;color:#94a3b8;font-size:12px;">Nightly job reassigns each story to the sprint whose start date is closest to its parent goal's start date (±6 months). Stories with no qualifying sprint drop to the backlog.</p>
+        ${alignMovesHtml}
+
+        <h3 style="margin-top:24px;color:#f8fafc;">Conversions</h3>
         ${conversionsHtml}
         <h3 style="margin-top:24px;color:#f8fafc;">Duplicates</h3>
         ${duplicatesHtml}

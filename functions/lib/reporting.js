@@ -1752,6 +1752,60 @@ const buildDataQualitySnapshot = async (db, userId, { windowEnd, windowHours = 2
   const storiesSnap = await db.collection('stories').where('ownerUid', '==', userId).get();
   const stories = toList(storiesSnap);
 
+  // Story → goal-sprint alignment moves (nightly align_stories_nightly job)
+  const updatedActivities = activityByType.get('updated') || [];
+  const sprintsSnapForAlign = await db
+    .collection('sprints')
+    .where('ownerUid', '==', userId)
+    .get()
+    .catch(() => ({ docs: [] }));
+  const sprintNameById = new Map();
+  for (const sd of sprintsSnapForAlign.docs || []) {
+    const sData = sd.data() || {};
+    sprintNameById.set(sd.id, sData.name || sData.title || sd.id);
+  }
+  const goalTitleById = new Map();
+  const storyById = new Map(stories.map((s) => [s.id, s]));
+  const alignMoveRecords = [];
+  for (const entry of updatedActivities) {
+    const raw = entry.raw || {};
+    if (raw.source !== 'align_stories_nightly') continue;
+    if (!withinWindow(entry.createdAt)) continue;
+    const payload = raw.payload || {};
+    const storyId = raw.entityId || null;
+    const story = storyId ? storyById.get(storyId) : null;
+    const storyRef = story ? ensureStoryReference(story) : (storyId || null);
+    const storyTitle = story?.title || storyRef || 'Story';
+    const goalId = payload.goalId || story?.goalId || null;
+    let goalTitle = null;
+    if (goalId) {
+      if (goalTitleById.has(goalId)) {
+        goalTitle = goalTitleById.get(goalId);
+      } else {
+        const goalSnap = await db.collection('goals').doc(goalId).get().catch(() => null);
+        goalTitle = goalSnap?.exists ? (goalSnap.data()?.title || null) : null;
+        goalTitleById.set(goalId, goalTitle);
+      }
+    }
+    const fromSprintId = payload.fromSprintId || null;
+    const toSprintId = payload.toSprintId || null;
+    alignMoveRecords.push({
+      storyId,
+      storyRef,
+      storyTitle,
+      storyDeepLink: storyRef ? makeDeepLink('story', storyRef) : null,
+      goalId,
+      goalTitle,
+      fromSprintId,
+      fromSprintName: fromSprintId ? (sprintNameById.get(fromSprintId) || fromSprintId) : '(backlog)',
+      toSprintId,
+      toSprintName: toSprintId ? (sprintNameById.get(toSprintId) || toSprintId) : '(backlog)',
+      toBacklog: !toSprintId,
+      createdAtIso: toDateTime(entry.createdAt, { defaultValue: null })?.toISO() || null,
+    });
+  }
+  alignMoveRecords.sort((a, b) => String(b.createdAtIso || '').localeCompare(String(a.createdAtIso || '')));
+
   // Missing points
   const missingPoints = stories
     .filter((story) => !STORY_DONE_STATUSES.has(story.status))
@@ -1803,6 +1857,8 @@ const buildDataQualitySnapshot = async (db, userId, { windowEnd, windowHours = 2
     autoPointed: autoPointingRecords.length,
     autoTimeOfDay: autoTimeOfDayRecords.length,
     errors: errorEntries.length,
+    alignMoves: alignMoveRecords.length,
+    alignMovesToBacklog: alignMoveRecords.filter((r) => r.toBacklog).length,
   };
 
   return {
@@ -1819,6 +1875,7 @@ const buildDataQualitySnapshot = async (db, userId, { windowEnd, windowHours = 2
     autoPointing: autoPointingRecords,
     autoTimeOfDay: autoTimeOfDayRecords,
     errors: errorEntries,
+    alignMoves: alignMoveRecords,
     summaryStats,
   };
 };

@@ -45,9 +45,14 @@ function resolveConstraintMode(entity, requestedMode) {
   if (explicit === 'override' || explicit === 'free_slot' || explicit === 'theme_block') return explicit;
   const rank = getManualPriorityRank(entity);
   // Manual Top 1/2/3 should bypass planner theme blocks and search true free
-  // time on the calendar. AI Top 3 is unaffected because it does not set this
-  // manual priority rank.
+  // time on the calendar.
   if (rank) return 'override';
+  // AI-ranked Top 3 (aiTop3ForDay) also needs to bypass theme allocations in
+  // smart mode — otherwise a 10h Top 3 story is gated to its theme's weekly
+  // hours and silently dropped on days where that theme isn't allocated. The
+  // user requirement: top items always get scheduled, even if only 30 mins
+  // are free on a given day, splitting across days until the duration is met.
+  if (entity?.aiTop3ForDay === true) return 'override';
   return 'theme_block';
 }
 
@@ -417,9 +422,10 @@ function chooseSplitPlacements({
   searchDays,
   maxTargetDateMs = null,
   constraintMode = 'theme_block',
+  minBlockMs = MIN_BLOCK_MS,
 }) {
   const baseDay = DateTime.fromMillis(targetDateMs, { zone }).startOf('day');
-  let remainingMs = Math.max(MIN_BLOCK_MS, Math.round(durationMinutes) * 60 * 1000);
+  let remainingMs = Math.max(minBlockMs, Math.round(durationMinutes) * 60 * 1000);
   const placements = [];
   const mutableBusy = Array.isArray(busyIntervals) ? [...busyIntervals] : [];
   const requestedBucket = normalizeBucket(targetBucket);
@@ -445,11 +451,11 @@ function chooseSplitPlacements({
         second: 0,
         millisecond: 0,
       }).toMillis();
-      const gaps = findFreeGapsInSlot(slotStart, slotEnd, mutableBusy, MIN_BLOCK_MS);
+      const gaps = findFreeGapsInSlot(slotStart, slotEnd, mutableBusy, minBlockMs);
       for (const gap of gaps) {
         if (remainingMs <= 0) break;
         const gapMs = gap.end - gap.start;
-        if (gapMs < MIN_BLOCK_MS) continue;
+        if (gapMs < minBlockMs) continue;
         const blockMs = Math.min(gapMs, remainingMs);
         let appliedBucket = requestedBucket;
         if (!appliedBucket) {
@@ -600,7 +606,13 @@ async function schedulePlannerItemMutation({
   const forcedDurationMs = Math.max(MIN_BLOCK_MS, Math.round(effectiveDurationMinutes) * 60 * 1000);
   const persistWeeklyPlannerManualLock = shouldPersistWeeklyPlannerManualLock({ source, exactTargetStartMs });
   const oldSprintId = String(entity.sprintId || '');
-  const placements = Number.isFinite(forcedStartMs) && forcedStartMs > 0
+  // Top-priority items (manual rank or AI Top 3) should be split into ≥30-min
+  // chunks rather than 15-min slivers. Smart mode also gets a free-slot fallback
+  // below if theme-block placement comes up empty.
+  const isTopPriorityEntity = Boolean(manualPriorityRank) || entity?.aiTop3ForDay === true;
+  const topItemMinBlockMs = 30 * 60 * 1000;
+
+  let placements = Number.isFinite(forcedStartMs) && forcedStartMs > 0
     ? [{
         appliedStartMs: forcedStartMs,
         appliedEndMs: (Number.isFinite(forcedEndMs) && forcedEndMs > forcedStartMs)
@@ -620,6 +632,7 @@ async function schedulePlannerItemMutation({
         searchDays: normalizedSearchDays,
         maxTargetDateMs: Number.isFinite(Number(maxTargetDateMs)) ? Number(maxTargetDateMs) : null,
         constraintMode: resolvedConstraintMode,
+        minBlockMs: isTopPriorityEntity ? topItemMinBlockMs : MIN_BLOCK_MS,
       })
     : (() => {
         const single = choosePlacement({
@@ -636,6 +649,43 @@ async function schedulePlannerItemMutation({
         });
         return single ? [single] : [];
       })();
+
+  // Smart-mode free-slot fallback for top items: if the theme-window pass
+  // returned nothing (typically because the user's theme allocation for this
+  // theme doesn't cover the search window, or every slot is already busy),
+  // retry across the wider FREE_SLOT_SLOTS (5am–10pm any day). Top items must
+  // always get scheduled — even if that means a 30-min chunk on each day
+  // until the duration is met. Only kicks in for smart planning + allowSplit.
+  if (
+    !placements.length
+    && allowSplit
+    && isTopPriorityEntity
+    && effectivePlanningMode === 'smart'
+    && resolvedConstraintMode !== 'override'
+  ) {
+    placements = chooseSplitPlacements({
+      targetDateMs: targetMs,
+      targetBucket,
+      durationMinutes: effectiveDurationMinutes,
+      busyIntervals,
+      pickSlots,
+      themeLabel,
+      zone,
+      searchDays: normalizedSearchDays,
+      maxTargetDateMs: Number.isFinite(Number(maxTargetDateMs)) ? Number(maxTargetDateMs) : null,
+      constraintMode: 'free_slot',
+      minBlockMs: topItemMinBlockMs,
+    });
+    if (placements.length) {
+      console.info('[schedulePlannerItemMutation] free-slot-fallback-applied', {
+        ...logContext,
+        entityId: itemId,
+        manualPriorityRank,
+        aiTop3ForDay: entity?.aiTop3ForDay === true,
+        placementCount: placements.length,
+      });
+    }
+  }
 
   if (!placements.length) {
     console.warn('[schedulePlannerItemMutation] no-placement', {
