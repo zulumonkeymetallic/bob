@@ -22,7 +22,7 @@ import { normalizeGoalCostType } from '../utils/goalCost';
 import { Wand2 } from 'lucide-react';
 import DrivePickerButton from './shared/DrivePickerButton';
 import { resolveLeafGoalSelection } from '../utils/goalHierarchy';
-import { buildGoalTimelineImpactPlan } from './visualization/goalTimelineImpact';
+import { buildGoalTimelineImpactPlan, GoalTimelineAffectedStory } from './visualization/goalTimelineImpact';
 import GoalKpiLivePanel from './goals/GoalKpiLivePanel';
 import { applyGoalTimelineChanges } from '../utils/goalTimelineChanges';
 import { KPIDesignerForm } from './KPIDesigner';
@@ -103,6 +103,14 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
   const [isDeleting, setIsDeleting] = useState(false);
   const [submitResult, setSubmitResult] = useState<string | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const [pendingStoryMoves, setPendingStoryMoves] = useState<{
+    goalId: string;
+    startDateMs: number;
+    endDateMs: number;
+    ownerUid: string;
+    persona: 'personal' | 'work';
+    affectedStories: GoalTimelineAffectedStory[];
+  } | null>(null);
   const { themes } = useGlobalThemes();
   const { trackFieldChange } = useActivityTracking();
   const [themeInput, setThemeInput] = useState('');
@@ -763,7 +771,8 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
             const movable = impactPlan.affectedStories.filter((s) => s.recommendationKind === 'move');
             if (movable.length > 0) {
               const persona = (goalData.persona || currentPersona || 'personal') as 'personal' | 'work';
-              const result = await applyGoalTimelineChanges({
+              setPendingStoryMoves({
+
                 goalId: goal.id,
                 startDateMs: newStartDateMs,
                 endDateMs: newEndDateMs,
@@ -771,12 +780,11 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
                 persona,
                 affectedStories: impactPlan.affectedStories,
               });
-              if (result.movedStoryCount > 0) {
-                setToastMsg(`Goal updated — ${result.movedStoryCount} stor${result.movedStoryCount === 1 ? 'y' : 'ies'} moved to nearest sprint`);
-              }
+              setIsSubmitting(false);
+              return; // goal is saved; wait for user to confirm story moves
             }
           } catch (err) {
-            console.warn('[EditGoalModal] Failed to auto-move stories after date change:', err);
+            console.warn('[EditGoalModal] Failed to compute story move plan:', err);
           }
         }
         const prevPersona = ((goal as any).persona || currentPersona || 'personal') as 'personal' | 'work';
@@ -908,7 +916,23 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
 
   // if (!goal) return null; // Removed to allow create mode
 
+  const applyPendingMoves = async () => {
+    if (!pendingStoryMoves) return;
+    try {
+      const result = await applyGoalTimelineChanges(pendingStoryMoves);
+      if (result.movedStoryCount > 0) {
+        setToastMsg(`${result.movedStoryCount} stor${result.movedStoryCount === 1 ? 'y' : 'ies'} moved to nearest sprint`);
+      }
+    } catch (err) {
+      console.warn('[EditGoalModal] Failed to apply story moves:', err);
+    } finally {
+      setPendingStoryMoves(null);
+      onClose();
+    }
+  };
+
   return (
+    <>
     <Modal show={show} onHide={handleClose} centered size="xl" fullscreen="lg-down" scrollable>
       <ToastContainer position="bottom-end" className="p-3">
         <Toast bg="success" onClose={() => setToastMsg(null)} show={!!toastMsg} delay={1800} autohide>
@@ -1639,6 +1663,41 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         </Button>
       </Modal.Footer>
     </Modal>
+
+    {/* Story move confirmation — shown after goal is saved when dates shift affected stories */}
+    <Modal show={!!pendingStoryMoves} onHide={() => { setPendingStoryMoves(null); onClose(); }} centered>
+      <Modal.Header closeButton>
+        <Modal.Title style={{ fontSize: 16 }}>Move stories to match new dates?</Modal.Title>
+      </Modal.Header>
+      <Modal.Body>
+        <p style={{ fontSize: 14 }}>
+          Goal saved. The following stories are outside the new date range and would be moved to their nearest sprint:
+        </p>
+        <ul style={{ fontSize: 13, paddingLeft: 18, maxHeight: 240, overflowY: 'auto' }}>
+          {(pendingStoryMoves?.affectedStories ?? [])
+            .filter((s) => s.recommendationKind === 'move')
+            .map((s) => (
+              <li key={s.id} style={{ marginBottom: 4 }}>
+                <a href={`https://bob.jc1.tech/stories/${s.id}`} target="_blank" rel="noreferrer">
+                  {s.ref ? `${s.ref} — ` : ''}{s.title || s.id}
+                </a>
+                {s.recommendedSprintName && (
+                  <span style={{ color: 'var(--muted)', marginLeft: 6 }}>→ {s.recommendedSprintName}</span>
+                )}
+              </li>
+            ))}
+        </ul>
+      </Modal.Body>
+      <Modal.Footer>
+        <Button variant="outline-secondary" size="sm" onClick={() => { setPendingStoryMoves(null); onClose(); }}>
+          Leave stories where they are
+        </Button>
+        <Button variant="primary" size="sm" onClick={applyPendingMoves}>
+          Move stories
+        </Button>
+      </Modal.Footer>
+    </Modal>
+    </>
   );
 };
 
