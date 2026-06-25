@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Modal, Button, Form, Row, Col, Alert } from 'react-bootstrap';
 import { updateDoc, doc, serverTimestamp, collection, query, where, getDocs, addDoc, deleteDoc } from 'firebase/firestore';
 import { db, functions } from '../firebase';
@@ -18,7 +18,7 @@ import { cascadeStoryPersona } from '../utils/personaCascade';
 import { useNavigate } from 'react-router-dom';
 import { Activity, Bot, CalendarPlus, Clock3, Shuffle, Trash2, Wand2 } from 'lucide-react';
 import { planningSprints } from '../utils/sprintFilter';
-import { evaluateStorySprintAlignment } from '../utils/sprintAlignment';
+import { evaluateStorySprintAlignment, getSprintFocusGoalIds } from '../utils/sprintAlignment';
 import { getGoalDisplayPath, getLeafGoalOptions, resolveLeafGoalSelection } from '../utils/goalHierarchy';
 import NewCalendarEventModal, { buildCalendarComposerInitialValues } from './planner/NewCalendarEventModal';
 import DeferItemModal from './DeferItemModal';
@@ -114,6 +114,14 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
     () => evaluateStorySprintAlignment(selectedSprint as any, editedStory.goalId || '', goals),
     [selectedSprint, editedStory.goalId, goals],
   );
+
+  const sprintFocusGoals = useMemo(() => {
+    const ids = getSprintFocusGoalIds(selectedSprint as any);
+    return ids.map(id => goals.find(g => g.id === id)).filter(Boolean) as Goal[];
+  }, [selectedSprint, goals]);
+
+  const [showAlignmentWarning, setShowAlignmentWarning] = useState(false);
+  const goalInputRef = useRef<HTMLInputElement>(null);
 
   const reloadLinkedTasks = useCallback(async (sourceStory: Story | null) => {
     if (!sourceStory || !currentUser) {
@@ -247,19 +255,26 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
     setLoading(true);
     setError(null);
 
+    if (editedStory.sprintId && sprintAlignment.hasRule && !sprintAlignment.aligned) {
+      if (sprintAlignment.blocking) {
+        setError(sprintAlignment.message);
+        setLoading(false);
+        return;
+      }
+      setShowAlignmentWarning(true);
+      setLoading(false);
+      return;
+    }
+
+    await performSave();
+  };
+
+  const performSave = async () => {
+    if (!story) return;
+    setLoading(true);
+    setError(null);
     try {
       console.log('💾 EditStoryModal: Saving story updates:', editedStory);
-
-      if (editedStory.sprintId && sprintAlignment.hasRule && !sprintAlignment.aligned) {
-        if (sprintAlignment.blocking) {
-          setError(sprintAlignment.message);
-          return;
-        }
-        const proceed = window.confirm(`${sprintAlignment.message} Continue anyway?`);
-        if (!proceed) {
-          return;
-        }
-      }
 
       const resolvedGoalSelection = resolveLeafGoalSelection(editedStory.goalId || null, goals);
       if (editedStory.goalId && !resolvedGoalSelection.goalId) {
@@ -523,6 +538,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
     resolveLeafGoalSelection(goalId, availableGoals).goalId || null;
 
   return (
+    <>
     <Modal show={show} onHide={onHide} size="xl" container={container || undefined} fullscreen="lg-down" scrollable>
       <Modal.Header closeButton>
         <div className="d-flex w-100 align-items-center justify-content-between gap-2">
@@ -686,6 +702,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
                   <Form.Group className="mb-3">
                     <Form.Label>Linked Goal</Form.Label>
                     <Form.Control
+                      ref={goalInputRef}
                       list="edit-story-goal-options"
                       value={goalInput}
                       onChange={(e) => setGoalInput(e.target.value)}
@@ -970,6 +987,74 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
         }}
       />
     </Modal>
+
+    <Modal
+      show={showAlignmentWarning}
+      onHide={() => setShowAlignmentWarning(false)}
+      centered
+      size="sm"
+    >
+      <Modal.Header closeButton>
+        <Modal.Title style={{ fontSize: '15px', fontWeight: 600 }}>Sprint alignment warning</Modal.Title>
+      </Modal.Header>
+      <Modal.Body style={{ fontSize: '14px' }}>
+        <p>This story's linked goal is not aligned to the sprint's focus goals. Saving it will leave it flagged as unaligned, and the nightly job may move it to the backlog.</p>
+        {sprintFocusGoals.length > 0 && (
+          <div style={{ marginBottom: '10px' }}>
+            <strong>Sprint focus goals:</strong>
+            <ul style={{ margin: '6px 0 0 0', paddingLeft: '20px' }}>
+              {sprintFocusGoals.map(g => (
+                <li key={g.id}>
+                  <Button
+                    variant="link"
+                    size="sm"
+                    className="p-0"
+                    style={{ fontSize: '13px' }}
+                    onClick={() => { setShowAlignmentWarning(false); navigate(`/goals/${(g as any).ref || g.id}`); }}
+                  >
+                    {(g as any).title || (g as any).ref || g.id}
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {linkedGoal && (
+          <p style={{ marginBottom: 0, color: 'var(--muted)' }}>
+            Currently linked to: <strong>{(linkedGoal as any).title || editedStory.goalId}</strong>
+          </p>
+        )}
+      </Modal.Body>
+      <Modal.Footer style={{ gap: '8px', flexWrap: 'wrap' }}>
+        <Button variant="secondary" size="sm" onClick={() => setShowAlignmentWarning(false)}>
+          Cancel
+        </Button>
+        <Button
+          variant="outline-primary"
+          size="sm"
+          onClick={() => {
+            setShowAlignmentWarning(false);
+            setTimeout(() => {
+              goalInputRef.current?.focus();
+              goalInputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }, 100);
+          }}
+        >
+          Update linked goal
+        </Button>
+        <Button
+          variant="warning"
+          size="sm"
+          onClick={async () => {
+            setShowAlignmentWarning(false);
+            await performSave();
+          }}
+        >
+          Continue anyway
+        </Button>
+      </Modal.Footer>
+    </Modal>
+    </>
   );
 };
 

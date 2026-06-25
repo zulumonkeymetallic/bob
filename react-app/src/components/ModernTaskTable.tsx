@@ -33,7 +33,7 @@ import {
 } from 'lucide-react';
 import DeferItemModal from './DeferItemModal';
 import { Task, Story, Goal, Sprint } from '../types';
-import { Toast, ToastContainer } from 'react-bootstrap';
+import { Toast, ToastContainer, Modal, Button } from 'react-bootstrap';
 import TagInput from './common/TagInput';
 import { formatTaskTagLabel } from '../utils/tagDisplay';
 import { useSidebar } from '../contexts/SidebarContext';
@@ -55,6 +55,7 @@ import EditStoryModal from './EditStoryModal';
 import { MISSING_INFO_CELL_BG, MISSING_INFO_CELL_BG_HOVER, hasLinkedId, isBlankText, isMissingPoints } from '../utils/dataQuality';
 import { useAuth } from '../contexts/AuthContext';
 import { useFocusGoals } from '../hooks/useFocusGoals';
+import { evaluateStorySprintAlignment, getSprintFocusGoalIds } from '../utils/sprintAlignment';
 
 interface TaskTableRow extends Task {
   storyTitle?: string;
@@ -998,6 +999,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
   const { currentPersona } = usePersona();
   const { themes: globalThemes } = useGlobalThemes();
   const { currentUser } = useAuth();
+  const navigate = useNavigate();
   const { activeFocusGoals } = useFocusGoals(currentUser?.uid);
   const focusGoalIdSet = useMemo(
     () => new Set(activeFocusGoals.flatMap(fg => fg.goalIds || [])),
@@ -1043,6 +1045,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
   const [alignmentMode, setAlignmentMode] = useState<'all' | 'focus-only' | 'warn'>('all');
   const [convertLoadingId, setConvertLoadingId] = useState<string | null>(null);
   const [toastState, setToastState] = useState<{ show: boolean; message: string; variant: 'danger' | 'info' | 'success' }>({ show: false, message: '', variant: 'danger' });
+  const [pendingSprintAssign, setPendingSprintAssign] = useState<{ taskId: string; sprintId: string | null; focusGoals: Goal[] } | null>(null);
 
   const showToast = (message: string, variant: 'danger' | 'info' | 'success' = 'danger') => {
     setToastState({ show: true, message, variant });
@@ -1393,15 +1396,11 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
     }
   };
 
-  const handleSprintAssign = async (taskId: string, newSprintId: string | null) => {
-    // When assigning a sprint, align due date to sprint start and cascade to parent story
+  const doSprintAssign = async (taskId: string, newSprintId: string | null) => {
     const sprint = newSprintId ? sprints.find(s => s.id === newSprintId) : null;
     const dueDate = sprint ? sprint.startDate : null;
-
     const updates: Partial<Task> = { sprintId: newSprintId, dueDate };
     await handleValidatedUpdate(taskId, updates);
-
-    // Cascade sprint to parent story if present
     const task = tasks.find(t => t.id === taskId);
     const parentStoryId = (task as any)?.storyId;
     if (parentStoryId && newSprintId) {
@@ -1414,6 +1413,23 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
         console.warn('Failed to cascade sprint to story', parentStoryId, e);
       }
     }
+  };
+
+  const handleSprintAssign = async (taskId: string, newSprintId: string | null) => {
+    if (newSprintId) {
+      const sprint = sprints.find(s => s.id === newSprintId) ?? null;
+      const task = tasks.find(t => t.id === taskId);
+      const parentStory = task ? stories.find(s => s.id === (task as any).storyId) : null;
+      const goalId = (task as any)?.goalId || (parentStory as any)?.goalId || '';
+      const alignment = evaluateStorySprintAlignment(sprint as any, goalId, goals);
+      if (alignment.hasRule && !alignment.aligned && !alignment.blocking) {
+        const focusGoalIds = getSprintFocusGoalIds(sprint as any);
+        const focusGoals = focusGoalIds.map(id => goals.find(g => g.id === id)).filter(Boolean) as Goal[];
+        setPendingSprintAssign({ taskId, sprintId: newSprintId, focusGoals });
+        return;
+      }
+    }
+    await doSprintAssign(taskId, newSprintId);
   };
 
   const handleConvertToStory = async (task: TaskTableRow) => {
@@ -2317,6 +2333,57 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
           </Toast.Body>
         </Toast>
       </ToastContainer>
+
+      <Modal
+        show={!!pendingSprintAssign}
+        onHide={() => setPendingSprintAssign(null)}
+        centered
+        size="sm"
+      >
+        <Modal.Header closeButton>
+          <Modal.Title style={{ fontSize: '15px', fontWeight: 600 }}>Sprint alignment warning</Modal.Title>
+        </Modal.Header>
+        <Modal.Body style={{ fontSize: '14px' }}>
+          <p>This task's goal is not aligned to the sprint's focus goals. Saving it will leave it flagged as unaligned.</p>
+          {pendingSprintAssign && pendingSprintAssign.focusGoals.length > 0 && (
+            <div style={{ marginBottom: '10px' }}>
+              <strong>Sprint focus goals:</strong>
+              <ul style={{ margin: '6px 0 0 0', paddingLeft: '20px' }}>
+                {pendingSprintAssign.focusGoals.map(g => (
+                  <li key={g.id}>
+                    <Button
+                      variant="link"
+                      size="sm"
+                      className="p-0"
+                      style={{ fontSize: '13px' }}
+                      onClick={() => { setPendingSprintAssign(null); navigate(`/goals/${(g as any).ref || g.id}`); }}
+                    >
+                      {(g as any).title || (g as any).ref || g.id}
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </Modal.Body>
+        <Modal.Footer style={{ gap: '8px' }}>
+          <Button variant="secondary" size="sm" onClick={() => setPendingSprintAssign(null)}>
+            Cancel
+          </Button>
+          <Button
+            variant="warning"
+            size="sm"
+            onClick={async () => {
+              if (!pendingSprintAssign) return;
+              const { taskId, sprintId } = pendingSprintAssign;
+              setPendingSprintAssign(null);
+              await doSprintAssign(taskId, sprintId);
+            }}
+          >
+            Assign anyway
+          </Button>
+        </Modal.Footer>
+      </Modal>
     </>
   );
 };
