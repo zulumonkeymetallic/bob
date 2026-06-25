@@ -90,6 +90,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
   const [calendarComposerInitialValues, setCalendarComposerInitialValues] = useState<any>({});
   const [showDeferModal, setShowDeferModal] = useState(false);
   const [flaggingPriority, setFlaggingPriority] = useState(false);
+  const [takenOrderRanks, setTakenOrderRanks] = useState<Set<number>>(new Set());
   const isHiddenSprint = (sprint: Sprint) => isStatus(sprint.status, 'closed') || isStatus(sprint.status, 'cancelled');
   const formatSprintLabel = (sprint: Sprint, statusOverride?: string) => {
     const name = sprint.name || sprint.ref || `Sprint ${sprint.id.slice(-4)}`;
@@ -193,10 +194,26 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
   useEffect(() => {
     if (!show || !story) {
       setLinkedTasks([]);
+      setTakenOrderRanks(new Set());
       return;
     }
     reloadLinkedTasks(story);
-  }, [show, story, reloadLinkedTasks]);
+    // Load which order ranks are taken by other stories in the same persona
+    if (currentUser) {
+      const storyPersona = String((story as any).persona || currentPersona || 'personal');
+      getDocs(query(collection(db, 'stories'), where('ownerUid', '==', currentUser.uid))).then((snap) => {
+        const taken = new Set<number>();
+        snap.docs.forEach((d) => {
+          if (d.id === story.id) return;
+          const data = d.data();
+          if (String(data.persona || 'personal') !== storyPersona) return;
+          const r = Number(data.userPriorityRank);
+          if (r >= 1 && r <= 5 && data.userPriorityFlag === true) taken.add(r);
+        });
+        setTakenOrderRanks(taken);
+      }).catch(() => setTakenOrderRanks(new Set()));
+    }
+  }, [show, story, reloadLinkedTasks, currentUser, currentPersona]);
 
   const handleTaskUpdate = async (taskId: string, updates: Partial<Task>) => {
     if (!currentUser) return;
@@ -340,6 +357,21 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
         updates.theme = (selectedGoal as any).theme;
       }
       await updateDoc(doc(db, 'stories', story.id), updates);
+      // Auto-demote any other story that holds the same order rank
+      if (editedStory.userOrder > 0 && currentUser) {
+        const storyPersona = String(updates.persona || 'personal');
+        const siblingsSnap = await getDocs(query(collection(db, 'stories'), where('ownerUid', '==', currentUser.uid)));
+        const conflicts = siblingsSnap.docs.filter((d) => {
+          if (d.id === story.id) return false;
+          const data = d.data();
+          return String(data.persona || 'personal') === storyPersona
+            && data.userPriorityFlag === true
+            && Number(data.userPriorityRank) === editedStory.userOrder;
+        });
+        await Promise.all(conflicts.map((d) =>
+          updateDoc(d.ref, { userPriorityFlag: false, userPriorityRank: null, userPriorityFlagAt: null, updatedAt: serverTimestamp() })
+        ));
+      }
       const prevPersona = ((story as any).persona || currentPersona || 'personal') as 'personal' | 'work';
       const nextPersona = (updates.persona || prevPersona) as 'personal' | 'work';
       if (prevPersona !== nextPersona && currentUser?.uid) {
@@ -793,11 +825,16 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
                       onChange={(e) => handleInputChange('userOrder', parseInt(e.target.value))}
                     >
                       <option value={0}>— unset —</option>
-                      <option value={1}>1 · First</option>
-                      <option value={2}>2</option>
-                      <option value={3}>3</option>
-                      <option value={4}>4</option>
-                      <option value={5}>5 · Last</option>
+                      {([1, 2, 3, 4, 5] as const).map((r) => {
+                        const savedRank = story ? getManualPriorityRank(story) : null;
+                        const isTaken = takenOrderRanks.has(r) && r !== savedRank;
+                        return (
+                          <option key={r} value={r} disabled={isTaken}>
+                            {r === 1 ? '1 · First' : r === 5 ? '5 · Last' : String(r)}
+                            {isTaken ? ' (taken)' : ''}
+                          </option>
+                        );
+                      })}
                     </Form.Select>
                   </Form.Group>
                 </Col>
