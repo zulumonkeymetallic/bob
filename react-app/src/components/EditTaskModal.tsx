@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { format } from 'date-fns';
 import { Modal, Button, Form, Row, Col } from 'react-bootstrap';
 import { doc, updateDoc, serverTimestamp, collection, query, where, orderBy, limit, onSnapshot, addDoc, deleteDoc } from 'firebase/firestore';
@@ -21,6 +21,7 @@ import { normalizeTaskTags } from '../utils/taskTagging';
 import { findSprintForDate } from '../utils/taskSprintHelpers';
 import { parsePointsValue, TASK_DEFAULT_POINTS } from '../utils/points';
 import { planningSprints } from '../utils/sprintFilter';
+import { evaluateStorySprintAlignment, getSprintFocusGoalIds } from '../utils/sprintAlignment';
 import { getGoalDisplayPath, getLeafGoalOptions, resolveLeafGoalSelection } from '../utils/goalHierarchy';
 import EditStoryModal from './EditStoryModal';
 import NewCalendarEventModal, { buildCalendarComposerInitialValues } from './planner/NewCalendarEventModal';
@@ -113,7 +114,10 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
     repeatInterval: 1 as number | string,
     daysOfWeek: [] as string[],
     persona: 'personal' as 'personal' | 'work',
+    sprintAlignmentOverride: false as boolean,
   });
+  const [showAlignmentWarning, setShowAlignmentWarning] = useState(false);
+  const goalInputRef = useRef<HTMLInputElement>(null);
   const [storyInput, setStoryInput] = useState('');
   const [goalInput, setGoalInput] = useState('');
   const [showLinkedStoryModal, setShowLinkedStoryModal] = useState(false);
@@ -145,6 +149,14 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
     [linkedGoalId, goals],
   );
   const leafGoalOptions = useMemo(() => getLeafGoalOptions(goals), [goals]);
+  const sprintAlignment = useMemo(
+    () => evaluateStorySprintAlignment(selectedSprint as any, linkedGoalId, goals),
+    [selectedSprint, linkedGoalId, goals],
+  );
+  const sprintFocusGoals = useMemo(() => {
+    const ids = getSprintFocusGoalIds(selectedSprint as any);
+    return ids.map(id => goals.find(g => g.id === id)).filter(Boolean) as Goal[];
+  }, [selectedSprint, goals]);
 
   useEffect(() => {
     if (!currentUser?.uid) return;
@@ -203,6 +215,7 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
         repeatInterval: 1,
         daysOfWeek: [],
         persona: ((currentPersona || 'personal') as 'personal' | 'work'),
+        sprintAlignmentOverride: false,
       });
       setStoryInput('');
       setGoalInput('');
@@ -226,6 +239,7 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
       status: normalizeTaskStatus((task as any).status),
       priority: normalizePriorityValue((task as any).priority),
       sprintId: (task as any).sprintId || '',
+      sprintAlignmentOverride: Boolean((task as any).sprintAlignmentOverride),
       points: parsePointsValue((task as any).points) ?? TASK_DEFAULT_POINTS,
       dueDate: resolveDue((task as any).dueDate || (task as any).dueDateMs || (task as any).targetDate),
       dueTime: task.dueTime || '',
@@ -287,12 +301,27 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
 
   const handleSave = async () => {
     setSaving(true);
-    const linkedStory = form.storyId ? stories.find((s) => s.id === form.storyId) : null;
     if (!form.title.trim()) {
       alert('Please add a task title.');
       setSaving(false);
       return;
     }
+    if (form.sprintId && sprintAlignment.hasRule && !sprintAlignment.aligned && !form.sprintAlignmentOverride) {
+      if (sprintAlignment.blocking) {
+        alert(sprintAlignment.message);
+        setSaving(false);
+        return;
+      }
+      setShowAlignmentWarning(true);
+      setSaving(false);
+      return;
+    }
+    await performSave();
+  };
+
+  const performSave = async () => {
+    setSaving(true);
+    const linkedStory = form.storyId ? stories.find((s) => s.id === form.storyId) : null;
     try {
       const normalizedTaskType = normalizeTaskType(form.type);
       const isRecurringType = RECURRING_TASK_TYPES.has(normalizedTaskType);
@@ -334,6 +363,7 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
         repeatInterval: normalizedInterval,
         daysOfWeek: normalizedDays,
         persona: form.persona || 'personal',
+        sprintAlignmentOverride: !!form.sprintAlignmentOverride,
       };
       const directGoalSelection = resolveLeafGoalSelection(form.goalId || null, goals);
       if (!form.storyId && form.goalId && !directGoalSelection.goalId) {
@@ -521,6 +551,7 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
   };
 
   return (
+    <>
     <Modal show={show} onHide={onHide} size="lg" container={container || undefined}>
       <Modal.Header closeButton>
         <div className="d-flex w-100 align-items-center justify-content-between gap-2">
@@ -780,6 +811,16 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
                       ))}
                     </Form.Select>
                   </Form.Group>
+                  {selectedSprint && sprintFocusGoals.length > 0 && (
+                    <Form.Check
+                      type="checkbox"
+                      label="Keep in this sprint — skip nightly focus-alignment moves"
+                      checked={!!form.sprintAlignmentOverride}
+                      onChange={(e) => setForm({ ...form, sprintAlignmentOverride: e.target.checked })}
+                      className="mb-3"
+                      style={{ fontSize: '13px', color: 'var(--muted)' }}
+                    />
+                  )}
                 </Col>
               </Row>
               <Row>
@@ -841,6 +882,7 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
               <Form.Group className="mb-3">
                 <Form.Label>Link to goal</Form.Label>
                 <Form.Control
+                  ref={goalInputRef}
                   list="task-goal-options"
                   placeholder="Search leaf goal by title..."
                   value={goalInput}
@@ -1006,6 +1048,50 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
         }}
       />
     </Modal>
+
+    {/* Sprint alignment warning */}
+    <Modal show={showAlignmentWarning} onHide={() => setShowAlignmentWarning(false)} centered container={container || undefined}>
+      <Modal.Header closeButton>
+        <Modal.Title style={{ fontSize: 16 }}>Sprint focus mismatch</Modal.Title>
+      </Modal.Header>
+      <Modal.Body>
+        <p style={{ fontSize: 14 }}>
+          This task's goal is not a focus goal for the selected sprint.
+          The nightly alignment job may move it to a different sprint.
+        </p>
+        {sprintFocusGoals.length > 0 && (
+          <>
+            <p style={{ fontSize: 13, marginBottom: 6 }}><strong>Sprint focus goals:</strong></p>
+            <ul style={{ fontSize: 13, paddingLeft: 18 }}>
+              {sprintFocusGoals.map(g => (
+                <li key={g.id}>
+                  <a href={`https://bob.jc1.tech/goals/${g.id}`} target="_blank" rel="noreferrer">{(g as any).title}</a>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+        <Form.Check
+          type="checkbox"
+          label="Keep in this sprint — skip nightly focus-alignment moves"
+          checked={!!form.sprintAlignmentOverride}
+          onChange={(e) => setForm(prev => ({ ...prev, sprintAlignmentOverride: e.target.checked }))}
+          style={{ fontSize: 13, marginTop: 12 }}
+        />
+      </Modal.Body>
+      <Modal.Footer>
+        <Button variant="outline-secondary" size="sm" onClick={() => { setShowAlignmentWarning(false); goalInputRef.current?.focus(); }}>
+          Update linked goal
+        </Button>
+        <Button variant="outline-secondary" size="sm" onClick={() => setShowAlignmentWarning(false)}>
+          Cancel
+        </Button>
+        <Button variant="primary" size="sm" onClick={async () => { setShowAlignmentWarning(false); await performSave(); }}>
+          Continue anyway
+        </Button>
+      </Modal.Footer>
+    </Modal>
+    </>
   );
 };
 
