@@ -3576,7 +3576,13 @@ async function runCalendarPlannerJob() {
 
     const busyPersonal = Array.isArray(rescheduleResult.busy) ? [...rescheduleResult.busy] : [];
     const busyWork = Array.isArray(rescheduleResult.busyWork) ? [...rescheduleResult.busyWork] : [];
-    const scoreWithBonus = (priority, base) => (Number(priority) >= 4 ? Number(base || 0) + 500 : Number(base || 0));
+    const scoreWithBonus = (priority, base, userPriorityRank) => {
+      const b = Number(base || 0);
+      const priorityBonus = Number(priority) >= 4 ? 500 : 0;
+      const r = Number(userPriorityRank || 0);
+      const rankBonus = r >= 1 && r <= 5 ? (6 - r) * 100 : 0;
+      return b + priorityBonus + rankBonus;
+    };
 
     // Build sprint map for gating and metadata
     const sprintMap = new Map();
@@ -3625,19 +3631,19 @@ async function runCalendarPlannerJob() {
       const ar = Number(a?.[key] || 0) || 99;
       const br = Number(b?.[key] || 0) || 99;
       if (ar !== br) return ar - br;
-      const as = scoreWithBonus(a.priority, a.aiCriticalityScore);
-      const bs = scoreWithBonus(b.priority, b.aiCriticalityScore);
+      const as = scoreWithBonus(a.priority, a.aiCriticalityScore, a.userPriorityRank);
+      const bs = scoreWithBonus(b.priority, b.aiCriticalityScore, b.userPriorityRank);
       return bs - as;
     };
 
     const scoredStories = openStories.map((story) => ({
       ...story,
-      aiScore: scoreWithBonus(story.priority, story.aiCriticalityScore),
+      aiScore: scoreWithBonus(story.priority, story.aiCriticalityScore, story.userPriorityRank),
     }));
     const storyMap = new Map(scoredStories.map((story) => [story.id, story]));
     const scoredTasks = openTasks.map((task) => ({
       ...task,
-      aiScore: scoreWithBonus(task.priority, task.aiCriticalityScore),
+      aiScore: scoreWithBonus(task.priority, task.aiCriticalityScore, task.userPriorityRank),
     }));
 
     const storyQueue = ['personal', 'work']
@@ -4309,12 +4315,12 @@ exports.replanCalendarNow = onCall({
 
   const scoredStories = openStories.map((story) => ({
     ...story,
-    aiScore: scoreWithBonus(story.priority, story.aiCriticalityScore),
+    aiScore: scoreWithBonus(story.priority, story.aiCriticalityScore, story.userPriorityRank),
   }));
   const storyMap = new Map(scoredStories.map((story) => [story.id, story]));
   const scoredTasks = openTasks.map((task) => ({
     ...task,
-    aiScore: scoreWithBonus(task.priority, task.aiCriticalityScore),
+    aiScore: scoreWithBonus(task.priority, task.aiCriticalityScore, task.userPriorityRank),
   }));
 
   const storyQueue = ['personal', 'work']

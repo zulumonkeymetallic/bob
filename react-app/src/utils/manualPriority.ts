@@ -1,17 +1,23 @@
-export type ManualPriorityRank = 1 | 2 | 3 | null;
+export type ManualPriorityRank = 1 | 2 | 3 | 4 | 5 | null;
 
 export function getManualPriorityRank(entity: any): ManualPriorityRank {
   const explicit = Number(entity?.userPriorityRank);
-  if (explicit === 1 || explicit === 2 || explicit === 3) return explicit;
+  if (explicit >= 1 && explicit <= 5) return explicit as ManualPriorityRank;
   return entity?.userPriorityFlag === true ? 1 : null;
 }
 
 export function getManualPriorityLabel(entity: any): string | null {
   const rank = getManualPriorityRank(entity);
-  return rank ? `#${rank} Priority` : null;
+  return rank ? `Order #${rank}` : null;
 }
 
-export function getNextManualPriorityRank(items: any[], persona: string, excludeId?: string): 1 | 2 | 3 {
+/** Score boost for user-ordered stories: order 1 → +500 … order 5 → +100 */
+export function manualRankScoreBoost(rank: number | null | undefined): number {
+  const r = Number(rank || 0);
+  return r >= 1 && r <= 5 ? (6 - r) * 100 : 0;
+}
+
+export function getNextManualPriorityRank(items: any[], persona: string, excludeId?: string): 1 | 2 | 3 | 4 | 5 {
   const normalizedPersona = String(persona || 'personal');
   const used = new Set<number>();
   (items || []).forEach((item) => {
@@ -20,15 +26,16 @@ export function getNextManualPriorityRank(items: any[], persona: string, exclude
     const rank = getManualPriorityRank(item);
     if (rank) used.add(rank);
   });
-  if (!used.has(1)) return 1;
-  if (!used.has(2)) return 2;
-  return 3;
+  for (const r of [1, 2, 3, 4, 5] as const) {
+    if (!used.has(r)) return r;
+  }
+  return 5;
 }
 
 export function findItemWithManualPriorityRank<T extends { id?: string; persona?: string }>(
   items: T[],
   persona: string,
-  rank: 1 | 2 | 3,
+  rank: 1 | 2 | 3 | 4 | 5,
   excludeId?: string,
 ): T | null {
   const normalizedPersona = String(persona || 'personal');

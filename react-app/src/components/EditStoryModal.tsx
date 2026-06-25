@@ -73,6 +73,8 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
     blocked: false as boolean,
     tags: [] as string[],
     persona: (currentPersona || 'personal') as 'personal' | 'work',
+    sprintAlignmentOverride: false as boolean,
+    userOrder: 0 as number,
   });
 
   const [loading, setLoading] = useState(false);
@@ -178,6 +180,8 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
         blocked: Boolean((story as any).blocked),
         tags: (story as any).tags || [],
         persona: ((story as any).persona || currentPersona || 'personal') as 'personal' | 'work',
+        sprintAlignmentOverride: Boolean((story as any).sprintAlignmentOverride),
+        userOrder: getManualPriorityRank(story) || 0,
       });
       setError(null);
       setAiResult(null);
@@ -320,7 +324,11 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
           ? editedStory.acceptanceCriteria.split('\n').map(line => line.trim()).filter(line => line.length > 0)
           : [],
         updatedAt: serverTimestamp(),
-        tags: editedStory.tags
+        tags: editedStory.tags,
+        sprintAlignmentOverride: !!editedStory.sprintAlignmentOverride,
+        userPriorityFlag: editedStory.userOrder > 0,
+        userPriorityRank: editedStory.userOrder > 0 ? editedStory.userOrder : null,
+        userPriorityFlagAt: editedStory.userOrder > 0 ? new Date().toISOString() : null,
       };
       if (dueOverrideChanged) {
         updates.dueDateLocked = !!editedStory.dueDate;
@@ -379,6 +387,14 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
 
   const handleInputChange = (field: string, value: any) => {
     setEditedStory(prev => {
+      if (field === 'userOrder') {
+        const order = Number(value) || 0;
+        return {
+          ...prev,
+          userOrder: order,
+          sprintAlignmentOverride: order > 0 ? true : prev.sprintAlignmentOverride,
+        };
+      }
       if (field === 'sprintId' && value) {
         const sprint = sprints.find((s) => s.id === value);
         const sprintStart = sprint?.startDate ?? (sprint as any)?.start ?? null;
@@ -755,9 +771,40 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
                   </Col>
                 )}
 
+                {editedStory.sprintId && sprintAlignment.hasRule && (
+                  <Col md={12}>
+                    <Form.Check
+                      type="checkbox"
+                      id="sprint-alignment-override"
+                      label="Keep in this sprint — skip nightly focus-alignment moves"
+                      checked={!!editedStory.sprintAlignmentOverride}
+                      onChange={(e) => handleInputChange('sprintAlignmentOverride', e.target.checked)}
+                      className="mb-3"
+                      style={{ fontSize: '13px', color: 'var(--muted)' }}
+                    />
+                  </Col>
+                )}
+
                 <Col md={2}>
                   <Form.Group className="mb-3">
-                    <Form.Label>Priority</Form.Label>
+                    <Form.Label>Order</Form.Label>
+                    <Form.Select
+                      value={editedStory.userOrder}
+                      onChange={(e) => handleInputChange('userOrder', parseInt(e.target.value))}
+                    >
+                      <option value={0}>— unset —</option>
+                      <option value={1}>1 · First</option>
+                      <option value={2}>2</option>
+                      <option value={3}>3</option>
+                      <option value={4}>4</option>
+                      <option value={5}>5 · Last</option>
+                    </Form.Select>
+                  </Form.Group>
+                </Col>
+
+                <Col md={2}>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Importance</Form.Label>
                     <Form.Select
                       value={editedStory.priority}
                       onChange={(e) => handleInputChange('priority', parseInt(e.target.value))}

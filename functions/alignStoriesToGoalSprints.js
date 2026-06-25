@@ -75,6 +75,7 @@ async function runForUser(db, uid, options = {}) {
     const s = doc.data();
     const status = Number(s.status);
     if (Number.isFinite(status) && status >= 2) { skipped++; continue; }
+    if (s.sprintAlignmentOverride === true) { skipped++; continue; }
     const currentSprintId = s.sprintId ? String(s.sprintId) : null;
     if (!currentSprintId) { skipped++; continue; }
     const goalId = s.goalId ? String(s.goalId) : null;
