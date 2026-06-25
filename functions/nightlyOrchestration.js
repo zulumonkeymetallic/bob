@@ -4792,6 +4792,14 @@ async function runNightlyChainCore() {
     { name: 'runPriorityScoring', fn: runPriorityScoringJob },
     { name: 'runCalendarPlanner', fn: runCalendarPlannerJob },
     {
+      name: 'sprintForwardPlanner',
+      fn: async () => {
+        const sfp = require('./sprintForwardPlanner');
+        if (sfp?.runForAllUsers) return await sfp.runForAllUsers();
+        return null;
+      },
+    },
+    {
       name: 'nightlyTaskLinking',
       fn: async () => {
         if (!fuzzyTaskLinking?.nightlyTaskLinking?.run) return;
@@ -5307,3 +5315,24 @@ exports._runPriorityScoringJob = runPriorityScoringJob;
 exports._runCalendarPlannerJob = runCalendarPlannerJob;
 exports._replanExistingBlocksForUser = replanExistingBlocksForUser;
 exports._deltaTop3ForPersona = _deltaTop3ForPersona;
+
+exports.runSprintForwardPlannerNow = onCall({
+  memory: '512MiB',
+  timeoutSeconds: 300,
+  region: 'europe-west2',
+  invoker: 'public',
+  secrets: [BOB_CLI_ACCESS],
+}, async (req) => {
+  const cliKey = BOB_CLI_ACCESS.value();
+  const key = req.rawRequest?.get?.('x-api-key') || req.rawRequest?.query?.key;
+  if (cliKey && key && key !== cliKey) {
+    throw new https.HttpsError('permission-denied', 'unauthorized');
+  }
+  const sfp = require('./sprintForwardPlanner');
+  const dryRun = req.data?.dryRun === true;
+  if (req.data?.uid) {
+    const db = admin.firestore();
+    return sfp.runForUser(db, req.data.uid, { dryRun });
+  }
+  return sfp.runForAllUsers();
+});
