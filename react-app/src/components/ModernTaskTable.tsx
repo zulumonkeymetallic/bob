@@ -56,6 +56,7 @@ import { MISSING_INFO_CELL_BG, MISSING_INFO_CELL_BG_HOVER, hasLinkedId, isBlankT
 import { useAuth } from '../contexts/AuthContext';
 import { useFocusGoals } from '../hooks/useFocusGoals';
 import { evaluateStorySprintAlignment, getSprintFocusGoalIds } from '../utils/sprintAlignment';
+import { useNavigate } from 'react-router-dom';
 
 interface TaskTableRow extends Task {
   storyTitle?: string;
