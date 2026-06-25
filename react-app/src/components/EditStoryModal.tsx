@@ -90,7 +90,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
   const [calendarComposerInitialValues, setCalendarComposerInitialValues] = useState<any>({});
   const [showDeferModal, setShowDeferModal] = useState(false);
   const [flaggingPriority, setFlaggingPriority] = useState(false);
-  const [takenOrderRanks, setTakenOrderRanks] = useState<Set<number>>(new Set());
+  const [takenOrderMap, setTakenOrderMap] = useState<Map<number, string>>(new Map()); // rank → story doc id
   const isHiddenSprint = (sprint: Sprint) => isStatus(sprint.status, 'closed') || isStatus(sprint.status, 'cancelled');
   const formatSprintLabel = (sprint: Sprint, statusOverride?: string) => {
     const name = sprint.name || sprint.ref || `Sprint ${sprint.id.slice(-4)}`;
@@ -194,24 +194,24 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
   useEffect(() => {
     if (!show || !story) {
       setLinkedTasks([]);
-      setTakenOrderRanks(new Set());
+      setTakenOrderMap(new Map());
       return;
     }
     reloadLinkedTasks(story);
-    // Load which order ranks are taken by other stories in the same persona
+    // Load which order ranks are taken by other stories in the same persona (rank → doc id)
     if (currentUser) {
       const storyPersona = String((story as any).persona || currentPersona || 'personal');
       getDocs(query(collection(db, 'stories'), where('ownerUid', '==', currentUser.uid))).then((snap) => {
-        const taken = new Set<number>();
+        const taken = new Map<number, string>();
         snap.docs.forEach((d) => {
           if (d.id === story.id) return;
           const data = d.data();
           if (String(data.persona || 'personal') !== storyPersona) return;
           const r = Number(data.userPriorityRank);
-          if (r >= 1 && r <= 5 && data.userPriorityFlag === true) taken.add(r);
+          if (r >= 1 && r <= 5 && data.userPriorityFlag === true) taken.set(r, d.id);
         });
-        setTakenOrderRanks(taken);
-      }).catch(() => setTakenOrderRanks(new Set()));
+        setTakenOrderMap(taken);
+      }).catch(() => setTakenOrderMap(new Map()));
     }
   }, [show, story, reloadLinkedTasks, currentUser, currentPersona]);
 
@@ -357,20 +357,14 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
         updates.theme = (selectedGoal as any).theme;
       }
       await updateDoc(doc(db, 'stories', story.id), updates);
-      // Auto-demote any other story that holds the same order rank
-      if (editedStory.userOrder > 0 && currentUser) {
-        const storyPersona = String(updates.persona || 'personal');
-        const siblingsSnap = await getDocs(query(collection(db, 'stories'), where('ownerUid', '==', currentUser.uid)));
-        const conflicts = siblingsSnap.docs.filter((d) => {
-          if (d.id === story.id) return false;
-          const data = d.data();
-          return String(data.persona || 'personal') === storyPersona
-            && data.userPriorityFlag === true
-            && Number(data.userPriorityRank) === editedStory.userOrder;
-        });
-        await Promise.all(conflicts.map((d) =>
-          updateDoc(d.ref, { userPriorityFlag: false, userPriorityRank: null, userPriorityFlagAt: null, updatedAt: serverTimestamp() })
-        ));
+      // Auto-demote the holder of this rank using the pre-loaded map — no extra fetch needed
+      if (editedStory.userOrder > 0) {
+        const conflictId = takenOrderMap.get(editedStory.userOrder);
+        if (conflictId && conflictId !== story.id) {
+          await updateDoc(doc(db, 'stories', conflictId), {
+            userPriorityFlag: false, userPriorityRank: null, userPriorityFlagAt: null, updatedAt: serverTimestamp(),
+          });
+        }
       }
       const prevPersona = ((story as any).persona || currentPersona || 'personal') as 'personal' | 'work';
       const nextPersona = (updates.persona || prevPersona) as 'personal' | 'work';
@@ -827,7 +821,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
                       <option value={0}>— unset —</option>
                       {([1, 2, 3, 4, 5] as const).map((r) => {
                         const savedRank = story ? getManualPriorityRank(story) : null;
-                        const isTaken = takenOrderRanks.has(r) && r !== savedRank;
+                        const isTaken = takenOrderMap.has(r) && r !== savedRank;
                         return (
                           <option key={r} value={r} disabled={isTaken}>
                             {r === 1 ? '1 · First' : r === 5 ? '5 · Last' : String(r)}
