@@ -4820,6 +4820,18 @@ async function runNightlyChainCore() {
       },
     },
     { name: 'nightlySprintCapacityUpdate', fn: nightlySprintCapacityUpdate },
+    {
+      name: 'pushPendingCalendarBlocks',
+      fn: async () => {
+        try {
+          const calSync = require('./calendarSync');
+          if (!calSync?._pushPendingBlocksForAllUsers) return { skipped: true, reason: 'no export' };
+          return await calSync._pushPendingBlocksForAllUsers();
+        } catch (e) {
+          return { skipped: true, reason: e?.message || String(e) };
+        }
+      },
+    },
   ];
   const results = [];
   for (const step of steps) {

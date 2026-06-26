@@ -2048,6 +2048,20 @@ exports.repairDuplicateCalendarEvents = functions.https.onCall(async (data, cont
 
 exports._syncBlockToGoogle = syncBlockToGoogle;
 exports._evaluateGoogleSyncPolicyForBlock = evaluateGoogleSyncPolicyForBlock;
+exports._pushPendingBlocksForAllUsers = async function() {
+  const db = admin.firestore();
+  const profiles = await db.collection('profiles').get().catch(() => ({ docs: [] }));
+  const results = [];
+  for (const p of profiles.docs) {
+    try {
+      const r = await pushPendingBlocks(p.id, 50);
+      results.push({ uid: p.id, ...r });
+    } catch (e) {
+      results.push({ uid: p.id, error: e?.message || String(e) });
+    }
+  }
+  return { ok: true, results };
+};
 
 exports.syncCalendarBlock = functions.https.onCall(async (data, context) => {
   if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Must be authenticated');
