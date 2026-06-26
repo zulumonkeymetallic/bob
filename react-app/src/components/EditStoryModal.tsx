@@ -16,7 +16,7 @@ import ActivityStreamPanel from './common/ActivityStreamPanel';
 import ModernTaskTable from './ModernTaskTable';
 import { cascadeStoryPersona } from '../utils/personaCascade';
 import { useNavigate } from 'react-router-dom';
-import { Activity, Bot, CalendarPlus, Clock3, Shuffle, Trash2, Wand2 } from 'lucide-react';
+import { Activity, Bot, CalendarPlus, Clock3, Maximize2, Minimize2, Shuffle, Trash2, Wand2 } from 'lucide-react';
 import { planningSprints } from '../utils/sprintFilter';
 import { evaluateStorySprintAlignment, getSprintFocusGoalIds } from '../utils/sprintAlignment';
 import { getGoalDisplayPath, getLeafGoalOptions, resolveLeafGoalSelection } from '../utils/goalHierarchy';
@@ -77,6 +77,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
     userOrder: 0 as number,
   });
 
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -581,10 +582,13 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
 
   return (
     <>
-    <Modal show={show} onHide={onHide} size="xl" container={container || undefined} fullscreen="lg-down" scrollable>
+    <Modal show={show} onHide={onHide} size={isFullscreen ? undefined : 'xl'} container={container || undefined} fullscreen={isFullscreen ? true : 'lg-down'} scrollable>
       <Modal.Header closeButton>
         <div className="d-flex w-100 align-items-center justify-content-between gap-2">
           <Modal.Title>Edit Story: {story?.ref}</Modal.Title>
+          <button onClick={() => setIsFullscreen((v) => !v)} title={isFullscreen ? 'Restore' : 'Maximise'} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', padding: '2px 4px' }}>
+            {isFullscreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+          </button>
           {story && (
             <div className="d-flex align-items-center gap-2">
               <Button variant="outline-secondary" size="sm" title="Activity stream" onClick={() => showSidebar(story, 'story')}>

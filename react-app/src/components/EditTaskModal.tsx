@@ -26,7 +26,7 @@ import { getGoalDisplayPath, getLeafGoalOptions, resolveLeafGoalSelection } from
 import EditStoryModal from './EditStoryModal';
 import NewCalendarEventModal, { buildCalendarComposerInitialValues } from './planner/NewCalendarEventModal';
 import DeferItemModal from './DeferItemModal';
-import { Activity, Bot, CalendarPlus, Clock3, Trash2, Wand2 } from 'lucide-react';
+import { Activity, Bot, CalendarPlus, Clock3, Maximize2, Minimize2, Trash2, Wand2 } from 'lucide-react';
 import DrivePickerButton from './shared/DrivePickerButton';
 
 interface EditTaskModalProps {
@@ -92,6 +92,7 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
   const { currentPersona } = usePersona();
   const { sprints } = useSprint();
   const { themes: globalThemes } = useGlobalThemes();
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [form, setForm] = useState({
@@ -552,10 +553,13 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
 
   return (
     <>
-    <Modal show={show} onHide={onHide} size="lg" container={container || undefined}>
+    <Modal show={show} onHide={onHide} size={isFullscreen ? undefined : 'lg'} container={container || undefined} fullscreen={isFullscreen ? true : 'lg-down'} scrollable>
       <Modal.Header closeButton>
         <div className="d-flex w-100 align-items-center justify-content-between gap-2">
           <Modal.Title>{task ? 'Edit Task' : 'Add Task'}</Modal.Title>
+          <button onClick={() => setIsFullscreen((v) => !v)} title={isFullscreen ? 'Restore' : 'Maximise'} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', padding: '2px 4px' }}>
+            {isFullscreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+          </button>
           {task && (
             <div className="d-flex align-items-center gap-2">
               <Button variant="outline-secondary" size="sm" title="Activity stream" onClick={() => showSidebar(task, 'task')}>

@@ -19,7 +19,7 @@ import { useSprint } from '../contexts/SprintContext';
 import { cascadeGoalPersona } from '../utils/personaCascade';
 import { parsePointsValue, TASK_DEFAULT_POINTS } from '../utils/points';
 import { normalizeGoalCostType } from '../utils/goalCost';
-import { Wand2 } from 'lucide-react';
+import { Maximize2, Minimize2, Wand2 } from 'lucide-react';
 import DrivePickerButton from './shared/DrivePickerButton';
 import { resolveLeafGoalSelection } from '../utils/goalHierarchy';
 import { buildGoalTimelineImpactPlan, GoalTimelineAffectedStory } from './visualization/goalTimelineImpact';
@@ -70,6 +70,7 @@ const shiftDateInputToYear = (value: string, year: number) => {
 const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, currentUserId, allGoals = [] }) => {
   const { currentPersona } = usePersona();
   const { sprints } = useSprint();
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const [formData, setFormData] = useState({
     title: '',
     description: '',
@@ -934,7 +935,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
 
   return (
     <>
-    <Modal show={show} onHide={handleClose} centered size="xl" fullscreen="lg-down" scrollable>
+    <Modal show={show} onHide={handleClose} centered size={isFullscreen ? undefined : 'xl'} fullscreen={isFullscreen ? true : 'lg-down'} scrollable>
       <ToastContainer position="bottom-end" className="p-3">
         <Toast bg="success" onClose={() => setToastMsg(null)} show={!!toastMsg} delay={1800} autohide>
           <Toast.Body className="text-white">{toastMsg}</Toast.Body>
@@ -943,6 +944,9 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
       <Modal.Header closeButton>
         <div className="d-flex w-100 align-items-center justify-content-between gap-2">
           <Modal.Title>{goal ? `Edit Goal: ${goal.title}` : 'Create New Goal'}</Modal.Title>
+          <button onClick={() => setIsFullscreen((v) => !v)} title={isFullscreen ? 'Restore' : 'Maximise'} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', padding: '2px 4px', marginRight: 4 }}>
+            {isFullscreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+          </button>
           {goal && (
             <Button
               variant="outline-primary"
