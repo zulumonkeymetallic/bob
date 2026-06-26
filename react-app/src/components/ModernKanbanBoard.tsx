@@ -887,9 +887,9 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
     const raw = (story as any).status;
     if (typeof raw === 'number') {
       if (isStatus(raw, 'Blocked')) return 'in-progress';
-      // Only treat canonical done (4+) as done; avoid goal 'Complete' mapping
       if (raw >= 4 || isStatus(raw, 'done')) return 'done';
-      if (raw >= 2 || isStatus(raw, 'active') || isStatus(raw, 'in-progress') || isStatus(raw, 'testing')) return 'in-progress';
+      // 1=InProgress, 2=Review — both show in the In Progress lane
+      if (raw >= 1) return 'in-progress';
       return 'backlog';
     }
     const normalized = normalizeStatusValue(raw);
