@@ -71,7 +71,10 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   const [isSmallScreen, setIsSmallScreen] = useState<boolean>(typeof window !== 'undefined' ? window.innerWidth < 768 : false);
   const [navCollapsed, setNavCollapsed] = useState<boolean>(() => {
     if (typeof window !== 'undefined' && window.innerWidth < 768) return true;
-    try { return localStorage.getItem('leftNavCollapsed') === '1'; } catch { return false; }
+    try {
+      const stored = localStorage.getItem('leftNavCollapsed');
+      return stored === null ? true : stored === '1';
+    } catch { return true; }
   });
   const toggleNavCollapsed = () => {
     setNavCollapsed((prev) => {
@@ -284,21 +287,92 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   return (
     <div className="d-flex sidebar-layout-outer" style={{ height: '100vh', overflow: 'hidden' }}>
       {/* Desktop Sidebar (collapsible) */}
-      {!navCollapsed && (
-        <div className="sidebar-desktop d-none d-md-block" style={{ width: '250px', height: '100vh', flexShrink: 0 }}>
-          <div className="h-100 d-flex flex-column" style={{
-            background: 'var(--panel)',
-            color: 'var(--notion-text)',
-            borderRight: '1px solid var(--notion-border)',
-            maxHeight: '100vh',
-            overflow: 'hidden'
-          }}>
-            {/* Brand */}
-            <div className="p-3" style={{ borderBottom: '1px solid var(--notion-border)', flexShrink: 0, display: 'flex', alignItems: 'center', gap: '12px' }}>
-              <img src="/logo192.png" alt="BOB Logo" style={{ width: '32px', height: '32px', objectFit: 'contain' }} />
-              <div>
+      <div
+        className="sidebar-desktop d-none d-md-flex flex-column"
+        style={{
+          width: navCollapsed ? '56px' : '250px',
+          height: '100vh',
+          flexShrink: 0,
+          background: 'var(--panel)',
+          color: 'var(--notion-text)',
+          borderRight: '1px solid var(--notion-border)',
+          overflow: 'hidden',
+          transition: 'width 0.2s ease',
+        }}
+      >
+        {navCollapsed ? (
+          /* ── Collapsed icon rail ── */
+          <>
+            {/* Logo + expand toggle */}
+            <div style={{ borderBottom: '1px solid var(--notion-border)', flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '10px 0 6px' }}>
+              <img src="/logo192.png" alt="BOB" style={{ width: '28px', height: '28px', objectFit: 'contain', marginBottom: '8px' }} />
+              <button
+                onClick={toggleNavCollapsed}
+                title="Expand sidebar"
+                style={{ background: 'none', border: 'none', color: 'var(--notion-text-gray)', cursor: 'pointer', fontSize: '13px', padding: '2px 6px', borderRadius: '4px' }}
+              >
+                <i className="fas fa-chevron-right" />
+              </button>
+            </div>
+
+            {/* Nav group icons */}
+            <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', scrollbarWidth: 'thin', paddingTop: '4px' }}>
+              {navigationGroups.map((group) => (
+                <div
+                  key={group.label}
+                  title={group.label}
+                  onClick={() => {
+                    setNavCollapsed(false);
+                    try { localStorage.setItem('leftNavCollapsed', '0'); } catch { }
+                    setExpandedGroups((prev) => prev.includes(group.label) ? prev : [...prev, group.label]);
+                  }}
+                  style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '10px 0', cursor: 'pointer', color: 'var(--notion-text-gray)', transition: 'all 0.15s ease' }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--notion-hover)'; e.currentTarget.style.color = 'var(--notion-text)'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--notion-text-gray)'; }}
+                >
+                  <i className={`fas fa-${group.icon}`} style={{ fontSize: '15px' }} />
+                </div>
+              ))}
+            </div>
+
+            {/* Bottom actions (icons only) */}
+            <div style={{ borderTop: '1px solid var(--notion-border)', padding: '8px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px' }}>
+              <button
+                onClick={toggleTheme}
+                title={`Switch to ${theme === 'light' ? 'dark' : 'light'} mode`}
+                style={{ background: 'none', border: 'none', color: 'var(--notion-text-gray)', cursor: 'pointer', fontSize: '15px', padding: '6px', borderRadius: '4px' }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--notion-text)'; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--notion-text-gray)'; }}
+              >
+                <i className={`fas fa-${theme === 'light' ? 'moon' : 'sun'}`} />
+              </button>
+              <button
+                onClick={onSignOut || signOut}
+                title="Sign out"
+                style={{ background: 'none', border: 'none', color: 'var(--notion-text-gray)', cursor: 'pointer', fontSize: '15px', padding: '6px', borderRadius: '4px' }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--notion-text)'; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--notion-text-gray)'; }}
+              >
+                <i className="fas fa-sign-out-alt" />
+              </button>
+            </div>
+          </>
+        ) : (
+          /* ── Expanded sidebar ── */
+          <>
+            {/* Brand + collapse toggle */}
+            <div className="p-3" style={{ borderBottom: '1px solid var(--notion-border)', flexShrink: 0, display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <img src="/logo192.png" alt="BOB Logo" style={{ width: '32px', height: '32px', objectFit: 'contain', flexShrink: 0 }} />
+              <div style={{ flex: 1, minWidth: 0 }}>
                 <h4 className="mb-0" style={{ color: 'var(--notion-text)', fontWeight: '600', fontSize: '1rem', lineHeight: '1.2' }}>blueprint.<br />organize.build</h4>
               </div>
+              <button
+                onClick={toggleNavCollapsed}
+                title="Collapse sidebar"
+                style={{ background: 'none', border: 'none', color: 'var(--notion-text-gray)', cursor: 'pointer', fontSize: '13px', padding: '2px 6px', borderRadius: '4px', flexShrink: 0 }}
+              >
+                <i className="fas fa-chevron-left" />
+              </button>
             </div>
 
             {/* User Info */}
@@ -306,79 +380,31 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
               <div className="p-3" style={{ borderBottom: '1px solid var(--notion-border)', flexShrink: 0 }}>
                 <div className="d-flex align-items-center mb-2">
                   <div className="rounded-circle d-flex align-items-center justify-content-center me-2"
-                    style={{
-                      width: '32px',
-                      height: '32px',
-                      fontSize: '14px',
-                      background: 'var(--notion-accent)',
-                      color: 'white'
-                    }}>
+                    style={{ width: '32px', height: '32px', fontSize: '14px', background: 'var(--notion-accent)', color: 'white' }}>
                     {currentUser.displayName?.charAt(0) || 'U'}
                   </div>
                   <div className="flex-grow-1">
-                    <div className="small" style={{ color: 'var(--notion-text)' }}>
-                      {currentUser.displayName || 'User'}
-                    </div>
-                    <div className="badge" style={{
-                      background: 'var(--notion-accent)',
-                      color: 'white',
-                      fontSize: '0.75rem'
-                    }}>
-                      {currentPersona}
-                    </div>
+                    <div className="small" style={{ color: 'var(--notion-text)' }}>{currentUser.displayName || 'User'}</div>
+                    <div className="badge" style={{ background: 'var(--notion-accent)', color: 'white', fontSize: '0.75rem' }}>{currentPersona}</div>
                   </div>
                 </div>
                 <div className="d-flex gap-1">
-                  <Button
-                    size="sm"
-                    variant={currentPersona === 'personal' ? 'primary' : 'outline-primary'}
-                    onClick={() => setPersona('personal')}
-                    className="flex-fill"
-                  >
-                    Personal
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant={currentPersona === 'work' ? 'primary' : 'outline-primary'}
-                    onClick={() => setPersona('work')}
-                    className="flex-fill"
-                  >
-                    Work
-                  </Button>
+                  <Button size="sm" variant={currentPersona === 'personal' ? 'primary' : 'outline-primary'} onClick={() => setPersona('personal')} className="flex-fill">Personal</Button>
+                  <Button size="sm" variant={currentPersona === 'work' ? 'primary' : 'outline-primary'} onClick={() => setPersona('work')} className="flex-fill">Work</Button>
                 </div>
               </div>
             )}
 
             {/* Navigation - Scrollable */}
-            <div className="flex-grow-1" style={{
-              overflowY: 'auto',
-              overflowX: 'hidden',
-              scrollbarWidth: 'thin',
-              msOverflowStyle: 'scrollbar'
-            }}>
+            <div className="flex-grow-1" style={{ overflowY: 'auto', overflowX: 'hidden', scrollbarWidth: 'thin' }}>
               <Nav className="flex-column py-2">{navigationGroups.map((group) => (
                 <div key={group.label} className="mb-2">
-                  {/* Group Header */}
                   <div
-                    className="d-flex align-items-center justify-content-between px-3 py-2 cursor-pointer"
+                    className="d-flex align-items-center justify-content-between px-3 py-2"
                     onClick={() => toggleGroup(group.label)}
-                    style={{
-                      cursor: 'pointer',
-                      fontSize: '0.9rem',
-                      fontWeight: '600',
-                      color: 'var(--notion-text-gray)',
-                      borderRadius: '6px',
-                      margin: '0 8px',
-                      transition: 'all 0.15s ease'
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.background = 'var(--notion-hover)';
-                      e.currentTarget.style.color = 'var(--notion-text)';
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.background = 'transparent';
-                      e.currentTarget.style.color = 'var(--notion-text-gray)';
-                    }}
+                    style={{ cursor: 'pointer', fontSize: '0.9rem', fontWeight: '600', color: 'var(--notion-text-gray)', borderRadius: '6px', margin: '0 8px', transition: 'all 0.15s ease' }}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--notion-hover)'; e.currentTarget.style.color = 'var(--notion-text)'; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--notion-text-gray)'; }}
                     title={group.label}
                   >
                     <div className="d-flex align-items-center">
@@ -388,7 +414,6 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
                     <i className={`fas fa-chevron-${expandedGroups.includes(group.label) ? 'down' : 'right'}`}></i>
                   </div>
 
-                  {/* Group Items */}
                   {expandedGroups.includes(group.label) && (
                     <div className="ms-2">
                       {group.items.map((item) => (
@@ -397,33 +422,12 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
                           className="nav-link px-3 py-2 border-0 text-start"
                           title={item.label}
                           onClick={() => {
-                            console.log('[Sidebar Desktop] BEFORE navigate()', { path: item.path, currentLocation: window.location.pathname });
-                            // Use setTimeout to ensure navigation happens after current event loop
-                            setTimeout(() => {
-                              navigate(item.path, { replace: true });
-                              console.log('[Sidebar Desktop] AFTER navigate()', { path: item.path, newLocation: window.location.pathname });
-                            }, 0);
+                            setTimeout(() => { navigate(item.path, { replace: true }); }, 0);
                             setShowSidebar(false);
-                            console.info('[Sidebar] navigation executed', { to: item.path, ts: new Date().toISOString() });
                           }}
-                          style={{
-                            cursor: 'pointer',
-                            fontSize: '0.9rem',
-                            color: 'var(--notion-text)',
-                            borderRadius: '6px',
-                            margin: '2px 8px',
-                            display: 'block',
-                            textDecoration: 'none',
-                            transition: 'all 0.15s ease'
-                          }}
-                          onMouseEnter={(e) => {
-                            e.currentTarget.style.background = 'var(--notion-hover)';
-                            e.currentTarget.style.color = 'var(--notion-accent)';
-                          }}
-                          onMouseLeave={(e) => {
-                            e.currentTarget.style.background = 'transparent';
-                            e.currentTarget.style.color = 'var(--notion-text)';
-                          }}
+                          style={{ cursor: 'pointer', fontSize: '0.9rem', color: 'var(--notion-text)', borderRadius: '6px', margin: '2px 8px', display: 'block', textDecoration: 'none', transition: 'all 0.15s ease' }}
+                          onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--notion-hover)'; e.currentTarget.style.color = 'var(--notion-accent)'; }}
+                          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--notion-text)'; }}
                         >
                           <i className={`fas fa-${item.icon} me-2`}></i>
                           {item.label}
@@ -436,68 +440,29 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
               </Nav>
             </div>
 
-            {/* Bottom Actions - Now Sticky */}
-            <div
-              className="p-3"
-              style={{
-                borderTop: '1px solid var(--notion-border)',
-                position: 'sticky',
-                bottom: 0,
-                background: 'var(--notion-bg)',
-                zIndex: 10
-              }}
-            >
+            {/* Bottom Actions */}
+            <div className="p-3" style={{ borderTop: '1px solid var(--notion-border)', background: 'var(--notion-bg)' }}>
               <div className="d-flex gap-2 mb-2">
-                <Button
-                  size="sm"
-                  onClick={toggleTheme}
-                  className="flex-fill"
-                  style={{
-                    background: 'var(--notion-hover)',
-                    border: '1px solid var(--notion-border)',
-                    color: 'var(--notion-text)',
-                    borderRadius: '6px'
-                  }}
-                >
+                <Button size="sm" onClick={toggleTheme} className="flex-fill"
+                  style={{ background: 'var(--notion-hover)', border: '1px solid var(--notion-border)', color: 'var(--notion-text)', borderRadius: '6px' }}>
+                  <i className={`fas fa-${theme === 'light' ? 'moon' : 'sun'} me-1`} />
                   {theme === 'light' ? 'Dark' : 'Light'} Mode
                 </Button>
-                {/* Removed Test/Prod toggle */}
               </div>
-              <Button
-                size="sm"
-                onClick={onSignOut || signOut}
-                className="w-100"
-                style={{
-                  background: 'transparent',
-                  border: '1px solid var(--notion-border)',
-                  color: 'var(--notion-text)',
-                  borderRadius: '6px'
-                }}
-              >
+              <Button size="sm" onClick={onSignOut || signOut} className="w-100"
+                style={{ background: 'transparent', border: '1px solid var(--notion-border)', color: 'var(--notion-text)', borderRadius: '6px' }}>
+                <i className="fas fa-sign-out-alt me-1" />
                 Sign Out
               </Button>
-
-              {/* App Version */}
               <div style={{ marginTop: '8px', textAlign: 'center' }}>
-                <span style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  padding: '2px 8px',
-                  borderRadius: '12px',
-                  fontSize: '12px',
-                  fontWeight: 600,
-                  border: '1px solid var(--notion-border)',
-                  background: 'var(--notion-hover)',
-                  color: 'var(--notion-text)'
-                }}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '2px 8px', borderRadius: '12px', fontSize: '12px', fontWeight: 600, border: '1px solid var(--notion-border)', background: 'var(--notion-hover)', color: 'var(--notion-text)' }}>
                   <VersionDisplay variant="badge-only" showSessionInfo={false} />
                 </span>
               </div>
             </div>
-          </div>
-        </div>
-      )}
+          </>
+        )}
+      </div>
 
       {/* Mobile Header */}
       <div className="d-md-none fixed-top" style={{
@@ -660,29 +625,6 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         </Offcanvas.Body>
       </Offcanvas>
 
-      {/* Global collapse/expand toggle */}
-      {!isSmallScreen && (
-        <button
-          type="button"
-          onClick={toggleNavCollapsed}
-          className="position-fixed"
-          style={{
-            top: 10,
-            left: navCollapsed ? 10 : 260,
-            zIndex: 2000,
-            boxShadow: '0 1px 4px rgba(0,0,0,0.15)',
-            border: '1px solid var(--notion-border)',
-            background: 'var(--notion-hover)',
-            color: 'var(--notion-text)',
-            padding: '4px 8px',
-            borderRadius: 6,
-            lineHeight: 1
-          }}
-          title={navCollapsed ? 'Show sidebar' : 'Hide sidebar'}
-        >
-          {navCollapsed ? '▶' : '◀'}
-        </button>
-      )}
 
       {/* Main Content Area */}
       <div
