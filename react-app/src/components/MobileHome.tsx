@@ -2139,7 +2139,7 @@ const MobileHome: React.FC = () => {
                 0: { bg: 'secondary', text: 'Backlog' },
                 1: { bg: 'info',      text: 'Planned' },
                 2: { bg: 'primary',   text: 'In progress' },
-                3: { bg: 'warning',   text: 'Testing' },
+                3: { bg: 'warning',   text: 'Review' },
                 4: { bg: 'success',   text: 'Done' },
               } as Record<number, { bg: string; text: string }>)[storyStatusNum >= 4 ? 4 : storyStatusNum]
                 ?? { bg: 'secondary', text: 'Backlog' };
@@ -2180,7 +2180,7 @@ const MobileHome: React.FC = () => {
                         { value: 0, bg: 'secondary', text: 'Backlog' },
                         { value: 1, bg: 'info',      text: 'Planned' },
                         { value: 2, bg: 'primary',   text: 'In progress' },
-                        { value: 3, bg: 'warning',   text: 'Testing' },
+                        { value: 3, bg: 'warning',   text: 'Review' },
                         { value: 4, bg: 'success',   text: 'Done' },
                       ] as { value: number; bg: string; text: string }[]).map(opt => (
                         <Dropdown.Item

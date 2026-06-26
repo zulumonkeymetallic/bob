@@ -18,7 +18,7 @@ export const isStatus = (actualStatus: any, expectedStatus: string): boolean => 
     if (expectedStatus === 'planned') return actualStatus === 1;
     if (expectedStatus === 'active') return actualStatus === 2;
     if (expectedStatus === 'in-progress') return actualStatus === 2;
-    if (expectedStatus === 'testing') return actualStatus === 3;
+    if (expectedStatus === 'review_gate') return actualStatus === 3;
     if (expectedStatus === 'done') return actualStatus === 4;
 
     // Task status mapping

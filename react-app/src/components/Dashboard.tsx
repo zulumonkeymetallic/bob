@@ -5709,7 +5709,7 @@ const Dashboard: React.FC = () => {
                                           0: { bg: 'light', label: 'Backlog' },
                                           1: { bg: 'info', label: 'Planned' },
                                           2: { bg: 'primary', label: 'In Progress' },
-                                          3: { bg: 'warning', label: 'Testing' },
+                                          3: { bg: 'warning', label: 'Review' },
                                           4: { bg: 'success', label: 'Done' },
                                         };
                                         const storyS = storyStatusMap[storyStatusVal] || storyStatusMap[0];
@@ -5783,7 +5783,7 @@ const Dashboard: React.FC = () => {
                                                   <option value={0}>Backlog</option>
                                                   <option value={1}>Planned</option>
                                                   <option value={2}>In Progress</option>
-                                                  <option value={3}>Testing</option>
+                                                  <option value={3}>Review</option>
                                                   <option value={4}>Done</option>
                                                 </select>
                                               </span>

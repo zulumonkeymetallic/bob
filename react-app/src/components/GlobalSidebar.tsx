@@ -265,7 +265,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
       if (typeof status === 'number') {
         switch (status) {
           case 4: return { label: 'Done', variant: 'success' };
-          case 3: return { label: 'Testing', variant: 'warning' };
+          case 3: return { label: 'Review', variant: 'warning' };
           case 2: return { label: 'Active', variant: 'primary' };
           case 1: return { label: 'Planned', variant: 'secondary' };
           case 0: return { label: 'Backlog', variant: 'secondary' };
@@ -278,7 +278,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
         planned: { label: 'Planned', variant: 'secondary' },
         active: { label: 'Active', variant: 'primary' },
         'in-progress': { label: 'Active', variant: 'primary' },
-        testing: { label: 'Testing', variant: 'warning' },
+        testing: { label: 'Review', variant: 'warning' },
         done: { label: 'Done', variant: 'success' },
         defect: { label: 'Defect', variant: 'danger' },
       };

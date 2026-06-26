@@ -243,7 +243,7 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
             0: { bg: 'secondary', text: 'Backlog' },
             1: { bg: 'info', text: 'Planned' },
             2: { bg: 'primary', text: 'In progress' },
-            3: { bg: 'warning', text: 'Testing' },
+            3: { bg: 'warning', text: 'Review' },
             4: { bg: 'success', text: 'Done' },
         } as Record<number, { bg: string; text: string }>)[statusValue] || { bg: 'secondary', text: 'Backlog' }
         : ({
@@ -1058,7 +1058,7 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                                 <option value={0}>Backlog</option>
                                 <option value={1}>Planned</option>
                                 <option value={2}>In progress</option>
-                                <option value={3}>Testing</option>
+                                <option value={3}>Review</option>
                                 <option value={4}>Done</option>
                             </>
                         ) : (
