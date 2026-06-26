@@ -79,6 +79,7 @@ async function runForUser(db, uid, options = {}) {
     .filter(s => {
       const status = Number(s.status ?? -1);
       if (status >= 2) return false; // closed / cancelled
+      if (String(s.persona || '').toLowerCase() !== 'personal') return false; // work sprints excluded
       const endMs = toMs(s.endDate || s.targetDate);
       if (!endMs) return false;
       return endMs >= tomorrowStart.toMillis(); // has at least tomorrow left
@@ -118,13 +119,15 @@ async function runForUser(db, uid, options = {}) {
   const stories = storiesSnap.docs
     .map(d => ({ id: d.id, ...d.data() }))
     .filter(s => s.sprintId && activeSprintIds.has(s.sprintId))
-    .filter(s => !isDoneStatus(s.status));
+    .filter(s => !isDoneStatus(s.status))
+    .filter(s => String(s.persona || '').toLowerCase() === 'personal');
 
   const tasks = tasksSnap.docs
     .map(d => ({ id: d.id, ...d.data() }))
     .filter(t => t.sprintId && activeSprintIds.has(t.sprintId))
     .filter(t => !isDoneStatus(t.status))
-    .filter(t => !RECURRING_TYPES.has(String(t.type || '').toLowerCase()));
+    .filter(t => !RECURRING_TYPES.has(String(t.type || '').toLowerCase()))
+    .filter(t => String(t.persona || '').toLowerCase() === 'personal');
 
   if (stories.length === 0 && tasks.length === 0) {
     return { user: uid, blocks: 0, items: 0, reason: 'no incomplete items in active sprints' };
@@ -186,20 +189,25 @@ async function runForUser(db, uid, options = {}) {
       blocksToCreate.push({
         id: '',   // filled below
         ownerUid: uid,
-        entityId: item.id,
+        // calendarSync resolves entity via storyId/taskId — not entityId/entityType
+        ...(item._type === 'story' ? { storyId: item.id } : { taskId: item.id }),
         entityType: item._type,
         title: `${item.title || 'Untitled'} (${ptsAllocated}pt)`,
+        // calendarSync reads block.start / block.end for time
+        start: startMs,
+        end:   endMs,
         startTime: startMs,
         endTime:   endMs,
         startMs,
         endMs,
         date: iso,
         source: SOURCE_TAG,
+        persona: String(item.persona || 'personal'),
         sprintId: item.sprintId || null,
         score:    item._score,
         userPriorityRank: item.userPriorityRank || null,
         minsAllocated: allocated,
-        googleSyncEnabled: true,
+        googleEventId: null, // explicit null so pushPendingBlocks query catches it
         synced: false,
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),

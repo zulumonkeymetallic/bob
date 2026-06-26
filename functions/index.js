@@ -304,6 +304,9 @@ try {
     exports.replanCalendarNow = nightlyOrchestration.replanCalendarNow;
     exports.unifiedNightlyOrchestrator = nightlyOrchestration.unifiedNightlyOrchestrator;
     exports.runNightlyChainNow = nightlyOrchestration.runNightlyChainNow;
+    if (nightlyOrchestration.runSprintForwardPlannerNow) {
+      exports.runSprintForwardPlannerNow = nightlyOrchestration.runSprintForwardPlannerNow;
+    }
     if (nightlyOrchestration.schedulePlannerItem) {
       exports.schedulePlannerItem = nightlyOrchestration.schedulePlannerItem;
     }
