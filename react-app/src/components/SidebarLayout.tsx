@@ -69,17 +69,18 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   const [showSidebar, setShowSidebar] = useState(false);
   const location = useLocation();
   const [isSmallScreen, setIsSmallScreen] = useState<boolean>(typeof window !== 'undefined' ? window.innerWidth < 768 : false);
+  const NAV_COLLAPSED_KEY = 'navCollapsedV2'; // V2 resets all users to collapsed default
   const [navCollapsed, setNavCollapsed] = useState<boolean>(() => {
     if (typeof window !== 'undefined' && window.innerWidth < 768) return true;
     try {
-      const stored = localStorage.getItem('leftNavCollapsed');
+      const stored = localStorage.getItem('navCollapsedV2');
       return stored === null ? true : stored === '1';
     } catch { return true; }
   });
   const toggleNavCollapsed = () => {
     setNavCollapsed((prev) => {
       const next = !prev;
-      try { localStorage.setItem('leftNavCollapsed', next ? '1' : '0'); } catch { }
+      try { localStorage.setItem('navCollapsedV2', next ? '1' : '0'); } catch { }
       return next;
     });
   };
@@ -323,7 +324,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
                   title={group.label}
                   onClick={() => {
                     setNavCollapsed(false);
-                    try { localStorage.setItem('leftNavCollapsed', '0'); } catch { }
+                    try { localStorage.setItem('navCollapsedV2', '0'); } catch { }
                     setExpandedGroups((prev) => prev.includes(group.label) ? prev : [...prev, group.label]);
                   }}
                   style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '10px 0', cursor: 'pointer', color: 'var(--notion-text-gray)', transition: 'all 0.15s ease' }}
