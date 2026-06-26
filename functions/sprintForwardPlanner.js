@@ -37,12 +37,25 @@ function toMs(v) {
   return Number.isNaN(p) ? null : p;
 }
 
+function parsePriorityBonus(priority) {
+  const p = String(priority || '').toUpperCase().trim().replace(/^P/, '');
+  if (p === '1' || p === 'CRITICAL') return 500;
+  if (p === '2' || p === 'HIGH')     return 400;
+  if (p === '3' || p === 'MEDIUM')   return 200;
+  if (p === '4' || p === 'LOW')      return 100;
+  const n = Number(priority);
+  if (Number.isFinite(n) && n >= 1 && n <= 4) return Math.max(0, (5 - n) * 100);
+  return 0;
+}
+
 function effectiveScore(item) {
-  const base         = Number(item.aiCriticalityScore || 0);
-  const priorityBonus = Number(item.priority || 0) >= 4 ? 500 : 0;
-  const r             = Number(item.userPriorityRank || 0);
-  const rankBonus     = r >= 1 && r <= 5 ? (6 - r) * 100 : 0;
-  return base + priorityBonus + rankBonus;
+  const base      = Number(item.aiCriticalityScore || 0);
+  const priBonus  = parsePriorityBonus(item.priority);
+  const r         = Number(item.userPriorityRank || 0);
+  const rankBonus = r >= 1 && r <= 5 ? (6 - r) * 100 : 0;
+  // User-pinned items get a large floor bonus so they always beat unranked items
+  const pinBonus  = item.userPriorityFlag ? 1000 : 0;
+  return base + priBonus + rankBonus + pinBonus;
 }
 
 function pointsRemaining(item) {
