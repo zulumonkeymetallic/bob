@@ -519,7 +519,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
           linkedPotId: (goal as any).linkedPotId || (goal as any).potId || '',
           tags: (goal as any).tags || [],
           autoCreatePot: !!(goal as any).autoCreatePot,
-          showInDashboardBanner: !!(goal as any).showInDashboardBanner,
+          showInDashboardBanner: !!(goal as any).showInDashboardBanner || !!(goal as any).isBannerGoal,
           persona: ((goal as any).persona || currentPersona || 'personal') as 'personal' | 'work',
           isPublished: !!(goal as any).isPublished,
           shareCode: (goal as any).shareCode || '',
@@ -709,6 +709,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         tags: formData.tags,
         autoCreatePot: formData.autoCreatePot,
         showInDashboardBanner: !!formData.showInDashboardBanner,
+        isBannerGoal: !!formData.showInDashboardBanner,
         persona: formData.persona || currentPersona || 'personal',
         costType: normalizedCostType || null,
         recurrence: normalizedRecurrence || null,
@@ -1239,12 +1240,12 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
                     <Form.Check
                       type="switch"
                       id="edit-goal-show-in-dashboard-banner"
-                      label="Include in dashboard goal banner rotation"
+                      label="Focus Goal (show in banner)"
                       checked={!!formData.showInDashboardBanner}
                       onChange={(e) => setFormData({ ...formData, showInDashboardBanner: e.target.checked })}
                     />
                     <Form.Text className="text-muted">
-                      Rotates this goal into the daily dashboard focus banner.
+                      Pins this goal to the focus goals banner shown on every page.
                     </Form.Text>
                   </Form.Group>
                 </div>

@@ -1,4 +1,5 @@
 import React from 'react';
+import { Star } from 'lucide-react';
 import { colorWithAlpha } from '../utils/storyCardFormatting';
 import { getThemeName, getStatusName } from '../utils/statusHelpers';
 import './GoalsCardView.css';
@@ -37,6 +38,12 @@ export interface GoalCardProps {
   /** Story counts */
   totalStories?: number | null;
   doneStories?: number | null;
+  /** Title of the parent/program goal */
+  programTitle?: string;
+  /** Whether this goal is flagged as a banner focus goal */
+  isFocusGoal?: boolean;
+  /** Called when the focus star is toggled */
+  onToggleFocusGoal?: (newValue: boolean) => void;
   /** Click handler */
   onClick?: () => void;
   /** Optional action toolbar rendered at the bottom */
@@ -64,6 +71,9 @@ const GoalCard: React.FC<GoalCardProps> = ({
   progressPercent,
   totalStories,
   doneStories,
+  programTitle,
+  isFocusGoal,
+  onToggleFocusGoal,
   onClick,
   actions,
 }) => {
@@ -97,7 +107,31 @@ const GoalCard: React.FC<GoalCardProps> = ({
     >
       <div className="goal-card__theme-strip" style={{ background: themeColor }} />
       <div className="goal-card__body">
-        <div className="goal-card__title">{goal.title || 'Untitled'}</div>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4 }}>
+          <div className="goal-card__title" style={{ flex: 1 }}>{goal.title || 'Untitled'}</div>
+          {onToggleFocusGoal && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onToggleFocusGoal(!isFocusGoal); }}
+              title={isFocusGoal ? 'Remove from focus goals' : 'Mark as focus goal'}
+              style={{
+                background: 'none',
+                border: 'none',
+                padding: '0 1px',
+                cursor: 'pointer',
+                flexShrink: 0,
+                color: isFocusGoal ? 'var(--focus-gold, #f5a623)' : 'var(--muted)',
+                lineHeight: 1,
+              }}
+            >
+              <Star size={12} fill={isFocusGoal ? 'currentColor' : 'none'} />
+            </button>
+          )}
+        </div>
+        {programTitle && (
+          <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            ↳ {programTitle}
+          </div>
+        )}
 
         <div className="goal-card__badges">
           {/* Focus badge */}

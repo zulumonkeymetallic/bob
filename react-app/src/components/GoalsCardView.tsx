@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useLayoutEffect, useRef } from 'react';
 import { startOfWeek, endOfWeek, startOfDay, subDays, format } from 'date-fns';
 import { Card, Badge, Button, Modal, Alert, Toast, ToastContainer } from 'react-bootstrap';
-import { Edit3, Target, Calendar, User, CalendarPlus, Wand2, Activity } from 'lucide-react';
+import { Edit3, Target, Calendar, User, CalendarPlus, Wand2, Activity, Star } from 'lucide-react';
 import { Goal, Story } from '../types';
 import { useSidebar } from '../contexts/SidebarContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -756,6 +756,15 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
             ? `${Math.round(effectiveGoalKpiStatus.progressPct)}%${effectiveGoalKpiStatus.expectedProgressPct != null ? ` (exp ${Math.round(effectiveGoalKpiStatus.expectedProgressPct)}%)` : ''}`
             : 'n/a';
           const shouldShowDescription = showDescriptionsResolved && !!goal.description;
+          const parentGoal = goal.parentGoalId ? goals.find((g) => g.id === goal.parentGoalId) : null;
+          const isGoalFocusFlagged = !!(goal as any).isBannerGoal || !!(goal as any).showInDashboardBanner;
+          const handleToggleFocusGoal = async (e: React.MouseEvent) => {
+            e.stopPropagation();
+            const next = !isGoalFocusFlagged;
+            try {
+              await onGoalUpdate(goal.id, { isBannerGoal: next, showInDashboardBanner: next } as any);
+            } catch { /* handled upstream */ }
+          };
           const latestActivityLabel = latestActivity
             ? latestActivity.activityType === 'note_added'
               ? 'Latest Comment'
@@ -841,18 +850,33 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                 {/* Header */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: headerMargin }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <h5 style={{ 
-                      margin: '0 0 6px 0', 
-                      fontSize: titleFontSize, 
+                    <h5 style={{
+                      margin: '0 0 4px 0',
+                      fontSize: titleFontSize,
                       fontWeight: '600',
                       lineHeight: '1.3',
                       wordBreak: 'break-word'
                   }}>
                       {goal.title}
                     </h5>
+                    {parentGoal && (
+                      <div style={{ fontSize: 11, color: mutedTextColor, marginBottom: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        ↳ {parentGoal.title}
+                      </div>
+                    )}
                   </div>
-                  
+
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <Button
+                      variant="link"
+                      size="sm"
+                      className="p-0"
+                      style={{ width: 24, height: 24, color: isGoalFocusFlagged ? 'var(--focus-gold, #f5a623)' : mutedTextColor }}
+                      title={isGoalFocusFlagged ? 'Remove from focus goals banner' : 'Mark as focus goal (show in banner)'}
+                      onClick={handleToggleFocusGoal}
+                    >
+                      <Star size={14} fill={isGoalFocusFlagged ? 'currentColor' : 'none'} />
+                    </Button>
                     <Button
                       variant="link"
                       size="sm"
