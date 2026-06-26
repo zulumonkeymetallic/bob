@@ -151,12 +151,13 @@ async function runForUser(db, uid, options = {}) {
   const latestEndMs = Math.max(...activeSprints.map(s => toMs(s.endDate || s.targetDate) || 0));
   const endDt       = DateTime.fromMillis(latestEndMs).setZone(zone);
 
+  const WEEKEND_MINS = 240; // shorter weekend capacity — 4h
   const dayCapacity = new Map(); // isoDate → { remainingMins, dt }
   let cursor = tomorrowStart;
   while (cursor <= endDt) {
-    if (cursor.weekday >= 1 && cursor.weekday <= 5) { // Mon–Fri
-      dayCapacity.set(cursor.toISODate(), { remainingMins: DEFAULT_DAILY_MINS, dt: cursor });
-    }
+    const isWeekend = cursor.weekday >= 6; // Sat=6, Sun=7
+    const mins = isWeekend ? WEEKEND_MINS : DEFAULT_DAILY_MINS;
+    dayCapacity.set(cursor.toISODate(), { remainingMins: mins, dt: cursor });
     cursor = cursor.plus({ days: 1 });
   }
 

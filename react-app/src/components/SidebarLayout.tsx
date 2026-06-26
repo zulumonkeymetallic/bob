@@ -104,7 +104,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         { label: 'Finance Dashboard', path: '/dashboard/finance', icon: 'wallet' },
         { label: 'Habit Tracking', path: '/dashboard/habit-tracking', icon: 'check-square' },
         { label: 'Fitness', path: '/fitness', icon: 'heartbeat' },
-        { label: 'Kanban Board', path: '/sprints/kanban', icon: 'kanban' },
+        { label: 'Kanban Board', path: '/sprints/kanban', icon: 'columns' },
         { label: 'Calendar', path: '/calendar', icon: 'calendar' },
         { label: 'Metrics', path: '/metrics', icon: 'tachometer-alt' },
       ]
@@ -124,19 +124,19 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
     },
     {
       label: 'Goals',
-      icon: 'target',
+      icon: 'bullseye',
       items: [
         { label: 'Goals List', path: '/goals', icon: 'list' },
         { label: 'Focus Goals', path: '/focus-goals', icon: 'bullseye' },
         { label: 'Goal Planner', path: '/planner?level=year', icon: 'columns' },
-        { label: 'Gannt chart', path: '/planner?level=gantt', icon: 'sparkles' },
+        { label: 'Gannt chart', path: '/planner?level=gantt', icon: 'magic' },
         { label: 'Theme Progress', path: '/metrics/progress', icon: 'chart-bar' },
         { label: 'Visual Canvas', path: '/canvas', icon: 'share-alt' }
       ]
     },
     {
       label: 'Plan',
-      icon: 'project-diagram',
+      icon: 'sitemap',
       items: [
         { label: 'Year Planner', path: '/planner?level=year', icon: 'route' },
         { label: 'Gannt chart', path: '/planner?level=gantt', icon: 'stream' },
@@ -152,7 +152,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         { label: 'Budgets', path: '/finance/budgets', icon: 'wallet' },
         { label: 'Merchants', path: '/finance/merchants', icon: 'tags' },
         { label: 'Transactions', path: '/finance/transactions', icon: 'receipt' },
-        { label: 'Spend Breakdown', path: '/finance/flow', icon: 'project-diagram' },
+        { label: 'Spend Breakdown', path: '/finance/flow', icon: 'sitemap' },
         { label: 'Pots', path: '/finance/pots', icon: 'database' },
         { label: 'Goal Linking', path: '/finance/goals', icon: 'link' }
       ]
@@ -162,7 +162,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       icon: 'book',
       items: [
         { label: 'Stories List', path: '/stories', icon: 'list' },
-        { label: 'Kanban Board', path: '/sprints/kanban', icon: 'kanban' },
+        { label: 'Kanban Board', path: '/sprints/kanban', icon: 'columns' },
         { label: 'Calendar', path: '/calendar', icon: 'calendar' }
       ]
     },
@@ -187,7 +187,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
     },
     {
       label: 'Tasks',
-      icon: 'list-check',
+      icon: 'tasks',
       items: [
         { label: 'Tasks List', path: '/tasks', icon: 'list' }
       ]
@@ -200,7 +200,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         { label: 'Sprint Kanban', path: '/sprints/kanban', icon: 'columns' },
         { label: 'Multi Sprint Planner', path: '/planner?level=sprint', icon: 'th' },
         { label: 'Capacity Planning', path: '/sprints/capacity', icon: 'chart-pie' },
-        { label: 'Retrospective', path: '/sprints/retrospective', icon: 'rotate-left' }
+        { label: 'Retrospective', path: '/sprints/retrospective', icon: 'undo' }
       ]
     },
     {
