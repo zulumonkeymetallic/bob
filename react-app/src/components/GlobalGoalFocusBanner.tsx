@@ -1,59 +1,207 @@
 /**
- * Self-contained wrapper around RotatingGoalFocusBanner for use in SidebarLayout.
- * Fetches banner-eligible goals from Firestore so the layout component stays prop-free.
- * Includes persona filter to satisfy Firestore security rules.
+ * Compact focus-goal banner shown in SidebarLayout on every page (desktop only).
+ * Shows ALL isBannerGoal-flagged goals as compact GoalCard tiles in a horizontal row.
+ * Clicking any card or the header navigates to /focus-goals.
+ * Includes per-goal progress: story completion, KPIs, and Monzo savings progress.
  */
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
+import { Target } from 'lucide-react';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
-import { Goal } from '../types';
-import RotatingGoalFocusBanner from './RotatingGoalFocusBanner';
+import { Goal, Story } from '../types';
+import GoalCard from './GoalCard';
+import { getThemeById, getThemeByName, GLOBAL_THEMES } from '../constants/globalThemes';
+
+const BANNER_TAGS = new Set(['banner', 'daily-banner', 'focus-banner', 'rotation-banner', 'project45']);
+
+function isBannerEligible(goal: Goal): boolean {
+  const tags = Array.isArray((goal as any).tags)
+    ? (goal as any).tags.map((t: any) => String(t || '').trim().toLowerCase()).filter(Boolean)
+    : [];
+  const hasTag = tags.some((t: string) => BANNER_TAGS.has(t));
+  const hasField =
+    (goal as any).showInDashboardBanner === true ||
+    (goal as any).dashboardBanner === true ||
+    (goal as any).isBannerGoal === true;
+  // Exclude binned goals (status 4)
+  const status = Number((goal as any).status ?? 0);
+  return (hasTag || hasField) && status !== 4;
+}
+
+function resolveGoalTheme(themeValue: any): { color: string; label: string } {
+  if (themeValue == null) return { color: GLOBAL_THEMES[0].color, label: GLOBAL_THEMES[0].label };
+  if (typeof themeValue === 'number') {
+    const t = getThemeById(themeValue);
+    return { color: t.color, label: t.label };
+  }
+  if (typeof themeValue === 'string' && themeValue.trim()) {
+    const t = getThemeByName(themeValue.trim());
+    return { color: t.color, label: t.label };
+  }
+  return { color: GLOBAL_THEMES[0].color, label: GLOBAL_THEMES[0].label };
+}
 
 const GlobalGoalFocusBanner: React.FC = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const navigate = useNavigate();
-  const [goals, setGoals] = useState<Goal[]>([]);
 
+  const [goals, setGoals]   = useState<Goal[]>([]);
+  const [stories, setStories] = useState<Story[]>([]);
+  const [pots, setPots]     = useState<Record<string, { name: string; balance: number }>>({});
+
+  // Goals subscription
   useEffect(() => {
-    if (!currentUser?.uid || !currentPersona) {
-      setGoals([]);
-      return;
-    }
-
+    if (!currentUser?.uid || !currentPersona) { setGoals([]); return; }
     const q = query(
       collection(db, 'goals'),
       where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona)
+      where('persona', '==', currentPersona),
     );
-
-    const unsubscribe = onSnapshot(
-      q,
-      (snapshot) => {
-        setGoals(snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Goal)));
-      },
-      (error) => {
-        if (String(error?.code || '').includes('permission-denied')) {
-          console.warn('GlobalGoalFocusBanner: goals not accessible', error.code);
-        } else {
-          console.error('GlobalGoalFocusBanner: snapshot error', error);
-        }
-      }
+    const unsub = onSnapshot(q,
+      (snap) => setGoals(snap.docs.map((d) => ({ id: d.id, ...d.data() } as Goal))),
+      (err) => console.warn('GlobalGoalFocusBanner goals:', err.code),
     );
-
-    return () => unsubscribe();
+    return () => unsub();
   }, [currentUser?.uid, currentPersona]);
 
-  if (goals.length === 0) return null;
+  // Stories subscription (for per-goal completion progress)
+  useEffect(() => {
+    if (!currentUser?.uid || !currentPersona) { setStories([]); return; }
+    const q = query(
+      collection(db, 'stories'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+    );
+    const unsub = onSnapshot(q,
+      (snap) => setStories(snap.docs.map((d) => ({ id: d.id, ...d.data() } as Story))),
+      (err) => console.warn('GlobalGoalFocusBanner stories:', err.code),
+    );
+    return () => unsub();
+  }, [currentUser?.uid, currentPersona]);
+
+  // Monzo pots subscription (for savings progress)
+  useEffect(() => {
+    if (!currentUser?.uid) { setPots({}); return; }
+    const q = query(collection(db, 'monzo_pots'), where('ownerUid', '==', currentUser.uid));
+    const unsub = onSnapshot(q,
+      (snap) => {
+        const map: Record<string, { name: string; balance: number }> = {};
+        snap.docs.forEach((d) => {
+          const data = d.data();
+          if (data.potId) map[data.potId] = { name: data.name || '', balance: data.balance || 0 };
+        });
+        setPots(map);
+      },
+      () => { /* non-critical */ },
+    );
+    return () => unsub();
+  }, [currentUser?.uid]);
+
+  const bannerGoals = useMemo(
+    () => goals.filter(isBannerEligible).sort((a, b) => String(a.title || '').localeCompare(String(b.title || ''))),
+    [goals],
+  );
+
+  // Per-goal story completion stats
+  const storyStats = useMemo(() => {
+    const map = new Map<string, { total: number; done: number }>();
+    for (const s of stories) {
+      const gid = (s as any).goalId;
+      if (!gid) continue;
+      const status = Number((s as any).status ?? 0);
+      if (status === 4) continue;
+      const cur = map.get(gid) ?? { total: 0, done: 0 };
+      cur.total++;
+      if (status === 3) cur.done++;
+      map.set(gid, cur);
+    }
+    return map;
+  }, [stories]);
+
+  if (bannerGoals.length === 0) return null;
 
   return (
-    <RotatingGoalFocusBanner
-      goals={goals}
-      onOpenGoal={() => navigate('/goals')}
-    />
+    <div className="mb-2" style={{ fontSize: '0.85em' }}>
+      {/* Header row */}
+      <div
+        className="d-flex align-items-center justify-content-between mb-1"
+        style={{ paddingLeft: 2, paddingRight: 4 }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          <Target size={11} style={{ color: 'var(--muted)' }} />
+          <span style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--muted)' }}>
+            Focus Goals
+          </span>
+        </div>
+        <button
+          onClick={() => navigate('/focus-goals')}
+          style={{
+            background: 'none',
+            border: 'none',
+            padding: 0,
+            fontSize: 10,
+            color: 'var(--brand, #5f77dc)',
+            cursor: 'pointer',
+            textDecoration: 'underline',
+          }}
+        >
+          View all
+        </button>
+      </div>
+
+      {/* Goal cards — horizontal scroll if many */}
+      <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 2 }}>
+        {bannerGoals.map((goal) => {
+          const { color: themeColor, label: themeLabel } = resolveGoalTheme((goal as any).theme);
+          const stats   = storyStats.get(goal.id);
+          const total   = stats?.total ?? null;
+          const done    = stats?.done  ?? null;
+          const progressPercent = total ? Math.round(((done ?? 0) / total) * 100) : undefined;
+
+          // KPI label: show first KPI name + target, truncated
+          const kpis = Array.isArray((goal as any).kpis) ? (goal as any).kpis : [];
+          const kpiLabel = kpis.length > 0
+            ? kpis.slice(0, 2).map((k: any) => `${k.name}: ${k.target}${k.unit ?? ''}`).join(' · ')
+            : undefined;
+
+          // Savings progress
+          const potId      = (goal as any).monzoPotId || (goal as any).linkedPotId || (goal as any).potId;
+          const potBalance = potId && pots[potId] ? pots[potId].balance : 0; // pence
+          const estimated  = Number((goal as any).estimatedCost || 0);
+          const hasSavings = estimated > 0 && potId;
+          const savingsPct = hasSavings
+            ? Math.min(100, Math.round(((potBalance / 100) / estimated) * 100))
+            : null;
+
+          // Build a combined kpiLabel including savings if present
+          const displayKpiLabel = [
+            kpiLabel,
+            savingsPct != null ? `Savings ${savingsPct}%` : null,
+          ].filter(Boolean).join(' · ') || undefined;
+
+          return (
+            <div key={goal.id} style={{ flexShrink: 0, width: 180 }}>
+              <GoalCard
+                goal={goal}
+                themeColor={themeColor}
+                themeLabel={themeLabel}
+                detailLevel="compact"
+                isFocusAligned
+                progressPercent={progressPercent}
+                totalStories={total}
+                doneStories={done}
+                kpiLabel={displayKpiLabel}
+                onClick={() => navigate('/focus-goals')}
+              />
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 };
 
