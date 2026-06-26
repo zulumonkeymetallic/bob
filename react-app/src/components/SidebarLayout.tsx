@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Container, Nav, Navbar, Button, Offcanvas } from 'react-bootstrap';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import {
@@ -85,6 +85,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
     } catch { return true; }
   });
   const toggleNavCollapsed = () => {
+    setFlyoutGroup(null);
     setNavCollapsed((prev) => {
       const next = !prev;
       try { localStorage.setItem('navCollapsedV3', next ? '1' : '0'); } catch { }
@@ -93,6 +94,24 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   };
   // Start collapsed by default
   const [expandedGroups, setExpandedGroups] = useState<string[]>([]);
+  const [flyoutGroup, setFlyoutGroup] = useState<string | null>(null);
+  const flyoutRef = useRef<HTMLDivElement>(null);
+  const railRef = useRef<HTMLDivElement>(null);
+
+  // Close flyout on click-outside
+  useEffect(() => {
+    if (!flyoutGroup) return;
+    const handler = (e: MouseEvent) => {
+      if (
+        flyoutRef.current && !flyoutRef.current.contains(e.target as Node) &&
+        railRef.current  && !railRef.current.contains(e.target as Node)
+      ) {
+        setFlyoutGroup(null);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [flyoutGroup]);
   const { selectedSprintId: globalSprintId, setSelectedSprintId: setGlobalSprintId } = useSprint();
   const { isVisible: isRightSidebarVisible, isCollapsed: isRightSidebarCollapsed } = useSidebar();
   const [assistantOpen, setAssistantOpen] = useState(false);
@@ -330,22 +349,36 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
               <img src="/logo192.png" alt="BOB" style={{ width: '26px', height: '26px', objectFit: 'contain' }} />
             </div>
 
-            {/* Nav group icons — lucide-react for reliable rendering */}
-            <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', scrollbarWidth: 'none', paddingTop: '4px', paddingBottom: '4px' }}>
+            {/* Nav group icons — click opens flyout, title gives native tooltip */}
+            <div ref={railRef} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', scrollbarWidth: 'none' as any, paddingTop: '4px', paddingBottom: '4px' }}>
               {navigationGroups.map((group) => {
                 const Icon = group.lucideIcon;
+                const isActive = flyoutGroup === group.label;
                 return (
                   <div
                     key={group.label}
                     title={group.label}
-                    onClick={() => {
-                      setNavCollapsed(false);
-                      try { localStorage.setItem('navCollapsedV3', '0'); } catch { }
-                      setExpandedGroups((prev) => prev.includes(group.label) ? prev : [...prev, group.label]);
+                    onClick={() => setFlyoutGroup(isActive ? null : group.label)}
+                    style={{
+                      display: 'flex', justifyContent: 'center', alignItems: 'center',
+                      height: '36px', cursor: 'pointer',
+                      color: isActive ? 'var(--notion-accent, #2563eb)' : 'var(--notion-text)',
+                      background: isActive ? 'var(--notion-hover)' : 'transparent',
+                      transition: 'background 0.12s ease, color 0.12s ease',
+                      borderRadius: '6px', margin: '1px 6px',
                     }}
-                    style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '36px', cursor: 'pointer', color: 'var(--notion-text)', transition: 'background 0.12s ease, color 0.12s ease', borderRadius: '6px', margin: '1px 6px' }}
-                    onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--notion-hover)'; e.currentTarget.style.color = 'var(--notion-accent, #2563eb)'; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--notion-text)'; }}
+                    onMouseEnter={(e) => {
+                      if (!isActive) {
+                        e.currentTarget.style.background = 'var(--notion-hover)';
+                        e.currentTarget.style.color = 'var(--notion-accent, #2563eb)';
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      if (!isActive) {
+                        e.currentTarget.style.background = 'transparent';
+                        e.currentTarget.style.color = 'var(--notion-text)';
+                      }
+                    }}
                   >
                     {Icon ? <Icon size={17} strokeWidth={1.8} /> : <i className={`fas fa-${group.icon}`} style={{ fontSize: '15px' }} />}
                   </div>
@@ -491,6 +524,65 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
           </>
         )}
       </div>
+
+      {/* Collapsed sidebar flyout — shows sub-items for the active group */}
+      {navCollapsed && flyoutGroup && (() => {
+        const group = navigationGroups.find((g) => g.label === flyoutGroup);
+        if (!group) return null;
+        const GroupIcon = group.lucideIcon;
+        return (
+          <div
+            ref={flyoutRef}
+            style={{
+              position: 'fixed',
+              left: 56,
+              top: 0,
+              height: '100vh',
+              width: 210,
+              background: 'var(--panel)',
+              borderRight: '1px solid var(--notion-border)',
+              boxShadow: '4px 0 20px rgba(0,0,0,0.14)',
+              zIndex: 1040,
+              display: 'flex',
+              flexDirection: 'column',
+              overflowY: 'auto',
+            }}
+          >
+            {/* Group header */}
+            <div style={{ padding: '14px 16px 10px', borderBottom: '1px solid var(--notion-border)', display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+              {GroupIcon && <GroupIcon size={15} strokeWidth={2} style={{ color: 'var(--notion-accent, #2563eb)' }} />}
+              <span style={{ fontWeight: 600, fontSize: '0.9rem', color: 'var(--notion-text)' }}>{group.label}</span>
+            </div>
+            {/* Sub-items */}
+            <div style={{ flex: 1, overflowY: 'auto', padding: '6px 0' }}>
+              {group.items.map((item) => (
+                <div
+                  key={item.path}
+                  onClick={() => {
+                    navigate(item.path);
+                    setFlyoutGroup(null);
+                  }}
+                  style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 16px', cursor: 'pointer', fontSize: '0.875rem', color: 'var(--notion-text)', borderRadius: 0, transition: 'background 0.1s' }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--notion-hover)'; e.currentTarget.style.color = 'var(--notion-accent, #2563eb)'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--notion-text)'; }}
+                >
+                  <i className={`fas fa-${item.icon}`} style={{ width: 14, fontSize: '13px', opacity: 0.7 }} />
+                  {item.label}
+                </div>
+              ))}
+            </div>
+            {/* Expand full sidebar link */}
+            <div
+              onClick={() => { setFlyoutGroup(null); toggleNavCollapsed(); }}
+              style={{ borderTop: '1px solid var(--notion-border)', padding: '10px 16px', cursor: 'pointer', fontSize: '0.8rem', color: 'var(--notion-text-gray)', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}
+              onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--notion-text)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--notion-text-gray)'; }}
+            >
+              <ChevronRight size={13} /> Expand sidebar
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Mobile Header */}
       <div className="d-md-none fixed-top" style={{
