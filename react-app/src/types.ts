@@ -481,6 +481,8 @@ export interface CalendarBlock {
   calendarMatchConfidenceTier?: 'high' | 'medium' | 'low' | string;
   // Goal linking fields (Gap 1 — Calendar-to-goal linking)
   activityType?: 'run' | 'swim' | 'cycle' | 'gym' | 'fitness' | string | null;
+  /** Identifies the subsystem that created this block (e.g. 'gcal', 'theme_allocation', 'sprint_forward_plan') */
+  source?: string;
 }
 
 export interface PlanningPrefs {

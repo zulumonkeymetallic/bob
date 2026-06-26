@@ -4,7 +4,7 @@
  * For each active sprint, sorts all stories + tasks by effective score
  * (aiCriticalityScore + critical-priority bonus + userPriorityRank boost),
  * then allocates each item's remaining points across future working days,
- * packing blocks back-to-back from WORK_START_HOUR.
+ * packing blocks into free slots derived from the waking window (05:00–21:00) minus GCal commitments.
  *
  * Produces calendar_blocks with source='sprint_forward_plan'.
  * The existing calendarSync step pushes these to Google Calendar.
@@ -20,11 +20,12 @@ const { DateTime } = require('luxon');
 
 if (!admin.apps.length) admin.initializeApp();
 
-const MINS_PER_POINT   = 60;   // 1 story point = 1 hour of work
-const DEFAULT_DAILY_MINS = 360; // 6 working hours available per day (8h minus meetings/admin)
-const WORK_START_HOUR  = 9;    // 09:00 local time
-const SOURCE_TAG       = 'sprint_forward_plan';
-const RECURRING_TYPES  = new Set(['chore', 'routine', 'habit']);
+const MINS_PER_POINT    = 60;   // 1 story point = 1 hour of work
+const WAKING_START_HOUR = 5;    // 05:00 — sleep ends
+const WAKING_END_HOUR   = 21;   // 21:00 — sleep begins
+const WAKING_MINS       = (WAKING_END_HOUR - WAKING_START_HOUR) * 60; // 960
+const SOURCE_TAG        = 'sprint_forward_plan';
+const RECURRING_TYPES   = new Set(['chore', 'routine', 'habit']);
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -72,6 +73,87 @@ function pointsRemaining(item) {
 function isDoneStatus(status) {
   const s = String(status ?? '').toLowerCase().trim();
   return s === '4' || s === 'done' || s === 'complete' || s === 'completed';
+}
+
+// ─── capacity helpers ────────────────────────────────────────────────────────
+
+/**
+ * Fetch committed calendar blocks (gcal + theme_allocation) for a date range
+ * and return a per-day map of free slots within the waking window.
+ *
+ * A "free slot" is a continuous interval not covered by any committed block.
+ * Returns Map<isoDate, [{startMs, endMs}]> — slots are non-overlapping and sorted.
+ */
+async function buildFreeSlotMap(db, uid, fromMs, untilMs, zone) {
+  const committedSnap = await db.collection('calendar_blocks')
+    .where('ownerUid', '==', uid)
+    .where('start', '>=', fromMs)
+    .where('start', '<',  untilMs)
+    .get();
+
+  // Group committed blocks by iso date, clamped to waking window
+  const busyByDay = new Map(); // isoDate → [{s, e}]
+
+  for (const doc of committedSnap.docs) {
+    const data = doc.data();
+    const src  = String(data.source || '');
+    // Only hard commitments reduce capacity; BOB's own plan output does not
+    if (src !== 'gcal' && src !== 'theme_allocation') continue;
+    if (data.status === 'superseded') continue;
+
+    const blockStart = toMs(data.start);
+    const blockEnd   = toMs(data.end ?? (data.start + 3_600_000));
+    if (!blockStart || !blockEnd) continue;
+
+    const isoDate = DateTime.fromMillis(blockStart).setZone(zone).toISODate();
+    const dayDt   = DateTime.fromISO(isoDate, { zone });
+    const wakingStart = dayDt.set({ hour: WAKING_START_HOUR, minute: 0, second: 0, millisecond: 0 }).toMillis();
+    const wakingEnd   = dayDt.set({ hour: WAKING_END_HOUR,   minute: 0, second: 0, millisecond: 0 }).toMillis();
+
+    const s = Math.max(blockStart, wakingStart);
+    const e = Math.min(blockEnd,   wakingEnd);
+    if (e <= s) continue;
+
+    const existing = busyByDay.get(isoDate) || [];
+    existing.push({ s, e });
+    busyByDay.set(isoDate, existing);
+  }
+
+  // For each day in the range, subtract busy intervals from the waking window
+  const freeSlotMap = new Map(); // isoDate → [{startMs, endMs}]
+  let cursor = DateTime.fromMillis(fromMs).setZone(zone).startOf('day');
+  const endDt = DateTime.fromMillis(untilMs).setZone(zone);
+
+  while (cursor <= endDt) {
+    const iso = cursor.toISODate();
+    const wakingStart = cursor.set({ hour: WAKING_START_HOUR, minute: 0, second: 0, millisecond: 0 }).toMillis();
+    const wakingEnd   = cursor.set({ hour: WAKING_END_HOUR,   minute: 0, second: 0, millisecond: 0 }).toMillis();
+
+    const busy = (busyByDay.get(iso) || [])
+      .sort((a, b) => a.s - b.s);
+
+    // Subtract busy intervals from [wakingStart, wakingEnd]
+    const free = [];
+    let pos = wakingStart;
+    for (const { s, e } of busy) {
+      if (s > pos) free.push({ startMs: pos, endMs: Math.min(s, wakingEnd) });
+      pos = Math.max(pos, e);
+      if (pos >= wakingEnd) break;
+    }
+    if (pos < wakingEnd) free.push({ startMs: pos, endMs: wakingEnd });
+
+    freeSlotMap.set(iso, free.filter(sl => sl.endMs > sl.startMs));
+    cursor = cursor.plus({ days: 1 });
+  }
+
+  return freeSlotMap;
+}
+
+/**
+ * Total available minutes for a day from its free slots.
+ */
+function availableMinsForDay(freeSlots) {
+  return freeSlots.reduce((sum, sl) => sum + (sl.endMs - sl.startMs) / 60_000, 0);
 }
 
 // ─── per-user run ────────────────────────────────────────────────────────────
@@ -160,26 +242,23 @@ async function runForUser(db, uid, options = {}) {
     return b._score - a._score;
   });
 
-  // ── 5. Build working-day capacity map: tomorrow → latest sprint end ────────
+  // ── 5. Build GCal-aware free-slot map: tomorrow → latest sprint end ─────────
   const latestEndMs = Math.max(...activeSprints.map(s => toMs(s.endDate || s.targetDate) || 0));
-  const endDt       = DateTime.fromMillis(latestEndMs).setZone(zone);
+  const freeSlotMap = await buildFreeSlotMap(db, uid, tomorrowStart.toMillis(), latestEndMs + 86_400_000, zone);
 
-  const WEEKEND_MINS = 240; // shorter weekend capacity — 4h
-  const dayCapacity = new Map(); // isoDate → { remainingMins, dt }
-  let cursor = tomorrowStart;
-  while (cursor <= endDt) {
-    const isWeekend = cursor.weekday >= 6; // Sat=6, Sun=7
-    const mins = isWeekend ? WEEKEND_MINS : DEFAULT_DAILY_MINS;
-    dayCapacity.set(cursor.toISODate(), { remainingMins: mins, dt: cursor });
-    cursor = cursor.plus({ days: 1 });
+  // day state: remaining free-slot queue per day (mutable pointers into the slot list)
+  // We clone the slot arrays so we can consume them as items are allocated.
+  const daySlots = new Map(); // isoDate → [{startMs, endMs}] (remaining free time)
+  for (const [iso, slots] of freeSlotMap) {
+    daySlots.set(iso, slots.map(sl => ({ ...sl }))); // shallow clone
   }
 
-  const workDays = Array.from(dayCapacity.keys()).sort();
+  const workDays = Array.from(daySlots.keys()).sort();
   if (workDays.length === 0) {
     return { user: uid, blocks: 0, items: 0, reason: 'no working days left in sprint' };
   }
 
-  // ── 6. Allocate items to days ──────────────────────────────────────────────
+  // ── 6. Allocate items into free slots ─────────────────────────────────────
   const blocksToCreate = [];
 
   for (const item of items) {
@@ -187,45 +266,51 @@ async function runForUser(db, uid, options = {}) {
     if (minsLeft <= 0) continue;
 
     for (const iso of workDays) {
-      const dayData = dayCapacity.get(iso);
-      if (!dayData || dayData.remainingMins <= 0) continue;
+      const slots = daySlots.get(iso);
+      if (!slots || slots.length === 0) continue;
 
-      const usedMins   = DEFAULT_DAILY_MINS - dayData.remainingMins;
-      const allocated  = Math.min(minsLeft, dayData.remainingMins);
-      const startMs    = dayData.dt.set({ hour: WORK_START_HOUR, minute: 0, second: 0, millisecond: 0 }).toMillis()
-                         + usedMins * 60 * 1000;
-      const endMs      = startMs + allocated * 60 * 1000;
+      // Pack into as many consecutive free slots as needed for this item on this day
+      while (minsLeft > 0 && slots.length > 0) {
+        const slot = slots[0];
+        const slotMins = (slot.endMs - slot.startMs) / 60_000;
+        if (slotMins <= 0) { slots.shift(); continue; }
 
-      dayData.remainingMins -= allocated;
-      minsLeft -= allocated;
+        const allocated  = Math.min(minsLeft, slotMins);
+        const blockStart = slot.startMs;
+        const blockEnd   = blockStart + allocated * 60_000;
 
-      const ptsAllocated = Math.round((allocated / MINS_PER_POINT) * 10) / 10;
-      blocksToCreate.push({
-        id: '',   // filled below
-        ownerUid: uid,
-        // calendarSync resolves entity via storyId/taskId — not entityId/entityType
-        ...(item._type === 'story' ? { storyId: item.id } : { taskId: item.id }),
-        entityType: item._type,
-        title: `${item.title || 'Untitled'} (${ptsAllocated}pt)`,
-        // calendarSync reads block.start / block.end for time
-        start: startMs,
-        end:   endMs,
-        startTime: startMs,
-        endTime:   endMs,
-        startMs,
-        endMs,
-        date: iso,
-        source: SOURCE_TAG,
-        persona: String(item.persona || 'personal'),
-        sprintId: item.sprintId || null,
-        score:    item._score,
-        userPriorityRank: item.userPriorityRank || null,
-        minsAllocated: allocated,
-        googleEventId: null, // explicit null so pushPendingBlocks query catches it
-        synced: false,
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
+        // Consume from slot
+        slot.startMs += allocated * 60_000;
+        if (slot.startMs >= slot.endMs) slots.shift();
+
+        minsLeft -= allocated;
+
+        const ptsAllocated = Math.round((allocated / MINS_PER_POINT) * 10) / 10;
+        blocksToCreate.push({
+          id: '',
+          ownerUid: uid,
+          ...(item._type === 'story' ? { storyId: item.id } : { taskId: item.id }),
+          entityType: item._type,
+          title: `${item.title || 'Untitled'} (${ptsAllocated}pt)`,
+          start:     blockStart,
+          end:       blockEnd,
+          startTime: blockStart,
+          endTime:   blockEnd,
+          startMs:   blockStart,
+          endMs:     blockEnd,
+          date: iso,
+          source: SOURCE_TAG,
+          persona: String(item.persona || 'personal'),
+          sprintId: item.sprintId || null,
+          score:    item._score,
+          userPriorityRank: item.userPriorityRank || null,
+          minsAllocated: allocated,
+          googleEventId: null,
+          synced: false,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      }
 
       if (minsLeft <= 0) break;
     }

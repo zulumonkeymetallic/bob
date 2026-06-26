@@ -7,6 +7,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useSprint } from '../contexts/SprintContext';
 import { Sprint, Story, Task, Goal } from '../types';
+import { buildCapacityMap, sumCapacityRange } from '../utils/dayCapacityUtils';
 
 interface CompactSprintMetricsProps {
   selectedSprintId?: string;
@@ -162,33 +163,38 @@ const CompactSprintMetrics: React.FC<CompactSprintMetricsProps> = ({
   useEffect(() => {
     if (!currentUser || !sprint) return;
 
-    const start = new Date(sprint.startDate);
-    const end = new Date(sprint.endDate);
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    // Remaining capacity = today → sprint end (not full sprint, which includes passed days)
+    const fromMs = todayStart.getTime();
+    const toMs   = new Date(sprint.endDate).getTime();
 
-    // Query blocks within sprint range
+    // Query only remaining blocks
     const q = query(
       collection(db, 'calendar_blocks'),
       where('ownerUid', '==', currentUser.uid),
-      where('start', '>=', start.getTime()),
-      where('start', '<=', end.getTime())
+      where('start', '>=', fromMs),
+      where('start', '<=', toMs)
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      let usedMinutes = 0;
-      snapshot.forEach(doc => {
+      const blocks = snapshot.docs.map((d) => ({ id: d.id, ...d.data() })) as any[];
+      const capMap = buildCapacityMap(fromMs, toMs, blocks);
+      const totals = sumCapacityRange(capMap, fromMs, toMs);
+
+      // Planned = sprint_forward_plan blocks (what BOB has scheduled)
+      let plannedMinutes = 0;
+      snapshot.forEach((doc) => {
         const data = doc.data();
-        usedMinutes += (data.end - data.start) / (1000 * 60);
+        if (data.source === 'sprint_forward_plan') {
+          plannedMinutes += (data.end - data.start) / 60_000;
+        }
       });
 
-      // Calculate total capacity: 8 hours per day * number of days
-      const days = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
-      const totalMinutes = days * 8 * 60; // 8 hours per day
-      const remainingMinutes = Math.max(0, totalMinutes - usedMinutes);
-
       setCapacity({
-        total: Math.round(totalMinutes / 60),
-        used: Math.round(usedMinutes / 60),
-        remaining: Math.round(remainingMinutes / 60)
+        total: Math.round(totals.availableMins / 60),
+        used: Math.round(plannedMinutes / 60),
+        remaining: Math.round(Math.max(0, totals.availableMins - plannedMinutes) / 60),
       });
     });
 

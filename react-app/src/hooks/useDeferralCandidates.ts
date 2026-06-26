@@ -7,6 +7,7 @@ import { useFocusGoals } from './useFocusGoals';
 import { getActiveFocusLeafGoalIds } from '../utils/goalHierarchy';
 import { deriveSprintCapacityPoints } from '../utils/plannerCapacity';
 import { buildSprintFillPlan } from '../utils/deferralHeuristics';
+import { buildCapacityMap, findNextFreeDay } from '../utils/dayCapacityUtils';
 import type { CalendarBlock } from '../types';
 
 export interface OverCapacityMove {
@@ -43,7 +44,6 @@ export interface DeferralCandidate {
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const LOOK_AHEAD_DAYS = 14;
 const RECURRING_TYPES = new Set(['chore', 'routine', 'habit']);
 
 function startOfDayMs(ms: number): number {
@@ -60,63 +60,7 @@ function todayIso(): string {
   return isoDate(Date.now());
 }
 
-function countWorkingDays(startMs: number, endMs: number): number {
-  let count = 0;
-  let cur = startOfDayMs(startMs);
-  const end = startOfDayMs(endMs);
-  while (cur <= end) {
-    const dow = new Date(cur).getDay();
-    if (dow >= 1 && dow <= 5) count++;
-    cur += DAY_MS;
-  }
-  return Math.max(1, count);
-}
 
-function buildDayLoadHoursMap(blocks: CalendarBlock[], fromMs: number, toMs: number): Map<string, number> {
-  const map = new Map<string, number>();
-  for (const block of blocks) {
-    if (block.status === 'superseded') continue;
-    if (block.start < fromMs || block.start >= toMs) continue;
-    const key = isoDate(block.start);
-    const hours = Math.max(0, (block.end - block.start) / (60 * 60 * 1000));
-    map.set(key, (map.get(key) ?? 0) + hours);
-  }
-  return map;
-}
-
-/**
- * First working day from tomorrow where booked + effort fits within daily capacity.
- * Caps search at sprintEndMs (for focus stories scheduled within the sprint).
- * Pass sprintEndMs = 0 to search the full LOOK_AHEAD_DAYS window (for tasks).
- */
-function findNextFreeDay(
-  effortHours: number,
-  dayLoadMap: Map<string, number>,
-  dailyCapacityHours: number,
-  sprintEndMs = 0,
-): number {
-  const tomorrow = startOfDayMs(Date.now()) + DAY_MS;
-  const horizonMs = sprintEndMs > tomorrow
-    ? startOfDayMs(sprintEndMs)
-    : tomorrow + LOOK_AHEAD_DAYS * DAY_MS;
-
-  let cur = tomorrow;
-  while (cur <= horizonMs) {
-    const dow = new Date(cur).getDay();
-    if (dow >= 1 && dow <= 5) {
-      const booked = dayLoadMap.get(isoDate(cur)) ?? 0;
-      if (booked + effortHours <= dailyCapacityHours) return cur;
-    }
-    cur += DAY_MS;
-  }
-  // Fallback: last working day at or before horizon
-  cur = horizonMs;
-  while (cur >= tomorrow) {
-    if (new Date(cur).getDay() >= 1 && new Date(cur).getDay() <= 5) return cur;
-    cur -= DAY_MS;
-  }
-  return tomorrow;
-}
 
 function getManualPriorityRank(entity: any): number | null {
   const explicit = Number(entity?.userPriorityRank);
@@ -300,8 +244,10 @@ export const useDeferralCandidates = () => {
       return;
     }
     setBlocksReady(false);
-    const fromMs = startOfDayMs(Date.now()) + DAY_MS;
-    const toMs = fromMs + LOOK_AHEAD_DAYS * DAY_MS;
+    const fromMs = startOfDayMs(Date.now()); // include today
+    const sprintEnd = Number((currentSprint as any)?.endDate || 0);
+    // Extend to sprint end or 30 days so capacity map covers the full planning window
+    const toMs = Math.max(fromMs + 30 * DAY_MS, sprintEnd);
     const q = query(
       collection(db, 'calendar_blocks'),
       where('ownerUid', '==', currentUser.uid),
@@ -314,27 +260,18 @@ export const useDeferralCandidates = () => {
       () => { setCalendarBlocks([]); setBlocksReady(true); },
     );
     return () => unsub();
-  }, [currentUser?.uid]);
+  }, [currentUser?.uid, currentSprint]);
 
   const sprintEndMs = useMemo(
     () => Number((currentSprint as any)?.endDate || 0),
     [currentSprint],
   );
 
-  const dailyCapacityHours = useMemo(() => {
-    const totalPoints = deriveSprintCapacityPoints(currentSprint as any);
-    const startMs = Number((currentSprint as any)?.startDate || 0);
-    if (startMs && sprintEndMs && sprintEndMs > startMs) {
-      return totalPoints / countWorkingDays(startMs, sprintEndMs);
-    }
-    return 6;
-  }, [currentSprint, sprintEndMs]);
-
-  const dayLoadMap = useMemo(() => {
-    const fromMs = startOfDayMs(Date.now()) + DAY_MS;
-    const toMs = fromMs + LOOK_AHEAD_DAYS * DAY_MS;
-    return buildDayLoadHoursMap(calendarBlocks, fromMs, toMs);
-  }, [calendarBlocks]);
+  const capacityMap = useMemo(() => {
+    const fromMs = startOfDayMs(Date.now()); // include today
+    const toMs   = Math.max(fromMs + 30 * DAY_MS, sprintEndMs || 0);
+    return buildCapacityMap(fromMs, toMs, calendarBlocks);
+  }, [calendarBlocks, sprintEndMs]);
 
   const focusGoalIds = useMemo(
     () => getActiveFocusLeafGoalIds(activeFocusGoals),
@@ -366,7 +303,7 @@ export const useDeferralCandidates = () => {
         // No due date yet — propose one based on capacity so nightly planner can slot it
         recommendedAction = 'set_due_date';
         targetDateMs = blocksReady
-          ? findNextFreeDay(inferEffortHours(story, 'story'), dayLoadMap, dailyCapacityHours, sprintEndMs)
+          ? findNextFreeDay(inferEffortHours(story, 'story'), capacityMap, sprintEndMs)
           : (sprintEndMs || startOfDayMs(Date.now()) + 7 * DAY_MS);
       } else {
         recommendedAction = nextSprint?.id ? 'next_sprint' : 'next_sprint_pending';
@@ -403,7 +340,7 @@ export const useDeferralCandidates = () => {
       const codes = buildReasonCodes(task, 'task', parentStory);
       const goalId = String(task.goalId || parentStory?.goalId || '').trim();
       const targetDateMs = blocksReady
-        ? findNextFreeDay(inferEffortHours(task, 'task'), dayLoadMap, dailyCapacityHours)
+        ? findNextFreeDay(inferEffortHours(task, 'task'), capacityMap)
         : startOfDayMs(Date.now()) + DAY_MS;
       result.push({
         id: task._id,
@@ -428,7 +365,7 @@ export const useDeferralCandidates = () => {
     return result;
   }, [
     stories, tasks, currentSprint, nextSprint, focusGoalIds,
-    dayLoadMap, dailyCapacityHours, blocksReady, storiesReady, tasksReady, sprintEndMs,
+    capacityMap, blocksReady, storiesReady, tasksReady, sprintEndMs,
   ]);
 
   /**
