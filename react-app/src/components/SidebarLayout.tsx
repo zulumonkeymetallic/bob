@@ -1,6 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { Container, Nav, Navbar, Button, Offcanvas } from 'react-bootstrap';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
+import {
+  BookOpen, BookText, Calendar, CalendarDays, CheckSquare, ChevronLeft,
+  ChevronRight, ClipboardList, Globe, Heart, LayoutDashboard, Network,
+  PiggyBank, ScrollText, Settings, Target, LucideIcon,
+} from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useTheme } from '../contexts/ThemeContext';
@@ -31,6 +36,7 @@ interface NavigationGroup {
   label: string;
   items: NavigationItem[];
   icon: string;
+  lucideIcon?: LucideIcon;
 }
 
 interface NavigationItem {
@@ -97,6 +103,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       {
         label: 'Overview',
         icon: 'home',
+        lucideIcon: LayoutDashboard,
       items: [
         { label: 'Overview', path: '/dashboard', icon: 'home' },
         { label: 'Daily Check-in', path: '/dashboard/daily-checkin', icon: 'clipboard-check' },
@@ -114,6 +121,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
     {
       label: 'Health',
       icon: 'heartbeat',
+      lucideIcon: Heart,
       items: [
         { label: 'Fitness', path: '/fitness', icon: 'th' },
         { label: 'AI Coach', path: '/coach', icon: 'dumbbell' },
@@ -126,6 +134,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
     {
       label: 'Goals',
       icon: 'bullseye',
+      lucideIcon: Target,
       items: [
         { label: 'Goals List', path: '/goals', icon: 'list' },
         { label: 'Focus Goals', path: '/focus-goals', icon: 'bullseye' },
@@ -138,6 +147,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
     {
       label: 'Plan',
       icon: 'sitemap',
+      lucideIcon: Network,
       items: [
         { label: 'Year Planner', path: '/planner?level=year', icon: 'route' },
         { label: 'Gannt chart', path: '/planner?level=gantt', icon: 'stream' },
@@ -148,6 +158,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
     {
       label: 'Finance',
       icon: 'piggy-bank',
+      lucideIcon: PiggyBank,
       items: [
         { label: 'Dashboard', path: '/finance/dashboard', icon: 'chart-line' },
         { label: 'Budgets', path: '/finance/budgets', icon: 'wallet' },
@@ -161,6 +172,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
     {
       label: 'Stories',
       icon: 'book',
+      lucideIcon: BookOpen,
       items: [
         { label: 'Stories List', path: '/stories', icon: 'list' },
         { label: 'Kanban Board', path: '/sprints/kanban', icon: 'columns' },
@@ -170,6 +182,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
     {
       label: 'Journals',
       icon: 'book-open',
+      lucideIcon: BookText,
       items: [
         { label: 'Journal Entries', path: '/journals', icon: 'book-open' },
         { label: 'Journal Insights', path: '/journals/insights', icon: 'chart-line' }
@@ -178,6 +191,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
     {
       label: 'Backlog',
       icon: 'clipboard-list',
+      lucideIcon: ClipboardList,
       items: [
         { label: 'Games', path: '/games-backlog', icon: 'gamepad' },
         { label: 'Shows', path: '/shows-backlog', icon: 'tv' },
@@ -189,6 +203,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
     {
       label: 'Tasks',
       icon: 'tasks',
+      lucideIcon: CheckSquare,
       items: [
         { label: 'Tasks List', path: '/tasks', icon: 'list' }
       ]
@@ -196,6 +211,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
     {
       label: 'Sprints',
       icon: 'calendar-alt',
+      lucideIcon: CalendarDays,
       items: [
         { label: 'Sprint Management', path: '/sprints/management', icon: 'tasks' },
         { label: 'Sprint Kanban', path: '/sprints/kanban', icon: 'columns' },
@@ -207,6 +223,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
     {
       label: 'Calendar',
       icon: 'calendar',
+      lucideIcon: Calendar,
       items: [
         { label: 'Calendar', path: '/calendar', icon: 'calendar' },
         { label: 'Weekly Capacity', path: '/calendar/planner', icon: 'palette' },
@@ -218,6 +235,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
     {
       label: 'Travel',
       icon: 'globe',
+      lucideIcon: Globe,
       items: [
         { label: 'Travel Map', path: '/travel', icon: 'map' }
       ]
@@ -226,6 +244,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
     {
       label: 'Settings',
       icon: 'cog',
+      lucideIcon: Settings,
       items: [
         { label: 'Profile', path: '/settings/profile', icon: 'user' },
         { label: 'AI', path: '/settings/ai', icon: 'robot' },
@@ -239,6 +258,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
     {
       label: 'Logs',
       icon: 'stream',
+      lucideIcon: ScrollText,
       items: [
         { label: 'Integration Logs', path: '/logs/integrations', icon: 'database' },
         { label: 'AI Diagnostics', path: '/logs/ai', icon: 'robot' },
@@ -305,57 +325,63 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         {navCollapsed ? (
           /* ── Collapsed icon rail ── */
           <>
-            {/* Logo + expand toggle */}
-            <div style={{ borderBottom: '1px solid var(--notion-border)', flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '10px 0 6px' }}>
-              <img src="/logo192.png" alt="BOB" style={{ width: '28px', height: '28px', objectFit: 'contain', marginBottom: '8px' }} />
-              <button
-                onClick={toggleNavCollapsed}
-                title="Expand sidebar"
-                style={{ background: 'none', border: 'none', color: 'var(--notion-text-gray)', cursor: 'pointer', fontSize: '13px', padding: '2px 6px', borderRadius: '4px' }}
-              >
-                <i className="fas fa-chevron-right" />
-              </button>
+            {/* Logo pinned at top */}
+            <div style={{ flexShrink: 0, display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '12px 0 8px', borderBottom: '1px solid var(--notion-border)' }}>
+              <img src="/logo192.png" alt="BOB" style={{ width: '26px', height: '26px', objectFit: 'contain' }} />
             </div>
 
-            {/* Nav group icons */}
-            <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', scrollbarWidth: 'thin', paddingTop: '4px' }}>
-              {navigationGroups.map((group) => (
-                <div
-                  key={group.label}
-                  title={group.label}
-                  onClick={() => {
-                    setNavCollapsed(false);
-                    try { localStorage.setItem('navCollapsedV3', '0'); } catch { }
-                    setExpandedGroups((prev) => prev.includes(group.label) ? prev : [...prev, group.label]);
-                  }}
-                  style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '10px 0', cursor: 'pointer', color: 'var(--notion-text-gray)', transition: 'all 0.15s ease' }}
-                  onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--notion-hover)'; e.currentTarget.style.color = 'var(--notion-text)'; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--notion-text-gray)'; }}
-                >
-                  <i className={`fas fa-${group.icon}`} style={{ fontSize: '15px' }} />
-                </div>
-              ))}
+            {/* Nav group icons — lucide-react for reliable rendering */}
+            <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', scrollbarWidth: 'none', paddingTop: '4px', paddingBottom: '4px' }}>
+              {navigationGroups.map((group) => {
+                const Icon = group.lucideIcon;
+                return (
+                  <div
+                    key={group.label}
+                    title={group.label}
+                    onClick={() => {
+                      setNavCollapsed(false);
+                      try { localStorage.setItem('navCollapsedV3', '0'); } catch { }
+                      setExpandedGroups((prev) => prev.includes(group.label) ? prev : [...prev, group.label]);
+                    }}
+                    style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '36px', cursor: 'pointer', color: 'var(--notion-text)', transition: 'background 0.12s ease, color 0.12s ease', borderRadius: '6px', margin: '1px 6px' }}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--notion-hover)'; e.currentTarget.style.color = 'var(--notion-accent, #2563eb)'; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--notion-text)'; }}
+                  >
+                    {Icon ? <Icon size={17} strokeWidth={1.8} /> : <i className={`fas fa-${group.icon}`} style={{ fontSize: '15px' }} />}
+                  </div>
+                );
+              })}
             </div>
 
-            {/* Bottom actions (icons only) */}
-            <div style={{ borderTop: '1px solid var(--notion-border)', padding: '8px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px' }}>
+            {/* Bottom: expand chevron + theme + sign out */}
+            <div style={{ flexShrink: 0, borderTop: '1px solid var(--notion-border)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px', padding: '6px 0' }}>
               <button
                 onClick={toggleTheme}
                 title={`Switch to ${theme === 'light' ? 'dark' : 'light'} mode`}
-                style={{ background: 'none', border: 'none', color: 'var(--notion-text-gray)', cursor: 'pointer', fontSize: '15px', padding: '6px', borderRadius: '4px' }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--notion-text)'; }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--notion-text-gray)'; }}
+                style={{ background: 'none', border: 'none', color: 'var(--notion-text)', cursor: 'pointer', padding: '7px', borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 36 }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--notion-hover)'; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'none'; }}
               >
-                <i className={`fas fa-${theme === 'light' ? 'moon' : 'sun'}`} />
+                <i className={`fas fa-${theme === 'light' ? 'moon' : 'sun'}`} style={{ fontSize: '14px' }} />
               </button>
               <button
                 onClick={onSignOut || signOut}
                 title="Sign out"
-                style={{ background: 'none', border: 'none', color: 'var(--notion-text-gray)', cursor: 'pointer', fontSize: '15px', padding: '6px', borderRadius: '4px' }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--notion-text)'; }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--notion-text-gray)'; }}
+                style={{ background: 'none', border: 'none', color: 'var(--notion-text)', cursor: 'pointer', padding: '7px', borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 36 }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--notion-hover)'; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'none'; }}
               >
-                <i className="fas fa-sign-out-alt" />
+                <i className="fas fa-sign-out-alt" style={{ fontSize: '14px' }} />
+              </button>
+              {/* Expand chevron — prominent, always at bottom */}
+              <button
+                onClick={toggleNavCollapsed}
+                title="Expand sidebar"
+                style={{ background: 'none', border: '1px solid var(--notion-border)', color: 'var(--notion-text)', cursor: 'pointer', padding: '5px', borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 36, marginTop: '2px' }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--notion-hover)'; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'none'; }}
+              >
+                <ChevronRight size={16} strokeWidth={2} />
               </button>
             </div>
           </>
@@ -371,9 +397,9 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
               <button
                 onClick={toggleNavCollapsed}
                 title="Collapse sidebar"
-                style={{ background: 'none', border: 'none', color: 'var(--notion-text-gray)', cursor: 'pointer', fontSize: '13px', padding: '2px 6px', borderRadius: '4px', flexShrink: 0 }}
+                style={{ background: 'none', border: '1px solid var(--notion-border)', color: 'var(--notion-text)', cursor: 'pointer', padding: '4px', borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, width: 28, height: 28 }}
               >
-                <i className="fas fa-chevron-left" />
+                <ChevronLeft size={15} strokeWidth={2} />
               </button>
             </div>
 
