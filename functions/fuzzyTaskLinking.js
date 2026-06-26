@@ -784,17 +784,19 @@ exports.nightlyStoryGoalLinking = onSchedule(
             if (!matches.length) {
               userRunCounts.no_match++;
               results.confidenceTierTotals.no_match++;
-              await ensureValidationTask({
-                db,
-                userId,
-                sourceType: 'story',
-                sourceId: story.id,
-                sourceRef: storyRef,
-                sourceTitle: story.title || storyRef,
-                reason: 'no_match',
-              });
-              results.validationTasksCreated++;
-              userValidationTasksCreated++;
+              if (ENABLE_FUZZY_VALIDATION_TASKS) {
+                await ensureValidationTask({
+                  db,
+                  userId,
+                  sourceType: 'story',
+                  sourceId: story.id,
+                  sourceRef: storyRef,
+                  sourceTitle: story.title || storyRef,
+                  reason: 'no_match',
+                });
+                results.validationTasksCreated++;
+                userValidationTasksCreated++;
+              }
               continue;
             }
 
@@ -865,22 +867,24 @@ exports.nightlyStoryGoalLinking = onSchedule(
               }
               userRunCounts.low_confidence++;
               results.confidenceTierTotals.low_confidence++;
-              await ensureValidationTask({
-                db,
-                userId,
-                sourceType: 'story',
-                sourceId: story.id,
-                sourceRef: storyRef,
-                sourceTitle: story.title || storyRef,
-                reason: 'low_confidence',
-                suggestedType: 'goal',
-                suggestedId: bestMatch.id,
-                suggestedRef: bestMatch.ref || null,
-                suggestedTitle: bestMatch.title,
-                confidence: Math.round(bestMatch.score * 100),
-              });
-              results.validationTasksCreated++;
-              userValidationTasksCreated++;
+              if (ENABLE_FUZZY_VALIDATION_TASKS) {
+                await ensureValidationTask({
+                  db,
+                  userId,
+                  sourceType: 'story',
+                  sourceId: story.id,
+                  sourceRef: storyRef,
+                  sourceTitle: story.title || storyRef,
+                  reason: 'low_confidence',
+                  suggestedType: 'goal',
+                  suggestedId: bestMatch.id,
+                  suggestedRef: bestMatch.ref || null,
+                  suggestedTitle: bestMatch.title,
+                  confidence: Math.round(bestMatch.score * 100),
+                });
+                results.validationTasksCreated++;
+                userValidationTasksCreated++;
+              }
             }
           }
 
