@@ -35,17 +35,18 @@ const ModernKanbanPage: React.FC = () => {
   
   // Configurable swim lanes (canonical numeric buckets)
   const [swimLanes] = useState([
-    { id: 'backlog', title: 'Backlog', status: 0 }, // 0/1 -> Backlog
-    { id: 'active', title: 'Active', status: 2 },   // 2/3 -> In Progress
+    { id: 'backlog', title: 'Backlog', status: 0 }, // 0   -> Backlog
+    { id: 'active', title: 'Active', status: 2 },   // 1/2/3 -> In Progress
     { id: 'done', title: 'Done', status: 4 }        // 4    -> Done
   ]);
 
   // Normalize story status (string/number) to canonical lane bucket 0,2,4
+  // BOB schema: 0=backlog, 1=in-progress, 2=review, 4=done
   const storyBucket = (s: any): 0 | 2 | 4 => {
     if (typeof s === 'number') {
       if (s >= 4) return 4; // Done
-      if (s >= 2) return 2; // In Progress (2 or 3)
-      return 0;             // Backlog (0 or 1)
+      if (s >= 1) return 2; // In Progress (1, 2 or 3)
+      return 0;             // Backlog (0 only)
     }
     const v = String(s || '').trim().toLowerCase().replace(/_/g, '-');
     if (['done','complete','completed','finished','closed'].includes(v)) return 4;
