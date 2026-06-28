@@ -5,6 +5,7 @@ import { sideDoorAuth } from '../services/SideDoorAuth';
 
 interface AuthContextType {
   currentUser: User | null;
+  authLoading: boolean;
   signInWithGoogle: () => Promise<void>;
   signInLocally: (tokenOrEmail?: string) => Promise<void>;
   signOut: () => Promise<void>;
@@ -16,6 +17,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
   const [isTestUser, setIsTestUser] = useState(false);
   const localLoginEnabled = sideDoorAuth.isLocalEnvironment();
 
@@ -97,6 +99,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       console.log('🧪 Local test authentication active:', localUser.email);
       setCurrentUser(localUser as User);
       setIsTestUser(true);
+      setAuthLoading(false);
       return () => {
         console.log('🧪 Local test auth cleanup');
       };
@@ -108,6 +111,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       console.log('🔐 Auth state changed:', user ? user.email : 'null');
       setCurrentUser(user);
       setIsTestUser(false);
+      setAuthLoading(false);
     });
 
     return () => {
@@ -152,6 +156,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
   const value = {
     currentUser,
+    authLoading,
     signInWithGoogle,
     signInLocally,
     signOut,

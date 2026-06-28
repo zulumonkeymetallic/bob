@@ -27,7 +27,7 @@ import YouTubeHistoryDashboard from './components/YouTubeHistoryDashboard';
 // import ModernTableDemo from './components/ModernTableDemo';
 import FloatingActionButton from './components/FloatingActionButton';
 import FloatingAssistantButton from './components/FloatingAssistantButton';
-import AssistantChatModal from './components/AssistantChatModal';
+import AssistantDock from './components/AssistantDock';
 import ImportExportModal from './components/ImportExportModal';
 import SidebarLayout from './components/SidebarLayout';
 import SettingsPage from './components/SettingsPage';
@@ -87,7 +87,9 @@ import SprintPlanningMatrix from './components/SprintPlanningMatrix';
 import WorkoutsDashboard from './components/WorkoutsDashboard';
 import MetricsPage from './components/MetricsPage';
 import AiCoachPage from './components/coach/AiCoachPage';
+import CoachHubPage from './components/coach/CoachHubPage';
 import FitnessTabBar from './components/coach/FitnessTabBar';
+import HealthHubPage from './components/health/HealthHubPage';
 import FinanceDashboardModern from './components/FinanceDashboardModern';
 import MerchantMappings from './components/finance/MerchantMappings';
 import BudgetsPage from './components/finance/BudgetsPage';
@@ -156,7 +158,7 @@ function App() {
 
 function AppContent() {
   const { theme, toggleTheme } = useTheme();
-  const { currentUser, signInWithGoogle, signOut } = useAuth();
+  const { currentUser, authLoading, signInWithGoogle, signOut } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
   const deviceInfo = useDeviceInfo();
@@ -344,6 +346,14 @@ function AppContent() {
   const enableAudit = process.env.REACT_APP_ENABLE_AUDIT === 'true';
   useEntityAudit(enableAudit && currentUser ? { currentUserId: currentUser.uid, currentUserEmail: currentUser.email, persona: currentPersona } : null);
 
+  if (authLoading) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh' }}>
+        <div className="spinner-border text-secondary" role="status" />
+      </div>
+    );
+  }
+
   if (!currentUser) {
     return <LoginPage />;
   }
@@ -504,14 +514,19 @@ function AppContent() {
             <Route path="/wplanner/year" element={<LegacyPlannerRedirect level="year" />} />
             <Route path="/wplanner/gantt" element={<LegacyPlannerRedirect level="gantt" />} />
             <Route path="/planner/sprint-capacity" element={<Navigate to="/sprints/capacity" replace />} />
-            <Route path="/ai-coach" element={<AiCoachPage />} />
-            <Route path="/coach" element={<AiCoachPage />} />
-            <Route path="/metrics" element={<MetricsPage />} />
+            {/* Health Hub — unified tabbed page */}
+            <Route path="/health" element={<HealthHubPage />} />
+            <Route path="/health/:tab" element={<HealthHubPage />} />
+            {/* /fitness kept as direct MetricsPage — user explicitly wants these boxes at this URL */}
             <Route path="/fitness" element={<MetricsPage />} />
-            <Route path="/fitness/full" element={<WorkoutsDashboard />} />
-            <Route path="/running-results" element={<Navigate to="/fitness/full" replace />} />
-            <Route path="/parkrun-results" element={<WorkoutsDashboard />} />
-            <Route path="/workouts" element={<Navigate to="/fitness/full" replace />} />
+            <Route path="/metrics" element={<MetricsPage />} />
+            <Route path="/coach" element={<CoachHubPage />} />
+            <Route path="/coach/:tab" element={<CoachHubPage />} />
+            <Route path="/ai-coach" element={<Navigate to="/coach" replace />} />
+            <Route path="/fitness/full" element={<Navigate to="/health/workouts" replace />} />
+            <Route path="/workouts" element={<Navigate to="/health/workouts" replace />} />
+            <Route path="/running-results" element={<Navigate to="/health/workouts" replace />} />
+            <Route path="/parkrun-results" element={<Navigate to="/health/workouts" replace />} />
             <Route path="/running/heatmap" element={
               <Suspense fallback={<div className="p-4">Loading…</div>}>
                 <RunningHeatmap />
@@ -526,7 +541,7 @@ function AppContent() {
             <Route path="/finance/dashboard" element={<FinanceDashboardAdvanced />} />
             <Route path="/finance/flow" element={<FinanceFlowDiagram />} />
             <Route path="/finance/pots" element={<PotsBoard />} />
-            <Route path="/finance/coach" element={<FinanceCoachPage />} />
+            <Route path="/finance/coach" element={<Navigate to="/coach/finance" replace />} />
             <Route path="/finance/advanced" element={<Navigate to="/finance/dashboard" replace />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/settings/profile" element={<Navigate to="/settings?tab=profile" replace />} />
@@ -558,9 +573,9 @@ function AppContent() {
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
 
-          {/* Assistant (floating, near FAB but separate) */}
-          <FloatingAssistantButton onClick={() => setShowAssistant(true)} />
-          <AssistantChatModal show={showAssistant} onHide={() => setShowAssistant(false)} />
+          {/* BOB Assistant — Vertex AI powered, slides in from right */}
+          <FloatingAssistantButton onClick={() => setShowAssistant(v => !v)} isOpen={showAssistant} />
+          <AssistantDock open={showAssistant} onClose={() => setShowAssistant(false)} />
 
           {/* Bottom tab bar — only renders on Home/Fitness/Coach/Goals/Tasks routes */}
           <FitnessTabBar />

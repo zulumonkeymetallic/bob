@@ -29,6 +29,8 @@ interface KanbanCardV2Props {
     taskCount?: number; // For stories
     themeColor?: string;
     themes?: GlobalTheme[];
+    goals?: Goal[];
+    focusGoalIds?: Set<string>;
     formatTag?: (tag: string) => string;
     onEdit?: (item: Story | Task) => void;
     onDelete?: (item: Story | Task) => void;
@@ -69,6 +71,8 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
     taskCount = 0,
     themeColor,
     themes,
+    goals = [],
+    focusGoalIds = new Set(),
     formatTag,
     onEdit,
     onDelete,
@@ -99,6 +103,11 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
     const [showRejectModal, setShowRejectModal] = useState(false);
     const [rejectFeedback, setRejectFeedback] = useState('');
     const [rejectSubmitting, setRejectSubmitting] = useState(false);
+    const [showConvertModal, setShowConvertModal] = useState(false);
+    const [convertTitle, setConvertTitle] = useState('');
+    const [convertGoalId, setConvertGoalId] = useState<string | null>(null);
+    const [convertLoading, setConvertLoading] = useState(false);
+    const [convertedStory, setConvertedStory] = useState<{ ref: string; id: string } | null>(null);
 
     useEffect(() => {
         const el = ref.current;
@@ -474,31 +483,25 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
         }
     };
 
-    const handleConvertTaskToStory = async (event: React.MouseEvent<HTMLButtonElement>) => {
+    const openConvertModal = (event: React.MouseEvent<HTMLButtonElement>) => {
         event.stopPropagation();
-        setActionMessage(null);
+        setConvertTitle(item.title || '');
+        setConvertGoalId((item as any).goalId || (parentStory as any)?.goalId || null);
+        setConvertedStory(null);
+        setShowConvertModal(true);
+    };
+
+    const executeConversion = async () => {
+        if (!convertTitle.trim()) return;
+        setConvertLoading(true);
         try {
-            const suggest = httpsCallable(functions, 'suggestTaskStoryConversions');
             const convert = httpsCallable(functions, 'convertTasksToStories');
-
-            const suggestionResp: any = await suggest({
-                persona: (item as any).persona || 'personal',
-                taskIds: [item.id],
-                limit: 1
-            });
-            const suggestions: any[] = Array.isArray(suggestionResp?.data?.suggestions) ? suggestionResp.data.suggestions : [];
-            const suggestion = suggestions.find(s => s.taskId === item.id) || suggestions[0] || {};
-
-            const storyTitle = (suggestion?.storyTitle || item.title || 'Converted task').slice(0, 140);
-            const storyDescription = (suggestion?.storyDescription || (item as any).description || '').slice(0, 1200);
-            const goalId = suggestion?.goalId || (item as any).goalId || (parentStory as any)?.goalId || null;
-
             const resp: any = await convert({
                 conversions: [{
                     taskId: item.id,
-                    storyTitle,
-                    storyDescription,
-                    goalId
+                    storyTitle: convertTitle.trim().slice(0, 140),
+                    storyDescription: ((item as any).description || '').slice(0, 1200),
+                    goalId: convertGoalId || null,
                 }]
             });
 
@@ -506,7 +509,19 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
             const newStoryId = created.storyId || created.id || null;
             const newStoryRef = created.storyRef || created.ref || created.reference || null;
 
-            // Close the task locally
+            // Set new story to in-progress so it appears in the Kanban In Progress lane
+            if (newStoryId) {
+                try {
+                    await updateDoc(doc(db, 'stories', newStoryId), {
+                        status: 1,
+                        updatedAt: serverTimestamp(),
+                    });
+                } catch (e) {
+                    console.warn('[convert] Failed to set story in-progress', e);
+                }
+            }
+
+            // Mark the source task as done
             try {
                 await updateDoc(doc(db, 'tasks', item.id), {
                     status: 2,
@@ -514,19 +529,18 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                     updatedAt: serverTimestamp(),
                 });
             } catch (e) {
-                console.warn('Failed to close task after conversion', e);
+                console.warn('[convert] Failed to close task', e);
             }
 
-            // Activity stream entry
+            // Activity stream
             if (currentUser) {
-                const desc = `Converted to story ${newStoryRef || newStoryId || ''}`.trim();
                 await ActivityStreamService.addActivity({
                     entityId: item.id,
                     entityType: 'task',
                     activityType: 'task_to_story_conversion',
                     userId: currentUser.uid,
                     userEmail: currentUser.email || undefined,
-                    description: desc || 'Converted to story',
+                    description: `Converted to story ${newStoryRef || newStoryId || ''}`.trim(),
                     persona: (item as any).persona || 'personal',
                     referenceNumber: (item as any).ref,
                     source: 'human'
@@ -546,10 +560,14 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                 }
             }
 
-            setActionMessage('Converted to story');
-            setTimeout(() => setActionMessage(null), 2500);
+            setShowConvertModal(false);
+            if (newStoryId && newStoryRef) {
+                setConvertedStory({ ref: newStoryRef, id: newStoryId });
+            }
         } catch (err: any) {
             alert(err?.message || 'Convert failed');
+        } finally {
+            setConvertLoading(false);
         }
     };
 
@@ -871,7 +889,7 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                                 className="p-0"
                                 style={{ width: 24, height: 24, color: themeVars.muted }}
                                 title="Convert to story"
-                                onClick={handleConvertTaskToStory}
+                                onClick={openConvertModal}
                                 onPointerDown={(e) => e.stopPropagation()}
                             >
                                 <Wand2 size={12} />
@@ -1347,6 +1365,119 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                 </Button>
             </Modal.Footer>
         </Modal>
+        {/* Convert task → story modal */}
+        <Modal
+            show={showConvertModal}
+            onHide={() => !convertLoading && setShowConvertModal(false)}
+            centered
+            onClick={(e: React.MouseEvent) => e.stopPropagation()}
+        >
+            <Modal.Header closeButton={!convertLoading}>
+                <Modal.Title style={{ fontSize: 16 }}>Promote task to story</Modal.Title>
+            </Modal.Header>
+            <Modal.Body>
+                <div className="mb-3">
+                    <label className="form-label mb-1" style={{ fontSize: 13 }}>Story title</label>
+                    <input
+                        className="form-control form-control-sm"
+                        value={convertTitle}
+                        onChange={(e) => setConvertTitle(e.target.value)}
+                        onClick={(e) => e.stopPropagation()}
+                        maxLength={140}
+                        disabled={convertLoading}
+                    />
+                </div>
+                <div className="mb-2">
+                    <label className="form-label mb-1" style={{ fontSize: 13 }}>Parent goal</label>
+                    <select
+                        className="form-select form-select-sm"
+                        value={convertGoalId || ''}
+                        onChange={(e) => setConvertGoalId(e.target.value || null)}
+                        onClick={(e) => e.stopPropagation()}
+                        disabled={convertLoading}
+                    >
+                        <option value="">No goal</option>
+                        {goals
+                            .filter(g => g.status !== 4)
+                            .sort((a, b) => (a.title || '').localeCompare(b.title || ''))
+                            .map(g => (
+                                <option key={g.id} value={g.id}>
+                                    {focusGoalIds.has(g.id) ? '★ ' : ''}{g.ref ? `${g.ref} — ` : ''}{g.title}
+                                </option>
+                            ))
+                        }
+                    </select>
+                    {convertGoalId && !focusGoalIds.has(convertGoalId) && (
+                        <div style={{ fontSize: 12, color: themeVars.muted, marginTop: 4 }}>
+                            This goal is not a current focus goal. Consider deferring instead.
+                        </div>
+                    )}
+                </div>
+            </Modal.Body>
+            <Modal.Footer>
+                <Button
+                    variant="outline-secondary"
+                    size="sm"
+                    disabled={convertLoading}
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        setShowConvertModal(false);
+                        setShowDeferModal(true);
+                    }}
+                >
+                    Defer instead
+                </Button>
+                <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={convertLoading}
+                    onClick={(e) => { e.stopPropagation(); setShowConvertModal(false); }}
+                >
+                    Cancel
+                </Button>
+                <Button
+                    variant="primary"
+                    size="sm"
+                    disabled={convertLoading || !convertTitle.trim()}
+                    onClick={(e) => { e.stopPropagation(); executeConversion(); }}
+                >
+                    {convertLoading ? <><Spinner animation="border" size="sm" className="me-1" />Converting…</> : 'Promote to story'}
+                </Button>
+            </Modal.Footer>
+        </Modal>
+
+        {/* Success banner after conversion */}
+        {convertedStory && (
+            <Modal
+                show
+                onHide={() => setConvertedStory(null)}
+                centered
+                onClick={(e: React.MouseEvent) => e.stopPropagation()}
+            >
+                <Modal.Header closeButton>
+                    <Modal.Title style={{ fontSize: 16 }}>Story created</Modal.Title>
+                </Modal.Header>
+                <Modal.Body>
+                    <p className="mb-2">
+                        <strong>{convertedStory.ref}</strong> is now in your In Progress lane.
+                    </p>
+                    <a
+                        href={`https://bob.jc1.tech/stories/${convertedStory.id}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        Open {convertedStory.ref} →
+                    </a>
+                </Modal.Body>
+                <Modal.Footer>
+                    <Button variant="primary" size="sm" onClick={(e) => { e.stopPropagation(); setConvertedStory(null); }}>
+                        Done
+                    </Button>
+                </Modal.Footer>
+            </Modal>
+        )}
+
         <DeferItemModal
             show={showDeferModal}
             onHide={() => setShowDeferModal(false)}

@@ -752,6 +752,8 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
                                 onParentClick={onParentClick}
                                 formatTag={formatTag}
                                 themes={themes}
+                                goals={goals}
+                                focusGoalIds={focusGoalIds}
                                 isFocusAligned={isFocusAligned}
                                 detailLevel={detailLevel}
                             />

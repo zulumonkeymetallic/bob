@@ -7,7 +7,8 @@ import { usePersona } from '../contexts/PersonaContext';
 import { Story, Task, Goal } from '../types';
 import KanbanBoardV2 from './KanbanBoardV2';
 import { useNavigate } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Maximize2, Minimize2, RefreshCw, Sparkles } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Maximize2, Minimize2, RefreshCw, Sparkles, LayoutList, Columns2 } from 'lucide-react';
+import SprintTriageTable from './SprintTriageTable';
 import { displayRefForEntity } from '../utils/referenceGenerator';
 import { useSprint } from '../contexts/SprintContext';
 import { isStatus } from '../utils/statusHelpers';
@@ -70,6 +71,9 @@ const SprintKanbanPageV2: React.FC = () => {
     const [showAiScoredOnly, setShowAiScoredOnly] = useState(false);
     const [showDelegatedOnly, setShowDelegatedOnly] = useState(false);
     const [sortBy, setSortBy] = useState<'ai' | 'due' | 'priority' | 'default'>('default');
+    const [viewMode, setViewMode] = useState<'board' | 'table'>(() => {
+        try { return (localStorage.getItem('kanban_view_mode') as 'board' | 'table') || 'board'; } catch { return 'board'; }
+    });
     const [replanLoading, setReplanLoading] = useState(false);
     const [fullReplanLoading, setFullReplanLoading] = useState(false);
     const [replanFeedback, setReplanFeedback] = useState<string | null>(null);
@@ -355,7 +359,7 @@ const SprintKanbanPageV2: React.FC = () => {
     };
 
     return (
-        <Container fluid style={{ padding: '24px', backgroundColor: 'var(--bg)', minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
+        <Container fluid style={{ padding: '24px', backgroundColor: 'var(--bg)', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
             {/* Header */}
             <Row className="mb-4 flex-shrink-0">
                 <Col>
@@ -499,6 +503,27 @@ const SprintKanbanPageV2: React.FC = () => {
                                     </Form.Select>
                                 </Form.Group>
 
+                            <div style={{ display: 'flex', border: '1px solid var(--border)', borderRadius: 6, overflow: 'hidden' }}>
+                                <Button
+                                    variant={viewMode === 'board' ? 'secondary' : 'outline-secondary'}
+                                    size="sm"
+                                    onClick={() => { setViewMode('board'); try { localStorage.setItem('kanban_view_mode', 'board'); } catch {} }}
+                                    title="Board view"
+                                    style={{ borderRadius: 0, border: 'none', padding: '4px 10px' }}
+                                >
+                                    <Columns2 size={15} />
+                                </Button>
+                                <Button
+                                    variant={viewMode === 'table' ? 'secondary' : 'outline-secondary'}
+                                    size="sm"
+                                    onClick={() => { setViewMode('table'); try { localStorage.setItem('kanban_view_mode', 'table'); } catch {} }}
+                                    title="Triage table view"
+                                    style={{ borderRadius: 0, border: 'none', padding: '4px 10px' }}
+                                >
+                                    <LayoutList size={15} />
+                                </Button>
+                            </div>
+
                             <Button
                                 variant="outline-secondary"
                                 size="sm"
@@ -539,8 +564,8 @@ const SprintKanbanPageV2: React.FC = () => {
                                     disabled={replanLoading || fullReplanLoading}
                                     title="Delta replan: quickly rebalance existing calendar blocks using current priorities."
                                 >
-                                    {replanLoading ? <Spinner size="sm" animation="border" className="me-1" /> : <RefreshCw size={14} className="me-1" />}
-                                    Delta replan
+                                    {replanLoading ? <Spinner size="sm" animation="border" /> : <RefreshCw size={14} />}
+                                    <span className="d-none d-xl-inline ms-1">Delta replan</span>
                                 </Button>
                                 <Button
                                     variant="outline-secondary"
@@ -549,8 +574,8 @@ const SprintKanbanPageV2: React.FC = () => {
                                     disabled={fullReplanLoading || replanLoading}
                                     title="Full replan: runs full nightly orchestration (pointing, conversions, priority scoring, and calendar planning)."
                                 >
-                                    {fullReplanLoading ? <Spinner size="sm" animation="border" className="me-1" /> : <Sparkles size={14} className="me-1" />}
-                                    Full replan
+                                    {fullReplanLoading ? <Spinner size="sm" animation="border" /> : <Sparkles size={14} />}
+                                    <span className="d-none d-xl-inline ms-1">Full replan</span>
                                 </Button>
                             </div>
                         </div>
@@ -637,11 +662,12 @@ const SprintKanbanPageV2: React.FC = () => {
                 </Row>
             )}
 
-            {/* Kanban Board */}
+            {/* Kanban Board / Triage Table */}
             <Row style={{ flex: 1, minHeight: 0 }} ref={boardContainerRef as any}>
                 <Col style={{ height: '100%' }}>
                     <Card style={{ border: 'none', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', height: '100%', borderRadius: isFullscreen ? 0 : undefined }}>
                         <Card.Body style={{ padding: '24px', height: '100%', overflow: 'auto', backgroundColor: isFullscreen ? 'var(--bg)' : undefined }}>
+                            {viewMode === 'board' ? (
                                 <KanbanBoardV2
                                     sprintId={filterSprintId}
                                     themeFilter={themeFilterIds.length > 0 ? themeFilterIds : null}
@@ -661,6 +687,17 @@ const SprintKanbanPageV2: React.FC = () => {
                                     themes={globalThemes}
                                     detailLevel={detailLevel}
                                 />
+                            ) : (
+                                <SprintTriageTable
+                                    stories={stories}
+                                    tasks={tasks}
+                                    goals={goals}
+                                    sprints={sprints as any}
+                                    filterSprintId={filterSprintId}
+                                    onEditStory={setEditStory}
+                                    onEditTask={setEditTask}
+                                />
+                            )}
                         </Card.Body>
                     </Card>
                 </Col>
