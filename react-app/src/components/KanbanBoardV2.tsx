@@ -88,6 +88,9 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
     useEffect(() => {
         if (!currentUser || !currentPersona) return;
 
+        // Clear stale data immediately so old sprint items don't flash while new subscription loads
+        setStories([]);
+        setTasks([]);
         setLoading(true);
 
         // Goals
