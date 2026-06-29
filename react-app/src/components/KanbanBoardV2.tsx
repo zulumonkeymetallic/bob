@@ -383,9 +383,11 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
         return true;
     };
 
+    const EXCLUDED_TASK_TYPES = new Set(['chore', 'routine', 'habit', 'core', 'read', 'watch']);
+
     const filteredTasks = useMemo(() => {
-        let result = tasks;
-        // Tasks are already filtered by query if sprintId is present, 
+        let result = tasks.filter(t => !EXCLUDED_TASK_TYPES.has(String((t as any).type || '').toLowerCase()));
+        // Tasks are already filtered by query if sprintId is present,
         // but if sprintId changed rapidly, safety check:
         if (sprintId) {
             result = result.filter(t => t.sprintId === sprintId);
