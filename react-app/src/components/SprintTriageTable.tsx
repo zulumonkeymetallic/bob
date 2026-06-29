@@ -235,7 +235,17 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
 
     const handleDelete = async (id: string, type: RowType) => {
         if (!window.confirm(`Delete this ${type}? Cannot be undone.`)) return;
-        await deleteDoc(doc(db, type === 'story' ? 'stories' : 'tasks', id));
+        const col = type === 'story' ? 'stories' : 'tasks';
+        try {
+            // Claim ownership first so docs without ownerUid can be deleted
+            if (currentUser?.uid) {
+                await updateDoc(doc(db, col, id), { ownerUid: currentUser.uid, updatedAt: serverTimestamp() });
+            }
+            await deleteDoc(doc(db, col, id));
+        } catch (err: any) {
+            console.error(`[SprintTriageTable] delete ${type} failed`, err);
+            alert(`Failed to delete ${type}: ${err?.message || 'permission denied'}`);
+        }
     };
 
     const handleSort = (key: SortKey) => {

@@ -401,6 +401,10 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
     setDeleting(true);
     setError(null);
     try {
+      // Claim ownership first to handle legacy docs without ownerUid
+      if (currentUser?.uid) {
+        await updateDoc(doc(db, 'stories', story.id), { ownerUid: currentUser.uid, updatedAt: serverTimestamp() });
+      }
       await deleteDoc(doc(db, 'stories', story.id));
       onStoryUpdated?.();
       onHide();
@@ -583,12 +587,9 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
   return (
     <>
     <Modal show={show} onHide={onHide} size={isFullscreen ? undefined : 'xl'} container={container || undefined} fullscreen={isFullscreen ? true : 'lg-down'} scrollable>
-      <Modal.Header closeButton>
-        <div className="d-flex w-100 align-items-center justify-content-between gap-2">
-          <Modal.Title>Edit Story: {story?.ref}</Modal.Title>
-          <button onClick={() => setIsFullscreen((v) => !v)} title={isFullscreen ? 'Restore' : 'Maximise'} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', padding: '2px 4px' }}>
-            {isFullscreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
-          </button>
+      <Modal.Header>
+        <Modal.Title className="me-auto">Edit Story: {story?.ref}</Modal.Title>
+        <div className="d-flex align-items-center gap-1">
           {story && (
             <div className="d-flex align-items-center gap-2">
               <Button variant="outline-secondary" size="sm" title="Activity stream" onClick={() => showSidebar(story, 'story')}>
@@ -638,6 +639,14 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
               </Button>
             </div>
           )}
+          <button
+            onClick={() => setIsFullscreen((v) => !v)}
+            title={isFullscreen ? 'Restore default size' : 'Maximise to full screen'}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', padding: '4px 6px', borderRadius: 4, display: 'flex', alignItems: 'center' }}
+          >
+            {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+          </button>
+          <button onClick={onHide} className="btn-close" aria-label="Close" style={{ fontSize: '0.7rem' }} />
         </div>
       </Modal.Header>
 
