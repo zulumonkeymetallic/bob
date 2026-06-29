@@ -696,6 +696,7 @@ const SprintKanbanPageV2: React.FC = () => {
                                     filterSprintId={filterSprintId}
                                     onEditStory={setEditStory}
                                     onEditTask={setEditTask}
+                                    onEditGoal={setEditGoal}
                                 />
                             )}
                         </Card.Body>
