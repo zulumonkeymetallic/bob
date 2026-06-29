@@ -12,6 +12,7 @@ import { Story, Task, Goal } from '../types';
 import { themeVars } from '../utils/themeVars';
 import { useThemeAwareColors } from '../hooks/useThemeAwareColors';
 import { applyPlannerDefer } from '../utils/plannerDeferral';
+import { findItemWithManualPriorityRank, getManualPriorityLabel, getManualPriorityRank, getNextManualPriorityRank } from '../utils/manualPriority';
 import DeferItemModal from './DeferItemModal';
 import { useAuth } from '../contexts/AuthContext';
 import { useSidebar } from '../contexts/SidebarContext';
@@ -114,6 +115,38 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
     const [hovered, setHovered] = useState<string | null>(null);
     const [latestNotes, setLatestNotes] = useState<Record<string, string>>({});
     const [hideDone, setHideDone] = useState(true);
+    const [flaggingPriorityId, setFlaggingPriorityId] = useState<string | null>(null);
+
+    const handleFlagPriority = async (story: Story) => {
+        if (!currentUser) return;
+        setFlaggingPriorityId(story.id);
+        try {
+            const storyPersona = String((story as any).persona || 'personal');
+            const currentRank = getManualPriorityRank(story);
+            if (currentRank) {
+                await updateDoc(doc(db, 'stories', story.id), {
+                    userPriorityFlag: false, userPriorityRank: null, userPriorityFlagAt: null, updatedAt: serverTimestamp(),
+                });
+            } else {
+                const allStories = stories.filter(s => (s as any).status !== 4);
+                const nextRank = getNextManualPriorityRank(allStories, storyPersona, story.id);
+                const conflict = findItemWithManualPriorityRank(allStories, storyPersona, nextRank, story.id);
+                if (conflict?.id) {
+                    await updateDoc(doc(db, 'stories', conflict.id), {
+                        userPriorityFlag: false, userPriorityRank: null, userPriorityFlagAt: null, updatedAt: serverTimestamp(),
+                    });
+                }
+                await updateDoc(doc(db, 'stories', story.id), {
+                    userPriorityFlag: true, userPriorityRank: nextRank, userPriorityFlagAt: new Date().toISOString(), updatedAt: serverTimestamp(),
+                });
+                httpsCallable(functions, 'deltaPriorityRescore')({ entityId: story.id, entityType: 'story' }).catch(() => {});
+            }
+        } catch (e) {
+            console.warn('Failed to toggle user priority', e);
+        } finally {
+            setFlaggingPriorityId(null);
+        }
+    };
 
     // Sprint-scoped data
     const sprintStories = useMemo(() =>
@@ -500,19 +533,32 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
 
     const actionCell = (item: Story | Task, type: RowType) => {
         const isConverting = converting === item.id;
+        const isFlaggingPriority = flaggingPriorityId === item.id;
+        const manualRank = type === 'story' ? getManualPriorityRank(item) : null;
+        const manualLabel = type === 'story' ? getManualPriorityLabel(item) : null;
         return (
             <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
                 <button style={abtn()} title="Activity stream" onClick={() => showSidebar(item, type)}>
                     <Activity size={15} />
                 </button>
                 {type === 'story' ? (
-                    <button style={abtn()} title="AI: Generate tasks"
-                        onClick={async () => {
-                            try { await httpsCallable(functions, 'orchestrateStoryPlanning')({ storyId: item.id }); }
-                            catch (e: any) { alert(e?.message || 'Failed'); }
-                        }}>
-                        <Wand2 size={15} />
-                    </button>
+                    <>
+                        <button style={abtn()} title="AI: Generate tasks"
+                            onClick={async () => {
+                                try { await httpsCallable(functions, 'orchestrateStoryPlanning')({ storyId: item.id }); }
+                                catch (e: any) { alert(e?.message || 'Failed'); }
+                            }}>
+                            <Wand2 size={15} />
+                        </button>
+                        <button
+                            style={{ ...abtn(manualRank ? '#dc3545' : (themeVars.muted as string)), opacity: isFlaggingPriority ? 0.5 : 1, minWidth: 22, fontWeight: 800, fontSize: 11 }}
+                            title={manualRank ? `Remove ${manualLabel || 'manual priority'}` : 'Set manual priority'}
+                            disabled={isFlaggingPriority}
+                            onClick={() => handleFlagPriority(item as Story)}
+                        >
+                            {isFlaggingPriority ? <Spinner animation="border" size="sm" style={{ width: 11, height: 11 }} /> : (manualRank || 1)}
+                        </button>
+                    </>
                 ) : (
                     <button style={abtn(isConverting ? (themeVars.muted as string) : (themeVars.brand as string))}
                         title={isConverting ? 'Converting…' : 'Convert to story'}
@@ -524,9 +570,9 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
                 <button style={abtn()} title="Defer" onClick={() => setDeferItem({ id: item.id, type, title: item.title || '' })}>
                     <Clock3 size={15} />
                 </button>
-                <a href={`${BASE_URL}/${type === 'story' ? 'stories' : 'tasks'}/${item.id}`} target="_blank" rel="noreferrer" style={{ ...abtn(), textDecoration: 'none' }} title="Deep link">
+                <button style={abtn()} title="Open" onClick={() => navigate(`/${type === 'story' ? 'stories' : 'tasks'}/${item.id}`)}>
                     <ExternalLink size={15} />
-                </a>
+                </button>
                 <button style={abtn(themeVars.brand as string)} title="Edit" onClick={() => type === 'story' ? onEditStory(item as Story) : onEditTask(item as Task)}>
                     <Pencil size={15} />
                 </button>
