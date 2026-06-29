@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Spinner } from 'react-bootstrap';
 import { Activity, Clock3, Wand2, Pencil, Trash2, ExternalLink, ChevronUp, ChevronDown } from 'lucide-react';
 import {
@@ -98,6 +99,7 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
     stories, tasks, goals, sprints, filterSprintId,
     onEditStory, onEditTask, onEditGoal,
 }) => {
+    const navigate = useNavigate();
     const { backgrounds } = useThemeAwareColors();
     const { showSidebar } = useSidebar();
     const { currentUser } = useAuth();
@@ -391,20 +393,32 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
             }
 
             const prog = goal ? goalProgress(goal.id) : null;
+            const goalLabel = goal ? `${goal.ref ? goal.ref + ' — ' : ''}${goal.title}` : '';
             return (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0, flexWrap: 'wrap' }}>
                     {goal ? (
-                        <button
-                            style={{ ...abtn(themeVars.brand as string), padding: 0, fontSize: 12, fontWeight: 500, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'left' }}
-                            title={goal.title}
-                            onClick={() => onEditGoal ? onEditGoal(goal) : window.open(`${BASE_URL}/goals/${goal.id}`, '_blank')}
-                        >
-                            {goal.ref ? `${goal.ref}` : ''}{goal.ref && goal.title ? ' — ' : ''}{goal.title}
-                        </button>
+                        <>
+                            <button
+                                type="button"
+                                style={{ border: 'none', background: 'none', color: themeVars.brand as string, padding: 0, fontSize: 12, fontWeight: 500, cursor: 'pointer', textDecoration: 'underline', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'left' }}
+                                title={goal.title}
+                                onClick={(e) => { e.stopPropagation(); navigate(`/goals/${goal.id}`); }}
+                            >
+                                {goalLabel}
+                            </button>
+                            <button
+                                type="button"
+                                style={{ ...abtn(themeVars.muted as string), padding: 0 }}
+                                title="Open goal"
+                                onClick={(e) => { e.stopPropagation(); navigate(`/goals/${goal.id}`); }}
+                            >
+                                <ExternalLink size={12} />
+                            </button>
+                        </>
                     ) : goalId ? (
                         <span style={{ color: themeVars.muted as string, fontSize: 12, fontStyle: 'italic' }} title={`Goal ID: ${goalId}`}>Unknown goal</span>
                     ) : (
-                        <span style={{ color: themeVars.muted as string, fontSize: 12 }}>—</span>
+                        <span style={{ color: themeVars.muted as string, fontSize: 12 }}>Unassigned</span>
                     )}
                     {prog && (
                         <span style={{ fontSize: 10, color: prog.pct === 100 ? '#198754' : themeVars.muted as string, whiteSpace: 'nowrap' }}>
@@ -444,20 +458,32 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
             }
 
             const prog = parentStory ? storyProgress(parentStory.id) : null;
+            const storyLabel = parentStory ? ((parentStory as any).ref || parentStory.title.slice(0, 24)) : '';
             return (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0, flexWrap: 'wrap' }}>
                     {parentStory ? (
-                        <button
-                            style={{ ...abtn(themeVars.brand as string), padding: 0, fontSize: 12, fontWeight: 500, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'left' }}
-                            title={parentStory.title}
-                            onClick={() => onEditStory(parentStory)}
-                        >
-                            {(parentStory as any).ref || parentStory.title.slice(0, 24)}
-                        </button>
+                        <>
+                            <button
+                                type="button"
+                                style={{ border: 'none', background: 'none', color: themeVars.brand as string, padding: 0, fontSize: 12, fontWeight: 500, cursor: 'pointer', textDecoration: 'underline', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'left' }}
+                                title={parentStory.title}
+                                onClick={(e) => { e.stopPropagation(); navigate(`/stories/${parentStory.id}`); }}
+                            >
+                                {storyLabel}
+                            </button>
+                            <button
+                                type="button"
+                                style={{ ...abtn(themeVars.muted as string), padding: 0 }}
+                                title="Open story"
+                                onClick={(e) => { e.stopPropagation(); navigate(`/stories/${parentStory.id}`); }}
+                            >
+                                <ExternalLink size={12} />
+                            </button>
+                        </>
                     ) : parentId ? (
                         <span style={{ color: themeVars.muted as string, fontSize: 12, fontStyle: 'italic' }} title={`Story ID: ${parentId}`}>Unknown story</span>
                     ) : (
-                        <span style={{ color: themeVars.muted as string, fontSize: 12 }}>—</span>
+                        <span style={{ color: themeVars.muted as string, fontSize: 12 }}>Unassigned</span>
                     )}
                     {prog && (
                         <span style={{ fontSize: 10, color: prog.pct === 100 ? '#198754' : themeVars.muted as string, whiteSpace: 'nowrap' }}>
