@@ -13,11 +13,11 @@ export const isStatus = (actualStatus: any, expectedStatus: string): boolean => 
     if (expectedStatus === 'Blocked') return actualStatus === 3;
     if (expectedStatus === 'Deferred') return actualStatus === 4;
 
-    // Story status mapping
+    // Story status mapping — 0=Backlog, 1=In Progress, 2=Review, 4=Bin/Done
     if (expectedStatus === 'backlog') return actualStatus === 0;
-    if (expectedStatus === 'planned') return actualStatus === 1;
-    if (expectedStatus === 'active') return actualStatus === 2;
-    if (expectedStatus === 'in-progress') return actualStatus === 2;
+    if (expectedStatus === 'in-progress' || expectedStatus === 'in_progress') return actualStatus === 1;
+    if (expectedStatus === 'planned') return actualStatus === 1; // legacy alias kept for compat
+    if (expectedStatus === 'active' || expectedStatus === 'review') return actualStatus === 2;
     if (expectedStatus === 'review_gate') return actualStatus === 3;
     if (expectedStatus === 'done') return actualStatus === 4;
 

@@ -34,8 +34,11 @@ interface SprintTriageTableProps {
     onEditGoal?: (goal: Goal) => void;
 }
 
+// Canonical status labels — 0=Backlog, 1=In Progress, 2=Review(stories)/Done(tasks), 4=Bin
 const STORY_STATUS: Record<number, string> = { 0: 'Backlog', 1: 'In Progress', 2: 'Review', 4: 'Bin' };
-const TASK_STATUS: Record<number, string> = { 0: 'To Do', 1: 'In Progress', 2: 'Done' };
+const TASK_STATUS: Record<number, string> = { 0: 'Backlog', 1: 'In Progress', 2: 'Done' };
+// "done" threshold per entity type (used for hide-done filter)
+const isDone = (status: number, type: RowType) => type === 'story' ? status >= 4 : status >= 2;
 
 function statusColor(status: number, type: RowType) {
     if (status === 1) return '#0d6efd';
@@ -108,6 +111,7 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
     const [sortDir, setSortDir] = useState<SortDir>('asc');
     const [hovered, setHovered] = useState<string | null>(null);
     const [latestNotes, setLatestNotes] = useState<Record<string, string>>({});
+    const [hideDone, setHideDone] = useState(true);
 
     // Sprint-scoped data
     const sprintStories = useMemo(() =>
@@ -242,8 +246,12 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
     // Merged sorted rows
     const rows = useMemo(() => {
         const all = [
-            ...sprintStories.map(s => ({ item: s as Story | Task, rowType: 'story' as RowType })),
-            ...sprintTasks.map(t => ({ item: t as Story | Task, rowType: 'task' as RowType })),
+            ...sprintStories
+                .filter(s => !hideDone || !isDone(Number((s as any).status ?? 0), 'story'))
+                .map(s => ({ item: s as Story | Task, rowType: 'story' as RowType })),
+            ...sprintTasks
+                .filter(t => !hideDone || !isDone(Number((t as any).status ?? 0), 'task'))
+                .map(t => ({ item: t as Story | Task, rowType: 'task' as RowType })),
         ];
         return [...all].sort((a, b) => {
             let av: string | number = '', bv: string | number = '';
@@ -593,7 +601,22 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
             </div>
 
             <div style={{ marginTop: 8, fontSize: 12, color: themeVars.muted as string, display: 'flex', alignItems: 'center', gap: 16 }}>
-                <span>{sprintStories.length} {sprintStories.length === 1 ? 'story' : 'stories'} · {sprintTasks.length} {sprintTasks.length === 1 ? 'task' : 'tasks'}</span>
+                <button
+                    onClick={() => setHideDone(h => !h)}
+                    style={{
+                        padding: '3px 10px',
+                        borderRadius: 6,
+                        border: `1px solid ${themeVars.border}`,
+                        background: hideDone ? (themeVars.card as string) : 'transparent',
+                        color: themeVars.text as string,
+                        fontSize: 12,
+                        cursor: 'pointer',
+                        fontWeight: hideDone ? 600 : 400,
+                    }}
+                >
+                    {hideDone ? 'Showing active only' : 'Showing all incl. done'}
+                </button>
+                <span>{sprintStories.length} {sprintStories.length === 1 ? 'story' : 'stories'} · {sprintTasks.length} {sprintTasks.length === 1 ? 'task' : 'tasks'} · {rows.length} shown</span>
                 {convertedStory && (
                     <span style={{ color: '#198754' }}>
                         Story created: <a href={`${BASE_URL}/stories/${convertedStory.id}`} target="_blank" rel="noreferrer" style={{ color: '#198754' }}>{convertedStory.ref} →</a>
