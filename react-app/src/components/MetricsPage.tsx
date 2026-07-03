@@ -21,6 +21,18 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import FitnessKpiGrid, { FitnessKpiBox, FitnessKpiRow } from './fitness/FitnessKpiGrid';
 import { CoachVerdictBanner } from './coach/CoachVerdictBanner';
+import { resolveGoalKpis } from '../utils/kpiResolver';
+import type { Goal } from '../types';
+
+const BANNER_TAGS = new Set(['banner', 'daily-banner', 'focus-banner', 'rotation-banner', 'project45']);
+
+function isBannerEligibleGoal(goal: any): boolean {
+  const tags = Array.isArray(goal?.tags) ? goal.tags.map((t: any) => String(t || '').trim().toLowerCase()).filter(Boolean) : [];
+  const hasTag = tags.some((t: string) => BANNER_TAGS.has(t));
+  const hasField = goal?.showInDashboardBanner === true || goal?.dashboardBanner === true || goal?.isBannerGoal === true;
+  const status = Number(goal?.status ?? 0);
+  return (hasTag || hasField) && status !== 4;
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -133,6 +145,9 @@ const MetricsPage: React.FC = () => {
   const [healthMetrics, setHealthMetrics] = useState<any[]>([]);
   const [tasks, setTasks] = useState<any[]>([]);
   const [calendarBlocks, setCalendarBlocks] = useState<any[]>([]);
+  const [goals, setGoals] = useState<Goal[]>([]);
+  const [stories, setStories] = useState<any[]>([]);
+  const [resolvedKpisByGoalId, setResolvedKpisByGoalId] = useState<Record<string, any[]>>({});
 
   // ─── Data subscriptions ─────────────────────────────────────────────────────
 
@@ -179,6 +194,62 @@ const MetricsPage: React.FC = () => {
     );
     return onSnapshot(q, snap => setCalendarBlocks(snap.docs.map(d => ({ id: d.id, ...d.data() }))), () => setCalendarBlocks([]));
   }, [currentUser?.uid]);
+
+  useEffect(() => {
+    if (!currentUser?.uid || !currentPersona) { setGoals([]); return; }
+    const q = query(
+      collection(db, 'goals'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+    );
+    return onSnapshot(q, snap => setGoals(snap.docs.map(d => ({ id: d.id, ...d.data() } as Goal))), () => setGoals([]));
+  }, [currentUser?.uid, currentPersona]);
+
+  useEffect(() => {
+    if (!currentUser?.uid || !currentPersona) { setStories([]); return; }
+    const q = query(
+      collection(db, 'stories'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+    );
+    return onSnapshot(q, snap => setStories(snap.docs.map(d => ({ id: d.id, ...d.data() }))), () => setStories([]));
+  }, [currentUser?.uid, currentPersona]);
+
+  const focusGoals = useMemo(() => goals.filter(isBannerEligibleGoal), [goals]);
+
+  // Live-resolve each focus goal's KPIs (story/task progress, HealthKit, Strava, etc.)
+  // rather than trusting the stale `current` value last written when the KPI was created.
+  useEffect(() => {
+    if (!currentUser?.uid || focusGoals.length === 0) { setResolvedKpisByGoalId({}); return; }
+    let cancelled = false;
+    (async () => {
+      const entries = await Promise.all(focusGoals.map(async (goal) => {
+        try {
+          const resolved = await resolveGoalKpis({ ownerUid: currentUser.uid, goal });
+          return [goal.id, resolved] as const;
+        } catch {
+          return [goal.id, []] as const;
+        }
+      }));
+      if (!cancelled) setResolvedKpisByGoalId(Object.fromEntries(entries));
+    })();
+    return () => { cancelled = true; };
+  }, [currentUser?.uid, focusGoals]);
+
+  const storyStatsByGoalId = useMemo(() => {
+    const map = new Map<string, { total: number; done: number }>();
+    for (const s of stories) {
+      const gid = (s as any).goalId;
+      if (!gid) continue;
+      const status = Number((s as any).status ?? 0);
+      if (status === 4) continue;
+      const cur = map.get(gid) ?? { total: 0, done: 0 };
+      cur.total++;
+      if (status === 3) cur.done++;
+      map.set(gid, cur);
+    }
+    return map;
+  }, [stories]);
 
   // ─── Weekly sport KPI data ──────────────────────────────────────────────────
 
@@ -308,45 +379,44 @@ const MetricsPage: React.FC = () => {
         </div>
       </div>
 
-      {/* ── PROFESSIONAL ──────────────────────────────────────────────────────── */}
-      <div className="card border-0 shadow-sm mb-3">
-        <div className="card-body">
-          <SectionHeader title="PROFESSIONAL" subtitle="CTA certification · Crossfuze delivery" colour="#3b82f6" />
-          <KpiChecklistRow label="CTA exam registered" goalRef="GR-86741" navigate={navigate} />
-          <KpiChecklistRow label="CTA exam passed" goalRef="GR-86741" navigate={navigate} />
-          <KpiChecklistRow label="Delivery milestones on track (weekly)" goalRef="GR-86741" navigate={navigate} />
+      {/* ── FOCUS GOALS ───────────────────────────────────────────────────────── */}
+      {focusGoals.length > 0 && (
+        <div className="card border-0 shadow-sm mb-3">
+          <div className="card-body">
+            <SectionHeader title="FOCUS GOALS" subtitle="Live KPI + story progress for flagged focus goals" colour="#3b82f6" />
+            {focusGoals.map((goal) => {
+              const stats = storyStatsByGoalId.get(goal.id);
+              const storyPct = stats?.total ? Math.round(((stats.done ?? 0) / stats.total) * 100) : null;
+              const kpis = resolvedKpisByGoalId[goal.id] || (Array.isArray((goal as any).kpisV2) ? (goal as any).kpisV2 : []);
+              return (
+                <div key={goal.id} className="mb-3 pb-3" style={{ borderBottom: '1px solid var(--bs-border-color)' }}>
+                  <div
+                    className="d-flex align-items-center justify-content-between mb-1"
+                    style={{ cursor: 'pointer' }}
+                    onClick={() => navigate(`/goals/${goal.id}`)}
+                  >
+                    <span style={{ fontSize: 13, fontWeight: 600 }}>{goal.title || 'Untitled goal'}</span>
+                    {storyPct != null && (
+                      <span className="text-muted" style={{ fontSize: 11 }}>{stats!.done}/{stats!.total} stories · {storyPct}%</span>
+                    )}
+                  </div>
+                  {kpis.length === 0 && (
+                    <div className="text-muted small">No KPIs defined for this goal yet.</div>
+                  )}
+                  {kpis.map((k: any, idx: number) => (
+                    <div key={k.id || idx} className="d-flex align-items-center justify-content-between py-1" style={{ borderTop: idx > 0 ? '1px dashed var(--bs-border-color)' : undefined }}>
+                      <span style={{ fontSize: 12 }}>{k.name || 'KPI'}</span>
+                      <span className="text-muted" style={{ fontSize: 11 }}>
+                        {k.currentDisplay ?? (k.current != null ? `${k.current}${k.unit ? ` ${k.unit}` : ''}` : '—')} / {k.target}{k.unit ? ` ${k.unit}` : ''}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              );
+            })}
+          </div>
         </div>
-      </div>
-
-      {/* ── AI COMPANY ────────────────────────────────────────────────────────── */}
-      <div className="card border-0 shadow-sm mb-3">
-        <div className="card-body">
-          <SectionHeader title="AI COMPANY (JC1)" subtitle="First revenue Q1 2027" colour="#a855f7" />
-          <KpiChecklistRow label="Company registered" goalRef="GR-87526" navigate={navigate} />
-          <KpiChecklistRow label="BOB shipped" goalRef="GR-87526" navigate={navigate} />
-          <KpiChecklistRow label="First client signed" goalRef="GR-87526" navigate={navigate} />
-        </div>
-      </div>
-
-      {/* ── GAY TRAVEL ────────────────────────────────────────────────────────── */}
-      <div className="card border-0 shadow-sm mb-3">
-        <div className="card-body">
-          <SectionHeader title="GAY TRAVEL BUSINESS" subtitle="China trip · Side venture" colour="#f59e0b" />
-          <KpiChecklistRow label="China trip dates confirmed" goalRef="GR-94912" navigate={navigate} />
-          <KpiChecklistRow label="Website live" goalRef="GR-94912" navigate={navigate} />
-          <KpiChecklistRow label="Model defined (tours / content / affiliate)" goalRef="GR-94912" navigate={navigate} />
-        </div>
-      </div>
-
-      {/* ── BOB PLATFORM ──────────────────────────────────────────────────────── */}
-      <div className="card border-0 shadow-sm mb-3">
-        <div className="card-body">
-          <SectionHeader title="BOB PLATFORM" subtitle="Track 1 → Track 2 gaps" colour="#ef4444" />
-          <KpiChecklistRow label="AI Coach live" goalRef="GR-47791" navigate={navigate} />
-          <KpiChecklistRow label="Calendar–goal linking live" goalRef="GR-47791" navigate={navigate} />
-          <KpiChecklistRow label="KPI dashboard live" goalRef="GR-47791" navigate={navigate} />
-        </div>
-      </div>
+      )}
 
       {/* ── HABITS ────────────────────────────────────────────────────────────── */}
       {habitGridRows.length > 0 && (
@@ -375,21 +445,5 @@ const MetricsPage: React.FC = () => {
   );
 };
 
-// ─── Simple boolean KPI checklist row ─────────────────────────────────────────
-
-const KpiChecklistRow: React.FC<{ label: string; goalRef: string; navigate: (p: string) => void }> = ({ label, goalRef, navigate }) => (
-  <div
-    className="d-flex align-items-center gap-2 py-1"
-    style={{ cursor: 'pointer', borderBottom: '1px solid var(--bs-border-color)' }}
-    onClick={() => navigate(`/goals`)}
-  >
-    <div style={{
-      width: 16, height: 16, borderRadius: 3, border: '2px solid var(--bs-border-color)',
-      flexShrink: 0, background: 'transparent',
-    }} />
-    <span style={{ fontSize: 13 }}>{label}</span>
-    <span className="ms-auto text-muted" style={{ fontSize: 11 }}>{goalRef}</span>
-  </div>
-);
 
 export default MetricsPage;
