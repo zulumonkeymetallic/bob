@@ -73,3 +73,4 @@ website/static/api/skills-index.json
 # Claude Code worktree submodule pointers — managed by `git worktree`,
 # never meant to be staged from main
 .claude/worktrees/
+firebase-debug.log
