@@ -42,6 +42,7 @@ const fuzzyTaskLinking = require('./fuzzyTaskLinking');
 // Secrets
 const OPENROUTER_API_KEY_SECRET = defineSecret('OPENROUTER_API_KEY');
 const BOB_CLI_ACCESS = defineSecret('BOB_CLI_ACCESS');
+const BREVO_API_KEY_SECRET = defineSecret('BREVO_API_KEY');
 
 const THEME_RULES = [
   { match: ['growth'], slots: [{ days: [1, 2, 3, 4, 5], start: 7, end: 9, label: 'Growth AM' }, { days: [1, 2, 3, 4, 5], start: 17, end: 19, label: 'Growth PM' }] },
@@ -410,10 +411,14 @@ async function matchExternalCalendarEventsToEntities({
 // ===== Helpers
 const PRIORITY_TEXT_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
 
+const LOW_STAKES_PURPOSES = new Set(['autoPoint_task', 'autoTimeOfDay_task', 'autoPoint_story', 'autoTimeOfDay_story']);
+
 async function callLLMJsonSafe({ system, user, purpose, userId, model }) {
-  const { callLLM } = require('./utils/llmHelper');
+  const { callLLM, callLLMFreeFirst } = require('./utils/llmHelper');
   try {
-    const raw = await callLLM(system, user, model);
+    const raw = LOW_STAKES_PURPOSES.has(purpose)
+      ? await callLLMFreeFirst(system, user, { modelName: model, purpose })
+      : await callLLM(system, user, model);
     return JSON.parse(raw);
   } catch (error) {
     console.warn('[llm-json] failed', { purpose, userId, error: error?.message || error });
@@ -3805,7 +3810,7 @@ exports.unifiedNightlyOrchestrator = onSchedule({
   timeZone: 'Europe/London',
   memory: '1GiB',
   timeoutSeconds: 600,
-  secrets: [OPENROUTER_API_KEY_SECRET, BOB_CLI_ACCESS],
+  secrets: [OPENROUTER_API_KEY_SECRET, BOB_CLI_ACCESS, BREVO_API_KEY_SECRET],
   region: 'europe-west2',
 }, async () => {
   console.log('[unifiedNightlyOrchestrator] Starting consolidated nightly chain...');
@@ -5031,7 +5036,7 @@ exports.runNightlyChainNow = onCall({
   timeZone: 'Europe/London',
   memory: '1GiB',
   timeoutSeconds: 540,
-  secrets: [OPENROUTER_API_KEY_SECRET, BOB_CLI_ACCESS],
+  secrets: [OPENROUTER_API_KEY_SECRET, BOB_CLI_ACCESS, BREVO_API_KEY_SECRET],
   region: 'europe-west2',
   invoker: 'public',
 }, async (req) => {
@@ -5048,7 +5053,7 @@ exports.runNightlyChainNowHttp = https.onRequest({
   timeZone: 'Europe/London',
   memory: '1GiB',
   timeoutSeconds: 540,
-  secrets: [OPENROUTER_API_KEY_SECRET, BOB_CLI_ACCESS],
+  secrets: [OPENROUTER_API_KEY_SECRET, BOB_CLI_ACCESS, BREVO_API_KEY_SECRET],
   region: 'europe-west2',
 }, async (req, res) => {
   const cliKey = BOB_CLI_ACCESS.value();

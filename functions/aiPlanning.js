@@ -431,7 +431,7 @@ async function saveScheduleToFirestore(db, userId, result) {
 /**
  * NEW: Trigger to Auto-Enrich Tasks
  */
-exports.onTaskWrite = functions.firestore.document('tasks/{taskId}').onWrite(async (change, context) => {
+exports.onTaskWrite = functions.runWith({ secrets: ['OPENROUTER_API_KEY', 'BREVO_API_KEY'] }).firestore.document('tasks/{taskId}').onWrite(async (change, context) => {
     const after = change.after.exists ? change.after.data() : null;
     const before = change.before.exists ? change.before.data() : null;
 
@@ -449,11 +449,11 @@ exports.onTaskWrite = functions.firestore.document('tasks/{taskId}').onWrite(asy
         // For now, let's call the LLM helper directly.
 
         try {
-            const { callLLM } = require('./utils/llmHelper');
+            const { callLLMFreeFirst } = require('./utils/llmHelper');
             const systemPrompt = `Estimate the time in minutes for this task. Return ONLY a number.`;
             const userPrompt = `Task: ${after.title}\nDescription: ${after.description || ''}`;
 
-            const result = await callLLM(systemPrompt, userPrompt);
+            const result = await callLLMFreeFirst(systemPrompt, userPrompt, { purpose: 'task_minute_estimate' });
             const minutes = parseInt(result.replace(/[^0-9]/g, ''));
 
             if (!isNaN(minutes) && minutes > 0) {

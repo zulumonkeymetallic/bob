@@ -2,13 +2,14 @@ const { Readable } = require('stream');
 const httpsV2 = require('firebase-functions/v2/https');
 const { defineSecret } = require('firebase-functions/params');
 const admin = require('firebase-admin');
-const { callLLM } = require('./utils/llmHelper');
+const { callLLMFreeFirst } = require('./utils/llmHelper');
 const { extractVideoId, fetchTranscript } = require('./utils/youtubeTranscript');
 const { ensureStoryFolder, ensureTaskFolder, getDriveClient } = require('./driveHierarchy');
 
 const GOOGLE_OAUTH_CLIENT_ID = defineSecret('GOOGLE_OAUTH_CLIENT_ID');
 const GOOGLE_OAUTH_CLIENT_SECRET = defineSecret('GOOGLE_OAUTH_CLIENT_SECRET');
 const OPENROUTER_API_KEY_SECRET = defineSecret('OPENROUTER_API_KEY');
+const BREVO_API_KEY_SECRET = defineSecret('BREVO_API_KEY');
 
 function buildAnalysisPrompts(transcript, context) {
   const { entityTitle, entityDescription, acceptanceCriteria, goalTitle } = context;
@@ -43,7 +44,7 @@ Return JSON only.`;
 async function analyzeTranscript(transcript, context) {
   const { system, user } = buildAnalysisPrompts(transcript, context);
   try {
-    const raw = await callLLM(system, user);
+    const raw = await callLLMFreeFirst(system, user, { purpose: 'youtube_transcript_analysis' });
     return JSON.parse(raw);
   } catch (e) {
     console.warn('[youtubeIngestion] analyzeTranscript failed:', e.message);
@@ -195,7 +196,7 @@ async function ingestYouTubeUrl({ uid, entityType, entityId, videoUrl }) {
 }
 
 exports.ingestYouTubeUrlHttp = httpsV2.onCall({
-  secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET, OPENROUTER_API_KEY_SECRET],
+  secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET, OPENROUTER_API_KEY_SECRET, BREVO_API_KEY_SECRET],
   timeoutSeconds: 300,
   memory: '512MiB',
 }, async (request) => {

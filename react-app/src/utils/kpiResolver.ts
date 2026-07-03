@@ -127,6 +127,12 @@ async function resolveExecutionSource(ownerUid: string, goalId: string, source: 
     };
   }
   if (source === 'task_progress' || source === 'manual_task') {
+    // The designer's "Calendar block duration" field maps here too (both surface as
+    // task_progress) but means something different — hours scheduled/completed against
+    // this goal in calendar_blocks, not a count of completed task docs.
+    if (kpi.type === 'time_tracked') {
+      return resolveCalendarDurationSource(ownerUid, goalId, binding, kpi);
+    }
     const tasksSnap = await getDocs(query(collection(db, 'tasks'), where('ownerUid', '==', ownerUid), where('goalId', '==', goalId)));
     const tasks = tasksSnap.docs.map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) })) as Task[];
     const completedTasks = tasks.filter((task) => {
@@ -146,7 +152,99 @@ async function resolveExecutionSource(ownerUid: string, goalId: string, source: 
   return null;
 }
 
-async function resolveHabitSource(ownerUid: string, goalId: string, binding: MetricBinding) {
+const TIMEFRAME_LOOKBACK_DAYS: Record<string, number> = {
+  daily: 1, weekly: 7, sprint: 14, monthly: 30, quarterly: 90, annual: 365,
+};
+
+async function resolveCalendarDurationSource(ownerUid: string, goalId: string, binding: MetricBinding, kpi: Kpi) {
+  const lookbackDays = TIMEFRAME_LOOKBACK_DAYS[kpi.timeframe] || 7;
+  const sinceMs = Date.now() - lookbackDays * 24 * 60 * 60 * 1000;
+  const blocksSnap = await getDocs(query(
+    collection(db, 'calendar_blocks'),
+    where('ownerUid', '==', ownerUid),
+    where('goalId', '==', goalId),
+  ));
+  let totalHours = 0;
+  blocksSnap.docs.forEach((docSnap) => {
+    const data = docSnap.data() as any;
+    const startMs = Number(data.start || 0);
+    const endMs = Number(data.end || 0);
+    if (!startMs || !endMs || endMs <= startMs || startMs < sinceMs) return;
+    totalHours += (endMs - startMs) / (60 * 60 * 1000);
+  });
+  return {
+    source: 'task_progress' as const,
+    currentValue: Math.round(totalHours * 10) / 10,
+    unit: binding.unit || kpi.unit || 'hours',
+    observedAt: Date.now(),
+    isFresh: true,
+  };
+}
+
+async function resolveHabitSource(ownerUid: string, goalId: string, binding: MetricBinding, kpi: Kpi) {
+  const linkedHabitIds = (kpi as any).linkedHabitIds as string[] | undefined;
+  const linkedRoutineIds = (kpi as any).linkedRoutineIds as string[] | undefined;
+  const lookbackDays = (kpi as any).lookbackDays || 30;
+  const sinceMs = Date.now() - lookbackDays * 24 * 60 * 60 * 1000;
+
+  // Designer-specified habits/routines take precedence — the whole point of picking
+  // them explicitly is to track exactly those, not "whatever scheduled_instances
+  // happens to carry this goalId" (which nothing reliably populates for habit tasks).
+  if (linkedHabitIds?.length) {
+    let totalDays = 0;
+    let completedDays = 0;
+    for (const habitId of linkedHabitIds) {
+      const entriesSnap = await getDocs(query(collection(db, `habits/${habitId}/habitEntries`)));
+      entriesSnap.docs.forEach((docSnap) => {
+        const data = docSnap.data() as any;
+        const dateMs = Number(data.date || 0);
+        if (dateMs && dateMs < sinceMs) return;
+        totalDays += 1;
+        if (data.isCompleted) completedDays += 1;
+      });
+    }
+    if (totalDays === 0) return null;
+    const adherence = Math.round((completedDays / totalDays) * 100);
+    return {
+      source: 'habit_occurrence' as const,
+      currentValue: adherence,
+      unit: binding.unit || '%',
+      observedAt: Date.now(),
+      isFresh: true,
+      completedOccurrences: completedDays,
+      totalScheduledOccurrences: totalDays,
+    };
+  }
+
+  if (linkedRoutineIds?.length) {
+    const doneDaysByTask = new Map<string, Set<string>>();
+    for (const taskId of linkedRoutineIds) {
+      const blocksSnap = await getDocs(query(collection(db, 'calendar_blocks'), where('ownerUid', '==', ownerUid), where('taskId', '==', taskId)));
+      const doneDays = new Set<string>();
+      blocksSnap.docs.forEach((docSnap) => {
+        const data = docSnap.data() as any;
+        if (String(data.status || '').toLowerCase() !== 'done') return;
+        const updatedMs = data.updatedAt?.toMillis?.() ?? null;
+        if (updatedMs != null && updatedMs < sinceMs) return;
+        doneDays.add(String(docSnap.id).split('_').pop() || docSnap.id);
+      });
+      doneDaysByTask.set(taskId, doneDays);
+    }
+    const totalCompleted = Array.from(doneDaysByTask.values()).reduce((sum, s) => sum + s.size, 0);
+    const compliancePercent = Math.round((totalCompleted / (linkedRoutineIds.length * lookbackDays)) * 100);
+    return {
+      source: 'habit_occurrence' as const,
+      currentValue: Math.min(100, compliancePercent),
+      unit: binding.unit || '%',
+      observedAt: Date.now(),
+      isFresh: true,
+      completedOccurrences: totalCompleted,
+      totalScheduledOccurrences: linkedRoutineIds.length * lookbackDays,
+    };
+  }
+
+  // Fallback for KPIs created before linked habits/routines were required: whatever
+  // scheduled_instances happen to carry this goalId.
   const instancesSnap = await getDocs(query(collection(db, 'scheduled_instances'), where('ownerUid', '==', ownerUid), orderBy('occurrenceDate', 'desc'), limit(200)));
   const matching = instancesSnap.docs
     .map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) }))
@@ -221,7 +319,7 @@ export async function resolveKpiForGoal(options: {
     } else if (source === 'story_progress' || source === 'task_progress' || source === 'manual_task') {
       candidate = await resolveExecutionSource(ownerUid, goal.id, source, binding, kpi);
     } else if (source === 'habit_occurrence') {
-      candidate = await resolveHabitSource(ownerUid, goal.id, binding);
+      candidate = await resolveHabitSource(ownerUid, goal.id, binding, kpi);
     } else if (source === 'finance') {
       candidate = await resolveFinanceSource(ownerUid, goal, binding);
     }

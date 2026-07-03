@@ -1,24 +1,24 @@
 {
-  "buildId": "1783095135810",
-  "timestamp": "2026-07-03T16:12:15Z",
-  "date": "2026-07-03 17:12:15",
+  "buildId": "1783099923948",
+  "timestamp": "2026-07-03T17:32:03Z",
+  "date": "2026-07-03 18:32:03",
   "branch": "main",
   "user": "jim",
   "versions": {
-    "web": "4.5.484.5810",
+    "web": "4.5.484.3948",
     "ios": "",
     "mac": ""
   },
   "commits": {
-    "web": "ea5b7e6d",
-    "ios": "",
-    "mac": ""
+    "web": "63114647",
+    "ios": "6e0195a",
+    "mac": "a1a4d8b"
   },
   "durations": {
-    "web": "201s",
-    "ios": "",
-    "mac": ""
+    "web": "33s",
+    "ios": "0s",
+    "mac": "0s"
   },
-  "dryRun": false,
+  "dryRun": true,
   "beta": false
 }
