@@ -3242,9 +3242,10 @@ async function appendJournalToGoogleDoc({ uid, docUrl, sections, includeDateHead
 
     // A "date heading" is an H1 whose text looks like a journal date (contains a year
     // in the 2000s AND a month name).  "Rules for Life" and other static H1s won't match.
+    const MONTH_NAME_RE =
+      /\b(jan(uary)?|feb(ruary)?|mar(ch)?|apr(il)?|may|jun(e)?|jul(y)?|aug(ust)?|sep(tember)?|oct(ober)?|nov(ember)?|dec(ember)?)\b/i;
     const looksLikeDateHeading = (text) =>
-      /\b20\d{2}\b/.test(text) &&
-      /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b/i.test(text);
+      /\b20\d{2}\b/.test(text) && MONTH_NAME_RE.test(text);
 
     const h1Elements = bodyContent.filter(
       (el) => el?.paragraph?.paragraphStyle?.namedStyleType === 'HEADING_1',
