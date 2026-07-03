@@ -50,20 +50,28 @@ function fromCachedSprint(cached: CachedSprint): Sprint {
   };
 }
 
-function isSprintActive(sprint: Sprint, nowMs = Date.now()) {
+function isSprintStatusActive(sprint: Sprint) {
   const status = String((sprint as any)?.status ?? '').toLowerCase();
-  const statusActive = ['active', 'current', 'in-progress', 'inprogress', '1', 'true'].includes(status);
-  const start = typeof sprint.startDate === 'number' ? sprint.startDate : null;
-  const end = typeof sprint.endDate === 'number' ? sprint.endDate : null;
-  const inWindow = start != null && end != null ? nowMs >= start && nowMs <= end : false;
-  return statusActive || inWindow;
+  return ['active', 'current', 'in-progress', 'inprogress', '1', 'true'].includes(status);
 }
 
+function isSprintInWindow(sprint: Sprint, nowMs = Date.now()) {
+  const start = typeof sprint.startDate === 'number' ? sprint.startDate : null;
+  const end = typeof sprint.endDate === 'number' ? sprint.endDate : null;
+  return start != null && end != null ? nowMs >= start && nowMs <= end : false;
+}
+
+// A sprint's date window merely overlapping "now" doesn't make it active — a planned
+// (status=0) sprint scheduled for this month is not the active sprint just because
+// today falls inside its window. Only fall back to date-window matching when nothing
+// carries an explicit active status, so a real active sprint always wins the pick,
+// even if a later-starting planned sprint's window also happens to include today.
 function pickActiveSprint(sprints: Sprint[]) {
   if (!Array.isArray(sprints) || sprints.length === 0) return null;
-  const active = sprints.filter((s) => isSprintActive(s));
-  if (!active.length) return null;
-  return active.sort((a, b) => (b.startDate ?? 0) - (a.startDate ?? 0))[0];
+  const statusActive = sprints.filter((s) => isSprintStatusActive(s));
+  const candidates = statusActive.length ? statusActive : sprints.filter((s) => isSprintInWindow(s));
+  if (!candidates.length) return null;
+  return candidates.sort((a, b) => (b.startDate ?? 0) - (a.startDate ?? 0))[0];
 }
 
 function loadCachedSprints(uid: string, persona: string) {

@@ -10,6 +10,7 @@ const { makeRefCandidate } = require('./lib/refGenerator');
 const { clampTaskPoints } = require('./utils/taskPoints');
 const { buildAbsoluteUrl, buildEntityUrl } = require('./utils/urlHelpers');
 const { coerceZone, toDateTime, toMillis } = require('./lib/time');
+const { resolveActiveSprintIds } = require('./lib/sprintStatus');
 const {
   cloneThemeAllocations,
   getAllocationWeekKey,
@@ -2812,21 +2813,17 @@ async function runPriorityScoringJob() {
     });
 
     const sprintMap = new Map();
-    const activeSprintIds = new Set();
     const sprintSnap = await db.collection('sprints').where('ownerUid', '==', userId).get().catch(() => ({ docs: [] }));
     sprintSnap.docs.forEach((d) => {
       const sd = d.data() || {};
       const end = sd.endDate || sd.end || null;
       const start = sd.startDate || sd.start || null;
-      const nowMs = Date.now();
       const endMs = end ? toDateTime(end, { defaultValue: null })?.toMillis() : null;
       const startMs = start ? toDateTime(start, { defaultValue: null })?.toMillis() : null;
       const status = String(sd.status || '').toLowerCase();
-      const inWindow = startMs && endMs ? (nowMs >= startMs && nowMs <= endMs) : false;
-      const isActiveStatus = ['active', 'current', 'in-progress', 'inprogress', '1', 'true'].includes(status);
-      if (isActiveStatus || inWindow) activeSprintIds.add(d.id);
       sprintMap.set(d.id, { endDateMs: endMs, startDateMs: startMs, status });
     });
+    const activeSprintIds = resolveActiveSprintIds(sprintSnap.docs);
 
     // ========== CLEAR ALL TOP 3 TAGS BEFORE RE-PRIORITIZATION ==========
     // This ensures only fresh Top 3 items are tagged, preventing stale tags
@@ -3501,7 +3498,7 @@ async function runCalendarPlannerJob() {
     // Cache goals for theme inheritance
     const goalMetaMap = new Map();
     const sprintMetaMap = new Map();
-    const activeSprintIds = new Set();
+    let activeSprintIds = new Set();
     try {
       const goalsSnap = await db.collection('goals').where('ownerUid', '==', userId).get();
       goalsSnap.docs.forEach((d) => {
@@ -3511,15 +3508,6 @@ async function runCalendarPlannerJob() {
       const sprintSnap = await db.collection('sprints').where('ownerUid', '==', userId).get().catch(() => ({ docs: [] }));
       sprintSnap.docs.forEach((d) => {
         const sd = d.data() || {};
-        const status = String(sd.status || '').toLowerCase();
-        const startMs = sd.startDate || sd.start || null;
-        const endMs = sd.endDate || sd.end || null;
-        const nowMs = Date.now();
-        const isActiveStatus = ['active', 'current', 'in-progress', 'inprogress', '1', 'true'].includes(status);
-        const inWindow = startMs && endMs ? (nowMs >= toMillis(startMs) && nowMs <= toMillis(endMs)) : false;
-        if (isActiveStatus || inWindow) {
-          activeSprintIds.add(d.id);
-        }
         sprintMetaMap.set(d.id, {
           status: sd.status,
           start: sd.startDate || sd.start || null,
@@ -3527,6 +3515,7 @@ async function runCalendarPlannerJob() {
           name: sd.name || sd.title || d.id,
         });
       });
+      activeSprintIds = resolveActiveSprintIds(sprintSnap.docs);
     } catch { /* ignore */ }
 
     const activeSprintEndMs = Array.from(activeSprintIds)

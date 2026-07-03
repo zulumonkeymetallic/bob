@@ -95,6 +95,7 @@ try {
 }
 const { sendEmail } = require('./lib/email');
 const { coerceZone, toDateTime, computeDayWindow } = require('./lib/time');
+const { resolveActiveSprintIds } = require('./lib/sprintStatus');
 const { resolveThemeAllocationsForDate } = require('./lib/themeAllocations');
 const crypto = require('crypto');
 const { KeyManagementServiceClient } = require('@google-cloud/kms');
@@ -9570,17 +9571,7 @@ async function prioritizeTasksForUser({ db, userId, runId = null }) {
     db.collection('sprints').where('ownerUid', '==', userId).get().catch(() => ({ docs: [] })),
   ]);
 
-  const nowMs = Date.now();
-  const activeSprintIds = new Set();
-  sprintsSnap.docs.forEach((doc) => {
-    const data = doc.data() || {};
-    const status = String(data.status || '').toLowerCase();
-    const startMs = toMillis(data.startDate || data.start);
-    const endMs = toMillis(data.endDate || data.end);
-    const inWindow = startMs && endMs ? (nowMs >= startMs && nowMs <= endMs) : false;
-    const isActive = ['active', 'current', 'in-progress', 'inprogress', '1', 'true'].includes(status) || inWindow;
-    if (isActive) activeSprintIds.add(doc.id);
-  });
+  const activeSprintIds = resolveActiveSprintIds(sprintsSnap.docs);
 
   if (!activeSprintIds.size) {
     return { ok: true, considered: 0, updated: 0, items: [] };
@@ -16530,20 +16521,17 @@ exports.remindersPush = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
 
     // Sprint metadata for tagging/selection
     const sprintMeta = new Map();
-    const activeSprintIds = new Set();
+    let activeSprintIds = new Set();
     try {
       const sprintSnap = await db.collection('sprints').where('ownerUid', '==', uid).limit(25).get();
       sprintSnap.docs.forEach((d) => {
         const data = d.data() || {};
-        const status = String(data.status || '').toLowerCase();
         const startMs = toMillis(data.startDate || data.start);
         const endMs = toMillis(data.endDate || data.end);
-        const inWindow = startMs && endMs ? (now >= startMs && now <= endMs) : false;
-        const isActive = ['active', 'current', 'in-progress', 'inprogress', '1', 'true'].includes(status) || inWindow;
         const name = data.name || data.title || data.ref || `Sprint ${d.id.slice(-2)}`;
-        sprintMeta.set(d.id, { name, startMs, endMs, status });
-        if (isActive) activeSprintIds.add(d.id);
+        sprintMeta.set(d.id, { name, startMs, endMs, status: data.status });
       });
+      activeSprintIds = resolveActiveSprintIds(sprintSnap.docs);
     } catch { /* ignore */ }
 
     // Return tasks that need pushing: unlinked, flagged, or completion updates
@@ -16706,18 +16694,18 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET, 
     let defaultSprintId = null;
     try {
       const sprintSnap = await db.collection('sprints').where('ownerUid', '==', uid).limit(25).get();
-      const nowMs = Date.now();
+      const activeIds = resolveActiveSprintIds(sprintSnap.docs);
       sprintSnap.docs.forEach((d) => {
         const data = d.data() || {};
         const startMs = toMillis(data.startDate || data.start);
         const endMs = toMillis(data.endDate || data.end);
-        const status = String(data.status || '').toLowerCase();
-        const inWindow = startMs && endMs ? (nowMs >= startMs && nowMs <= endMs) : false;
-        const isActive = ['active', 'current', 'in-progress', 'inprogress', '1', 'true'].includes(status) || inWindow;
         const name = data.name || data.title || data.ref || `Sprint ${d.id.slice(-2)}`;
-        sprintMeta.set(d.id, { name, startMs, endMs, isActive });
-        if (!defaultSprintId && isActive) defaultSprintId = d.id;
+        sprintMeta.set(d.id, { name, startMs, endMs, isActive: activeIds.has(d.id) });
       });
+      // Tie-break on latest start date so a genuinely active sprint is picked even when
+      // more than one qualifies (e.g. legacy data with several overlapping windows).
+      defaultSprintId = Array.from(activeIds)
+        .sort((a, b) => (sprintMeta.get(b)?.startMs || 0) - (sprintMeta.get(a)?.startMs || 0))[0] || null;
     } catch { /* ignore */ }
 
     // Load global hierarchy snapshot once for fast pre-write deduplication — reduces per-task
