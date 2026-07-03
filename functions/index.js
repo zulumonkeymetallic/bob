@@ -12381,8 +12381,78 @@ function assembleDailyChecklist(summaryData) {
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       }, { merge: true });
     await taskRef.set({ lastDoneAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+
+    const linkedGoalId = task.linkedGoalId || task.goalId || null;
+    if (linkedGoalId && type !== 'chore') {
+      await updateHabitDrivenGoalKpi({ db, uid, task: { ...task, id: taskId }, goalId: String(linkedGoalId) }).catch((err) => {
+        console.warn('[completeChoreTask] habit KPI update failed', { taskId, goalId: linkedGoalId, error: err?.message || err });
+      });
+    }
+
     return { ok: true };
   });
+
+  // A habit/routine task carrying linkedGoalId (set via EditTaskModal's "Linked goal
+  // (KPI tracking)" picker) drives a routine_compliance KPI on that goal automatically —
+  // no separate KPI-designer configuration step required. Compliance is 30-day adherence:
+  // days with a completed calendar_block for this task, out of days since the task/habit
+  // was created (capped at 30).
+  async function updateHabitDrivenGoalKpi({ db, uid, task, goalId }) {
+    const goalRef = db.collection('goals').doc(goalId);
+    const goalSnap = await goalRef.get();
+    if (!goalSnap.exists) return;
+    const goal = goalSnap.data() || {};
+    if (String(goal.ownerUid || '') !== String(uid || '')) return;
+
+    const lookbackDays = 30;
+    const sinceMs = Date.now() - lookbackDays * 24 * 60 * 60 * 1000;
+    const blocksSnap = await db.collection('calendar_blocks')
+      .where('ownerUid', '==', uid)
+      .where('taskId', '==', task.id)
+      .get();
+    const doneDays = new Set();
+    blocksSnap.docs.forEach((d) => {
+      const data = d.data() || {};
+      if (String(data.status || '').toLowerCase() !== 'done') return;
+      const updatedMs = data.updatedAt?.toMillis?.() ?? null;
+      if (updatedMs != null && updatedMs < sinceMs) return;
+      const dayKey = String(d.id).split('_').pop();
+      if (dayKey) doneDays.add(dayKey);
+    });
+
+    const createdMs = task.createdAt?.toMillis?.() ?? (typeof task.createdAt === 'number' ? task.createdAt : null);
+    const ageDays = createdMs ? Math.max(1, Math.round((Date.now() - createdMs) / 86400000)) : lookbackDays;
+    const windowDays = Math.min(lookbackDays, ageDays);
+    const compliancePercent = Math.round((doneDays.size / Math.max(windowDays, 1)) * 100);
+
+    const kpiId = `habit_${task.id}`;
+    const kpiEntry = {
+      id: kpiId,
+      name: task.title || task.name || 'Habit',
+      type: 'routine_compliance',
+      timeframe: 'monthly',
+      target: 80,
+      unit: '%',
+      current: compliancePercent,
+      progress: compliancePercent,
+      currentDisplay: `${compliancePercent}%`,
+      linkedRoutineIds: [task.id],
+      lookbackDays,
+      complianceThreshold: 80,
+      completedDays: doneDays.size,
+      compliancePercent,
+      resolvedSource: 'habit_occurrence',
+      lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+    };
+
+    const kpisV2 = Array.isArray(goal.kpisV2) ? goal.kpisV2.filter((k) => k?.id !== kpiId) : [];
+    const kpis = Array.isArray(goal.kpis) ? goal.kpis.filter((k) => k?.id !== kpiId) : [];
+    await goalRef.set({
+      kpisV2: [...kpisV2, kpiEntry],
+      kpis: [...kpis, { id: kpiId, name: kpiEntry.name, target: kpiEntry.target, unit: kpiEntry.unit, current: compliancePercent }],
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+  }
 
   exports.snoozeChoreTask = httpsV2.onCall(async (req) => {
     const uid = req?.auth?.uid;
