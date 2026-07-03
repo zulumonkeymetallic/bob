@@ -28,7 +28,6 @@ const { callLLM } = require('../utils/llmHelper');
 const TZ = 'Europe/London';
 const REGION = 'europe-west2';
 
-const GOOGLE_AI_STUDIO_API_KEY = defineSecret('GOOGLEAISTUDIOAPIKEY');
 const OPENROUTER_API_KEY_SECRET = defineSecret('OPENROUTER_API_KEY');
 
 // ─── Coach persona (triathlon + strength) ────────────────────────────────────
@@ -674,7 +673,7 @@ exports.runCoachOrchestratorNightly = schedulerV2.onSchedule(
     schedule: '0 4 * * *',  // 4am — gives morning briefing (07:00) time to read coach_daily
     timeZone: TZ,
     region: REGION,
-    secrets: [GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET],
+    secrets: [OPENROUTER_API_KEY_SECRET],
   },
   async () => {
     const firestore = db();

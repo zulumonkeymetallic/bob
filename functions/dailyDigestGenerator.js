@@ -6,7 +6,10 @@ const { sendEmail } = require('./lib/email');
 const aiUsageLogger = require('./utils/aiUsageLogger');
 
 // Centralize Gemini model selection so we can switch to newer models (e.g., gemini-2.5-flash-lite)
-const DEFAULT_GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
+const { VertexAI } = require('@google-cloud/vertexai');
+const DEFAULT_GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+const VERTEX_PROJECT  = 'bob20250810';
+const VERTEX_LOCATION = 'europe-west2';
 const DAILY_DIGEST_ENABLED = process.env.DAILY_DIGEST_ENABLED === 'true';
 
 /**
@@ -519,36 +522,14 @@ async function generateAIInsights(userData, personality = null) {
   4) Heads up: one short risk/warning (overdue, crowded calendar, or missing blocks).
   ${toneLine}`;
 
-  const apiKey = process.env.GOOGLEAISTUDIOAPIKEY;
-  if (!apiKey) {
-    return { choices: [{ message: { content: 'Gemini key not configured.' } }] };
-  }
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(DEFAULT_GEMINI_MODEL)}:generateContent?key=${encodeURIComponent(apiKey)}`;
-  const body = {
-    contents: [
-      { role: 'user', parts: [{ text: 'You are an expert executive assistant. Be precise and data-driven.' }] },
-      { role: 'user', parts: [{ text: prompt }] }
-    ],
-    generationConfig: { temperature: 0.7, maxOutputTokens: 800 }
-  };
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+  const vertexAI = new VertexAI({ project: VERTEX_PROJECT, location: VERTEX_LOCATION });
+  const model = vertexAI.getGenerativeModel({
+    model: DEFAULT_GEMINI_MODEL,
+    systemInstruction: { role: 'system', parts: [{ text: 'You are an expert executive assistant. Be precise and data-driven.' }] },
+    generationConfig: { temperature: 0.7, maxOutputTokens: 800 },
   });
-  if (!resp.ok) {
-    const text = await resp.text();
-    throw new Error(`Gemini HTTP ${resp.status}: ${text}`);
-  }
-  const json = await resp.json();
-  const textOut = json?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-
-  // Attempt to extract a Task ID if the AI identified one (This is a heuristic extraction)
-  // In a future iteration, we should force JSON output from the LLM.
-  // For now, we'll look for a pattern like "Task ID: <id>" or just rely on the text.
-  // BUT, the requirement is to "Write this priority back to the tasks Firestore collection".
-  // So we MUST ask for JSON or a specific format.
-
+  const result = await model.generateContent(prompt);
+  const textOut = result.response?.candidates?.[0]?.content?.parts?.[0]?.text || '';
   return { choices: [{ message: { content: textOut } }] };
 }
 

@@ -18,6 +18,13 @@ export interface OverCapacityMove {
   suggestedSprintName: string;
 }
 
+export interface ScheduleWarning {
+  id: string;
+  type: 'story' | 'task';
+  title: string;
+  reason: string;
+}
+
 export interface DeferralCandidate {
   id: string;
   type: 'story' | 'task';
@@ -415,9 +422,35 @@ export const useDeferralCandidates = () => {
       }));
   }, [stories, currentSprint, nextSprint, focusGoalIds, storiesReady]);
 
+  /**
+   * Stories/tasks whose current sprint falls outside their linked goal's planned
+   * start/end window (set nightly by the goal-window guard rail). Surfaced regardless
+   * of protected/candidate status — it's a data integrity flag, not a defer suggestion.
+   */
+  const scheduleWarnings = useMemo<ScheduleWarning[]>(() => {
+    const fromStories = stories
+      .filter((s) => s.aiScheduleWarning === 'goal_window_mismatch')
+      .map((s) => ({
+        id: s._id,
+        type: 'story' as const,
+        title: String(s.title || 'Untitled story'),
+        reason: String(s.aiScheduleWarningReason || 'Sprint falls outside linked goal\'s planned window'),
+      }));
+    const fromTasks = tasks
+      .filter((t) => t.aiScheduleWarning === 'goal_window_mismatch')
+      .map((t) => ({
+        id: t._id,
+        type: 'task' as const,
+        title: String(t.title || 'Untitled task'),
+        reason: String(t.aiScheduleWarningReason || 'Sprint falls outside linked goal\'s planned window'),
+      }));
+    return [...fromStories, ...fromTasks];
+  }, [stories, tasks]);
+
   return {
     candidates,
     overCapacityMoves,
+    scheduleWarnings,
     loading: !storiesReady || !tasksReady,
     currentSprint,
     nextSprint,

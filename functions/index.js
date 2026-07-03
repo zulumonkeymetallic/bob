@@ -6310,6 +6310,7 @@ async function syncMonzoTransactionsForAccount({ uid, accountId, accessToken, si
     merchantMap.set(key, {
       type: data.categoryType || data.type || 'optional',
       label: data.label || data.categoryLabel || null,
+      isSubscription: data.isSubscription === true,
     });
   });
 
@@ -6427,6 +6428,11 @@ async function syncMonzoTransactionsForAccount({ uid, accountId, accessToken, si
         const m = merchantMap.get(merchantKey);
         docData.userCategoryType = m.type;
         if (m.label) docData.userCategoryLabel = m.label;
+        if (m.isSubscription) docData.isSubscription = true;
+      }
+      // Auto-detect subscription from Monzo's native category
+      if (!docData.isSubscription && String(tx.category || '').toLowerCase() === 'subscriptions') {
+        docData.isSubscription = true;
       }
 
       // Apply AI merchant mapping if available
@@ -11000,76 +11006,39 @@ async function callLLMJson({ system, user, purpose, userId, expectJson = false, 
 }
 
 async function callGemini({ system, user, model = GEMINI_MODEL, expectJson, temperature, apiKey: userApiKey = null }) {
-  const apiKey = (userApiKey || process.env.GOOGLEAISTUDIOAPIKEY || '').trim();
-  if (!apiKey) throw new Error('GOOGLEAISTUDIOAPIKEY not configured');
-
-  try {
-    // Initialize SDK
-    const genAI = new GoogleGenerativeAI(apiKey);
+  // User-supplied key → honour it (user-configured AI Studio provider path)
+  if (userApiKey) {
+    const genAI = new GoogleGenerativeAI(userApiKey);
     const mdl = model || GEMINI_MODEL;
-
-    // Configure safety settings (block only high-risk content)
     const safetySettings = [
-      {
-        category: HarmCategory.HARM_CATEGORY_HARASSMENT,
-        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
-      },
-      {
-        category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
-      },
-      {
-        category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
-      },
-      {
-        category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
-        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
-      },
+      { category: HarmCategory.HARM_CATEGORY_HARASSMENT,        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
+      { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,       threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
+      { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
+      { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
     ];
-
-    // Configure generation parameters
-    const generationConfig = {
-      temperature: temperature ?? 0.2,
-      topP: 0.95,
-      topK: 40,
-      maxOutputTokens: 8192,
-    };
-
-    // Add JSON mode if requested
-    if (expectJson) {
-      generationConfig.responseMimeType = 'application/json';
-    }
-
-    // Get model instance
-    const modelInstance = genAI.getGenerativeModel({
-      model: mdl,
-      safetySettings,
-      generationConfig,
-    });
-
-    // Combine system and user prompts
-    const prompt = `${system}\n\n${user}`;
-
-    // Generate content
-    const result = await modelInstance.generateContent(prompt);
-    const response = result.response;
-    const text = response.text();
-
+    const generationConfig = { temperature: temperature ?? 0.2, topP: 0.95, topK: 40, maxOutputTokens: 8192 };
+    if (expectJson) generationConfig.responseMimeType = 'application/json';
+    const modelInstance = genAI.getGenerativeModel({ model: mdl, safetySettings, generationConfig });
+    const result = await modelInstance.generateContent(`${system}\n\n${user}`);
+    const text = result.response.text();
     if (!text) throw new Error('Empty response from Gemini');
     return text;
-
-  } catch (error) {
-    console.error('Gemini API Error:', error);
-    // Enhanced error handling
-    if (error.message?.includes('SAFETY')) {
-      throw new Error(`Gemini blocked response due to safety concerns: ${error.message}`);
-    }
-    if (error.message?.includes('RECITATION')) {
-      throw new Error(`Gemini blocked response due to recitation: ${error.message}`);
-    }
-    throw new Error(`Gemini API error: ${error.message || String(error)}`);
   }
+
+  // No user key → route through Vertex AI (ADC — SGC-visible, BOB's infrastructure)
+  const { VertexAI } = require('@google-cloud/vertexai');
+  const vertexAI = new VertexAI({ project: 'bob20250810', location: 'europe-west2' });
+  const generationConfig = { temperature: temperature ?? 0.2, topP: 0.95, maxOutputTokens: 8192 };
+  if (expectJson) generationConfig.responseMimeType = 'application/json';
+  const vertexModel = vertexAI.getGenerativeModel({
+    model: model || GEMINI_MODEL,
+    systemInstruction: system ? { role: 'system', parts: [{ text: system }] } : undefined,
+    generationConfig,
+  });
+  const result = await vertexModel.generateContent(user);
+  const text = result.response?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) throw new Error('Empty response from Vertex AI');
+  return text;
 }
 
 async function callAnthropic({ system, user, model = 'claude-haiku-3-5', expectJson, temperature, apiKey: userApiKey = null }) {
@@ -20974,7 +20943,7 @@ exports.tagTasksAndBuildDeepLinks = schedulerV2.onSchedule({ schedule: 'every 6 
 });
 
 // Sprint Retrospective Generation
-exports.generateSprintRetrospective = functionsV2.https.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET] }, async (request) => {
+exports.generateSprintRetrospective = functionsV2.https.onCall({ secrets: [OPENROUTER_API_KEY_SECRET] }, async (request) => {
   const { data, auth } = request;
   if (!auth) throw new httpsV2.HttpsError('unauthenticated', 'User must be authenticated');
 
@@ -20982,9 +20951,9 @@ exports.generateSprintRetrospective = functionsV2.https.onCall({ secrets: [GOOGL
   if (!sprintId || !metrics) throw new httpsV2.HttpsError('invalid-argument', 'Missing required fields');
 
   try {
-    const { GoogleGenerativeAI } = require('@google/generative-ai');
-    const genAI = new GoogleGenerativeAI(GOOGLE_AI_STUDIO_API_KEY.value());
-    const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
+    const { VertexAI } = require('@google-cloud/vertexai');
+    const vertexAI = new VertexAI({ project: 'bob20250810', location: 'europe-west2' });
+    const model = vertexAI.getGenerativeModel({ model: GEMINI_MODEL });
 
     const prompt = `You are a helpful assistant generating a sprint retrospective summary.
 
@@ -21011,9 +20980,9 @@ Generate a concise retrospective summary (3-4 paragraphs) covering:
 Keep it professional, actionable, and encourage the team.`;
 
     const result = await model.generateContent(prompt);
-    const summary = result.response.text();
+    const summary = result.response?.candidates?.[0]?.content?.parts?.[0]?.text || '';
 
-    await aiUsageLogger.logAIUsage(auth.uid, 'gemini-retro', GEMINI_MODEL, prompt, summary);
+    await aiUsageLogger.logAIUsage(auth.uid, 'vertex-retro', GEMINI_MODEL, prompt, summary);
 
     return { summary };
   } catch (error) {
@@ -21079,6 +21048,16 @@ try {
   }
 } catch (e) {
   console.warn('[init] agent/agentBriefing not loaded', e?.message || e);
+}
+
+// Phase 5: Vertex AI in-app assistant (replaces AI Studio path, visible to CMDB SGC)
+try {
+  const bobAssistVertexModule = require('./agent/bobAssistVertex');
+  if (bobAssistVertexModule) {
+    exports.sendAssistantMessageV2 = bobAssistVertexModule.sendAssistantMessageV2;
+  }
+} catch (e) {
+  console.warn('[init] agent/bobAssistVertex not loaded', e?.message || e);
 }
 
 // ===== YouTube ingestion — manual callable trigger

@@ -31,8 +31,6 @@ const { onSchedule }         = require('firebase-functions/v2/scheduler');
 const { defineSecret }       = require('firebase-functions/params');
 const admin                  = require('firebase-admin');
 
-// BOB's own Gemini key (available to the refresh function)
-const GOOGLE_AI_STUDIO_API_KEY = defineSecret('GOOGLEAISTUDIOAPIKEY');
 const OPENROUTER_API_KEY_SECRET = defineSecret('OPENROUTER_API_KEY');
 
 // Registry TTL: consider entries stale after 25 hours
@@ -170,22 +168,16 @@ exports.refreshModelRegistry = onSchedule(
     region: 'europe-west2',
     memory: '256MiB',
     timeoutSeconds: 60,
-    secrets: [GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET],
+    secrets: [OPENROUTER_API_KEY_SECRET],
   },
   async () => {
     const db = admin.firestore();
     console.log('[llmSettings] refreshModelRegistry started');
 
-    // --- Gemini: always use BOB's own key ---
+    // --- Gemini: write curated list to registry (Vertex AI — no AI Studio key needed) ---
     try {
-      const geminiKey = GOOGLE_AI_STUDIO_API_KEY.value();
-      if (geminiKey) {
-        const models = await _fetchLiveModels('gemini', geminiKey);
-        if (models && models.length > 0) {
-          await _writeRegistry('gemini', models);
-          console.log(`[llmSettings] Registry updated: gemini (${models.length} models)`);
-        }
-      }
+      await _writeRegistry('gemini', FALLBACK_MODELS.gemini);
+      console.log(`[llmSettings] Registry updated: gemini (${FALLBACK_MODELS.gemini.length} models, curated)`);
     } catch (e) {
       console.warn('[llmSettings] Gemini registry refresh failed:', e?.message);
     }

@@ -81,7 +81,7 @@ interface HabitAdherenceRow {
 }
 
 function buildHabitRows(tasks: any[], calendarBlocks: any[]): HabitAdherenceRow[] {
-  const CHORE_TYPES = new Set(['chore', 'routine', 'habit']);
+  const CHORE_TYPES = new Set(['routine', 'habit']);
   const days = getLast30Days();
   const habits = tasks.filter(t => CHORE_TYPES.has(String(t.type || '').toLowerCase()));
 

@@ -42,7 +42,10 @@ import {
   Wand2,
   Pencil,
   Trash2,
-  CalendarDays
+  CalendarDays,
+  GitBranch,
+  Layers2,
+  Leaf,
 } from 'lucide-react';
 import { Goal, Story } from '../types';
 import { ChoiceHelper } from '../config/choices';
@@ -935,29 +938,27 @@ const SortableRow: React.FC<SortableRowProps> = ({
               );
             }
             if (column.key === 'title') {
-              const kind = (goal as any).goalKind as string | undefined;
-              const kindBadge =
-                kind === 'umbrella' ? { label: '📁 Project', style: { background: 'var(--bs-primary)', color: '#fff' } } :
-                kind === 'milestone' ? { label: '🎯 Phase', style: { background: 'var(--bs-info)', color: '#fff' } } :
-                null;
+              const kind = String((goal as any).goalKind || '').toLowerCase();
               const hasParent = !!(goal as any).parentGoalId;
+              const KindBadge = kind === 'program' ? (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10, padding: '1px 6px', borderRadius: 10, fontWeight: 600, color: '#0ea5e9', background: '#e0f2fe', whiteSpace: 'nowrap' }}>
+                  <Layers2 size={10} />Program
+                </span>
+              ) : kind === 'phase' ? (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10, padding: '1px 6px', borderRadius: 10, fontWeight: 600, color: '#10b981', background: '#d1fae5', whiteSpace: 'nowrap' }}>
+                  <GitBranch size={10} />Phase
+                </span>
+              ) : kind ? (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10, padding: '1px 6px', borderRadius: 10, fontWeight: 600, color: '#8b5cf6', background: '#ede9fe', whiteSpace: 'nowrap' }}>
+                  <Leaf size={10} />Leaf
+                </span>
+              ) : null;
               return (
                 <span style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
                   {hasParent && (
                     <span style={{ color: 'var(--bs-secondary)', fontSize: '11px', marginRight: '2px' }}>└─</span>
                   )}
-                  {kindBadge && (
-                    <span style={{
-                      fontSize: '10px',
-                      padding: '1px 6px',
-                      borderRadius: '10px',
-                      fontWeight: 600,
-                      whiteSpace: 'nowrap',
-                      ...kindBadge.style,
-                    }}>
-                      {kindBadge.label}
-                    </span>
-                  )}
+                  {KindBadge}
                   <span>{formatValue(column.key, value)}</span>
                 </span>
               );

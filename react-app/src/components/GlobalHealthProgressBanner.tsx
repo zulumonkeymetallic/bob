@@ -8,9 +8,13 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
 import { Button, Card } from 'react-bootstrap';
-import { Heart, X } from 'lucide-react';
+import { Heart, Sparkles, X } from 'lucide-react';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
+
+function todayIso(): string {
+  return new Date().toISOString().slice(0, 10);
+}
 
 const DISMISS_KEY          = 'dashboard-health-banner-dismissed-date';
 const DISMISS_DAYS         = 3;
@@ -36,6 +40,7 @@ const GlobalHealthProgressBanner: React.FC = () => {
   const { currentUser } = useAuth();
   const navigate = useNavigate();
   const [profile, setProfile] = useState<any | null>(null);
+  const [coachDaily, setCoachDaily] = useState<any | null>(null);
   const [visible, setVisible] = useState(false);
 
   // Respect 3-day dismiss
@@ -56,6 +61,17 @@ const GlobalHealthProgressBanner: React.FC = () => {
       doc(db, 'profiles', currentUser.uid),
       (snap) => setProfile(snap.exists() ? snap.data() : null),
       () => setProfile(null),
+    );
+    return () => unsub();
+  }, [currentUser?.uid]);
+
+  // AI coach daily insight — written nightly to coach_daily/{uid}_{date}
+  useEffect(() => {
+    if (!currentUser?.uid) { setCoachDaily(null); return; }
+    const unsub = onSnapshot(
+      doc(db, 'coach_daily', `${currentUser.uid}_${todayIso()}`),
+      (snap) => setCoachDaily(snap.exists() ? snap.data() : null),
+      () => setCoachDaily(null),
     );
     return () => unsub();
   }, [currentUser?.uid]);
@@ -131,50 +147,62 @@ const GlobalHealthProgressBanner: React.FC = () => {
     setVisible(false);
   };
 
+  const insight: string | null = coachDaily?.briefingText || coachDaily?.adaptationAction || null;
+  const readinessLabel: string | null = coachDaily?.readinessLabel || null;
+
   return (
-    <Card className="mb-3" style={{ background: bg, border: 'none', color: '#fff', boxShadow: '0 6px 18px rgba(13,110,253,0.18)' }}>
-      <Card.Body style={{ padding: '8px 12px' }}>
+    <Card className="mb-1 global-health-banner" style={{ background: bg, border: 'none', color: '#fff', boxShadow: '0 3px 10px rgba(13,110,253,0.15)' }}>
+      <Card.Body style={{ padding: '6px 10px' }}>
         <div className="d-flex align-items-center gap-2 flex-wrap">
-          <div style={{ width: 28, height: 28, borderRadius: 6, backgroundColor: 'rgba(255,255,255,0.18)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-            <Heart size={14} />
+          <div style={{ width: 22, height: 22, borderRadius: 4, backgroundColor: 'rgba(255,255,255,0.18)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <Heart size={12} />
           </div>
-          <div style={{ flex: 1, minWidth: 220 }}>
-            <div style={{ margin: 0, fontSize: 11, fontWeight: 700 }}>Daily Health Progress</div>
-            <div style={{ marginTop: 2, fontSize: 9, opacity: 0.9 }}>
+          <div style={{ flex: 1, minWidth: 160 }}>
+            <div style={{ margin: 0, fontSize: 13, fontWeight: 600 }}>Daily Health Progress</div>
+            <div style={{ marginTop: 1, fontSize: 10, opacity: 0.9 }}>
               {data.weightKg     != null ? `${data.weightKg.toFixed(1)} kg`          : 'weight missing'}
               {' • '}
-              {data.bodyFatPct   != null ? `${data.bodyFatPct.toFixed(1)}% body fat`  : 'body fat missing'}
+              {data.bodyFatPct   != null ? `${data.bodyFatPct.toFixed(1)}% BF`        : 'BF missing'}
               {' • '}
-              {data.targetWeightKg   != null ? `target ${data.targetWeightKg.toFixed(1)} kg`    : 'set weight target'}
-              {' / '}
-              {data.targetBodyFatPct != null ? `${data.targetBodyFatPct.toFixed(1)}%`            : 'set body-fat target'}
+              {data.targetBodyFatPct != null ? `→ ${data.targetBodyFatPct.toFixed(1)}%` : 'set target'}
               {' • '}
-              {data.weeksToTarget    != null ? `${Math.round(data.weeksToTarget)}w ETA`          : 'ETA n/a'}
+              {data.weeksToTarget    != null ? `${Math.round(data.weeksToTarget)}w ETA` : 'ETA n/a'}
             </div>
           </div>
-          <div style={{ textAlign: 'right', minWidth: 52 }}>
-            <div style={{ fontSize: 15, fontWeight: 800, lineHeight: 1 }}>
+          <div style={{ textAlign: 'right', minWidth: 44 }}>
+            <div style={{ fontSize: 16, fontWeight: 800, lineHeight: 1 }}>
               {data.primaryPct != null ? `${data.primaryPct}%` : '—'}
             </div>
-            <div style={{ fontSize: 9, opacity: 0.85 }}>{data.primaryLabel}</div>
+            <div style={{ fontSize: 10, opacity: 0.85 }}>{data.primaryLabel}</div>
           </div>
-          <button onClick={dismiss} style={{ background: 'rgba(255,255,255,0.2)', border: 'none', color: '#fff', cursor: 'pointer', padding: 4, borderRadius: 4, display: 'flex', alignItems: 'center', flexShrink: 0 }} title="Dismiss for 3 days">
-            <X size={16} />
+          <button onClick={dismiss} style={{ background: 'rgba(255,255,255,0.2)', border: 'none', color: '#fff', cursor: 'pointer', padding: 3, borderRadius: 3, display: 'flex', alignItems: 'center', flexShrink: 0 }} title="Dismiss for 3 days">
+            <X size={13} />
           </button>
         </div>
-        <div className="d-flex align-items-center justify-content-between gap-2 flex-wrap" style={{ marginTop: 5, fontSize: 9, opacity: 0.9 }}>
-          <div>
-            Source {data.sourceLabel}
-            {data.stepsToday   != null && ` • ${Math.round(data.stepsToday).toLocaleString()} steps`}
-            {data.workoutMins  != null && ` • ${Math.round(data.workoutMins)} min workout`}
-            {data.macroAdherencePct != null && ` • ${data.macroAdherencePct}% macros`}
-            {data.syncLabel && ` • HealthKit synced ${data.syncLabel}`}
+        {insight && (
+          <div
+            className="d-flex align-items-start gap-1"
+            style={{ marginTop: 4, paddingTop: 4, borderTop: '1px solid rgba(255,255,255,0.2)', fontSize: 10, opacity: 0.95 }}
+          >
+            <Sparkles size={11} style={{ flexShrink: 0, marginTop: 1 }} />
+            <div>
+              {readinessLabel && <strong>{readinessLabel} · </strong>}
+              {insight}
+            </div>
           </div>
-          <div className="d-flex align-items-center gap-2">
+        )}
+        <div className="global-health-banner-second-row d-flex align-items-center justify-content-between gap-2 flex-wrap" style={{ marginTop: 3, fontSize: 10, opacity: 0.9 }}>
+          <div>
+            {data.stepsToday   != null && `${Math.round(data.stepsToday).toLocaleString()} steps`}
+            {data.workoutMins  != null && ` • ${Math.round(data.workoutMins)}m workout`}
+            {data.macroAdherencePct != null && ` • ${data.macroAdherencePct}% macros`}
+            {data.syncLabel && ` • synced ${data.syncLabel}`}
+          </div>
+          <div className="d-flex align-items-center gap-1">
             {data.missingTargets && (
-              <Button variant="light" size="sm" onClick={() => navigate('/settings?tab=profile')}>Set targets</Button>
+              <Button variant="light" size="sm" style={{ fontSize: 10, padding: '2px 7px' }} onClick={() => navigate('/settings?tab=profile')}>Set targets</Button>
             )}
-            <Button variant="outline-light" size="sm" onClick={() => navigate('/fitness')}>View health</Button>
+            <Button variant="outline-light" size="sm" style={{ fontSize: 10, padding: '2px 7px' }} onClick={() => navigate('/fitness')}>Health</Button>
           </div>
         </div>
       </Card.Body>

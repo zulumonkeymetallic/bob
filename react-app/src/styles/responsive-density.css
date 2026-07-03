@@ -30,12 +30,12 @@
     overflow: hidden !important;
   }
 
-  /* Left sidebar: fixed height, no overflow */
+  /* Left sidebar: fixed height, no overflow. Width controlled by inline style (56px collapsed / 250px expanded). */
   .sidebar-desktop {
-    width: 180px !important;
     height: 100vh !important;
     overflow: hidden !important;
     flex-shrink: 0 !important;
+    max-width: 250px !important;
   }
 
   /* Right column: flex-column so toolbar + page stack cleanly */
@@ -78,6 +78,10 @@
     flex: 1 !important;
     min-height: 0 !important;
     overflow-x: hidden !important;
+  }
+  /* Banners strip must NOT expand — it's flex: none so it stays compact */
+  .sidebar-layout-page > .sidebar-layout-banners {
+    flex: none !important;
   }
 
   /* ═══════════════════════════════════════════════════════
@@ -185,6 +189,18 @@
 
   /* Banners padding compression */
   .sidebar-layout-banners .p-3 { padding: 0.25rem 0.5rem !important; }
+
+  /* Compact GlobalHealthProgressBanner — hide second row on tablet (already tiny on desktop) */
+  .global-health-banner .card-body { padding: 3px 6px !important; }
+  .global-health-banner-second-row { display: none !important; }
+  .global-health-banner { margin-bottom: 2px !important; }
+
+  /* Tighten action button rows inside banners (e.g. PlannerCapacityBanner) */
+  .sidebar-layout-banners .btn-group .btn,
+  .sidebar-layout-banners .btn:not(.btn-close) {
+    font-size: 0.7rem !important;
+    padding: 3px 7px !important;
+  }
 
   /* ═══════════════════════════════════════════════════════
      5. KANBAN BOARD — 3 columns visible without scrolling

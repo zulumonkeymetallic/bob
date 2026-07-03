@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Container, Nav, Navbar, Button, Offcanvas } from 'react-bootstrap';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import {
-  BookOpen, BookText, Calendar, CalendarDays, CheckSquare, ChevronLeft,
+  BookOpen, BookText, Brain, Calendar, CalendarDays, CheckSquare, ChevronLeft,
   ChevronRight, ClipboardList, Globe, Heart, LayoutDashboard, Network,
   PiggyBank, ScrollText, Settings, Target, LucideIcon,
 } from 'lucide-react';
@@ -76,42 +76,23 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   const [showSidebar, setShowSidebar] = useState(false);
   const location = useLocation();
   const [isSmallScreen, setIsSmallScreen] = useState<boolean>(typeof window !== 'undefined' ? window.innerWidth < 768 : false);
+  const [isLargeScreen, setIsLargeScreen] = useState<boolean>(typeof window !== 'undefined' ? window.innerWidth >= 1200 : true);
   const NAV_COLLAPSED_KEY = 'navCollapsedV3'; // V2 resets all users to collapsed default
   const [navCollapsed, setNavCollapsed] = useState<boolean>(() => {
-    if (typeof window !== 'undefined' && window.innerWidth < 768) return true;
+    if (typeof window !== 'undefined' && window.innerWidth < 1200) return true;
     try {
       const stored = localStorage.getItem('navCollapsedV3');
       return stored === null ? true : stored === '1';
     } catch { return true; }
   });
   const toggleNavCollapsed = () => {
-    setFlyoutGroup(null);
     setNavCollapsed((prev) => {
       const next = !prev;
       try { localStorage.setItem('navCollapsedV3', next ? '1' : '0'); } catch { }
       return next;
     });
   };
-  // Start collapsed by default
   const [expandedGroups, setExpandedGroups] = useState<string[]>([]);
-  const [flyoutGroup, setFlyoutGroup] = useState<string | null>(null);
-  const flyoutRef = useRef<HTMLDivElement>(null);
-  const railRef = useRef<HTMLDivElement>(null);
-
-  // Close flyout on click-outside
-  useEffect(() => {
-    if (!flyoutGroup) return;
-    const handler = (e: MouseEvent) => {
-      if (
-        flyoutRef.current && !flyoutRef.current.contains(e.target as Node) &&
-        railRef.current  && !railRef.current.contains(e.target as Node)
-      ) {
-        setFlyoutGroup(null);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [flyoutGroup]);
   const { selectedSprintId: globalSprintId, setSelectedSprintId: setGlobalSprintId } = useSprint();
   const { isVisible: isRightSidebarVisible, isCollapsed: isRightSidebarCollapsed } = useSidebar();
   const [assistantOpen, setAssistantOpen] = useState(false);
@@ -136,17 +117,24 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         { label: 'Metrics', path: '/metrics', icon: 'tachometer-alt' },
       ]
     },
+    // Coach
+    {
+      label: 'Coach',
+      icon: 'brain',
+      lucideIcon: Brain,
+      items: [
+        { label: 'AI Coach', path: '/coach', icon: 'brain' },
+        { label: 'Finance Coach', path: '/coach/finance', icon: 'chart-line' },
+      ]
+    },
     // Health
     {
       label: 'Health',
       icon: 'heartbeat',
       lucideIcon: Heart,
       items: [
-        { label: 'Fitness', path: '/fitness', icon: 'th' },
-        { label: 'AI Coach', path: '/coach', icon: 'dumbbell' },
-        { label: 'Activity Log', path: '/fitness/full', icon: 'running' },
+        { label: 'Health Hub', path: '/health', icon: 'heartbeat' },
         { label: 'Habit Tracking', path: '/dashboard/habit-tracking', icon: 'check-square' },
-        { label: 'Parkrun Results', path: '/parkrun-results', icon: 'flag-checkered' },
         { label: 'Running Heatmap', path: '/running/heatmap', icon: 'map-marked-alt' },
       ]
     },
@@ -305,7 +293,12 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    const handler = () => setIsSmallScreen(window.innerWidth < 768);
+    const handler = () => {
+      const w = window.innerWidth;
+      setIsSmallScreen(w < 768);
+      setIsLargeScreen(w >= 1200);
+      if (w < 1200) setNavCollapsed(true);
+    };
     handler();
     window.addEventListener('resize', handler);
     return () => window.removeEventListener('resize', handler);
@@ -344,21 +337,31 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         {navCollapsed ? (
           /* ── Collapsed icon rail ── */
           <>
-            {/* Logo pinned at top */}
-            <div style={{ flexShrink: 0, display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '12px 0 8px', borderBottom: '1px solid var(--notion-border)' }}>
+            {/* Top: logo + expand chevron */}
+            <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '10px 0 6px', borderBottom: '1px solid var(--notion-border)', gap: 6 }}>
               <img src="/logo192.png" alt="BOB" style={{ width: '26px', height: '26px', objectFit: 'contain' }} />
+              <button
+                onClick={toggleNavCollapsed}
+                title="Expand sidebar"
+                style={{ background: 'none', border: '1px solid var(--notion-border)', color: 'var(--notion-text)', cursor: 'pointer', padding: '4px', borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32 }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--notion-hover)'; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'none'; }}
+              >
+                <ChevronRight size={15} strokeWidth={2} />
+              </button>
             </div>
 
-            {/* Nav group icons — click opens flyout, title gives native tooltip */}
-            <div ref={railRef} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', scrollbarWidth: 'none' as any, paddingTop: '4px', paddingBottom: '4px' }}>
+            {/* Nav group icons — single click navigates to group primary route */}
+            <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', scrollbarWidth: 'none' as any, paddingTop: '4px', paddingBottom: '4px' }}>
               {navigationGroups.map((group) => {
                 const Icon = group.lucideIcon;
-                const isActive = flyoutGroup === group.label;
+                const primaryPath = group.items[0]?.path;
+                const isActive = primaryPath ? location.pathname === primaryPath || location.pathname.startsWith(primaryPath.split('?')[0] + '/') : false;
                 return (
                   <div
                     key={group.label}
                     title={group.label}
-                    onClick={() => setFlyoutGroup(isActive ? null : group.label)}
+                    onClick={() => primaryPath && navigate(primaryPath)}
                     style={{
                       display: 'flex', justifyContent: 'center', alignItems: 'center',
                       height: '36px', cursor: 'pointer',
@@ -386,7 +389,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
               })}
             </div>
 
-            {/* Bottom: expand chevron + theme + sign out */}
+            {/* Bottom: theme + sign out */}
             <div style={{ flexShrink: 0, borderTop: '1px solid var(--notion-border)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px', padding: '6px 0' }}>
               <button
                 onClick={toggleTheme}
@@ -405,16 +408,6 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
                 onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'none'; }}
               >
                 <i className="fas fa-sign-out-alt" style={{ fontSize: '14px' }} />
-              </button>
-              {/* Expand chevron — prominent, always at bottom */}
-              <button
-                onClick={toggleNavCollapsed}
-                title="Expand sidebar"
-                style={{ background: 'none', border: '1px solid var(--notion-border)', color: 'var(--notion-text)', cursor: 'pointer', padding: '5px', borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 36, marginTop: '2px' }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--notion-hover)'; }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'none'; }}
-              >
-                <ChevronRight size={16} strokeWidth={2} />
               </button>
             </div>
           </>
@@ -524,65 +517,6 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
           </>
         )}
       </div>
-
-      {/* Collapsed sidebar flyout — shows sub-items for the active group */}
-      {navCollapsed && flyoutGroup && (() => {
-        const group = navigationGroups.find((g) => g.label === flyoutGroup);
-        if (!group) return null;
-        const GroupIcon = group.lucideIcon;
-        return (
-          <div
-            ref={flyoutRef}
-            style={{
-              position: 'fixed',
-              left: 56,
-              top: 0,
-              height: '100vh',
-              width: 210,
-              background: 'var(--panel)',
-              borderRight: '1px solid var(--notion-border)',
-              boxShadow: '4px 0 20px rgba(0,0,0,0.14)',
-              zIndex: 1040,
-              display: 'flex',
-              flexDirection: 'column',
-              overflowY: 'auto',
-            }}
-          >
-            {/* Group header */}
-            <div style={{ padding: '14px 16px 10px', borderBottom: '1px solid var(--notion-border)', display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-              {GroupIcon && <GroupIcon size={15} strokeWidth={2} style={{ color: 'var(--notion-accent, #2563eb)' }} />}
-              <span style={{ fontWeight: 600, fontSize: '0.9rem', color: 'var(--notion-text)' }}>{group.label}</span>
-            </div>
-            {/* Sub-items */}
-            <div style={{ flex: 1, overflowY: 'auto', padding: '6px 0' }}>
-              {group.items.map((item) => (
-                <div
-                  key={item.path}
-                  onClick={() => {
-                    navigate(item.path);
-                    setFlyoutGroup(null);
-                  }}
-                  style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 16px', cursor: 'pointer', fontSize: '0.875rem', color: 'var(--notion-text)', borderRadius: 0, transition: 'background 0.1s' }}
-                  onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--notion-hover)'; e.currentTarget.style.color = 'var(--notion-accent, #2563eb)'; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--notion-text)'; }}
-                >
-                  <i className={`fas fa-${item.icon}`} style={{ width: 14, fontSize: '13px', opacity: 0.7 }} />
-                  {item.label}
-                </div>
-              ))}
-            </div>
-            {/* Expand full sidebar link */}
-            <div
-              onClick={() => { setFlyoutGroup(null); toggleNavCollapsed(); }}
-              style={{ borderTop: '1px solid var(--notion-border)', padding: '10px 16px', cursor: 'pointer', fontSize: '0.8rem', color: 'var(--notion-text-gray)', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}
-              onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--notion-text)'; }}
-              onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--notion-text-gray)'; }}
-            >
-              <ChevronRight size={13} /> Expand sidebar
-            </div>
-          </div>
-        );
-      })()}
 
       {/* Mobile Header */}
       <div className="d-md-none fixed-top" style={{
@@ -813,9 +747,9 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
             {!hidePlannerCapacityBanner && <PlannerCapacityBanner />}
             <SprintClosureBanner />
             <PlannedSprintBanner />
-            {!isSmallScreen && <GlobalGoalFocusBanner />}
-            {!isSmallScreen && <GlobalHealthProgressBanner />}
-            {!isSmallScreen && <GlobalIntegrationStatus />}
+            {isLargeScreen && <GlobalGoalFocusBanner />}
+            {isLargeScreen && <GlobalHealthProgressBanner />}
+            {isLargeScreen && <GlobalIntegrationStatus />}
             <ProcessTextActivityHost />
           </div>
           {children}

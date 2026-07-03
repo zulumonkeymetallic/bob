@@ -7,7 +7,6 @@ const { generateDailyDigest } = require('./dailyDigestGenerator');
 const aiUsageLogger = require('./utils/aiUsageLogger');
 const { clampTaskPoints } = require('./utils/taskPoints');
 
-const GOOGLE_AI_STUDIO_API_KEY = defineSecret('GOOGLEAISTUDIOAPIKEY');
 const OPENROUTER_API_KEY_SECRET = defineSecret('OPENROUTER_API_KEY');
 
 /**
@@ -20,7 +19,7 @@ exports.runNightlyScheduler = onSchedule({
     region: 'europe-west2',
     memory: '1GiB',
     timeoutSeconds: 540,
-    secrets: [GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET]
+    secrets: [OPENROUTER_API_KEY_SECRET]
 }, async (event) => {
     console.log('🌙 Starting Nightly AI Scheduler...');
     const db = admin.firestore();
@@ -81,7 +80,7 @@ exports.runMorningPlanner = onSchedule({
     region: 'europe-west2',
     memory: '1GiB',
     timeoutSeconds: 540,
-    secrets: [GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET]
+    secrets: [OPENROUTER_API_KEY_SECRET]
 }, async (event) => {
     console.log('☀️ Starting Morning AI Planner...');
     const db = admin.firestore();
@@ -488,7 +487,7 @@ exports.onTaskWrite = functions.firestore.document('tasks/{taskId}').onWrite(asy
 exports.convertTasksToStories = onSchedule({
     schedule: '0 3 * * *', // 3 AM
     timeZone: 'Europe/London',
-    secrets: [GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET]
+    secrets: [OPENROUTER_API_KEY_SECRET]
 }, async (event) => {
     const db = admin.firestore();
     console.log('🏗️ Starting Task-to-Story Conversion for Large Tasks...');

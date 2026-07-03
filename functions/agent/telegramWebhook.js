@@ -35,9 +35,12 @@ const { getAgentTodayContext } = require('./agentContext');
 const { executeApprovedActions } = require('./approvalWorker');
 const { processAgentRequestInternal } = require('../transcriptIngestion');
 
+const { VertexAI } = require('@google-cloud/vertexai');
+const VERTEX_PROJECT  = 'bob20250810';
+const VERTEX_LOCATION = 'europe-west2';
+
 const TELEGRAM_BOT_TOKEN = defineSecret('TELEGRAM_BOT_TOKEN');
 const TELEGRAM_WEBHOOK_SECRET = defineSecret('TELEGRAM_WEBHOOK_SECRET');
-const GEMINI_API_KEY = defineSecret('GOOGLEAISTUDIOAPIKEY');
 
 const SESSIONS_COLLECTION = 'telegram_sessions';
 const APPROVALS_COLLECTION = 'pending_approvals';
@@ -50,7 +53,7 @@ const PROFILES_COLLECTION = 'profiles';
 exports.telegramWebhook = onRequest(
   {
     region: 'europe-west2',
-    secrets: [TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET, GEMINI_API_KEY],
+    secrets: [TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET],
     invoker: 'public',
     timeoutSeconds: 30,
     memory: '512MiB',
@@ -346,25 +349,21 @@ async function _transcribeAudio(fileId) {
   const audioBuffer = await audioResp.arrayBuffer();
   const audioBase64 = Buffer.from(audioBuffer).toString('base64');
 
-  // Step 3: Send to Gemini for transcription
-  const { GoogleGenerativeAI } = require('@google/generative-ai');
-  const apiKey = GEMINI_API_KEY.value();
-  if (!apiKey) throw new Error('Gemini API key not available for transcription');
+  // Step 3: Transcribe via Vertex AI Gemini (multimodal)
+  const vertexAI = new VertexAI({ project: VERTEX_PROJECT, location: VERTEX_LOCATION });
+  const model = vertexAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
 
-  const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+  const result = await model.generateContent({
+    contents: [{
+      role: 'user',
+      parts: [
+        { inlineData: { mimeType: 'audio/ogg', data: audioBase64 } },
+        { text: 'Transcribe this voice note accurately. Return only the transcribed text, no commentary.' },
+      ],
+    }],
+  });
 
-  const result = await model.generateContent([
-    {
-      inlineData: {
-        mimeType: 'audio/ogg',
-        data: audioBase64,
-      },
-    },
-    'Transcribe this voice note accurately. Return only the transcribed text, no commentary.',
-  ]);
-
-  return result.response.text()?.trim() || null;
+  return result.response?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || null;
 }
 
 // ---------------------------------------------------------------------------

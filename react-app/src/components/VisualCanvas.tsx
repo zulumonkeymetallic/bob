@@ -23,7 +23,8 @@ import {
   updateDoc,
   where,
 } from 'firebase/firestore';
-import { ZoomIn, ZoomOut, RotateCcw, Link2, Link2Off, Filter, GitBranch, Rows3, Info } from 'lucide-react';
+import { ZoomIn, ZoomOut, RotateCcw, Link2, Link2Off, Filter, GitBranch, Rows3, Info, Calendar } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import type { Goal, Story, Task, Sprint } from '../types';
@@ -40,7 +41,7 @@ import GoalCard from './GoalCard';
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type ColType = 'focus' | 'umbrella' | 'phase' | 'story' | 'task';
-type ViewLayout = 'swimlane' | 'tree';
+type ViewLayout = 'swimlane' | 'tree' | 'roadmap';
 
 interface CanvasNode {
   id: string;
@@ -167,6 +168,20 @@ function elbowPath(fx: number, fy: number, tx: number, ty: number): string {
   return `M ${fx} ${fy} L ${fx} ${midY} L ${tx} ${midY} L ${tx} ${ty}`;
 }
 
+// ─── Quarter helpers (roadmap layout) ─────────────────────────────────────────
+
+function computeQuarterKey(ts: number | null | undefined): string | null {
+  if (!ts || !Number.isFinite(ts)) return null;
+  const d = new Date(ts);
+  const q = Math.ceil((d.getMonth() + 1) / 3);
+  return `${d.getFullYear()}-Q${q}`;
+}
+
+function quarterLabel(key: string): string {
+  const [year, q] = key.split('-');
+  return `${q} ${year}`;
+}
+
 // ─── Goal theme colour ────────────────────────────────────────────────────────
 
 function goalThemeColor(goal: any): string {
@@ -269,10 +284,65 @@ const NodeCard: React.FC<{
   );
 };
 
+// ─── Roadmap chip ─────────────────────────────────────────────────────────────
+
+const GOAL_KIND_ICON: Record<string, string> = {
+  umbrella: '◆',
+  milestone: '◉',
+  focus: '★',
+};
+
+const RoadmapChip: React.FC<{
+  goal: Goal;
+  themeColor: string;
+  onNavigate: (id: string) => void;
+}> = ({ goal, themeColor, onNavigate }) => {
+  const g = goal as any;
+  const plannedStartKey = computeQuarterKey(typeof g.plannedStartDate === 'number' ? g.plannedStartDate : null);
+  const kindIcon = GOAL_KIND_ICON[g.goalKind] ?? '○';
+  const isDone = Number(g.status) === 4;
+  const isActive = Number(g.status) === 1;
+
+  return (
+    <div
+      onClick={() => onNavigate(goal.id)}
+      title={goal.title}
+      style={{
+        borderLeft: `3px solid ${themeColor}`,
+        background: isDone ? '#f3f4f6' : isActive ? '#fff' : '#fafafa',
+        borderRadius: '0 6px 6px 0',
+        padding: '4px 7px',
+        cursor: 'pointer',
+        boxShadow: '0 1px 2px rgba(0,0,0,0.07)',
+        fontSize: 11,
+        opacity: isDone ? 0.55 : 1,
+        transition: 'box-shadow 0.12s',
+      }}
+      onMouseEnter={e => (e.currentTarget.style.boxShadow = '0 2px 6px rgba(0,0,0,0.15)')}
+      onMouseLeave={e => (e.currentTarget.style.boxShadow = '0 1px 2px rgba(0,0,0,0.07)')}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+        <span style={{ color: themeColor, fontSize: 9, flexShrink: 0 }}>{kindIcon}</span>
+        <span style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {goal.title}
+        </span>
+        {isActive && (
+          <span style={{ flexShrink: 0, fontSize: 9, background: '#dcfce7', color: '#16a34a', borderRadius: 4, padding: '0 3px' }}>●</span>
+        )}
+      </div>
+      <div style={{ color: '#9ca3af', fontSize: 9, marginTop: 1, display: 'flex', gap: 6 }}>
+        {g.ref && <span>{g.ref}</span>}
+        {plannedStartKey && <span>Start {quarterLabel(plannedStartKey)}</span>}
+      </div>
+    </div>
+  );
+};
+
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 const VisualCanvas: React.FC = () => {
   const { currentUser } = useAuth();
+  const navigate = useNavigate();
   const canvasRef = useRef<HTMLDivElement>(null);
 
   // ── Data ────────────────────────────────────────────────────────────────────
@@ -350,6 +420,54 @@ const VisualCanvas: React.FC = () => {
     () => [...sprints].sort((a, b) => (a.startDate || 0) - (b.startDate || 0)),
     [sprints],
   );
+
+  // ── Roadmap computed data ─────────────────────────────────────────────────────
+  const roadmapGoals = useMemo(() => {
+    const search = searchTerm.toLowerCase();
+    return goals.filter(g => {
+      if (activeOnly && Number(g.status) !== 1) return false;
+      if (focusOnly && !focusGoalIds.has(g.id)) return false;
+      if (filterThemeIds.length > 0 && !filterThemeIds.includes(Number((g as any).theme))) return false;
+      if (search && !g.title?.toLowerCase().includes(search)) return false;
+      return true;
+    });
+  }, [goals, activeOnly, focusOnly, focusGoalIds, filterThemeIds, searchTerm]);
+
+  const roadmapQuarters = useMemo((): string[] => {
+    const keys = new Set<string>();
+    const curKey = computeQuarterKey(Date.now());
+    if (curKey) keys.add(curKey);
+    for (const g of roadmapGoals) {
+      const due = (g as any).endDate || (g as any).dueDate;
+      const planned = typeof (g as any).plannedStartDate === 'number' ? (g as any).plannedStartDate : null;
+      const k1 = computeQuarterKey(due);
+      const k2 = computeQuarterKey(planned);
+      if (k1) keys.add(k1);
+      if (k2) keys.add(k2);
+    }
+    return [...keys].sort();
+  }, [roadmapGoals]);
+
+  const roadmapThemes = useMemo(() =>
+    GLOBAL_THEMES.filter(t => roadmapGoals.some(g => Number((g as any).theme ?? 0) === t.id)),
+    [roadmapGoals],
+  );
+
+  const roadmapGrid = useMemo((): Map<number, Map<string, Goal[]>> => {
+    const grid = new Map<number, Map<string, Goal[]>>();
+    for (const g of roadmapGoals) {
+      const themeId = Number((g as any).theme ?? 0);
+      const due = (g as any).endDate || (g as any).dueDate;
+      const cell = computeQuarterKey(due) ?? 'unscheduled';
+      if (!grid.has(themeId)) grid.set(themeId, new Map());
+      const row = grid.get(themeId)!;
+      if (!row.has(cell)) row.set(cell, []);
+      row.get(cell)!.push(g);
+    }
+    return grid;
+  }, [roadmapGoals]);
+
+  const currentQuarterKey = useMemo(() => computeQuarterKey(Date.now()), []);
 
   // ── Node computation ─────────────────────────────────────────────────────────
   const { nodes, connections } = useMemo(() => {
@@ -654,6 +772,15 @@ const VisualCanvas: React.FC = () => {
               <GitBranch size={14} />
             </Button>
           </OverlayTrigger>
+          <OverlayTrigger placement="bottom" overlay={<Tooltip>Roadmap — themes × quarters grid</Tooltip>}>
+            <Button
+              size="sm"
+              variant={viewLayout === 'roadmap' ? 'primary' : 'outline-secondary'}
+              onClick={() => setViewLayout('roadmap')}
+            >
+              <Calendar size={14} />
+            </Button>
+          </OverlayTrigger>
         </div>
 
         <div className="vr" />
@@ -770,7 +897,88 @@ const VisualCanvas: React.FC = () => {
         </div>
       )}
 
-      {/* Canvas */}
+      {/* ── ROADMAP layout (outside SVG canvas) ───────────────────────────────── */}
+      {viewLayout === 'roadmap' && (
+        <div style={{ flex: 1, overflow: 'auto', background: 'var(--bs-light, #f8f9fa)', padding: '16px 20px' }}>
+          {roadmapGoals.length === 0 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#6b7280' }}>
+              <Filter size={32} style={{ opacity: 0.4, marginBottom: 12 }} />
+              <div className="fw-medium">No items match current filters</div>
+              <div className="small mt-1">Try clearing filters or adding goals</div>
+            </div>
+          ) : (
+            <div style={{ minWidth: 'max-content' }}>
+              {/* Quarter header row */}
+              <div style={{ display: 'flex', marginBottom: 2 }}>
+                <div style={{ width: 168, flexShrink: 0 }} />
+                {roadmapQuarters.map(qKey => (
+                  <div key={qKey} style={{
+                    width: 210, flexShrink: 0, padding: '5px 10px',
+                    fontSize: 11, fontWeight: 700, color: '#374151',
+                    borderLeft: '1px solid #e5e7eb',
+                    background: qKey === currentQuarterKey ? '#dbeafe' : '#f1f5f9',
+                    borderRadius: qKey === roadmapQuarters[0] ? '6px 0 0 0' : undefined,
+                  }}>
+                    {quarterLabel(qKey)}
+                    {qKey === currentQuarterKey && <span style={{ marginLeft: 5, fontSize: 9, color: '#3b82f6' }}>▶ now</span>}
+                  </div>
+                ))}
+                <div style={{ width: 210, flexShrink: 0, padding: '5px 10px', fontSize: 11, fontWeight: 700, color: '#9ca3af', borderLeft: '1px solid #e5e7eb', background: '#f9fafb' }}>
+                  Unscheduled
+                </div>
+              </div>
+              {/* Theme rows */}
+              {roadmapThemes.map(theme => {
+                const themeGoals = roadmapGrid.get(theme.id);
+                return (
+                  <div key={theme.id} style={{ display: 'flex', marginBottom: 1 }}>
+                    {/* Theme label */}
+                    <div style={{
+                      width: 168, flexShrink: 0, padding: '8px 10px',
+                      borderTop: `3px solid ${theme.color}`,
+                      background: `${theme.color}18`,
+                      fontSize: 11, fontWeight: 700, color: theme.color,
+                      display: 'flex', alignItems: 'flex-start',
+                    }}>
+                      {theme.name}
+                    </div>
+                    {/* Quarter cells */}
+                    {roadmapQuarters.map(qKey => {
+                      const cellGoals = themeGoals?.get(qKey) || [];
+                      return (
+                        <div key={qKey} style={{
+                          width: 210, flexShrink: 0, padding: '6px 8px', minHeight: 72,
+                          borderLeft: '1px solid #e5e7eb', borderTop: '1px solid #e5e7eb',
+                          background: qKey === currentQuarterKey ? '#eff6ff40' : '#fff',
+                          display: 'flex', flexDirection: 'column', gap: 4,
+                        }}>
+                          {cellGoals.map(g => (
+                            <RoadmapChip key={g.id} goal={g} themeColor={theme.color} onNavigate={(id) => navigate(`/goals/${id}`)} />
+                          ))}
+                        </div>
+                      );
+                    })}
+                    {/* Unscheduled cell */}
+                    <div style={{
+                      width: 210, flexShrink: 0, padding: '6px 8px', minHeight: 72,
+                      borderLeft: '1px solid #e5e7eb', borderTop: '1px solid #e5e7eb',
+                      background: '#fafafa',
+                      display: 'flex', flexDirection: 'column', gap: 4,
+                    }}>
+                      {(themeGoals?.get('unscheduled') || []).map(g => (
+                        <RoadmapChip key={g.id} goal={g} themeColor={theme.color} onNavigate={(id) => navigate(`/goals/${id}`)} />
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Canvas (swimlane + tree) */}
+      {viewLayout !== 'roadmap' && (
       <div
         ref={canvasRef}
         style={{ flex: 1, overflow: 'hidden', cursor: draggingId || isPanning ? 'grabbing' : linkMode ? 'crosshair' : 'grab', background: 'var(--bs-light, #f8f9fa)' }}
@@ -947,17 +1155,20 @@ const VisualCanvas: React.FC = () => {
           )}
         </div>
       </div>
+      )} {/* end viewLayout !== 'roadmap' */}
 
       {/* Legend */}
       <div className="border-top px-3 py-2 d-flex align-items-center gap-4 bg-white flex-wrap" style={{ fontSize: 11 }}>
-        {COL_ORDER.map(col => (
+        {viewLayout !== 'roadmap' && COL_ORDER.map(col => (
           <div key={col} className="d-flex align-items-center gap-1">
             <div style={{ width: 10, height: 10, borderRadius: '50%', background: COL_COLOURS[col] }} />
             <span className="text-muted">{COL_LABELS[col]}</span>
           </div>
         ))}
         <span className="text-muted ms-auto">
-          {viewLayout === 'tree'
+          {viewLayout === 'roadmap'
+            ? 'Roadmap view — themes × quarters · Click a goal to open it'
+            : viewLayout === 'tree'
             ? 'Tree view — top-down hierarchy · Drag to pan · Scroll to zoom'
             : 'Swimlane view — drag to pan · scroll to zoom · Link Mode to create relationships'}
         </span>

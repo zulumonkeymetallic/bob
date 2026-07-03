@@ -14,14 +14,15 @@ import { getBadgeVariant, getPriorityBadge, getStatusName } from '../utils/statu
 import { taskStatusText } from '../utils/storyCardFormatting';
 import { extractWeatherSummary, extractWeatherTemp, formatWeatherLine } from '../utils/weatherFormat';
 import { isRecurringDueOnDate, resolveRecurringDueMs, resolveTaskDueMs } from '../utils/recurringTaskDue';
-import { Wand2, AlertCircle, RefreshCw, Sparkles, Clock3, Pencil, Home, CalendarDays, ListChecks, BookOpen, Target, CheckSquare, Wallet, Dumbbell, TrendingUp, type LucideIcon } from 'lucide-react';
+import { Wand2, AlertCircle, RefreshCw, Sparkles, Clock3, Pencil, Home, CalendarDays, ListChecks, BookOpen, Target, CheckSquare, Wallet, Brain, type LucideIcon } from 'lucide-react';
 import EditTaskModal from './EditTaskModal';
 import EditStoryModal from './EditStoryModal';
 import DeferItemModal from './DeferItemModal';
 import KanbanCardV2 from './KanbanCardV2';
-import AiCoachPage from './coach/AiCoachPage';
-import FinanceCoachPage from './finance/FinanceCoachPage';
+import CoachHubPage from './coach/CoachHubPage';
 import FitnessWidget from './metrics/FitnessWidget';
+import FitnessKpiDashboardWidget from './dashboard/FitnessKpiDashboardWidget';
+import HabitsKpiWidget from './dashboard/HabitsKpiWidget';
 import {
   callDeltaReplan,
   callFullReplan,
@@ -47,7 +48,7 @@ import {
   MOBILE_STORY_PROGRESS_OPTIONS,
 } from '../utils/storyProgress';
 
-type TabKey = 'overview' | 'daily_plan' | 'tasks' | 'stories' | 'goals' | 'chores' | 'finance' | 'coach' | 'finance_coach';
+type TabKey = 'overview' | 'coach' | 'daily_plan' | 'tasks' | 'stories' | 'goals' | 'chores' | 'finance';
 type TaskViewFilter = 'top3' | 'due_today' | 'overdue' | 'all';
 type GoalsViewFilter = 'active_sprint' | 'year';
 type MobileSharedFilters = {
@@ -55,33 +56,31 @@ type MobileSharedFilters = {
   chores: boolean;
   focusAligned: boolean;
 };
-const MOBILE_TAB_ORDER: TabKey[] = ['overview', 'daily_plan', 'tasks', 'stories', 'goals', 'chores', 'finance', 'coach', 'finance_coach'];
+const MOBILE_TAB_ORDER: TabKey[] = ['overview', 'coach', 'daily_plan', 'tasks', 'stories', 'goals', 'chores', 'finance'];
 const MOBILE_TAB_LABELS: Record<TabKey, string> = {
   overview: 'Today',
+  coach: 'Coach',
   daily_plan: 'Plan',
   tasks: 'Tasks',
   stories: 'Stories',
   goals: 'Goals',
   chores: 'Chores',
   finance: 'Finance',
-  coach: 'Coach',
-  finance_coach: 'Money',
 };
 // Lucide icon components for the bottom tab bar
 const MOBILE_TAB_ICONS: Record<TabKey, LucideIcon> = {
   overview: Home,
+  coach: Brain,
   daily_plan: CalendarDays,
   tasks: ListChecks,
   stories: BookOpen,
   goals: Target,
   chores: CheckSquare,
   finance: Wallet,
-  coach: Dumbbell,
-  finance_coach: TrendingUp,
 };
 const MOBILE_TAB_BAR_HEIGHT = 64;
-// Coach/Money tabs render full-page components; they skip the overview chrome
-const COACH_TABS: TabKey[] = ['coach', 'finance_coach'];
+// Coach tab renders full-page component; skips the overview chrome
+const COACH_TABS: TabKey[] = ['coach'];
 
 const THEME_COLORS: Record<number, string> = {
   1: '#22c55e', // Health
@@ -1121,13 +1120,17 @@ const MobileHome: React.FC = () => {
 
     choresDueToday.forEach((task) => {
       const dueMs = resolveRecurringDueMs(task, today, startMs) ?? getTaskDueMs(task);
+      // Midnight/pre-dawn (00:00–05:00) = date-only assignment, not a scheduled block time.
+      // Drop the time label and use timeOfDay preference for bucket placement.
+      const isMidnightFallback = dueMs !== null && dueMs >= startMs && dueMs <= startMs + 5 * 3_600_000;
+      const effectiveSortMs = isMidnightFallback ? null : dueMs;
       add({
         id: `chore-${task.id}`,
         kind: 'chore',
         title: task.title,
-        timeLabel: timelineTimeLabel(dueMs),
-        sortMs: dueMs,
-        bucket: bucketFromTime(dueMs, (task as any).timeOfDay),
+        timeLabel: isMidnightFallback ? '' : timelineTimeLabel(dueMs),
+        sortMs: effectiveSortMs,
+        bucket: bucketFromTime(effectiveSortMs, (task as any).timeOfDay),
         task,
       });
     });
@@ -1135,30 +1138,26 @@ const MobileHome: React.FC = () => {
     sortedStories
       .filter((story) => story.status !== 4)
       .forEach((story) => {
-        const dueMs = resolveDateValue(story.targetDate || story.dueDate || (story as any).plannedStartDate);
-        if (dueMs && (dueMs < startMs || dueMs > endMs)) return;
+        const dueMs = resolveDateValue(story.targetDate || story.dueDate);
+        const matchedStartMs = resolveDateValue((story as any).calendarMatchedStart);
+        const matchedEndMs = resolveDateValue((story as any).calendarMatchedEnd);
+        // Include if dueDate is today OR if the story is scheduled via GCal match today
+        const isToday = (ms: number | null) => ms !== null && ms >= startMs && ms <= endMs;
+        if (!isToday(dueMs) && !isToday(matchedStartMs)) return;
+        // Prefer GCal matched start time for sort/label so stories sort at when they begin, not when they end
+        const sortTime = matchedStartMs ?? dueMs;
         add({
           id: `story-${story.id}`,
           kind: 'story',
           title: story.title,
-          timeLabel: timelineTimeLabel(dueMs),
-          sortMs: dueMs,
-          bucket: bucketFromTime(dueMs, (story as any).timeOfDay),
+          timeLabel: timelineTimeLabel(matchedStartMs ?? dueMs, matchedEndMs ?? undefined),
+          sortMs: sortTime,
+          bucket: bucketFromTime(sortTime, (story as any).timeOfDay),
           story,
         });
       });
 
-    overviewCalendarEvents.forEach((event) => {
-      if (event.startMs && (event.startMs < startMs || event.startMs > endMs)) return;
-      add({
-        id: `event-${event.id}`,
-        kind: 'event',
-        title: event.title,
-        timeLabel: timelineTimeLabel(event.startMs, event.endMs),
-        sortMs: event.startMs,
-        bucket: bucketFromTime(event.startMs),
-      });
-    });
+    // Raw GCal events are intentionally excluded — only BOB entities (stories/tasks/chores) appear in the plan
 
     return rows
       .filter(matchesTimelineSharedFilters)
@@ -1168,13 +1167,28 @@ const MobileHome: React.FC = () => {
       if (aTime !== bTime) return aTime - bTime;
       return a.title.localeCompare(b.title);
     });
-  }, [tasksDueTodayForMobile, choresDueToday, sortedStories, overviewCalendarEvents, getTaskDueMs, matchesTimelineSharedFilters, bucketFromTime]);
+  }, [tasksDueTodayForMobile, choresDueToday, sortedStories, getTaskDueMs, matchesTimelineSharedFilters, bucketFromTime]);
 
   const dailyPlanBucketCounts = useMemo(() => ({
     morning: unifiedTimelineItems.filter((item) => item.bucket === 'morning').length,
     afternoon: unifiedTimelineItems.filter((item) => item.bucket === 'afternoon').length,
     evening: unifiedTimelineItems.filter((item) => item.bucket === 'evening').length,
   }), [unifiedTimelineItems]);
+
+  const upNextItem = useMemo(() => {
+    const hour = new Date().getHours();
+    const currentBucket: MobileTimelineBucket =
+      hour >= 5 && hour < 13 ? 'morning' : hour >= 13 && hour < 19 ? 'afternoon' : 'evening';
+    const bucketItems = unifiedTimelineItems.filter((i) => i.bucket === currentBucket);
+    if (bucketItems.length > 0) return bucketItems[0];
+    // Fallback: next bucket with items
+    const all = unifiedTimelineItems;
+    if (all.length > 0) return all[0];
+    // Fallback: top 3
+    if (top3Tasks.length > 0) return { id: `task-${top3Tasks[0].id}`, kind: 'task' as const, title: top3Tasks[0].title, timeLabel: '', sortMs: null, bucket: currentBucket, task: top3Tasks[0] };
+    if (top3Stories.length > 0) return { id: `story-${top3Stories[0].id}`, kind: 'story' as const, title: top3Stories[0].title, timeLabel: '', sortMs: null, bucket: currentBucket, story: top3Stories[0] };
+    return null;
+  }, [unifiedTimelineItems, top3Tasks, top3Stories]);
 
   const renderChoresHabitsWidget = () => {
     // Group by time-of-day bucket, respecting explicit timeOfDay field before falling back to schedule time.
@@ -1553,7 +1567,40 @@ const MobileHome: React.FC = () => {
       {/* Overview */}
       {activeTab === 'overview' && (
         <div>
-          {summary && (
+          {/* ── Up Next ─────────────────────────────────────────────────────── */}
+          {upNextItem && (
+            <Card className="mb-3" style={{ background: 'var(--bs-primary)', color: '#fff', borderRadius: 12 }}>
+              <Card.Body className="py-2 px-3">
+                <div className="d-flex align-items-center justify-content-between gap-2">
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', opacity: 0.8 }}>Up Next</div>
+                    <div style={{ fontWeight: 600, fontSize: 15, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {upNextItem.title}
+                    </div>
+                    {upNextItem.timeLabel && (
+                      <div style={{ fontSize: 12, opacity: 0.85 }}>{upNextItem.timeLabel}</div>
+                    )}
+                  </div>
+                  <div className="d-flex gap-1 flex-shrink-0">
+                    {upNextItem.kind === 'task' && upNextItem.task && (
+                      <Button size="sm" variant="light" style={{ fontSize: 12, padding: '2px 10px', color: 'var(--bs-primary)' }}
+                        onClick={() => setEditingTask(upNextItem.task!)}>
+                        Edit
+                      </Button>
+                    )}
+                    {upNextItem.kind === 'story' && upNextItem.story && (
+                      <Button size="sm" variant="light" style={{ fontSize: 12, padding: '2px 10px', color: 'var(--bs-primary)' }}
+                        onClick={() => setEditingStory(upNextItem.story!)}>
+                        Edit
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </Card.Body>
+            </Card>
+          )}
+
+          {summary && (summary.dailyBriefing || summary.dailyBrief || (Array.isArray(summary?.aiFocus?.items) && summary.aiFocus.items.length > 0)) && (
             <Card className="mb-3" style={{ background: '#f3f4ff' }}>
               <Card.Body>
                 {summary.dailyBriefing?.headline && (
@@ -1633,22 +1680,7 @@ const MobileHome: React.FC = () => {
             </Card>
           )}
 
-          {summary && (
-            <Card className="mb-3" style={{ background: 'linear-gradient(90deg,#eef2ff,#fdf2f8)' }}>
-              <Card.Body>
-                {summary.dailyBriefing?.headline && (
-                  <div className="fw-semibold mb-1" style={{ fontSize: 16 }}>{summary.dailyBriefing.headline}</div>
-                )}
-                {summary.dailyBriefing?.body && (
-                  <div style={{ fontSize: 14 }} className="mb-2">{summary.dailyBriefing.body}</div>
-                )}
-                {summary.dailyBriefing?.checklist && (
-                  <div className="text-muted" style={{ fontSize: 13 }}>{summary.dailyBriefing.checklist}</div>
-                )}
-              </Card.Body>
-            </Card>
-          )}
-
+          {(top3Tasks.length > 0 || top3Stories.length > 0) && (
           <Card className="mb-3" style={{ background: '#f8fafc' }}>
             <Card.Header className="py-2" style={{ background: 'transparent', border: 'none' }}>
               <strong>Top 3 priorities</strong>
@@ -1721,6 +1753,7 @@ const MobileHome: React.FC = () => {
               )}
             </Card.Body>
           </Card>
+          )}
 
           {summary?.priorities?.items?.length > 0 && (
             <Card className="mb-3" style={{ background: '#f0f9ff' }}>
@@ -1871,7 +1904,13 @@ const MobileHome: React.FC = () => {
             </Card.Body>
           </Card>
 
-          {/* Fitness widget — Run/Swim/Bike SportCards */}
+          {/* ── Fitness & Health — pinned at bottom ─────────────────────── */}
+          <div className="mb-3">
+            <FitnessKpiDashboardWidget />
+          </div>
+          <div className="mb-3">
+            <HabitsKpiWidget />
+          </div>
           <Card className="mb-3">
             <Card.Body>
               <div className="d-flex align-items-center justify-content-between mb-2">
@@ -1879,23 +1918,6 @@ const MobileHome: React.FC = () => {
                 <Link to="/fitness" className="small text-decoration-none">Full →</Link>
               </div>
               <FitnessWidget />
-            </Card.Body>
-          </Card>
-
-          {/* Habits & Chores roll-up */}
-          <Card className="mb-3">
-            <Card.Body>
-              <div className="d-flex align-items-center justify-content-between mb-2">
-                <div className="fw-semibold" style={{ fontSize: 14 }}>Habits & Chores</div>
-                <button
-                  type="button"
-                  className="btn btn-link btn-sm p-0 text-decoration-none"
-                  onClick={() => setActiveMobileTab('chores')}
-                >
-                  Open →
-                </button>
-              </div>
-              {renderChoresHabitsWidget()}
             </Card.Body>
           </Card>
         </div>
@@ -2337,13 +2359,7 @@ const MobileHome: React.FC = () => {
 
       {activeTab === 'coach' && (
         <div style={{ marginLeft: -12, marginRight: -12 }}>
-          <AiCoachPage />
-        </div>
-      )}
-
-      {activeTab === 'finance_coach' && (
-        <div style={{ marginLeft: -12, marginRight: -12 }}>
-          <FinanceCoachPage />
+          <CoachHubPage />
         </div>
       )}
 

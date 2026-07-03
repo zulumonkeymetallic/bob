@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { Modal, Button, Form, Badge, Spinner, Alert } from 'react-bootstrap';
+import { Modal, Button, Form, Badge, Spinner, Alert, ProgressBar } from 'react-bootstrap';
+import EditGoalModal from '../EditGoalModal';
 import {
   CheckCircle2,
   Circle,
@@ -214,6 +215,16 @@ const SprintPlannerWizard: React.FC<SprintPlannerWizardProps> = ({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeFocusGoals, show]);
 
+  // Goal to open in KPI editor (layered on top of wizard)
+  const [kpiGoal, setKpiGoal] = useState<Goal | null>(null);
+
+  const refreshGoals = useCallback(() => {
+    if (!uid) return;
+    getDocs(query(collection(db, 'goals'), where('ownerUid', '==', uid)))
+      .then(snap => setAllGoals(snap.docs.map(d => ({ id: d.id, ...d.data() } as Goal))))
+      .catch(() => {});
+  }, [uid]);
+
   // Load all goals once on open
   useEffect(() => {
     if (!show || !uid) return;
@@ -329,11 +340,15 @@ const SprintPlannerWizard: React.FC<SprintPlannerWizardProps> = ({
       let sprintId: string;
 
       if (existingSprint) {
+        const currentStatus = typeof existingSprint.status === 'number' ? existingSprint.status : parseInt(String(existingSprint.status ?? 0));
+        // Promote planned (0) sprints to active (1) when wizard completes
+        const newStatus = currentStatus === 0 ? 1 : currentStatus;
         await updateDoc(doc(db, 'sprints', existingSprint.id), {
           name: wiz.name,
           objective: wiz.objective,
           startDate: startMs,
           endDate: endMs,
+          status: newStatus,
           focusGoalIds: [...wiz.selectedGoalIds],
           alignmentMode: wiz.alignmentMode,
           updatedAt: serverTimestamp(),
@@ -434,6 +449,7 @@ const SprintPlannerWizard: React.FC<SprintPlannerWizardProps> = ({
 
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
+    <>
     <Modal show={show} onHide={onHide} centered size="xl" fullscreen="lg-down" scrollable>
       <Modal.Header closeButton style={{ borderBottom: '1px solid var(--notion-border)' }}>
         <Modal.Title style={{ fontSize: 16, fontWeight: 600 }}>
@@ -441,28 +457,35 @@ const SprintPlannerWizard: React.FC<SprintPlannerWizardProps> = ({
         </Modal.Title>
       </Modal.Header>
 
-      {/* Step indicator */}
-      <div style={{ display: 'flex', padding: '10px 20px', gap: 4, borderBottom: '1px solid var(--notion-border)', background: 'var(--notion-bg-secondary, #f9fafb)' }}>
-        {STEPS.map(({ id, label, icon }) => {
-          const done = id < step;
-          const active = id === step;
-          return (
-            <div
-              key={id}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 20,
-                fontSize: 12, fontWeight: active ? 600 : 400,
-                background: active ? 'var(--bs-primary)' : done ? 'var(--bs-success-subtle)' : 'transparent',
-                color: active ? '#fff' : done ? 'var(--bs-success-text)' : 'var(--bs-secondary-color)',
-                cursor: 'default',
-              }}
-            >
-              {done ? <CheckCircle2 size={12} /> : icon}
-              <span className="d-none d-sm-inline">{label}</span>
-              <span className="d-sm-none">{id}</span>
-            </div>
-          );
-        })}
+      {/* Step indicator + progress bar */}
+      <div style={{ borderBottom: '1px solid var(--notion-border)', background: 'var(--notion-bg-secondary, #f9fafb)' }}>
+        <div style={{ display: 'flex', padding: '10px 20px 8px', gap: 4 }}>
+          {STEPS.map(({ id, label, icon }) => {
+            const done = id < step;
+            const active = id === step;
+            return (
+              <div
+                key={id}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 20,
+                  fontSize: 12, fontWeight: active ? 600 : 400,
+                  background: active ? 'var(--bs-primary)' : done ? 'var(--bs-success-subtle)' : 'transparent',
+                  color: active ? '#fff' : done ? 'var(--bs-success-text)' : 'var(--bs-secondary-color)',
+                  cursor: 'default',
+                }}
+              >
+                {done ? <CheckCircle2 size={12} /> : icon}
+                <span className="d-none d-sm-inline">{label}</span>
+                <span className="d-sm-none">{id}</span>
+              </div>
+            );
+          })}
+        </div>
+        <ProgressBar
+          now={Math.round(((step - 1) / (STEPS.length - 1)) * 100)}
+          style={{ height: 3, borderRadius: 0 }}
+          variant="primary"
+        />
       </div>
 
       <Modal.Body style={{ minHeight: 400, padding: '20px 24px' }}>
@@ -722,12 +745,23 @@ const SprintPlannerWizard: React.FC<SprintPlannerWizardProps> = ({
                   const linkedHabits = habits.filter(h => h.linkedGoalId === goal.id);
                   return (
                     <div key={goal.id} style={{ border: `1px solid ${color}40`, borderLeft: `4px solid ${color}`, borderRadius: 8, padding: 14 }}>
-                      <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 8 }}>{goal.title}</div>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                        <div style={{ fontWeight: 600, fontSize: 14 }}>{goal.title}</div>
+                        <Button
+                          size="sm"
+                          variant="outline-secondary"
+                          style={{ fontSize: 11, padding: '2px 8px' }}
+                          title="Open goal to configure KPIs — your wizard progress is saved"
+                          onClick={() => setKpiGoal(goal)}
+                        >
+                          {kpisV2.length > 0 ? 'Edit KPIs' : '+ Add KPIs'}
+                        </Button>
+                      </div>
 
                       {kpisV2.length > 0 ? (
                         <GoalKpiLivePanel goalId={goal.id} ownerUid={uid} kpisV2={kpisV2} />
                       ) : (
-                        <div className="text-muted small mb-2">No KPIs configured for this goal.</div>
+                        <div className="text-muted small mb-2">No KPIs configured — click "+ Add KPIs" to set targets.</div>
                       )}
 
                       {habitsLoading ? (
@@ -829,6 +863,19 @@ const SprintPlannerWizard: React.FC<SprintPlannerWizardProps> = ({
         )}
       </Modal.Footer>
     </Modal>
+
+    {/* KPI editor — layered on top of wizard; wizard state is preserved */}
+    <EditGoalModal
+      show={!!kpiGoal}
+      goal={kpiGoal}
+      currentUserId={uid ?? ''}
+      allGoals={allGoals}
+      onClose={() => {
+        setKpiGoal(null);
+        refreshGoals(); // re-fetch so updated kpisV2 appear on return
+      }}
+    />
+    </>
   );
 };
 

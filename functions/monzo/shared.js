@@ -18,6 +18,7 @@ const MONZO_CATEGORY_TYPE_MAP = {
   savings: 'savings',
   charity: 'mandatory',
   business: 'mandatory',
+  subscriptions: 'optional',
 };
 
 function inferDefaultCategoryType(tx) {

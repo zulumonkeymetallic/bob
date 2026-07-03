@@ -125,15 +125,15 @@ const GlobalGoalFocusBanner: React.FC = () => {
   if (bannerGoals.length === 0) return null;
 
   return (
-    <div className="mb-2" style={{ fontSize: '0.85em' }}>
+    <div className="mb-1" style={{ fontSize: '0.7em' }}>
       {/* Header row */}
       <div
         className="d-flex align-items-center justify-content-between mb-1"
         style={{ paddingLeft: 2, paddingRight: 4 }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-          <Target size={11} style={{ color: 'var(--muted)' }} />
-          <span style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--muted)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+          <Target size={9} style={{ color: 'var(--muted)' }} />
+          <span style={{ fontSize: 9, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--muted)' }}>
             Focus Goals
           </span>
         </div>
@@ -143,7 +143,7 @@ const GlobalGoalFocusBanner: React.FC = () => {
             background: 'none',
             border: 'none',
             padding: 0,
-            fontSize: 10,
+            fontSize: 9,
             color: 'var(--brand, #5f77dc)',
             cursor: 'pointer',
             textDecoration: 'underline',
@@ -154,7 +154,7 @@ const GlobalGoalFocusBanner: React.FC = () => {
       </div>
 
       {/* Goal cards — horizontal scroll if many */}
-      <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 2 }}>
+      <div style={{ display: 'flex', gap: 4, overflowX: 'auto', paddingBottom: 2 }}>
         {bannerGoals.map((goal) => {
           const { color: themeColor, label: themeLabel } = resolveGoalTheme((goal as any).theme);
           const stats   = storyStats.get(goal.id);
@@ -162,29 +162,26 @@ const GlobalGoalFocusBanner: React.FC = () => {
           const done    = stats?.done  ?? null;
           const progressPercent = total ? Math.round(((done ?? 0) / total) * 100) : undefined;
 
-          // KPI label: show first KPI name + target, truncated
           const kpis = Array.isArray((goal as any).kpis) ? (goal as any).kpis : [];
           const kpiLabel = kpis.length > 0
             ? kpis.slice(0, 2).map((k: any) => `${k.name}: ${k.target}${k.unit ?? ''}`).join(' · ')
             : undefined;
 
-          // Savings progress
           const potId      = (goal as any).monzoPotId || (goal as any).linkedPotId || (goal as any).potId;
-          const potBalance = potId && pots[potId] ? pots[potId].balance : 0; // pence
+          const potBalance = potId && pots[potId] ? pots[potId].balance : 0;
           const estimated  = Number((goal as any).estimatedCost || 0);
           const hasSavings = estimated > 0 && potId;
           const savingsPct = hasSavings
             ? Math.min(100, Math.round(((potBalance / 100) / estimated) * 100))
             : null;
 
-          // Build a combined kpiLabel including savings if present
           const displayKpiLabel = [
             kpiLabel,
             savingsPct != null ? `Savings ${savingsPct}%` : null,
           ].filter(Boolean).join(' · ') || undefined;
 
           return (
-            <div key={goal.id} style={{ flexShrink: 0, width: 180 }}>
+            <div key={goal.id} style={{ flexShrink: 0, width: 140 }}>
               <GoalCard
                 goal={goal}
                 themeColor={themeColor}

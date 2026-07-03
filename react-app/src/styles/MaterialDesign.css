@@ -818,13 +818,14 @@
 
 /* Responsive adjustments */
 @media (max-width: 768px) {
+  /* FAB must clear the 64px MobileHome tab bar + safe area */
   .md-fab {
-    bottom: 16px;
+    bottom: calc(64px + env(safe-area-inset-bottom, 0px) + 16px) !important;
     right: 16px;
   }
-  
+
   .md-fab-menu {
-    bottom: 82px;
+    bottom: calc(64px + env(safe-area-inset-bottom, 0px) + 88px) !important;
     right: 16px;
   }
   

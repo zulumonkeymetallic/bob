@@ -14,12 +14,17 @@ export const getDeviceInfo = (): DeviceInfo => {
   const userAgent = navigator.userAgent.toLowerCase();
   const width = window.innerWidth;
   
-  // Check for mobile devices
-  const isMobile = /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini/i.test(userAgent) || width < 768;
-  
-  // Check for tablets (larger mobile devices)
-  const isTablet = (/ipad|android/i.test(userAgent) && width >= 768 && width < 1024) || (width >= 768 && width < 1024);
-  
+  // iPad: portrait (<1024px) → mobile layout; landscape (≥1024px) → tablet sidebar layout
+  const isIPad = /ipad/i.test(userAgent);
+
+  // Phone UA match (iPad excluded — handled separately by width)
+  const isPhoneUA = /android|webos|iphone|ipod|blackberry|iemobile|opera mini/i.test(userAgent);
+
+  const isMobile = (isPhoneUA && !isIPad) || width < 768 || (isIPad && width < 1024);
+
+  // Tablet: iPad landscape, or non-iPad viewport in 768–1199px range
+  const isTablet = (isIPad && width >= 1024) || (!isIPad && width >= 768 && width < 1200);
+
   // Desktop
   const isDesktop = !isMobile && !isTablet;
   

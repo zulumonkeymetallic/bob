@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { Modal, Button, Form, Alert, InputGroup, Toast, ToastContainer } from 'react-bootstrap';
+import { Modal, Button, Form, Alert, InputGroup, Toast, ToastContainer, Nav } from 'react-bootstrap';
 import { db, functions } from '../firebase';
 import { doc, updateDoc, serverTimestamp, collection, query, where, getDocs, setDoc, getDoc, addDoc, deleteDoc, onSnapshot, orderBy } from 'firebase/firestore';
 import { Goal, Story, Task } from '../types';
@@ -71,6 +71,8 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
   const { currentPersona } = usePersona();
   const { sprints } = useSprint();
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [activeTab, setActiveTab] = useState<'details' | 'stories' | 'tasks' | 'child-goals'>('details');
+  const childGoals = useMemo(() => allGoals.filter((g) => g.parentGoalId === goal?.id), [allGoals, goal?.id]);
   const [formData, setFormData] = useState({
     title: '',
     description: '',
@@ -476,6 +478,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
   // Load goal data when modal opens
   useEffect(() => {
     if (show) {
+      setActiveTab('details');
       if (goal) {
         // EDIT MODE: Map database values back to form values
         const sizeMap = { 1: 'XS', 2: 'S', 3: 'M', 4: 'L', 5: 'XL' };
@@ -525,6 +528,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
           isPublished: !!(goal as any).isPublished,
           shareCode: (goal as any).shareCode || '',
         });
+        setDurationDays(calculateDurationDays(startDateStr, endDateStr));
         const current = canonicalThemeId;
         const themeObj = themes.find(t => String(t.id) === String(current));
         setThemeInput(themeObj?.label || themeObj?.name || `${themeObj?.id ?? current ?? ''}`);
@@ -941,12 +945,9 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
           <Toast.Body className="text-white">{toastMsg}</Toast.Body>
         </Toast>
       </ToastContainer>
-      <Modal.Header closeButton>
-        <div className="d-flex w-100 align-items-center justify-content-between gap-2">
-          <Modal.Title>{goal ? `Edit Goal: ${goal.title}` : 'Create New Goal'}</Modal.Title>
-          <button onClick={() => setIsFullscreen((v) => !v)} title={isFullscreen ? 'Restore' : 'Maximise'} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', padding: '2px 4px', marginRight: 4 }}>
-            {isFullscreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
-          </button>
+      <Modal.Header>
+        <Modal.Title className="me-auto">{goal ? `Edit Goal: ${goal.title}` : 'Create New Goal'}</Modal.Title>
+        <div className="d-flex align-items-center gap-1">
           {goal && (
             <Button
               variant="outline-primary"
@@ -959,9 +960,90 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
               {isGeneratingStories ? 'Generating...' : 'AI Stories'}
             </Button>
           )}
+          <button
+            onClick={() => setIsFullscreen((v) => !v)}
+            title={isFullscreen ? 'Restore default size' : 'Maximise to full screen'}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', padding: '4px 6px', borderRadius: 4, display: 'flex', alignItems: 'center' }}
+          >
+            {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+          </button>
+          <button onClick={handleClose} className="btn-close" aria-label="Close" style={{ fontSize: '0.7rem' }} />
         </div>
       </Modal.Header>
       <Modal.Body>
+        {/* Tab nav — fullscreen mode with an existing goal only */}
+        {isFullscreen && goal && (
+          <Nav variant="tabs" className="mb-3" activeKey={activeTab} onSelect={(k) => setActiveTab((k as any) ?? 'details')}>
+            <Nav.Item><Nav.Link eventKey="details">Details</Nav.Link></Nav.Item>
+            <Nav.Item><Nav.Link eventKey="stories">Stories ({linkedStories.length})</Nav.Link></Nav.Item>
+            <Nav.Item><Nav.Link eventKey="tasks">Tasks ({linkedTasks.length})</Nav.Link></Nav.Item>
+            <Nav.Item><Nav.Link eventKey="child-goals">Child Goals ({childGoals.length})</Nav.Link></Nav.Item>
+          </Nav>
+        )}
+
+        {/* Stories tab — fullscreen only */}
+        {isFullscreen && goal && activeTab === 'stories' && (
+          <div>
+            {storiesLoading ? (
+              <div className="text-muted small">Loading stories…</div>
+            ) : (
+              <ModernStoriesTable
+                stories={linkedStories}
+                goals={allGoals.length ? allGoals : [goal]}
+                goalId={goal.id}
+                onStoryUpdate={handleStoryUpdate}
+                onStoryDelete={handleStoryDelete}
+                onStoryPriorityChange={handleStoryPriorityChange}
+                onStoryAdd={handleStoryAdd}
+              />
+            )}
+          </div>
+        )}
+
+        {/* Tasks tab — fullscreen only */}
+        {isFullscreen && goal && activeTab === 'tasks' && (
+          <div>
+            {tasksLoading ? (
+              <div className="text-muted small">Loading tasks…</div>
+            ) : (
+              <ModernTaskTable
+                tasks={linkedTasks}
+                stories={linkedStories}
+                goals={allGoals.length ? allGoals : [goal]}
+                sprints={sprints as any}
+                compact
+                defaultColumns={['ref', 'title', 'status', 'priority', 'dueDate', 'points', 'storyTitle']}
+                onTaskCreate={handleTaskCreate}
+                onTaskUpdate={handleTaskUpdate}
+                onTaskDelete={handleTaskDelete}
+                onTaskPriorityChange={handleTaskPriorityChange}
+              />
+            )}
+          </div>
+        )}
+
+        {/* Child Goals tab — fullscreen only */}
+        {isFullscreen && goal && activeTab === 'child-goals' && (
+          <div>
+            {childGoals.length === 0 ? (
+              <div className="text-muted small">No child goals.</div>
+            ) : (
+              <div className="vstack gap-2">
+                {childGoals.map((cg) => (
+                  <div key={cg.id} className="p-3 rounded" style={{ background: 'var(--panel)', border: '1px solid var(--notion-border)', fontSize: '0.9rem' }}>
+                    <div style={{ fontWeight: 600 }}>{cg.title || 'Untitled'}</div>
+                    {(cg as any).description && (
+                      <div className="text-muted mt-1" style={{ fontSize: '0.82rem' }}>{(cg as any).description}</div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Details panel — always shown in non-fullscreen; only when activeTab==='details' in fullscreen */}
+        <div style={{ display: isFullscreen && goal && activeTab !== 'details' ? 'none' : undefined }}>
         <div className="row g-3">
           <div className="col-lg-8">
             <Form>
@@ -1325,7 +1407,11 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
                     <Form.Control
                       type="date"
                       value={formData.endDate}
-                      onChange={(e) => setFormData({ ...formData, endDate: e.target.value })}
+                      onChange={(e) => {
+                        const newEnd = e.target.value;
+                        setFormData(prev => ({ ...prev, endDate: newEnd }));
+                        setDurationDays(calculateDurationDays(formData.startDate, newEnd));
+                      }}
                     />
                   </Form.Group>
                 </div>
@@ -1562,7 +1648,8 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
           />
         )}
 
-        {goal && (
+        {/* Inline stories/tasks — only in non-fullscreen mode */}
+        {(!isFullscreen || !goal) && goal && (
           <div className="mt-4">
             <div className="mb-4">
               <h5 className="mb-2">Linked Stories</h5>
@@ -1649,6 +1736,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
             )}
           </div>
         )}
+        </div>{/* end details panel wrapper */}
       </Modal.Body>
       <Modal.Footer>
         {goal && (

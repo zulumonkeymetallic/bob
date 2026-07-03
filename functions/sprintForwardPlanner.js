@@ -196,7 +196,7 @@ async function runForUser(db, uid, options = {}) {
     const delBatch = db.batch();
     let delCount = 0;
     for (const d of oldSnap.docs) {
-      const sm = toMs(d.data().startTime ?? d.data().startMs);
+      const sm = toMs(d.data().start ?? d.data().startTime ?? d.data().startMs);
       if (sm == null || sm >= tomorrowMs) {
         delBatch.delete(d.ref);
         delCount++;
@@ -300,6 +300,8 @@ async function runForUser(db, uid, options = {}) {
           endMs:     blockEnd,
           date: iso,
           source: SOURCE_TAG,
+          status: 'planned',
+          aiGenerated: true,
           persona: String(item.persona || 'personal'),
           sprintId: item.sprintId || null,
           score:    item._score,

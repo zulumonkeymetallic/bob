@@ -1,8 +1,10 @@
 import React, { useCallback, useState } from 'react';
 import { Alert, Badge, Button } from 'react-bootstrap';
-import { CalendarClock, ChevronDown, ChevronRight } from 'lucide-react';
+import { AlertTriangle, CalendarClock, CheckCircle, ChevronDown, ChevronRight, Trash2 } from 'lucide-react';
 import { useDeferralCandidates, type DeferralCandidate, type OverCapacityMove } from '../hooks/useDeferralCandidates';
 import { applyPlannerDefer, applyPlannerMoveToSprint, applyStoryDueDate } from '../utils/plannerDeferral';
+import { doc, updateDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
+import { db } from '../firebase';
 
 function formatDate(dateMs: number | null): string {
   if (!dateMs) return 'tomorrow';
@@ -22,7 +24,7 @@ interface Props {
 }
 
 const DeferralRecommendationBanner: React.FC<Props> = ({ compact = false }) => {
-  const { candidates, overCapacityMoves, loading, currentSprint, nextSprint } = useDeferralCandidates();
+  const { candidates, overCapacityMoves, scheduleWarnings, loading, currentSprint, nextSprint } = useDeferralCandidates();
 
   const [expanded, setExpanded] = useState(false);
   const [actioningId, setActioningId] = useState<string | null>(null);
@@ -125,11 +127,32 @@ const DeferralRecommendationBanner: React.FC<Props> = ({ compact = false }) => {
     setStatusMsg(`Moved ${moved} ${moved === 1 ? 'story' : 'stories'} to ${(nextSprint as any).name || 'next sprint'}.`);
   }, [nextSprint, overCapacityMoves, actioned]);
 
+  const handleMarkComplete = useCallback(async (c: DeferralCandidate) => {
+    setActioningId(c.id);
+    try {
+      const collection = c.type === 'task' ? 'tasks' : 'stories';
+      const doneStatus = c.type === 'task' ? 2 : 4;
+      await updateDoc(doc(db, collection, c.id), { status: doneStatus, updatedAt: serverTimestamp() });
+      markActioned(c.id);
+    } catch { /* ignore */ } finally { setActioningId(null); }
+  }, [markActioned]);
+
+  const handleDeleteItem = useCallback(async (c: DeferralCandidate) => {
+    setActioningId(c.id);
+    try {
+      const collection = c.type === 'task' ? 'tasks' : 'stories';
+      await deleteDoc(doc(db, collection, c.id));
+      markActioned(c.id);
+    } catch { /* ignore */ } finally { setActioningId(null); }
+  }, [markActioned]);
+
   const visibleOverCapacity = overCapacityMoves.filter((m) => !actioned.has(m.id));
+
+  const visibleScheduleWarnings = scheduleWarnings || [];
 
   if (dismissed) return null;
   if (!currentSprint || loading) return null;
-  if (visibleCandidates.length === 0 && visibleOverCapacity.length === 0) return null;
+  if (visibleCandidates.length === 0 && visibleOverCapacity.length === 0 && visibleScheduleWarnings.length === 0) return null;
 
   const focusStoryCandidates = visibleCandidates.filter((c) => c.type === 'story' && c.recommendedAction === 'set_due_date');
   const deferStoryCandidates = visibleCandidates.filter((c) => c.type === 'story' && c.recommendedAction !== 'set_due_date');
@@ -143,6 +166,7 @@ const DeferralRecommendationBanner: React.FC<Props> = ({ compact = false }) => {
           {focusStoryCandidates.length > 0 && ` · ${focusStoryCandidates.length} focus ${focusStoryCandidates.length === 1 ? 'story' : 'stories'}`}
           {deferStoryCandidates.length > 0 && ` · ${deferStoryCandidates.length} ${deferStoryCandidates.length === 1 ? 'story' : 'stories'}`}
           {taskCandidates.length > 0 && ` · ${taskCandidates.length} ${taskCandidates.length === 1 ? 'task' : 'tasks'}`}
+          {visibleScheduleWarnings.length > 0 && ` · ${visibleScheduleWarnings.length} goal mismatch${visibleScheduleWarnings.length !== 1 ? 'es' : ''}`}
         </span>
         <Button size="sm" variant="outline-primary" onClick={() => setExpanded((v) => !v)}>
           {expanded ? 'Less' : 'Show'}
@@ -195,6 +219,11 @@ const DeferralRecommendationBanner: React.FC<Props> = ({ compact = false }) => {
                 Over capacity
               </Badge>
             )}
+            {visibleScheduleWarnings.length > 0 && (
+              <Badge bg="danger" className="ms-1" style={{ fontSize: 11 }}>
+                {visibleScheduleWarnings.length} goal mismatch{visibleScheduleWarnings.length !== 1 ? 'es' : ''}
+              </Badge>
+            )}
           </div>
           <div className="text-muted small">
             {visibleOverCapacity.length > 0 && `${visibleOverCapacity.length} over capacity → next sprint`}
@@ -204,6 +233,8 @@ const DeferralRecommendationBanner: React.FC<Props> = ({ compact = false }) => {
             {deferStoryCandidates.length > 0 && `${deferStoryCandidates.length} ${deferStoryCandidates.length === 1 ? 'story' : 'stories'} → next sprint`}
             {deferStoryCandidates.length > 0 && taskCandidates.length > 0 && ' · '}
             {taskCandidates.length > 0 && `${taskCandidates.length} ${taskCandidates.length === 1 ? 'task' : 'tasks'} → next free slot`}
+            {(visibleOverCapacity.length > 0 || focusStoryCandidates.length > 0 || deferStoryCandidates.length > 0 || taskCandidates.length > 0) && visibleScheduleWarnings.length > 0 && ' · '}
+            {visibleScheduleWarnings.length > 0 && `${visibleScheduleWarnings.length} sprint/goal date mismatch${visibleScheduleWarnings.length !== 1 ? 'es' : ''}`}
           </div>
         </div>
       </div>
@@ -225,6 +256,27 @@ const DeferralRecommendationBanner: React.FC<Props> = ({ compact = false }) => {
 
         {expanded && (
           <div className="d-flex flex-column gap-2">
+            {visibleScheduleWarnings.length > 0 && (
+              <>
+                <div className="text-muted small fw-semibold" style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                  Sprint/goal date mismatch — review linkage
+                </div>
+                {visibleScheduleWarnings.map((w) => (
+                  <div
+                    key={w.id}
+                    className="d-flex flex-wrap align-items-center gap-2"
+                    style={{ background: 'rgba(220,53,69,0.06)', border: '1px solid rgba(220,53,69,0.3)', borderRadius: 8, padding: '8px 10px' }}
+                  >
+                    <AlertTriangle size={14} className="text-danger flex-shrink-0" />
+                    <div className="small flex-grow-1">
+                      <strong>{w.title}</strong>
+                      <span className="text-muted ms-1">· {w.reason}</span>
+                    </div>
+                  </div>
+                ))}
+              </>
+            )}
+
             {visibleOverCapacity.length > 0 && (
               <>
                 <div className="d-flex align-items-center justify-content-between">
@@ -305,15 +357,23 @@ const DeferralRecommendationBanner: React.FC<Props> = ({ compact = false }) => {
                       <strong>{c.title}</strong>
                       <span className="text-muted ms-1">· {Math.round(c.effortHours * 10) / 10}h</span>
                     </div>
-                    <Button
-                      size="sm"
-                      variant="outline-primary"
-                      style={{ minWidth: 170 }}
-                      disabled={!c.targetDateMs || actioningId === c.id}
-                      onClick={() => handleSetDueDate(c)}
-                    >
-                      {actioningId === c.id ? 'Scheduling…' : `Schedule by ${formatDate(c.targetDateMs)}`}
-                    </Button>
+                    <div className="d-flex align-items-center gap-1">
+                      <Button size="sm" variant="outline-success" title="Mark complete" disabled={actioningId === c.id} onClick={() => handleMarkComplete(c)} style={{ padding: '2px 6px' }}>
+                        <CheckCircle size={13} />
+                      </Button>
+                      <Button size="sm" variant="outline-danger" title="Delete" disabled={actioningId === c.id} onClick={() => handleDeleteItem(c)} style={{ padding: '2px 6px' }}>
+                        <Trash2 size={13} />
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline-primary"
+                        style={{ minWidth: 170 }}
+                        disabled={!c.targetDateMs || actioningId === c.id}
+                        onClick={() => handleSetDueDate(c)}
+                      >
+                        {actioningId === c.id ? 'Scheduling…' : `Schedule by ${formatDate(c.targetDateMs)}`}
+                      </Button>
+                    </div>
                   </div>
                 ))}
               </>
@@ -332,21 +392,29 @@ const DeferralRecommendationBanner: React.FC<Props> = ({ compact = false }) => {
                       <strong>{c.title}</strong>
                       <span className="text-muted ms-1">· {reasonLabel(c.reasonCodes)} · {Math.round(c.effortHours * 10) / 10}h</span>
                     </div>
-                    {nextSprint ? (
-                      <Button
-                        size="sm"
-                        variant="outline-dark"
-                        style={{ minWidth: 140 }}
-                        disabled={actioningId === c.id}
-                        onClick={() => handleStoryMove(c)}
-                      >
-                        {actioningId === c.id ? 'Moving…' : `Move to ${(nextSprint as any).name || 'next sprint'}`}
+                    <div className="d-flex align-items-center gap-1">
+                      <Button size="sm" variant="outline-success" title="Mark complete" disabled={actioningId === c.id} onClick={() => handleMarkComplete(c)} style={{ padding: '2px 6px' }}>
+                        <CheckCircle size={13} />
                       </Button>
-                    ) : (
-                      <Button size="sm" variant="outline-warning" disabled>
-                        Create next sprint to enable
+                      <Button size="sm" variant="outline-danger" title="Delete" disabled={actioningId === c.id} onClick={() => handleDeleteItem(c)} style={{ padding: '2px 6px' }}>
+                        <Trash2 size={13} />
                       </Button>
-                    )}
+                      {nextSprint ? (
+                        <Button
+                          size="sm"
+                          variant="outline-dark"
+                          style={{ minWidth: 140 }}
+                          disabled={actioningId === c.id}
+                          onClick={() => handleStoryMove(c)}
+                        >
+                          {actioningId === c.id ? 'Moving…' : `Move to ${(nextSprint as any).name || 'next sprint'}`}
+                        </Button>
+                      ) : (
+                        <Button size="sm" variant="outline-warning" disabled>
+                          Create next sprint to enable
+                        </Button>
+                      )}
+                    </div>
                   </div>
                 ))}
               </>
@@ -365,15 +433,23 @@ const DeferralRecommendationBanner: React.FC<Props> = ({ compact = false }) => {
                       <strong>{c.title}</strong>
                       <span className="text-muted ms-1">· {reasonLabel(c.reasonCodes)} · {Math.round(c.effortHours * 10) / 10}h</span>
                     </div>
-                    <Button
-                      size="sm"
-                      variant="outline-dark"
-                      style={{ minWidth: 140 }}
-                      disabled={!c.targetDateMs || actioningId === c.id}
-                      onClick={() => handleTaskDefer(c)}
-                    >
-                      {actioningId === c.id ? 'Deferring…' : `Defer to ${formatDate(c.targetDateMs)}`}
-                    </Button>
+                    <div className="d-flex align-items-center gap-1">
+                      <Button size="sm" variant="outline-success" title="Mark complete" disabled={actioningId === c.id} onClick={() => handleMarkComplete(c)} style={{ padding: '2px 6px' }}>
+                        <CheckCircle size={13} />
+                      </Button>
+                      <Button size="sm" variant="outline-danger" title="Delete" disabled={actioningId === c.id} onClick={() => handleDeleteItem(c)} style={{ padding: '2px 6px' }}>
+                        <Trash2 size={13} />
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline-dark"
+                        style={{ minWidth: 140 }}
+                        disabled={!c.targetDateMs || actioningId === c.id}
+                        onClick={() => handleTaskDefer(c)}
+                      >
+                        {actioningId === c.id ? 'Deferring…' : `Defer to ${formatDate(c.targetDateMs)}`}
+                      </Button>
+                    </div>
                   </div>
                 ))}
               </>

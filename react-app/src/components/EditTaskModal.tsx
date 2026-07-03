@@ -116,6 +116,7 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
     daysOfWeek: [] as string[],
     persona: 'personal' as 'personal' | 'work',
     sprintAlignmentOverride: false as boolean,
+    linkedGoalId: '' as string,
   });
   const [showAlignmentWarning, setShowAlignmentWarning] = useState(false);
   const goalInputRef = useRef<HTMLInputElement>(null);
@@ -210,6 +211,7 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
         timeOfDay: '',
         storyId: '',
         goalId: '',
+        linkedGoalId: '',
         tags: [],
         type: 'task',
         repeatFrequency: '',
@@ -253,6 +255,7 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
       repeatInterval: Number((task as any).repeatInterval || 1) || 1,
       daysOfWeek: Array.isArray((task as any).daysOfWeek) ? (task as any).daysOfWeek : [],
       persona: ((task as any).persona || 'personal') as 'personal' | 'work',
+      linkedGoalId: (task as any).linkedGoalId || '',
     });
     setStoryInput(linkedStory ? (linkedStory.title || '') : '');
     const resolvedGoalId = (task as any)?.goalId || linkedStory?.goalId || '';
@@ -307,7 +310,7 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
       setSaving(false);
       return;
     }
-    if (form.sprintId && sprintAlignment.hasRule && !sprintAlignment.aligned && !form.sprintAlignmentOverride) {
+    if (form.type !== 'chore' && form.sprintId && sprintAlignment.hasRule && !sprintAlignment.aligned && !form.sprintAlignmentOverride) {
       if (sprintAlignment.blocking) {
         alert(sprintAlignment.message);
         setSaving(false);
@@ -358,6 +361,7 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
         parentType: form.storyId ? 'story' : null,
         parentId: form.storyId || null,
         goalId: form.goalId || null,
+        linkedGoalId: form.linkedGoalId || null,
         tags: Array.isArray(form.tags) ? form.tags.map((tag) => tag.trim()).filter(Boolean) : [],
         type: normalizedTaskType,
         repeatFrequency: normalizedFrequency,
@@ -554,12 +558,9 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
   return (
     <>
     <Modal show={show} onHide={onHide} size={isFullscreen ? undefined : 'lg'} container={container || undefined} fullscreen={isFullscreen ? true : 'lg-down'} scrollable>
-      <Modal.Header closeButton>
-        <div className="d-flex w-100 align-items-center justify-content-between gap-2">
-          <Modal.Title>{task ? 'Edit Task' : 'Add Task'}</Modal.Title>
-          <button onClick={() => setIsFullscreen((v) => !v)} title={isFullscreen ? 'Restore' : 'Maximise'} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', padding: '2px 4px' }}>
-            {isFullscreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
-          </button>
+      <Modal.Header>
+        <Modal.Title className="me-auto">{task ? 'Edit Task' : 'Add Task'}</Modal.Title>
+        <div className="d-flex align-items-center gap-1">
           {task && (
             <div className="d-flex align-items-center gap-2">
               <Button variant="outline-secondary" size="sm" title="Activity stream" onClick={() => showSidebar(task, 'task')}>
@@ -604,6 +605,14 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
               </Button>
             </div>
           )}
+          <button
+            onClick={() => setIsFullscreen((v) => !v)}
+            title={isFullscreen ? 'Restore default size' : 'Maximise to full screen'}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', padding: '4px 6px', borderRadius: 4, display: 'flex', alignItems: 'center' }}
+          >
+            {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+          </button>
+          <button onClick={onHide} className="btn-close" aria-label="Close" style={{ fontSize: '0.7rem' }} />
         </div>
       </Modal.Header>
       <Modal.Body>
@@ -815,7 +824,7 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
                       ))}
                     </Form.Select>
                   </Form.Group>
-                  {selectedSprint && sprintFocusGoals.length > 0 && (
+                  {form.type !== 'chore' && selectedSprint && sprintFocusGoals.length > 0 && (
                     <Form.Check
                       type="checkbox"
                       label="Keep in this sprint — skip nightly focus-alignment moves"
@@ -923,6 +932,30 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
               </Form.Group>
                 </Col>
               </Row>
+              {(form.type === 'habit' || form.type === 'routine') && (
+              <Row>
+                <Col md={12}>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Linked goal (KPI tracking)</Form.Label>
+                    <Form.Select
+                      size="sm"
+                      value={form.linkedGoalId}
+                      onChange={(e) => setForm((prev) => ({ ...prev, linkedGoalId: e.target.value }))}
+                    >
+                      <option value="">— none —</option>
+                      {goals.filter(g => Number((g as any).status) !== 4).map((g) => (
+                        <option key={g.id} value={g.id}>
+                          {getGoalDisplayPath(g.id, goals)}
+                        </option>
+                      ))}
+                    </Form.Select>
+                    <div className="form-text">
+                      Links this habit to a goal so sprint planners can surface it under that goal, and KPI adherence counts against it.
+                    </div>
+                  </Form.Group>
+                </Col>
+              </Row>
+              )}
               <Row>
                 <Col md={12}>
                   <Form.Group className="mb-3">

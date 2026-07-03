@@ -39,7 +39,6 @@ const {
 const fuzzyTaskLinking = require('./fuzzyTaskLinking');
 
 // Secrets
-const GOOGLE_AI_STUDIO_API_KEY = defineSecret('GOOGLEAISTUDIOAPIKEY');
 const OPENROUTER_API_KEY_SECRET = defineSecret('OPENROUTER_API_KEY');
 const BOB_CLI_ACCESS = defineSecret('BOB_CLI_ACCESS');
 
@@ -338,7 +337,7 @@ async function matchExternalCalendarEventsToEntities({
 
     if (matched.type === 'story') {
       result.matchedStories += 1;
-      await db.collection('stories').doc(matched.id).set({
+      const storyGcalPatch = {
         calendarMatchSource: 'matched_user_created_calendar_event',
         calendarMatchNote: 'Matched user created calendar event',
         calendarMatchConfidence: confidence.normalized,
@@ -347,7 +346,19 @@ async function matchExternalCalendarEventsToEntities({
         calendarMatchedEnd: block.end || null,
         plannedStartDate: block.start || null,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      }, { merge: true });
+      };
+      // Set dueDate from the GCal event end time if not user-locked
+      if (!matched.dueDateLocked) {
+        const gcalDueMs = block.end || block.start || null;
+        if (gcalDueMs) {
+          storyGcalPatch.dueDate = gcalDueMs;
+          storyGcalPatch.dueDateMs = gcalDueMs;
+          storyGcalPatch.dueDateUpdatedBy = 'gcal_match';
+          storyGcalPatch.dueDateUpdatedSource = 'calendar_event_matcher';
+          storyGcalPatch.dueDateUpdatedAt = admin.firestore.FieldValue.serverTimestamp();
+        }
+      }
+      await db.collection('stories').doc(matched.id).set(storyGcalPatch, { merge: true });
     } else {
       result.matchedTasks += 1;
       await db.collection('tasks').doc(matched.id).set({
@@ -591,18 +602,49 @@ function normalizeUserPriority(value) {
 
 function getManualPriorityRank(value) {
   const explicit = Number(value?.userPriorityRank);
-  if (explicit === 1 || explicit === 2 || explicit === 3) return explicit;
+  if (explicit >= 1 && explicit <= 5) return explicit;
   return value?.userPriorityFlag === true ? 1 : null;
+}
+
+// Manual pin ordering is already enforced structurally (placement queue sorts
+// `manual` rank first, and pinned items are forced into the active sprint /
+// excluded from auto-defer). The score bonus only needs to nudge aiCriticalityScore
+// so pinned items read as high-but-not-uniformly-99 — it must stay small relative to
+// computeCriticalityScore's ~90-point range, not swamp it (previously 800-1000).
+function manualPriorityScoreBoost(rank) {
+  const r = Number(rank || 0);
+  if (r < 1 || r > 5) return 0;
+  return Math.max(10, 40 - (r - 1) * 7);
+}
+
+// Bonuses are additive on top of computeCriticalityScore (typically 0-90) and the
+// final score is clamped to 99 — so any tier here must stay small relative to that
+// range or it silently overrides due-date/goal-timing signal instead of nudging it
+// (previously 'critical' was +500, which saturated the score regardless of baseScore).
+// A story should never be silently pinned to a sprint that falls entirely outside
+// its own goal's planned window (e.g. a goal starting 2027 shouldn't force a story
+// into a 2026 sprint just because the story scored high on urgency/priority).
+// Goals with no dates set are treated as unconstrained (no mismatch).
+function sprintOutsideGoalWindow(sprint, goal) {
+  const goalStart = Number(goal?.startDateMs) || null;
+  const goalEnd = Number(goal?.dueDateMs) || null;
+  if (!goalStart && !goalEnd) return false;
+  const sprintStart = Number(sprint?.startDateMs) || null;
+  const sprintEnd = Number(sprint?.endDateMs) || null;
+  if (!sprintStart || !sprintEnd) return false;
+  if (goalStart && sprintEnd < goalStart) return true;
+  if (goalEnd && sprintStart > goalEnd) return true;
+  return false;
 }
 
 function priorityBoostFor(level) {
   switch (level) {
     case 'critical':
-      return { boost: 500, label: 'Critical' };
+      return { boost: 30, label: 'Critical' };
     case 'high':
-      return { boost: 12, label: 'High' };
+      return { boost: 18, label: 'High' };
     case 'medium':
-      return { boost: 6, label: 'Medium' };
+      return { boost: 8, label: 'Medium' };
     case 'low':
       return { boost: 0, label: 'Low' };
     default:
@@ -1160,6 +1202,7 @@ async function applyAggressiveDueDateReplanForUser({
     }
     if (isTaskDoneStatus(data.status) || data.deleted) continue;
     if (isTop) continue;
+    if (getManualPriorityRank(data)) continue;
 
     const score = Number(data.aiCriticalityScore || 0);
     const dueMs = getDueDateMs(data);
@@ -1218,6 +1261,7 @@ async function applyAggressiveDueDateReplanForUser({
     }
     if (isStoryDoneStatus(data.status)) continue;
     if (isTop) continue;
+    if (getManualPriorityRank(data)) continue;
     if (isStoryImmovable(data)) continue;
 
     const score = Number(data.aiCriticalityScore || 0);
@@ -1607,6 +1651,7 @@ function chooseSprintWeekBucket({
   candidate,
   kind,
   isTop,
+  hasManualPriority,
   parentStory,
   storyWeekById,
   sprintMap,
@@ -1631,7 +1676,7 @@ function chooseSprintWeekBucket({
   const currentWeekKey = plannerWeekStart(windowStart).toISODate();
   const currentWeekBucket = buckets.find((bucket) => bucket.weekKey === currentWeekKey) || buckets[0];
 
-  if (isTop && currentWeekBucket) {
+  if ((isTop || hasManualPriority) && currentWeekBucket) {
     currentWeekBucket.plannedPoints += candidatePoints;
     return currentWeekBucket;
   }
@@ -1713,6 +1758,7 @@ async function schedulePlacementQueueWithCanonicalScheduler({
       candidate,
       kind,
       isTop,
+      hasManualPriority,
       parentStory,
       storyWeekById,
       sprintMap,
@@ -2758,6 +2804,7 @@ async function runPriorityScoringJob() {
       const due = gd.targetDate || gd.dueDate || null;
       goalMap.set(d.id, {
         dueDateMs: due ? toDateTime(due, { defaultValue: null })?.toMillis() : null,
+        startDateMs: gd.startDate ? toDateTime(gd.startDate, { defaultValue: null })?.toMillis() : null,
         priority: gd.priority || null,
         theme: gd.theme || null,
         title: gd.title || gd.name || null,
@@ -3064,6 +3111,11 @@ async function runPriorityScoringJob() {
         bonus += priorityBoost;
         bonusReasons.push(`User priority: ${priorityLabel}`);
       }
+      const manualPriorityRank = getManualPriorityRank(entity);
+      if (manualPriorityRank != null) {
+        bonus += manualPriorityScoreBoost(manualPriorityRank);
+        bonusReasons.push(`User manual priority #${manualPriorityRank}`);
+      }
       const oldUnlinked = entityType === 'task' && !entity.storyId && ageDays != null && ageDays >= 90;
       if (oldUnlinked) {
         bonus += 15;
@@ -3355,6 +3407,8 @@ async function runPriorityScoringJob() {
       const isTop = topStoryIds.has(doc.id);
       const sprint = data.sprintId ? sprintMap.get(data.sprintId) : null;
       const sprintEnd = sprint?.endDateMs || null;
+      const goal = data.goalId ? goalMap.get(data.goalId) : null;
+      const goalWindowMismatch = sprint && goal ? sprintOutsideGoalWindow(sprint, goal) : false;
       const patch = {};
       if (isTop) {
         patch.aiTop3ForDay = true;
@@ -3374,8 +3428,15 @@ async function runPriorityScoringJob() {
             patch.tags = cleanedTags;
           }
         }
-        if (sprintEnd && !isStoryImmovable(data)) {
+        if (sprintEnd && !isStoryImmovable(data) && !goalWindowMismatch) {
           Object.assign(patch, schedulerCanonicalDuePatch(sprintEnd, 'nightly_sprint_end'));
+        }
+        if (goalWindowMismatch) {
+          patch.aiScheduleWarning = 'goal_window_mismatch';
+          patch.aiScheduleWarningReason = `Sprint ${data.sprintId} falls outside linked goal's planned window`;
+        } else if (data.aiScheduleWarning === 'goal_window_mismatch') {
+          patch.aiScheduleWarning = admin.firestore.FieldValue.delete();
+          patch.aiScheduleWarningReason = admin.firestore.FieldValue.delete();
         }
       }
       if (Object.keys(patch).length) {
@@ -3755,7 +3816,7 @@ exports.unifiedNightlyOrchestrator = onSchedule({
   timeZone: 'Europe/London',
   memory: '1GiB',
   timeoutSeconds: 600,
-  secrets: [GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET, BOB_CLI_ACCESS],
+  secrets: [OPENROUTER_API_KEY_SECRET, BOB_CLI_ACCESS],
   region: 'europe-west2',
 }, async () => {
   console.log('[unifiedNightlyOrchestrator] Starting consolidated nightly chain...');
@@ -3901,13 +3962,14 @@ async function applyRolloverForMissedChoresRoutines(db, userId, zone) {
     }
   }
 
-  // Batch-update instance status
+  // Batch-update instance status — habits are 'skipped' (no streak penalty), chores/routines are 'missed'
   const instanceBatches = [];
   for (let i = 0; i < toMark.length; i += 500) {
     const batch = db.batch();
-    toMark.slice(i, i + 500).forEach(({ ref }) => {
+    toMark.slice(i, i + 500).forEach(({ ref, data }) => {
+      const instanceStatus = data.sourceType === 'habit' ? 'skipped' : 'missed';
       batch.update(ref, {
-        status: 'missed',
+        status: instanceStatus,
         missedAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
@@ -3922,22 +3984,48 @@ async function applyRolloverForMissedChoresRoutines(db, userId, zone) {
     const batch = db.batch();
     sourceEntries.slice(i, i + 500).forEach(([sourceId, info]) => {
       const ref = db.collection(info.collection).doc(sourceId);
-      batch.update(ref, {
+      const isHabit = info.collection === 'habits';
+      const sourceUpdate = {
         pendingRollover: true,
         lastMissedAt: admin.firestore.FieldValue.serverTimestamp(),
-        missedCount: admin.firestore.FieldValue.increment(info.missedCount),
         // Slightly elevate priority so the next occurrence gets scheduled sooner
         schedulerPriority: admin.firestore.FieldValue.increment(-1),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
+      };
+      if (isHabit) {
+        sourceUpdate.skippedCount = admin.firestore.FieldValue.increment(info.missedCount);
+      } else {
+        sourceUpdate.missedCount = admin.firestore.FieldValue.increment(info.missedCount);
+      }
+      batch.update(ref, sourceUpdate);
     });
     sourceBatches.push(batch.commit());
   }
 
   await Promise.allSettled([...instanceBatches, ...sourceBatches]);
 
-  console.log(`[Rollover] Marked ${toMark.length} missed chore/routine instances, updated ${sourceUpdates.size} source docs`);
-  return { rolled: toMark.length };
+  const habitCount = toMark.filter((x) => x.data.sourceType === 'habit').length;
+  const choreCount = toMark.length - habitCount;
+  console.log(`[Rollover] ${choreCount} chore/routine → missed, ${habitCount} habit → skipped; updated ${sourceUpdates.size} source docs`);
+  return { rolled: toMark.length, missed: choreCount, skipped: habitCount };
+}
+
+async function runRolloverForAllUsers() {
+  const db = ensureFirestore();
+  const profiles = await db.collection('profiles').get().catch(() => ({ docs: [] }));
+  let totalRolled = 0;
+  for (const prof of profiles.docs) {
+    const userId = prof.id;
+    const zone = resolveTimezone(prof.data() || {}, 'Europe/London');
+    try {
+      const result = await applyRolloverForMissedChoresRoutines(db, userId, zone);
+      totalRolled += result.rolled || 0;
+    } catch (err) {
+      console.warn(`[Rollover] Failed for user ${userId}:`, err?.message || err);
+    }
+  }
+  console.log(`[Rollover] Total across all users: ${totalRolled}`);
+  return { totalRolled };
 }
 
 async function clearStaleCalendarInstances(db, userId, windowStart, windowEnd, currentOccurrences) {
@@ -4129,7 +4217,6 @@ exports.replanCalendarNow = onCall({
   timeoutSeconds: 120,
   region: 'europe-west2',
   invoker: 'public',
-  enforceAppCheck: true,
 }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new https.HttpsError('unauthenticated', 'Sign in required');
@@ -4533,21 +4620,33 @@ exports.replanCalendarNow = onCall({
       .get()
       .catch(() => ({ docs: [] }));
 
-    const scheduledInstances = blocksSnap.docs.map(doc => {
+    const scheduledInstances = blocksSnap.docs.flatMap(doc => {
       const block = doc.data();
-      return {
+      const startMs = block.start;
+      const sourceType = block.entityType || 'story';
+      // Chores/routines/habits must only appear with a real block time (not midnight 00:00–05:00).
+      // A block starting at midnight indicates a date-only placeholder, not a scheduled slot.
+      if (sourceType === 'chore' || sourceType === 'routine' || sourceType === 'habit') {
+        const blockDate = new Date(startMs);
+        const blockHour = blockDate.getHours();
+        if (blockHour < 5) {
+          console.log(`[replanCalendarNow] Skipping midnight ${sourceType} block: ${block.title} at ${blockDate.toISOString()}`);
+          return [];
+        }
+      }
+      return [{
         id: `scheduled-${doc.id}`,
         ownerUid: uid,
-        sourceType: block.entityType || 'story',
+        sourceType,
         sourceId: block.taskId || block.storyId,
         title: block.title,
         blockId: block.blockId,
         theme: block.theme,
-        plannedStart: new Date(block.start).toISOString(),
+        plannedStart: new Date(startMs).toISOString(),
         plannedEnd: new Date(block.end).toISOString(),
         status: 'planned',
         deepLink: block.deepLink,
-      };
+      }];
     });
 
     const syncResult = await writeScheduledInstances(db, uid, scheduledInstances, {
@@ -4774,6 +4873,96 @@ async function nightlySprintCapacityUpdate() {
   console.log(`[nightlySprintCapacityUpdate] Done — ${updated}/${sprintDocs.length} updated`);
 }
 
+/**
+ * Assign projected due dates to unscheduled sprint items (tasks + stories) that
+ * are in the active sprint but have no dueDate or were previously projected.
+ * Rate: 5 items per day, starting tomorrow, sorted by aiCriticalityScore DESC.
+ */
+async function applyProjectedDueDatesForUnscheduledSprintItems() {
+  const db = ensureFirestore();
+  const profiles = await db.collection('profiles').get().catch(() => ({ docs: [] }));
+  let totalProjected = 0;
+
+  for (const prof of profiles.docs) {
+    const userId = prof.id;
+    const zone = resolveTimezone(prof.data() || {}, 'Europe/London');
+    try {
+      // Find active personal sprint
+      const sprintSnap = await db.collection('sprints')
+        .where('ownerUid', '==', userId)
+        .where('status', 'in', [0, 1, 'active', 'planned'])
+        .get();
+      if (sprintSnap.empty) continue;
+
+      // Pick the sprint with the latest startDate
+      const activeSprint = sprintSnap.docs
+        .map((d) => ({ id: d.id, ...d.data() }))
+        .sort((a, b) => (b.startDate || 0) - (a.startDate || 0))[0];
+      if (!activeSprint) continue;
+      const sprintId = activeSprint.id;
+
+      // Load tasks and stories in the active sprint, not done/binned
+      const [tasksSnap, storiesSnap] = await Promise.all([
+        db.collection('tasks')
+          .where('ownerUid', '==', userId)
+          .where('sprintId', '==', sprintId)
+          .where('status', 'not-in', [2, 3, 4])
+          .get().catch(() => ({ docs: [] })),
+        db.collection('stories')
+          .where('ownerUid', '==', userId)
+          .where('sprintId', '==', sprintId)
+          .where('status', 'not-in', [2, 3, 4])
+          .get().catch(() => ({ docs: [] })),
+      ]);
+
+      const PROJECTABLE = 'projected_by_score';
+      const needsProjection = [];
+      for (const d of [...tasksSnap.docs, ...storiesSnap.docs]) {
+        const data = d.data() || {};
+        const hasDate = data.dueDate || data.dueDateMs;
+        const wasProjected = data.dueDateUpdatedBy === PROJECTABLE;
+        if (!hasDate || wasProjected) {
+          needsProjection.push({ ref: d.ref, collection: d.ref.parent.id, score: data.aiCriticalityScore || 0 });
+        }
+      }
+      if (!needsProjection.length) continue;
+
+      // Sort by criticality DESC
+      needsProjection.sort((a, b) => b.score - a.score);
+
+      // Assign dates: 5 items per day starting tomorrow
+      const ITEMS_PER_DAY = 5;
+      const nowLocal = DateTime.now().setZone(coerceZone(zone));
+      const batch = db.batch();
+      let projected = 0;
+      for (let i = 0; i < needsProjection.length; i++) {
+        const dayOffset = Math.floor(i / ITEMS_PER_DAY) + 1; // +1 = tomorrow
+        const projectedDate = nowLocal.startOf('day').plus({ days: dayOffset }).set({ hour: 18, minute: 0 });
+        const projectedMs = projectedDate.toMillis();
+        batch.update(needsProjection[i].ref, {
+          dueDate: projectedMs,
+          dueDateMs: projectedMs,
+          dueDateUpdatedBy: PROJECTABLE,
+          dueDateUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        projected++;
+        // Flush batch every 500 writes
+        if (projected % 500 === 0) {
+          await batch.commit();
+        }
+      }
+      await batch.commit().catch(() => {}); // final flush (may be empty if already flushed)
+      totalProjected += projected;
+      console.log(`[ProjectedDueDates] User ${userId}: ${projected} items projected across sprint ${sprintId}`);
+    } catch (err) {
+      console.warn(`[ProjectedDueDates] Failed for user ${userId}:`, err?.message || err);
+    }
+  }
+  console.log(`[ProjectedDueDates] Total projected: ${totalProjected}`);
+  return { totalProjected };
+}
+
 // Manual trigger to run the nightly chain (pointing → conversions → scoring+Top3 → calendar)
 async function runNightlyChainCore() {
   const steps = [
@@ -4790,7 +4979,9 @@ async function runNightlyChainCore() {
       },
     },
     { name: 'runPriorityScoring', fn: runPriorityScoringJob },
+    { name: 'rolloverMissedChoresRoutines', fn: runRolloverForAllUsers },
     { name: 'runCalendarPlanner', fn: runCalendarPlannerJob },
+    { name: 'applyProjectedDueDates', fn: applyProjectedDueDatesForUnscheduledSprintItems },
     {
       name: 'sprintForwardPlanner',
       fn: async () => {
@@ -4851,7 +5042,7 @@ exports.runNightlyChainNow = onCall({
   timeZone: 'Europe/London',
   memory: '1GiB',
   timeoutSeconds: 540,
-  secrets: [GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET, BOB_CLI_ACCESS],
+  secrets: [OPENROUTER_API_KEY_SECRET, BOB_CLI_ACCESS],
   region: 'europe-west2',
   invoker: 'public',
 }, async (req) => {
@@ -4868,7 +5059,7 @@ exports.runNightlyChainNowHttp = https.onRequest({
   timeZone: 'Europe/London',
   memory: '1GiB',
   timeoutSeconds: 540,
-  secrets: [GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET, BOB_CLI_ACCESS],
+  secrets: [OPENROUTER_API_KEY_SECRET, BOB_CLI_ACCESS],
   region: 'europe-west2',
 }, async (req, res) => {
   const cliKey = BOB_CLI_ACCESS.value();
@@ -4907,7 +5098,6 @@ exports.seedNextWeekPlannerOverridesNow = onCall({
   timeoutSeconds: 120,
   region: 'europe-west2',
   invoker: 'public',
-  enforceAppCheck: true,
 }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new https.HttpsError('unauthenticated', 'Sign in required');
@@ -4926,7 +5116,6 @@ exports.seedNextWeekPlannerOverridesNow = onCall({
 exports.applyEveningPullForward = onCall({
   memory: '256MiB',
   region: 'europe-west2',
-  enforceAppCheck: true,
 }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new https.HttpsError('unauthenticated', 'Login required');
@@ -4973,7 +5162,6 @@ exports.applyEveningPullForward = onCall({
 exports.deltaPriorityRescore = onCall({
   memory: '256MiB',
   region: 'europe-west2',
-  enforceAppCheck: true,
 }, async (request) => {
   const uid = request.auth?.uid;
   if (!uid) throw new https.HttpsError('unauthenticated', 'Login required');
@@ -5059,8 +5247,7 @@ exports.deltaPriorityRescore = onCall({
 
   const manualPriorityRank = getManualPriorityRank(entity);
   if (manualPriorityRank != null) {
-    const manualBoost = manualPriorityRank === 1 ? 1000 : manualPriorityRank === 2 ? 900 : 800;
-    bonus += manualBoost;
+    bonus += manualPriorityScoreBoost(manualPriorityRank);
     bonusReasons.push(`User manual priority #${manualPriorityRank}`);
   }
 

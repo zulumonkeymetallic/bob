@@ -46,7 +46,11 @@ service cloud.firestore {
     }
     match /stories/{id} {
       allow create: if isOwnerForCreate();
-      allow read, delete: if isOwner();
+      allow read: if isOwner();
+      allow delete: if isSignedIn() && (
+        resource.data.ownerUid == request.auth.uid ||
+        resource.data.ownerUid == null
+      );
       allow update: if isSignedIn() && (
         (resource.data.ownerUid == request.auth.uid) ||
         (request.resource.data.ownerUid == request.auth.uid)
@@ -385,6 +389,11 @@ service cloud.firestore {
       allow read: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
       allow update, delete: if false;
     }
+    match /daily_plan_state/{id} {
+      allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+      allow read, update: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow delete: if false;
+    }
     match /replan_runs/{id} {
       allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
       allow read: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
@@ -585,6 +594,60 @@ service cloud.firestore {
                       && request.resource.data.ownerUid == uid;
         allow update, delete: if isSignedIn() && request.auth.uid == uid;
       }
+    }
+
+    // Daily digests (separate from /digests — used by Dashboard widget)
+    match /daily_digests/{id} {
+      allow create: if isSignedIn() && (
+        request.resource.data.ownerUid == request.auth.uid ||
+        request.resource.data.userId == request.auth.uid
+      );
+      allow read, update, delete: if isSignedIn() && (
+        resource.data.ownerUid == request.auth.uid ||
+        resource.data.userId == request.auth.uid ||
+        id.matches('^' + request.auth.uid + '_.*')
+      );
+    }
+
+    // User reminders
+    match /reminders/{id} {
+      allow create: if isOwnerForCreate();
+      allow read, update, delete: if isOwner();
+    }
+
+    // Goal KPI metrics + snapshots (KPI designer, metrics dashboard)
+    match /goal_kpi_metrics/{id} {
+      allow create: if isOwnerForCreate();
+      allow read, update, delete: if isOwner();
+    }
+    match /weekly_goal_kpi_snapshots/{id} {
+      allow create: if isOwnerForCreate();
+      allow read, update, delete: if isOwner();
+    }
+    match /metric_values/{id} {
+      allow create: if isOwnerForCreate();
+      allow read, update, delete: if isOwner();
+    }
+
+    // Sprint retrospectives
+    match /sprint_retros/{id} {
+      allow create: if isOwnerForCreate();
+      allow read, update, delete: if isOwner();
+    }
+
+    // AI usage aggregates (usage dashboard)
+    match /ai_usage_aggregates/{id} {
+      allow read: if isSignedIn() && (
+        resource.data.ownerUid == request.auth.uid ||
+        id.matches('^' + request.auth.uid + '_.*')
+      );
+      allow write: if false; // server-only aggregates
+    }
+
+    // Intent broker events (assistant/delegation UI)
+    match /intent_broker_events/{id} {
+      allow create: if isOwnerForCreate();
+      allow read, update, delete: if isOwner();
     }
 
     // ── LLM Model Registry ─────────────────────────────────────────────────

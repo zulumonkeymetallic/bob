@@ -1,5 +1,5 @@
 import React from 'react';
-import { Star } from 'lucide-react';
+import { GitBranch, Layers2, Leaf, Star } from 'lucide-react';
 import { colorWithAlpha } from '../utils/storyCardFormatting';
 import { getThemeName, getStatusName } from '../utils/statusHelpers';
 import './GoalsCardView.css';
@@ -155,15 +155,25 @@ const GoalCard: React.FC<GoalCardProps> = ({
               {statusLabel(goal.status, goal.goalKind)}
             </span>
           )}
-          {/* Goal kind (compact / full) */}
-          {detailLevel !== 'minimal' && goal.goalKind && (
-            <span
-              className="kanban-card__meta-badge"
-              style={{ textTransform: 'capitalize' }}
-            >
-              {goal.goalKind}
-            </span>
-          )}
+          {/* Goal type badge */}
+          {detailLevel !== 'minimal' && goal.goalKind && (() => {
+            const kind = String(goal.goalKind).toLowerCase();
+            if (kind === 'program') return (
+              <span className="kanban-card__meta-badge" style={{ color: '#0ea5e9', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                <Layers2 size={10} />Program
+              </span>
+            );
+            if (kind === 'phase') return (
+              <span className="kanban-card__meta-badge" style={{ color: '#10b981', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                <GitBranch size={10} />Phase
+              </span>
+            );
+            return (
+              <span className="kanban-card__meta-badge" style={{ color: '#8b5cf6', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                <Leaf size={10} />Leaf
+              </span>
+            );
+          })()}
           {/* KPI status (compact / full) */}
           {detailLevel !== 'minimal' && kpiLabel && (
             <span className="kanban-card__meta-badge" style={{ color: kpiColor }}>

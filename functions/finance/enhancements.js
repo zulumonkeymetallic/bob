@@ -6,7 +6,6 @@ const { normaliseMerchantName, inferDefaultCategoryType, inferDefaultCategoryLab
 const { mergeFinanceCategories } = require('./categories');
 const { callLLM } = require('../utils/llmHelper');
 
-const GOOGLE_AI_STUDIO_API_KEY = defineSecret('GOOGLEAISTUDIOAPIKEY');
 const OPENROUTER_API_KEY_SECRET = defineSecret('OPENROUTER_API_KEY');
 const FUNCTION_REGION = 'europe-west2';
 const EXTERNAL_SOURCES = new Set(['barclays', 'paypal', 'other']);
@@ -873,7 +872,7 @@ const recomputeDebtServiceBreakdown = httpsV2.onCall({ region: FUNCTION_REGION }
   return { ok: true, source, perMonth, totals };
 });
 
-const generateFinanceActionInsights = httpsV2.onCall({ region: FUNCTION_REGION, secrets: [GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET] }, async (req) => {
+const generateFinanceActionInsights = httpsV2.onCall({ region: FUNCTION_REGION, secrets: [OPENROUTER_API_KEY_SECRET] }, async (req) => {
   if (!req?.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
   const uid = req.auth.uid;
   const source = normalizeExternalSource(req.data?.source || 'barclays');

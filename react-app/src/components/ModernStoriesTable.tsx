@@ -33,7 +33,7 @@ import {
   ChevronRight,
   ChevronDown
 } from 'lucide-react';
-import { Activity, Pencil, Trash2, Wand2, ExternalLink, CalendarClock, Clock3 } from 'lucide-react';
+import { Activity, Pencil, Trash2, Wand2, ExternalLink, CalendarClock, Clock3, AlertTriangle } from 'lucide-react';
 import DeferItemModal from './DeferItemModal';
 import { Story, Goal, Sprint, Task } from '../types';
 import StoryTasksPanel from './StoryTasksPanel';
@@ -940,6 +940,13 @@ const SortableRow: React.FC<SortableRowProps> = ({
         >
           <GripVertical size={16} />
         </button>
+        {(story as any).aiScheduleWarning === 'goal_window_mismatch' && (
+          <AlertTriangle
+            size={13}
+            style={{ color: 'var(--bs-warning, #fd7e14)', marginLeft: 2, verticalAlign: 'middle' }}
+            title={(story as any).aiScheduleWarningReason || 'Sprint falls outside the linked goal\'s planned window'}
+          />
+        )}
       </td>
       {columns.filter(col => col.visible).map(renderCell)}
       <td style={{

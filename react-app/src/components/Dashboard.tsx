@@ -24,7 +24,6 @@ import { colors } from '../utils/colors';
 import SprintMetricsPanel from './SprintMetricsPanel';
 import JournalInsightsCard from './JournalInsightsCard';
 import BirthdayMilestoneCard from './BirthdayMilestoneCard';
-import RotatingGoalFocusBanner from './RotatingGoalFocusBanner';
 import KpiDashboardWidget from './KpiDashboardWidget';
 import DailyPlanSummaryCard from './planner/DailyPlanSummaryCard';
 import WeeklyPlannerSummaryCard from './planner/WeeklyPlannerSummaryCard';
@@ -45,6 +44,11 @@ import RecoveryWidget from './metrics/RecoveryWidget';
 import ActivityWidget from './metrics/ActivityWidget';
 import FitnessWidget from './metrics/FitnessWidget';
 import SprintVelocityWidget from './metrics/SprintVelocityWidget';
+import DailyAgendaWidget from './dashboard/DailyAgendaWidget';
+import FinanceSummaryWidget from './dashboard/FinanceSummaryWidget';
+import FitnessKpiDashboardWidget from './dashboard/FitnessKpiDashboardWidget';
+import HabitsKpiWidget from './dashboard/HabitsKpiWidget';
+import AddToCalendarWidget from './dashboard/AddToCalendarWidget';
 import { isGoalInHierarchySet } from '../utils/goalHierarchy';
 import {
   callDeltaReplan,
@@ -263,6 +267,11 @@ type DashboardWidgetKey =
   | 'lowHangingFruit'
   | 'dailySummary'
   | 'top3'
+  | 'dailyAgenda'
+  | 'financeOverview'
+  | 'fitnessKpiBoxes'
+  | 'habitsGrid'
+  | 'addToCalendar'
   | 'themeProgress'
   | 'kpiStudio'
   | 'unifiedTimeline'
@@ -279,7 +288,7 @@ interface DashboardWidgetSize {
   height: number;
 }
 type DashboardWidgetSizes = Partial<Record<DashboardWidgetKey, DashboardWidgetSize>>;
-const SUMMARY_WIDGET_KEYS: DashboardWidgetKey[] = ['unifiedTimeline', 'top3', 'dailySummary', 'kpiStudio', 'choresHabits', 'lowHangingFruit', 'themeProgress', 'tasksDueToday', 'calendar', 'recoveryMetrics', 'activityMetrics', 'fitnessMetrics', 'sprintVelocity'];
+const SUMMARY_WIDGET_KEYS: DashboardWidgetKey[] = ['unifiedTimeline', 'top3', 'dailyAgenda', 'addToCalendar', 'fitnessKpiBoxes', 'habitsGrid', 'financeOverview', 'dailySummary', 'kpiStudio', 'choresHabits', 'lowHangingFruit', 'themeProgress', 'tasksDueToday', 'calendar', 'recoveryMetrics', 'activityMetrics', 'fitnessMetrics', 'sprintVelocity'];
 const dashboardWidgetOrderStorageKey = (deviceType: DashboardDeviceType) => `${DASHBOARD_WIDGET_ORDER_STORAGE_PREFIX}_${deviceType}`;
 const readDashboardWidgetOrder = (deviceType: DashboardDeviceType): DashboardWidgetKey[] => {
   try {
@@ -515,6 +524,11 @@ const DASHBOARD_WIDGET_CONFIG: Array<{ key: DashboardWidgetKey; label: string }>
   { key: 'lowHangingFruit', label: 'Low hanging fruit' },
   { key: 'dailySummary', label: 'Daily summary' },
   { key: 'top3', label: 'Top 3 priorities' },
+  { key: 'dailyAgenda', label: "Today's Agenda" },
+  { key: 'addToCalendar', label: 'Add to Calendar' },
+  { key: 'fitnessKpiBoxes', label: 'Fitness KPI boxes (weekly + daily)' },
+  { key: 'habitsGrid', label: 'Habits & Routines adherence' },
+  { key: 'financeOverview', label: 'Finance Summary' },
   { key: 'themeProgress', label: 'Theme progress' },
   { key: 'kpiStudio', label: 'Pinned focus KPIs' },
   { key: 'unifiedTimeline', label: 'Daily Plan' },
@@ -523,7 +537,7 @@ const DASHBOARD_WIDGET_CONFIG: Array<{ key: DashboardWidgetKey; label: string }>
   { key: 'calendar', label: 'Calendar (mini)' },
   { key: 'recoveryMetrics', label: 'Recovery (HRV, Sleep, Calories)' },
   { key: 'activityMetrics', label: 'Activity (Steps + HRV trend)' },
-  { key: 'fitnessMetrics', label: 'Fitness (Run / Swim / Bike)' },
+  { key: 'fitnessMetrics', label: 'Fitness (Run / Swim / Bike sport cards)' },
   { key: 'sprintVelocity', label: 'Sprint velocity + Theme rings' },
 ];
 
@@ -531,6 +545,11 @@ const DASHBOARD_WIDGET_DEFAULT_VISIBILITY: DashboardWidgetVisibility = {
   lowHangingFruit: false,
   dailySummary: true,
   top3: true,
+  dailyAgenda: true,
+  addToCalendar: true,
+  fitnessKpiBoxes: true,
+  habitsGrid: true,
+  financeOverview: false,
   themeProgress: false,
   kpiStudio: true,
   unifiedTimeline: true,
@@ -539,7 +558,7 @@ const DASHBOARD_WIDGET_DEFAULT_VISIBILITY: DashboardWidgetVisibility = {
   calendar: false,
   recoveryMetrics: false,
   activityMetrics: false,
-  fitnessMetrics: true,
+  fitnessMetrics: false,
   sprintVelocity: false,
 };
 
@@ -4565,125 +4584,11 @@ const Dashboard: React.FC = () => {
       <Container fluid className="p-2 dashboard-compact">
         <Row>
           <Col>
-            <RotatingGoalFocusBanner
-              goals={goalsList}
-              defaultGoalIds={['Nzp2xQCTZbTaOLCgycjQ']}
-              onOpenGoal={() => navigate('/goals')}
+            <BirthdayMilestoneCard
+              targetDate={new Date('2027-09-22')}
+              age={45}
+              linkedGoalsCount={goalsList.length}
             />
-
-            <BirthdayMilestoneCard 
-              targetDate={new Date('2027-09-22')} 
-              age={45} 
-              linkedGoalsCount={goalsList.length} 
-            />
-
-            {showPersistentDashboardBanners && healthBannerData && showHealthBanner && (
-              <Card
-                className="mb-3"
-                style={{
-                  background: healthBannerData.macroTone === 'success'
-                    ? 'linear-gradient(135deg, #198754 0%, #0f5132 100%)'
-                    : healthBannerData.macroTone === 'warning'
-                      ? 'linear-gradient(135deg, #fd7e14 0%, #b35c00 100%)'
-                      : 'linear-gradient(135deg, #0d6efd 0%, #0b5ed7 100%)',
-                  border: 'none',
-                  color: '#fff',
-                  boxShadow: '0 6px 18px rgba(13, 110, 253, 0.18)'
-                }}
-              >
-                <Card.Body style={{ padding: '8px 12px' }}>
-                  <div className="d-flex align-items-center gap-2 flex-wrap">
-                    <div
-                      style={{
-                        width: 28,
-                        height: 28,
-                        borderRadius: 6,
-                        backgroundColor: 'rgba(255, 255, 255, 0.18)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        backdropFilter: 'blur(10px)',
-                        flexShrink: 0,
-                      }}
-                    >
-                      <Heart size={14} />
-                    </div>
-                    <div style={{ flex: 1, minWidth: 220 }}>
-                      <div style={{ margin: 0, fontSize: 11, fontWeight: 700 }}>
-                        Daily Health Progress
-                      </div>
-                      <div style={{ marginTop: 2, fontSize: 9, opacity: 0.9 }}>
-                        {healthBannerData.weightKg != null ? `${healthBannerData.weightKg.toFixed(1)} kg` : 'weight missing'}
-                        {' • '}
-                        {healthBannerData.bodyFatPct != null ? `${healthBannerData.bodyFatPct.toFixed(1)}% body fat` : 'body fat missing'}
-                        {' • '}
-                        {healthBannerData.targetWeightKg != null ? `target ${healthBannerData.targetWeightKg.toFixed(1)} kg` : 'set weight target'}
-                        {' / '}
-                        {healthBannerData.targetBodyFatPct != null ? `${healthBannerData.targetBodyFatPct.toFixed(1)}%` : 'set body-fat target'}
-                        {' • '}
-                        {healthBannerData.weeksToTargetBodyFat != null ? `${Math.round(healthBannerData.weeksToTargetBodyFat)}w ETA` : 'ETA n/a'}
-                      </div>
-                    </div>
-                    <div style={{ textAlign: 'right', minWidth: 52 }}>
-                      <div style={{ fontSize: 15, fontWeight: 800, lineHeight: 1 }}>
-                        {healthBannerData.primaryProgressPct != null ? `${healthBannerData.primaryProgressPct}%` : '—'}
-                      </div>
-                      <div style={{ fontSize: 9, opacity: 0.85 }}>
-                        {healthBannerData.primaryProgressLabel}
-                      </div>
-                    </div>
-                    <button
-                      onClick={handleDismissHealthBanner}
-                      style={{
-                        background: 'rgba(255, 255, 255, 0.2)',
-                        border: 'none',
-                        color: '#fff',
-                        cursor: 'pointer',
-                        padding: 4,
-                        borderRadius: 4,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        flexShrink: 0,
-                      }}
-                      title="Dismiss for 3 days"
-                    >
-                      <X size={16} />
-                    </button>
-                  </div>
-
-                  <div className="d-flex align-items-center justify-content-between gap-2 flex-wrap" style={{ marginTop: 5, fontSize: 9, opacity: 0.9 }}>
-                    <div>
-                      Source {healthBannerData.sourceLabel}
-                      {' • '}
-                      {healthBannerData.stepsToday != null ? `${Math.round(healthBannerData.stepsToday).toLocaleString()} steps` : 'steps missing'}
-                      {' • '}
-                      {healthBannerData.workoutMinutesToday != null ? `${Math.round(healthBannerData.workoutMinutesToday)} min workout` : 'workout missing'}
-                      {' • '}
-                      {healthBannerData.macroAdherencePct != null ? `${healthBannerData.macroAdherencePct}% macros` : 'macro targets missing'}
-                      {(() => {
-                        const ts = profileSnapshot?.updatedAt?.toMillis?.() ?? (typeof profileSnapshot?.updatedAt === 'number' ? profileSnapshot.updatedAt : null);
-                        if (!ts) return null;
-                        const diff = Date.now() - ts;
-                        const mins = Math.round(diff / 60000);
-                        const label = mins < 2 ? 'just now' : mins < 60 ? `${mins}m ago` : diff < 86400000 ? `${Math.round(diff / 3600000)}h ago` : `${Math.round(diff / 86400000)}d ago`;
-                        return <span>{' • '}HealthKit synced {label}</span>;
-                      })()}
-                    </div>
-                    <div className="d-flex align-items-center gap-2">
-                      {healthBannerData.missingTargets && (
-                        <Button variant="light" size="sm" onClick={() => navigate('/settings?tab=profile')}>
-                          Set targets
-                        </Button>
-                      )}
-                      <Button variant="outline-light" size="sm" onClick={() => navigate('/fitness')}>
-                        View health
-                      </Button>
-                    </div>
-                  </div>
-                </Card.Body>
-              </Card>
-            )}
 
             {showPersistentDashboardBanners && showMonzoReconnectBanner && (
               <Alert variant="warning" className="d-flex align-items-center justify-content-between flex-wrap gap-1 py-1 px-2 mb-1" style={{ fontSize: 11 }}>
@@ -5354,8 +5259,8 @@ const Dashboard: React.FC = () => {
                         onClick={handleReplan}
                         title="Delta replan: quickly rebalance existing calendar blocks using current priorities."
                       >
-                        {replanLoading ? <Spinner size="sm" animation="border" className="me-1" /> : <RefreshCw size={14} className="me-1" />}
-                        Delta replan
+                        {replanLoading ? <Spinner size="sm" animation="border" /> : <RefreshCw size={14} />}
+                        <span className="d-none d-xl-inline ms-1">Delta replan</span>
                       </Button>
                       <Button
                         variant="primary"
@@ -5364,8 +5269,8 @@ const Dashboard: React.FC = () => {
                         onClick={handleFullReplan}
                         title="Full replan: runs full nightly orchestration (pointing, conversions, priority scoring, and calendar planning)."
                       >
-                        {fullReplanLoading ? <Spinner size="sm" animation="border" className="me-1" /> : <Sparkles size={14} className="me-1" />}
-                        Full replan
+                        {fullReplanLoading ? <Spinner size="sm" animation="border" /> : <Sparkles size={14} />}
+                        <span className="d-none d-xl-inline ms-1">Full replan</span>
                       </Button>
                       <Button
                         variant={widgetEditMode ? 'success' : 'outline-secondary'}
@@ -5915,6 +5820,61 @@ const Dashboard: React.FC = () => {
                             </Card>
                             {renderWidgetEdgeHandles('top3')}
                               {renderWidgetResizeHandle('top3', 260, 'Resize top 3 priorities widget')}
+                          </div>
+                        )}
+                                    {widgetKey === 'dailyAgenda' && widgetVisibility.dailyAgenda && (
+                          <div
+                            ref={setWidgetResizeContainer('dailyAgenda')}
+                            className="dashboard-widget-shell"
+                            style={getWidgetSizeStyle('dailyAgenda', 400)}
+                          >
+                            <DailyAgendaWidget />
+                            {renderWidgetEdgeHandles('dailyAgenda')}
+                            {renderWidgetResizeHandle('dailyAgenda', 400, "Resize today's agenda widget")}
+                          </div>
+                        )}
+                                    {widgetKey === 'addToCalendar' && widgetVisibility.addToCalendar && (
+                          <div
+                            ref={setWidgetResizeContainer('addToCalendar')}
+                            className="dashboard-widget-shell"
+                            style={getWidgetSizeStyle('addToCalendar', 320)}
+                          >
+                            <AddToCalendarWidget />
+                            {renderWidgetEdgeHandles('addToCalendar')}
+                            {renderWidgetResizeHandle('addToCalendar', 320, 'Resize add to calendar widget')}
+                          </div>
+                        )}
+                                    {widgetKey === 'fitnessKpiBoxes' && widgetVisibility.fitnessKpiBoxes && (
+                          <div
+                            ref={setWidgetResizeContainer('fitnessKpiBoxes')}
+                            className="dashboard-widget-shell"
+                            style={getWidgetSizeStyle('fitnessKpiBoxes', 260)}
+                          >
+                            <FitnessKpiDashboardWidget />
+                            {renderWidgetEdgeHandles('fitnessKpiBoxes')}
+                            {renderWidgetResizeHandle('fitnessKpiBoxes', 260, 'Resize fitness KPI widget')}
+                          </div>
+                        )}
+                                    {widgetKey === 'habitsGrid' && widgetVisibility.habitsGrid && (
+                          <div
+                            ref={setWidgetResizeContainer('habitsGrid')}
+                            className="dashboard-widget-shell"
+                            style={getWidgetSizeStyle('habitsGrid', 220)}
+                          >
+                            <HabitsKpiWidget />
+                            {renderWidgetEdgeHandles('habitsGrid')}
+                            {renderWidgetResizeHandle('habitsGrid', 220, 'Resize habits grid widget')}
+                          </div>
+                        )}
+                                    {widgetKey === 'financeOverview' && widgetVisibility.financeOverview && (
+                          <div
+                            ref={setWidgetResizeContainer('financeOverview')}
+                            className="dashboard-widget-shell"
+                            style={getWidgetSizeStyle('financeOverview', 280)}
+                          >
+                            <FinanceSummaryWidget />
+                            {renderWidgetEdgeHandles('financeOverview')}
+                            {renderWidgetResizeHandle('financeOverview', 280, 'Resize finance overview widget')}
                           </div>
                         )}
                                     {widgetKey === 'themeProgress' && widgetVisibility.themeProgress && (

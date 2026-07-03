@@ -9,6 +9,10 @@
  */
 
 const admin = require('firebase-admin');
+const { VertexAI } = require('@google-cloud/vertexai');
+
+const VERTEX_PROJECT  = 'bob20250810';
+const VERTEX_LOCATION = 'europe-west2';
 
 const MORNING_HOURS = [5, 6, 7, 8, 9, 10, 11, 12]; // 05:00 - 12:59
 const AFTERNOON_HOURS = [13, 14, 15, 16, 17, 18]; // 13:00 - 18:59
@@ -161,20 +165,19 @@ async function populateBlankTimeOfDay(db, userId, options = {}) {
   let errors = 0;
 
   // Only load AI client when LLM is opted in
-  let aiClient = null;
+  let vertexModel = null;
   if (useLlm) {
     try {
-      const { GoogleGenerativeAI } = require('@google/generative-ai');
-      aiClient = new GoogleGenerativeAI(process.env.GOOGLE_AI_API_KEY);
+      const vertexAI = new VertexAI({ project: VERTEX_PROJECT, location: VERTEX_LOCATION });
+      vertexModel = vertexAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
     } catch (e) {
-      console.warn('[timeOfDayPopulator] Could not load GoogleGenerativeAI — useLlm ignored:', e?.message);
+      console.warn('[timeOfDayPopulator] Could not init Vertex AI — useLlm ignored:', e?.message);
     }
   }
 
   async function llmInfer(entityType, id, title, description) {
-    if (!aiClient || !title) return null;
+    if (!vertexModel || !title) return null;
     try {
-      const model = aiClient.getGenerativeModel({ model: 'gemini-1.5-flash' });
       const context = entityType === 'task'
         ? 'scheduled for (chore, routine, or one-off task)'
         : 'worked on (project story or feature)';
@@ -188,13 +191,13 @@ Respond with ONLY one word: morning, afternoon, or evening.
 - evening: 19:00-04:59 (dinner, bedtime routines, retainer, TV, reading)
 
 If unclear, respond morning.`;
-      const result = await model.generateContent(prompt);
-      const text = (result?.response?.text() || '').toLowerCase().trim();
+      const result = await vertexModel.generateContent(prompt);
+      const text = (result.response?.candidates?.[0]?.content?.parts?.[0]?.text || '').toLowerCase().trim();
       if (text.includes('afternoon')) return 'afternoon';
       if (text.includes('evening')) return 'evening';
       return 'morning';
     } catch (err) {
-      console.warn(`[timeOfDayPopulator] LLM failed for ${entityType} ${id}:`, err?.message);
+      console.warn(`[timeOfDayPopulator] Vertex AI failed for ${entityType} ${id}:`, err?.message);
       return null;
     }
   }

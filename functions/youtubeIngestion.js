@@ -8,7 +8,6 @@ const { ensureStoryFolder, ensureTaskFolder, getDriveClient } = require('./drive
 
 const GOOGLE_OAUTH_CLIENT_ID = defineSecret('GOOGLE_OAUTH_CLIENT_ID');
 const GOOGLE_OAUTH_CLIENT_SECRET = defineSecret('GOOGLE_OAUTH_CLIENT_SECRET');
-const GOOGLE_AI_STUDIO_API_KEY = defineSecret('GOOGLEAISTUDIOAPIKEY');
 const OPENROUTER_API_KEY_SECRET = defineSecret('OPENROUTER_API_KEY');
 
 function buildAnalysisPrompts(transcript, context) {
@@ -196,7 +195,7 @@ async function ingestYouTubeUrl({ uid, entityType, entityId, videoUrl }) {
 }
 
 exports.ingestYouTubeUrlHttp = httpsV2.onCall({
-  secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET, GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET],
+  secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET, OPENROUTER_API_KEY_SECRET],
   timeoutSeconds: 300,
   memory: '512MiB',
 }, async (request) => {

@@ -5,7 +5,8 @@ const crypto = require('crypto');
 const cheerio = require('cheerio');
 const { DateTime } = require('luxon');
 const { google } = require('googleapis');
-const { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } = require('@google/generative-ai');
+const { VertexAI } = require('@google-cloud/vertexai');
+const { HarmCategory, HarmBlockThreshold } = require('@google/generative-ai'); // kept for constant values only
 
 const { sendEmail } = require('./lib/email');
 const { loadThemesForUser, mapThemeLabelToId } = require('./services/themeManager');
@@ -22,9 +23,11 @@ const IOS_SHORTCUT_WEBHOOK_SECRET = defineSecret('IOS_SHORTCUT_WEBHOOK_SECRET');
 const REMINDERS_WEBHOOK_SECRET = defineSecret('REMINDERS_WEBHOOK_SECRET');
 
 const DEFAULT_TIMEZONE = 'Europe/London';
-const GEMINI_MODEL = String(process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite').trim();
+const GEMINI_MODEL = String(process.env.GEMINI_MODEL || 'gemini-2.5-flash').trim();
+const VERTEX_PROJECT  = 'bob20250810';
+const VERTEX_LOCATION = 'europe-west2';
 const OPENROUTER_BASE_URL = String(process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').trim().replace(/\/+$/, '');
-const OPENROUTER_FALLBACK_MODEL = String(process.env.OPENROUTER_FALLBACK_MODEL || 'meta-llama/llama-3.1-8b-instruct:free').trim();
+const OPENROUTER_FALLBACK_MODEL = String(process.env.OPENROUTER_FALLBACK_MODEL || 'openrouter/auto').trim();
 const GOOGLE_REGION = 'europe-west2';
 const MAX_DIAGNOSTIC_TEXT = 500;
 const DEFAULT_CALENDAR_QUERY_COUNT = 4;
@@ -439,16 +442,10 @@ function mergeEntryMetadata(existingMetadata, nextMetadata, previousEntryCount =
   };
 }
 
-function createGeminiJsonModel(apiKey, { schema, maxOutputTokens, temperature, topP, topK }) {
-  const genAI = new GoogleGenerativeAI(apiKey);
-  return genAI.getGenerativeModel({
+function createVertexJsonModel({ schema, maxOutputTokens, temperature, topP, topK }) {
+  const vertexAI = new VertexAI({ project: VERTEX_PROJECT, location: VERTEX_LOCATION });
+  return vertexAI.getGenerativeModel({
     model: GEMINI_MODEL,
-    safetySettings: [
-      { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
-      { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
-      { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
-      { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
-    ],
     generationConfig: {
       temperature,
       topP,
@@ -460,12 +457,16 @@ function createGeminiJsonModel(apiKey, { schema, maxOutputTokens, temperature, t
   });
 }
 
-async function generateGeminiJsonText(model, prompt, emptyMessage) {
-  const response = await model.generateContent(prompt);
-  const text = response?.response?.text?.();
+async function generateVertexJsonText(model, prompt, emptyMessage) {
+  const result = await model.generateContent(prompt);
+  const text = result.response?.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!text) throw new Error(emptyMessage);
   return text;
 }
+
+// Legacy aliases — callers use these names; remapped to Vertex equivalents
+const createGeminiJsonModel = (_, opts) => createVertexJsonModel(opts);
+const generateGeminiJsonText = generateVertexJsonText;
 
 function resolveProfileProviderApiKeys(profile = null) {
   const profileData = profile && typeof profile === 'object' ? profile : {};
@@ -1792,29 +1793,18 @@ async function callAgentRouterModel({
     );
   };
 
-  if (!apiKey) {
-    const repairedSystem = `${system}\nReturn STRICT JSON only with no extra text.`;
-    const text = await callOpenRouterText({
-      system: repairedSystem,
-      user,
-      apiKey: fallbackKey,
-      model: openRouterModel || OPENROUTER_FALLBACK_MODEL,
-    });
-    return parseModelJson(text, 'OpenRouter routing response');
-  }
-
   try {
-    const model = createGeminiJsonModel(apiKey, {
+    const model = createVertexJsonModel({
       schema: ROUTER_RESPONSE_SCHEMA,
       maxOutputTokens: 1024,
       temperature: 0.1,
       topP: 0.9,
       topK: 40,
     });
-    const text = await generateGeminiJsonText(model, `${system}\n\n${user}`, 'Gemini returned an empty routing response');
-    return parseModelJson(text, 'Gemini routing response');
-  } catch (geminiError) {
-    if (!shouldFallbackToOpenRouter(geminiError) || !fallbackKey) throw geminiError;
+    const text = await generateVertexJsonText(model, `${system}\n\n${user}`, 'Vertex AI returned an empty routing response');
+    return parseModelJson(text, 'Vertex AI routing response');
+  } catch (vertexError) {
+    if (!shouldFallbackToOpenRouter(vertexError) || !fallbackKey) throw vertexError;
     const repairedSystem = `${system}\nReturn STRICT JSON only with no extra text.`;
     const text = await callOpenRouterText({
       system: repairedSystem,
@@ -1822,7 +1812,7 @@ async function callAgentRouterModel({
       apiKey: fallbackKey,
       model: openRouterModel || OPENROUTER_FALLBACK_MODEL,
     });
-    return parseModelJson(text, 'OpenRouter routing response');
+    return parseModelJson(text, 'OpenRouter routing response (fallback)');
   }
 }
 
@@ -2033,22 +2023,19 @@ async function callTranscriptModel({
     });
   };
 
-  if (!apiKey) {
-    text = await tryAnthropicThenOpenRouter(null);
-  } else {
-    try {
-      const model = createGeminiJsonModel(apiKey, {
-        schema: TRANSCRIPT_ANALYSIS_SCHEMA,
-        maxOutputTokens: 8192,
-        temperature: 0.2,
-        topP: 0.95,
-        topK: 40,
-      });
-      text = await generateGeminiJsonText(model, `${system}\n\n${user}`, 'Gemini returned an empty response');
-    } catch (geminiError) {
-      if (!shouldFallbackToAlternateProvider(geminiError)) throw geminiError;
-      text = await tryAnthropicThenOpenRouter(geminiError);
-    }
+  try {
+    const model = createVertexJsonModel({
+      schema: TRANSCRIPT_ANALYSIS_SCHEMA,
+      maxOutputTokens: 8192,
+      temperature: 0.2,
+      topP: 0.95,
+      topK: 40,
+    });
+    text = await generateVertexJsonText(model, `${system}\n\n${user}`, 'Vertex AI returned an empty response');
+    usedProvider = 'vertex-ai';
+  } catch (vertexError) {
+    if (!shouldFallbackToAlternateProvider(vertexError)) throw vertexError;
+    text = await tryAnthropicThenOpenRouter(vertexError);
   }
 
   if (logger) {

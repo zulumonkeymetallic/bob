@@ -67,7 +67,7 @@ const SprintKanbanPageV2: React.FC = () => {
     const [editGoal, setEditGoal] = useState<Goal | null>(null);
     const [dueFilter, setDueFilter] = useState<'all' | 'today' | 'overdue' | 'top3' | 'critical'>('all');
     const [showFocusOnly, setShowFocusOnly] = useState(false);
-    const [showCompletedItems, setShowCompletedItems] = useState(false);
+    const [showCompletedItems, setShowCompletedItems] = useState(true);
     const [showAiScoredOnly, setShowAiScoredOnly] = useState(false);
     const [showDelegatedOnly, setShowDelegatedOnly] = useState(false);
     const [sortBy, setSortBy] = useState<'ai' | 'due' | 'priority' | 'default'>('default');
@@ -120,11 +120,6 @@ const SprintKanbanPageV2: React.FC = () => {
     const filterSprintId: string | null = selectedSprintId === ''
         ? null
         : (selectedSprintId || null);
-
-    // Collapse the Done column whenever sprint scope is cleared — prevents historical pollution
-    useEffect(() => {
-        if (!filterSprintId) setShowCompletedItems(false);
-    }, [filterSprintId]);
 
     // Get current sprint only when a specific ID is chosen
     const currentSprint = filterSprintId
@@ -686,7 +681,7 @@ const SprintKanbanPageV2: React.FC = () => {
                                     showLatestNotes={showLatestNotes}
                                     dueFilter={dueFilter}
                                     sortBy={sortBy}
-                                    showCompletedItems={showCompletedItems}
+                                    showCompletedItems={!!filterSprintId && showCompletedItems}
                                     showAiScoredOnly={showAiScoredOnly}
                                     showDelegatedOnly={showDelegatedOnly}
                                     themes={globalThemes}

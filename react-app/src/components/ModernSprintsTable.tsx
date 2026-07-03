@@ -34,6 +34,8 @@ import { Sprint, Story, Task, Goal } from '../types';
 import { generateRef } from '../utils/referenceGenerator';
 import { isStatus, getStatusName } from '../utils/statusHelpers';
 import { getGoalDisplayPath, isLeafGoal } from '../utils/goalHierarchy';
+import { deriveSprintCapacityPoints } from '../utils/plannerCapacity';
+import SprintPlannerWizard from './sprints/SprintPlannerWizard';
 
 // Sprint status helpers with null checking
 const getSprintStatusLabel = (status: number | undefined): string => {
@@ -75,6 +77,8 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
   const [goals, setGoals] = useState<Goal[]>([]);
   const [showModal, setShowModal] = useState(false);
   const [editingSprint, setEditingSprint] = useState<Sprint | null>(null);
+  const [showWizard, setShowWizard] = useState(false);
+  const [wizardSprint, setWizardSprint] = useState<Sprint | null>(null);
   const [message, setMessage] = useState('');
   const [messageType, setMessageType] = useState<'success' | 'error' | ''>('');
   const [formData, setFormData] = useState({
@@ -454,6 +458,7 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
                   <th>Stories</th>
                   <th>Tasks</th>
                   <th>Points</th>
+                  <th title="Points planned vs capacity (1 hr = 1 pt)">Capacity</th>
                   <th>Actions</th>
                 </tr>
               </thead>
@@ -560,7 +565,7 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
                           placement="top"
                           overlay={<Tooltip>{metrics.goalCount} goal(s) linked via stories</Tooltip>}
                         >
-                          <Badge bg="outline-secondary">
+                          <Badge bg="secondary" style={{ color: '#fff' }}>
                             {metrics.goalCount}
                           </Badge>
                         </OverlayTrigger>
@@ -570,7 +575,7 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
                           placement="top"
                           overlay={<Tooltip>{metrics.completedStories} completed, {metrics.totalStories - metrics.completedStories} remaining</Tooltip>}
                         >
-                          <Badge bg="outline-primary">
+                          <Badge bg="primary" style={{ color: '#fff' }}>
                             {metrics.completedStories}/{metrics.totalStories}
                           </Badge>
                         </OverlayTrigger>
@@ -580,7 +585,7 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
                           placement="top"
                           overlay={<Tooltip>{metrics.completedTasks} completed, {metrics.totalTasks - metrics.completedTasks} remaining</Tooltip>}
                         >
-                          <Badge bg="outline-info">
+                          <Badge bg="info" style={{ color: '#fff' }}>
                             {metrics.completedTasks}/{metrics.totalTasks}
                           </Badge>
                         </OverlayTrigger>
@@ -588,18 +593,45 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
                       <td>
                         <OverlayTrigger
                           placement="top"
-                          overlay={<Tooltip>{metrics.completedPoints} completed, {metrics.totalPoints - metrics.completedPoints} remaining</Tooltip>}
+                          overlay={<Tooltip>{metrics.completedPoints} pts done of {metrics.totalPoints} total</Tooltip>}
                         >
-                          <Badge bg="outline-success">
+                          <Badge bg="success" style={{ color: '#fff' }}>
                             {metrics.completedPoints}/{metrics.totalPoints}
                           </Badge>
                         </OverlayTrigger>
                       </td>
+                      <td>
+                        {(() => {
+                          const capPts = deriveSprintCapacityPoints(sprint);
+                          const used = metrics.totalPoints;
+                          const pct = capPts > 0 ? Math.round((used / capPts) * 100) : 0;
+                          const over = used > capPts;
+                          return (
+                            <OverlayTrigger
+                              placement="top"
+                              overlay={<Tooltip>{used} pts planned of {capPts} pts available (1 hr = 1 pt)</Tooltip>}
+                            >
+                              <Badge bg={over ? 'danger' : pct >= 80 ? 'warning' : 'secondary'} style={{ color: '#fff' }}>
+                                {used}/{capPts}
+                              </Badge>
+                            </OverlayTrigger>
+                          );
+                        })()}
+                      </td>
                       <td onClick={(e) => e.stopPropagation()}>
                         <div className="d-flex gap-1">
-                          <OverlayTrigger placement="top" overlay={<Tooltip>Edit Sprint</Tooltip>}>
-                            <Button 
-                              size="sm" 
+                          <OverlayTrigger placement="top" overlay={<Tooltip>Plan with wizard</Tooltip>}>
+                            <Button
+                              size="sm"
+                              variant="outline-success"
+                              onClick={() => { setWizardSprint(sprint); setShowWizard(true); }}
+                            >
+                              <Play size={14} />
+                            </Button>
+                          </OverlayTrigger>
+                          <OverlayTrigger placement="top" overlay={<Tooltip>Edit sprint details</Tooltip>}>
+                            <Button
+                              size="sm"
                               variant="outline-primary"
                               onClick={() => openEditModal(sprint)}
                             >
@@ -607,8 +639,8 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
                             </Button>
                           </OverlayTrigger>
                           <OverlayTrigger placement="top" overlay={<Tooltip>Delete Sprint</Tooltip>}>
-                            <Button 
-                              size="sm" 
+                            <Button
+                              size="sm"
                               variant="outline-danger"
                               onClick={() => handleDelete(sprint)}
                             >
@@ -769,6 +801,14 @@ const ModernSprintsTable: React.FC<ModernSprintsTableProps> = ({
           </Button>
         </Modal.Footer>
       </Modal>
+
+      <SprintPlannerWizard
+        show={showWizard}
+        onHide={() => { setShowWizard(false); setWizardSprint(null); }}
+        currentUserId={currentUser?.uid}
+        existingSprint={wizardSprint}
+        onComplete={() => { setShowWizard(false); setWizardSprint(null); }}
+      />
     </>
   );
 };

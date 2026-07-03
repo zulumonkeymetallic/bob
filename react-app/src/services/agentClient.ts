@@ -175,6 +175,25 @@ export async function submitTranscriptAgentRequest({
   return (body || {}) as AgentResponse;
 }
 
+export interface VertexAssistantResponse {
+  ok: boolean;
+  reply: string;
+  toolsUsed?: string[];
+  source: 'vertex';
+}
+
+export async function submitAssistantAgentRequestV2({
+  text,
+  history = [],
+}: {
+  text: string;
+  history?: Array<{ role: 'user' | 'assistant'; content: string }>;
+}): Promise<VertexAssistantResponse> {
+  const callable = httpsCallable(functions, 'sendAssistantMessageV2');
+  const response = await callable({ message: text, history });
+  return (response.data || {}) as VertexAssistantResponse;
+}
+
 export async function submitAssistantAgentRequest({
   text,
   persona,

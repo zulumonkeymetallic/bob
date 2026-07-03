@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Row, Col, Spinner, Alert, Form, Button, Badge, ButtonGroup } from 'react-bootstrap';
 import { httpsCallable } from 'firebase/functions';
 import { doc, getDoc } from 'firebase/firestore';
@@ -236,6 +236,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
     const [cardFilter, setCardFilter] = useState<DashboardCardFilter>('all');
     const [debtStrategy, setDebtStrategy] = useState<'snowball' | 'avalanche'>('avalanche');
     const [debtAprByAccount, setDebtAprByAccount] = useState<Record<string, number>>({});
+    const txSectionRef = useRef<HTMLDivElement>(null);
 
     const [editingManualAccountId, setEditingManualAccountId] = useState<string | null>(null);
     const [manualForm, setManualForm] = useState<{
@@ -615,6 +616,9 @@ const FinanceDashboardAdvanced: React.FC = () => {
     const handleCardFilter = useCallback((nextFilter: DashboardCardFilter) => {
         setChartFilter({ type: null, value: null });
         setCardFilter((prev) => (prev === nextFilter ? 'all' : nextFilter));
+        setTimeout(() => {
+            txSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }, 60);
     }, []);
 
     const transactionsExternalFilters = useMemo(() => {
@@ -660,7 +664,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
 
     const userBadge = (
         <div className="d-flex justify-content-end mb-2">
-            <span className="small text-muted">Signed in as: <code>{currentUser?.uid || '—'}</code></span>
+            <span className="small text-muted">Signed in as: <code>{currentUser?.email || (currentUser?.uid ? currentUser.uid.slice(0, 8) + '…' : '—')}</code></span>
         </div>
     );
 
@@ -1602,7 +1606,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
     const renderOverview = () => (
         <>
             <Row className="g-3 mb-3">
-                <Col xxl={2} xl={3} md={6}>
+                <Col xxl={2} xl={3} lg={4} md={6}>
                     <div
                         className={`finance-dashboard-clickable-card${cardFilter === 'all' && !chartFilter.type ? ' is-active' : ''}`}
                         role="button"
@@ -1623,7 +1627,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
                         </PremiumCard>
                     </div>
                 </Col>
-                <Col xxl={2} xl={3} md={6}>
+                <Col xxl={2} xl={3} lg={4} md={6}>
                     <div
                         className={`finance-dashboard-clickable-card${cardFilter === 'discretionary' ? ' is-active' : ''}`}
                         role="button"
@@ -1644,7 +1648,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
                         </PremiumCard>
                     </div>
                 </Col>
-                <Col xxl={2} xl={3} md={6}>
+                <Col xxl={2} xl={3} lg={4} md={6}>
                     <div
                         className={`finance-dashboard-clickable-card${cardFilter === 'subscriptions' ? ' is-active' : ''}`}
                         role="button"
@@ -1665,18 +1669,19 @@ const FinanceDashboardAdvanced: React.FC = () => {
                         </PremiumCard>
                     </div>
                 </Col>
-                <Col xxl={2} xl={3} md={6}>
+                <Col xxl={2} xl={3} lg={4} md={6}>
                     <div
-                        className={`finance-dashboard-clickable-card${cardFilter === 'actions' ? ' is-active' : ''}`}
+                        className={`finance-dashboard-clickable-card${activeView === 'actions' ? ' is-active' : ''}`}
                         role="button"
                         tabIndex={0}
-                        onClick={() => handleCardFilter('actions')}
+                        onClick={() => handleViewChange('actions')}
                         onKeyDown={(event) => {
                             if (event.key === 'Enter' || event.key === ' ') {
                                 event.preventDefault();
-                                handleCardFilter('actions');
+                                handleViewChange('actions');
                             }
                         }}
+                        title="View all actions"
                     >
                         <PremiumCard icon={Sparkles} title="Actions Potential" className="finance-summary-card">
                             <div className="finance-summary-value" style={{ color: colors.success }}>
@@ -1686,7 +1691,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
                         </PremiumCard>
                     </div>
                 </Col>
-                <Col xxl={2} xl={3} md={6}>
+                <Col xxl={2} xl={3} lg={4} md={6}>
                     <div
                         className={`finance-dashboard-clickable-card finance-dashboard-clickable-card--small${cardFilter === 'missingCategory' ? ' is-active' : ''}`}
                         role="button"
@@ -1712,7 +1717,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
                         </PremiumCard>
                     </div>
                 </Col>
-                <Col xxl={2} xl={3} md={6}>
+                <Col xxl={2} xl={3} lg={4} md={6}>
                     <div
                         className={`finance-dashboard-clickable-card finance-dashboard-clickable-card--small${cardFilter === 'anomaly' ? ' is-active' : ''}`}
                         role="button"
@@ -1739,30 +1744,66 @@ const FinanceDashboardAdvanced: React.FC = () => {
             {budgetHealth && (
                 <Row className="g-3 mb-3">
                     <Col md={3}>
-                        <PremiumCard icon={Wallet} title="Budget Set" className="finance-summary-card finance-summary-card--tight">
-                            <div className="finance-summary-subvalue">{formatCurrency(toPounds(budgetHealth.totalBudgetPence || 0))}</div>
-                            <p className="text-muted mb-0 mt-1 finance-summary-caption">Configured category budget</p>
-                        </PremiumCard>
+                        <div
+                            className="finance-dashboard-clickable-card finance-dashboard-clickable-card--small"
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => handleViewChange('spend')}
+                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleViewChange('spend'); } }}
+                            title="View spend analysis"
+                        >
+                            <PremiumCard icon={Wallet} title="Budget Set" className="finance-summary-card finance-summary-card--tight">
+                                <div className="finance-summary-subvalue">{formatCurrency(toPounds(budgetHealth.totalBudgetPence || 0))}</div>
+                                <p className="text-muted mb-0 mt-1 finance-summary-caption">Configured category budget</p>
+                            </PremiumCard>
+                        </div>
                     </Col>
                     <Col md={3}>
-                        <PremiumCard icon={Activity} title="Actual Spend" className="finance-summary-card finance-summary-card--tight">
-                            <div className="finance-summary-subvalue" style={{ color: colors.danger }}>{formatCurrency(toPounds(budgetHealth.totalActualPence || 0))}</div>
-                            <p className="text-muted mb-0 mt-1 finance-summary-caption">In selected date range</p>
-                        </PremiumCard>
+                        <div
+                            className="finance-dashboard-clickable-card finance-dashboard-clickable-card--small"
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => handleCardFilter('all')}
+                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleCardFilter('all'); } }}
+                            title="Show all transactions"
+                        >
+                            <PremiumCard icon={Activity} title="Actual Spend" className="finance-summary-card finance-summary-card--tight">
+                                <div className="finance-summary-subvalue" style={{ color: colors.danger }}>{formatCurrency(toPounds(budgetHealth.totalActualPence || 0))}</div>
+                                <p className="text-muted mb-0 mt-1 finance-summary-caption">In selected date range</p>
+                            </PremiumCard>
+                        </div>
                     </Col>
                     <Col md={3}>
-                        <PremiumCard icon={TrendingUp} title="Variance" className="finance-summary-card finance-summary-card--tight">
-                            <div className="finance-summary-subvalue" style={{ color: (budgetHealth.variancePence || 0) >= 0 ? colors.success : colors.warning }}>
-                                {formatCurrency(toPounds(budgetHealth.variancePence || 0))}
-                            </div>
-                            <p className="text-muted mb-0 mt-1 finance-summary-caption">Budget minus actual</p>
-                        </PremiumCard>
+                        <div
+                            className="finance-dashboard-clickable-card finance-dashboard-clickable-card--small"
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => handleViewChange('analyst')}
+                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleViewChange('analyst'); } }}
+                            title="View budget analysis"
+                        >
+                            <PremiumCard icon={TrendingUp} title="Variance" className="finance-summary-card finance-summary-card--tight">
+                                <div className="finance-summary-subvalue" style={{ color: (budgetHealth.variancePence || 0) >= 0 ? colors.success : colors.warning }}>
+                                    {formatCurrency(toPounds(budgetHealth.variancePence || 0))}
+                                </div>
+                                <p className="text-muted mb-0 mt-1 finance-summary-caption">Budget minus actual</p>
+                            </PremiumCard>
+                        </div>
                     </Col>
                     <Col md={3}>
-                        <PremiumCard icon={Target} title="Budget Used" className="finance-summary-card finance-summary-card--tight">
-                            <div className="finance-summary-subvalue">{Number(budgetHealth.utilizationPct || 0).toFixed(1)}%</div>
-                            <p className="text-muted mb-0 mt-1 finance-summary-caption">Utilization against set budget</p>
-                        </PremiumCard>
+                        <div
+                            className="finance-dashboard-clickable-card finance-dashboard-clickable-card--small"
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => handleViewChange('spend')}
+                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleViewChange('spend'); } }}
+                            title="View spend breakdown"
+                        >
+                            <PremiumCard icon={Target} title="Budget Used" className="finance-summary-card finance-summary-card--tight">
+                                <div className="finance-summary-subvalue">{Number(budgetHealth.utilizationPct || 0).toFixed(1)}%</div>
+                                <p className="text-muted mb-0 mt-1 finance-summary-caption">Utilization against set budget</p>
+                            </PremiumCard>
+                        </div>
                     </Col>
                 </Row>
             )}
@@ -1812,7 +1853,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
                 </Col>
             </Row>
 
-            <Row className="g-3">
+            <Row className="g-3" ref={txSectionRef}>
                 <Col lg={12}>
                     <PremiumCard
                         title={`Transactions + AI Recommendations (${filteredRecentTransactions.length})`}

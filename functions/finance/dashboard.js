@@ -152,8 +152,11 @@ function aggregateTransactions(transactions, startDate, endDate) {
         }
 
         // Subscription & Discretionary tracking
+        const isSubscription = tx.isSubscription === true
+            || tx.userCategoryKey === 'online_subscription'
+            || String(tx.category || '').toLowerCase() === 'subscriptions';
         if (amount < 0) {
-            if (tx.isSubscription) {
+            if (isSubscription) {
                 result.totalSubscriptionSpend = (result.totalSubscriptionSpend || 0) + amount;
             }
             if (bucketNormalized === 'discretionary') {
@@ -340,7 +343,9 @@ function buildDashboardData(transactions, goals, pots, budgetSettings, filter) {
                     aiAnomalyReason: t.aiAnomalyReason || null,
                     aiAnomalyScore: t.aiAnomalyScore || null,
                     createdAt: t.createdAt,
-                    isSubscription: t.isSubscription,
+                    isSubscription: t.isSubscription === true
+                        || t.userCategoryKey === 'online_subscription'
+                        || String(t.category || '').toLowerCase() === 'subscriptions',
                     potId: potId || null,
                     potName: pot ? pot.name : null,
                 };

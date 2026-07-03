@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import { Button, Dropdown } from 'react-bootstrap';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
+  Brain,
   Calendar,
   LayoutDashboard,
   LayoutGrid,
@@ -51,9 +52,10 @@ const PlanActionBar: React.FC<PlanActionBarProps> = ({ className }) => {
   );
   const isWeeklyCapacityActive = location.pathname.startsWith('/planner/weekly-capacity');
 
-  const buttonVariant = (target: 'dashboard' | 'planner' | 'kanban') => {
+  const buttonVariant = (target: 'dashboard' | 'planner' | 'kanban' | 'coach') => {
     if (target === 'dashboard') return location.pathname.startsWith('/dashboard') ? 'primary' : 'outline-secondary';
     if (target === 'planner') return location.pathname.startsWith('/planner') ? 'primary' : 'outline-secondary';
+    if (target === 'coach') return location.pathname.startsWith('/coach') ? 'primary' : 'outline-secondary';
     return location.pathname.startsWith('/sprints/kanban') ? 'primary' : 'outline-secondary';
   };
 
@@ -82,20 +84,22 @@ const PlanActionBar: React.FC<PlanActionBarProps> = ({ className }) => {
   };
 
   return (
-    <div className={`d-flex align-items-center gap-2 flex-wrap ${className || ''}`.trim()}>
-      <Button size="sm" variant={buttonVariant('dashboard')} onClick={() => navigate('/dashboard')} title="Open overview dashboard">
-        <LayoutDashboard size={14} className="me-1" /> Overview
+    <div className={`d-flex align-items-center gap-1 flex-wrap ${className || ''}`.trim()}>
+      <Button size="sm" variant={buttonVariant('dashboard')} onClick={() => navigate('/dashboard')} title="Overview dashboard">
+        <LayoutDashboard size={14} /><span className="d-none d-xl-inline ms-1">Overview</span>
       </Button>
-      <Button size="sm" variant={buttonVariant('planner')} onClick={() => navigate(buildPlannerPath(currentPlannerLevel || 'calendar', location.search))} title="Open unified planner">
-        <Calendar size={14} className="me-1" /> Calendar
+      <Button size="sm" variant={buttonVariant('planner')} onClick={() => navigate(buildPlannerPath(currentPlannerLevel || 'calendar', location.search))} title="Calendar / planner">
+        <Calendar size={14} /><span className="d-none d-xl-inline ms-1">Calendar</span>
       </Button>
-      <Button size="sm" variant={buttonVariant('kanban')} onClick={() => navigate('/sprints/kanban')} title="Open kanban board">
-        <LayoutGrid size={14} className="me-1" /> Kanban
+      <Button size="sm" variant={buttonVariant('kanban')} onClick={() => navigate('/sprints/kanban')} title="Kanban board">
+        <LayoutGrid size={14} /><span className="d-none d-xl-inline ms-1">Kanban</span>
+      </Button>
+      <Button size="sm" variant={buttonVariant('coach')} onClick={() => navigate('/coach')} title="Coach hub">
+        <Brain size={14} /><span className="d-none d-xl-inline ms-1">Coach</span>
       </Button>
       <Dropdown>
         <Dropdown.Toggle size="sm" variant={activePlanLevel ? 'primary' : 'outline-secondary'} title="Switch planning level">
-          <Milestone size={14} className="me-1" /> Plan
-          {activePlanLevel ? `: ${plannerLevelLabel(activePlanLevel.level)}` : ''}
+          <Milestone size={14} /><span className="d-none d-xl-inline ms-1">Plan{activePlanLevel ? `: ${plannerLevelLabel(activePlanLevel.level)}` : ''}</span>
         </Dropdown.Toggle>
         <Dropdown.Menu>
           {PLAN_LEVELS.map((entry) => (

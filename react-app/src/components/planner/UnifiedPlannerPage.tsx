@@ -47,6 +47,8 @@ import 'react-big-calendar/lib/css/react-big-calendar.css';
 import 'react-big-calendar/lib/addons/dragAndDrop/styles.css';
 import { useUnifiedPlannerData, type PlannerRange } from '../../hooks/useUnifiedPlannerData';
 import type { ExternalCalendarEvent } from '../../hooks/useUnifiedPlannerData';
+import FitnessKpiDashboardWidget from '../dashboard/FitnessKpiDashboardWidget';
+import HabitsKpiWidget from '../dashboard/HabitsKpiWidget';
 import { useAuth } from '../../contexts/AuthContext';
 import { db, functions } from '../../firebase';
 import { httpsCallable } from 'firebase/functions';
@@ -2496,148 +2498,9 @@ const UnifiedPlannerCalendarPage: React.FC = () => {
                 </Card.Body>
           </Card>
 
-          <Card className="shadow-sm border-0 mb-4">
-            <Card.Header className="fw-semibold">Planner Audit</Card.Header>
-            <Card.Body className="p-3">
-              {(() => {
-                const total = planner.instances.length;
-                const unscheduled = planner.instances.filter(i => i.status === 'unscheduled');
-                const lastUpdated = planner.instances.reduce<number>((acc, i) => {
-                  const t = Number((i as any).updatedAt || 0);
-                  return Number.isFinite(t) && t > acc ? t : acc;
-                }, 0);
-                const reasonCounts = new Map<string, number>();
-                unscheduled.forEach(i => {
-                  const r = String((i as any).statusReason || 'unknown');
-                  reasonCounts.set(r, (reasonCounts.get(r) || 0) + 1);
-                });
-                const topReasons = Array.from(reasonCounts.entries()).sort((a, b) => b[1] - a[1]).slice(0, 3);
-                return (
-                  <div>
-                    <div className="d-flex justify-content-between mb-2">
-                      <span className="text-muted">Instances in window</span>
-                      <span className="fw-semibold">{total}</span>
-                    </div>
-                    <div className="d-flex justify-content-between mb-2">
-                      <span className="text-muted">Unscheduled</span>
-                      <span className="fw-semibold">{unscheduled.length}</span>
-                    </div>
-                    {topReasons.length > 0 && (
-                      <div className="mb-2">
-                        <div className="text-muted small">Top reasons</div>
-                        <ul className="small mb-0">
-                          {topReasons.map(([label, count]) => (
-                            <li key={label}>{label} — {count}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                    <div className="text-muted small">Last update {lastUpdated ? new Date(lastUpdated).toLocaleString() : '—'}</div>
-                  </div>
-                );
-              })()}
-            </Card.Body>
-          </Card>
-
-          <Card className="shadow-sm border-0 mb-4">
-            <Card.Header className="fw-semibold">AI Automations & Suggestions</Card.Header>
-            <Card.Body className="d-flex flex-column gap-3">
-              <div>
-                <div className="text-uppercase text-muted small fw-semibold mb-1">Pending insertions</div>
-                {unscheduledItems.length === 0 ? (
-                  <div className="text-muted small">AI has placed all chores and routines. Great job!</div>
-                ) : (
-                  <ul className="list-unstyled small mb-0">
-                    {unscheduledItems.map((item) => {
-                      const typeLabel = item.sourceType.charAt(0).toUpperCase() + item.sourceType.slice(1);
-                      const policyLabel = item.schedulingContext?.policyMode
-                        ? humanizePolicyMode(item.schedulingContext.policyMode)
-                        : null;
-                      const reasonLabel = item.statusReason || 'Waiting for calendar entry';
-                      return (
-                        <li key={item.id} className="border rounded p-2 mb-2">
-                          <div className="d-flex justify-content-between align-items-start gap-2">
-                            <div className="d-flex flex-column">
-                              <span className="fw-semibold">{item.title || item.sourceId}</span>
-                              <span className="text-muted small">{typeLabel}{policyLabel ? ` · ${policyLabel}` : ''}</span>
-                              {reasonLabel && (
-                                <span className="text-warning small">{reasonLabel}</span>
-                              )}
-                            </div>
-                            <Badge bg="warning" text="dark">{typeLabel}</Badge>
-                          </div>
-                          {(item.deepLink || item.mobileCheckinUrl) && (
-                            <div className="d-flex gap-2 flex-wrap mt-2">
-                              {item.deepLink && (
-                                <Button
-                                  as="a"
-                                  href={item.deepLink}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  size="sm"
-                                  variant="outline-primary"
-                                >
-                                  <LinkIcon size={14} className="me-1" /> Open item
-                                </Button>
-                              )}
-                              {item.mobileCheckinUrl && (
-                                <Button
-                                  as="a"
-                                  href={item.mobileCheckinUrl}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  size="sm"
-                                  variant="outline-success"
-                                >
-                                  <Smartphone size={14} className="me-1" /> Check-in
-                                </Button>
-                              )}
-                            </div>
-                          )}
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
-              </div>
-              <div>
-                <div className="text-uppercase text-muted small fw-semibold mb-1">Top priorities</div>
-                {topChores.length === 0 && topRoutines.length === 0 ? (
-                  <div className="text-muted small">No recurring chores or routines defined yet.</div>
-                ) : (
-                  <div className="d-flex flex-column gap-2">
-                    {topChores.map((chore) => (
-                      <div key={chore.id} className="d-flex justify-content-between small chore-pill">
-                        <div>
-                          <div className="fw-semibold">{chore.title}</div>
-                          <div className="text-muted">Priority P{chore.priority}</div>
-                        </div>
-                        <Badge bg="info">Chore</Badge>
-                      </div>
-                    ))}
-                    {topRoutines.map((routine) => (
-                      <div key={routine.id} className="d-flex justify-content-between small chore-pill">
-                        <div>
-                          <div className="fw-semibold">{routine.title}</div>
-                          <div className="text-muted">Target {routine.dailyTarget ?? 1}</div>
-                        </div>
-                        <Badge bg="success">Routine</Badge>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-              <Button
-                variant="outline-primary"
-                size="sm"
-                onClick={handleRebalanceNextDay}
-                disabled={rebalanceLoading}
-              >
-                {rebalanceLoading ? <Spinner size="sm" animation="border" className="me-1" /> : null}
-                Rebalance next 24h
-              </Button>
-            </Card.Body>
-          </Card>
+          <FitnessKpiDashboardWidget />
+          <div className="mb-4" />
+          <HabitsKpiWidget />
 
           {activeEvent && (
             <Card className="shadow-sm border-0">

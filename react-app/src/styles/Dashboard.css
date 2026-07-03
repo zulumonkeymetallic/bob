@@ -725,6 +725,16 @@ body.dashboard-widget-resizing * {
   background: var(--bs-border-color);
 }
 
+/* Tablet: 2-column widget grid, override stored pixel widths */
+@media (min-width: 768px) and (max-width: 1199px) {
+  .dashboard-sortable-item {
+    flex: 1 1 calc(50% - 4px) !important;
+    max-width: calc(50% - 4px) !important;
+    width: auto !important;
+    min-width: 0 !important;
+  }
+}
+
 /* Hide resize handles on mobile */
 @media (max-width: 767.98px) {
   .dashboard-widget-grid {

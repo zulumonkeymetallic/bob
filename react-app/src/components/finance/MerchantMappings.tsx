@@ -803,12 +803,6 @@ const MerchantMappings: React.FC = () => {
                               </optgroup>
                             ))}
                           </Form.Select>
-                          <Form.Control
-                            size="sm"
-                            className="merchant-input mt-1"
-                            value={edits[m.merchantKey]?.label || toText(m.merchantName, toText(m.merchantKey, ''))}
-                            onChange={(e) => setEdit(m.merchantKey, { label: e.target.value })}
-                          />
                         </div>
                       )}
                       {effectiveVisibleColumns.includes('bucket') && (
