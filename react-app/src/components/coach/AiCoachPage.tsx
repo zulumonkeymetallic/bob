@@ -59,64 +59,110 @@ function todayStr() {
   return new Date().toISOString().split('T')[0];
 }
 
-// ─── Readiness Gauge ──────────────────────────────────────────────────────────
+// ─── Circular Dial (WHOOP-style ring) ──────────────────────────────────────────
 
-const ReadinessGauge: React.FC<{
-  score: number; label: string; hrv: number | null; sleep: number | null;
-  adaptedToday?: string | null;
-}> = ({ score, label, hrv, sleep, adaptedToday }) => {
-  const pct = Math.round(score * 100);
-  const colour =
-    label === 'green' ? 'var(--bs-success)' :
-    label === 'amber' ? 'var(--bs-warning)' : 'var(--bs-danger)';
-  const badgeCls =
-    label === 'green' ? 'bg-success' :
-    label === 'amber' ? 'bg-warning text-dark' : 'bg-danger';
-  const circumference = 2 * Math.PI * 40;
-  const dashOffset = circumference - (pct / 100) * circumference;
+const CircularDial: React.FC<{
+  pct: number | null;          // 0-100, null = no data
+  colour: string;
+  label: string;
+  value: string;               // display value in the centre, e.g. "82%" or "7.2h"
+  sub?: string;                // small line under the dial, e.g. "HRV 54ms"
+  size?: number;
+}> = ({ pct, colour, label, value, sub, size = 92 }) => {
+  const r = (size / 2) - 9;
+  const circumference = 2 * Math.PI * r;
+  const clamped = pct == null ? 0 : Math.max(0, Math.min(100, pct));
+  const dashOffset = circumference - (clamped / 100) * circumference;
+  const cx = size / 2;
+
+  return (
+    <div className="d-flex flex-column align-items-center" style={{ minWidth: size }}>
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+        <circle cx={cx} cy={cx} r={r} fill="none" stroke="var(--bs-border-color)" strokeWidth="9" />
+        {pct != null && (
+          <circle
+            cx={cx} cy={cx} r={r}
+            fill="none"
+            stroke={colour}
+            strokeWidth="9"
+            strokeDasharray={circumference}
+            strokeDashoffset={dashOffset}
+            strokeLinecap="round"
+            transform={`rotate(-90 ${cx} ${cx})`}
+            style={{ transition: 'stroke-dashoffset 0.6s ease' }}
+          />
+        )}
+        <text x={cx} y={cx + 5} textAnchor="middle" fontSize={size >= 90 ? 17 : 14} fontWeight="bold" fill={pct == null ? 'var(--bs-secondary)' : colour}>
+          {value}
+        </text>
+      </svg>
+      <div className="text-muted text-uppercase mt-1" style={{ fontSize: '0.65rem', letterSpacing: '0.05em' }}>{label}</div>
+      {sub && <div className="text-muted" style={{ fontSize: '0.7rem' }}>{sub}</div>}
+    </div>
+  );
+};
+
+// ─── Vitals Dials Row — Recovery / Sleep / Training Load ───────────────────────
+
+const VitalsDialsRow: React.FC<{ coachData: CoachDaily }> = ({ coachData }) => {
+  const recoveryPct = Math.round((coachData.readinessScore || 0) * 100);
+  const recoveryColour =
+    coachData.readinessLabel === 'green' ? 'var(--bs-success)' :
+    coachData.readinessLabel === 'amber' ? 'var(--bs-warning)' : 'var(--bs-danger)';
+
+  const sleepTarget = 8;
+  const sleepPct = coachData.sleepToday != null ? Math.round((coachData.sleepToday / sleepTarget) * 100) : null;
+  const sleepColour = sleepPct == null ? 'var(--bs-secondary)' : sleepPct >= 90 ? 'var(--bs-success)' : sleepPct >= 70 ? 'var(--bs-warning)' : 'var(--bs-danger)';
+
+  // No true real-time strain metric available (would need Strava suffer score / active
+  // energy) — this is weekly training volume vs a nominal 100km/wk combined target,
+  // the closest proxy we can compute from data we actually have.
+  const weeklyVolumeKm = (coachData.weeklyRunKm || 0) + (coachData.weeklyBikeKm || 0) + (coachData.weeklySwimKm || 0);
+  const loadTargetKm = 100;
+  const loadPct = Math.round((weeklyVolumeKm / loadTargetKm) * 100);
+  const loadColour = loadPct >= 100 ? 'var(--bs-danger)' : loadPct >= 60 ? 'var(--bs-warning)' : 'var(--bs-success)';
 
   return (
     <div className="card border-0 shadow-sm">
       <div className="card-body">
         <div className="d-flex align-items-center justify-content-between mb-3">
-          <h6 className="card-subtitle text-muted mb-0">Today's Readiness</h6>
-          <span className={`badge ${badgeCls} text-uppercase`} style={{ fontSize: '0.7rem', letterSpacing: '0.05em' }}>
-            {label}
+          <h6 className="card-subtitle text-muted mb-0">Today's Vitals</h6>
+          <span className="badge bg-secondary-subtle text-secondary text-uppercase" style={{ fontSize: '0.65rem' }}>
+            {coachData.readinessLabel}
           </span>
         </div>
-        <div className="d-flex align-items-center gap-4">
-          <svg width="90" height="90" viewBox="0 0 100 100" className="flex-shrink-0">
-            <circle cx="50" cy="50" r="40" fill="none" stroke="var(--bs-border-color)" strokeWidth="10" />
-            <circle
-              cx="50" cy="50" r="40"
-              fill="none"
-              stroke={colour}
-              strokeWidth="10"
-              strokeDasharray={circumference}
-              strokeDashoffset={dashOffset}
-              strokeLinecap="round"
-              transform="rotate(-90 50 50)"
-              style={{ transition: 'stroke-dashoffset 0.6s ease' }}
-            />
-            <text x="50" y="54" textAnchor="middle" fontSize="18" fontWeight="bold" fill={colour}>
-              {pct}%
-            </text>
-          </svg>
-          <div className="vstack gap-1 small">
-            <div className="d-flex gap-2">
-              <span className="text-muted">HRV</span>
-              <strong>{hrv !== null ? `${Math.round(hrv)}ms` : '—'}</strong>
-            </div>
-            <div className="d-flex gap-2">
-              <span className="text-muted">Sleep</span>
-              <strong>{sleep !== null ? `${sleep.toFixed(1)}h` : '—'}</strong>
-            </div>
-          </div>
+        <div className="d-flex justify-content-around">
+          <CircularDial
+            pct={recoveryPct}
+            colour={recoveryColour}
+            label="Recovery"
+            value={`${recoveryPct}%`}
+            sub={coachData.hrvToday != null ? `HRV ${Math.round(coachData.hrvToday)}ms` : undefined}
+          />
+          <CircularDial
+            pct={sleepPct}
+            colour={sleepColour}
+            label="Sleep"
+            value={coachData.sleepToday != null ? `${coachData.sleepToday.toFixed(1)}h` : '—'}
+            sub={`Target ${sleepTarget}h`}
+          />
+          <CircularDial
+            pct={Math.min(100, loadPct)}
+            colour={loadColour}
+            label="Training Load"
+            value={`${Math.round(weeklyVolumeKm)}km`}
+            sub={`Wk target ${loadTargetKm}km`}
+          />
         </div>
-        {adaptedToday && (
+        {(coachData.readinessLabel === 'red' || coachData.readinessLabel === 'amber') && (
           <div className="alert alert-warning alert-sm p-2 mb-0 mt-3 small d-flex align-items-center gap-2">
             <span>⚡</span>
-            <span><strong>Coach action:</strong> {adaptedToday}</span>
+            <span>
+              <strong>Coach action:</strong>{' '}
+              {coachData.readinessLabel === 'red'
+                ? 'Replaced session with Rest / Active Recovery'
+                : 'Reduced session intensity by 30%'}
+            </span>
           </div>
         )}
       </div>
@@ -237,7 +283,16 @@ const PhaseCard: React.FC<{
             </div>
             <div className="vstack gap-2">
               {kpisV2.map((kpi: any) => {
-                const current = kpi.current ?? null;
+                // kpi.current is only ever populated by the KPI designer at creation
+                // time and never refreshed — fall back to the live weekly volume BOB
+                // already computes nightly for the matching sport, so these bars
+                // actually move instead of always reading "—".
+                const liveValue =
+                  kpi.type === 'fitness_running' ? coachData.weeklyRunKm :
+                  kpi.type === 'fitness_cycling' ? coachData.weeklyBikeKm :
+                  kpi.type === 'fitness_swimming' ? coachData.weeklySwimKm :
+                  null;
+                const current = liveValue ?? kpi.current ?? null;
                 const pct = (current !== null && kpi.target > 0)
                   ? Math.min(100, Math.round((current / kpi.target) * 100)) : null;
                 const variant =
@@ -1071,21 +1126,9 @@ export const AiCoachPage: React.FC = () => {
       )}
 
       <div className="vstack gap-3">
-        {/* Readiness */}
+        {/* Vitals dials — Recovery / Sleep / Training Load */}
         {coachData ? (
-          <ReadinessGauge
-            score={coachData.readinessScore}
-            label={coachData.readinessLabel}
-            hrv={coachData.hrvToday}
-            sleep={coachData.sleepToday}
-            adaptedToday={
-              coachData.readinessLabel === 'red'
-                ? 'Replaced session with Rest / Active Recovery'
-                : coachData.readinessLabel === 'amber'
-                ? 'Reduced session intensity by 30%'
-                : null
-            }
-          />
+          <VitalsDialsRow coachData={coachData} />
         ) : (
           <div className="card border-0 shadow-sm">
             <div className="card-body py-3">
