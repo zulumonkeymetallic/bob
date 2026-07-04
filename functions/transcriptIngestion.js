@@ -142,9 +142,12 @@ const TRANSCRIPT_ANALYSIS_SCHEMA = {
           points: { type: 'integer' },
           acceptanceCriteria: { type: 'array', items: { type: 'string' } },
           theme: { type: 'string' },
+          goalId: { type: 'string', nullable: true },
           url: { type: 'string', nullable: true },
         },
-        required: ['title', 'description', 'priority', 'points', 'acceptanceCriteria', 'theme', 'url'],
+        required: [
+          'title', 'description', 'priority', 'points', 'acceptanceCriteria', 'theme', 'goalId', 'url',
+        ],
       },
     },
     tasks: {
@@ -160,11 +163,15 @@ const TRANSCRIPT_ANALYSIS_SCHEMA = {
           effort: { type: 'string', format: 'enum', enum: ['S', 'M', 'L', 'XL'] },
           kind: { type: 'string', format: 'enum', enum: ['task', 'read', 'watch'] },
           theme: { type: 'string' },
+          goalId: { type: 'string', nullable: true },
           storyTitle: { type: 'string', nullable: true },
           dueDateIso: { type: 'string', nullable: true },
           url: { type: 'string', nullable: true },
         },
-        required: ['title', 'description', 'priority', 'estimateMin', 'points', 'effort', 'kind', 'theme', 'storyTitle', 'dueDateIso', 'url'],
+        required: [
+          'title', 'description', 'priority', 'estimateMin', 'points', 'effort', 'kind',
+          'theme', 'goalId', 'storyTitle', 'dueDateIso', 'url',
+        ],
       },
     },
   },
@@ -1169,6 +1176,15 @@ function normalizeThemeForCatalog(rawTheme, userThemes = [], fallback = 'General
   };
 }
 
+// The LLM can hallucinate goal ids, so only accept ones present in the user's real goal catalog.
+function resolveGoalIdForCatalog(rawGoalId, userGoals = []) {
+  const candidate = String(rawGoalId || '').trim();
+  if (!candidate) return null;
+  const catalog = Array.isArray(userGoals) ? userGoals : [];
+  const match = catalog.find((goal) => String(goal?.id || '').trim() === candidate);
+  return match ? match.id : null;
+}
+
 function isGenericConsumptionTitle(title, kind = null) {
   const normalized = normalizeTitle(title).replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
   if (!normalized) return true;
@@ -1821,6 +1837,7 @@ async function callTranscriptModel({
   persona,
   timezone,
   urlPreviews,
+  goals = [],
   logger = null,
   journalPromptOverride = '',
   geminiApiKey = null,
@@ -1869,6 +1886,7 @@ async function callTranscriptModel({
     '    "points": number,',
     '    "acceptanceCriteria": string[],',
     '    "theme": string,',
+    '    "goalId": string|null,',
     '    "url": string|null',
     '  }],',
     '  "tasks": [{',
@@ -1880,6 +1898,7 @@ async function callTranscriptModel({
     '    "effort": "S"|"M"|"L"|"XL",',
     '    "kind": "task"|"read"|"watch",',
     '    "theme": string,',
+    '    "goalId": string|null,',
     '    "storyTitle": string|null,',
     '    "dueDateIso": "YYYY-MM-DD"|null,',
     '    "url": string|null',
@@ -1933,6 +1952,11 @@ async function callTranscriptModel({
       'Use kind="watch" for videos/shows/movies to consume.',
     ].join(' '),
     'Use storyTitle on a task only when that task clearly belongs to one of the returned stories.',
+    [
+      'Set goalId to the matching id from the "Active goals" list below only when the story or task',
+      'clearly relates to that goal; when unsure, or when no listed goal fits, prefer null over guessing.',
+    ].join(' '),
+    'Never invent a goalId — only use ids that appear in the provided "Active goals" list.',
     'Set dueDateIso only when the transcript clearly implies a due date such as today, tomorrow, tonight, a weekday, next week, or an explicit date.',
     'Resolve dueDateIso to a local calendar date in YYYY-MM-DD using the provided timezone and current local date.',
     'If no clear due date is requested, set dueDateIso to null.',
@@ -1955,6 +1979,9 @@ async function callTranscriptModel({
     `Persona: ${persona || 'personal'}`,
     `Timezone: ${timezone || DEFAULT_TIMEZONE}`,
     `Current local date: ${currentDate.toISODate()} (${currentDate.toLocaleString(DateTime.DATE_FULL)})`,
+    goals?.length
+      ? `Active goals (id: title):\n${goals.map((goal) => `${goal.id}: ${goal.title}`).join('\n')}`
+      : 'Active goals (id: title):\n(none — leave goalId null for every story and task)',
     urlPreviews?.length ? `Resolved URL previews:\n${JSON.stringify(urlPreviews, null, 2)}` : null,
     'Transcript:',
     transcript,
@@ -2498,6 +2525,7 @@ function sanitizeAnalysis(raw, transcript, sourceUrls = [], timezone = DEFAULT_T
       points: clampTaskPoints(story?.points) ?? 2,
       acceptanceCriteria: sanitizeAcceptanceCriteria(story?.acceptanceCriteria),
       theme: String(story?.theme || '').trim() || 'Growth',
+      goalId: story?.goalId == null ? null : (String(story.goalId).trim().slice(0, 200) || null),
       url: normalizeUrlValue(story?.url),
     }))
     .filter((story) => {
@@ -2524,6 +2552,7 @@ function sanitizeAnalysis(raw, transcript, sourceUrls = [], timezone = DEFAULT_T
         effort: String(task?.effort || '').trim().toUpperCase() || null,
         kind: normalizeTaskKind(task?.kind, title),
         theme: String(task?.theme || '').trim() || 'Growth',
+        goalId: task?.goalId == null ? null : (String(task.goalId).trim().slice(0, 200) || null),
         storyTitle: storyTitle || null,
         dueDateIso: normalizeDueDateIso(task?.dueDateIso, timezone),
         url: normalizeUrlValue(task?.url),
@@ -2664,6 +2693,30 @@ async function loadExistingEntityCatalog(db, uid) {
   };
 }
 
+function isGoalArchivedStatus(status) {
+  if (status == null) return false;
+  if (typeof status === 'number') return status === 4;
+  const normalized = String(status).trim().toLowerCase();
+  return ['done', 'completed', 'complete', 'archived', 'cancelled', 'canceled', 'bin'].includes(normalized);
+}
+
+async function loadGoalsForUser(uid) {
+  const db = admin.firestore();
+  const snapshot = await db.collection('goals')
+    .where('ownerUid', '==', uid)
+    .get()
+    .catch(() => ({ docs: [] }));
+  return (snapshot?.docs || [])
+    .map((doc) => ({ id: doc.id, ...(doc.data() || {}) }))
+    .filter((goal) => goal.deleted !== true && !isGoalArchivedStatus(goal.status))
+    .map((goal) => ({
+      id: goal.id,
+      title: String(goal.title || goal.name || '').trim(),
+      persona: goal.persona || 'personal',
+    }))
+    .filter((goal) => Boolean(goal.title));
+}
+
 function findExistingEntityMatch(catalog, title, url = null, preferredEntityType = 'task') {
   const normalized = normalizeTitle(title);
   const normalizedUrl = normalizeUrlValue(url);
@@ -2745,7 +2798,9 @@ async function findExistingEntityRecord(db, collectionName, uid, title, url = nu
   return doc ? buildExistingEntityRecord(collectionName, doc) : null;
 }
 
-async function buildStoryRecords({ db, uid, persona, fingerprint, analysis, existingEntityCatalog, userThemes = [] }) {
+async function buildStoryRecords({
+  db, uid, persona, fingerprint, analysis, existingEntityCatalog, userThemes = [], userGoals = [],
+}) {
   const createdAtOrder = Date.now();
   const records = [];
   const matchedTaskRecords = new Map();
@@ -2794,12 +2849,13 @@ async function buildStoryRecords({ db, uid, persona, fingerprint, analysis, exis
       userThemes,
       'Growth'
     );
+    const resolvedGoalId = resolveGoalIdForCatalog(story.goalId, userGoals);
     const payload = {
       id,
       ref,
       ownerUid: uid,
       persona,
-      goalId: '',
+      goalId: resolvedGoalId || '',
       title: story.title,
       description: story.description || 'Captured from transcript intake',
       status: 0,
@@ -2852,6 +2908,7 @@ async function buildTaskRecords({
   storyMap,
   existingEntityCatalog,
   userThemes = [],
+  userGoals = [],
 }) {
   const saturdayDueMs = computeUpcomingSaturdayMs(timezone);
   const records = [];
@@ -2992,6 +3049,7 @@ async function buildTaskRecords({
         : null;
     const inheritedTheme = prioritized.theme || linkedStory?.payload?.theme || task.theme || 'Growth';
     const normalizedTheme = normalizeThemeForCatalog(inheritedTheme, userThemes, 'Growth');
+    const resolvedGoalId = resolveGoalIdForCatalog(task.goalId, userGoals);
     const payload = ensureTaskPoints({
       id,
       ref,
@@ -3017,19 +3075,19 @@ async function buildTaskRecords({
       checklist: [],
       attachments: [],
       url: task.url || null,
-      alignedToGoal: false,
+      alignedToGoal: Boolean(resolvedGoalId),
       theme: normalizedTheme.theme,
       theme_id: normalizedTheme.themeId,
       themeId: normalizedTheme.themeId,
       source: 'ai',
       sourceRef: fingerprint,
       aiLinkConfidence: 0,
-      hasGoal: false,
+      hasGoal: Boolean(resolvedGoalId),
       syncState: 'dirty',
       serverUpdatedAt: Date.now(),
       createdBy: uid,
       storyId: linkedStory?.id || null,
-      goalId: null,
+      goalId: resolvedGoalId || null,
       deleted: false,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -4493,12 +4551,17 @@ async function processTranscriptIngestion({
       timezone,
     });
 
+    const safeIngestionPersona = resolvePersona(persona);
+    const allUserGoals = await loadGoalsForUser(uid);
+    const userGoals = allUserGoals.filter((goal) => resolvePersona(goal.persona) === safeIngestionPersona);
+
     const profileApiKeys = resolveProfileProviderApiKeys(profile);
     const rawAnalysis = existingLock.analysis || await callTranscriptModel({
       transcript: normalizedTranscript,
       persona: persona || 'personal',
       timezone,
       urlPreviews,
+      goals: userGoals,
       logger,
       journalPromptOverride: profile?.journalEditorPrompt || profile?.journalPromptOverride || null,
       geminiApiKey: profileApiKeys.geminiApiKey,
@@ -4653,6 +4716,7 @@ async function processTranscriptIngestion({
       analysis,
       existingEntityCatalog,
       userThemes,
+      userGoals,
     });
     const storyMap = new Map(rawStoryRecords.map((story) => [normalizeTitle(story.title), story]));
     const {
@@ -4668,6 +4732,7 @@ async function processTranscriptIngestion({
       storyMap,
       existingEntityCatalog,
       userThemes,
+      userGoals,
     });
     const storyRecords = dedupeEntityRecords([...rawStoryRecords, ...crossMatchedStoryRecords]);
     const taskRecords = dedupeEntityRecords([...rawTaskRecords, ...crossMatchedTaskRecords]);
@@ -5549,3 +5614,13 @@ exports.editJournalEntry = httpsV2.onCall({
 
   return { success: true, docResult };
 });
+
+// Exposed for unit testing only — not part of the public Cloud Functions surface.
+exports._internal = {
+  resolveGoalIdForCatalog,
+  loadGoalsForUser,
+  isGoalArchivedStatus,
+  sanitizeAnalysis,
+  buildStoryRecords,
+  buildTaskRecords,
+};
