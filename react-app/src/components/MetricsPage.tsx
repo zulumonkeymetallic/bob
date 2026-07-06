@@ -93,9 +93,10 @@ interface HabitAdherenceRow {
 }
 
 function buildHabitRows(tasks: any[], calendarBlocks: any[]): HabitAdherenceRow[] {
-  const CHORE_TYPES = new Set(['routine', 'habit']);
+  // Habits & routines only — chores are NOT habits and are excluded.
+  const HABIT_TYPES = new Set(['routine', 'habit']);
   const days = getLast30Days();
-  const habits = tasks.filter(t => CHORE_TYPES.has(String(t.type || '').toLowerCase()));
+  const habits = tasks.filter(t => HABIT_TYPES.has(String(t.type || '').toLowerCase()));
 
   return habits.slice(0, 12).map(habit => {
     const completedDays = new Set<string>();
@@ -434,9 +435,9 @@ const MetricsPage: React.FC = () => {
       {habitGridRows.length === 0 && (
         <div className="card border-0 shadow-sm mb-3">
           <div className="card-body">
-            <SectionHeader title="HABITS & ROUTINES" subtitle="No chore/routine tasks found" colour="#6b7280" />
+            <SectionHeader title="HABITS & ROUTINES" subtitle="No habit/routine tasks found" colour="#6b7280" />
             <p className="text-muted small mb-0">
-              Add tasks with type "chore", "routine", or "habit" to see them here.
+              Add tasks with type "habit" or "routine" to see them here. Chores are tracked separately.
             </p>
           </div>
         </div>

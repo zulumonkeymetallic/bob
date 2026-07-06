@@ -143,7 +143,8 @@ const HabitsChoresDashboard: React.FC = () => {
         snap.docs.forEach((docSnap) => {
           const data = docSnap.data() as any;
           const entityType = String(data.entityType || '').toLowerCase();
-          if (!['routine', 'habit', 'chore'].includes(entityType)) return;
+          // Habits & routines only — chores are not habits.
+          if (!['routine', 'habit'].includes(entityType)) return;
           const taskId = String(data.taskId || '').trim();
           if (!taskId) return;
           const start = typeof data.start === 'number' ? data.start : null;
