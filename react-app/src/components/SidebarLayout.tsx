@@ -16,15 +16,8 @@ import SprintSelector from './SprintSelector';
 import GlobalSearchBar from './GlobalSearchBar';
 import CompactSprintMetrics from './CompactSprintMetrics';
 import AssistantDock from './AssistantDock';
-import SprintClosureBanner from './sprints/SprintClosureBanner';
-import PlannedSprintBanner from './sprints/PlannedSprintBanner';
-import CheckInBanner from './checkins/CheckInBanner';
-import { CoachVerdictBanner } from './coach/CoachVerdictBanner';
 import ProcessTextActivityHost from './ProcessTextActivityHost';
-import PlannerCapacityBanner from './planner/PlannerCapacityBanner';
-import GlobalGoalFocusBanner from './GlobalGoalFocusBanner';
-import GlobalHealthProgressBanner from './GlobalHealthProgressBanner';
-import GlobalIntegrationStatus from './GlobalIntegrationStatus';
+import BannerToastStack from './BannerToastStack';
 // Test mode UI removed per request
 
 interface SidebarLayoutProps {
@@ -740,18 +733,17 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
           </div>
         </div>
 
-        <main className="sidebar-layout-page" style={{ flex: 1, overflowY: 'auto', overflowX: 'auto', minHeight: 0 }}>
-          <div className="sidebar-layout-banners">
-            <CheckInBanner />
-            <CoachVerdictBanner />
-            {!hidePlannerCapacityBanner && <PlannerCapacityBanner />}
-            <SprintClosureBanner />
-            <PlannedSprintBanner />
-            {isLargeScreen && <GlobalGoalFocusBanner />}
-            {isLargeScreen && <GlobalHealthProgressBanner />}
-            {isLargeScreen && <GlobalIntegrationStatus />}
-            <ProcessTextActivityHost />
-          </div>
+        {/* Banners overlay the page as a top-right toast stack (see BannerToastStack). */}
+        <BannerToastStack
+          isSmallScreen={isSmallScreen}
+          isLargeScreen={isLargeScreen}
+          hidePlannerCapacityBanner={hidePlannerCapacityBanner}
+          topOffset={isSmallScreen ? 68 : 58}
+          rightOffset={(isRightSidebarVisible && window.innerWidth >= 768 ? (isRightSidebarCollapsed ? 60 : 400) : 0) + 16}
+        />
+        <ProcessTextActivityHost />
+
+        <main className="sidebar-layout-page" style={{ flex: 1, overflowY: 'auto', overflowX: 'auto', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
           {children}
         </main>
         <AssistantDock open={assistantOpen} onClose={() => setAssistantOpen(false)} />

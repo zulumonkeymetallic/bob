@@ -275,3 +275,64 @@
     padding: 0.4rem 0.5rem !important;
   }
 }
+
+/*
+ * ═══════════════════════════════════════════════════════════
+ * DESKTOP (≥1200px) — LOCKED SHELL
+ * ═══════════════════════════════════════════════════════════
+ * Mirrors the tablet no-scroll shell (section 1 above) without the
+ * compaction, so on desktop the banners stay pinned over the top and
+ * page-level filters/toolbars stay locked while the content panel
+ * (e.g. the Kanban board) scrolls inside its own frame.
+ */
+@media (min-width: 1200px) {
+
+  html, body, #root {
+    height: 100% !important;
+    overflow: hidden !important;
+  }
+
+  .sidebar-layout-outer {
+    height: 100vh !important;
+    overflow: hidden !important;
+  }
+
+  .sidebar-layout-main {
+    height: 100vh !important;
+    overflow: hidden !important;
+    display: flex !important;
+    flex-direction: column !important;
+    min-width: 0 !important;
+  }
+
+  .sidebar-layout-toolbar {
+    flex-shrink: 0 !important;
+  }
+
+  /* Banners strip: pinned over the top, never grows, collapses when empty */
+  .sidebar-layout-banners {
+    flex-shrink: 0 !important;
+  }
+  .sidebar-layout-banners:empty {
+    display: none !important;
+  }
+
+  /* Page frame fills remaining height; scrolls as a fallback for long pages */
+  .sidebar-layout-page {
+    flex: 1 !important;
+    min-height: 0 !important;
+    overflow-y: auto !important;
+    display: flex !important;
+    flex-direction: column !important;
+  }
+
+  /* Route component fills the frame so pages that manage their own internal
+     scroll (Kanban board, calendar) keep their headers/filters locked. */
+  .sidebar-layout-page > * {
+    flex: 1 !important;
+    min-height: 0 !important;
+  }
+  .sidebar-layout-page > .sidebar-layout-banners {
+    flex: none !important;
+  }
+}

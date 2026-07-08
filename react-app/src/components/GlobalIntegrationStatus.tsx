@@ -2,7 +2,7 @@
  * GlobalIntegrationStatus
  *
  * Compact desktop-only strip showing Monzo, Strava, and HealthKit staleness on every page.
- * Appears in SidebarLayout below the GlobalGoalFocusBanner.
+ * Appears in SidebarLayout's banner strip.
  * Only renders when one or more integrations is stale or disconnected.
  * Strava/Monzo: stale after 2 days. HealthKit: stale after 7 days.
  */
