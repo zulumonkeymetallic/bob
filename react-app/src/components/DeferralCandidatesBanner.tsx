@@ -1,132 +1,197 @@
 /**
  * DeferralCandidatesBanner
  *
- * Compact, persistent banner (shown as a top-right toast that does NOT auto-dismiss).
- * Surfaces the 3 lowest-criticality stories whose linked goal has nothing in the
- * currently-selected sprint — i.e. the strongest candidates to defer out.
- *
- * "Goal not in this sprint" = the story's goalId is not among the goals that have
- * at least one story assigned to the active sprint.
+ * Compact, persistent entry in the banner panel. Surfaces the top 3 deferral
+ * candidates from useDeferralCandidates (over-capacity moves first, then the
+ * largest-effort in-sprint items that aren't top-3/manual/focus priority),
+ * each with a one-tap "move it out of the way" action. "View all" opens the
+ * full DeferralRecommendationBanner (mark complete / delete / schedule / move)
+ * in a modal.
  */
-import React, { useEffect, useMemo, useState } from 'react';
-import { collection, query, where, onSnapshot } from 'firebase/firestore';
-import { useNavigate } from 'react-router-dom';
-import { ArrowDownCircle } from 'lucide-react';
-import { db } from '../firebase';
-import { useAuth } from '../contexts/AuthContext';
-import { usePersona } from '../contexts/PersonaContext';
-import { useSprint } from '../contexts/SprintContext';
-import { Story } from '../types';
+import React, { useMemo, useState, useCallback } from 'react';
+import { Modal } from 'react-bootstrap';
+import { ArrowRightCircle } from 'lucide-react';
+import { useDeferralCandidates, type DeferralCandidate, type OverCapacityMove } from '../hooks/useDeferralCandidates';
+import { applyPlannerDefer, applyPlannerMoveToSprint, applyStoryDueDate } from '../utils/plannerDeferral';
+import DeferralRecommendationBanner from './DeferralRecommendationBanner';
 
-// Stories that are finished or binned are never deferral candidates.
-// Status: 0 backlog, 1 in-progress, 2 review, 3+ done, 4 bin.
-function isActiveStory(story: Story): boolean {
-  const status = (story as any).status;
-  if (typeof status === 'number') return status >= 0 && status < 3;
-  const s = String(status || '').toLowerCase();
-  return !['done', 'complete', 'completed', 'bin', 'binned', 'archived'].includes(s);
-}
+type PinnedItem =
+  | { kind: 'overcap'; data: OverCapacityMove }
+  | { kind: 'candidate'; data: DeferralCandidate };
 
-function scoreOf(story: Story): number {
-  const v = Number((story as any).aiCriticalityScore);
-  // Missing scores sort last so genuinely low-scored items surface first.
-  return Number.isFinite(v) ? v : Number.POSITIVE_INFINITY;
+function formatDate(dateMs: number | null): string {
+  if (!dateMs) return 'soon';
+  return new Date(dateMs).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 }
 
 const DeferralCandidatesBanner: React.FC = () => {
-  const { currentUser } = useAuth();
-  const { currentPersona } = usePersona();
-  const { selectedSprintId } = useSprint();
-  const navigate = useNavigate();
+  const { candidates, overCapacityMoves, currentSprint, nextSprint, loading } = useDeferralCandidates();
 
-  const [stories, setStories] = useState<Story[]>([]);
+  const [actionedIds, setActionedIds] = useState<Set<string>>(() => new Set());
+  const [actioningId, setActioningId] = useState<string | null>(null);
+  const [showAll, setShowAll] = useState(false);
 
-  useEffect(() => {
-    if (!currentUser?.uid || !currentPersona) { setStories([]); return; }
-    const q = query(
-      collection(db, 'stories'),
-      where('ownerUid', '==', currentUser.uid),
-      where('persona', '==', currentPersona),
-    );
-    const unsub = onSnapshot(q,
-      (snap) => setStories(snap.docs.map((d) => ({ id: d.id, ...d.data() } as Story))),
-      (err) => console.warn('DeferralCandidatesBanner stories:', err.code),
-    );
-    return () => unsub();
-  }, [currentUser?.uid, currentPersona]);
+  const markActioned = useCallback((id: string) => {
+    setActionedIds((prev) => new Set(prev).add(id));
+  }, []);
 
-  const candidates = useMemo(() => {
-    // No specific sprint selected (e.g. "All sprints") → nothing to defer against.
-    const sprintId = selectedSprintId && selectedSprintId !== '' ? selectedSprintId : null;
-    if (!sprintId) return [] as Story[];
+  const visibleOverCap = useMemo(
+    () => overCapacityMoves.filter((m) => !actionedIds.has(m.id)),
+    [overCapacityMoves, actionedIds],
+  );
+  const visibleCandidates = useMemo(
+    () => candidates.filter((c) => !actionedIds.has(c.id)),
+    [candidates, actionedIds],
+  );
 
-    // Goals represented in the active sprint.
-    const goalsInSprint = new Set<string>();
-    for (const s of stories) {
-      if (String((s as any).sprintId || '') === sprintId) {
-        const gid = String((s as any).goalId || '').trim();
-        if (gid) goalsInSprint.add(gid);
+  const totalCount = visibleOverCap.length + visibleCandidates.length;
+
+  const pinnedItems = useMemo<PinnedItem[]>(() => {
+    const overcap: PinnedItem[] = visibleOverCap.map((data) => ({ kind: 'overcap', data }));
+    const rest: PinnedItem[] = [...visibleCandidates]
+      .sort((a, b) => b.effortHours - a.effortHours)
+      .map((data) => ({ kind: 'candidate', data }));
+    return [...overcap, ...rest].slice(0, 3);
+  }, [visibleOverCap, visibleCandidates]);
+
+  const handleMove = useCallback(async (item: PinnedItem) => {
+    setActioningId(item.data.id);
+    try {
+      if (item.kind === 'overcap') {
+        if (!nextSprint) return;
+        await applyPlannerMoveToSprint({
+          itemType: 'story',
+          item: { id: item.data.id, title: item.data.title },
+          sprintId: item.data.suggestedSprintId,
+          sprintStartMs: Number((nextSprint as any).startDate || Date.now()),
+          rationale: 'Sprint over capacity — priority-ordered fill plan',
+          source: 'deferral_candidates_banner',
+        });
+      } else {
+        const c = item.data;
+        if (c.recommendedAction === 'set_due_date') {
+          if (!c.targetDateMs) return;
+          await applyStoryDueDate(c.id, c.targetDateMs);
+        } else if (c.type === 'story') {
+          if (!nextSprint) return;
+          await applyPlannerMoveToSprint({
+            itemType: 'story',
+            item: { id: c.id, title: c.title },
+            sprintId: nextSprint.id,
+            sprintStartMs: Number((nextSprint as any).startDate || Date.now()),
+            rationale: `Deferral recommendation: ${c.reasonSummary}`,
+            source: 'deferral_candidates_banner',
+          });
+        } else {
+          if (!c.targetDateMs) return;
+          await applyPlannerDefer({
+            itemType: 'task',
+            item: { id: c.id, title: c.title },
+            payload: {
+              dateMs: c.targetDateMs,
+              rationale: `Deferral recommendation: ${c.reasonSummary}`,
+              source: 'deferral_candidates_banner',
+              targetBucket: null,
+              exactTargetStartMs: null,
+              exactTargetEndMs: null,
+            },
+            sourceFallback: 'deferral_candidates_banner',
+          });
+        }
       }
+      markActioned(item.data.id);
+    } catch {
+      // Best-effort quick action; user can retry from "View all" for a full error message.
+    } finally {
+      setActioningId(null);
     }
+  }, [nextSprint, markActioned]);
 
-    return stories
-      .filter(isActiveStory)
-      .filter((s) => {
-        const gid = String((s as any).goalId || '').trim();
-        return !!gid && !goalsInSprint.has(gid);
-      })
-      .sort((a, b) => scoreOf(a) - scoreOf(b))
-      .slice(0, 3);
-  }, [stories, selectedSprintId]);
-
-  if (candidates.length === 0) return null;
+  if (loading || !currentSprint || totalCount === 0) return null;
 
   return (
     <div style={{ minWidth: 240 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-        <ArrowDownCircle size={13} style={{ color: 'var(--muted)' }} />
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
         <span style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--muted)' }}>
           Deferral candidates
         </span>
       </div>
+
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-        {candidates.map((s) => {
-          const ref = String((s as any).ref || '');
-          const score = Number((s as any).aiCriticalityScore);
+        {pinnedItems.map((item) => {
+          const isActioning = actioningId === item.data.id;
+          const disabled = isActioning
+            || (item.kind === 'overcap' && !nextSprint)
+            || (item.kind === 'candidate' && item.data.recommendedAction === 'next_sprint_pending');
+
+          const title =
+            item.kind === 'overcap'
+              ? `Move to ${item.data.suggestedSprintName}`
+              : item.data.recommendedAction === 'set_due_date'
+                ? `Schedule by ${formatDate(item.data.targetDateMs)}`
+                : item.data.recommendedAction === 'next_free_day'
+                  ? `Defer to ${formatDate(item.data.targetDateMs)}`
+                  : item.data.recommendedAction === 'next_sprint_pending'
+                    ? 'Create next sprint to enable'
+                    : `Move to ${nextSprint ? (nextSprint as any).name || 'next sprint' : 'next sprint'}`;
+
+          const meta = item.kind === 'overcap'
+            ? `${item.data.points}pt${item.data.points !== 1 ? 's' : ''}`
+            : `${Math.round(item.data.effortHours * 10) / 10}h`;
+
           return (
-            <button
-              key={s.id}
-              onClick={() => navigate(`/stories/${s.id}`)}
-              title={String((s as any).title || '')}
+            <div
+              key={item.data.id}
               style={{
                 display: 'flex', alignItems: 'center', gap: 8, width: '100%',
                 background: 'var(--notion-hover, rgba(0,0,0,0.04))',
                 border: '1px solid var(--border, #e5e7eb)', borderRadius: 6,
-                padding: '5px 8px', cursor: 'pointer', textAlign: 'left',
-                color: 'var(--text)',
+                padding: '5px 6px 5px 8px',
               }}
             >
-              {ref && (
-                <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 10, color: 'var(--muted)', flexShrink: 0 }}>
-                  {ref}
-                </span>
-              )}
-              <span style={{ fontSize: 12, flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {String((s as any).title || 'Untitled')}
+              <span style={{ fontSize: 12, flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={item.data.title}>
+                {item.data.title}
               </span>
-              <span
+              <span style={{ fontSize: 10, color: 'var(--muted)', flexShrink: 0 }}>{meta}</span>
+              <button
+                onClick={() => handleMove(item)}
+                disabled={disabled}
+                title={title}
+                aria-label={title}
                 style={{
-                  fontSize: 10, fontWeight: 700, flexShrink: 0,
-                  background: 'var(--panel)', border: '1px solid var(--border, #e5e7eb)',
-                  borderRadius: 10, padding: '1px 6px', color: 'var(--muted)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  width: 24, height: 24, flexShrink: 0, padding: 0,
+                  background: 'transparent', border: 'none', borderRadius: 6,
+                  color: disabled ? 'var(--muted)' : 'var(--brand, #5f77dc)',
+                  cursor: disabled ? 'default' : 'pointer',
+                  opacity: disabled && !isActioning ? 0.4 : 1,
                 }}
               >
-                {Number.isFinite(score) ? `AI ${score}` : 'AI —'}
-              </span>
-            </button>
+                {isActioning ? <span style={{ fontSize: 11 }}>···</span> : <ArrowRightCircle size={16} />}
+              </button>
+            </div>
           );
         })}
       </div>
+
+      <button
+        onClick={() => setShowAll(true)}
+        style={{
+          marginTop: 6, background: 'none', border: 'none', padding: 0,
+          fontSize: 10, color: 'var(--brand, #5f77dc)', cursor: 'pointer', textDecoration: 'underline',
+        }}
+      >
+        View all ({totalCount})
+      </button>
+
+      <Modal show={showAll} onHide={() => setShowAll(false)} centered>
+        <Modal.Header closeButton>
+          <Modal.Title style={{ fontSize: 18 }}>Deferral suggestions</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <DeferralRecommendationBanner hideOwnDismiss />
+        </Modal.Body>
+      </Modal>
     </div>
   );
 };

@@ -21,9 +21,11 @@ function reasonLabel(codes: string[]): string {
 
 interface Props {
   compact?: boolean;
+  /** Suppress the banner's own dismiss X — use when hosting it inside a Modal that has its own close control. */
+  hideOwnDismiss?: boolean;
 }
 
-const DeferralRecommendationBanner: React.FC<Props> = ({ compact = false }) => {
+const DeferralRecommendationBanner: React.FC<Props> = ({ compact = false, hideOwnDismiss = false }) => {
   const { candidates, overCapacityMoves, scheduleWarnings, loading, currentSprint, nextSprint } = useDeferralCandidates();
 
   const [expanded, setExpanded] = useState(false);
@@ -160,7 +162,11 @@ const DeferralRecommendationBanner: React.FC<Props> = ({ compact = false }) => {
 
   if (compact) {
     return (
-      <Alert variant="info" className="py-2 px-3 mb-2 small d-flex align-items-center justify-content-between gap-2" dismissible onClose={() => setDismissed(true)}>
+      <Alert
+        variant="info"
+        className="py-2 px-3 mb-2 small d-flex align-items-center justify-content-between gap-2"
+        {...(hideOwnDismiss ? {} : { dismissible: true, onClose: () => setDismissed(true) })}
+      >
         <span>
           <strong>{visibleCandidates.length}</strong> deferral{visibleCandidates.length !== 1 ? 's' : ''} suggested
           {focusStoryCandidates.length > 0 && ` · ${focusStoryCandidates.length} focus ${focusStoryCandidates.length === 1 ? 'story' : 'stories'}`}
@@ -203,8 +209,7 @@ const DeferralRecommendationBanner: React.FC<Props> = ({ compact = false }) => {
     <Alert
       variant="info"
       className="border-0 shadow-sm mb-3"
-      dismissible
-      onClose={() => setDismissed(true)}
+      {...(hideOwnDismiss ? {} : { dismissible: true, onClose: () => setDismissed(true) })}
     >
       <div className="d-flex align-items-center gap-2">
         <CalendarClock size={20} />
