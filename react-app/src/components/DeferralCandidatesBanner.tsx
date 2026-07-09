@@ -4,16 +4,14 @@
  * Compact, persistent entry in the banner panel. Surfaces the top 3 deferral
  * candidates from useDeferralCandidates (over-capacity moves first, then the
  * largest-effort in-sprint items that aren't top-3/manual/focus priority),
- * each with a one-tap "move it out of the way" action. "View all" opens the
- * full DeferralRecommendationBanner (mark complete / delete / schedule / move)
- * in a modal.
+ * each with a one-tap "move it out of the way" action. "View all" navigates
+ * to the full /sprints/deferrals page (mark complete / delete / schedule / move).
  */
 import React, { useMemo, useState, useCallback } from 'react';
-import { Modal } from 'react-bootstrap';
+import { useNavigate } from 'react-router-dom';
 import { ArrowRightCircle } from 'lucide-react';
 import { useDeferralCandidates, type DeferralCandidate, type OverCapacityMove } from '../hooks/useDeferralCandidates';
 import { applyPlannerDefer, applyPlannerMoveToSprint, applyStoryDueDate } from '../utils/plannerDeferral';
-import DeferralRecommendationBanner from './DeferralRecommendationBanner';
 
 type PinnedItem =
   | { kind: 'overcap'; data: OverCapacityMove }
@@ -26,10 +24,10 @@ function formatDate(dateMs: number | null): string {
 
 const DeferralCandidatesBanner: React.FC = () => {
   const { candidates, overCapacityMoves, currentSprint, nextSprint, loading } = useDeferralCandidates();
+  const navigate = useNavigate();
 
   const [actionedIds, setActionedIds] = useState<Set<string>>(() => new Set());
   const [actioningId, setActioningId] = useState<string | null>(null);
-  const [showAll, setShowAll] = useState(false);
 
   const markActioned = useCallback((id: string) => {
     setActionedIds((prev) => new Set(prev).add(id));
@@ -175,7 +173,7 @@ const DeferralCandidatesBanner: React.FC = () => {
       </div>
 
       <button
-        onClick={() => setShowAll(true)}
+        onClick={() => navigate('/sprints/deferrals')}
         style={{
           marginTop: 6, background: 'none', border: 'none', padding: 0,
           fontSize: 10, color: 'var(--brand, #5f77dc)', cursor: 'pointer', textDecoration: 'underline',
@@ -183,15 +181,6 @@ const DeferralCandidatesBanner: React.FC = () => {
       >
         View all ({totalCount})
       </button>
-
-      <Modal show={showAll} onHide={() => setShowAll(false)} centered>
-        <Modal.Header closeButton>
-          <Modal.Title style={{ fontSize: 18 }}>Deferral suggestions</Modal.Title>
-        </Modal.Header>
-        <Modal.Body>
-          <DeferralRecommendationBanner hideOwnDismiss />
-        </Modal.Body>
-      </Modal>
     </div>
   );
 };

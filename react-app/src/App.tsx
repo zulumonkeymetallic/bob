@@ -61,6 +61,7 @@ import SprintManagementView from './components/sprints/SprintManagementView';
 import SprintsPage from './components/sprints/SprintsPage';
 import SprintTablePage from './components/sprints/SprintTablePage';
 import SprintRetrospective from './components/SprintRetrospective';
+import DeferralSuggestionsPage from './components/DeferralSuggestionsPage';
 import CheckInDaily from './components/checkins/CheckInDaily';
 import CheckInWeekly from './components/checkins/CheckInWeekly';
 import DailyPlanPage from './components/DailyPlanPage';
@@ -426,6 +427,7 @@ function AppContent() {
             <Route path="/sprints/table" element={<SprintTablePage />} />
             <Route path="/sprints/planning" element={<LegacyPlannerRedirect level="sprint" />} />
             <Route path="/sprints/retrospective" element={<SprintRetrospective />} />
+            <Route path="/sprints/deferrals" element={<DeferralSuggestionsPage />} />
             <Route path="/checkin/daily" element={<CheckInDaily />} />
             <Route path="/checkin/weekly" element={<CheckInWeekly />} />
             <Route path="/daily-plan" element={<DailyPlanPage />} />

@@ -217,6 +217,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         { label: 'Sprint Kanban', path: '/sprints/kanban', icon: 'columns' },
         { label: 'Multi Sprint Planner', path: '/planner?level=sprint', icon: 'th' },
         { label: 'Capacity Planning', path: '/sprints/capacity', icon: 'chart-pie' },
+        { label: 'Deferral Suggestions', path: '/sprints/deferrals', icon: 'clock' },
         { label: 'Retrospective', path: '/sprints/retrospective', icon: 'undo' }
       ]
     },
