@@ -2,6 +2,7 @@ import React from 'react';
 import { Container, Row, Col } from 'react-bootstrap';
 import { CalendarClock, CheckCircle2 } from 'lucide-react';
 import DeferralRecommendationBanner from './DeferralRecommendationBanner';
+import PlannerCapacityBanner from './planner/PlannerCapacityBanner';
 import { useDeferralCandidates } from '../hooks/useDeferralCandidates';
 
 const DeferralSuggestionsPage: React.FC = () => {
@@ -22,6 +23,12 @@ const DeferralSuggestionsPage: React.FC = () => {
             Stories and tasks in the current sprint that aren't a top-3, manually pinned, or focus-goal priority —
             candidates to move out so the sprint fits capacity.
           </p>
+        </Col>
+      </Row>
+
+      <Row className="mb-3">
+        <Col>
+          <PlannerCapacityBanner />
         </Col>
       </Row>
 

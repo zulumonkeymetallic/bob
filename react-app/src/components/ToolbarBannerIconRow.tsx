@@ -9,13 +9,16 @@
  * When more than one category is active at once, all active icons switch to
  * the "prominent" style — a visual escalation that something needs attention
  * beyond the usual single nudge.
+ *
+ * Planner capacity intentionally has no icon here — it duplicated the
+ * deferral candidates popup (both are "is the sprint over capacity"), so its
+ * content now lives on the /sprints/deferrals page instead.
  */
 import React, { useCallback, useMemo, useState } from 'react';
-import { ClipboardCheck, Brain, CalendarClock, Flag, CalendarDays, Heart, Plug, Clock3 } from 'lucide-react';
+import { ClipboardCheck, Brain, Flag, CalendarDays, Heart, Plug, Clock3 } from 'lucide-react';
 import ToolbarBannerIcon from './ToolbarBannerIcon';
 import CheckInBanner from './checkins/CheckInBanner';
 import { CoachVerdictBanner } from './coach/CoachVerdictBanner';
-import PlannerCapacityBanner from './planner/PlannerCapacityBanner';
 import SprintClosureBanner from './sprints/SprintClosureBanner';
 import PlannedSprintBanner from './sprints/PlannedSprintBanner';
 import GlobalHealthProgressBanner from './GlobalHealthProgressBanner';
@@ -24,10 +27,9 @@ import DeferralCandidatesBanner from './DeferralCandidatesBanner';
 
 interface ToolbarBannerIconRowProps {
   isLargeScreen: boolean;
-  hidePlannerCapacityBanner: boolean;
 }
 
-const ToolbarBannerIconRow: React.FC<ToolbarBannerIconRowProps> = ({ isLargeScreen, hidePlannerCapacityBanner }) => {
+const ToolbarBannerIconRow: React.FC<ToolbarBannerIconRowProps> = ({ isLargeScreen }) => {
   const [visibleMap, setVisibleMap] = useState<Record<string, boolean>>({});
 
   const handleVisibilityChange = useCallback((id: string, visible: boolean) => {
@@ -48,11 +50,6 @@ const ToolbarBannerIconRow: React.FC<ToolbarBannerIconRowProps> = ({ isLargeScre
       <ToolbarBannerIcon id="coach" icon={Brain} label="Coach" prominent={prominent} onVisibilityChange={handleVisibilityChange}>
         <CoachVerdictBanner />
       </ToolbarBannerIcon>
-      {!hidePlannerCapacityBanner && (
-        <ToolbarBannerIcon id="plannerCapacity" icon={CalendarClock} label="Planner capacity" prominent={prominent} onVisibilityChange={handleVisibilityChange}>
-          <PlannerCapacityBanner />
-        </ToolbarBannerIcon>
-      )}
       <ToolbarBannerIcon id="sprintClosure" icon={Flag} label="Sprint closure" prominent={prominent} onVisibilityChange={handleVisibilityChange}>
         <SprintClosureBanner />
       </ToolbarBannerIcon>

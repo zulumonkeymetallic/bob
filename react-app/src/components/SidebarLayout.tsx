@@ -90,8 +90,6 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   const { isVisible: isRightSidebarVisible, isCollapsed: isRightSidebarCollapsed } = useSidebar();
   const [assistantOpen, setAssistantOpen] = useState(false);
 
-  const hidePlannerCapacityBanner = isSmallScreen && /^\/mobile(?:\/|$)/.test(location.pathname);
-
   const navigationGroups: NavigationGroup[] = [
       {
         label: 'Overview',
@@ -537,7 +535,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
             blueprint.organize.build
           </Navbar.Brand>
           <div className="d-flex align-items-center gap-2">
-            {isSmallScreen && <ToolbarBannerIconRow isLargeScreen={false} hidePlannerCapacityBanner={hidePlannerCapacityBanner} />}
+            {isSmallScreen && <ToolbarBannerIconRow isLargeScreen={false} />}
             {currentUser && (
               <div className="rounded-circle bg-primary d-flex align-items-center justify-content-center"
                 style={{ width: '24px', height: '24px', fontSize: '12px' }}>
@@ -726,7 +724,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
               </Button>
               {/* Metrics first, then selector so metrics appear to the left of the selector */}
               <CompactSprintMetrics selectedSprintId={globalSprintId} />
-              {!isSmallScreen && <ToolbarBannerIconRow isLargeScreen={isLargeScreen} hidePlannerCapacityBanner={hidePlannerCapacityBanner} />}
+              {!isSmallScreen && <ToolbarBannerIconRow isLargeScreen={isLargeScreen} />}
               <span className="text-muted small me-2 d-none d-xl-inline">Active Sprint:</span>
               <SprintSelector
                 selectedSprintId={globalSprintId}

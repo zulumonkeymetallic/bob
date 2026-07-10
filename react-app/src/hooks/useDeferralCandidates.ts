@@ -16,6 +16,12 @@ export interface OverCapacityMove {
   points: number;
   suggestedSprintId: string;
   suggestedSprintName: string;
+  aiCriticalityScore: number | null;
+}
+
+export interface CapacitySummary {
+  availablePoints: number;
+  requiredPoints: number;
 }
 
 export interface ScheduleWarning {
@@ -48,6 +54,7 @@ export interface DeferralCandidate {
   manualPriorityRank: number | null;
   aiTop3: boolean;
   effortHours: number;
+  aiCriticalityScore: number | null;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -68,6 +75,11 @@ function todayIso(): string {
 }
 
 
+
+function resolveAiScore(entity: any): number | null {
+  const score = Number(entity?.aiCriticalityScore);
+  return Number.isFinite(score) ? score : null;
+}
 
 function getManualPriorityRank(entity: any): number | null {
   const explicit = Number(entity?.userPriorityRank);
@@ -334,6 +346,7 @@ export const useDeferralCandidates = () => {
         manualPriorityRank: getManualPriorityRank(story),
         aiTop3: isAiTop3Today(story),
         effortHours: inferEffortHours(story, 'story'),
+        aiCriticalityScore: resolveAiScore(story),
       });
     }
 
@@ -366,6 +379,7 @@ export const useDeferralCandidates = () => {
         manualPriorityRank: getManualPriorityRank(task),
         aiTop3: isAiTop3Today(task),
         effortHours: inferEffortHours(task, 'task'),
+        aiCriticalityScore: resolveAiScore(task),
       });
     }
 
@@ -419,8 +433,26 @@ export const useDeferralCandidates = () => {
         points: Number(s.points || 0) || 2,
         suggestedSprintId: nextSprint.id,
         suggestedSprintName: nextSprintName,
+        aiCriticalityScore: resolveAiScore(s),
       }));
   }, [stories, currentSprint, nextSprint, focusGoalIds, storiesReady]);
+
+  /**
+   * Sprint capacity available (points) vs required (sum of points across all
+   * non-done stories currently assigned to the sprint) — the same inputs that
+   * drive overCapacityMoves above, surfaced directly for display.
+   */
+  const capacitySummary = useMemo<CapacitySummary | null>(() => {
+    if (!currentSprint || !storiesReady) return null;
+    const availablePoints = deriveSprintCapacityPoints(currentSprint as any);
+    const requiredPoints = stories
+      .filter((s) => {
+        const status = String(s.status || '').toLowerCase();
+        return status !== 'done' && status !== 'completed' && status !== 'closed';
+      })
+      .reduce((sum, s) => sum + (Number(s.points || 0) || 2), 0);
+    return { availablePoints, requiredPoints };
+  }, [currentSprint, stories, storiesReady]);
 
   /**
    * Stories/tasks whose current sprint falls outside their linked goal's planned
@@ -451,6 +483,7 @@ export const useDeferralCandidates = () => {
     candidates,
     overCapacityMoves,
     scheduleWarnings,
+    capacitySummary,
     loading: !storiesReady || !tasksReady,
     currentSprint,
     nextSprint,
