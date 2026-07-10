@@ -2,13 +2,15 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { addDays, format, getDay, parse, startOfWeek } from 'date-fns';
 import { enGB } from 'date-fns/locale';
 import { Alert, Badge, Button, Card, Form, Spinner } from 'react-bootstrap';
-import { Eye, EyeOff, RefreshCw, Sparkles } from 'lucide-react';
+import {
+  CheckCircle, Clock3, CornerUpLeft, Eye, EyeOff, ExternalLink, RefreshCw, Sparkles, Trash2, X,
+} from 'lucide-react';
 import { Calendar as RBC, dateFnsLocalizer } from 'react-big-calendar';
 import withDragAndDrop from 'react-big-calendar/lib/addons/dragAndDrop';
 import 'react-big-calendar/lib/css/react-big-calendar.css';
 import 'react-big-calendar/lib/addons/dragAndDrop/styles.css';
 import {
-  collection, limit, onSnapshot, orderBy, query, where,
+  collection, deleteDoc, doc, limit, onSnapshot, orderBy, query, updateDoc, where,
 } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { useNavigate } from 'react-router-dom';
@@ -18,7 +20,7 @@ import { usePersona } from '../../contexts/PersonaContext';
 import { useSprint } from '../../contexts/SprintContext';
 import { useFocusGoals } from '../../hooks/useFocusGoals';
 import { useThemeAppearance } from '../../hooks/useThemeAppearance';
-import { usePlannerCalendarEvents, type PlannerFeedback } from '../../hooks/usePlannerCalendarEvents';
+import { usePlannerCalendarEvents, type PlannerCalendarEvent, type PlannerFeedback } from '../../hooks/usePlannerCalendarEvents';
 import { useUnifiedPlannerData } from '../../hooks/useUnifiedPlannerData';
 import {
   buildPlannerItems,
@@ -30,8 +32,19 @@ import { getActiveFocusLeafGoalIds } from '../../utils/goalHierarchy';
 import { getPriorityBadge } from '../../utils/statusHelpers';
 import { getEntityAiScore } from '../../utils/top3';
 import { schedulePlannerItem, normalizePlannerSchedulingError } from '../../utils/plannerScheduling';
+import { applyPlannerDefer } from '../../utils/plannerDeferral';
+import DeferItemModal from '../DeferItemModal';
 import FiveDayView from './FiveDayView';
 import type { Goal, Story, Task } from '../../types';
+
+type ItemTarget = {
+  itemType: 'story' | 'task';
+  itemId: string;
+  title: string;
+  scheduledBlockId?: string | null;
+  scheduledInstanceId?: string | null;
+  durationMinutes?: number | null;
+};
 
 const locales = { 'en-GB': enGB } as const;
 const localizer = dateFnsLocalizer({
@@ -99,6 +112,8 @@ const SprintWeekPlanner: React.FC<SprintWeekPlannerProps> = ({ anchorDate }) => 
   const [deltaReplanLoading, setDeltaReplanLoading] = useState(false);
   const [fullReplanLoading, setFullReplanLoading] = useState(false);
   const [draggingItemId, setDraggingItemId] = useState<string | null>(null);
+  const [selectedEvent, setSelectedEvent] = useState<PlannerCalendarEvent | null>(null);
+  const [deferTarget, setDeferTarget] = useState<ItemTarget | null>(null);
   const dragItemRef = useRef<PlannerItem | null>(null);
 
   useEffect(() => {
@@ -212,12 +227,71 @@ const SprintWeekPlanner: React.FC<SprintWeekPlannerProps> = ({ anchorDate }) => 
     [allEvents, showThemeAllocations],
   );
 
-  const handleSelectEvent = useCallback((event: (typeof events)[number]) => {
+  const handleSelectEvent = useCallback((event: PlannerCalendarEvent) => {
+    setSelectedEvent(event);
+  }, []);
+
+  const resolveEventTarget = useCallback((event: PlannerCalendarEvent): ItemTarget | null => {
     const storyId = event.block?.storyId || event.instance?.storyId;
     const taskId = event.block?.taskId;
-    if (storyId) navigate(`/stories/${storyId}`);
-    else if (taskId) navigate(`/tasks/${taskId}`);
+    const durationMinutes = Math.max(15, Math.round((event.end.getTime() - event.start.getTime()) / 60000));
+    if (storyId) {
+      return {
+        itemType: 'story', itemId: storyId, title: event.title,
+        scheduledBlockId: event.block?.id || null, scheduledInstanceId: event.instance?.id || null, durationMinutes,
+      };
+    }
+    if (taskId) {
+      return {
+        itemType: 'task', itemId: taskId, title: event.title,
+        scheduledBlockId: event.block?.id || null, scheduledInstanceId: event.instance?.id || null, durationMinutes,
+      };
+    }
+    return null;
+  }, []);
+
+  const openItem = useCallback((target: ItemTarget) => {
+    navigate(target.itemType === 'story' ? `/stories/${target.itemId}` : `/tasks/${target.itemId}`);
   }, [navigate]);
+
+  const completeItem = useCallback(async (target: ItemTarget) => {
+    try {
+      await updateDoc(doc(db, target.itemType === 'story' ? 'stories' : 'tasks', target.itemId), {
+        status: target.itemType === 'story' ? 4 : 2,
+        updatedAt: Date.now(),
+      });
+      setFeedback({ variant: 'success', message: `${target.title} marked complete.` });
+      setSelectedEvent(null);
+    } catch (err: any) {
+      setFeedback({ variant: 'danger', message: err?.message || 'Could not mark complete.' });
+    }
+  }, []);
+
+  const deleteItem = useCallback(async (target: ItemTarget) => {
+    if (typeof window !== 'undefined' && !window.confirm(`Delete "${target.title}"? This cannot be undone.`)) return;
+    try {
+      await deleteDoc(doc(db, target.itemType === 'story' ? 'stories' : 'tasks', target.itemId));
+      setFeedback({ variant: 'success', message: `${target.title} deleted.` });
+      setSelectedEvent(null);
+    } catch (err: any) {
+      setFeedback({ variant: 'danger', message: err?.message || 'Could not delete.' });
+    }
+  }, []);
+
+  const sendEventBackToBacklog = useCallback(async (target: ItemTarget) => {
+    try {
+      if (target.scheduledBlockId) await deleteDoc(doc(db, 'calendar_blocks', target.scheduledBlockId));
+      if (target.scheduledInstanceId) await deleteDoc(doc(db, 'scheduled_instances', target.scheduledInstanceId));
+      const patch = target.itemType === 'story'
+        ? { dueDate: null, targetDate: null, plannedStartDate: null, plannedWeekKey: null, plannedWeekStart: null, updatedAt: Date.now() }
+        : { dueDate: null, dueDateMs: null, plannedWeekKey: null, plannedWeekStart: null, updatedAt: Date.now() };
+      await updateDoc(doc(db, target.itemType === 'story' ? 'stories' : 'tasks', target.itemId), patch);
+      setFeedback({ variant: 'success', message: `${target.title} moved back to the backlog.` });
+      setSelectedEvent(null);
+    } catch (err: any) {
+      setFeedback({ variant: 'danger', message: err?.message || 'Could not move back to backlog.' });
+    }
+  }, []);
 
   const runDeltaReplan = useCallback(async () => {
     if (!currentUser) return;
@@ -306,6 +380,11 @@ const SprintWeekPlanner: React.FC<SprintWeekPlannerProps> = ({ anchorDate }) => 
           {backlogItems.map((item) => {
             const priority = getPriorityBadge((item.rawStory as any)?.priority ?? (item.rawTask as any)?.priority);
             const score = getEntityAiScore((item.rawStory || item.rawTask) as Story | Task);
+            const target: ItemTarget | null = item.rawStory
+              ? { itemType: 'story', itemId: item.rawStory.id, title: item.title, durationMinutes: estimateDurationMinutes(item) }
+              : item.rawTask
+                ? { itemType: 'task', itemId: item.rawTask.id, title: item.title, durationMinutes: estimateDurationMinutes(item) }
+                : null;
             return (
               <div
                 key={item.id}
@@ -332,9 +411,24 @@ const SprintWeekPlanner: React.FC<SprintWeekPlannerProps> = ({ anchorDate }) => 
                   {score > 0 && <Badge bg="info" pill title="AI criticality score">{score}</Badge>}
                 </div>
                 <div className="fw-medium" style={{ fontSize: '0.9rem', lineHeight: 1.2 }}>{item.title}</div>
-                <div className="d-flex gap-1 mt-1 flex-wrap">
-                  <Badge bg={priority.bg}>{priority.text}</Badge>
-                  {item.goalTheme && <Badge bg="light" text="dark">{item.goalTheme}</Badge>}
+                <div className="d-flex justify-content-between align-items-center mt-1 flex-wrap">
+                  <div className="d-flex gap-1 flex-wrap">
+                    <Badge bg={priority.bg}>{priority.text}</Badge>
+                    {item.goalTheme && <Badge bg="light" text="dark">{item.goalTheme}</Badge>}
+                  </div>
+                  {target && (
+                    <div className="d-flex gap-1">
+                      <Button variant="link" size="sm" className="p-0 text-muted" style={{ width: 20, height: 20 }} title="Defer to another sprint" onClick={(e) => { e.stopPropagation(); setDeferTarget(target); }} onPointerDown={(e) => e.stopPropagation()}>
+                        <Clock3 size={12} />
+                      </Button>
+                      <Button variant="link" size="sm" className="p-0 text-muted" style={{ width: 20, height: 20 }} title="Mark complete" onClick={(e) => { e.stopPropagation(); completeItem(target); }} onPointerDown={(e) => e.stopPropagation()}>
+                        <CheckCircle size={12} />
+                      </Button>
+                      <Button variant="link" size="sm" className="p-0" style={{ width: 20, height: 20, color: 'var(--red)' }} title="Delete" onClick={(e) => { e.stopPropagation(); deleteItem(target); }} onPointerDown={(e) => e.stopPropagation()}>
+                        <Trash2 size={12} />
+                      </Button>
+                    </div>
+                  )}
                 </div>
               </div>
             );
@@ -371,6 +465,35 @@ const SprintWeekPlanner: React.FC<SprintWeekPlannerProps> = ({ anchorDate }) => 
             {feedback.message}
           </Alert>
         )}
+        {selectedEvent && (() => {
+          const target = resolveEventTarget(selectedEvent);
+          if (!target) return null;
+          return (
+            <div className="d-flex align-items-center justify-content-between gap-2 flex-wrap px-2 py-2 border-bottom bg-body-tertiary">
+              <div className="fw-medium small text-truncate" style={{ maxWidth: 260 }}>{target.title}</div>
+              <div className="d-flex gap-1">
+                <Button size="sm" variant="outline-secondary" title="Open" onClick={() => openItem(target)}>
+                  <ExternalLink size={13} />
+                </Button>
+                <Button size="sm" variant="outline-secondary" title="Send back to backlog" onClick={() => sendEventBackToBacklog(target)}>
+                  <CornerUpLeft size={13} />
+                </Button>
+                <Button size="sm" variant="outline-secondary" title="Defer to another sprint" onClick={() => setDeferTarget(target)}>
+                  <Clock3 size={13} />
+                </Button>
+                <Button size="sm" variant="outline-secondary" title="Mark complete" onClick={() => completeItem(target)}>
+                  <CheckCircle size={13} />
+                </Button>
+                <Button size="sm" variant="outline-danger" title="Delete" onClick={() => deleteItem(target)}>
+                  <Trash2 size={13} />
+                </Button>
+                <Button size="sm" variant="link" className="text-muted" title="Close" onClick={() => setSelectedEvent(null)}>
+                  <X size={14} />
+                </Button>
+              </div>
+            </div>
+          );
+        })()}
         <Card.Body className="p-0">
           {planner.loading && events.length === 0 ? (
             <div className="d-flex align-items-center justify-content-center text-muted flex-column py-5">
@@ -387,6 +510,7 @@ const SprintWeekPlanner: React.FC<SprintWeekPlannerProps> = ({ anchorDate }) => 
                 toolbar={false}
                 date={weekStart}
                 onNavigate={() => { /* navigation is driven by the anchor date from the parent route */ }}
+                onView={() => { /* single fixed view — no switcher */ }}
                 selectable
                 resizable
                 step={30}
@@ -411,6 +535,33 @@ const SprintWeekPlanner: React.FC<SprintWeekPlannerProps> = ({ anchorDate }) => 
           )}
         </Card.Body>
       </Card>
+
+      {deferTarget && (
+        <DeferItemModal
+          show
+          onHide={() => setDeferTarget(null)}
+          itemType={deferTarget.itemType}
+          itemId={deferTarget.itemId}
+          itemTitle={deferTarget.title}
+          allowAdvancedSearch
+          onApply={async (payload) => {
+            const rawItem = deferTarget.itemType === 'story'
+              ? stories.find((s) => s.id === deferTarget.itemId)
+              : tasks.find((t) => t.id === deferTarget.itemId);
+            await applyPlannerDefer({
+              itemType: deferTarget.itemType,
+              item: (rawItem || { id: deferTarget.itemId, title: deferTarget.title }) as any,
+              payload,
+              sourceFallback: 'sprint_week_planner',
+              linkedBlockId: deferTarget.scheduledBlockId || null,
+              durationMinutes: deferTarget.durationMinutes || null,
+            });
+            setFeedback({ variant: 'success', message: `${deferTarget.title} deferred.` });
+            setDeferTarget(null);
+            setSelectedEvent(null);
+          }}
+        />
+      )}
     </div>
   );
 };
