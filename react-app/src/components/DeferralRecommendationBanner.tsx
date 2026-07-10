@@ -23,12 +23,14 @@ interface Props {
   compact?: boolean;
   /** Suppress the banner's own dismiss X — use when hosting it inside a Modal that has its own close control. */
   hideOwnDismiss?: boolean;
+  /** Skip the "Show details" toggle and render the full list open — use on a dedicated page where collapsing serves no purpose. */
+  alwaysExpanded?: boolean;
 }
 
-const DeferralRecommendationBanner: React.FC<Props> = ({ compact = false, hideOwnDismiss = false }) => {
+const DeferralRecommendationBanner: React.FC<Props> = ({ compact = false, hideOwnDismiss = false, alwaysExpanded = false }) => {
   const { candidates, overCapacityMoves, scheduleWarnings, loading, currentSprint, nextSprint } = useDeferralCandidates();
 
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(alwaysExpanded);
   const [actioningId, setActioningId] = useState<string | null>(null);
   const [bulkApplying, setBulkApplying] = useState(false);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
@@ -245,17 +247,19 @@ const DeferralRecommendationBanner: React.FC<Props> = ({ compact = false, hideOw
       </div>
 
       <div className="mt-3 pt-2 border-top">
-        <Button
-          size="sm"
-          variant="link"
-          className="p-0 text-dark d-inline-flex align-items-center gap-1 mb-2"
-          onClick={() => setExpanded((v) => !v)}
-        >
-          {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-          <span className="fw-semibold" style={{ fontSize: 13 }}>
-            {expanded ? 'Hide details' : 'Show details'}
-          </span>
-        </Button>
+        {!alwaysExpanded && (
+          <Button
+            size="sm"
+            variant="link"
+            className="p-0 text-dark d-inline-flex align-items-center gap-1 mb-2"
+            onClick={() => setExpanded((v) => !v)}
+          >
+            {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            <span className="fw-semibold" style={{ fontSize: 13 }}>
+              {expanded ? 'Hide details' : 'Show details'}
+            </span>
+          </Button>
+        )}
 
         {statusMsg && <div className="text-muted small mb-2">{statusMsg}</div>}
 

@@ -40,7 +40,7 @@ const DeferralSuggestionsPage: React.FC = () => {
               <div>Nothing to defer — the current sprint is within capacity and priorities look clean.</div>
             </div>
           ) : (
-            <DeferralRecommendationBanner hideOwnDismiss />
+            <DeferralRecommendationBanner hideOwnDismiss alwaysExpanded />
           )}
         </Col>
       </Row>
