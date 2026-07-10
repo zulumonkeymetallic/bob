@@ -11,7 +11,7 @@
  * beyond the usual single nudge.
  */
 import React, { useCallback, useMemo, useState } from 'react';
-import { ClipboardCheck, Brain, CalendarClock, Flag, CalendarDays, Heart, Plug, Clock } from 'lucide-react';
+import { ClipboardCheck, Brain, CalendarClock, Flag, CalendarDays, Heart, Plug, Clock3 } from 'lucide-react';
 import ToolbarBannerIcon from './ToolbarBannerIcon';
 import CheckInBanner from './checkins/CheckInBanner';
 import { CoachVerdictBanner } from './coach/CoachVerdictBanner';
@@ -39,7 +39,7 @@ const ToolbarBannerIconRow: React.FC<ToolbarBannerIconRowProps> = ({ isLargeScre
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-      <ToolbarBannerIcon id="deferral" icon={Clock} label="Deferral suggestions" prominent={prominent} onVisibilityChange={handleVisibilityChange}>
+      <ToolbarBannerIcon id="deferral" icon={Clock3} label="Deferral suggestions" prominent={prominent} onVisibilityChange={handleVisibilityChange}>
         <DeferralCandidatesBanner />
       </ToolbarBannerIcon>
       <ToolbarBannerIcon id="checkin" icon={ClipboardCheck} label="Check-in" prominent={prominent} onVisibilityChange={handleVisibilityChange}>
