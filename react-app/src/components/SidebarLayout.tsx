@@ -17,7 +17,7 @@ import GlobalSearchBar from './GlobalSearchBar';
 import CompactSprintMetrics from './CompactSprintMetrics';
 import AssistantDock from './AssistantDock';
 import ProcessTextActivityHost from './ProcessTextActivityHost';
-import BannerToastStack from './BannerToastStack';
+import ToolbarBannerIconRow from './ToolbarBannerIconRow';
 // Test mode UI removed per request
 
 interface SidebarLayoutProps {
@@ -537,6 +537,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
             blueprint.organize.build
           </Navbar.Brand>
           <div className="d-flex align-items-center gap-2">
+            {isSmallScreen && <ToolbarBannerIconRow isLargeScreen={false} hidePlannerCapacityBanner={hidePlannerCapacityBanner} />}
             {currentUser && (
               <div className="rounded-circle bg-primary d-flex align-items-center justify-content-center"
                 style={{ width: '24px', height: '24px', fontSize: '12px' }}>
@@ -725,6 +726,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
               </Button>
               {/* Metrics first, then selector so metrics appear to the left of the selector */}
               <CompactSprintMetrics selectedSprintId={globalSprintId} />
+              {!isSmallScreen && <ToolbarBannerIconRow isLargeScreen={isLargeScreen} hidePlannerCapacityBanner={hidePlannerCapacityBanner} />}
               <span className="text-muted small me-2 d-none d-xl-inline">Active Sprint:</span>
               <SprintSelector
                 selectedSprintId={globalSprintId}
@@ -734,14 +736,6 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
           </div>
         </div>
 
-        {/* Banners overlay the page as a top-right toast stack (see BannerToastStack). */}
-        <BannerToastStack
-          isSmallScreen={isSmallScreen}
-          isLargeScreen={isLargeScreen}
-          hidePlannerCapacityBanner={hidePlannerCapacityBanner}
-          topOffset={isSmallScreen ? 68 : 58}
-          rightOffset={(isRightSidebarVisible && window.innerWidth >= 768 ? (isRightSidebarCollapsed ? 60 : 400) : 0) + 16}
-        />
         <ProcessTextActivityHost />
 
         <main className="sidebar-layout-page" style={{ flex: 1, overflowY: 'auto', overflowX: 'auto', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
