@@ -37,7 +37,7 @@ export function plannerLevelLabel(level: UnifiedPlannerLevel): string {
     case 'sprint':
       return 'Multi Sprint Planner';
     case 'week':
-      return '4-Day Planner';
+      return 'Sprint Week Planner';
     case 'calendar':
     default:
       return 'Calendar';

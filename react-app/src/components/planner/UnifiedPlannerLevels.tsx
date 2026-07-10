@@ -5,10 +5,10 @@ import { addDays, format, startOfDay } from 'date-fns';
 import { useLocation, useNavigate } from 'react-router-dom';
 import GoalRoadmapV6 from '../visualization/GoalRoadmapV6';
 import { buildPlannerPath, normalizePlannerLevel, plannerLevelLabel, type UnifiedPlannerLevel } from '../../utils/plannerRoutes';
-import WeeklyPlannerSurface from './WeeklyPlannerSurface';
 import UnifiedGoalPlannerLevels from './UnifiedGoalPlannerLevels';
 import PlanActionBar from './PlanActionBar';
 import SprintPlanningMatrix from '../SprintPlanningMatrix';
+import SprintWeekPlanner from './SprintWeekPlanner';
 
 const toAnchorDate = (value: string | null) => {
   if (!value) return null;
@@ -48,7 +48,7 @@ const UnifiedPlannerLevels: React.FC = () => {
   }
 
   if (level === 'week') {
-    const endDate = addDays(anchorDate, 3);
+    const endDate = addDays(anchorDate, 4);
     return (
       <div className={embedded ? 'p-2' : 'p-3'}>
         {!embedded && (
@@ -56,7 +56,7 @@ const UnifiedPlannerLevels: React.FC = () => {
             <div className="d-flex justify-content-between align-items-center gap-2 flex-wrap mb-3">
               <div>
                 <h3 className="mb-1">{plannerLevelLabel(level)}</h3>
-                <div className="text-muted small">Stories, tasks, planner blocks, and linked calendar events across the next 4 days.</div>
+                <div className="text-muted small">Backlog and calendar for the current sprint, rolling 5 days at a time.</div>
               </div>
               <Badge bg="info">
                 {format(anchorDate, 'dd MMM')} - {format(endDate, 'dd MMM yyyy')}
@@ -72,24 +72,17 @@ const UnifiedPlannerLevels: React.FC = () => {
 
         <Card className="shadow-sm border-0 mb-3">
           <Card.Body className="d-flex align-items-center justify-content-between gap-2 flex-wrap">
-            <Button size="sm" variant="outline-secondary" onClick={() => navigate(withAnchor(level, addDays(anchorDate, -4), location.search))}>
-              <ChevronLeft size={14} className="me-1" /> Previous 4 days
+            <Button size="sm" variant="outline-secondary" onClick={() => navigate(withAnchor(level, addDays(anchorDate, -1), location.search))}>
+              <ChevronLeft size={14} className="me-1" /> Previous day
             </Button>
             <div className="small text-muted">Anchor: {format(anchorDate, 'EEE d MMM yyyy')}</div>
-            <Button size="sm" variant="outline-secondary" onClick={() => navigate(withAnchor(level, addDays(anchorDate, 4), location.search))}>
-              Next 4 days <ChevronRight size={14} className="ms-1" />
+            <Button size="sm" variant="outline-secondary" onClick={() => navigate(withAnchor(level, addDays(anchorDate, 1), location.search))}>
+              Next day <ChevronRight size={14} className="ms-1" />
             </Button>
           </Card.Body>
         </Card>
 
-        <WeeklyPlannerSurface
-          weekStart={anchorDate}
-          embedded={embedded}
-          title="4-Day Planner"
-          visibleDays={4}
-          initialDetailLevel="minimal"
-          hideGoalTextWhenMinimal
-        />
+        <SprintWeekPlanner anchorDate={anchorDate} />
       </div>
     );
   }

@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "react-app",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "cd react-app && npm run start"],
+      "port": 3000
+    }
+  ]
+}
