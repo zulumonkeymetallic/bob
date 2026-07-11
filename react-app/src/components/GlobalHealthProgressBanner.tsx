@@ -1,14 +1,13 @@
 /**
- * Self-contained health progress banner for SidebarLayout.
+ * Health progress section for the NotificationStream popover.
  * Reads profiles/{uid} directly so it works on every page, not just Dashboard.
- * Shares the same localStorage dismiss key as Dashboard so dismissing on one
- * suppresses it everywhere for 3 days.
+ * Shares the same localStorage dismiss key so dismissing suppresses it
+ * everywhere for 3 days.
  */
 import React, { useEffect, useMemo, useState } from 'react';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
-import { Button, Card } from 'react-bootstrap';
-import { Heart, Sparkles, X } from 'lucide-react';
+import { Sparkles, X } from 'lucide-react';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -136,12 +135,6 @@ const GlobalHealthProgressBanner: React.FC = () => {
 
   if (!visible || !data) return null;
 
-  const bg = data.macroTone === 'success'
-    ? 'linear-gradient(135deg, #198754 0%, #0f5132 100%)'
-    : data.macroTone === 'warning'
-      ? 'linear-gradient(135deg, #fd7e14 0%, #b35c00 100%)'
-      : 'linear-gradient(135deg, #0d6efd 0%, #0b5ed7 100%)';
-
   const dismiss = () => {
     try { localStorage.setItem(DISMISS_KEY, new Date().toISOString()); } catch { /* ignore */ }
     setVisible(false);
@@ -150,63 +143,75 @@ const GlobalHealthProgressBanner: React.FC = () => {
   const insight: string | null = coachDaily?.briefingText || coachDaily?.adaptationAction || null;
   const readinessLabel: string | null = coachDaily?.readinessLabel || null;
 
+  const rowStyle: React.CSSProperties = {
+    background: 'var(--notion-hover, rgba(0,0,0,0.04))',
+    border: '1px solid var(--border, #e5e7eb)', borderRadius: 6,
+    padding: '5px 8px',
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+  };
+
   return (
-    <Card className="mb-1 global-health-banner" style={{ background: bg, border: 'none', color: '#fff', boxShadow: '0 3px 10px rgba(13,110,253,0.15)' }}>
-      <Card.Body style={{ padding: '6px 10px' }}>
-        <div className="d-flex align-items-center gap-2 flex-wrap">
-          <div style={{ width: 22, height: 22, borderRadius: 4, backgroundColor: 'rgba(255,255,255,0.18)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-            <Heart size={12} />
-          </div>
-          <div style={{ flex: 1, minWidth: 160 }}>
-            <div style={{ margin: 0, fontSize: 13, fontWeight: 600 }}>Daily Health Progress</div>
-            <div style={{ marginTop: 1, fontSize: 10, opacity: 0.9 }}>
-              {data.weightKg     != null ? `${data.weightKg.toFixed(1)} kg`          : 'weight missing'}
-              {' • '}
-              {data.bodyFatPct   != null ? `${data.bodyFatPct.toFixed(1)}% BF`        : 'BF missing'}
-              {' • '}
-              {data.targetBodyFatPct != null ? `→ ${data.targetBodyFatPct.toFixed(1)}%` : 'set target'}
-              {' • '}
-              {data.weeksToTarget    != null ? `${Math.round(data.weeksToTarget)}w ETA` : 'ETA n/a'}
-            </div>
-          </div>
-          <div style={{ textAlign: 'right', minWidth: 44 }}>
-            <div style={{ fontSize: 16, fontWeight: 800, lineHeight: 1 }}>
-              {data.primaryPct != null ? `${data.primaryPct}%` : '—'}
-            </div>
-            <div style={{ fontSize: 10, opacity: 0.85 }}>{data.primaryLabel}</div>
-          </div>
-          <button onClick={dismiss} style={{ background: 'rgba(255,255,255,0.2)', border: 'none', color: '#fff', cursor: 'pointer', padding: 3, borderRadius: 3, display: 'flex', alignItems: 'center', flexShrink: 0 }} title="Dismiss for 3 days">
-            <X size={13} />
+    <div style={{ minWidth: 260 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+        <span style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--muted)' }}>
+          Daily Health Progress
+        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <button
+            onClick={() => navigate('/fitness')}
+            style={{ background: 'none', border: 'none', padding: 0, fontSize: 10, color: 'var(--brand, #5f77dc)', cursor: 'pointer', textDecoration: 'underline' }}
+          >
+            View all
+          </button>
+          <button
+            onClick={dismiss}
+            title="Dismiss for 3 days"
+            aria-label="Dismiss"
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 18, height: 18, padding: 0, background: 'transparent', border: 'none', borderRadius: 4, color: 'var(--muted)', cursor: 'pointer' }}
+          >
+            <X size={12} />
           </button>
         </div>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div style={rowStyle}>
+          <span style={{ fontSize: 12 }}>
+            {data.weightKg != null ? `${data.weightKg.toFixed(1)} kg` : 'weight missing'}
+            {' · '}
+            {data.bodyFatPct != null ? `${data.bodyFatPct.toFixed(1)}% BF` : 'BF missing'}
+            {data.targetBodyFatPct != null ? ` → ${data.targetBodyFatPct.toFixed(1)}%` : ''}
+            {data.weeksToTarget != null ? ` · ${Math.round(data.weeksToTarget)}w ETA` : ''}
+          </span>
+          <span style={{ fontSize: 11, color: 'var(--muted)', whiteSpace: 'nowrap' }}>
+            {data.primaryPct != null ? `${data.primaryPct}% ` : '— '}{data.primaryLabel}
+          </span>
+        </div>
+        <div style={rowStyle}>
+          <span style={{ fontSize: 12 }}>Today</span>
+          <span style={{ fontSize: 11, color: 'var(--muted)' }}>
+            {data.stepsToday != null ? `${Math.round(data.stepsToday).toLocaleString()} steps` : 'no steps'}
+            {data.workoutMins != null ? ` · ${Math.round(data.workoutMins)}m workout` : ''}
+            {data.macroAdherencePct != null ? ` · ${data.macroAdherencePct}% macros` : ''}
+            {data.syncLabel ? ` · synced ${data.syncLabel}` : ''}
+          </span>
+        </div>
         {insight && (
-          <div
-            className="d-flex align-items-start gap-1"
-            style={{ marginTop: 4, paddingTop: 4, borderTop: '1px solid rgba(255,255,255,0.2)', fontSize: 10, opacity: 0.95 }}
-          >
+          <div style={{ fontSize: 11, color: 'var(--muted)', display: 'flex', alignItems: 'flex-start', gap: 4 }}>
             <Sparkles size={11} style={{ flexShrink: 0, marginTop: 1 }} />
-            <div>
-              {readinessLabel && <strong>{readinessLabel} · </strong>}
-              {insight}
-            </div>
+            <span>{readinessLabel && <strong>{readinessLabel} · </strong>}{insight}</span>
           </div>
         )}
-        <div className="global-health-banner-second-row d-flex align-items-center justify-content-between gap-2 flex-wrap" style={{ marginTop: 3, fontSize: 10, opacity: 0.9 }}>
-          <div>
-            {data.stepsToday   != null && `${Math.round(data.stepsToday).toLocaleString()} steps`}
-            {data.workoutMins  != null && ` • ${Math.round(data.workoutMins)}m workout`}
-            {data.macroAdherencePct != null && ` • ${data.macroAdherencePct}% macros`}
-            {data.syncLabel && ` • synced ${data.syncLabel}`}
-          </div>
-          <div className="d-flex align-items-center gap-1">
-            {data.missingTargets && (
-              <Button variant="light" size="sm" style={{ fontSize: 10, padding: '2px 7px' }} onClick={() => navigate('/settings?tab=profile')}>Set targets</Button>
-            )}
-            <Button variant="outline-light" size="sm" style={{ fontSize: 10, padding: '2px 7px' }} onClick={() => navigate('/fitness')}>Health</Button>
-          </div>
-        </div>
-      </Card.Body>
-    </Card>
+        {data.missingTargets && (
+          <button
+            onClick={() => navigate('/settings?tab=profile')}
+            style={{ alignSelf: 'flex-start', background: 'none', border: 'none', padding: 0, fontSize: 10, color: 'var(--brand, #5f77dc)', cursor: 'pointer', textDecoration: 'underline' }}
+          >
+            Set targets
+          </button>
+        )}
+      </div>
+    </div>
   );
 };
 

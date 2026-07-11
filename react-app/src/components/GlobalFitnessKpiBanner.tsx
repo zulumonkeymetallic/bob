@@ -1,15 +1,14 @@
 /**
- * Self-contained fitness KPI banner for the toolbar bell row.
+ * Fitness KPI section for the NotificationStream popover.
  * Condenses FitnessKpiDashboardWidget's rolling-window targets (12wk run/swim/cycle
- * distance, 30d steps/protein hit-streaks) into a one-line reminder shown every
- * few days — same 3-day dismiss pattern as GlobalHealthProgressBanner, so it works
- * on every page rather than only the dashboard's full KPI grid.
+ * distance, 30d steps/protein hit-streaks) into a compact list shown every few days
+ * — same 3-day dismiss pattern as GlobalHealthProgressBanner, so it works on every
+ * page rather than only the dashboard's full KPI grid.
  */
 import React, { useEffect, useMemo, useState } from 'react';
 import { collection, onSnapshot, orderBy, query, where, limit } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
-import { Button, Card } from 'react-bootstrap';
-import { Activity, X } from 'lucide-react';
+import { X } from 'lucide-react';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -132,29 +131,55 @@ const GlobalFitnessKpiBanner: React.FC = () => {
     setVisible(false);
   };
 
+  const rows = [
+    { label: 'Run', value: `${data.runKm.toFixed(1)}/30km`, hits: `${data.runHits}/12wks` },
+    { label: 'Swim', value: `${data.swimKm.toFixed(1)}/4km`, hits: `${data.swimHits}/12wks` },
+    { label: 'Cycle', value: `${data.cycleKm.toFixed(1)}/50km`, hits: `${data.cycleHits}/12wks` },
+    { label: 'Steps', value: `${data.stepsHits}/30d ≥12k`, hits: null },
+    { label: 'Protein', value: `${data.proteinHits}/30d ≥180g`, hits: null },
+  ];
+
   return (
-    <Card className="mb-1" style={{ background: 'linear-gradient(135deg, #0ea5e9 0%, #0369a1 100%)', border: 'none', color: '#fff', boxShadow: '0 3px 10px rgba(14,165,233,0.15)' }}>
-      <Card.Body style={{ padding: '6px 10px' }}>
-        <div className="d-flex align-items-center gap-2 flex-wrap">
-          <div style={{ width: 22, height: 22, borderRadius: 4, backgroundColor: 'rgba(255,255,255,0.18)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-            <Activity size={12} />
-          </div>
-          <div style={{ flex: 1, minWidth: 200 }}>
-            <div style={{ margin: 0, fontSize: 13, fontWeight: 600 }}>Fitness KPIs this week</div>
-            <div style={{ marginTop: 1, fontSize: 10, opacity: 0.9 }}>
-              Run {data.runKm.toFixed(1)}/30km · Swim {data.swimKm.toFixed(1)}/4km · Cycle {data.cycleKm.toFixed(1)}/50km
-            </div>
-          </div>
-          <div style={{ textAlign: 'right', fontSize: 10, opacity: 0.9, whiteSpace: 'nowrap' }}>
-            12wk hits: R{data.runHits} S{data.swimHits} C{data.cycleHits} · 30d: {data.stepsHits} steps, {data.proteinHits} protein
-          </div>
-          <Button variant="outline-light" size="sm" style={{ fontSize: 10, padding: '2px 7px' }} onClick={() => navigate('/fitness')}>Fitness</Button>
-          <button onClick={dismiss} style={{ background: 'rgba(255,255,255,0.2)', border: 'none', color: '#fff', cursor: 'pointer', padding: 3, borderRadius: 3, display: 'flex', alignItems: 'center', flexShrink: 0 }} title="Dismiss for 3 days">
-            <X size={13} />
+    <div style={{ minWidth: 260 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+        <span style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--muted)' }}>
+          Fitness KPIs this week
+        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <button
+            onClick={() => navigate('/fitness')}
+            style={{ background: 'none', border: 'none', padding: 0, fontSize: 10, color: 'var(--brand, #5f77dc)', cursor: 'pointer', textDecoration: 'underline' }}
+          >
+            View all
+          </button>
+          <button
+            onClick={dismiss}
+            title="Dismiss for 3 days"
+            aria-label="Dismiss"
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 18, height: 18, padding: 0, background: 'transparent', border: 'none', borderRadius: 4, color: 'var(--muted)', cursor: 'pointer' }}
+          >
+            <X size={12} />
           </button>
         </div>
-      </Card.Body>
-    </Card>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {rows.map((row) => (
+          <div
+            key={row.label}
+            style={{
+              background: 'var(--notion-hover, rgba(0,0,0,0.04))',
+              border: '1px solid var(--border, #e5e7eb)', borderRadius: 6,
+              padding: '5px 8px',
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            }}
+          >
+            <span style={{ fontSize: 12 }}>{row.label}</span>
+            <span style={{ fontSize: 11, color: 'var(--muted)' }}>{row.value}{row.hits ? ` · ${row.hits}` : ''}</span>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 };
 
