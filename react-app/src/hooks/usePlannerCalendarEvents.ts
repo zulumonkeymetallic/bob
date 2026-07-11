@@ -243,7 +243,7 @@ export const usePlannerCalendarEvents = ({
     if (event.type === 'instance') {
       const status = event.instance?.status;
       if (status === 'completed') {
-        return { style: { backgroundColor: hexToRgba(baseColor, 0.85), borderColor: baseColor, color: textColor } };
+        return { style: { backgroundColor: hexToRgba(baseColor, 0.95), borderColor: baseColor, color: textColor } };
       }
       if (status === 'missed' || status === 'cancelled') {
         return { style: { backgroundColor: hexToRgba('#ef4444', 0.9), borderColor: '#dc2626', color: '#ffffff' } };
@@ -268,7 +268,7 @@ export const usePlannerCalendarEvents = ({
 
     return {
       style: {
-        backgroundColor: hexToRgba(baseColor, 0.85),
+        backgroundColor: hexToRgba(baseColor, 0.95),
         borderColor: hasConflict ? '#dc2626' : baseColor,
         boxShadow: hasConflict ? '0 0 0 2px rgba(220,38,38,0.3) inset' : undefined,
         color: textColor,

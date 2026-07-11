@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { addDays, format, getDay, parse, startOfWeek } from 'date-fns';
 import { enGB } from 'date-fns/locale';
-import { Alert, Badge, Button, Card, Form, Spinner } from 'react-bootstrap';
+import {
+  Alert, Badge, Button, ButtonGroup, Card, Form, Spinner,
+} from 'react-bootstrap';
 import {
   CheckCircle, Clock3, CornerUpLeft, Eye, EyeOff, ExternalLink, RefreshCw, Sparkles, Trash2, X,
 } from 'lucide-react';
@@ -19,6 +21,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { usePersona } from '../../contexts/PersonaContext';
 import { useSprint } from '../../contexts/SprintContext';
 import { useFocusGoals } from '../../hooks/useFocusGoals';
+import { useGlobalThemes } from '../../hooks/useGlobalThemes';
 import { useThemeAppearance } from '../../hooks/useThemeAppearance';
 import { usePlannerCalendarEvents, type PlannerCalendarEvent, type PlannerFeedback } from '../../hooks/usePlannerCalendarEvents';
 import { useUnifiedPlannerData } from '../../hooks/useUnifiedPlannerData';
@@ -33,6 +36,7 @@ import { getPriorityBadge } from '../../utils/statusHelpers';
 import { getEntityAiScore } from '../../utils/top3';
 import { schedulePlannerItem, normalizePlannerSchedulingError } from '../../utils/plannerScheduling';
 import { applyPlannerDefer } from '../../utils/plannerDeferral';
+import { goalThemeColor } from '../../utils/storyCardFormatting';
 import DeferItemModal from '../DeferItemModal';
 import FiveDayView from './FiveDayView';
 import type { Goal, Story, Task } from '../../types';
@@ -44,6 +48,64 @@ type ItemTarget = {
   scheduledBlockId?: string | null;
   scheduledInstanceId?: string | null;
   durationMinutes?: number | null;
+};
+
+const resolveEventTarget = (event: PlannerCalendarEvent): ItemTarget | null => {
+  const storyId = event.block?.storyId || event.instance?.storyId;
+  const taskId = event.block?.taskId;
+  const durationMinutes = Math.max(15, Math.round((event.end.getTime() - event.start.getTime()) / 60000));
+  if (storyId) {
+    return {
+      itemType: 'story', itemId: storyId, title: event.title,
+      scheduledBlockId: event.block?.id || null, scheduledInstanceId: event.instance?.id || null, durationMinutes,
+    };
+  }
+  if (taskId) {
+    return {
+      itemType: 'task', itemId: taskId, title: event.title,
+      scheduledBlockId: event.block?.id || null, scheduledInstanceId: event.instance?.id || null, durationMinutes,
+    };
+  }
+  return null;
+};
+
+const eventIconBtnStyle: React.CSSProperties = {
+  background: 'transparent', border: 'none', color: '#fff', padding: 0,
+  width: 14, height: 14, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+};
+
+interface PlannerEventContentProps {
+  event: PlannerCalendarEvent;
+  onBackToBacklog: (target: ItemTarget) => void;
+  onDefer: (target: ItemTarget) => void;
+  onComplete: (target: ItemTarget) => void;
+  onDelete: (target: ItemTarget) => void;
+}
+
+const PlannerEventContent: React.FC<PlannerEventContentProps> = ({ event, onBackToBacklog, onDefer, onComplete, onDelete }) => {
+  const [hovered, setHovered] = useState(false);
+  const target = resolveEventTarget(event);
+  return (
+    <div
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{ position: 'relative', height: '100%', overflow: 'hidden' }}
+    >
+      <div className="text-truncate" style={{ fontSize: 11, lineHeight: 1.2, paddingRight: target ? 58 : 0 }}>{event.title}</div>
+      {target && hovered && (
+        <div
+          className="d-flex align-items-center gap-1"
+          style={{ position: 'absolute', top: 0, right: 0, background: 'rgba(0,0,0,0.4)', borderRadius: 3, padding: '1px 3px' }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button type="button" title="Send back to backlog" onClick={(e) => { e.stopPropagation(); onBackToBacklog(target); }} style={eventIconBtnStyle}><CornerUpLeft size={10} /></button>
+          <button type="button" title="Defer to another sprint" onClick={(e) => { e.stopPropagation(); onDefer(target); }} style={eventIconBtnStyle}><Clock3 size={10} /></button>
+          <button type="button" title="Mark complete" onClick={(e) => { e.stopPropagation(); onComplete(target); }} style={eventIconBtnStyle}><CheckCircle size={10} /></button>
+          <button type="button" title="Delete" onClick={(e) => { e.stopPropagation(); onDelete(target); }} style={eventIconBtnStyle}><Trash2 size={10} /></button>
+        </div>
+      )}
+    </div>
+  );
 };
 
 const locales = { 'en-GB': enGB } as const;
@@ -85,6 +147,7 @@ const SprintWeekPlanner: React.FC<SprintWeekPlannerProps> = ({ anchorDate }) => 
   const { selectedSprintId, sprintsById } = useSprint();
   const { activeFocusGoals } = useFocusGoals(currentUser?.uid);
   const { resolveThemeAppearance } = useThemeAppearance();
+  const { themes: globalThemes } = useGlobalThemes();
   const navigate = useNavigate();
 
   const weekStart = useMemo(() => new Date(dayStartMs(anchorDate)), [anchorDate]);
@@ -111,6 +174,7 @@ const SprintWeekPlanner: React.FC<SprintWeekPlannerProps> = ({ anchorDate }) => 
   });
   const [deltaReplanLoading, setDeltaReplanLoading] = useState(false);
   const [fullReplanLoading, setFullReplanLoading] = useState(false);
+  const [planningMode, setPlanningMode] = useState<'smart' | 'strict'>('smart');
   const [draggingItemId, setDraggingItemId] = useState<string | null>(null);
   const [selectedEvent, setSelectedEvent] = useState<PlannerCalendarEvent | null>(null);
   const [deferTarget, setDeferTarget] = useState<ItemTarget | null>(null);
@@ -222,32 +286,35 @@ const SprintWeekPlanner: React.FC<SprintWeekPlannerProps> = ({ anchorDate }) => 
     syncEntityDate: true,
   });
 
-  const events = useMemo(
+  const visibleEvents = useMemo(
     () => (showThemeAllocations ? allEvents : allEvents.filter((e) => String(e.source || '').toLowerCase() !== 'theme_allocation')),
     [allEvents, showThemeAllocations],
   );
 
+  const storyById = useMemo(() => new Map(stories.map((s) => [s.id, s])), [stories]);
+  const taskById = useMemo(() => new Map(tasks.map((t) => [t.id, t])), [tasks]);
+  const goalById = useMemo(() => new Map(goals.map((g) => [g.id, g])), [goals]);
+
+  // Mirrors KanbanCardV2's colour resolution: item's own theme first, falling back to the parent goal's colour.
+  const resolveEntityColor = useCallback((storyId?: string | null, taskId?: string | null): string | undefined => {
+    const entity: any = storyId ? storyById.get(storyId) : taskId ? taskById.get(taskId) : null;
+    if (!entity) return undefined;
+    const goal = entity.goalId ? goalById.get(entity.goalId) : undefined;
+    const themeValue = entity.theme ?? entity.themeId ?? entity.theme_id ?? goal?.theme;
+    const resolved = resolveThemeAppearance(themeValue);
+    return resolved?.color || (goal ? goalThemeColor(goal, globalThemes) : undefined);
+  }, [storyById, taskById, goalById, resolveThemeAppearance, globalThemes]);
+
+  const events = useMemo(() => visibleEvents.map((e) => {
+    if (e.type !== 'block' && e.type !== 'instance') return e;
+    const storyId = e.block?.storyId || e.instance?.storyId;
+    const taskId = e.block?.taskId;
+    const color = resolveEntityColor(storyId, taskId);
+    return color ? { ...e, color } : e;
+  }), [visibleEvents, resolveEntityColor]);
+
   const handleSelectEvent = useCallback((event: PlannerCalendarEvent) => {
     setSelectedEvent(event);
-  }, []);
-
-  const resolveEventTarget = useCallback((event: PlannerCalendarEvent): ItemTarget | null => {
-    const storyId = event.block?.storyId || event.instance?.storyId;
-    const taskId = event.block?.taskId;
-    const durationMinutes = Math.max(15, Math.round((event.end.getTime() - event.start.getTime()) / 60000));
-    if (storyId) {
-      return {
-        itemType: 'story', itemId: storyId, title: event.title,
-        scheduledBlockId: event.block?.id || null, scheduledInstanceId: event.instance?.id || null, durationMinutes,
-      };
-    }
-    if (taskId) {
-      return {
-        itemType: 'task', itemId: taskId, title: event.title,
-        scheduledBlockId: event.block?.id || null, scheduledInstanceId: event.instance?.id || null, durationMinutes,
-      };
-    }
-    return null;
   }, []);
 
   const openItem = useCallback((target: ItemTarget) => {
@@ -299,7 +366,7 @@ const SprintWeekPlanner: React.FC<SprintWeekPlannerProps> = ({ anchorDate }) => 
     setFeedback(null);
     try {
       const replanCalendarNowFn = httpsCallable(functions, 'replanCalendarNow', { timeout: 180000 });
-      const res: any = await replanCalendarNowFn({ days: VISIBLE_DAYS, startDate: format(weekStart, 'yyyy-MM-dd') });
+      const res: any = await replanCalendarNowFn({ days: VISIBLE_DAYS, startDate: format(weekStart, 'yyyy-MM-dd'), planningMode });
       const data = res?.data || {};
       const parts: string[] = [];
       if (data.created) parts.push(`${data.created} created`);
@@ -311,7 +378,7 @@ const SprintWeekPlanner: React.FC<SprintWeekPlannerProps> = ({ anchorDate }) => 
     } finally {
       setDeltaReplanLoading(false);
     }
-  }, [currentUser, weekStart]);
+  }, [currentUser, weekStart, planningMode]);
 
   const runFullReplan = useCallback(async () => {
     if (!currentUser) return;
@@ -319,14 +386,14 @@ const SprintWeekPlanner: React.FC<SprintWeekPlannerProps> = ({ anchorDate }) => 
     setFeedback(null);
     try {
       const runNightlyChainFn = httpsCallable(functions, 'runNightlyChainNow', { timeout: 540000 });
-      await runNightlyChainFn({ startDate: format(weekStart, 'yyyy-MM-dd'), days: VISIBLE_DAYS });
+      await runNightlyChainFn({ startDate: format(weekStart, 'yyyy-MM-dd'), days: VISIBLE_DAYS, planningMode });
       setFeedback({ variant: 'success', message: 'Full replan complete.' });
     } catch (err: any) {
       setFeedback({ variant: 'danger', message: err?.message || 'Full replan failed. Please retry in a moment.' });
     } finally {
       setFullReplanLoading(false);
     }
-  }, [currentUser, weekStart]);
+  }, [currentUser, weekStart, planningMode]);
 
   const handleDropFromOutside = useCallback(async ({ start, end }: { start: Date; end: Date }) => {
     const item = dragItemRef.current;
@@ -360,6 +427,18 @@ const SprintWeekPlanner: React.FC<SprintWeekPlannerProps> = ({ anchorDate }) => 
     const end = new Date(start.getTime() + estimateDurationMinutes(item) * 60000);
     return { title: item.title, start, end };
   }, []);
+
+  const eventComponents = useMemo(() => ({
+    event: (props: { event: PlannerCalendarEvent }) => (
+      <PlannerEventContent
+        event={props.event}
+        onBackToBacklog={sendEventBackToBacklog}
+        onDefer={setDeferTarget}
+        onComplete={completeItem}
+        onDelete={deleteItem}
+      />
+    ),
+  }), [sendEventBackToBacklog, completeItem, deleteItem]);
 
   const sprintName = selectedSprintId ? sprintsById?.[selectedSprintId]?.name : null;
 
@@ -449,7 +528,23 @@ const SprintWeekPlanner: React.FC<SprintWeekPlannerProps> = ({ anchorDate }) => 
             checked={showThemeAllocations}
             onChange={(e) => setShowThemeAllocations(e.target.checked)}
           />
-          <div className="d-flex gap-2">
+          <div className="d-flex gap-2 align-items-center">
+            <ButtonGroup size="sm">
+              <Button
+                variant={planningMode === 'smart' ? 'secondary' : 'outline-secondary'}
+                title="Smart: fill free slots flexibly"
+                onClick={() => setPlanningMode('smart')}
+              >
+                Smart
+              </Button>
+              <Button
+                variant={planningMode === 'strict' ? 'secondary' : 'outline-secondary'}
+                title="Strict: only honour explicit theme windows"
+                onClick={() => setPlanningMode('strict')}
+              >
+                Strict
+              </Button>
+            </ButtonGroup>
             <Button size="sm" variant="outline-secondary" disabled={deltaReplanLoading || fullReplanLoading} onClick={runDeltaReplan}>
               {deltaReplanLoading ? <Spinner size="sm" animation="border" className="me-1" /> : <RefreshCw size={14} className="me-1" />}
               Delta replan
@@ -521,6 +616,7 @@ const SprintWeekPlanner: React.FC<SprintWeekPlannerProps> = ({ anchorDate }) => 
                 onDropFromOutside={handleDropFromOutside}
                 dragFromOutsideItem={dragFromOutsideItem}
                 eventPropGetter={eventStyleGetter}
+                components={eventComponents}
                 tooltipAccessor={(event: any) => `${event.title} — Planned Date: ${format(event.start, 'd MMM, HH:mm')}`}
                 getNow={() => new Date()}
                 style={{ height: 'calc(100vh - 260px)' }}
