@@ -37,6 +37,15 @@ export interface CoachMacros {
   fatActualG: number | null;
 }
 
+export type CoachFocusEmphasis = 'performance' | 'nutrition_recovery';
+
+export interface CoachKpiTargets {
+  runKmTarget: number | null;
+  bikeKmTarget: number | null;
+  swimKmTarget: number | null;
+  bodyFatPctTarget: number | null;
+}
+
 export interface CoachPhaseRef {
   phaseIndex: number;        // 0-3
   phaseName: string;
@@ -44,6 +53,10 @@ export interface CoachPhaseRef {
   phaseGoalId: string;
   dayInPhase: number;        // e.g. 47
   totalDaysInPhase: number;  // e.g. 150
+  // Optional — absent on docs written before the phase-aware coach rollout.
+  focusAreas?: string[];
+  focusEmphasis?: CoachFocusEmphasis;
+  kpiTargets?: CoachKpiTargets;
 }
 
 export interface CoachDaily {

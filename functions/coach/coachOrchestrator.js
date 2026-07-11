@@ -25,6 +25,7 @@ const schedulerV2 = require('firebase-functions/v2/scheduler');
 const { defineSecret } = require('firebase-functions/params');
 const { DateTime } = require('luxon');
 const { callLLM } = require('../utils/llmHelper');
+const { resolveActivePhase, buildPhaseRef, phaseFocus } = require('./phaseResolver');
 const TZ = 'Europe/London';
 const REGION = 'europe-west2';
 
@@ -36,37 +37,54 @@ const OPENROUTER_API_KEY_SECRET = defineSecret('OPENROUTER_API_KEY');
 // appended at runtime by buildCoachSystemPrompt() so the coach is aware of
 // what the athlete is currently prioritising.
 
-const COACH_SYSTEM_PROMPT_BASE = [
+const COACH_SYSTEM_PROMPT_INTRO = [
   "You are Jim's personal triathlon and strength coach.",
   '',
   'Athlete profile:',
   '- Training for a full Ironman, target date September 2027',
-  '- Currently in base-building phase',
   '- 13 years CrossFit background — high fitness floor, bias toward intensity that needs managing',
   '- Disciplines: swim, bike, run, strength (2x/week max)',
   '- Based in Belfast, training solo, works from home',
-  '',
-  'Coaching priorities (in order):',
-  '1. Aerobic base development — protect Zone 2 volume above all else',
-  '2. Injury resilience — posterior chain, single-leg stability, shoulder integrity',
-  '3. Sport-specific volume progression — swim technique first, then volume',
-  '4. Manage CrossFit instincts — intensity is the enemy during base phase',
-  '',
+].join('\n');
+
+// Fixed weekly session-count rhythm — phase-specific emphasis (intensity vs.
+// volume vs. recovery) comes from the dynamic phase block below, not here.
+const COACH_SYSTEM_PROMPT_WEEKLY_STRUCTURE = [
   'Weekly structure target:',
-  '- Swim: 3x (technique focus in base phase)',
+  '- Swim: 3x',
   '- Bike: 3x including 1 long aerobic ride',
   '- Run: 4x including 1 long easy run',
   '- Strength: 2x (compound, low rep, 45 mins max)',
   '- Rest/recovery: 1 day minimum',
-  '',
-  'Current phase: Base Build (now → October 2026)',
-  'Upcoming phases: Build 1 → Build 2 → Peak → Taper → Race (Sept 2027)',
-  '',
+].join('\n');
+
+const COACH_SYSTEM_PROMPT_OUTRO = [
   'Be direct, evidence-based, and concise. No filler.',
   'If asked about a specific session, give concrete numbers (duration, intensity, HR zone).',
 ].join('\n');
 
-async function buildCoachSystemPrompt(uid, firestore) {
+/** Phase-derived "Coaching priorities" list — replaces the old hardcoded,
+ * base-phase-only list so the LLM's stated priorities always match phaseRef. */
+function buildPhasePriorities(phaseRef) {
+  const areas = phaseRef?.focusAreas?.length ? phaseRef.focusAreas : phaseFocus(0).focusAreas;
+  return ['Coaching priorities (in order):', ...areas.map((area, i) => `${i + 1}. ${area}`)].join('\n');
+}
+
+/** Phase-derived "Current phase / Phase focus / Upcoming phases" block —
+ * replaces the old static "Current phase: Base Build" lines. */
+function buildDynamicPhaseBlock(phaseRef, phases) {
+  const focus = phaseFocus(phaseRef.phaseIndex);
+  const lines = [
+    `Current phase: ${phaseRef.phaseName} (day ${phaseRef.dayInPhase}/${phaseRef.totalDaysInPhase})`,
+    `Phase focus: ${(phaseRef.focusAreas || []).join(', ')}`,
+    focus.directive,
+  ];
+  const upcoming = (phases || []).slice(phaseRef.phaseIndex + 1).map(p => p.title).filter(Boolean);
+  if (upcoming.length) lines.push(`Upcoming phases: ${upcoming.join(' → ')}`);
+  return lines.join('\n');
+}
+
+async function buildCoachSystemPrompt(uid, firestore, phaseRef, phases) {
   let titles = [];
   try {
     const fgSnap = await firestore.collection('focusGoals')
@@ -100,13 +118,31 @@ async function buildCoachSystemPrompt(uid, firestore) {
   }
 
   const dedup = Array.from(new Set(titles.map(t => t.trim()).filter(Boolean))).slice(0, 10);
-  if (dedup.length === 0) return COACH_SYSTEM_PROMPT_BASE;
-  return `${COACH_SYSTEM_PROMPT_BASE}\n\nAthlete's current focus goals: ${dedup.join('; ')}`;
+
+  const base = [
+    COACH_SYSTEM_PROMPT_INTRO,
+    '',
+    buildPhasePriorities(phaseRef),
+    '',
+    COACH_SYSTEM_PROMPT_WEEKLY_STRUCTURE,
+    '',
+    buildDynamicPhaseBlock(phaseRef, phases),
+    '',
+    COACH_SYSTEM_PROMPT_OUTRO,
+  ].join('\n');
+
+  if (dedup.length === 0) return base;
+  return `${base}\n\nAthlete's current focus goals: ${dedup.join('; ')}`;
 }
 
 async function generateCoachBriefingLLM(uid, firestore, ctx) {
   try {
-    const systemPrompt = await buildCoachSystemPrompt(uid, firestore);
+    const systemPrompt = await buildCoachSystemPrompt(uid, firestore, ctx.phaseRef, ctx.phases);
+    const kpiTargets = ctx.phaseRef?.kpiTargets || {};
+    const withTarget = (value, target, unit) =>
+      value === null || value === undefined ? null :
+        target === null || target === undefined ? `${Number(value).toFixed(1)}${unit}` :
+          `${Number(value).toFixed(1)}${unit} (target ${target}${unit})`;
     const lines = [
       "Generate this morning's coaching briefing for the athlete.",
       '',
@@ -116,14 +152,11 @@ async function generateCoachBriefingLLM(uid, firestore, ctx) {
       `Macro targets: P:${ctx.proteinG}g  C:${ctx.carbG}g  F:${ctx.fatG}g`,
       `Tomorrow training type: ${String(ctx.tomorrowTrainingType || 'rest').replace('_', ' ')}`,
       ctx.stepsToday !== null && ctx.stepsToday !== undefined
-        ? `Steps so far today: ${Number(ctx.stepsToday).toLocaleString()} / 12,000` : null,
-      ctx.weeklyRunKm !== null && ctx.weeklyRunKm !== undefined
-        ? `Weekly run volume: ${Number(ctx.weeklyRunKm).toFixed(1)}km` : null,
-      ctx.weeklySwimKm !== null && ctx.weeklySwimKm !== undefined
-        ? `Weekly swim volume: ${Number(ctx.weeklySwimKm).toFixed(1)}km` : null,
-      ctx.weeklyBikeKm !== null && ctx.weeklyBikeKm !== undefined
-        ? `Weekly bike volume: ${Number(ctx.weeklyBikeKm).toFixed(1)}km` : null,
-      ctx.phaseName ? `Active phase: ${ctx.phaseName} (day ${ctx.dayInPhase}/${ctx.totalDaysInPhase})` : null,
+        ? `Steps so far today: ${Number(ctx.stepsToday).toLocaleString()} / ${Number(ctx.stepsTarget || 12000).toLocaleString()}` : null,
+      withTarget(ctx.weeklyRunKm, kpiTargets.runKmTarget, 'km') ? `Weekly run volume: ${withTarget(ctx.weeklyRunKm, kpiTargets.runKmTarget, 'km')}` : null,
+      withTarget(ctx.weeklySwimKm, kpiTargets.swimKmTarget, 'km') ? `Weekly swim volume: ${withTarget(ctx.weeklySwimKm, kpiTargets.swimKmTarget, 'km')}` : null,
+      withTarget(ctx.weeklyBikeKm, kpiTargets.bikeKmTarget, 'km') ? `Weekly bike volume: ${withTarget(ctx.weeklyBikeKm, kpiTargets.bikeKmTarget, 'km')}` : null,
+      ctx.phaseRef ? `Active phase: ${ctx.phaseRef.phaseName} (day ${ctx.phaseRef.dayInPhase}/${ctx.phaseRef.totalDaysInPhase})` : null,
       ctx.programmeLine ? ctx.programmeLine.replace(/^\n/, '') : null,
       '',
       'Write the briefing as plain text under 800 characters, suitable for a Telegram message.',
@@ -377,17 +410,22 @@ async function _runOrchestratorForUser(uid) {
     ? inferTrainingType(tomorrowFitnessBlock.data().title)
     : 'rest';
 
-  // 7. Macros — targets computed from LBM; actuals from HealthKit profile snapshot
+  // 7. Macros — Settings-configured targets win when set, else computed from LBM.
+  // Field names confirmed from react-app/src/components/SettingsPage.tsx:1158-1298.
+  const stepsTarget = profile.targetStepsPerDay ?? profile.dailyStepTarget
+    ?? profile.healthTargetStepsPerDay ?? 12000;
   const weightKg = profile.healthkitWeightKg ?? profile.manualWeightKg ?? 79;
   const bodyFatPct = profile.healthkitBodyFatPct ?? profile.manualBodyFatPct ?? null;
   const lbm = bodyFatPct !== null ? weightKg * (1 - bodyFatPct / 100) : weightKg * 0.80;
-  const proteinG = Math.round(2.0 * lbm);
+  const proteinG = profile.targetProteinG ?? profile.dailyProteinTargetG
+    ?? profile.healthTargetProteinG ?? Math.round(2.0 * lbm);
   const carbG = Math.round(carbsPerKg(tomorrowTrainingType) * weightKg);
   // TDEE: prefer a static estimate since HealthKit calories = consumed, not burned
-  const tdeeKcal = 2500; // reasonable default; override with profile.tdeeKcal if set
+  const tdeeKcal = profile.tdeeKcal ?? 2500; // override with profile.tdeeKcal if set
   const proteinKcal = proteinG * 4;
   const carbKcal = carbG * 4;
-  const fatG = Math.max(40, Math.round((tdeeKcal - proteinKcal - carbKcal) / 9));
+  const fatG = profile.targetFatG ?? profile.dailyFatTargetG ?? profile.healthTargetFatG
+    ?? Math.max(40, Math.round((tdeeKcal - proteinKcal - carbKcal) / 9));
 
   // Actuals — read directly from HealthKit snapshot fields already mirrored to profiles
   const proteinActualG = profile.healthkitProteinTodayG ?? profile.manualProteinG ?? null;
@@ -405,8 +443,17 @@ async function _runOrchestratorForUser(uid) {
     muscleAtrophyAlert = true;
   }
 
-  // 9. Active phase
+  // 9. Active phase — resolved via the shared phaseResolver (also used by
+  // coachFitnessScheduler.js and coachDailyBriefing.js) so all three agree on
+  // "what phase is the athlete in" and its focus/KPI targets.
   const umbrellaGoalId = profile.ironmanUmbrellaGoalId ?? null;
+  const nowMs2 = Date.now();
+  const resolved = await resolveActivePhase(firestore, uid, umbrellaGoalId);
+  const phases = resolved?.phases ?? [];
+  // Preserve original fallback: default to phases[0] when nothing brackets "now".
+  const activePhase = resolved?.phase ?? phases[0] ?? null;
+  const phaseIdx = activePhase ? phases.indexOf(activePhase) : 0;
+
   let phaseRef = {
     phaseIndex: 0,
     phaseName: 'Phase 0 — Base Building',
@@ -414,75 +461,57 @@ async function _runOrchestratorForUser(uid) {
     phaseGoalId: '',
     dayInPhase: 0,
     totalDaysInPhase: 90,
+    focusAreas: phaseFocus(0).focusAreas,
+    focusEmphasis: phaseFocus(0).focusEmphasis,
+    kpiTargets: { runKmTarget: null, bikeKmTarget: null, swimKmTarget: null, bodyFatPctTarget: null },
   };
 
-  if (umbrellaGoalId) {
-    const phasesSnap = await firestore
-      .collection('goals')
-      .where('ownerUid', '==', uid)
-      .where('parentGoalId', '==', umbrellaGoalId)
-      .get();
+  if (activePhase) {
+    phaseRef = buildPhaseRef({ uid, umbrellaGoalId, phaseIndex: phaseIdx, phase: activePhase, nowMs: nowMs2 });
 
-    const nowMs2 = Date.now();
-    const phases = phasesSnap.docs
-      .map(d => ({ id: d.id, ...d.data() }))
-      .filter(g => g.startDate && g.endDate)
-      .sort((a, b) => a.startDate - b.startDate);
-
-    const activePhase = phases.find(p => p.startDate <= nowMs2 && p.endDate >= nowMs2)
-      || phases[0];
-
-    if (activePhase) {
-      const phaseIdx = phases.indexOf(activePhase);
-      const dayInPhase = Math.max(0, Math.ceil((nowMs2 - activePhase.startDate) / 86400000));
-      const totalDays = Math.ceil((activePhase.endDate - activePhase.startDate) / 86400000);
-      phaseRef = {
-        phaseIndex: phaseIdx,
-        phaseName: activePhase.title,
-        umbrellaGoalId,
-        phaseGoalId: activePhase.id,
-        dayInPhase,
-        totalDaysInPhase: totalDays,
-      };
-
-      // Phase transition check — update FocusGoal leaf if we just entered a new phase
-      const prevDayMs = nowMs2 - 86400000;
-      const prevPhase = phases.find(p => p.startDate <= prevDayMs && p.endDate >= prevDayMs);
-      if (prevPhase && prevPhase.id !== activePhase.id) {
-        // Just transitioned — update FocusGoal
-        const fgSnap = await firestore
-          .collection('focusGoals')
-          .where('ownerUid', '==', uid)
-          .where('isActive', '==', true)
-          .limit(1)
-          .get();
-        if (!fgSnap.empty) {
-          const fg = fgSnap.docs[0];
-          const fgData = fg.data();
-          const newLeafIds = [
-            ...(fgData.focusLeafGoalIds || []).filter(id => id !== prevPhase.id),
-            activePhase.id,
-          ];
-          const newGoalIds = [
-            ...(fgData.goalIds || []).filter(id => id !== prevPhase.id),
-            activePhase.id,
-          ];
-          await fg.ref.update({
-            focusLeafGoalIds: newLeafIds,
-            goalIds: newGoalIds,
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          });
-        }
-        // Send phase transition Telegram notification
-        const chatId = await getTelegramChatId(uid);
-        if (chatId) {
-          const targets = phases[phaseIdx]?.kpis?.map(k => `${k.name}: ${k.target}${k.unit}`).join(' | ') || '';
-          await sendTelegram(chatId,
-            `🚀 Phase Transition!\nYou're now in ${activePhase.title}.\nNew weekly targets: ${targets}`
-          );
-        }
+    // Phase transition check — update FocusGoal leaf if we just entered a new phase
+    const prevDayMs = nowMs2 - 86400000;
+    const prevPhase = phases.find(p => p.startDate <= prevDayMs && p.endDate >= prevDayMs);
+    if (prevPhase && prevPhase.id !== activePhase.id) {
+      // Just transitioned — update FocusGoal
+      const fgSnap = await firestore
+        .collection('focusGoals')
+        .where('ownerUid', '==', uid)
+        .where('isActive', '==', true)
+        .limit(1)
+        .get();
+      if (!fgSnap.empty) {
+        const fg = fgSnap.docs[0];
+        const fgData = fg.data();
+        const newLeafIds = [
+          ...(fgData.focusLeafGoalIds || []).filter(id => id !== prevPhase.id),
+          activePhase.id,
+        ];
+        const newGoalIds = [
+          ...(fgData.goalIds || []).filter(id => id !== prevPhase.id),
+          activePhase.id,
+        ];
+        await fg.ref.update({
+          focusLeafGoalIds: newLeafIds,
+          goalIds: newGoalIds,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      }
+      // Send phase transition Telegram notification
+      const chatId = await getTelegramChatId(uid);
+      if (chatId) {
+        const targets = phases[phaseIdx]?.kpis?.map(k => `${k.name}: ${k.target}${k.unit}`).join(' | ') || '';
+        await sendTelegram(chatId,
+          `🚀 Phase Transition!\nYou're now in ${activePhase.title}.\nNew weekly targets: ${targets}`
+        );
       }
     }
+  }
+
+  // Settings-configured body-fat target wins over the phase's auto-generated KPI target.
+  const bodyFatPctTargetOverride = profile.targetBodyFatPct ?? profile.healthTargetBodyFatPct ?? null;
+  if (bodyFatPctTargetOverride !== null) {
+    phaseRef = { ...phaseRef, kpiTargets: { ...phaseRef.kpiTargets, bodyFatPctTarget: bodyFatPctTargetOverride } };
   }
 
   // 10. Weekly photo prompt (Mondays)
@@ -550,7 +579,7 @@ async function _runOrchestratorForUser(uid) {
 
   // 12d. Steps today
   const stepsToday = profile.healthkitStepsToday ?? profile.stepsToday ?? null;
-  const stepsLine = stepsToday !== null ? `\nSteps: ${stepsToday.toLocaleString()} / 12,000` : '';
+  const stepsLine = stepsToday !== null ? `\nSteps: ${stepsToday.toLocaleString()} / ${stepsTarget.toLocaleString()}` : '';
 
   // 12e. Generate the briefing via LLM with the triathlon coach persona +
   // focus-goal awareness. Falls back to the programmatic template if the LLM
@@ -572,9 +601,9 @@ async function _runOrchestratorForUser(uid) {
     weeklyRunKm,
     weeklySwimKm,
     weeklyBikeKm: weeklyBikeKmCtx,
-    phaseName: phaseRef.phaseName,
-    dayInPhase: phaseRef.dayInPhase,
-    totalDaysInPhase: phaseRef.totalDaysInPhase,
+    stepsTarget,
+    phaseRef,
+    phases,
     programmeLine,
   });
 

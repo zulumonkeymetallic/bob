@@ -19,6 +19,7 @@ const admin = require('firebase-admin');
 const httpsV2 = require('firebase-functions/v2/https');
 const schedulerV2 = require('firebase-functions/v2/scheduler');
 const { DateTime } = require('luxon');
+const { resolveActivePhase } = require('./phaseResolver');
 
 const TZ = 'Europe/London';
 const REGION = 'europe-west2';
@@ -90,19 +91,8 @@ async function _buildWeeklyProgressMessage(uid) {
   const umbrellaGoalId = profile.ironmanUmbrellaGoalId;
   if (!umbrellaGoalId) return null;
 
-  const phasesSnap = await firestore
-    .collection('goals')
-    .where('ownerUid', '==', uid)
-    .where('parentGoalId', '==', umbrellaGoalId)
-    .get();
-
-  const nowMs = Date.now();
-  const activePhase = phasesSnap.docs
-    .map(d => ({ id: d.id, ...d.data() }))
-    .filter(p => p.startDate && p.endDate)
-    .sort((a, b) => a.startDate - b.startDate)
-    .find(p => p.startDate <= nowMs && p.endDate >= nowMs);
-
+  const resolved = await resolveActivePhase(firestore, uid, umbrellaGoalId);
+  const activePhase = resolved?.phase ?? null;
   if (!activePhase) return null;
 
   // Read current week from fitness_overview.weekly[] (pre-aggregated, no 1000-doc query needed)
@@ -207,19 +197,8 @@ exports.checkKpiOffTrack = schedulerV2.onSchedule(
         const umbrellaGoalId = profile.ironmanUmbrellaGoalId;
         if (!umbrellaGoalId) continue;
 
-        const phasesSnap = await firestore
-          .collection('goals')
-          .where('ownerUid', '==', uid)
-          .where('parentGoalId', '==', umbrellaGoalId)
-          .get();
-
-        const nowMs = Date.now();
-        const activePhase = phasesSnap.docs
-          .map(d => ({ id: d.id, ...d.data() }))
-          .filter(p => p.startDate && p.endDate)
-          .sort((a, b) => a.startDate - b.startDate)
-          .find(p => p.startDate <= nowMs && p.endDate >= nowMs);
-
+        const resolved = await resolveActivePhase(firestore, uid, umbrellaGoalId);
+        const activePhase = resolved?.phase ?? null;
         if (!activePhase) continue;
 
         // Use fitness_overview sport totals (last30 best available approximation for this week)

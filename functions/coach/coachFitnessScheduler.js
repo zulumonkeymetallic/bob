@@ -18,6 +18,7 @@ const httpsV2 = require('firebase-functions/v2/https');
 const { DateTime } = require('luxon');
 const ical = require('node-ical');
 const { RRule } = require('rrule');
+const { resolveActivePhase: resolveActivePhaseShared } = require('./phaseResolver');
 
 const TZ = 'Europe/London';
 const REGION = 'europe-west2';
@@ -216,25 +217,13 @@ exports.pollFitnessProgrammes = schedulerV2.onSchedule(
 
 // ─── scheduleCoachFitnessBlocks ──────────────────────────────────────────────
 
-/** Returns the phase index (0-3) based on phase goals or null */
+/** Returns the phase index (0-3) based on phase goals or null. Thin wrapper
+ * over the shared phaseResolver.js — preserves this file's original
+ * "null when nothing brackets now" contract (no phases[0] fallback). */
 async function resolveActivePhase(firestore, uid, umbrellaGoalId) {
-  const phasesSnap = await firestore
-    .collection('goals')
-    .where('ownerUid', '==', uid)
-    .where('parentGoalId', '==', umbrellaGoalId)
-    .get();
-
-  const nowMs = Date.now();
-  const phases = phasesSnap.docs
-    .map(d => ({ id: d.id, ...d.data() }))
-    .filter(p => p.startDate && p.endDate)
-    .sort((a, b) => a.startDate - b.startDate);
-
-  const activePhase = phases.find(p => p.startDate <= nowMs && p.endDate >= nowMs);
-  if (!activePhase) return null;
-
-  const phaseIndex = phases.indexOf(activePhase);
-  return { phaseIndex, phase: activePhase };
+  const resolved = await resolveActivePhaseShared(firestore, uid, umbrellaGoalId);
+  if (!resolved || !resolved.phase) return null;
+  return { phaseIndex: resolved.phaseIndex, phase: resolved.phase };
 }
 
 /** Phase → weekly swim/bike targets */
