@@ -5,7 +5,7 @@ import {
   Alert, Badge, Button, ButtonGroup, Card, Form, Spinner,
 } from 'react-bootstrap';
 import {
-  CheckCircle, Clock3, CornerUpLeft, Eye, EyeOff, ExternalLink, RefreshCw, Sparkles, Trash2, X,
+  CheckCircle, Clock3, CornerUpLeft, Eye, EyeOff, ExternalLink, MoreVertical, RefreshCw, Sparkles, Trash2, X,
 } from 'lucide-react';
 import { Calendar as RBC, dateFnsLocalizer } from 'react-big-calendar';
 import withDragAndDrop from 'react-big-calendar/lib/addons/dragAndDrop';
@@ -69,40 +69,33 @@ const resolveEventTarget = (event: PlannerCalendarEvent): ItemTarget | null => {
   return null;
 };
 
-const eventIconBtnStyle: React.CSSProperties = {
-  background: 'transparent', border: 'none', color: '#fff', padding: 0,
-  width: 14, height: 14, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+const eventActionsBtnStyle: React.CSSProperties = {
+  background: 'rgba(0,0,0,0.35)', border: 'none', color: '#fff', padding: 0, borderRadius: 3,
+  width: 16, height: 16, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
 };
 
 interface PlannerEventContentProps {
   event: PlannerCalendarEvent;
-  onBackToBacklog: (target: ItemTarget) => void;
-  onDefer: (target: ItemTarget) => void;
-  onComplete: (target: ItemTarget) => void;
-  onDelete: (target: ItemTarget) => void;
+  onOpenActions: (event: PlannerCalendarEvent) => void;
 }
 
-const PlannerEventContent: React.FC<PlannerEventContentProps> = ({ event, onBackToBacklog, onDefer, onComplete, onDelete }) => {
-  const [hovered, setHovered] = useState(false);
+// Always-visible tap target (not hover-gated) so it works on touch/iPad, not just mouse.
+// Opens the same action bar used when selecting an event.
+const PlannerEventContent: React.FC<PlannerEventContentProps> = ({ event, onOpenActions }) => {
   const target = resolveEventTarget(event);
   return (
-    <div
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      style={{ position: 'relative', height: '100%', overflow: 'hidden' }}
-    >
-      <div className="text-truncate" style={{ fontSize: 11, lineHeight: 1.2, paddingRight: target ? 58 : 0 }}>{event.title}</div>
-      {target && hovered && (
-        <div
-          className="d-flex align-items-center gap-1"
-          style={{ position: 'absolute', top: 0, right: 0, background: 'rgba(0,0,0,0.4)', borderRadius: 3, padding: '1px 3px' }}
-          onClick={(e) => e.stopPropagation()}
+    <div style={{ position: 'relative', height: '100%', overflow: 'hidden' }}>
+      <div className="text-truncate" style={{ fontSize: 11, lineHeight: 1.2, paddingRight: target ? 18 : 0 }}>{event.title}</div>
+      {target && (
+        <button
+          type="button"
+          title="Actions"
+          onClick={(e) => { e.stopPropagation(); onOpenActions(event); }}
+          onPointerDown={(e) => e.stopPropagation()}
+          style={{ ...eventActionsBtnStyle, position: 'absolute', top: 0, right: 0 }}
         >
-          <button type="button" title="Send back to backlog" onClick={(e) => { e.stopPropagation(); onBackToBacklog(target); }} style={eventIconBtnStyle}><CornerUpLeft size={10} /></button>
-          <button type="button" title="Defer to another sprint" onClick={(e) => { e.stopPropagation(); onDefer(target); }} style={eventIconBtnStyle}><Clock3 size={10} /></button>
-          <button type="button" title="Mark complete" onClick={(e) => { e.stopPropagation(); onComplete(target); }} style={eventIconBtnStyle}><CheckCircle size={10} /></button>
-          <button type="button" title="Delete" onClick={(e) => { e.stopPropagation(); onDelete(target); }} style={eventIconBtnStyle}><Trash2 size={10} /></button>
-        </div>
+          <MoreVertical size={11} />
+        </button>
       )}
     </div>
   );
@@ -430,15 +423,9 @@ const SprintWeekPlanner: React.FC<SprintWeekPlannerProps> = ({ anchorDate }) => 
 
   const eventComponents = useMemo(() => ({
     event: (props: { event: PlannerCalendarEvent }) => (
-      <PlannerEventContent
-        event={props.event}
-        onBackToBacklog={sendEventBackToBacklog}
-        onDefer={setDeferTarget}
-        onComplete={completeItem}
-        onDelete={deleteItem}
-      />
+      <PlannerEventContent event={props.event} onOpenActions={setSelectedEvent} />
     ),
-  }), [sendEventBackToBacklog, completeItem, deleteItem]);
+  }), []);
 
   const sprintName = selectedSprintId ? sprintsById?.[selectedSprintId]?.name : null;
 

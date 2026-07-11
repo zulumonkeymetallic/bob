@@ -15,13 +15,14 @@
  * content now lives on the /sprints/deferrals page instead.
  */
 import React, { useCallback, useMemo, useState } from 'react';
-import { ClipboardCheck, Brain, Flag, CalendarDays, Heart, Plug, Clock3 } from 'lucide-react';
+import { ClipboardCheck, Brain, Flag, CalendarDays, Heart, Plug, Clock3, Activity } from 'lucide-react';
 import ToolbarBannerIcon from './ToolbarBannerIcon';
 import CheckInBanner from './checkins/CheckInBanner';
 import { CoachVerdictBanner } from './coach/CoachVerdictBanner';
 import SprintClosureBanner from './sprints/SprintClosureBanner';
 import PlannedSprintBanner from './sprints/PlannedSprintBanner';
 import GlobalHealthProgressBanner from './GlobalHealthProgressBanner';
+import GlobalFitnessKpiBanner from './GlobalFitnessKpiBanner';
 import GlobalIntegrationStatus from './GlobalIntegrationStatus';
 import DeferralCandidatesBanner from './DeferralCandidatesBanner';
 
@@ -59,6 +60,11 @@ const ToolbarBannerIconRow: React.FC<ToolbarBannerIconRowProps> = ({ isLargeScre
       {isLargeScreen && (
         <ToolbarBannerIcon id="health" icon={Heart} label="Health" prominent={prominent} onVisibilityChange={handleVisibilityChange}>
           <GlobalHealthProgressBanner />
+        </ToolbarBannerIcon>
+      )}
+      {isLargeScreen && (
+        <ToolbarBannerIcon id="fitness" icon={Activity} label="Fitness KPIs" prominent={prominent} onVisibilityChange={handleVisibilityChange}>
+          <GlobalFitnessKpiBanner />
         </ToolbarBannerIcon>
       )}
       {isLargeScreen && (

@@ -197,6 +197,13 @@ function buildBusyIntervals(blocks, { planningMode, persona, excludedBlockIds, c
       busy.push({ start, end });
       return;
     }
+    // Real user calendar events are always hard-busy, regardless of mode or persona —
+    // never let a title/theme match (e.g. a GCal meeting titled "Work sync") make a
+    // genuine calendar event transparent to the placer.
+    if (isUserGcalEvent(block)) {
+      busy.push({ start, end });
+      return;
+    }
     // P1 override: treat work/fitness theme blocks as transparent so the item
     // can be placed inside or alongside them.
     if (constraintMode === 'override' && isPlannerThemeBlock(block)) return;
