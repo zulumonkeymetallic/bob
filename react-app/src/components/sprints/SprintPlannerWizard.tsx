@@ -852,7 +852,7 @@ const SprintPlannerWizard: React.FC<SprintPlannerWizardProps> = ({
             variant="primary"
             size="sm"
             onClick={goNext}
-            disabled={step === 1 && wiz.selectedGoalIds.size === 0}
+            disabled={step === 1 && !existingSprint && wiz.selectedGoalIds.size === 0}
           >
             Next<ChevronRight size={14} className="ms-1" />
           </Button>
