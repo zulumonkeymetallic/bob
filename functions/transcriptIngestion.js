@@ -26,6 +26,7 @@ const DEFAULT_TIMEZONE = 'Europe/London';
 const GEMINI_MODEL = String(process.env.GEMINI_MODEL || 'gemini-2.5-flash').trim();
 const VERTEX_PROJECT  = 'bob20250810';
 const VERTEX_LOCATION = 'europe-west2';
+const semanticClustering = require('./semanticClustering');
 const OPENROUTER_BASE_URL = String(process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').trim().replace(/\/+$/, '');
 const OPENROUTER_FALLBACK_MODEL = String(process.env.OPENROUTER_FALLBACK_MODEL || 'openrouter/auto').trim();
 const GOOGLE_REGION = 'europe-west2';
@@ -2835,6 +2836,35 @@ async function buildStoryRecords({
       continue;
     }
 
+    // Semantic clustering: no exact/title match — check for a near-duplicate by
+    // MEANING before creating a new story. On a high-confidence match we reuse
+    // the existing story (auto-append) instead of creating a duplicate. Fully
+    // fail-soft: any error falls through to normal creation.
+    let semanticEmbedding = null;
+    try {
+      const decision = await semanticClustering.resolveCandidate({
+        db, uid, kind: 'story',
+        title: story.title, description: story.description, entity: story,
+      });
+      semanticEmbedding = decision.embedding;
+      if (decision.action === 'attach' && decision.match && decision.match.id) {
+        records.push({
+          id: decision.match.id,
+          ref: decision.match.ref,
+          title: story.title,
+          url: story.url || null,
+          entityType: 'story',
+          collectionName: 'stories',
+          deepLink: buildEntityUrl('story', decision.match.id, decision.match.ref),
+          existing: true,
+          semanticSimilarity: decision.match.similarity,
+        });
+        continue;
+      }
+    } catch (e) {
+      // fail-soft — proceed to create the story as normal
+    }
+
     const id = buildStableDocId('story', uid, fingerprint, index);
     const ref = buildStableRef('story', id);
     const sized = estimateSize({
@@ -2879,6 +2909,9 @@ async function buildStoryRecords({
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     };
+    if (semanticEmbedding) {
+      payload.titleEmbedding = admin.firestore.FieldValue.vector(semanticEmbedding);
+    }
     records.push({
       id,
       ref,
