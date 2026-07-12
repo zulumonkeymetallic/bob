@@ -14,6 +14,7 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Badge, Button, Form, OverlayTrigger, Tooltip } from 'react-bootstrap';
 import {
   collection,
@@ -382,7 +383,12 @@ const VisualCanvas: React.FC = () => {
   const [canvasDetailLevel, setCanvasDetailLevel] = useState<'minimal' | 'compact' | 'full'>('minimal');
 
   // ── Layout ───────────────────────────────────────────────────────────────────
-  const [viewLayout, setViewLayout] = useState<ViewLayout>('tree');
+  // Deep-linkable via ?layout=roadmap|swimlane|tree (e.g. the Roadmap action-bar button).
+  const [searchParams] = useSearchParams();
+  const [viewLayout, setViewLayout] = useState<ViewLayout>(() => {
+    const requested = searchParams.get('layout');
+    return requested === 'roadmap' || requested === 'swimlane' || requested === 'tree' ? requested : 'tree';
+  });
 
   // ── Canvas state ─────────────────────────────────────────────────────────────
   const [scale,     setScale]     = useState(1);
