@@ -27,7 +27,7 @@ const KanbanColumnV2: React.FC<KanbanColumnV2Props> = ({ status, title, color, c
     }, [status]);
 
     return (
-        <div className="kanban-column" style={{ flex: 1, minWidth: '300px', display: 'flex', flexDirection: 'column', height: '100%' }}>
+        <div className="kanban-column" style={{ flex: 1, minWidth: '300px', display: 'flex', flexDirection: 'column' }}>
             <div
                 className="kanban-column-header"
                 style={{
@@ -39,7 +39,10 @@ const KanbanColumnV2: React.FC<KanbanColumnV2Props> = ({ status, title, color, c
                     marginBottom: '8px',
                     display: 'flex',
                     alignItems: 'center',
-                    justifyContent: 'space-between'
+                    justifyContent: 'space-between',
+                    position: 'sticky',
+                    top: 0,
+                    zIndex: 2,
                 }}
             >
                 <h5 style={{ margin: 0, fontSize: '16px', fontWeight: 600 }}>{title}</h5>
@@ -63,7 +66,6 @@ const KanbanColumnV2: React.FC<KanbanColumnV2Props> = ({ status, title, color, c
                     padding: '8px',
                     backgroundColor: isDraggedOver ? 'var(--notion-hover)' : 'var(--bg-subtle)',
                     borderRadius: '8px',
-                    overflowY: 'auto',
                     minHeight: '200px',
                     transition: 'background-color 0.2s ease'
                 }}

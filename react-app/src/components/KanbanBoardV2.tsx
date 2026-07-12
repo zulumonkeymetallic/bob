@@ -685,7 +685,7 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
     }
 
     return (
-        <div className="kanban-board-v2" style={{ display: 'flex', gap: '16px', height: '100%', overflowX: 'auto', paddingBottom: '16px' }}>
+        <div className="kanban-board-v2" style={{ display: 'flex', gap: '16px', alignItems: 'flex-start', overflowX: 'auto', paddingBottom: '16px' }}>
             {Object.entries(columns).map(([key, col]) => (
                 <KanbanColumnV2 key={key} status={key} title={col.title} color={col.color as string}>
                     {col.items.map(item => {

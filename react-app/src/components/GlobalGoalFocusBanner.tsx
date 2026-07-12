@@ -1,18 +1,16 @@
 /**
- * Compact focus-goal banner shown in SidebarLayout on every page (desktop only).
- * Shows ALL isBannerGoal-flagged goals as compact GoalCard tiles in a horizontal row.
- * Clicking any card or the header navigates to /focus-goals.
- * Includes per-goal progress: story completion, KPIs, and Monzo savings progress.
+ * Focus-goals section for the NotificationStream popover.
+ * Shows every isBannerGoal-flagged goal as a plain row with a progress bar
+ * (story completion), matching DeferralCandidatesBanner's list style.
+ * Clicking a row or "View all" navigates to /focus-goals.
  */
 import React, { useEffect, useMemo, useState } from 'react';
 import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
-import { Target } from 'lucide-react';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { Goal, Story } from '../types';
-import GoalCard from './GoalCard';
 import { getThemeById, getThemeByName, GLOBAL_THEMES } from '../constants/globalThemes';
 
 const BANNER_TAGS = new Set(['banner', 'daily-banner', 'focus-banner', 'rotation-banner', 'project45']);
@@ -125,76 +123,70 @@ const GlobalGoalFocusBanner: React.FC = () => {
   if (bannerGoals.length === 0) return null;
 
   return (
-    <div className="mb-1" style={{ fontSize: '0.7em' }}>
-      {/* Header row */}
-      <div
-        className="d-flex align-items-center justify-content-between mb-1"
-        style={{ paddingLeft: 2, paddingRight: 4 }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
-          <Target size={9} style={{ color: 'var(--muted)' }} />
-          <span style={{ fontSize: 9, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--muted)' }}>
-            Focus Goals
-          </span>
-        </div>
+    <div style={{ minWidth: 260 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+        <span style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--muted)' }}>
+          Focus goals
+        </span>
         <button
           onClick={() => navigate('/focus-goals')}
-          style={{
-            background: 'none',
-            border: 'none',
-            padding: 0,
-            fontSize: 9,
-            color: 'var(--brand, #5f77dc)',
-            cursor: 'pointer',
-            textDecoration: 'underline',
-          }}
+          style={{ background: 'none', border: 'none', padding: 0, fontSize: 10, color: 'var(--brand, #5f77dc)', cursor: 'pointer', textDecoration: 'underline' }}
         >
           View all
         </button>
       </div>
 
-      {/* Goal cards — horizontal scroll if many */}
-      <div style={{ display: 'flex', gap: 4, overflowX: 'auto', paddingBottom: 2 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         {bannerGoals.map((goal) => {
-          const { color: themeColor, label: themeLabel } = resolveGoalTheme((goal as any).theme);
-          const stats   = storyStats.get(goal.id);
-          const total   = stats?.total ?? null;
-          const done    = stats?.done  ?? null;
-          const progressPercent = total ? Math.round(((done ?? 0) / total) * 100) : undefined;
+          const { color: themeColor } = resolveGoalTheme((goal as any).theme);
+          const stats = storyStats.get(goal.id);
+          const total = stats?.total ?? null;
+          const done = stats?.done ?? null;
+          const progressPercent = total ? Math.round(((done ?? 0) / total) * 100) : 0;
 
           const kpis = Array.isArray((goal as any).kpis) ? (goal as any).kpis : [];
           const kpiLabel = kpis.length > 0
             ? kpis.slice(0, 2).map((k: any) => `${k.name}: ${k.target}${k.unit ?? ''}`).join(' · ')
             : undefined;
 
-          const potId      = (goal as any).monzoPotId || (goal as any).linkedPotId || (goal as any).potId;
+          const potId = (goal as any).monzoPotId || (goal as any).linkedPotId || (goal as any).potId;
           const potBalance = potId && pots[potId] ? pots[potId].balance : 0;
-          const estimated  = Number((goal as any).estimatedCost || 0);
+          const estimated = Number((goal as any).estimatedCost || 0);
           const hasSavings = estimated > 0 && potId;
           const savingsPct = hasSavings
             ? Math.min(100, Math.round(((potBalance / 100) / estimated) * 100))
             : null;
 
-          const displayKpiLabel = [
+          const metaLabel = [
+            total != null ? `${done ?? 0}/${total} stories` : null,
             kpiLabel,
             savingsPct != null ? `Savings ${savingsPct}%` : null,
-          ].filter(Boolean).join(' · ') || undefined;
+          ].filter(Boolean).join(' · ');
 
           return (
-            <div key={goal.id} style={{ flexShrink: 0, width: 140 }}>
-              <GoalCard
-                goal={goal}
-                themeColor={themeColor}
-                themeLabel={themeLabel}
-                detailLevel="compact"
-                isFocusAligned
-                progressPercent={progressPercent}
-                totalStories={total}
-                doneStories={done}
-                kpiLabel={displayKpiLabel}
-                onClick={() => navigate('/focus-goals')}
-              />
-            </div>
+            <button
+              key={goal.id}
+              onClick={() => navigate('/focus-goals')}
+              style={{
+                display: 'block', width: '100%',
+                background: 'var(--notion-hover, rgba(0,0,0,0.04))',
+                border: '1px solid var(--border, #e5e7eb)', borderRadius: 6,
+                padding: '5px 8px', textAlign: 'left', cursor: 'pointer',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
+                <span style={{ fontSize: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={goal.title}>
+                  {goal.title}
+                </span>
+                <span style={{ fontSize: 11, fontWeight: 700, flexShrink: 0, color: 'var(--muted)' }}>{progressPercent}%</span>
+              </div>
+              <div style={{ height: 4, background: 'var(--border, #e5e7eb)', borderRadius: 2, marginTop: 4, overflow: 'hidden' }}>
+                <div style={{ height: '100%', width: `${progressPercent}%`, background: themeColor, borderRadius: 2 }} />
+              </div>
+              {metaLabel && (
+                <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 3 }}>{metaLabel}</div>
+              )}
+            </button>
           );
         })}
       </div>
