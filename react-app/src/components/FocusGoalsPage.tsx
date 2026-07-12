@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { Container, Row, Col, Button, Card, Alert, Spinner, ListGroup } from 'react-bootstrap';
+import { Container, Row, Col, Button, Card, Alert, Spinner, ListGroup, Form } from 'react-bootstrap';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
-import { collection, query, where, onSnapshot, getDocs, getDoc, doc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, getDocs, getDoc, doc, updateDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { FocusGoal, Goal, Story } from '../types';
 import { useFocusGoals } from '../hooks/useFocusGoals';
@@ -11,6 +11,8 @@ import FocusGoalCountdownBanner from './FocusGoalCountdownBanner';
 import FocusGoalWizard from './FocusGoalWizard';
 import GoalKpiStudioPanel from './GoalKpiStudioPanel';
 import KPIDesigner from './KPIDesigner';
+import GoalsCardView from './GoalsCardView';
+import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import {
   autoCreateStoriesForGoals,
   autoCreateSprintsForFocusPeriod,
@@ -25,7 +27,7 @@ import {
   triggerFocusGoalDataRefresh,
   updateFocusGoal,
 } from '../services/focusGoalsService';
-import { getActiveFocusLeafGoalIds, getGoalDisplayPath, getProtectedFocusGoalIds, isGoalInHierarchySet } from '../utils/goalHierarchy';
+import { getActiveFocusLeafGoalIds, getProtectedFocusGoalIds, isGoalInHierarchySet } from '../utils/goalHierarchy';
 import { Plus, Zap } from 'lucide-react';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -69,6 +71,18 @@ export const FocusGoalsPage: React.FC = () => {
   const [focusAlignmentMessage, setFocusAlignmentMessage] = useState<string>('');
   const [monzoBudgetSummary, setMonzoBudgetSummary] = useState<any>(null);
   const [monzoGoalAlignment, setMonzoGoalAlignment] = useState<any>(null);
+  const { themes: globalThemes } = useGlobalThemes();
+  // Shares the same persistence key as the Goals page so the detail level follows the user across pages
+  const [goalsDetailLevel, setGoalsDetailLevel] = useState<'minimal' | 'medium' | 'full'>(() => {
+    try {
+      const stored = localStorage.getItem('bob_goals_detail_level');
+      if (stored === 'minimal' || stored === 'medium' || stored === 'full') return stored;
+    } catch {}
+    return 'medium';
+  });
+  useEffect(() => {
+    try { localStorage.setItem('bob_goals_detail_level', goalsDetailLevel); } catch {}
+  }, [goalsDetailLevel]);
 
   const activeFocusLeafGoalIdSet = React.useMemo(
     () => getActiveFocusLeafGoalIds(activeFocusGoals),
@@ -359,6 +373,39 @@ export const FocusGoalsPage: React.FC = () => {
     }
   };
 
+  const handleGoalUpdate = async (goalId: string, updates: Partial<Goal>) => {
+    try {
+      await updateDoc(doc(db, 'goals', goalId), {
+        ...updates,
+        updatedAt: serverTimestamp(),
+      });
+    } catch (error) {
+      console.error('Error updating goal:', error);
+    }
+  };
+
+  const handleGoalDelete = async (goalId: string) => {
+    const goal = goals.find((g) => g.id === goalId);
+    const confirmed = window.confirm(`Delete goal "${goal?.title || goalId}"? This cannot be undone.`);
+    if (!confirmed) return;
+    try {
+      await deleteDoc(doc(db, 'goals', goalId));
+    } catch (error) {
+      console.error('Error deleting goal:', error);
+    }
+  };
+
+  const handleGoalPriorityChange = async (goalId: string, newPriority: number) => {
+    try {
+      await updateDoc(doc(db, 'goals', goalId), {
+        priority: newPriority,
+        updatedAt: serverTimestamp(),
+      });
+    } catch (error) {
+      console.error('Error updating goal priority:', error);
+    }
+  };
+
   const handleOpenKpiDesigner = (goalId?: string) => {
     setKpiDesignerGoalId(goalId);
     setShowKpiDesigner(true);
@@ -494,9 +541,27 @@ export const FocusGoalsPage: React.FC = () => {
       {/* Active Focus Goals */}
       {activeFocusGoals.length > 0 ? (
         <div style={{ marginBottom: '32px' }}>
-          <h4 style={{ marginBottom: '16px', fontWeight: '600' }}>
-            🎯 Active Focus ({activeFocusGoals.length})
-          </h4>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap', marginBottom: '16px' }}>
+            <h4 style={{ margin: 0, fontWeight: '600' }}>
+              🎯 Active Focus ({activeFocusGoals.length})
+            </h4>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Form.Label htmlFor="focus-goals-detail-level" style={{ margin: 0, fontSize: '12px', fontWeight: 500, color: 'var(--notion-text-secondary, #666)' }}>
+                Detail
+              </Form.Label>
+              <Form.Select
+                id="focus-goals-detail-level"
+                size="sm"
+                value={goalsDetailLevel}
+                onChange={(e) => setGoalsDetailLevel(e.target.value as 'minimal' | 'medium' | 'full')}
+                style={{ width: 'auto', border: '1px solid var(--notion-border)', background: 'var(--notion-bg)', color: 'var(--notion-text)' }}
+              >
+                <option value="minimal">Minimal</option>
+                <option value="medium">Medium</option>
+                <option value="full">Full</option>
+              </Form.Select>
+            </div>
+          </div>
           {activeFocusGoals.map(focusGoal => (
             <div key={focusGoal.id} style={{ marginBottom: '20px' }}>
               <FocusGoalCountdownBanner
@@ -511,33 +576,43 @@ export const FocusGoalsPage: React.FC = () => {
                 monzoBudgetSummary={monzoBudgetSummary}
                 monzoGoalAlignment={monzoGoalAlignment}
               />
-              {Array.isArray(focusGoal.sprintPlanSegments) && focusGoal.sprintPlanSegments.length > 0 && focusGoal.sprintPlanByGoalId && (
-                <Card className="mt-3 border-0 shadow-sm">
-                  <Card.Body>
-                    <div style={{ fontWeight: 600, marginBottom: 8 }}>Milestone sprint rollout</div>
-                    <div style={{ fontSize: '13px', color: '#666', marginBottom: 10 }}>
-                      Leaf goals are mapped to the sprint windows below for this focus period.
-                    </div>
-                    <ListGroup variant="flush">
-                      {Object.entries(focusGoal.sprintPlanByGoalId)
-                        .filter(([, segmentIndexes]) => Array.isArray(segmentIndexes) && segmentIndexes.length > 0)
-                        .map(([goalId, segmentIndexes]) => {
-                          const goal = goals.find((item) => item.id === goalId);
-                          const labels = segmentIndexes
-                            .map((segmentIndex) => focusGoal.sprintPlanSegments?.find((segment) => segment.index === segmentIndex)?.label)
-                            .filter(Boolean)
-                            .join(', ');
-                          return (
-                            <ListGroup.Item key={`${focusGoal.id}-${goalId}`} className="px-0">
-                              <div style={{ fontWeight: 500 }}>{goal ? getGoalDisplayPath(goal.id, goals) : goalId}</div>
-                              <div style={{ fontSize: '12px', color: '#666' }}>{labels || 'No sprint window assigned'}</div>
-                            </ListGroup.Item>
-                          );
-                        })}
-                    </ListGroup>
-                  </Card.Body>
-                </Card>
-              )}
+              {Array.isArray(focusGoal.sprintPlanSegments) && focusGoal.sprintPlanSegments.length > 0 && focusGoal.sprintPlanByGoalId && (() => {
+                const rolloutEntries = Object.entries(focusGoal.sprintPlanByGoalId)
+                  .filter(([, segmentIndexes]) => Array.isArray(segmentIndexes) && segmentIndexes.length > 0);
+                const rolloutGoals = rolloutEntries
+                  .map(([goalId]) => goals.find((item) => item.id === goalId))
+                  .filter((goal): goal is Goal => !!goal);
+                const sprintWindowByGoalId: Record<string, string> = {};
+                rolloutEntries.forEach(([goalId, segmentIndexes]) => {
+                  const labels = segmentIndexes
+                    .map((segmentIndex) => focusGoal.sprintPlanSegments?.find((segment) => segment.index === segmentIndex)?.label)
+                    .filter(Boolean)
+                    .join(', ');
+                  sprintWindowByGoalId[goalId] = labels || 'No sprint window assigned';
+                });
+                if (rolloutGoals.length === 0) return null;
+                return (
+                  <Card className="mt-3 border-0 shadow-sm">
+                    <Card.Body>
+                      <div style={{ fontWeight: 600, marginBottom: 8 }}>Milestone sprint rollout</div>
+                      <div style={{ fontSize: '13px', color: '#666', marginBottom: 10 }}>
+                        Leaf goals are mapped to the sprint windows shown on each card for this focus period.
+                      </div>
+                      <GoalsCardView
+                        goals={rolloutGoals}
+                        onGoalUpdate={handleGoalUpdate}
+                        onGoalDelete={handleGoalDelete}
+                        onGoalPriorityChange={handleGoalPriorityChange}
+                        themes={globalThemes}
+                        focusGoalIds={rolloutGoals.map((goal) => goal.id)}
+                        cardLayout={goalsDetailLevel === 'full' ? 'comfortable' : 'grid'}
+                        showDescriptions={goalsDetailLevel !== 'minimal'}
+                        subtitleByGoalId={sprintWindowByGoalId}
+                      />
+                    </Card.Body>
+                  </Card>
+                );
+              })()}
             </div>
           ))}
 

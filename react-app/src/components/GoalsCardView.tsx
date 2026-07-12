@@ -34,6 +34,8 @@ interface GoalsCardViewProps {
   themes?: GlobalTheme[];
   cardLayout?: 'grid' | 'comfortable';
   showDescriptions?: boolean;
+  /** Optional small muted caption per goal, rendered under the title (e.g. sprint window on the Focus Goals page) */
+  subtitleByGoalId?: Record<string, string>;
   goalKpiStatusByGoalId?: Record<string, {
     goalId: string;
     goalTitle: string;
@@ -57,6 +59,7 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
   themes,
   cardLayout = 'grid',
   showDescriptions,
+  subtitleByGoalId,
   goalKpiStatusByGoalId
 }) => {
   const { showSidebar } = useSidebar();
@@ -862,6 +865,12 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                     {parentGoal && (
                       <div style={{ fontSize: 11, color: mutedTextColor, marginBottom: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         ↳ {parentGoal.title}
+                      </div>
+                    )}
+                    {subtitleByGoalId?.[goal.id] && (
+                      <div style={{ fontSize: 11, color: mutedTextColor, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <Calendar size={11} />
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{subtitleByGoalId[goal.id]}</span>
                       </div>
                     )}
                   </div>
