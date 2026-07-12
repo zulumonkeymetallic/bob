@@ -7,9 +7,13 @@ interface KanbanColumnV2Props {
     title: string;
     color: string;
     children: React.ReactNode;
+    /** Registers this column's scrollable body element with the parent board, so the
+     * board can scroll all columns together in lockstep when the mouse isn't directly
+     * over a specific column. Hovering the column itself still scrolls it natively. */
+    registerScrollEl?: (status: string, el: HTMLDivElement | null) => void;
 }
 
-const KanbanColumnV2: React.FC<KanbanColumnV2Props> = ({ status, title, color, children }) => {
+const KanbanColumnV2: React.FC<KanbanColumnV2Props> = ({ status, title, color, children, registerScrollEl }) => {
     const ref = useRef<HTMLDivElement>(null);
     const [isDraggedOver, setIsDraggedOver] = useState(false);
 
@@ -26,8 +30,13 @@ const KanbanColumnV2: React.FC<KanbanColumnV2Props> = ({ status, title, color, c
         });
     }, [status]);
 
+    useEffect(() => {
+        registerScrollEl?.(status, ref.current);
+        return () => registerScrollEl?.(status, null);
+    }, [status, registerScrollEl]);
+
     return (
-        <div className="kanban-column" style={{ flex: 1, minWidth: '300px', display: 'flex', flexDirection: 'column' }}>
+        <div className="kanban-column" style={{ flex: 1, minWidth: '300px', display: 'flex', flexDirection: 'column', height: '100%' }}>
             <div
                 className="kanban-column-header"
                 style={{
@@ -60,12 +69,14 @@ const KanbanColumnV2: React.FC<KanbanColumnV2Props> = ({ status, title, color, c
 
             <div
                 ref={ref}
+                data-kanban-column-body="true"
                 className={`kanban-column-body${isDraggedOver ? ' is-dragged-over' : ''}`}
                 style={{
                     flex: 1,
                     padding: '8px',
                     backgroundColor: isDraggedOver ? 'var(--notion-hover)' : 'var(--bg-subtle)',
                     borderRadius: '8px',
+                    overflowY: 'auto',
                     minHeight: '200px',
                     transition: 'background-color 0.2s ease'
                 }}

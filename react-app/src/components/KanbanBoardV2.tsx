@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import { monitorForElements } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
 import { collection, query, where, onSnapshot, orderBy, limit, updateDoc, doc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -83,6 +83,38 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
     const [steamLastSyncAt, setSteamLastSyncAt] = useState<any>(null);
     const [scheduledBlocksByEntity, setScheduledBlocksByEntity] = useState<Record<string, ScheduledBlockInfo>>({});
     const formatTag = (tag: string) => formatTaskTagLabel(tag, goals, sprints);
+
+    // Column scroll sync: hovering directly over a column's card list scrolls just that
+    // column (native overflow behaviour below). Scrolling anywhere else on the board
+    // (headers, gutters, background) scrolls every column together in lockstep.
+    //
+    // A callback ref is used (rather than useRef + a mount-only useEffect) because this
+    // component renders a "Loading board..." placeholder — without the real wrapper div —
+    // until data arrives; an effect with an empty dependency array would run once against
+    // that placeholder's null ref and never re-attach once the real board mounts.
+    const columnScrollEls = useRef<Map<string, HTMLDivElement>>(new Map());
+    const wheelCleanupRef = useRef<(() => void) | null>(null);
+
+    const registerColumnScrollEl = useCallback((status: string, el: HTMLDivElement | null) => {
+        if (el) columnScrollEls.current.set(status, el);
+        else columnScrollEls.current.delete(status);
+    }, []);
+
+    const boardWrapperRef = useCallback((node: HTMLDivElement | null) => {
+        wheelCleanupRef.current?.();
+        wheelCleanupRef.current = null;
+        if (!node) return;
+        const handleWheel = (e: WheelEvent) => {
+            const target = e.target as HTMLElement | null;
+            if (target?.closest('[data-kanban-column-body]')) return; // let the hovered column scroll itself
+            const scrollable = Array.from(columnScrollEls.current.values()).filter((el) => el.scrollHeight > el.clientHeight);
+            if (scrollable.length === 0) return;
+            e.preventDefault();
+            scrollable.forEach((el) => { el.scrollTop += e.deltaY; });
+        };
+        node.addEventListener('wheel', handleWheel, { passive: false });
+        wheelCleanupRef.current = () => node.removeEventListener('wheel', handleWheel);
+    }, []);
 
     // Data fetching
     useEffect(() => {
@@ -685,9 +717,9 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
     }
 
     return (
-        <div className="kanban-board-v2" style={{ display: 'flex', gap: '16px', alignItems: 'flex-start', overflowX: 'auto', paddingBottom: '16px' }}>
+        <div ref={boardWrapperRef} className="kanban-board-v2" style={{ display: 'flex', gap: '16px', height: '100%', overflowX: 'auto', paddingBottom: '16px' }}>
             {Object.entries(columns).map(([key, col]) => (
-                <KanbanColumnV2 key={key} status={key} title={col.title} color={col.color as string}>
+                <KanbanColumnV2 key={key} status={key} title={col.title} color={col.color as string} registerScrollEl={registerColumnScrollEl}>
                     {col.items.map(item => {
                         const isStory = 'points' in item || (item as any).storyId === undefined; // Rough check, better to check ID or something
                         // Actually, my Task type has storyId, Story doesn't (usually). 
