@@ -20,6 +20,10 @@ if (!admin.apps.length) {
 
 const SIX_MONTHS_MS = 180 * 24 * 60 * 60 * 1000;
 
+function normalizePersona(v) {
+  return String(v || 'personal').toLowerCase() === 'work' ? 'work' : 'personal';
+}
+
 function toMillisAlign(v) {
   if (v == null) return null;
   if (typeof v === 'number') return v < 1e11 ? v * 1000 : v;
@@ -50,21 +54,38 @@ async function runForUser(db, uid, options = {}) {
   const sprints = sprintsSnap.docs
     .map((d) => ({ id: d.id, ...d.data() }))
     .filter((s) => Number(s.status) < 2)
-    .map((s) => ({ id: s.id, name: s.name || s.id, startMs: toMillisAlign(s.startDate) }))
+    .map((s) => ({
+      id: s.id,
+      name: s.name || s.id,
+      startMs: toMillisAlign(s.startDate),
+      persona: normalizePersona(s.persona),
+    }))
     .filter((s) => s.startMs != null)
     .sort((a, b) => a.startMs - b.startMs);
   const sprintNameById = new Map(sprints.map((s) => [s.id, s.name]));
 
-  const targetSprintIdByGoalId = new Map();
-  for (const [goalId, goalStart] of goalStartByGoalId.entries()) {
-    let best = null;
-    let bestDelta = Infinity;
-    for (const s of sprints) {
-      const d = Math.abs(s.startMs - goalStart);
-      if (d < bestDelta) { best = s; bestDelta = d; }
+  // Target sprint is resolved per (goal, persona): a story must never be aligned to a
+  // sprint of a different persona (e.g. a personal story landing in the "Work 2026"
+  // sprint just because that sprint's start date is nearest the goal's start date).
+  const targetSprintIdByGoalPersona = new Map(); // key: `${goalId}|${persona}`
+  const resolveTargetForGoalPersona = (goalId, persona) => {
+    const key = `${goalId}|${persona}`;
+    if (targetSprintIdByGoalPersona.has(key)) return targetSprintIdByGoalPersona.get(key);
+    const goalStart = goalStartByGoalId.get(goalId);
+    let targetId = null;
+    if (goalStart != null) {
+      let best = null;
+      let bestDelta = Infinity;
+      for (const s of sprints) {
+        if (s.persona !== persona) continue;
+        const d = Math.abs(s.startMs - goalStart);
+        if (d < bestDelta) { best = s; bestDelta = d; }
+      }
+      targetId = best && bestDelta <= SIX_MONTHS_MS ? best.id : null;
     }
-    targetSprintIdByGoalId.set(goalId, best && bestDelta <= SIX_MONTHS_MS ? best.id : null);
-  }
+    targetSprintIdByGoalPersona.set(key, targetId);
+    return targetId;
+  };
 
   const storiesSnap = await db.collection('stories').where('ownerUid', '==', uid).get();
   let moved = 0, backlogged = 0, skipped = 0;
@@ -79,8 +100,9 @@ async function runForUser(db, uid, options = {}) {
     const currentSprintId = s.sprintId ? String(s.sprintId) : null;
     if (!currentSprintId) { skipped++; continue; }
     const goalId = s.goalId ? String(s.goalId) : null;
-    if (!goalId || !targetSprintIdByGoalId.has(goalId)) { skipped++; continue; }
-    const targetId = targetSprintIdByGoalId.get(goalId);
+    if (!goalId || !goalStartByGoalId.has(goalId)) { skipped++; continue; }
+    const persona = normalizePersona(s.persona);
+    const targetId = resolveTargetForGoalPersona(goalId, persona);
     if (targetId === currentSprintId) { skipped++; continue; }
 
     const moveRecord = {

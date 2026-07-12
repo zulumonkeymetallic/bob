@@ -10,7 +10,7 @@ const { makeRefCandidate } = require('./lib/refGenerator');
 const { clampTaskPoints } = require('./utils/taskPoints');
 const { buildAbsoluteUrl, buildEntityUrl } = require('./utils/urlHelpers');
 const { coerceZone, toDateTime, toMillis } = require('./lib/time');
-const { resolveActiveSprintIds } = require('./lib/sprintStatus');
+const { resolveActiveSprintIds, resolveActiveSprintIdsByPersona } = require('./lib/sprintStatus');
 const {
   cloneThemeAllocations,
   getAllocationWeekKey,
@@ -38,11 +38,13 @@ const {
   schedulePlannerItemMutation,
 } = require('./services/schedulingService');
 const fuzzyTaskLinking = require('./fuzzyTaskLinking');
+const semanticClustering = require('./semanticClustering');
 
 // Secrets
 const OPENROUTER_API_KEY_SECRET = defineSecret('OPENROUTER_API_KEY');
 const BOB_CLI_ACCESS = defineSecret('BOB_CLI_ACCESS');
 const BREVO_API_KEY_SECRET = defineSecret('BREVO_API_KEY');
+const GOOGLE_AI_STUDIO_API_KEY = defineSecret('GOOGLEAISTUDIOAPIKEY');
 
 const THEME_RULES = [
   { match: ['growth'], slots: [{ days: [1, 2, 3, 4, 5], start: 7, end: 9, label: 'Growth AM' }, { days: [1, 2, 3, 4, 5], start: 17, end: 19, label: 'Growth PM' }] },
@@ -2826,9 +2828,14 @@ async function runPriorityScoringJob() {
       const endMs = end ? toDateTime(end, { defaultValue: null })?.toMillis() : null;
       const startMs = start ? toDateTime(start, { defaultValue: null })?.toMillis() : null;
       const status = String(sd.status || '').toLowerCase();
-      sprintMap.set(d.id, { endDateMs: endMs, startDateMs: startMs, status });
+      sprintMap.set(d.id, { endDateMs: endMs, startDateMs: startMs, status, persona: resolvePersona(sd.persona) });
     });
-    const activeSprintIds = resolveActiveSprintIds(sprintSnap.docs);
+    // Persona-scoped active sprints: an entity is only "in the active sprint" if that
+    // sprint belongs to its OWN persona. `activeSprintIds` remains the union purely for
+    // the coarse Firestore fetch below; all membership decisions use activeSetFor(persona).
+    const activeByPersona = resolveActiveSprintIdsByPersona(sprintSnap.docs);
+    const activeSetFor = (persona) => activeByPersona[resolvePersona(persona)] || new Set();
+    const activeSprintIds = new Set([...activeByPersona.personal, ...activeByPersona.work]);
 
     // ========== CLEAR ALL TOP 3 TAGS BEFORE RE-PRIORITIZATION ==========
     // This ensures only fresh Top 3 items are tagged, preventing stale tags
@@ -2909,7 +2916,13 @@ async function runPriorityScoringJob() {
         base.where('status', 'in', stringStatusesUpper),
         base.where('status', '==', null),
       ];
-      const snaps = await Promise.all(queries.map((q) => q.get().catch(() => ({ docs: [] }))));
+      const snaps = await Promise.all(queries.map((q) => q.get().catch((err) => {
+        // Surface (don't silently swallow) index/precondition failures — a missing
+        // composite index here previously produced an empty result and zero scores
+        // with no trace in the logs.
+        console.warn(`[Priority] active-task query failed for user ${userId}:`, err?.message || err);
+        return { docs: [] };
+      })));
       const seen = new Map();
       snaps.forEach((snap) => snap.docs.forEach((doc) => {
         if (!seen.has(doc.id)) seen.set(doc.id, doc);
@@ -2917,9 +2930,10 @@ async function runPriorityScoringJob() {
       return Array.from(seen.values());
     };
 
-    const isDueInActiveSprint = (dueMs) => {
+    const isDueInActiveSprint = (dueMs, persona = null) => {
       if (!dueMs) return false;
-      for (const sprintId of activeSprintIds) {
+      const activeSet = persona ? activeSetFor(persona) : activeSprintIds;
+      for (const sprintId of activeSet) {
         const sprint = sprintMap.get(sprintId);
         if (!sprint) continue;
         const start = sprint.startDateMs;
@@ -2960,8 +2974,11 @@ async function runPriorityScoringJob() {
         goalId: st.goalId || null,
         goalTheme: goal.theme || null,
         sprintId: st.sprintId || null,
+        persona: resolvePersona(st.persona),
       });
-      if (st.sprintId && activeSprintIds.has(st.sprintId)) {
+      // A story counts as active-sprint only if its sprint is active AND belongs to the
+      // story's own persona (guards against a personal story mis-tagged to a work sprint).
+      if (st.sprintId && activeSetFor(st.persona).has(st.sprintId)) {
         activeStoryIds.add(d.id);
       }
     });
@@ -2982,8 +2999,6 @@ async function runPriorityScoringJob() {
       const statusRaw = data.status;
       const isDone = isTaskDoneStatus(statusRaw);
       if (isDone || data.deleted) return;
-      const isEntityActiveSprint = data.sprintId ? activeSprintIds.has(data.sprintId) : false;
-      const isLinkedActiveSprint = data.storyId ? activeStoryIds.has(data.storyId) : false;
       if (hasRecurrence(data)) return;
       const dueMs = toDateTime(data.dueDate || data.targetDate, { defaultValue: null })?.toMillis() || null;
       if (isRoutineChoreHabit(data) && !isTodayOrOverdue(dueMs)) return;
@@ -3076,6 +3091,14 @@ async function runPriorityScoringJob() {
     const taskScores = [];
     const storyScores = [];
 
+    // All per-item score/clear writes go through a single bulkWriter so the pass
+    // completes in one batched flush instead of thousands of sequential round-trips
+    // (the previous per-doc `await set()` + per-doc `activity_stream.add()` could not
+    // finish inside the function timeout, leaving most of the backlog unscored).
+    const scoreWriter = db.bulkWriter();
+    let scoredTasks = 0;
+    let scoredStories = 0;
+
     const applyScore = async (ref, entity, entityType) => {
       const goal = entity.goalId ? goalMap.get(entity.goalId) : null;
       const sprint = entity.sprintId ? sprintMap.get(entity.sprintId) : null;
@@ -3097,8 +3120,9 @@ async function runPriorityScoringJob() {
       const ageDays = createdMs ? (Date.now() - createdMs) / 86400000 : null;
       const storyMetaForTask = entityType === 'task' && entity.storyId ? (storyMetaMap.get(entity.storyId) || {}) : {};
       const linkedSprintId = storyMetaForTask.sprintId || null;
-      const isLinkedActiveSprint = linkedSprintId ? activeSprintIds.has(linkedSprintId) : false;
-      const isEntityActiveSprint = entity.sprintId ? activeSprintIds.has(entity.sprintId) : false;
+      const entityActiveSet = activeSetFor(entity.persona);
+      const isLinkedActiveSprint = linkedSprintId ? entityActiveSet.has(linkedSprintId) : false;
+      const isEntityActiveSprint = entity.sprintId ? entityActiveSet.has(entity.sprintId) : false;
       const priorityLevel = normalizeUserPriority(entity.userPriority || entity.priority || entity.priorityLabel);
       const { boost: priorityBoost, label: priorityLabel } = priorityBoostFor(priorityLevel);
 
@@ -3180,28 +3204,22 @@ async function runPriorityScoringJob() {
       if (entityType === 'story' && !entity.deepLink) {
         patch.deepLink = buildEntityUrl('story', ref.id, ref.ref);
       }
-      await ref.set(patch, { merge: true });
-      await db.collection('activity_stream').add(activityPayload({
-        ownerUid: userId,
-        entityId: ref.id,
-        entityType,
-        activityType: 'ai_priority_score',
-        description: `Criticality ${score}/100 · ${reason}`,
-        metadata: { score, reason, textScore, textReason: textSignal?.reason || null, textModel: textModel || null, run: '03:00_priority' },
-      }));
+      scoreWriter.set(ref, patch, { merge: true });
 
       if (entityType === 'story') {
+        scoredStories += 1;
         storyScores.push({ id: ref.id, score, data: entity, reason, dueMs, createdMs, refObj: ref, persona: entity.persona || 'personal' });
       }
 
       if (entityType === 'task') {
+        scoredTasks += 1;
         taskScores.push({ id: ref.id, score, data: entity, reason, dueMs, refObj: ref, persona: entity.persona || 'personal' });
       }
     };
 
-    const clearPriorityFields = async (ref, entityType) => {
-      // Get current document to check for Top3 tag
-      const doc = await ref.get();
+    const clearPriorityFields = (doc, entityType) => {
+      // Use the already-fetched doc data (no extra read) to check for a Top3 tag.
+      const ref = doc.ref;
       const data = doc.data() || {};
       const tags = Array.isArray(data.tags) ? data.tags : [];
 
@@ -3250,7 +3268,7 @@ async function runPriorityScoringJob() {
         patch.aiPriorityReason = admin.firestore.FieldValue.delete();
         patch.syncState = 'dirty';
       }
-      await ref.set(patch, { merge: true });
+      scoreWriter.set(ref, patch, { merge: true });
     };
 
     for (const doc of taskDocs) {
@@ -3258,21 +3276,22 @@ async function runPriorityScoringJob() {
       const statusRaw = data.status;
       const isDone = isTaskDoneStatus(statusRaw);
       if (isDone || data.deleted) {
-        await clearPriorityFields(doc.ref, 'task');
+        clearPriorityFields(doc, 'task');
         continue;
       }
       // Never score recurring chores/routines/habits
       if (hasRecurrence(data) || isRoutineChoreHabit(data)) {
-        await clearPriorityFields(doc.ref, 'task');
+        clearPriorityFields(doc, 'task');
         continue;
       }
       const dueMs = toDateTime(data.dueDate || data.targetDate, { defaultValue: null })?.toMillis() || null;
       const storyMeta = data.storyId ? (storyMetaMap.get(data.storyId) || {}) : {};
-      const inActiveSprint = (data.sprintId && activeSprintIds.has(data.sprintId))
-        || (storyMeta.sprintId && activeSprintIds.has(storyMeta.sprintId));
-      const mustScore = inActiveSprint || isDueInActiveSprint(dueMs);
+      const taskActiveSet = activeSetFor(data.persona);
+      const inActiveSprint = (data.sprintId && taskActiveSet.has(data.sprintId))
+        || (storyMeta.sprintId && taskActiveSet.has(storyMeta.sprintId));
+      const mustScore = inActiveSprint || isDueInActiveSprint(dueMs, data.persona);
       if (!mustScore && !isTaskOpenStatus(statusRaw)) {
-        await clearPriorityFields(doc.ref, 'task');
+        clearPriorityFields(doc, 'task');
         continue;
       }
       await applyScore(doc.ref, data, 'task');
@@ -3283,17 +3302,32 @@ async function runPriorityScoringJob() {
       const statusRaw = data.status;
       const isDone = isStoryDoneStatus(statusRaw);
       if (isDone) {
-        await clearPriorityFields(doc.ref, 'story');
+        clearPriorityFields(doc, 'story');
         continue;
       }
       const dueMs = toDateTime(data.dueDate || data.targetDate, { defaultValue: null })?.toMillis() || null;
-      const inActiveSprint = data.sprintId && activeSprintIds.has(data.sprintId);
-      const mustScore = inActiveSprint || isDueInActiveSprint(dueMs);
+      const inActiveSprint = data.sprintId && activeSetFor(data.persona).has(data.sprintId);
+      const mustScore = inActiveSprint || isDueInActiveSprint(dueMs, data.persona);
       if (!mustScore && !isStoryOpenStatus(statusRaw)) {
-        await clearPriorityFields(doc.ref, 'story');
+        clearPriorityFields(doc, 'story');
         continue;
       }
       await applyScore(doc.ref, data, 'story');
+    }
+
+    // Flush all base-score / clear writes in one batched pass.
+    await scoreWriter.close();
+    // One summary activity per user per run, replacing the former per-item writes
+    // that were both a timeout risk and an activity_stream bloat source.
+    if (scoredTasks > 0 || scoredStories > 0) {
+      await db.collection('activity_stream').add(activityPayload({
+        ownerUid: userId,
+        entityId: null,
+        entityType: 'system',
+        activityType: 'ai_priority_score_run',
+        description: `Nightly criticality scoring: ${scoredStories} stories, ${scoredTasks} tasks scored`,
+        metadata: { scoredStories, scoredTasks, run: '03:00_priority' },
+      })).catch((err) => console.warn('[Priority] summary activity write failed', err?.message || err));
     }
 
     const nowLocal = DateTime.now();
@@ -3504,6 +3538,7 @@ async function runCalendarPlannerJob() {
     const goalMetaMap = new Map();
     const sprintMetaMap = new Map();
     let activeSprintIds = new Set();
+    let activeByPersona = { personal: new Set(), work: new Set() };
     try {
       const goalsSnap = await db.collection('goals').where('ownerUid', '==', userId).get();
       goalsSnap.docs.forEach((d) => {
@@ -3518,10 +3553,13 @@ async function runCalendarPlannerJob() {
           start: sd.startDate || sd.start || null,
           end: sd.endDate || sd.end || null,
           name: sd.name || sd.title || d.id,
+          persona: resolvePersona(sd.persona),
         });
       });
-      activeSprintIds = resolveActiveSprintIds(sprintSnap.docs);
+      activeByPersona = resolveActiveSprintIdsByPersona(sprintSnap.docs);
+      activeSprintIds = new Set([...activeByPersona.personal, ...activeByPersona.work]);
     } catch { /* ignore */ }
+    const activeSetFor = (persona) => activeByPersona[resolvePersona(persona)] || new Set();
 
     const activeSprintEndMs = Array.from(activeSprintIds)
       .map((sprintId) => toMillis(sprintMetaMap.get(sprintId)?.end))
@@ -3643,10 +3681,13 @@ async function runCalendarPlannerJob() {
     const sprintMap = new Map();
     sprintMetaMap.forEach((val, key) => sprintMap.set(key, val));
 
+    // A story/task only counts as being in the active sprint when that sprint belongs to
+    // its OWN persona — a personal item never inherits scheduling eligibility from the
+    // active work sprint, and vice versa.
     const openStories = storiesSnap.docs
       .map((d) => ({ id: d.id, ...(d.data() || {}) }))
       .filter((s) => !isStoryDoneStatus(s.status))
-      .filter((s) => activeSprintIds.size === 0 || (s.sprintId && activeSprintIds.has(s.sprintId)));
+      .filter((s) => activeSprintIds.size === 0 || (s.sprintId && activeSetFor(s.persona).has(s.sprintId)));
     const openStoryIds = new Set(openStories.map((story) => story.id));
 
     const openTasks = tasksSnap.docs
@@ -3655,7 +3696,7 @@ async function runCalendarPlannerJob() {
       .filter((t) => !isRoutineChoreHabit(t))
       .filter((t) => {
         if (activeSprintIds.size === 0) return true;
-        if (t.sprintId && activeSprintIds.has(t.sprintId)) return true;
+        if (t.sprintId && activeSetFor(t.persona).has(t.sprintId)) return true;
         if (t.storyId && openStoryIds.has(t.storyId)) return true;
         return false;
       });
@@ -3810,7 +3851,7 @@ exports.unifiedNightlyOrchestrator = onSchedule({
   timeZone: 'Europe/London',
   memory: '1GiB',
   timeoutSeconds: 600,
-  secrets: [OPENROUTER_API_KEY_SECRET, BOB_CLI_ACCESS, BREVO_API_KEY_SECRET],
+  secrets: [OPENROUTER_API_KEY_SECRET, BOB_CLI_ACCESS, BREVO_API_KEY_SECRET, GOOGLE_AI_STUDIO_API_KEY],
   region: 'europe-west2',
 }, async () => {
   console.log('[unifiedNightlyOrchestrator] Starting consolidated nightly chain...');
@@ -5004,6 +5045,16 @@ async function runNightlyChainCore() {
         });
       },
     },
+    {
+      name: 'semanticEmbeddingBackfill',
+      fn: async () => {
+        if (!semanticClustering?.runEmbeddingBackfillForAllUsers) return null;
+        // Idempotent + non-destructive: only writes titleEmbedding on open
+        // stories/tasks so ingest-time findNearest has neighbours to match.
+        const db = admin.firestore();
+        return await semanticClustering.runEmbeddingBackfillForAllUsers(db);
+      },
+    },
     { name: 'nightlySprintCapacityUpdate', fn: nightlySprintCapacityUpdate },
     {
       name: 'pushPendingCalendarBlocks',
@@ -5036,7 +5087,7 @@ exports.runNightlyChainNow = onCall({
   timeZone: 'Europe/London',
   memory: '1GiB',
   timeoutSeconds: 540,
-  secrets: [OPENROUTER_API_KEY_SECRET, BOB_CLI_ACCESS, BREVO_API_KEY_SECRET],
+  secrets: [OPENROUTER_API_KEY_SECRET, BOB_CLI_ACCESS, BREVO_API_KEY_SECRET, GOOGLE_AI_STUDIO_API_KEY],
   region: 'europe-west2',
   invoker: 'public',
 }, async (req) => {
@@ -5053,7 +5104,7 @@ exports.runNightlyChainNowHttp = https.onRequest({
   timeZone: 'Europe/London',
   memory: '1GiB',
   timeoutSeconds: 540,
-  secrets: [OPENROUTER_API_KEY_SECRET, BOB_CLI_ACCESS, BREVO_API_KEY_SECRET],
+  secrets: [OPENROUTER_API_KEY_SECRET, BOB_CLI_ACCESS, BREVO_API_KEY_SECRET, GOOGLE_AI_STUDIO_API_KEY],
   region: 'europe-west2',
 }, async (req, res) => {
   const cliKey = BOB_CLI_ACCESS.value();

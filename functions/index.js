@@ -95,7 +95,10 @@ try {
 }
 const { sendEmail } = require('./lib/email');
 const { coerceZone, toDateTime, computeDayWindow } = require('./lib/time');
-const { resolveActiveSprintIds } = require('./lib/sprintStatus');
+const {
+  resolveActiveSprintIdsByPersona,
+  normalizeSprintPersona,
+} = require('./lib/sprintStatus');
 const { resolveThemeAllocationsForDate } = require('./lib/themeAllocations');
 const crypto = require('crypto');
 const { KeyManagementServiceClient } = require('@google-cloud/kms');
@@ -9571,7 +9574,12 @@ async function prioritizeTasksForUser({ db, userId, runId = null }) {
     db.collection('sprints').where('ownerUid', '==', userId).get().catch(() => ({ docs: [] })),
   ]);
 
-  const activeSprintIds = resolveActiveSprintIds(sprintsSnap.docs);
+  // Persona-scoped active sprints: an item is only "in the active sprint" if that sprint
+  // belongs to its own persona (a personal task must not inherit active status from the
+  // work sprint, and vice versa).
+  const activeByPersona = resolveActiveSprintIdsByPersona(sprintsSnap.docs);
+  const activeSetFor = (persona) => activeByPersona[normalizeSprintPersona(persona)] || new Set();
+  const activeSprintIds = new Set([...activeByPersona.personal, ...activeByPersona.work]);
 
   if (!activeSprintIds.size) {
     return { ok: true, considered: 0, updated: 0, items: [] };
@@ -9590,7 +9598,10 @@ async function prioritizeTasksForUser({ db, userId, runId = null }) {
       const data = doc.data() || {};
       const status = String(data.status ?? '').toLowerCase();
       const done = status === 'done' || status === 'complete' || status === 'completed' || Number(data.status) >= 4;
-      if (!done) activeStoryIds.add(doc.id);
+      // Only count the story active if its sprint matches its own persona.
+      if (!done && data.sprintId && activeSetFor(data.persona).has(data.sprintId)) {
+        activeStoryIds.add(doc.id);
+      }
     });
   }
 
@@ -9600,7 +9611,7 @@ async function prioritizeTasksForUser({ db, userId, runId = null }) {
       const status = String(task.status ?? '').toLowerCase();
       const done = status === 'done' || status === 'complete' || Number(task.status) === 2 || task.deleted === true;
       if (done) return false;
-      const inSprint = task.sprintId && activeSprintIds.has(task.sprintId);
+      const inSprint = task.sprintId && activeSetFor(task.persona).has(task.sprintId);
       const inStory = task.storyId && activeStoryIds.has(task.storyId);
       return inSprint || inStory;
     });
@@ -16592,6 +16603,7 @@ exports.remindersPush = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
     // Sprint metadata for tagging/selection
     const sprintMeta = new Map();
     let activeSprintIds = new Set();
+    let activeByPersona = { personal: new Set(), work: new Set() };
     try {
       const sprintSnap = await db.collection('sprints').where('ownerUid', '==', uid).limit(25).get();
       sprintSnap.docs.forEach((d) => {
@@ -16599,10 +16611,12 @@ exports.remindersPush = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
         const startMs = toMillis(data.startDate || data.start);
         const endMs = toMillis(data.endDate || data.end);
         const name = data.name || data.title || data.ref || `Sprint ${d.id.slice(-2)}`;
-        sprintMeta.set(d.id, { name, startMs, endMs, status: data.status });
+        sprintMeta.set(d.id, { name, startMs, endMs, status: data.status, persona: normalizeSprintPersona(data.persona) });
       });
-      activeSprintIds = resolveActiveSprintIds(sprintSnap.docs);
+      activeByPersona = resolveActiveSprintIdsByPersona(sprintSnap.docs);
+      activeSprintIds = new Set([...activeByPersona.personal, ...activeByPersona.work]);
     } catch { /* ignore */ }
+    const activeSetFor = (persona) => activeByPersona[normalizeSprintPersona(persona)] || new Set();
 
     // Return tasks that need pushing: unlinked, flagged, or completion updates
     const tasksSnap = await db.collection('tasks').where('ownerUid', '==', uid).get();
@@ -16687,6 +16701,9 @@ exports.remindersPush = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET],
           .catch(() => ({ docs: [] }));
         for (const d of storySnap.docs) {
           const data = d.data() || {};
+          // Skip stories whose sprint doesn't belong to their own persona (guards against a
+          // personal story mis-tagged to the work sprint being pushed as work, or vice versa).
+          if (!data.sprintId || !activeSetFor(data.persona).has(data.sprintId)) continue;
           const stStatus = String(data.status || '').toLowerCase();
           const done = stStatus === 'done' || stStatus === 'completed' || stStatus === 'complete' || Number(data.status || 0) >= 4;
           const sprintLabel = data.sprintId && sprintMeta.has(data.sprintId) ? sprintMeta.get(data.sprintId).name : null;
@@ -16761,10 +16778,13 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET, 
 
     // Sprint metadata (used to tag new stories to current sprint)
     const sprintMeta = new Map();
-    let defaultSprintId = null;
+    // Default sprint is resolved per persona so a new work item is tagged to the active
+    // work sprint and a new personal item to the active personal sprint — never crossed.
+    const defaultSprintIdByPersona = { personal: null, work: null };
     try {
       const sprintSnap = await db.collection('sprints').where('ownerUid', '==', uid).limit(25).get();
-      const activeIds = resolveActiveSprintIds(sprintSnap.docs);
+      const activeByPersona = resolveActiveSprintIdsByPersona(sprintSnap.docs);
+      const activeIds = new Set([...activeByPersona.personal, ...activeByPersona.work]);
       sprintSnap.docs.forEach((d) => {
         const data = d.data() || {};
         const startMs = toMillis(data.startDate || data.start);
@@ -16774,8 +16794,10 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET, 
       });
       // Tie-break on latest start date so a genuinely active sprint is picked even when
       // more than one qualifies (e.g. legacy data with several overlapping windows).
-      defaultSprintId = Array.from(activeIds)
+      const pickLatest = (ids) => Array.from(ids)
         .sort((a, b) => (sprintMeta.get(b)?.startMs || 0) - (sprintMeta.get(a)?.startMs || 0))[0] || null;
+      defaultSprintIdByPersona.personal = pickLatest(activeByPersona.personal);
+      defaultSprintIdByPersona.work = pickLatest(activeByPersona.work);
     } catch { /* ignore */ }
 
     // Load global hierarchy snapshot once for fast pre-write deduplication — reduces per-task
@@ -16862,7 +16884,7 @@ exports.remindersPull = httpsV2.onRequest({ secrets: [REMINDERS_WEBHOOK_SECRET, 
           const newRef = db.collection('stories').doc();
           let refVal = null;
           try { refVal = await generateStoryRef(db, uid); } catch { refVal = `ST-${String(newRef.id).slice(-6).toUpperCase()}`; }
-          const sprintId = defaultSprintId || null;
+          const sprintId = defaultSprintIdByPersona[normalizeSprintPersona(personaValue)] || null;
           const sprintTag = sprintId && sprintMeta.get(sprintId)?.name ? sprintMeta.get(sprintId).name : null;
           const base = {
             id: newRef.id,

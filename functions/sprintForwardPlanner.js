@@ -97,8 +97,9 @@ async function buildFreeSlotMap(db, uid, fromMs, untilMs, zone) {
   for (const doc of committedSnap.docs) {
     const data = doc.data();
     const src  = String(data.source || '');
-    // Only hard commitments reduce capacity; BOB's own plan output does not
-    if (src !== 'gcal' && src !== 'theme_allocation') continue;
+    // Only hard commitments reduce capacity; BOB's own plan output does not.
+    // work_shift_allocation is a hard day-job commitment and must count as busy.
+    if (src !== 'gcal' && src !== 'theme_allocation' && src !== 'work_shift_allocation') continue;
     if (data.status === 'superseded') continue;
 
     const blockStart = toMs(data.start);
@@ -242,7 +243,10 @@ async function runForUser(db, uid, options = {}) {
     return b._score - a._score;
   });
 
-  // ── 5. Build GCal-aware free-slot map: tomorrow → latest sprint end ─────────
+  // ── 5. Build GCal- and work-block-aware free-slot map: tomorrow → sprint end ─
+  // Real work_shift_allocation blocks (materialised from the user's theme plan) are
+  // treated as busy so personal items never land on top of an actual scheduled work
+  // block. Where no work block exists, that time stays available — no hardcoded hours.
   const latestEndMs = Math.max(...activeSprints.map(s => toMs(s.endDate || s.targetDate) || 0));
   const freeSlotMap = await buildFreeSlotMap(db, uid, tomorrowStart.toMillis(), latestEndMs + 86_400_000, zone);
 
