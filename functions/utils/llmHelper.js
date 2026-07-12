@@ -95,11 +95,23 @@ async function _sendModelFailureEmail(purpose, freeError, fallbackError) {
 
 // ---------------------------------------------------------------------------
 // Public interface — same signature as before: callLLM(system, user, model?)
-// Primary: Vertex AI (ADC — no API key needed)
-// Fallback: OpenRouter (when Vertex quota/error)
+//
+// Cost migration (2026-07): the free OpenRouter model is now the PRIMARY path
+// for callLLM. Vertex AI remains the safety net when the free model errors, and
+// the modelName argument is passed through as the Vertex fallback model so
+// existing callers keep their behaviour on fallback. Where no OPENROUTER_API_KEY
+// is bound, callLLMFreeFirst goes straight to Vertex — identical to before, so
+// this change never breaks a caller, it only saves cost where the key is present.
 // ---------------------------------------------------------------------------
 
 async function callLLM(systemPrompt, userPrompt, modelName = VERTEX_DEFAULT_MODEL) {
+  return callLLMFreeFirst(systemPrompt, userPrompt, { modelName, purpose: 'callLLM' });
+}
+
+// Vertex-first variant retained for callers that must have the higher-capability
+// model as primary (e.g. strict-JSON extraction). Same behaviour callLLM had before
+// the free-model migration.
+async function callLLMVertexFirst(systemPrompt, userPrompt, modelName = VERTEX_DEFAULT_MODEL) {
   try {
     return await _callVertexAI(systemPrompt, userPrompt, modelName);
   } catch (vertexError) {
@@ -146,6 +158,7 @@ async function callLLMFreeFirst(systemPrompt, userPrompt, { modelName, purpose }
 
 module.exports = {
   callLLM,
+  callLLMVertexFirst,
   callLLMFreeFirst,
   _callVertexAI,
   _callOpenRouter,
