@@ -14,17 +14,17 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Badge, Button, Dropdown, Form, OverlayTrigger, Tooltip } from 'react-bootstrap';
+import { Badge, Button, Form, OverlayTrigger, Tooltip } from 'react-bootstrap';
 import {
   collection,
   doc,
   onSnapshot,
   query,
+  serverTimestamp,
   updateDoc,
   where,
 } from 'firebase/firestore';
 import { ZoomIn, ZoomOut, RotateCcw, Link2, Link2Off, Filter, GitBranch, Rows3, Info, Calendar } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import type { Goal, Story, Task, Sprint } from '../types';
@@ -37,6 +37,7 @@ import ThemeMultiSelect from './shared/ThemeMultiSelect';
 import SprintMultiSelect from './shared/SprintMultiSelect';
 import ShareGoalsPanel from './shared/ShareGoalsPanel';
 import GoalCard from './GoalCard';
+import EditGoalModal from './EditGoalModal';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -182,6 +183,16 @@ function quarterLabel(key: string): string {
   return `${q} ${year}`;
 }
 
+// A representative timestamp inside a quarter (mid of its last month, noon local)
+// so computeQuarterKey() maps it back to the same quarter regardless of TZ.
+function quarterKeyToTimestamp(key: string): number | null {
+  const m = /^(\d{4})-Q([1-4])$/.exec(key);
+  if (!m) return null;
+  const year = Number(m[1]);
+  const q = Number(m[2]);
+  return new Date(year, q * 3 - 1, 15, 12, 0, 0).getTime();
+}
+
 // ─── Goal theme colour ────────────────────────────────────────────────────────
 
 function goalThemeColor(goal: any): string {
@@ -295,8 +306,10 @@ const GOAL_KIND_ICON: Record<string, string> = {
 const RoadmapChip: React.FC<{
   goal: Goal;
   themeColor: string;
-  onNavigate: (id: string) => void;
-}> = ({ goal, themeColor, onNavigate }) => {
+  onEdit: (goal: Goal) => void;
+  onDragStartGoal: (goalId: string) => void;
+  onDragEndGoal: () => void;
+}> = ({ goal, themeColor, onEdit, onDragStartGoal, onDragEndGoal }) => {
   const g = goal as any;
   const plannedStartKey = computeQuarterKey(typeof g.plannedStartDate === 'number' ? g.plannedStartDate : null);
   const kindIcon = GOAL_KIND_ICON[g.goalKind] ?? '○';
@@ -305,14 +318,21 @@ const RoadmapChip: React.FC<{
 
   return (
     <div
-      onClick={() => onNavigate(goal.id)}
-      title={goal.title}
+      draggable
+      onDragStart={e => {
+        e.dataTransfer.setData('text/plain', goal.id);
+        e.dataTransfer.effectAllowed = 'move';
+        onDragStartGoal(goal.id);
+      }}
+      onDragEnd={onDragEndGoal}
+      onClick={() => onEdit(goal)}
+      title={`${goal.title} — click to edit, drag to reschedule`}
       style={{
         borderLeft: `3px solid ${themeColor}`,
         background: isDone ? '#f3f4f6' : isActive ? '#fff' : '#fafafa',
         borderRadius: '0 6px 6px 0',
         padding: '4px 7px',
-        cursor: 'pointer',
+        cursor: 'grab',
         boxShadow: '0 1px 2px rgba(0,0,0,0.07)',
         fontSize: 11,
         opacity: isDone ? 0.55 : 1,
@@ -342,7 +362,6 @@ const RoadmapChip: React.FC<{
 
 const VisualCanvas: React.FC = () => {
   const { currentUser } = useAuth();
-  const navigate = useNavigate();
   const canvasRef = useRef<HTMLDivElement>(null);
 
   // ── Data ────────────────────────────────────────────────────────────────────
@@ -384,6 +403,11 @@ const VisualCanvas: React.FC = () => {
   const dragStartMouse  = useRef({ x: 0, y: 0 });
   const dragStartPos    = useRef({ x: 0, y: 0 });
   const wasDragged      = useRef(false);
+
+  // ── Roadmap edit + drag-to-reschedule ────────────────────────────────────────
+  const [editingGoal,      setEditingGoal]      = useState<Goal | null>(null);
+  const [roadmapDragId,    setRoadmapDragId]    = useState<string | null>(null);
+  const [dragOverCell,     setDragOverCell]     = useState<string | null>(null);
 
   // ── Firestore subscriptions ──────────────────────────────────────────────────
   useEffect(() => {
@@ -468,6 +492,29 @@ const VisualCanvas: React.FC = () => {
   }, [roadmapGoals]);
 
   const currentQuarterKey = useMemo(() => computeQuarterKey(Date.now()), []);
+
+  // Move a goal into a quarter column (or unschedule it) by rewriting its due/end date.
+  // The roadmap cell is keyed off `endDate || dueDate`, so we set endDate to a date
+  // inside the target quarter; unscheduling clears both so it falls to the last column.
+  const rescheduleGoalToQuarter = useCallback(async (goalId: string, qKey: string) => {
+    const goal = goals.find(g => g.id === goalId);
+    if (!goal) return;
+    try {
+      if (qKey === 'unscheduled') {
+        await updateDoc(doc(db, 'goals', goalId), {
+          endDate: null, dueDate: null, updatedAt: serverTimestamp(),
+        } as any);
+      } else {
+        const ts = quarterKeyToTimestamp(qKey);
+        if (ts == null) return;
+        await updateDoc(doc(db, 'goals', goalId), {
+          endDate: ts, updatedAt: serverTimestamp(),
+        } as any);
+      }
+    } catch (err) {
+      console.error('Failed to reschedule goal', goalId, err);
+    }
+  }, [goals]);
 
   // ── Node computation ─────────────────────────────────────────────────────────
   const { nodes, connections } = useMemo(() => {
@@ -945,30 +992,64 @@ const VisualCanvas: React.FC = () => {
                     {/* Quarter cells */}
                     {roadmapQuarters.map(qKey => {
                       const cellGoals = themeGoals?.get(qKey) || [];
+                      const cellId = `${theme.id}:${qKey}`;
+                      const isDropTarget = roadmapDragId != null && dragOverCell === cellId;
                       return (
-                        <div key={qKey} style={{
+                        <div key={qKey}
+                          onDragOver={e => { if (roadmapDragId) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDragOverCell(cellId); } }}
+                          onDragLeave={() => setDragOverCell(prev => (prev === cellId ? null : prev))}
+                          onDrop={e => {
+                            e.preventDefault();
+                            const id = e.dataTransfer.getData('text/plain') || roadmapDragId;
+                            setDragOverCell(null);
+                            if (id) rescheduleGoalToQuarter(id, qKey);
+                          }}
+                          style={{
                           width: 210, flexShrink: 0, padding: '6px 8px', minHeight: 72,
                           borderLeft: '1px solid #e5e7eb', borderTop: '1px solid #e5e7eb',
-                          background: qKey === currentQuarterKey ? '#eff6ff40' : '#fff',
+                          background: isDropTarget ? '#dbeafe' : qKey === currentQuarterKey ? '#eff6ff40' : '#fff',
+                          boxShadow: isDropTarget ? `inset 0 0 0 2px ${theme.color}` : undefined,
                           display: 'flex', flexDirection: 'column', gap: 4,
                         }}>
                           {cellGoals.map(g => (
-                            <RoadmapChip key={g.id} goal={g} themeColor={theme.color} onNavigate={(id) => navigate(`/goals/${id}`)} />
+                            <RoadmapChip key={g.id} goal={g} themeColor={theme.color}
+                              onEdit={setEditingGoal}
+                              onDragStartGoal={setRoadmapDragId}
+                              onDragEndGoal={() => { setRoadmapDragId(null); setDragOverCell(null); }} />
                           ))}
                         </div>
                       );
                     })}
                     {/* Unscheduled cell */}
-                    <div style={{
+                    {(() => {
+                      const cellId = `${theme.id}:unscheduled`;
+                      const isDropTarget = roadmapDragId != null && dragOverCell === cellId;
+                      return (
+                    <div
+                      onDragOver={e => { if (roadmapDragId) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDragOverCell(cellId); } }}
+                      onDragLeave={() => setDragOverCell(prev => (prev === cellId ? null : prev))}
+                      onDrop={e => {
+                        e.preventDefault();
+                        const id = e.dataTransfer.getData('text/plain') || roadmapDragId;
+                        setDragOverCell(null);
+                        if (id) rescheduleGoalToQuarter(id, 'unscheduled');
+                      }}
+                      style={{
                       width: 210, flexShrink: 0, padding: '6px 8px', minHeight: 72,
                       borderLeft: '1px solid #e5e7eb', borderTop: '1px solid #e5e7eb',
-                      background: '#fafafa',
+                      background: isDropTarget ? '#dbeafe' : '#fafafa',
+                      boxShadow: isDropTarget ? `inset 0 0 0 2px ${theme.color}` : undefined,
                       display: 'flex', flexDirection: 'column', gap: 4,
                     }}>
                       {(themeGoals?.get('unscheduled') || []).map(g => (
-                        <RoadmapChip key={g.id} goal={g} themeColor={theme.color} onNavigate={(id) => navigate(`/goals/${id}`)} />
+                        <RoadmapChip key={g.id} goal={g} themeColor={theme.color}
+                          onEdit={setEditingGoal}
+                          onDragStartGoal={setRoadmapDragId}
+                          onDragEndGoal={() => { setRoadmapDragId(null); setDragOverCell(null); }} />
                       ))}
                     </div>
+                      );
+                    })()}
                   </div>
                 );
               })}
@@ -1167,12 +1248,21 @@ const VisualCanvas: React.FC = () => {
         ))}
         <span className="text-muted ms-auto">
           {viewLayout === 'roadmap'
-            ? 'Roadmap view — themes × quarters · Click a goal to open it'
+            ? 'Roadmap view — themes × quarters · Click a goal to edit · Drag a goal to reschedule'
             : viewLayout === 'tree'
             ? 'Tree view — top-down hierarchy · Drag to pan · Scroll to zoom'
             : 'Swimlane view — drag to pan · scroll to zoom · Link Mode to create relationships'}
         </span>
       </div>
+
+      {/* Edit-in-place — clicking a roadmap goal opens the modal instead of navigating away */}
+      <EditGoalModal
+        goal={editingGoal}
+        show={!!editingGoal}
+        onClose={() => setEditingGoal(null)}
+        currentUserId={currentUser?.uid || ''}
+        allGoals={goals}
+      />
     </div>
   );
 };
