@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Modal, Button, Form, Alert, Row, Col } from 'react-bootstrap';
 import { db } from '../firebase';
-import { collection, addDoc, getDocs, query, where, orderBy, serverTimestamp } from 'firebase/firestore';
+import { collection, addDoc, getDocs, query, where, serverTimestamp } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useSprint } from '../contexts/SprintContext';
@@ -153,11 +153,13 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
             timestamp: new Date().toISOString()
           });
 
-          // Load goals (filter by persona on client so personal includes legacy nulls)
+          // Load goals (filter by persona on client so personal includes legacy nulls).
+          // NB: do NOT orderBy('priority') here — Firestore silently omits any document
+          // missing that field, which was hiding the ~30 goals that have no priority set
+          // (e.g. travel goals) from the parent-goal picker. Sort client-side instead.
           const goalsQuery = query(
             collection(db, 'goals'),
-            where('ownerUid', '==', currentUser.uid),
-            orderBy('priority', 'desc')
+            where('ownerUid', '==', currentUser.uid)
           );
 
           console.log('📊 AddStoryModal: Loading goals...', {
@@ -282,6 +284,12 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
     setIsSubmitting(true);
     setSubmitResult(null);
 
+    // Per-phase timing to localise the create delay (matches the FAB goal/task timers).
+    const _t0 = performance.now();
+    const perf = (label: string) =>
+      console.log(`⏱️ [AddStory perf] ${label}: +${Math.round(performance.now() - _t0)}ms`);
+    perf('handler start');
+
     try {
       console.log('🚀 AddStoryModal: Starting STORY creation', {
         action: 'story_creation_start',
@@ -293,18 +301,10 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
         timestamp: new Date().toISOString()
       });
 
-      // Get existing story references for unique ref generation
-      const existingStoriesQuery = query(
-        collection(db, 'stories'),
-        where('ownerUid', '==', currentUser.uid)
-      );
-      const existingSnapshot = await getDocs(existingStoriesQuery);
-      const existingRefs = existingSnapshot.docs
-        .map(doc => doc.data().ref)
-        .filter(ref => ref);
-
-      // Generate unique reference number
-      const ref = generateRef('story', existingRefs);
+      // Generate a display ref. generateRef is timestamp+random-unique, so we no longer
+      // read the entire stories collection just to build it — that full-collection getDocs
+      // was the main cost making story creation take many seconds on large backlogs.
+      const ref = generateRef('story');
       console.log('🏷️ AddStoryModal: Generated reference', {
         action: 'reference_generated',
         ref: ref,
@@ -342,8 +342,10 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
         data: storyData,
         timestamp: new Date().toISOString()
       });
+      perf('before stories addDoc');
 
       await addDoc(collection(db, 'stories'), storyData);
+      perf('after stories addDoc (raw write latency)');
 
       console.log('✅ AddStoryModal: STORY created successfully', {
         action: 'story_creation_success',

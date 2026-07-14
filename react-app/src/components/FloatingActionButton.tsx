@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Modal, Button, Form, Alert } from 'react-bootstrap';
 import { useNavigate } from 'react-router-dom';
 import { db } from '../firebase';
-import { collection, addDoc, getDocs, query, where, orderBy, serverTimestamp } from 'firebase/firestore';
+import { collection, addDoc, getDocs, query, where, serverTimestamp } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useSprint } from '../contexts/SprintContext';
@@ -162,11 +162,11 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
           persona: currentPersona
         });
 
-        // Load goals
+        // Load goals. Do NOT orderBy('priority') — Firestore omits documents missing that
+        // field, which hid priority-less goals from the picker. Sort client-side if needed.
         const goalsQuery = query(
           collection(db, 'goals'),
-          where('ownerUid', '==', currentUser.uid),
-          orderBy('priority', 'desc')
+          where('ownerUid', '==', currentUser.uid)
         );
         const goalsSnapshot = await getDocs(goalsQuery);
         const goalsData = goalsSnapshot.docs.map(doc => ({
@@ -195,6 +195,14 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
 
   const handleQuickAdd = async () => {
     if (!currentUser || !quickAddData.title.trim()) return;
+
+    // Per-phase timing to localise the create delay (goal/task). Read the console
+    // after one create: whichever phase shows the big jump is the bottleneck.
+    // Typically the gap at "after addDoc/write" isolates raw Firestore write latency.
+    const _t0 = performance.now();
+    const perf = (label: string) =>
+      console.log(`⏱️ [FAB perf] ${quickAddType} — ${label}: +${Math.round(performance.now() - _t0)}ms`);
+    perf('handler start');
 
     console.log('🚀 FloatingActionButton: QUICK ADD button clicked', {
       action: 'quick_add_button_clicked',
@@ -235,17 +243,9 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
             return;
           }
         }
-        // Get existing goal references for unique ref generation
-        const existingGoalsQuery = query(
-          collection(db, 'goals'),
-          where('ownerUid', '==', currentUser.uid)
-        );
-        const existingSnapshot = await getDocs(existingGoalsQuery);
-        const existingRefs = existingSnapshot.docs
-          .map(doc => doc.data().ref)
-          .filter(ref => ref);
-        
-        const goalRef = generateRef('goal', existingRefs);
+        // generateRef is timestamp+random-unique; no need to read the whole goals
+        // collection to build a display ref (that read slowed creation noticeably).
+        const goalRef = generateRef('goal');
         const goalData = {
           ...baseData,
           ref: goalRef,
@@ -262,9 +262,11 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
           data: goalData,
           ref: goalRef
         });
-        
+        perf('before goals addDoc');
+
         await addDoc(collection(db, 'goals'), goalData);
-        
+        perf('after goals addDoc (raw write latency)');
+
         console.log('✅ FloatingActionButton: GOAL saved successfully', {
           action: 'goal_save_success',
           timestamp: new Date().toISOString(),
@@ -272,17 +274,7 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
         });
         setSubmitResult(`✅ Goal created successfully! (${goalRef})`);
       } else if (quickAddType === 'story') {
-        // Get existing story references for unique ref generation
-        const existingStoriesQuery = query(
-          collection(db, 'stories'),
-          where('ownerUid', '==', currentUser.uid)
-        );
-        const existingSnapshot = await getDocs(existingStoriesQuery);
-        const existingRefs = existingSnapshot.docs
-          .map(doc => doc.data().ref)
-          .filter(ref => ref);
-        
-        const storyRef = generateRef('story', existingRefs);
+        const storyRef = generateRef('story');
         const linkedGoal = goals.find(g => g.id === quickAddData.goalId);
         const themeId = (linkedGoal && (linkedGoal as any).theme !== undefined) ? (linkedGoal as any).theme : 1;
         const storyData = {
@@ -314,17 +306,7 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
         });
         setSubmitResult(`✅ Story created successfully! (${storyRef})`);
       } else if (quickAddType === 'task') {
-        // Get existing task references for unique ref generation
-        const existingTasksQuery = query(
-          collection(db, 'tasks'),
-          where('ownerUid', '==', currentUser.uid)
-        );
-        const existingSnapshot = await getDocs(existingTasksQuery);
-        const existingRefs = existingSnapshot.docs
-          .map(doc => doc.data().ref)
-          .filter(ref => ref);
-        
-        const taskRef = generateRef('task', existingRefs);
+        const taskRef = generateRef('task');
         const effortData = efforts.find(e => e.value === quickAddData.effort);
         const estimateMinutes = effortData?.minutes || 45;
         const effortPoints = effortData?.points ?? 1;
@@ -385,14 +367,16 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
           data: taskData,
           ref: taskRef
         });
-        
+        perf('before emergencyCreateTask');
+
         // Use emergency task creation with fallback system
         const result = await emergencyCreateTask(taskData, currentUser.uid, {
           maxRetries: 3,
           retryDelay: 1000,
           fallbackMethod: true
         });
-        
+        perf(`after emergencyCreateTask (method=${result?.method || '?'}, retries burn 1s each)`);
+
         if (result.success) {
           console.log('✅ FloatingActionButton: TASK saved successfully', {
             action: 'task_save_success',
