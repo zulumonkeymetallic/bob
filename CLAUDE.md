@@ -198,6 +198,22 @@ cd ~/git/bob
 
 **Firestore Collection for Snapshots:** `global_hierarchy_snapshots`
 
+### 3.7 Demo & Agent Test Accounts
+
+Two isolated Firebase Auth + Firestore accounts with synthetic (fabricated,
+non-personal) data — never Jim's real content. Full detail, sign-in mechanism,
+and re-seeding instructions: `~/.hermes/skills/bob-app/bob-test-demo-accounts/SKILL.md`.
+Seed script: `scripts/seed_demo_accounts.py`.
+
+| Purpose | UID | Email |
+|---|---|---|
+| Customer-facing demo | `demo-user-jc1-tech` | `demo@jc1.tech` |
+| Agent/automated QA | `ai-test-user-12345abcdef` | `ai-test-agent@bob.local` |
+
+Agents sign in via a server-minted custom token (`?agent_token=` URL param,
+see `AuthContext.tsx`) — never a password. Never copy Jim's real data into
+these accounts; the demo one may be shown to prospects.
+
 ---
 
 ## 4. Autonomous Trading Bot Stack
