@@ -283,7 +283,10 @@ try {
   if (aiPlanning) {
     // Legacy nightly scheduler retired; unifiedNightlyOrchestrator is canonical.
     exports.runMorningPlanner = aiPlanning.runMorningPlanner;
-    exports.onStoryWrite = aiPlanning.onStoryWrite;
+    // onStoryWrite (per-story synchronous AI enrichment) removed — it silently
+    // fabricated a batch of untracked tasks on every story write. Acceptance
+    // criteria generation is now generateMissingAcceptanceCriteria, a scheduled,
+    // sprint-scoped nightly step (see nightlyOrchestration.js).
     exports.onTaskWrite = aiPlanning.onTaskWrite; // New Trigger
 
     // Capacity Planning

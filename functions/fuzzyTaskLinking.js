@@ -94,85 +94,6 @@ function findPotentialGoalMatchesForStory(story, goals) {
   return matches;
 }
 
-function tomorrowEndOfDayMillis() {
-  const now = new Date();
-  const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 23, 59, 0, 0);
-  return tomorrow.getTime();
-}
-
-async function ensureValidationTask({
-  db,
-  userId,
-  sourceType,
-  sourceId,
-  sourceRef,
-  sourceTitle,
-  reason,
-  suggestedType = null,
-  suggestedId = null,
-  suggestedRef = null,
-  suggestedTitle = null,
-  linkedGoalRef = null,
-  linkedGoalTitle = null,
-  confidence = null,
-}) {
-  const duplicateKey = `link_validation:${sourceType}:${sourceId}:${reason}`;
-  const existing = await db.collection('tasks')
-    .where('ownerUid', '==', userId)
-    .where('duplicateKey', '==', duplicateKey)
-    .where('status', 'in', [0, 1, 'open', 'todo', 'backlog'])
-    .limit(1)
-    .get();
-
-  if (!existing.empty) return existing.docs[0].id;
-
-  const dueDate = tomorrowEndOfDayMillis();
-  const suggestedLabel = suggestedType && (suggestedRef || suggestedTitle)
-    ? [suggestedRef, suggestedTitle].filter(Boolean).join(' · ')
-    : '';
-  const linkedGoalLabel = linkedGoalRef || linkedGoalTitle
-    ? [linkedGoalRef, linkedGoalTitle].filter(Boolean).join(' · ')
-    : '';
-  const suggestedText = suggestedType && suggestedLabel
-    ? ` Suggested ${suggestedType}: ${suggestedLabel}${linkedGoalLabel ? ` -> goal ${linkedGoalLabel}` : ''}${confidence != null ? ` (${confidence}% confidence)` : ''}.`
-    : '';
-  const title = reason === 'no_match'
-    ? `Validate ${sourceType} linkage for ${sourceRef}${suggestedLabel ? ` -> ${suggestedLabel}` : ''}`
-    : `Review low-confidence ${sourceType} linkage for ${sourceRef}${suggestedLabel ? ` -> ${suggestedLabel}` : ''}`;
-  const description = `${sourceType.toUpperCase()}: ${sourceTitle || sourceRef}.${suggestedText}`.trim();
-
-  const taskRef = db.collection('tasks').doc();
-  await taskRef.set({
-    ownerUid: userId,
-    title,
-    description,
-    status: 0,
-    dueDate,
-    source: 'system',
-    entry_method: 'auto:fuzzy_link_validation',
-    task_type: 'task',
-    duplicateKey,
-    parentType: sourceType,
-    parentId: sourceId,
-    metadata: {
-      validationReason: reason,
-      sourceType,
-      sourceId,
-      sourceRef,
-      suggestedType,
-      suggestedId,
-      confidence,
-    },
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    syncState: 'dirty',
-  }, { merge: true });
-
-  return taskRef.id;
-}
-
-const ENABLE_FUZZY_VALIDATION_TASKS = false;
-
 function createConfidenceTierCounts() {
   return {
     no_match: 0,
@@ -527,20 +448,6 @@ exports.nightlyTaskLinking = onSchedule(
             if (matches.goals.length === 0 && matches.stories.length === 0) {
               userRunCounts.no_match++;
               results.confidenceTierTotals.no_match++;
-              if (ENABLE_FUZZY_VALIDATION_TASKS) {
-                const taskRef = task.reference || `TK-${String(task.id).slice(-6).toUpperCase()}`;
-                await ensureValidationTask({
-                  db,
-                  userId,
-                  sourceType: 'task',
-                  sourceId: task.id,
-                  sourceRef: taskRef,
-                  sourceTitle: task.title || taskRef,
-                  reason: 'no_match',
-                });
-                results.validationTasksCreated++;
-                userValidationTasksCreated++;
-              }
               continue;
             }
 
@@ -629,27 +536,6 @@ exports.nightlyTaskLinking = onSchedule(
               }
               userRunCounts.low_confidence++;
               results.confidenceTierTotals.low_confidence++;
-              if (ENABLE_FUZZY_VALIDATION_TASKS) {
-                const taskRef = task.reference || `TK-${String(task.id).slice(-6).toUpperCase()}`;
-                await ensureValidationTask({
-                  db,
-                  userId,
-                  sourceType: 'task',
-                  sourceId: task.id,
-                  sourceRef: taskRef,
-                  sourceTitle: task.title || taskRef,
-                  reason: 'low_confidence',
-                  suggestedType: bestMatch.type,
-                  suggestedId: bestMatch.id,
-                  suggestedRef: bestMatch.ref || null,
-                  suggestedTitle: bestMatch.title,
-                  linkedGoalRef: bestMatch.linkedGoalRef || null,
-                  linkedGoalTitle: bestMatch.linkedGoalTitle || null,
-                  confidence: Math.round(bestMatch.score * 100),
-                });
-                results.validationTasksCreated++;
-                userValidationTasksCreated++;
-              }
             }
           }
 
@@ -780,23 +666,9 @@ exports.nightlyStoryGoalLinking = onSchedule(
             if (story.deleted || Number(story.status) === 99) continue;
 
             const matches = findPotentialGoalMatchesForStory(story, goals);
-            const storyRef = story.ref || `ST-${String(story.id).slice(-6).toUpperCase()}`;
             if (!matches.length) {
               userRunCounts.no_match++;
               results.confidenceTierTotals.no_match++;
-              if (ENABLE_FUZZY_VALIDATION_TASKS) {
-                await ensureValidationTask({
-                  db,
-                  userId,
-                  sourceType: 'story',
-                  sourceId: story.id,
-                  sourceRef: storyRef,
-                  sourceTitle: story.title || storyRef,
-                  reason: 'no_match',
-                });
-                results.validationTasksCreated++;
-                userValidationTasksCreated++;
-              }
               continue;
             }
 
@@ -867,24 +739,6 @@ exports.nightlyStoryGoalLinking = onSchedule(
               }
               userRunCounts.low_confidence++;
               results.confidenceTierTotals.low_confidence++;
-              if (ENABLE_FUZZY_VALIDATION_TASKS) {
-                await ensureValidationTask({
-                  db,
-                  userId,
-                  sourceType: 'story',
-                  sourceId: story.id,
-                  sourceRef: storyRef,
-                  sourceTitle: story.title || storyRef,
-                  reason: 'low_confidence',
-                  suggestedType: 'goal',
-                  suggestedId: bestMatch.id,
-                  suggestedRef: bestMatch.ref || null,
-                  suggestedTitle: bestMatch.title,
-                  confidence: Math.round(bestMatch.score * 100),
-                });
-                results.validationTasksCreated++;
-                userValidationTasksCreated++;
-              }
             }
           }
 
