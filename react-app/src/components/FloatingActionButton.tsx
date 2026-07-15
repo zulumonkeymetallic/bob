@@ -18,6 +18,9 @@ import IntentBrokerModal from './IntentBrokerModal';
 import { useProcessTextActivity } from '../contexts/ProcessTextActivityContext';
 import { saveFocusWizardPrefill } from '../services/focusGoalsService';
 import { pickDefaultPlanningSprintId } from '../utils/sprintFilter';
+import { withTimeout } from '../utils/withTimeout';
+
+const CREATE_TIMEOUT_MS = 15000;
 
 interface FloatingActionButtonProps {
   onImportClick: () => void;
@@ -264,7 +267,7 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
         });
         perf('before goals addDoc');
 
-        await addDoc(collection(db, 'goals'), goalData);
+        await withTimeout(addDoc(collection(db, 'goals'), goalData), CREATE_TIMEOUT_MS, 'goals addDoc');
         perf('after goals addDoc (raw write latency)');
 
         console.log('✅ FloatingActionButton: GOAL saved successfully', {
@@ -297,7 +300,7 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
           ref: storyRef
         });
         
-        await addDoc(collection(db, 'stories'), storyData);
+        await withTimeout(addDoc(collection(db, 'stories'), storyData), CREATE_TIMEOUT_MS, 'stories addDoc');
         
         console.log('✅ FloatingActionButton: STORY saved successfully', {
           action: 'story_save_success',

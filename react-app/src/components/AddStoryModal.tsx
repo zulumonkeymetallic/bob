@@ -12,6 +12,9 @@ import TagInput from './common/TagInput';
 import { planningSprints, pickDefaultPlanningSprintId } from '../utils/sprintFilter';
 import { evaluateStorySprintAlignment } from '../utils/sprintAlignment';
 import { getGoalDisplayPath, getLeafGoalOptions, isGoalInHierarchySet, resolveLeafGoalSelection } from '../utils/goalHierarchy';
+import { withTimeout } from '../utils/withTimeout';
+
+const CREATE_TIMEOUT_MS = 15000;
 
 interface AddStoryModalProps {
   onClose: () => void;
@@ -344,7 +347,7 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
       });
       perf('before stories addDoc');
 
-      await addDoc(collection(db, 'stories'), storyData);
+      await withTimeout(addDoc(collection(db, 'stories'), storyData), CREATE_TIMEOUT_MS, 'stories addDoc');
       perf('after stories addDoc (raw write latency)');
 
       console.log('✅ AddStoryModal: STORY created successfully', {

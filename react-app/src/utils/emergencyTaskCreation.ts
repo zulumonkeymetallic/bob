@@ -1,5 +1,12 @@
 import { collection, addDoc, doc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
+import { withTimeout } from './withTimeout';
+
+// Bounds each individual write attempt so a stuck Firestore write (persistence/
+// multi-tab lock contention can leave the promise unresolved with no error thrown)
+// can no longer hang this function forever — it now always progresses through the
+// retry -> fallback -> localStorage chain within a bounded total time instead.
+const WRITE_ATTEMPT_TIMEOUT_MS = 6000;
 
 export interface TaskCreationOptions {
   maxRetries?: number;
@@ -21,16 +28,20 @@ export const emergencyCreateTask = async (
     try {
       console.log(`🔄 Task creation attempt ${attempt}/${maxRetries}`);
       
-      const docRef = await addDoc(collection(db, 'tasks'), {
-        ...taskData,
-        userId,
-        ownerUid: userId,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-        emergencyCreated: true,
-        creationMethod: 'standard',
-        attempt
-      });
+      const docRef = await withTimeout(
+        addDoc(collection(db, 'tasks'), {
+          ...taskData,
+          userId,
+          ownerUid: userId,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          emergencyCreated: true,
+          creationMethod: 'standard',
+          attempt
+        }),
+        WRITE_ATTEMPT_TIMEOUT_MS,
+        `tasks addDoc attempt ${attempt}`,
+      );
       
       console.log('✅ Task created successfully with ID:', docRef.id);
       return { success: true, id: docRef.id, method: 'standard', attempt };
@@ -53,16 +64,20 @@ export const emergencyCreateTask = async (
       const customId = `task_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       const taskRef = doc(db, 'tasks', customId);
       
-      await setDoc(taskRef, {
-        ...taskData,
-        userId,
-        ownerUid: userId,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-        emergencyCreated: true,
-        creationMethod: 'fallback',
-        customId
-      });
+      await withTimeout(
+        setDoc(taskRef, {
+          ...taskData,
+          userId,
+          ownerUid: userId,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          emergencyCreated: true,
+          creationMethod: 'fallback',
+          customId
+        }),
+        WRITE_ATTEMPT_TIMEOUT_MS,
+        'tasks fallback setDoc',
+      );
       
       console.log('✅ Task created via fallback method with ID:', customId);
       return { success: true, id: customId, method: 'fallback', attempt: 'fallback' };
