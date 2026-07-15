@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback, useRef } from 'react';
-import { onAuthStateChanged, User, GoogleAuthProvider, signInWithPopup, signOut as firebaseSignOut } from 'firebase/auth';
+import { onAuthStateChanged, User, GoogleAuthProvider, signInWithPopup, signInWithCustomToken, signOut as firebaseSignOut } from 'firebase/auth';
 import { auth } from '../firebase';
 import { sideDoorAuth } from '../services/SideDoorAuth';
 
@@ -86,6 +86,33 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       signOut().catch((err) => console.error('Auto logout failed', err));
     }, AUTO_LOGOUT_MS);
   }, [signOut]);
+
+  // Server-minted custom-token sign-in — lets an authorised agent (or a magic-link
+  // style flow) sign in via a one-time ?agent_token=<Firebase custom JWT> URL param,
+  // with no password ever entered by anyone in the browser. The token can only be
+  // minted server-side with the Admin SDK service account, so this adds no attack
+  // surface — it's the standard Firebase pattern for server-authenticated sessions.
+  // onAuthStateChanged (below) picks up the resulting real session automatically.
+  useEffect(() => {
+    let cancelled = false;
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const agentToken = params.get('agent_token');
+      if (!agentToken) return;
+      signInWithCustomToken(auth, agentToken)
+        .then(() => {
+          if (cancelled) return;
+          console.log('🔐 Signed in via agent custom token');
+          const url = new URL(window.location.href);
+          url.searchParams.delete('agent_token');
+          window.history.replaceState({}, document.title, `${url.pathname}${url.search}${url.hash}`);
+        })
+        .catch((err) => console.error('🔐 Agent custom-token sign-in failed', err?.message || err));
+    } catch (err) {
+      console.error('🔐 Agent custom-token sign-in setup failed', err);
+    }
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     console.log('🔐 Setting up auth state listener...');
