@@ -4508,11 +4508,6 @@ exports.replanCalendarNow = onCall({
     storyMap,
   });
 
-  const candidateIds = new Set([
-    ...storyQueue.map((story) => getEntityKey('story', story.id)),
-    ...taskQueue.map((task) => getEntityKey('task', task.id)),
-  ]);
-
   // NEW: Check user setting for chore scheduling
   const scheduleChoresEnabled = profile?.scheduleChoresEnabled !== false;
 
@@ -4575,25 +4570,18 @@ exports.replanCalendarNow = onCall({
 
   for (const block of existingBlocks) {
     const isAi = isAiPlannerBlock(block);
-    const key = block.storyId ? getEntityKey('story', block.storyId) : block.taskId ? getEntityKey('task', block.taskId) : null;
 
-    if (planningMode === 'smart') {
-      // Smart mode: wipe ALL AI-created planner blocks — we replan everything fresh.
-      // Hard events (user GCal, work, fitness) are kept and treated as immovable.
-      if (isAi) {
-        await db.collection('calendar_blocks').doc(block.id).delete().catch(() => { });
-        replaced += 1;
-      } else {
-        remainingBlocks.push(block);
-      }
+    // Both modes fully wipe planner-created blocks on every replan. Previously strict
+    // mode only removed an AI block if its linked story/task was no longer a valid
+    // candidate — a still-valid-but-stale AI block would sit untouched, and its
+    // existing scheduledMinutesByEntity would silently satisfy the placement check,
+    // making replan a no-op for it. Real events and any block a human placed directly
+    // (never AI-created) are never touched here in either mode.
+    if (isAi) {
+      await db.collection('calendar_blocks').doc(block.id).delete().catch(() => { });
+      replaced += 1;
     } else {
-      // Strict mode: only remove AI blocks whose linked entity is no longer a candidate
-      if (isAi && key && !candidateIds.has(key)) {
-        await db.collection('calendar_blocks').doc(block.id).delete().catch(() => { });
-        replaced += 1;
-      } else {
-        remainingBlocks.push(block);
-      }
+      remainingBlocks.push(block);
     }
   }
 
@@ -4621,13 +4609,17 @@ exports.replanCalendarNow = onCall({
     for (const block of existingBlocks) {
       if (retainedIds.has(block.id)) continue;
       const isAi = isAiPlannerBlock(block);
-      const key = block.storyId ? getEntityKey('story', block.storyId) : block.taskId ? getEntityKey('task', block.taskId) : null;
       if (planningMode === 'smart') {
+        // Smart: newly-materialised blocks only get protected if they're one of the
+        // narrow hard-busy categories (real GCal event, Work, Fitness) — anything else
+        // is a theme hint, not a hard reservation, per Smart's design.
         if (isHardBusy(block)) {
           remainingBlocks.push(block);
           retainedIds.add(block.id);
         }
-      } else if (!(isAi && key && !candidateIds.has(key))) {
+      } else if (!isAi) {
+        // Strict: every non-AI block is a hard reservation, no exceptions — matches
+        // buildBusyIntervals' unconditional busy treatment for strict mode.
         remainingBlocks.push(block);
         retainedIds.add(block.id);
       }
