@@ -5214,7 +5214,7 @@ exports._runNightlyChainCore = runNightlyChainCore;
 exports.runNightlyChainNow = onCall({
   timeZone: 'Europe/London',
   memory: '1GiB',
-  timeoutSeconds: 540,
+  timeoutSeconds: 600,
   secrets: [OPENROUTER_API_KEY_SECRET, BOB_CLI_ACCESS, BREVO_API_KEY_SECRET, GOOGLE_AI_STUDIO_API_KEY],
   region: 'europe-west2',
   invoker: 'public',
@@ -5228,10 +5228,13 @@ exports.runNightlyChainNow = onCall({
 });
 
 // HTTP variant removed to keep callable signature stable
+// timeoutSeconds matches unifiedNightlyOrchestrator (the real scheduled trigger)
+// so a manual verification run via this endpoint isn't cut off sooner than a
+// production run would be.
 exports.runNightlyChainNowHttp = https.onRequest({
   timeZone: 'Europe/London',
   memory: '1GiB',
-  timeoutSeconds: 540,
+  timeoutSeconds: 600,
   secrets: [OPENROUTER_API_KEY_SECRET, BOB_CLI_ACCESS, BREVO_API_KEY_SECRET, GOOGLE_AI_STUDIO_API_KEY],
   region: 'europe-west2',
 }, async (req, res) => {
