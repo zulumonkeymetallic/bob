@@ -13,7 +13,13 @@ const OPENROUTER_FALLBACK_MODEL = 'openrouter/auto';
 // No-cost OpenRouter model for low-stakes, high-volume jobs (sizing, time-of-day,
 // video summarisation). Rate-limited (~20 req/min, ~50/day without prior credit),
 // so it's used as primary only where an occasional miss is harmless.
-const OPENROUTER_FREE_MODEL = process.env.OPENROUTER_FREE_MODEL || 'google/gemini-2.0-flash-exp:free';
+// 2026-07-16: the previous default (gemini-2.0-flash-exp:free) was removed from
+// OpenRouter's catalogue (404 "No endpoints found") — every callLLMFreeFirst call
+// was silently falling through to paid Vertex on every invocation, and the nightly
+// generateMissingAcceptanceCriteria step was burning most of its 600s budget retrying
+// a dead model across every candidate story before falling back. Verified live via
+// https://openrouter.ai/api/v1/models at time of writing.
+const OPENROUTER_FREE_MODEL = process.env.OPENROUTER_FREE_MODEL || 'meta-llama/llama-3.3-70b-instruct:free';
 const ALERT_EMAIL_TO = 'Jdonnelly@jc1.tech';
 
 // ---------------------------------------------------------------------------

@@ -4998,6 +4998,17 @@ async function applyProjectedDueDatesForUnscheduledSprintItems() {
   return { totalProjected };
 }
 
+// Hard ceiling on this step's own runtime and volume, independent of anything else in
+// the chain. This step runs FIRST in the nightly chain (before calendar planning) — if
+// an LLM provider is slow/erroring, or the candidate backlog is large, this must never
+// be able to consume enough of the 600s function budget to starve the scheduling steps
+// that come after it. Confirmed necessary in production 2026-07-16: a dead free-model
+// reference caused this step to burn 17+ minutes retrying-then-falling-back across
+// candidates in a single run, blowing the whole function's timeout before
+// runCalendarPlanner/sprintForwardPlanner got a turn.
+const ACCEPTANCE_CRITERIA_MAX_CANDIDATES_PER_USER = 40;
+const ACCEPTANCE_CRITERIA_TIME_BUDGET_MS = 90_000;
+
 /**
  * Scheduled replacement for the old onStoryWrite/enrichStory trigger. That trigger
  * fired synchronously on every stories/{id} write missing acceptance criteria and
@@ -5012,8 +5023,13 @@ async function generateMissingAcceptanceCriteria() {
   const db = ensureFirestore();
   const profiles = await db.collection('profiles').get().catch(() => ({ docs: [] }));
   let totalGenerated = 0;
+  const stepStartMs = Date.now();
 
   for (const prof of profiles.docs) {
+    if (Date.now() - stepStartMs > ACCEPTANCE_CRITERIA_TIME_BUDGET_MS) {
+      console.warn('[AcceptanceCriteria] time budget exhausted, deferring remaining users to next nightly run');
+      break;
+    }
     const userId = prof.id;
     try {
       const sprintSnap = await db.collection('sprints')
@@ -5046,10 +5062,18 @@ async function generateMissingAcceptanceCriteria() {
         });
       }
       if (candidates.length === 0) continue;
+      if (candidates.length > ACCEPTANCE_CRITERIA_MAX_CANDIDATES_PER_USER) {
+        console.warn(`[AcceptanceCriteria] user ${userId}: ${candidates.length} candidates, capping at ${ACCEPTANCE_CRITERIA_MAX_CANDIDATES_PER_USER} for this run`);
+      }
+      const scoped = candidates.slice(0, ACCEPTANCE_CRITERIA_MAX_CANDIDATES_PER_USER);
 
       const writer = db.bulkWriter();
       let generated = 0;
-      for (const story of candidates) {
+      for (const story of scoped) {
+        if (Date.now() - stepStartMs > ACCEPTANCE_CRITERIA_TIME_BUDGET_MS) {
+          console.warn(`[AcceptanceCriteria] time budget exhausted mid-user ${userId}, deferring remaining stories`);
+          break;
+        }
         const system = 'You are an expert Agile Product Owner. Generate 2-5 clear, testable acceptance '
           + 'criteria for the given user story. Return ONLY valid JSON: {"acceptanceCriteria": ["AC1", "AC2"]}';
         const user = `Story Title: ${story.title}\nDescription: ${story.description}`;
@@ -5074,7 +5098,7 @@ async function generateMissingAcceptanceCriteria() {
       console.warn(`[AcceptanceCriteria] failed for user ${userId}:`, err?.message || err);
     }
   }
-  return { totalGenerated };
+  return { totalGenerated, elapsedMs: Date.now() - stepStartMs };
 }
 
 // Manual trigger to run the nightly chain (pointing → conversions → scoring+Top3 → calendar)
