@@ -3515,7 +3515,15 @@ async function runCalendarPlannerJob() {
   const db = ensureFirestore();
   const profiles = await db.collection('profiles').get().catch(() => ({ docs: [] }));
   const now = DateTime.now();
-  const MAX_PLANNING_DAYS = 21;
+  // Must match sprintForwardPlanner.js's CALENDAR_VISIBILITY_HORIZON_DAYS and
+  // calendarSync.js's GCAL_FUTURE_DAYS (both 90). This window governs how far ahead
+  // recurring "Work (Main Gig)" / theme_allocation blocks get materialised into real
+  // calendar_blocks documents. It previously stopped at 21 days while
+  // sprintForwardPlanner scheduled out to a sprint's end date (often 60-90+ days) —
+  // beyond day 21 there was no real work block left to check against, so personal
+  // items landed straight through the working day. Confirmed live in production
+  // 2026-07-16 (227 of 251 forward-scheduled personal items fell in that gap).
+  const MAX_PLANNING_DAYS = 90;
 
   for (const prof of profiles.docs) {
     const userId = prof.id;

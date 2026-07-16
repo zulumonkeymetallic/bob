@@ -26,6 +26,15 @@ const WAKING_END_HOUR   = 21;   // 21:00 — sleep begins
 const WAKING_MINS       = (WAKING_END_HOUR - WAKING_START_HOUR) * 60; // 960
 const SOURCE_TAG        = 'sprint_forward_plan';
 const RECURRING_TYPES   = new Set(['chore', 'routine', 'habit']);
+// Must match calendarSync.js's GCAL_FUTURE_DAYS. This is the furthest out that a
+// real Google Calendar event or recurring instance is guaranteed to have been synced
+// into calendar_blocks. Scheduling beyond this point means planning into a calendar
+// window BOB genuinely cannot see yet — real events sync in later and can retroactively
+// collide with whatever was placed there blind. Confirmed live in production
+// 2026-07-16: 25 personal items landed directly on top of real recurring calendar
+// events (swim, sauna, macro logging) that were beyond this horizon at planning time.
+const CALENDAR_VISIBILITY_HORIZON_DAYS = 90;
+const MS_IN_DAY = 86_400_000;
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -247,7 +256,13 @@ async function runForUser(db, uid, options = {}) {
   // Real work_shift_allocation blocks (materialised from the user's theme plan) are
   // treated as busy so personal items never land on top of an actual scheduled work
   // block. Where no work block exists, that time stays available — no hardcoded hours.
-  const latestEndMs = Math.max(...activeSprints.map(s => toMs(s.endDate || s.targetDate) || 0));
+  // The scheduling horizon itself is capped at CALENDAR_VISIBILITY_HORIZON_DAYS: beyond
+  // that point real calendar data isn't guaranteed to exist yet, so nothing gets
+  // scheduled there this run — it's picked up on a later run once that window is
+  // visible, rather than being placed blind and risking a retroactive collision.
+  const sprintEndMs = Math.max(...activeSprints.map(s => toMs(s.endDate || s.targetDate) || 0));
+  const visibilityHorizonMs = Date.now() + CALENDAR_VISIBILITY_HORIZON_DAYS * MS_IN_DAY;
+  const latestEndMs = Math.min(sprintEndMs, visibilityHorizonMs);
   const freeSlotMap = await buildFreeSlotMap(db, uid, tomorrowStart.toMillis(), latestEndMs + 86_400_000, zone);
 
   // day state: remaining free-slot queue per day (mutable pointers into the slot list)
