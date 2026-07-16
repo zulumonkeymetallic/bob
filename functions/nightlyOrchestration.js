@@ -413,14 +413,17 @@ async function matchExternalCalendarEventsToEntities({
 // ===== Helpers
 const PRIORITY_TEXT_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
 
-const LOW_STAKES_PURPOSES = new Set(['autoPoint_task', 'autoTimeOfDay_task', 'autoPoint_story', 'autoTimeOfDay_story']);
-
+// 2026-07-16: previously routed low-stakes purposes (sizing, time-of-day) through
+// callLLMFreeFirst to save cost. OpenRouter's free tier caps at 8 req/min — at
+// realistic per-user candidate volumes every call past the 8th in a minute burns a
+// 429 + retry before falling back to Vertex anyway, serially, with no cap on how
+// many candidates queue up behind it. Confirmed live 2026-07-16: this alone blew
+// past the 540s function budget on a single manual run. callLLM (Vertex-first) is
+// used for everything now, per Jim's direction to keep all "AI stuff" on Vertex.
 async function callLLMJsonSafe({ system, user, purpose, userId, model }) {
-  const { callLLM, callLLMFreeFirst } = require('./utils/llmHelper');
+  const { callLLM } = require('./utils/llmHelper');
   try {
-    const raw = LOW_STAKES_PURPOSES.has(purpose)
-      ? await callLLMFreeFirst(system, user, { modelName: model, purpose })
-      : await callLLM(system, user, model);
+    const raw = await callLLM(system, user, model);
     return JSON.parse(raw);
   } catch (error) {
     console.warn('[llm-json] failed', { purpose, userId, error: error?.message || error });
@@ -2434,11 +2437,20 @@ async function replanExistingBlocksForUser({
 }
 
 // ===== 01:00 Auto-pointing (missing points only)
+// Bounds mirror generateMissingAcceptanceCriteria: caps candidates per user per
+// sub-loop and enforces a hard time budget for the whole step, so a large backlog
+// or a slow/unhealthy LLM provider can never again eat into the shared nightly
+// chain's runtime budget. Unprocessed candidates are simply picked up next run.
+const AUTO_POINTING_MAX_CANDIDATES_PER_USER = 40;
+const AUTO_POINTING_TIME_BUDGET_MS = 90_000;
+
 async function runAutoPointingJob() {
   const db = ensureFirestore();
   const profiles = await db.collection('profiles').get().catch(() => ({ docs: [] }));
+  const stepStartMs = Date.now();
 
   for (const prof of profiles.docs) {
+    if (Date.now() - stepStartMs > AUTO_POINTING_TIME_BUDGET_MS) break;
     const userId = prof.id;
     const userSnap = await db.collection('users').doc(userId).get().catch(() => null);
     if (userSnap && userSnap.exists && userSnap.data()?.sizingEnabled === false) continue;
@@ -2482,9 +2494,10 @@ async function runAutoPointingJob() {
       if (data.deleted || isTaskDoneStatus(data.status)) return false;
       const hasPoints = Number.isFinite(Number(data.points)) && Number(data.points) > 0;
       return !hasPoints;
-    });
+    }).slice(0, AUTO_POINTING_MAX_CANDIDATES_PER_USER);
 
     for (const task of taskCandidates) {
+      if (Date.now() - stepStartMs > AUTO_POINTING_TIME_BUDGET_MS) break;
       const data = task.data || {};
       const type = String(data.type || data.task_type || '').toLowerCase();
       const isRoutine = ['chore', 'routine', 'habit', 'habitual'].includes(type) || isRoutineChoreHabit(data);
@@ -2525,9 +2538,10 @@ async function runAutoPointingJob() {
       if (!hasPoints) return false; // will be handled above
       const type = String(data.type || data.task_type || '').toLowerCase();
       return !['chore', 'routine', 'habit', 'habitual'].includes(type) && !isRoutineChoreHabit(data);
-    });
+    }).slice(0, AUTO_POINTING_MAX_CANDIDATES_PER_USER);
 
     for (const task of noTimeOfDayTasks) {
+      if (Date.now() - stepStartMs > AUTO_POINTING_TIME_BUDGET_MS) break;
       const data = task.data || {};
       const estimate = await callLLMJsonSafe({
         system: 'Suggest the best time of day for this task. Return {"timeOfDay":"morning"|"afternoon"|"evening"}. Use morning for deep/creative work, afternoon for reviews/meetings, evening for light/admin tasks.',
@@ -2553,9 +2567,10 @@ async function runAutoPointingJob() {
       if (isStoryDoneStatus(data.status)) return false;
       const hasPoints = Number.isFinite(Number(data.points)) && Number(data.points) > 0;
       return !hasPoints;
-    });
+    }).slice(0, AUTO_POINTING_MAX_CANDIDATES_PER_USER);
 
     for (const story of storyCandidates) {
+      if (Date.now() - stepStartMs > AUTO_POINTING_TIME_BUDGET_MS) break;
       const data = story.data || {};
       const estimate = await callLLMJsonSafe({
         system: 'Estimate agile story points (0.25–8, 0.25 increments) and suggest time of day. Return {"points":number,"timeOfDay":"morning"|"afternoon"|"evening"|null}.',
@@ -2586,9 +2601,10 @@ async function runAutoPointingJob() {
       if (data.timeOfDay) return false;
       const hasPoints = Number.isFinite(Number(data.points)) && Number(data.points) > 0;
       return hasPoints;
-    });
+    }).slice(0, AUTO_POINTING_MAX_CANDIDATES_PER_USER);
 
     for (const story of noTimeOfDayStories) {
+      if (Date.now() - stepStartMs > AUTO_POINTING_TIME_BUDGET_MS) break;
       const data = story.data || {};
       const estimate = await callLLMJsonSafe({
         system: 'Suggest the best time of day for this story. Return {"timeOfDay":"morning"|"afternoon"|"evening"}.',
