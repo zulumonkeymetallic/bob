@@ -45,6 +45,14 @@ const OPENROUTER_API_KEY_SECRET = defineSecret('OPENROUTER_API_KEY');
 const BOB_CLI_ACCESS = defineSecret('BOB_CLI_ACCESS');
 const BREVO_API_KEY_SECRET = defineSecret('BREVO_API_KEY');
 const GOOGLE_AI_STUDIO_API_KEY = defineSecret('GOOGLEAISTUDIOAPIKEY');
+// Needed by the pushPendingCalendarBlocks step (calendarSync.js's
+// getGoogleOAuthConfig()). Without these bound here, process.env.GOOGLE_OAUTH_CLIENT_ID
+// is empty inside this function and calendarSync.js falls back to the removed
+// functions.config() API, which throws — confirmed live 2026-07-16: 49 of 50
+// pending calendar blocks failed to push for Jim's real account with exactly
+// this error.
+const GOOGLE_OAUTH_CLIENT_ID = defineSecret('GOOGLE_OAUTH_CLIENT_ID');
+const GOOGLE_OAUTH_CLIENT_SECRET = defineSecret('GOOGLE_OAUTH_CLIENT_SECRET');
 
 const THEME_RULES = [
   { match: ['growth'], slots: [{ days: [1, 2, 3, 4, 5], start: 7, end: 9, label: 'Growth AM' }, { days: [1, 2, 3, 4, 5], start: 17, end: 19, label: 'Growth PM' }] },
@@ -3875,7 +3883,7 @@ exports.unifiedNightlyOrchestrator = onSchedule({
   timeZone: 'Europe/London',
   memory: '1GiB',
   timeoutSeconds: 600,
-  secrets: [OPENROUTER_API_KEY_SECRET, BOB_CLI_ACCESS, BREVO_API_KEY_SECRET, GOOGLE_AI_STUDIO_API_KEY],
+  secrets: [OPENROUTER_API_KEY_SECRET, BOB_CLI_ACCESS, BREVO_API_KEY_SECRET, GOOGLE_AI_STUDIO_API_KEY, GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET],
   region: 'europe-west2',
 }, async () => {
   console.log('[unifiedNightlyOrchestrator] Starting consolidated nightly chain...');
@@ -5215,7 +5223,7 @@ exports.runNightlyChainNow = onCall({
   timeZone: 'Europe/London',
   memory: '1GiB',
   timeoutSeconds: 600,
-  secrets: [OPENROUTER_API_KEY_SECRET, BOB_CLI_ACCESS, BREVO_API_KEY_SECRET, GOOGLE_AI_STUDIO_API_KEY],
+  secrets: [OPENROUTER_API_KEY_SECRET, BOB_CLI_ACCESS, BREVO_API_KEY_SECRET, GOOGLE_AI_STUDIO_API_KEY, GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET],
   region: 'europe-west2',
   invoker: 'public',
 }, async (req) => {
@@ -5235,7 +5243,7 @@ exports.runNightlyChainNowHttp = https.onRequest({
   timeZone: 'Europe/London',
   memory: '1GiB',
   timeoutSeconds: 600,
-  secrets: [OPENROUTER_API_KEY_SECRET, BOB_CLI_ACCESS, BREVO_API_KEY_SECRET, GOOGLE_AI_STUDIO_API_KEY],
+  secrets: [OPENROUTER_API_KEY_SECRET, BOB_CLI_ACCESS, BREVO_API_KEY_SECRET, GOOGLE_AI_STUDIO_API_KEY, GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET],
   region: 'europe-west2',
 }, async (req, res) => {
   const cliKey = BOB_CLI_ACCESS.value();
