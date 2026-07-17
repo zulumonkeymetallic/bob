@@ -9,10 +9,7 @@
  */
 
 const admin = require('firebase-admin');
-const { VertexAI } = require('@google-cloud/vertexai');
-
-const VERTEX_PROJECT  = 'bob20250810';
-const VERTEX_LOCATION = 'europe-west2';
+const { callLLM } = require('../utils/llmHelper');
 
 const MORNING_HOURS = [5, 6, 7, 8, 9, 10, 11, 12]; // 05:00 - 12:59
 const AFTERNOON_HOURS = [13, 14, 15, 16, 17, 18]; // 13:00 - 18:59
@@ -164,19 +161,8 @@ async function populateBlankTimeOfDay(db, userId, options = {}) {
   let updated = 0;
   let errors = 0;
 
-  // Only load AI client when LLM is opted in
-  let vertexModel = null;
-  if (useLlm) {
-    try {
-      const vertexAI = new VertexAI({ project: VERTEX_PROJECT, location: VERTEX_LOCATION });
-      vertexModel = vertexAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
-    } catch (e) {
-      console.warn('[timeOfDayPopulator] Could not init Vertex AI — useLlm ignored:', e?.message);
-    }
-  }
-
   async function llmInfer(entityType, id, title, description) {
-    if (!vertexModel || !title) return null;
+    if (!useLlm || !title) return null;
     try {
       const context = entityType === 'task'
         ? 'scheduled for (chore, routine, or one-off task)'
@@ -191,13 +177,12 @@ Respond with ONLY one word: morning, afternoon, or evening.
 - evening: 19:00-04:59 (dinner, bedtime routines, retainer, TV, reading)
 
 If unclear, respond morning.`;
-      const result = await vertexModel.generateContent(prompt);
-      const text = (result.response?.candidates?.[0]?.content?.parts?.[0]?.text || '').toLowerCase().trim();
+      const text = (await callLLM('', prompt) || '').toLowerCase().trim();
       if (text.includes('afternoon')) return 'afternoon';
       if (text.includes('evening')) return 'evening';
       return 'morning';
     } catch (err) {
-      console.warn(`[timeOfDayPopulator] Vertex AI failed for ${entityType} ${id}:`, err?.message);
+      console.warn(`[timeOfDayPopulator] LLM inference failed for ${entityType} ${id}:`, err?.message);
       return null;
     }
   }

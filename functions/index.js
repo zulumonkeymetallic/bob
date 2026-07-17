@@ -21034,9 +21034,7 @@ exports.generateSprintRetrospective = functionsV2.https.onCall({ secrets: [OPENR
   if (!sprintId || !metrics) throw new httpsV2.HttpsError('invalid-argument', 'Missing required fields');
 
   try {
-    const { VertexAI } = require('@google-cloud/vertexai');
-    const vertexAI = new VertexAI({ project: 'bob20250810', location: 'europe-west2' });
-    const model = vertexAI.getGenerativeModel({ model: GEMINI_MODEL });
+    const { callLLM } = require('./utils/llmHelper');
 
     const prompt = `You are a helpful assistant generating a sprint retrospective summary.
 
@@ -21062,10 +21060,9 @@ Generate a concise retrospective summary (3-4 paragraphs) covering:
 
 Keep it professional, actionable, and encourage the team.`;
 
-    const result = await model.generateContent(prompt);
-    const summary = result.response?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    const summary = await callLLM('', prompt) || '';
 
-    await aiUsageLogger.logAIUsage(auth.uid, 'vertex-retro', GEMINI_MODEL, prompt, summary);
+    await aiUsageLogger.logAIUsage(auth.uid, 'openrouter-retro', 'openrouter/auto', prompt, summary);
 
     return { summary };
   } catch (error) {

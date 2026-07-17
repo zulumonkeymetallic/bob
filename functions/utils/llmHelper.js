@@ -8,22 +8,18 @@ const VERTEX_LOCATION = 'europe-west2';
 const VERTEX_DEFAULT_MODEL = 'gemini-2.5-flash';
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
-// Use 'auto' so OpenRouter picks the best available model as fallback
-const OPENROUTER_FALLBACK_MODEL = 'openrouter/auto';
-// No-cost OpenRouter model for low-stakes, high-volume jobs (sizing, time-of-day,
-// video summarisation). Rate-limited (~20 req/min, ~50/day without prior credit),
-// so it's used as primary only where an occasional miss is harmless.
-// 2026-07-16: the previous default (gemini-2.0-flash-exp:free) was removed from
-// OpenRouter's catalogue (404 "No endpoints found") — every callLLMFreeFirst call
-// was silently falling through to paid Vertex on every invocation, and the nightly
-// generateMissingAcceptanceCriteria step was burning most of its 600s budget retrying
-// a dead model across every candidate story before falling back. Verified live via
-// https://openrouter.ai/api/v1/models at time of writing.
-const OPENROUTER_FREE_MODEL = process.env.OPENROUTER_FREE_MODEL || 'meta-llama/llama-3.3-70b-instruct:free';
+// 'auto' routes to whatever underlying model OpenRouter judges best for the
+// request — paid, not subject to the free tier's 8 req/min cap that caused a
+// production incident on 2026-07-16 (see git history: the nightly chain blew
+// its function timeout retrying a dead/rate-limited free model on every
+// candidate). This is now the primary path for every BOB LLM call, per
+// explicit direction 2026-07-17: standardise BOB and Hermes on OpenRouter
+// auto rather than mixing Vertex/free-tier/local models.
+const OPENROUTER_MODEL = 'openrouter/auto';
 const ALERT_EMAIL_TO = 'Jdonnelly@jc1.tech';
 
 // ---------------------------------------------------------------------------
-// Vertex AI (primary)
+// Vertex AI (fallback)
 // ---------------------------------------------------------------------------
 
 async function _callVertexAI(systemPrompt, userPrompt, modelName) {
@@ -40,7 +36,7 @@ async function _callVertexAI(systemPrompt, userPrompt, modelName) {
 }
 
 // ---------------------------------------------------------------------------
-// OpenRouter (fallback)
+// OpenRouter (primary)
 // ---------------------------------------------------------------------------
 
 async function _callOpenRouterModel(apiKey, model, systemPrompt, userPrompt) {
@@ -73,22 +69,22 @@ async function _callOpenRouterModel(apiKey, model, systemPrompt, userPrompt) {
 }
 
 async function _callOpenRouter(apiKey, systemPrompt, userPrompt) {
-  return _callOpenRouterModel(apiKey, OPENROUTER_FALLBACK_MODEL, systemPrompt, userPrompt);
+  return _callOpenRouterModel(apiKey, OPENROUTER_MODEL, systemPrompt, userPrompt);
 }
 
 // ---------------------------------------------------------------------------
 // Failure alerting — one email per failed job, best-effort (never throws)
 // ---------------------------------------------------------------------------
 
-async function _sendModelFailureEmail(purpose, freeError, fallbackError) {
+async function _sendModelFailureEmail(purpose, primaryError, fallbackError) {
   try {
     const { sendEmail } = require('../lib/email');
     await sendEmail({
       to: ALERT_EMAIL_TO,
       subject: `BOB: AI model failed${purpose ? ` (${purpose})` : ''}`,
       text: [
-        `The OpenRouter free model (${OPENROUTER_FREE_MODEL}) failed${purpose ? ` for job "${purpose}"` : ''}.`,
-        `Free-model error: ${freeError?.message || freeError}`,
+        `OpenRouter (${OPENROUTER_MODEL}) failed${purpose ? ` for job "${purpose}"` : ''}.`,
+        `OpenRouter error: ${primaryError?.message || primaryError}`,
         fallbackError
           ? `Vertex AI fallback also failed: ${fallbackError?.message || fallbackError}`
           : 'Vertex AI fallback was not attempted or was unavailable.',
@@ -102,17 +98,32 @@ async function _sendModelFailureEmail(purpose, freeError, fallbackError) {
 // ---------------------------------------------------------------------------
 // Public interface — same signature as before: callLLM(system, user, model?)
 //
-// 2026-07-15: briefly routed through the free OpenRouter model as a cost
-// migration. Reverted 2026-07-16 at Jim's explicit request — Vertex is the
-// reliable, primary path for callLLM; free-tier OpenRouter models have proven
-// unstable (the previous default was silently removed from OpenRouter's
-// catalogue entirely, see git history). callLLM is Vertex-first again.
-// callLLMFreeFirst remains available for genuinely low-stakes, high-volume
-// callers that opt in explicitly (see callLLMFreeFirst below).
+// 2026-07-17: standardised on OpenRouter 'auto' as the primary path for every
+// caller, per explicit direction. Vertex is the fallback on OpenRouter
+// failure, using whichever Vertex-flavoured model name the caller originally
+// passed (OpenRouter auto ignores that param — its whole point is picking
+// the model itself). callLLMFreeFirst is kept as a thin alias so existing
+// call sites (youtubeIngestion.js, aiPlanning.js) don't need touching —
+// there's no separate free-tier path any more.
 // ---------------------------------------------------------------------------
 
 async function callLLM(systemPrompt, userPrompt, modelName = VERTEX_DEFAULT_MODEL) {
-  return callLLMVertexFirst(systemPrompt, userPrompt, modelName);
+  const openRouterKey = (process.env.OPENROUTER_API_KEY || '').trim();
+  if (openRouterKey) {
+    try {
+      return await _callOpenRouter(openRouterKey, systemPrompt, userPrompt);
+    } catch (openRouterError) {
+      console.warn('[llmHelper] OpenRouter auto failed — falling back to Vertex AI:', openRouterError.message);
+      try {
+        return await _callVertexAI(systemPrompt, userPrompt, modelName);
+      } catch (vertexError) {
+        await _sendModelFailureEmail(null, openRouterError, vertexError);
+        throw vertexError;
+      }
+    }
+  }
+  // No OpenRouter key configured for this trigger — go straight to Vertex.
+  return _callVertexAI(systemPrompt, userPrompt, modelName);
 }
 
 async function callLLMVertexFirst(systemPrompt, userPrompt, modelName = VERTEX_DEFAULT_MODEL) {
@@ -134,30 +145,8 @@ async function callLLMVertexFirst(systemPrompt, userPrompt, modelName = VERTEX_D
   }
 }
 
-// ---------------------------------------------------------------------------
-// Free-first interface — for low-stakes, high-volume jobs (sizing, time-of-day,
-// video summarisation) where an occasional miss is acceptable.
-// Primary: OpenRouter free model. Safety net: Vertex AI (paid).
-// If both fail, alert Jim by email rather than failing silently.
-// ---------------------------------------------------------------------------
-
 async function callLLMFreeFirst(systemPrompt, userPrompt, { modelName, purpose } = {}) {
-  const openRouterKey = (process.env.OPENROUTER_API_KEY || '').trim();
-  if (openRouterKey) {
-    try {
-      return await _callOpenRouterModel(openRouterKey, OPENROUTER_FREE_MODEL, systemPrompt, userPrompt);
-    } catch (freeError) {
-      console.warn('[llmHelper] OpenRouter free model failed — falling back to Vertex AI:', freeError.message);
-      try {
-        return await _callVertexAI(systemPrompt, userPrompt, modelName);
-      } catch (vertexError) {
-        await _sendModelFailureEmail(purpose, freeError, vertexError);
-        throw vertexError;
-      }
-    }
-  }
-  // No OpenRouter key configured for this trigger — go straight to Vertex.
-  return _callVertexAI(systemPrompt, userPrompt, modelName);
+  return callLLM(systemPrompt, userPrompt, modelName);
 }
 
 module.exports = {
@@ -170,5 +159,5 @@ module.exports = {
   VERTEX_PROJECT,
   VERTEX_LOCATION,
   VERTEX_DEFAULT_MODEL,
-  OPENROUTER_FREE_MODEL,
+  OPENROUTER_MODEL,
 };

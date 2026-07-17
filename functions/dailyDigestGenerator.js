@@ -6,10 +6,8 @@ const { sendEmail } = require('./lib/email');
 const aiUsageLogger = require('./utils/aiUsageLogger');
 
 // Centralize Gemini model selection so we can switch to newer models (e.g., gemini-2.5-flash-lite)
-const { VertexAI } = require('@google-cloud/vertexai');
+const { callLLM } = require('./utils/llmHelper');
 const DEFAULT_GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
-const VERTEX_PROJECT  = 'bob20250810';
-const VERTEX_LOCATION = 'europe-west2';
 const DAILY_DIGEST_ENABLED = process.env.DAILY_DIGEST_ENABLED === 'true';
 
 /**
@@ -522,15 +520,9 @@ async function generateAIInsights(userData, personality = null) {
   4) Heads up: one short risk/warning (overdue, crowded calendar, or missing blocks).
   ${toneLine}`;
 
-  const vertexAI = new VertexAI({ project: VERTEX_PROJECT, location: VERTEX_LOCATION });
-  const model = vertexAI.getGenerativeModel({
-    model: DEFAULT_GEMINI_MODEL,
-    systemInstruction: { role: 'system', parts: [{ text: 'You are an expert executive assistant. Be precise and data-driven.' }] },
-    generationConfig: { temperature: 0.7, maxOutputTokens: 800 },
-  });
-  const result = await model.generateContent(prompt);
-  const textOut = result.response?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-  return { choices: [{ message: { content: textOut } }] };
+  const digestSystemPrompt = 'You are an expert executive assistant. Be precise and data-driven.';
+  const textOut = await callLLM(digestSystemPrompt, prompt, DEFAULT_GEMINI_MODEL);
+  return { choices: [{ message: { content: textOut || '' } }] };
 }
 
 /**
