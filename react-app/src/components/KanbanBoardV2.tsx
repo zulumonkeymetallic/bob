@@ -348,6 +348,13 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
                     if (boardSprintId) {
                         updatePayload.sprintId = boardSprintId;
                     }
+                    // Completing a story should release its human-set order — a #1/#2/#3
+                    // pin only makes sense for something still competing for scheduling.
+                    if (type === 'story' && actualStatus === 4) {
+                        updatePayload.userPriorityFlag = false;
+                        updatePayload.userPriorityRank = null;
+                        updatePayload.userPriorityFlagAt = null;
+                    }
 
                     await updateDoc(doc(db, collectionName, itemId), updatePayload);
 
