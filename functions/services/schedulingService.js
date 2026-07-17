@@ -204,10 +204,19 @@ function buildBusyIntervals(blocks, { planningMode, persona, excludedBlockIds, c
       busy.push({ start, end });
       return;
     }
-    // P1 override: treat work/fitness theme blocks as transparent so the item
-    // can be placed inside or alongside them.
+    // Work (Main Gig) is always hard-busy, no exceptions — it represents the whole
+    // work day as reserved, so nothing gets planned inside it, not even a Top 3 item
+    // and not even a work-persona item. Confirmed live 2026-07-17: Top 3/manually-
+    // pinned items were writing straight through this block via the override
+    // bypass below — exactly the "planning on top of work" behaviour that's
+    // unacceptable. Checked before the override branch so it can never be bypassed.
+    if (isMainGigBlock(block)) {
+      busy.push({ start, end });
+      return;
+    }
+    // P1 override: treat other theme blocks (e.g. fitness) as transparent so the
+    // item can be placed inside or alongside them.
     if (constraintMode === 'override' && isPlannerThemeBlock(block)) return;
-    if (persona === 'work' && isMainGigBlock(block)) return;
     busy.push({ start, end });
   });
   return busy;

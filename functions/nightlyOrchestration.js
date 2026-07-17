@@ -1493,6 +1493,8 @@ function buildUnifiedPlacementQueue({
     if (a.manual !== b.manual) return a.manual - b.manual;
     if (a.extra !== b.extra) return b.extra - a.extra;
     if (a.top !== b.top) return b.top - a.top;
+    // Stories fill ahead of tasks once we're past the manual/Top-3 tiers.
+    if (a.kind !== b.kind) return a.kind === 'story' ? -1 : 1;
     if (a.rank !== b.rank) return a.rank - b.rank;
     if (a.score !== b.score) return b.score - a.score;
     if (a.due != null || b.due != null) {

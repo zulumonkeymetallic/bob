@@ -243,12 +243,20 @@ async function runForUser(db, uid, options = {}) {
     ...stories.map(s => ({ ...s, _type: 'story', _score: effectiveScore(s), _mins: Math.round(pointsRemaining(s) * MINS_PER_POINT) })),
     ...tasks.map(t => ({ ...t, _type: 'task',  _score: effectiveScore(t), _mins: Math.round(pointsRemaining(t) * MINS_PER_POINT) })),
   ].sort((a, b) => {
-    // user-ordered first (rank 1-5 by rank asc), then score desc
+    // 1. Human-prioritised (manual rank 1-5, ascending) always first.
     const ar = Number(a.userPriorityRank || 0);
     const br = Number(b.userPriorityRank || 0);
     if (ar > 0 && br === 0) return -1;
     if (ar === 0 && br > 0) return  1;
     if (ar > 0 && br > 0 && ar !== br) return ar - br;
+    // 2. AI-ranked Top 3 next (this tier was previously missing entirely — Top 3
+    // items were falling through to plain score order, same as everything else).
+    const at = a.aiTop3ForDay === true ? 1 : 0;
+    const bt = b.aiTop3ForDay === true ? 1 : 0;
+    if (at !== bt) return bt - at;
+    // 3. Stories fill ahead of tasks.
+    if (a._type !== b._type) return a._type === 'story' ? -1 : 1;
+    // 4. AI score, descending.
     return b._score - a._score;
   });
 
